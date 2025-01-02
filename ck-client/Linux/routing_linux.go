@@ -1,21 +1,23 @@
+//go:build linux
 // +build linux
 
 package main
 
 import (
 	"errors"
-	"net"
-        "fmt"
-	"os/exec"
+	"fmt"
 	"io/ioutil"
+	"net"
+	"os/exec"
 	"path/filepath"
+
 	"github.com/vishvananda/netlink"
 )
 
-const wireguardSystemConfigPath = "/etc/wireguard/"
+const amneziawgSystemConfigPath = "/etc/amnezia/amneziawg/"
 
 func saveWireguardConf(config string, fileName string) error {
-	systemConfigPath := filepath.Join(wireguardSystemConfigPath, fileName+".conf")
+	systemConfigPath := filepath.Join(amneziawgSystemConfigPath, fileName+".conf")
 	return ioutil.WriteFile(systemConfigPath, []byte(config), 0644)
 }
 
@@ -29,97 +31,33 @@ func executeCommand(command string) (string, error) {
 	return string(output), nil
 }
 
+func WireguardTunnelProtocol() string {
+	return "AmneziaWG"
+}
+
 func StartTunnel(name string) {
-        systemConfigPath := filepath.Join(wireguardSystemConfigPath, name+".conf")
+	systemConfigPath := filepath.Join(amneziawgSystemConfigPath, name+".conf")
 
-        cmd := exec.Command("sudo", "./libs/wireguard-go", name)
-        err := cmd.Run()
-
+	err := installTunnel(systemConfigPath, name)
 	if err != nil {
+		Logging.Info.Printf("Failed interface launch: %s", err)
+	} else {
 		Logging.Info.Printf("Interface is already launched")
-	} else {
-		Logging.Info.Printf("Launch interface")
 	}
-
-        cmd = exec.Command("sudo", "wg", "setconf", name, systemConfigPath)
-        err = cmd.Run()
-
-	if err != nil {
-		Logging.Info.Printf("Config is already launched")
-	} else {
-		Logging.Info.Printf("Launch config")
-	}
-
-        cmd = exec.Command("sudo", "ip", "address", "add", "10.66.66.2/32", "dev", name)
-        err = cmd.Run()
-
-	if err != nil {
-		Logging.Info.Printf("Address is already launched")
-	} else {
-		Logging.Info.Printf("Launch address")
-	}
-
-        cmd = exec.Command("sudo", "ip", "link", "set", "mtu", "1360", "up", "dev", name)
-        err = cmd.Run()
-
-	if err != nil {
-		Logging.Info.Printf("Tunnel is already launched")
-	} else {
-		Logging.Info.Printf("Launch tunnel")
-	}   
-
-        cmd = exec.Command("sudo", "ip", "-4", "route", "add", "128.0.0.0/1", "dev", name)
-        err = cmd.Run()
-
-	if err != nil {
-		Logging.Info.Printf("Address is already launched")
-	} else {
-		Logging.Info.Printf("Launch Address")
-	}   
-
-        cmd = exec.Command("sudo", "ip", "-4", "route", "add", "0.0.0.0/1", "dev", name)
-        err = cmd.Run()
-
-	if err != nil {
-		Logging.Info.Printf("Address is already launched")
-	} else {
-		Logging.Info.Printf("Launch Address")
-	}   
 }
 
 func StopTunnel(name string) {
-        cmd := exec.Command("sudo", "ip", "link", "del", name)
-        err := cmd.Run()
-
+	err := uninstallTunnel(name)
 	if err != nil {
-		Logging.Info.Printf("Tunnel is already stopped")
+		Logging.Info.Printf("Failed interface stop: %s", err)
 	} else {
-		Logging.Info.Printf("Stop tunnel: %s", name)
+		Logging.Info.Printf("Interface stop success")
 	}
 }
 
 func CheckAndInstallWireGuard() error {
-	cmd := exec.Command("sudo", "wg", "--version")
-	err := cmd.Run()
-
-	if err != nil {
-		Logging.Info.Printf("WireGuard is not install")
-
-		installCmd := exec.Command("sudo", "apt", "install", "-y", "wireguard-tools")
-		installErr := installCmd.Run()
-
-		if installErr != nil {
-			Logging.Info.Printf("Error install WireGuard: %w", installErr)
-		}
-
-		Logging.Info.Printf("WireGuard is sucessfully installed.")
-	} else {
-		Logging.Info.Printf("WireGuard is already installed.")
-	}
-
 	return nil
 }
-
 
 func startRouting(proxyIP string, gatewayIP string, interfaceName string, tunIp string, tunName string) error {
 	removeOldDefaultRoute := fmt.Sprintf("sudo ip route del default via %s dev %s", gatewayIP, interfaceName)
@@ -158,7 +96,6 @@ func stopRouting(proxyIP string, gatewayIP string, interfaceName string, tunIp s
 
 	return nil
 }
-
 
 var ipRule *netlink.Rule = nil
 

@@ -3,7 +3,7 @@
 package main
 
 import (
-        "fmt"
+	"fmt"
 	"io/ioutil"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +29,10 @@ func saveWireguardConf(config string, fileName string) error {
 	}
 	Logging.Info.Printf("WireGuard config saved to %s\n", systemConfigPath)
 	return nil
+}
+
+func WireguardTunnelProtocol() string {
+	return "Wireguard"
 }
 
 func StartTunnel(name string) {

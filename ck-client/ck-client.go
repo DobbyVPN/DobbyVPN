@@ -1,21 +1,19 @@
 package main
 
 import (
-	"fmt"
-	"log"
-	"os"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
+	"log"
 	"net"
+	"os"
+
 	//"os/exec"
 	"path/filepath"
 	"sync"
-	"os/signal"
-	"syscall"
-        "strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -23,15 +21,12 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 
-        "github.com/database64128/swgp-go/logging"
-	"github.com/database64128/swgp-go/service"
-	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/cbeuw/Cloak/internal/client"
 	"github.com/cbeuw/Cloak/internal/common"
-        "github.com/cbeuw/Cloak/internal/out"
 	mux "github.com/cbeuw/Cloak/internal/multiplex"
+	"github.com/cbeuw/Cloak/internal/out"
 )
 
 var (
@@ -40,8 +35,6 @@ var (
 	zapConf  string
 	logLevel zapcore.Level
 )
-
-const config_swgp_FileName = "swgp_config.json"
 
 var Logging = out.Logging
 
@@ -52,8 +45,6 @@ const combinedConfigFileName = "combined_config.json"
 const combinedKeyFileName = "combined_shadowsocks_key.txt"
 
 const wireguardConfigFileName = "wireguard_config.json"
-
-const wireguardCombinedConfigFileName = "wireguard_swgp_config.json"
 
 func getConfigPath() string {
 	homeDir, _ := os.UserHomeDir()
@@ -131,42 +122,6 @@ func loadWireguardConfig() (string, error) {
 	}
 	return string(data), nil
 }
-
-func getWireguardCombinedConfigPath() string {
-	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, wireguardCombinedConfigFileName)
-}
-
-func saveWireguardCombinedConfig(config string) error {
-	configPath := getWireguardCombinedConfigPath()
-	return ioutil.WriteFile(configPath, []byte(config), 0644)
-}
-
-func loadWireguardCombinedConfig() (string, error) {
-	configPath := getWireguardCombinedConfigPath()
-	data, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-func save_swgp_Config(config string) error {
-	homeDir, _ := os.UserHomeDir() 
-	configPath := filepath.Join(homeDir, config_swgp_FileName)
-	return ioutil.WriteFile(configPath, []byte(config), 0644)
-}
-
-func load_swgp_Config() (string, error) {
-	homeDir, _ := os.UserHomeDir() 
-	configPath := filepath.Join(homeDir, config_swgp_FileName)
-	data, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
 
 func showMessage(message string) {
 	Logging.Info.Printf(message)
@@ -863,200 +818,13 @@ PersistentKeepalive = 20`
 		wireguardDisconnectButton,
 	)
 
-	wireguardTab := container.NewTabItem("WireGuard", wireguardContent)
+	wireguardTab := container.NewTabItem(WireguardTunnelProtocol(), wireguardContent)
 	tabs.Append(wireguardTab)
-
-        //--------------------------------------------------------------------Wireguard-swgp--------------------------------------------
-        testConfEntry := widget.NewCheck("testConf", func(checked bool) {})
-	testConfEntry.SetChecked(false)
-
-	jsonConfigEntry := widget.NewMultiLineEntry()
-        jsonConfigEntry.Wrapping = fyne.TextWrapWord
-        jsonConfigEntry.SetMinRowsVisible(5)
-        loaded_swgp_Config, err := load_swgp_Config()
-	if err != nil {
-		loaded_swgp_Config = `{
-            "name": "client",
-            "wgListenNetwork": "",
-            "wgListen": ":20222",
-            "wgFwmark": 0,
-            "wgTrafficClass": 0,
-            "proxyEndpointNetwork": "",
-            "proxyEndpoint": "[2001:db8:1f74:3c86:aef9:a75:5d2a:425e]:20220",
-            "proxyConnListenNetwork": "",
-            "proxyConnListenAddress": "",
-            "proxyMode": "zero-overhead",
-            "proxyPSK": "sAe5RvzLJ3Q0Ll88QRM1N01dYk83Q4y0rXMP1i4rDmI=",
-            "proxyFwmark": 0,
-            "proxyTrafficClass": 0,
-            "mtu": 1500,
-            "batchMode": "",
-            "relayBatchSize": 0,
-            "mainRecvBatchSize": 0,
-            "sendChannelCapacity": 0
-        }`
-	}
-	jsonConfigEntry.SetText(loaded_swgp_Config)
-
-        zapConfEntry := widget.NewEntry()
-	zapConfEntry.SetText("console")
-
-        logLevelEntry := widget.NewEntry()
-        logLevelEntry.SetText(zapcore.InfoLevel.String())
-
-        wireguardCombinedNameEntry := widget.NewEntry()
-	wireguardCombinedNameEntry.SetText("wg0")
-
-	wireguardCombinedConfigEntry := widget.NewMultiLineEntry()
-	wireguardCombinedConfigEntry.Wrapping = fyne.TextWrapWord
-	wireguardCombinedConfigEntry.SetMinRowsVisible(5)
-
-	loadedWGCombinedConfig, err := loadWireguardCombinedConfig()
-	if err != nil {
-		loadedWGCombinedConfig = `[Interface]
-PrivateKey = <Private_client_key>
-Address = <IP_client_address>
-DNS = 8.8.8.8
-
-[Peer]
-PublicKey = <Public_server_key>
-Endpoint = <IP_server_address>:<Port>
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 20`
-	}
-	wireguardCombinedConfigEntry.SetText(loadedWGCombinedConfig)
-
-        status_swgp_Label := widget.NewLabel("Not connected")
-
-        connect_swgp_Button := widget.NewButton("Connect", func() {
-            go func() { 
-                defer func() {
-                }()
-
-		testConf := testConfEntry.Checked
-		jsonConfig := jsonConfigEntry.Text
-		zapConf := zapConfEntry.Text
-		logLevel := zapcore.InfoLevel
-
-		fyne.CurrentApp().SendNotification(fyne.NewNotification("Status", "Connected"))
-		status_swgp_Label.SetText("Connected")
-
-		err = save_swgp_Config(jsonConfig)
-		if err != nil {
-		    fyne.CurrentApp().SendNotification(fyne.NewNotification("Error", "Failed to save config: "+err.Error()))
-		    return
-		}
-
-		logger, err := logging.NewZapLogger(zapConf, logLevel)
-		if err != nil {
-		    fyne.CurrentApp().SendNotification(fyne.NewNotification("Error", "Failed to build logger"))
-		    return
-		}
-		defer logger.Sync()
-
-		var sc service.Config
-		d := json.NewDecoder(strings.NewReader(jsonConfig))
-		d.DisallowUnknownFields()
-		if err = d.Decode(&sc); err != nil {
-		    logger.Fatal("Failed to load config",
-		        zap.String("jsonConfig", jsonConfig),
-		        zap.Error(err),
-		    )
-		}
-
-                for _, client := range sc.Clients {
-                    ip, _, err := net.SplitHostPort(client.ProxyEndpointAddress.String())
-                    if err != nil {
-                        logger.Warn("Failed to parse ProxyEndpointAddress", zap.Error(err))
-                        continue
-                    }
-                    add_route(ip)
-                }
-
-		m, err := sc.Manager(logger)
-		if err != nil {
-		    logger.Fatal("Failed to create service manager",
-		        zap.String("confPath", confPath),
-		        zap.Error(err),
-		    )
-		}
-
-		if testConf {
-		    logger.Info("Config test OK", zap.String("confPath", confPath))
-		    return
-		}
-
-		ctx, cancel := context.WithCancel(context.Background())
-
-		go func() {
-		    sigCh := make(chan os.Signal, 1)
-		    signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		    sig := <-sigCh
-		    logger.Info("Received exit signal", zap.Stringer("signal", sig))
-		    cancel()
-		}()
-
-		if err = m.Start(ctx); err != nil {
-		    logger.Fatal("Failed to start services",
-		        zap.String("confPath", confPath),
-		        zap.Error(err),
-		    )
-		}
-
-		<-ctx.Done() 
-		m.Stop()
-	    }()
-	    
-	    wireguardCombinedConfig := wireguardCombinedConfigEntry.Text
-	    wireguardCombinedName := wireguardCombinedNameEntry.Text
-	    err := saveWireguardCombinedConfig(wireguardCombinedConfig)
-	    if err != nil {
-		fyne.CurrentApp().SendNotification(fyne.NewNotification("Error", "Failed to save WireGuard config: "+err.Error()))
-		showMessage("Error: unable to save config")
-		return
-	    }
-		
-	    err = saveWireguardConf(wireguardCombinedConfig, wireguardCombinedName)
-	    if err != nil {
-		fyne.CurrentApp().SendNotification(fyne.NewNotification("Error", "Failed to save WireGuard config"))
-		Logging.Info.Printf("Error: unable to save tunnel %s", wireguardCombinedNameEntry.Text)
-		return
-            }
-		
-	    StartTunnel(wireguardCombinedNameEntry.Text)
-
-	})
-
-
-        disconnect_swgp_Button := widget.NewButton("Disconnect", func() {
-                status_swgp_Label.SetText("Not connected")
-                StopTunnel(wireguardCombinedNameEntry.Text)
-	})
-
-        swgpContent := container.NewVBox(
-		testConfEntry,
-		widget.NewLabel("JSON Config:"),
-		jsonConfigEntry,
-		widget.NewLabel("zapConf:"),
-		zapConfEntry,
-		widget.NewLabel("logLevel:"),
-		logLevelEntry,
-                widget.NewLabel("Enter WireGuard Config Name:"),
-		wireguardCombinedNameEntry,
-		widget.NewLabel("Enter WireGuard Config:"),
-		wireguardCombinedConfigEntry,
-		connect_swgp_Button,
-		disconnect_swgp_Button,
-		status_swgp_Label,
-	)
-
-	swgpClientTab := container.NewTabItem("swgp-client", swgpContent)
-        tabs.Append(swgpClientTab)
-
-        logTab := container.NewTabItem("Logs", logOutput)
-        tabs.Append(logTab)
-
-        w.SetContent(tabs)
+	
+	logTab := container.NewTabItem("Logs", logOutput)
+	tabs.Append(logTab)
+	
+	w.SetContent(tabs) 
 	w.Resize(fyne.NewSize(600, 400))
 	w.ShowAndRun()
 }

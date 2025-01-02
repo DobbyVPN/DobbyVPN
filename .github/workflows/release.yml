@@ -38,6 +38,7 @@ jobs:
           mkdir Cloak/internal/out
           cp log-files/logging.go Cloak/internal/out/logging.go
           cp -r ck-client/Windows Cloak
+          cp -r ck-client/WindowsTunnelService Cloak/Windows/WindowsTunnelService
           cp ck-client/app.go Cloak/Windows
           cp ck-client/ck-client.go Cloak/Windows
           cp ck-client/Icon.png Cloak/Windows
@@ -45,25 +46,35 @@ jobs:
           cp ck-client/outline_device.go Cloak/Windows
           cp ck-client/outline_packet_proxy.go Cloak/Windows
           cp ck-client/protector.go Cloak/Windows
-          cd Cloak
-          git clone https://github.com/database64128/swgp-go.git
-          echo "replace github.com/database64128/swgp-go v0.0.0 => ./swgp-go" >> go.mod
-          cd ..
           cd Cloak/Windows
+          go get github.com/amnezia-vpn/amneziawg-windows/tunnel@v0.1.4-0.20240526104134-db18f2297e5e
           go mod tidy
           go install fyne.io/fyne/v2/cmd/fyne@latest
           cd ../..
       - name: Build windows ck-client
         run: |
+          cd Cloak/Windows/WindowsTunnelService
+          go build -o tunnel-service.exe .
+          cd ../../../
           cd Cloak/Windows
           fyne package -os windows
           cd ../..
+          mkdir libs
+          cp Cloak/Windows/WindowsTunnelService/tunnel-service.exe tunnel-service.exe
           cp Cloak/Windows/Windows.exe dobbyvpn-windows.exe
+      - name: Make Windows zip
+        run: |
+          mkdir dobbyvpn-windows-amd64
+          mkdir dobbyvpn-windows-amd64/libs
+          mv tunnel-service.exe dobbyvpn-windows-amd64/libs/tunnel-service.exe
+          mv dobbyvpn-windows.exe dobbyvpn-windows-amd64/dobbyvpn-windows.exe
+          cp wintun/bin/amd64/wintun.dll dobbyvpn-windows-amd64/libs/wintun.dll
+          zip -r dobbyvpn-windows-amd64.zip dobbyvpn-windows-amd64.zip
       - name: Upload Windows client
         uses: actions/upload-artifact@master
         with:
-          name: dobbyvpn-windows.exe
-          path: dobbyvpn-windows.exe
+          name: dobbyvpn-windows-amd64.zip
+          path: dobbyvpn-windows-amd64.zip
 
   linux_build:
     runs-on: ubuntu-latest
@@ -91,7 +102,6 @@ jobs:
           git submodule add https://github.com/cbeuw/Cloak
           git submodule init
           git submodule update
-          git clone https://git.zx2c4.com/wireguard-go
           # mv -f log-files/piper.go Cloak/internal/client/piper.go
           # mv -f log-files/connector.go Cloak/internal/client/connector.go
           # mv -f log-files/TLS.go Cloak/internal/client/TLS.go
@@ -106,30 +116,16 @@ jobs:
           cp ck-client/outline_device.go Cloak/Linux
           cp ck-client/outline_packet_proxy.go Cloak/Linux
           cp ck-client/protector.go Cloak/Linux
-          cd Cloak
-          git clone https://github.com/database64128/swgp-go.git
-          echo "replace github.com/database64128/swgp-go v0.0.0 => ./swgp-go" >> go.mod
-          cd ..
-          cd wireguard-go
-          make
-          cd ..
-          mkdir -p Cloak/Linux/libs
-          cp wireguard-go/wireguard-go Cloak/Linux/libs
           cd Cloak/Linux
           go mod tidy
           cd ../..
       - name: Build linux ck-client
         run: |
-          cd wireguard-go
-          make
-          cd ..
           cd Cloak/Linux
           go build -o dobbyvpn-linux-amd64 .
       - name: Make linux zip
         run: |
           mkdir dobbyvpn-linux-amd64
-          mkdir dobbyvpn-linux-amd64/libs
-          mv wireguard-go/wireguard-go dobbyvpn-linux-amd64/libs/wireguard-go
           mv Cloak/Linux/dobbyvpn-linux-amd64 dobbyvpn-linux-amd64/dobbyvpn-linux-amd64
           zip -r dobbyvpn-linux-amd64.zip dobbyvpn-linux-amd64
       - name: Upload Linux client
