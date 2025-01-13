@@ -21,4 +21,14 @@ interface DobbyConfigsRepository {
 
     fun setIsOutlineEnabled(isOutlineEnabled: Boolean)
     // endregion
+
+    // region amnezia
+    fun getAwgConfig(): String
+
+    fun setAwgConfig(newConfig: String)
+
+    fun getIsAmneziaWGEnabled(): Boolean
+
+    fun setIsAmneziaWGEnabled(isAmneziaWGEnabled: Boolean)
+    // endregion
 }

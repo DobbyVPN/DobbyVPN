@@ -12,6 +12,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import cloak_outline.OutlineDevice
 import cloak_outline.Cloak_outline
+import com.dobby.awg.TunnelManager
+import com.dobby.awg.TunnelState
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.domain.DobbyConfigsRepositoryImpl
@@ -43,6 +45,7 @@ class MyVpnService : VpnService() {
 
     private lateinit var dobbyConfigsRepository: DobbyConfigsRepository
 
+    private val tunnelManager = TunnelManager(this)
     private var vpnInterface: ParcelFileDescriptor? = null
     private var device: OutlineDevice? = null
     private val ipFetcher: IpFetcher = IpFetcher()
@@ -81,6 +84,19 @@ class MyVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (dobbyConfigsRepository.getIsAmneziaWGEnabled()) {
+            Logger.log("!!! Starting AmneziaWG")
+            val stringConfig = dobbyConfigsRepository.getAwgConfig()
+            val state = if (dobbyConfigsRepository.getIsAmneziaWGEnabled()) {
+                TunnelState.UP
+            } else {
+                TunnelState.DOWN
+            }
+            tunnelManager.updateState(stringConfig, state)
+
+            return START_STICKY
+        }
+
         val connectionFlag = dobbyConfigsRepository.getIsOutlineEnabled()
         check = connectionFlag
         if (connectionFlag) {
@@ -107,6 +123,7 @@ class MyVpnService : VpnService() {
             vpnInterface?.close()
             disableCloakIfNeeded()
         }.onFailure { it.printStackTrace() }
+        tunnelManager.updateState(null, TunnelState.DOWN)
     }
 
     private fun enableCloakIfNeeded() {

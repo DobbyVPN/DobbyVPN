@@ -39,15 +39,17 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import com.dobby.feature.main.presentation.MainViewModel
+import com.dobby.navigation.AmneziaWGScreen
 import com.dobby.navigation.LogsScreen
 import org.jetbrains.compose.ui.tooling.preview.Preview
+
 
 @Preview
 @Composable
 fun DobbySocksScreen(
     modifier: Modifier = Modifier,
     navController: NavController,
-    viewModel: MainViewModel = viewModel()
+    viewModel: MainViewModel = viewModel(),
 ) {
     val scrollState = rememberScrollState()
 
@@ -66,6 +68,13 @@ fun DobbySocksScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.Center
     ) {
+        Button(
+            onClick = { navController.navigate(AmneziaWGScreen) }
+        ) {
+            Text("Go to AmneziaWG VPN")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         Row(
             modifier = Modifier

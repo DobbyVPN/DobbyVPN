@@ -55,4 +55,28 @@ internal class DobbyConfigsRepositoryImpl(
             AndroidLog("DOBBY_TAG", "setIsOutlineEnabled = $isOutlineEnabled")
         }
     }
+
+    override fun getAwgConfig(): String {
+        return (prefs.getString("awgConfig", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getAwgConfig, size = ${it.length}")
+        }
+    }
+
+    override fun setAwgConfig(newConfig: String) {
+        prefs.edit().putString("awgConfig", newConfig).apply().also {
+            AndroidLog("DOBBY_TAG", "setAwgConfig, size = ${newConfig.length}")
+        }
+    }
+
+    override fun getIsAmneziaWGEnabled(): Boolean {
+        return prefs.getBoolean("isAmneziaWGEnabled", false).also {
+            AndroidLog("DOBBY_TAG", "getIsAmneziaWGEnabled = $it")
+        }
+    }
+
+    override fun setIsAmneziaWGEnabled(isAmneziaWGEnabled: Boolean) {
+        prefs.edit().putBoolean("isAmneziaWGEnabled", isAmneziaWGEnabled).apply().also {
+            AndroidLog("DOBBY_TAG", "setIsAmneziaWGEnabled = $isAmneziaWGEnabled")
+        }
+    }
 }

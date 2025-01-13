@@ -2,6 +2,7 @@ import android.content.Context.MODE_PRIVATE
 import com.dobby.domain.DobbyConfigsRepositoryImpl
 import com.dobby.feature.logging.CopyLogsInteractorImpl
 import com.dobby.feature.logging.LogsRepositoryImpl
+import com.dobby.feature.main.domain.AwgManagerImpl
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.VpnManagerImpl
 import com.dobby.feature.vpn_service.CloakLibFacade
@@ -19,7 +20,8 @@ val androidMainModule = makeNativeModule(
         )
     },
     connectionStateRepository = { ConnectionStateRepository },
-    vpnManager = { VpnManagerImpl(androidContext()) }
+    vpnManager = { VpnManagerImpl(androidContext()) },
+    awgManager = { AwgManagerImpl(androidContext()) }
 )
 
 val androidVpnModule = module {

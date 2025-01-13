@@ -5,4 +5,5 @@ plugins {
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.composeMultiplatform) apply false
     alias(libs.plugins.kotlinMultiplatform) apply false
+    alias(libs.plugins.android.library) apply false
 }

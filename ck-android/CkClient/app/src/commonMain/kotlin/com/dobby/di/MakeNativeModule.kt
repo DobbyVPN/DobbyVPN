@@ -1,5 +1,6 @@
 import com.dobby.feature.logging.domain.CopyLogsInteractor
 import com.dobby.feature.logging.domain.LogsRepository
+import com.dobby.feature.main.domain.AwgManager
 import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
@@ -15,9 +16,11 @@ fun makeNativeModule(
     configsRepository: NativeInjectionFactory<DobbyConfigsRepository>,
     connectionStateRepository: NativeInjectionFactory<ConnectionStateRepository>,
     vpnManager: NativeInjectionFactory<VpnManager>,
+    awgManager: NativeInjectionFactory<AwgManager>,
 ): Module {
     return module {
         factory { vpnManager() }
+        factory { awgManager() }
         single { copyLogsInteractor() }
         single { logsRepository() }
         single { connectionStateRepository() }

@@ -2,6 +2,7 @@ package com.dobby.feature.main.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.dobby.feature.main.domain.AwgManager
 import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
@@ -15,6 +16,7 @@ class MainViewModel(
     private val configsRepository: DobbyConfigsRepository,
     private val connectionStateRepository: ConnectionStateRepository,
     private val vpnManager: VpnManager,
+    private val awgManager: AwgManager,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MainUiState())
@@ -77,5 +79,26 @@ class MainViewModel(
     private fun stopVpnService() {
         configsRepository.setIsOutlineEnabled(false)
         vpnManager.stop()
+    }
+
+    fun getAwgVersion(): String = awgManager.getAwgVersion()
+
+    fun onAwgConnect(config: String) {
+        viewModelScope.launch {
+            checkVpnPermissionEvents.emit(Unit)
+        }
+
+        configsRepository.setAwgConfig(config)
+        configsRepository.setIsAmneziaWGEnabled(true)
+        awgManager.onAwgConnect()
+    }
+
+    fun onAwgDisconnect() {
+        viewModelScope.launch {
+            checkVpnPermissionEvents.emit(Unit)
+        }
+
+        configsRepository.setIsAmneziaWGEnabled(false)
+        awgManager.onAwgDisconnect()
     }
 }
