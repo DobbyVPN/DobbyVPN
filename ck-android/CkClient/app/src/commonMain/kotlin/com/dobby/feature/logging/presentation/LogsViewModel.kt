@@ -26,6 +26,11 @@ class LogsViewModel(
         _uiState.tryEmit(LogsUiState())
     }
 
+    fun reloadLogs() {
+        val logsState = LogsUiState(logsRepository.readLogs())
+        _uiState.tryEmit(logsState)
+    }
+
     fun copyLogsToClipBoard() {
         copyLogsInteractor.copy(_uiState.value.logMessages)
     }

@@ -3,14 +3,11 @@
 .DS_Store
 build
 /captures
-/.idea/*
-!.idea/codeStyles
-!.idea/dictionaries
-!.idea/inspectionProfiles
-!.idea/vcs.xml
 *.iml
 .externalNativeBuild
 .cxx
+.kotlin/
+.idea/
 
 # Xcode
 xcuserdata/

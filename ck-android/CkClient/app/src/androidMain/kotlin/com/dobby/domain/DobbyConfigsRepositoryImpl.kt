@@ -71,14 +71,14 @@ internal class DobbyConfigsRepositoryImpl(
     }
 
     override fun getAwgConfig(): String {
-        return (prefs.getString("awgConfig", "") ?: "").also {
+        return (prefs.getString("awgConfig", DEFAULT_AWG_CONFIG) ?: "").also {
             AndroidLog("DOBBY_TAG", "getAwgConfig, size = ${it.length}")
         }
     }
 
-    override fun setAwgConfig(newConfig: String?) {
+    override fun setAwgConfig(newConfig: String) {
         prefs.edit().putString("awgConfig", newConfig).apply().also {
-            AndroidLog("DOBBY_TAG", "setAwgConfig, size = ${newConfig?.length}")
+            AndroidLog("DOBBY_TAG", "setAwgConfig, size = ${newConfig.length}")
         }
     }
 
@@ -92,5 +92,28 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.edit().putBoolean("isAmneziaWGEnabled", isAmneziaWGEnabled).apply().also {
             AndroidLog("DOBBY_TAG", "setIsAmneziaWGEnabled = $isAmneziaWGEnabled")
         }
+    }
+
+    companion object {
+        const val DEFAULT_AWG_CONFIG = """[Interface]
+PrivateKey = <...>
+Address = <...>
+DNS = 8.8.8.8
+Jc = 0
+Jmin = 0
+Jmax = 0
+S1 = 0
+S2 = 0
+H1 = 1
+H2 = 2
+H3 = 3
+H4 = 4
+
+[Peer]
+PublicKey = <...>
+Endpoint = <...>
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 60
+"""
     }
 }
