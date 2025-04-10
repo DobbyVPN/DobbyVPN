@@ -33,7 +33,7 @@ interface DobbyConfigsRepository {
     // region amnezia
     fun getAwgConfig(): String
 
-    fun setAwgConfig(newConfig: String?)
+    fun setAwgConfig(newConfig: String)
 
     fun getIsAmneziaWGEnabled(): Boolean
 

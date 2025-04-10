@@ -45,7 +45,6 @@ class MyVpnService : VpnService() {
         }
     }
 
-    private val tunnelManager = TunnelManager(this)
     private var vpnInterface: ParcelFileDescriptor? = null
 
     private val logger: Logger by inject()
@@ -58,6 +57,7 @@ class MyVpnService : VpnService() {
     private val bufferSize = 65536
     private var inputStream: FileInputStream? = null
     private var outputStream: FileOutputStream? = null
+    private val tunnelManager = TunnelManager(this, logger)
 
     override fun onCreate() {
         super.onCreate()
