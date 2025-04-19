@@ -254,6 +254,150 @@ jobs:
           name: dobbyvpn-android.apk
           path: dobbyvpn-android.apk
 
+  ios_build:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        go-version: [ "1.23.2" ]
+
+    steps:
+      - name: Checkout node
+        uses: actions/checkout@v2
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Select Xcode 16.1
+        run: sudo xcode-select -s /Applications/Xcode_16.1.app
+
+      - name: Set up Git Submodules
+        run: |
+          git submodule update --init --recursive
+
+      - name: Install dependencies
+        run: |
+          cd src
+          go get ./...
+          cd ..
+
+      - name: Build Kotlin Multiplatform
+        run: |
+          cd ck-android/CkClient
+          chmod +x gradlew
+          ./gradlew linkReleaseFrameworkIosArm64
+
+      - name: Build iOS App
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          CERT_P12_PASSWORD: ${{ secrets.CERT_P12_PASSWORD }}
+          CERT_P12_BASE64: ${{ secrets.CERT_P12_BASE64 }}
+          PROVISION_DOBBY_BASE64: ${{ secrets.PROVISION_DOBBY_BASE64 }}
+          PROVISION_DOBBY_TUNNEL_BASE64: ${{ secrets.PROVISION_DOBBY_TUNNEL_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          # Prepare paths
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          PROVISION_DOBBY_PATH="$RUNNER_TEMP/profile1.mobileprovision"
+          PROVISION_DOBBY_TUNNEL_PATH="$RUNNER_TEMP/profile2.mobileprovision"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+
+          # Decode base64 secrets
+          echo "$CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          echo "$PROVISION_DOBBY_BASE64" | base64 --decode > "$PROVISION_DOBBY_PATH"
+          echo "$PROVISION_DOBBY_TUNNEL_BASE64" | base64 --decode > "$PROVISION_DOBBY_TUNNEL_PATH"
+
+          # Setup keychain and import certificate
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$CERT_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Install provisioning profiles
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$PROVISION_DOBBY_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/
+          cp "$PROVISION_DOBBY_TUNNEL_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Verify provisioning profile contents
+        run: |
+          for profile in ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision; do
+            echo "== $profile =="
+            security cms -D -i "$profile" | grep network || echo "No Network Extension entitlement"
+          done
+
+      - name: List installed provisioning profiles
+        run: |
+          echo "Listing provisioning profiles in ~/Library/MobileDevice/Provisioning Profiles"
+          ls -l ~/Library/MobileDevice/Provisioning\ Profiles
+          for profile in ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision; do
+            echo "----"
+            security cms -D -i "$profile" | plutil -extract Name xml1 -o - - | xmllint --format -
+          done
+
+      - name: 📦 Build and Archive iOS App
+        run: |
+          set -euo pipefail
+          cd ck-android/CkClient/iosApp
+          xcodebuild -project iosApp.xcodeproj \
+                     -scheme iosApp \
+                     -configuration Release \
+                     -sdk iphoneos \
+                     -archivePath $PWD/build/iosApp.xcarchive \
+                     archive
+              ls -lh $PWD/build
+
+              if [ -e "$PWD/build/iosApp.xcarchive" ]; then
+                  echo "Archive created successfully!"
+              else
+                  echo "Archive not found!"
+              exit 1
+              fi
+
+      - name: Export IPA
+        run: |
+          cd ck-android/CkClient/iosApp
+          cat > exportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>vpn.dobby.app</key>
+              <string>DobbyVPNAppStore</string>
+              <key>vpn.dobby.app.tunnel</key>
+              <string>DobbyVPNTunnelAppStore</string>
+            </dict>
+            <key>teamID</key>
+            <string>F6CHJX72K5</string>
+          </dict>
+          </plist>
+          EOF
+
+          xcodebuild -exportArchive \
+                     -archivePath $PWD/build/iosApp.xcarchive \
+                     -exportPath $PWD/build/ipa \
+                     -exportOptionsPlist exportOptions.plist
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@master
+        with:
+          name: DobbyVPN.ipa
+          path: ck-android/CkClient/iosApp/build/ipa/*.ipa
+
   release:
     runs-on: ubuntu-latest
     needs: [windows_build, linux_build, macos_build_arm64, android_build]
