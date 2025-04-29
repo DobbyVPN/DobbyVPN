@@ -13,6 +13,10 @@ class LogsRepositoryImpl(
     private val logFile: File
         get() = File(logFileName)
 
+    init {
+        logFile.createNewFile()
+    }
+
     override fun writeLog(log: String) {
         runCatching {
             FileWriter(logFile, true).use { writer ->
@@ -36,6 +40,9 @@ class LogsRepositoryImpl(
     }
 
     override fun clearLogs() {
-        if (logFile.exists()) logFile.delete()
+        if (logFile.exists()) {
+            logFile.delete()
+        }
+        logFile.createNewFile()
     }
 }

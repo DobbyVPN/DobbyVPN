@@ -43,7 +43,7 @@ internal class DobbyConfigsRepositoryImpl() : DobbyConfigsRepository {
         return "AwgConfig"
     }
 
-    override fun setAwgConfig(newConfig: String?) {
+    override fun setAwgConfig(newConfig: String) {
     }
 
     override fun getIsAmneziaWGEnabled(): Boolean {
