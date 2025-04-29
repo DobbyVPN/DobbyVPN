@@ -5,7 +5,7 @@ class AddTapDevice(
     private val logger: Logger
 ) {
 
-    fun updatePath() {
+    private fun updatePath() {
         val currentPath = System.getenv("PATH")
         val newPath = "$currentPath;${System.getenv("SystemRoot")}\\system32;${System.getenv("SystemRoot")}\\system32\\wbem;${System.getenv("SystemRoot")}\\system32\\WindowsPowerShell\\v1.0"
         System.setProperty("java.library.path", newPath)
@@ -47,7 +47,7 @@ class AddTapDevice(
         configureTapDevice(deviceName)
     }
 
-    fun configureTapDevice(deviceName: String) {
+    private fun configureTapDevice(deviceName: String) {
         logger.log("Configuring TAP device subnet...")
         if (executeCommand("netsh interface ip set address $deviceName static 10.0.85.2 255.255.255.255") != 0) {
             logger.log("Could not set TAP network device subnet.")
@@ -67,7 +67,7 @@ class AddTapDevice(
         }
     }
 
-    fun executeCommand(command: String): Int {
+    private fun executeCommand(command: String): Int {
         return try {
             val process = ProcessBuilder("cmd.exe", "/c", command).start()
             process.waitFor()
@@ -78,7 +78,7 @@ class AddTapDevice(
     }
 
 
-    fun runAsAdmin(appDir: String, command: String) {
+    private fun runAsAdmin(appDir: String, command: String) {
         val processBuilder = ProcessBuilder(
             "powershell",
             "-Command",
@@ -97,7 +97,7 @@ class AddTapDevice(
 
             process.waitFor()
         } catch (e: Exception) {
-            e.message?.let { logger.log(it.toString()) }
+            e.message?.let { logger.log(it) }
         }
     }
 }
