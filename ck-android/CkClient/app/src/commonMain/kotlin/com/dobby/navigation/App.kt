@@ -7,7 +7,6 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -23,12 +22,8 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.logging.ui.LogScreen
-import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.feature.main.ui.AwgScreen
-import com.dobby.feature.main.ui.DobbySocksScreen
-import org.jetbrains.compose.ui.tooling.preview.Preview
 import com.dobby.feature.main.ui.DobbySocksScreen
 import com.dobby.util.koinViewModel
 
@@ -40,7 +35,7 @@ fun App(
     val keyboardController = LocalSoftwareKeyboardController.current
 
     Scaffold(
-        modifier = Modifier
+        modifier = modifier
             .pointerInput(Unit) {
                 detectTapGestures(onTap = { keyboardController?.hide() })
             },
@@ -65,15 +60,6 @@ fun App(
             }
         }
     )
-}
-
-@Composable
-fun App(
-    mainViewModel: MainViewModel,
-    logsViewModel: LogsViewModel,
-) {
-    val navController = rememberNavController()
-    val keyboardController = LocalSoftwareKeyboardController.current
 }
 
 @Composable

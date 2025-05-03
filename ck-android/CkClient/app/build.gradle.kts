@@ -61,7 +61,7 @@ kotlin {
             implementation(libs.koin.android)
             implementation(libs.koin.androidx.compose)
 
-            implementation(files("../libs/cloak_outline.aar"))
+            implementation(files("../libs/go_client_android.aar"))
         }
 
         commonMain.dependencies {
@@ -141,8 +141,4 @@ dependencies {
     implementation(project(":awg"))
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
-    implementation(kotlin("script-runtime"))
-    //implementation(files("../libs/cloak.aar"))
-    //implementation(files("../libs/tun2socks.aar"))
-    //implementation(files("../libs/outline.aar"))
 }

@@ -20,6 +20,10 @@ import com.dobby.feature.vpn_service.domain.CloakConnectionInteractor
 import com.dobby.feature.vpn_service.domain.IpFetcher
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.isActive
 import org.koin.android.ext.android.inject
 import java.io.BufferedReader
 import java.io.FileInputStream
@@ -53,14 +57,30 @@ class DobbyVpnService : VpnService() {
     private val cloakConnectInteractor: CloakConnectionInteractor by inject()
     private val dobbyConfigsRepository: DobbyConfigsRepository by inject()
     private val outlineLibFacade: OutlineLibFacade by inject()
+    private val connectionState: ConnectionStateRepository by inject()
 
     private val bufferSize = 65536
     private var inputStream: FileInputStream? = null
     private var outputStream: FileOutputStream? = null
     private val tunnelManager = TunnelManager(this, logger)
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    override fun onCreate() {
+        super.onCreate()
+        serviceScope.launch {
+            connectionState.flow.drop(1).collect { isConnected ->
+                if (!isConnected) {
+                    vpnInterface?.close()
+                    vpnInterface = null
+                    stopSelf()
+                }
+            }
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when(dobbyConfigsRepository.getVpnInterface()) {
+        when (dobbyConfigsRepository.getVpnInterface()) {
             VpnInterface.CLOAK_OUTLINE -> startCloakOutline(intent)
             VpnInterface.AMNEZIA_WG -> startAwg()
         }
@@ -68,8 +88,8 @@ class DobbyVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
-        ConnectionStateRepository.update(isConnected = false)
+        connectionState.tryUpdate(isConnected = false)
+        serviceScope.cancel()
         runCatching {
             inputStream?.close()
             outputStream?.close()
@@ -77,14 +97,15 @@ class DobbyVpnService : VpnService() {
             disableCloakIfNeeded()
         }.onFailure { it.printStackTrace() }
         tunnelManager.updateState(null, TunnelState.DOWN)
+        super.onDestroy()
     }
 
     private fun startCloakOutline(intent: Intent?) {
         logger.log("Tunnel: Start curl before connection")
-        CoroutineScope(Dispatchers.IO).launch {
+        serviceScope.launch {
             val ipAddress = ipFetcher.fetchIp()
             withContext(Dispatchers.Main) {
-                ConnectionStateRepository.update(isConnected = true)
+                connectionState.update(isConnected = true)
                 if (ipAddress != null) {
                     logger.log("Tunnel: response from curl: $ipAddress")
                     setupVpn()
@@ -108,7 +129,6 @@ class DobbyVpnService : VpnService() {
         } else {
             logger.log("!!! Start disconnecting Outline")
             vpnInterface?.close()
-            ConnectionStateRepository.update(isConnected = false) // todo move somewhere
             stopSelf()
         }
     }
@@ -133,7 +153,7 @@ class DobbyVpnService : VpnService() {
         val shouldEnableCloak = dobbyConfigsRepository.getIsCloakEnabled() || force
         val cloakConfig = dobbyConfigsRepository.getCloakConfig().ifEmpty { return }
         if (shouldEnableCloak && cloakConfig.isNotEmpty()) {
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 logger.log("!!!Cloak: connect start")
                 val result = cloakConnectInteractor.connect(config = cloakConfig)
                 logger.log("!!!Cloak connection result is $result")
@@ -146,7 +166,7 @@ class DobbyVpnService : VpnService() {
     private fun disableCloakIfNeeded() {
         if (dobbyConfigsRepository.getIsCloakEnabled()) {
             logger.log("!!! Disabling Cloak!")
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 cloakConnectInteractor.disconnect()
                 dobbyConfigsRepository.setIsCloakEnabled(false)
             }
@@ -162,16 +182,15 @@ class DobbyVpnService : VpnService() {
             inputStream = FileInputStream(vpnInterface?.fileDescriptor)
             outputStream = FileOutputStream(vpnInterface?.fileDescriptor)
 
-            logger.log("VPN Interface Created Successfully")
+            logger.log("Start reading packets")
+            startReadingPackets()
 
-            CoroutineScope(Dispatchers.IO).launch {
-                logger.log("Start reading packets")
-                startReadingPackets()
-                logger.log("Start writing packets")
-                startWritingPackets()
+            logger.log("Start writing packets")
+            startWritingPackets()
 
-                logRoutingTable()
+            logRoutingTable()
 
+            serviceScope.launch {
                 logger.log("Start function resolveAndLogDomain('google.com')")
                 val ipAddress = resolveAndLogDomain("google.com")
                 logger.log("Start function ping('1.1.1.1')")
@@ -189,7 +208,7 @@ class DobbyVpnService : VpnService() {
     }
 
     private fun logRoutingTable() {
-        CoroutineScope(Dispatchers.IO).launch {
+        serviceScope.launch {
             try {
                 val processBuilder = ProcessBuilder("ip", "route")
                 processBuilder.redirectErrorStream(true)
@@ -236,7 +255,7 @@ class DobbyVpnService : VpnService() {
 
     private fun ping(host: String): Deferred<Unit> {
         val deferred = CompletableDeferred<Unit>()
-        CoroutineScope(Dispatchers.IO).launch {
+        serviceScope.launch {
             try {
                 val processBuilder = ProcessBuilder("ping", "-c", "4", host)
                 processBuilder.redirectErrorStream(true)
@@ -261,11 +280,11 @@ class DobbyVpnService : VpnService() {
     }
 
     private fun startReadingPackets() {
-        CoroutineScope(Dispatchers.IO).launch {
+        serviceScope.launch {
             vpnInterface?.let { vpn ->
                 val buffer = ByteBuffer.allocate(bufferSize)
 
-                while (true) {
+                while (isActive) {
                     try {
                         val length = inputStream?.read(buffer.array()) ?: 0
 
@@ -285,7 +304,7 @@ class DobbyVpnService : VpnService() {
     }
 
     private fun checkServerAvailability(host: String) {
-        CoroutineScope(Dispatchers.IO).launch {
+        serviceScope.launch {
             try {
                 val socket = Socket()
                 val socketAddress = InetSocketAddress(host, 443)
@@ -324,11 +343,11 @@ class DobbyVpnService : VpnService() {
     }
 
     private fun startWritingPackets() {
-        CoroutineScope(Dispatchers.IO).launch {
+        serviceScope.launch {
             vpnInterface?.let {
                 val buffer = ByteBuffer.allocate(bufferSize)
 
-                while (true) {
+                while (isActive) {
                     try {
                         //val length = tunnel.read(buffer)
                         //if (length > 0) {

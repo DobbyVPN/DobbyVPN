@@ -26,7 +26,7 @@ val androidMainModule = makeNativeModule(
             prefs = androidContext().getSharedPreferences("DobbyPrefs", MODE_PRIVATE)
         )
     },
-    connectionStateRepository = { ConnectionStateRepository },
+    connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(androidContext()) },
     awgManager = { AwgManagerImpl(androidContext()) }
 )

@@ -1,19 +1,20 @@
 package com.dobby.feature.vpn_service.domain
 
 import com.dobby.feature.vpn_service.CloakLibFacade
-import cloak_outline.Cloak_outline
+import kotlin_exports.Kotlin_exports.startCloakClient
+import kotlin_exports.Kotlin_exports.stopCloakClient
 
 class CloakLibFacadeImpl : CloakLibFacade {
 
     override fun startClient(localHost: String, localPort: String, config: String) {
-        Cloak_outline.startCloakClient(localHost, localPort, config, false)
+        startCloakClient(localHost, localPort, config, false)
     }
 
     override fun stopClient() {
-        Cloak_outline.stopCloak()
+        stopCloakClient()
     }
 
     override fun restartClient() {
-        Cloak_outline.startAgain()
+//        Cloak_outline.startAgain()
     }
 }

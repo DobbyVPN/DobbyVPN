@@ -51,12 +51,14 @@ class MainViewModel(
         )
 
         viewModelScope.launch {
-            connectionStateRepository.observe().collect { isConnected ->
+            connectionStateRepository.flow.collect { isConnected ->
                 val newState = _uiState.value.copy(isConnected = isConnected)
                 _uiState.tryEmit(newState)
             }
+        }
+        viewModelScope.launch {
             permissionEventsChannel
-                .observePermissionGrantedEvents()
+                .permissionsGrantedEvents
                 .collect { isPermissionGranted -> startVpn(isPermissionGranted) }
         }
 
@@ -79,7 +81,7 @@ class MainViewModel(
     ) {
         saveData(isCloakEnabled, cloakJson, outlineKey)
         viewModelScope.launch {
-            when (ConnectionStateRepository.isConnected()) {
+            when (connectionStateRepository.flow.value) {
                 true -> stopVpnService()
                 false -> {
                     if (isPermissionCheckNeeded) {
@@ -113,8 +115,9 @@ class MainViewModel(
         vpnManager.start()
     }
 
-    private fun stopVpnService() {
+    private suspend fun stopVpnService() {
         configsRepository.setIsOutlineEnabled(false)
+        connectionStateRepository.update(isConnected = false)
         vpnManager.stop()
     }
     //endregion

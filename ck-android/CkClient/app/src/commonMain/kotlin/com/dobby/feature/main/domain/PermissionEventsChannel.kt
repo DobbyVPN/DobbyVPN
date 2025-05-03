@@ -1,27 +1,21 @@
 package com.dobby.feature.main.domain
 
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
 class PermissionEventsChannel {
 
-    private val checkPermissionsEvents = MutableSharedFlow<Unit>()
+    private val _checkPermissionsEvents = MutableSharedFlow<Unit>()
+    private val _permissionsGrantedEvents = MutableSharedFlow<Boolean>()
 
-    private val permissionsGrantedEvents = MutableSharedFlow<Boolean>()
-
-    fun observeCheckPermissionsEvents(): Flow<Unit> {
-        return checkPermissionsEvents
-    }
+    val checkPermissionsEvents = _checkPermissionsEvents.asSharedFlow()
+    val permissionsGrantedEvents = _permissionsGrantedEvents.asSharedFlow()
 
     suspend fun checkPermissions() {
-        checkPermissionsEvents.emit(Unit)
-    }
-
-    fun observePermissionGrantedEvents(): Flow<Boolean> {
-        return permissionsGrantedEvents
+        _checkPermissionsEvents.emit(Unit)
     }
 
     suspend fun onPermissionGranted(isGranted: Boolean) {
-        permissionsGrantedEvents.emit(isGranted)
+        _permissionsGrantedEvents.emit(isGranted)
     }
 }
