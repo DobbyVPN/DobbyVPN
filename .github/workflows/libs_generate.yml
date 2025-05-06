@@ -1,0 +1,134 @@
+name: Build VPN Libraries
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag for new library release"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}-latest
+    strategy:
+      matrix:
+        os: [windows, ubuntu, macos]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+
+      - name: Vendor Cloak/internal
+        run: |
+          git clone --depth 1 https://github.com/cbeuw/Cloak tmp
+          cp -r tmp/internal go_client/modules/Cloak/
+
+      - name: Download Go modules
+        run: |
+          cd go_client
+          go mod download
+          go get github.com/refraction-networking/utls@v1.6.7
+          cd ..
+
+      - name: Install compiler
+        if: matrix.os != 'windows-latest'
+        id: install_cc
+        uses: rlalik/setup-cpp-compiler@master
+        with:
+          compiler: latest
+
+      - name: Verify GCC Installation
+        if: matrix.os != 'windows-latest'
+        run: |
+          gcc --version
+          g++ --version
+
+      - name: Build windows library
+        if: matrix.os == 'windows'
+        run: |
+          cd go_client
+          go build -buildmode=c-shared -o lib_windows.dll ./desktop_exports/...
+        env:
+          CGO_ENABLED: "1"
+          GOOS: "windows"
+          GOARCH: "amd64"
+          CC: ${{ steps.install_cc.outputs.cc }}
+          CXX: ${{ steps.install_cc.outputs.cxx }}
+
+      - name: Build linux library
+        if: matrix.os == 'ubuntu'
+        run: |
+          cd go_client
+          go build -buildmode=c-shared -o lib_linux.so ./desktop_exports/...
+        env:
+          CGO_ENABLED: "1"
+          GOOS: "linux"
+          GOARCH: "amd64"
+          CC: ${{ steps.install_cc.outputs.cc }}
+          CXX: ${{ steps.install_cc.outputs.cxx }}
+
+      - name: Build windows library
+        if: matrix.os == 'macos'
+        run: |
+          cd go_client
+          go build -buildmode=c-shared -o lib_mac.dylib ./desktop_exports/...
+        env:
+          CGO_ENABLED: "1"
+          GOOS: "darwin"
+          GOARCH: "amd64"
+          CC: ${{ steps.install_cc.outputs.cc }}
+          CXX: ${{ steps.install_cc.outputs.cxx }}
+
+      - name: Upload Built Libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: "lib_${{ matrix.os }}"
+          path: |
+            go_client/lib_windows.dll
+            go_client/lib_linux.so
+            go_client/lib_mac.dylib
+
+  release:
+    if: ${{ github.event.inputs.release_tag != '' }}
+    runs-on: ubuntu-latest
+    needs: build
+    permissions: write-all
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Make release dir
+        run: mkdir release
+
+      - name: Download windows library
+        uses: actions/download-artifact@v4
+        with:
+          name: lib_windows
+          path: release
+
+      - name: Download linux library
+        uses: actions/download-artifact@v4
+        with:
+          name: lib_ubuntu
+          path: release
+
+      - name: Download macos library
+        uses: actions/download-artifact@v4
+        with:
+          name: lib_macos
+          path: release
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*
+          tag_name: ${{ github.event.inputs.release_tag }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

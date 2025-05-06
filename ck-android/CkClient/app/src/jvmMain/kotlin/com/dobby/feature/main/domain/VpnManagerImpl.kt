@@ -1,8 +1,16 @@
 package com.dobby.feature.main.domain
 
-class VpnManagerImpl(): VpnManager {
+import com.dobby.feature.vpn_service.DobbyVpnService
 
-    override fun start() {}
+internal class VpnManagerImpl(
+    private val dobbyVpnService: DobbyVpnService,
+) : VpnManager {
 
-    override fun stop() {}
+    override fun start() {
+        dobbyVpnService.startService()
+    }
+
+    override fun stop() {
+        dobbyVpnService.stopService()
+    }
 }
