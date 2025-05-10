@@ -56,10 +56,12 @@ class MainViewModel(
                 _uiState.tryEmit(newState)
             }
         }
-        viewModelScope.launch {
-            permissionEventsChannel
-                .permissionsGrantedEvents
-                .collect { isPermissionGranted -> startVpn(isPermissionGranted) }
+        if (isPermissionCheckNeeded) {
+            viewModelScope.launch {
+                permissionEventsChannel
+                    .permissionsGrantedEvents
+                    .collect { isPermissionGranted -> startVpn(isPermissionGranted) }
+            }
         }
 
         // AmneziaWG init
@@ -79,6 +81,7 @@ class MainViewModel(
         outlineKey: String,
         isCloakEnabled: Boolean
     ) {
+        if (outlineKey.isEmpty()) return
         saveData(isCloakEnabled, cloakJson, outlineKey)
         viewModelScope.launch {
             when (connectionStateRepository.flow.value) {

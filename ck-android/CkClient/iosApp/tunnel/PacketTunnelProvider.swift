@@ -1,5 +1,4 @@
 import NetworkExtension
-import MyLibrary
 import os
 import app
 import CommonDI
@@ -29,7 +28,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.dnsSettings = NEDNSSettings(servers: dnsServers)
 
         try await self.setTunnelNetworkSettings(settings)
-        NSLog("Tunnel settings applied")
+        log(message: "Tunnel settings applied")
 
         // Initialize the device
         device.initialize(config: config)
@@ -43,7 +42,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        NSLog("Stopping tunnel with reason: \(reason)")
+        log(message: "Stopping tunnel with reason: \(reason)")
         completionHandler()
     }
     
@@ -52,19 +51,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func startReadPacketsFromDevice() {
-        NSLog("Starting to read packets from device...")
+        log(message: "Starting to read packets from device...")
         while true {
             let data = device.readFromDevice()
             let packets: [Data] = [data]
             let protocols: [NSNumber] = [NSNumber(value: AF_INET)] // IPv4
 
             let success = self.packetFlow.writePackets(packets, withProtocols: protocols)
-            NSLog("self.packetFlow.writePackets - succ")
+            NSLog("self.packetFlow.writePackets - success")
             if !success {
-                NSLog("Failed to write packets to the tunnel")
+                log(message: "Failed to write packets to the tunnel")
             }
         }
-        NSLog("Finishing #startReadPacketsFromDevice")
+        log(message: "Finishing #startReadPacketsFromDevice")
     }
     
     private func startReadPacketsAndForwardToDevice() {
@@ -83,40 +82,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             device.write(data: packet)
         }
     }
-}
-
-class DeviceFacade {
-
-    private var device: Cloak_outlineOutlineDevice? = nil
-
-    func initialize(config: String) {
-        device = Cloak_outlineOutlineDevice(config)
-        NSLog("Device initiaization finished")
-    }
     
-    func write(data: Data) {
-        do {
-            var ret0_: Int = 0
-            try device?.write(data, ret0_: &ret0_)
-        } catch let error {
-            NSLog("error is \(error)")
-        }
-    }
-    
-    func readFromDevice() -> Data {
-        do {
-            let data = try device?.read()
-            return data!
-        } catch let error {
-            NSLog("error is \(error)")
-            return Data()
-        }
-    }
-    
-    func close() {
-        do {
-            try device?.close()
-        } catch {}
-        device = nil
+    private func log(message: String) {
+        logs.writeLog(log: message)
+        NSLog(message)
     }
 }

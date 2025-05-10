@@ -7,7 +7,7 @@ public class NativeModuleHolder {
             return CopyLogsInteractorImpl()
         },
         logsRepository: { scope in
-            return LocalLogsRepository()
+            return logger
         },
         configsRepository: { scope in
             return configsRepository
@@ -16,7 +16,10 @@ public class NativeModuleHolder {
             return connectionStateRepository
         },
         vpnManager: { scope in
-            return VpnManagerImpl(connectionRepository: connectionStateRepository)
+            return VpnManagerImpl(
+                connectionRepository: connectionStateRepository,
+                logsRepository: logger
+            )
         },
         awgManager: { scope in
             return AwgManagerImpl()
@@ -31,3 +34,5 @@ public let appGroupIdentifier = "group.vpn.dobby.app"
 public var configsRepository = DobbyConfigsRepositoryImpl.shared
 
 public var connectionStateRepository = ConnectionStateRepository()
+
+private var logger = LocalLogsRepository()

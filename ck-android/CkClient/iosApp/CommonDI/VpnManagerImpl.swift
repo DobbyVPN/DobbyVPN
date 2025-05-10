@@ -8,12 +8,17 @@ class VpnManagerImpl: VpnManager {
     
     private var vpnManager: NETunnelProviderManager?
     private var connectionRepository: ConnectionStateRepository
+    private var logger: LogsRepository
     
     private var observer: NSObjectProtocol?
     @Published private(set) var state: NEVPNStatus = .invalid
     
-    init(connectionRepository: ConnectionStateRepository) {
+    init(
+        connectionRepository: ConnectionStateRepository,
+        logsRepository: LogsRepository
+    ) {
         self.connectionRepository = connectionRepository
+        self.logger = logsRepository
 
         getOrCreateManager { (manager, error) in
             if (manager?.connection.status == .connected) {
@@ -51,25 +56,24 @@ class VpnManagerImpl: VpnManager {
     func start() {
         getOrCreateManager { (manager, error) in
             guard let manager = manager else {
-                NSLog("Created VPNManager is nil")
+                self.log(message: "Created VPNManager is nil")
                 return
             }
-            print("self.vpnManager = \(manager)")
             self.vpnManager = manager
             self.vpnManager?.isEnabled = true
             do {
-                print("starting tunnel !\(manager.connection.status)")
+                self.log(message: "starting tunnel. Current status is \(manager.connection.status)")
                 // https://stackoverflow.com/a/47569982/934719 - TODO fix
                 try manager.connection.startVPNTunnel()
             } catch {
-                NSLog("Error staring VPNTunnel \(error)")
+                self.log(message: "Error staring VPNTunnel \(error)")
             }
         }
     }
 
     func stop() {
         guard state == .connected else { return }
-        NSLog("Actually vpnManager is \(vpnManager)")
+        self.log(message: "Stopping vpnManager: \(vpnManager)")
         vpnManager?.connection.stopVPNTunnel()
     }
 
@@ -77,10 +81,10 @@ class VpnManagerImpl: VpnManager {
         NETunnelProviderManager.loadAllFromPreferences { (managers, error) in
             if let existingManager = managers?.first(where: { $0.localizedDescription == self.dobbyName }) {
                 self.vpnManager = existingManager
-                NSLog("Existing manager found.")
+                self.log(message: "Existing VPN Manager found.")
                 completion(existingManager, nil)
             } else {
-                NSLog("Existing manager not found.")
+                self.log(message: "Existing VPN Manager not found.")
                 self.vpnManager = self.makeManager()
                 self.vpnManager?.saveToPreferences { (error) in
                     completion(self.vpnManager, error)
@@ -100,5 +104,10 @@ class VpnManagerImpl: VpnManager {
         newVpnManager.protocolConfiguration = proto
         newVpnManager.isEnabled = true
         return newVpnManager
+    }
+    
+    private func log(message: String) {
+        logger.writeLog(log: message)
+        NSLog(message)
     }
 }
