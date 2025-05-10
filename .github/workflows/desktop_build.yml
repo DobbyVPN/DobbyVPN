@@ -1,0 +1,119 @@
+name: Desktop Build
+
+on:
+  workflow_call:
+
+
+jobs:
+  desktop_build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Download Windows lib
+        uses: actions/download-artifact@master
+        with:
+          name: lib_windows
+          path: ck-android/CkClient/libs
+
+      - name: Download Linux lib
+        uses: actions/download-artifact@master
+        with:
+          name: lib_ubuntu
+          path: ck-android/CkClient/libs
+
+      - name: Download MacOS lib
+        uses: actions/download-artifact@master
+        with:
+          name: lib_macos
+          path: ck-android/CkClient/libs
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          check-latest: true
+
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: >
+            ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
+
+      - name: Build with Gradle
+        run: |
+          cd ck-android/CkClient
+          chmod +x ./gradlew
+          ./gradlew build
+
+      - name: Conveyor build site
+        uses: hydraulic-software/conveyor/actions/build@v16.0
+        env:
+          OAUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          command: make site
+          extra_flags: "--passphrase=\"${{ secrets.CONVEYOR_PASSPHRASE }}\" -f ck-android/CkClient/conveyor.conf"
+          signing_key: ${{ secrets.CONVEYOR_SIGNING_KEY }}
+          agree_to_license: 1
+
+      - name: Display file tree with sizes after Linux build
+        run: |
+          echo "Displaying the size of files and directories in 'output' directory:"
+          du -ah output | sort -rh
+
+      - name: Find files
+        id: find_deb
+        run: |
+          echo "DEB_FILE=$(find ./output -name '*.deb' -type f)" >> $GITHUB_ENV
+          echo "TARGZ_FILE=$(find ./output -name '*.tar.gz' -type f)" >> $GITHUB_ENV
+          echo "MAC_AARCH64_FILE=$(find ./output -name '*-mac-aarch64.zip' -type f)" >> $GITHUB_ENV
+          echo "MAC_AMD64_FILE=$(find ./output -name '*-mac-amd64.zip' -type f)" >> $GITHUB_ENV
+          echo "MSIX_FILE=$(find ./output -name '*.msix' -type f)" >> $GITHUB_ENV
+
+      - name: Upload Debian
+        uses: actions/upload-artifact@master
+        with:
+          name: dobbyVPN-linux.deb
+          path: ${{ env.DEB_FILE }}
+
+      - name: Upload Tar Gz
+        uses: actions/upload-artifact@master
+        with:
+          name: dobbyVPN-linux.tar.gz
+          path: ${{ env.TARGZ_FILE }}
+
+      - name: Upload Zip for Mac aarch64
+        uses: actions/upload-artifact@master
+        with:
+          name: dobbyVPN-macos-aarch64.zip
+          path: ${{ env.MAC_AARCH64_FILE }}
+
+      - name: Upload Zip for Mac amd64
+        uses: actions/upload-artifact@master
+        with:
+          name: dobbyVPN-macos-amd64.zip
+          path: ${{ env.MAC_AMD64_FILE }}
+
+      - name: Upload Msix
+        uses: actions/upload-artifact@master
+        with:
+          name: dobbyVPN-windows.msiz
+          path: ${{ env.MSIX_FILE }}
+
+      - name: Cleanup Conveyor
+        if: always()
+        run: |
+          rm -rf .conveyor/cache/*
+
+      - name: Display file tree with sizes after Windows build
+        run: |
+          echo "Displaying the size of files and directories in 'output' directory:"
+          du -ah output | sort -rh
+
+      - name: Delete output directory
+        run: rm -rf output
