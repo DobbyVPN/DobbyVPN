@@ -3,7 +3,7 @@ package com.dobby.feature.vpn_service
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
-import interop.OutlineLib
+import interop.VPNLibraryLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
@@ -11,7 +11,7 @@ import kotlinx.coroutines.launch
 internal class DobbyVpnService(
     private val dobbyConfigsRepository: DobbyConfigsRepository,
     private val logger: Logger,
-    private val outlineLib: OutlineLib
+    private val outlineLib: VPNLibraryLoader
 ) {
 
     fun startService() {
@@ -22,6 +22,7 @@ internal class DobbyVpnService(
     }
 
     fun stopService() {
+
     }
 
 
