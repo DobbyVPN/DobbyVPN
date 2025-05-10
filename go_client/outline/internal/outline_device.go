@@ -62,23 +62,6 @@ func (d *OutlineDevice) GetServerIP() net.IP {
 	return d.svrIP
 }
 
-func (d *OutlineDevice) Read() ([]byte, error) {
-	buf := make([]byte, 65536)
-	n, err := d.IPDevice.Read(buf)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read data: %w", err)
-	}
-	return buf[:n], nil
-}
-
-func (d *OutlineDevice) Write(buf []byte) (int, error) {
-	n, err := d.IPDevice.Write(buf)
-	if err != nil {
-		return 0, fmt.Errorf("failed to write data: %w", err)
-	}
-	return n, nil
-}
-
 func resolveShadowsocksServerIPFromConfig(transportConfig string) (net.IP, error) {
 	if strings.Contains(transportConfig, "|") {
 		return nil, errors.New("multi-part config is not supported")

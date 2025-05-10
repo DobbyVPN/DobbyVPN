@@ -1,6 +1,9 @@
+//go:build android || ios
+
 package outline
 
 import (
+	"fmt"
 	"go_client/common"
 	"go_client/outline/internal"
 	"net"
@@ -50,7 +53,12 @@ func (c *OutlineClient) GetServerIP() net.IP {
 }
 
 func (c *OutlineClient) Read() ([]byte, error) {
-	return c.device.Read()
+	buf := make([]byte, 65536)
+	n, err := c.device.Read(buf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read data: %w", err)
+	}
+	return buf[:n], nil
 }
 
 func (c *OutlineClient) Write(buf []byte) (int, error) {

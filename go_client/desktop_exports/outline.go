@@ -1,37 +1,50 @@
 package main
 
-import "go_client/outline"
+import "C"
+import (
+	log "github.com/sirupsen/logrus"
+	"go_client/outline"
+	"sync"
+)
 
-type OutlineClient struct {
-	*outline.OutlineClient
+var outlineClient *outline.OutlineClient
+var outlineMu sync.Mutex
+
+//export StartOutline
+func StartOutline(key *C.char) {
+	str_key := C.GoString(key)
+	keyPtr := &str_key
+
+	outlineMu.Lock()
+	defer outlineMu.Unlock()
+
+	if outlineClient != nil {
+		log.Infof("Disconnect existing outline client")
+		err := outlineClient.Disconnect()
+		if err != nil {
+			log.Errorf("Failed to disconnect existing outline client: %v", err)
+			return
+		}
+	}
+
+	outlineClient = outline.NewClient(keyPtr)
+	log.Infof("Connect outline client")
+	err := outlineClient.Connect()
+	if err != nil {
+		log.Errorf("Failed to connect outline client: %v", err)
+	}
 }
 
-//export Connect
-func (c *OutlineClient) Connect() error {
-	return c.OutlineClient.Connect()
-}
-
-//export Disconnect
-func (c *OutlineClient) Disconnect() error {
-	return c.OutlineClient.Disconnect()
-}
-
-//func (c *OutlineClient) GetServerIP() net.IP {
-//	return c.OutlineClient.GetServerIP()
-//}
-
-//export Read
-func (c *OutlineClient) Read() ([]byte, error) {
-	return c.OutlineClient.Read()
-}
-
-//export Write
-func (c *OutlineClient) Write(buf []byte) (int, error) {
-	return c.OutlineClient.Write(buf)
-}
-
-//export NewOutlineClient
-func NewOutlineClient(transportConfig string) *OutlineClient {
-	cl := outline.NewClient(transportConfig)
-	return &OutlineClient{OutlineClient: cl}
+//export StopOutline
+func StopOutline() {
+	outlineMu.Lock()
+	defer outlineMu.Unlock()
+	if outlineClient != nil {
+		log.Infof("Disconnect outline client")
+		err := outlineClient.Disconnect()
+		if err != nil {
+			log.Errorf("Failed to disconnect outline client: %v", err)
+		}
+		outlineClient = nil
+	}
 }
