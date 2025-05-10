@@ -87,11 +87,11 @@ jobs:
           name: dobbyVPN-linux.tar.gz
           path: ${{ env.TARGZ_FILE }}
 
-      - name: Upload Zip for Mac aarch64
-        uses: actions/upload-artifact@master
-        with:
-          name: dobbyVPN-macos-aarch64.zip
-          path: ${{ env.MAC_AARCH64_FILE }}
+#      - name: Upload Zip for Mac aarch64
+#        uses: actions/upload-artifact@master
+#        with:
+#          name: dobbyVPN-macos-aarch64.zip
+#          path: ${{ env.MAC_AARCH64_FILE }}
 
       - name: Upload Zip for Mac amd64
         uses: actions/upload-artifact@master
@@ -102,7 +102,7 @@ jobs:
       - name: Upload Msix
         uses: actions/upload-artifact@master
         with:
-          name: dobbyVPN-windows.msiz
+          name: dobbyVPN-windows.msix
           path: ${{ env.MSIX_FILE }}
 
       - name: Cleanup Conveyor

@@ -39,21 +39,30 @@ jobs:
       - name: Make release dir
         run: mkdir release
 
-      - name: Download linux client
+      - name: Download linux deb client
         uses: actions/download-artifact@master
         with:
-          name: dobbyvpn-linux-amd64.zip
+          name: dobbyVPN-linux.deb
           path: release
-      - name: Download windows client
+
+      - name: Download linux tar.gz client
         uses: actions/download-artifact@master
         with:
-          name: dobbyvpn-windows.exe
+          name: dobbyVPN-linux.tar.gz
           path: release
-      - name: Download macos client
+
+      - name: Download windows msix client
         uses: actions/download-artifact@master
         with:
-          name: dobbyvpn-darwin-arm64
+          name: dobbyVPN-windows.msix
           path: release
+
+      - name: Download macos amd64 client
+        uses: actions/download-artifact@master
+        with:
+          name: dobbyVPN-macos-amd64.zip
+          path: release
+
       - name: Download android client
         uses: actions/download-artifact@master
         with:
