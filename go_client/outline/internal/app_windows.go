@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go_client/geo"
+	"go_client/route"
 	"log"
 	"net"
 	"os"
@@ -160,6 +162,19 @@ func (app App) Run(ctx context.Context) error {
 
 	if err := ss.Refresh(); err != nil {
 		return fmt.Errorf("failed to refresh OutlineDevice: %w", err)
+	}
+
+	if len(app.RoutingConfig.BypassCountries) > 0 {
+		cidrs, err := geo.CIDRList(app.RoutingConfig.BypassCountries)
+		if err != nil {
+			return fmt.Errorf("failed to load geo bypass CIDRs: %w", err)
+		}
+		if len(cidrs) > 0 {
+			if err := route.InstallBypassRoutes(cidrs, app.RoutingConfig.RoutingTableID); err != nil {
+				return fmt.Errorf("failed to install geo bypass routes: %w", err)
+			}
+			logging.Info.Printf("Outline/Run: Installed %d geo‑bypass routes", len(cidrs))
+		}
 	}
 
 	tunInterface, err := GetNetworkInterfaceByIP(TunDeviceIP)

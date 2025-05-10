@@ -31,6 +31,8 @@ func NewClient(transportConfig *string) *OutlineClient {
 				RoutingTableID:       233,
 				RoutingTablePriority: 23333,
 				DNSServerIP:          "9.9.9.9",
+
+				BypassCountries: []string{"RU"},
 			},
 		},
 	}

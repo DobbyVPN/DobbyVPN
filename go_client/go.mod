@@ -13,6 +13,7 @@ require (
 	github.com/cbeuw/Cloak v0.0.0-00010101000000-000000000000
 	github.com/jackpal/gateway v1.1.1
 	github.com/matsuridayo/libneko v0.0.0-20240702024904-1c47a3af7199
+	github.com/oschwald/maxminddb-golang/v2 v2.0.0-beta.3
 	github.com/sirupsen/logrus v1.9.3
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/vishvananda/netlink v1.2.1-beta.2
