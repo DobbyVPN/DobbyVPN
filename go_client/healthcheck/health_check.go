@@ -52,7 +52,7 @@ func (h *healthChecker) start() {
 }
 
 func checkHealth() healthCheckStatus {
-	ms, err := UrlTest("https://google.com", 1)
+	ms, err := UrlTest("https://www.gstatic.com/generate_204", 1)
 	return healthCheckStatus{at: time.Now(), isHealthy: err == nil, handshakeMs: ms, err: err}
 }
 
