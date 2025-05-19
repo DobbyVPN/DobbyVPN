@@ -1,7 +1,4 @@
-/* SPDX-License-Identifier: Apache-2.0
- *
- * Copyright © 2017-2022 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
- */
+//go:build android || linux
 
 package awg
 
