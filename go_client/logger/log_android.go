@@ -29,6 +29,7 @@ import "C"
 
 import (
 	"bufio"
+	log "github.com/sirupsen/logrus"
 	"os"
 	"unsafe"
 )
@@ -65,19 +66,19 @@ func lineLog(f *os.File, priority C.int) {
 }
 
 func LogInit() {
-	//log.SetOutput(infoWriter{})
-	//
-	//r, w, err := os.Pipe()
-	//if err != nil {
-	//	panic(err)
-	//}
-	//os.Stderr = w
-	//go lineLog(r, C.ANDROID_LOG_ERROR)
-	//
-	//r, w, err = os.Pipe()
-	//if err != nil {
-	//	panic(err)
-	//}
-	//os.Stdout = w
-	//go lineLog(r, C.ANDROID_LOG_INFO)
+	log.SetOutput(infoWriter{})
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		panic(err)
+	}
+	os.Stderr = w
+	go lineLog(r, C.ANDROID_LOG_ERROR)
+
+	r, w, err = os.Pipe()
+	if err != nil {
+		panic(err)
+	}
+	os.Stdout = w
+	go lineLog(r, C.ANDROID_LOG_INFO)
 }
