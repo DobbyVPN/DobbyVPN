@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -11,7 +10,7 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/Jigsaw-Code/outline-sdk/network/lwip2transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
+	"github.com/Jigsaw-Code/outline-sdk/x/config"
 )
 
 const (
@@ -26,7 +25,7 @@ type OutlineDevice struct {
 	svrIP net.IP
 }
 
-var configModule = configurl.NewDefaultProviders()
+var configModule = config.NewDefaultConfigToDialer()
 
 func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 	// log.Infof("oultine client: resolving server IP from config...")
@@ -39,7 +38,7 @@ func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 	}
 
 	// log.Infof("outline client: creating stream dialer...")
-	if od.sd, err = configModule.NewStreamDialer(context.TODO(), transportConfig); err != nil {
+	if od.sd, err = configModule.NewStreamDialer(transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create TCP dialer: %w", err)
 	}
 

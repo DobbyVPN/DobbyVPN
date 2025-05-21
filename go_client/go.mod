@@ -18,8 +18,8 @@ require (
 )
 
 require (
-	github.com/Jigsaw-Code/outline-sdk v0.0.20 // indirect
-	github.com/Jigsaw-Code/outline-sdk/x v0.0.3 // indirect
+	github.com/Jigsaw-Code/outline-sdk v0.0.16 // indirect
+	github.com/Jigsaw-Code/outline-sdk/x v0.0.0-20240507000320-2e2d2af31add // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/cloudflare/circl v1.5.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
