@@ -11,7 +11,7 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/Jigsaw-Code/outline-sdk/network/lwip2transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
+	"github.com/Jigsaw-Code/outline-sdk/x/config"
 )
 
 const (
@@ -26,7 +26,7 @@ type OutlineDevice struct {
 	svrIP net.IP
 }
 
-var configModule = configurl.NewDefaultConfigToDialer()
+var configModule = config.NewDefaultConfigToDialer()
 
 func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 	log.Infof("oultine client: resolving server IP from config...")

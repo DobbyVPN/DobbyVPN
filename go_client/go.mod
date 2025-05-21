@@ -7,7 +7,7 @@ toolchain go1.24.3
 replace github.com/cbeuw/Cloak => ./modules/Cloak
 
 require (
-	github.com/Jigsaw-Code/outline-sdk v0.0.17-0.20240726212635-470a9290ec57
+	github.com/Jigsaw-Code/outline-sdk v0.0.16
 	github.com/amnezia-vpn/amneziawg-go v0.2.12
 	github.com/cbeuw/Cloak v0.0.0-00010101000000-000000000000
 	github.com/jackpal/gateway v1.1.1
@@ -19,7 +19,7 @@ require (
 )
 
 require (
-	github.com/Jigsaw-Code/outline-sdk/x v0.0.0-20240920164112-f65586ccd3d3 // indirect
+	github.com/Jigsaw-Code/outline-sdk/x v0.0.0-20240507000320-2e2d2af31add // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/cloudflare/circl v1.5.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
