@@ -3,7 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
-	"log"
+	log "github.com/sirupsen/logrus"
 
 	"github.com/Jigsaw-Code/outline-sdk/dns"
 	"github.com/Jigsaw-Code/outline-sdk/network"
@@ -44,14 +44,14 @@ func (proxy *outlinePacketProxy) testConnectivityAndRefresh(resolverAddr, domain
 	dnsResolver := dns.NewUDPResolver(dialer, resolverAddr)
 	result, err := connectivity.TestConnectivityWithResolver(context.Background(), dnsResolver, domain)
 	if err != nil {
-		log.Printf("connectivity test failed. Refresh skipped. Error: %v\n", err)
+		log.Infof("connectivity test failed. Refresh skipped. Error: %v\n", err)
 		return err
 	}
 	if result != nil {
-		log.Printf("remote server cannot handle UDP traffic, switch to DNS truncate mode.")
+		log.Infof("remote server cannot handle UDP traffic, switch to DNS truncate mode.")
 		return proxy.SetProxy(proxy.fallback)
 	} else {
-		log.Printf("remote server supports UDP, we will delegate all UDP packets to it")
+		log.Infof("remote server supports UDP, we will delegate all UDP packets to it")
 		return proxy.SetProxy(proxy.remote)
 	}
 }

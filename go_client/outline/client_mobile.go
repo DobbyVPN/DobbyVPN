@@ -62,6 +62,7 @@ func (c *OutlineClient) GetServerIP() net.IP {
 
 func (c *OutlineClient) Read() ([]byte, error) {
 	buf := make([]byte, 65536)
+	log.Infof("outline client: read data")
 	n, err := c.device.Read(buf)
 	if err != nil {
 		log.Errorf("failed to read data: %v", err)
@@ -71,5 +72,11 @@ func (c *OutlineClient) Read() ([]byte, error) {
 }
 
 func (c *OutlineClient) Write(buf []byte) (int, error) {
-	return c.device.Write(buf)
+	log.Infof("outline client: write data")
+	n, err := c.device.Write(buf)
+	if err != nil {
+		log.Errorf("failed to write data: %v", err)
+		return 0, fmt.Errorf("failed to write data: %w", err)
+	}
+	return n, nil
 }

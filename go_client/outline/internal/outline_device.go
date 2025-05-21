@@ -3,6 +3,7 @@ package internal
 import (
 	"errors"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"net"
 	"net/url"
 	"strings"
@@ -28,6 +29,7 @@ type OutlineDevice struct {
 var configModule = configurl.NewDefaultConfigToDialer()
 
 func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
+	log.Infof("oultine client: resolving server IP from config...")
 	ip, err := resolveShadowsocksServerIPFromConfig(transportConfig)
 	if err != nil {
 		return nil, err
@@ -36,12 +38,17 @@ func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 		svrIP: ip,
 	}
 
+	log.Infof("outline client: creating stream dialer...")
 	if od.sd, err = configModule.NewStreamDialer(transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create TCP dialer: %w", err)
 	}
+
+	log.Infof("outline client: creating packet proxy...")
 	if od.pp, err = newOutlinePacketProxy(transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create delegate UDP proxy: %w", err)
 	}
+
+	log.Infof("outline client: configuring lwIP...")
 	if od.IPDevice, err = lwip2transport.ConfigureDevice(od.sd, od.pp); err != nil {
 		return nil, fmt.Errorf("failed to configure lwIP: %w", err)
 	}
