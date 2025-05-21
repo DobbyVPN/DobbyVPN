@@ -3,13 +3,13 @@ package internal
 import (
 	"context"
 	"fmt"
+	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/Jigsaw-Code/outline-sdk/dns"
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/Jigsaw-Code/outline-sdk/network/dnstruncate"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/Jigsaw-Code/outline-sdk/x/config"
 	"github.com/Jigsaw-Code/outline-sdk/x/connectivity"
 )
 
@@ -23,15 +23,22 @@ type outlinePacketProxy struct {
 func newOutlinePacketProxy(transportConfig string) (opp *outlinePacketProxy, err error) {
 	opp = &outlinePacketProxy{}
 
-	if opp.remotePl, err = config.NewPacketListener(transportConfig); err != nil {
+	log.Infof("outline client: creating UDP packet listener...")
+	if opp.remotePl, err = configurl.NewDefaultProviders().NewPacketListener(context.TODO(), transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create UDP packet listener: %w", err)
 	}
+
+	log.Infof("outline client: creating UDP packet proxy...")
 	if opp.remote, err = network.NewPacketProxyFromPacketListener(opp.remotePl); err != nil {
 		return nil, fmt.Errorf("failed to create UDP packet proxy: %w", err)
 	}
+
+	log.Infof("outline client: creating DNS truncate packet proxy...")
 	if opp.fallback, err = dnstruncate.NewPacketProxy(); err != nil {
 		return nil, fmt.Errorf("failed to create DNS truncate packet proxy: %w", err)
 	}
+
+	log.Infof("outline client: creating delegate UDP proxy...")
 	if opp.DelegatePacketProxy, err = network.NewDelegatePacketProxy(opp.fallback); err != nil {
 		return nil, fmt.Errorf("failed to create delegate UDP proxy: %w", err)
 	}
