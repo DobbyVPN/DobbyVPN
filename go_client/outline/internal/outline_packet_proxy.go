@@ -3,7 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
-	log "github.com/sirupsen/logrus"
+	"log"
 
 	"github.com/Jigsaw-Code/outline-sdk/dns"
 	"github.com/Jigsaw-Code/outline-sdk/network"
@@ -23,7 +23,7 @@ type outlinePacketProxy struct {
 func newOutlinePacketProxy(transportConfig string) (opp *outlinePacketProxy, err error) {
 	opp = &outlinePacketProxy{}
 
-	if opp.remotePl, err = configurl.NewDefaultProviders().NewPacketListener(context.TODO(), transportConfig); err != nil {
+	if opp.remotePl, err = configurl.NewPacketListener(transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create UDP packet listener: %w", err)
 	}
 	if opp.remote, err = network.NewPacketProxyFromPacketListener(opp.remotePl); err != nil {
@@ -44,14 +44,14 @@ func (proxy *outlinePacketProxy) testConnectivityAndRefresh(resolverAddr, domain
 	dnsResolver := dns.NewUDPResolver(dialer, resolverAddr)
 	result, err := connectivity.TestConnectivityWithResolver(context.Background(), dnsResolver, domain)
 	if err != nil {
-		log.Errorf("connectivity test failed. Refresh skipped. Error: %v\n", err)
+		log.Printf("connectivity test failed. Refresh skipped. Error: %v\n", err)
 		return err
 	}
 	if result != nil {
-		log.Infof("remote server cannot handle UDP traffic, switch to DNS truncate mode.")
+		log.Printf("remote server cannot handle UDP traffic, switch to DNS truncate mode.")
 		return proxy.SetProxy(proxy.fallback)
 	} else {
-		log.Infof("remote server supports UDP, we will delegate all UDP packets to it")
+		log.Printf("remote server supports UDP, we will delegate all UDP packets to it")
 		return proxy.SetProxy(proxy.remote)
 	}
 }

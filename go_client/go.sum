@@ -1,5 +1,13 @@
+github.com/Jigsaw-Code/outline-sdk v0.0.16 h1:WbHmv80FKDIpzEmR3GehTbq5CibYTLvcxIIpMMILiEs=
+github.com/Jigsaw-Code/outline-sdk v0.0.16/go.mod h1:e1oQZbSdLJBBuHgfeQsgEkvkuyIePPwstUeZRGq0KO8=
+github.com/Jigsaw-Code/outline-sdk v0.0.17-0.20240726212635-470a9290ec57 h1:XNSV0dGW48J8DmdmCnk/txGHf9glAPqa6Xme/rFWn7c=
+github.com/Jigsaw-Code/outline-sdk v0.0.17-0.20240726212635-470a9290ec57/go.mod h1:e1oQZbSdLJBBuHgfeQsgEkvkuyIePPwstUeZRGq0KO8=
 github.com/Jigsaw-Code/outline-sdk v0.0.20 h1:4ep7MK9lFmcyPIRIbn4xrP1VKdJNsqR6+iJEOHDKnNg=
 github.com/Jigsaw-Code/outline-sdk v0.0.20/go.mod h1:CFDKyGZA4zatKE4vMLe8TyQpZCyINOeRFbMAmYHxodw=
+github.com/Jigsaw-Code/outline-sdk/x v0.0.0-20240920164112-f65586ccd3d3 h1:zHvNg7oCkDsOXXPDZSLSIW7kjV0Zts4s0NaH/Bz5GME=
+github.com/Jigsaw-Code/outline-sdk/x v0.0.0-20240920164112-f65586ccd3d3/go.mod h1:buECBxsNB+FXqDnsbJP6RiAMus7TBXqKAq5lSm+aE7k=
+github.com/Jigsaw-Code/outline-sdk/x v0.0.1 h1:DW8Ja4iWKPqYpnahBXQ/eg1WVDw/F3Pktbz1mBWTZXw=
+github.com/Jigsaw-Code/outline-sdk/x v0.0.1/go.mod h1:aFUEz6Z/eD0NS3c3fEIX+JO2D9aIrXCmWTb1zJFlItw=
 github.com/Jigsaw-Code/outline-sdk/x v0.0.3 h1:+TZ2BVcJPwI8BdYEqH/wQR1lNhq8HLB+nrXqyq+acFQ=
 github.com/Jigsaw-Code/outline-sdk/x v0.0.3/go.mod h1:l9BHj3M+4EPJyeDKWQlrtuppEC4P8Gfl+eKs1dyJZ2g=
 github.com/amnezia-vpn/amneziawg-go v0.2.12 h1:CxIQETy5kZ0ip/dFBpmnDxAcS/KuIQaJkOxDv5OQhVI=
