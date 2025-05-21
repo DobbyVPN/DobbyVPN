@@ -8,8 +8,13 @@ import (
 	"go_client/outline/internal"
 	"log"
 	"net"
+	"os"
 	//_ "go_client/logger"
 )
+
+func init() {
+	os.Setenv("GODEBUG", "checkptr=0")
+}
 
 const Name = "outline"
 
