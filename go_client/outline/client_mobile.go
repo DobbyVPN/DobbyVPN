@@ -4,6 +4,7 @@ package outline
 
 import (
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"go_client/common"
 	"go_client/outline/internal"
 	"net"
@@ -20,6 +21,7 @@ type OutlineClient struct {
 
 func NewClient(transportConfig string) *OutlineClient {
 	c := &OutlineClient{config: transportConfig}
+	log.Infof("outline client created")
 	common.Client.SetVpnClient(Name, c)
 	return c
 }
@@ -27,8 +29,12 @@ func NewClient(transportConfig string) *OutlineClient {
 func (c *OutlineClient) Connect() error {
 	od, err := internal.NewOutlineDevice(c.config)
 	if err != nil {
+		log.Errorf("failed to create outline device: %v", err)
 		return err
 	}
+
+	log.Infof("outline device created")
+	log.Infof("outline client connected")
 
 	c.device = od
 	common.Client.MarkActive(Name)
@@ -38,8 +44,10 @@ func (c *OutlineClient) Connect() error {
 func (c *OutlineClient) Disconnect() error {
 	err := c.device.Close()
 	if err != nil {
+		log.Errorf("failed to close outline device: %v", err)
 		return err
 	}
+	log.Infof("outline client disconnected")
 	common.Client.MarkInactive(Name)
 	return nil
 }
@@ -56,6 +64,7 @@ func (c *OutlineClient) Read() ([]byte, error) {
 	buf := make([]byte, 65536)
 	n, err := c.device.Read(buf)
 	if err != nil {
+		log.Errorf("failed to read data: %v", err)
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
 	return buf[:n], nil
