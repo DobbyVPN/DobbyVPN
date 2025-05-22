@@ -8,13 +8,8 @@ import (
 	"go_client/outline/internal"
 	"log"
 	"net"
-	"os"
 	//_ "go_client/logger"
 )
-
-func init() {
-	os.Setenv("GODEBUG", "checkptr=0")
-}
 
 const Name = "outline"
 
@@ -66,8 +61,8 @@ func (c *OutlineClient) GetServerIP() net.IP {
 
 func (c *OutlineClient) Read() ([]byte, error) {
 	buf := make([]byte, 65536)
-	log.Println("outline client: read data")
 	n, err := c.device.Read(buf)
+	log.Println(fmt.Sprintf("outline client: read data; size: %d (%d)", n, n%8))
 	if err != nil {
 		log.Printf("failed to read data: %v\n", err)
 		return nil, fmt.Errorf("failed to read data: %w", err)
@@ -76,8 +71,8 @@ func (c *OutlineClient) Read() ([]byte, error) {
 }
 
 func (c *OutlineClient) Write(buf []byte) (int, error) {
-	log.Println("outline client: write data")
 	n, err := c.device.Write(buf)
+	log.Println(fmt.Sprintf("outline client: write data; size: %d (%d)", n, n%8))
 	if err != nil {
 		log.Printf("failed to write data: %v\n", err)
 		return 0, fmt.Errorf("failed to write data: %w", err)
