@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go_client/routing"
+	tun2 "go_client/tun"
 	"log"
 	"net"
 	"os"
@@ -33,7 +35,7 @@ func add_route(proxyIp string) {
 		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
-	addOrUpdateProxyRoute(proxyIp, gatewayIP.String(), netInterface.Name)
+	routing.AddOrUpdateProxyRoute(proxyIp, gatewayIP.String(), netInterface.Name)
 }
 
 func FindInterfaceByGateway(gatewayIP string) (string, error) {
@@ -123,7 +125,7 @@ func (app App) Run(ctx context.Context) error {
 	trafficCopyWg := &sync.WaitGroup{}
 	defer trafficCopyWg.Wait()
 
-	if !checkRoot() {
+	if !tun2.CheckRoot() {
 		return errors.New("this operation requires superuser privileges. Please run the program with administrator")
 	}
 
@@ -145,7 +147,7 @@ func (app App) Run(ctx context.Context) error {
 		os.Exit(1)
 	}
 
-	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, TunDeviceIP)
+	tun, err := tun2.NewTunDevice(app.RoutingConfig.TunDeviceName, TunDeviceIP)
 	if err != nil {
 		return fmt.Errorf("failed to create tun device: %w", err)
 	}
@@ -173,10 +175,10 @@ func (app App) Run(ctx context.Context) error {
 	copy(src, dst)
 	src[2] += 2
 
-	if err := startRouting(ss.GetServerIP().String(), gatewayIP.String(), tunInterface.Name, tunInterface.HardwareAddr.String(), netInterface.Name, TunGateway, TunDeviceIP, src); err != nil {
+	if err := routing.StartRouting(ss.GetServerIP().String(), gatewayIP.String(), tunInterface.Name, tunInterface.HardwareAddr.String(), netInterface.Name, TunGateway, TunDeviceIP, src); err != nil {
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
-	defer stopRouting(ss.GetServerIP().String(), tunInterface.Name)
+	defer routing.StopRouting(ss.GetServerIP().String(), tunInterface.Name)
 
 	/*ss1, err := NewOutlineDevice("ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpaVWVmTzExenFzN0pQbFBBMU4xWHlh@195.201.111.36:40287/?outline=1")
 	    if err != nil {
@@ -265,7 +267,7 @@ func (app App) Run(ctx context.Context) error {
 
 	tun.Close()
 	ss.Close()
-	stopRouting(ss.GetServerIP().String(), tunInterface.Name)
+	routing.StopRouting(ss.GetServerIP().String(), tunInterface.Name)
 
 	return nil
 

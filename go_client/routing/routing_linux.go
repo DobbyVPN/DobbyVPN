@@ -1,11 +1,12 @@
 //go:build linux
 // +build linux
 
-package internal
+package routing
 
 import (
 	"errors"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"net"
 
 	"github.com/vishvananda/netlink"
@@ -13,19 +14,19 @@ import (
 
 var ipRule *netlink.Rule = nil
 
-func startRouting(proxyIP string, config *RoutingConfig) error {
+func StartRouting(proxyIP string, config *RoutingConfig) error {
 	if err := setupRoutingTable(config.RoutingTableID, config.TunDeviceName, config.TunGatewayCIDR, config.TunDeviceIP); err != nil {
 		return err
 	}
 	return setupIpRule(proxyIP+"/32", config.RoutingTableID, config.RoutingTablePriority)
 }
 
-func stopRouting(routingTable int) {
+func StopRouting(routingTable int) {
 	if err := cleanUpRoutingTable(routingTable); err != nil {
-		logging.Err.Printf("failed to clean up routing table '%v': %v\n", routingTable, err)
+		log.Errorf("failed to clean up routing table '%v': %v\n", routingTable, err)
 	}
 	if err := cleanUpRule(); err != nil {
-		logging.Err.Printf("failed to clean up IP rule: %v\n", err)
+		log.Errorf("failed to clean up IP rule: %v\n", err)
 	}
 }
 
@@ -51,7 +52,7 @@ func setupRoutingTable(routingTable int, tunName, gwSubnet string, tunIP string)
 	if err = netlink.RouteAdd(&r); err != nil {
 		return fmt.Errorf("failed to add routing entry '%v' -> '%v': %w", r.Src, r.Dst, err)
 	}
-	logging.Info.Printf("routing traffic from %v to %v through nic %v\n", r.Src, r.Dst, r.LinkIndex)
+	log.Infof("routing traffic from %v to %v through nic %v\n", r.Src, r.Dst, r.LinkIndex)
 
 	r = netlink.Route{
 		LinkIndex: tun.Attrs().Index,
@@ -62,7 +63,7 @@ func setupRoutingTable(routingTable int, tunName, gwSubnet string, tunIP string)
 	if err := netlink.RouteAdd(&r); err != nil {
 		return fmt.Errorf("failed to add gateway routing entry '%v': %w", r.Gw, err)
 	}
-	logging.Info.Printf("routing traffic via gw %v through nic %v...\n", r.Gw, r.LinkIndex)
+	log.Infof("routing traffic via gw %v through nic %v...\n", r.Gw, r.LinkIndex)
 
 	return nil
 }
@@ -81,7 +82,7 @@ func cleanUpRoutingTable(routingTable int) error {
 		}
 	}
 	if rtDelErr == nil {
-		logging.Info.Printf("routing table '%v' has been cleaned up\n", routingTable)
+		log.Infof("routing table '%v' has been cleaned up\n", routingTable)
 	}
 	return rtDelErr
 }
@@ -104,7 +105,7 @@ func setupIpRule(svrIp string, routingTable, routingPriority int) error {
 	if err := netlink.RuleAdd(ipRule); err != nil {
 		return fmt.Errorf("failed to add IP rule (table %v, dst %v): %w", ipRule.Table, ipRule.Dst, err)
 	}
-	logging.Info.Printf("ip rule 'from all not to %v via table %v' created\n", ipRule.Dst, ipRule.Table)
+	log.Infof("ip rule 'from all not to %v via table %v' created\n", ipRule.Dst, ipRule.Table)
 	return nil
 }
 
@@ -115,7 +116,7 @@ func cleanUpRule() error {
 	if err := netlink.RuleDel(ipRule); err != nil {
 		return fmt.Errorf("failed to delete IP rule of routing table '%v': %w", ipRule.Table, err)
 	}
-	logging.Info.Printf("ip rule of routing table '%v' deleted\n", ipRule.Table)
+	log.Infof("ip rule of routing table '%v' deleted\n", ipRule.Table)
 	ipRule = nil
 	return nil
 }

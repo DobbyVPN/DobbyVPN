@@ -6,6 +6,8 @@ package internal
 import (
 	"errors"
 	"fmt"
+	"go_client/routing"
+	tun2 "go_client/tun"
 	"log"
 	//"os/exec"
 	"context"
@@ -23,7 +25,7 @@ func add_route(proxyIp string) {
 	}
 
 	addSpecificRoute := fmt.Sprintf("sudo route add -net %s/32 %s", proxyIp, gatewayIP.String())
-	if _, err := executeCommand(addSpecificRoute); err != nil {
+	if _, err := routing.ExecuteCommand(addSpecificRoute); err != nil {
 		logging.Info.Printf("failed to add specific route: %w", err)
 	}
 }
@@ -41,11 +43,11 @@ func (app App) Run(ctx context.Context) error {
 	trafficCopyWg := &sync.WaitGroup{}
 	defer trafficCopyWg.Wait()
 
-	if !checkRoot() {
+	if !tun2.CheckRoot() {
 		return errors.New("this operation requires superuser privileges. Please run the program with sudo or as root")
 	}
 
-	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
+	tun, err := tun2.NewTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
 	if err != nil {
 		return fmt.Errorf("failed to create tun device: %w, open app with sudo", err)
 	}
@@ -123,10 +125,10 @@ func (app App) Run(ctx context.Context) error {
 		log.Printf("OutlineDevice -> tun stopped")
 	}()
 
-	if err := startRouting(ss.GetServerIP().String(), gatewayIP.String(), tun.(*tunDevice).name); err != nil {
+	if err := routing.StartRouting(ss.GetServerIP().String(), gatewayIP.String(), tun.(*tun2.TunDevice).Name); err != nil {
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
-	defer stopRouting(ss.GetServerIP().String(), gatewayIP.String())
+	defer routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
 
 	trafficCopyWg.Wait()
 
@@ -136,7 +138,7 @@ func (app App) Run(ctx context.Context) error {
 	log.Printf("Tun closed")
 	ss.Close()
 	log.Printf("Device closed")
-	stopRouting(ss.GetServerIP().String(), gatewayIP.String())
+	routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
 	log.Printf("Stopped")
 	return nil
 }

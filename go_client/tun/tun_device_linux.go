@@ -1,7 +1,7 @@
 //go:build linux
 // +build linux
 
-package internal
+package tun
 
 import (
 	"errors"
@@ -19,7 +19,7 @@ type tunDevice struct {
 
 var _ network.IPDevice = (*tunDevice)(nil)
 
-func newTunDevice(name, ip string) (d network.IPDevice, err error) {
+func NewTunDevice(name, ip string) (d network.IPDevice, err error) {
 	if len(name) == 0 {
 		return nil, errors.New("name is required for TUN/TAP device")
 	}
