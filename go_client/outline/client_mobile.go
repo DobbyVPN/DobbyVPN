@@ -8,7 +8,6 @@ import (
 	"go_client/outline/internal"
 	"log"
 	"net"
-	//_ "go_client/logger"
 )
 
 const Name = "outline"

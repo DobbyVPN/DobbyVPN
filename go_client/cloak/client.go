@@ -6,8 +6,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"go_client/common"
 	"sync"
-
-	_ "go_client/logger"
 )
 
 const Name = "cloak"
