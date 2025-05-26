@@ -1,6 +1,7 @@
 package kotlin_exports
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -11,7 +12,7 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/Jigsaw-Code/outline-sdk/network/lwip2transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/Jigsaw-Code/outline-sdk/x/config"
+	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
 )
 
 const (
@@ -26,7 +27,7 @@ type OutlineDevice struct {
 	svrIP net.IP
 }
 
-var configModule = config.NewDefaultConfigToDialer()
+var configModule = configurl.NewDefaultProviders()
 
 func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 	log.Println("oultine client: resolving server IP from config...")
@@ -39,7 +40,7 @@ func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 	}
 
 	log.Println("outline client: creating stream dialer...")
-	if od.sd, err = configModule.NewStreamDialer(transportConfig); err != nil {
+	if od.sd, err = configModule.NewStreamDialer(context.TODO(), transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create TCP dialer: %w", err)
 	}
 
@@ -94,4 +95,21 @@ func resolveShadowsocksServerIPFromConfig(transportConfig string) (net.IP, error
 		}
 	}
 	return nil, errors.New("IPv6 only Shadowsocks server is not supported yet")
+}
+
+func (d *OutlineDevice) Read() ([]byte, error) {
+	buf := make([]byte, 65536)
+	n, err := d.IPDevice.Read(buf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read data: %w", err)
+	}
+	return buf[:n], nil
+}
+
+func (d *OutlineDevice) Write(buf []byte) (int, error) {
+	n, err := d.IPDevice.Write(buf)
+	if err != nil {
+		return 0, fmt.Errorf("failed to write data: %w", err)
+	}
+	return n, nil
 }
