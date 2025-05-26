@@ -106,13 +106,6 @@ jobs:
         with:
           go-version: '1.24.3'
 
-      - name: Vendor Cloak/internal
-        run: |
-          git clone --depth 1 https://github.com/cbeuw/Cloak tmp
-          mkdir -p go_client/modules/Cloak
-          cp -r tmp/internal go_client/modules/Cloak/
-          rm -rf tmp
-
       - name: Download Go modules
         run: |
           cd go_client
