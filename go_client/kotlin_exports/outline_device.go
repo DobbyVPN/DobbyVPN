@@ -1,4 +1,4 @@
-package internal
+package kotlin_exports
 
 import (
 	"errors"

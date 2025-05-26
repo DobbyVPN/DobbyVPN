@@ -135,7 +135,7 @@ jobs:
       - name: Build Go AAR
         run: |
           cd go_client
-          gomobile bind -target=android/arm64 -androidapi=23 -o ../go_client_android.aar ./kotlin_exports
+          gomobile bind -target=android/arm64 -androidapi=26 -o ../go_client_android.aar ./kotlin_exports
           cd ..
 
       - name: Upload Go AAR
