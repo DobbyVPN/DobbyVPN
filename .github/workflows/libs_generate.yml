@@ -128,8 +128,9 @@ jobs:
 
       - name: Fetch gomobile runtime
         run: |
+          MOBILE_VER=$(go list -m -f '{{.Version}}' golang.org/x/mobile)
           cd go_client
-          go get golang.org/x/mobile/bind@latest
+          go get golang.org/x/mobile@${MOBILE_VER}
           cd ..
 
       - name: Build Go AAR
