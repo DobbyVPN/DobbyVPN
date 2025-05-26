@@ -97,50 +97,30 @@ jobs:
 
   prepare_go_client_android:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.24.3'
 
-#      - name: Download Go modules
-#        run: |
-#          cd go_client
-#          go mod download
-#          cd ..
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platforms;android-35
+            build-tools;35.0.0
+            platform-tools
 
-#      - name: Setup Android SDK
-#        uses: android-actions/setup-android@v3
-#        with:
-#          packages: >
-#            platforms;android-35
-#            build-tools;35.0.0
-#            platform-tools
-
-
-#      - name: Install gomobile & init
-#        run: |
-#          go install golang.org/x/mobile/cmd/gomobile@latest
-#          gomobile version
-#          gomobile init -v
-
-      - name: Build Go Mobile
-        run: go build -C x -o "go_client/" golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
-
-#      - name: Fetch gomobile runtime
-#        run: |
-#          MOBILE_VER=$(go list -m -f '{{.Version}}' golang.org/x/mobile)
-#          cd go_client
-#          go get golang.org/x/mobile@${MOBILE_VER}
-#          cd ..
+      - name: Install gomobile & gobind
+        run: |
+          go install golang.org/x/mobile/cmd/{gomobile,gobind}@latest
+          gomobile init -v
 
       - name: Build Go AAR
         run: |
           cd go_client
-          gomobile bind -ldflags='-s -w' -v -target=android -androidapi=21 -o ./kotlin_exports
+          gomobile bind -ldflags='-s -w' -v -target=android -androidapi=21 -o ../go_client_android.aar ./kotlin_exports
           cd ..
 
       - name: Upload Go AAR
@@ -148,6 +128,7 @@ jobs:
         with:
           name: go_client_android.aar
           path: go_client_android.aar
+
 
   release:
     if: ${{ github.event.inputs.release_tag != '' }}
