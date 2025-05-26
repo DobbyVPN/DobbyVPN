@@ -4,7 +4,6 @@ package outline
 
 import (
 	"fmt"
-	"go_client/common"
 	"go_client/outline/internal"
 	"log"
 	"net"
@@ -20,7 +19,7 @@ type OutlineClient struct {
 func NewClient(transportConfig string) *OutlineClient {
 	c := &OutlineClient{config: transportConfig}
 	log.Println("outline client created")
-	common.Client.SetVpnClient(Name, c)
+	//common.Client.SetVpnClient(Name, c)
 	return c
 }
 
@@ -35,7 +34,7 @@ func (c *OutlineClient) Connect() error {
 	log.Println("outline client connected")
 
 	c.device = od
-	common.Client.MarkActive(Name)
+	//common.Client.MarkActive(Name)
 	return nil
 }
 
@@ -46,7 +45,7 @@ func (c *OutlineClient) Disconnect() error {
 		return err
 	}
 	log.Println("outline client disconnected")
-	common.Client.MarkInactive(Name)
+	//common.Client.MarkInactive(Name)
 	return nil
 }
 

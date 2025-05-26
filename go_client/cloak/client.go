@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"github.com/cbeuw/Cloak/exported_client"
 	log "github.com/sirupsen/logrus"
-	"go_client/common"
 	"sync"
 )
 
@@ -48,7 +47,7 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 
 	client = exported_client.NewCkClient(rawConfig)
 
-	common.Client.SetVpnClient(Name, client)
+	//common.Client.SetVpnClient(Name, client)
 	err = client.Connect() // TODO: handle err
 	if err != nil {
 		log.Errorf("cloak client: Failed to connect to cloak client - %v", err)
@@ -57,11 +56,11 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 
 	log.Infof("cloak client connected")
 
-	common.Client.MarkActive(Name)
+	//common.Client.MarkActive(Name)
 }
 
 func StopCloakClient() {
-	defer common.Client.MarkInactive(Name)
+	//defer common.Client.MarkInactive(Name)
 	mu.Lock()
 	defer mu.Unlock()
 
