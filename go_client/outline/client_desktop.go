@@ -7,7 +7,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"go_client/common"
 	"go_client/outline/internal"
-	"go_client/routing"
 	"sync"
 )
 
@@ -24,7 +23,7 @@ func NewClient(transportConfig *string) *OutlineClient {
 	c := &OutlineClient{
 		app: &internal.App{
 			TransportConfig: transportConfig,
-			RoutingConfig: &routing.RoutingConfig{
+			RoutingConfig: &internal.RoutingConfig{
 				TunDeviceName:        "outline233",
 				TunDeviceIP:          "10.233.233.1",
 				TunDeviceMTU:         1500,
@@ -51,8 +50,6 @@ func (c *OutlineClient) Connect() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
 
-	common.Client.MarkActive(Name)
-
 	go func() {
 		if err := c.app.Run(ctx); err != nil {
 			log.Errorf("connect outline failed: %v", err)
@@ -60,6 +57,7 @@ func (c *OutlineClient) Connect() error {
 		}
 	}()
 
+	common.Client.MarkActive(Name)
 	return nil
 }
 

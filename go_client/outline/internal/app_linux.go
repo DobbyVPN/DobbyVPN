@@ -6,8 +6,6 @@ package internal
 import (
 	"context"
 	"fmt"
-	"go_client/routing"
-	tun2 "go_client/tun"
 	"log"
 	"sync"
 )
@@ -18,7 +16,7 @@ func (app App) Run(ctx context.Context) error {
 	defer trafficCopyWg.Wait()
 
 	logging.Info.Printf("Outline/Run: Start creating tun")
-	tun, err := tun2.NewTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
+	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
 	if err != nil {
 		return fmt.Errorf("failed to create tun device: %w", err)
 	}
@@ -42,12 +40,12 @@ func (app App) Run(ctx context.Context) error {
 
 	logging.Info.Printf("Outline/Run: Start routing")
 
-	if err := routing.StartRouting(ss.GetServerIP().String(), app.RoutingConfig); err != nil {
+	if err := startRouting(ss.GetServerIP().String(), app.RoutingConfig); err != nil {
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
 	defer func() {
 		logging.Info.Printf("Outline/Run: Stop routing")
-		routing.StopRouting(app.RoutingConfig.RoutingTableID)
+		stopRouting(app.RoutingConfig.RoutingTableID)
 		log.Printf("Outline/Run: Stopped")
 	}()
 

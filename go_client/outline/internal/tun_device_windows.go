@@ -1,7 +1,7 @@
 //go:build windows
 // +build windows
 
-package tun
+package internal
 
 import (
 	"bytes"
@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-func CheckRoot() bool {
+func checkRoot() bool {
 	cmd := exec.Command("net", "session")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow: true,
@@ -349,8 +349,8 @@ type tunDevice struct {
 
 var _ network.IPDevice = (*tunDevice)(nil)
 
-func NewTunDevice(name, ip string) (d network.IPDevice, err error) {
-	if !CheckRoot() {
+func newTunDevice(name, ip string) (d network.IPDevice, err error) {
+	if !checkRoot() {
 		return nil, errors.New("this operation requires superuser privileges. Please run the program with administrator")
 	}
 
