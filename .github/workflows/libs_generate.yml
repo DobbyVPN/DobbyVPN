@@ -116,8 +116,8 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           packages: >
-            platforms;android-36
-            build-tools;36.0.0
+            platforms;android-35
+            build-tools;35.0.0
             platform-tools
 
       - name: Install gomobile & init
@@ -136,7 +136,7 @@ jobs:
       - name: Build Go AAR
         run: |
           cd go_client
-          gomobile bind -target=android/arm64 -androidapi=26 -v -x -ldflags='' -o ../go_client_android.aar ./kotlin_exports
+          gomobile bind -target=android/arm64 -androidapi=26 -o ../go_client_android.aar ./kotlin_exports
           cd ..
 
       - name: Upload Go AAR
