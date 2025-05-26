@@ -122,16 +122,16 @@ jobs:
 
       - name: Install gomobile & init
         run: |
-          go get -u golang.org/x/mobile/bind@latest
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile version
           gomobile init -v
 
-#      - name: Fetch gomobile runtime
-#        run: |
-#          cd go_client
-#          go get golang.org/x/mobile/bind@latest
-#          cd ..
+      - name: Fetch gomobile runtime
+        run: |
+          cd go_client
+          go get golang.org/x/mobile/bind@latest
+          go mod tidy
+          cd ..
 
       - name: Build Go AAR
         run: |
