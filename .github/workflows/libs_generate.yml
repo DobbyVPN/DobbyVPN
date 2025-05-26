@@ -130,7 +130,7 @@ jobs:
       - name: Build Go AAR
         run: |
           cd go_client
-          gomobile bind -ldflags='-s -w' -ldflags="-extldflags=-static" -v -target=android -androidapi=21 -o ../go_client_android.aar ./kotlin_exports
+          gomobile bind -ldflags="-extldflags=-static" -v -target=android -androidapi=21 -o ../go_client_android.aar ./kotlin_exports
           cd ..
 
       - name: Upload Go AAR
