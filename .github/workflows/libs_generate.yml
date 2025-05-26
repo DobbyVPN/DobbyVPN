@@ -100,14 +100,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
           go-version: '1.24.3'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: |
+          packages: >
             platforms;android-35
             build-tools;35.0.0
             platform-tools
