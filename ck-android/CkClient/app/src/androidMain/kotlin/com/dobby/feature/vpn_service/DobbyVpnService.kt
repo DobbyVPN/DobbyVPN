@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import androidx.lifecycle.viewModelScope
+import com.dobby.awg.GoBackendWrapper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
@@ -21,7 +23,9 @@ import com.dobby.feature.vpn_service.domain.IpFetcher
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.isActive
 import org.koin.android.ext.android.inject
@@ -75,6 +79,19 @@ class DobbyVpnService : VpnService() {
                     vpnInterface = null
                     stopSelf()
                 }
+            }
+        }
+
+        serviceScope.launch {
+            while (true) {
+                val dumpedLog = GoBackendWrapper.awgDumpLog()
+                dumpedLog.split("\n").forEach {
+                    if (it.isNotEmpty()) {
+                        logger.log("[AmneziaWG/tunnel] $it")
+                    }
+                }
+
+                delay(1000)
             }
         }
     }

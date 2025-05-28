@@ -15,5 +15,7 @@ class GoBackendWrapper {
         fun awgGetConfig(handle: Int): String = backend.awgGetConfig(handle)
 
         fun awgVersion(): String = backend.awgVersion()
+
+        fun awgDumpLog(): String = backend.awgDumpLog()
     }
 }

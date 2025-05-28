@@ -14,6 +14,7 @@ extern int awgGetSocketV4(int handle);
 extern int awgGetSocketV6(int handle);
 extern char *awgGetConfig(int handle);
 extern char *awgVersion();
+extern char *awgDumpLog();
 
 JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_awgTurnOn(JNIEnv *env, jclass c, jstring ifname, jint tun_fd, jstring settings)
 {
@@ -61,11 +62,22 @@ JNIEXPORT jstring JNICALL Java_com_dobby_awg_GoBackend_awgGetConfig(JNIEnv *env,
 
 JNIEXPORT jstring JNICALL Java_com_dobby_awg_GoBackend_awgVersion(JNIEnv *env, jclass c)
 {
-	jstring ret;
-	char *version = awgVersion();
-	if (!version)
-		return NULL;
-	ret = (*env)->NewStringUTF(env, version);
-	free(version);
-	return ret;
+    jstring ret;
+    char *version = awgVersion();
+    if (!version)
+        return NULL;
+    ret = (*env)->NewStringUTF(env, version);
+    free(version);
+    return ret;
+}
+
+JNIEXPORT jstring JNICALL Java_com_dobby_awg_GoBackend_awgDumpLog(JNIEnv *env, jclass c)
+{
+    jstring ret;
+    char * log = awgDumpLog();
+    if (!log)
+        return NULL;
+    ret = (*env)->NewStringUTF(env, log);
+    free(log);
+    return ret;
 }
