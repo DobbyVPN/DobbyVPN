@@ -16,9 +16,6 @@ class LogsViewModel(
         logsRepository.clearLogs()
     }
 
-    fun reloadLogs() {
-    }
-
     fun copyLogsToClipBoard() {
         copyLogsInteractor.copy(uiState.logMessages.toList())
     }
