@@ -84,6 +84,7 @@ class DobbyVpnService : VpnService() {
 
         serviceScope.launch {
             while (true) {
+                logger.log("GoBackendWrapper.awgDumpLog()")
                 val dumpedLog = GoBackendWrapper.awgDumpLog()
                 dumpedLog.split("\n").forEach {
                     if (it.isNotEmpty()) {

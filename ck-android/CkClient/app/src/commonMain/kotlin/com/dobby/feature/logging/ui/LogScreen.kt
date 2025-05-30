@@ -47,8 +47,6 @@ fun LogScreen(
     viewModel: LogsViewModel = viewModel(),
     modifier: Modifier = Modifier,
 ) {
-    val uiState by viewModel.uiState.collectAsState()
-
     Column(modifier = modifier) {
         Button(
             onClick = { viewModel.copyLogsToClipBoard() },
@@ -85,7 +83,7 @@ fun LogScreen(
         }
 
         LazyColumn {
-            items(uiState.logMessages) { message ->
+            items(viewModel.uiState.logMessages) { message ->
                 // some important logs contain this
                 val isBald = message.contains("!!!")
 

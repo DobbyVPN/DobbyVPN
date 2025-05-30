@@ -1,5 +1,8 @@
 package com.dobby.feature.logging
 
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.runtime.toMutableStateList
 import com.dobby.feature.logging.domain.LogsRepository
 import java.io.BufferedReader
 import java.io.File
@@ -11,32 +14,56 @@ class LogsRepositoryImpl(
     private val logFileName: String = "app_logs.txt"
 ) : LogsRepository {
 
+    private var logState: SnapshotStateList<String>? = null
     private val logFile: File
         get() = File(fileDirProvider(), logFileName)
+
+    init {
+        logFile.createNewFile()
+
+        readLogs()
+    }
 
     override fun writeLog(log: String) {
         runCatching {
             FileWriter(logFile, true).use { writer ->
                 writer.appendLine(log)
             }
+
+            logState?.add(log)
         }.onFailure { it.printStackTrace() }
     }
 
-    override fun readLogs(): List<String> {
-        val logs = mutableListOf<String>()
-        runCatching {
-            BufferedReader(FileReader(logFile)).use { reader ->
-                var line: String? = reader.readLine()
-                while(line != null) {
-                    logs.add(line)
-                    line = reader.readLine()
+    override fun readLogs(): SnapshotStateList<String> {
+        val currentState = logState
+
+        if (currentState == null) {
+            val newState = mutableStateListOf<String>()
+
+            runCatching {
+                BufferedReader(FileReader(logFile)).use { reader ->
+                    var line: String? = reader.readLine()
+                    while(line != null) {
+                        newState.add(line)
+                        line = reader.readLine()
+                    }
                 }
-            }
-        }.onFailure { it.printStackTrace() }
-        return logs
+            }.onFailure { it.printStackTrace() }
+
+            logState = newState
+
+            return newState
+        } else {
+            return currentState
+        }
     }
 
     override fun clearLogs() {
-        if (logFile.exists()) logFile.delete()
+        if (logFile.exists()) {
+            logFile.delete()
+        }
+
+        logFile.createNewFile()
+        logState?.clear()
     }
 }
