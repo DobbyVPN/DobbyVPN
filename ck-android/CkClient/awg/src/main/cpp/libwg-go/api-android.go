@@ -32,6 +32,17 @@ type AndroidLogger struct {
 	tag   *C.char
 }
 
+type AndroidLogLine struct {
+	level   C.int
+	tag     *C.char
+	message *string
+}
+
+type TunnelHandle struct {
+	device *device.Device
+	uapi   net.Listener
+}
+
 func cstring(s string) *C.char {
 	b, err := unix.BytePtrFromString(s)
 	if err != nil {
@@ -41,19 +52,17 @@ func cstring(s string) *C.char {
 	return (*C.char)(unsafe.Pointer(b))
 }
 
-func (l AndroidLogger) Printf(format string, args ...interface{}) {
-	C.__android_log_write(l.level, l.tag, cstring(fmt.Sprintf(format, args...)))
-}
-
-type TunnelHandle struct {
-	device *device.Device
-	uapi   net.Listener
-}
-
 var tunnelHandles map[int32]TunnelHandle
+var logDump []string
+
+func (l AndroidLogger) Printf(format string, args ...interface{}) {
+    C.__android_log_write(l.level, l.tag, cstring(fmt.Sprintf(format, args...)))
+	logDump = append(logDump, fmt.Sprintf(format, args...))
+}
 
 func init() {
 	tunnelHandles = make(map[int32]TunnelHandle)
+	logDump = nil
 	signals := make(chan os.Signal)
 	signal.Notify(signals, unix.SIGUSR2)
 	go func() {
@@ -222,6 +231,14 @@ func awgVersion() *C.char {
 		}
 	}
 	return C.CString("unknown")
+}
+
+//export awgDumpLog
+func awgDumpLog() *C.char {
+	var log = strings.Join(logDump, "\n")
+	logDump = nil
+
+	return C.CString(log)
 }
 
 func main() {}

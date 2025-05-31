@@ -1,4 +1,5 @@
 import com.dobby.domain.DobbyConfigsRepositoryImpl
+import com.dobby.feature.diagnostic.IpRepositoryImpl
 import com.dobby.feature.logging.CopyLogsInteractorImpl
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.LogsRepositoryImpl
@@ -13,6 +14,7 @@ import org.koin.dsl.module
 val jvmMainModule = makeNativeModule(
     copyLogsInteractor = { CopyLogsInteractorImpl() },
     logsRepository = { LogsRepositoryImpl() },
+    ipRepository = { IpRepositoryImpl(get()) },
     configsRepository = { DobbyConfigsRepositoryImpl() },
     connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(get()) },

@@ -13,6 +13,8 @@ class GoBackend {
 
     external fun awgVersion(): String
 
+    external fun awgDumpLog(): String
+
     companion object {
         init {
             System.loadLibrary("wg-go")

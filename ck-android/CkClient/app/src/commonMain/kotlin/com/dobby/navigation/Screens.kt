@@ -9,4 +9,7 @@ data object MainScreen
 data object AmneziaWGScreen
 
 @Serializable
+data object DiagnosticsScreen
+
+@Serializable
 data object LogsScreen
