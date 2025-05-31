@@ -16,7 +16,7 @@ val jvmMainModule = makeNativeModule(
     configsRepository = { DobbyConfigsRepositoryImpl() },
     connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(get()) },
-    awgManager = { AwgManagerImpl() }
+    awgManager = { AwgManagerImpl(get()) }
 )
 
 val jvmVpnModule = module {
