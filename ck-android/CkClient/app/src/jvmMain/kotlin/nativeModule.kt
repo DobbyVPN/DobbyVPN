@@ -22,5 +22,5 @@ val jvmMainModule = makeNativeModule(
 val jvmVpnModule = module {
     single<Logger> { LoggerImpl(get()) }
     single<VPNLibraryLoader> { VPNLibraryLoader(get()) }
-    single<DobbyVpnService> { DobbyVpnService(get(), get(), get()) }
+    single<DobbyVpnService> { DobbyVpnService(get(), get(), get(), get()) }
 }
