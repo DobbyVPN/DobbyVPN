@@ -18,8 +18,16 @@ class DiagnosticViewModel(
     suspend fun reloadIpData() {
         var state by _uiState
 
-        state = UiData.LOADING
+        state = UiData(IpData.LOADING, state.dnsData)
         val data = ipRepository.getIpData()
-        state = UiData(data.ip, data.city, data.country)
+        state = UiData(IpData(data.ip, data.city, data.country), state.dnsData)
+    }
+
+    suspend fun reloadDnsIpData(hostname: String) {
+        var state by _uiState
+
+        state = UiData(state.ipData, IpData.LOADING)
+        val data = ipRepository.getHostnameIpData(hostname)
+        state = UiData(state.ipData, IpData(data.ip, data.city, data.country))
     }
 }

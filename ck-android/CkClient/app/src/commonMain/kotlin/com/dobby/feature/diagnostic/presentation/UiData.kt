@@ -1,12 +1,10 @@
 package com.dobby.feature.diagnostic.presentation
 
 data class UiData(
-    val ip: String,
-    val city: String,
-    val country: String,
+    var ipData: IpData,
+    var dnsData: IpData,
 ) {
     companion object {
-        val EMPTY = UiData("null", "null", "null")
-        val LOADING = UiData("Loading...", "", "")
+        val EMPTY = UiData(IpData.EMPTY, IpData.EMPTY)
     }
 }

@@ -6,6 +6,7 @@ import com.dobby.feature.logging.Logger
 import kotlinx.coroutines.future.await
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.net.InetAddress
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -17,6 +18,49 @@ class IpRepositoryImpl(
     override suspend fun getIpData(): IpData {
         val client = HttpClient.newBuilder().build();
         val uri = URI.create("https://ipinfo.io/json")
+        val request = HttpRequest.newBuilder()
+            .uri(uri)
+            .build()
+
+        val response = client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
+        logger.log("[Diagnostic] Sending request to $uri, status code: ${response.statusCode()}")
+
+        if (response.statusCode() == 200) {
+            val json = Json { ignoreUnknownKeys = true }
+            val responseJson = json.decodeFromString<IpInfoRequestJsonData>(response.body())
+
+            return IpData(
+                ip = responseJson.ip,
+                city = responseJson.city,
+                country = responseJson.country,
+            )
+        } else {
+            return IpData(
+                ip = "null",
+                city = "null",
+                country = "null",
+            )
+        }
+    }
+
+    override suspend fun getHostnameIpData(hostname: String): IpData {
+        val address: InetAddress
+
+        try {
+            address = InetAddress.getByName(hostname)
+            logger.log("IP address for $hostname: ${address.hostAddress}")
+        } catch (e: Exception) {
+            logger.log("[Diagnostic] Error resolving $hostname: ${e.message}")
+
+            return IpData(
+                ip = "Failed",
+                city = "",
+                country = "",
+            )
+        }
+
+        val client = HttpClient.newBuilder().build();
+        val uri = URI.create("https://ipinfo.io/${address.hostAddress}/json")
         val request = HttpRequest.newBuilder()
             .uri(uri)
             .build()
