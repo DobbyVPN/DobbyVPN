@@ -22,7 +22,7 @@ class IpRepositoryImpl(
             .build()
 
         val response = client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
-        logger.log("Sending request to $uri, status code: ${response.statusCode()}")
+        logger.log("[Diagnostic] Sending request to $uri, status code: ${response.statusCode()}")
 
         if (response.statusCode() == 200) {
             val json = Json { ignoreUnknownKeys = true }
