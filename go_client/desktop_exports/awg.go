@@ -40,7 +40,7 @@ func StartAwg(key *C.char) {
 	}
 }
 
-//export StopOutline
+//export StopAwg
 func StopAwg() {
 	awgMu.Lock()
 	defer awgMu.Unlock()
