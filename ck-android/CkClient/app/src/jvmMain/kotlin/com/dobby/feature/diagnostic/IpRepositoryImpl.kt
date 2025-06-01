@@ -3,7 +3,6 @@ package com.dobby.feature.diagnostic
 import com.dobby.feature.diagnostic.domain.IpData
 import com.dobby.feature.diagnostic.domain.IpRepository
 import com.dobby.feature.logging.Logger
-import kotlinx.coroutines.future.await
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.net.InetAddress
@@ -17,13 +16,25 @@ class IpRepositoryImpl(
 ) : IpRepository {
     override fun getIpData(): IpData {
         val client = HttpClient.newBuilder().build();
-        val uri = URI.create("https://ipinfo.io/json")
+        val url = "https://ipinfo.io/json"
+        val uri = URI.create(url)
         val request = HttpRequest.newBuilder()
             .uri(uri)
             .build()
 
-        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-        logger.log("[Diagnostic] Sending request to $uri, status code: ${response.statusCode()}")
+        val response = try {
+            client.send(request, HttpResponse.BodyHandlers.ofString())
+        } catch (e: Exception) {
+            logger.log("[Diagnostic] Sending request to $url, failed")
+
+            return IpData(
+                ip = "Failed",
+                city = "",
+                country = "",
+            )
+        }
+
+        logger.log("[Diagnostic] Sending request to $url, status code: ${response.statusCode()}")
 
         if (response.statusCode() == 200) {
             val json = Json { ignoreUnknownKeys = true }
@@ -59,14 +70,26 @@ class IpRepositoryImpl(
             )
         }
 
+        val url = "https://ipinfo.io/${address.hostAddress}/json"
         val client = HttpClient.newBuilder().build();
-        val uri = URI.create("https://ipinfo.io/${address.hostAddress}/json")
+        val uri = URI.create(url)
         val request = HttpRequest.newBuilder()
             .uri(uri)
             .build()
 
-        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-        logger.log("[Diagnostic] Sending request to $uri, status code: ${response.statusCode()}")
+        val response = try {
+            client.send(request, HttpResponse.BodyHandlers.ofString())
+        } catch (e: Exception) {
+            logger.log("[Diagnostic] Sending request to $url, failed")
+
+            return IpData(
+                ip = "Failed",
+                city = "",
+                country = "",
+            )
+        }
+
+        logger.log("[Diagnostic] Sending request to $url, status code: ${response.statusCode()}")
 
         if (response.statusCode() == 200) {
             val json = Json { ignoreUnknownKeys = true }

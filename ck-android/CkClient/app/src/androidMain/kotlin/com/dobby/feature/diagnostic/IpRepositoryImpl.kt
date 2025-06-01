@@ -23,7 +23,7 @@ class IpRepositoryImpl(
 
         val response = try {
             client.newCall(request).execute()
-        } catch (e: IOException) {
+        } catch (e: Exception) {
             logger.log("[Diagnostic] Sending request to $url, failed")
 
             return IpData(
@@ -78,7 +78,7 @@ class IpRepositoryImpl(
 
         val response = try {
             client.newCall(request).execute()
-        } catch (e: IOException) {
+        } catch (e: Exception) {
             logger.log("[Diagnostic] Sending request to $url, failed")
 
             return IpData(
