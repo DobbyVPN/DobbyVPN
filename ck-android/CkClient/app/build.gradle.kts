@@ -62,6 +62,8 @@ kotlin {
             implementation(libs.koin.androidx.compose)
 
             implementation(files("../libs/go_client_android.aar"))
+
+            implementation(libs.okhttp)
         }
 
         commonMain.dependencies {

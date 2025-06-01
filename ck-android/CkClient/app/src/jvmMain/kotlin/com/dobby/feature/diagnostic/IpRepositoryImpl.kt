@@ -15,14 +15,14 @@ import java.net.http.HttpResponse
 class IpRepositoryImpl(
     private val logger: Logger
 ) : IpRepository {
-    override suspend fun getIpData(): IpData {
+    override fun getIpData(): IpData {
         val client = HttpClient.newBuilder().build();
         val uri = URI.create("https://ipinfo.io/json")
         val request = HttpRequest.newBuilder()
             .uri(uri)
             .build()
 
-        val response = client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
+        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
         logger.log("[Diagnostic] Sending request to $uri, status code: ${response.statusCode()}")
 
         if (response.statusCode() == 200) {
@@ -43,7 +43,7 @@ class IpRepositoryImpl(
         }
     }
 
-    override suspend fun getHostnameIpData(hostname: String): IpData {
+    override fun getHostnameIpData(hostname: String): IpData {
         val address: InetAddress
 
         try {
@@ -65,7 +65,7 @@ class IpRepositoryImpl(
             .uri(uri)
             .build()
 
-        val response = client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
+        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
         logger.log("[Diagnostic] Sending request to $uri, status code: ${response.statusCode()}")
 
         if (response.statusCode() == 200) {

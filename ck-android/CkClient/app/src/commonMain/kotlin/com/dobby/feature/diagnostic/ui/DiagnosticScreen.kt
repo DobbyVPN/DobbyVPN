@@ -2,7 +2,7 @@ package com.dobby.feature.diagnostic.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -18,7 +18,7 @@ fun DiagnosticScreen(
 ) {
     val coroutineScope = rememberCoroutineScope()
 
-    remember {
+    LaunchedEffect(Unit) {
         coroutineScope.launch {
             viewModel.reloadIpData()
             viewModel.reloadDnsIpData(hostname = DEFAULT_DNS_RESOLVING_HOST)

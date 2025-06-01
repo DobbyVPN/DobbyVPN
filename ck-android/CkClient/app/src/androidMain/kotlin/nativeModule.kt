@@ -22,7 +22,7 @@ import org.koin.dsl.module
 val androidMainModule = makeNativeModule(
     copyLogsInteractor = { CopyLogsInteractorImpl(get()) },
     logsRepository = { LogsRepositoryImpl({ androidContext().filesDir }) },
-    ipRepository = { IpRepositoryImpl() },
+    ipRepository = { IpRepositoryImpl(get()) },
     configsRepository = {
         DobbyConfigsRepositoryImpl(
             prefs = androidContext().getSharedPreferences("DobbyPrefs", MODE_PRIVATE)

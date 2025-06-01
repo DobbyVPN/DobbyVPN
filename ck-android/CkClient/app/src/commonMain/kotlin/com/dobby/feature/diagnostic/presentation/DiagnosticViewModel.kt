@@ -7,6 +7,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import com.dobby.feature.diagnostic.domain.IpRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 
 class DiagnosticViewModel(
     private val ipRepository: IpRepository,
@@ -15,19 +20,25 @@ class DiagnosticViewModel(
     private val _uiState: MutableState<UiData> = mutableStateOf(UiData.EMPTY)
     val uiState: State<UiData> = _uiState
 
-    suspend fun reloadIpData() {
+    fun reloadIpData() {
         var state by _uiState
 
         state = UiData(IpData.LOADING, state.dnsData)
-        val data = ipRepository.getIpData()
-        state = UiData(IpData(data.ip, data.city, data.country), state.dnsData)
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val data = ipRepository.getIpData()
+            state = UiData(IpData(data.ip, data.city, data.country), state.dnsData)
+        }
     }
 
-    suspend fun reloadDnsIpData(hostname: String) {
+    fun reloadDnsIpData(hostname: String) {
         var state by _uiState
 
         state = UiData(state.ipData, IpData.LOADING)
-        val data = ipRepository.getHostnameIpData(hostname)
-        state = UiData(state.ipData, IpData(data.ip, data.city, data.country))
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val data = ipRepository.getHostnameIpData(hostname)
+            state = UiData(state.ipData, IpData(data.ip, data.city, data.country))
+        }
     }
 }
