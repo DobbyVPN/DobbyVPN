@@ -7,6 +7,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okio.IOException
+import java.net.InetAddress
 
 class IpRepositoryImpl(
     private val logger: Logger
@@ -19,31 +21,92 @@ class IpRepositoryImpl(
             .url(url)
             .build()
 
-        client.newCall(request).execute().use { response ->
-            logger.log("[Diagnostic] Sending request to $url, status code: ${response.code}")
+        val response = try {
+            client.newCall(request).execute()
+        } catch (e: IOException) {
+            logger.log("[Diagnostic] Sending request to $url, failed")
 
-            if (response.isSuccessful) {
-                val content = response.body?.string() ?: return IpData("", "", "")
-                val json = Json { ignoreUnknownKeys = true }
-                val responseJson = json.decodeFromString<IpInfoRequestJsonData>(content)
+            return IpData(
+                ip = "Failed",
+                city = "",
+                country = "",
+            )
+        }
 
-                return IpData(
-                    ip = responseJson.ip,
-                    city = responseJson.city,
-                    country = responseJson.country,
-                )
-            } else {
-                return IpData(
-                    ip = "null",
-                    city = "null",
-                    country = "null",
-                )
-            }
+        logger.log("[Diagnostic] Sending request to $url, status code: ${response.code}")
+
+        if (response.isSuccessful) {
+            val content = response.body?.string() ?: return IpData("", "", "")
+            val json = Json { ignoreUnknownKeys = true }
+            val responseJson = json.decodeFromString<IpInfoRequestJsonData>(content)
+
+            return IpData(
+                ip = responseJson.ip,
+                city = responseJson.city,
+                country = responseJson.country,
+            )
+        } else {
+            return IpData(
+                ip = "null",
+                city = "null",
+                country = "null",
+            )
         }
     }
 
     override fun getHostnameIpData(hostname: String): IpData {
-        return IpData("Not implemented", "", "")
+        val address: InetAddress
+
+        try {
+            address = InetAddress.getByName(hostname)
+            logger.log("IP address for $hostname: ${address.hostAddress}")
+        } catch (e: Exception) {
+            logger.log("[Diagnostic] Error resolving $hostname: ${e.message}")
+
+            return IpData(
+                ip = "Failed",
+                city = "",
+                country = "",
+            )
+        }
+
+        val url = "https://ipinfo.io/${address.hostAddress}/json"
+
+        val request: Request = Request.Builder()
+            .url(url)
+            .build()
+
+        val response = try {
+            client.newCall(request).execute()
+        } catch (e: IOException) {
+            logger.log("[Diagnostic] Sending request to $url, failed")
+
+            return IpData(
+                ip = "Failed",
+                city = "",
+                country = "",
+            )
+        }
+
+        logger.log("[Diagnostic] Sending request to $url, status code: ${response.code}")
+
+        if (response.isSuccessful) {
+            val content = response.body?.string() ?: return IpData("", "", "")
+            val json = Json { ignoreUnknownKeys = true }
+            val responseJson = json.decodeFromString<IpInfoRequestJsonData>(content)
+
+            return IpData(
+                ip = responseJson.ip,
+                city = responseJson.city,
+                country = responseJson.country,
+            )
+        } else {
+            return IpData(
+                ip = "null",
+                city = "null",
+                country = "null",
+            )
+        }
     }
 
     @Serializable
