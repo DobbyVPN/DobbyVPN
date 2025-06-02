@@ -10,22 +10,26 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.time.Duration
 
 class IpRepositoryImpl(
     private val logger: Logger
 ) : IpRepository {
     override fun getIpData(): IpData {
-        val client = HttpClient.newBuilder().build();
+        val client = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(2))
+            .build()
         val url = "https://ipinfo.io/json"
         val uri = URI.create(url)
         val request = HttpRequest.newBuilder()
             .uri(uri)
+            .timeout(Duration.ofSeconds(2))
             .build()
 
         val response = try {
             client.send(request, HttpResponse.BodyHandlers.ofString())
         } catch (e: Exception) {
-            logger.log("[Diagnostic] Sending request to $url, failed")
+            logger.log("[Diagnostic] Sending request to $url, failed: ${e.message}")
 
             return IpData(
                 ip = "Failed",
@@ -55,6 +59,10 @@ class IpRepositoryImpl(
     }
 
     override fun getHostnameIpData(hostname: String): IpData {
+        val client = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(2))
+            .build()
+
         val address: InetAddress
 
         try {
@@ -71,16 +79,16 @@ class IpRepositoryImpl(
         }
 
         val url = "https://ipinfo.io/${address.hostAddress}/json"
-        val client = HttpClient.newBuilder().build();
         val uri = URI.create(url)
         val request = HttpRequest.newBuilder()
             .uri(uri)
+            .timeout(Duration.ofSeconds(2))
             .build()
 
         val response = try {
             client.send(request, HttpResponse.BodyHandlers.ofString())
         } catch (e: Exception) {
-            logger.log("[Diagnostic] Sending request to $url, failed")
+            logger.log("[Diagnostic] Sending request to $url, failed: ${e.message}")
 
             return IpData(
                 ip = "Failed",

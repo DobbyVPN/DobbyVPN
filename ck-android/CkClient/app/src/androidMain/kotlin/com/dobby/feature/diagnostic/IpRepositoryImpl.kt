@@ -7,15 +7,19 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okio.IOException
 import java.net.InetAddress
+import java.util.concurrent.TimeUnit
 
 class IpRepositoryImpl(
     private val logger: Logger
 ) : IpRepository {
-    private val client = OkHttpClient()
 
     override fun getIpData(): IpData {
+        val client = OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .writeTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(5, TimeUnit.SECONDS)
+            .build()
         val url = "https://ipinfo.io/json"
         val request: Request = Request.Builder()
             .url(url)
@@ -24,7 +28,7 @@ class IpRepositoryImpl(
         val response = try {
             client.newCall(request).execute()
         } catch (e: Exception) {
-            logger.log("[Diagnostic] Sending request to $url, failed")
+            logger.log("[Diagnostic] Sending request to $url, failed: ${e.message}")
 
             return IpData(
                 ip = "Failed",
@@ -55,6 +59,12 @@ class IpRepositoryImpl(
     }
 
     override fun getHostnameIpData(hostname: String): IpData {
+        val client = OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .writeTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(5, TimeUnit.SECONDS)
+            .build()
+
         val address: InetAddress
 
         try {
@@ -79,7 +89,7 @@ class IpRepositoryImpl(
         val response = try {
             client.newCall(request).execute()
         } catch (e: Exception) {
-            logger.log("[Diagnostic] Sending request to $url, failed")
+            logger.log("[Diagnostic] Sending request to $url, failed: ${e.message}")
 
             return IpData(
                 ip = "Failed",
