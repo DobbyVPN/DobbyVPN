@@ -53,7 +53,7 @@ type TunnelHandle struct {
 	uapi   net.Listener
 }
 
-var tunnelHandles map[int32]TunnelHandle
+var tunnelHandles = make(map[int32]TunnelHandle)
 
 //func init() {
 //	tunnelHandles = make(map[int32]TunnelHandle)
