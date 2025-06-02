@@ -113,25 +113,31 @@ jobs:
             build-tools;35.0.0
             platform-tools
 
-      - name: Install gomobile & gobind
+      - name: Install gomobile & gobind and pin x/mobile version
         run: |
-          cd go_client
           go install golang.org/x/mobile/cmd/{gomobile,gobind}@latest
-          gomobile init -v
-          cd ..
-
-      - name: Fetch gomobile runtime
-        run: |
+            
           MOBILE_VER=$(go list -m -f '{{.Version}}' golang.org/x/mobile)
+          echo "MOBILE_VER=$MOBILE_VER" >> "$GITHUB_ENV"
+            
+          gomobile init -v
+        env:
+          GITHUB_ENV: ${{ github.env }}
+
+      - name: Pin golang.org/x/mobile in go.mod
+        run: |
           cd go_client
-          go get golang.org/x/mobile@${MOBILE_VER}
+          go get golang.org/x/mobile@${{ env.MOBILE_VER }}
+#          go mod tidy
           cd ..
 
       - name: Build Go AAR
         run: |
           cd go_client
+          echo "____________"
           go list -m all | grep 'golang.org/x/mobile'
-          gomobile bind -v -target=android -androidapi=21 -o ../go_client_android.aar ./kotlin_exports
+          echo "____________"
+          gomobile bind -v -target=android/arm64 -androidapi=21 -o ../go_client_android.aar ./kotlin_exports
           cd ..
 
       - name: Upload Go AAR
