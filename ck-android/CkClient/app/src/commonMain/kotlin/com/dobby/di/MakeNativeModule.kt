@@ -1,3 +1,4 @@
+import com.dobby.feature.diagnostic.domain.IpRepository
 import com.dobby.feature.logging.domain.CopyLogsInteractor
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.AwgManager
@@ -13,6 +14,7 @@ typealias NativeInjectionFactory<T> = Scope.() -> T
 fun makeNativeModule(
     copyLogsInteractor: NativeInjectionFactory<CopyLogsInteractor>,
     logsRepository: NativeInjectionFactory<LogsRepository>,
+    ipRepository: NativeInjectionFactory<IpRepository>,
     configsRepository: NativeInjectionFactory<DobbyConfigsRepository>,
     connectionStateRepository: NativeInjectionFactory<ConnectionStateRepository>,
     vpnManager: NativeInjectionFactory<VpnManager>,
@@ -23,6 +25,7 @@ fun makeNativeModule(
         factory { awgManager() }
         single { copyLogsInteractor() }
         single { logsRepository() }
+        single { ipRepository() }
         single { connectionStateRepository() }
         single { configsRepository() }
     }
