@@ -15,7 +15,7 @@ jobs:
     runs-on: ${{ matrix.os }}-latest
     strategy:
       matrix:
-        os: [windows, ubuntu, macos]
+        os: [ windows, ubuntu, macos ]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -116,20 +116,16 @@ jobs:
       - name: Install gomobile & gobind and pin x/mobile version
         run: |
           go install golang.org/x/mobile/cmd/{gomobile,gobind}@latest
-            
           MOBILE_VER=$(go list -m -f '{{.Version}}' golang.org/x/mobile)
-          echo "MOBILE_VER=$MOBILE_VER" >> "$GITHUB_ENV"
-            
+          echo "MOBILE_VER=$MOBILE_VER" >> "$GITHUB_ENV"           
           gomobile init -v
         env:
           GITHUB_ENV: ${{ github.env }}
-
-
       - name: Pin golang.org/x/mobile in go.mod
         run: |
           cd go_client
           go get golang.org/x/mobile@${{ env.MOBILE_VER }}
-#          go mod tidy
+          #          go mod tidy
           cd ..
 
       - name: Build Go AAR
