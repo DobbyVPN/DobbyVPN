@@ -130,6 +130,7 @@ jobs:
       - name: Build Go AAR
         run: |
           cd go_client
+          go list -m all | grep 'golang.org/x/mobile'
           gomobile bind -v -target=android -androidapi=21 -o ../go_client_android.aar ./kotlin_exports
           cd ..
 
