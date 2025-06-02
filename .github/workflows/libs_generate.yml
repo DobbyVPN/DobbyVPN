@@ -125,7 +125,6 @@ jobs:
         run: |
           cd go_client
           go get golang.org/x/mobile@${{ env.MOBILE_VER }}
-          #          go mod tidy
           cd ..
 
       - name: Build Go AAR
