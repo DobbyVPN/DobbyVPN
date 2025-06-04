@@ -98,7 +98,7 @@ func AwgTurnOn(_ string, tunFd int32, settings string) int32 {
 	logger.Verbosef("Attaching to interface")
 	dev := device.NewDevice(tun, conn.NewStdNetBind(), logger)
 
-	err = dev.IpcSet(C.GoString(settings))
+	err = dev.IpcSet(settings)
 	if err != nil {
 		logger.Errorf("Unable to set IPC settings: %v", err)
 		unix.Close(dupTunFd)
