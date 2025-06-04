@@ -8,7 +8,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     
     private var device = DeviceFacade()
     
-    private var logs = LocalLogsRepository()
+    private var logs = logsRepo
 
     private var configs = configsRepository
 

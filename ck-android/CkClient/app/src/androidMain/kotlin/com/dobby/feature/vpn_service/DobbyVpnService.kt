@@ -39,6 +39,7 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.nio.ByteBuffer
+import kotlin.coroutines.cancellation.CancellationException
 
 private const val IS_FROM_UI = "isLaunchedFromUi"
 
@@ -311,7 +312,11 @@ class DobbyVpnService : VpnService() {
                             // val hexString = packetData.joinToString(separator = " ") { byte -> "%02x".format(byte) }
                             // Logger.log("MyVpnService: Packet Data Written (Hex): $hexString")
                         }
-                    } catch (e: Exception) {
+                    } catch (e: CancellationException) {
+                        logger.log("VpnService: Packet reading coroutine was cancelled.")
+                        break
+                    }
+                    catch (e: Exception) {
                         logger.log("VpnService: Failed to write packet to Outline: ${e.message}")
                     }
                     buffer.clear()
@@ -366,19 +371,11 @@ class DobbyVpnService : VpnService() {
 
                 while (isActive) {
                     try {
-                        //val length = tunnel.read(buffer)
-                        //if (length > 0) {
-                        //    outputStream.write(buffer.array(), 0, length)
-                        //}
-                        //buffer.clear()
-                        //Logger.log("MyVpnService: read packet from tunnel")
                         val packetData: ByteArray? = outlineLibFacade.readData()
-
-                        packetData?.let {
-                            outputStream?.write(it)
-                            //val hexString = it.joinToString(separator = " ") { byte -> "%02x".format(byte) }
-                            //Logger.log("MyVpnService: Packet Data Read (Hex): $hexString")
-                        } ?: Unit // Logger.log("No data read from Outline") TODO remove comment
+                        packetData?.let { outputStream?.write(it) }
+                    } catch (e: CancellationException) {
+                        logger.log("VpnService: Packet writing coroutine was cancelled.")
+                        break
                     } catch (e: Exception) {
                         logger.log("VpnService: Failed to read packet from tunnel: ${e.message}")
                     }

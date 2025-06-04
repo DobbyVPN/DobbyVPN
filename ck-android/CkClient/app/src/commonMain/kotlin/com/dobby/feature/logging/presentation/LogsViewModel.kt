@@ -17,6 +17,6 @@ class LogsViewModel(
     }
 
     fun copyLogsToClipBoard() {
-        copyLogsInteractor.copy(uiState.logMessages.toList())
+        copyLogsInteractor.copy(uiState.logMessages.value)
     }
 }

@@ -7,7 +7,10 @@ public class NativeModuleHolder {
             return CopyLogsInteractorImpl()
         },
         logsRepository: { scope in
-            return LocalLogsRepository()
+            return logsRepo
+        },
+        ipRepository: { scope in
+            return IpRepositoryImpl()
         },
         configsRepository: { scope in
             return configsRepository
@@ -29,5 +32,8 @@ public class NativeModuleHolder {
 public let appGroupIdentifier = "group.vpn.dobby.app"
 
 public var configsRepository = DobbyConfigsRepositoryImpl.shared
+
+private let path = LogsRepository_iosKt.provideLogFilePath()
+public var logsRepo = LogsRepository.init(logFilePath: path)
 
 public var connectionStateRepository = ConnectionStateRepository()
