@@ -16,11 +16,3 @@ actual fun provideLogFilePath(): Path {
     val path = containerURL?.path ?: error("Failed to get shared container URL for $appGroupIdentifier")
     return "$path/app_logs.txt".toPath()
 }
-
-fun provideLogFilePath2(): Path {
-    val fileManager = NSFileManager.defaultManager
-    val containerURL: NSURL? = fileManager.containerURLForSecurityApplicationGroupIdentifier(appGroupIdentifier)
-
-    val path = containerURL?.path ?: error("Failed to get shared container URL for $appGroupIdentifier")
-    return "$path/app_logs.txt".toPath()
-}
