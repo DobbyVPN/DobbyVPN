@@ -1,8 +1,7 @@
 package com.dobby.feature.logging.ui
 
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.snapshots.SnapshotStateList
+import kotlinx.coroutines.flow.StateFlow
 
 data class LogsUiState(
-    val logMessages: SnapshotStateList<String> = mutableStateListOf()
+    val logMessages: StateFlow<List<String>>
 )

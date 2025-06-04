@@ -34,15 +34,9 @@ kotlin {
         }
     }
 
-    listOf(
-        iosX64(),
-        iosArm64(),
-        iosSimulatorArm64()
-    ).forEach { iosTarget ->
-        iosTarget.binaries.framework {
-            baseName = "app"
-            isStatic = true
-        }
+    iosArm64().binaries.framework {
+        baseName = "app"
+        isStatic = true
     }
 
     sourceSets {
@@ -76,6 +70,7 @@ kotlin {
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.lifecycle.viewmodel.compose)
             implementation(libs.navigation.compose)
+            implementation(libs.okio)
 
             api(libs.koin.core)
             implementation(libs.koin.compose)

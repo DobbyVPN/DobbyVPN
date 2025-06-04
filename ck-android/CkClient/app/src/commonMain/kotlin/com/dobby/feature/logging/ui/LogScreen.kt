@@ -1,6 +1,5 @@
 package com.dobby.feature.logging.ui
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -20,6 +19,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -28,13 +29,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dobby.feature.logging.presentation.LogsViewModel
-import org.jetbrains.compose.ui.tooling.preview.Preview
 
 @Composable
 fun LogScreen(
     viewModel: LogsViewModel = viewModel(),
     modifier: Modifier = Modifier,
 ) {
+
+    val logs by viewModel.uiState.logMessages.collectAsState()
+
     Column(modifier = modifier) {
         Button(
             onClick = { viewModel.copyLogsToClipBoard() },
@@ -60,7 +63,7 @@ fun LogScreen(
         }
 
         LazyColumn {
-            items(viewModel.uiState.logMessages) { message ->
+            items(logs) { message ->
                 // some important logs contain this
                 val isBald = message.contains("!!!")
 
