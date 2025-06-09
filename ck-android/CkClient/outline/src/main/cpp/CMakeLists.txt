@@ -16,6 +16,8 @@ add_library(outline
 set_target_properties(outline PROPERTIES
     IMPORTED_LOCATION
       "${CMAKE_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/liboutline.so"
+    IMPORTED_SONAME
+      "liboutline.so"
 )
 
 # 2) Собираем JNI-обёртку
