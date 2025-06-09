@@ -20,8 +20,8 @@ set_target_properties(outline PROPERTIES
 
 # 2) Собираем JNI-обёртку
 add_library(outline_jni
-            SHARED
-            outline_jni.cpp)
+        SHARED
+        jni.c)
 
 # 3) Линкуем:
 #    outline_jni → outline (Go .so) + log (для __android_log*)
