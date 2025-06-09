@@ -61,7 +61,7 @@ kotlin {
             implementation(libs.koin.android)
             implementation(libs.koin.androidx.compose)
 
-            implementation(files("../libs/go_client_android.aar"))
+            implementation(files("../libs/outline-debug.aar"))
         }
 
         commonMain.dependencies {

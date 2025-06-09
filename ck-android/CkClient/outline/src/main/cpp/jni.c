@@ -8,10 +8,8 @@
 #include <string.h>
 #include "liboutline.h"
 
-// package: com.dobby.outline, class: GoBackend
-
 JNIEXPORT void JNICALL
-Java_com_dobby_outline_GoBackend_newOutlineDevice(JNIEnv *env, jclass clazz, jstring jConfig)
+Java_com_dobby_outline_OutlineGo_newOutlineDevice(JNIEnv *env, jclass clazz, jstring jConfig)
 {
 const char *config_str = (*env)->GetStringUTFChars(env, jConfig, NULL);
 // Вызываем Go-экспорт
@@ -20,7 +18,7 @@ NewOutlineDevice((char*)config_str);
 }
 
 JNIEXPORT jint JNICALL
-Java_com_dobby_outline_GoBackend_write(JNIEnv *env, jclass clazz,
+Java_com_dobby_outline_OutlineGo_write(JNIEnv *env, jclass clazz,
                                        jbyteArray jBuf, jint length)
 {
     jbyte *buf = (*env)->GetByteArrayElements(env, jBuf, NULL);
@@ -32,7 +30,7 @@ Java_com_dobby_outline_GoBackend_write(JNIEnv *env, jclass clazz,
 }
 
 JNIEXPORT jint JNICALL
-Java_com_dobby_outline_GoBackend_read(JNIEnv *env, jclass clazz,
+Java_com_dobby_outline_OutlineGo_read(JNIEnv *env, jclass clazz,
                                       jbyteArray jBuf, jint maxLen)
 {
     jbyte *buf = (*env)->GetByteArrayElements(env, jBuf, NULL);
