@@ -29,7 +29,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dobby.feature.logging.presentation.LogsViewModel
-import com.dobby.BuildConfig
 
 @Composable
 fun LogScreen(
@@ -40,10 +39,6 @@ fun LogScreen(
     val logs by viewModel.uiState.logMessages.collectAsState()
 
     Column(modifier = modifier) {
-        Text(
-            BuildConfig.VERSION_NAME
-        )
-
         Button(
             onClick = { viewModel.copyLogsToClipBoard() },
             shape = RoundedCornerShape(6.dp),
