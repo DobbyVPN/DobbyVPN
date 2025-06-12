@@ -7,6 +7,11 @@ import kotlinx.coroutines.withContext
 
 class OutlineGo {
     companion object {
+        init {
+            System.loadLibrary("outline")
+            System.loadLibrary("outline_jni")
+        }
+
         private const val TAG = "OutlineGo"
 
         @Volatile
