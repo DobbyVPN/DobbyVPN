@@ -8,27 +8,33 @@ project("outline_jni")
 # Путь к заголовкам liboutline.h
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include")
 
-# 1) Импортируем готовую Go-библиотеку
-add_library(outline
-            SHARED
-            IMPORTED)
-
-set_target_properties(outline PROPERTIES
-    IMPORTED_LOCATION
-      "${CMAKE_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/liboutline.so"
-    IMPORTED_SONAME
-      "liboutline.so"
-)
-
-# 2) Собираем JNI-обёртку
+# 1) Собираем JNI-обёртку
 add_library(outline_jni
         SHARED
         jni.c)
 
-# 3) Линкуем:
-#    outline_jni → outline (Go .so) + log (для __android_log*)
+# 2) Находим Android log библиотеку
 find_library(log-lib log)
 
+# 3) Линкуем с log и outline
+# Используем относительный путь для линковки
 target_link_libraries(outline_jni
-                      outline
-                      ${log-lib})
+        ${log-lib}
+        "-loutline")
+
+# 4) Указываем где искать liboutline.so во время линковки
+target_link_directories(outline_jni PRIVATE
+        "${CMAKE_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}")
+
+# 5) Устанавливаем RPATH для поиска зависимостей в той же директории
+set_target_properties(outline_jni PROPERTIES
+        BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "$ORIGIN"
+        INSTALL_RPATH_USE_LINK_PATH TRUE)
+
+# 6) Копируем liboutline.so в выходную директорию сборки
+# Это гарантирует, что обе библиотеки будут в одной директории
+add_custom_command(TARGET outline_jni POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/liboutline.so"
+        "$<TARGET_FILE_DIR:outline_jni>/liboutline.so")
