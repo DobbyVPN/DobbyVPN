@@ -12,7 +12,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dobby.BuildConfig
@@ -38,63 +37,47 @@ fun SettingsScreen(
         Column(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Box(
+            SettingsBox(
+                "Application log",
+                "Logs may assist with debugging",
                 modifier = Modifier
                     .padding(horizontal = 8.dp)
-                    .fillMaxWidth()
-                    .border(
-                        border = BorderStroke(
-                            width = 2.dp,
-                            color = MaterialTheme.colorScheme.outline
-                        ),
-                        shape = RectangleShape
-                    )
-                    .clickable {
-                        onNavigate.invoke(LogsScreen)
-                    }
-            ) {
-                Column(modifier = Modifier.padding(8.dp)) {
-                    Text(
-                        text = "Application log",
-                        fontSize = MaterialTheme.typography.bodyMedium.fontSize,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        text = "Logs may assist with debugging",
-                        fontSize = MaterialTheme.typography.bodyMedium.fontSize,
-                        fontWeight = FontWeight.Normal,
-                    )
-                }
-            }
+                    .clickable { onNavigate.invoke(LogsScreen) },
+            )
 
-            Box(
+            SettingsBox(
+                "Diagnostics page",
+                "Diagnostics may assist with internet connection check",
                 modifier = Modifier
                     .padding(horizontal = 8.dp)
-                    .fillMaxWidth()
-                    .border(
-                        border = BorderStroke(
-                            width = 2.dp,
-                            color = MaterialTheme.colorScheme.outline
-                        ),
-                        shape = RectangleShape
-                    )
-                    .clickable {
-                        onNavigate.invoke(DiagnosticsScreen)
-                    }
-            ) {
-                Column(modifier = Modifier.padding(8.dp)) {
-                    Text(
-                        text = "Diagnostics page",
-                        fontSize = MaterialTheme.typography.bodyMedium.fontSize,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        text = "Diagnostics may assist with internet connection check",
-                        fontSize = MaterialTheme.typography.bodyMedium.fontSize,
-                        fontWeight = FontWeight.Normal,
-                    )
-                }
-            }
+                    .clickable { onNavigate.invoke(DiagnosticsScreen) },
+            )
+        }
+    }
+}
+
+@Composable
+fun SettingsBox(
+    title: String,
+    description: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(BorderStroke(2.dp, MaterialTheme.colorScheme.outline))
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            Text(
+                text = title,
+                fontSize = MaterialTheme.typography.bodyMedium.fontSize,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = description,
+                fontSize = MaterialTheme.typography.bodyMedium.fontSize,
+                fontWeight = FontWeight.Normal,
+            )
         }
     }
 }
