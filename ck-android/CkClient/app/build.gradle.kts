@@ -18,8 +18,6 @@ java {
     }
 }
 
-
-
 kotlin {
     androidTarget {
         @OptIn(ExperimentalKotlinGradlePluginApi::class)
@@ -97,17 +95,32 @@ compose.desktop {
     }
 }
 
-
 android {
-    namespace = "com.example.ck_client"
+    namespace = providers.gradleProperty("packageName").get()
     compileSdk = 35
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
-        applicationId = "com.example.ck_client"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+
+        applicationId = providers.gradleProperty("packageName").get()
+        versionCode = providers.gradleProperty("versionCode").get().toInt()
+        versionName = providers.gradleProperty("versionName").get()
+
+        buildConfigField(
+            "String",
+            "PROJECT_REPOSITORY_COMMIT",
+            "\"${providers.gradleProperty("projectRepositoryCommit").getOrElse("N/A")}\""
+        )
+        buildConfigField(
+            "String",
+            "PROJECT_REPOSITORY_COMMIT_LINK",
+            "\"${providers.gradleProperty("projectRepositoryCommitLink").getOrElse("N/A")}\""
+        )
 
         vectorDrawables {
             useSupportLibrary = true
@@ -123,11 +136,13 @@ android {
             )
         }
     }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

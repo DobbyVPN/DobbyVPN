@@ -12,4 +12,10 @@ data object AmneziaWGScreen
 data object DiagnosticsScreen
 
 @Serializable
+data object SettingsScreen
+
+@Serializable
 data object LogsScreen
+
+@Serializable
+data object AboutScreen

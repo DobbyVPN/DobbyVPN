@@ -45,6 +45,15 @@ jobs:
           key: >
             ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
 
+      - name: Fill gradle.properties
+        run:
+          echo "projectRepositoryCommit=$GITHUB_SHA"
+          echo "projectRepositoryCommit=$GITHUB_SHA" >> ck-android/CkClient/gradle.properties
+          echo "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$GITHUB_SHA"
+          echo "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$GITHUB_SHA" >> ck-android/CkClient/gradle.properties
+          echo "gradle.properties:"
+          cat ck-android/CkClient/gradle.properties
+
       - name: Build with Gradle
         run: |
           cd ck-android/CkClient
