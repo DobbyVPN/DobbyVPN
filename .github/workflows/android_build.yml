@@ -57,9 +57,9 @@ jobs:
         run: |
           cd ck-android/CkClient
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease
           cd ../..
-          cp ck-android/CkClient/app/build/outputs/apk/debug/app-debug.apk dobbyvpn-android.apk
+          cp ck-android/CkClient/app/build/outputs/apk/release/app-release-unsigned.apk dobbyvpn-android.apk
 
       - name: Upload Android client
         uses: actions/upload-artifact@master
