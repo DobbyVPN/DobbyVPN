@@ -111,6 +111,17 @@ android {
         versionCode = providers.gradleProperty("versionCode").get().toInt()
         versionName = providers.gradleProperty("versionName").get()
 
+        buildConfigField(
+            "String",
+            "PROJECT_REPOSITORY_COMMIT",
+            "\"${providers.gradleProperty("projectRepositoryCommit").get()}\""
+        )
+        buildConfigField(
+            "String",
+            "PROJECT_REPOSITORY_COMMIT_LINK",
+            "\"${providers.gradleProperty("projectRepositoryCommitLink").get()}\""
+        )
+
         vectorDrawables {
             useSupportLibrary = true
         }

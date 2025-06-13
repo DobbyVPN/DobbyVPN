@@ -24,6 +24,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.dobby.feature.diagnostic.ui.DiagnosticScreen
+import com.dobby.feature.logging.ui.AboutScreen
 import com.dobby.feature.logging.ui.LogScreen
 import com.dobby.feature.logging.ui.SettingsScreen
 import com.dobby.feature.main.ui.AwgScreen
@@ -63,6 +64,9 @@ fun App(modifier: Modifier = Modifier) {
                 }
                 composable<SettingsScreen> {
                     SettingsScreen(onNavigate = navController::navigate)
+                }
+                composable<AboutScreen> {
+                    AboutScreen()
                 }
             }
         }

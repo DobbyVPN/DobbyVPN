@@ -14,7 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.dobby.BuildConfig
+import com.dobby.navigation.AboutScreen
 import com.dobby.navigation.DiagnosticsScreen
 import com.dobby.navigation.LogsScreen
 
@@ -24,15 +24,12 @@ fun SettingsScreen(
     onNavigate: (Any) -> Unit = {}
 ) {
     Column(modifier = modifier) {
-        Box(
+        Text(
+            text = "DobbyVPN",
+            fontSize = MaterialTheme.typography.headlineMedium.fontSize,
+            maxLines = 1,
             modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 0.dp, bottom = 16.dp)
-        ) {
-            Text(
-                text = "DobbyVPN v${BuildConfig.VERSION_NAME}",
-                fontSize = MaterialTheme.typography.headlineMedium.fontSize,
-                maxLines = 1
-            )
-        }
+        )
 
         Column(
             verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -51,6 +48,14 @@ fun SettingsScreen(
                 modifier = Modifier
                     .padding(horizontal = 8.dp)
                     .clickable { onNavigate.invoke(DiagnosticsScreen) },
+            )
+
+            SettingsBox(
+                "About",
+                "Project short information",
+                modifier = Modifier
+                    .padding(horizontal = 8.dp)
+                    .clickable { onNavigate.invoke(AboutScreen) },
             )
         }
     }
