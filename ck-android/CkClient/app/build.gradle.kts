@@ -114,12 +114,12 @@ android {
         buildConfigField(
             "String",
             "PROJECT_REPOSITORY_COMMIT",
-            "\"${providers.gradleProperty("projectRepositoryCommit").get()}\""
+            "\"${providers.gradleProperty("projectRepositoryCommit").getOrElse("N/A")}\""
         )
         buildConfigField(
             "String",
             "PROJECT_REPOSITORY_COMMIT_LINK",
-            "\"${providers.gradleProperty("projectRepositoryCommitLink").get()}\""
+            "\"${providers.gradleProperty("projectRepositoryCommitLink").getOrElse("N/A")}\""
         )
 
         vectorDrawables {
