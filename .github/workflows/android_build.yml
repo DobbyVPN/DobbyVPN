@@ -50,6 +50,8 @@ jobs:
           echo "projectRepositoryCommit=$GITHUB_SHA" >> ck-android/CkClient/gradle.properties
           echo "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$GITHUB_SHA"
           echo "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$GITHUB_SHA" >> ck-android/CkClient/gradle.properties
+          echo "gradle.properties:"
+          cat ck-android/CkClient/gradle.properties
 
       - name: Android build
         run: |
