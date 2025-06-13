@@ -7,4 +7,6 @@ plugins {
     alias(libs.plugins.kotlinMultiplatform) apply false
     alias(libs.plugins.android.library) apply false
     alias(libs.plugins.hydraulic.conveyor) apply false
+
+    id("com.github.gmazzo.buildconfig") version "5.6.5" apply false
 }

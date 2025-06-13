@@ -8,6 +8,8 @@ plugins {
     alias(libs.plugins.jetbrains.kotlin.serialization)
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.hydraulic.conveyor)
+
+    id("com.github.gmazzo.buildconfig") version "5.6.5"
 }
 
 version = "1.0"
@@ -99,10 +101,6 @@ android {
     namespace = providers.gradleProperty("packageName").get()
     compileSdk = 35
 
-    buildFeatures {
-        buildConfig = true
-    }
-
     defaultConfig {
         minSdk = 26
         targetSdk = 35
@@ -110,17 +108,6 @@ android {
         applicationId = providers.gradleProperty("packageName").get()
         versionCode = providers.gradleProperty("versionCode").get().toInt()
         versionName = providers.gradleProperty("versionName").get()
-
-        buildConfigField(
-            "String",
-            "PROJECT_REPOSITORY_COMMIT",
-            "\"${providers.gradleProperty("projectRepositoryCommit").getOrElse("N/A")}\""
-        )
-        buildConfigField(
-            "String",
-            "PROJECT_REPOSITORY_COMMIT_LINK",
-            "\"${providers.gradleProperty("projectRepositoryCommitLink").getOrElse("N/A")}\""
-        )
 
         vectorDrawables {
             useSupportLibrary = true
@@ -147,6 +134,34 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
+
+buildConfig {
+    className = "BuildConfig"
+    packageName = providers.gradleProperty("packageName").get()
+
+    useKotlinOutput()
+
+    buildConfigField(
+        "int",
+        "VERSION_CODE",
+        providers.gradleProperty("versionCode").get().toInt()
+    )
+    buildConfigField(
+        "String",
+        "VERSION_NAME",
+        "\"${providers.gradleProperty("versionName").getOrElse("N/A")}\""
+    )
+    buildConfigField(
+        "String",
+        "PROJECT_REPOSITORY_COMMIT",
+        "\"${providers.gradleProperty("projectRepositoryCommit").getOrElse("N/A")}\""
+    )
+    buildConfigField(
+        "String",
+        "PROJECT_REPOSITORY_COMMIT_LINK",
+        "\"${providers.gradleProperty("projectRepositoryCommitLink").getOrElse("N/A")}\""
+    )
 }
 
 dependencies {

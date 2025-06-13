@@ -34,7 +34,6 @@ fun AboutScreen(
         )
 
         AboutRow("Version:", BuildConfig.VERSION_NAME)
-        AboutRow("Build type:", BuildConfig.BUILD_TYPE)
         AboutRowLink(
             title = "Build commit:",
             value = BuildConfig.PROJECT_REPOSITORY_COMMIT,
