@@ -13,8 +13,6 @@ import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.main.ui.MainUiState
-import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -44,18 +42,20 @@ class MainViewModel(
 
     init {
         // Cloak init
-        _uiState.tryEmit(
-            MainUiState(
-                cloakJson = configsRepository.getCloakConfig(),
-                outlineKey = configsRepository.getOutlineKey(),
-                isCloakEnabled = configsRepository.getIsCloakEnabled()
+        viewModelScope.launch {
+            _uiState.emit(
+                MainUiState(
+                    cloakJson = configsRepository.getCloakConfig(),
+                    outlineKey = configsRepository.getOutlineKey(),
+                    isCloakEnabled = configsRepository.getIsCloakEnabled()
+                )
             )
-        )
+        }
 
         viewModelScope.launch {
             connectionStateRepository.flow.collect { isConnected ->
                 val newState = _uiState.value.copy(isConnected = isConnected)
-                _uiState.tryEmit(newState)
+                _uiState.emit(newState)
             }
         }
         viewModelScope.launch {

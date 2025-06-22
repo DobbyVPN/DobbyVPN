@@ -15,7 +15,7 @@
 		A12013A82D80DE3200D43A3A /* tunnel.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A120139F2D80DE3100D43A3A /* tunnel.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A12013AD2D80E0FA00D43A3A /* MyLibrary.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A120131F2D7DB2A900D43A3A /* MyLibrary.xcframework */; settings = {ATTRIBUTES = (Required, ); }; };
 		A15F0FD42D874CDC007FA45D /* CommonDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; };
-		A15F0FD52D874CDC007FA45D /* CommonDI.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A15F0FD52D874CDC007FA45D /* CommonDI.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A15F0FEA2D874D38007FA45D /* CommonDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; settings = {ATTRIBUTES = (Required, ); }; };
 /* End PBXBuildFile section */
 

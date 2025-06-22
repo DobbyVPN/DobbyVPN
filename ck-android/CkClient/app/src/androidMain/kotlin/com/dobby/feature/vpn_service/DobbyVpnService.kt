@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
-import androidx.lifecycle.viewModelScope
 import com.dobby.awg.GoBackendWrapper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,8 +19,6 @@ import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.vpn_service.domain.CloakConnectionInteractor
 import com.dobby.feature.vpn_service.domain.IpFetcher
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
@@ -212,7 +209,7 @@ class DobbyVpnService : VpnService() {
                 logger.log("Start function resolveAndLogDomain('google.com')")
                 val ipAddress = resolveAndLogDomain("google.com")
                 logger.log("Start function ping('1.1.1.1')")
-                ping("1.1.1.1").await()
+                async { ping("1.1.1.1") }.await()
                 ipAddress?.let(::checkServerAvailability)
                     ?: logger.log("MyVpnService: Unable to resolve IP for google.com")
 
@@ -271,8 +268,7 @@ class DobbyVpnService : VpnService() {
         }
     }
 
-    private fun ping(host: String): Deferred<Unit> {
-        val deferred = CompletableDeferred<Unit>()
+    private fun ping(host: String) {
         serviceScope.launch {
             try {
                 val processBuilder = ProcessBuilder("ping", "-c", "4", host)
@@ -288,13 +284,10 @@ class DobbyVpnService : VpnService() {
 
                 process.waitFor()
                 logger.log("VpnService: Ping output:\n$output")
-                deferred.complete(Unit)
             } catch (e: Exception) {
                 logger.log("MyVpnService: Failed to execute ping command: ${e.message}")
-                deferred.completeExceptionally(e)
             }
         }
-        return deferred
     }
 
     private fun startReadingPackets() {
@@ -315,9 +308,11 @@ class DobbyVpnService : VpnService() {
                     } catch (e: CancellationException) {
                         logger.log("VpnService: Packet reading coroutine was cancelled.")
                         break
-                    }
-                    catch (e: Exception) {
-                        logger.log("VpnService: Failed to write packet to Outline: ${e.message}")
+                    } catch (e: Exception) {
+                        android.util.Log.e(
+                            "DobbyTAG",
+                            "VpnService: Failed to write packet to Outline: ${e.message}"
+                        )
                     }
                     buffer.clear()
                 }

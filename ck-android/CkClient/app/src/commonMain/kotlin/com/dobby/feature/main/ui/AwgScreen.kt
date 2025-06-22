@@ -18,13 +18,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dobby.feature.main.presentation.AwgConnectionState
 import com.dobby.feature.main.presentation.MainViewModel
+import com.dobby.util.koinViewModel
 
 @Composable
 fun AwgScreen(
-    viewModel: MainViewModel = viewModel(),
+    viewModel: MainViewModel = koinViewModel(),
     modifier: Modifier = Modifier,
 ) {
     Column(

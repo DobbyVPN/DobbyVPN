@@ -29,14 +29,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dobby.feature.logging.presentation.LogsViewModel
+import com.dobby.util.koinViewModel
 
 @Composable
 fun LogScreen(
-    viewModel: LogsViewModel = viewModel(),
+    viewModel: LogsViewModel = koinViewModel(),
     modifier: Modifier = Modifier,
 ) {
 
-    val logs by viewModel.uiState.logMessages.collectAsState()
+    val uiState by viewModel.uiState.collectAsState()
 
     Column(modifier = modifier) {
         Button(
@@ -63,7 +64,7 @@ fun LogScreen(
         }
 
         LazyColumn {
-            items(logs) { message ->
+            items(uiState.logMessages) { message ->
                 // some important logs contain this
                 val isBald = message.contains("!!!")
 

@@ -1,6 +1,12 @@
 package com.dobby.feature.logging
 
-interface Logger {
+import com.dobby.feature.logging.domain.LogsRepository
 
-    fun log(message: String)
+class Logger(
+    private val logsRepository: LogsRepository
+) {
+
+    fun log(message: String) {
+        logsRepository.writeLog(message)
+    }
 }

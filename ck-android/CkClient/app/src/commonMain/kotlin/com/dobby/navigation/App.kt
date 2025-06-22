@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -29,7 +28,6 @@ import com.dobby.feature.logging.ui.LogScreen
 import com.dobby.feature.logging.ui.SettingsScreen
 import com.dobby.feature.main.ui.AwgScreen
 import com.dobby.feature.main.ui.DobbySocksScreen
-import com.dobby.util.koinViewModel
 
 @Composable
 fun App(modifier: Modifier = Modifier) {
@@ -51,16 +49,16 @@ fun App(modifier: Modifier = Modifier) {
                 startDestination = MainScreen
             ) {
                 composable<MainScreen> {
-                    DobbySocksScreen(viewModel = koinViewModel())
+                    DobbySocksScreen()
                 }
                 composable<AmneziaWGScreen> {
-                    AwgScreen(viewModel = koinViewModel())
+                    AwgScreen()
                 }
                 composable<DiagnosticsScreen> {
-                    DiagnosticScreen(viewModel = koinViewModel())
+                    DiagnosticScreen()
                 }
                 composable<LogsScreen> {
-                    LogScreen(viewModel = koinViewModel())
+                    LogScreen()
                 }
                 composable<SettingsScreen> {
                     SettingsScreen(onNavigate = navController::navigate)

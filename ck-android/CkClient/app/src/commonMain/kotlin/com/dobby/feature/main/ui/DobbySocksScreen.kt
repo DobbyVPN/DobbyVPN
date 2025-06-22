@@ -30,8 +30,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dobby.feature.main.presentation.MainViewModel
+import com.dobby.util.koinViewModel
 import org.jetbrains.compose.ui.tooling.preview.Preview
 
 /**
@@ -42,7 +42,7 @@ import org.jetbrains.compose.ui.tooling.preview.Preview
 @Preview
 @Composable
 fun DobbySocksScreen(
-    viewModel: MainViewModel = viewModel(),
+    viewModel: MainViewModel = koinViewModel(),
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()

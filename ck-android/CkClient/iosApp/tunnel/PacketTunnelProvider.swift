@@ -7,11 +7,8 @@ import CommonDI
 class PacketTunnelProvider: NEPacketTunnelProvider {
     
     private var device = DeviceFacade()
-    
-    private var logs = logsRepo
-
+    private var logs = logsRepository
     private var configs = configsRepository
-
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
 
     override func startTunnel(options: [String : NSObject]?) async throws {
@@ -29,7 +26,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.dnsSettings = NEDNSSettings(servers: dnsServers)
 
         try await self.setTunnelNetworkSettings(settings)
-        NSLog("Tunnel settings applied")
+        logs.writeLog(log: "Tunnel settings applied")
 
         // Initialize the device
         device.initialize(config: config)
@@ -40,10 +37,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         DispatchQueue.global().async { [weak self] in
             self?.startReadPacketsAndForwardToDevice()
         }
+        DispatchQueue.global().async {
+            while true {
+                self.logs.writeLog(log: "Hello every 2 seconds")
+                unistd.sleep(2)
+            }
+        }
     }
     
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        NSLog("Stopping tunnel with reason: \(reason)")
+        logs.writeLog(log: "Stopping tunnel with reason: \(reason)")
         completionHandler()
     }
     
@@ -52,7 +55,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func startReadPacketsFromDevice() {
-        NSLog("Starting to read packets from device...")
+        logs.writeLog(log: "Starting to read packets from device...")
         while true {
             let data = device.readFromDevice()
             let packets: [Data] = [data]
@@ -64,16 +67,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 NSLog("Failed to write packets to the tunnel")
             }
         }
-        NSLog("Finishing #startReadPacketsFromDevice")
+        logs.writeLog(log: "Finishing #startReadPacketsFromDevice")
     }
     
     private func startReadPacketsAndForwardToDevice() {
         self.packetFlow.readPackets { [weak self] (packets, protocols) in
-            guard let self = self else { return }
+            guard let self else { return }
             if !packets.isEmpty {
-                self.forwardPacketsToDevice(packets, protocols: protocols)
+                forwardPacketsToDevice(packets, protocols: protocols)
             }
-            self.startReadPacketsAndForwardToDevice()
+            startReadPacketsAndForwardToDevice()
         }
     }
 
@@ -113,10 +116,10 @@ class DeviceFacade {
         }
     }
     
-    func close() {
-        do {
-            try device?.close()
-        } catch {}
-        device = nil
-    }
+//    func close() {
+//        do {
+//            try device?.close()
+//        } catch {}
+//        device = nil
+//    }
 }

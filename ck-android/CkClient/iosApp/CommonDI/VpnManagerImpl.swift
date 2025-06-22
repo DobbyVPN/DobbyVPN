@@ -27,12 +27,12 @@ class VpnManagerImpl: VpnManager {
         }
         
         observer = NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: nil) { [weak self] notification in
-            guard let connection = notification.object as? NEVPNConnection else { return }
-            self?.state = connection.status
+            guard let self, let connection = notification.object as? NEVPNConnection else { return }
+            state = connection.status
             if (connection.status == .connected) {
-                if (self?.vpnManager == nil) {
-                    self?.getOrCreateManager { (manager, error) in
-                        self?.vpnManager = manager
+                if (self.vpnManager == nil) {
+                    getOrCreateManager { (manager, _) in
+                        self.vpnManager = manager
                     }
                 }
                 connectionRepository.tryUpdate(isConnected: true)
@@ -74,9 +74,11 @@ class VpnManagerImpl: VpnManager {
     }
 
     private func getOrCreateManager(completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
-        NETunnelProviderManager.loadAllFromPreferences { (managers, error) in
+        NETunnelProviderManager.loadAllFromPreferences { [weak self] (managers, error) in
+            guard let self else { return }
+            
             if let existingManager = managers?.first(where: { $0.localizedDescription == self.dobbyName }) {
-                self.vpnManager = existingManager
+                vpnManager = existingManager
                 NSLog("Existing manager found.")
                 completion(existingManager, nil)
             } else {
