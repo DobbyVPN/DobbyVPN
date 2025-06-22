@@ -1,6 +1,9 @@
 import app
 
 public class NativeModuleHolder {
+
+    private let path = LogsRepository_iosKt.provideLogFilePath()
+    public static let logsRepository = LogsRepository.init(logFilePath: path)
     
     public static let shared: Koin_coreModule = MakeNativeModuleKt.makeNativeModule(
         copyLogsInteractor: { scope in
@@ -32,8 +35,5 @@ public class NativeModuleHolder {
 public let appGroupIdentifier = "group.vpn.dobby.app"
 
 public var configsRepository = DobbyConfigsRepositoryImpl.shared
-
-private let path = LogsRepository_iosKt.provideLogFilePath()
-public var logsRepo = LogsRepository.init(logFilePath: path)
 
 public var connectionStateRepository = ConnectionStateRepository()
