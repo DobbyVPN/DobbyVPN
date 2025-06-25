@@ -40,7 +40,7 @@ jobs:
           cd src
           go get ./...
           cd ..
-          sudo apt-get install golang gcc libgl1-mesa-dev xorg-dev
+          sudo apt-get install golang gcc libgl1-mesa-dev xorg-dev coreutils
           sudo apt-get install gcc-multilib
           sudo apt-get install gcc-mingw-w64
 
@@ -53,13 +53,29 @@ jobs:
           echo "gradle.properties:"
           cat ck-android/CkClient/gradle.properties
 
-      - name: Android build
+      - name: Build APK
         run: |
           cd ck-android/CkClient
           chmod +x gradlew
           ./gradlew assembleDebug
           cd ../..
-          cp ck-android/CkClient/app/build/outputs/apk/debug/app-debug.apk dobbyvpn-android.apk
+          ./gradlew assembleRelease --stacktrace
+
+      - name: Set up Keystore
+        run: |
+          mkdir -p $RUNNER_TEMP/keystores
+          echo "${{ secrets.KEYSTORE_FILE }}" | base64 --decode > $RUNNER_TEMP/keystores/keystore.jks
+
+      - name: Sign APK
+        run: |
+          ANDROID_SDK_PATH=$ANDROID_HOME/build-tools/35.0.0/apksigner
+          $ANDROID_SDK_PATH sign \
+            --ks $RUNNER_TEMP/keystores/keystore.jks \
+            --ks-key-alias ${{ secrets.KEY_ALIAS }} \
+            --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} \
+            --key-pass pass:${{ secrets.KEY_PASSWORD }} \
+            --out dobbyvpn-android.apk \
+            app/build/outputs/apk/release/app-release-unsigned.apk
 
       - name: Upload Android client
         uses: actions/upload-artifact@master
