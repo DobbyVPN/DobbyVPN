@@ -59,9 +59,8 @@ jobs:
         run: |
           cd ck-android/CkClient
           chmod +x gradlew
-          ./gradlew assembleDebug
-          cd ../..
           ./gradlew assembleRelease --stacktrace
+          cd ../..
 
       - name: Set up Keystore
         run: |
