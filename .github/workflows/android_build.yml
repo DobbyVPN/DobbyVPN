@@ -40,6 +40,8 @@ jobs:
           cd src
           go get ./...
           cd ..
+          sudo apt-get update
+          sudo apt-get upgrade
           sudo apt-get install golang gcc libgl1-mesa-dev xorg-dev coreutils
           sudo apt-get install gcc-multilib
           sudo apt-get install gcc-mingw-w64
