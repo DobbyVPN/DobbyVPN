@@ -1,4 +1,4 @@
-package kotlin_exports
+package main
 
 import "go_client/awg"
 

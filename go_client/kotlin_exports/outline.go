@@ -1,32 +1,65 @@
-package kotlin_exports
+package main
 
-import "go_client/outline"
+/*
+#include <stdlib.h>
+#include <string.h>
+*/
+import "C"
+import (
+    "go_client/outline"
+	"unsafe"
+)
 
-type OutlineClient struct {
-	*outline.OutlineClient
+var client *outline.OutlineClient
+
+//export Connect
+func Connect() error {
+	return client.Connect()
 }
 
-func (c *OutlineClient) Connect() error {
-	return c.OutlineClient.Connect()
+//export Disconnect
+func Disconnect() error {
+	return client.Disconnect()
 }
 
-func (c *OutlineClient) Disconnect() error {
-	return c.OutlineClient.Disconnect()
+//export Read
+func Read(buf *C.char, maxLen C.int) C.int {
+    if client == nil {
+		return -1
+	}
+	data, err := client.Read()
+	if err != nil {
+		return -1
+	}
+	copyLen := len(data)
+	if copyLen > int(maxLen) {
+		copyLen = int(maxLen)
+	}
+	// memcpy из <string.h>
+	C.memcpy(
+		unsafe.Pointer(buf),
+		unsafe.Pointer(&data[0]),
+		C.size_t(copyLen),
+	)
+	return C.int(copyLen)
 }
 
-//func (c *OutlineClient) GetServerIP() net.IP {
-//	return c.OutlineClient.GetServerIP()
-//}
-
-func (c *OutlineClient) Read() ([]byte, error) {
-	return c.OutlineClient.Read()
+//export Write
+func Write(buf *C.char, length C.int) C.int {
+    if client == nil {
+		return -1
+	}
+	data := C.GoBytes(unsafe.Pointer(buf), length)
+	n, err := client.Write(data)
+	if err != nil {
+		return -1
+	}
+	return C.int(n)
 }
 
-func (c *OutlineClient) Write(buf []byte) (int, error) {
-	return c.OutlineClient.Write(buf)
-}
-
-func NewOutlineClient(transportConfig string) *OutlineClient {
-	cl := outline.NewClient(transportConfig)
-	return &OutlineClient{OutlineClient: cl}
+//export NewOutlineClient
+func NewOutlineClient(config *C.char) {
+	goConfig := C.GoString(config)
+	cl := outline.NewClient(goConfig)
+	client = cl
 }
