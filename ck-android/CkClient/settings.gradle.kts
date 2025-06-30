@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 rootProject.name = "Ck-Client"
 include(":app")
 include(":awg")
+include(":outline")

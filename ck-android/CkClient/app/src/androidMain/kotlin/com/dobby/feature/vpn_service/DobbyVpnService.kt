@@ -82,19 +82,6 @@ class DobbyVpnService : VpnService() {
                 }
             }
         }
-
-        serviceScope.launch {
-            while (true) {
-                val dumpedLog = GoBackendWrapper.awgDumpLog()
-                dumpedLog.split("\n").forEach {
-                    if (it.isNotEmpty()) {
-                        logger.log("[awg tun] $it")
-                    }
-                }
-
-                delay(1000)
-            }
-        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
