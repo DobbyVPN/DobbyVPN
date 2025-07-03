@@ -28,7 +28,7 @@ jobs:
         uses: actions/download-artifact@master
         with:
           name: liboutline.so
-          path: ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a/liboutline.so
+          path: ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a
 
       - name: Setup Go
         uses: actions/setup-go@v5
