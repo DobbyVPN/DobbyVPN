@@ -144,7 +144,10 @@ jobs:
         run: |
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.11718014
           export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
-
+          export CC=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
+          export CXX=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++
+  
+  
           cd go_client
           go build -v -buildmode=c-shared -o liboutline.so ./kotlin_exports/...
           cd ..
@@ -157,8 +160,6 @@ jobs:
           CGO_ENABLED: "1"
           GOOS: "android"
           GOARCH: "arm64"
-          CC: ${{ steps.install_cc.outputs.cc }}
-          CXX: ${{ steps.install_cc.outputs.cxx }}
 
 
       - name: Build .aar
