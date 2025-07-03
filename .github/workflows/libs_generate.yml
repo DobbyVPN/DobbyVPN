@@ -128,19 +128,6 @@ jobs:
             platform-tools
             ndk;27.0.11718014
 
-      - name: Install compiler
-        if: matrix.os != 'windows-latest'
-        id: install_cc
-        uses: rlalik/setup-cpp-compiler@master
-        with:
-          compiler: latest
-
-      - name: Verify GCC Installation
-        if: matrix.os != 'windows-latest'
-        run: |
-          gcc --version
-          g++ --version
-
       - name: Set up Android NDK and build arm64 .so
         run: |
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.11718014
