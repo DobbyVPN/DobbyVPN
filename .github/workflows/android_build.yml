@@ -17,7 +17,7 @@ jobs:
       - name: Download Go AAR
         uses: actions/download-artifact@master
         with:
-          name: go_client_android.aar
+          name: outline-debug.aar
           path: ck-android/CkClient/libs
 
       - name: Setup Go
