@@ -126,6 +126,7 @@ jobs:
             platforms;android-36
             build-tools;36.0.0
             platform-tools
+            ndk;27.0.11718014
 
       - name: Install compiler
         if: matrix.os != 'windows-latest'
