@@ -15,7 +15,7 @@ jobs:
     runs-on: ${{ matrix.os }}-latest
     strategy:
       matrix:
-        os: [windows, ubuntu, macos]
+        os: [ windows, ubuntu, macos ]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -122,10 +122,10 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: |
-            platforms;android-33
-            build-tools;33.0.2
-            ndk;27.0.11718014
+          packages: >
+            platforms;android-36
+            build-tools;36.0.0
+            platform-tools
 
       - name: Set up Android NDK and build arm64 .so
         run: |
