@@ -20,6 +20,16 @@ jobs:
           name: outline-debug.aar
           path: ck-android/CkClient/libs
 
+      - name: Prepare for .so
+        run: |
+          mkdir -p ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a
+
+      - name: Download So
+        uses: actions/download-artifact@master
+        with:
+          name: liboutline.so
+          path: ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a/liboutline.so
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
