@@ -127,16 +127,23 @@ jobs:
             build-tools;36.0.0
             platform-tools
 
+      - name: Install compiler
+        if: matrix.os != 'windows-latest'
+        id: install_cc
+        uses: rlalik/setup-cpp-compiler@master
+        with:
+          compiler: latest
+
+      - name: Verify GCC Installation
+        if: matrix.os != 'windows-latest'
+        run: |
+          gcc --version
+          g++ --version
+
       - name: Set up Android NDK and build arm64 .so
         run: |
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.11718014
           export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
-
-          export CC=aarch64-linux-android21-clang
-          export CXX=aarch64-linux-android21-clang++
-          export GOOS=android
-          export GOARCH=arm64
-          export CGO_ENABLED=1
 
           cd go_client
           go build -v -buildmode=c-shared -o liboutline.so ./kotlin_exports/...
@@ -146,6 +153,13 @@ jobs:
           mkdir -p ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a
           cp go_client/liboutline.h ck-android/CkClient/outline/src/main/cpp/include/liboutline.h
           cp go_client/liboutline.so ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a/liboutline.so
+        env:
+          CGO_ENABLED: "1"
+          GOOS: "android"
+          GOARCH: "arm64"
+          CC: ${{ steps.install_cc.outputs.cc }}
+          CXX: ${{ steps.install_cc.outputs.cxx }}
+
 
       - name: Build .aar
         run: |
