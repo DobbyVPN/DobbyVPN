@@ -154,8 +154,6 @@ jobs:
         run: |
           cd ck-android/CkClient
           ./gradlew :outline:build
-          tree outline/build/outputs/aar
-          cp outline/build/outputs/aar/outline-debug.aar ../../../../..
 
       - name: Tree
         run: |
@@ -166,7 +164,7 @@ jobs:
         uses: actions/upload-artifact@master
         with:
           name: outline-debug.aar
-          path: outline-debug.aar
+          path: ck-android/CkClient/outline/build/outputs/aar/outline-debug.aar
 
   release:
     if: ${{ github.event.inputs.release_tag != '' }}
