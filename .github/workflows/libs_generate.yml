@@ -122,34 +122,42 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: >
-            platforms;android-36
-            build-tools;36.0.0
-            platform-tools
+          packages: |
+            platforms;android-33
+            build-tools;33.0.2
+            ndk;27.0.11718014
 
-      - name: Install gomobile & init
+      - name: Set up Android NDK and build arm64 .so
         run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          gomobile version
-          gomobile init     
+          export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.11718014
+          export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
 
-      - name: Fetch gomobile runtime
-        run: |
-          cd go_client            
-          go get golang.org/x/mobile/bind@latest
-          cd ..
+          export CC=aarch64-linux-android21-clang
+          export CXX=aarch64-linux-android21-clang++
+          export GOOS=android
+          export GOARCH=arm64
+          export CGO_ENABLED=1
 
-      - name: Build Go AAR
-        run: |
           cd go_client
-          gomobile bind -target=android/arm64 -androidapi=26 -o ../go_client_android.aar ./kotlin_exports
+          go build -v -buildmode=c-shared -o liboutline.so ./kotlin_exports/...
           cd ..
+
+          mkdir -p ck-android/CkClient/outline/src/main/cpp/include
+          mkdir -p ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a
+          cp go_client/liboutline.h ck-android/CkClient/outline/src/main/cpp/include/liboutline.h
+          cp go_client/liboutline.so ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a/liboutline.so
+
+      - name: Build .aar
+        run: |
+          cd ck-android/CkClient
+          ./gradlew :outline:build
+          cp build/outputs/aar/outline-debug.aar ../../..
 
       - name: Upload Go AAR
         uses: actions/upload-artifact@master
         with:
-          name: go_client_android.aar
-          path: go_client_android.aar
+          name: outline-debug.aar
+          path: outline-debug.aar
 
   release:
     if: ${{ github.event.inputs.release_tag != '' }}
@@ -185,7 +193,7 @@ jobs:
       - name: Download android library
         uses: actions/download-artifact@master
         with:
-          name: go_client_android.aar
+          name: outline-debug.aar
           path: release
 
       - name: Release
