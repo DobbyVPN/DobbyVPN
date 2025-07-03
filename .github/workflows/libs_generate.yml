@@ -155,7 +155,12 @@ jobs:
           cd ck-android/CkClient
           ./gradlew :outline:build
           tree outline/build/outputs/aar
-          cp outline/build/outputs/aar/outline-debug.aar ../../../../../..
+          cp outline/build/outputs/aar/outline-debug.aar ../../../../..
+
+      - name: Tree
+        run: |
+          ls
+          tree
 
       - name: Upload Go AAR
         uses: actions/upload-artifact@master
