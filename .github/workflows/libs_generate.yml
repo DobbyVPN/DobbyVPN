@@ -145,8 +145,8 @@ jobs:
         run: |
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.11718014
           export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
-          export CC=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
-          export CXX=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++
+          export CC=aarch64-linux-android21-clang
+          export CXX=aarch64-linux-android21-clang++
   
   
           cd go_client
