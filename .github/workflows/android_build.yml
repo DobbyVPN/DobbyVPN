@@ -17,8 +17,18 @@ jobs:
       - name: Download Go AAR
         uses: actions/download-artifact@master
         with:
-          name: go_client_android.aar
+          name: outline-debug.aar
           path: ck-android/CkClient/libs
+
+      - name: Prepare for .so
+        run: |
+          mkdir -p ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a
+
+      - name: Download So
+        uses: actions/download-artifact@master
+        with:
+          name: liboutline.so
+          path: ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -76,7 +86,7 @@ jobs:
             --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} \
             --key-pass pass:${{ secrets.KEY_PASSWORD }} \
             --out dobbyvpn-android.apk \
-            app/build/outputs/apk/release/app-release-unsigned.apk
+            ck-android/CkClient/app/build/outputs/apk/release/app-release-unsigned.apk
 
       - name: Upload Android client
         uses: actions/upload-artifact@master
