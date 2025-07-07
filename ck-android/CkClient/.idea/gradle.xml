@@ -12,10 +12,10 @@
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/app" />
             <option value="$PROJECT_DIR$/awg" />
+            <option value="$PROJECT_DIR$/outline" />
           </set>
         </option>
-        <option name="resolveExternalAnnotations" value="false" />
-      </GradleProjectSettings>
+        </GradleProjectSettings>
     </option>
   </component>
 </project>
