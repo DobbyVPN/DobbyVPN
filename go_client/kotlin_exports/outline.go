@@ -13,13 +13,13 @@ import (
 var client *outline.OutlineClient
 
 //export Connect
-func Connect() error {
-	return client.Connect()
+func Connect() {
+	client.Connect()
 }
 
 //export Disconnect
-func Disconnect() error {
-	return client.Disconnect()
+func Disconnect() {
+	client.Disconnect()
 }
 
 //export Read

@@ -83,8 +83,8 @@ extern "C" {
 
 extern void StartCloakClient(char* localHostC, char* localPortC, char* configC, GoUint8 udp);
 extern void StopCloakClient();
-extern GoInterface Connect();
-extern GoInterface Disconnect();
+extern void Connect();
+extern void Disconnect();
 extern int Read(char* buf, int maxLen);
 extern int Write(char* buf, int length);
 extern void NewOutlineClient(char* config);
