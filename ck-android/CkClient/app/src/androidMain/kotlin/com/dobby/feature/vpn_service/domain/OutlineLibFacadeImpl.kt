@@ -1,10 +1,9 @@
 package com.dobby.feature.vpn_service.domain
 
-import android.health.connect.datatypes.units.Length
 import com.dobby.outline.OutlineGo
 import com.dobby.feature.vpn_service.OutlineLibFacade
 
-internal class OutlineLibFacadeImpl: OutlineLibFacade {
+internal class OutlineLibFacadeImpl : OutlineLibFacade {
 
     override fun init(apiKey: String) {
         OutlineGo.newOutlineClient(apiKey).apply { OutlineGo.connect() }
