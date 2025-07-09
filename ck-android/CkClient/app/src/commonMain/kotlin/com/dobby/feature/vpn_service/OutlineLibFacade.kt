@@ -6,7 +6,7 @@ interface OutlineLibFacade {
 
     fun disconnect()
 
-    fun writeData(data: ByteArray)
+    fun writeData(data: ByteArray, length: Int)
 
-    fun readData(): ByteArray?
+    fun readData(data: ByteArray): Int
 }

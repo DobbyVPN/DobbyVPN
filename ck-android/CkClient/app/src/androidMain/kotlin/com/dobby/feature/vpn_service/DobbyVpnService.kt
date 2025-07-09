@@ -285,10 +285,8 @@ class DobbyVpnService : VpnService() {
                 while (isActive) {
                     try {
                         val length = inputStream?.read(buffer.array()) ?: 0
-
                         if (length > 0) {
-                            val packetData: ByteArray = buffer.array().copyOfRange(0, length)
-                            outlineLibFacade.writeData(packetData)
+                            outlineLibFacade.writeData(buffer.array(), length)
                             // val hexString = packetData.joinToString(separator = " ") { byte -> "%02x".format(byte) }
                             // Logger.log("MyVpnService: Packet Data Written (Hex): $hexString")
                         }
@@ -349,19 +347,20 @@ class DobbyVpnService : VpnService() {
     private fun startWritingPackets() {
         serviceScope.launch {
             vpnInterface?.let {
-                val buffer = ByteBuffer.allocate(bufferSize)
+                val buffer = ByteArray(bufferSize)
 
                 while (isActive) {
                     try {
-                        val packetData: ByteArray? = outlineLibFacade.readData()
-                        packetData?.let { outputStream?.write(it) }
+                        val length: Int = outlineLibFacade.readData(buffer)
+                        if (length > 0) {
+                            outputStream?.write(buffer, 0, length)
+                        }
                     } catch (e: CancellationException) {
                         logger.log("VpnService: Packet writing coroutine was cancelled.")
                         break
                     } catch (e: Exception) {
                         logger.log("VpnService: Failed to read packet from tunnel: ${e.message}")
                     }
-                    buffer.clear()
                 }
             }
         }
