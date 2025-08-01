@@ -4,6 +4,7 @@ package main
 #include <stdlib.h>
 #include <string.h>
 */
+
 import "C"
 import (
     "go_client/outline"

@@ -74,7 +74,7 @@ jobs:
           CC: ${{ steps.install_cc.outputs.cc }}
           CXX: ${{ steps.install_cc.outputs.cxx }}
 
-      - name: Build windows library
+      - name: Build macos library
         if: matrix.os == 'macos'
         run: |
           cd go_client
@@ -82,7 +82,7 @@ jobs:
         env:
           CGO_ENABLED: "1"
           GOOS: "darwin"
-          GOARCH: "amd64"
+          GOARCH: "arm64"
           CC: ${{ steps.install_cc.outputs.cc }}
           CXX: ${{ steps.install_cc.outputs.cxx }}
 
