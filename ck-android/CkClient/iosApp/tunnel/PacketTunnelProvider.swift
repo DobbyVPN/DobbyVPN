@@ -7,7 +7,7 @@ import CommonDI
 class PacketTunnelProvider: NEPacketTunnelProvider {
     
     private var device = DeviceFacade()
-    private var logs = logsRepository
+    private var logs = NativeModuleHolder.logsRepository
     private var configs = configsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
 
