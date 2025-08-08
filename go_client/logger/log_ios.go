@@ -28,7 +28,6 @@ type infoWriter struct{}
 
 func (infoWriter) Write(p []byte) (int, error) {
 	c := C.CString(string(p))
-	C.os_log_info(oslog, "%{public}s", c)
 	C.free(unsafe.Pointer(c))
 	return len(p), nil
 }
@@ -44,11 +43,6 @@ func lineLog(f *os.File, isErr bool) {
 		}
 
 		c := C.CString(msg)
-		if isErr {
-			C.os_log_error(oslog, "%{public}s", c)
-		} else {
-			C.os_log_info(oslog, "%{public}s", c)
-		}
 		C.free(unsafe.Pointer(c))
 
 		if err != nil {
