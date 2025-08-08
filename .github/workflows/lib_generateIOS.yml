@@ -50,8 +50,7 @@ jobs:
 
       - name: Show files
         run: |
-          ls -la go_client
-          tree go_client
+          ls -laR go_client
 
       - name: Upload iOS XCFramework
         uses: actions/upload-artifact@v4
