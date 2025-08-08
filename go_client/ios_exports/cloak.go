@@ -2,15 +2,17 @@ package outlinebridge
 
 import (
     "fmt"
-	"go_client/cloak"
+    "go_client/cloak"
 )
 
-func StartCloakClient(localHost  *string, localPort  *string, config  *string, udp bool) {
-    fmt.println(localHost + localPort + config)
-    fmt.println(udp)
-// 	cloak.StartCloakClient(localHost, localPort, config, udp)
+func StartCloakClient(localHost, localPort, config *string, udp bool) {
+    // Чтобы вывести значения строк, нужно разыменовать указатели
+    fmt.Println(*localHost + *localPort + *config)
+    fmt.Println(udp)
+    // Раскомментируй, когда cloak.StartCloakClient готов к использованию
+    // cloak.StartCloakClient(localHost, localPort, config, udp)
 }
 
 func StopCloakClient() {
-	cloak.StopCloakClient()
+    cloak.StopCloakClient()
 }
