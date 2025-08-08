@@ -1,54 +1,32 @@
 package cloak_outline
 
-import (
-	"go_client/outline"
-)
+import "go_client/outline"
 
-var client *outline.OutlineClient
-
-// NewOutlineClient — инициализация глобального клиента
-func NewOutlineClient(config string) {
-	cl := outline.NewClient(config)
-	client = cl
+type OutlineClient struct {
+	*outline.OutlineClient
 }
 
-// Connect — подключение VPN
-func Connect() {
-	if client != nil {
-		client.Connect()
-	}
+func (c *OutlineClient) Connect() error {
+	return c.OutlineClient.Connect()
 }
 
-// Disconnect — отключение VPN
-func Disconnect() {
-	if client != nil {
-		client.Disconnect()
-	}
+func (c *OutlineClient) Disconnect() error {
+	return c.OutlineClient.Disconnect()
 }
 
-// Read — чтение данных
-func Read(maxLen int) []byte {
-	if client == nil {
-		return nil
-	}
-	data, err := client.Read()
-	if err != nil {
-		return nil
-	}
-	if len(data) > maxLen {
-		return data[:maxLen]
-	}
-	return data
+//func (c *OutlineClient) GetServerIP() net.IP {
+//	return c.OutlineClient.GetServerIP()
+//}
+
+func (c *OutlineClient) Read() ([]byte, error) {
+	return c.OutlineClient.Read()
 }
 
-// Write — запись данных
-func Write(data []byte) int {
-	if client == nil {
-		return -1
-	}
-	n, err := client.Write(data)
-	if err != nil {
-		return -1
-	}
-	return n
+func (c *OutlineClient) Write(buf []byte) (int, error) {
+	return c.OutlineClient.Write(buf)
+}
+
+func NewOutlineClient(transportConfig string) *OutlineClient {
+	cl := outline.NewClient(transportConfig)
+	return &OutlineClient{OutlineClient: cl}
 }
