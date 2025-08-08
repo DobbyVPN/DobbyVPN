@@ -4,7 +4,7 @@ import (
 	"go_client/cloak"
 )
 
-func StartCloakClient(localHostC  *byte, localPortC  *byte, configC  *byte, udp bool) {
+func StartCloakClient(localHost  *byte, localPort  *byte, config  *byte, udp bool) {
 	cloak.StartCloakClient(localHost, localPort, config, udp)
 }
 
