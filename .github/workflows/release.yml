@@ -1,12 +1,12 @@
 name: Release
 
 # Configures this workflow to run every time a change is pushed to the master.
-on:
-  push:
-    branches:
-      - main
-    tags:
-      - "v*"
+#on:
+#  push:
+#    branches:
+#      - main
+#    tags:
+#      - "v*"
 
 jobs:
   libs_build:

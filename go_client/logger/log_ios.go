@@ -3,6 +3,10 @@
 
 package logger
 
+import (
+	"os"
+)
+
 
 type infoWriter struct{}
 
