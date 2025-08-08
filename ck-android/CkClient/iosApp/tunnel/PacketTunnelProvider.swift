@@ -90,10 +90,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
 class DeviceFacade {
 
-    private var device: Cloak_outlineOutlineDevice? = nil
+    private var device: Cloak_outlineOutlineClient? = nil
 
     func initialize(config: String) {
-        device = Cloak_outlineOutlineDevice(config)
+        device = Cloak_outlineNewOutlineClient(config)
         NSLog("Device initiaization finished")
     }
     
