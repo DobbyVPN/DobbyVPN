@@ -1,4 +1,4 @@
-package outlinebridge
+package cloak_outline
 
 import "go_client/healthcheck"
 
