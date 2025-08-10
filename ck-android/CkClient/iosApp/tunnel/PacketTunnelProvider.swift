@@ -86,9 +86,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     
     private func startCloak() {
-        var apiKey = configsRepository.getOutlineKey()
-        var localHost = "127.0.0.1"
-        var localPort = "1984"
+        let localHost = "127.0.0.1"
+        let localPort = "1984"
         logs.writeLog(log: "startCloakOutline with key: $apiKey")
         if (configsRepository.getIsCloakEnabled()) {
             Cloak_outlineStartCloakClient(localHost, localPort, configsRepository.getCloakConfig(), false)
@@ -127,11 +126,4 @@ class DeviceFacade {
             return Data()
         }
     }
-    
-//    func close() {
-//        do {
-//            try device?.close()
-//        } catch {}
-//        device = nil
-//    }
 }
