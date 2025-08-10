@@ -1,7 +1,6 @@
 package cloak_outline
 
 import (
-    "fmt"
     "go_client/cloak"
 )
 
