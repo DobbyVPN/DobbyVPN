@@ -25,7 +25,7 @@
 // skipped method OutlineDevice.GetServerIP with unsupported parameter or return types
 
 - (long)mtu;
-- (BOOL)read:(NSData* _Nullable)buf ret0_:(long* _Nullable)ret0_ error:(NSError* _Nullable* _Nullable)error;
+- (NSData* _Nullable)read:(NSError* _Nullable* _Nullable)error;
 - (BOOL)refresh:(NSError* _Nullable* _Nullable)error;
 - (BOOL)write:(NSData* _Nullable)buf ret0_:(long* _Nullable)ret0_ error:(NSError* _Nullable* _Nullable)error;
 @end
