@@ -62,7 +62,7 @@ jobs:
           PLIST="ck-android/CkClient/iosApp/iosApp/Info.plist"
           MARKETING_VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$PLIST")
 
-          LATEST_BUILD=$(fastlane run latest_testflight_build_number api_key_path:"api_key.json" version:"$MARKETING_VERSION" | tr -dc '0-9')
+          LATEST_BUILD=$(fastlane run latest_testflight_build_number api_key_path:"api_key.json" app_identifier:"vpn.dobby.app" version:"$MARKETING_VERSION" | tr -dc '0-9')
           if [ -z "$LATEST_BUILD" ]; then
             echo "No builds found in TestFlight. Using 1."
             LATEST_BUILD=0
