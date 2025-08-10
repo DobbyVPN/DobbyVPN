@@ -37,12 +37,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         DispatchQueue.global().async { [weak self] in
             self?.startReadPacketsAndForwardToDevice()
         }
-        DispatchQueue.global().async {
-            while true {
-                self.logs.writeLog(log: "Hello every 2 seconds")
-                unistd.sleep(2)
-            }
-        }
     }
     
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
@@ -57,14 +51,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startReadPacketsFromDevice() {
         logs.writeLog(log: "Starting to read packets from device...")
         while true {
-            let data = device.readFromDevice()
-            let packets: [Data] = [data]
-            let protocols: [NSNumber] = [NSNumber(value: AF_INET)] // IPv4
+            autoreleasepool {
+                let data = device.readFromDevice()
+                let packets: [Data] = [data]
+                let protocols: [NSNumber] = [NSNumber(value: AF_INET)] // IPv4
 
-            let success = self.packetFlow.writePackets(packets, withProtocols: protocols)
-            NSLog("self.packetFlow.writePackets - succ")
-            if !success {
-                NSLog("Failed to write packets to the tunnel")
+                let success = self.packetFlow.writePackets(packets, withProtocols: protocols)
+                NSLog("self.packetFlow.writePackets - succ")
+                if !success {
+                    NSLog("Failed to write packets to the tunnel")
+                }
             }
         }
         logs.writeLog(log: "Finishing #startReadPacketsFromDevice")
