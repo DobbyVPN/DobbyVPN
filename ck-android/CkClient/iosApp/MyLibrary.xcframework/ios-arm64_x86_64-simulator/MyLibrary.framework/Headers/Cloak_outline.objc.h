@@ -25,7 +25,7 @@
 // skipped method OutlineDevice.GetServerIP with unsupported parameter or return types
 
 - (long)mtu;
-- (NSData* _Nullable)read:(NSError* _Nullable* _Nullable)error;
+- (BOOL)read:(NSData* _Nullable)buf ret0_:(long* _Nullable)ret0_ error:(NSError* _Nullable* _Nullable)error;
 - (BOOL)refresh:(NSError* _Nullable* _Nullable)error;
 - (BOOL)write:(NSData* _Nullable)buf ret0_:(long* _Nullable)ret0_ error:(NSError* _Nullable* _Nullable)error;
 @end
@@ -44,8 +44,7 @@ FOUNDATION_EXPORT NSString* _Nonnull Cloak_outlineAwgVersion(void);
 
 FOUNDATION_EXPORT Cloak_outlineOutlineDevice* _Nullable Cloak_outlineNewOutlineDevice(NSString* _Nullable transportConfig, NSError* _Nullable* _Nullable error);
 
-// skipped function StartCloakClient with unsupported parameter or return types
-
+FOUNDATION_EXPORT void Cloak_outlineStartCloakClient(NSString* _Nullable localHost, NSString* _Nullable localPort, NSString* _Nullable config, BOOL udp);
 
 FOUNDATION_EXPORT void Cloak_outlineStartHealthCheck(long period, BOOL sendMetrics);
 

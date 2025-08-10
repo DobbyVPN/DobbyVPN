@@ -63,12 +63,13 @@ func (d *OutlineDevice) GetServerIP() net.IP {
 	return d.svrIP
 }
 
-func (d *OutlineDevice) Read(buf []byte) (int, error) {
+func (d *OutlineDevice) Read() ([]byte, error) {
+	buf := make([]byte, 65536)
 	n, err := d.IPDevice.Read(buf)
 	if err != nil {
-		return 0, fmt.Errorf("failed to read data: %w", err)
+		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
-	return n, nil
+	return buf[:n], nil
 }
 
 func (d *OutlineDevice) Write(buf []byte) (int, error) {

@@ -30,6 +30,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         // Initialize the device
         device.initialize(config: config)
+        startCloak()
+        
         
         DispatchQueue.global().async { [weak self] in
             self?.startReadPacketsFromDevice()
@@ -81,6 +83,20 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             NSLog("writing packet \(packet) to device")
             device.write(data: packet)
         }
+    }
+    
+    private func startCloak() {
+        var apiKey = configsRepository.getOutlineKey()
+        var localHost = "127.0.0.1"
+        var localPort = "1984"
+        logs.writeLog(log: "startCloakOutline with key: $apiKey")
+        if (configsRepository.getIsCloakEnabled()) {
+            Cloak_outlineStartCloakClient(localHost, localPort, configsRepository.getCloakConfig(), false)
+        }
+    }
+    
+    private func stopCloak() {
+        Cloak_outlineStopCloakClient()
     }
 }
 
