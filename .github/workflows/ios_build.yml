@@ -39,40 +39,23 @@ jobs:
           go get ./...
           cd ..
 
+      - name: Get latest build number from App Store Connect
+        id: get_build
+        uses: nlemeshko/app-store-last-build-number-individual-key@1.0.2
+        with:
+          key: ${{ secrets.APP_STORE_PRIVATE_KEY_BASE64 }}
+          key_id: ${{ secrets.APP_STORE_KEY_ID }}
+          app_id: ${{ secrets.APP_STORE_APP_ID }}
+
+      - name: Show fetched build
+        run: |
+          echo "Latest build: ${{ env.BUILD_VERSION }}"
+
       - name: Build Kotlin Multiplatform
         run: |
           cd ck-android/CkClient
           chmod +x gradlew
           ./gradlew linkReleaseFrameworkIosArm64
-
-      - name: Increment build number from TestFlight
-        env:
-          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
-          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
-          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
-        run: |
-          gem install fastlane
-
-          echo '{
-          "key_id": "'"$APP_STORE_KEY_ID"'",
-          "issuer_id": "'"$APP_STORE_ISSUER_ID"'",
-          "key": "'"$APP_STORE_API_KEY"'"
-          }' > api_key.json
-
-          PLIST="ck-android/CkClient/iosApp/iosApp/Info.plist"
-          MARKETING_VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$PLIST")
-
-          LATEST_BUILD=$(fastlane run latest_testflight_build_number api_key_path:"api_key.json" app_identifier:"vpn.dobby.app" version:"$MARKETING_VERSION" | tr -dc '0-9')
-          if [ -z "$LATEST_BUILD" ]; then
-            echo "No builds found in TestFlight. Using 1."
-            LATEST_BUILD=0
-          fi
-
-          NEW_BUILD=$((LATEST_BUILD + 1))
-          echo "Incrementing CFBundleVersion to $NEW_BUILD"
-          /usr/libexec/PlistBuddy -c "Set CFBundleVersion $NEW_BUILD" "$PLIST"
-
-          rm -f api_key.json
 
       - name: Build iOS App
         env:
