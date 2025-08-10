@@ -5,11 +5,10 @@ import (
     "go_client/cloak"
 )
 
-func StartCloakClient(localHost, localPort, config *string, udp bool) {
-    // Чтобы вывести значения строк, нужно разыменовать указатели
-    fmt.Println(*localHost + *localPort + *config)
+func StartCloakClient(localHost string, localPort string, config string, udp bool) {
+    fmt.Println(localHost + localPort + config)
     fmt.Println(udp)
-    // Раскомментируй, когда cloak.StartCloakClient готов к использованию
+    // Когда будет готова функция cloak.StartCloakClient, вызываем её:
     // cloak.StartCloakClient(localHost, localPort, config, udp)
 }
 
