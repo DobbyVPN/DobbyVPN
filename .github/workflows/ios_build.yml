@@ -33,21 +33,6 @@ jobs:
         run: |
           git submodule update --init --recursive
 
-      - name: Get latest build number from App Store Connect
-        run: |
-          LATEST=$(app-store-connect get-latest-testflight-build-number \
-          "$APP_APPLE_ID" \
-          --issuer-id "APP_STORE_ISSUER_ID" \
-          --key-id "APP_STORE_KEY_ID" \
-          --private-key "APP_STORE_API_KEY" \
-          --not-expired)
-          NEXT=$((LATEST + 1))
-          echo "Next TestFlight build number: $NEXT"
-        env:
-          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
-          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
-          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
-
       - name: Install dependencies
         run: |
           cd src
