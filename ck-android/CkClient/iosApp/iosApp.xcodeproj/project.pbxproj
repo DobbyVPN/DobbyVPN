@@ -12,8 +12,6 @@
 		2152FB042600AC8F00CF470E /* iOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2152FB032600AC8F00CF470E /* iOSApp.swift */; };
 		7555FF83242A565900829871 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7555FF82242A565900829871 /* ContentView.swift */; };
 		8C7730202E427B7700B3782E /* app.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C77301F2E427B7700B3782E /* app.framework */; };
-		8C7730212E427B9300B3782E /* app.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C77301F2E427B7700B3782E /* app.framework */; };
-		8C7730222E427B9300B3782E /* app.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 8C77301F2E427B7700B3782E /* app.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		8C7730E12E49480D00B3782E /* MyLibrary.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7730E02E49480D00B3782E /* MyLibrary.xcframework */; };
 		8C7730E22E49480D00B3782E /* MyLibrary.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7730E02E49480D00B3782E /* MyLibrary.xcframework */; };
 		A12013A02D80DE3200D43A3A /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */; };
@@ -48,17 +46,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		8C7730232E427B9300B3782E /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				8C7730222E427B9300B3782E /* app.framework in Embed Frameworks */,
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		A12012F62D7DAE1200D43A3A /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -137,7 +124,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				8C7730212E427B9300B3782E /* app.framework in Frameworks */,
 				8C7730E22E49480D00B3782E /* MyLibrary.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -282,7 +268,6 @@
 				A15F0FCA2D874CDC007FA45D /* Sources */,
 				A15F0FCB2D874CDC007FA45D /* Frameworks */,
 				A15F0FCC2D874CDC007FA45D /* Resources */,
-				8C7730232E427B9300B3782E /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -576,7 +561,6 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 3;
 				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app;
 				PRODUCT_NAME = "${APP_NAME}";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -607,7 +591,6 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 3;
 				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app;
 				PRODUCT_NAME = "${APP_NAME}";
 				PROVISIONING_PROFILE_SPECIFIER = "";
