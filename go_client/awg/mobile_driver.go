@@ -1,4 +1,4 @@
-//go:build android
+//go:build android || ios
 
 package awg
 
@@ -7,11 +7,9 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/device"
 	"github.com/amnezia-vpn/amneziawg-go/ipc"
-	"github.com/amnezia-vpn/amneziawg-go/tun"
 	log "github.com/sirupsen/logrus"
 	"go_client/common"
 	_ "go_client/logger"
-	"golang.org/x/sys/unix"
 	"math"
 	"net"
 	"runtime/debug"
@@ -20,32 +18,41 @@ import (
 
 const Name = "awg"
 
-type AwgClient struct {
+type mobileDriver struct {
 	interfaceName string
 	tunFd         int32
 	settings      string
 	tunnelHandle  int32
 }
 
-func (c *AwgClient) Connect() error {
-	c.tunnelHandle = AwgTurnOn(c.interfaceName, c.tunFd, c.settings)
-	if c.tunnelHandle == -1 {
+func newDriver(config string) (Driver, error) {
+	// The mobile driver is not created with a config string.
+	// It's created with a tunFd and settings.
+	// This needs to be handled differently.
+	// For now, we will return a nil driver.
+	// This will be fixed in the next step.
+	return nil, nil
+}
+
+func (d *mobileDriver) Connect() error {
+	d.tunnelHandle = AwgTurnOn(d.interfaceName, d.tunFd, d.settings)
+	if d.tunnelHandle == -1 {
 		return fmt.Errorf("awgTurnOn failed") // TODO: handle error with more detail
 	}
 	return nil
 }
 
-func (c *AwgClient) Disconnect() error {
-	AwgTurnOff(c.tunnelHandle)
-	c.tunnelHandle = -1
+func (d *mobileDriver) Disconnect() error {
+	AwgTurnOff(d.tunnelHandle)
+	d.tunnelHandle = -1
 	return nil
 }
 
-func (c *AwgClient) Refresh() error {
-	if err := c.Disconnect(); err != nil {
+func (d *mobileDriver) Refresh() error {
+	if err := d.Disconnect(); err != nil {
 		return err
 	} // TODO: handle error with more detail
-	return c.Connect()
+	return d.Connect()
 }
 
 type TunnelHandle struct {
@@ -55,36 +62,15 @@ type TunnelHandle struct {
 
 var tunnelHandles = make(map[int32]TunnelHandle)
 
-//func init() {
-//	tunnelHandles = make(map[int32]TunnelHandle)
-//	signals := make(chan os.Signal)
-//	signal.Notify(signals, unix.SIGUSR2)
-//	go func() {
-//		buf := make([]byte, os.Getpagesize())
-//		for {
-//			select {
-//			case <-signals:
-//				n := runtime.Stack(buf, true)
-//				if n == len(buf) {
-//					n--
-//				}
-//				buf[n] = 0
-//				C.__android_log_write(C.ANDROID_LOG_ERROR, cstring("AmneziaWG/Stacktrace"), (*C.char)(unsafe.Pointer(&buf[0])))
-//			}
-//		}
-//	}()
-//}
-
 func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	logger := &device.Logger{
 		Verbosef: log.Infof,
 		Errorf:   log.Errorf,
 	}
 
-	tun, name, err := tun.CreateUnmonitoredTUNFromFD(int(tunFd))
+	tun, name, err := createTUN(int(tunFd))
 	if err != nil {
-		unix.Close(int(tunFd))
-		logger.Errorf("CreateUnmonitoredTUNFromFD: %v", err)
+		log.Errorf("createTUN: %v", err)
 		return -1
 	}
 
@@ -93,8 +79,7 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 
 	err = device.IpcSet(settings)
 	if err != nil {
-		unix.Close(int(tunFd))
-		logger.Errorf("IpcSet: %v", err)
+		log.Errorf("IpcSet: %v", err)
 		return -1
 	}
 	device.DisableSomeRoamingForBrokenMobileSemantics()
@@ -104,16 +89,19 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	uapiFile, err := ipc.UAPIOpen(name)
 	if err != nil {
 		logger.Errorf("UAPIOpen: %v", err)
+		// Even if UAPI fails, we can continue without it.
 	} else {
 		uapi, err = ipc.UAPIListen(name, uapiFile)
 		if err != nil {
 			uapiFile.Close()
 			logger.Errorf("UAPIListen: %v", err)
+			// Even if UAPI fails, we can continue without it.
 		} else {
 			go func() {
 				for {
 					conn, err := uapi.Accept()
 					if err != nil {
+						logger.Errorf("UAPI Accept: %v", err)
 						return
 					}
 					go device.IpcHandle(conn)
@@ -125,7 +113,9 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	err = device.Up()
 	if err != nil {
 		logger.Errorf("Unable to bring up device: %v", err)
-		uapiFile.Close()
+		if uapiFile != nil {
+			uapiFile.Close()
+		}
 		device.Close()
 		return -1
 	}
@@ -139,13 +129,15 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	}
 	if i == math.MaxInt32 {
 		logger.Errorf("Unable to find empty handle")
-		uapiFile.Close()
+		if uapiFile != nil {
+			uapiFile.Close()
+		}
 		device.Close()
 		return -1
 	}
 	tunnelHandles[i] = TunnelHandle{device: device, uapi: uapi}
 
-	common.Client.SetVpnClient(Name, &AwgClient{interfaceName: interfaceName, tunFd: tunFd, settings: settings, tunnelHandle: i})
+	common.Client.SetVpnClient(Name, &mobileDriver{interfaceName: interfaceName, tunFd: tunFd, settings: settings, tunnelHandle: i})
 	common.Client.MarkActive(Name)
 
 	return i
@@ -196,16 +188,16 @@ func AwgGetSocketV6(tunnelHandle int32) int32 {
 	return int32(fd)
 }
 
-func AwgGetConfig(tunnelHandle int32) string {
+func AwgGetConfig(tunnelHandle int32) (string, error) {
 	handle, ok := tunnelHandles[tunnelHandle]
 	if !ok {
-		return ""
+		return "", fmt.Errorf("invalid tunnel handle: %d", tunnelHandle)
 	}
 	settings, err := handle.device.IpcGet()
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return settings
+	return settings, nil
 }
 
 func AwgVersion() string {
@@ -224,32 +216,3 @@ func AwgVersion() string {
 	}
 	return "unknown"
 }
-
-//func AwgGetConfig(tunnelHandle int32) *C.char {
-//	handle, ok := tunnelHandles[tunnelHandle]
-//	if !ok {
-//		return nil
-//	}
-//	settings, err := handle.device.IpcGet()
-//	if err != nil {
-//		return nil
-//	}
-//	return C.CString(settings)
-//}
-//
-//func AwgVersion() *C.char {
-//	info, ok := debug.ReadBuildInfo()
-//	if !ok {
-//		return C.CString("unknown")
-//	}
-//	for _, dep := range info.Deps {
-//		if dep.Path == "github.com/amnezia-vpn/amneziawg-go" {
-//			parts := strings.Split(dep.Version, "-")
-//			if len(parts) == 3 && len(parts[2]) == 12 {
-//				return C.CString(parts[2][:7])
-//			}
-//			return C.CString(dep.Version)
-//		}
-//	}
-//	return C.CString("unknown")
-//}
