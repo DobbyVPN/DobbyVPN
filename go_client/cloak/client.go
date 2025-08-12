@@ -27,6 +27,8 @@ func InitLog() {
 }
 
 func StartCloakClient(localHost, localPort, config string, udp bool) {
+	StopCloakClient()
+
 	mu.Lock()
 	defer mu.Unlock()
 
