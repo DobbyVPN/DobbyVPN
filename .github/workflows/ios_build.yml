@@ -37,9 +37,7 @@ jobs:
         run: |
           gem install fastlane
           cd ck-android/CkClient/iosApp
-          fastlane run increment_build_number \
-            xcodeproj:"iosApp.xcodeproj" \
-            build_number:$(( $(fastlane run latest_testflight_build_number app_identifier:vpn.dobby.app | tail -n 1) + 1 ))
+          fastlane run increment_build_number
 
 
       - name: Install dependencies
