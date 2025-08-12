@@ -37,7 +37,8 @@ jobs:
         run: |
           gem install fastlane
           cd ck-android/CkClient/iosApp
-          fastlane run increment_build_number
+          fastlane run increment_build_number \
+            build_number: ${{ github.run_number }}"
 
 
       - name: Install dependencies
