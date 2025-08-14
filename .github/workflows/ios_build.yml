@@ -36,6 +36,7 @@ jobs:
       - name: Increment build number
         run: |
           cd ck-android/CkClient/iosApp/iosApp
+          ls
           NEW_VER=${{ github.run_number }}
           sed -i -e '/<key>CFBundleVersion<\/key>/{n;s|<string>.*</string>|<string>'"$NEW_VER"'</string>|;}' Info.plist
 
