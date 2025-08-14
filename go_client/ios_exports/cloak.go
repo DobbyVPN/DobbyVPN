@@ -2,6 +2,7 @@ package cloak_outline
 
 import (
     "go_client/cloak"
+    "runtime/debug"
 )
 
 func StartCloakClient(localHost string, localPort string, config string, udp bool) {
