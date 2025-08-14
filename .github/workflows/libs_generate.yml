@@ -219,7 +219,7 @@ jobs:
           ls -laR go_client
 
       - name: Upload iOS XCFramework
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@master
         with:
           name: MyLibrary.xcframework
           path: go_client/MyLibrary.xcframework
