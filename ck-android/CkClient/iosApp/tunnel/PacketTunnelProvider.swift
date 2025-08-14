@@ -5,14 +5,17 @@ import app
 import CommonDI
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
+    private var isRunning = false
     
     private var device = DeviceFacade()
     private var logs = NativeModuleHolder.logsRepository
     private var configs = configsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
+    private var writeQueue = DispatchSemaphore(value: 256)
 
     override func startTunnel(options: [String : NSObject]?) async throws {
         let config = configsRepository.getOutlineKey()
+        isRunning = true
 
         let remoteAddress = "254.1.1.1"
         let localAddress = "198.18.0.1"
@@ -43,6 +46,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         logs.writeLog(log: "Stopping tunnel with reason: \(reason)")
+        isRunning = false
+        stopCloak()
         completionHandler()
     }
     
@@ -52,16 +57,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func startReadPacketsFromDevice() {
         logs.writeLog(log: "Starting to read packets from device...")
-        while true {
+        var pending = 0
+        while isRunning {
             autoreleasepool {
                 let data = device.readFromDevice()
-                let packets: [Data] = [data]
-                let protocols: [NSNumber] = [NSNumber(value: AF_INET)] // IPv4
-
-                let success = self.packetFlow.writePackets(packets, withProtocols: protocols)
-                NSLog("self.packetFlow.writePackets - succ")
-                if !success {
-                    NSLog("Failed to write packets to the tunnel")
+                if !data.isEmpty {
+                    writeQueue.wait()
+                    DispatchQueue.global().async {
+                        let proto: NSNumber = ((data.first ?? 0) >> 4 == 6) ? NSNumber(value: AF_INET6) : NSNumber(value: AF_INET)
+                        let success = self.packetFlow.writePackets([data], withProtocols: [proto])
+                        if success { self.writeQueue.signal() }
+                    }
                 }
             }
         }
@@ -69,6 +75,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     
     private func startReadPacketsAndForwardToDevice() {
+        guard isRunning else { return }
         self.packetFlow.readPackets { [weak self] (packets, protocols) in
             guard let self else { return }
             if !packets.isEmpty {
@@ -95,7 +102,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     
     private func stopCloak() {
-        Cloak_outlineStopCloakClient()
+        if (configsRepository.getIsCloakEnabled()) {
+            Cloak_outlineStopCloakClient()
+        }
     }
 }
 
