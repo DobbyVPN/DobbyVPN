@@ -7,22 +7,23 @@ import (
 	log "github.com/sirupsen/logrus"
 	"go_client/common"
 	"go_client/outline/internal"
+	"net"
 	"sync"
 )
 
 const Name = "outline"
 
-type OutlineClient struct {
+type desktopDriver struct {
 	app    *internal.App
 	cancel func()
 
 	mu sync.Mutex
 }
 
-func NewClient(transportConfig *string) *OutlineClient {
-	c := &OutlineClient{
+func newDriver(transportConfig string) Driver {
+	return &desktopDriver{
 		app: &internal.App{
-			TransportConfig: transportConfig,
+			TransportConfig: &transportConfig,
 			RoutingConfig: &internal.RoutingConfig{
 				TunDeviceName:        "outline233",
 				TunDeviceIP:          "10.233.233.1",
@@ -34,24 +35,22 @@ func NewClient(transportConfig *string) *OutlineClient {
 			},
 		},
 	}
-	common.Client.SetVpnClient(Name, c)
-	return c
 }
 
-func (c *OutlineClient) Connect() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (d *desktopDriver) Connect() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
-	if c.cancel != nil {
-		c.cancel()
-		c.cancel = nil
+	if d.cancel != nil {
+		d.cancel()
+		d.cancel = nil
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	c.cancel = cancel
+	d.cancel = cancel
 
 	go func() {
-		if err := c.app.Run(ctx); err != nil {
+		if err := d.app.Run(ctx); err != nil {
 			log.Errorf("connect outline failed: %v", err)
 			common.Client.MarkInactive(Name)
 		}
@@ -61,19 +60,31 @@ func (c *OutlineClient) Connect() error {
 	return nil
 }
 
-func (c *OutlineClient) Disconnect() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (d *desktopDriver) Disconnect() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
-	if c.cancel != nil {
-		c.cancel()
-		c.cancel = nil
+	if d.cancel != nil {
+		d.cancel()
+		d.cancel = nil
 	}
 	common.Client.MarkInactive(Name)
 	return nil
 }
 
-func (c *OutlineClient) Refresh() error {
-	_ = c.Disconnect()
-	return c.Connect()
+func (d *desktopDriver) Refresh() error {
+	_ = d.Disconnect()
+	return d.Connect()
+}
+
+func (d *desktopDriver) Read(buf []byte) (int, error) {
+	return 0, nil
+}
+
+func (d *desktopDriver) Write(buf []byte) (int, error) {
+	return 0, nil
+}
+
+func (d *desktopDriver) GetServerIP() net.IP {
+	return nil
 }
