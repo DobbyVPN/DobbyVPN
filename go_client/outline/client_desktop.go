@@ -19,10 +19,10 @@ type OutlineClient struct {
 	mu sync.Mutex
 }
 
-func NewClient(transportConfig string) *OutlineClient {
+func NewClient(transportConfig *string) *OutlineClient {
 	c := &OutlineClient{
 		app: &internal.App{
-			TransportConfig: &transportConfig,
+			TransportConfig: transportConfig,
 			RoutingConfig: &internal.RoutingConfig{
 				TunDeviceName:        "outline233",
 				TunDeviceIP:          "10.233.233.1",

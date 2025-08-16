@@ -17,19 +17,29 @@ var (
 	mu     sync.Mutex
 )
 
-func StartCloakClient(localHost, localPort, config string, udp bool) error {
+func InitLog() {
+	exported_client.InitLog()
+
+	log.SetFormatter(&log.TextFormatter{
+		FullTimestamp: true,
+	})
+	log.SetLevel(log.InfoLevel)
+}
+
+func StartCloakClient(localHost, localPort, config string, udp bool) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if client != nil {
-		StopCloakClient()
-	}
+	//if client != nil {
+	//	log.Errorf("start cloak client failed: cloak client already started")
+	//	return
+	//}
 
 	var rawConfig exported_client.Config
 	err := json.Unmarshal([]byte(config), &rawConfig)
 	if err != nil {
 		log.Errorf("cloak client: Failed to unmarshal config - %v", err)
-		return err
+		return
 	}
 	log.Infof("cloak client: rawConfig parsed successfully: %+v", rawConfig)
 
@@ -41,16 +51,15 @@ func StartCloakClient(localHost, localPort, config string, udp bool) error {
 	client = exported_client.NewCkClient(rawConfig)
 
 	common.Client.SetVpnClient(Name, client)
-	err = client.Connect()
+	err = client.Connect() // TODO: handle err
 	if err != nil {
 		log.Errorf("cloak client: Failed to connect to cloak client - %v", err)
-		return err
+		return
 	}
 
 	log.Infof("cloak client connected")
 
 	common.Client.MarkActive(Name)
-	return nil
 }
 
 func StopCloakClient() {

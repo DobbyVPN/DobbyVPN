@@ -13,6 +13,7 @@ var outlineMu sync.Mutex
 //export StartOutline
 func StartOutline(key *C.char) {
 	str_key := C.GoString(key)
+	keyPtr := &str_key
 
 	outlineMu.Lock()
 	defer outlineMu.Unlock()
@@ -26,7 +27,7 @@ func StartOutline(key *C.char) {
 		}
 	}
 
-	outlineClient = outline.NewClient(str_key)
+	outlineClient = outline.NewClient(keyPtr)
 	log.Infof("Connect outline client")
 	err := outlineClient.Connect()
 	if err != nil {

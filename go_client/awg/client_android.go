@@ -55,6 +55,26 @@ type TunnelHandle struct {
 
 var tunnelHandles = make(map[int32]TunnelHandle)
 
+//func init() {
+//	tunnelHandles = make(map[int32]TunnelHandle)
+//	signals := make(chan os.Signal)
+//	signal.Notify(signals, unix.SIGUSR2)
+//	go func() {
+//		buf := make([]byte, os.Getpagesize())
+//		for {
+//			select {
+//			case <-signals:
+//				n := runtime.Stack(buf, true)
+//				if n == len(buf) {
+//					n--
+//				}
+//				buf[n] = 0
+//				C.__android_log_write(C.ANDROID_LOG_ERROR, cstring("AmneziaWG/Stacktrace"), (*C.char)(unsafe.Pointer(&buf[0])))
+//			}
+//		}
+//	}()
+//}
+
 func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	logger := &device.Logger{
 		Verbosef: log.Infof,
@@ -84,19 +104,16 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	uapiFile, err := ipc.UAPIOpen(name)
 	if err != nil {
 		logger.Errorf("UAPIOpen: %v", err)
-		// Even if UAPI fails, we can continue without it.
 	} else {
 		uapi, err = ipc.UAPIListen(name, uapiFile)
 		if err != nil {
 			uapiFile.Close()
 			logger.Errorf("UAPIListen: %v", err)
-			// Even if UAPI fails, we can continue without it.
 		} else {
 			go func() {
 				for {
 					conn, err := uapi.Accept()
 					if err != nil {
-						logger.Errorf("UAPI Accept: %v", err)
 						return
 					}
 					go device.IpcHandle(conn)
@@ -108,9 +125,7 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	err = device.Up()
 	if err != nil {
 		logger.Errorf("Unable to bring up device: %v", err)
-		if uapiFile != nil {
-			uapiFile.Close()
-		}
+		uapiFile.Close()
 		device.Close()
 		return -1
 	}
@@ -181,16 +196,16 @@ func AwgGetSocketV6(tunnelHandle int32) int32 {
 	return int32(fd)
 }
 
-func AwgGetConfig(tunnelHandle int32) (string, error) {
+func AwgGetConfig(tunnelHandle int32) string {
 	handle, ok := tunnelHandles[tunnelHandle]
 	if !ok {
-		return "", fmt.Errorf("invalid tunnel handle: %d", tunnelHandle)
+		return ""
 	}
 	settings, err := handle.device.IpcGet()
 	if err != nil {
-		return "", err
+		return ""
 	}
-	return settings, nil
+	return settings
 }
 
 func AwgVersion() string {
@@ -210,3 +225,31 @@ func AwgVersion() string {
 	return "unknown"
 }
 
+//func AwgGetConfig(tunnelHandle int32) *C.char {
+//	handle, ok := tunnelHandles[tunnelHandle]
+//	if !ok {
+//		return nil
+//	}
+//	settings, err := handle.device.IpcGet()
+//	if err != nil {
+//		return nil
+//	}
+//	return C.CString(settings)
+//}
+//
+//func AwgVersion() *C.char {
+//	info, ok := debug.ReadBuildInfo()
+//	if !ok {
+//		return C.CString("unknown")
+//	}
+//	for _, dep := range info.Deps {
+//		if dep.Path == "github.com/amnezia-vpn/amneziawg-go" {
+//			parts := strings.Split(dep.Version, "-")
+//			if len(parts) == 3 && len(parts[2]) == 12 {
+//				return C.CString(parts[2][:7])
+//			}
+//			return C.CString(dep.Version)
+//		}
+//	}
+//	return C.CString("unknown")
+//}
