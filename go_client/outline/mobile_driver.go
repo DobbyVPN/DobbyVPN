@@ -13,20 +13,17 @@ import (
 
 const Name = "outline"
 
-type OutlineClient struct {
+type mobileDriver struct {
 	device *internal.OutlineDevice
 	config string
 }
 
-func NewClient(transportConfig string) *OutlineClient {
-	c := &OutlineClient{config: transportConfig}
-	log.Println("outline client created")
-	common.Client.SetVpnClient(Name, c)
-	return c
+func newDriver(transportConfig string) Driver {
+	return &mobileDriver{config: transportConfig}
 }
 
-func (c *OutlineClient) Connect() error {
-	od, err := internal.NewOutlineDevice(c.config)
+func (d *mobileDriver) Connect() error {
+	od, err := internal.NewOutlineDevice(d.config)
 	if err != nil {
 		log.Printf("failed to create outline device: %v\n", err)
 		return err
@@ -35,13 +32,13 @@ func (c *OutlineClient) Connect() error {
 	log.Println("outline device created")
 	log.Println("outline client connected")
 
-	c.device = od
+	d.device = od
 	common.Client.MarkActive(Name)
 	return nil
 }
 
-func (c *OutlineClient) Disconnect() error {
-	err := c.device.Close()
+func (d *mobileDriver) Disconnect() error {
+	err := d.device.Close()
 	if err != nil {
 		log.Printf("failed to close outline device: %v\n", err)
 		return err
@@ -51,27 +48,26 @@ func (c *OutlineClient) Disconnect() error {
 	return nil
 }
 
-func (c *OutlineClient) Refresh() error {
-	return c.device.Refresh()
+func (d *mobileDriver) Refresh() error {
+	return d.device.Refresh()
 }
 
-func (c *OutlineClient) GetServerIP() net.IP {
-	return c.device.GetServerIP()
+func (d *mobileDriver) GetServerIP() net.IP {
+	return d.device.GetServerIP()
 }
 
-func (c *OutlineClient) Read() ([]byte, error) {
-	buf := make([]byte, 65536)
-	n, err := c.device.Read(buf)
+func (d *mobileDriver) Read(buf []byte) (int, error) {
+	n, err := d.device.Read(buf)
 	log.Println(fmt.Sprintf("outline client: read data; size: %d (%d)", n, n%8))
 	if err != nil {
 		log.Printf("failed to read data: %v\n", err)
-		return nil, fmt.Errorf("failed to read data: %w", err)
+		return 0, fmt.Errorf("failed to read data: %w", err)
 	}
-	return buf, nil
+	return n, nil
 }
 
-func (c *OutlineClient) Write(buf []byte) (int, error) {
-	n, err := c.device.Write(buf)
+func (d *mobileDriver) Write(buf []byte) (int, error) {
+	n, err := d.device.Write(buf)
 	log.Println(fmt.Sprintf("outline client: write data; size: %d (%d)", n, n%8))
 	if err != nil {
 		log.Printf("failed to write data: %v\n", err)

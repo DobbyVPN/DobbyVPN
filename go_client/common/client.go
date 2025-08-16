@@ -15,7 +15,7 @@ type vpnClientWithState struct {
 
 type CommonClient struct {
 	mu         sync.Mutex
-	vpnClients map[string]vpnClientWithState
+	vpnClients map[string]*vpnClientWithState
 }
 
 func (c *CommonClient) Connect(clientName string) error {
@@ -57,9 +57,9 @@ func (c *CommonClient) SetVpnClient(clientName string, client vpnClient) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.vpnClients == nil {
-		c.vpnClients = make(map[string]vpnClientWithState)
+		c.vpnClients = make(map[string]*vpnClientWithState)
 	}
-	c.vpnClients[clientName] = vpnClientWithState{vpnClient: client}
+	c.vpnClients[clientName] = &vpnClientWithState{vpnClient: client}
 }
 
 func (c *CommonClient) MarkActive(clientName string) {
@@ -106,5 +106,5 @@ func (c *CommonClient) RefreshAll() error {
 }
 
 var Client = &CommonClient{
-	vpnClients: make(map[string]vpnClientWithState),
+	vpnClients: make(map[string]*vpnClientWithState),
 }

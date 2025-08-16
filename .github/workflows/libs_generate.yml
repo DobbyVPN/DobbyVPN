@@ -36,6 +36,10 @@ jobs:
           go mod download
           go get github.com/refraction-networking/utls@v1.6.7
           cd ..
+      - name: Run tests
+        run: |
+          cd go_client
+          go test ./...
 
       - name: Install compiler
         if: matrix.os != 'windows-latest'
@@ -118,6 +122,10 @@ jobs:
           cd go_client
           go mod download
           cd ..
+      - name: Run tests
+        run: |
+          cd go_client
+          go test ./...
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -196,6 +204,11 @@ jobs:
           cd go_client
           go mod download
           cd ..
+
+      - name: Run tests
+        run: |
+          cd go_client
+          go test ./...
 
       - name: Install gomobile & init
         run: |

@@ -11,19 +11,18 @@ import (
 )
 
 type healthChecker struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	sendMetrics bool
-	period      int32
+	ctx    context.Context
+	cancel context.CancelFunc
+	period int32
 }
 
 var checker *healthChecker
 var mu sync.Mutex
 var lastStatus atomic.Pointer[healthCheckStatus]
 
-func newHealthCheck(sendMetrics bool, period int32) *healthChecker {
+func newHealthCheck(period int32) *healthChecker {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &healthChecker{ctx: ctx, cancel: cancel, sendMetrics: sendMetrics, period: period}
+	return &healthChecker{ctx: ctx, cancel: cancel, period: period}
 }
 
 func (h *healthChecker) stop() {
@@ -78,13 +77,13 @@ func (s healthCheckStatus) String() string {
 	)
 }
 
-func StartHealthCheck(period int, sendMetrics bool) {
+func StartHealthCheck(period int) {
 	mu.Lock()
 	defer mu.Unlock()
 	if checker != nil {
 		checker.stop()
 	}
-	checker = newHealthCheck(sendMetrics, int32(period))
+	checker = newHealthCheck(int32(period))
 	go checker.start()
 }
 
