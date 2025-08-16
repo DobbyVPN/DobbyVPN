@@ -55,26 +55,6 @@ type TunnelHandle struct {
 
 var tunnelHandles = make(map[int32]TunnelHandle)
 
-//func init() {
-//	tunnelHandles = make(map[int32]TunnelHandle)
-//	signals := make(chan os.Signal)
-//	signal.Notify(signals, unix.SIGUSR2)
-//	go func() {
-//		buf := make([]byte, os.Getpagesize())
-//		for {
-//			select {
-//			case <-signals:
-//				n := runtime.Stack(buf, true)
-//				if n == len(buf) {
-//					n--
-//				}
-//				buf[n] = 0
-//				C.__android_log_write(C.ANDROID_LOG_ERROR, cstring("AmneziaWG/Stacktrace"), (*C.char)(unsafe.Pointer(&buf[0])))
-//			}
-//		}
-//	}()
-//}
-
 func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	logger := &device.Logger{
 		Verbosef: log.Infof,
@@ -114,6 +94,7 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 				for {
 					conn, err := uapi.Accept()
 					if err != nil {
+					    logger.Errorf("UAPI Accept: %v", err)
 						return
 					}
 					go device.IpcHandle(conn)
@@ -125,7 +106,9 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	err = device.Up()
 	if err != nil {
 		logger.Errorf("Unable to bring up device: %v", err)
-		uapiFile.Close()
+		if uapiFile != nil {
+        	uapiFile.Close()
+        }
 		device.Close()
 		return -1
 	}
@@ -224,32 +207,3 @@ func AwgVersion() string {
 	}
 	return "unknown"
 }
-
-//func AwgGetConfig(tunnelHandle int32) *C.char {
-//	handle, ok := tunnelHandles[tunnelHandle]
-//	if !ok {
-//		return nil
-//	}
-//	settings, err := handle.device.IpcGet()
-//	if err != nil {
-//		return nil
-//	}
-//	return C.CString(settings)
-//}
-//
-//func AwgVersion() *C.char {
-//	info, ok := debug.ReadBuildInfo()
-//	if !ok {
-//		return C.CString("unknown")
-//	}
-//	for _, dep := range info.Deps {
-//		if dep.Path == "github.com/amnezia-vpn/amneziawg-go" {
-//			parts := strings.Split(dep.Version, "-")
-//			if len(parts) == 3 && len(parts[2]) == 12 {
-//				return C.CString(parts[2][:7])
-//			}
-//			return C.CString(dep.Version)
-//		}
-//	}
-//	return C.CString("unknown")
-//}

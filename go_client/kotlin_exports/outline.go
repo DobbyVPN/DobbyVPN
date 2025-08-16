@@ -59,7 +59,15 @@ func Write(buf *C.char, length C.int) C.int {
 
 //export NewOutlineClient
 func NewOutlineClient(config *C.char) {
+    StopOutlineClient()
 	goConfig := C.GoString(config)
 	cl := outline.NewClient(goConfig)
 	client = cl
+}
+
+//export StopOutlineClient
+func StopOutlineClient() {
+	if client != nil {
+		client.Disconnect()
+	}
 }

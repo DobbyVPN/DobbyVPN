@@ -30,10 +30,9 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	//if client != nil {
-	//	log.Errorf("start cloak client failed: cloak client already started")
-	//	return
-	//}
+	if client != nil {
+    	StopCloakClient()
+    }
 
 	var rawConfig exported_client.Config
 	err := json.Unmarshal([]byte(config), &rawConfig)
