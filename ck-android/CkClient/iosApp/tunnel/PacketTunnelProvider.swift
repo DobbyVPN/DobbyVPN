@@ -10,6 +10,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var logs = NativeModuleHolder.logsRepository
     private var configs = configsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
+    private var memoryTimer: DispatchSourceTimer?
 
     override func startTunnel(options: [String : NSObject]?) async throws {
         let config = configsRepository.getOutlineKey()
@@ -60,7 +61,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 let protocols: [NSNumber] = [NSNumber(value: AF_INET)] // IPv4
 
                 let success = self.packetFlow.writePackets(packets, withProtocols: protocols)
-                NSLog("self.packetFlow.writePackets - succ \(Thread.current)")
                 if !success {
                     NSLog("Failed to write packets to the tunnel")
                 }
@@ -81,7 +81,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func forwardPacketsToDevice(_ packets: [Data], protocols: [NSNumber]) {
         for packet in packets {
-            NSLog("writing packet \(packet) to device \(Thread.current)")
             device.write(data: packet)
         }
     }

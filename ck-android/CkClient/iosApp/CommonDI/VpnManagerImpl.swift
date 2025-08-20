@@ -12,6 +12,8 @@ class VpnManagerImpl: VpnManager {
     private var observer: NSObjectProtocol?
     @Published private(set) var state: NEVPNStatus = .invalid
     
+    private var isUserInitiatedStop = true
+    
     init(connectionRepository: ConnectionStateRepository) {
         self.connectionRepository = connectionRepository
 
@@ -29,15 +31,24 @@ class VpnManagerImpl: VpnManager {
         observer = NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: nil) { [weak self] notification in
             guard let self, let connection = notification.object as? NEVPNConnection else { return }
             state = connection.status
-            if (connection.status == .connected) {
+            switch connection.status {
+            case .connected:
                 if (self.vpnManager == nil) {
                     getOrCreateManager { (manager, _) in
                         self.vpnManager = manager
                     }
                 }
                 connectionRepository.tryUpdate(isConnected: true)
-            } else {
+            case .disconnected:
                 connectionRepository.tryUpdate(isConnected: false)
+                if !self.isUserInitiatedStop {
+                    NSLog("VPN disconnected unexpectedly, restarting...")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        self.start()
+                    }
+                }
+            default:
+                break
             }
         }
     }
@@ -49,6 +60,7 @@ class VpnManagerImpl: VpnManager {
     }
     
     func start() {
+        isUserInitiatedStop = false
         getOrCreateManager { (manager, error) in
             guard let manager = manager else {
                 NSLog("Created VPNManager is nil")
@@ -69,6 +81,7 @@ class VpnManagerImpl: VpnManager {
 
     func stop() {
         guard state == .connected else { return }
+        isUserInitiatedStop = true
         NSLog("Actually vpnManager is \(vpnManager)")
         vpnManager?.connection.stopVPNTunnel()
     }
