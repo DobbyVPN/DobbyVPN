@@ -8,7 +8,6 @@ import org.koin.core.module.dsl.singleOf
 import org.koin.dsl.module
 
 actual val sharedModule = module {
-    single { LogsRepository() }
     singleOf(::Logger)
     singleOf(::PermissionEventsChannel)
     singleOf(::LogsViewModel)

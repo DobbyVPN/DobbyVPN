@@ -13,6 +13,7 @@ typealias NativeInjectionFactory<T> = Scope.() -> T
 
 fun makeNativeModule(
     copyLogsInteractor: NativeInjectionFactory<CopyLogsInteractor>,
+    logsRepository: NativeInjectionFactory<LogsRepository>,
     ipRepository: NativeInjectionFactory<IpRepository>,
     configsRepository: NativeInjectionFactory<DobbyConfigsRepository>,
     connectionStateRepository: NativeInjectionFactory<ConnectionStateRepository>,
@@ -23,6 +24,7 @@ fun makeNativeModule(
         factory { vpnManager() }
         factory { awgManager() }
         single { copyLogsInteractor() }
+        single { logsRepository() }
         single { ipRepository() }
         single { connectionStateRepository() }
         single { configsRepository() }

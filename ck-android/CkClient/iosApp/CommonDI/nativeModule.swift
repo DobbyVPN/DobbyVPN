@@ -1,13 +1,15 @@
 import app
 
 public class NativeModuleHolder {
-
     private static let path = LogsRepository_iosKt.provideLogFilePath()
     public static let logsRepository = LogsRepository.init(logFilePath: path)
     
     public static let shared: Koin_coreModule = MakeNativeModuleKt.makeNativeModule(
         copyLogsInteractor: { scope in
             return CopyLogsInteractorImpl()
+        },
+        logsRepository: { scope in
+            return logsRepository
         },
         ipRepository: { scope in
             return IpRepositoryImpl()

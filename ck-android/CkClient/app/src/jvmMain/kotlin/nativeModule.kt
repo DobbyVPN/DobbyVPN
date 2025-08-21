@@ -10,6 +10,7 @@ import org.koin.dsl.module
 
 val jvmMainModule = makeNativeModule(
     copyLogsInteractor = { CopyLogsInteractorImpl() },
+    logsRepository = { LogsRepository() },
     ipRepository = { IpRepositoryImpl(get()) },
     configsRepository = { DobbyConfigsRepositoryImpl() },
     connectionStateRepository = { ConnectionStateRepository() },
@@ -18,7 +19,6 @@ val jvmMainModule = makeNativeModule(
 )
 
 val jvmVpnModule = module {
-
     single<VPNLibraryLoader> { VPNLibraryLoader(get()) }
     single<DobbyVpnService> { DobbyVpnService(get(), get(), get(), get()) }
 }

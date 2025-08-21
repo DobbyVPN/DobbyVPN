@@ -20,6 +20,7 @@ import org.koin.dsl.module
 
 val androidMainModule = makeNativeModule(
     copyLogsInteractor = { CopyLogsInteractorImpl(get()) },
+    logsRepository = { LogsRepository() },
     ipRepository = { IpRepositoryImpl(get()) },
     configsRepository = {
         DobbyConfigsRepositoryImpl(
@@ -32,7 +33,6 @@ val androidMainModule = makeNativeModule(
 )
 
 val androidVpnModule = module {
-    single { LogsRepository() }
     single { Logger(get()) }
     factoryOf(::IpFetcher)
     factory<CloakLibFacade> { CloakLibFacadeImpl() }

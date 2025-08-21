@@ -605,7 +605,7 @@ __attribute__((swift_name("MainViewControllerKt")))
 __attribute__((objc_subclassing_restricted))
 __attribute__((swift_name("MakeNativeModuleKt")))
 @interface AppMakeNativeModuleKt : AppBase
-+ (AppKoin_coreModule *)makeNativeModuleCopyLogsInteractor:(id<AppCopyLogsInteractor> (^)(AppKoin_coreScope *))copyLogsInteractor ipRepository:(id<AppIpRepository> (^)(AppKoin_coreScope *))ipRepository configsRepository:(id<AppDobbyConfigsRepository> (^)(AppKoin_coreScope *))configsRepository connectionStateRepository:(AppConnectionStateRepository *(^)(AppKoin_coreScope *))connectionStateRepository vpnManager:(id<AppVpnManager> (^)(AppKoin_coreScope *))vpnManager awgManager:(id<AppAwgManager> (^)(AppKoin_coreScope *))awgManager __attribute__((swift_name("makeNativeModule(copyLogsInteractor:ipRepository:configsRepository:connectionStateRepository:vpnManager:awgManager:)")));
++ (AppKoin_coreModule *)makeNativeModuleCopyLogsInteractor:(id<AppCopyLogsInteractor> (^)(AppKoin_coreScope *))copyLogsInteractor logsRepository:(AppLogsRepository *(^)(AppKoin_coreScope *))logsRepository ipRepository:(id<AppIpRepository> (^)(AppKoin_coreScope *))ipRepository configsRepository:(id<AppDobbyConfigsRepository> (^)(AppKoin_coreScope *))configsRepository connectionStateRepository:(AppConnectionStateRepository *(^)(AppKoin_coreScope *))connectionStateRepository vpnManager:(id<AppVpnManager> (^)(AppKoin_coreScope *))vpnManager awgManager:(id<AppAwgManager> (^)(AppKoin_coreScope *))awgManager __attribute__((swift_name("makeNativeModule(copyLogsInteractor:logsRepository:ipRepository:configsRepository:connectionStateRepository:vpnManager:awgManager:)")));
 @end
 
 __attribute__((objc_subclassing_restricted))
