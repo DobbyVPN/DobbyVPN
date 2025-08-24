@@ -169,7 +169,26 @@ jobs:
           name: DobbyVPN.ipa
           path: ck-android/CkClient/iosApp/build/ipa/*.ipa
 
-#      - name: Publish to TestFlight via FastLane
+      - name: Publish to TestFlight via FastLane
+        env:
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+        run: |
+          gem install fastlane
+          echo '{
+          "key_id": "'"$APP_STORE_KEY_ID"'",
+          "issuer_id": "'"$APP_STORE_ISSUER_ID"'",
+          "key": "'"$APP_STORE_API_KEY"'"
+          }' > api_key.json
+
+          fastlane pilot upload \
+            --ipa ck-android/CkClient/iosApp/build/ipa/*.ipa \
+            --api_key_path api_key.json
+          rm -f api_key.json
+
+#      - name: Publish to App Store via Fastlane
+#        if: github.ref == 'refs/heads/main'
 #        env:
 #          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
 #          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
@@ -182,33 +201,14 @@ jobs:
 #          "key": "'"$APP_STORE_API_KEY"'"
 #          }' > api_key.json
 #
-#          fastlane pilot upload \
+#          fastlane deliver \
 #            --ipa ck-android/CkClient/iosApp/build/ipa/*.ipa \
-#            --api_key_path api_key.json
+#            --api_key_path api_key.json \
+#            --submit_for_review true \
+#            --automatic_release true \
+#            --skip_metadata true \
+#            --skip_screenshots true \
+#            --force \
+#            --run_precheck_before_submit false
+#
 #          rm -f api_key.json
-
-      - name: Publish to App Store via Fastlane
-        if: github.ref == 'refs/heads/main'
-        env:
-          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
-          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
-          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
-        run: |
-          gem install fastlane
-          echo '{
-          "key_id": "'"$APP_STORE_KEY_ID"'",
-          "issuer_id": "'"$APP_STORE_ISSUER_ID"'",
-          "key": "'"$APP_STORE_API_KEY"'"
-          }' > api_key.json
-          
-          fastlane deliver \
-            --ipa ck-android/CkClient/iosApp/build/ipa/*.ipa \
-            --api_key_path api_key.json \
-            --submit_for_review true \
-            --automatic_release true \
-            --skip_metadata true \
-            --skip_screenshots true \
-            --force \
-            --run_precheck_before_submit false
-          
-          rm -f api_key.json
