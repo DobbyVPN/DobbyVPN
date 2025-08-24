@@ -41,13 +41,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             self?.startReadPacketsAndForwardToDevice()
         }
     }
-    
+
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         logs.writeLog(log: "Stopping tunnel with reason: \(reason)")
         stopCloak()
         completionHandler()
     }
-    
+
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         completionHandler?(messageData)
     }
@@ -58,7 +58,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             autoreleasepool {
                 let data = device.readFromDevice()
                 let packets: [Data] = [data]
-                let protocols: [NSNumber] = [NSNumber(value: AF_INET)] // IPv4
+                let protocols: [NSNumber] = [NSNumber(value: AF_INET)]
 
                 let success = self.packetFlow.writePackets(packets, withProtocols: protocols)
                 if !success {
