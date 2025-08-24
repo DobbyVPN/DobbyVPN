@@ -1,4 +1,5 @@
 import com.dobby.domain.DobbyConfigsRepositoryImpl
+import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.diagnostic.IpRepositoryImpl
 import com.dobby.feature.logging.CopyLogsInteractorImpl
 import com.dobby.feature.main.domain.AwgManagerImpl

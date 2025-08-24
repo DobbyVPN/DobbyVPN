@@ -1,4 +1,3 @@
-import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.diagnostic.presentation.DiagnosticViewModel
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.presentation.LogsViewModel
