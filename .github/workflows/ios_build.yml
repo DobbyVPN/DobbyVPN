@@ -188,6 +188,7 @@ jobs:
 #          rm -f api_key.json
 
       - name: Publish to App Store via Fastlane
+        if: github.ref == 'refs/heads/main'
         env:
           APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
           APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
@@ -207,6 +208,7 @@ jobs:
             --automatic_release true \
             --skip_metadata true \
             --skip_screenshots true \
-            --force
-            
+            --force \
+            --run_precheck_before_submit false
+          
           rm -f api_key.json
