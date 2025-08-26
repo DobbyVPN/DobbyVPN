@@ -30,6 +30,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.util.koinViewModel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 @Composable
 fun LogScreen(
@@ -38,6 +43,11 @@ fun LogScreen(
 ) {
 
     val uiState by viewModel.uiState.collectAsState()
+
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    scope.launch {
+        viewModel.reloadLogs()
+    }
 
     Column(modifier = modifier) {
         Button(
@@ -61,6 +71,17 @@ fun LogScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp)
         ) {
             Text("Clear Logs")
+        }
+        Button(
+            onClick = { viewModel.reloadLogs() },
+            shape = RoundedCornerShape(6.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color.Gray,
+                contentColor = Color.White
+            ),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp)
+        ) {
+            Text("Reload Logs")
         }
 
         LazyColumn {

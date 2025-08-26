@@ -1,3 +1,4 @@
+// LogsViewModel.kt
 package com.dobby.feature.logging.presentation
 
 import androidx.lifecycle.ViewModel
@@ -19,17 +20,16 @@ class LogsViewModel(
     private val copyLogsInteractor: CopyLogsInteractor
 ) : ViewModel() {
 
-    // универсальный scope, работает и на iOS, и на Android
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val _uiState = MutableStateFlow(LogsUiState())
     val uiState: StateFlow<LogsUiState> = _uiState.asStateFlow()
 
     init {
-        // подписываемся на изменения логов
         scope.launch {
             logsRepository.logState.collect { newLogList ->
-                _uiState.value = LogsUiState(newLogList)
+                // copy() создаёт новый объект -> гарантирует перерисовку
+                _uiState.value = LogsUiState(newLogList.toList())
             }
         }
     }
@@ -42,12 +42,18 @@ class LogsViewModel(
         copyLogsInteractor.copy(uiState.value.logMessages)
     }
 
-    override fun onCleared() {
-        super.onCleared()
-        scope.cancel() // Android lifecycle
+    fun reloadLogs() {
+        scope.launch {
+            val freshLogs = logsRepository.readAllLogs()
+            _uiState.value = _uiState.value.copy(logMessages = freshLogs.toList())
+        }
     }
 
-    // на iOS нужно будет вызывать вручную
+    override fun onCleared() {
+        super.onCleared()
+        scope.cancel()
+    }
+
     fun dispose() {
         scope.cancel()
     }

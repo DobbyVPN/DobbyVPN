@@ -1,3 +1,4 @@
+// LogsRepository.kt
 package com.dobby.feature.logging.domain
 
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,20 +11,17 @@ import okio.buffer
 import okio.use
 
 expect val fileSystem: FileSystem
-
 expect fun provideLogFilePath(): Path
 
 class LogsRepository(
     private val logFilePath: Path = provideLogFilePath()
 ) {
-
     private val _logState = MutableStateFlow<List<String>>(emptyList())
-
     val logState: StateFlow<List<String>> = _logState.asStateFlow()
 
     init {
         if (!fileSystem.exists(logFilePath)) {
-            fileSystem.sink(logFilePath).buffer().use { /* create empty file */ }
+            fileSystem.sink(logFilePath).buffer().use { }
         }
         _logState.value = readLogs()
     }
@@ -35,9 +33,7 @@ class LogsRepository(
                 sink.writeUtf8("\n")
             }
             _logState.update { it + log }
-        }.onFailure {
-            it.printStackTrace()
-        }
+        }.onFailure { it.printStackTrace() }
     }
 
     fun clearLogs() {
@@ -45,12 +41,13 @@ class LogsRepository(
             if (fileSystem.exists(logFilePath)) {
                 fileSystem.delete(logFilePath)
             }
-            fileSystem.sink(logFilePath).buffer().use { /* recreate empty file */ }
+            fileSystem.sink(logFilePath).buffer().use { }
             _logState.value = emptyList()
-        }.onFailure {
-            it.printStackTrace()
-        }
+        }.onFailure { it.printStackTrace() }
     }
+
+    // 👇 открываем метод для ViewModel
+    fun readAllLogs(): List<String> = readLogs()
 
     private fun readLogs(): List<String> {
         return runCatching {

@@ -261,6 +261,7 @@ __attribute__((swift_name("LogsRepository")))
 @interface AppLogsRepository : AppBase
 - (instancetype)initWithLogFilePath:(AppOkioPath *)logFilePath __attribute__((swift_name("init(logFilePath:)"))) __attribute__((objc_designated_initializer));
 - (void)clearLogs __attribute__((swift_name("clearLogs()")));
+- (NSArray<NSString *> *)readAllLogs __attribute__((swift_name("readAllLogs()")));
 - (void)writeLogLog:(NSString *)log __attribute__((swift_name("writeLog(log:)")));
 @property (readonly) id<AppKotlinx_coroutines_coreStateFlow> logState __attribute__((swift_name("logState")));
 @end
@@ -282,6 +283,7 @@ __attribute__((swift_name("LogsViewModel")))
  * @note This method has protected visibility in Kotlin source and is intended only for use by subclasses.
 */
 - (void)onCleared __attribute__((swift_name("onCleared()")));
+- (void)reloadLogs __attribute__((swift_name("reloadLogs()")));
 @property (readonly) id<AppKotlinx_coroutines_coreStateFlow> uiState __attribute__((swift_name("uiState")));
 @end
 
