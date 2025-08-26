@@ -17,7 +17,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
-import com.dobby.BuildConfig
+import com.dobby.vpn.BuildConfig
 
 @Composable
 fun AboutScreen(

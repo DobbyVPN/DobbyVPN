@@ -276,6 +276,12 @@ __attribute__((swift_name("LogsViewModel")))
 - (instancetype)initWithViewModelScope:(id<AppKotlinx_coroutines_coreCoroutineScope>)viewModelScope closeables:(AppKotlinArray<id<AppKotlinAutoCloseable>> *)closeables __attribute__((swift_name("init(viewModelScope:closeables:)"))) __attribute__((objc_designated_initializer)) __attribute__((unavailable));
 - (void)clearLogs __attribute__((swift_name("clearLogs()")));
 - (void)doCopyLogsToClipBoard __attribute__((swift_name("doCopyLogsToClipBoard()")));
+- (void)dispose __attribute__((swift_name("dispose()")));
+
+/**
+ * @note This method has protected visibility in Kotlin source and is intended only for use by subclasses.
+*/
+- (void)onCleared __attribute__((swift_name("onCleared()")));
 @property (readonly) id<AppKotlinx_coroutines_coreStateFlow> uiState __attribute__((swift_name("uiState")));
 @end
 
