@@ -33,7 +33,9 @@ import com.dobby.util.koinViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -44,9 +46,11 @@ fun LogScreen(
 
     val uiState by viewModel.uiState.collectAsState()
 
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    scope.launch {
-        viewModel.reloadLogs()
+    MainScope().launch {
+        while (true) {
+            viewModel.reloadLogs()
+            delay(1000L)
+        }
     }
 
     Column(modifier = modifier) {
