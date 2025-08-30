@@ -1,8 +1,16 @@
 import app
+import Sentry
+
+class SentryLogsRepositoryImpl : SentryLogsRepository {
+    func log(string: String) {
+        SentrySDK.capture(message: string)
+    }
+}
+
 
 public class NativeModuleHolder {
     private static let path = LogsRepository_iosKt.provideLogFilePath()
-    public static let logsRepository = LogsRepository.init(logFilePath: path)
+    public static let logsRepository = LogsRepository.init(logFilePath: path).setSentryLogger(_sentryLogger: SentryLogsRepositoryImpl())
     
     public static let shared: Koin_coreModule = MakeNativeModuleKt.makeNativeModule(
         copyLogsInteractor: { scope in
@@ -28,7 +36,8 @@ public class NativeModuleHolder {
         }
     )
     
-    private init() {}
+    private init() {
+    }
 }
 
 public let appGroupIdentifier = "group.vpn.dobby.app"

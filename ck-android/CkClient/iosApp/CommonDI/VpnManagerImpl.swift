@@ -1,7 +1,10 @@
 import app
 import NetworkExtension
+import Sentry
 
 class VpnManagerImpl: VpnManager {
+    private static let launchId = UUID().uuidString
+    private var logs = NativeModuleHolder.logsRepository
     
     private var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
     private var dobbyName = "DobbyVPN"
@@ -15,6 +18,7 @@ class VpnManagerImpl: VpnManager {
     private var isUserInitiatedStop = true
     
     init(connectionRepository: ConnectionStateRepository) {
+        VpnManagerImpl.startSentry()
         self.connectionRepository = connectionRepository
 
         getOrCreateManager { (manager, error) in
@@ -42,7 +46,7 @@ class VpnManagerImpl: VpnManager {
             case .disconnected:
                 connectionRepository.tryUpdate(isConnected: false)
                 if !self.isUserInitiatedStop {
-                    NSLog("VPN disconnected unexpectedly, restarting...")
+                    logs.writeLog(log: "VPN disconnected unexpectedly, restarting...")
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                         self.start()
                     }
@@ -63,18 +67,18 @@ class VpnManagerImpl: VpnManager {
         isUserInitiatedStop = false
         getOrCreateManager { (manager, error) in
             guard let manager = manager else {
-                NSLog("Created VPNManager is nil")
+                self.logs.writeLog(log: "Created VPNManager is nil")
                 return
             }
-            print("self.vpnManager = \(manager)")
+            self.logs.writeLog(log: "self.vpnManager = \(manager)")
             self.vpnManager = manager
             self.vpnManager?.isEnabled = true
             do {
-                print("starting tunnel !\(manager.connection.status)")
+                self.logs.writeLog(log: "starting tunnel !\(manager.connection.status)")
                 // https://stackoverflow.com/a/47569982/934719 - TODO fix
                 try manager.connection.startVPNTunnel()
             } catch {
-                NSLog("Error staring VPNTunnel \(error)")
+                self.logs.writeLog(log: "Error staring VPNTunnel \(error)")
             }
         }
     }
@@ -82,7 +86,7 @@ class VpnManagerImpl: VpnManager {
     func stop() {
         guard state == .connected else { return }
         isUserInitiatedStop = true
-        NSLog("Actually vpnManager is \(vpnManager)")
+        self.logs.writeLog(log: "Actually vpnManager is \(vpnManager)")
         vpnManager?.connection.stopVPNTunnel()
     }
 
@@ -92,10 +96,10 @@ class VpnManagerImpl: VpnManager {
             
             if let existingManager = managers?.first(where: { $0.localizedDescription == self.dobbyName }) {
                 vpnManager = existingManager
-                NSLog("Existing manager found.")
+                self.logs.writeLog(log: "Existing manager found.")
                 completion(existingManager, nil)
             } else {
-                NSLog("Existing manager not found.")
+                self.logs.writeLog(log: "Existing manager not found.")
                 self.vpnManager = self.makeManager()
                 self.vpnManager?.saveToPreferences { (error) in
                     completion(self.vpnManager, error)
@@ -115,5 +119,29 @@ class VpnManagerImpl: VpnManager {
         newVpnManager.protocolConfiguration = proto
         newVpnManager.isEnabled = true
         return newVpnManager
+    }
+    
+    
+    static func startSentry() {
+        SentrySDK.start { options in
+            options.dsn = "https://1ebacdcb98b5a261d06aeb0216cdafc5@o4509873345265664.ingest.de.sentry.io/4509927590068304"
+            options.debug = true
+
+            options.sendDefaultPii = true
+
+            options.tracesSampleRate = 1.0
+            options.configureProfiling = {
+                $0.sessionSampleRate = 1.0
+                $0.lifecycle = .trace
+            }
+            
+            options.experimental.enableLogs = true
+        }
+        
+        SentrySDK.configureScope { scope in
+            scope.setTag(value: VpnManagerImpl.launchId, key: "launch_id")
+        }
+        
+        SentrySDK.capture(message: "Sentry started, launch_id: \(VpnManagerImpl.launchId)")
     }
 }

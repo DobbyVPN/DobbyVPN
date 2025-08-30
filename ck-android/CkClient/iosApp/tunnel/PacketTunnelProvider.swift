@@ -3,8 +3,10 @@ import MyLibrary
 import os
 import app
 import CommonDI
+import Sentry
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
+    private let launchId = UUID().uuidString
     
     private var device = DeviceFacade()
     private var logs = NativeModuleHolder.logsRepository
@@ -13,6 +15,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var memoryTimer: DispatchSourceTimer?
 
     override func startTunnel(options: [String : NSObject]?) async throws {
+        self.startSentry()
         let config = configsRepository.getOutlineKey()
 
         let remoteAddress = "254.1.1.1"
@@ -28,9 +31,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         try await self.setTunnelNetworkSettings(settings)
         logs.writeLog(log: "Tunnel settings applied")
-
-        // Initialize the device
-        device.initialize(config: config)
+        
+        device.initialize(config: config, _logs: logs)
         startCloak()
         
         
@@ -62,7 +64,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
                 let success = self.packetFlow.writePackets(packets, withProtocols: protocols)
                 if !success {
-                    NSLog("Failed to write packets to the tunnel")
+                    logs.writeLog(log: "Failed to write packets to the tunnel")
                 }
             }
         }
@@ -88,7 +90,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startCloak() {
         let localHost = "127.0.0.1"
         let localPort = "1984"
-        logs.writeLog(log: "startCloakOutline with key: $apiKey")
+        logs.writeLog(log: "startCloakOutline")
         if (configsRepository.getIsCloakEnabled()) {
             Cloak_outlineStartCloakClient(localHost, localPort, configsRepository.getCloakConfig(), false)
         }
@@ -96,18 +98,43 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     
     private func stopCloak() {
         if (configsRepository.getIsCloakEnabled()) {
+            logs.writeLog(log: "stopCloakOutline")
             Cloak_outlineStopCloakClient()
         }
+    }
+    
+    func startSentry() {
+        SentrySDK.start { options in
+            options.dsn = "https://1ebacdcb98b5a261d06aeb0216cdafc5@o4509873345265664.ingest.de.sentry.io/4509927590068304"
+            options.debug = true
+
+            options.sendDefaultPii = true
+
+            options.tracesSampleRate = 1.0
+            options.configureProfiling = {
+                $0.sessionSampleRate = 1.0
+                $0.lifecycle = .trace
+            }
+            
+            options.experimental.enableLogs = true
+        }
+        
+        SentrySDK.configureScope { scope in
+            scope.setTag(value: self.launchId, key: "launch_id")
+        }
+        
+        SentrySDK.capture(message: "Sentry started, launch_id: \(self.launchId)")
     }
 }
 
 class DeviceFacade {
-
     private var device: Cloak_outlineOutlineDevice? = nil
+    private var logs: LogsRepository? = nil
 
-    func initialize(config: String) {
+    func initialize(config: String, _logs: LogsRepository) {
         device = Cloak_outlineOutlineDevice(config)
-        NSLog("Device initiaization finished")
+        logs = _logs
+        logs?.writeLog(log: "Device initiaization finished")
     }
     
     func write(data: Data) {
@@ -115,7 +142,7 @@ class DeviceFacade {
             var ret0_: Int = 0
             try device?.write(data, ret0_: &ret0_)
         } catch let error {
-            NSLog("error is \(error)")
+            logs?.writeLog(log: "error is \(error)")
         }
     }
     
@@ -124,7 +151,7 @@ class DeviceFacade {
             let data = try device?.read()
             return data!
         } catch let error {
-            NSLog("error is \(error)")
+            logs?.writeLog(log: "error is \(error)")
             return Data()
         }
     }

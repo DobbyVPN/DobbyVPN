@@ -10,6 +10,7 @@ plugins {
     alias(libs.plugins.hydraulic.conveyor)
 
     id("com.github.gmazzo.buildconfig") version "5.6.5"
+    id("io.sentry.kotlin.multiplatform.gradle") version "0.18.0"
 }
 
 version = "1.0"
@@ -163,6 +164,7 @@ buildConfig {
         "\"${providers.gradleProperty("projectRepositoryCommitLink").getOrElse("N/A")}\""
     )
 }
+
 
 dependencies {
     implementation(project(":awg"))

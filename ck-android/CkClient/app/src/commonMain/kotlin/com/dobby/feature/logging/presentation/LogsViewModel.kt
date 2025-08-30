@@ -1,6 +1,7 @@
 // LogsViewModel.kt
 package com.dobby.feature.logging.presentation
 
+import androidx.compose.ui.util.fastJoinToString
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dobby.feature.logging.domain.CopyLogsInteractor
@@ -45,6 +46,7 @@ class LogsViewModel(
     fun reloadLogs() {
         scope.launch {
             val freshLogs = logsRepository.readAllLogs()
+            logsRepository.writeLog("Try to update all logs on Screen with size=${freshLogs.toList().size}")
             _uiState.value = _uiState.value.copy(logMessages = freshLogs.toList())
         }
     }

@@ -13,11 +13,18 @@ import okio.use
 expect val fileSystem: FileSystem
 expect fun provideLogFilePath(): Path
 
+interface SentryLogsRepository{
+    fun log(string: String) {
+        println(string)
+    }
+}
+
 class LogsRepository(
     private val logFilePath: Path = provideLogFilePath()
 ) {
     private val _logState = MutableStateFlow<List<String>>(emptyList())
     val logState: StateFlow<List<String>> = _logState.asStateFlow()
+    private var sentryLogger: SentryLogsRepository? = null
 
     init {
         if (!fileSystem.exists(logFilePath)) {
@@ -26,7 +33,17 @@ class LogsRepository(
         _logState.value = readLogs()
     }
 
+    fun setSentryLogger(_sentryLogger: SentryLogsRepository) : LogsRepository {
+        sentryLogger = _sentryLogger
+        return this
+    }
+
+    fun getSentryLogger(): SentryLogsRepository? {
+        return sentryLogger
+    }
+
     fun writeLog(log: String) {
+        sentryLogger?.log(log)
         runCatching {
             fileSystem.appendingSink(logFilePath).buffer().use { sink ->
                 sink.writeUtf8(log)

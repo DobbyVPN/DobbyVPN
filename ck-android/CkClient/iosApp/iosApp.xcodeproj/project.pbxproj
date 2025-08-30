@@ -11,13 +11,16 @@
 		058557D9273AAEEB004C7B11 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 058557D8273AAEEB004C7B11 /* Preview Assets.xcassets */; };
 		2152FB042600AC8F00CF470E /* iOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2152FB032600AC8F00CF470E /* iOSApp.swift */; };
 		7555FF83242A565900829871 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7555FF82242A565900829871 /* ContentView.swift */; };
-		8C6F97F72E5E850F00D2AAD7 /* app.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C6F97F62E5E850F00D2AAD7 /* app.framework */; };
 		8C7731F12E566DCD00B3782E /* MyLibrary.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */; };
+		8CF4C25F2E61E1C400A1B0E4 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
+		8CF4C2602E61E1C400A1B0E4 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
+		8CF4C2612E61E1C400A1B0E4 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = F9EDD575E30B42BCA81EA237 /* Sentry */; };
 		A12013A02D80DE3200D43A3A /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */; };
 		A12013A82D80DE3200D43A3A /* tunnel.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A120139F2D80DE3100D43A3A /* tunnel.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A15F0FD42D874CDC007FA45D /* CommonDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; };
 		A15F0FD52D874CDC007FA45D /* CommonDI.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A15F0FEA2D874D38007FA45D /* CommonDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; settings = {ATTRIBUTES = (Required, ); }; };
+		F7DF1050154F40A18C26FC85 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = F9EDD575E30B42BCA81EA237 /* Sentry */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -76,7 +79,6 @@
 		7555FF7B242A565900829871 /* DobbyVPN.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DobbyVPN.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7555FF82242A565900829871 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		7555FF8C242A565B00829871 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		8C6F97F62E5E850F00D2AAD7 /* app.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = app.framework; sourceTree = "<group>"; };
 		8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = MyLibrary.xcframework; sourceTree = "<group>"; };
 		A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 		A120131E2D7DB13F00D43A3A /* iosApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iosApp.entitlements; sourceTree = "<group>"; };
@@ -114,8 +116,8 @@
 			files = (
 				A15F0FEA2D874D38007FA45D /* CommonDI.framework in Frameworks */,
 				A12013A02D80DE3200D43A3A /* NetworkExtension.framework in Frameworks */,
-				8C6F97F72E5E850F00D2AAD7 /* app.framework in Frameworks */,
 				8C7731F12E566DCD00B3782E /* MyLibrary.xcframework in Frameworks */,
+				8CF4C25F2E61E1C400A1B0E4 /* (null) in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -123,6 +125,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F7DF1050154F40A18C26FC85 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -131,6 +134,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				A15F0FD42D874CDC007FA45D /* CommonDI.framework in Frameworks */,
+				8CF4C2602E61E1C400A1B0E4 /* (null) in Frameworks */,
+				8CF4C2612E61E1C400A1B0E4 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -148,7 +153,6 @@
 		42799AB246E5F90AF97AA0EF /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				8C6F97F62E5E850F00D2AAD7 /* app.framework */,
 				8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */,
 				A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */,
 			);
@@ -221,6 +225,7 @@
 				7555FF79242A565900829871 /* Resources */,
 				A12012F62D7DAE1200D43A3A /* Embed Foundation Extensions */,
 				A12013402D7E4A6000D43A3A /* Embed Frameworks */,
+				35B6E1C2A4E543D783FC8A57 /* Upload Debug Symbols to Sentry */,
 			);
 			buildRules = (
 			);
@@ -230,6 +235,7 @@
 			);
 			name = iosApp;
 			packageProductDependencies = (
+				F9EDD575E30B42BCA81EA237 /* Sentry */,
 			);
 			productName = iosApp;
 			productReference = 7555FF7B242A565900829871 /* DobbyVPN.app */;
@@ -313,6 +319,7 @@
 			);
 			mainGroup = 7555FF72242A565900829871;
 			packageReferences = (
+				DA5C79649DF34256B38A117F /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 			);
 			productRefGroup = 7555FF7C242A565900829871 /* Products */;
 			projectDirPath = "";
@@ -352,6 +359,21 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		35B6E1C2A4E543D783FC8A57 /* Upload Debug Symbols to Sentry */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}",
+			);
+			name = "Upload Debug Symbols to Sentry";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# This script is responsible for uploading debug symbols and source context for Sentry.\nif which sentry-cli >/dev/null; then\n  export SENTRY_ORG=dobby-jn\n  export SENTRY_PROJECT=apple-ios\n  ERROR=$(sentry-cli debug-files upload --include-sources \"$DWARF_DSYM_FOLDER_PATH\" 2>&1 >/dev/null)\n  if [ ! $? -eq 0 ]; then\n    echo \"warning: sentry-cli - $ERROR\"\n  fi\nelse\n  echo \"warning: sentry-cli not installed, download from https://github.com/getsentry/sentry-cli/releases\"\nfi\n";
+		};
 		F36B1CEB2AD83DDC00CB74D5 /* Compile Kotlin Framework */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -546,13 +568,16 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 4;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"iosApp/Preview Content\"";
 				DEVELOPMENT_TEAM = F6CHJX72K5;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/CommonDI",
 					"$(SRCROOT)/../app/build/bin/iosArm64/debugFramework",
+					"$(PROJECT_DIR)",
 				);
 				INFOPLIST_FILE = iosApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
@@ -578,13 +603,16 @@
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 4;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"iosApp/Preview Content\"";
 				DEVELOPMENT_TEAM = F6CHJX72K5;
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = F6CHJX72K5;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/../app/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
+					"$(PROJECT_DIR)",
 				);
 				INFOPLIST_FILE = iosApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
@@ -830,6 +858,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		DA5C79649DF34256B38A117F /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa/";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 8.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		F9EDD575E30B42BCA81EA237 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DA5C79649DF34256B38A117F /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 7555FF73242A565900829871 /* Project object */;
 }
