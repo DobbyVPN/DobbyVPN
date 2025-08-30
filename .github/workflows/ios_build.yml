@@ -49,6 +49,12 @@ jobs:
           go get ./...
           cd ..
 
+      - name: Sentry auth
+        run: |
+          cd ck-android/CkClient/iosApp
+          echo "[auth]" > .sentryclirc
+          echo "token=${{ secrets.SENTRY_AUTH }}" >> .sentryclirc
+
       - name: Build Kotlin Multiplatform
         run: |
           cd ck-android/CkClient
