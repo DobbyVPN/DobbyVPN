@@ -93,6 +93,10 @@ class VpnManagerImpl: VpnManager {
                 self.logs.writeLog(log: "Created VPNManager is nil")
                 return
             }
+            if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
+                let address = proto.serverAddress ?? "nil"
+                self.logs.writeLog(log: "VPN Manager serverAddress = \(address)")
+            }
             self.logs.writeLog(log: "self.vpnManager = \(manager)")
             self.vpnManager = manager
             self.vpnManager?.isEnabled = true
@@ -100,6 +104,7 @@ class VpnManagerImpl: VpnManager {
                 self.logs.writeLog(log: "starting tunnel !\(manager.connection.status)")
                 // https://stackoverflow.com/a/47569982/934719 - TODO fix
                 try manager.connection.startVPNTunnel()
+                self.logs.writeLog(log: "Tunnel was started!\(manager.connection.status)")
             } catch {
                 self.logs.writeLog(log: "Error staring VPNTunnel \(error)")
             }

@@ -15,7 +15,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var memoryTimer: DispatchSourceTimer?
 
     override func startTunnel(options: [String : NSObject]?) async throws {
+        logs.writeLog(log: "startTunnel in PacketTunnelProvider")
         self.startSentry()
+        logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
         let config = configsRepository.getOutlineKey()
 
         let remoteAddress = "254.1.1.1"
@@ -28,7 +30,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.ipv4Settings = NEIPv4Settings(addresses: [localAddress], subnetMasks: [subnetMask])
         settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
         settings.dnsSettings = NEDNSSettings(servers: dnsServers)
-
+        
+        logs.writeLog(log: "Settings are ready:\n \(settings)")
         try await self.setTunnelNetworkSettings(settings)
         logs.writeLog(log: "Tunnel settings applied")
         
