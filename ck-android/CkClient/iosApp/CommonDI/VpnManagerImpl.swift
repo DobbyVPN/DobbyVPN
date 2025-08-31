@@ -8,7 +8,7 @@ class VpnManagerImpl: VpnManager {
     private var lastRestartDate: Date?
     
     private var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
-    private var dobbyName = "DobbyVPN"
+    private var dobbyName = "Dobby_VPN"
     
     private var vpnManager: NETunnelProviderManager?
     private var connectionRepository: ConnectionStateRepository
