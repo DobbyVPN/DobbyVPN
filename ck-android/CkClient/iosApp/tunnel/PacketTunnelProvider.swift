@@ -69,6 +69,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(log: "Reading packets from device... \(Thread.current)")
             autoreleasepool {
                 let data = device.readFromDevice()
+                logs.writeLog(log: "Read from device: \(data.count)" + parseIPv4Packet(data))
                 let packets: [Data] = [data]
                 let protocols: [NSNumber] = [NSNumber(value: AF_INET)]
 
@@ -96,6 +97,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func forwardPacketsToDevice(_ packets: [Data], protocols: [NSNumber]) {
         for packet in packets {
+            logs.writeLog(log: "Forwarding packet to device: \(packet.count)" + parseIPv4Packet(packet))
             device.write(data: packet)
         }
     }
@@ -173,6 +175,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(log: "Failed to get interfaces")
         }
     }
+    
+    func parseIPv4Packet(_ data: Data) -> String {
+        guard data.count >= 20 else { return "Invalid IPv4 packet" }
+        
+        let sourceIP = data[12..<16].map { String($0) }.joined(separator: ".")
+        let destinationIP = data[16..<20].map { String($0) }.joined(separator: ".")
+        
+        // Протокол: TCP = 6, UDP = 17
+        let proto = data[9]
+        
+        return "route \(sourceIP) → \(destinationIP), proto: \(proto)"
+    }
 }
 
 class DeviceFacade {
@@ -183,26 +197,26 @@ class DeviceFacade {
         var err: NSErrorPointer = nil
         device = Cloak_outlineNewOutlineDevice(config, err)
         logs = _logs
-        logs?.writeLog(log: "Device initiaization finished (error is:\(err == nil))")
+        logs?.writeLog(log: "[DeviceFacade] Device initiaization finished (error is:\(err == nil))")
     }
     
     func write(data: Data) {
         do {
             var ret0_: Int = 0
             try device?.write(data, ret0_: &ret0_)
-            logs?.writeLog(log: "DeviceFacade: wrote \(data.count) bytes")
+            logs?.writeLog(log: "[DeviceFacade] wrote \(data.count) bytes")
         } catch let error {
-            logs?.writeLog(log: "DeviceFacade write error: \(error)")
+            logs?.writeLog(log: "[DeviceFacade] write error: \(error)")
         }
     }
 
     func readFromDevice() -> Data {
         do {
             let data = try device?.read()
-            logs?.writeLog(log: "DeviceFacade: read \(data?.count ?? 0) bytes")
+            logs?.writeLog(log: "[DeviceFacade] read \(data?.count ?? 0) bytes")
             return data!
         } catch let error {
-            logs?.writeLog(log: "DeviceFacade read error: \(error)")
+            logs?.writeLog(log: "[DeviceFacade] read error: \(error)")
             return Data()
         }
     }
