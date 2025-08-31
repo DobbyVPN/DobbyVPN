@@ -149,9 +149,10 @@ class DeviceFacade {
     private var logs: LogsRepository? = nil
 
     func initialize(config: String, _logs: LogsRepository) {
-        device = Cloak_outlineOutlineDevice(config)
+        var err: NSErrorPointer = nil
+        device = Cloak_outlineNewOutlineDevice(config, err)
         logs = _logs
-        logs?.writeLog(log: "Device initiaization finished")
+        logs?.writeLog(log: "Device initiaization finished (error is:\(err == nil))")
     }
     
     func write(data: Data) {
