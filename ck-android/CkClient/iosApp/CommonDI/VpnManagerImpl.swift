@@ -155,8 +155,9 @@ class VpnManagerImpl: VpnManager {
         
         let proto = NETunnelProviderProtocol()
         proto.providerBundleIdentifier = dobbyBundleIdentifier
-        proto.serverAddress = "127.0.0.1:4009"
+        proto.serverAddress = "159.69.19.209:443"
         proto.providerConfiguration = [:]
+        proto.includeAllNetworks = true
         newVpnManager.protocolConfiguration = proto
         newVpnManager.isEnabled = true
         return newVpnManager
