@@ -73,8 +73,21 @@ class VpnManagerImpl: VpnManager {
                         }
                     }
                 }
+                
+            case .connecting:
+                self.logs.writeLog(log: "VPN is connecting…")
 
-            default:
+            case .reasserting:
+                self.logs.writeLog(log: "VPN is reasserting…")
+
+            case .disconnecting:
+                self.logs.writeLog(log: "VPN is disconnecting…")
+
+            case .invalid:
+                self.logs.writeLog(log: "VPN status is invalid")
+
+            @unknown default:
+                self.logs.writeLog(log: "VPN status unknown: \(connection.status.rawValue)")
                 break
             }
         }
