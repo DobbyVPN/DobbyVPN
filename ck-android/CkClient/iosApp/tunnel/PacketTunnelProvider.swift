@@ -42,6 +42,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         DispatchQueue.global().async { [weak self] in
             self?.startReadPacketsAndForwardToDevice()
         }
+        logs.writeLog(log: "startTunnel: packet loops started")
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
@@ -57,6 +58,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startReadPacketsFromDevice() {
         logs.writeLog(log: "Starting to read packets from device... \(Thread.current)")
         while true {
+            logs.writeLog(log: "Reading packets from device... \(Thread.current)")
             autoreleasepool {
                 let data = device.readFromDevice()
                 let packets: [Data] = [data]
@@ -72,8 +74,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     
     private func startReadPacketsAndForwardToDevice() {
+        logs.writeLog(log: "Starting to read packets from tunnel... \(Thread.current)")
         self.packetFlow.readPackets { [weak self] (packets, protocols) in
+            NativeModuleHolder.logsRepository.writeLog(log: "Read packets from tunnel: \(packets.count) protocols: \(protocols) \(Thread.current)")
             guard let self else { return }
+            NativeModuleHolder.logsRepository.writeLog(log: "Continue reading packets from tunnel... \(Thread.current)")
             if !packets.isEmpty {
                 forwardPacketsToDevice(packets, protocols: protocols)
             }
@@ -90,11 +95,20 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startCloak() {
         let localHost = "127.0.0.1"
         let localPort = "1984"
-        logs.writeLog(log: "startCloakOutline")
+        logs.writeLog(log: "startCloakOutline: entering")
         if (configsRepository.getIsCloakEnabled()) {
-            Cloak_outlineStartCloakClient(localHost, localPort, configsRepository.getCloakConfig(), false)
+            do {
+                logs.writeLog(log: "startCloakOutline: about to start Cloak client")
+                Cloak_outlineStartCloakClient(localHost, localPort, configsRepository.getCloakConfig(), false)
+                logs.writeLog(log: "startCloakOutline: Cloak client started successfully")
+            } catch {
+                logs.writeLog(log: "startCloakOutline: Cloak client failed with error: \(error)")
+            }
+        } else {
+            logs.writeLog(log: "startCloakOutline: cloak disabled in configs")
         }
     }
+
     
     private func stopCloak() {
         if (configsRepository.getIsCloakEnabled()) {
@@ -141,18 +155,21 @@ class DeviceFacade {
         do {
             var ret0_: Int = 0
             try device?.write(data, ret0_: &ret0_)
+            logs?.writeLog(log: "DeviceFacade: wrote \(data.count) bytes")
         } catch let error {
-            logs?.writeLog(log: "error is \(error)")
+            logs?.writeLog(log: "DeviceFacade write error: \(error)")
         }
     }
-    
+
     func readFromDevice() -> Data {
         do {
             let data = try device?.read()
+            logs?.writeLog(log: "DeviceFacade: read \(data?.count ?? 0) bytes")
             return data!
         } catch let error {
-            logs?.writeLog(log: "error is \(error)")
+            logs?.writeLog(log: "DeviceFacade read error: \(error)")
             return Data()
         }
     }
+
 }

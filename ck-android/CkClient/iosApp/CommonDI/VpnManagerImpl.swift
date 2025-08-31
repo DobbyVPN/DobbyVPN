@@ -5,6 +5,7 @@ import Sentry
 class VpnManagerImpl: VpnManager {
     private static let launchId = UUID().uuidString
     private var logs = NativeModuleHolder.logsRepository
+    private var lastRestartDate: Date?
     
     private var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
     private var dobbyName = "DobbyVPN"
@@ -31,26 +32,48 @@ class VpnManagerImpl: VpnManager {
                 connectionRepository.tryUpdate(isConnected: false)
             }
         }
-        
-        observer = NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: nil) { [weak self] notification in
-            guard let self, let connection = notification.object as? NEVPNConnection else { return }
+
+        observer = NotificationCenter.default.addObserver(
+            forName: .NEVPNStatusDidChange,
+            object: nil,
+            queue: nil
+        ) { [weak self] notification in
+            guard let self,
+                  let connection = notification.object as? NEVPNConnection else { return }
+
             state = connection.status
             switch connection.status {
             case .connected:
-                if (self.vpnManager == nil) {
-                    getOrCreateManager { (manager, _) in
+                self.logs.writeLog(log: "VPN connected. Update ui and isUserInitiatedStop and put manager")
+                isUserInitiatedStop = false
+                if self.vpnManager == nil {
+                    getOrCreateManager { manager, _ in
                         self.vpnManager = manager
                     }
                 }
                 connectionRepository.tryUpdate(isConnected: true)
+
             case .disconnected:
                 connectionRepository.tryUpdate(isConnected: false)
+
                 if !self.isUserInitiatedStop {
-                    logs.writeLog(log: "VPN disconnected unexpectedly, restarting...")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                        self.start()
+                    self.logs.writeLog(
+                            log: "VPN disconnected. Reason? state=\(connection.status.rawValue))"
+                        )
+                    let now = Date()
+                    if let lastRestart = self.lastRestartDate,
+                       now.timeIntervalSince(lastRestart) < 60 {
+                        // Уже был рестарт в течение последней минуты → не перезапускаем
+                        self.logs.writeLog(log: "VPN disconnected unexpectedly, but restart suppressed (too frequent)")
+                    } else {
+                        self.logs.writeLog(log: "VPN disconnected unexpectedly, restarting...")
+                        self.lastRestartDate = now
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            self.start()
+                        }
                     }
                 }
+
             default:
                 break
             }
@@ -64,7 +87,7 @@ class VpnManagerImpl: VpnManager {
     }
     
     func start() {
-        isUserInitiatedStop = false
+        self.logs.writeLog(log: "call start")
         getOrCreateManager { (manager, error) in
             guard let manager = manager else {
                 self.logs.writeLog(log: "Created VPNManager is nil")

@@ -46,7 +46,6 @@ class LogsViewModel(
     fun reloadLogs() {
         scope.launch {
             val freshLogs = logsRepository.readAllLogs()
-            logsRepository.writeLog("Try to update all logs on Screen with size=${freshLogs.toList().size}")
             _uiState.value = _uiState.value.copy(logMessages = freshLogs.toList())
         }
     }
