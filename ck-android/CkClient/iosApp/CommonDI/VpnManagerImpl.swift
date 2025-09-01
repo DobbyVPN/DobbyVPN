@@ -113,7 +113,6 @@ class VpnManagerImpl: VpnManager {
                 let address = proto.serverAddress ?? "nil"
                 self.logs.writeLog(log: "VPN Manager serverAddress = \(address)")
             }
-            self.logs.writeLog(log: "self.vpnManager = \(manager)")
             self.vpnManager = manager
             self.vpnManager?.isEnabled = true
             manager.saveToPreferences { saveError in
@@ -122,6 +121,7 @@ class VpnManagerImpl: VpnManager {
                 } else {
                     self.logs.writeLog(log: "VPN configuration saved successfully!")
                     do {
+                        self.logs.writeLog(log: "self.vpnManager = \(manager)")
                         self.logs.writeLog(log: "starting tunnel !\(manager.connection.status)")
                         try manager.connection.startVPNTunnel()
                         self.logs.writeLog(log: "Tunnel was started! \(manager.connection.status)")
