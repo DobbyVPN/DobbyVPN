@@ -47,9 +47,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         DispatchQueue.global().async { [weak self] in
             self?.startReadPacketsAndForwardToDevice()
         }
-        
-        logs.writeLog(log: "Routing table with vpn:")
-        logRoutingTable()
         logs.writeLog(log: "startTunnel: packet loops started")
     }
 
@@ -150,32 +147,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         SentrySDK.capture(message: "Sentry started, launch_id: \(self.launchId)")
     }
     
-    
-    func logRoutingTable() {
-        var ifaddrPointer: UnsafeMutablePointer<ifaddrs>? = nil
-        if getifaddrs(&ifaddrPointer) == 0 {
-            var ptr = ifaddrPointer
-            while ptr != nil {
-                if let addr = ptr?.pointee.ifa_addr {
-                    let name = String(cString: ptr!.pointee.ifa_name)
-                    let family = addr.pointee.sa_family
-                    logs.writeLog(log: "Interface: \(name), family: \(family)")
-                    
-                    if family == UInt8(AF_INET) || family == UInt8(AF_INET6) {
-                        var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                        getnameinfo(addr, socklen_t(addr.pointee.sa_len), &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
-                        let address = String(cString: hostname)
-                        logs.writeLog(log: "  Address: \(address)")
-                    }
-                }
-                ptr = ptr?.pointee.ifa_next
-            }
-            freeifaddrs(ifaddrPointer)
-        } else {
-            logs.writeLog(log: "Failed to get interfaces")
-        }
-    }
-    
     func parseIPv4Packet(_ data: Data) -> String {
         guard data.count >= 20 else { return "Invalid IPv4 packet" }
         
@@ -185,7 +156,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // Протокол: TCP = 6, UDP = 17
         let proto = data[9]
         
-        return "route \(sourceIP) → \(destinationIP), proto: \(proto)"
+        return " route \(sourceIP) → \(destinationIP), proto: \(proto)"
     }
 }
 

@@ -103,8 +103,7 @@ class VpnManagerImpl: VpnManager {
     
     func start() {
         self.logs.writeLog(log: "call start")
-        logs.writeLog(log: "Routing table without vpn:")
-        logRoutingTable()
+        self.logs.writeLog(log: "Routing table without vpn:")
         getOrCreateManager { (manager, error) in
             guard let manager = manager else {
                 self.logs.writeLog(log: "Created VPNManager is nil")
@@ -189,32 +188,6 @@ class VpnManagerImpl: VpnManager {
         }
         
         SentrySDK.capture(message: "Sentry started, launch_id: \(VpnManagerImpl.launchId)")
-    }
-
-    
-    func logRoutingTable() {
-        var ifaddrPointer: UnsafeMutablePointer<ifaddrs>? = nil
-        if getifaddrs(&ifaddrPointer) == 0 {
-            var ptr = ifaddrPointer
-            while ptr != nil {
-                if let addr = ptr?.pointee.ifa_addr {
-                    let name = String(cString: ptr!.pointee.ifa_name)
-                    let family = addr.pointee.sa_family
-                    logs.writeLog(log: "Interface: \(name), family: \(family)")
-                    
-                    if family == UInt8(AF_INET) || family == UInt8(AF_INET6) {
-                        var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                        getnameinfo(addr, socklen_t(addr.pointee.sa_len), &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
-                        let address = String(cString: hostname)
-                        logs.writeLog(log: "  Address: \(address)")
-                    }
-                }
-                ptr = ptr?.pointee.ifa_next
-            }
-            freeifaddrs(ifaddrPointer)
-        } else {
-            logs.writeLog(log: "Failed to get interfaces")
-        }
     }
 
 }
