@@ -6,6 +6,7 @@ import CommonDI
 import Sentry
 import Foundation
 import SystemConfiguration
+import Network
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
     private let launchId = UUID().uuidString
@@ -18,6 +19,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func startTunnel(options: [String : NSObject]?) async throws {
         logs.writeLog(log: "startTunnel in PacketTunnelProvider")
+        pingGoogleDNS()
         self.startSentry()
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
         let config = configsRepository.getOutlineKey()
@@ -47,6 +49,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         DispatchQueue.global().async { [weak self] in
             self?.startReadPacketsAndForwardToDevice()
         }
+        logs.writeLog(log: "start ping Google DNS")
+        pingGoogleDNS()
         logs.writeLog(log: "startTunnel: packet loops started")
     }
 
@@ -54,6 +58,30 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "Stopping tunnel with reason: \(reason)")
         stopCloak()
         completionHandler()
+    }
+    
+    func pingGoogleDNS() {
+        switch tcpPing(address: "8.8.8.8:53") {
+        case .success(let ping):
+            self.logs.writeLog(log: "Ping to google takes : \(ping) ms")
+        case .failure(let error):
+            self.logs.writeLog(log: "Ping to google error: \(error.localizedDescription)")
+        }
+    }
+    
+    func tcpPing(address: String) -> Result<Int32, Error> {
+        var ret: Int32 = 0
+        var err: NSError?
+
+        let success = Cloak_outlineTcpPing(address, &ret, &err)
+
+        if success {
+            return .success(ret)
+        } else if let error = err {
+            return .failure(error)
+        } else {
+            return .failure(NSError(domain: "CloakTcpPing", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+        }
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {

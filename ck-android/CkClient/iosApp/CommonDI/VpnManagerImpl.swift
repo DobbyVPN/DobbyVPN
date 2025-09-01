@@ -10,7 +10,7 @@ class VpnManagerImpl: VpnManager {
     private var lastRestartDate: Date?
     
     private var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
-    private var dobbyName = "Dobby_VPN"
+    private var dobbyName = "Dobby_VPN_2"
     
     private var vpnManager: NETunnelProviderManager?
     private var connectionRepository: ConnectionStateRepository
@@ -116,13 +116,19 @@ class VpnManagerImpl: VpnManager {
             self.logs.writeLog(log: "self.vpnManager = \(manager)")
             self.vpnManager = manager
             self.vpnManager?.isEnabled = true
-            do {
-                self.logs.writeLog(log: "starting tunnel !\(manager.connection.status)")
-                // https://stackoverflow.com/a/47569982/934719 - TODO fix
-                try manager.connection.startVPNTunnel()
-                self.logs.writeLog(log: "Tunnel was started!\(manager.connection.status)")
-            } catch {
-                self.logs.writeLog(log: "Error staring VPNTunnel \(error)")
+            manager.saveToPreferences { saveError in
+                if let saveError = saveError {
+                    self.logs.writeLog(log: "Failed to save VPN configuration: \(saveError)")
+                } else {
+                    self.logs.writeLog(log: "VPN configuration saved successfully!")
+                    do {
+                        self.logs.writeLog(log: "starting tunnel !\(manager.connection.status)")
+                        try manager.connection.startVPNTunnel()
+                        self.logs.writeLog(log: "Tunnel was started! \(manager.connection.status)")
+                    } catch {
+                        self.logs.writeLog(log: "Error starting VPNTunnel \(error)")
+                    }
+                }
             }
         }
     }
