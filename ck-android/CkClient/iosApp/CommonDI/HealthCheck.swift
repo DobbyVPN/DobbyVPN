@@ -35,6 +35,7 @@ public class HealthCheck {
         }
         
         for _ in 1...4 { pingGoogleWithDNS() }
+        
         for _ in 1...4 { pingOnesWithDNS() }
         
         for _ in 1...4 {
