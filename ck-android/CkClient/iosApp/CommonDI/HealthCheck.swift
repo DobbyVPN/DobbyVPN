@@ -16,21 +16,23 @@ import Network
 public class HealthCheck {
     private let monitor = NWPathMonitor()
     private let logs = NativeModuleHolder.logsRepository
+    private let queue = DispatchQueue(label: "Monitor")
     public static let shared = HealthCheck()
     
     public func fullCheckUp() {
         self.logs.writeLog(log: "[fullCheckUp] START Check UP")
+        let timeout: TimeInterval = 1.0
         for _ in 1...4 { pingVPNServer() }
         for _ in 1...4 { pingGoogle() }
         for _ in 1...4 { pingOnes() }
         
         for _ in 1...4 {
-            let ip = resolveDNS(host: "one.one.one.one")
+            let ip = resolveDNSWithTimeout(host: "one.one.one.one", timeout: timeout)
             self.logs.writeLog(log: "[resolveDNS] one.one.one.one -> \(ip)")
         }
         
         for _ in 1...4 {
-            let ip = resolveDNS(host: "google.com")
+            let ip = resolveDNSWithTimeout(host: "google.com", timeout: timeout)
             self.logs.writeLog(log: "[resolveDNS] google.com -> \(ip)")
         }
         
@@ -47,7 +49,40 @@ public class HealthCheck {
             let status = isVPNConnectedWithAddress()
             self.logs.writeLog(log: "[isVPNConnectedWithAddress] isVPNConnectedWithAddress: \(status)")
         }
+        monitor.pathUpdateHandler = { path in
+            let gateways = path.gateways  // это уже [NWEndpoint], не Optional
+            if gateways.isEmpty {
+                self.logs.writeLog(log: "[Gateways] No gateways")
+            } else {
+                for gateway in gateways {
+                    self.logs.writeLog(log: "[Gateways] Gateways: \(gateway)")
+                }
+            }
+        }
+
+        monitor.start(queue: queue)
         self.logs.writeLog(log: "[fullCheckUp] FINISH Check UP")
+    }
+    
+    func resolveDNSWithTimeout(host: String, timeout: TimeInterval) -> String {
+        var resultIP: String = "Timeout"
+        let group = DispatchGroup()
+        group.enter()
+        
+        let workItem = DispatchWorkItem {
+            resultIP = self.resolveDNS(host: host)
+            group.leave()
+        }
+        
+        DispatchQueue.global(qos: .userInitiated).async(execute: workItem)
+        
+        let waitResult = group.wait(timeout: .now() + timeout)
+        if waitResult == .timedOut {
+            workItem.cancel()
+            resultIP = "Timeout"
+        }
+        
+        return resultIP
     }
 
     
