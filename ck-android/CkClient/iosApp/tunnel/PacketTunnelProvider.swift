@@ -19,7 +19,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func startTunnel(options: [String : NSObject]?) async throws {
         logs.writeLog(log: "startTunnel in PacketTunnelProvider")
-        pingGoogleDNS()
+        HealthCheck.shared.fullCheckUp()
         self.startSentry()
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
         let config = configsRepository.getOutlineKey()
@@ -49,8 +49,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         DispatchQueue.global().async { [weak self] in
             self?.startReadPacketsAndForwardToDevice()
         }
-        logs.writeLog(log: "start ping Google DNS")
-        pingGoogleDNS()
+        HealthCheck.shared.fullCheckUp()
         logs.writeLog(log: "startTunnel: packet loops started")
     }
 
@@ -60,30 +59,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         completionHandler()
     }
     
-    func pingGoogleDNS() {
-        switch tcpPing(address: "8.8.8.8:53") {
-        case .success(let ping):
-            self.logs.writeLog(log: "Ping to google takes : \(ping) ms")
-        case .failure(let error):
-            self.logs.writeLog(log: "Ping to google error: \(error.localizedDescription)")
-        }
-    }
-    
-    func tcpPing(address: String) -> Result<Int32, Error> {
-        var ret: Int32 = 0
-        var err: NSError?
-
-        let success = Cloak_outlineTcpPing(address, &ret, &err)
-
-        if success {
-            return .success(ret)
-        } else if let error = err {
-            return .failure(error)
-        } else {
-            return .failure(NSError(domain: "CloakTcpPing", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
-        }
-    }
-
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         completionHandler?(messageData)
     }
@@ -91,10 +66,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startReadPacketsFromDevice() {
         logs.writeLog(log: "Starting to read packets from device... \(Thread.current)")
         while true {
-            logs.writeLog(log: "Reading packets from device... \(Thread.current)")
+//            logs.writeLog(log: "Reading packets from device... \(Thread.current)")
             autoreleasepool {
                 let data = device.readFromDevice()
-                logs.writeLog(log: "Read from device: \(data.count)" + parseIPv4Packet(data))
+//                logs.writeLog(log: "Read from device: \(data.count)" + parseIPv4Packet(data))
                 let packets: [Data] = [data]
                 let protocols: [NSNumber] = [NSNumber(value: AF_INET)]
 
@@ -108,11 +83,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     
     private func startReadPacketsAndForwardToDevice() {
-        logs.writeLog(log: "Starting to read packets from tunnel... \(Thread.current)")
+//        logs.writeLog(log: "Starting to read packets from tunnel... \(Thread.current)")
         self.packetFlow.readPackets { [weak self] (packets, protocols) in
-            NativeModuleHolder.logsRepository.writeLog(log: "Read packets from tunnel: \(packets.count) protocols: \(protocols) \(Thread.current)")
+//            NativeModuleHolder.logsRepository.writeLog(log: "Read packets from tunnel: \(packets.count) protocols: \(protocols) \(Thread.current)")
             guard let self else { return }
-            NativeModuleHolder.logsRepository.writeLog(log: "Continue reading packets from tunnel... \(Thread.current)")
+//            NativeModuleHolder.logsRepository.writeLog(log: "Continue reading packets from tunnel... \(Thread.current)")
             if !packets.isEmpty {
                 forwardPacketsToDevice(packets, protocols: protocols)
             }
@@ -122,7 +97,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func forwardPacketsToDevice(_ packets: [Data], protocols: [NSNumber]) {
         for packet in packets {
-            logs.writeLog(log: "Forwarding packet to device: \(packet.count)" + parseIPv4Packet(packet))
+//            logs.writeLog(log: "Forwarding packet to device: \(packet.count)" + parseIPv4Packet(packet))
             device.write(data: packet)
         }
     }
@@ -203,7 +178,7 @@ class DeviceFacade {
         do {
             var ret0_: Int = 0
             try device?.write(data, ret0_: &ret0_)
-            logs?.writeLog(log: "[DeviceFacade] wrote \(data.count) bytes")
+//            logs?.writeLog(log: "[DeviceFacade] wrote \(data.count) bytes")
         } catch let error {
             logs?.writeLog(log: "[DeviceFacade] write error: \(error)")
         }
@@ -212,7 +187,7 @@ class DeviceFacade {
     func readFromDevice() -> Data {
         do {
             let data = try device?.read()
-            logs?.writeLog(log: "[DeviceFacade] read \(data?.count ?? 0) bytes")
+//            logs?.writeLog(log: "[DeviceFacade] read \(data?.count ?? 0) bytes")
             return data!
         } catch let error {
             logs?.writeLog(log: "[DeviceFacade] read error: \(error)")
