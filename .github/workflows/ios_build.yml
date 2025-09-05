@@ -22,7 +22,8 @@ jobs:
           rm -rf ~/Library/Developer/Xcode/Archives/*
 
       - name: Clean Gradle cache
-        run: ./ck-android/CkClient/gradlew clean --no-daemon
+        working-directory: ck-android/CkClient
+        run: ./gradlew clean --no-daemon
 
       - name: Setup Go
         uses: actions/setup-go@v5
