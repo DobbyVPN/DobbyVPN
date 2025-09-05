@@ -124,12 +124,21 @@ jobs:
         run: |
           set -euo pipefail
           cd ck-android/CkClient/iosApp
+          export CODESIGN_ALLOCATE=$(xcrun --find codesign_allocate)
+          export CODE_SIGN_STYLE=Manual
+          export CSC_DISABLE_OCSP_CHECK=1
+          
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" ~/Library/Keychains/login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" ~/Library/Keychains/login.keychain-db
+  
+  
           xcodebuild -project iosApp.xcodeproj \
                      -scheme iosApp \
                      -configuration Release \
                      -sdk iphoneos \
                      -archivePath $PWD/build/iosApp.xcarchive \
-                     archive
+                     archive \
+                    -verbose
               ls -lh $PWD/build
 
               if [ -e "$PWD/build/iosApp.xcarchive" ]; then
