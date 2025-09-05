@@ -174,7 +174,7 @@ jobs:
 
 
   build_ios_lib:
-    runs-on: macos-latest
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 

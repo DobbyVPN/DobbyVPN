@@ -15,16 +15,6 @@ jobs:
       - name: Checkout node
         uses: actions/checkout@v2
 
-      - name: Clean Xcode caches
-        run: |
-          rm -rf ~/Library/Developer/Xcode/DerivedData/*
-          rm -rf ~/Library/Caches/CocoaPods/*
-          rm -rf ~/Library/Developer/Xcode/Archives/*
-
-      - name: Clean Gradle cache
-        working-directory: ck-android/CkClient
-        run: ./gradlew clean --no-daemon
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
