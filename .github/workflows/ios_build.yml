@@ -45,7 +45,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          cd go_client
+          cd src
           go get ./...
           cd ..
 
