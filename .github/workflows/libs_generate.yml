@@ -30,11 +30,23 @@ jobs:
           git clone --depth 1 https://github.com/cbeuw/Cloak tmp
           cp -r tmp/internal go_client/modules/Cloak/
 
+      - name: Update utls
+        run: |
+          cd go_client
+          go get -u github.com/refraction-networking/utls@latest
+          go mod tidy
+          cd ..
+
+      - name: Check utls version
+        run: |
+          cd go_client
+          go list -m github.com/refraction-networking/utls
+          cd ..
+
       - name: Download Go modules
         run: |
           cd go_client
           go mod download
-          go get github.com/refraction-networking/utls@v1.6.7
           cd ..
 
       - name: Install compiler
@@ -112,6 +124,19 @@ jobs:
           mkdir -p go_client/modules/Cloak
           cp -r tmp/internal go_client/modules/Cloak/
           rm -rf tmp
+
+      - name: Update utls
+        run: |
+          cd go_client
+          go get -u github.com/refraction-networking/utls@latest
+          go mod tidy
+          cd ..
+
+      - name: Check utls version
+        run: |
+          cd go_client
+          go list -m github.com/refraction-networking/utls
+          cd ..
 
       - name: Download Go modules
         run: |
@@ -195,6 +220,19 @@ jobs:
         run: |
           cd go_client
           go mod download
+          cd ..
+
+      - name: Update utls
+        run: |
+          cd go_client
+          go get -u github.com/refraction-networking/utls@latest
+          go mod tidy
+          cd ..
+
+      - name: Check utls version
+        run: |
+          cd go_client
+          go list -m github.com/refraction-networking/utls
           cd ..
 
       - name: Install gomobile & init

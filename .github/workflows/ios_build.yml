@@ -124,7 +124,7 @@ jobs:
         run: |
           set -euo pipefail
           cd ck-android/CkClient/iosApp
-          export CODESIGN_ALLOCATE=$(xcrun --find codesign_allocate)
+          export CSC_DISABLE_OCSP_CHECK=1
   
   
           xcodebuild -project iosApp.xcodeproj \
