@@ -41,6 +41,16 @@ public class HealthCheck {
         for _ in 1...4 { pingOnesWithDNS() }
         
         for _ in 1...4 {
+            httpPing(urlString: "https://google.com") { success, statusCode, errorMessage in
+                if success {
+                    self.logs.writeLog(log: "[httpPing] HTTP ping is workung! Rsponse code: \(statusCode!)")
+                } else {
+                    self.logs.writeLog(log: "[httpPing] HTTP ping failed. Error: \(errorMessage ?? "Unknown")")
+                }
+            }
+        }
+        
+        for _ in 1...4 {
             let status = isVPNConnected()
             self.logs.writeLog(log: "[isVPNConnected] isVPNConnected: \(status)")
         }
@@ -186,6 +196,33 @@ public class HealthCheck {
         }
         
         return false
+    }
+    
+    func httpPing(urlString: String, completion: @escaping (Bool, Int?, String?) -> Void) {
+        guard let url = URL(string: urlString) else {
+            completion(false, nil, "Invalid URL")
+            return
+        }
+
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 5 // Таймаут 5 секунд
+
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(false, nil, error.localizedDescription)
+                return
+            }
+
+            if let httpResponse = response as? HTTPURLResponse {
+                completion(true, httpResponse.statusCode, nil)
+            } else {
+                completion(false, nil, "No HTTP response")
+            }
+        }
+
+        task.resume()
     }
     
     func pingVPNServer() {
