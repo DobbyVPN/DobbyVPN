@@ -165,10 +165,10 @@ jobs:
           go build -v -buildmode=c-shared -o liboutline.so ./kotlin_exports/...
           cd ..
 
-          mkdir -p ck-android/CkClient/outline/src/main/cpp/include
-          mkdir -p ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a
-          cp go_client/liboutline.h ck-android/CkClient/outline/src/main/cpp/include/liboutline.h
-          cp go_client/liboutline.so ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a/liboutline.so
+          mkdir -p kmp_client/outline/src/main/cpp/include
+          mkdir -p kmp_client/outline/src/main/jniLibs/arm64-v8a
+          cp go_client/liboutline.h kmp_client/outline/src/main/cpp/include/liboutline.h
+          cp go_client/liboutline.so kmp_client/outline/src/main/jniLibs/arm64-v8a/liboutline.so
         env:
           CGO_ENABLED: "1"
           GOOS: "android"
@@ -177,7 +177,7 @@ jobs:
 
       - name: Build .aar
         run: |
-          cd ck-android/CkClient
+          cd kmp_client
           ./gradlew :outline:build
 
       - name: Tree
@@ -189,13 +189,13 @@ jobs:
         uses: actions/upload-artifact@master
         with:
           name: liboutline.so
-          path: ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a/liboutline.so
+          path: kmp_client/outline/src/main/jniLibs/arm64-v8a/liboutline.so
 
       - name: Upload Go AAR
         uses: actions/upload-artifact@master
         with:
           name: outline-debug.aar
-          path: ck-android/CkClient/outline/build/outputs/aar/outline-debug.aar
+          path: kmp_client/outline/build/outputs/aar/outline-debug.aar
 
 
   build_ios_lib:

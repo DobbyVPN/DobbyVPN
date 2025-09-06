@@ -15,19 +15,19 @@ jobs:
         uses: actions/download-artifact@master
         with:
           name: lib_windows
-          path: ck-android/CkClient/libs
+          path: kmp_client/libs
 
       - name: Download Linux lib
         uses: actions/download-artifact@master
         with:
           name: lib_ubuntu
-          path: ck-android/CkClient/libs
+          path: kmp_client/libs
 
       - name: Download MacOS lib
         uses: actions/download-artifact@master
         with:
           name: lib_macos
-          path: ck-android/CkClient/libs
+          path: kmp_client/libs
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -48,15 +48,15 @@ jobs:
       - name: Fill gradle.properties
         run: |
           echo "projectRepositoryCommit=$GITHUB_SHA"
-          echo "projectRepositoryCommit=$GITHUB_SHA" >> ck-android/CkClient/gradle.properties
+          echo "projectRepositoryCommit=$GITHUB_SHA" >> kmp_client/gradle.properties
           echo "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$GITHUB_SHA"
-          echo "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$GITHUB_SHA" >> ck-android/CkClient/gradle.properties
+          echo "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$GITHUB_SHA" >> kmp_client/gradle.properties
           echo "gradle.properties:"
-          cat ck-android/CkClient/gradle.properties
+          cat kmp_client/gradle.properties
 
       - name: Build with Gradle
         run: |
-          cd ck-android/CkClient
+          cd kmp_client
           chmod +x ./gradlew
           ./gradlew build
 
@@ -66,7 +66,7 @@ jobs:
           OAUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           command: make site
-          extra_flags: "--passphrase=\"${{ secrets.CONVEYOR_PASSPHRASE }}\" -f ck-android/CkClient/conveyor.conf"
+          extra_flags: "--passphrase=\"${{ secrets.CONVEYOR_PASSPHRASE }}\" -f kmp_client/conveyor.conf"
           signing_key: ${{ secrets.CONVEYOR_SIGNING_KEY }}
           agree_to_license: 1
 

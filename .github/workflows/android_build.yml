@@ -18,17 +18,17 @@ jobs:
         uses: actions/download-artifact@master
         with:
           name: outline-debug.aar
-          path: ck-android/CkClient/libs
+          path: kmp_client/libs
 
       - name: Prepare for .so
         run: |
-          mkdir -p ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a
+          mkdir -p kmp_client/outline/src/main/jniLibs/arm64-v8a
 
       - name: Download So
         uses: actions/download-artifact@master
         with:
           name: liboutline.so
-          path: ck-android/CkClient/outline/src/main/jniLibs/arm64-v8a
+          path: kmp_client/outline/src/main/jniLibs/arm64-v8a
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -47,7 +47,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          cd src
+          cd go_client
           go get ./...
           cd ..
           sudo apt-get update
@@ -59,15 +59,15 @@ jobs:
       - name: Fill gradle.properties
         run: |
           echo "projectRepositoryCommit=$GITHUB_SHA"
-          echo "projectRepositoryCommit=$GITHUB_SHA" >> ck-android/CkClient/gradle.properties
+          echo "projectRepositoryCommit=$GITHUB_SHA" >> kmp_client/gradle.properties
           echo "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$GITHUB_SHA"
-          echo "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$GITHUB_SHA" >> ck-android/CkClient/gradle.properties
+          echo "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$GITHUB_SHA" >> kmp_client/gradle.properties
           echo "gradle.properties:"
-          cat ck-android/CkClient/gradle.properties
+          cat kmp_client/gradle.properties
 
       - name: Build APK
         run: |
-          cd ck-android/CkClient
+          cd kmp_client
           chmod +x gradlew
           ./gradlew assembleRelease --stacktrace
           cd ../..
@@ -86,7 +86,7 @@ jobs:
             --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} \
             --key-pass pass:${{ secrets.KEY_PASSWORD }} \
             --out dobbyvpn-android.apk \
-            ck-android/CkClient/app/build/outputs/apk/release/app-release-unsigned.apk
+            kmp_client/app/build/outputs/apk/release/app-release-unsigned.apk
 
       - name: Upload Android client
         uses: actions/upload-artifact@master

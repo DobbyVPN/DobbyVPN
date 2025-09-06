@@ -1,6 +1,6 @@
 [submodule "Cloak"]
 	path = Cloak
 	url = https://github.com/cbeuw/Cloak
-[submodule "ck-android/CkClient/awg/src/main/cpp/amneziawg-tools"]
-	path = ck-android/CkClient/awg/src/main/cpp/amneziawg-tools
+[submodule "kmp_client/awg/src/main/cpp/amneziawg-tools"]
+	path = kmp_client/awg/src/main/cpp/amneziawg-tools
 	url = https://github.com/amnezia-vpn/amneziawg-tools

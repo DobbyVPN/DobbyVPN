@@ -35,41 +35,41 @@ jobs:
 
       - name: Increment build number
         run: |
-          cd ck-android/CkClient/iosApp/iosApp
+          cd kmp_client/iosApp/iosApp
           NEW_VER=${{ github.run_number }}
           sed -i -e '/<key>CFBundleVersion<\/key>/{n;s|<string>.*</string>|<string>'"$NEW_VER"'</string>|;}' Info.plist
 
       - name: Print Info.plist
         run: |
-          cat ck-android/CkClient/iosApp/iosApp/Info.plist
+          cat kmp_client/iosApp/iosApp/Info.plist
 
       - name: Install dependencies
         run: |
-          cd src
+          cd go_client
           go get ./...
           cd ..
 
       - name: Sentry auth
         run: |
-          cd ck-android/CkClient/iosApp
+          cd kmp_client/iosApp
           echo "[auth]" > .sentryclirc
           echo "token=${{ secrets.SENTRY_AUTH }}" >> .sentryclirc
 
       - name: Build Kotlin Multiplatform
         run: |
-          cd ck-android/CkClient
+          cd kmp_client
           chmod +x gradlew
           ./gradlew linkReleaseFrameworkIosArm64
 
       - name: Remove old MyLibrary.xcframework
         run: |
-          rm -rf ck-android/CkClient/iosApp/MyLibrary.xcframework
+          rm -rf kmp_client/iosApp/MyLibrary.xcframework
 
       - name: Download IOS lib
         uses: actions/download-artifact@master
         with:
           name: MyLibrary.xcframework
-          path: ck-android/CkClient/iosApp/MyLibrary.xcframework
+          path: kmp_client/iosApp/MyLibrary.xcframework
 
       - name: Build iOS App
         env:
@@ -123,7 +123,7 @@ jobs:
       - name: 📦 Build and Archive iOS App
         run: |
           set -euo pipefail
-          cd ck-android/CkClient/iosApp
+          cd kmp_client/iosApp
           export CSC_DISABLE_OCSP_CHECK=1
   
   
@@ -145,7 +145,7 @@ jobs:
 
       - name: Export IPA
         run: |
-          cd ck-android/CkClient/iosApp
+          cd kmp_client/iosApp
           cat > exportOptions.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -177,7 +177,7 @@ jobs:
         uses: actions/upload-artifact@master
         with:
           name: DobbyVPN.ipa
-          path: ck-android/CkClient/iosApp/build/ipa/*.ipa
+          path: kmp_client/iosApp/build/ipa/*.ipa
 
       - name: Publish to TestFlight via FastLane
         env:
@@ -193,7 +193,7 @@ jobs:
           }' > api_key.json
 
           fastlane pilot upload \
-            --ipa ck-android/CkClient/iosApp/build/ipa/*.ipa \
+            --ipa kmp_client/iosApp/build/ipa/*.ipa \
             --api_key_path api_key.json
           rm -f api_key.json
 
@@ -212,7 +212,7 @@ jobs:
 #          }' > api_key.json
 #
 #          fastlane deliver \
-#            --ipa ck-android/CkClient/iosApp/build/ipa/*.ipa \
+#            --ipa kmp_client/iosApp/build/ipa/*.ipa \
 #            --api_key_path api_key.json \
 #            --submit_for_review true \
 #            --automatic_release true \
