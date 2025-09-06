@@ -61,15 +61,15 @@ jobs:
           chmod +x gradlew
           ./gradlew linkReleaseFrameworkIosArm64
 
-#      - name: Remove old MyLibrary.xcframework
-#        run: |
-#          rm -rf ck-android/CkClient/iosApp/MyLibrary.xcframework
-#
-#      - name: Download IOS lib
-#        uses: actions/download-artifact@master
-#        with:
-#          name: MyLibrary.xcframework
-#          path: ck-android/CkClient/iosApp/MyLibrary.xcframework
+      - name: Remove old MyLibrary.xcframework
+        run: |
+          rm -rf ck-android/CkClient/iosApp/MyLibrary.xcframework
+
+      - name: Download IOS lib
+        uses: actions/download-artifact@master
+        with:
+          name: MyLibrary.xcframework
+          path: ck-android/CkClient/iosApp/MyLibrary.xcframework
 
       - name: Build iOS App
         env:
