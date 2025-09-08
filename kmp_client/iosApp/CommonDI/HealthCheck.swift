@@ -12,6 +12,7 @@ import app
 import Foundation
 import SystemConfiguration
 import Network
+import SwiftSocket
 
 public class HealthCheck {
     private let monitor = NWPathMonitor()
@@ -200,11 +201,11 @@ public class HealthCheck {
         return false
     }
     
-    func socketPing(urlString: String, let port: UInt16 = 80) -> String {
+    func socketPing(urlString: String, port: UInt16 = 80) -> String {
         var socket = Socket()
         do {
             try socket.connect(to: host, port: port, timeout: 5)
-            reurn "Connection is established"
+            return "Connection is established"
         } catch {
             return "Connection failed: \(error.localizedDescription)"
         }
