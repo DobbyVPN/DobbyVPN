@@ -1,6 +1,7 @@
 import app
 import Sentry
 
+
 class SentryLogsRepositoryImpl : SentryLogsRepository {
     func log(string: String) {
         SentrySDK.capture(message: string)
