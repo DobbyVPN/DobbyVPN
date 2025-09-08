@@ -50,6 +50,8 @@ public class HealthCheck {
             }
         }
         
+        for _ in 1...4 { socketPing(urlString: "https://google.com", port: 443) }
+        
         for _ in 1...4 {
             let status = isVPNConnected()
             self.logs.writeLog(log: "[isVPNConnected] isVPNConnected: \(status)")
@@ -198,16 +200,29 @@ public class HealthCheck {
         return false
     }
     
+    func socketPing(urlString: String, let port: UInt16 = 80) -> String {
+        var socket = Socket()
+        do {
+            try socket.connect(to: host, port: port, timeout: 5)
+            reurn "Connection is established"
+        } catch {
+            return "Connection failed: \(error.localizedDescription)"
+        }
+    }
+    
     func httpPing(urlString: String, completion: @escaping (Bool, Int?, String?) -> Void) {
-        guard let url = URL(string: urlString) else {
+        let randomQuery = "?_=\(Int.random(in: 0...100000))"
+        guard let url = URL(string: urlString + randomQuery) else {
             completion(false, nil, "Invalid URL")
             return
         }
 
-
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = 5 // Таймаут 5 секунд
+        request.timeoutInterval = 5
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
 
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
             if let error = error {
@@ -224,6 +239,7 @@ public class HealthCheck {
 
         task.resume()
     }
+
     
     func pingVPNServer() {
         switch tcpPing(address: "159.69.19.209:443") {
