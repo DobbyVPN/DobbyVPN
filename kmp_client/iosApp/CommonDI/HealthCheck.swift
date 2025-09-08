@@ -12,7 +12,6 @@ import app
 import Foundation
 import SystemConfiguration
 import Network
-import SwiftSocket
 
 public class HealthCheck {
     private let monitor = NWPathMonitor()
@@ -51,7 +50,15 @@ public class HealthCheck {
             }
         }
         
-        for _ in 1...4 { socketPing(urlString: "https://google.com", port: 443) }
+        for _ in 1...4 {
+            socketPing(host: "google.com", port: 443) { success in
+                if success {
+                    self.logs.writeLog(log: "[socketPing] TCP connection is working!")
+                } else {
+                    self.logs.writeLog(log: "[socketPing] TCP connection failed.")
+                }
+            }
+        }
         
         for _ in 1...4 {
             let status = isVPNConnected()
@@ -201,14 +208,23 @@ public class HealthCheck {
         return false
     }
     
-    func socketPing(urlString: String, port: UInt16 = 80) -> String {
-        var socket = Socket()
-        do {
-            try socket.connect(to: host, port: port, timeout: 5)
-            return "Connection is established"
-        } catch {
-            return "Connection failed: \(error.localizedDescription)"
+    func socketPing(host: String, port: UInt16, completion: @escaping (Bool) -> Void) {
+        let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                completion(true)
+                connection.cancel()
+            case .failed(_):
+                completion(false)
+                connection.cancel()
+            default:
+                break
+            }
         }
+        
+        connection.start(queue: .main)
     }
     
     func httpPing(urlString: String, completion: @escaping (Bool, Int?, String?) -> Void) {
