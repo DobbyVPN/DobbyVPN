@@ -15,11 +15,6 @@
 		8CF4C25F2E61E1C400A1B0E4 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		8CF4C2602E61E1C400A1B0E4 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		8CF4C2612E61E1C400A1B0E4 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = F9EDD575E30B42BCA81EA237 /* Sentry */; };
-		8CF4C31B2E6638A600A1B0E4 /* RouteRecord.h in Headers */ = {isa = PBXBuildFile; fileRef = 8CF4C3162E6638A600A1B0E4 /* RouteRecord.h */; };
-		8CF4C31C2E6638A600A1B0E4 /* RouteTableManager.h in Headers */ = {isa = PBXBuildFile; fileRef = 8CF4C3182E6638A600A1B0E4 /* RouteTableManager.h */; };
-		8CF4C31D2E6638A600A1B0E4 /* route.h in Headers */ = {isa = PBXBuildFile; fileRef = 8CF4C3152E6638A600A1B0E4 /* route.h */; };
-		8CF4C31E2E6638A600A1B0E4 /* RouteRecord.m in Sources */ = {isa = PBXBuildFile; fileRef = 8CF4C3172E6638A600A1B0E4 /* RouteRecord.m */; };
-		8CF4C31F2E6638A600A1B0E4 /* RouteTableManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 8CF4C3192E6638A600A1B0E4 /* RouteTableManager.m */; };
 		A12013A02D80DE3200D43A3A /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */; };
 		A12013A82D80DE3200D43A3A /* tunnel.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A120139F2D80DE3100D43A3A /* tunnel.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A15F0FD42D874CDC007FA45D /* CommonDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; };
@@ -85,12 +80,6 @@
 		7555FF82242A565900829871 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		7555FF8C242A565B00829871 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = MyLibrary.xcframework; sourceTree = "<group>"; };
-		8CF4C3152E6638A600A1B0E4 /* route.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = route.h; sourceTree = "<group>"; };
-		8CF4C3162E6638A600A1B0E4 /* RouteRecord.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RouteRecord.h; sourceTree = "<group>"; };
-		8CF4C3172E6638A600A1B0E4 /* RouteRecord.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = RouteRecord.m; sourceTree = "<group>"; };
-		8CF4C3182E6638A600A1B0E4 /* RouteTableManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RouteTableManager.h; sourceTree = "<group>"; };
-		8CF4C3192E6638A600A1B0E4 /* RouteTableManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = RouteTableManager.m; sourceTree = "<group>"; };
-		8CF4C32A2E66413100A1B0E4 /* DobbyVPN-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "DobbyVPN-Bridging-Header.h"; sourceTree = "<group>"; };
 		A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 		A120131E2D7DB13F00D43A3A /* iosApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iosApp.entitlements; sourceTree = "<group>"; };
 		A120139F2D80DE3100D43A3A /* tunnel.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = tunnel.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -173,7 +162,6 @@
 		7555FF72242A565900829871 = {
 			isa = PBXGroup;
 			children = (
-				8CF4C31A2E6638A600A1B0E4 /* RouteTableManager */,
 				AB1DB47929225F7C00F7AF9C /* Configuration */,
 				7555FF7D242A565900829871 /* iosApp */,
 				A12013A12D80DE3200D43A3A /* tunnel */,
@@ -197,7 +185,6 @@
 			isa = PBXGroup;
 			children = (
 				A120131E2D7DB13F00D43A3A /* iosApp.entitlements */,
-				8CF4C32A2E66413100A1B0E4 /* DobbyVPN-Bridging-Header.h */,
 				058557BA273AAA24004C7B11 /* Assets.xcassets */,
 				7555FF82242A565900829871 /* ContentView.swift */,
 				7555FF8C242A565B00829871 /* Info.plist */,
@@ -205,18 +192,6 @@
 				058557D7273AAEEB004C7B11 /* Preview Content */,
 			);
 			path = iosApp;
-			sourceTree = "<group>";
-		};
-		8CF4C31A2E6638A600A1B0E4 /* RouteTableManager */ = {
-			isa = PBXGroup;
-			children = (
-				8CF4C3152E6638A600A1B0E4 /* route.h */,
-				8CF4C3162E6638A600A1B0E4 /* RouteRecord.h */,
-				8CF4C3172E6638A600A1B0E4 /* RouteRecord.m */,
-				8CF4C3182E6638A600A1B0E4 /* RouteTableManager.h */,
-				8CF4C3192E6638A600A1B0E4 /* RouteTableManager.m */,
-			);
-			path = RouteTableManager;
 			sourceTree = "<group>";
 		};
 		AB1DB47929225F7C00F7AF9C /* Configuration */ = {
@@ -234,9 +209,6 @@
 			isa = PBXHeadersBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				8CF4C31B2E6638A600A1B0E4 /* RouteRecord.h in Headers */,
-				8CF4C31C2E6638A600A1B0E4 /* RouteTableManager.h in Headers */,
-				8CF4C31D2E6638A600A1B0E4 /* route.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -443,8 +415,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				8CF4C31E2E6638A600A1B0E4 /* RouteRecord.m in Sources */,
-				8CF4C31F2E6638A600A1B0E4 /* RouteTableManager.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
