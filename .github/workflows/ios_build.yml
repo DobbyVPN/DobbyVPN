@@ -45,9 +45,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          cd src
           go get ./...
-          cd ..
 
       - name: Sentry auth
         run: |
