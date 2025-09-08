@@ -18,7 +18,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var memoryTimer: DispatchSourceTimer?
 
     override func startTunnel(options: [String : NSObject]?) async throws {
-        logs.writeLog(log: "startTunnel in PacketTunnelProvider")
+        logs.writeLog(log: "startTunnel in PacketTunnelProvider, thread: \(Thread.current)")
         HealthCheck.shared.fullCheckUp()
         self.startSentry()
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
@@ -83,7 +83,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     
     private func startReadPacketsAndForwardToDevice() {
-//        logs.writeLog(log: "Starting to read packets from tunnel... \(Thread.current)")
+        logs.writeLog(log: "Starting to read packets from tunnel... \(Thread.current)")
         self.packetFlow.readPackets { [weak self] (packets, protocols) in
 //            NativeModuleHolder.logsRepository.writeLog(log: "Read packets from tunnel: \(packets.count) protocols: \(protocols) \(Thread.current)")
             guard let self else { return }
@@ -108,7 +108,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "startCloakOutline: entering")
         if (configsRepository.getIsCloakEnabled()) {
             do {
-                logs.writeLog(log: "startCloakOutline: about to start Cloak client")
+                logs.writeLog(log: "startCloakOutline: about to start Cloak client with localHost: \(localHost), localPort: \(localPort), config: \(configsRepository.getCloakConfig())")
                 Cloak_outlineStartCloakClient(localHost, localPort, configsRepository.getCloakConfig(), false)
                 logs.writeLog(log: "startCloakOutline: Cloak client started successfully")
             } catch {
@@ -168,6 +168,7 @@ class DeviceFacade {
     private var logs: LogsRepository? = nil
 
     func initialize(config: String, _logs: LogsRepository) {
+        logs?.writeLog(log: "[DeviceFacade] Device initiaization started with config: \(config)")
         var err: NSErrorPointer = nil
         device = Cloak_outlineNewOutlineDevice(config, err)
         logs = _logs
