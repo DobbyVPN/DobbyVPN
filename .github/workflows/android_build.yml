@@ -91,3 +91,8 @@ jobs:
         with:
           name: dobbyvpn-android.apk
           path: dobbyvpn-android.apk
+
+      - name: Write go depends
+        run: |
+          go mod tidy
+          cat go.mod

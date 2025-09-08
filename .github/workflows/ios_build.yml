@@ -220,3 +220,8 @@ jobs:
 #            --run_precheck_before_submit false
 #
 #          rm -f api_key.json
+
+      - name: Write go depends
+        run: |
+          go mod tidy
+          cat go.mod
