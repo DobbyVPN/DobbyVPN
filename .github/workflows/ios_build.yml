@@ -122,6 +122,8 @@ jobs:
         run: |
           set -euo pipefail
           cd kmp_client/iosApp
+          export CODESIGN_ALLOCATE=$(xcrun --find codesign_allocate)
+          export CODE_SIGN_STYLE=Manual
           export CSC_DISABLE_OCSP_CHECK=1
   
   
