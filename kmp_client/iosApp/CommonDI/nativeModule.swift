@@ -41,6 +41,7 @@ public class NativeModuleHolder {
     }
 }
 
+
 public let appGroupIdentifier = "group.vpn.dobby.app"
 
 public var configsRepository = DobbyConfigsRepositoryImpl.shared
