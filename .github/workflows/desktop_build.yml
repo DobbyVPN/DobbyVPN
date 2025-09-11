@@ -67,10 +67,6 @@ jobs:
           ./gradlew --no-daemon -q dependencies 
           ./gradlew --no-daemon -q printConveyorConfig
 
-      - name: Debug gradle cache
-        run: |
-          ls -R ${env.HOME}/.gradle/caches/modules-2/files-2.1/org.jetbrains.skiko
-
       - name: Conveyor build site
         uses: hydraulic-software/conveyor/actions/build@v16.0
         env:
