@@ -54,18 +54,18 @@ jobs:
           echo "gradle.properties:"
           cat kmp_client/gradle.properties
 
-      - name: Download Skiko runtimes
-        run: |
-          cd kmp_client
-          chmod +x ./gradlew
-          ./gradlew --no-daemon -q dependencies 
-          ./gradlew --no-daemon -q :printConveyorConfig
-
       - name: Build with Gradle
         run: |
           cd kmp_client
           chmod +x ./gradlew
           ./gradlew build
+
+      - name: Download Skiko runtimes
+        run: |
+          cd kmp_client
+          chmod +x ./gradlew
+          ./gradlew --no-daemon -q dependencies 
+          ./gradlew --no-daemon -q printConveyorConfig
 
       - name: Debug gradle cache
         run: |
