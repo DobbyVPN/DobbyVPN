@@ -54,6 +54,11 @@ jobs:
           echo "gradle.properties:"
           cat kmp_client/gradle.properties
 
+      - name: Download Skiko runtimes
+        run: |
+          ./gradlew --no-daemon -q dependencies 
+          ./gradlew --no-daemon -q :printConveyorConfig
+
       - name: Build with Gradle
         run: |
           cd kmp_client
@@ -83,6 +88,7 @@ jobs:
           echo "MAC_AARCH64_FILE=$(find ./output -name '*-mac-aarch64.zip' -type f)" >> $GITHUB_ENV
           echo "MAC_AMD64_FILE=$(find ./output -name '*-mac-amd64.zip' -type f)" >> $GITHUB_ENV
           echo "MSIX_FILE=$(find ./output -name '*.msix' -type f)" >> $GITHUB_ENV
+          echo "WIN_ZIP_FILE=$(find ./output -name '*-windows-amd64.zip' -type f)" >> $GITHUB_ENV
 
       - name: Upload Debian
         uses: actions/upload-artifact@master
@@ -113,6 +119,12 @@ jobs:
         with:
           name: dobbyVPN-windows.msix
           path: ${{ env.MSIX_FILE }}
+
+      - name: Upload Windows Zip
+        uses: actions/upload-artifact@master
+        with:
+          name: dobbyVPN-windows.zip
+          path: ${{ env.WIN_ZIP_FILE }}
 
       - name: Cleanup Conveyor
         if: always()
