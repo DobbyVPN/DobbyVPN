@@ -56,6 +56,8 @@ jobs:
 
       - name: Download Skiko runtimes
         run: |
+          cd kmp_client
+          chmod +x ./gradlew
           ./gradlew --no-daemon -q dependencies 
           ./gradlew --no-daemon -q :printConveyorConfig
 
