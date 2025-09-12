@@ -29,6 +29,10 @@ jobs:
           name: lib_macos
           path: kmp_client/libs
 
+      - name: Print libs
+        run: |
+          ls kmp_client/libs
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
