@@ -90,7 +90,7 @@ jobs:
         if: matrix.os == 'macos'
         run: |
           cd go_client
-          go build -buildmode=c-shared -o lib_mac.dylib ./desktop_exports/...
+          go build -buildmode=c-shared -o lib_macos.dylib ./desktop_exports/...
         env:
           CGO_ENABLED: "1"
           GOOS: "darwin"
@@ -105,7 +105,7 @@ jobs:
           path: |
             go_client/lib_windows.dll
             go_client/lib_linux.so
-            go_client/lib_mac.dylib
+            go_client/lib_macos.dylib
 
   build_android_lib:
     runs-on: ubuntu-latest
