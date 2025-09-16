@@ -173,6 +173,14 @@ func (app App) Run(ctx context.Context) error {
 	copy(src, dst)
 	src[2] += 2
 
+    cmd := exec.Command("route", "add", "85.9.223.19", "mask", "255.255.255.255", gatewayIP.String(), "if", fmt.Sprint(netInterface.Index))
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    if err := cmd.Run(); err != nil {
+        fmt.Println("Failed to add route for 85.9.223.19:", err)
+    } else {
+        fmt.Println("Route for 85.9.223.19 added via", gatewayIP)
+    }
+
 	if err := startRouting(ss.GetServerIP().String(), gatewayIP.String(), tunInterface.Name, tunInterface.HardwareAddr.String(), netInterface.Name, TunGateway, TunDeviceIP, src); err != nil {
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}

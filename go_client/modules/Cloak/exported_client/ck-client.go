@@ -54,7 +54,11 @@ func (c *CkClient) Connect() error {
 		authInfo.SessionId = 0
 		remoteConfig.NumConn = 1
 
+
+
+		log.Infof("Before seshMaker")
 		seshMaker = func() *mux.Session {
+		    log.Infof("In seshMaker")
 			c.session = client.MakeSession(remoteConfig, authInfo, d)
 			return c.session
 		}
