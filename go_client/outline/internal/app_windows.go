@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -17,6 +16,7 @@ import (
 	"syscall"
 
 	"github.com/jackpal/gateway"
+	log "github.com/sirupsen/logrus"
 )
 
 func add_route(proxyIp string) {
@@ -130,6 +130,10 @@ func (app App) Run(ctx context.Context) error {
 	TunGateway := "10.0.85.1"
 	TunDeviceIP := "10.0.85.2"
 
+// 	TunDeviceIP := app.RoutingConfig.TunDeviceIP
+//     TunGatewayCIDR := app.RoutingConfig.TunGatewayCIDR
+//     TunGateway := strings.Split(TunGatewayCIDR, "/")[0]
+
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
 		panic(err)
@@ -155,7 +159,7 @@ func (app App) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create OutlineDevice: %w", err)
 	}
-	log.Printf("Create Device")
+	log.Infof("Create Device")
 	defer ss.Close()
 
 	if err := ss.Refresh(); err != nil {
@@ -205,11 +209,11 @@ func (app App) Run(ctx context.Context) error {
 					break
 				}
 				if n > 0 {
-					//log.Printf("Read %d bytes from tun\n", n)
+					log.Printf("Read %d bytes from tun\n", n)
 					//log.Printf("Data from tun: % x\n", buffer[:n])
 					ipPacket, err := ExtractIPPacketFromEthernet(buffer[:n])
 					if err != nil {
-						//fmt.Println("Error:", err)
+						fmt.Println("Error:", err)
 					}
 					_, err = ss.Write(ipPacket)
 					if err != nil {
@@ -236,7 +240,7 @@ func (app App) Run(ctx context.Context) error {
 					break
 				}
 				if n > 0 {
-					//log.Printf("Read %d bytes from OutlineDevice\n", n)
+					log.Printf("Read %d bytes from OutlineDevice\n", n)
 					//log.Printf("Data from OutlineDevice: % x\n", buf[:n])
 
 					ethernetPacket, err := CreateEthernetPacket(dst, src, buf[:n])
@@ -261,7 +265,7 @@ func (app App) Run(ctx context.Context) error {
 
 	trafficCopyWg.Wait()
 
-	log.Printf("Outline/app: received interrupt signal, terminating...\n")
+	log.Infof("Outline/app: received interrupt signal, terminating...\n")
 
 	tun.Close()
 	ss.Close()

@@ -25,9 +25,9 @@ func NewClient(transportConfig string) *OutlineClient {
 			TransportConfig: &transportConfig,
 			RoutingConfig: &internal.RoutingConfig{
 				TunDeviceName:        "outline233",
-				TunDeviceIP:          "10.233.233.1",
+				TunDeviceIP:          "10.0.85.2",
 				TunDeviceMTU:         1500,
-				TunGatewayCIDR:       "10.233.233.2/32",
+				TunGatewayCIDR:       "10.0.85.1/32",
 				RoutingTableID:       233,
 				RoutingTablePriority: 23333,
 				DNSServerIP:          "9.9.9.9",
@@ -52,7 +52,7 @@ func (c *OutlineClient) Connect() error {
 
 	go func() {
 		if err := c.app.Run(ctx); err != nil {
-			log.Errorf("connect outline failed: %v", err)
+			log.Infof("connect outline failed: %v", err)
 			common.Client.MarkInactive(Name)
 		}
 	}()

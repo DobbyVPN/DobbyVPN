@@ -4,9 +4,7 @@ package internal
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 )
@@ -50,55 +48,6 @@ func executeCommand(command string) (string, error) {
 	}
 	logging.Info.Printf("Outline/routing: Command executed: %s, output: %s", command, output)
 	return string(output), nil
-}
-
-func saveWireguardConf(config string, fileName string) error {
-	systemConfigPath := filepath.Join(wireguardSystemConfigPath, fileName+".conf")
-
-	err := os.MkdirAll(wireguardSystemConfigPath, os.ModePerm)
-	if err != nil {
-		logging.Info.Printf("failed to create directory %s: %w", wireguardSystemConfigPath, err)
-	}
-
-	err = os.WriteFile(systemConfigPath, []byte(config), 0644)
-	if err != nil {
-		logging.Info.Printf("failed to save WireGuard configuration to %s: %w", systemConfigPath, err)
-	}
-
-	logging.Info.Printf("Configuration saved successfully to %s\n", systemConfigPath)
-	return nil
-}
-
-func StartTunnel(name string) {
-	systemConfigPath := filepath.Join(wireguardSystemConfigPath, name+".conf")
-	command := fmt.Sprintf("wireguard.exe /installtunnelservice %s", systemConfigPath)
-	output, err := executeCommand(command)
-	if err != nil {
-		logging.Info.Printf("Failed to start tunnel: %v, output: %s", err, output)
-	} else {
-		logging.Info.Printf("Tunnel started successfully: %s", name)
-	}
-}
-
-func StopTunnel(name string) {
-	command := fmt.Sprintf("wireguard.exe /uninstalltunnelservice %s", name)
-	output, err := executeCommand(command)
-	if err != nil {
-		logging.Info.Printf("Failed to stop tunnel: %v, output: %s", err, output)
-	} else {
-		logging.Info.Printf("Tunnel stopped successfully: %s", name)
-	}
-}
-
-func CheckAndInstallWireGuard() error {
-	_, err := exec.LookPath("wireguard.exe")
-	if err != nil {
-		logging.Info.Printf("WireGuard not found, installing...")
-
-		return fmt.Errorf("WireGuard is not installed")
-	}
-	logging.Info.Printf("WireGuard is already installed")
-	return nil
 }
 
 func startRouting(proxyIP string, GatewayIP string, TunDeviceName string, MacAddress string, InterfaceName string, TunGateway string, TunDeviceIP string, addr []byte) error {

@@ -22,58 +22,6 @@ func executeCommand(command string) (string, error) {
 	return string(output), nil
 }
 
-func saveWireguardConf(config string, fileName string) error {
-	systemConfigPath := filepath.Join(wireguardSystemConfigPathMacOS, fileName+".conf")
-	err := ioutil.WriteFile(systemConfigPath, []byte(config), 0644)
-	if err != nil {
-		return fmt.Errorf("failed to save wireguard config: %w", err)
-	}
-	logging.Info.Printf("WireGuard config saved to %s\n", systemConfigPath)
-	return nil
-}
-
-func StartTunnel(name string) {
-	cmd := exec.Command("sudo", "wg-quick", "up", name)
-	err := cmd.Run()
-
-	if err != nil {
-		logging.Info.Printf("Error launching tunnel %s: %v\n", name, err)
-	} else {
-		logging.Info.Printf("Tunnel launched: %s\n", name)
-	}
-}
-
-func StopTunnel(name string) {
-	cmd := exec.Command("sudo", "wg-quick", "down", name)
-	err := cmd.Run()
-
-	if err != nil {
-		logging.Info.Printf("Error stopping tunnel %s: %v\n", name, err)
-	} else {
-		logging.Info.Printf("Tunnel stopped: %s\n", name)
-	}
-}
-
-func CheckAndInstallWireGuard() error {
-	cmd := exec.Command("wg", "--version")
-	err := cmd.Run()
-
-	if err != nil {
-		logging.Info.Printf("WireGuard is not installed. Installing...")
-
-		output, installErr := executeCommand("arch -arm64 brew install wireguard-tools")
-		if installErr != nil {
-			logging.Info.Printf("error installing WireGuard: %w, output: %s", installErr, output)
-		}
-
-		logging.Info.Printf("WireGuard successfully installed. Output: %s", output)
-	} else {
-		logging.Info.Printf("WireGuard is already installed.")
-	}
-
-	return nil
-}
-
 func startRouting(proxyIP string, gatewayIP string, tunName string) error {
 	removeOldDefaultRoute := fmt.Sprintf("sudo route delete default")
 	if _, err := executeCommand(removeOldDefaultRoute); err != nil {
