@@ -14,10 +14,6 @@ import (
 )
 
 func (app App) Run(ctx context.Context) error {
-	if !checkRoot() {
-		return errors.New("this operation requires superuser privileges. Please run the program with sudo or as root")
-	}
-
 	// Определяем gateway
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
