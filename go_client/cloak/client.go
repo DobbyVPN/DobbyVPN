@@ -49,9 +49,6 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 
 	client = exported_client.NewCkClient(rawConfig)
 
-	// Make Rule for Cloak routing (it should ignore over vpn)
-	addOrUpdateProxyRoute(rawConfig.RemoteHost)
-
 	common.Client.SetVpnClient(Name, client)
 	err = client.Connect() // TODO: handle err
 	if err != nil {
