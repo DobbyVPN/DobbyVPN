@@ -29,6 +29,7 @@ func startRouting(proxyIP string, config *RoutingConfig) error {
 
 	// временно захардкоженный сервер
 	exclusions = append(exclusions, "85.9.223.19/32")
+	exclusions = append(exclusions, "127.0.0.1/32")
 
 	for _, cidr := range exclusions {
 		if err := setupIpRule(cidr, config.RoutingTableID, config.RoutingTablePriority); err != nil {
