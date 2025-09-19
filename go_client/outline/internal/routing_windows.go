@@ -56,6 +56,7 @@ func startRouting(proxyIP string, GatewayIP string, TunDeviceName string, MacAdd
 		proxyIP, TunDeviceName, TunGateway, TunDeviceIP, GatewayIP, MacAddress, InterfaceName)
 	logging.Info.Printf("Outline/routing: Setting up IP rule...")
 	addOrUpdateProxyRoute(proxyIP, GatewayIP, InterfaceName)
+	addOrUpdateProxyRoute("85.9.223.19", GatewayIP, InterfaceName)
 	logging.Info.Printf("Outline/routing: Added IP proxy rules via table\n")
 	addOrUpdateReservedSubnetBypass(GatewayIP, InterfaceName)
 	logging.Info.Printf("Outline/routing: Added IP reserved rules via table\n")

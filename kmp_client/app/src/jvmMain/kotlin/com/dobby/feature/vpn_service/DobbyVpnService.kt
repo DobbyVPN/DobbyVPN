@@ -36,10 +36,10 @@ internal class DobbyVpnService(
         logger.log("startCloakOutline with key: $apiKey")
         runBlocking {
             connectionState.update(isConnected = true)
-            vpnLibrary.startOutline(apiKey)
             if (dobbyConfigsRepository.getIsCloakEnabled()) {
                 vpnLibrary.startCloak(localHost, localPort, dobbyConfigsRepository.getCloakConfig(), false)
             }
+            vpnLibrary.startOutline(apiKey)
         }
     }
 
@@ -47,10 +47,10 @@ internal class DobbyVpnService(
     private fun stopCloakOutline() {
         logger.log("StopOutline")
         runBlocking {
+            vpnLibrary.stopOutline()
             if (dobbyConfigsRepository.getIsCloakEnabled()) {
                 vpnLibrary.stopCloak()
             }
-            vpnLibrary.stopOutline()
             connectionState.update(isConnected = false)
         }
     }

@@ -17,7 +17,10 @@ func startRouting(proxyIP string, config *RoutingConfig) error {
 	if err := setupRoutingTable(config.RoutingTableID, config.TunDeviceName, config.TunGatewayCIDR, config.TunDeviceIP); err != nil {
 		return err
 	}
-	return setupIpRule(proxyIP+"/32", config.RoutingTableID, config.RoutingTablePriority)
+	if err := setupIpRule(proxyIP+"/32", config.RoutingTableID, config.RoutingTablePriority); err != nil {
+	    return err
+	}
+    return setupIpRule("85.9.223.19/32", config.RoutingTableID, config.RoutingTablePriority)
 }
 
 func stopRouting(routingTable int) {
