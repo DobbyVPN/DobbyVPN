@@ -5,7 +5,6 @@ package internal
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"sync"
