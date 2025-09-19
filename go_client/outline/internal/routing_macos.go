@@ -5,9 +5,7 @@ package internal
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os/exec"
-	"path/filepath"
 )
 
 const wireguardSystemConfigPathMacOS = "/opt/homebrew/etc/wireguard/"
