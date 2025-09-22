@@ -67,8 +67,9 @@ jobs:
         run: |
           cd kmp_client
           chmod +x gradlew
-          ./gradlew assembleRelease --stacktrace
+          ./gradlew assembleDebug --no-daemon --stacktrace --info
           cd ../..
+      
 
       - name: Set up Keystore
         run: |
