@@ -87,11 +87,17 @@ jobs:
 #            --out dobbyvpn-android.apk \
 #            kmp_client/app/build/outputs/apk/release/app-release-unsigned.apk
 
-      - name: Upload Android client
+#      - name: Upload Android client
+#        uses: actions/upload-artifact@master
+#        with:
+#          name: dobbyvpn-android.apk
+#          path: dobbyvpn-android.apk
+
+      - name: Upload Debug APK
         uses: actions/upload-artifact@master
         with:
-          name: dobbyvpn-android.apk
-          path: dobbyvpn-android.apk
+          name: dobbyvpn-android-debug.apk
+          path: kmp_client/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Write go depends
         run: |
