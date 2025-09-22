@@ -75,6 +75,12 @@ jobs:
           mkdir -p $RUNNER_TEMP/keystores
           echo "${{ secrets.KEYSTORE_FILE }}" | base64 --decode > $RUNNER_TEMP/keystores/keystore.jks
 
+      - name: Upload Unsigned Android client
+        uses: actions/upload-artifact@master
+        with:
+          name: app-release-unsigned.apk
+          path: kmp_client/app/build/outputs/apk/release/app-release-unsigned.apk
+
       - name: Sign APK
         run: |
           ANDROID_SDK_PATH=$ANDROID_HOME/build-tools/35.0.0/apksigner
