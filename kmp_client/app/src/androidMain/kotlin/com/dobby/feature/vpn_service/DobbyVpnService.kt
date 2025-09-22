@@ -125,6 +125,7 @@ class DobbyVpnService : VpnService() {
             }
             logger.log("!!! Start connecting Outline")
             outlineLibFacade.init(apiKey)
+            logger.log("outlineLibFacade inited")
             enableCloakIfNeeded(force = !isServiceStartedFromUi)
         } else {
             logger.log("!!! Start disconnecting Outline")
