@@ -8,8 +8,10 @@ import kotlinx.coroutines.withContext
 class OutlineGo {
     companion object {
         init {
+            Log.d(TAG, "Start Libraries loadeding")
             System.loadLibrary("outline")
             System.loadLibrary("outline_jni")
+            Log.d(TAG, "Libraries loaded successfully")
         }
 
         private const val TAG = "OutlineGo"
@@ -24,6 +26,7 @@ class OutlineGo {
          */
         suspend fun loadLibraries(): Boolean = withContext(Dispatchers.IO) {
             synchronized(loadingLock) {
+                Log.d(TAG, "Start Libraries loadeding")
                 if (isLibrariesLoaded) {
                     return@withContext true
                 }
@@ -108,6 +111,7 @@ class OutlineGo {
          * Безопасный вызов newOutlineClient с проверкой загрузки библиотек
          */
         suspend fun safeNewOutlineClient(config: String): Boolean = withContext(Dispatchers.IO) {
+            Log.d(TAG, "Start safeNewOutlineClient")
             try {
                 if (!isLibrariesLoaded && !loadLibraries()) {
                     return@withContext false
