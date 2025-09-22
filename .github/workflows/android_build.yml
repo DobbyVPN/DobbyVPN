@@ -76,16 +76,16 @@ jobs:
           mkdir -p $RUNNER_TEMP/keystores
           echo "${{ secrets.KEYSTORE_FILE }}" | base64 --decode > $RUNNER_TEMP/keystores/keystore.jks
 
-      - name: Sign APK
-        run: |
-          ANDROID_SDK_PATH=$ANDROID_HOME/build-tools/35.0.0/apksigner
-          $ANDROID_SDK_PATH sign \
-            --ks $RUNNER_TEMP/keystores/keystore.jks \
-            --ks-key-alias ${{ secrets.KEY_ALIAS }} \
-            --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} \
-            --key-pass pass:${{ secrets.KEY_PASSWORD }} \
-            --out dobbyvpn-android.apk \
-            kmp_client/app/build/outputs/apk/release/app-release-unsigned.apk
+#      - name: Sign APK
+#        run: |
+#          ANDROID_SDK_PATH=$ANDROID_HOME/build-tools/35.0.0/apksigner
+#          $ANDROID_SDK_PATH sign \
+#            --ks $RUNNER_TEMP/keystores/keystore.jks \
+#            --ks-key-alias ${{ secrets.KEY_ALIAS }} \
+#            --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} \
+#            --key-pass pass:${{ secrets.KEY_PASSWORD }} \
+#            --out dobbyvpn-android.apk \
+#            kmp_client/app/build/outputs/apk/release/app-release-unsigned.apk
 
       - name: Upload Android client
         uses: actions/upload-artifact@master
