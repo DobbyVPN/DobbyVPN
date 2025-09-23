@@ -16,9 +16,6 @@ jobs:
           name: outline-debug.aar
           path: kmp_client/libs
 
-      - name: Prepare for .so
-        run: mkdir kmp_client/outline/src/main/jniLibs/arm64-v8a
-
       - name: Download So
         uses: actions/download-artifact@master
         with:
