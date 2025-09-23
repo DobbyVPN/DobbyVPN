@@ -27,10 +27,10 @@ jobs:
         with:
           go-version: "1.23.3"
 
-      - name: Set up JDK 21.0.6 (Temurin)
+      - name: Set up JDK 17 (Temurin)
         uses: actions/setup-java@v5
         with:
-          java-version: "21.0.6"
+          java-version: "17"
           distribution: "temurin"
 
       - name: Set up Android SDK
