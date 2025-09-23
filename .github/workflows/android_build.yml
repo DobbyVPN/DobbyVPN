@@ -66,8 +66,11 @@ jobs:
       - name: Set up Keystore
         shell: pwsh
         run: |
+          $KeystorePath = "$env:RUNNER_TEMP\keystores\keystore.jks"
           mkdir $env:RUNNER_TEMP\keystores
-          echo "${{ secrets.KEYSTORE_FILE }}" | base64 -d > $env:RUNNER_TEMP\keystores\keystore.jks
+          $KeystoreContent = "${{ secrets.KEYSTORE_FILE }}"
+          [System.IO.File]::WriteAllBytes($KeystorePath, [System.Convert]::FromBase64String($KeystoreContent))
+
 
       - name: Upload Unsigned Android client
         uses: actions/upload-artifact@master
@@ -79,13 +82,19 @@ jobs:
         shell: pwsh
         run: |
           $apksigner="$env:ANDROID_HOME\build-tools\34.0.0\apksigner.bat"
+          if (!(Test-Path $apksigner)) {
+              Write-Error "apksigner not found at $apksigner"
+              exit 1
+          }
+          & $apksigner version
           & $apksigner sign `
             --ks $env:RUNNER_TEMP\keystores\keystore.jks `
-            --ks-key-alias ${{ secrets.KEY_ALIAS }} `
+            --ks-key-alias "${{ secrets.KEY_ALIAS }}" `
             --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} `
             --key-pass pass:${{ secrets.KEY_PASSWORD }} `
             --out dobbyvpn-android.apk `
             kmp_client/app/build/outputs/apk/release/app-release-unsigned.apk
+
 
       - name: Upload Android client
         uses: actions/upload-artifact@master
