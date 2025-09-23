@@ -1,11 +1,11 @@
-name: Android Build
+name: Android Build (Windows)
 
 on:
   workflow_call:
 
 jobs:
   android_build:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -17,8 +17,7 @@ jobs:
           path: kmp_client/libs
 
       - name: Prepare for .so
-        run: |
-          mkdir -p kmp_client/outline/src/main/jniLibs/arm64-v8a
+        run: mkdir kmp_client/outline/src/main/jniLibs/arm64-v8a
 
       - name: Download So
         uses: actions/download-artifact@master
@@ -37,44 +36,42 @@ jobs:
           java-version: "21.0.6"
           distribution: "temurin"
 
-      - name: Set up Android SDK / NDK / CMake
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: |
             build-tools;34.0.0
             platforms;android-34
-            ndk;27.0.12077973
-            cmake;3.22.1
 
       - name: Set up Git Submodules
-        run: |
-          git submodule update --init --recursive
+        run: git submodule update --init --recursive
 
       - name: Install dependencies
+        shell: pwsh
         run: |
           go get ./...
-          sudo apt-get update
-          sudo apt-get install -y golang gcc libgl1-mesa-dev xorg-dev coreutils
-          sudo apt-get install -y gcc-multilib gcc-mingw-w64
+          choco install -y mingw
+          choco install -y cmake --version=3.22.1
 
       - name: Fill gradle.properties
+        shell: pwsh
         run: |
-          echo "projectRepositoryCommit=$GITHUB_SHA" >> kmp_client/gradle.properties
-          echo "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$GITHUB_SHA" >> kmp_client/gradle.properties
-          echo "gradle.properties:"
-          cat kmp_client/gradle.properties
+          Add-Content kmp_client/gradle.properties "projectRepositoryCommit=$env:GITHUB_SHA"
+          Add-Content kmp_client/gradle.properties "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$env:GITHUB_SHA"
+          Get-Content kmp_client/gradle.properties
 
       - name: Build APK
+        shell: pwsh
         run: |
           cd kmp_client
-          chmod +x gradlew
-          ./gradlew assembleRelease --stacktrace
+          ./gradlew.bat assembleRelease --stacktrace
           cd ..
 
       - name: Set up Keystore
+        shell: pwsh
         run: |
-          mkdir -p $RUNNER_TEMP/keystores
-          echo "${{ secrets.KEYSTORE_FILE }}" | base64 --decode > $RUNNER_TEMP/keystores/keystore.jks
+          mkdir $env:RUNNER_TEMP\keystores
+          echo "${{ secrets.KEYSTORE_FILE }}" | base64 -d > $env:RUNNER_TEMP\keystores\keystore.jks
 
       - name: Upload Unsigned Android client
         uses: actions/upload-artifact@master
@@ -83,14 +80,15 @@ jobs:
           path: kmp_client/app/build/outputs/apk/release/app-release-unsigned.apk
 
       - name: Sign APK
+        shell: pwsh
         run: |
-          ANDROID_SDK_PATH=$ANDROID_HOME/build-tools/34.0.0/apksigner
-          $ANDROID_SDK_PATH sign \
-            --ks $RUNNER_TEMP/keystores/keystore.jks \
-            --ks-key-alias ${{ secrets.KEY_ALIAS }} \
-            --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} \
-            --key-pass pass:${{ secrets.KEY_PASSWORD }} \
-            --out dobbyvpn-android.apk \
+          $apksigner="$env:ANDROID_HOME\build-tools\34.0.0\apksigner.bat"
+          & $apksigner sign `
+            --ks $env:RUNNER_TEMP\keystores\keystore.jks `
+            --ks-key-alias ${{ secrets.KEY_ALIAS }} `
+            --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} `
+            --key-pass pass:${{ secrets.KEY_PASSWORD }} `
+            --out dobbyvpn-android.apk `
             kmp_client/app/build/outputs/apk/release/app-release-unsigned.apk
 
       - name: Upload Android client
@@ -100,6 +98,7 @@ jobs:
           path: dobbyvpn-android.apk
 
       - name: Write go depends
+        shell: pwsh
         run: |
           go mod tidy
-          cat go.mod
+          Get-Content go.mod
