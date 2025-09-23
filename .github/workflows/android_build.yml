@@ -48,7 +48,6 @@ jobs:
         run: |
           go get ./...
           choco install -y mingw
-          choco install -y cmake --version=3.22.1
 
       - name: Fill gradle.properties
         shell: pwsh
