@@ -5,6 +5,7 @@ on:
 
 jobs:
   android_build:
+    # Had issue (can't work on linux) https://github.com/DobbyVPN/DobbyVPN/issues/45
     runs-on: windows-latest
 
     steps:
