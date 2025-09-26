@@ -26,7 +26,6 @@ import com.dobby.feature.diagnostic.ui.DiagnosticScreen
 import com.dobby.feature.logging.ui.AboutScreen
 import com.dobby.feature.logging.ui.LogScreen
 import com.dobby.feature.logging.ui.SettingsScreen
-import com.dobby.feature.main.ui.AwgScreen
 import com.dobby.feature.main.ui.DobbySocksScreen
 
 @Composable
@@ -51,9 +50,6 @@ fun App(modifier: Modifier = Modifier) {
                 composable<MainScreen> {
                     DobbySocksScreen()
                 }
-                composable<AmneziaWGScreen> {
-                    AwgScreen()
-                }
                 composable<DiagnosticsScreen> {
                     DiagnosticScreen()
                 }
@@ -74,8 +70,8 @@ fun App(modifier: Modifier = Modifier) {
 @Composable
 private fun BottomBar(onNavigate: (Any) -> Unit = {}) {
     var selectedItem by remember { mutableIntStateOf(0) }
-    val items = listOf("Outline", "AmneziaWG", "Settings")
-    val screens = listOf(MainScreen, AmneziaWGScreen, SettingsScreen)
+    val items = listOf("Outline", "Settings")
+    val screens = listOf(MainScreen, SettingsScreen)
     val selectedIcons =
         listOf(Icons.Filled.Home, Icons.Filled.Favorite, Icons.Default.Settings)
 

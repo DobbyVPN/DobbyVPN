@@ -6,9 +6,6 @@ import kotlinx.serialization.Serializable
 data object MainScreen
 
 @Serializable
-data object AmneziaWGScreen
-
-@Serializable
 data object DiagnosticsScreen
 
 @Serializable
