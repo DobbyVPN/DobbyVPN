@@ -1,155 +1,143 @@
 package com.dobby.feature.main.ui
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.util.koinViewModel
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.jetbrains.compose.ui.tooling.preview.Preview
-
-/**
- * TextField is not kept above keyboard when resized while typing
- * https://issuetracker.google.com/issues/266094055
- */
 
 @Preview
 @Composable
 fun DobbySocksScreen(
-    viewModel: MainViewModel = koinViewModel(),
+    mainViewModel: MainViewModel = koinViewModel(),
+    logsViewModel: LogsViewModel = koinViewModel(),
     modifier: Modifier = Modifier,
 ) {
-    val uiState by viewModel.uiState.collectAsState()
-    val isCloakEnabled = remember { mutableStateOf(uiState.isCloakEnabled) }
+    val uiMainState by mainViewModel.uiState.collectAsState()
+    val uiLogState by logsViewModel.uiState.collectAsState()
+    val isCloakEnabled = remember { mutableStateOf(uiMainState.isCloakEnabled) }
 
-    var cloakJson by remember { mutableStateOf(uiState.cloakJson) }
-    var apiKey by remember { mutableStateOf(uiState.outlineKey) }
+    var cloakJson by remember { mutableStateOf(uiMainState.cloakJson) }
+    var apiKey by remember { mutableStateOf(uiMainState.outlineKey) }
+
+    MainScope().launch {
+        while (true) {
+            logsViewModel.reloadLogs()
+            delay(1000L)
+        }
+    }
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .padding(16.dp),
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.SpaceBetween
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .weight(1f),
+            verticalArrangement = Arrangement.Center
         ) {
-            Text(
-                text = "Status",
-                fontSize = 24.sp,
-                color = Color.Black,
-                modifier = Modifier.padding(end = 8.dp)
-            )
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            TagChip(
-                tagText = if (uiState.isConnected) "connected" else "disconnected",
-                color = if (uiState.isConnected) 0xFFDCFCE7 else 0xFFFEE2E2
-            )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp),
-            horizontalArrangement = Arrangement.Start,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-
-            Switch(
+            Row(
                 modifier = Modifier
-                    .padding(start = 4.dp)
-                    .size(44.dp, 24.dp),
-                checked = isCloakEnabled.value,
-                onCheckedChange = { isCloakEnabled.value = it },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    uncheckedThumbColor = Color.White,
-                    checkedTrackColor = Color.Black,
-                    uncheckedTrackColor = Color(0xFFE2E8F0)
+                    .fillMaxWidth()
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Status",
+                    fontSize = 24.sp,
+                    color = Color.Black,
+                    modifier = Modifier.padding(end = 8.dp)
                 )
-            )
-            Text(
-                text = "Enable cloak?",
-                color = Color.Black,
-                modifier = Modifier.padding(horizontal = 8.dp)
-            )
-        }
-        TextField(
-            value = cloakJson,
-            onValueChange = { cloakJson = it },
-            label = { Text("Enter Cloak JSON") },
-            singleLine = false,
-            colors = TextFieldDefaults.colors(
-                unfocusedPlaceholderColor = Color(0xFF94A3B8),
 
+                Spacer(modifier = Modifier.weight(1f))
+
+                TagChip(
+                    tagText = if (uiMainState.isConnected) "connected" else "disconnected",
+                    color = if (uiMainState.isConnected) 0xFFDCFCE7 else 0xFFFEE2E2
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            TextField(
+                value = apiKey,
+                onValueChange = { apiKey = it },
+                label = { Text("Enter config") },
+                singleLine = false,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.3f)
+                    .clip(RoundedCornerShape(6.dp))
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
+                onClick = {
+                    mainViewModel.onConnectionButtonClicked(cloakJson, apiKey, isCloakEnabled.value)
+                },
+                shape = RoundedCornerShape(6.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.Black,
+                    contentColor = Color.White
                 ),
-            enabled = isCloakEnabled.value,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (uiMainState.isConnected) "Disconnect" else "Connect")
+            }
+        }
+
+        val listState = rememberLazyListState()
+
+        LaunchedEffect(uiLogState.logMessages.size) {
+            if (uiLogState.logMessages.isNotEmpty()) {
+                listState.animateScrollToItem(uiLogState.logMessages.lastIndex)
+            }
+        }
+
+        Column(
             modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .fillMaxHeight(0.3f)
                 .fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        TextField(
-            value = apiKey,
-            onValueChange = { apiKey = it },
-            label = { Text("Enter outline config") },
-            singleLine = false,
-            modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxHeight(0.25f)
                 .clip(RoundedCornerShape(6.dp))
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = {
-                viewModel.onConnectionButtonClicked(cloakJson, apiKey, isCloakEnabled.value)
-            },
-            shape = RoundedCornerShape(6.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color.Black,
-                contentColor = Color.White
-            ),
-            modifier = Modifier.fillMaxWidth()
+                .background(Color.Gray.copy(alpha = 0.1f))
+                .padding(8.dp)
         ) {
-            Text(if (uiState.isConnected) "Disconnect" else "Connect")
+            LazyColumn(state = listState) {
+                items(uiLogState.logMessages) { message ->
+                    val isBold = message.contains("!!!")
+
+                    Text(
+                        text = message,
+                        modifier = Modifier.padding(8.dp),
+                        fontSize = MaterialTheme.typography.bodyMedium.fontSize,
+                        fontWeight = if (isBold) FontWeight.W700 else FontWeight.W400,
+                        color = Color.Black
+                    )
+
+                    HorizontalDivider(thickness = 1.dp, color = Color.DarkGray)
+                }
+            }
         }
     }
 }
-
-
