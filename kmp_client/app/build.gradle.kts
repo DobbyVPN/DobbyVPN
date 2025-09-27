@@ -59,6 +59,7 @@ kotlin {
             implementation(files("../libs/outline-debug.aar"))
 
             implementation(libs.okhttp)
+            implementation(libs.ktor.client.okhttp)
         }
 
         commonMain.dependencies {
@@ -76,6 +77,10 @@ kotlin {
             api(libs.koin.core)
             implementation(libs.koin.compose)
             implementation(libs.lifecycle.viewmodel)
+
+            implementation(libs.ktor.client.core)
+            implementation(libs.ktor.client.content.negotiation)
+            implementation(libs.ktor.serialization.kotlinx.json)
         }
 
         jvmMain.dependencies {
@@ -88,6 +93,12 @@ kotlin {
             implementation(libs.kotlinx.coroutines.swing)
             implementation(libs.jna)
             implementation(libs.gson)
+            implementation(libs.ktor.client.cio)
+        }
+
+        iosMain.dependencies {
+
+            implementation(libs.ktor.client.darwin)
         }
     }
 }

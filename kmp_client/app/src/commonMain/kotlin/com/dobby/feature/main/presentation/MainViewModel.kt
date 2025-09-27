@@ -11,11 +11,19 @@ import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
+import com.dobby.feature.main.domain.Protocols
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.main.ui.MainUiState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import io.ktor.client.*
+import io.ktor.client.call.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+
+val httpClient = HttpClient()
 
 class MainViewModel(
     private val configsRepository: DobbyConfigsRepository,
@@ -45,9 +53,7 @@ class MainViewModel(
         viewModelScope.launch {
             _uiState.emit(
                 MainUiState(
-                    cloakJson = configsRepository.getCloakConfig(),
-                    outlineKey = configsRepository.getOutlineKey(),
-                    isCloakEnabled = configsRepository.getIsCloakEnabled()
+                    connectionURL = configsRepository.getConnectionURL(),
                 )
             )
         }
@@ -77,11 +83,9 @@ class MainViewModel(
 
     //region Cloak functions
     fun onConnectionButtonClicked(
-        cloakJson: String?,
-        outlineKey: String,
-        isCloakEnabled: Boolean
+        connectionUrl: String,
     ) {
-        saveData(isCloakEnabled, cloakJson, outlineKey)
+        setConfig(connectionUrl)
         viewModelScope.launch {
             when (connectionStateRepository.flow.value) {
                 true -> stopVpnService()
@@ -96,11 +100,36 @@ class MainViewModel(
         }
     }
 
-    private fun saveData(isCloakEnabled: Boolean, cloakJson: String?, outlineKey: String) {
-        configsRepository.setOutlineKey(outlineKey)
+    private fun setConfig(connectionUrl: String) {
+        configsRepository.setConnectionURL(connectionUrl)
+        val connectionConfig = getConfigByURL(connectionUrl)
+        configsRepository.setConnectionConfig(connectionConfig)
+        when (findProtocol(connectionConfig)) {
+            Protocols.SHADOWSOCKS -> {
+                configsRepository.setIsOutlineEnabled(true)
+            }
+            Protocols.SHADOWSOCKS_VIA_CLOAK -> {
+                configsRepository.setIsOutlineEnabled(true)
+                configsRepository.setIsCloakEnabled(true)
+            }
+            null -> {
+                println("Unknown protocol in config")
+            }
+        }
+    }
 
-        cloakJson?.let(configsRepository::setCloakConfig)
-        configsRepository.setIsCloakEnabled(isCloakEnabled)
+    private fun findProtocol(connectionConfig: String): Protocols? {
+        val regex = Regex("""protocol\s*=\s*"([^"]+)"""")
+        val match = regex.find(connectionConfig)
+        return match?.groups?.get(1)?.value?.let { Protocols.fromString(it) }
+    }
+
+    private fun getConfigByURL(connectionUrl: String): String {
+        return if (connectionUrl.startsWith("http://") || connectionUrl.startsWith("https://")) {
+            runBlocking { httpClient.get(connectionUrl).bodyAsText() }
+        } else {
+            connectionUrl
+        }
     }
 
     private fun startVpn(isPermissionGranted: Boolean) {
@@ -112,13 +141,12 @@ class MainViewModel(
     }
 
     private fun startVpnService() {
-        configsRepository.setIsOutlineEnabled(true)
-        configsRepository.setVpnInterface(VpnInterface.CLOAK_OUTLINE)
         vpnManager.start()
     }
 
     private suspend fun stopVpnService() {
         configsRepository.setIsOutlineEnabled(false)
+        configsRepository.setIsCloakEnabled(false)
         connectionStateRepository.update(isConnected = false)
         vpnManager.stop()
     }

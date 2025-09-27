@@ -118,7 +118,7 @@ class DobbyVpnService : VpnService() {
         val isServiceStartedFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) ?: false
         val shouldTurnOutlineOn = dobbyConfigsRepository.getIsOutlineEnabled()
         if (shouldTurnOutlineOn || !isServiceStartedFromUi) {
-            val apiKey = dobbyConfigsRepository.getOutlineKey()
+            val apiKey = dobbyConfigsRepository.getConnectionConfig()
             if (apiKey.isEmpty()) {
                 logger.log("Previously used outline apiKey is empty")
                 return
@@ -152,7 +152,7 @@ class DobbyVpnService : VpnService() {
 
     private fun enableCloakIfNeeded(force: Boolean) {
         val shouldEnableCloak = dobbyConfigsRepository.getIsCloakEnabled() || force
-        val cloakConfig = dobbyConfigsRepository.getCloakConfig().ifEmpty { return }
+        val cloakConfig = dobbyConfigsRepository.getConnectionConfig().ifEmpty { return }
         if (shouldEnableCloak && cloakConfig.isNotEmpty()) {
             serviceScope.launch {
                 logger.log("!!!Cloak: connect start")

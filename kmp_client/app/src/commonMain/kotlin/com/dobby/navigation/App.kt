@@ -70,7 +70,7 @@ fun App(modifier: Modifier = Modifier) {
 @Composable
 private fun BottomBar(onNavigate: (Any) -> Unit = {}) {
     var selectedItem by remember { mutableIntStateOf(0) }
-    val items = listOf("Outline", "Settings")
+    val items = listOf("Connection", "Settings")
     val screens = listOf(MainScreen, SettingsScreen)
     val selectedIcons =
         listOf(Icons.Filled.Home, Icons.Filled.Favorite, Icons.Default.Settings)

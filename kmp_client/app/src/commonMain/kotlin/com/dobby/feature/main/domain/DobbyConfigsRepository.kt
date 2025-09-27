@@ -8,23 +8,23 @@ interface DobbyConfigsRepository {
 
     fun setVpnInterface(vpnInterface: VpnInterface)
 
+    fun getConnectionURL(): String
+
+    fun setConnectionURL(connectionURL: String)
+
+    fun getConnectionConfig(): String
+
+    fun setConnectionConfig(connectionConfig: String)
+
     // endregion
 
     // region cloak
-    fun getCloakConfig(): String
-
-    fun setCloakConfig(newConfig: String)
-
     fun getIsCloakEnabled(): Boolean
 
     fun setIsCloakEnabled(isCloakEnabled: Boolean)
     // endregion
 
     // region outline
-    fun getOutlineKey(): String
-
-    fun setOutlineKey(newOutlineKey: String)
-
     fun getIsOutlineEnabled(): Boolean
 
     fun setIsOutlineEnabled(isOutlineEnabled: Boolean)

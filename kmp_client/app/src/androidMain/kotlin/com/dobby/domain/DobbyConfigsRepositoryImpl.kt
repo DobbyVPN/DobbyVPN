@@ -22,15 +22,27 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
-    override fun getCloakConfig(): String {
-        return (prefs.getString("cloakConfig", "") ?: "").also {
-            AndroidLog("DOBBY_TAG", "getCloakConfig, size = ${it.length}")
+    override fun getConnectionURL(): String {
+        return (prefs.getString("сonnectionURL", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getConnectionURL, url = ${it}")
         }
     }
 
-    override fun setCloakConfig(newConfig: String) {
-        prefs.edit().putString("cloakConfig", newConfig).apply().also {
-            AndroidLog("DOBBY_TAG", "setCloakConfig, size = ${newConfig.length}")
+    override fun setConnectionURL(connectionURL: String) {
+        prefs.edit().putString("сonnectionURL", connectionURL).apply().also {
+            AndroidLog("DOBBY_TAG", "setConnectionURL, url = ${connectionURL}")
+        }
+    }
+
+    override fun getConnectionConfig(): String {
+        return (prefs.getString("сonnectionConfig", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getConnectionConfig, config = ${it}")
+        }
+    }
+
+    override fun setConnectionConfig(connectionConfig: String) {
+        prefs.edit().putString("сonnectionConfig", connectionConfig).apply().also {
+            AndroidLog("DOBBY_TAG", "setConnectionConfig, config = ${connectionConfig}")
         }
     }
 
@@ -43,18 +55,6 @@ internal class DobbyConfigsRepositoryImpl(
     override fun setIsCloakEnabled(isCloakEnabled: Boolean) {
         prefs.edit().putBoolean("isCloakEnabled", isCloakEnabled).apply().also {
             AndroidLog("DOBBY_TAG", "setIsCloakEnabled: $isCloakEnabled")
-        }
-    }
-
-    override fun getOutlineKey(): String {
-        return (prefs.getString("outlineApiKey", "") ?: "").also {
-            AndroidLog("DOBBY_TAG", "getOutlineKey, size = ${it.length}")
-        }
-    }
-
-    override fun setOutlineKey(newOutlineKey: String) {
-        prefs.edit().putString("outlineApiKey", newOutlineKey).apply().also {
-            AndroidLog("DOBBY_TAG", "setOutlineKey, size = ${newOutlineKey.length}")
         }
     }
 

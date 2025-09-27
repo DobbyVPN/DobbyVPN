@@ -20,9 +20,10 @@ type OutlineClient struct {
 }
 
 func NewClient(transportConfig string) *OutlineClient {
+    parsedTransportConfig := ParseSSTOML(transportConfig)
 	c := &OutlineClient{
 		app: &internal.App{
-			TransportConfig: &transportConfig,
+			TransportConfig: &parsedTransportConfig,
 			RoutingConfig: &internal.RoutingConfig{
 				TunDeviceName:        "outline233",
 				TunDeviceIP:          "10.0.85.2",

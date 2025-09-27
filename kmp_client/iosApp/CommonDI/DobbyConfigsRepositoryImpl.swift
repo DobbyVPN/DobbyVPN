@@ -11,6 +11,24 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let isCloakEnabledKey = "isCloakEnabledKey"
     private let outlineConfigKey = "outlineConfigKey"
     private let isOutlineEnabledKey = "isOutlineEnabledKey"
+    private let connectionURLKey = "connectionURLKey"
+    private let connectionConfigKey = "connectionConfigKey"
+
+    override fun getConnectionURL(): String {
+        return userDefaults.string(forKey: connectionURLKey) ?? ""
+    }
+
+    override fun setConnectionURL(connectionURL: String) {
+        userDefaults.set(connectionURL, forKey: c)
+    }
+
+    override fun getConnectionConfig(): String {
+        return userDefaults.string(forKey: connectionConfigKey) ?? ""
+    }
+
+    override fun setConnectionConfig(connectionConfig: String) {
+        userDefaults.set(connectionConfig, forKey: connectionConfigKey)
+    }
     
     public func getCloakConfig() -> String {
         return userDefaults.string(forKey: cloakConfigKey) ?? ""

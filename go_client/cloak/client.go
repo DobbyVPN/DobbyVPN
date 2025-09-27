@@ -35,7 +35,7 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
     }
 
 	var rawConfig exported_client.Config
-	err := json.Unmarshal([]byte(config), &rawConfig)
+	err := ParseCloakTOML(config, &rawConfig)
 	if err != nil {
 		log.Errorf("cloak client: Failed to unmarshal config - %v", err)
 		return

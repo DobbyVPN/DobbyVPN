@@ -32,10 +32,8 @@ fun DobbySocksScreen(
 ) {
     val uiMainState by mainViewModel.uiState.collectAsState()
     val uiLogState by logsViewModel.uiState.collectAsState()
-    val isCloakEnabled = remember { mutableStateOf(uiMainState.isCloakEnabled) }
 
-    var cloakJson by remember { mutableStateOf(uiMainState.cloakJson) }
-    var apiKey by remember { mutableStateOf(uiMainState.outlineKey) }
+    var connectionURL by remember { mutableStateOf(uiMainState.connectionURL) }
 
     MainScope().launch {
         while (true) {
@@ -80,9 +78,9 @@ fun DobbySocksScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             TextField(
-                value = apiKey,
-                onValueChange = { apiKey = it },
-                label = { Text("Enter config") },
+                value = connectionURL,
+                onValueChange = { connectionURL = it },
+                label = { Text("Subscription URL") },
                 singleLine = false,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -94,7 +92,7 @@ fun DobbySocksScreen(
 
             Button(
                 onClick = {
-                    mainViewModel.onConnectionButtonClicked(cloakJson, apiKey, isCloakEnabled.value)
+                    mainViewModel.onConnectionButtonClicked(connectionURL)
                 },
                 shape = RoundedCornerShape(6.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -134,8 +132,6 @@ fun DobbySocksScreen(
                         fontWeight = if (isBold) FontWeight.W700 else FontWeight.W400,
                         color = Color.Black
                     )
-
-                    HorizontalDivider(thickness = 1.dp, color = Color.DarkGray)
                 }
             }
         }
