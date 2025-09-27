@@ -21,9 +21,9 @@ type OutlineClient struct {
 
 func NewClient(transportConfig string) *OutlineClient {
 //     parsedTransportConfig, err := ParseSSTOML(transportConfig)
-    if (err != nil) {
-        return nil
-    }
+//     if (err != nil) {
+//         return nil
+//     }
 	c := &OutlineClient{
 		app: &internal.App{
 			TransportConfig: &transportConfig,
