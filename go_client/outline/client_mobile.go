@@ -20,7 +20,7 @@ type OutlineClient struct {
 
 func NewClient(transportConfig string) *OutlineClient {
 	log.Println("Start parsing config = " + transportConfig)
-    parsedTransportConfig, err := ParseSSTOML(transportConfig)
+//     parsedTransportConfig, err := ParseSSTOML(transportConfig)
 	log.Println("Finish parsing config = " + parsedTransportConfig)
     if (err != nil) {
         return nil
