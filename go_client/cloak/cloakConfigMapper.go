@@ -1,12 +1,9 @@
 package cloak
 
-import (
-	"fmt"
-
-	"github.com/cbeuw/Cloak/exported_client"
+import ("github.com/cbeuw/Cloak/exported_client"
 	"github.com/BurntSushi/toml"
 )
-
+type RawConfig = exported_client.Config
 
 func ParseCloakTOML(tomlStr string, out *RawConfig) error {
 	var wrapper struct {

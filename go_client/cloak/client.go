@@ -1,7 +1,6 @@
 package cloak
 
 import (
-	"encoding/json"
 	"github.com/cbeuw/Cloak/exported_client"
 	log "github.com/sirupsen/logrus"
 	"go_client/common"

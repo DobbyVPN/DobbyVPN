@@ -19,7 +19,10 @@ type OutlineClient struct {
 }
 
 func NewClient(transportConfig string) *OutlineClient {
-    parsedTransportConfig := ParseSSTOML(parsedTransportConfig)
+    parsedTransportConfig, err := ParseSSTOML(transportConfig)
+    if (err != nil) {
+        return nil
+    }
 	c := &OutlineClient{config: transportConfig}
 	log.Println("outline client created")
 	common.Client.SetVpnClient(Name, c)
