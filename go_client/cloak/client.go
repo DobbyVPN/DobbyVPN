@@ -1,7 +1,6 @@
 package cloak
 
 import (
-	"encoding/json"
 	"github.com/cbeuw/Cloak/exported_client"
 	log "github.com/sirupsen/logrus"
 	"go_client/common"
@@ -35,7 +34,7 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
     }
 
 	var rawConfig exported_client.Config
-	err := json.Unmarshal([]byte(config), &rawConfig)
+	err := ParseCloakTOML(config, &rawConfig)
 	if err != nil {
 		log.Errorf("cloak client: Failed to unmarshal config - %v", err)
 		return
