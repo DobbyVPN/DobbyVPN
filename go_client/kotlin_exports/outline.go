@@ -93,7 +93,7 @@ func NewOutlineClient(config *C.char) {
     log("NewOutlineClient() called")
     StopOutlineClient()
     goConfig := C.GoString(config)
-    log("Config length=" + string(rune(len(goConfig))))
+    log("Start NewClient, config = "+ goConfig)
     cl := outline.NewClient(goConfig)
     client = cl
     log("NewOutlineClient() finished")
