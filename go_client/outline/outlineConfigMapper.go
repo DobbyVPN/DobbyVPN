@@ -1,4 +1,4 @@
-package ss
+package outline
 
 import (
 	"encoding/base64"
