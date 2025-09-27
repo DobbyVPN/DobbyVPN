@@ -19,7 +19,10 @@ type OutlineClient struct {
 }
 
 func NewClient(transportConfig string) *OutlineClient {
+	log.Println("Start parsing startes, config = " + transportConfig)
     parsedTransportConfig, err := ParseSSTOML(transportConfig)
+	log.Println("Finish parsing startes, parsedTransportConfig = " + parsedTransportConfig)
+	parsedTransportConfig = "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpwM0l0TThTZlhodlNaUUJkbHU1dzIz@85.9.223.19:22484/?outline=1"
     if (err != nil) {
         return nil
     }
