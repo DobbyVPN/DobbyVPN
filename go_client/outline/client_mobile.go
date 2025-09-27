@@ -23,7 +23,7 @@ func NewClient(transportConfig string) *OutlineClient {
     if (err != nil) {
         return nil
     }
-	c := &OutlineClient{config: transportConfig}
+	c := &OutlineClient{config: parsedTransportConfig}
 	log.Println("outline client created")
 	common.Client.SetVpnClient(Name, c)
 	return c
