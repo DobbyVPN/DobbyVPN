@@ -19,6 +19,22 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("vpnInterface", vpnInterface.toString())
     }
 
+    override fun getConnectionURL(): String {
+        return prefs.get("connectionURL", "")
+    }
+
+    override fun setConnectionURL(connectionURL: String) {
+        prefs.put("connectionURL", connectionURL)
+    }
+
+    override fun getConnectionConfig(): String {
+        return prefs.get("connectionConfig", "")
+    }
+
+    override fun setConnectionConfig(connectionConfig: String) {
+        prefs.put("connectionConfig", connectionConfig)
+    }
+
     override fun getCloakConfig(): String {
         return prefs.get("cloakConfig", "")
     }
@@ -35,12 +51,20 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("isCloakEnabled", isCloakEnabled.toString())
     }
 
-    override fun getOutlineKey(): String {
-        return prefs.get("outlineApiKey", "")
+    override fun setServerPortOutline(newConfig: String) {
+        prefs.put("ServerPortOutlineKey", newConfig)
     }
 
-    override fun setOutlineKey(newOutlineKey: String) {
-        prefs.put("outlineApiKey", newOutlineKey)
+    override fun setMethodPasswordOutline(newConfig: String) {
+        prefs.put("MethodPasswordOutlineKey", newConfig)
+    }
+
+    override fun getServerPortOutline(): String {
+        return prefs.get("ServerPortOutlineKey", "")
+    }
+
+    override fun getMethodPasswordOutline(): String {
+        return prefs.get("MethodPasswordOutlineKey", "")
     }
 
     override fun getIsOutlineEnabled(): Boolean {

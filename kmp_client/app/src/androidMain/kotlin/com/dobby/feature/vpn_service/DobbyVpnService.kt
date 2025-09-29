@@ -35,8 +35,17 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.nio.ByteBuffer
 import kotlin.coroutines.cancellation.CancellationException
+import java.util.Base64
 
 private const val IS_FROM_UI = "isLaunchedFromUi"
+
+private fun buildOutlineUrl(
+    methodPassword: String,
+    serverPort: String
+): String {
+    val encoded = Base64.getEncoder().encodeToString(methodPassword.toByteArray())
+    return "ss://$encoded@$serverPort/?outline=1"
+}
 
 class DobbyVpnService : VpnService() {
 
@@ -118,13 +127,14 @@ class DobbyVpnService : VpnService() {
         val isServiceStartedFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) ?: false
         val shouldTurnOutlineOn = dobbyConfigsRepository.getIsOutlineEnabled()
         if (shouldTurnOutlineOn || !isServiceStartedFromUi) {
-            val apiKey = dobbyConfigsRepository.getOutlineKey()
-            if (apiKey.isEmpty()) {
+            val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
+            val serverPort = dobbyConfigsRepository.getServerPortOutline()
+            if (methodPassword.isEmpty() || serverPort.isEmpty()) {
                 logger.log("Previously used outline apiKey is empty")
                 return
             }
             logger.log("!!! Start connecting Outline")
-            outlineLibFacade.init(apiKey)
+            outlineLibFacade.init(buildOutlineUrl(methodPassword, serverPort))
             logger.log("outlineLibFacade inited")
             enableCloakIfNeeded(force = !isServiceStartedFromUi)
         } else {

@@ -22,6 +22,18 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun getConnectionURL(): String {
+        return (prefs.getString("сonnectionURL", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getConnectionURL, url = ${it}")
+        }
+    }
+
+    override fun setConnectionURL(connectionURL: String) {
+        prefs.edit().putString("сonnectionURL", connectionURL).apply().also {
+            AndroidLog("DOBBY_TAG", "setConnectionURL, url = ${connectionURL}")
+        }
+    }
+
     override fun getCloakConfig(): String {
         return (prefs.getString("cloakConfig", "") ?: "").also {
             AndroidLog("DOBBY_TAG", "getCloakConfig, size = ${it.length}")
@@ -31,6 +43,18 @@ internal class DobbyConfigsRepositoryImpl(
     override fun setCloakConfig(newConfig: String) {
         prefs.edit().putString("cloakConfig", newConfig).apply().also {
             AndroidLog("DOBBY_TAG", "setCloakConfig, size = ${newConfig.length}")
+        }
+    }
+
+    override fun getConnectionConfig(): String {
+        return (prefs.getString("сonnectionConfig", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getConnectionConfig, config = ${it}")
+        }
+    }
+
+    override fun setConnectionConfig(connectionConfig: String) {
+        prefs.edit().putString("сonnectionConfig", connectionConfig).apply().also {
+            AndroidLog("DOBBY_TAG", "setConnectionConfig, config = ${connectionConfig}")
         }
     }
 
@@ -46,15 +70,27 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
-    override fun getOutlineKey(): String {
-        return (prefs.getString("outlineApiKey", "") ?: "").also {
-            AndroidLog("DOBBY_TAG", "getOutlineKey, size = ${it.length}")
+    override fun setServerPortOutline(newConfig: String) {
+        prefs.edit().putString("ServerPortOutlineKey", newConfig).apply().also {
+            AndroidLog("DOBBY_TAG", "setServerPortOutline, size = ${newConfig.length}")
         }
     }
 
-    override fun setOutlineKey(newOutlineKey: String) {
-        prefs.edit().putString("outlineApiKey", newOutlineKey).apply().also {
-            AndroidLog("DOBBY_TAG", "setOutlineKey, size = ${newOutlineKey.length}")
+    override fun setMethodPasswordOutline(newConfig: String) {
+        prefs.edit().putString("MethodPasswordOutlineKey", newConfig).apply().also {
+            AndroidLog("DOBBY_TAG", "setMethodPasswordOutline, size = ${newConfig.length}")
+        }
+    }
+
+    override fun getServerPortOutline(): String {
+        return (prefs.getString("ServerPortOutlineKey", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getServerPortOutline, size = ${it.length}")
+        }
+    }
+
+    override fun getMethodPasswordOutline(): String {
+        return (prefs.getString("MethodPasswordOutlineKey", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getMethodPasswordOutline, size = ${it.length}")
         }
     }
 

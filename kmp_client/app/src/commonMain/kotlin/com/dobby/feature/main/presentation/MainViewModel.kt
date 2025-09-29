@@ -11,11 +11,23 @@ import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
+import com.dobby.feature.main.domain.TomlConfigs
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.main.ui.MainUiState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import io.ktor.client.*
+import io.ktor.client.call.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import net.peanuuutz.tomlkt.Toml
+import net.peanuuutz.tomlkt.decodeFromString
+
+val httpClient = HttpClient()
 
 class MainViewModel(
     private val configsRepository: DobbyConfigsRepository,
@@ -45,9 +57,7 @@ class MainViewModel(
         viewModelScope.launch {
             _uiState.emit(
                 MainUiState(
-                    cloakJson = configsRepository.getCloakConfig(),
-                    outlineKey = configsRepository.getOutlineKey(),
-                    isCloakEnabled = configsRepository.getIsCloakEnabled()
+                    connectionURL = configsRepository.getConnectionURL(),
                 )
             )
         }
@@ -77,11 +87,9 @@ class MainViewModel(
 
     //region Cloak functions
     fun onConnectionButtonClicked(
-        cloakJson: String?,
-        outlineKey: String,
-        isCloakEnabled: Boolean
+        connectionUrl: String,
     ) {
-        saveData(isCloakEnabled, cloakJson, outlineKey)
+        setConfig(connectionUrl)
         viewModelScope.launch {
             when (connectionStateRepository.flow.value) {
                 true -> stopVpnService()
@@ -96,11 +104,36 @@ class MainViewModel(
         }
     }
 
-    private fun saveData(isCloakEnabled: Boolean, cloakJson: String?, outlineKey: String) {
-        configsRepository.setOutlineKey(outlineKey)
+    private fun setConfig(connectionUrl: String) {
+        configsRepository.setConnectionURL(connectionUrl)
+        val connectionConfig = getConfigByURL(connectionUrl)
+        configsRepository.setConnectionConfig(connectionConfig)
+        parseToml(connectionConfig)
+    }
 
-        cloakJson?.let(configsRepository::setCloakConfig)
-        configsRepository.setIsCloakEnabled(isCloakEnabled)
+    private fun parseToml(connectionConfig: String) {
+        val root = Toml.decodeFromString<TomlConfigs>(connectionConfig)
+        val ss = root.shadowsocks?.direct ?: root.shadowsocks?.local
+        if (ss != null) {
+            configsRepository.setIsOutlineEnabled(true)
+            configsRepository.setMethodPasswordOutline("${ss.method}:${ss.password}")
+            val outlineSuffix = if (ss.outline == true) "?outline=1" else ""
+            configsRepository.setServerPortOutline("${ss.server}:${ss.port}/$outlineSuffix")
+        }
+        if (root.cloak != null) {
+            configsRepository.setIsCloakEnabled(true)
+
+            configsRepository.setCloakConfig(Json { prettyPrint = true }.encodeToString(root.cloak))
+
+        }
+    }
+
+    private fun getConfigByURL(connectionUrl: String): String {
+        return if (connectionUrl.startsWith("http://") || connectionUrl.startsWith("https://")) {
+            runBlocking { httpClient.get(connectionUrl).bodyAsText() }
+        } else {
+            connectionUrl
+        }
     }
 
     private fun startVpn(isPermissionGranted: Boolean) {
@@ -112,13 +145,12 @@ class MainViewModel(
     }
 
     private fun startVpnService() {
-        configsRepository.setIsOutlineEnabled(true)
-        configsRepository.setVpnInterface(VpnInterface.CLOAK_OUTLINE)
         vpnManager.start()
     }
 
     private suspend fun stopVpnService() {
         configsRepository.setIsOutlineEnabled(false)
+        configsRepository.setIsCloakEnabled(false)
         connectionStateRepository.update(isConnected = false)
         vpnManager.stop()
     }

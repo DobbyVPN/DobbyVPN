@@ -5,6 +5,12 @@ kotlin = "2.1.21"
 coreKtx = "1.15.0"
 kotlinScriptRuntime = "2.0.20"
 kotlinxSerializationJson = "1.6.3"
+ktorClientCio = "2.3.7"
+ktorClientContentNegotiation = "2.3.7"
+ktorClientCore = "2.3.7"
+ktorClientDarwin = "2.3.7"
+ktorClientOkhttp = "2.3.7"
+ktorSerializationKotlinxJson = "2.3.7"
 lifecycleRuntimeKtx = "2.8.7"
 activityCompose = "1.9.3"
 composeBom = "2024.12.01"
@@ -26,6 +32,7 @@ skiko = "0.8.15"
 jnaVersion = "5.13.0"
 gsonVersion = "2.8.9"
 okio = "3.6.0"
+tomlkt = "0.5.0"
 
 [libraries]
 androidx-compiler = { module = "androidx.compose.compiler:compiler", version.ref = "compiler" }
@@ -41,6 +48,12 @@ androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-man
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
 kotlin-script-runtime = { module = "org.jetbrains.kotlin:kotlin-script-runtime", version.ref = "kotlinScriptRuntime" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
+ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktorClientCio" }
+ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktorClientContentNegotiation" }
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktorClientCore" }
+ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktorClientDarwin" }
+ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktorClientOkhttp" }
+ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktorSerializationKotlinxJson" }
 lifecycle-viewmodel-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycleViewmodelCompose" }
 lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel", version.ref = "lifecycleViewModel"}
 koin-android = { module = "io.insert-koin:koin-android", version.ref = "koin" }
@@ -62,6 +75,7 @@ skiko-linux = { group = "org.jetbrains.skiko", name = "skiko-awt-runtime-linux-x
 kotlinx-coroutines-swing = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-swing" }
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jnaVersion"}
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gsonVersion"}
+tomlkt = { module = "net.peanuuutz.tomlkt:tomlkt", version.ref = "tomlkt" }
 
 
 [plugins]

@@ -9,8 +9,27 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     
     private let cloakConfigKey = "cloakConfigKey"
     private let isCloakEnabledKey = "isCloakEnabledKey"
-    private let outlineConfigKey = "outlineConfigKey"
+    private let MethodPasswordOutlineKey = "MethodPasswordOutlineKey"
+    private let ServerPortOutlineKey = "ServerPortOutlineKey"
     private let isOutlineEnabledKey = "isOutlineEnabledKey"
+    private let connectionURLKey = "connectionURLKey"
+    private let connectionConfigKey = "connectionConfigKey"
+
+    override fun getConnectionURL(): String {
+        return userDefaults.string(forKey: connectionURLKey) ?? ""
+    }
+
+    override fun setConnectionURL(connectionURL: String) {
+        userDefaults.set(connectionURL, forKey: c)
+    }
+
+    override fun getConnectionConfig(): String {
+        return userDefaults.string(forKey: connectionConfigKey) ?? ""
+    }
+
+    override fun setConnectionConfig(connectionConfig: String) {
+        userDefaults.set(connectionConfig, forKey: connectionConfigKey)
+    }
     
     public func getCloakConfig() -> String {
         return userDefaults.string(forKey: cloakConfigKey) ?? ""
@@ -27,13 +46,21 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     public func setIsCloakEnabled(isCloakEnabled: Bool) {
         userDefaults.set(isCloakEnabled, forKey: isCloakEnabledKey)
     }
-    
-    public func getOutlineKey() -> String {
-        return userDefaults.string(forKey: outlineConfigKey) ?? ""
+
+    public func getServerPortOutline() -> String {
+        return userDefaults.string(forKey: ServerPortOutlineKey) ?? ""
+    }
+
+    public func setServerPortOutline(newOutlineKey: String) {
+        userDefaults.set(newOutlineKey, forKey: ServerPortOutlineKey)
     }
     
-    public func setOutlineKey(newOutlineKey: String) {
-        userDefaults.set(newOutlineKey, forKey: outlineConfigKey)
+    public func getMethodPasswordOutline() -> String {
+        return userDefaults.string(forKey: MethodPasswordOutlineKey) ?? ""
+    }
+    
+    public func setMethodPasswordOutline(newOutlineKey: String) {
+        userDefaults.set(newOutlineKey, forKey: MethodPasswordOutlineKey)
     }
     
     public func getIsOutlineEnabled() -> Bool {
