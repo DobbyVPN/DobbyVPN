@@ -1,6 +1,6 @@
 [versions]
 agp = "8.5.2"
-compiler = "1.5.15"
+compiler = "1.9.0"
 kotlin = "2.1.21"
 coreKtx = "1.15.0"
 kotlinScriptRuntime = "2.0.20"
