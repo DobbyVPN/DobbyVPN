@@ -19,19 +19,19 @@ data class ShadowsocksBlock(
 
 @Serializable
 data class CloakConfig(
-    val transport: String,
-    val proxyMethod: String,
-    val encryptionMethod: String,
-    val uid: String,
-    val publicKey: String,
-    val serverName: String,
-    val numConn: Int,
-    val browserSig: String? = null,
-    val streamTimeout: Int? = null,
-    val remoteHost: String,
-    val remotePort: Int,
-    val cdnWsUrlPath: String? = null,
-    val cdnOriginHost: String? = null
+    val Transport: String,
+    val ProxyMethod: String,
+    val EncryptionMethod: String,
+    val UID: String,
+    val PublicKey: String,
+    val ServerName: String,
+    val NumConn: Int,
+    val BrowserSig: String? = null,
+    val StreamTimeout: Int? = null,
+    val RemoteHost: String,
+    val RemotePort: String,
+    val CDNWsUrlPath: String? = null,
+    val CDNOriginHost: String? = null
 )
 
 @Serializable
