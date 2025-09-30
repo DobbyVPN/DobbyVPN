@@ -16,13 +16,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var configs = configsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
     private var memoryTimer: DispatchSourceTimer?
+    
+    func buildOutlineConfig(methodPassword: String, serverPort: String) -> String {
+        let encoded = methodPassword.data(using: .utf8)?.base64EncodedString() ?? ""
+        return "ss://\(encoded)@\(serverPort)"
+    }
 
     override func startTunnel(options: [String : NSObject]?) async throws {
         logs.writeLog(log: "startTunnel in PacketTunnelProvider, thread: \(Thread.current)")
         HealthCheck.shared.fullCheckUp()
         self.startSentry()
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
-        let config = configsRepository.getOutlineKey()
+        let methodPassword = configsRepository.getMethodPasswordOutline()
+        let serverPort = configsRepository.getServerPortOutline()
+        
+        let config = buildOutlineConfig(methodPassword: methodPassword, serverPort: serverPort)
 
         let remoteAddress = "254.1.1.1"
         let localAddress = "198.18.0.1"

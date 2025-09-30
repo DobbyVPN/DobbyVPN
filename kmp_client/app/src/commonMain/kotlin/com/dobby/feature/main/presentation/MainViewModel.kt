@@ -117,8 +117,8 @@ class MainViewModel(
         if (ss != null) {
             configsRepository.setIsOutlineEnabled(true)
             configsRepository.setMethodPasswordOutline("${ss.method}:${ss.password}")
-            val outlineSuffix = if (ss.outline == true) "?outline=1" else ""
-            configsRepository.setServerPortOutline("${ss.server}:${ss.port}/$outlineSuffix")
+            val outlineSuffix = if (ss.outline == true) "/?outline=1" else ""
+            configsRepository.setServerPortOutline("${ss.server}:${ss.port}$outlineSuffix")
         }
         if (root.cloak != null) {
             configsRepository.setIsCloakEnabled(true)

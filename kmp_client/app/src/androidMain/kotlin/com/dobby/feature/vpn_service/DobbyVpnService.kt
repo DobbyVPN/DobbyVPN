@@ -44,7 +44,7 @@ private fun buildOutlineUrl(
     serverPort: String
 ): String {
     val encoded = Base64.getEncoder().encodeToString(methodPassword.toByteArray())
-    return "ss://$encoded@$serverPort/?outline=1"
+    return "ss://$encoded@$serverPort"
 }
 
 class DobbyVpnService : VpnService() {
