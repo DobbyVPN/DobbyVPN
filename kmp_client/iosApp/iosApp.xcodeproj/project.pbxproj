@@ -12,10 +12,6 @@
 		2152FB042600AC8F00CF470E /* iOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2152FB032600AC8F00CF470E /* iOSApp.swift */; };
 		7555FF83242A565900829871 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7555FF82242A565900829871 /* ContentView.swift */; };
 		8C7731F12E566DCD00B3782E /* MyLibrary.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */; };
-		8CF177F32E8C6B6E009F74EE /* MyLibrary.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */; };
-		8CF177F42E8C6B6E009F74EE /* MyLibrary.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		8CF1780E2E8C6D34009F74EE /* app.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8CF1780D2E8C6D34009F74EE /* app.framework */; };
-		8CF1780F2E8C6D34009F74EE /* app.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8CF1780D2E8C6D34009F74EE /* app.framework */; };
 		8CF4C25F2E61E1C400A1B0E4 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		8CF4C2602E61E1C400A1B0E4 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		8CF4C2612E61E1C400A1B0E4 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = F9EDD575E30B42BCA81EA237 /* Sentry */; };
@@ -52,17 +48,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		8CF177DD2E8C33AD009F74EE /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				8CF177F42E8C6B6E009F74EE /* MyLibrary.xcframework in Embed Frameworks */,
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		A12012F62D7DAE1200D43A3A /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -95,7 +80,6 @@
 		7555FF82242A565900829871 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		7555FF8C242A565B00829871 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = MyLibrary.xcframework; sourceTree = "<group>"; };
-		8CF1780D2E8C6D34009F74EE /* app.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = app.framework; sourceTree = "<group>"; };
 		A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 		A120131E2D7DB13F00D43A3A /* iosApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iosApp.entitlements; sourceTree = "<group>"; };
 		A120139F2D80DE3100D43A3A /* tunnel.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = tunnel.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -131,7 +115,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				A15F0FEA2D874D38007FA45D /* CommonDI.framework in Frameworks */,
-				8CF1780E2E8C6D34009F74EE /* app.framework in Frameworks */,
 				A12013A02D80DE3200D43A3A /* NetworkExtension.framework in Frameworks */,
 				8C7731F12E566DCD00B3782E /* MyLibrary.xcframework in Frameworks */,
 				8CF4C25F2E61E1C400A1B0E4 /* (null) in Frameworks */,
@@ -142,9 +125,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				8CF1780F2E8C6D34009F74EE /* app.framework in Frameworks */,
 				F7DF1050154F40A18C26FC85 /* Sentry in Frameworks */,
-				8CF177F32E8C6B6E009F74EE /* MyLibrary.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -172,7 +153,6 @@
 		42799AB246E5F90AF97AA0EF /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				8CF1780D2E8C6D34009F74EE /* app.framework */,
 				8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */,
 				A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */,
 			);
@@ -292,7 +272,6 @@
 				A15F0FCA2D874CDC007FA45D /* Sources */,
 				A15F0FCB2D874CDC007FA45D /* Frameworks */,
 				A15F0FCC2D874CDC007FA45D /* Resources */,
-				8CF177DD2E8C33AD009F74EE /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
