@@ -1,6 +1,6 @@
 [versions]
 agp = "8.5.2"
-compiler = "1.9.0"
+compiler = "1.5.15"
 kotlin = "2.1.21"
 coreKtx = "1.15.0"
 kotlinScriptRuntime = "2.0.20"
@@ -32,7 +32,7 @@ skiko = "0.8.15"
 jnaVersion = "5.13.0"
 gsonVersion = "2.8.9"
 okio = "3.6.0"
-tomlkt = "0.5.0"
+tomlkt = "0.4.0"
 
 [libraries]
 androidx-compiler = { module = "androidx.compose.compiler:compiler", version.ref = "compiler" }
