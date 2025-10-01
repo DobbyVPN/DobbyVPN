@@ -9,6 +9,7 @@
         tools:ignore="ProtectedPermissions" />
 
     <application
+        android:usesCleartextTraffic="true"
         android:name="com.dobby.DobbyApp"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"

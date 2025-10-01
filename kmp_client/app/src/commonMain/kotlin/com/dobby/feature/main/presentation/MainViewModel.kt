@@ -136,7 +136,13 @@ class MainViewModel(
 
     private fun getConfigByURL(connectionUrl: String): String {
         return if (connectionUrl.startsWith("http://") || connectionUrl.startsWith("https://")) {
-            runBlocking { httpClient.get(connectionUrl).bodyAsText() }
+            runBlocking {
+                httpClient.get(connectionUrl) {
+                    headers {
+                        append("User-Agent", "DobbyVPN")
+                    }
+                }.bodyAsText()
+            }
         } else {
             connectionUrl
         }
