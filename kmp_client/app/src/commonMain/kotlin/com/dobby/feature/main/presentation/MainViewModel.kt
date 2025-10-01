@@ -19,7 +19,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import io.ktor.client.*
-import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import kotlinx.serialization.encodeToString
@@ -108,22 +107,29 @@ class MainViewModel(
         configsRepository.setConnectionURL(connectionUrl)
         val connectionConfig = getConfigByURL(connectionUrl)
         configsRepository.setConnectionConfig(connectionConfig)
-        parseToml(connectionConfig)
+        try {
+            parseToml(connectionConfig)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private fun parseToml(connectionConfig: String) {
+        if (connectionConfig.isBlank()) {
+            return
+        }
         val root = Toml.decodeFromString<TomlConfigs>(connectionConfig)
-        val ss = root.shadowsocks?.direct ?: root.shadowsocks?.local
+        val ss = root.Shadowsocks?.Direct ?: root.Shadowsocks?.Local
         if (ss != null) {
             configsRepository.setIsOutlineEnabled(true)
-            configsRepository.setMethodPasswordOutline("${ss.method}:${ss.password}")
-            val outlineSuffix = if (ss.outline == true) "/?outline=1" else ""
-            configsRepository.setServerPortOutline("${ss.server}:${ss.port}$outlineSuffix")
+            configsRepository.setMethodPasswordOutline("${ss.Method}:${ss.Password}")
+            val outlineSuffix = if (ss.Outline == true) "/?outline=1" else ""
+            configsRepository.setServerPortOutline("${ss.Server}:${ss.Port}$outlineSuffix")
         }
-        if (root.cloak != null) {
+        if (root.Cloak != null) {
             configsRepository.setIsCloakEnabled(true)
 
-            configsRepository.setCloakConfig(Json { prettyPrint = true }.encodeToString(root.cloak))
+            configsRepository.setCloakConfig(Json { prettyPrint = true }.encodeToString(root.Cloak))
 
         }
     }

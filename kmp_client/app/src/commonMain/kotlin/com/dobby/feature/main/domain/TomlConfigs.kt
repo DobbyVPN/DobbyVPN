@@ -4,17 +4,17 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class ShadowsocksConfig(
-    val server: String,
-    val port: Int,
-    val method: String,
-    val password: String,
-    val outline: Boolean? = null
+    val Server: String,
+    val Port: Int,
+    val Method: String,
+    val Password: String,
+    val Outline: Boolean? = null
 )
 
 @Serializable
 data class ShadowsocksBlock(
-    val local: ShadowsocksConfig? = null,
-    val direct: ShadowsocksConfig? = null
+    val Local: ShadowsocksConfig? = null,
+    val Direct: ShadowsocksConfig? = null
 )
 
 @Serializable
@@ -36,8 +36,8 @@ data class CloakConfig(
 
 @Serializable
 data class TomlConfigs(
-    val version: String? = null,
-    val protocol: String? = null,
-    val shadowsocks: ShadowsocksBlock? = null,
-    val cloak: CloakConfig? = null
+    val Version: String? = null,
+    val Protocol: String? = null,
+    val Shadowsocks: ShadowsocksBlock? = null,
+    val Cloak: CloakConfig? = null
 )
