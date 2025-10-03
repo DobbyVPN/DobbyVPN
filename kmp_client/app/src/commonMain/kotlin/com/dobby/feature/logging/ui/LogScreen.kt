@@ -27,14 +27,9 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.util.koinViewModel
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.MainScope
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -62,7 +57,7 @@ fun LogScreen(
             ),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp)
         ) {
-            Text("Copy logs to clipboard")
+            Text("Send logs")
         }
 
         Button(
@@ -90,7 +85,6 @@ fun LogScreen(
 
         LazyColumn {
             items(uiState.logMessages) { message ->
-                // some important logs contain this
                 val isBald = message.contains("!!!")
 
                 Text(

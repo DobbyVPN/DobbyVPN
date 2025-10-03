@@ -37,6 +37,8 @@ fun DobbySocksScreen(
 
     var connectionURL by remember { mutableStateOf(uiMainState.connectionURL) }
 
+    var showLogsDialog by remember { mutableStateOf(false) }
+
     MainScope().launch {
         while (true) {
             logsViewModel.reloadLogs()
@@ -125,8 +127,7 @@ fun DobbySocksScreen(
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onDoubleTap = {
-                            // Реакция на двойной тап по окну
-                            println("Double tap detected!")
+                            showLogsDialog = true
                         }
                     )
                 }
@@ -146,4 +147,43 @@ fun DobbySocksScreen(
             }
         }
     }
+
+    if (showLogsDialog) {
+        AlertDialog(
+            onDismissRequest = { showLogsDialog = false },
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Logs",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = { showLogsDialog = false }) {
+                        Text("✕", fontSize = 18.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    logsViewModel.copyLogsToClipBoard()
+                    showLogsDialog = false
+                }) {
+                    Text("Send")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    logsViewModel.clearLogs()
+                    showLogsDialog = false
+                }) {
+                    Text("Clear")
+                }
+            }
+        )
+    }
+
 }
