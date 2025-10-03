@@ -63,7 +63,6 @@ class LogsRepository(
         }.onFailure { it.printStackTrace() }
     }
 
-    // 👇 открываем метод для ViewModel
     fun readAllLogs(): List<String> = readLogs()
 
     private fun readLogs(): List<String> {
