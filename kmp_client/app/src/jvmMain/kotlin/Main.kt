@@ -14,22 +14,24 @@ import java.nio.charset.StandardCharsets
 fun ensureAdminPrivilegesMacOS() {
     if (!isRunningAsRoot()) {
         try {
-            val jarPath = File(
+            val appPath = File(
                 object {}.javaClass.protectionDomain.codeSource.location.toURI()
-            ).absolutePath
+            ).parentFile.parentFile.parentFile.absolutePath
 
             val command = arrayOf(
                 "osascript", "-e",
-                "do shell script \"java -jar '$jarPath'\" with administrator privileges"
+                "do shell script \"open '$appPath'\" with administrator privileges"
             )
 
-            Runtime.getRuntime().exec(command)
+            val process = Runtime.getRuntime().exec(command)
+            process.waitFor()
             System.exit(0)
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 }
+
 
 fun ensureAdminPrivilegesLinux() {
     if (!isRunningAsRoot()) {
