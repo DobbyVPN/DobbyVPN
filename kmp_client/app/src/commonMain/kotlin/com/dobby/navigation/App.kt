@@ -7,10 +7,12 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -30,41 +32,45 @@ import com.dobby.feature.main.ui.DobbySocksScreen
 
 @Composable
 fun App(modifier: Modifier = Modifier) {
-    val navController = rememberNavController()
-    val keyboardController = LocalSoftwareKeyboardController.current
+    MaterialTheme(
+        colorScheme = lightColorScheme()
+    ) {
+        val navController = rememberNavController()
+        val keyboardController = LocalSoftwareKeyboardController.current
 
-    Scaffold(
-        modifier = modifier
-            .pointerInput(Unit) {
-                detectTapGestures(onTap = { keyboardController?.hide() })
+        Scaffold(
+            modifier = modifier
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = { keyboardController?.hide() })
+                },
+            bottomBar = {
+                BottomBar(navController::navigate)
             },
-        bottomBar = {
-            BottomBar(navController::navigate)
-        },
-        content = { innerPadding ->
-            NavHost(
-                modifier = Modifier.padding(innerPadding),
-                navController = navController,
-                startDestination = MainScreen
-            ) {
-                composable<MainScreen> {
-                    DobbySocksScreen()
-                }
-                composable<DiagnosticsScreen> {
-                    DiagnosticScreen()
-                }
-                composable<LogsScreen> {
-                    LogScreen()
-                }
-                composable<SettingsScreen> {
-                    SettingsScreen(onNavigate = navController::navigate)
-                }
-                composable<AboutScreen> {
-                    AboutScreen()
+            content = { innerPadding ->
+                NavHost(
+                    modifier = Modifier.padding(innerPadding),
+                    navController = navController,
+                    startDestination = MainScreen
+                ) {
+                    composable<MainScreen> {
+                        DobbySocksScreen()
+                    }
+                    composable<DiagnosticsScreen> {
+                        DiagnosticScreen()
+                    }
+                    composable<LogsScreen> {
+                        LogScreen()
+                    }
+                    composable<SettingsScreen> {
+                        SettingsScreen(onNavigate = navController::navigate)
+                    }
+                    composable<AboutScreen> {
+                        AboutScreen()
+                    }
                 }
             }
-        }
-    )
+        )
+    }
 }
 
 @Composable
