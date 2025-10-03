@@ -1,6 +1,7 @@
 package com.dobby.feature.main.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -120,6 +122,14 @@ fun DobbySocksScreen(
                 .clip(RoundedCornerShape(6.dp))
                 .background(Color.Gray.copy(alpha = 0.1f))
                 .padding(8.dp)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onDoubleTap = {
+                            // Реакция на двойной тап по окну
+                            println("Double tap detected!")
+                        }
+                    )
+                }
         ) {
             LazyColumn(state = listState) {
                 items(uiLogState.logMessages) { message ->

@@ -29,7 +29,6 @@ class LogsViewModel(
     init {
         scope.launch {
             logsRepository.logState.collect { newLogList ->
-                // copy() создаёт новый объект -> гарантирует перерисовку
                 _uiState.value = LogsUiState(newLogList.toList())
             }
         }
