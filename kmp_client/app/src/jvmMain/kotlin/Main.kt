@@ -25,7 +25,6 @@ fun ensureAdminPrivilegesMacOS() {
 
             val process = Runtime.getRuntime().exec(command)
             process.waitFor()
-            System.exit(0)
         } catch (e: Exception) {
             e.printStackTrace()
         }
