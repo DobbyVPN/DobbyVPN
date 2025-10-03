@@ -5,8 +5,6 @@ on:
   push:
     branches:
       - main
-    tags:
-      - "v*"
 
 jobs:
   libs_build:
@@ -29,7 +27,6 @@ jobs:
     secrets: inherit
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     needs: [desktop_build, android_build, ios_build]
     permissions: write-all
@@ -70,9 +67,32 @@ jobs:
           name: dobbyvpn-android.apk
           path: release
 
+      - name: Compute tag
+        id: tag
+        run: |
+          MAJOR=${{ vars.MAJOR }}
+          MINOR=${{ vars.MINOR }}
+          MAINTENANCE=${{ vars.MAINTENANCE }}
+          TAG="v${MAJOR}.${MINOR}.${MAINTENANCE}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ steps.tag.outputs.tag }}
           files: release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update MAINTENANCE variable
+        run: |
+          CUR=${{ vars.MAINTENANCE }}
+          NEXT=$((CUR + 1))
+          echo "Current maintenance: $CUR, next: $NEXT"
+          gh api \
+            --method PATCH \
+            -H "Accept: application/vnd.github+json" \
+            /repos/${{ github.repository }}/actions/variables/MAINTENANCE \
+            -f value="$NEXT"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
