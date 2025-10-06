@@ -18,37 +18,19 @@ fun ensureAdminPrivilegesMacOS() {
                 object {}.javaClass.protectionDomain.codeSource.location.toURI()
             ).parentFile.parentFile.parentFile.absolutePath
 
-            val command = arrayOf(
-                "osascript", "-e",
-                "do shell script \"open '$appPath'\" with administrator privileges"
-            )
+            val dobbyApp = File(appPath, "Contents/MacOS/Dobby\\ Vpn")
 
-            val process = Runtime.getRuntime().exec(command)
-            process.waitFor()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-}
+            val command = arrayOf("sudo", dobbyApp.absolutePath)
 
+            println("Executing: ${command.joinToString(" ")}")
 
-fun ensureAdminPrivilegesLinux() {
-    if (!isRunningAsRoot()) {
-        try {
-            val jarPath = File(
-                object {}.javaClass.protectionDomain.codeSource.location.toURI()
-            ).absolutePath
+            val process = ProcessBuilder(*command)
+                .redirectErrorStream(true)
+                .inheritIO()
+                .start()
 
-            val command = arrayOf(
-                "pkexec", "java", "-jar", jarPath
-            )
-
-            val process = Runtime.getRuntime().exec(command)
-            if (process.isAlive) {
-                System.exit(0)
-            } else {
-                println("Can't run with admin privileges")
-            }
+            val exitCode = process.waitFor()
+            println("Process exited with code $exitCode")
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -69,9 +51,6 @@ fun isRunningAsRoot(): Boolean {
 fun main() = application {
     if (Platform.isMac()) {
         ensureAdminPrivilegesMacOS()
-    }
-    if (Platform.isLinux()) {
-        ensureAdminPrivilegesLinux()
     }
     startDI(listOf(jvmMainModule, jvmVpnModule)){}
     // Get path to the current jar-file
