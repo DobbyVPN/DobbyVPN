@@ -16,9 +16,9 @@ fun ensureAdminPrivilegesMacOS() {
         try {
             val appPath = File(
                 object {}.javaClass.protectionDomain.codeSource.location.toURI()
-            ).parentFile.parentFile.parentFile.absolutePath
+            ).parentFile.parentFile.parentFile.parentFile.absolutePath
 
-            val dobbyApp = File(appPath, "Contents/MacOS/Dobby\\ Vpn")
+            val dobbyApp = File(appPath, "Dobby\\ Vpn.app/Contents/MacOS/Dobby\\ Vpn")
 
             val command = arrayOf("sudo", dobbyApp.absolutePath)
 
