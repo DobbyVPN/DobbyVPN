@@ -4,16 +4,11 @@
 package internal
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
-	"os/exec"
-	"strings"
 	"sync"
-	"syscall"
 
 	"go_client/routing"
 
@@ -26,69 +21,16 @@ func add_route(proxyIp string) {
 	if err != nil {
 		panic(err)
 	}
-	interfaceName, err := FindInterfaceByGateway(gatewayIP.String())
+	interfaceName, err := routing.FindInterfaceByGateway(gatewayIP.String())
 	if err != nil {
 		panic(err)
 	}
-	netInterface, err := GetNetworkInterfaceByIP(interfaceName)
+	netInterface, err := routing.GetNetworkInterfaceByIP(interfaceName)
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
 	routing.AddOrUpdateProxyRoute(proxyIp, gatewayIP.String(), netInterface.Name)
-}
-
-func FindInterfaceByGateway(gatewayIP string) (string, error) {
-	cmd := exec.Command("route", "print")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-	}
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("fail to execute a command route print: %v", err)
-	}
-
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	var foundGateway bool
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.Contains(line, gatewayIP) {
-			foundGateway = true
-			parts := strings.Fields(line)
-			if len(parts) >= 4 {
-				interfaceName := parts[3]
-				return interfaceName, nil
-			}
-		}
-	}
-
-	if !foundGateway {
-		return "", fmt.Errorf("gateway %s is not found in the table", gatewayIP)
-	}
-
-	return "", fmt.Errorf("no interface %s", gatewayIP)
-}
-
-func GetNetworkInterfaceByIP(currentIP string) (*net.Interface, error) {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return nil, fmt.Errorf("error getting network interfaces: %v", err)
-	}
-
-	for _, interf := range interfaces {
-		addrs, err := interf.Addrs()
-		if err != nil {
-			return nil, fmt.Errorf("error getting addresses for interface %v: %v", interf.Name, err)
-		}
-
-		for _, addr := range addrs {
-			if strings.Contains(addr.String(), currentIP) {
-				return &interf, nil
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("no interface found with IP: %v", currentIP)
 }
 
 func CreateEthernetPacket(dstMAC, srcMAC, ipPacket []byte) ([]byte, error) {
@@ -140,12 +82,12 @@ func (app App) Run(ctx context.Context) error {
 	if err != nil {
 		panic(err)
 	}
-	interfaceName, err := FindInterfaceByGateway(gatewayIP.String())
+	interfaceName, err := routing.FindInterfaceByGateway(gatewayIP.String())
 	if err != nil {
 		panic(err)
 	}
 
-	netInterface, err := GetNetworkInterfaceByIP(interfaceName)
+	netInterface, err := routing.GetNetworkInterfaceByIP(interfaceName)
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)
@@ -168,7 +110,7 @@ func (app App) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to refresh OutlineDevice: %w", err)
 	}
 
-	tunInterface, err := GetNetworkInterfaceByIP(TunDeviceIP)
+	tunInterface, err := routing.GetNetworkInterfaceByIP(TunDeviceIP)
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)

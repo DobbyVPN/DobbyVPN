@@ -3,7 +3,9 @@
 package routing
 
 import (
+	"bufio"
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -37,7 +39,7 @@ var ipv4ReservedSubnets = []string{
 
 const wireguardSystemConfigPath = "C:\\ProgramData\\WireGuard"
 
-func executeCommand(command string) (string, error) {
+func ExecuteCommand(command string) (string, error) {
 	cmd := exec.Command("cmd", "/C", command)
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -58,7 +60,6 @@ func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, MacAdd
 		proxyIP, TunDeviceName, TunGateway, TunDeviceIP, GatewayIP, MacAddress, InterfaceName)
 	log.Infof("Outline/routing: Setting up IP rule...")
 	AddOrUpdateProxyRoute(proxyIP, GatewayIP, InterfaceName)
-	AddOrUpdateProxyRoute("85.9.223.19", GatewayIP, InterfaceName)
 	log.Infof("Outline/routing: Added IP proxy rules via table\n")
 	addOrUpdateReservedSubnetBypass(GatewayIP, InterfaceName)
 	log.Infof("Outline/routing: Added IP reserved rules via table\n")
@@ -84,11 +85,11 @@ func StopRouting(proxyIp string, TunDeviceName string) {
 
 func AddOrUpdateProxyRoute(proxyIp string, gatewayIp string, gatewayInterfaceIndex string) {
 	command := fmt.Sprintf("route change %s %s if \"%s\"", proxyIp, gatewayIp, gatewayInterfaceIndex)
-	_, err := executeCommand(command)
+	_, err := ExecuteCommand(command)
 	if err != nil {
 		netshCommand := fmt.Sprintf("netsh interface ipv4 add route %s/32 nexthop=%s interface=\"%s\" metric=0 store=active",
 			proxyIp, gatewayIp, gatewayInterfaceIndex)
-		_, err = executeCommand(netshCommand)
+		_, err = ExecuteCommand(netshCommand)
 		if err != nil {
 			log.Infof("Outline/routing: Failed to add or update proxy route for IP %s: %v\n", proxyIp, err)
 		}
@@ -97,7 +98,7 @@ func AddOrUpdateProxyRoute(proxyIp string, gatewayIp string, gatewayInterfaceInd
 
 func deleteProxyRoute(proxyIp string) {
 	command := fmt.Sprintf("route delete %s", proxyIp)
-	_, err := executeCommand(command)
+	_, err := ExecuteCommand(command)
 	if err != nil {
 		log.Infof("Outline/routing: Failed to delete proxy route for IP %s: %v\n", proxyIp, err)
 	}
@@ -106,11 +107,11 @@ func deleteProxyRoute(proxyIp string) {
 func addOrUpdateReservedSubnetBypass(gatewayIp string, gatewayInterfaceIndex string) {
 	for _, subnet := range ipv4ReservedSubnets {
 		command := fmt.Sprintf("route change %s %s if \"%s\"", subnet, gatewayIp, gatewayInterfaceIndex)
-		_, err := executeCommand(command)
+		_, err := ExecuteCommand(command)
 		if err != nil {
 			netshCommand := fmt.Sprintf("netsh interface ipv4 add route %s nexthop=%s interface=\"%s\" metric=0 store=active",
 				subnet, gatewayIp, gatewayInterfaceIndex)
-			_, err = executeCommand(netshCommand)
+			_, err = ExecuteCommand(netshCommand)
 			if err != nil {
 				log.Infof("Outline/routing: Failed to add or update route for subnet %s: %v\n", subnet, err)
 			}
@@ -121,7 +122,7 @@ func addOrUpdateReservedSubnetBypass(gatewayIp string, gatewayInterfaceIndex str
 func removeReservedSubnetBypass() {
 	for _, subnet := range ipv4ReservedSubnets {
 		command := fmt.Sprintf("route delete %s", subnet)
-		_, err := executeCommand(command)
+		_, err := ExecuteCommand(command)
 		if err != nil {
 			log.Infof("Outline/routing: Failed to delete route for subnet %s: %v\n", subnet, err)
 		}
@@ -132,11 +133,11 @@ func addIpv4TapRedirect(tapGatewayIP string, tapDeviceName string) {
 	for _, subnet := range ipv4Subnets {
 		command := fmt.Sprintf("netsh interface ipv4 add route %s nexthop=%s interface=\"%s\" metric=0 store=active",
 			subnet, tapGatewayIP, tapDeviceName)
-		_, err := executeCommand(command)
+		_, err := ExecuteCommand(command)
 		if err != nil {
 			setCommand := fmt.Sprintf("netsh interface ipv4 set route %s nexthop=%s interface=\"%s\" metric=0 store=active",
 				subnet, tapGatewayIP, tapDeviceName)
-			_, err = executeCommand(setCommand)
+			_, err = ExecuteCommand(setCommand)
 			if err != nil {
 				log.Infof("Outline/routing: Failed to add or set route for subnet %s: %v\n", subnet, err)
 			}
@@ -147,10 +148,10 @@ func addIpv4TapRedirect(tapGatewayIP string, tapDeviceName string) {
 func stopRoutingIpv4(loopbackInterfaceIndex string) {
 	for _, subnet := range ipv4Subnets {
 		command := fmt.Sprintf("netsh interface ipv4 add route %s interface=\"%s\" metric=0 store=active", subnet, loopbackInterfaceIndex)
-		_, err := executeCommand(command)
+		_, err := ExecuteCommand(command)
 		if err != nil {
 			setCommand := fmt.Sprintf("netsh interface ipv4 set route %s interface=\"%s\" metric=0 store=active", subnet, loopbackInterfaceIndex)
-			_, err = executeCommand(setCommand)
+			_, err = ExecuteCommand(setCommand)
 			if err != nil {
 				log.Infof("Outline/routing: Failed to add or set route for subnet %s: %v\n", subnet, err)
 			}
@@ -177,4 +178,56 @@ func AddNeighbor(interfaceName, gatewayIP, macAddress string) error {
 		fmt.Printf("Command arp executed successfully: %s\n", string(output))
 	}
 	return nil
+}
+func FindInterfaceByGateway(gatewayIP string) (string, error) {
+	cmd := exec.Command("route", "print")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow: true,
+	}
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("fail to execute a command route print: %v", err)
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	var foundGateway bool
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, gatewayIP) {
+			foundGateway = true
+			parts := strings.Fields(line)
+			if len(parts) >= 4 {
+				interfaceName := parts[3]
+				return interfaceName, nil
+			}
+		}
+	}
+
+	if !foundGateway {
+		return "", fmt.Errorf("gateway %s is not found in the table", gatewayIP)
+	}
+
+	return "", fmt.Errorf("no interface %s", gatewayIP)
+}
+
+func GetNetworkInterfaceByIP(currentIP string) (*net.Interface, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("error getting network interfaces: %v", err)
+	}
+
+	for _, interf := range interfaces {
+		addrs, err := interf.Addrs()
+		if err != nil {
+			return nil, fmt.Errorf("error getting addresses for interface %v: %v", interf.Name, err)
+		}
+
+		for _, addr := range addrs {
+			if strings.Contains(addr.String(), currentIP) {
+				return &interf, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("no interface found with IP: %v", currentIP)
 }

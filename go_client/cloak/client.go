@@ -13,8 +13,9 @@ import (
 const Name = "cloak"
 
 var (
-	client *exported_client.CkClient
-	mu     sync.Mutex
+	client       *exported_client.CkClient
+	mu           sync.Mutex
+	RemoteHostIP string
 )
 
 func InitLog() {
@@ -31,8 +32,8 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 	defer mu.Unlock()
 
 	if client != nil {
-    	StopCloakClient()
-    }
+		StopCloakClient()
+	}
 
 	var rawConfig exported_client.Config
 	err := json.Unmarshal([]byte(config), &rawConfig)
@@ -46,6 +47,14 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 	rawConfig.LocalPort = localPort
 	rawConfig.UDP = udp
 	log.Infof("cloak client: rawConfig updated with LocalHost=%s, LocalPort=%s, UDP=%v", localHost, localPort, udp)
+
+	// Cloak routing
+	RemoteHostIP = rawConfig.RemoteHost
+	err = StartRoutingCloak(RemoteHostIP)
+	if err != nil {
+		log.Infof("Can't routing cloak, %v", err)
+		return
+	}
 
 	client = exported_client.NewCkClient(rawConfig)
 
@@ -65,6 +74,10 @@ func StopCloakClient() {
 	defer common.Client.MarkInactive(Name)
 	mu.Lock()
 	defer mu.Unlock()
+	if RemoteHostIP != "" {
+		StopRoutingCloak(RemoteHostIP)
+		RemoteHostIP = ""
+	}
 
 	if client == nil {
 		return

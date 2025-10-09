@@ -37,11 +37,6 @@ func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
 		log.Infof("failed to add specific route: %w", err)
 	}
 
-	addSpecificRoute2 := fmt.Sprintf("sudo route add -net %s/32 %s", "85.9.223.19", gatewayIP)
-	if _, err := ExecuteCommand(addSpecificRoute2); err != nil {
-		log.Infof("failed to add specific route: %w", err)
-	}
-
 	return nil
 }
 
