@@ -2,8 +2,11 @@ name: Release
 
 # Configures this workflow to run every time a change is pushed to the master.
 on:
-  push:
-    branches:
+  push:    
+    branches:      
+      - main
+  pull_request:    
+    branches:      
       - main
 
 jobs:
@@ -27,6 +30,7 @@ jobs:
     secrets: inherit
 
   release:
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     needs: [desktop_build, android_build, ios_build]
     permissions: write-all

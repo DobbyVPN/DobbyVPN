@@ -1,110 +1,68 @@
-name: Android Build (Windows)
+name: Android Build
 
 on:
   workflow_call:
 
 jobs:
   android_build:
-    # Had issue (can't work on linux) https://github.com/DobbyVPN/DobbyVPN/issues/45
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Download Go AAR
-        uses: actions/download-artifact@master
+        uses: actions/download-artifact@v4
         with:
           name: outline-debug.aar
           path: kmp_client/libs
 
       - name: Download So
-        uses: actions/download-artifact@master
+        uses: actions/download-artifact@v4
         with:
           name: liboutline.so
           path: kmp_client/outline/src/main/jniLibs/arm64-v8a
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.23.3"
-
-      - name: Set up JDK 17 (Temurin)
+      - name: Set up JDK 21.0.6 (Temurin)
         uses: actions/setup-java@v5
         with:
-          java-version: "17"
+          java-version: "21.0.6"
           distribution: "temurin"
+
+      - name: Install Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: |
-            build-tools;34.0.0
-            platforms;android-34
+          packages: "build-tools;34.0.0 platforms;android-34 ndk;27.0.12077973 cmake;3.22.1"
 
       - name: Set up Git Submodules
         run: git submodule update --init --recursive
 
       - name: Install dependencies
-        shell: pwsh
         run: |
-          go get ./...
-          choco install -y mingw
+          sudo apt-get update
+          sudo apt-get install -y golang gcc libgl1-mesa-dev xorg-dev coreutils
+          sudo apt-get install -y gcc-multilib gcc-mingw-w64
 
-      - name: Fill gradle.properties
-        shell: pwsh
+      - name: Build & Sign via Fastlane
+        working-directory: kmp_client
         run: |
-          Add-Content kmp_client/gradle.properties "projectRepositoryCommit=$env:GITHUB_SHA"
-          Add-Content kmp_client/gradle.properties "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$env:GITHUB_SHA"
-          Get-Content kmp_client/gradle.properties
+          bundle install
+          bundle exec fastlane android build_android
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
 
-      - name: Build APK
-        shell: pwsh
-        run: |
-          cd kmp_client
-          ./gradlew.bat assembleRelease --stacktrace
-          cd ..
-
-      - name: Set up Keystore
-        shell: pwsh
-        run: |
-          $KeystorePath = "$env:RUNNER_TEMP\keystores\keystore.jks"
-          mkdir $env:RUNNER_TEMP\keystores
-          $KeystoreContent = "${{ secrets.KEYSTORE_FILE }}"
-          [System.IO.File]::WriteAllBytes($KeystorePath, [System.Convert]::FromBase64String($KeystoreContent))
-
-
-      - name: Upload Unsigned Android client
-        uses: actions/upload-artifact@master
-        with:
-          name: app-release-unsigned.apk
-          path: kmp_client/app/build/outputs/apk/release/app-release-unsigned.apk
-
-      - name: Sign APK
-        shell: pwsh
-        run: |
-          $apksigner="$env:ANDROID_HOME\build-tools\34.0.0\apksigner.bat"
-          if (!(Test-Path $apksigner)) {
-              Write-Error "apksigner not found at $apksigner"
-              exit 1
-          }
-          & $apksigner version
-          & $apksigner sign `
-            --ks $env:RUNNER_TEMP\keystores\keystore.jks `
-            --ks-key-alias "${{ secrets.KEY_ALIAS }}" `
-            --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} `
-            --key-pass pass:${{ secrets.KEY_PASSWORD }} `
-            --out dobbyvpn-android.apk `
-            kmp_client/app/build/outputs/apk/release/app-release-unsigned.apk
-
-
-      - name: Upload Android client
-        uses: actions/upload-artifact@master
+      - name: Upload Signed APK
+        uses: actions/upload-artifact@v4
         with:
           name: dobbyvpn-android.apk
           path: dobbyvpn-android.apk
-
-      - name: Write go depends
-        shell: pwsh
-        run: |
-          go mod tidy
-          Get-Content go.mod
