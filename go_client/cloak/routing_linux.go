@@ -17,7 +17,7 @@ func StartRoutingCloak(proxyIP string) error {
 	if err != nil {
 		return fmt.Errorf("failed to discover gateway: %w", err)
 	}
-	if _, err := executeCommand(fmt.Sprintf("sudo ip route add %s/32 via %s", proxyIP, gatewayIP.String())); err != nil {
+	if _, err := routing.ExecuteCommand(fmt.Sprintf("sudo ip route add %s/32 via %s", proxyIP, gatewayIP.String())); err != nil {
 		log.Infof("failed to add specific route for %s: %v", proxyIP, err)
 	}
 
@@ -25,7 +25,7 @@ func StartRoutingCloak(proxyIP string) error {
 }
 
 func StopRoutingCloak(proxyIP string) {
-	if _, err := executeCommand(fmt.Sprintf("sudo ip route del %s/32", proxyIP)); err != nil {
+	if _, err := routing.ExecuteCommand(fmt.Sprintf("sudo ip route del %s/32", proxyIP)); err != nil {
 		log.Infof("failed to remove specific route for %s: %v", proxyIP, err)
 	}
 }
