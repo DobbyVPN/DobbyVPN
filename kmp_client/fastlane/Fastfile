@@ -1,0 +1,74 @@
+default_platform(:android)
+
+platform :android do
+    desc "Build and sign Android APK"
+    lane :build_android do
+
+    commit = ENV["GITHUB_SHA"]
+    repo   = ENV["GITHUB_REPOSITORY"]
+    commit_link = "https://github.com/#{repo}/tree/#{commit}"
+
+    if ENV["KEYSTORE_FILE"] && ENV["KEYSTORE_PASSWORD"] && ENV["KEY_ALIAS"] && ENV["KEY_PASSWORD"]
+        puts "Keystore foumd. Start build with sign."
+  
+        gradle(
+            task: "assembleRelease",
+            properties: {
+            "projectRepositoryCommit" => commit,
+            "projectRepositoryCommitLink" => commit_link,
+            "android.injected.signing.store.file" => ENV["KEYSTORE_FILE"],
+            "android.injected.signing.store.password" => ENV["KEYSTORE_PASSWORD"],
+            "android.injected.signing.key.alias" => ENV["KEY_ALIAS"],
+            "android.injected.signing.key.password" => ENV["KEY_PASSWORD"],
+            }
+        )
+    else
+        puts "Keystore not foumd. Start build without sign."
+
+        gradle(
+            task: "assembleRelease",
+            properties: {
+            "projectRepositoryCommit" => commit,
+            "projectRepositoryCommitLink" => commit_link,
+            }
+        )
+    end
+  end
+end
+
+platform :ios do
+    desc "Build & Upload to TestFlight"
+    lane :build_ios do
+
+    increment_build_number(
+        xcodeproj: "iosApp/iosApp.xcodeproj"
+    )
+
+    gradle(task: "linkReleaseFrameworkIosArm64")
+
+    ipa_path = build_app(
+        project: "iosApp/iosApp.xcodeproj",
+        scheme: "iosApp",
+        configuration: "Release",
+        export_method: "app-store",
+        export_options: {
+            provisioningProfiles: {
+            "vpn.dobby.app" => "DobbyVPNAppStore",
+            "vpn.dobby.app.tunnel" => "DobbyVPNTunnelAppStore"
+            }
+        },
+        output_directory: "ios_build",
+        output_name: "DobbyVPN.ipa"
+    )
+    if ENV["GITHUB_REF"] == 'refs/heads/main'
+        api_key = app_store_connect_api_key(
+            key_id: ENV['APP_STORE_KEY_ID'],
+            issuer_id: ENV['APP_STORE_ISSUER_ID'],
+            key_content: ENV['APP_STORE_API_KEY'],
+            is_key_content_base64: false,
+            duration: 1200, in_house: false
+        )
+
+        pilot(api_key: api_key, ipa: ipa_path, distribute_external: false)
+    end
+end
