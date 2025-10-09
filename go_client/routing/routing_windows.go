@@ -1,12 +1,14 @@
 //go:build windows
 
-package internal
+package routing
 
 import (
 	"fmt"
 	"os/exec"
 	"strings"
 	"syscall"
+
+	log "github.com/sirupsen/logrus"
 )
 
 var ipv4Subnets = []string{
@@ -46,24 +48,24 @@ func executeCommand(command string) (string, error) {
 	if err != nil {
 		return string(output), fmt.Errorf("command execution failed: %w, output: %s", err, output)
 	}
-	logging.Info.Printf("Outline/routing: Command executed: %s, output: %s", command, output)
+	log.Infof("Outline/routing: Command executed: %s, output: %s", command, output)
 	return string(output), nil
 }
 
-func startRouting(proxyIP string, GatewayIP string, TunDeviceName string, MacAddress string, InterfaceName string, TunGateway string, TunDeviceIP string, addr []byte) error {
-	logging.Info.Printf("Outline/routing: Starting routing configuration for Windows...")
-	logging.Info.Printf("Outline/routing: Proxy IP: %s, Tun Device Name: %s, Tun Gateway: %s, Tun Device IP: %s, Gateway IP: %s, Mac Address: %s, Interface Name: %s",
+func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, MacAddress string, InterfaceName string, TunGateway string, TunDeviceIP string, addr []byte) error {
+	log.Infof("Outline/routing: Starting routing configuration for Windows...")
+	log.Infof("Outline/routing: Proxy IP: %s, Tun Device Name: %s, Tun Gateway: %s, Tun Device IP: %s, Gateway IP: %s, Mac Address: %s, Interface Name: %s",
 		proxyIP, TunDeviceName, TunGateway, TunDeviceIP, GatewayIP, MacAddress, InterfaceName)
-	logging.Info.Printf("Outline/routing: Setting up IP rule...")
-	addOrUpdateProxyRoute(proxyIP, GatewayIP, InterfaceName)
-	addOrUpdateProxyRoute("85.9.223.19", GatewayIP, InterfaceName)
-	logging.Info.Printf("Outline/routing: Added IP proxy rules via table\n")
+	log.Infof("Outline/routing: Setting up IP rule...")
+	AddOrUpdateProxyRoute(proxyIP, GatewayIP, InterfaceName)
+	AddOrUpdateProxyRoute("85.9.223.19", GatewayIP, InterfaceName)
+	log.Infof("Outline/routing: Added IP proxy rules via table\n")
 	addOrUpdateReservedSubnetBypass(GatewayIP, InterfaceName)
-	logging.Info.Printf("Outline/routing: Added IP reserved rules via table\n")
+	log.Infof("Outline/routing: Added IP reserved rules via table\n")
 	addIpv4TapRedirect(TunGateway, TunDeviceName)
-	logging.Info.Printf("Outline/routing: Added IP rules via table\n")
+	log.Infof("Outline/routing: Added IP rules via table\n")
 
-	logging.Info.Printf("Outline/routing: Routing configuration completed successfully.")
+	log.Infof("Outline/routing: Routing configuration completed successfully.")
 
 	err := AddNeighbor(TunDeviceName, TunGateway, formatMACAddress(addr))
 	if err != nil {
@@ -72,15 +74,15 @@ func startRouting(proxyIP string, GatewayIP string, TunDeviceName string, MacAdd
 	return nil
 }
 
-func stopRouting(proxyIp string, TunDeviceName string) {
-	logging.Info.Printf("Outline/routing: Cleaning up routing table and rules...")
+func StopRouting(proxyIp string, TunDeviceName string) {
+	log.Infof("Outline/routing: Cleaning up routing table and rules...")
 	deleteProxyRoute(proxyIp)
 	removeReservedSubnetBypass()
 	stopRoutingIpv4(TunDeviceName)
-	logging.Info.Printf("Outline/routing: Cleaned up routing table and rules.")
+	log.Infof("Outline/routing: Cleaned up routing table and rules.")
 }
 
-func addOrUpdateProxyRoute(proxyIp string, gatewayIp string, gatewayInterfaceIndex string) {
+func AddOrUpdateProxyRoute(proxyIp string, gatewayIp string, gatewayInterfaceIndex string) {
 	command := fmt.Sprintf("route change %s %s if \"%s\"", proxyIp, gatewayIp, gatewayInterfaceIndex)
 	_, err := executeCommand(command)
 	if err != nil {
@@ -88,7 +90,7 @@ func addOrUpdateProxyRoute(proxyIp string, gatewayIp string, gatewayInterfaceInd
 			proxyIp, gatewayIp, gatewayInterfaceIndex)
 		_, err = executeCommand(netshCommand)
 		if err != nil {
-			logging.Info.Printf("Outline/routing: Failed to add or update proxy route for IP %s: %v\n", proxyIp, err)
+			log.Infof("Outline/routing: Failed to add or update proxy route for IP %s: %v\n", proxyIp, err)
 		}
 	}
 }
@@ -97,7 +99,7 @@ func deleteProxyRoute(proxyIp string) {
 	command := fmt.Sprintf("route delete %s", proxyIp)
 	_, err := executeCommand(command)
 	if err != nil {
-		logging.Info.Printf("Outline/routing: Failed to delete proxy route for IP %s: %v\n", proxyIp, err)
+		log.Infof("Outline/routing: Failed to delete proxy route for IP %s: %v\n", proxyIp, err)
 	}
 }
 
@@ -110,7 +112,7 @@ func addOrUpdateReservedSubnetBypass(gatewayIp string, gatewayInterfaceIndex str
 				subnet, gatewayIp, gatewayInterfaceIndex)
 			_, err = executeCommand(netshCommand)
 			if err != nil {
-				logging.Info.Printf("Outline/routing: Failed to add or update route for subnet %s: %v\n", subnet, err)
+				log.Infof("Outline/routing: Failed to add or update route for subnet %s: %v\n", subnet, err)
 			}
 		}
 	}
@@ -121,7 +123,7 @@ func removeReservedSubnetBypass() {
 		command := fmt.Sprintf("route delete %s", subnet)
 		_, err := executeCommand(command)
 		if err != nil {
-			logging.Info.Printf("Outline/routing: Failed to delete route for subnet %s: %v\n", subnet, err)
+			log.Infof("Outline/routing: Failed to delete route for subnet %s: %v\n", subnet, err)
 		}
 	}
 }
@@ -136,7 +138,7 @@ func addIpv4TapRedirect(tapGatewayIP string, tapDeviceName string) {
 				subnet, tapGatewayIP, tapDeviceName)
 			_, err = executeCommand(setCommand)
 			if err != nil {
-				logging.Info.Printf("Outline/routing: Failed to add or set route for subnet %s: %v\n", subnet, err)
+				log.Infof("Outline/routing: Failed to add or set route for subnet %s: %v\n", subnet, err)
 			}
 		}
 	}
@@ -150,7 +152,7 @@ func stopRoutingIpv4(loopbackInterfaceIndex string) {
 			setCommand := fmt.Sprintf("netsh interface ipv4 set route %s interface=\"%s\" metric=0 store=active", subnet, loopbackInterfaceIndex)
 			_, err = executeCommand(setCommand)
 			if err != nil {
-				logging.Info.Printf("Outline/routing: Failed to add or set route for subnet %s: %v\n", subnet, err)
+				log.Infof("Outline/routing: Failed to add or set route for subnet %s: %v\n", subnet, err)
 			}
 		}
 	}
