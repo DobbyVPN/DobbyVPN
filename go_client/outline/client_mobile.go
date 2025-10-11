@@ -67,7 +67,7 @@ func (c *OutlineClient) Read() ([]byte, error) {
 		log.Printf("failed to read data: %v\n", err)
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
-	return buf, nil
+	return buf[:n], nil
 }
 
 func (c *OutlineClient) Write(buf []byte) (int, error) {
