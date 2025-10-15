@@ -2,8 +2,11 @@ name: Release
 
 # Configures this workflow to run every time a change is pushed to the master.
 on:
-  push:
-    branches:
+  push:    
+    branches:      
+      - main
+  pull_request:    
+    branches:      
       - main
 
 jobs:
@@ -27,6 +30,7 @@ jobs:
     secrets: inherit
 
   release:
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     needs: [desktop_build, android_build, ios_build]
     permissions: write-all
@@ -38,31 +42,31 @@ jobs:
         run: mkdir release
 
       - name: Download linux deb client
-        uses: actions/download-artifact@master
+        uses: actions/download-artifact@v4
         with:
           name: dobbyVPN-linux.deb
           path: release
 
       - name: Download linux tar.gz client
-        uses: actions/download-artifact@master
+        uses: actions/download-artifact@v4
         with:
           name: dobbyVPN-linux.tar.gz
           path: release
 
       - name: Download windows msix client
-        uses: actions/download-artifact@master
+        uses: actions/download-artifact@v4
         with:
           name: dobbyVPN-windows.msix
           path: release
 
       - name: Download macos amd64 client
-        uses: actions/download-artifact@master
+        uses: actions/download-artifact@v4
         with:
           name: dobbyVPN-macos-amd64.zip
           path: release
 
       - name: Download android client
-        uses: actions/download-artifact@master
+        uses: actions/download-artifact@v4
         with:
           name: dobbyvpn-android.apk
           path: release

@@ -1,0 +1,134 @@
+default_platform(:android)
+
+platform :android do
+  desc "Build and sign Android APK"
+  lane :build_android do
+    commit = ENV["GITHUB_SHA"]
+    repo   = ENV["GITHUB_REPOSITORY"]
+    commit_link = "https://github.com/#{repo}/tree/#{commit}"
+
+    tmp = Dir.mktmpdir
+    keystore_path = File.join(tmp, "keystore.jks")
+    File.write(keystore_path, Base64.decode64(ENV['KEYSTORE_FILE']))  
+
+    gradle(
+        task: "assembleRelease",
+        properties: {
+        "projectRepositoryCommit" => commit,
+        "projectRepositoryCommitLink" => commit_link,
+        "android.injected.signing.store.file" => keystore_path, 
+        "android.injected.signing.store.password" => ENV["KEYSTORE_PASSWORD"],
+        "android.injected.signing.key.alias" => ENV["KEY_ALIAS"],
+        "android.injected.signing.key.password" => ENV["KEY_PASSWORD"],
+        }
+    )
+  end
+end
+
+
+platform :ios do
+    PROJECT    = "iosApp/iosApp.xcodeproj"
+    SCHEME     = "iosApp"
+    EXPORT_DIR = "iosApp/build/ipa"
+    TEAM_ID    = "F6CHJX72K5"
+    BUNDLE_ID  = "vpn.dobby.app"
+    BUNDLE_ID_TUNNEL = "vpn.dobby.app.tunnel"
+
+    desc "Bump CFBundleVersion to GITHUB_RUN_NUMBER"
+    lane :bump_build do
+      build_number = ENV['GITHUB_RUN_NUMBER']
+      increment_build_number(
+        build_number: build_number,
+        xcodeproj: PROJECT
+      )
+    end
+
+    desc "Build Kotlin Multiplatform"
+    lane :build_kotlin_multiplatform do
+      gradle(task: "linkReleaseFrameworkIosArm64")
+    end
+
+    desc "Create keychain, import certificate, install provisioning profiles from base64 secrets"
+    lane :prepare_signing do
+  
+      keychain_name = "build.keychain-db"
+      keychain_password = ENV['KEYCHAIN_PASSWORD']
+  
+      tmp = Dir.mktmpdir
+      cert_path = File.join(tmp, "cert.p12")
+      profile1  = File.join(tmp, "profile1.mobileprovision")
+      profile2  = File.join(tmp, "profile2.mobileprovision")
+  
+      File.write(cert_path, Base64.decode64(ENV['CERT_P12_BASE64']))
+      File.write(profile1,  Base64.decode64(ENV['PROVISION_DOBBY_BASE64']))
+      File.write(profile2,  Base64.decode64(ENV['PROVISION_DOBBY_TUNNEL_BASE64']))
+  
+      create_keychain(
+        name: keychain_name,
+        password: keychain_password,
+        default_keychain: true,
+        unlock: true,
+        timeout: 3600
+      )
+  
+      import_certificate(
+        certificate_path: cert_path,
+        certificate_password: ENV['CERT_P12_PASSWORD'],
+        keychain_name: keychain_name,
+        keychain_password: keychain_password
+      )
+
+      sh("security set-key-partition-list -S apple-tool:,apple: -s -k #{keychain_password} ~/Library/Keychains/#{keychain_name}")
+  
+      install_provisioning_profile(path: profile1)
+      install_provisioning_profile(path: profile2)
+    end
+  
+    desc "Build, archive and export IPA"
+    lane :build_ios do
+      export_options = {
+        method: "app-store",
+        signingStyle: "manual",
+        provisioningProfiles: {
+          BUNDLE_ID => "DobbyVPNAppStore",
+          BUNDLE_ID_TUNNEL => "DobbyVPNTunnelAppStore"
+        },
+        teamID: TEAM_ID
+      }
+
+      gym(
+        project: PROJECT,
+        scheme: SCHEME,
+        configuration: "Release",
+        sdk: "iphoneos",
+        clean: true,
+        archive_path: "iosApp/build/iosApp.xcarchive",
+        export_method: "app-store",
+        export_options: export_options,
+        output_directory: EXPORT_DIR,
+        output_name: "DobbyVPN.ipa",
+        silent: false
+      )
+    end
+  
+    desc "Upload IPA to TestFlight"
+    lane :upload_testflight do
+  
+      api_key = app_store_connect_api_key(
+        key_id: ENV['APP_STORE_KEY_ID'],
+        issuer_id: ENV['APP_STORE_ISSUER_ID'],
+        key_content: ENV['APP_STORE_API_KEY'],
+        is_key_content_base64: false,
+        duration: 1200,
+        in_house: false
+      )
+  
+      ipa_path = Dir["#{EXPORT_DIR}/*.ipa"].first
+  
+      pilot(
+        ipa: ipa_path,
+        api_key: api_key,
+        skip_waiting_for_build_processing: true
+      )
+    end
+  end

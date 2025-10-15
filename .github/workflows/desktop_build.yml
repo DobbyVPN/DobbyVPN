@@ -3,28 +3,27 @@ name: Desktop Build
 on:
   workflow_call:
 
-
 jobs:
   desktop_build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Download Windows lib
-        uses: actions/download-artifact@master
+        uses: actions/download-artifact@v4
         with:
           name: lib_windows
           path: kmp_client/libs
 
       - name: Download Linux lib
-        uses: actions/download-artifact@master
+        uses: actions/download-artifact@v4
         with:
           name: lib_ubuntu
           path: kmp_client/libs
 
       - name: Download MacOS lib
-        uses: actions/download-artifact@master
+        uses: actions/download-artifact@v4
         with:
           name: lib_macos
           path: kmp_client/libs
@@ -97,37 +96,37 @@ jobs:
           echo "WIN_ZIP_FILE=$(find ./output -name '*-windows-amd64.zip' -type f)" >> $GITHUB_ENV
 
       - name: Upload Debian
-        uses: actions/upload-artifact@master
+        uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-linux.deb
           path: ${{ env.DEB_FILE }}
 
       - name: Upload Tar Gz
-        uses: actions/upload-artifact@master
+        uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-linux.tar.gz
           path: ${{ env.TARGZ_FILE }}
 
       - name: Upload Zip for Mac aarch64
-        uses: actions/upload-artifact@master
+        uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-macos-aarch64.zip
           path: ${{ env.MAC_AARCH64_FILE }}
 
       - name: Upload Zip for Mac amd64
-        uses: actions/upload-artifact@master
+        uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-macos-amd64.zip
           path: ${{ env.MAC_AMD64_FILE }}
 
       - name: Upload Msix
-        uses: actions/upload-artifact@master
+        uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-windows.msix
           path: ${{ env.MSIX_FILE }}
 
       - name: Upload Windows Zip
-        uses: actions/upload-artifact@master
+        uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-windows.zip
           path: ${{ env.WIN_ZIP_FILE }}
