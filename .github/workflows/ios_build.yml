@@ -75,8 +75,8 @@ jobs:
       - name: Upload IPA as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DobbyVPN-ipa
-          path: kmp_client/iosApp/bduild/*.ipa
+          name: DobbyVPN.ipa
+          path: kmp_client/iosApp/build/ipa/*.ipa
 
       - name: Fastlane upload_testflight
         if: ${{ github.ref == 'refs/heads/main' }}
