@@ -80,6 +80,7 @@ jobs:
 
       - name: Fastlane upload_testflight
         if: ${{ github.ref == 'refs/heads/main' }}
+        working-directory: kmp_client
         env:
           APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
           APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
