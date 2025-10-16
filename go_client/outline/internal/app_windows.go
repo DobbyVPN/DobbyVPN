@@ -4,16 +4,13 @@
 package internal
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
-	"os/exec"
-	"strings"
 	"sync"
-	"syscall"
+
+	"go_client/routing"
 
 	"github.com/jackpal/gateway"
 	log "github.com/sirupsen/logrus"
@@ -24,69 +21,16 @@ func add_route(proxyIp string) {
 	if err != nil {
 		panic(err)
 	}
-	interfaceName, err := FindInterfaceByGateway(gatewayIP.String())
+	interfaceName, err := routing.FindInterfaceByGateway(gatewayIP.String())
 	if err != nil {
 		panic(err)
 	}
-	netInterface, err := GetNetworkInterfaceByIP(interfaceName)
+	netInterface, err := routing.GetNetworkInterfaceByIP(interfaceName)
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
-	addOrUpdateProxyRoute(proxyIp, gatewayIP.String(), netInterface.Name)
-}
-
-func FindInterfaceByGateway(gatewayIP string) (string, error) {
-	cmd := exec.Command("route", "print")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-	}
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("fail to execute a command route print: %v", err)
-	}
-
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	var foundGateway bool
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.Contains(line, gatewayIP) {
-			foundGateway = true
-			parts := strings.Fields(line)
-			if len(parts) >= 4 {
-				interfaceName := parts[3]
-				return interfaceName, nil
-			}
-		}
-	}
-
-	if !foundGateway {
-		return "", fmt.Errorf("gateway %s is not found in the table", gatewayIP)
-	}
-
-	return "", fmt.Errorf("no interface %s", gatewayIP)
-}
-
-func GetNetworkInterfaceByIP(currentIP string) (*net.Interface, error) {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return nil, fmt.Errorf("error getting network interfaces: %v", err)
-	}
-
-	for _, interf := range interfaces {
-		addrs, err := interf.Addrs()
-		if err != nil {
-			return nil, fmt.Errorf("error getting addresses for interface %v: %v", interf.Name, err)
-		}
-
-		for _, addr := range addrs {
-			if strings.Contains(addr.String(), currentIP) {
-				return &interf, nil
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("no interface found with IP: %v", currentIP)
+	routing.AddOrUpdateProxyRoute(proxyIp, gatewayIP.String(), netInterface.Name)
 }
 
 func CreateEthernetPacket(dstMAC, srcMAC, ipPacket []byte) ([]byte, error) {
@@ -130,20 +74,20 @@ func (app App) Run(ctx context.Context) error {
 	TunGateway := "10.0.85.1"
 	TunDeviceIP := "10.0.85.2"
 
-// 	TunDeviceIP := app.RoutingConfig.TunDeviceIP
-//     TunGatewayCIDR := app.RoutingConfig.TunGatewayCIDR
-//     TunGateway := strings.Split(TunGatewayCIDR, "/")[0]
+	// 	TunDeviceIP := app.RoutingConfig.TunDeviceIP
+	//     TunGatewayCIDR := app.RoutingConfig.TunGatewayCIDR
+	//     TunGateway := strings.Split(TunGatewayCIDR, "/")[0]
 
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
 		panic(err)
 	}
-	interfaceName, err := FindInterfaceByGateway(gatewayIP.String())
+	interfaceName, err := routing.FindInterfaceByGateway(gatewayIP.String())
 	if err != nil {
 		panic(err)
 	}
 
-	netInterface, err := GetNetworkInterfaceByIP(interfaceName)
+	netInterface, err := routing.GetNetworkInterfaceByIP(interfaceName)
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)
@@ -166,7 +110,7 @@ func (app App) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to refresh OutlineDevice: %w", err)
 	}
 
-	tunInterface, err := GetNetworkInterfaceByIP(TunDeviceIP)
+	tunInterface, err := routing.GetNetworkInterfaceByIP(TunDeviceIP)
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)
@@ -177,10 +121,10 @@ func (app App) Run(ctx context.Context) error {
 	copy(src, dst)
 	src[2] += 2
 
-	if err := startRouting(ss.GetServerIP().String(), gatewayIP.String(), tunInterface.Name, tunInterface.HardwareAddr.String(), netInterface.Name, TunGateway, TunDeviceIP, src); err != nil {
+	if err := routing.StartRouting(ss.GetServerIP().String(), gatewayIP.String(), tunInterface.Name, tunInterface.HardwareAddr.String(), netInterface.Name, TunGateway, TunDeviceIP, src); err != nil {
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
-	defer stopRouting(ss.GetServerIP().String(), tunInterface.Name)
+	defer routing.StopRouting(ss.GetServerIP().String(), tunInterface.Name)
 
 	/*ss1, err := NewOutlineDevice("ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpaVWVmTzExenFzN0pQbFBBMU4xWHlh@195.201.111.36:40287/?outline=1")
 	    if err != nil {
@@ -269,7 +213,7 @@ func (app App) Run(ctx context.Context) error {
 
 	tun.Close()
 	ss.Close()
-	stopRouting(ss.GetServerIP().String(), tunInterface.Name)
+	routing.StopRouting(ss.GetServerIP().String(), tunInterface.Name)
 
 	return nil
 

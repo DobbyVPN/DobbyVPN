@@ -11,6 +11,8 @@ import (
 	"log"
 	"os/exec"
 	"os/user"
+
+	"go_client/routing"
 )
 
 func checkRoot() bool {
@@ -61,7 +63,7 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 	tunDev := &tunDevice{tun, tun.Name()}
 
 	addTunRoute := fmt.Sprintf("sudo ifconfig %s inet 169.254.19.0 169.254.19.0 netmask 255.255.255.0", tun.Name())
-	if _, err := executeCommand(addTunRoute); err != nil {
+	if _, err := routing.ExecuteCommand(addTunRoute); err != nil {
 		return nil, fmt.Errorf("failed to add tun route: %w", err)
 	}
 

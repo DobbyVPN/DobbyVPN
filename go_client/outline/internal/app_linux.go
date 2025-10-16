@@ -9,6 +9,8 @@ import (
 	"log"
 	"sync"
 
+	"go_client/routing"
+
 	"github.com/jackpal/gateway"
 )
 
@@ -43,10 +45,10 @@ func (app App) Run(ctx context.Context) error {
 	log.Printf("Device created")
 
 	// Поднимаем роутинг
-	if err := startRouting(ss.GetServerIP().String(), gatewayIP.String(), app.RoutingConfig.TunDeviceName); err != nil {
+	if err := routing.StartRouting(ss.GetServerIP().String(), gatewayIP.String(), app.RoutingConfig.TunDeviceName); err != nil {
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
-	defer stopRouting(ss.GetServerIP().String(), gatewayIP.String())
+	defer routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
 
 	// Запускаем копирование трафика TUN ↔ Outline
 	trafficCopyWg.Add(2)

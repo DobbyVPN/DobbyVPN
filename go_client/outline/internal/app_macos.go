@@ -11,6 +11,9 @@ import (
 	"context"
 	"sync"
 	//"time"
+
+	"go_client/routing"
+
 	"github.com/jackpal/gateway"
 )
 
@@ -23,7 +26,7 @@ func add_route(proxyIp string) {
 	}
 
 	addSpecificRoute := fmt.Sprintf("sudo route add -net %s/32 %s", proxyIp, gatewayIP.String())
-	if _, err := executeCommand(addSpecificRoute); err != nil {
+	if _, err := routing.ExecuteCommand(addSpecificRoute); err != nil {
 		logging.Info.Printf("failed to add specific route: %w", err)
 	}
 }
@@ -123,10 +126,10 @@ func (app App) Run(ctx context.Context) error {
 		log.Printf("OutlineDevice -> tun stopped")
 	}()
 
-	if err := startRouting(ss.GetServerIP().String(), gatewayIP.String(), tun.(*tunDevice).name); err != nil {
+	if err := routing.StartRouting(ss.GetServerIP().String(), gatewayIP.String(), tun.(*tunDevice).name); err != nil {
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
-	defer stopRouting(ss.GetServerIP().String(), gatewayIP.String())
+	defer routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
 
 	trafficCopyWg.Wait()
 
@@ -136,7 +139,7 @@ func (app App) Run(ctx context.Context) error {
 	log.Printf("Tun closed")
 	ss.Close()
 	log.Printf("Device closed")
-	stopRouting(ss.GetServerIP().String(), gatewayIP.String())
+	routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
 	log.Printf("Stopped")
 	return nil
 }
