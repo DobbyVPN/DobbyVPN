@@ -30,6 +30,7 @@ platform :ios do
     PROJECT    = "iosApp/iosApp.xcodeproj"
     SCHEME     = "iosApp"
     EXPORT_DIR = "iosApp/build/ipa"
+    IPA_NAME   = "DobbyVPN.ipa"
     TEAM_ID    = "F6CHJX72K5"
     BUNDLE_ID  = "vpn.dobby.app"
     BUNDLE_ID_TUNNEL = "vpn.dobby.app.tunnel"
@@ -106,7 +107,7 @@ platform :ios do
         export_method: "app-store",
         export_options: export_options,
         output_directory: EXPORT_DIR,
-        output_name: "DobbyVPN.ipa",
+        output_name: IPA_NAME,
         silent: false
       )
     end
@@ -123,7 +124,8 @@ platform :ios do
         in_house: false
       )
   
-      ipa_path = Dir["#{EXPORT_DIR}/*.ipa"].first
+      ipa_path = "#{EXPORT_DIR}/#{IPA_NAME}"
+      puts ipa_path
   
       pilot(
         ipa: ipa_path,
