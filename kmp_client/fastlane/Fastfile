@@ -135,7 +135,8 @@ platform :ios do
       pilot(
         ipa: ipa_path,
         api_key: api_key,
-        skip_waiting_for_build_processing: true
+        skip_waiting_for_build_processing: true,
+        uses_non_exempt_encryption: false
       )
     end
   end
