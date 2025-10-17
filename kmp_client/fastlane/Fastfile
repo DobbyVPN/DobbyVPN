@@ -22,6 +22,11 @@ platform :android do
         "android.injected.signing.key.password" => ENV["KEY_PASSWORD"],
         }
     )
+
+    copy_artifacts(
+      artifacts: [lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]],
+      target_path: './dobbyvpn-android.apk'
+    )
   end
 end
 
