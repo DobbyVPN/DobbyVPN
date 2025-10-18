@@ -6,6 +6,10 @@ on:
 jobs:
   ios_build:
     runs-on: macos-14
+    env:
+      APP_MAJOR_VERSION: ${{ vars.MAJOR }}
+      APP_MINOR_VERSION: ${{ vars.MINOR }}
+      APP_MAINTENANCE_VERSION: ${{ vars.MAINTENANCE }}
 
     steps:
       - uses: actions/checkout@v4
@@ -44,12 +48,12 @@ jobs:
         run: |
           bundle install
 
-      - name: Fastlane bump_build
+      - name: Fastlane Bump Build And Version
         working-directory: kmp_client
         env:
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
         run: |
-          bundle exec fastlane ios bump_build
+          bundle exec fastlane ios bump_build_and_version
 
       - name: Fastlane Build Kotlin Multiplatform
         working-directory: kmp_client
@@ -79,11 +83,12 @@ jobs:
           path: kmp_client/iosApp/build/ipa/*.ipa
 
       - name: Fastlane upload_testflight
-        # if: ${{ github.ref == 'refs/heads/main' }}
+        if: ${{ github.ref == 'refs/heads/main' }}
         working-directory: kmp_client
         env:
           APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
           APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
           APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+          APP_TESTFLIGHT_EXTERNAL_GROUP: ${{ secrets.APP_TESTFLIGHT_EXTERNAL_GROUP }}
         run: |
           bundle exec fastlane ios upload_testflight
