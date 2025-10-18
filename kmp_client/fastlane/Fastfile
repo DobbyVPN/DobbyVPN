@@ -135,7 +135,11 @@ platform :ios do
       pilot(
         ipa: ipa_path,
         api_key: api_key,
-        skip_waiting_for_build_processing: true
+        skip_waiting_for_build_processing: false,
+        export_compliance_encryption_updated: true,
+        export_compliance_encryption_uses_encryption: true,
+        export_compliance_encryption_compliance_required: true,
+        export_compliance_encryption_is_exempt: true
       )
     end
   end
