@@ -133,10 +133,15 @@ class DobbyVpnService : VpnService() {
                 logger.log("Previously used outline apiKey is empty")
                 return
             }
-            logger.log("!!! Start connecting Outline")
-            outlineLibFacade.init(buildOutlineUrl(methodPassword, serverPort))
-            logger.log("outlineLibFacade inited")
-            enableCloakIfNeeded(force = !isServiceStartedFromUi)
+
+            // Run Outline initialization asynchronously to prevent UI blocking
+            // The init() call can take time and would freeze the interface if run on main thread
+            serviceScope.launch {
+                logger.log("!!! Start connecting Outline")
+                outlineLibFacade.init(buildOutlineUrl(methodPassword, serverPort))
+                logger.log("outlineLibFacade inited")
+                enableCloakIfNeeded(force = !isServiceStartedFromUi)
+            }
         } else {
             logger.log("!!! Start disconnecting Outline")
             vpnInterface?.close()
