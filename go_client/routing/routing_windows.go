@@ -75,9 +75,9 @@ func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, MacAdd
 	return nil
 }
 
-func StopRouting(proxyIp string, TunDeviceName string) {
+func StopRouting(proxyIp string, TunDeviceName string, GatewayIP string, InterfaceName string) {
 	log.Infof("Outline/routing: Cleaning up routing table and rules...")
-	deleteProxyRoute(proxyIp)
+ 	deleteProxyRoute(proxyIp, GatewayIP, InterfaceName)
 	removeReservedSubnetBypass()
 	stopRoutingIpv4(TunDeviceName)
 	log.Infof("Outline/routing: Cleaned up routing table and rules.")
@@ -96,8 +96,8 @@ func AddOrUpdateProxyRoute(proxyIp string, gatewayIp string, gatewayInterfaceInd
 	}
 }
 
-func deleteProxyRoute(proxyIp string) {
-	command := fmt.Sprintf("route delete %s", proxyIp)
+func deleteProxyRoute(proxyIp string, GatewayIP string, InterfaceName string) {
+	command := fmt.Sprintf("netsh interface ipv4 delete route %s/32 \"%s\" %s", proxyIp, InterfaceName, GatewayIP)
 	_, err := ExecuteCommand(command)
 	if err != nil {
 		log.Infof("Outline/routing: Failed to delete proxy route for IP %s: %v\n", proxyIp, err)

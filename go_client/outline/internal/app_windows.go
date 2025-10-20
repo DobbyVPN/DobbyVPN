@@ -106,35 +106,74 @@ func (app App) Run(ctx context.Context) error {
 	log.Infof("Create Device")
 	defer ss.Close()
 
-	if err := ss.Refresh(); err != nil {
-		return fmt.Errorf("failed to refresh OutlineDevice: %w", err)
-	}
+    log.Infof("[Outline] Refreshing Shadowsocks session...")
+    if err := ss.Refresh(); err != nil {
+    	log.Errorf("Failed to refresh OutlineDevice: %v", err)
+    	return fmt.Errorf("failed to refresh OutlineDevice: %w", err)
+    }
+    log.Infof("[Outline] Session refreshed successfully")
 
-	tunInterface, err := routing.GetNetworkInterfaceByIP(TunDeviceIP)
-	if err != nil {
-		fmt.Println("Error:", err)
-		os.Exit(1)
-	}
+    log.Infof("[Routing] Looking up TUN interface by IP: %s", TunDeviceIP)
+    tunInterface, err := routing.GetNetworkInterfaceByIP(TunDeviceIP)
+    if err != nil {
+    	log.Errorf("Could not find TUN interface: %v", err)
+    	os.Exit(1)
+    }
+    log.Infof("[Routing] Found TUN interface: %s (HWAddr=%s)", tunInterface.Name, tunInterface.HardwareAddr)
 
-	dst := tunInterface.HardwareAddr
-	src := make([]byte, len(dst))
-	copy(src, dst)
-	src[2] += 2
+    dst := tunInterface.HardwareAddr
+    src := make([]byte, len(dst))
+    copy(src, dst)
+    src[2] += 2
+    log.Infof("[Routing] Generated spoofed MAC: original=%s new=%v", tunInterface.HardwareAddr, src)
 
-	if err := routing.StartRouting(ss.GetServerIP().String(), gatewayIP.String(), tunInterface.Name, tunInterface.HardwareAddr.String(), netInterface.Name, TunGateway, TunDeviceIP, src); err != nil {
-		return fmt.Errorf("failed to configure routing: %w", err)
-	}
-	defer routing.StopRouting(ss.GetServerIP().String(), tunInterface.Name)
+    log.Infof("[Routing] Starting routing configuration:")
+    log.Infof("  Server IP:     %s", ss.GetServerIP().String())
+    log.Infof("  Gateway IP:    %s", gatewayIP.String())
+    log.Infof("  TUN Interface: %s", tunInterface.Name)
+    log.Infof("  TUN MAC:       %s", tunInterface.HardwareAddr.String())
+    log.Infof("  Net Interface: %s", netInterface.Name)
+    log.Infof("  Tun Gateway:   %s", TunGateway)
+    log.Infof("  Tun Device IP: %s", TunDeviceIP)
 
-	/*ss1, err := NewOutlineDevice("ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpaVWVmTzExenFzN0pQbFBBMU4xWHlh@195.201.111.36:40287/?outline=1")
-	    if err != nil {
-	        return fmt.Errorf("failed to create OutlineDevice: %w", err)
-	    }
+    if err := routing.StartRouting(
+    	ss.GetServerIP().String(),
+    	gatewayIP.String(),
+    	tunInterface.Name,
+    	tunInterface.HardwareAddr.String(),
+    	netInterface.Name,
+    	TunGateway,
+    	TunDeviceIP,
+    	src,
+    ); err != nil {
+    	log.Errorf("Failed to configure routing: %v", err)
+    	return fmt.Errorf("failed to configure routing: %w", err)
+    }
 
-	    if err = startRouting(ss1.GetServerIP().String(), gatewayIP.String(), tunInterface.Name, tunInterface.HardwareAddr.String(), netInterface.Name, TunGateway, TunDeviceIP, src); err != nil {
-		return fmt.Errorf("failed to configure routing: %w", err)
-	    }
-	    defer stopRouting(ss1.GetServerIP().String(), tunInterface.Name)*/
+    log.Infof("[Routing] Routing successfully configured")
+
+    defer func() {
+    	log.Infof("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
+    	routing.StopRouting(ss.GetServerIP().String(), tunInterface.Name, gatewayIP.String(), netInterface.Name)
+    	log.Infof("[Routing] Routes cleaned up")
+    }()
+
+    var closeOnce sync.Once
+    closeAll := func() {
+        closeOnce.Do(func() {
+            log.Infof("[Outline] Closing interfaces")
+            _ = tun.Close()
+            _ = ss.Close()
+        })
+    }
+
+    defer closeAll()
+
+	go func() {
+        <-ctx.Done()
+        closeAll()
+        log.Infof("[Outline] Cancel received — closing interfaces")
+    }()
 
 	trafficCopyWg.Add(2)
 	go func() {
@@ -153,16 +192,17 @@ func (app App) Run(ctx context.Context) error {
 					break
 				}
 				if n > 0 {
-					log.Printf("Read %d bytes from tun\n", n)
+ 					//log.Printf("Read %d bytes from tun\n", n)
 					//log.Printf("Data from tun: % x\n", buffer[:n])
 					ipPacket, err := ExtractIPPacketFromEthernet(buffer[:n])
 					if err != nil {
 						fmt.Println("Error:", err)
+                        continue
 					}
 					_, err = ss.Write(ipPacket)
 					if err != nil {
 						//   log.Printf("Error writing to device: %v", err)
-						break
+                        break
 					}
 				}
 			}
@@ -181,10 +221,10 @@ func (app App) Run(ctx context.Context) error {
 				n, err := ss.Read(buf)
 				if err != nil {
 					//  fmt.Printf("Error reading from device: %v\n", err)
-					break
+                    break
 				}
 				if n > 0 {
-					log.Printf("Read %d bytes from OutlineDevice\n", n)
+					//log.Printf("Read %d bytes from OutlineDevice\n", n)
 					//log.Printf("Data from OutlineDevice: % x\n", buf[:n])
 
 					ethernetPacket, err := CreateEthernetPacket(dst, src, buf[:n])
@@ -205,7 +245,7 @@ func (app App) Run(ctx context.Context) error {
 		log.Printf("OutlineDevice -> tun stopped")
 	}()
 
-	trafficCopyWg.Wait()
+	log.Infof("Outline/app: Start trafficCopyWg...\n")
 
 	trafficCopyWg.Wait()
 
@@ -213,7 +253,6 @@ func (app App) Run(ctx context.Context) error {
 
 	tun.Close()
 	ss.Close()
-	routing.StopRouting(ss.GetServerIP().String(), tunInterface.Name)
 
 	return nil
 

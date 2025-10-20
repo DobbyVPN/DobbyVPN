@@ -62,14 +62,19 @@ func (c *OutlineClient) Connect() error {
 }
 
 func (c *OutlineClient) Disconnect() error {
+	log.Infof("Disconnect: try to lock c.mu")
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	log.Infof("Disconnect: locked c.mu")
 
 	if c.cancel != nil {
+	    log.Infof("Disconnect: c.cancel != nil")
 		c.cancel()
 		c.cancel = nil
 	}
+    log.Infof("Disconnect: common.Client.MarkInactive")
 	common.Client.MarkInactive(Name)
+    log.Infof("Disconnect: MarkedInactive")
 	return nil
 }
 
