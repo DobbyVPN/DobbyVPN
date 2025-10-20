@@ -18,6 +18,8 @@ type CkClient struct {
 	connected bool
 	config    client.RawConfig
 	session   *mux.Session
+	listener  net.Listener
+	udpConn   *net.UDPConn
 }
 
 type Config client.RawConfig
@@ -88,26 +90,34 @@ func (c *CkClient) Connect() error {
 	}
 
 	go func() {
-		if authInfo.Unordered {
-			acceptor := func() (*net.UDPConn, error) {
-				udpAddr, _ := net.ResolveUDPAddr("udp", localConfig.LocalAddr)
-				return net.ListenUDP("udp", udpAddr)
-			}
+        if authInfo.Unordered {
+            udpAddr, _ := net.ResolveUDPAddr("udp", localConfig.LocalAddr)
+            conn, err := net.ListenUDP("udp", udpAddr)
+            if err != nil {
+                log.Error(err)
+                return
+            }
 
-			log.Infof("ck-client: start listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
-			client.RouteUDP(acceptor, localConfig.Timeout, remoteConfig.Singleplex, seshMaker)
-			log.Infof("ck-client: stop listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
-		} else {
-			listener, err := net.Listen("tcp", localConfig.LocalAddr)
-			if err != nil {
-				log.Error(err)
-			}
+            c.udpConn = conn
 
-			log.Infof("ck-client: start listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
-			client.RouteTCP(listener, localConfig.Timeout, remoteConfig.Singleplex, seshMaker)
-			log.Infof("ck-client: stop listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
-		}
-	}()
+            log.Infof("ck-client: start listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
+            client.RouteUDP(func() (*net.UDPConn, error) { return conn, nil }, localConfig.Timeout, remoteConfig.Singleplex, seshMaker)
+            log.Infof("ck-client: stop listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
+        } else {
+            l, err := net.Listen("tcp", localConfig.LocalAddr)
+            if err != nil {
+                log.Error(err)
+                return
+            }
+
+            c.listener = l
+
+            log.Infof("ck-client: start listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
+            client.RouteTCP(l, localConfig.Timeout, remoteConfig.Singleplex, seshMaker)
+            log.Infof("ck-client: stop listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
+        }
+    }()
+
 
 	return nil
 }

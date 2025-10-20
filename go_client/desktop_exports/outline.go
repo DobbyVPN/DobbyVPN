@@ -12,10 +12,13 @@ var outlineMu sync.Mutex
 
 //export StartOutline
 func StartOutline(key *C.char) {
+    log.Infof("StartOutline")
 	str_key := C.GoString(key)
 
+    log.Infof("Make lock")
 	outlineMu.Lock()
 	defer outlineMu.Unlock()
+    log.Infof("locked")
 
 	if outlineClient != nil {
 		log.Infof("Disconnect existing outline client")

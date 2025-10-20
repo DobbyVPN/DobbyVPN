@@ -46,6 +46,7 @@ internal class DobbyVpnService(
         logger.log("startCloakOutline with key: $methodPassword $serverPort")
         runBlocking {
             connectionState.update(isConnected = true)
+            logger.log("CloakIsEnable = " + dobbyConfigsRepository.getIsCloakEnabled())
             if (dobbyConfigsRepository.getIsCloakEnabled()) {
                 vpnLibrary.startCloak(localHost, localPort, dobbyConfigsRepository.getCloakConfig(), false)
             }
@@ -58,7 +59,9 @@ internal class DobbyVpnService(
         logger.log("StopOutline")
         runBlocking {
             vpnLibrary.stopOutline()
+            logger.log("CloakIsEnable = " + dobbyConfigsRepository.getIsCloakEnabled())
             if (dobbyConfigsRepository.getIsCloakEnabled()) {
+                logger.log("StopCloak")
                 vpnLibrary.stopCloak()
             }
             connectionState.update(isConnected = false)

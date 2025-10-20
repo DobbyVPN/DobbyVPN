@@ -165,10 +165,10 @@ class MainViewModel(
     }
 
     private suspend fun stopVpnService() {
+        vpnManager.stop()
         configsRepository.setIsOutlineEnabled(false)
         configsRepository.setIsCloakEnabled(false)
         connectionStateRepository.update(isConnected = false)
-        vpnManager.stop()
     }
     //endregion
 
