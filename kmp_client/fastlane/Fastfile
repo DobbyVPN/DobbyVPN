@@ -40,11 +40,20 @@ platform :ios do
     BUNDLE_ID  = "vpn.dobby.app"
     BUNDLE_ID_TUNNEL = "vpn.dobby.app.tunnel"
 
-    desc "Bump CFBundleVersion to GITHUB_RUN_NUMBER"
-    lane :bump_build do
-      build_number = ENV['GITHUB_RUN_NUMBER']
+    build_number     = ENV['GITHUB_RUN_NUMBER']
+    major_ver        = ENV['APP_MAJOR_VERSION']
+    minor_ver        = ENV['APP_MINOR_VERSION']
+    maintenance_ver  = ENV['APP_MAINTENANCE_VERSION']
+
+    desc "Bump CFBundleVersion to GITHUB_RUN_NUMBER and CFBundleShortVersionString"
+    lane :bump_build_and_version do
       increment_build_number(
         build_number: build_number,
+        xcodeproj: PROJECT
+      )
+
+      increment_version_number(
+        version_number: "#{major_ver}.#{minor_ver}.#{maintenance_ver}",
         xcodeproj: PROJECT
       )
     end
@@ -130,12 +139,17 @@ platform :ios do
       )
   
       ipa_path = "#{EXPORT_DIR}/#{IPA_NAME}"
-      puts ipa_path
   
-      pilot(
+      upload_to_testflight(
         ipa: ipa_path,
         api_key: api_key,
-        skip_waiting_for_build_processing: true
+        skip_waiting_for_build_processing: false,
+        uses_non_exempt_encryption: false,
+        notify_external_testers: true,
+        distribute_external: true,
+        groups: [ ENV['APP_TESTFLIGHT_EXTERNAL_GROUP'] ],
+        changelog: "Add Version #{major_ver}.#{minor_ver}.#{maintenance_ver}",
+        app_version: "#{major_ver}.#{minor_ver}.#{maintenance_ver}"
       )
     end
   end
