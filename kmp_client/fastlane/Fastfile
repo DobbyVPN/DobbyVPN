@@ -1,10 +1,16 @@
 default_platform(:android)
 
+MAJOR_VER        = ENV['APP_MAJOR_VERSION']
+MINOR_VER        = ENV['APP_MINOR_VERSION']
+MAINTENANCE_VER  = ENV['APP_MAINTENANCE_VERSION']
+
+
 platform :android do
   desc "Build and sign Android APK"
   lane :build_android do
-    commit = ENV["GITHUB_SHA"]
-    repo   = ENV["GITHUB_REPOSITORY"]
+    commit       = ENV["GITHUB_SHA"]
+    repo         = ENV["GITHUB_REPOSITORY"]
+    package_name = "com.dobby.vpn"
     commit_link = "https://github.com/#{repo}/tree/#{commit}"
 
     tmp = Dir.mktmpdir
@@ -16,7 +22,9 @@ platform :android do
         properties: {
         "projectRepositoryCommit" => commit,
         "projectRepositoryCommitLink" => commit_link,
-        "android.injected.signing.store.file" => keystore_path, 
+        "android.injected.signing.store.file" => keystore_path,
+        "android.injected.version.code" => "#{MAJOR_VER}#{MINOR_VER}#{MAINTENANCE_VER}",
+        "android.injected.version.name" => "#{MAJOR_VER}.#{MINOR_VER}.#{MAINTENANCE_VER}",
         "android.injected.signing.store.password" => ENV["KEYSTORE_PASSWORD"],
         "android.injected.signing.key.alias" => ENV["KEY_ALIAS"],
         "android.injected.signing.key.password" => ENV["KEY_PASSWORD"],
@@ -41,9 +49,6 @@ platform :ios do
     BUNDLE_ID_TUNNEL = "vpn.dobby.app.tunnel"
 
     build_number     = ENV['GITHUB_RUN_NUMBER']
-    major_ver        = ENV['APP_MAJOR_VERSION']
-    minor_ver        = ENV['APP_MINOR_VERSION']
-    maintenance_ver  = ENV['APP_MAINTENANCE_VERSION']
 
     desc "Bump CFBundleVersion to GITHUB_RUN_NUMBER and CFBundleShortVersionString"
     lane :bump_build_and_version do
@@ -53,7 +58,7 @@ platform :ios do
       )
 
       increment_version_number(
-        version_number: "#{major_ver}.#{minor_ver}.#{maintenance_ver}",
+        version_number: "#{MAJOR_VER}.#{MINOR_VER}.#{MAINTENANCE_VER}",
         xcodeproj: PROJECT
       )
     end
@@ -148,8 +153,8 @@ platform :ios do
         notify_external_testers: true,
         distribute_external: true,
         groups: [ ENV['APP_TESTFLIGHT_EXTERNAL_GROUP'] ],
-        changelog: "Add Version #{major_ver}.#{minor_ver}.#{maintenance_ver}",
-        app_version: "#{major_ver}.#{minor_ver}.#{maintenance_ver}"
+        changelog: "Add Version #{MAJOR_VER}.#{MINOR_VER}.#{MAINTENANCE_VER}",
+        app_version: "#{MAJOR_VER}.#{MINOR_VER}.#{MAINTENANCE_VER}"
       )
     end
   end

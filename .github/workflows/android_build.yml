@@ -6,6 +6,10 @@ on:
 jobs:
   android_build:
     runs-on: ubuntu-latest
+    env:
+      APP_MAJOR_VERSION: ${{ vars.MAJOR }}
+      APP_MINOR_VERSION: ${{ vars.MINOR }}
+      APP_MAINTENANCE_VERSION: ${{ vars.MAINTENANCE }}
 
     steps:
       - uses: actions/checkout@v4
