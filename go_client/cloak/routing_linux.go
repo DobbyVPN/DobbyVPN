@@ -1,5 +1,5 @@
-//go:build linux
-// +build linux
+//go:build linux && !(android || ios)
+// +build linux,!android,!ios
 
 package cloak
 

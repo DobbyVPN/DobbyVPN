@@ -24,7 +24,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func startTunnel(options: [String : NSObject]?) async throws {
         logs.writeLog(log: "startTunnel in PacketTunnelProvider, thread: \(Thread.current)")
-        HealthCheck.shared.fullCheckUp()
+        
+        do {
+            HealthCheck.shared.fullCheckUp()
+        } catch {
+            logs.writeLog(log: "[startTunnel] HealthCheck error: \(error.localizedDescription)")
+        }
+        
         self.startSentry()
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
         let methodPassword = configsRepository.getMethodPasswordOutline()
@@ -57,7 +63,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         DispatchQueue.global().async { [weak self] in
             self?.startReadPacketsAndForwardToDevice()
         }
-        HealthCheck.shared.fullCheckUp()
+
+        do {
+            HealthCheck.shared.fullCheckUp()
+        } catch {
+            logs.writeLog(log: "[startTunnel] HealthCheck error: \(error.localizedDescription)")
+        }
+        
         logs.writeLog(log: "startTunnel: packet loops started")
     }
 
@@ -73,33 +85,41 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func startReadPacketsFromDevice() {
         logs.writeLog(log: "Starting to read packets from device... \(Thread.current)")
-        while true {
-//            logs.writeLog(log: "Reading packets from device... \(Thread.current)")
-            autoreleasepool {
-                let data = device.readFromDevice()
-//                logs.writeLog(log: "Read from device: \(data.count)" + parseIPv4Packet(data))
-                let packets: [Data] = [data]
-                let protocols: [NSNumber] = [NSNumber(value: AF_INET)]
-
-                let success = self.packetFlow.writePackets(packets, withProtocols: protocols)
-                if !success {
-                    logs.writeLog(log: "Failed to write packets to the tunnel")
+        do {
+            while true {
+                //            logs.writeLog(log: "Reading packets from device... \(Thread.current)")
+                autoreleasepool {
+                    let data = device.readFromDevice()
+                    //                logs.writeLog(log: "Read from device: \(data.count)" + parseIPv4Packet(data))
+                    let packets: [Data] = [data]
+                    let protocols: [NSNumber] = [NSNumber(value: AF_INET)]
+                    
+                    let success = self.packetFlow.writePackets(packets, withProtocols: protocols)
+                    if !success {
+                        logs.writeLog(log: "Failed to write packets to the tunnel")
+                    }
                 }
             }
+        } catch {
+            logs.writeLog(log: "[startReadPacketsFromDevice] Error: \(error.localizedDescription)")
         }
         logs.writeLog(log: "Finishing #startReadPacketsFromDevice")
     }
     
     private func startReadPacketsAndForwardToDevice() {
         logs.writeLog(log: "Starting to read packets from tunnel... \(Thread.current)")
-        self.packetFlow.readPackets { [weak self] (packets, protocols) in
-//            NativeModuleHolder.logsRepository.writeLog(log: "Read packets from tunnel: \(packets.count) protocols: \(protocols) \(Thread.current)")
-            guard let self else { return }
-//            NativeModuleHolder.logsRepository.writeLog(log: "Continue reading packets from tunnel... \(Thread.current)")
-            if !packets.isEmpty {
-                forwardPacketsToDevice(packets, protocols: protocols)
+        do {
+            self.packetFlow.readPackets { [weak self] (packets, protocols) in
+                //            NativeModuleHolder.logsRepository.writeLog(log: "Read packets from tunnel: \(packets.count) protocols: \(protocols) \(Thread.current)")
+                guard let self else { return }
+                //            NativeModuleHolder.logsRepository.writeLog(log: "Continue reading packets from tunnel... \(Thread.current)")
+                if !packets.isEmpty {
+                    forwardPacketsToDevice(packets, protocols: protocols)
+                }
+                startReadPacketsAndForwardToDevice()
             }
-            startReadPacketsAndForwardToDevice()
+        } catch {
+            logs.writeLog(log: "[startReadPacketsAndForwardToDevice] Error: \(error.localizedDescription)")
         }
     }
 
@@ -180,7 +200,10 @@ class DeviceFacade {
         var err: NSErrorPointer = nil
         device = Cloak_outlineNewOutlineDevice(config, err)
         logs = _logs
-        logs?.writeLog(log: "[DeviceFacade] Device initiaization finished (error is:\(err == nil))")
+        logs?.writeLog(log: "[DeviceFacade] Device initiaization finished (has error:\(err != nil))")
+        if (err != nil) {
+            logs?.writeLog(log: "[DeviceFacade] Error: \(err))")
+        }
     }
     
     func write(data: Data) {

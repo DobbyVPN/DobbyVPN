@@ -1,6 +1,11 @@
 package main
 
-import "go_client/healthcheck"
+import "C"
+import (
+	log "github.com/sirupsen/logrus"
+	"go_client/common"
+	"go_client/healthcheck"
+)
 
 //export StartHealthCheck
 func StartHealthCheck(period int, sendMetrics bool) {
@@ -25,4 +30,10 @@ func TcpPing(address string) (int32, error) {
 //export UrlTest
 func UrlTest(url string, standard int) (int32, error) {
 	return healthcheck.UrlTest(url, standard)
+}
+
+//export CouldStart
+func CouldStart() bool {
+	log.Infof("===================Call CouldStart: %v\n", common.Client.CouldStart())
+	return common.Client.CouldStart()
 }

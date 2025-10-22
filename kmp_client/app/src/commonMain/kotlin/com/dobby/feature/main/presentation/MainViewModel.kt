@@ -88,7 +88,15 @@ class MainViewModel(
     fun onConnectionButtonClicked(
         connectionUrl: String,
     ) {
-        setConfig(connectionUrl)
+        if (!configsRepository.couldStart()) {
+            return
+        }
+        try {
+            setConfig(connectionUrl)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return
+        }
         viewModelScope.launch {
             when (connectionStateRepository.flow.value) {
                 true -> stopVpnService()
@@ -145,7 +153,7 @@ class MainViewModel(
                     }.bodyAsText()
                 }
             } catch (e: Exception) {
-                "Can't get config by url. Error" + e.message
+                throw RuntimeException("Can't get config by url. Error: ${e.message}", e)
             }
         } else {
             connectionUrl

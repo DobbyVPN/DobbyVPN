@@ -28,20 +28,20 @@ func InitLog() {
 }
 
 func StartCloakClient(localHost, localPort, config string, udp bool) {
-    log.Infof("StartCloakClient inner")
+	log.Infof("StartCloakClient inner")
 	mu.Lock()
 	defer mu.Unlock()
 
-    log.Infof("Get lock")
+	log.Infof("Get lock")
 
 	if client != nil {
-	    log.Infof("Need to stop old cloak client")
-	    mu.Unlock()
+		log.Infof("Need to stop old cloak client")
+		mu.Unlock()
 		StopCloakClient()
-	    mu.Lock()
+		mu.Lock()
 	}
 
-    log.Infof("deleted old cloak client")
+	log.Infof("deleted old cloak client")
 
 	var rawConfig exported_client.Config
 	err := json.Unmarshal([]byte(config), &rawConfig)
@@ -58,35 +58,72 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 
 	// Cloak routing
 	RemoteHostIP = rawConfig.RemoteHost
-	err = StartRoutingCloak(RemoteHostIP)
-	if err != nil {
-		log.Infof("Can't routing cloak, %v", err)
-		return
-	}
-	log.Infof("cloak client: Routed")
 
 	client = exported_client.NewCkClient(rawConfig)
 
+<<<<<<< HEAD
+<<<<<<< HEAD
 	common.Client.SetVpnClient(Name, client)
-	err = client.Connect() // TODO: handle err
+	err = common.Client.Connect(Name)
+=======
+	common.Client.SetVpnClient(exported_client.Name, client)
+	err = common.Client.Connect(exported_client.Name)
+>>>>>>> c3c2f56 (Fix fast connect/disconnect on windows)
+=======
+	common.Client.SetVpnClient(Name, client)
+	err = common.Client.Connect(Name)
+>>>>>>> b44136a (Rollback status marking 2)
 	if err != nil {
 		log.Errorf("cloak client: Failed to connect to cloak client - %v", err)
 		return
 	}
+<<<<<<< HEAD
+<<<<<<< HEAD
+	common.Client.MarkInProgress(Name)
+	err = StartRoutingCloak(RemoteHostIP)
+	if err != nil {
+		common.Client.MarkInactive(Name)
+		log.Infof("Can't routing cloak, %v", err)
+		return
+	}
+	common.Client.MarkActive(Name)
+=======
+=======
+	common.Client.MarkInProgress(Name)
+>>>>>>> 7039ac7 (Rollback status marking)
+	err = StartRoutingCloak(RemoteHostIP)
+	if err != nil {
+		common.Client.MarkInactive(Name)
+		log.Infof("Can't routing cloak, %v", err)
+		return
+	}
+<<<<<<< HEAD
+>>>>>>> c3c2f56 (Fix fast connect/disconnect on windows)
+=======
+	common.Client.MarkActive(Name)
+>>>>>>> 7039ac7 (Rollback status marking)
 
 	log.Infof("cloak client connected")
-
-	common.Client.MarkActive(Name)
 }
 
 func StopCloakClient() {
-    log.Infof("StopCloakClient inner")
+	log.Infof("StopCloakClient inner")
+<<<<<<< HEAD
+<<<<<<< HEAD
 	defer common.Client.MarkInactive(Name)
+=======
+	common.Client.MarkInProgress(exported_client.Name)
+>>>>>>> c3c2f56 (Fix fast connect/disconnect on windows)
+=======
+	defer common.Client.MarkInactive(Name)
+>>>>>>> 7039ac7 (Rollback status marking)
 	mu.Lock()
 	defer mu.Unlock()
-    log.Infof("Get mutex")
+	log.Infof("Get mutex")
 	if RemoteHostIP != "" {
+		common.Client.MarkInProgress(Name)
 		StopRoutingCloak(RemoteHostIP)
+		common.Client.MarkActive(Name)
 		RemoteHostIP = ""
 	}
 
@@ -94,10 +131,18 @@ func StopCloakClient() {
 		return
 	}
 
-    log.Infof("Start client disconnected")
+	log.Infof("Start client disconnected")
 
-	client.Disconnect()
+<<<<<<< HEAD
+<<<<<<< HEAD
+	common.Client.Disconnect(Name)
+=======
+	common.Client.Disconnect(exported_client.Name)
+>>>>>>> c3c2f56 (Fix fast connect/disconnect on windows)
+=======
+	common.Client.Disconnect(Name)
+>>>>>>> b44136a (Rollback status marking 2)
 	client = nil
 
-    log.Infof("Client disconnected")
+	log.Infof("Client disconnected")
 }

@@ -24,6 +24,7 @@ typedef struct { const char *p; ptrdiff_t n; } _GoString_;
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 #line 1 "cgo-generated-wrapper"
 
@@ -88,6 +89,7 @@ extern void Disconnect();
 extern int Read(char* buf, int maxLen);
 extern int Write(char* buf, int length);
 extern void NewOutlineClient(char* config);
+extern bool CouldStart();
 
 #ifdef __cplusplus
 }

@@ -6,18 +6,33 @@ package internal
 import (
 	"errors"
 	"fmt"
-	"log"
+<<<<<<< HEAD
+
+	log "github.com/sirupsen/logrus"
+
+=======
+	log "github.com/sirupsen/logrus"
+>>>>>>> 4736f4d (Fix proxi route and cloak killing)
 	//"os/exec"
 	"context"
 	"sync"
+
 	//"time"
 
+	"go_client/common"
+<<<<<<< HEAD
+<<<<<<< HEAD
+	outlineCommon "go_client/outline/common"
+=======
+>>>>>>> c3c2f56 (Fix fast connect/disconnect on windows)
+	"go_client/routing"
+=======
+>>>>>>> 7039ac7 (Rollback status marking)
+	outlineCommon "go_client/outline/common"
 	"go_client/routing"
 
 	"github.com/jackpal/gateway"
 )
-
-//var Logging = out.Logging
 
 func add_route(proxyIp string) {
 	gatewayIP, err := gateway.DiscoverGateway()
@@ -27,7 +42,7 @@ func add_route(proxyIp string) {
 
 	addSpecificRoute := fmt.Sprintf("sudo route add -net %s/32 %s", proxyIp, gatewayIP.String())
 	if _, err := routing.ExecuteCommand(addSpecificRoute); err != nil {
-		logging.Info.Printf("failed to add specific route: %w", err)
+		log.Infof("failed to add specific route: %w", err)
 	}
 }
 
@@ -39,7 +54,7 @@ func (app App) Run(ctx context.Context) error {
 		panic(err)
 	}
 
-	logging.Info.Printf("gatewayIP: %s", gatewayIP.String())
+	log.Infof("gatewayIP: %s", gatewayIP.String())
 
 	trafficCopyWg := &sync.WaitGroup{}
 	defer trafficCopyWg.Wait()
@@ -66,7 +81,23 @@ func (app App) Run(ctx context.Context) error {
 
 	log.Printf("Device created")
 
-	// Copy the traffic from tun device to OutlineDevice bidirectionally
+	var closeOnce sync.Once
+	closeAll := func() {
+		closeOnce.Do(func() {
+			log.Infof("[Outline] Closing interfaces")
+			_ = tun.Close()
+			_ = ss.Close()
+		})
+	}
+
+	defer closeAll()
+
+	go func() {
+		<-ctx.Done()
+		closeAll()
+		log.Infof("[Outline] Cancel received — closing interfaces")
+	}()
+
 	trafficCopyWg.Add(2)
 
 	go func() {
@@ -126,20 +157,36 @@ func (app App) Run(ctx context.Context) error {
 		log.Printf("OutlineDevice -> tun stopped")
 	}()
 
+	common.Client.MarkInProgress(outlineCommon.Name)
 	if err := routing.StartRouting(ss.GetServerIP().String(), gatewayIP.String(), tun.(*tunDevice).name); err != nil {
+		common.Client.MarkInactive(outlineCommon.Name)
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
-	defer routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
+	common.Client.MarkActive(outlineCommon.Name)
+
+	defer func() {
+<<<<<<< HEAD
+<<<<<<< HEAD
+		common.Client.MarkInProgress(outlineCommon.Name)
+=======
+>>>>>>> c3c2f56 (Fix fast connect/disconnect on windows)
+=======
+		common.Client.MarkInProgress(outlineCommon.Name)
+>>>>>>> 7039ac7 (Rollback status marking)
+		log.Infof("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
+		routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
+		log.Infof("[Routing] Routes cleaned up")
+		common.Client.MarkInactive(outlineCommon.Name)
+	}()
+
+	log.Infof("Outline/app: Start trafficCopyWg...\n")
 
 	trafficCopyWg.Wait()
 
-	trafficCopyWg.Wait()
+	log.Infof("Outline/app: received interrupt signal, terminating...\n")
 
 	tun.Close()
-	log.Printf("Tun closed")
 	ss.Close()
-	log.Printf("Device closed")
-	routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
-	log.Printf("Stopped")
+
 	return nil
 }

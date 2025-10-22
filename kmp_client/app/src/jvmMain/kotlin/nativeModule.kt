@@ -13,7 +13,7 @@ val jvmMainModule = makeNativeModule(
     copyLogsInteractor = { CopyLogsInteractorImpl() },
     logsRepository = { LogsRepository() },
     ipRepository = { IpRepositoryImpl(get()) },
-    configsRepository = { DobbyConfigsRepositoryImpl() },
+    configsRepository = { DobbyConfigsRepositoryImpl( vpnLibrary = get() ) },
     connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(get()) },
     awgManager = { AwgManagerImpl(get()) }

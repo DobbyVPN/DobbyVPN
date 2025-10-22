@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import android.util.Log.i as AndroidLog
+import com.dobby.outline.OutlineGo
 
 internal class DobbyConfigsRepositoryImpl(
     private val prefs: SharedPreferences
@@ -128,6 +129,10 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.edit().putBoolean("isAmneziaWGEnabled", isAmneziaWGEnabled).apply().also {
             AndroidLog("DOBBY_TAG", "setIsAmneziaWGEnabled = $isAmneziaWGEnabled")
         }
+    }
+
+    override fun couldStart(): Boolean {
+        return true
     }
 
     companion object {

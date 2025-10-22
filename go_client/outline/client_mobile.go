@@ -5,13 +5,12 @@ package outline
 import (
 	"fmt"
 	"go_client/common"
+	outlineCommon "go_client/outline/common"
 	"go_client/outline/internal"
 	"log"
 	"net"
 	// _ "go_client/logger"
 )
-
-const Name = "outline"
 
 type OutlineClient struct {
 	device *internal.OutlineDevice
@@ -21,7 +20,7 @@ type OutlineClient struct {
 func NewClient(transportConfig string) *OutlineClient {
 	c := &OutlineClient{config: transportConfig}
 	log.Println("outline client created")
-	common.Client.SetVpnClient(Name, c)
+	common.Client.SetVpnClient(outlineCommon.Name, c)
 	return c
 }
 
@@ -36,7 +35,7 @@ func (c *OutlineClient) Connect() error {
 	log.Println("outline client connected")
 
 	c.device = od
-	common.Client.MarkActive(Name)
+	common.Client.MarkActive(outlineCommon.Name)
 	return nil
 }
 
@@ -47,7 +46,7 @@ func (c *OutlineClient) Disconnect() error {
 		return err
 	}
 	log.Println("outline client disconnected")
-	common.Client.MarkInactive(Name)
+	common.Client.MarkInactive(outlineCommon.Name)
 	return nil
 }
 
@@ -68,6 +67,22 @@ func (c *OutlineClient) Read() ([]byte, error) {
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
 
+<<<<<<< HEAD
+<<<<<<< HEAD
+<<<<<<< HEAD
+<<<<<<< HEAD
+	// TODO
+=======
+    // TODO
+>>>>>>> cbe7829 (Return all buffer from android)
+=======
+>>>>>>> c62b141 (Try to return slice of buffer from android)
+=======
+    // TODO
+>>>>>>> 42e0ee3 (Fix UI)
+=======
+	// TODO
+>>>>>>> 7039ac7 (Rollback status marking)
 	// Return a slice containing only the actually read bytes.
 	// The TUN driver validates the capacity of the underlying buffer during write operations.
 	// Returning the full 64KB buffer would cause "no buffer space available" errors

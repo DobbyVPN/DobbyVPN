@@ -6,11 +6,15 @@ import (
 	"context"
 	log "github.com/sirupsen/logrus"
 	"go_client/common"
+<<<<<<< HEAD
+	outlineCommon "go_client/outline/common"
+	"go_client/outline/internal"
+=======
+>>>>>>> 7039ac7 (Rollback status marking)
+	outlineCommon "go_client/outline/common"
 	"go_client/outline/internal"
 	"sync"
 )
-
-const Name = "outline"
 
 type OutlineClient struct {
 	app    *internal.App
@@ -34,7 +38,7 @@ func NewClient(transportConfig string) *OutlineClient {
 			},
 		},
 	}
-	common.Client.SetVpnClient(Name, c)
+	common.Client.SetVpnClient(outlineCommon.Name, c)
 	return c
 }
 
@@ -53,11 +57,8 @@ func (c *OutlineClient) Connect() error {
 	go func() {
 		if err := c.app.Run(ctx); err != nil {
 			log.Infof("connect outline failed: %v", err)
-			common.Client.MarkInactive(Name)
 		}
 	}()
-
-	common.Client.MarkActive(Name)
 	return nil
 }
 
@@ -68,13 +69,21 @@ func (c *OutlineClient) Disconnect() error {
 	log.Infof("Disconnect: locked c.mu")
 
 	if c.cancel != nil {
-	    log.Infof("Disconnect: c.cancel != nil")
+		log.Infof("Disconnect: c.cancel != nil")
 		c.cancel()
 		c.cancel = nil
 	}
-    log.Infof("Disconnect: common.Client.MarkInactive")
-	common.Client.MarkInactive(Name)
-    log.Infof("Disconnect: MarkedInactive")
+<<<<<<< HEAD
+<<<<<<< HEAD
+	log.Infof("Disconnect: common.Client.MarkInactive")
+	common.Client.MarkInactive(outlineCommon.Name)
+=======
+>>>>>>> c3c2f56 (Fix fast connect/disconnect on windows)
+=======
+	log.Infof("Disconnect: common.Client.MarkInactive")
+	common.Client.MarkInactive(outlineCommon.Name)
+>>>>>>> 7039ac7 (Rollback status marking)
+	log.Infof("Disconnect: MarkedInactive")
 	return nil
 }
 

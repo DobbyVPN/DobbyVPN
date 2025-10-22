@@ -51,6 +51,8 @@ interface DobbyConfigsRepository {
 
     fun setIsAmneziaWGEnabled(isAmneziaWGEnabled: Boolean)
     // endregion
+
+    fun couldStart(): Boolean
 }
 
 enum class VpnInterface {

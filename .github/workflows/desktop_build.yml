@@ -10,6 +10,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Download Go AAR
+        uses: actions/download-artifact@v4
+        with:
+          name: outline-debug.aar
+          path: kmp_client/libs
+
+      - name: Download So
+        uses: actions/download-artifact@v4
+        with:
+          name: liboutline.so
+          path: kmp_client/outline/src/main/jniLibs/arm64-v8a
+
       - name: Download Windows lib
         uses: actions/download-artifact@v4
         with:
