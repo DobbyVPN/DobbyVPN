@@ -22,8 +22,7 @@ platform :android do
       }
     )
 
-    apk_location = "#{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]}"
-    sh "mv #{apk_location}/app-release-unsigned.apk ./DobbyVPN-v#{FULL_VERSION}-release-unsign.apk"
+    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} ./DobbyVPN-v#{FULL_VERSION}-unsign.apk"
   end
 
   desc "Build and sign Android APK"
@@ -47,8 +46,7 @@ platform :android do
       }
     )
 
-    apk_location = "#{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]}"
-    sh "mv #{apk_location}/app-release.apk ./DobbyVPN-v#{FULL_VERSION}-release-sign.apk"
+    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} ./DobbyVPN-v#{FULL_VERSION}-sign.apk"
   end
 end
 
