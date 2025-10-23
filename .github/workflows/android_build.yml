@@ -78,10 +78,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dobbyvpn-android-sign.apk
-          path: "kmp_client/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-release-sign.apk"
+          path: "kmp_client/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-sign.apk"
 
       - name: Upload UnSigned APK
         uses: actions/upload-artifact@v4
         with:
           name: dobbyvpn-android-unsign.apk
-          path: "kmp_client/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-release-unsign.apk"
+          path: "kmp_client/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-unsign.apk"
