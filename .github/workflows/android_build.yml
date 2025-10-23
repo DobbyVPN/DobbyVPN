@@ -10,6 +10,8 @@ jobs:
       APP_MAJOR_VERSION: ${{ vars.MAJOR }}
       APP_MINOR_VERSION: ${{ vars.MINOR }}
       APP_MAINTENANCE_VERSION: ${{ vars.MAINTENANCE }}
+      GITHUB_SHA: ${{ github.sha }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
 
     steps:
       - uses: actions/checkout@v4
@@ -52,14 +54,21 @@ jobs:
           sudo apt-get install -y golang gcc libgl1-mesa-dev xorg-dev coreutils
           sudo apt-get install -y gcc-multilib gcc-mingw-w64
 
-      - name: Build & Sign via Fastlane
+      - name: Bundle Instsall
         working-directory: kmp_client
         run: |
           bundle install
+
+      - name: Build UnSigned via Fastlane
+        working-directory: kmp_client
+        run: |
           bundle exec fastlane android build_android
+
+      - name: Build & Sign via Fastlane
+        working-directory: kmp_client
+        run: |
+          bundle exec fastlane android build_android_and_signing
         env:
-          GITHUB_SHA: ${{ github.sha }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
@@ -68,5 +77,11 @@ jobs:
       - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: dobbyvpn-android.apk
-          path: kmp_client/dobbyvpn-android.apk
+          name: dobbyvpn-android-sign.apk
+          path: "kmp_client/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-release-sign.apk"
+
+      - name: Upload UnSigned APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dobbyvpn-android-unsign.apk
+          path: "kmp_client/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-release-unsign.apk"
