@@ -1,0 +1,3 @@
+DobbyVPN is a minimalist and open VPN client for IOS/Windows/Android, designed with a focus on simplicity, privacy, and control. 
+It allows you to quickly connect to a VPN service, encrypts your internet connection, and hides your device's IP address, helping to protect you on public Wi-Fi networks and bypass geo-restrictions. 
+The code is available on GitHub, and the project supports transparency and openness. It is ideal as a lightweight solution for those who value privacy and prefer open source code.
