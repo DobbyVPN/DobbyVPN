@@ -16,23 +16,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func add_route(proxyIp string) {
-	gatewayIP, err := gateway.DiscoverGateway()
-	if err != nil {
-		panic(err)
-	}
-	interfaceName, err := routing.FindInterfaceByGateway(gatewayIP.String())
-	if err != nil {
-		panic(err)
-	}
-	netInterface, err := routing.GetNetworkInterfaceByIP(interfaceName)
-	if err != nil {
-		fmt.Println("Error:", err)
-		os.Exit(1)
-	}
-	routing.AddOrUpdateProxyRoute(proxyIp, gatewayIP.String(), netInterface.Name)
-}
-
 func CreateEthernetPacket(dstMAC, srcMAC, ipPacket []byte) ([]byte, error) {
 	if len(ipPacket) == 0 {
 		return nil, errors.New("IP-packet is empty")

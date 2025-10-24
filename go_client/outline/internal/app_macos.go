@@ -17,18 +17,6 @@ import (
 	"github.com/jackpal/gateway"
 )
 
-func add_route(proxyIp string) {
-	gatewayIP, err := gateway.DiscoverGateway()
-	if err != nil {
-		panic(err)
-	}
-
-	addSpecificRoute := fmt.Sprintf("sudo route add -net %s/32 %s", proxyIp, gatewayIP.String())
-	if _, err := routing.ExecuteCommand(addSpecificRoute); err != nil {
-		log.Infof("failed to add specific route: %w", err)
-	}
-}
-
 func (app App) Run(ctx context.Context) error {
 	// this WaitGroup must Wait() after tun is closed
 

@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-func executeAsAdmin(commands []string) (string, error) {
+func ExecuteAsAdmin(commands []string) (string, error) {
 	script := fmt.Sprintf(`do shell script "%s" with administrator privileges`,
 		strings.Join(commands, "; "))
 
