@@ -11,6 +11,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"net"
 	"sync"
+	"os"
 )
 
 type CkClient struct {
@@ -90,11 +91,16 @@ func (c *CkClient) Connect() error {
 	}
 
 	go func() {
+	    defer func() {
+            if r := recover(); r != nil {
+                log.Infof("ck-client: recovered from panic from: %v", r)
+            }
+        }()
         if authInfo.Unordered {
             udpAddr, _ := net.ResolveUDPAddr("udp", localConfig.LocalAddr)
             conn, err := net.ListenUDP("udp", udpAddr)
             if err != nil {
-                log.Error(err)
+                log.Warnf("ck-client: goroutines: err %v\n", err)
                 return
             }
 
@@ -106,7 +112,7 @@ func (c *CkClient) Connect() error {
         } else {
             l, err := net.Listen("tcp", localConfig.LocalAddr)
             if err != nil {
-                log.Error(err)
+                log.Warnf("ck-client: goroutines: err %v\n", err)
                 return
             }
 
@@ -123,24 +129,56 @@ func (c *CkClient) Connect() error {
 }
 
 func (c *CkClient) Disconnect() error {
+    log.StandardLogger().ExitFunc = func(int) {
+        panic("panic from log.StandardLogger().ExitFunc")
+    }
+    defer func() {
+        log.StandardLogger().ExitFunc = func(int) {
+            os.Exit(1)
+        }
+    }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if !c.connected {
-		log.Println("ck-client not connected")
+		log.Infof("ck-client: already disconnected")
 		return nil
 	}
+
+	log.Infof("ck-client: initiating disconnect...")
 	c.connected = false
 
-	if c.session != nil {
-		c.session.Close()
-		log.Printf("ck-client session closed")
+	if c.listener != nil {
+		addr := c.listener.Addr().String()
+		if err := c.listener.Close(); err != nil {
+			log.Warnf("ck-client: error closing TCP listener %v: %v", addr, err)
+		} else {
+			log.Infof("ck-client: TCP listener %v closed", addr)
+		}
+		c.listener = nil
 	}
 
-	log.Println("ck-client disconnected")
+	if c.udpConn != nil {
+		addr := c.udpConn.LocalAddr().String()
+		if err := c.udpConn.Close(); err != nil {
+			log.Warnf("ck-client: error closing UDP conn %v: %v", addr, err)
+		} else {
+			log.Infof("ck-client: UDP listener %v closed", addr)
+		}
+		c.udpConn = nil
+	}
 
+	if c.session != nil {
+		log.Infof("ck-client: closing session...")
+		c.session.Close()
+		c.session = nil
+		log.Infof("ck-client: session closed")
+	}
+
+	log.Infof("ck-client: fully disconnected")
 	return nil
 }
+
 
 func (c *CkClient) Refresh() error {
 	if err := c.Disconnect(); err != nil { // TODO: handle error with more detail
