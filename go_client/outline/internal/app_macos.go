@@ -6,7 +6,7 @@ package internal
 import (
 	"errors"
 	"fmt"
-	"log"
+	log "github.com/sirupsen/logrus"
 	//"os/exec"
 	"context"
 	"sync"
@@ -17,8 +17,6 @@ import (
 	"github.com/jackpal/gateway"
 )
 
-//var Logging = out.Logging
-
 func add_route(proxyIp string) {
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
@@ -27,7 +25,7 @@ func add_route(proxyIp string) {
 
 	addSpecificRoute := fmt.Sprintf("sudo route add -net %s/32 %s", proxyIp, gatewayIP.String())
 	if _, err := routing.ExecuteCommand(addSpecificRoute); err != nil {
-		logging.Info.Printf("failed to add specific route: %w", err)
+		log.Infof("failed to add specific route: %w", err)
 	}
 }
 
@@ -39,7 +37,7 @@ func (app App) Run(ctx context.Context) error {
 		panic(err)
 	}
 
-	logging.Info.Printf("gatewayIP: %s", gatewayIP.String())
+	log.Infof("gatewayIP: %s", gatewayIP.String())
 
 	trafficCopyWg := &sync.WaitGroup{}
 	defer trafficCopyWg.Wait()

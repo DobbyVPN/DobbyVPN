@@ -41,6 +41,11 @@ func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
 }
 
 func StopRouting(proxyIP string, gatewayIP string) error {
+	addSpecificRoute := fmt.Sprintf("sudo route delete -net %s/32 %s", proxyIP, gatewayIP)
+	if _, err := ExecuteCommand(addSpecificRoute); err != nil {
+		log.Infof("failed to delete specific route: %w", err)
+	}
+
 	removeNewDefaultRoute := fmt.Sprintf("sudo route delete default")
 	if _, err := ExecuteCommand(removeNewDefaultRoute); err != nil {
 		log.Infof("failed to remove new default route: %w", err)
@@ -49,11 +54,6 @@ func StopRouting(proxyIP string, gatewayIP string) error {
 	addOldDefaultRoute := fmt.Sprintf("sudo route add default %s", gatewayIP)
 	if _, err := ExecuteCommand(addOldDefaultRoute); err != nil {
 		log.Infof("failed to add old default route: %w", err)
-	}
-
-	removeSpecificRoute := fmt.Sprintf("sudo route delete %s", proxyIP)
-	if _, err := ExecuteCommand(removeSpecificRoute); err != nil {
-		log.Infof("failed to remove specific route: %w", err)
 	}
 
 	return nil
