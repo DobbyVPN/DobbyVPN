@@ -5,56 +5,48 @@ package routing
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"os/exec"
+	log "github.com/sirupsen/logrus"
+	"strings"
 )
 
-const wireguardSystemConfigPathMacOS = "/opt/homebrew/etc/wireguard/"
+func executeAsAdmin(commands []string) (string, error) {
+	script := fmt.Sprintf(`do shell script "%s" with administrator privileges`,
+		strings.Join(commands, "; "))
 
-func ExecuteCommand(command string) (string, error) {
-	cmd := exec.Command("bash", "-c", command)
+	cmd := exec.Command("osascript", "-e", script)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return string(output), fmt.Errorf("command execution failed: %w, output: %s", err, output)
+		return string(output), fmt.Errorf("osascript execution failed: %w, output: %s", err, output)
 	}
-	log.Infof("Outline/routing: Command executed: %s, output: %s", command, output)
+	log.Infof("Routing: executed with admin privileges: %s", script)
 	return string(output), nil
 }
 
 func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
-	removeOldDefaultRoute := fmt.Sprintf("sudo route delete default")
-	if _, err := ExecuteCommand(removeOldDefaultRoute); err != nil {
-		log.Infof("failed to remove old default route: %w", err)
+	commands := []string{
+		fmt.Sprintf("route delete default"),
+		fmt.Sprintf("route add default -interface %s", tunName),
+		fmt.Sprintf("route add -net %s/32 %s", proxyIP, gatewayIP),
 	}
 
-	addNewDefaultRoute := fmt.Sprintf("sudo route add default -interface %s", tunName)
-	if _, err := ExecuteCommand(addNewDefaultRoute); err != nil {
-		log.Infof("failed to add new default route: %w", err)
+	if _, err := executeAsAdmin(commands); err != nil {
+		log.Warnf("failed to execute StartRouting: %v", err)
+		return err
 	}
-
-	addSpecificRoute := fmt.Sprintf("sudo route add -net %s/32 %s", proxyIP, gatewayIP)
-	if _, err := ExecuteCommand(addSpecificRoute); err != nil {
-		log.Infof("failed to add specific route: %w", err)
-	}
-
 	return nil
 }
 
 func StopRouting(proxyIP string, gatewayIP string) error {
-	addSpecificRoute := fmt.Sprintf("sudo route delete -net %s/32 %s", proxyIP, gatewayIP)
-	if _, err := ExecuteCommand(addSpecificRoute); err != nil {
-		log.Infof("failed to delete specific route: %w", err)
+	commands := []string{
+		fmt.Sprintf("route delete -net %s/32 %s", proxyIP, gatewayIP),
+		fmt.Sprintf("route delete default"),
+		fmt.Sprintf("route add default %s", gatewayIP),
 	}
 
-	removeNewDefaultRoute := fmt.Sprintf("sudo route delete default")
-	if _, err := ExecuteCommand(removeNewDefaultRoute); err != nil {
-		log.Infof("failed to remove new default route: %w", err)
+	if _, err := executeAsAdmin(commands); err != nil {
+		log.Warnf("failed to execute StopRouting: %v", err)
+		return err
 	}
-
-	addOldDefaultRoute := fmt.Sprintf("sudo route add default %s", gatewayIP)
-	if _, err := ExecuteCommand(addOldDefaultRoute); err != nil {
-		log.Infof("failed to add old default route: %w", err)
-	}
-
 	return nil
 }

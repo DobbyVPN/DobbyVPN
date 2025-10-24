@@ -5,7 +5,6 @@ package cloak
 
 import (
 	"fmt"
-
 	"go_client/routing"
 
 	"github.com/jackpal/gateway"
@@ -15,26 +14,37 @@ import (
 func StartRoutingCloak(proxyIP string) error {
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
-		panic(err)
-	}
-	addSpecificRoute2 := fmt.Sprintf("sudo route add -net %s/32 %s", proxyIP, gatewayIP.String())
-
-	if _, err := routing.ExecuteCommand(addSpecificRoute2); err != nil {
-		log.Infof("failed to add specific route: %w", err)
+		return fmt.Errorf("failed to discover gateway: %w", err)
 	}
 
+	commands := []string{
+		fmt.Sprintf("route add -net %s/32 %s", proxyIP, gatewayIP.String()),
+	}
+
+	if _, err := routing.ExecuteAsAdmin(commands); err != nil {
+		log.Warnf("failed to add specific route: %v", err)
+		return err
+	}
+
+	log.Infof("Successfully added specific route to %s via %s", proxyIP, gatewayIP)
 	return nil
 }
 
 func StopRoutingCloak(proxyIP string) error {
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
-		panic(err)
-	}
-	removeSpecificRoute := fmt.Sprintf("sudo route delete -net %s/32 %s", proxyIP, gatewayIP.String())
-	if _, err := routing.ExecuteCommand(removeSpecificRoute); err != nil {
-		log.Infof("failed to remove specific route: %w", err)
+		return fmt.Errorf("failed to discover gateway: %w", err)
 	}
 
+	commands := []string{
+		fmt.Sprintf("route delete -net %s/32 %s", proxyIP, gatewayIP.String()),
+	}
+
+	if _, err := routing.ExecuteAsAdmin(commands); err != nil {
+		log.Warnf("failed to remove specific route: %v", err)
+		return err
+	}
+
+	log.Infof("Successfully removed specific route to %s", proxyIP)
 	return nil
 }
