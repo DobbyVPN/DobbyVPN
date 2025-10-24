@@ -1,4 +1,5 @@
-//go:build windows
+//go:build windows && !(android || ios)
+// +build windows
 
 package cloak
 
