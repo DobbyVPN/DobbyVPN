@@ -30,7 +30,7 @@ func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
 		fmt.Sprintf("route add -net %s/32 %s", proxyIP, gatewayIP),
 	}
 
-	if _, err := executeAsAdmin(commands); err != nil {
+	if _, err := ExecuteAsAdmin(commands); err != nil {
 		log.Warnf("failed to execute StartRouting: %v", err)
 		return err
 	}
@@ -44,7 +44,7 @@ func StopRouting(proxyIP string, gatewayIP string) error {
 		fmt.Sprintf("route add default %s", gatewayIP),
 	}
 
-	if _, err := executeAsAdmin(commands); err != nil {
+	if _, err := ExecuteAsAdmin(commands); err != nil {
 		log.Warnf("failed to execute StopRouting: %v", err)
 		return err
 	}
