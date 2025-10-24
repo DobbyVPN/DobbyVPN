@@ -66,7 +66,23 @@ func (app App) Run(ctx context.Context) error {
 
 	log.Printf("Device created")
 
-	// Copy the traffic from tun device to OutlineDevice bidirectionally
+    var closeOnce sync.Once
+    closeAll := func() {
+        closeOnce.Do(func() {
+            log.Infof("[Outline] Closing interfaces")
+            _ = tun.Close()
+            _ = ss.Close()
+        })
+    }
+
+    defer closeAll()
+
+	go func() {
+        <-ctx.Done()
+        closeAll()
+        log.Infof("[Outline] Cancel received — closing interfaces")
+    }()
+
 	trafficCopyWg.Add(2)
 
 	go func() {
@@ -129,17 +145,21 @@ func (app App) Run(ctx context.Context) error {
 	if err := routing.StartRouting(ss.GetServerIP().String(), gatewayIP.String(), tun.(*tunDevice).name); err != nil {
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
-	defer routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
+
+    defer func() {
+    	log.Infof("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
+    	routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
+    	log.Infof("[Routing] Routes cleaned up")
+    }()
+
+	log.Infof("Outline/app: Start trafficCopyWg...\n")
 
 	trafficCopyWg.Wait()
 
-	trafficCopyWg.Wait()
+	log.Infof("Outline/app: received interrupt signal, terminating...\n")
 
 	tun.Close()
-	log.Printf("Tun closed")
 	ss.Close()
-	log.Printf("Device closed")
-	routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
-	log.Printf("Stopped")
+
 	return nil
 }
