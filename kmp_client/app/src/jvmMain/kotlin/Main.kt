@@ -49,9 +49,9 @@ fun isRunningAsRoot(): Boolean {
 }
 
 fun main() = application {
-    if (Platform.isMac()) {
-        ensureAdminPrivilegesMacOS()
-    }
+//    if (Platform.isMac()) {
+//        ensureAdminPrivilegesMacOS()
+//    }
     startDI(listOf(jvmMainModule, jvmVpnModule)){}
     // Get path to the current jar-file
     val encodedPath = this::class.java.protectionDomain.codeSource.location.path
