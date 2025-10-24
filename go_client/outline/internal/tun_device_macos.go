@@ -62,8 +62,10 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 
 	tunDev := &tunDevice{tun, tun.Name()}
 
-	addTunRoute := fmt.Sprintf("sudo ifconfig %s inet 169.254.19.0 169.254.19.0 netmask 255.255.255.0", tun.Name())
-	if _, err := routing.ExecuteAsAdmin(addTunRoute); err != nil {
+	commands := []string{
+		fmt.Sprintf("sudo ifconfig %s inet 169.254.19.0 169.254.19.0 netmask 255.255.255.0", tun.Name()),
+	}
+	if _, err := routing.ExecuteAsAdmin(commands); err != nil {
 		return nil, fmt.Errorf("failed to add tun route: %w", err)
 	}
 
