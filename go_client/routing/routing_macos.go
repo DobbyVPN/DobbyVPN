@@ -14,8 +14,11 @@ func ExecuteAsAdmin(commands []string) (string, error) {
 	script := fmt.Sprintf(`do shell script "%s" with administrator privileges`,
 		strings.Join(commands, "; "))
 
-	cmd := exec.Command("osascript", "-e", script)
-	output, err := cmd.CombinedOutput()
+	log.Infof("Routing: running AppleScript: %s", script)
+    cmd := exec.Command("osascript", "-e", script)
+    output, err := cmd.CombinedOutput()
+    log.Infof("Routing: AppleScript finished, output=%s, err=%v", output, err)
+
 	if err != nil {
 		return string(output), fmt.Errorf("osascript execution failed: %w, output: %s", err, output)
 	}
