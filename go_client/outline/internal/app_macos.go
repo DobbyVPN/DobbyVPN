@@ -4,7 +4,7 @@
 package internal
 
 import (
-	"errors"
+// 	"errors"
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	//"os/exec"
