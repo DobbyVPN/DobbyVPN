@@ -32,9 +32,9 @@ type tunDevice struct {
 var _ network.IPDevice = (*tunDevice)(nil)
 
 func newTunDevice(name, ip string) (d network.IPDevice, err error) {
-	if !checkRoot() {
-		return nil, errors.New("this operation requires superuser privileges. Please run the program with sudo or as root")
-	}
+// 	if !checkRoot() {
+// 		return nil, errors.New("this operation requires superuser privileges. Please run the program with sudo or as root")
+// 	}
 
 	if len(name) == 0 {
 		return nil, errors.New("name is required for TUN/TAP device")
