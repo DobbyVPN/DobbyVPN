@@ -12,7 +12,7 @@ import (
 	"os/exec"
 	"os/user"
 
-	"go_client/routing"
+// 	"go_client/routing"
 )
 
 func checkRoot() bool {
