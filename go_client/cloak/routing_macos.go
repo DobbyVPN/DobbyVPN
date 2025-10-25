@@ -12,15 +12,15 @@ import (
 )
 
 func StartRoutingCloak(proxyIP string) error {
-// 	gatewayIP, err := gateway.DiscoverGateway()
-// 	if err != nil {
-// 		return fmt.Errorf("failed to discover gateway: %w", err)
-// 	}
-//
-// 	commands := []string{
-// 		fmt.Sprintf("route add -net %s/32 %s", proxyIP, gatewayIP.String()),
-// 	}
-//
+	gatewayIP, err := gateway.DiscoverGateway()
+	if err != nil {
+		return fmt.Errorf("failed to discover gateway: %w", err)
+	}
+
+	_ := []string{
+		fmt.Sprintf("route add -net %s/32 %s", proxyIP, gatewayIP.String()),
+	}
+
 // 	if _, err := routing.ExecuteAsAdmin(commands); err != nil {
 // 		log.Warnf("failed to add specific route: %v", err)
 // 		return err
@@ -31,15 +31,15 @@ func StartRoutingCloak(proxyIP string) error {
 }
 
 func StopRoutingCloak(proxyIP string) error {
-// 	gatewayIP, err := gateway.DiscoverGateway()
-// 	if err != nil {
-// 		return fmt.Errorf("failed to discover gateway: %w", err)
-// 	}
-//
-// 	commands := []string{
-// 		fmt.Sprintf("route delete -net %s/32 %s", proxyIP, gatewayIP.String()),
-// 	}
-//
+	gatewayIP, err := gateway.DiscoverGateway()
+	if err != nil {
+		return fmt.Errorf("failed to discover gateway: %w", err)
+	}
+
+	_ := []string{
+		fmt.Sprintf("route delete -net %s/32 %s", proxyIP, gatewayIP.String()),
+	}
+
 // 	if _, err := routing.ExecuteAsAdmin(commands); err != nil {
 // 		log.Warnf("failed to remove specific route: %v", err)
 // 		return err
