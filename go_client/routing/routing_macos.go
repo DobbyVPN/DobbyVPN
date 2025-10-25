@@ -28,6 +28,8 @@ func ExecuteAsAdmin(commands []string) (string, error) {
 
 func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
 	commands := []string{
+	    fmt.Sprintf("route add -net %s/32 %s", "85.9.223.19", gatewayIP),
+		fmt.Sprintf("ifconfig %s inet 169.254.19.0 169.254.19.0 netmask 255.255.255.0", tunName),
 		fmt.Sprintf("route delete default"),
 		fmt.Sprintf("route add default -interface %s", tunName),
 		fmt.Sprintf("route add -net %s/32 %s", proxyIP, gatewayIP),
@@ -42,6 +44,7 @@ func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
 
 func StopRouting(proxyIP string, gatewayIP string) error {
 	commands := []string{
+	    fmt.Sprintf("route delete -net %s/32 %s", "85.9.223.19", gatewayIP),
 		fmt.Sprintf("route delete -net %s/32 %s", proxyIP, gatewayIP),
 		fmt.Sprintf("route delete default"),
 		fmt.Sprintf("route add default %s", gatewayIP),

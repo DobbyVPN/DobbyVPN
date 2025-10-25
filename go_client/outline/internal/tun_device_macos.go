@@ -12,7 +12,7 @@ import (
 	"os/exec"
 	"os/user"
 
-	"go_client/routing"
+// 	"go_client/routing"
 )
 
 func checkRoot() bool {
@@ -62,12 +62,12 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 
 	tunDev := &tunDevice{tun, tun.Name()}
 
-	commands := []string{
-		fmt.Sprintf("sudo ifconfig %s inet 169.254.19.0 169.254.19.0 netmask 255.255.255.0", tun.Name()),
-	}
-	if _, err := routing.ExecuteAsAdmin(commands); err != nil {
-		return nil, fmt.Errorf("failed to add tun route: %w", err)
-	}
+// 	commands := []string{
+// 		fmt.Sprintf("sudo ifconfig %s inet 169.254.19.0 169.254.19.0 netmask 255.255.255.0", tun.Name()),
+// 	}
+// 	if _, err := routing.ExecuteAsAdmin(commands); err != nil {
+// 		return nil, fmt.Errorf("failed to add tun route: %w", err)
+// 	}
 
 	// Uncomment and implement if needed
 	//if err := tunDev.configureSubnet(ip); err != nil {
