@@ -30,9 +30,9 @@ func (app App) Run(ctx context.Context) error {
 	trafficCopyWg := &sync.WaitGroup{}
 	defer trafficCopyWg.Wait()
 
-	if !checkRoot() {
-		return errors.New("this operation requires superuser privileges. Please run the program with sudo or as root")
-	}
+// 	if !checkRoot() {
+// 		return errors.New("this operation requires superuser privileges. Please run the program with sudo or as root")
+// 	}
 
 	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
 	if err != nil {
