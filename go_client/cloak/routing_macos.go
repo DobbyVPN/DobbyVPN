@@ -5,7 +5,7 @@ package cloak
 
 import (
 	"fmt"
-	"go_client/routing"
+// 	"go_client/routing"
 
 	"github.com/jackpal/gateway"
 	log "github.com/sirupsen/logrus"
@@ -17,7 +17,7 @@ func StartRoutingCloak(proxyIP string) error {
 		return fmt.Errorf("failed to discover gateway: %w", err)
 	}
 
-	_ := []string{
+	_ = []string{
 		fmt.Sprintf("route add -net %s/32 %s", proxyIP, gatewayIP.String()),
 	}
 
@@ -36,7 +36,7 @@ func StopRoutingCloak(proxyIP string) error {
 		return fmt.Errorf("failed to discover gateway: %w", err)
 	}
 
-	_ := []string{
+	_ = []string{
 		fmt.Sprintf("route delete -net %s/32 %s", proxyIP, gatewayIP.String()),
 	}
 
