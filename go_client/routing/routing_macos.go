@@ -44,7 +44,7 @@ func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
 
 func StopRouting(proxyIP string, gatewayIP string) error {
 	commands := []string{
-	    fmt.Sprintf("route delete -net %s/32 %s", "85.9.223.19", gatewayIP.String()),
+	    fmt.Sprintf("route delete -net %s/32 %s", "85.9.223.19", gatewayIP),
 		fmt.Sprintf("route delete -net %s/32 %s", proxyIP, gatewayIP),
 		fmt.Sprintf("route delete default"),
 		fmt.Sprintf("route add default %s", gatewayIP),
