@@ -4,7 +4,6 @@
 package internal
 
 import (
-	"errors"
 	"fmt"
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/songgao/water"
