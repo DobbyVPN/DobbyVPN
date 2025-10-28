@@ -69,12 +69,13 @@ func (c *OutlineClient) Read() ([]byte, error) {
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
 
+    // TODO
 	// Return a slice containing only the actually read bytes.
 	// The TUN driver validates the capacity of the underlying buffer during write operations.
 	// Returning the full 64KB buffer would cause "no buffer space available" errors
 	// even if only a small portion contains actual data, because the TUN interface
 	// has limited buffer capacity (typically 32KB on Android devices).
-	return buf[:n], nil
+	return buf, nil
 }
 
 func (c *OutlineClient) Write(buf []byte) (int, error) {
