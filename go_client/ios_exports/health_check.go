@@ -1,6 +1,9 @@
 package cloak_outline
 
-import "go_client/healthcheck"
+import (
+	"go_client/common"
+	"go_client/healthcheck"
+)
 
 func StartHealthCheck(period int, sendMetrics bool) {
 	healthcheck.StartHealthCheck(period, sendMetrics)
@@ -20,4 +23,8 @@ func TcpPing(address string) (int32, error) {
 
 func UrlTest(url string, standard int) (int32, error) {
 	return healthcheck.UrlTest(url, standard)
+}
+
+func CouldStart() bool {
+	return common.Client.CouldStart()
 }

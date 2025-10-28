@@ -9,7 +9,9 @@ import (
 	"log"
 	"sync"
 
+	"go_client/common"
 	"go_client/routing"
+	outlineCommon "go_client/outline/common"
 
 	"github.com/jackpal/gateway"
 )
@@ -48,7 +50,12 @@ func (app App) Run(ctx context.Context) error {
 	if err := routing.StartRouting(ss.GetServerIP().String(), gatewayIP.String(), app.RoutingConfig.TunDeviceName); err != nil {
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
-	defer routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
+	defer func() {
+		log.Infof("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
+		routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
+		log.Infof("[Routing] Routes cleaned up")
+		common.Client.MarkInactive(outlineCommon.Name)
+	}()
 
 	// Запускаем копирование трафика TUN ↔ Outline
 	trafficCopyWg.Add(2)
@@ -95,6 +102,8 @@ func (app App) Run(ctx context.Context) error {
 		}
 		log.Printf("OutlineDevice -> tun stopped")
 	}()
+
+	common.Client.MarkActive(outlineCommon.Name)
 
 	trafficCopyWg.Wait()
 

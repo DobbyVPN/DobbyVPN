@@ -18,6 +18,9 @@ interface VPNLibrary : Library {
     // Awg
     fun StartAwg(key: String)
     fun StopAwg()
+
+    // Healthcheck
+    fun CouldStart(): Boolean
 }
 
 internal class VPNLibraryLoader(
@@ -134,5 +137,20 @@ internal class VPNLibraryLoader(
             logger.log("An error occurred while calling StopOutline: ${e.message}")
             e.printStackTrace()
         }
+    }
+
+    fun couldStart(): Boolean {
+        try {
+            var res = INSTANCE.CouldStart()
+            logger.log("CouldStart called successfully.")
+            return res
+        } catch (e: UnsatisfiedLinkError) {
+            logger.log("Failed to call CouldStart: ${e.message}")
+            e.printStackTrace()
+        } catch (e: Exception) {
+            logger.log("An error occurred while calling CouldStart: ${e.message}")
+            e.printStackTrace()
+        }
+        return false
     }
 }

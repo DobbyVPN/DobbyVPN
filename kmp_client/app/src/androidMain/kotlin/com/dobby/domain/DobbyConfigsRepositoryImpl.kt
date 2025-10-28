@@ -130,6 +130,10 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun couldStart(): Boolean {
+        return true
+    }
+
     companion object {
         const val DEFAULT_AWG_CONFIG = """[Interface]
 PrivateKey = <...>

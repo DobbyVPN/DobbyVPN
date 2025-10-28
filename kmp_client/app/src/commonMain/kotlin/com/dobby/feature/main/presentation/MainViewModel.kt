@@ -88,6 +88,9 @@ class MainViewModel(
     fun onConnectionButtonClicked(
         connectionUrl: String,
     ) {
+        if (!configsRepository.couldStart()) {
+            return
+        }
         setConfig(connectionUrl)
         viewModelScope.launch {
             when (connectionStateRepository.flow.value) {

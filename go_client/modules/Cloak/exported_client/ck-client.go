@@ -6,13 +6,16 @@ package exported_client
 import (
 	"encoding/binary"
 	"github.com/cbeuw/Cloak/internal/client"
-	"github.com/cbeuw/Cloak/internal/common"
+	cloakCommon "github.com/cbeuw/Cloak/internal/common"
 	mux "github.com/cbeuw/Cloak/internal/multiplex"
 	log "github.com/sirupsen/logrus"
+	"go_client/common"
 	"net"
-	"sync"
 	"os"
+	"sync"
 )
+
+const Name = "cloak"
 
 type CkClient struct {
 	mu        sync.Mutex
@@ -36,7 +39,7 @@ func (c *CkClient) Connect() error {
 	c.connected = true
 	log.Infof("ck-client connected")
 
-	localConfig, remoteConfig, authInfo, err := c.config.ProcessRawConfig(common.RealWorldState)
+	localConfig, remoteConfig, authInfo, err := c.config.ProcessRawConfig(cloakCommon.RealWorldState)
 	if err != nil {
 		return err
 	}
@@ -57,12 +60,11 @@ func (c *CkClient) Connect() error {
 		authInfo.SessionId = 0
 		remoteConfig.NumConn = 1
 
-
-
 		log.Infof("Before seshMaker")
 		seshMaker = func() *mux.Session {
-		    log.Infof("In seshMaker")
+			log.Infof("In seshMaker")
 			c.session = client.MakeSession(remoteConfig, authInfo, d)
+			common.Client.MarkActive(Name)
 			return c.session
 		}
 	} else {
@@ -77,66 +79,66 @@ func (c *CkClient) Connect() error {
 			authInfo := authInfo // copy the struct because we are overwriting SessionId
 
 			randByte := make([]byte, 1)
-			common.RandRead(authInfo.WorldState.Rand, randByte)
+			cloakCommon.RandRead(authInfo.WorldState.Rand, randByte)
 			authInfo.MockDomain = localConfig.MockDomainList[int(randByte[0])%len(localConfig.MockDomainList)]
 
 			// sessionID is usergenerated. There shouldn't be a security concern because the scope of
 			// sessionID is limited to its UID.
 			quad := make([]byte, 4)
-			common.RandRead(authInfo.WorldState.Rand, quad)
+			cloakCommon.RandRead(authInfo.WorldState.Rand, quad)
 			authInfo.SessionId = binary.BigEndian.Uint32(quad)
 			c.session = client.MakeSession(remoteConfig, authInfo, d)
+			common.Client.MarkActive(Name)
 			return c.session
 		}
 	}
 
 	go func() {
-	    defer func() {
-            if r := recover(); r != nil {
-                log.Infof("ck-client: recovered from panic from: %v", r)
-            }
-        }()
-        if authInfo.Unordered {
-            udpAddr, _ := net.ResolveUDPAddr("udp", localConfig.LocalAddr)
-            conn, err := net.ListenUDP("udp", udpAddr)
-            if err != nil {
-                log.Warnf("ck-client: goroutines: err %v\n", err)
-                return
-            }
+		defer func() {
+			if r := recover(); r != nil {
+				log.Infof("ck-client: recovered from panic from: %v", r)
+			}
+		}()
+		if authInfo.Unordered {
+			udpAddr, _ := net.ResolveUDPAddr("udp", localConfig.LocalAddr)
+			conn, err := net.ListenUDP("udp", udpAddr)
+			if err != nil {
+				log.Warnf("ck-client: goroutines: err %v\n", err)
+				return
+			}
 
-            c.udpConn = conn
+			c.udpConn = conn
 
-            log.Infof("ck-client: start listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
-            client.RouteUDP(func() (*net.UDPConn, error) { return conn, nil }, localConfig.Timeout, remoteConfig.Singleplex, seshMaker)
-            log.Infof("ck-client: stop listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
-        } else {
-            l, err := net.Listen("tcp", localConfig.LocalAddr)
-            if err != nil {
-                log.Warnf("ck-client: goroutines: err %v\n", err)
-                return
-            }
+			log.Infof("ck-client: start listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
+			client.RouteUDP(func() (*net.UDPConn, error) { return conn, nil }, localConfig.Timeout, remoteConfig.Singleplex, seshMaker)
+			log.Infof("ck-client: stop listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
+		} else {
+			l, err := net.Listen("tcp", localConfig.LocalAddr)
+			if err != nil {
+				log.Warnf("ck-client: goroutines: err %v\n", err)
+				return
+			}
 
-            c.listener = l
+			c.listener = l
 
-            log.Infof("ck-client: start listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
-            client.RouteTCP(l, localConfig.Timeout, remoteConfig.Singleplex, seshMaker)
-            log.Infof("ck-client: stop listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
-        }
-    }()
-
+			log.Infof("ck-client: start listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
+			client.RouteTCP(l, localConfig.Timeout, remoteConfig.Singleplex, seshMaker)
+			log.Infof("ck-client: stop listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
+		}
+	}()
 
 	return nil
 }
 
 func (c *CkClient) Disconnect() error {
-    log.StandardLogger().ExitFunc = func(int) {
-        panic("panic from log.StandardLogger().ExitFunc")
-    }
-    defer func() {
-        log.StandardLogger().ExitFunc = func(int) {
-            os.Exit(1)
-        }
-    }()
+	log.StandardLogger().ExitFunc = func(int) {
+		panic("panic from log.StandardLogger().ExitFunc")
+	}
+	defer func() {
+		log.StandardLogger().ExitFunc = func(int) {
+			os.Exit(1)
+		}
+	}()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -176,9 +178,9 @@ func (c *CkClient) Disconnect() error {
 	}
 
 	log.Infof("ck-client: fully disconnected")
+	common.Client.MarkInactive(Name)
 	return nil
 }
-
 
 func (c *CkClient) Refresh() error {
 	if err := c.Disconnect(); err != nil { // TODO: handle error with more detail

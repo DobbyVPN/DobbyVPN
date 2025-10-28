@@ -3,9 +3,11 @@ package com.dobby.domain
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import java.util.prefs.Preferences
+import interop.VPNLibraryLoader
 
 internal class DobbyConfigsRepositoryImpl(
-    private val prefs: Preferences = Preferences.systemRoot()
+    private val prefs: Preferences = Preferences.systemRoot(),
+    private val vpnLibrary: VPNLibraryLoader,
 ) : DobbyConfigsRepository {
 
     override fun getVpnInterface(): VpnInterface {
@@ -89,6 +91,10 @@ internal class DobbyConfigsRepositoryImpl(
 
     override fun setIsAmneziaWGEnabled(isAmneziaWGEnabled: Boolean) {
         prefs.put("isAmneziaWGEnabled", isAmneziaWGEnabled.toString())
+    }
+
+    override fun couldStart(): Boolean {
+        return vpnLibrary.couldStart()
     }
 
     companion object {
