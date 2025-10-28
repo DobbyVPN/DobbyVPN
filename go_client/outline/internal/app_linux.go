@@ -51,9 +51,9 @@ func (app App) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
 	defer func() {
-		log.Infof("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
+		log.Printf("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
 		routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
-		log.Infof("[Routing] Routes cleaned up")
+		log.Printf("[Routing] Routes cleaned up")
 		common.Client.MarkInactive(outlineCommon.Name)
 	}()
 

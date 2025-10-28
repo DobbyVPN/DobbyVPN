@@ -6,6 +6,7 @@
 #include <jni.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include "liboutline.h"
 
 JNIEXPORT void JNICALL
@@ -76,4 +77,11 @@ Java_com_dobby_outline_OutlineGo_stopCloakClient(JNIEnv *env, jclass clazz)
 {
     // Вызываем Go-экспорт
     StopCloakClient();
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_dobby_outline_OutlineGo_couldStart(JNIEnv *env, jclass clazz)
+{
+    bool result = CouldStart();
+    return result ? JNI_TRUE : JNI_FALSE;
 }

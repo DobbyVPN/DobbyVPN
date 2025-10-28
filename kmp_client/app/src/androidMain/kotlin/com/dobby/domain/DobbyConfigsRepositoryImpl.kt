@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import android.util.Log.i as AndroidLog
+import com.dobby.outline.OutlineGo
 
 internal class DobbyConfigsRepositoryImpl(
     private val prefs: SharedPreferences

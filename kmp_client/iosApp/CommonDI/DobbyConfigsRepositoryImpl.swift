@@ -88,4 +88,8 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     public func setIsAmneziaWGEnabled(isAmneziaWGEnabled: Bool) {}
     
     public func setVpnInterface(vpnInterface: VpnInterface) {}
+
+    public func couldStart() -> Bool {
+        return true
+    }
 }

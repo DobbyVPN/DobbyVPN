@@ -13,6 +13,7 @@ internal class OutlineLibFacadeImpl : OutlineLibFacade {
         OutlineGo.newOutlineClient(apiKey).apply {
             Log.d(TAG, "Connecting Outline...")
             OutlineGo.connect()
+            OutlineGo.couldStart()
             Log.d(TAG, "Connect finished")
         }
     }

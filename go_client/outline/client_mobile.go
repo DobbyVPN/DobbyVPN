@@ -25,6 +25,7 @@ func NewClient(transportConfig string) *OutlineClient {
 }
 
 func (c *OutlineClient) Connect() error {
+	common.Client.MarkInProgress(outlineCommon.Name)
 	od, err := internal.NewOutlineDevice(c.config)
 	if err != nil {
 		log.Printf("failed to create outline device: %v\n", err)
@@ -40,6 +41,7 @@ func (c *OutlineClient) Connect() error {
 }
 
 func (c *OutlineClient) Disconnect() error {
+	common.Client.MarkInProgress(outlineCommon.Name)
 	err := c.device.Close()
 	if err != nil {
 		log.Printf("failed to close outline device: %v\n", err)
