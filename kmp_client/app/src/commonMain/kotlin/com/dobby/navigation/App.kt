@@ -28,7 +28,9 @@ import com.dobby.feature.diagnostic.ui.DiagnosticScreen
 import com.dobby.feature.logging.ui.AboutScreen
 import com.dobby.feature.logging.ui.LogScreen
 import com.dobby.feature.logging.ui.SettingsScreen
+import com.dobby.feature.main.presentation.AuthenticationViewModel
 import com.dobby.feature.main.ui.DobbySocksScreen
+import com.dobby.util.koinViewModel
 
 @Composable
 fun App(modifier: Modifier = Modifier) {
@@ -37,6 +39,7 @@ fun App(modifier: Modifier = Modifier) {
     ) {
         val navController = rememberNavController()
         val keyboardController = LocalSoftwareKeyboardController.current
+        val authenticationViewModel: AuthenticationViewModel = koinViewModel()
 
         Scaffold(
             modifier = modifier
@@ -53,7 +56,7 @@ fun App(modifier: Modifier = Modifier) {
                     startDestination = MainScreen
                 ) {
                     composable<MainScreen> {
-                        DobbySocksScreen()
+                        DobbySocksScreen(authenticationViewModel)
                     }
                     composable<DiagnosticsScreen> {
                         DiagnosticScreen()

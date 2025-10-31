@@ -4,6 +4,7 @@ import com.dobby.feature.diagnostic.IpRepositoryImpl
 import com.dobby.feature.logging.CopyLogsInteractorImpl
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogsRepository
+import com.dobby.feature.main.domain.AuthenticationManagerImpl
 import com.dobby.feature.main.domain.AwgManagerImpl
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.VpnManagerImpl
@@ -29,7 +30,8 @@ val androidMainModule = makeNativeModule(
     },
     connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(androidContext()) },
-    awgManager = { AwgManagerImpl(androidContext()) }
+    awgManager = { AwgManagerImpl(androidContext()) },
+    authenticationManager = { AuthenticationManagerImpl(androidContext())}
 )
 
 val androidVpnModule = module {

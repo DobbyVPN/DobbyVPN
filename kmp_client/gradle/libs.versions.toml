@@ -1,5 +1,6 @@
 [versions]
 agp = "8.5.2"
+biometricKtx = "1.4.0-alpha02"
 compiler = "1.5.15"
 kotlin = "2.2.0"
 coreKtx = "1.15.0"
@@ -35,6 +36,7 @@ okio = "3.6.0"
 tomlkt = "0.5.0"
 
 [libraries]
+androidx-biometric-ktx = { module = "androidx.biometric:biometric-ktx", version.ref = "biometricKtx" }
 androidx-compiler = { module = "androidx.compose.compiler:compiler", version.ref = "compiler" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }

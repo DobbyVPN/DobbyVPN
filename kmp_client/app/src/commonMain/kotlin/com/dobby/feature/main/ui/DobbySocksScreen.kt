@@ -18,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dobby.feature.logging.presentation.LogsViewModel
+import com.dobby.feature.main.presentation.AuthenticationViewModel
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.util.koinViewModel
 import kotlinx.coroutines.MainScope
@@ -28,18 +29,27 @@ import org.jetbrains.compose.ui.tooling.preview.Preview
 @Preview
 @Composable
 fun DobbySocksScreen(
+    authViewModel: AuthenticationViewModel,
     mainViewModel: MainViewModel = koinViewModel(),
     logsViewModel: LogsViewModel = koinViewModel(),
     modifier: Modifier = Modifier,
 ) {
+    mainViewModel.setConfigsRepository(authViewModel.getConfigs())
     val uiMainState by mainViewModel.uiState.collectAsState()
     val uiLogState by logsViewModel.uiState.collectAsState()
 
-    var connectionURL by remember { mutableStateOf(uiMainState.connectionURL) }
+    var connectionURL by remember(
+        key1 = uiMainState.connectionURL
+    ) {
+        mutableStateOf(uiMainState.connectionURL)
+    }
 
     var showLogsDialog by remember { mutableStateOf(false) }
 
     MainScope().launch {
+        authViewModel.authenticate {
+            mainViewModel.setConfigsRepository(authViewModel.getConfigs())
+        }
         while (true) {
             logsViewModel.reloadLogs()
             delay(1000L)

@@ -34,6 +34,9 @@ public class NativeModuleHolder {
         },
         awgManager: { scope in
             return AwgManagerImpl()
+        },
+        authenticationManager: { scope in
+            return AuthenticationManagerImpl()
         }
     )
     
