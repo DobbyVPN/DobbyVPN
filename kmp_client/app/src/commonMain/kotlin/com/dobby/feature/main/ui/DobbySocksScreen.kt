@@ -47,9 +47,13 @@ fun DobbySocksScreen(
     var showLogsDialog by remember { mutableStateOf(false) }
 
     MainScope().launch {
-        authViewModel.authenticate {
-            mainViewModel.setConfigsRepository(authViewModel.getConfigs())
-        }
+        authViewModel.authenticate(
+            onAuthSuccess = {
+                mainViewModel.setConfigsRepository(authViewModel.getConfigs())
+            }, onAuthFailure = {
+                logsViewModel.clearLogs()
+            }
+        )
         while (true) {
             logsViewModel.reloadLogs()
             delay(1000L)
@@ -127,32 +131,34 @@ fun DobbySocksScreen(
             }
         }
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight(0.25f)
-                .clip(RoundedCornerShape(6.dp))
-                .background(Color.Gray.copy(alpha = 0.1f))
-                .padding(8.dp)
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onDoubleTap = {
-                            showLogsDialog = true
-                        }
-                    )
-                }
-        ) {
-            LazyColumn(state = listState) {
-                items(uiLogState.logMessages) { message ->
-                    val isBold = message.contains("!!!")
+        if (authViewModel.authenticationFinished) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.25f)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color.Gray.copy(alpha = 0.1f))
+                    .padding(8.dp)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                showLogsDialog = true
+                            }
+                        )
+                    }
+            ) {
+                LazyColumn(state = listState) {
+                    items(uiLogState.logMessages) { message ->
+                        val isBold = message.contains("!!!")
 
-                    Text(
-                        text = message,
-                        modifier = Modifier.padding(8.dp),
-                        fontSize = MaterialTheme.typography.bodyMedium.fontSize,
-                        fontWeight = if (isBold) FontWeight.W700 else FontWeight.W400,
-                        color = Color.Black
-                    )
+                        Text(
+                            text = message,
+                            modifier = Modifier.padding(8.dp),
+                            fontSize = MaterialTheme.typography.bodyMedium.fontSize,
+                            fontWeight = if (isBold) FontWeight.W700 else FontWeight.W400,
+                            color = Color.Black
+                        )
+                    }
                 }
             }
         }

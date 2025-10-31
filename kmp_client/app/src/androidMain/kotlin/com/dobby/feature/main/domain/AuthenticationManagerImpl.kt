@@ -18,7 +18,10 @@ fun initBiometricAuthenticationManager(context: FragmentActivity) {
 class AuthenticationManagerImpl(
     private val context: Context
 ): AuthenticationManager {
-    override fun authenticate(onAuthSuccess: () -> Unit) {
+    override fun authenticate(
+        onAuthSuccess: () -> Unit,
+        onAuthFailure: () -> Unit
+    ) {
         if (BiometricManager.from(context).canAuthenticate(BIOMETRIC_WEAK)
                 != BiometricManager.BIOMETRIC_SUCCESS) {
             onAuthSuccess()
@@ -42,6 +45,7 @@ class AuthenticationManagerImpl(
                         )
                             .show()
                     }
+                    onAuthFailure()
                 }
 
                 override fun onAuthenticationSucceeded(
@@ -49,6 +53,11 @@ class AuthenticationManagerImpl(
                 ) {
                     super.onAuthenticationSucceeded(result)
                     onAuthSuccess()
+                }
+
+                override fun onAuthenticationFailed() {
+                    super.onAuthenticationFailed()
+                    onAuthFailure()
                 }
             })
 

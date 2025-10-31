@@ -9,21 +9,27 @@ class AuthenticationViewModel(
     private val configsRepository: DobbyConfigsRepository,
     private val authenticationManager: AuthenticationManager
 ): ViewModel() {
-    var askedForAuthentication: Boolean = false
-
-    var authenticationSuccess: Boolean = false
+    private var askedForAuthentication: Boolean = false
+    private var authenticationSuccess: Boolean = false
 
     fun authenticate(
-        onAuthSuccess: () -> Unit
+        onAuthSuccess: () -> Unit,
+        onAuthFailure: () -> Unit
     ) {
         if (askedForAuthentication) {
             return
         }
         askedForAuthentication = true
-        authenticationManager.authenticate {
-            authenticationSuccess = true
-            onAuthSuccess()
-        }
+        authenticationManager.authenticate (
+            onAuthSuccess = {
+                authenticationSuccess = true
+                onAuthSuccess()
+                authenticationFinished = true
+            }, onAuthFailure = {
+                onAuthFailure()
+                authenticationFinished = true
+            }
+        )
     }
 
     fun getConfigs(): DobbyConfigsRepository =
@@ -31,76 +37,78 @@ class AuthenticationViewModel(
         if (authenticationSuccess) {
             configsRepository
         } else {
-            EmptyConfigsRepository()
+            EmptyConfigsRepository
         }
-}
 
-class EmptyConfigsRepository(): DobbyConfigsRepository {
-    private var vpnInterface: VpnInterface = VpnInterface.Companion.DEFAULT_VALUE
+    var authenticationFinished: Boolean = false
+        private set
 
-    override fun getVpnInterface(): VpnInterface
-            = vpnInterface
+    companion object EmptyConfigsRepository: DobbyConfigsRepository {
+        private var vpnInterface: VpnInterface = VpnInterface.Companion.DEFAULT_VALUE
 
-    override fun setVpnInterface(vpnInterface: VpnInterface) {
-        this.vpnInterface = vpnInterface
-    }
+        override fun getVpnInterface(): VpnInterface
+                = vpnInterface
 
-    private var connectionUrl: String = ""
+        override fun setVpnInterface(vpnInterface: VpnInterface) {
+            this.vpnInterface = vpnInterface
+        }
 
-    override fun getConnectionURL(): String = connectionUrl
+        private var connectionUrl: String = ""
 
-    override fun setConnectionURL(connectionURL: String) {
-        this.connectionUrl = connectionURL
-    }
+        override fun getConnectionURL(): String = connectionUrl
 
-    private var connectionConfig: String = ""
+        override fun setConnectionURL(connectionURL: String) {
+            this.connectionUrl = connectionURL
+        }
 
-    override fun getConnectionConfig(): String = connectionConfig
+        private var connectionConfig: String = ""
 
-    override fun setConnectionConfig(connectionConfig: String) {
-        this.connectionConfig = connectionConfig
-    }
+        override fun getConnectionConfig(): String = connectionConfig
 
-    private var cloakConfig: String = ""
+        override fun setConnectionConfig(connectionConfig: String) {
+            this.connectionConfig = connectionConfig
+        }
 
-    override fun getCloakConfig(): String = cloakConfig
+        private var cloakConfig: String = ""
 
-    override fun setCloakConfig(newConfig: String) {
-        this.cloakConfig = newConfig
-    }
-    private var isCloakEnabled: Boolean = false
+        override fun getCloakConfig(): String = cloakConfig
 
-    override fun getIsCloakEnabled(): Boolean = isCloakEnabled
+        override fun setCloakConfig(newConfig: String) {
+            this.cloakConfig = newConfig
+        }
+        private var isCloakEnabled: Boolean = false
 
-    override fun setIsCloakEnabled(isCloakEnabled: Boolean) {
-        this.isCloakEnabled = isCloakEnabled
-    }
+        override fun getIsCloakEnabled(): Boolean = isCloakEnabled
 
-    private var serverPortOutline: String = ""
+        override fun setIsCloakEnabled(isCloakEnabled: Boolean) {
+            this.isCloakEnabled = isCloakEnabled
+        }
 
-    override fun getServerPortOutline(): String = serverPortOutline
+        private var serverPortOutline: String = ""
 
-    override fun setServerPortOutline(newConfig: String) {
-        this.serverPortOutline = newConfig
-    }
+        override fun getServerPortOutline(): String = serverPortOutline
 
-    private var methodPasswordOutline: String = ""
+        override fun setServerPortOutline(newConfig: String) {
+            this.serverPortOutline = newConfig
+        }
 
-    override fun getMethodPasswordOutline(): String = methodPasswordOutline
+        private var methodPasswordOutline: String = ""
 
-    override fun setMethodPasswordOutline(newConfig: String) {
-        this.methodPasswordOutline = newConfig
-    }
+        override fun getMethodPasswordOutline(): String = methodPasswordOutline
 
-    private var isOutlineEnabled: Boolean = false
+        override fun setMethodPasswordOutline(newConfig: String) {
+            this.methodPasswordOutline = newConfig
+        }
 
-    override fun getIsOutlineEnabled(): Boolean = isOutlineEnabled
+        private var isOutlineEnabled: Boolean = false
 
-    override fun setIsOutlineEnabled(isOutlineEnabled: Boolean) {
-        this.isOutlineEnabled = isOutlineEnabled
-    }
+        override fun getIsOutlineEnabled(): Boolean = isOutlineEnabled
 
-    private var awgConfig: String = """[Interface]
+        override fun setIsOutlineEnabled(isOutlineEnabled: Boolean) {
+            this.isOutlineEnabled = isOutlineEnabled
+        }
+
+        private var awgConfig: String = """[Interface]
 PrivateKey = <...>
 Address = <...>
 DNS = 8.8.8.8
@@ -121,17 +129,18 @@ AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 60
 """
 
-    override fun getAwgConfig(): String = awgConfig
+        override fun getAwgConfig(): String = awgConfig
 
-    override fun setAwgConfig(newConfig: String) {
-        this.awgConfig = newConfig
-    }
+        override fun setAwgConfig(newConfig: String) {
+            this.awgConfig = newConfig
+        }
 
-    private var isAmneziaWGEnabled: Boolean = false
+        private var isAmneziaWGEnabled: Boolean = false
 
-    override fun getIsAmneziaWGEnabled(): Boolean = isAmneziaWGEnabled
+        override fun getIsAmneziaWGEnabled(): Boolean = isAmneziaWGEnabled
 
-    override fun setIsAmneziaWGEnabled(isAmneziaWGEnabled: Boolean) {
-        this.isAmneziaWGEnabled = isAmneziaWGEnabled
+        override fun setIsAmneziaWGEnabled(isAmneziaWGEnabled: Boolean) {
+            this.isAmneziaWGEnabled = isAmneziaWGEnabled
+        }
     }
 }
