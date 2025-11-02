@@ -14,7 +14,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dobby.feature.logging.presentation.LogsViewModel
@@ -50,13 +53,11 @@ fun DobbySocksScreen(
         modifier = modifier
             .fillMaxSize()
             .padding(16.dp),
-        verticalArrangement = Arrangement.SpaceBetween
+        verticalArrangement = Arrangement.Top
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            verticalArrangement = Arrangement.Center
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.Top
         ) {
             Row(
                 modifier = Modifier
@@ -64,19 +65,12 @@ fun DobbySocksScreen(
                     .padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Status",
-                    fontSize = 24.sp,
-                    color = Color.Black,
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-
                 Spacer(modifier = Modifier.weight(1f))
-
                 TagChip(
-                    tagText = if (uiMainState.isConnected) "connected" else "disconnected",
+                    tagText = if (uiMainState.isConnected) "Status: connected" else "Status: disconnected",
                     color = if (uiMainState.isConnected) 0xFFDCFCE7 else 0xFFFEE2E2
                 )
+                Spacer(modifier = Modifier.weight(1f))
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -86,9 +80,10 @@ fun DobbySocksScreen(
                 onValueChange = { connectionURL = it },
                 label = { Text("Subscription URL") },
                 singleLine = false,
+                minLines = 2,
+                maxLines = 2,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.3f)
                     .clip(RoundedCornerShape(6.dp))
             )
 
@@ -120,7 +115,7 @@ fun DobbySocksScreen(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.25f)
+                .weight(1f)
                 .clip(RoundedCornerShape(6.dp))
                 .background(Color.Gray.copy(alpha = 0.1f))
                 .padding(8.dp)
@@ -137,10 +132,27 @@ fun DobbySocksScreen(
                     val isBold = message.contains("!!!")
 
                     Text(
-                        text = message,
-                        modifier = Modifier.padding(8.dp),
-                        fontSize = MaterialTheme.typography.bodyMedium.fontSize,
-                        fontWeight = if (isBold) FontWeight.W700 else FontWeight.W400,
+                        buildAnnotatedString {
+                            withStyle(
+                                style = SpanStyle(
+                                    fontWeight = FontWeight.W700,
+                                )
+                            ) {
+                                append("=> ")
+                            }
+
+                            withStyle(
+                                style = SpanStyle(
+                                    fontWeight = if (isBold) FontWeight.W700 else FontWeight.W400,
+                                )
+                            ) {
+                                append(message)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 0.dp, horizontal = 4.dp),
+                        fontSize = 14.sp,
                         color = Color.Black
                     )
                 }

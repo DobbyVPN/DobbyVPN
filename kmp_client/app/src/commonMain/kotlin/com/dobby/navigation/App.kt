@@ -19,6 +19,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.navigation.compose.NavHost
@@ -33,7 +34,10 @@ import com.dobby.feature.main.ui.DobbySocksScreen
 @Composable
 fun App(modifier: Modifier = Modifier) {
     MaterialTheme(
-        colorScheme = lightColorScheme()
+        colorScheme = lightColorScheme(
+            background = Color.White,
+            surface = Color.White
+        )
     ) {
         val navController = rememberNavController()
         val keyboardController = LocalSoftwareKeyboardController.current
