@@ -61,8 +61,8 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 
 	client = exported_client.NewCkClient(rawConfig)
 
-	common.Client.SetVpnClient(exported_client.Name, client)
-	err = common.Client.Connect(exported_client.Name)
+	common.Client.SetVpnClient(Name, client)
+	err = common.Client.Connect(Name)
 	if err != nil {
 		log.Errorf("cloak client: Failed to connect to cloak client - %v", err)
 		return
@@ -98,7 +98,7 @@ func StopCloakClient() {
 
 	log.Infof("Start client disconnected")
 
-	common.Client.Disconnect(exported_client.Name)
+	common.Client.Disconnect(Name)
 	client = nil
 
 	log.Infof("Client disconnected")
