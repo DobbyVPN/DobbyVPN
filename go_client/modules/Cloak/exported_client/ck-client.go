@@ -6,16 +6,13 @@ package exported_client
 import (
 	"encoding/binary"
 	"github.com/cbeuw/Cloak/internal/client"
-	cloakCommon "github.com/cbeuw/Cloak/internal/common"
+	"github.com/cbeuw/Cloak/internal/common"
 	mux "github.com/cbeuw/Cloak/internal/multiplex"
 	log "github.com/sirupsen/logrus"
-	"go_client/common"
 	"net"
 	"os"
 	"sync"
 )
-
-const Name = "cloak"
 
 type CkClient struct {
 	mu        sync.Mutex
@@ -39,7 +36,7 @@ func (c *CkClient) Connect() error {
 	c.connected = true
 	log.Infof("ck-client connected")
 
-	localConfig, remoteConfig, authInfo, err := c.config.ProcessRawConfig(cloakCommon.RealWorldState)
+	localConfig, remoteConfig, authInfo, err := c.config.ProcessRawConfig(common.RealWorldState)
 	if err != nil {
 		return err
 	}
@@ -64,7 +61,6 @@ func (c *CkClient) Connect() error {
 		seshMaker = func() *mux.Session {
 			log.Infof("In seshMaker")
 			c.session = client.MakeSession(remoteConfig, authInfo, d)
-			common.Client.MarkActive(Name)
 			return c.session
 		}
 	} else {
@@ -79,16 +75,15 @@ func (c *CkClient) Connect() error {
 			authInfo := authInfo // copy the struct because we are overwriting SessionId
 
 			randByte := make([]byte, 1)
-			cloakCommon.RandRead(authInfo.WorldState.Rand, randByte)
+			common.RandRead(authInfo.WorldState.Rand, randByte)
 			authInfo.MockDomain = localConfig.MockDomainList[int(randByte[0])%len(localConfig.MockDomainList)]
 
 			// sessionID is usergenerated. There shouldn't be a security concern because the scope of
 			// sessionID is limited to its UID.
 			quad := make([]byte, 4)
-			cloakCommon.RandRead(authInfo.WorldState.Rand, quad)
+			common.RandRead(authInfo.WorldState.Rand, quad)
 			authInfo.SessionId = binary.BigEndian.Uint32(quad)
 			c.session = client.MakeSession(remoteConfig, authInfo, d)
-			common.Client.MarkActive(Name)
 			return c.session
 		}
 	}
@@ -178,7 +173,6 @@ func (c *CkClient) Disconnect() error {
 	}
 
 	log.Infof("ck-client: fully disconnected")
-	common.Client.MarkInactive(Name)
 	return nil
 }
 

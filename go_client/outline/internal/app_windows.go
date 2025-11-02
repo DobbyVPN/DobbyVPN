@@ -138,6 +138,7 @@ func (app App) Run(ctx context.Context) error {
 	log.Infof("  Tun Gateway:   %s", TunGateway)
 	log.Infof("  Tun Device IP: %s", TunDeviceIP)
 
+	common.Client.MarkInProgress(outlineCommon.Name)
 	if err := routing.StartRouting(
 		ss.GetServerIP().String(),
 		gatewayIP.String(),
@@ -148,13 +149,16 @@ func (app App) Run(ctx context.Context) error {
 		TunDeviceIP,
 		src,
 	); err != nil {
+		common.Client.MarkInactive(outlineCommon.Name)
 		log.Errorf("Failed to configure routing: %v", err)
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
+	common.Client.MarkActive(outlineCommon.Name)
 
 	log.Infof("[Routing] Routing successfully configured")
 
 	defer func() {
+		common.Client.MarkInProgress(outlineCommon.Name)
 		log.Infof("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
 		routing.StopRouting(ss.GetServerIP().String(), tunInterface.Name, gatewayIP.String(), netInterface.Name)
 		log.Infof("[Routing] Routes cleaned up")
@@ -249,8 +253,6 @@ func (app App) Run(ctx context.Context) error {
 	}()
 
 	log.Infof("Outline/app: Start trafficCopyWg...\n")
-
-	common.Client.MarkActive(outlineCommon.Name)
 
 	trafficCopyWg.Wait()
 

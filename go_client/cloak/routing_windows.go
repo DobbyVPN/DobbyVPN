@@ -1,4 +1,5 @@
-//go:build windows
+//go:build windows && !(android || ios)
+// +build windows,!android,!ios
 
 package cloak
 
@@ -12,19 +13,19 @@ import (
 )
 
 func StartRoutingCloak(proxyIP string) error {
-    log.Infof("StartRoutingCloak(%s)\n", proxyIP)
+	log.Infof("StartRoutingCloak(%s)\n", proxyIP)
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
-        log.Infof("Can't find gatewayIP, err = %v \n", err)
+		log.Infof("Can't find gatewayIP, err = %v \n", err)
 		return err
 	}
-    log.Infof("found gatewayIP = %s\n", gatewayIP.String())
+	log.Infof("found gatewayIP = %s\n", gatewayIP.String())
 	interfaceName, err := routing.FindInterfaceByGateway(gatewayIP.String())
 	if err != nil {
-        log.Infof("Can't find interfaceName, err = %v \n", err)
+		log.Infof("Can't find interfaceName, err = %v \n", err)
 		return err
 	}
-    log.Infof("found interfaceName = %s\n", interfaceName)
+	log.Infof("found interfaceName = %s\n", interfaceName)
 
 	netInterface, err := routing.GetNetworkInterfaceByIP(interfaceName)
 	command := fmt.Sprintf("route change %s %s if \"%s\"", proxyIP, gatewayIP.String(), netInterface.Name)

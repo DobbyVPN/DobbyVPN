@@ -5,10 +5,10 @@ package outline
 import (
 	"fmt"
 	"go_client/common"
+	outlineCommon "go_client/outline/common"
 	"go_client/outline/internal"
 	"log"
 	"net"
-	outlineCommon "go_client/outline/common"
 	// _ "go_client/logger"
 )
 
@@ -25,7 +25,6 @@ func NewClient(transportConfig string) *OutlineClient {
 }
 
 func (c *OutlineClient) Connect() error {
-	common.Client.MarkInProgress(outlineCommon.Name)
 	od, err := internal.NewOutlineDevice(c.config)
 	if err != nil {
 		log.Printf("failed to create outline device: %v\n", err)
@@ -41,7 +40,6 @@ func (c *OutlineClient) Connect() error {
 }
 
 func (c *OutlineClient) Disconnect() error {
-	common.Client.MarkInProgress(outlineCommon.Name)
 	err := c.device.Close()
 	if err != nil {
 		log.Printf("failed to close outline device: %v\n", err)
@@ -69,7 +67,7 @@ func (c *OutlineClient) Read() ([]byte, error) {
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
 
-    // TODO
+	// TODO
 	// Return a slice containing only the actually read bytes.
 	// The TUN driver validates the capacity of the underlying buffer during write operations.
 	// Returning the full 64KB buffer would cause "no buffer space available" errors

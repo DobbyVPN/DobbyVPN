@@ -30,7 +30,7 @@ type CommonClient struct {
 func (c *CommonClient) Connect(clientName string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if client, ok := c.vpnClients[clientName]; ok && client.state != Connected {
+	if client, ok := c.vpnClients[clientName]; ok && client.state == Disconnected {
 		err := client.Connect()
 		if err != nil {
 			return err
@@ -42,7 +42,7 @@ func (c *CommonClient) Connect(clientName string) error {
 func (c *CommonClient) Disconnect(clientName string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if client, ok := c.vpnClients[clientName]; ok && client.state != Disconnected {
+	if client, ok := c.vpnClients[clientName]; ok && client.state == Connected {
 		c.mu.Unlock()
 		err := client.Disconnect()
 		c.mu.Lock()
@@ -78,7 +78,7 @@ func (c *CommonClient) MarkInactive(clientName string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if client, ok := c.vpnClients[clientName]; ok {
-		client.state = Connected
+		client.state = Disconnected
 		c.vpnClients[clientName] = client
 		log.Infof("Marked Inactive %v\n", clientName)
 	}

@@ -6,8 +6,8 @@ import (
 	"context"
 	log "github.com/sirupsen/logrus"
 	"go_client/common"
-	"go_client/outline/internal"
 	outlineCommon "go_client/outline/common"
+	"go_client/outline/internal"
 	"sync"
 )
 
@@ -38,7 +38,6 @@ func NewClient(transportConfig string) *OutlineClient {
 }
 
 func (c *OutlineClient) Connect() error {
-	common.Client.MarkInProgress(outlineCommon.Name)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -59,7 +58,6 @@ func (c *OutlineClient) Connect() error {
 }
 
 func (c *OutlineClient) Disconnect() error {
-	common.Client.MarkInProgress(outlineCommon.Name)
 	log.Infof("Disconnect: try to lock c.mu")
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -70,6 +68,8 @@ func (c *OutlineClient) Disconnect() error {
 		c.cancel()
 		c.cancel = nil
 	}
+	log.Infof("Disconnect: common.Client.MarkInactive")
+	common.Client.MarkInactive(outlineCommon.Name)
 	log.Infof("Disconnect: MarkedInactive")
 	return nil
 }

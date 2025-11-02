@@ -10,6 +10,8 @@ import (
 	_ "go_client/logger"
 )
 
+const Name = "cloak"
+
 var (
 	client       *exported_client.CkClient
 	mu           sync.Mutex
@@ -60,29 +62,33 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 	client = exported_client.NewCkClient(rawConfig)
 
 	common.Client.SetVpnClient(exported_client.Name, client)
-	common.Client.MarkInProgress(exported_client.Name)
 	err = common.Client.Connect(exported_client.Name)
 	if err != nil {
 		log.Errorf("cloak client: Failed to connect to cloak client - %v", err)
 		return
 	}
+	common.Client.MarkInProgress(Name)
 	err = StartRoutingCloak(RemoteHostIP)
 	if err != nil {
+		common.Client.MarkInactive(Name)
 		log.Infof("Can't routing cloak, %v", err)
 		return
 	}
+	common.Client.MarkActive(Name)
 
 	log.Infof("cloak client connected")
 }
 
 func StopCloakClient() {
 	log.Infof("StopCloakClient inner")
-	common.Client.MarkInProgress(exported_client.Name)
+	defer common.Client.MarkInactive(Name)
 	mu.Lock()
 	defer mu.Unlock()
 	log.Infof("Get mutex")
 	if RemoteHostIP != "" {
+		common.Client.MarkInProgress(Name)
 		StopRoutingCloak(RemoteHostIP)
+		common.Client.MarkActive(Name)
 		RemoteHostIP = ""
 	}
 

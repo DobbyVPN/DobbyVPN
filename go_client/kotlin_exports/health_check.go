@@ -1,8 +1,7 @@
 package main
 
 import (
-    "C"
-	"go_client/common"
+	"C"
 	"go_client/healthcheck"
 )
 
@@ -28,5 +27,5 @@ func UrlTest(url string, standard int) (int32, error) {
 
 //export CouldStart
 func CouldStart() bool {
-	return common.Client.CouldStart()
+	return true
 }
