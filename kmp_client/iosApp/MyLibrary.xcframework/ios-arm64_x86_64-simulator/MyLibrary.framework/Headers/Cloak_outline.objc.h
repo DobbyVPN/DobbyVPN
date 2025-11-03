@@ -42,7 +42,7 @@ FOUNDATION_EXPORT int32_t Cloak_outlineAwgTurnOn(NSString* _Nullable interfaceNa
 
 FOUNDATION_EXPORT NSString* _Nonnull Cloak_outlineAwgVersion(void);
 
-FOUNDATION_EXPORT NSString* _Nonnull Cloak_outlineLogMemStats(void);
+FOUNDATION_EXPORT BOOL Cloak_outlineCouldStart(void);
 
 FOUNDATION_EXPORT Cloak_outlineOutlineDevice* _Nullable Cloak_outlineNewOutlineDevice(NSString* _Nullable transportConfig, NSError* _Nullable* _Nullable error);
 

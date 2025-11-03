@@ -7,7 +7,13 @@ import SystemConfiguration
 class VpnManagerImpl: VpnManager {
     private static let launchId = UUID().uuidString
     private var logs = NativeModuleHolder.logsRepository
-    private var lastRestartDate: Date?
+    
+    private let maxInitialRetries = 3
+    private let maxRuntimeRetries = 3
+    private let retryInterval: TimeInterval = 15
+    
+    private var initialRetryCount = 0
+    private var runtimeRetryCount = 0
     
     private var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
     private var dobbyName = "Dobby_VPN_3"
@@ -48,6 +54,7 @@ class VpnManagerImpl: VpnManager {
             case .connected:
                 self.logs.writeLog(log: "VPN connected. Update ui and isUserInitiatedStop and put manager")
                 isUserInitiatedStop = false
+                self.initialRetryCount = 3
                 if self.vpnManager == nil {
                     getOrCreateManager { manager, _ in
                         self.vpnManager = manager
@@ -56,23 +63,16 @@ class VpnManagerImpl: VpnManager {
                 connectionRepository.tryUpdate(isConnected: true)
 
             case .disconnected:
+                self.logs.writeLog(log: "VPN disconnected.")
                 connectionRepository.tryUpdate(isConnected: false)
 
                 if !self.isUserInitiatedStop {
-                    self.logs.writeLog(
-                            log: "VPN disconnected. Reason? state=\(connection.status.rawValue))"
-                        )
-                    let now = Date()
-                    if let lastRestart = self.lastRestartDate,
-                       now.timeIntervalSince(lastRestart) < 60 {
-                        // Уже был рестарт в течение последней минуты → не перезапускаем
-                        self.logs.writeLog(log: "VPN disconnected unexpectedly, but restart suppressed (too frequent)")
+                    if self.initialRetryCount < self.maxInitialRetries {
+                        self.handleInitialRetry()
+                    } else if self.runtimeRetryCount < self.maxRuntimeRetries {
+                        self.handleRuntimeRetry()
                     } else {
-                        self.logs.writeLog(log: "VPN disconnected unexpectedly, restarting...")
-                        self.lastRestartDate = now
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                            self.start()
-                        }
+                        self.logs.writeLog(log: "Max retry count reached (init=\(self.initialRetryCount), runtime=\(self.runtimeRetryCount)). Stop auto-restart.")
                     }
                 }
                 
@@ -98,6 +98,26 @@ class VpnManagerImpl: VpnManager {
     deinit {
         if let observer {
             NotificationCenter.default.removeObserver(observer)
+        }
+    }
+    
+    private func handleInitialRetry() {
+        initialRetryCount += 1
+        logs.writeLog(log: "Initial connection failed. Retry \(initialRetryCount)/\(maxInitialRetries) in \(Int(retryInterval))s")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + retryInterval) {
+            self.logs.writeLog(log: "Attempting initial reconnect (\(self.initialRetryCount)/\(self.maxInitialRetries))...")
+            self.start()
+        }
+    }
+
+    private func handleRuntimeRetry() {
+        runtimeRetryCount += 1
+        logs.writeLog(log: "VPN disconnected unexpectedly. Retry \(runtimeRetryCount)/\(maxRuntimeRetries) in \(Int(retryInterval))s")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + retryInterval) {
+            self.logs.writeLog(log: "Attempting runtime reconnect (\(self.runtimeRetryCount)/\(self.maxRuntimeRetries))...")
+            self.start()
         }
     }
     
