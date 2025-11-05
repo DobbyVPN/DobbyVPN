@@ -144,7 +144,8 @@ class VpnManagerImpl: VpnManager {
                         self.logs.writeLog(log: "self.vpnManager = \(manager)")
                         self.logs.writeLog(log: "starting tunnel !\(manager.connection.status)")
                         try manager.connection.startVPNTunnel()
-                        self.logs.writeLog(log: "Tunnel was started! \(manager.connection.status)")
+                        self.logs.writeLog(log: "Tunnel was started! changed connection.status")
+                        self.logs.writeLog(log: "Tunnel was started! manager.connection.status = \(manager.connection.status)")
                     } catch {
                         self.logs.writeLog(log: "Error starting VPNTunnel \(error)")
                     }
@@ -157,7 +158,9 @@ class VpnManagerImpl: VpnManager {
         guard state == .connected else { return }
         isUserInitiatedStop = true
         self.logs.writeLog(log: "Actually vpnManager is \(vpnManager)")
+        self.logs.writeLog(log: "[stop] User initiated stopVPNTunnel()")
         vpnManager?.connection.stopVPNTunnel()
+        self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")
     }
 
     private func getOrCreateManager(completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
