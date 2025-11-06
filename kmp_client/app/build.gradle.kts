@@ -120,8 +120,14 @@ android {
         targetSdk = 35
 
         applicationId = providers.gradleProperty("packageName").get()
-        versionCode = providers.gradleProperty("versionCode").get().toInt()
-        versionName = providers.gradleProperty("versionName").get()
+        versionCode = providers.gradleProperty("android.injected.version.code")
+            .orElse(providers.gradleProperty("versionCode"))
+            .map { it.toInt() }
+            .getOrElse(1)
+
+        versionName = providers.gradleProperty("android.injected.version.name")
+            .orElse(providers.gradleProperty("versionName"))
+            .getOrElse("0.0.1")
 
         vectorDrawables {
             useSupportLibrary = true
@@ -159,13 +165,20 @@ buildConfig {
     buildConfigField(
         "int",
         "VERSION_CODE",
-        providers.gradleProperty("versionCode").get().toInt()
+        providers.gradleProperty("android.injected.version.code")
+            .orElse(providers.gradleProperty("versionCode"))
+            .map { it.toInt() }
+            .getOrElse(1)
     )
+
     buildConfigField(
         "String",
         "VERSION_NAME",
-        "\"${providers.gradleProperty("versionName").getOrElse("N/A")}\""
+        "\"${providers.gradleProperty("android.injected.version.name")
+            .orElse(providers.gradleProperty("versionName"))
+            .getOrElse("0.0.1")}\""
     )
+
     buildConfigField(
         "String",
         "PROJECT_REPOSITORY_COMMIT",

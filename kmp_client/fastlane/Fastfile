@@ -1,32 +1,52 @@
 default_platform(:android)
 
+FULL_VERSION = "#{ENV['APP_MAJOR_VERSION']}.#{ENV['APP_MINOR_VERSION']}.#{ENV['APP_MAINTENANCE_VERSION']}"
+
 platform :android do
-  desc "Build and sign Android APK"
+  COMMIT          = ENV["GITHUB_SHA"]
+  REPO            = ENV["GITHUB_REPOSITORY"]
+  VERSION_CODE    = (ENV['APP_MAJOR_VERSION'].to_i * 10000) + (ENV['APP_MINOR_VERSION'].to_i * 100) + ENV['APP_MAINTENANCE_VERSION'].to_i
+  PACKAGE_NAME    = "com.dobby.vpn"
+  COMMIT_LINK     = "https://github.com/#{REPO}/tree/#{COMMIT}"
+
+  desc "Build Android APK"
   lane :build_android do
-    commit = ENV["GITHUB_SHA"]
-    repo   = ENV["GITHUB_REPOSITORY"]
-    commit_link = "https://github.com/#{repo}/tree/#{commit}"
+
+    gradle(
+      task: "assembleRelease",
+      properties: {
+      "projectRepositoryCommit" => COMMIT,
+      "projectRepositoryCommitLink" => COMMIT_LINK,
+      "android.injected.version.code" => VERSION_CODE,
+      "android.injected.version.name" => FULL_VERSION,
+      }
+    )
+
+    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} ../DobbyVPN-v#{FULL_VERSION}-unsign.apk"
+  end
+
+  desc "Build and sign Android APK"
+  lane :build_android_and_signing do
 
     tmp = Dir.mktmpdir
     keystore_path = File.join(tmp, "keystore.jks")
     File.write(keystore_path, Base64.decode64(ENV['KEYSTORE_FILE']))  
 
     gradle(
-        task: "assembleRelease",
-        properties: {
-        "projectRepositoryCommit" => commit,
-        "projectRepositoryCommitLink" => commit_link,
-        "android.injected.signing.store.file" => keystore_path, 
-        "android.injected.signing.store.password" => ENV["KEYSTORE_PASSWORD"],
-        "android.injected.signing.key.alias" => ENV["KEY_ALIAS"],
-        "android.injected.signing.key.password" => ENV["KEY_PASSWORD"],
-        }
+      task: "assembleRelease",
+      properties: {
+      "projectRepositoryCommit" => COMMIT,
+      "projectRepositoryCommitLink" => COMMIT_LINK,
+      "android.injected.signing.store.file" => keystore_path,
+      "android.injected.version.code" => VERSION_CODE,
+      "android.injected.version.name" => FULL_VERSION,
+      "android.injected.signing.store.password" => ENV["KEYSTORE_PASSWORD"],
+      "android.injected.signing.key.alias" => ENV["KEY_ALIAS"],
+      "android.injected.signing.key.password" => ENV["KEY_PASSWORD"],
+      }
     )
 
-    copy_artifacts(
-      artifacts: [lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]],
-      target_path: './dobbyvpn-android.apk'
-    )
+    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} ../DobbyVPN-v#{FULL_VERSION}-sign.apk"
   end
 end
 
@@ -41,9 +61,6 @@ platform :ios do
     BUNDLE_ID_TUNNEL = "vpn.dobby.app.tunnel"
 
     build_number     = ENV['GITHUB_RUN_NUMBER']
-    major_ver        = ENV['APP_MAJOR_VERSION']
-    minor_ver        = ENV['APP_MINOR_VERSION']
-    maintenance_ver  = ENV['APP_MAINTENANCE_VERSION']
 
     desc "Bump CFBundleVersion to GITHUB_RUN_NUMBER and CFBundleShortVersionString"
     lane :bump_build_and_version do
@@ -53,7 +70,7 @@ platform :ios do
       )
 
       increment_version_number(
-        version_number: "#{major_ver}.#{minor_ver}.#{maintenance_ver}",
+        version_number: "#{FULL_VERSION}",
         xcodeproj: PROJECT
       )
     end
@@ -148,8 +165,8 @@ platform :ios do
         notify_external_testers: true,
         distribute_external: true,
         groups: [ ENV['APP_TESTFLIGHT_EXTERNAL_GROUP'] ],
-        changelog: "Add Version #{major_ver}.#{minor_ver}.#{maintenance_ver}",
-        app_version: "#{major_ver}.#{minor_ver}.#{maintenance_ver}"
+        changelog: "Add Version #{FULL_VERSION}",
+        app_version: "#{FULL_VERSION}"
       )
     end
   end

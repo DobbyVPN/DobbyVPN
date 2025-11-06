@@ -30,24 +30,12 @@ jobs:
           git clone --depth 1 https://github.com/cbeuw/Cloak tmp
           cp -r tmp/internal go_client/modules/Cloak/
 
-      - name: Update utls
+      - name: Update utls & Download Go modules
+        working-directory: go_client
         run: |
-          cd go_client
           go get -u github.com/refraction-networking/utls@latest
           go mod tidy
-          cd ..
-
-      - name: Check utls version
-        run: |
-          cd go_client
-          go list -m github.com/refraction-networking/utls
-          cd ..
-
-      - name: Download Go modules
-        run: |
-          cd go_client
           go mod download
-          cd ..
 
       - name: Install compiler
         if: matrix.os != 'windows-latest'
@@ -64,8 +52,8 @@ jobs:
 
       - name: Build windows library
         if: matrix.os == 'windows'
+        working-directory: go_client
         run: |
-          cd go_client
           go build -buildmode=c-shared -o lib_windows.dll ./desktop_exports/...
         env:
           CGO_ENABLED: "1"
@@ -76,8 +64,8 @@ jobs:
 
       - name: Build linux library
         if: matrix.os == 'ubuntu'
+        working-directory: go_client
         run: |
-          cd go_client
           go build -buildmode=c-shared -o lib_linux.so ./desktop_exports/...
         env:
           CGO_ENABLED: "1"
@@ -88,8 +76,8 @@ jobs:
 
       - name: Build macos library
         if: matrix.os == 'macos'
+        working-directory: go_client
         run: |
-          cd go_client
           go build -buildmode=c-shared -o lib_macos.dylib ./desktop_exports/...
         env:
           CGO_ENABLED: "1"
@@ -125,24 +113,12 @@ jobs:
           cp -r tmp/internal go_client/modules/Cloak/
           rm -rf tmp
 
-      - name: Update utls
+      - name: Update utls & Download Go modules
+        working-directory: go_client
         run: |
-          cd go_client
           go get -u github.com/refraction-networking/utls@latest
           go mod tidy
-          cd ..
-
-      - name: Check utls version
-        run: |
-          cd go_client
-          go list -m github.com/refraction-networking/utls
-          cd ..
-
-      - name: Download Go modules
-        run: |
-          cd go_client
           go mod download
-          cd ..
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -159,8 +135,7 @@ jobs:
           export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
           export CC=aarch64-linux-android21-clang
           export CXX=aarch64-linux-android21-clang++
-  
-  
+
           cd go_client
           go build -v -buildmode=c-shared -o liboutline.so ./kotlin_exports/...
           cd ..
@@ -174,16 +149,10 @@ jobs:
           GOOS: "android"
           GOARCH: "arm64"
 
-
       - name: Build .aar
+        working-directory: kmp_client
         run: |
-          cd kmp_client
           ./gradlew :outline:build
-
-      - name: Tree
-        run: |
-          ls
-          tree
 
       - name: Upload So
         uses: actions/upload-artifact@v4
@@ -216,24 +185,12 @@ jobs:
           cp -r tmp/internal go_client/modules/Cloak/
           rm -rf tmp
 
-      - name: Download Go modules
+      - name: Download Go modules & Dependecies
+        working-directory: go_client
         run: |
-          cd go_client
           go mod download
-          cd ..
-
-      - name: Update utls
-        run: |
-          cd go_client
           go get -u github.com/refraction-networking/utls@latest
           go mod tidy
-          cd ..
-
-      - name: Check utls version
-        run: |
-          cd go_client
-          go list -m github.com/refraction-networking/utls
-          cd ..
 
       - name: Install gomobile & init
         run: |
@@ -241,20 +198,14 @@ jobs:
           gomobile init     
 
       - name: Fetch gomobile runtime
+        working-directory: go_client
         run: |
-          cd go_client            
           go get golang.org/x/mobile/bind@latest
-          cd ..
 
       - name: Build iOS XCFramework
+        working-directory: go_client
         run: |
-          cd go_client
           GO111MODULE=on gomobile bind -target=ios -o MyLibrary.xcframework ./ios_exports
-          cd ..
-
-      - name: Show files
-        run: |
-          ls -laR go_client
 
       - name: Upload iOS XCFramework
         uses: actions/upload-artifact@v4
