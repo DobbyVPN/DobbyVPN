@@ -138,7 +138,7 @@ fun DobbySocksScreen(
                                     fontWeight = FontWeight.W700,
                                 )
                             ) {
-                                append("=> ")
+                                append("> ")
                             }
 
                             withStyle(
