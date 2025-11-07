@@ -1,7 +1,7 @@
 package main
 
 import (
-	"C"
+	"go_client/common"
 	"go_client/healthcheck"
 )
 
@@ -23,9 +23,4 @@ func TcpPing(address string) (int32, error) {
 
 func UrlTest(url string, standard int) (int32, error) {
 	return healthcheck.UrlTest(url, standard)
-}
-
-//export CouldStart
-func CouldStart() bool {
-	return true
 }

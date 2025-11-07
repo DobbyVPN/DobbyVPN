@@ -23,7 +23,3 @@ func TcpPing(address string) (int32, error) {
 func UrlTest(url string, standard int) (int32, error) {
 	return healthcheck.UrlTest(url, standard)
 }
-
-func CouldStart() bool {
-	return true
-}
