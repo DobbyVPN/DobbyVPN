@@ -8,7 +8,15 @@ import Combine
 @main
 struct iOSApp: App {
     init() {
-        StartDIKt.startDI(nativeModules: [NativeModuleHolder.shared]) {_ in }
+        let logger = Logger(logsRepository: NativeModuleHolder.logsRepository)
+        StartDIKt.startDI(nativeModules: [NativeModuleHolder.shared]) { koinApp in
+            koinApp.koin.declare(
+                instance: logger,
+                qualifier: nil,
+                secondaryTypes: [],
+                allowOverride: true
+            )
+        }
     }
     
     var body: some Scene {
