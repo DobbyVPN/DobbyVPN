@@ -107,10 +107,6 @@ class OutlineGo {
         @Throws(IllegalStateException::class)
         external fun stopCloakClient(): Unit
 
-        @JvmStatic
-        @Throws(IllegalStateException::class)
-        external fun couldStart(): Boolean
-
         /**
          * Безопасный вызов newOutlineClient с проверкой загрузки библиотек
          */
@@ -198,16 +194,6 @@ class OutlineGo {
             } catch (e: Exception) {
                 Log.e(TAG, "Read failed", e)
                 -1
-            }
-        }
-
-        suspend fun safeCouldStart(): Boolean = withContext(Dispatchers.IO) {
-            try {
-                ensureLibrariesLoaded()
-                couldStart()
-            } catch (e: Exception) {
-                Log.e(TAG, "CouldStart failed", e)
-                false
             }
         }
     }

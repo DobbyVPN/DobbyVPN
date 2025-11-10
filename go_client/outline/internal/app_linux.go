@@ -46,20 +46,20 @@ func (app App) Run(ctx context.Context) error {
 	ss.Refresh()
 	log.Printf("Device created")
 
-	common.Client.MarkInProgress(outlineCommon.Name)
+	common.Client.MarkInCriticalSection(outlineCommon.Name)
 	// Поднимаем роутинг
 	if err := routing.StartRouting(ss.GetServerIP().String(), gatewayIP.String(), app.RoutingConfig.TunDeviceName); err != nil {
-		common.Client.MarkInactive(outlineCommon.Name)
+	    common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
-	common.Client.MarkActive(outlineCommon.Name)
+	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 	defer func() {
-		common.Client.MarkInProgress(outlineCommon.Name)
-		log.Printf("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
-		routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
-		log.Printf("[Routing] Routes cleaned up")
-		common.Client.MarkInactive(outlineCommon.Name)
-	}()
+        common.Client.MarkInCriticalSection(outlineCommon.Name)
+        log.Printf("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
+        routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
+        log.Printf("[Routing] Routes cleaned up")
+        common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+    }()
 
 	// Запускаем копирование трафика TUN ↔ Outline
 	trafficCopyWg.Add(2)
