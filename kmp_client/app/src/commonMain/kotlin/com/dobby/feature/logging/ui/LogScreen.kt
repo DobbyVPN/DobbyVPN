@@ -85,13 +85,11 @@ fun LogScreen(
 
         LazyColumn {
             items(uiState.logMessages) { message ->
-                val isBald = message.contains("!!!")
-
                 Text(
                     text = message,
                     modifier = Modifier.padding(8.dp),
                     fontSize = MaterialTheme.typography.bodyMedium.fontSize,
-                    fontWeight = if (isBald) FontWeight.W700 else FontWeight.W400,
+                    fontWeight = FontWeight.W400,
                 )
 
                 HorizontalDivider(thickness = 1.dp, color = Color.Gray)

@@ -129,8 +129,6 @@ fun DobbySocksScreen(
         ) {
             LazyColumn(state = listState) {
                 items(uiLogState.logMessages) { message ->
-                    val isBold = message.contains("!!!")
-
                     Text(
                         buildAnnotatedString {
                             withStyle(
@@ -143,7 +141,7 @@ fun DobbySocksScreen(
 
                             withStyle(
                                 style = SpanStyle(
-                                    fontWeight = if (isBold) FontWeight.W700 else FontWeight.W400,
+                                    fontWeight = FontWeight.W400,
                                 )
                             ) {
                                 append(message)

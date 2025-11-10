@@ -90,7 +90,7 @@ class MainViewModel(
     fun onConnectionButtonClicked(
         connectionUrl: String,
     ) {
-        logger.log("!!! The connection button was clicked with URL: $connectionUrl")
+        logger.log("The connection button was clicked with URL: $connectionUrl")
 
         if (!configsRepository.couldStart()) {
             logger.log("We couldn't do this operation, configsRepository.couldStart() returned FALSE")
@@ -101,7 +101,7 @@ class MainViewModel(
         try {
             setConfig(connectionUrl)
         } catch (e: Exception) {
-            logger.log("!!! Error during setConfig: ${e.message}")
+            logger.log("Error during setConfig: ${e.message}")
             return
         } finally {
             logger.log("Finish setConfig()")
@@ -132,7 +132,7 @@ class MainViewModel(
     }
 
     private fun setConfig(connectionUrl: String) {
-        logger.log("!!! Start setConfig() with connectionUrl: $connectionUrl")
+        logger.log("Start setConfig() with connectionUrl: $connectionUrl")
 
         configsRepository.setConnectionURL(connectionUrl)
         logger.log("Connection URL saved to repository")
@@ -153,7 +153,7 @@ class MainViewModel(
     }
 
     private fun parseToml(connectionConfig: String) {
-        logger.log("!!! Start parseToml()")
+        logger.log("Start parseToml()")
 
         if (connectionConfig.isBlank()) {
             logger.log("Connection config is blank, skipping parseToml()")
@@ -184,7 +184,7 @@ class MainViewModel(
     }
 
     private fun getConfigByURL(connectionUrl: String): String {
-        logger.log("!!! getConfigByURL() called with: $connectionUrl")
+        logger.log("getConfigByURL() called with: $connectionUrl")
 
         return if (connectionUrl.startsWith("http://") || connectionUrl.startsWith("https://")) {
             try {
@@ -220,12 +220,12 @@ class MainViewModel(
     }
 
     private fun startVpnService() {
-        logger.log("!!! Starting VPN service...")
+        logger.log("Starting VPN service...")
         vpnManager.start()
     }
 
     private suspend fun stopVpnService() {
-        logger.log("!!! Stopping VPN service...")
+        logger.log("Stopping VPN service...")
         vpnManager.stop()
         configsRepository.setIsOutlineEnabled(false)
         configsRepository.setIsCloakEnabled(false)

@@ -29,7 +29,6 @@ class VpnManagerImpl: VpnManager {
     init(connectionRepository: ConnectionStateRepository) {
         VpnManagerImpl.startSentry()
         self.connectionRepository = connectionRepository
-        HealthCheck.shared.fullCheckUp()
         getOrCreateManager { (manager, error) in
             if (manager?.connection.status == .connected) {
                 self.state = manager?.connection.status ?? .invalid
