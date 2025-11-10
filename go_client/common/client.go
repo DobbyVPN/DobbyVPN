@@ -1,7 +1,6 @@
 package common
 
 import "sync"
-import log "github.com/sirupsen/logrus"
 
 type vpnClient interface {
 	Connect() error
@@ -9,16 +8,9 @@ type vpnClient interface {
 	Refresh() error
 }
 
-type ClientState int
-
-const (
-	Disconnected ClientState = iota
-	InProcess
-	Connected
-)
-
 type vpnClientWithState struct {
-	state ClientState
+	connected bool
+	inCriticalSection bool
 	vpnClient
 }
 
@@ -30,11 +22,15 @@ type CommonClient struct {
 func (c *CommonClient) Connect(clientName string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if client, ok := c.vpnClients[clientName]; ok && client.state == Disconnected {
+	if client, ok := c.vpnClients[clientName]; ok && !client.connected && !client.inCriticalSection {
+		c.mu.Unlock()
 		err := client.Connect()
+		c.mu.Lock()
 		if err != nil {
 			return err
 		}
+		client.connected = true
+		c.vpnClients[clientName] = client
 	}
 	return nil
 }
@@ -42,13 +38,24 @@ func (c *CommonClient) Connect(clientName string) error {
 func (c *CommonClient) Disconnect(clientName string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if client, ok := c.vpnClients[clientName]; ok && client.state == Connected {
+	if client, ok := c.vpnClients[clientName]; ok && client.connected && !client.inCriticalSection {
 		c.mu.Unlock()
 		err := client.Disconnect()
 		c.mu.Lock()
 		if err != nil {
 			return err
 		}
+		client.connected = false
+		c.vpnClients[clientName] = client
+	}
+	return nil
+}
+
+func (c *CommonClient) Refresh(clientName string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if client, ok := c.vpnClients[clientName]; ok && client.connected && !client.inCriticalSection {
+		return client.Refresh()
 	}
 	return nil
 }
@@ -63,55 +70,70 @@ func (c *CommonClient) SetVpnClient(clientName string, client vpnClient) {
 }
 
 func (c *CommonClient) MarkActive(clientName string) {
-	log.Infof("Start MarkActive %v\n", clientName)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if client, ok := c.vpnClients[clientName]; ok {
-		client.state = Connected
+		client.connected = true
 		c.vpnClients[clientName] = client
-		log.Infof("Marked Active %v\n", clientName)
 	}
 }
 
 func (c *CommonClient) MarkInactive(clientName string) {
-	log.Infof("Start MarkInactive %v\n", clientName)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if client, ok := c.vpnClients[clientName]; ok {
-		client.state = Disconnected
+		client.connected = false
 		c.vpnClients[clientName] = client
-		log.Infof("Marked Inactive %v\n", clientName)
 	}
 }
 
-func (c *CommonClient) MarkInProgress(clientName string) {
-	log.Infof("Start MarkInProgress %v\n", clientName)
+func (c *CommonClient) MarkInCriticalSection(clientName string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if client, ok := c.vpnClients[clientName]; ok {
-		client.state = InProcess
+		client.inCriticalSection = true
 		c.vpnClients[clientName] = client
-		log.Infof("Marked InProgress %v\n", clientName)
+	}
+}
+
+func (c *CommonClient) MarkOutOffCriticalSection(clientName string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if client, ok := c.vpnClients[clientName]; ok {
+		client.inCriticalSection = false
+		c.vpnClients[clientName] = client
 	}
 }
 
 func (c *CommonClient) CouldStart() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for name, client := range c.vpnClients {
-		log.Infof("Call CouldStart: name = %v, state = %v\n", name, client.state)
-		if client.state != Connected && client.state != Disconnected {
+	for _, client := range c.vpnClients {
+		if client.inCriticalSection {
 			return false
 		}
 	}
 	return true
 }
 
+func (c *CommonClient) GetClientNames(active bool) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var names []string
+	for name, client := range c.vpnClients {
+		if client.connected != active {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
 func (c *CommonClient) RefreshAll() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, client := range c.vpnClients {
-		if client.state != Connected {
+		if !client.connected {
 			continue
 		}
 		if err := client.Refresh(); err != nil {

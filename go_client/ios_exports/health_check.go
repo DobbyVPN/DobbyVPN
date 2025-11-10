@@ -1,8 +1,6 @@
 package cloak_outline
 
-import (
-	"go_client/healthcheck"
-)
+import "go_client/healthcheck"
 
 func StartHealthCheck(period int, sendMetrics bool) {
 	healthcheck.StartHealthCheck(period, sendMetrics)
