@@ -2,12 +2,12 @@ name: Release
 
 # Configures this workflow to run every time a change is pushed to the master.
 on:
-  push:    
-    branches:      
+  push:
+    branches:
       - main
       - libs-delete
-  pull_request:    
-    branches:      
+  pull_request:
+    branches:
       - main
 
 jobs:
@@ -60,16 +60,10 @@ jobs:
           name: dobbyVPN-windows.msix
           path: release
 
-      - name: Download windows zip client
+      - name: Download macos amd64 client
         uses: actions/download-artifact@v4
         with:
-          name: dobbyVPN-windows.zip
-          path: release
-
-      - name: Download macos aarch client
-        uses: actions/download-artifact@v4
-        with:
-          name: dobbyVPN-macos-aarch64.zip
+          name: dobbyVPN-macos-amd64.zip
           path: release
 
       - name: Download android client Sign
