@@ -60,10 +60,16 @@ jobs:
           name: dobbyVPN-windows.msix
           path: release
 
-      - name: Download macos amd64 client
+      - name: Download windows zip client
         uses: actions/download-artifact@v4
         with:
-          name: dobbyVPN-macos-amd64.zip
+          name: dobbyVPN-windows.zip
+          path: release
+
+      - name: Download macos aarch client
+        uses: actions/download-artifact@v4
+        with:
+          name: dobbyVPN-macos-aarch64.zip
           path: release
 
       - name: Download android client Sign
