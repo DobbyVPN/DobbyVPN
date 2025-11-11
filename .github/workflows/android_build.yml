@@ -57,7 +57,6 @@ jobs:
 
       - name: Install dependencies
         run: |
-          go get ./...
           sudo apt-get update
           sudo apt-get install -y gcc-mingw-w64 mingw-w64
 
