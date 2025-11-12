@@ -11,6 +11,6 @@ plugins {
     id("com.github.gmazzo.buildconfig") version "5.6.5" apply false
 }
 
-tasks.named("assembleRelease").configure {
+tasks.named("assembleRelease") {
     dependsOn(:outline:copyOutlineAar)
 }
