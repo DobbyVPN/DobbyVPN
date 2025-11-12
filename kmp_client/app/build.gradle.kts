@@ -194,10 +194,7 @@ buildConfig {
 
 dependencies {
     implementation(project(":awg"))
+    implementation(project(":outline"))
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
-}
-
-tasks.matching { it.name == "assembleRelease"}.configureEach {
-    dependsOn(":outline:build")
 }
