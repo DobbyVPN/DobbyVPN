@@ -198,6 +198,4 @@ dependencies {
     debugImplementation(libs.androidx.ui.test.manifest)
 }
 
-tasks.named("assembleRelease") {
-    dependsOn(":outline:copyOutlineAar")
-}
+tasks.findByName("assembleRelease")?.dependsOn(":outline:copyOutlineAar")
