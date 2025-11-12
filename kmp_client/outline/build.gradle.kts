@@ -63,6 +63,19 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    val outputDir = rootProject.layout.projectDirectory.dir("libs")
+    val copyOutlineAar = tasks.register<Copy>("copyOutlineAar") {
+        from(layout.buildDirectory.dir("outputs/aar")) {
+            include("outline-debug.aar", "outline-release.aar")
+        }
+
+        into(outputDir)
+    }
+
+    afterEvaluate {
+        tasks.named("build").configure { finalizedBy(copyOutlineAar) }
+    }
 }
 
 dependencies {
@@ -73,19 +86,4 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
-}
-
-val outputDir = rootProject.layout.projectDirectory.dir("libs")
-val copyOutlineAar = tasks.register<Copy>("copyOutlineAar") {
-    dependsOn("assembleDebug", "assembleRelease")
-
-    from(layout.buildDirectory.dir("outputs/aar")) {
-        include("outline-debug.aar", "outline-release.aar")
-    }
-
-    into(outputDir)
-}
-
-afterEvaluate {
-    tasks.named("build").configure { finalizedBy(copyOutlineAar) }
 }

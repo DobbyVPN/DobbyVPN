@@ -56,7 +56,7 @@ kotlin {
             implementation(libs.koin.android)
             implementation(libs.koin.androidx.compose)
 
-            implementation(files("../libs/outline-debug.aar"))
+            implementation(project(":outline"))
 
             implementation(libs.okhttp)
             implementation(libs.ktor.client.okhttp)
