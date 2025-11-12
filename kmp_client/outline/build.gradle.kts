@@ -86,6 +86,6 @@ val copyOutlineAar = tasks.register<Copy>("copyOutlineAar") {
     into(outputDir)
 }
 
-afterEvaluate {
-    tasks.named("build").configure { finalizedBy(copyOutlineAar) }
+tasks.named("build").configure {
+    finalizedBy(copyOutlineAar)
 }
