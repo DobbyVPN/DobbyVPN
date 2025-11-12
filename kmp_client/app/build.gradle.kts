@@ -194,7 +194,6 @@ buildConfig {
 
 dependencies {
     implementation(project(":awg"))
-    implementation(project(":outline"))
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 }
