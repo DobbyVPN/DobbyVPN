@@ -1,7 +1,6 @@
 // @file:Suppress("UnstableApiUsage")
 
 import org.gradle.api.tasks.Copy
-import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
     id("com.android.library")
@@ -76,7 +75,17 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
 }
 
-val compileKotlin: KotlinCompile by tasks
-compileKotlin.destinationDirectory.set(file("libs"))
-val compileTestKotlin: KotlinCompile by tasks
-compileTestKotlin.destinationDirectory.set(file("libs"))
+val outputDir = rootProject.layout.projectDirectory.dir("libs")
+val copyOutlineAar = tasks.register<Copy>("copyOutlineAar") {
+    dependsOn("assembleDebug", "assembleRelease")
+
+    from(layout.buildDirectory.dir("outputs/aar")) {
+        include("outline-debug.aar", "outline-release.aar")
+    }
+
+    into(outputDir)
+}
+
+afterEvaluate {
+    tasks.named("build").configure { finalizedBy(copyOutlineAar) }
+}
