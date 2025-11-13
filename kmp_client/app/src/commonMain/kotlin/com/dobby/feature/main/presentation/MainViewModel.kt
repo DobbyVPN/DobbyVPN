@@ -1,31 +1,26 @@
 package com.dobby.feature.main.presentation
 
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.main.domain.AwgManager
-import com.dobby.feature.main.domain.VpnManager
-import com.dobby.feature.main.domain.ConnectionStateRepository
-import com.dobby.feature.main.domain.DobbyConfigsRepository
-import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.main.domain.TomlConfigs
-import com.dobby.feature.main.domain.VpnInterface
+import com.dobby.feature.main.domain.*
 import com.dobby.feature.main.ui.MainUiState
+import io.ktor.client.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import io.ktor.client.*
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import net.peanuuutz.tomlkt.AbstractTomlWriter
 import net.peanuuutz.tomlkt.Toml
+import net.peanuuutz.tomlkt.TomlIndentation
+import net.peanuuutz.tomlkt.TomlInteger
+import net.peanuuutz.tomlkt.TomlWriter
 import net.peanuuutz.tomlkt.decodeFromString
+import net.peanuuutz.tomlkt.encodeToWriter
 
 val httpClient = HttpClient()
 
@@ -34,23 +29,12 @@ class MainViewModel(
     private val connectionStateRepository: ConnectionStateRepository,
     private val permissionEventsChannel: PermissionEventsChannel,
     private val vpnManager: VpnManager,
-    private val awgManager: AwgManager,
     private val logger: Logger,
 ) : ViewModel() {
     //region Cloak states
     private val _uiState = MutableStateFlow(MainUiState())
 
     val uiState: StateFlow<MainUiState> = _uiState
-    //endregion
-
-    //region AmneziaWG states
-    val awgVersion: String
-
-    var awgConfigState: MutableState<String>
-        private set
-
-    var awgConnectionState: MutableState<AwgConnectionState>
-        private set
     //endregion
 
     init {
@@ -74,16 +58,6 @@ class MainViewModel(
                 .permissionsGrantedEvents
                 .collect { isPermissionGranted -> startVpn(isPermissionGranted) }
         }
-
-        // AmneziaWG init
-        awgVersion = awgManager.getAwgVersion()
-
-        val awgConfigStoredValue = configsRepository.getAwgConfig()
-        val awgConnectionStoredValue =
-            if (configsRepository.getIsAmneziaWGEnabled()) AwgConnectionState.ON
-            else AwgConnectionState.OFF
-        awgConfigState = mutableStateOf(awgConfigStoredValue)
-        awgConnectionState = mutableStateOf(awgConnectionStoredValue)
     }
 
     //region Cloak functions
@@ -180,6 +154,14 @@ class MainViewModel(
             logger.log("Cloak config saved successfully (length=${cloakJson.length})")
         }
 
+        if (root.AWG != null) {
+            logger.log("Detected AmneziaWG config, enabling awg mode")
+            configsRepository.setVpnInterface(VpnInterface.AMNEZIA_WG)
+            configsRepository.setIsAmneziaWGEnabled(true)
+            configsRepository.setAwgConfig(root.AWG)
+            logger.log("AmneziaWG config saved successfully (length=${root.AWG.length})")
+        }
+
         logger.log("Finish parseToml()")
     }
 
@@ -231,32 +213,6 @@ class MainViewModel(
         configsRepository.setIsCloakEnabled(false)
         connectionStateRepository.update(isConnected = false)
         logger.log("VPN service stopped successfully, state reset to disconnected")
-    }
-    //endregion
-
-    //region AmneziaWG functions
-    fun onAwgConfigEdit(newConfig: String) {
-        var configDelegate by awgConfigState
-        configsRepository.setAwgConfig(newConfig)
-        configDelegate = newConfig
-    }
-
-    fun onAwgConnect() {
-        viewModelScope.launch { permissionEventsChannel.checkPermissions() }
-
-        var connectionStateDelegate by awgConnectionState
-        connectionStateDelegate = AwgConnectionState.ON
-        configsRepository.setIsAmneziaWGEnabled(true)
-        configsRepository.setVpnInterface(VpnInterface.AMNEZIA_WG)
-        awgManager.onAwgConnect()
-    }
-
-    fun onAwgDisconnect() {
-        var connectionStateDelegate by awgConnectionState
-        connectionStateDelegate = AwgConnectionState.OFF
-        configsRepository.setIsAmneziaWGEnabled(false)
-        configsRepository.setVpnInterface(VpnInterface.AMNEZIA_WG)
-        awgManager.onAwgDisconnect()
     }
     //endregion
 }

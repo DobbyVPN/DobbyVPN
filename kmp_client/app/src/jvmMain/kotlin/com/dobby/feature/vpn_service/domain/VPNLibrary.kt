@@ -16,7 +16,7 @@ interface VPNLibrary : Library {
     fun StopCloakClient()
 
     // Awg
-    fun StartAwg(key: String)
+    fun StartAwg(key: String, awgqCongig: String)
     fun StopAwg()
 
     // Healthcheck
@@ -112,16 +112,16 @@ internal class VPNLibraryLoader(
         }
     }
 
-    fun startAwg(key: String) {
+    fun startAwg(key: String, awgqConfig: String) {
         try {
-            logger.log("Run key: $key")
-            INSTANCE.StartAwg(key)
-            logger.log("NewOutlineClient called successfully.")
+            logger.log("Run awg tunnel: $key")
+            INSTANCE.StartAwg(key, awgqConfig)
+            logger.log("NewAwgClient called successfully.")
         } catch (e: UnsatisfiedLinkError) {
-            logger.log("Failed to call NewOutlineClient: ${e.message}")
+            logger.log("Failed to call NewAwgClient: ${e.message}")
             e.printStackTrace()
         } catch (e: Exception) {
-            logger.log("An error occurred while calling NewOutlineClient: ${e.message}")
+            logger.log("An error occurred while calling NewAwgClient: ${e.message}")
             e.printStackTrace()
         }
     }
@@ -129,12 +129,12 @@ internal class VPNLibraryLoader(
     fun stopAwg() {
         try {
             INSTANCE.StopAwg()
-            logger.log("StopOutline called successfully.")
+            logger.log("StopAwg called successfully.")
         } catch (e: UnsatisfiedLinkError) {
-            logger.log("Failed to call StopOutline: ${e.message}")
+            logger.log("Failed to call StopAwg: ${e.message}")
             e.printStackTrace()
         } catch (e: Exception) {
-            logger.log("An error occurred while calling StopOutline: ${e.message}")
+            logger.log("An error occurred while calling StopAwg: ${e.message}")
             e.printStackTrace()
         }
     }
