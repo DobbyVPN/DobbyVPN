@@ -11,8 +11,9 @@ var awgClient *awg.AwgClient
 var awgMu sync.Mutex
 
 //export StartAwg
-func StartAwg(key *C.char) {
-	str_key := C.GoString(key)
+func StartAwg(config, awgqConfig *C.char) {
+	iface := C.GoString(config)
+	str_key := C.GoString(awgqConfig)
 
 	awgMu.Lock()
 	defer awgMu.Unlock()
@@ -26,7 +27,7 @@ func StartAwg(key *C.char) {
 		}
 	}
 
-	_awgClient, err := awg.NewAwgClient(str_key)
+	_awgClient, err := awg.NewAwgClient(iface, str_key)
 	if err != nil {
 		log.Errorf("Failed to create awgClient: %v", err)
 		return
