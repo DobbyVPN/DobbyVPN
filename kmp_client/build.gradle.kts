@@ -10,3 +10,12 @@ plugins {
 
     id("com.github.gmazzo.buildconfig") version "5.6.5" apply false
 }
+
+afterEvaluate {
+    tasks.named("assembleRelease").configure {
+        finalizedBy(":outline:copyOutlineAar")
+    }
+    tasks.named("build").configure {
+        finalizedBy(":outline:copyOutlineAar")
+    }
+}

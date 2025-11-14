@@ -77,8 +77,6 @@ dependencies {
 
 val outputDir = rootProject.layout.projectDirectory.dir("libs")
 val copyOutlineAar = tasks.register<Copy>("copyOutlineAar") {
-    dependsOn("assembleDebug", "assembleRelease")
-
     from(layout.buildDirectory.dir("outputs/aar")) {
         include("outline-debug.aar", "outline-release.aar")
     }
