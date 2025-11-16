@@ -89,6 +89,7 @@ class MainViewModel(
     //region Cloak functions
     fun onConnectionButtonClicked(
         connectionUrl: String,
+        isConnected: Boolean
     ) {
         logger.log("The connection button was clicked with URL: $connectionUrl")
 
@@ -98,15 +99,17 @@ class MainViewModel(
         }
 
         logger.log("Proceeding with setConfig for the provided URL...")
-        try {
-            setConfig(connectionUrl)
-        } catch (e: Exception) {
-            logger.log("Error during setConfig: ${e.message}")
-            return
-        } finally {
-            logger.log("Finish setConfig()")
+        if (!isConnected) {
+            try {
+                logger.log("We get config by $connectionUrl")
+                setConfig(connectionUrl)
+            } catch (e: Exception) {
+                logger.log("Error during setConfig: ${e.message}")
+                return
+            } finally {
+                logger.log("Finish setConfig()")
+            }
         }
-
 
         viewModelScope.launch {
             val currentState = connectionStateRepository.flow.value
@@ -170,6 +173,9 @@ class MainViewModel(
             val outlineSuffix = if (ss.Outline == true) "/?outline=1" else ""
             configsRepository.setServerPortOutline("${ss.Server}:${ss.Port}$outlineSuffix")
             logger.log("Outline method, password, and server: ${ss.Method}@${ss.Server}:${ss.Port}")
+        } else {
+            logger.log("Shadowsocks config didn't detected, turn off")
+            configsRepository.setIsOutlineEnabled(false)
         }
 
         if (root.Cloak != null) {
@@ -178,6 +184,9 @@ class MainViewModel(
             val cloakJson = Json { prettyPrint = true }.encodeToString(root.Cloak)
             configsRepository.setCloakConfig(cloakJson)
             logger.log("Cloak config saved successfully (length=${cloakJson.length})")
+        } else {
+            logger.log("Cloak config didn't detected, turn off")
+            configsRepository.setIsCloakEnabled(false)
         }
 
         logger.log("Finish parseToml()")

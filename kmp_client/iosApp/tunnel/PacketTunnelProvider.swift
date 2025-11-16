@@ -17,6 +17,37 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
     private var memoryTimer: DispatchSourceTimer?
     
+    private var healthTimer: DispatchSourceTimer?
+
+    private func startRepeatingHealthCheck(maxRepeats: Int = 3) {
+        var repeats = 0
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
+        
+        timer.schedule(deadline: .now(), repeating: 10)
+        
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            
+            do {
+                HealthCheck.shared.fullCheckUp()
+                repeats += 1
+                if repeats >= maxRepeats {
+                    timer.cancel()
+                }
+            } catch {
+                self.logs.writeLog(log: "[HealthCheck] Error: \(error.localizedDescription)")
+                repeats += 1
+                if repeats >= maxRepeats {
+                    timer.cancel()
+                }
+            }
+        }
+        
+        timer.resume()
+        self.healthTimer = timer
+    }
+
+    
     func buildOutlineConfig(methodPassword: String, serverPort: String) -> String {
         let encoded = methodPassword.data(using: .utf8)?.base64EncodedString() ?? ""
         return "ss://\(encoded)@\(serverPort)"
@@ -47,7 +78,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.mtu = 1200
         settings.ipv4Settings = NEIPv4Settings(addresses: [localAddress], subnetMasks: [subnetMask])
         settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
+        settings.ipv6Settings = NEIPv6Settings(addresses: [], networkPrefixLengths: [])
+        settings.ipv6Settings?.excludedRoutes = [NEIPv6Route.default()]
         settings.dnsSettings = NEDNSSettings(servers: dnsServers)
+        settings.dnsSettings?.matchDomains = [""]
         
         logs.writeLog(log: "Settings are ready:\n \(settings)")
         try await self.setTunnelNetworkSettings(settings)
@@ -63,12 +97,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         DispatchQueue.global().async { [weak self] in
             self?.startReadPacketsAndForwardToDevice()
         }
-
-        do {
-            HealthCheck.shared.fullCheckUp()
-        } catch {
-            logs.writeLog(log: "[startTunnel] HealthCheck error: \(error.localizedDescription)")
-        }
+        
+        self.startRepeatingHealthCheck()
+        
         
         logs.writeLog(log: "startTunnel: packet loops started")
     }
