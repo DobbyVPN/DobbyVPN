@@ -16,25 +16,26 @@ public class HealthCheck {
         do {
             logs.writeLog(log: "[fullCheckUp] START Check UP")
             let timeout: TimeInterval = 1.0
+            let repeatCount = 2
             
-            try safeRepeat(4) { self.pingVPNServer() }
-            try safeRepeat(4) { self.pingGoogle() }
-            try safeRepeat(4) { self.pingOnes() }
+            try safeRepeat(repeatCount) { self.pingVPNServer() }
+            try safeRepeat(repeatCount) { self.pingGoogle() }
+            try safeRepeat(repeatCount) { self.pingOnes() }
             
-            try safeRepeat(4) {
+            try safeRepeat(repeatCount) {
                 let ip = self.resolveDNSWithTimeout(host: "one.one.one.one", timeout: timeout)
                 self.logs.writeLog(log: "[resolveDNS] one.one.one.one -> \(ip)")
             }
             
-            try safeRepeat(4) {
+            try safeRepeat(repeatCount) {
                 let ip = self.resolveDNSWithTimeout(host: "google.com", timeout: timeout)
                 self.logs.writeLog(log: "[resolveDNS] google.com -> \(ip)")
             }
             
-            try safeRepeat(4) { self.pingGoogleWithDNS() }
-            try safeRepeat(4) { self.pingOnesWithDNS() }
+            try safeRepeat(repeatCount) { self.pingGoogleWithDNS() }
+            try safeRepeat(repeatCount) { self.pingOnesWithDNS() }
             
-            try safeRepeat(4) {
+            try safeRepeat(repeatCount) {
                 self.httpPing(urlString: "https://google.com") { success, statusCode, errorMessage in
                     if success {
                         self.logs.writeLog(log: "[httpPing] HTTP ping is working! Response code: \(statusCode ?? -1)")
@@ -44,7 +45,17 @@ public class HealthCheck {
                 }
             }
             
-            try safeRepeat(4) {
+            try safeRepeat(repeatCount) {
+                self.httpGetBody(urlString: "https://gist.githubusercontent.com/BrudLord/f844290711659cab9a05f618922019fb/raw/f42498ef3a3447a395056dd0f7d168a0b66e6083/shadowsocks") { success, body, errorMessage in
+                    if success {
+                        self.logs.writeLog(log: "[httpGetBody] GET request successful! Body: \(body)")
+                    } else {
+                        self.logs.writeLog(log: "[httpGetBody] GET request failed. Error: \(errorMessage ?? "Unknown")")
+                    }
+                }
+            }
+            
+            try safeRepeat(repeatCount) {
                 self.socketPing(host: "google.com", port: 443) { success in
                     if success {
                         self.logs.writeLog(log: "[socketPing] TCP connection is working!")
@@ -54,12 +65,12 @@ public class HealthCheck {
                 }
             }
             
-            try safeRepeat(4) {
+            try safeRepeat(repeatCount) {
                 let status = self.isVPNConnected()
                 self.logs.writeLog(log: "[isVPNConnected] isVPNConnected: \(status)")
             }
             
-            try safeRepeat(4) {
+            try safeRepeat(repeatCount) {
                 let status = self.isVPNConnectedWithAddress()
                 self.logs.writeLog(log: "[isVPNConnectedWithAddress] isVPNConnectedWithAddress: \(status)")
             }
@@ -82,6 +93,7 @@ public class HealthCheck {
             logs.writeLog(log: "[fullCheckUp] ERROR: \(error.localizedDescription)")
         }
     }
+
     
     func resolveDNSWithTimeout(host: String, timeout: TimeInterval) -> String {
         do {
@@ -261,6 +273,39 @@ public class HealthCheck {
             completion(false, nil, error.localizedDescription)
         }
     }
+    
+    func httpGetBody(urlString: String, completion: @escaping (Bool, String?, String?) -> Void) {
+        let randomQuery = "?_=\(Int.random(in: 0...100000))"
+        guard let url = URL(string: urlString + randomQuery) else {
+            completion(false, nil, "Invalid URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 5
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(false, nil, error.localizedDescription)
+                return
+            }
+            
+            guard let data = data else {
+                completion(false, nil, "No data received")
+                return
+            }
+            
+            let bodyString = String(data: data, encoding: .utf8)
+            completion(true, bodyString, nil)
+        }
+
+        task.resume()
+    }
+
 
     
     func tcpPing(address: String) -> Result<Int32, Error> {
