@@ -46,6 +46,41 @@ platform :android do
 
     sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} ../DobbyVPN-v#{FULL_VERSION}-sign.apk"
   end
+
+  desc "Build Desktop artifacts"
+  lane :build_desktop do
+    gradle(
+      task: "build",
+      properties: {
+        "projectRepositoryCommit" => COMMIT,
+        "projectRepositoryCommitLink" => COMMIT_LINK,
+        "android.injected.version.code" => VERSION_CODE,
+        "android.injected.version.name" => FULL_VERSION,
+      }
+    )
+
+    gradle(
+      task: "dependencies",
+      flags: "--no-daemon -q",
+      properties: {
+        "projectRepositoryCommit" => COMMIT,
+        "projectRepositoryCommitLink" => COMMIT_LINK,
+        "android.injected.version.code" => VERSION_CODE,
+        "android.injected.version.name" => FULL_VERSION,
+      }
+    )
+
+    gradle(
+      task: "printConveyorConfig",
+      flags: "--no-daemon -q",
+      properties: {
+        "projectRepositoryCommit" => COMMIT,
+        "projectRepositoryCommitLink" => COMMIT_LINK,
+        "android.injected.version.code" => VERSION_CODE,
+        "android.injected.version.name" => FULL_VERSION,
+      }
+    )
+  end
 end
 
 
