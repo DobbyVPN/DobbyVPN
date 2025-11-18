@@ -20,6 +20,6 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Ck-Client"
+include(":outline")
 include(":app")
 include(":awg")
-include(":outline")
