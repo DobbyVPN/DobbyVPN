@@ -62,7 +62,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(log: "[startTunnel] HealthCheck error: \(error.localizedDescription)")
         }
         
-        self.startSentry()
+//        self.startSentry()
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
         let methodPassword = configsRepository.getMethodPasswordOutline()
         let serverPort = configsRepository.getServerPortOutline()
@@ -106,6 +106,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         logs.writeLog(log: "Stopping tunnel with reason: \(reason)")
+        VpnManagerImpl.isUserInitiatedStop = true
         stopCloak()
         completionHandler()
     }
@@ -115,7 +116,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func startReadPacketsFromDevice() {
-        logs.writeLog(log: "Starting to read packets from device... \(Thread.current)")
+//        logs.writeLog(log: "Starting to read packets from device... \(Thread.current)")
         do {
             while true {
                 //            logs.writeLog(log: "Reading packets from device... \(Thread.current)")
@@ -186,28 +187,28 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
     
-    func startSentry() {
-        SentrySDK.start { options in
-            options.dsn = "https://1ebacdcb98b5a261d06aeb0216cdafc5@o4509873345265664.ingest.de.sentry.io/4509927590068304"
-            options.debug = true
-
-            options.sendDefaultPii = true
-
-            options.tracesSampleRate = 1.0
-            options.configureProfiling = {
-                $0.sessionSampleRate = 1.0
-                $0.lifecycle = .trace
-            }
-            
-            options.experimental.enableLogs = true
-        }
-        
-        SentrySDK.configureScope { scope in
-            scope.setTag(value: self.launchId, key: "launch_id")
-        }
-        
-        SentrySDK.capture(message: "Sentry started, launch_id: \(self.launchId)")
-    }
+//    func startSentry() {
+//        SentrySDK.start { options in
+//            options.dsn = "https://1ebacdcb98b5a261d06aeb0216cdafc5@o4509873345265664.ingest.de.sentry.io/4509927590068304"
+//            options.debug = true
+//
+//            options.sendDefaultPii = true
+//
+//            options.tracesSampleRate = 1.0
+//            options.configureProfiling = {
+//                $0.sessionSampleRate = 1.0
+//                $0.lifecycle = .trace
+//            }
+//            
+//            options.experimental.enableLogs = true
+//        }
+//        
+//        SentrySDK.configureScope { scope in
+//            scope.setTag(value: self.launchId, key: "launch_id")
+//        }
+//        
+//        SentrySDK.capture(message: "Sentry started, launch_id: \(self.launchId)")
+//    }
     
     func parseIPv4Packet(_ data: Data) -> String {
         guard data.count >= 20 else { return "Invalid IPv4 packet" }
