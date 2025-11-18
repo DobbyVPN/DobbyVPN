@@ -1,6 +1,7 @@
 import com.dobby.feature.diagnostic.domain.IpRepository
 import com.dobby.feature.logging.domain.CopyLogsInteractor
 import com.dobby.feature.logging.domain.LogsRepository
+import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.AwgManager
 import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
@@ -25,6 +26,7 @@ fun makeNativeModule(
         factory { awgManager() }
         single { copyLogsInteractor() }
         single { logsRepository() }
+        single { Logger(get()) }
         single { ipRepository() }
         single { connectionStateRepository() }
         single { configsRepository() }

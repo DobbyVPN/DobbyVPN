@@ -133,12 +133,12 @@ class DobbyVpnService : VpnService() {
                 logger.log("Previously used outline apiKey is empty")
                 return
             }
-            logger.log("!!! Start connecting Outline")
+            logger.log("Start connecting Outline")
             outlineLibFacade.init(buildOutlineUrl(methodPassword, serverPort))
             logger.log("outlineLibFacade inited")
             enableCloakIfNeeded(force = !isServiceStartedFromUi)
         } else {
-            logger.log("!!! Start disconnecting Outline")
+            logger.log("Start disconnecting Outline")
             vpnInterface?.close()
             stopSelf()
         }
@@ -146,7 +146,7 @@ class DobbyVpnService : VpnService() {
 
     private fun startAwg() {
         if (dobbyConfigsRepository.getIsAmneziaWGEnabled()) {
-            logger.log("!!! Starting AmneziaWG")
+            logger.log("Starting AmneziaWG")
             val stringConfig = dobbyConfigsRepository.getAwgConfig()
             val state = if (dobbyConfigsRepository.getIsAmneziaWGEnabled()) {
                 TunnelState.UP
@@ -155,7 +155,7 @@ class DobbyVpnService : VpnService() {
             }
             tunnelManager.updateState(stringConfig, state)
         } else {
-            logger.log("!!! Stopping AmneziaWG")
+            logger.log("Stopping AmneziaWG")
             tunnelManager.updateState(null, TunnelState.DOWN)
         }
     }
@@ -165,18 +165,18 @@ class DobbyVpnService : VpnService() {
         val cloakConfig = dobbyConfigsRepository.getCloakConfig().ifEmpty { return }
         if (shouldEnableCloak && cloakConfig.isNotEmpty()) {
             serviceScope.launch {
-                logger.log("!!!Cloak: connect start")
+                logger.log("Cloak: connect start")
                 val result = cloakConnectInteractor.connect(config = cloakConfig)
-                logger.log("!!!Cloak connection result is $result")
+                logger.log("Cloak connection result is $result")
             }
         } else {
-            logger.log("!!! Cloak is disabled. Config isEmpty == ${cloakConfig.isEmpty()}")
+            logger.log("Cloak is disabled. Config isEmpty == ${cloakConfig.isEmpty()}")
         }
     }
 
     private fun disableCloakIfNeeded() {
         if (dobbyConfigsRepository.getIsCloakEnabled()) {
-            logger.log("!!! Disabling Cloak!")
+            logger.log("Disabling Cloak!")
             serviceScope.launch {
                 cloakConnectInteractor.disconnect()
                 dobbyConfigsRepository.setIsCloakEnabled(false)

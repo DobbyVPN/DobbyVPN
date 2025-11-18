@@ -34,6 +34,6 @@ func UrlTest(url string, standard int) (int32, error) {
 
 //export CouldStart
 func CouldStart() bool {
-	log.Infof("===================Call CouldStart: %v\n", common.Client.CouldStart())
+	log.Infof("Call CouldStart: %v\n", common.Client.CouldStart())
 	return common.Client.CouldStart()
 }

@@ -66,22 +66,22 @@ func (app App) Run(ctx context.Context) error {
 
 	log.Printf("Device created")
 
-	var closeOnce sync.Once
-	closeAll := func() {
-		closeOnce.Do(func() {
-			log.Infof("[Outline] Closing interfaces")
-			_ = tun.Close()
-			_ = ss.Close()
-		})
-	}
+    var closeOnce sync.Once
+    closeAll := func() {
+        closeOnce.Do(func() {
+            log.Infof("[Outline] Closing interfaces")
+            _ = tun.Close()
+            _ = ss.Close()
+        })
+    }
 
-	defer closeAll()
+    defer closeAll()
 
 	go func() {
-		<-ctx.Done()
-		closeAll()
-		log.Infof("[Outline] Cancel received — closing interfaces")
-	}()
+        <-ctx.Done()
+        closeAll()
+        log.Infof("[Outline] Cancel received — closing interfaces")
+    }()
 
 	trafficCopyWg.Add(2)
 
@@ -142,19 +142,19 @@ func (app App) Run(ctx context.Context) error {
 		log.Printf("OutlineDevice -> tun stopped")
 	}()
 
-	common.Client.MarkInProgress(outlineCommon.Name)
+	common.Client.MarkInCriticalSection(outlineCommon.Name)
 	if err := routing.StartRouting(ss.GetServerIP().String(), gatewayIP.String(), tun.(*tunDevice).name); err != nil {
-		common.Client.MarkInactive(outlineCommon.Name)
+		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
-	common.Client.MarkActive(outlineCommon.Name)
+    common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 
 	defer func() {
-		common.Client.MarkInProgress(outlineCommon.Name)
+		common.Client.MarkInCriticalSection(outlineCommon.Name)
 		log.Infof("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
 		routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
 		log.Infof("[Routing] Routes cleaned up")
-		common.Client.MarkInactive(outlineCommon.Name)
+		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 	}()
 
 	log.Infof("Outline/app: Start trafficCopyWg...\n")
