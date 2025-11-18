@@ -1,6 +1,6 @@
 name: Release
 
-# Configures this workflow to run every time a change is pushed to the master.
+# Configures this workflow to run every time a change is pushed to the main branch.
 on:
   push:
     branches:
@@ -35,26 +35,30 @@ jobs:
     runs-on: ubuntu-latest
     needs: [desktop_build, android_build, ios_build]
     permissions: write-all
+    env:
+      APP_MAJOR_VERSION: ${{ vars.MAJOR }}
+      APP_MINOR_VERSION: ${{ vars.MINOR }}
+      APP_MAINTENANCE_VERSION: ${{ vars.MAINTENANCE }}
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Make release dir
         run: mkdir release
 
-      - name: Download linux deb client
+      - name: Download Linux deb client
         uses: actions/download-artifact@v4
         with:
           name: dobbyVPN-linux.deb
           path: release
 
-      - name: Download linux tar.gz client
+      - name: Download Linux tar.gz client
         uses: actions/download-artifact@v4
         with:
           name: dobbyVPN-linux.tar.gz
           path: release
 
-      - name: Download windows msix client
+      - name: Download Windows MSIX client
         uses: actions/download-artifact@v4
         with:
           name: dobbyVPN-windows.msix
@@ -72,25 +76,31 @@ jobs:
           name: dobbyVPN-macos-aarch64.zip
           path: release
 
-      - name: Download android client Sign
+      - name: Download Android client (signed)
         uses: actions/download-artifact@v4
         with:
           name: dobbyvpn-android-sign.apk
           path: release
 
-      - name: Download android client UnSign
+      - name: Download Android client (unsigned)
         uses: actions/download-artifact@v4
         with:
           name: dobbyvpn-android-unsign.apk
           path: release
 
+      - name: Create version file for F-Droid
+        run: |
+          VERSION_NAME="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
+          VERSION_CODE="${APP_MAJOR_VERSION}${APP_MINOR_VERSION}${APP_MAINTENANCE_VERSION}"
+          {
+            echo "versionName=${VERSION_NAME}"
+            echo "versionCode=${VERSION_CODE}"
+          } > release/version.txt
+
       - name: Compute tag
         id: tag
         run: |
-          MAJOR=${{ vars.MAJOR }}
-          MINOR=${{ vars.MINOR }}
-          MAINTENANCE=${{ vars.MAINTENANCE }}
-          TAG="v${MAJOR}.${MINOR}.${MAINTENANCE}"
+          TAG="v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Release

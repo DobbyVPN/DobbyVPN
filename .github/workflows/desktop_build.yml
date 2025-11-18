@@ -34,7 +34,7 @@ jobs:
           name: lib_ubuntu
           path: kmp_client/libs
 
-      - name: Download MacOS lib
+      - name: Download macOS lib
         uses: actions/download-artifact@v4
         with:
           name: lib_macos
@@ -84,11 +84,6 @@ jobs:
           signing_key: ${{ secrets.CONVEYOR_SIGNING_KEY }}
           agree_to_license: 1
 
-      - name: Display file tree with sizes after Linux build
-        run: |
-          echo "Displaying the size of files and directories in 'output' directory:"
-          du -ah output | sort -rh
-
       - name: Find files
         id: find_deb
         run: |
@@ -105,31 +100,31 @@ jobs:
           name: dobbyVPN-linux.deb
           path: ${{ env.DEB_FILE }}
 
-      - name: Upload Tar Gz
+      - name: Upload tar.gz
         uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-linux.tar.gz
           path: ${{ env.TARGZ_FILE }}
 
-      - name: Upload Zip for Mac aarch64
+      - name: Upload zip for macOS aarch64
         uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-macos-aarch64.zip
           path: ${{ env.MAC_AARCH64_FILE }}
 
-      - name: Upload Zip for Mac amd64
+      - name: Upload zip for macOS amd64
         uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-macos-amd64.zip
           path: ${{ env.MAC_AMD64_FILE }}
 
-      - name: Upload Msix
+      - name: Upload MSIX
         uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-windows.msix
           path: ${{ env.MSIX_FILE }}
 
-      - name: Upload Windows Zip
+      - name: Upload Windows zip
         uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-windows.zip

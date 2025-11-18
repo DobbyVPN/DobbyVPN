@@ -31,13 +31,13 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23.3"
+          go-version: '1.23.3'
 
       - name: Set up JDK 17 (Temurin)
         uses: actions/setup-java@v5
         with:
-          java-version: "17"
-          distribution: "temurin"
+          java-version: '17'
+          distribution: 'temurin'
 
       - name: Install Ruby
         uses: ruby/setup-ruby@v1
@@ -60,17 +60,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-mingw-w64 mingw-w64
 
-      - name: Bundle Instsall
+      - name: Bundle Install
         working-directory: kmp_client
         run: |
           bundle install
 
-      - name: Build UnSigned via Fastlane
+      - name: Build unsigned via Fastlane
         working-directory: kmp_client
         run: |
           bundle exec fastlane android build_android
 
-      - name: Build & Sign via Fastlane
+      - name: Build & sign via Fastlane
         working-directory: kmp_client
         run: |
           bundle exec fastlane android build_android_and_signing
@@ -80,14 +80,14 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
 
-      - name: Upload Signed APK
+      - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
           name: dobbyvpn-android-sign.apk
-          path: "kmp_client/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-sign.apk"
+          path: kmp_client/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-sign.apk
 
-      - name: Upload UnSigned APK
+      - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
           name: dobbyvpn-android-unsign.apk
-          path: "kmp_client/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-unsign.apk"
+          path: kmp_client/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-unsign.apk
