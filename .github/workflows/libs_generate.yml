@@ -17,8 +17,9 @@ jobs:
       matrix:
         os: [windows, ubuntu, macos]
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -27,8 +28,7 @@ jobs:
 
       - name: Vendor Cloak/internal
         run: |
-          git clone --depth 1 https://github.com/cbeuw/Cloak tmp
-          cp -r tmp/internal go_client/modules/Cloak/
+          cp -r Cloak/internal go_client/modules/Cloak/
 
       - name: Update utls & download Go modules
         working-directory: go_client
@@ -93,6 +93,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -101,9 +103,7 @@ jobs:
 
       - name: Vendor Cloak/internal
         run: |
-          git clone --depth 1 https://github.com/cbeuw/Cloak tmp
-          mkdir -p go_client/modules/Cloak
-          cp -r tmp/internal go_client/modules/Cloak/
+          cp -r Cloak/internal go_client/modules/Cloak/
 
       - name: Update utls & download Go modules
         working-directory: go_client
@@ -162,6 +162,8 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -171,9 +173,7 @@ jobs:
 
       - name: Vendor Cloak/internal
         run: |
-          git clone --depth 1 https://github.com/cbeuw/Cloak tmp
-          mkdir -p go_client/modules/Cloak
-          cp -r tmp/internal go_client/modules/Cloak/
+          cp -r Cloak/internal go_client/modules/Cloak/
 
       - name: Download Go modules & dependencies
         working-directory: go_client

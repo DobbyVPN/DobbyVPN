@@ -13,6 +13,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Set up JDK 21.0.6 (Temurin)
         uses: actions/setup-java@v5
@@ -22,9 +24,6 @@ jobs:
 
       - name: Select Xcode 16.1
         run: sudo xcode-select -s /Applications/Xcode_16.1.app
-
-      - name: Set up Git submodules
-        run: git submodule update --init --recursive
 
       - uses: ruby/setup-ruby@v1
         with:
