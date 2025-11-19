@@ -15,6 +15,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Download Go AAR
         uses: actions/download-artifact@v4
@@ -51,9 +53,6 @@ jobs:
           packages: >
             build-tools;34.0.0
             platforms;android-34
-
-      - name: Set up Git Submodules
-        run: git submodule update --init --recursive
 
       - name: Install dependencies
         run: |
