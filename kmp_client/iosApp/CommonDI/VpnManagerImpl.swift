@@ -16,7 +16,7 @@ class VpnManagerImpl: VpnManager {
     private var runtimeRetryCount = 0
     
     private var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
-    private var dobbyName = "Dobby_VPN_3"
+    private var dobbyName = "Dobby_VPN_4"
     
     private var vpnManager: NETunnelProviderManager?
     private var connectionRepository: ConnectionStateRepository
@@ -29,7 +29,6 @@ class VpnManagerImpl: VpnManager {
     init(connectionRepository: ConnectionStateRepository) {
         VpnManagerImpl.startSentry()
         self.connectionRepository = connectionRepository
-        HealthCheck.shared.fullCheckUp()
         getOrCreateManager { (manager, error) in
             if (manager?.connection.status == .connected) {
                 self.state = manager?.connection.status ?? .invalid
@@ -190,6 +189,9 @@ class VpnManagerImpl: VpnManager {
         proto.serverAddress = "159.69.19.209:443"
         proto.providerConfiguration = [:]
         proto.includeAllNetworks = true
+        if #available(iOS 17.4, *) {
+            proto.excludeDeviceCommunication = false
+        }
         newVpnManager.protocolConfiguration = proto
         newVpnManager.isEnabled = true
         return newVpnManager

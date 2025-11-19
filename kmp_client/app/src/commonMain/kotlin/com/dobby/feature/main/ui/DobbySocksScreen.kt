@@ -91,7 +91,7 @@ fun DobbySocksScreen(
 
             Button(
                 onClick = {
-                    mainViewModel.onConnectionButtonClicked(connectionURL)
+                    mainViewModel.onConnectionButtonClicked(connectionURL, uiMainState.isConnected)
                 },
                 shape = RoundedCornerShape(6.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -129,8 +129,6 @@ fun DobbySocksScreen(
         ) {
             LazyColumn(state = listState) {
                 items(uiLogState.logMessages) { message ->
-                    val isBold = message.contains("!!!")
-
                     Text(
                         buildAnnotatedString {
                             withStyle(
@@ -138,12 +136,12 @@ fun DobbySocksScreen(
                                     fontWeight = FontWeight.W700,
                                 )
                             ) {
-                                append("=> ")
+                                append("> ")
                             }
 
                             withStyle(
                                 style = SpanStyle(
-                                    fontWeight = if (isBold) FontWeight.W700 else FontWeight.W400,
+                                    fontWeight = FontWeight.W400,
                                 )
                             ) {
                                 append(message)
