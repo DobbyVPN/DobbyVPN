@@ -20,7 +20,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     
     private var packetContinuation: AsyncStream<(Data, NSNumber)>.Continuation!
     private lazy var packetStream: AsyncStream<(Data, NSNumber)> = {
-        AsyncStream<(Data, NSNumber)>(bufferingPolicy: .bufferingOldest(200)) { continuation in
+        AsyncStream<(Data, NSNumber)>(bufferingPolicy: .bufferingOldest(20)) { continuation in
             self.packetContinuation = continuation
         }
     }()
