@@ -43,7 +43,6 @@ class LogsRepository(
     }
 
     fun writeLog(log: String) {
-        sentryLogger?.log(log)
         runCatching {
             fileSystem.appendingSink(logFilePath).buffer().use { sink ->
                 sink.writeUtf8(log)

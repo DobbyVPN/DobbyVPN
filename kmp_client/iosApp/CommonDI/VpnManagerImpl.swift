@@ -4,7 +4,7 @@ import Sentry
 import Foundation
 import SystemConfiguration
 
-class VpnManagerImpl: VpnManager {
+public class VpnManagerImpl: VpnManager {
     private static let launchId = UUID().uuidString
     private var logs = NativeModuleHolder.logsRepository
     
@@ -24,10 +24,10 @@ class VpnManagerImpl: VpnManager {
     private var observer: NSObjectProtocol?
     @Published private(set) var state: NEVPNStatus = .invalid
     
-    private var isUserInitiatedStop = true
+    public static var isUserInitiatedStop = true
     
     init(connectionRepository: ConnectionStateRepository) {
-        VpnManagerImpl.startSentry()
+//        VpnManagerImpl.startSentry()
         self.connectionRepository = connectionRepository
         getOrCreateManager { (manager, error) in
             if (manager?.connection.status == .connected) {
@@ -52,7 +52,7 @@ class VpnManagerImpl: VpnManager {
             switch connection.status {
             case .connected:
                 self.logs.writeLog(log: "VPN connected. Update ui and isUserInitiatedStop and put manager")
-                isUserInitiatedStop = false
+                VpnManagerImpl.isUserInitiatedStop = false
                 self.initialRetryCount = 3
                 if self.vpnManager == nil {
                     getOrCreateManager { manager, _ in
@@ -62,10 +62,11 @@ class VpnManagerImpl: VpnManager {
                 connectionRepository.tryUpdate(isConnected: true)
 
             case .disconnected:
-                self.logs.writeLog(log: "VPN disconnected.")
+                self.logs.writeLog(log: "VPN disconnected.\(connection.status.rawValue)")
                 connectionRepository.tryUpdate(isConnected: false)
+                self.logs.writeLog(log: "isUserInitiatedStop = \(VpnManagerImpl.isUserInitiatedStop)")
 
-                if !self.isUserInitiatedStop {
+                if !VpnManagerImpl.isUserInitiatedStop {
                     if self.initialRetryCount < self.maxInitialRetries {
                         self.handleInitialRetry()
                     } else if self.runtimeRetryCount < self.maxRuntimeRetries {
@@ -120,7 +121,7 @@ class VpnManagerImpl: VpnManager {
         }
     }
     
-    func start() {
+    public func start() {
         self.logs.writeLog(log: "call start")
         self.logs.writeLog(log: "Routing table without vpn:")
         getOrCreateManager { (manager, error) in
@@ -134,6 +135,7 @@ class VpnManagerImpl: VpnManager {
             }
             self.vpnManager = manager
             self.vpnManager?.isEnabled = true
+            VpnManagerImpl.isUserInitiatedStop = false
             manager.saveToPreferences { saveError in
                 if let saveError = saveError {
                     self.logs.writeLog(log: "Failed to save VPN configuration: \(saveError)")
@@ -153,9 +155,9 @@ class VpnManagerImpl: VpnManager {
         }
     }
 
-    func stop() {
+    public func stop() {
         guard state == .connected else { return }
-        isUserInitiatedStop = true
+        VpnManagerImpl.isUserInitiatedStop = true
         self.logs.writeLog(log: "Actually vpnManager is \(vpnManager)")
         self.logs.writeLog(log: "[stop] User initiated stopVPNTunnel()")
         vpnManager?.connection.stopVPNTunnel()
@@ -198,27 +200,27 @@ class VpnManagerImpl: VpnManager {
     }
     
     
-    static func startSentry() {
-        SentrySDK.start { options in
-            options.dsn = "https://1ebacdcb98b5a261d06aeb0216cdafc5@o4509873345265664.ingest.de.sentry.io/4509927590068304"
-            options.debug = true
-
-            options.sendDefaultPii = true
-
-            options.tracesSampleRate = 1.0
-            options.configureProfiling = {
-                $0.sessionSampleRate = 1.0
-                $0.lifecycle = .trace
-            }
-            
-            options.experimental.enableLogs = true
-        }
-        
-        SentrySDK.configureScope { scope in
-            scope.setTag(value: VpnManagerImpl.launchId, key: "launch_id")
-        }
-        
-        SentrySDK.capture(message: "Sentry started, launch_id: \(VpnManagerImpl.launchId)")
-    }
+//    static func startSentry() {
+//        SentrySDK.start { options in
+//            options.dsn = "https://1ebacdcb98b5a261d06aeb0216cdafc5@o4509873345265664.ingest.de.sentry.io/4509927590068304"
+//            options.debug = true
+//
+//            options.sendDefaultPii = true
+//
+//            options.tracesSampleRate = 1.0
+//            options.configureProfiling = {
+//                $0.sessionSampleRate = 1.0
+//                $0.lifecycle = .trace
+//            }
+//            
+//            options.experimental.enableLogs = true
+//        }
+//        
+//        SentrySDK.configureScope { scope in
+//            scope.setTag(value: VpnManagerImpl.launchId, key: "launch_id")
+//        }
+//        
+//        SentrySDK.capture(message: "Sentry started, launch_id: \(VpnManagerImpl.launchId)")
+//    }
 
 }

@@ -15,44 +15,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var logs = NativeModuleHolder.logsRepository
     private var configs = configsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
-    private var memoryTimer: DispatchSourceTimer?
     
     private var healthTimer: DispatchSourceTimer?
-
-    private func startRepeatingHealthCheck(maxRepeats: Int = 3) {
-        var repeats = 0
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
-        
-        timer.schedule(deadline: .now(), repeating: 10)
-        
-        timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            
-            do {
-                HealthCheck.shared.fullCheckUp()
-                repeats += 1
-                if repeats >= maxRepeats {
-                    timer.cancel()
-                }
-            } catch {
-                self.logs.writeLog(log: "[HealthCheck] Error: \(error.localizedDescription)")
-                repeats += 1
-                if repeats >= maxRepeats {
-                    timer.cancel()
-                }
-            }
-        }
-        
-        timer.resume()
-        self.healthTimer = timer
-    }
-
     
-    func buildOutlineConfig(methodPassword: String, serverPort: String) -> String {
-        let encoded = methodPassword.data(using: .utf8)?.base64EncodedString() ?? ""
-        return "ss://\(encoded)@\(serverPort)"
-    }
-
+    private var packetContinuation: AsyncStream<(Data, NSNumber)>.Continuation!
+    private lazy var packetStream: AsyncStream<(Data, NSNumber)> = {
+        AsyncStream<(Data, NSNumber)>(bufferingPolicy: .bufferingOldest(20)) { continuation in
+            self.packetContinuation = continuation
+        }
+    }()
+    
     override func startTunnel(options: [String : NSObject]?) async throws {
         logs.writeLog(log: "startTunnel in PacketTunnelProvider, thread: \(Thread.current)")
         
@@ -61,8 +33,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         } catch {
             logs.writeLog(log: "[startTunnel] HealthCheck error: \(error.localizedDescription)")
         }
-        
-        self.startSentry()
+
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
         let methodPassword = configsRepository.getMethodPasswordOutline()
         let serverPort = configsRepository.getServerPortOutline()
@@ -90,22 +61,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         device.initialize(config: config, _logs: logs)
         startCloak()
         
-        
-        DispatchQueue.global().async { [weak self] in
-            self?.startReadPacketsFromDevice()
-        }
-        DispatchQueue.global().async { [weak self] in
-            self?.startReadPacketsAndForwardToDevice()
-        }
+        Task { await self.readPacketsFromTunnel() }
+        Task { await self.processPacketsToDevice() }
+        Task { await self.processPacketsFromDevice() }
         
         self.startRepeatingHealthCheck()
         
-        
-        logs.writeLog(log: "startTunnel: packet loops started")
+        logs.writeLog(log: "startTunnel: all packet loops started")
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         logs.writeLog(log: "Stopping tunnel with reason: \(reason)")
+        VpnManagerImpl.isUserInitiatedStop = true
         stopCloak()
         completionHandler()
     }
@@ -114,113 +81,119 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         completionHandler?(messageData)
     }
 
-    private func startReadPacketsFromDevice() {
-        logs.writeLog(log: "Starting to read packets from device... \(Thread.current)")
-        do {
-            while true {
-                //            logs.writeLog(log: "Reading packets from device... \(Thread.current)")
-                autoreleasepool {
-                    let data = device.readFromDevice()
-                    //                logs.writeLog(log: "Read from device: \(data.count)" + parseIPv4Packet(data))
-                    let packets: [Data] = [data]
-                    let protocols: [NSNumber] = [NSNumber(value: AF_INET)]
-                    
-                    let success = self.packetFlow.writePackets(packets, withProtocols: protocols)
-                    if !success {
-                        logs.writeLog(log: "Failed to write packets to the tunnel")
-                    }
-                }
+    private func startRepeatingHealthCheck(maxRepeats: Int = 3) {
+        var repeats = 0
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
+        
+        timer.schedule(deadline: .now(), repeating: 10)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            do {
+                HealthCheck.shared.fullCheckUp()
+                repeats += 1
+                if repeats >= maxRepeats { timer.cancel() }
+            } catch {
+                self.logs.writeLog(log: "[HealthCheck] Error: \(error.localizedDescription)")
+                repeats += 1
+                if repeats >= maxRepeats { timer.cancel() }
             }
-        } catch {
-            logs.writeLog(log: "[startReadPacketsFromDevice] Error: \(error.localizedDescription)")
         }
-        logs.writeLog(log: "Finishing #startReadPacketsFromDevice")
+        
+        timer.resume()
+        self.healthTimer = timer
     }
     
-    private func startReadPacketsAndForwardToDevice() {
-        logs.writeLog(log: "Starting to read packets from tunnel... \(Thread.current)")
-        do {
-            self.packetFlow.readPackets { [weak self] (packets, protocols) in
-                //            NativeModuleHolder.logsRepository.writeLog(log: "Read packets from tunnel: \(packets.count) protocols: \(protocols) \(Thread.current)")
-                guard let self else { return }
-                //            NativeModuleHolder.logsRepository.writeLog(log: "Continue reading packets from tunnel... \(Thread.current)")
-                if !packets.isEmpty {
-                    forwardPacketsToDevice(packets, protocols: protocols)
+    private func readPacketsFromTunnel() async {
+        logs.writeLog(log: "Starting async readPacketsFromTunnel()…")
+
+        while true {
+            do {
+                let (packets, protocols) = try await packetFlow.readPacketsAsync()
+                
+                guard !packets.isEmpty else { continue }
+
+                for i in 0..<packets.count {
+                    packetContinuation.yield((packets[i], protocols[i]))
                 }
-                startReadPacketsAndForwardToDevice()
+            } catch {
+                logs.writeLog(log: "[readPacketsFromTunnel] Error: \(error.localizedDescription)")
             }
-        } catch {
-            logs.writeLog(log: "[startReadPacketsAndForwardToDevice] Error: \(error.localizedDescription)")
         }
     }
 
-    private func forwardPacketsToDevice(_ packets: [Data], protocols: [NSNumber]) {
-        for packet in packets {
-//            logs.writeLog(log: "Forwarding packet to device: \(packet.count)" + parseIPv4Packet(packet))
+    private func processPacketsToDevice() async {
+        logs.writeLog(log: "Starting async processPacketsToDevice()…")
+
+        for await (packet, proto) in packetStream {
             device.write(data: packet)
         }
     }
-    
+
+    private func processPacketsFromDevice() async {
+        logs.writeLog(log: "Starting async processPacketsFromDevice()…")
+
+        while true {
+            autoreleasepool {
+                let data = device.readFromDevice()
+                
+                let ok = packetFlow.writePackets([data], withProtocols: [NSNumber(value: AF_INET)])
+                if !ok {
+                    logs.writeLog(log: "Failed to write packets to NEPacketFlow")
+                }
+            }
+        }
+    }
+
+    func buildOutlineConfig(methodPassword: String, serverPort: String) -> String {
+        let encoded = methodPassword.data(using: .utf8)?.base64EncodedString() ?? ""
+        return "ss://\(encoded)@\(serverPort)"
+    }
+
     private func startCloak() {
         let localHost = "127.0.0.1"
         let localPort = "1984"
         logs.writeLog(log: "startCloakOutline: entering")
-        if (configsRepository.getIsCloakEnabled()) {
+        
+        if configsRepository.getIsCloakEnabled() {
             do {
-                logs.writeLog(log: "startCloakOutline: about to start Cloak client with localHost: \(localHost), localPort: \(localPort), config: \(configsRepository.getCloakConfig())")
+                logs.writeLog(log: "startCloakOutline: starting cloak with config: \(configsRepository.getCloakConfig())")
                 Cloak_outlineStartCloakClient(localHost, localPort, configsRepository.getCloakConfig(), false)
-                logs.writeLog(log: "startCloakOutline: Cloak client started successfully")
+                logs.writeLog(log: "startCloakOutline: started")
             } catch {
-                logs.writeLog(log: "startCloakOutline: Cloak client failed with error: \(error)")
+                logs.writeLog(log: "startCloakOutline error: \(error)")
             }
         } else {
-            logs.writeLog(log: "startCloakOutline: cloak disabled in configs")
+            logs.writeLog(log: "startCloakOutline: cloak disabled")
         }
     }
 
-    
     private func stopCloak() {
-        if (configsRepository.getIsCloakEnabled()) {
+        if configsRepository.getIsCloakEnabled() {
             logs.writeLog(log: "stopCloakOutline")
             Cloak_outlineStopCloakClient()
         }
     }
-    
-    func startSentry() {
-        SentrySDK.start { options in
-            options.dsn = "https://1ebacdcb98b5a261d06aeb0216cdafc5@o4509873345265664.ingest.de.sentry.io/4509927590068304"
-            options.debug = true
 
-            options.sendDefaultPii = true
-
-            options.tracesSampleRate = 1.0
-            options.configureProfiling = {
-                $0.sessionSampleRate = 1.0
-                $0.lifecycle = .trace
-            }
-            
-            options.experimental.enableLogs = true
-        }
-        
-        SentrySDK.configureScope { scope in
-            scope.setTag(value: self.launchId, key: "launch_id")
-        }
-        
-        SentrySDK.capture(message: "Sentry started, launch_id: \(self.launchId)")
-    }
-    
     func parseIPv4Packet(_ data: Data) -> String {
         guard data.count >= 20 else { return "Invalid IPv4 packet" }
-        
         let sourceIP = data[12..<16].map { String($0) }.joined(separator: ".")
         let destinationIP = data[16..<20].map { String($0) }.joined(separator: ".")
-        
-        // Протокол: TCP = 6, UDP = 17
         let proto = data[9]
-        
         return " route \(sourceIP) → \(destinationIP), proto: \(proto)"
     }
 }
+
+
+extension NEPacketTunnelFlow {
+    func readPacketsAsync() async throws -> ([Data], [NSNumber]) {
+        try await withCheckedThrowingContinuation { cont in
+            self.readPackets { packets, protocols in
+                cont.resume(returning: (packets, protocols))
+            }
+        }
+    }
+}
+
 
 class DeviceFacade {
     private var device: Cloak_outlineOutlineDevice? = nil
