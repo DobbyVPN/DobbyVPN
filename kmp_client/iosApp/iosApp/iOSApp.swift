@@ -17,4 +17,9 @@ struct iOSApp: App {
                 .ignoresSafeArea(.keyboard)
         }
     }
+    .onChange(of: scenePhase) {
+        if scenePhase == .active {
+                // TODO: set authentication status to NONE
+            }
+        }
 }

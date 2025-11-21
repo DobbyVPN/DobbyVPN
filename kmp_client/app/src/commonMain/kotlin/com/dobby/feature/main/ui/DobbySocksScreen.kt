@@ -17,8 +17,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.dobby.feature.authentication.domain.HideConfigsManager
 import com.dobby.feature.logging.presentation.LogsViewModel
-import com.dobby.feature.main.presentation.AuthenticationViewModel
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.util.koinViewModel
 import kotlinx.coroutines.MainScope
@@ -29,31 +29,33 @@ import org.jetbrains.compose.ui.tooling.preview.Preview
 @Preview
 @Composable
 fun DobbySocksScreen(
-    authViewModel: AuthenticationViewModel,
     mainViewModel: MainViewModel = koinViewModel(),
     logsViewModel: LogsViewModel = koinViewModel(),
     modifier: Modifier = Modifier,
 ) {
-    mainViewModel.setConfigsRepository(authViewModel.getConfigs())
+    mainViewModel.setConfigsRepository(HideConfigsManager.getConfigs())
     val uiMainState by mainViewModel.uiState.collectAsState()
     val uiLogState by logsViewModel.uiState.collectAsState()
+    val authState by HideConfigsManager.authState.collectAsState()
 
     var connectionURL by remember(
-        key1 = uiMainState.connectionURL
+        key1 = authState,
+        key2 = uiMainState.connectionURL
     ) {
         mutableStateOf(uiMainState.connectionURL)
     }
 
     var showLogsDialog by remember { mutableStateOf(false) }
 
+    HideConfigsManager.authenticate(
+        onSuccess = {
+            mainViewModel.setConfigsRepository(it)
+        }, onFailure = {
+            logsViewModel.clearLogs()
+        }
+    )
+
     MainScope().launch {
-        authViewModel.authenticate(
-            onAuthSuccess = {
-                mainViewModel.setConfigsRepository(authViewModel.getConfigs())
-            }, onAuthFailure = {
-                logsViewModel.clearLogs()
-            }
-        )
         while (true) {
             logsViewModel.reloadLogs()
             delay(1000L)
@@ -131,7 +133,10 @@ fun DobbySocksScreen(
             }
         }
 
-        if (authViewModel.authenticationFinished) {
+        // don't show logs until authentication is finished
+        // (we clear the logs on auth failure instead of hiding them)
+        if (HideConfigsManager.authStatus == HideConfigsManager.AuthStatus.SUCCESS ||
+            HideConfigsManager.authStatus == HideConfigsManager.AuthStatus.FAILURE) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()

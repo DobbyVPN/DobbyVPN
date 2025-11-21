@@ -16,3 +16,6 @@ data object LogsScreen
 
 @Serializable
 data object AboutScreen
+
+@Serializable
+data object AuthenticationSettingsScreen

@@ -1,7 +1,7 @@
 import com.dobby.feature.diagnostic.domain.IpRepository
 import com.dobby.feature.logging.domain.CopyLogsInteractor
 import com.dobby.feature.logging.domain.LogsRepository
-import com.dobby.feature.main.domain.AuthenticationManager
+import com.dobby.feature.authentication.domain.AuthenticationManager
 import com.dobby.feature.main.domain.AwgManager
 import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository

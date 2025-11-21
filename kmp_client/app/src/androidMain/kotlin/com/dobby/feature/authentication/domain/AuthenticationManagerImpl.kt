@@ -1,4 +1,4 @@
-package com.dobby.feature.main.domain
+package com.dobby.feature.authentication.domain
 
 import android.content.Context
 import androidx.biometric.BiometricManager
@@ -18,12 +18,14 @@ fun initBiometricAuthenticationManager(context: FragmentActivity) {
 class AuthenticationManagerImpl(
     private val context: Context
 ): AuthenticationManager {
+    override fun isAuthenticationAvailable() = (BiometricManager.from(context).canAuthenticate(BIOMETRIC_WEAK)
+            == BiometricManager.BIOMETRIC_SUCCESS)
+
     override fun authenticate(
         onAuthSuccess: () -> Unit,
         onAuthFailure: () -> Unit
     ) {
-        if (BiometricManager.from(context).canAuthenticate(BIOMETRIC_WEAK)
-                != BiometricManager.BIOMETRIC_SUCCESS) {
+        if (!isAuthenticationAvailable()) {
             onAuthSuccess()
             return
         }

@@ -25,12 +25,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.dobby.feature.diagnostic.ui.DiagnosticScreen
+import com.dobby.feature.authentication.domain.HideConfigsManager
 import com.dobby.feature.logging.ui.AboutScreen
 import com.dobby.feature.logging.ui.LogScreen
 import com.dobby.feature.logging.ui.SettingsScreen
-import com.dobby.feature.main.presentation.AuthenticationViewModel
+import com.dobby.feature.authentication.ui.AuthenticationSettingsScreen
 import com.dobby.feature.main.ui.DobbySocksScreen
-import com.dobby.util.koinViewModel
 
 @Composable
 fun App(modifier: Modifier = Modifier) {
@@ -39,7 +39,7 @@ fun App(modifier: Modifier = Modifier) {
     ) {
         val navController = rememberNavController()
         val keyboardController = LocalSoftwareKeyboardController.current
-        val authenticationViewModel: AuthenticationViewModel = koinViewModel()
+        HideConfigsManager.authStatus = HideConfigsManager.AuthStatus.NONE
 
         Scaffold(
             modifier = modifier
@@ -56,7 +56,7 @@ fun App(modifier: Modifier = Modifier) {
                     startDestination = MainScreen
                 ) {
                     composable<MainScreen> {
-                        DobbySocksScreen(authenticationViewModel)
+                        DobbySocksScreen()
                     }
                     composable<DiagnosticsScreen> {
                         DiagnosticScreen()
@@ -69,6 +69,9 @@ fun App(modifier: Modifier = Modifier) {
                     }
                     composable<AboutScreen> {
                         AboutScreen()
+                    }
+                    composable<AuthenticationSettingsScreen> {
+                        AuthenticationSettingsScreen()
                     }
                 }
             }

@@ -1,0 +1,132 @@
+package com.dobby.feature.authentication.domain
+
+import dev.jordond.compass.Coordinates
+import dev.jordond.compass.Priority
+import dev.jordond.compass.geocoder.Geocoder
+import dev.jordond.compass.geolocation.Geolocator
+import dev.jordond.compass.geolocation.currentLocationOrNull
+import dev.jordond.compass.permissions.LocationPermissionController
+import dev.jordond.compass.permissions.PermissionState
+import kotlin.math.PI
+import kotlin.math.asin
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
+
+expect val geocoder: Geocoder?
+expect val geolocator: Geolocator?
+expect val locationPermissionController: LocationPermissionController?
+
+enum class RedZoneCheckResult {
+    RED_ZONE, NOT_RED_ZONE, ERROR
+}
+
+object LocationManager {
+    suspend fun requestLocationPermission(): PermissionState {
+        if (locationPermissionController == null) {
+            return PermissionState.NotDetermined
+        }
+        // check if permission has already been granted
+        if (locationPermissionController!!.hasPermission()) {
+            return PermissionState.Granted
+        }
+        // if not, request the permission
+        return locationPermissionController!!.requirePermissionFor(Priority.Balanced)
+    }
+
+    suspend fun inRedZone(): RedZoneCheckResult {
+        val currentLocation = getLocation()
+        if (currentLocation == null) {
+            return RedZoneCheckResult.ERROR
+        }
+        val closeToBorder = closeToBorder(currentLocation)
+        if (closeToBorder == null) {
+            return RedZoneCheckResult.ERROR
+        }
+        if (closeToBorder) {
+            return RedZoneCheckResult.RED_ZONE
+        }
+        if (closeToAirport(currentLocation)) {
+            return RedZoneCheckResult.RED_ZONE
+        }
+        return RedZoneCheckResult.NOT_RED_ZONE
+    }
+
+    // all distances are in kilometres
+    const val MAX_DISTANCE_TO_AIRPORT: Double = 10.0
+    const val MAX_DISTANCE_TO_BORDER: Double = 100.0
+
+    private suspend fun getLocation() = geolocator?.currentLocationOrNull()?.coordinates
+
+    private suspend fun closeToBorder(currentLocation: Coordinates): Boolean? {
+        val geocoderResults = geocoder?.reverse(currentLocation)?.getOrNull()?.map { place ->
+            place.country
+        }
+        if (geocoderResults == null) {
+            return null
+        }
+        if (geocoderResults.isEmpty()) {
+            return null
+        }
+        val country1 = geocoderResults.first()
+        if (!geocoderResults.all { country2 -> country1 == country2 }) {
+            return true
+        }
+        val nearbyLocations = getNearbyLocations(currentLocation)
+        for (nearbyLocation in nearbyLocations) {
+            val nearbyGeocoderResults = geocoder?.reverse(nearbyLocation)?.getOrNull()?.map { place ->
+                place.country
+            }
+            if (nearbyGeocoderResults == null) {
+                continue
+            }
+            if (nearbyGeocoderResults.isEmpty()) {
+                continue
+            }
+            if (!nearbyGeocoderResults.all { country2 -> country1 == country2 }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun closeToAirport(userLocation: Coordinates): Boolean =
+        AirportsList.airportsCoordinatesRU.any { airport: Coordinates ->
+            distance(userLocation, airport) <= MAX_DISTANCE_TO_AIRPORT
+        }
+
+    private const val EARTH_RADIUS: Double = 6371.0
+
+    private fun distance(location1: Coordinates, location2: Coordinates): Double {
+        val phi1 = location1.latitude * PI / 180.0
+        val phi2 = location2.latitude * PI / 180.0
+        val lambda1 = location1.longitude * PI / 180.0
+        val lambda2 = location2.longitude * PI / 180.0
+        // Haversine formula
+        val a = sin((phi1 - phi2) / 2.0) * sin((phi1-  phi2) / 2.0) +
+            cos(phi1) * cos(phi2) * sin((lambda1 - lambda2) / 2.0) * sin((lambda1 - lambda2) / 2.0)
+        return 2 * EARTH_RADIUS * atan2(sqrt(a), sqrt(1 - a))
+    }
+
+    private fun getNearbyLocations(currentLocation: Coordinates): List<Coordinates> {
+        val delta = MAX_DISTANCE_TO_BORDER / EARTH_RADIUS // angular distance
+        val phi = currentLocation.latitude * PI / 180.0
+        val deltaPhi = delta * 180.0 / PI
+        val deltaLambda = 2 * asin(sin(delta / 2) / cos(phi)) * 180.0 / PI
+        return listOf(
+            Coordinates(currentLocation.latitude + deltaPhi, currentLocation.longitude),
+            Coordinates(currentLocation.latitude - deltaPhi, currentLocation.longitude),
+            Coordinates(currentLocation.latitude, currentLocation.longitude + deltaLambda),
+            Coordinates(currentLocation.latitude, currentLocation.longitude - deltaLambda),
+            Coordinates(currentLocation.latitude + sqrt(0.5) * deltaPhi,
+                currentLocation.longitude + sqrt(0.5) * deltaLambda),
+            Coordinates(currentLocation.latitude + sqrt(0.5) * deltaPhi,
+                currentLocation.longitude - sqrt(0.5) * deltaLambda),
+            Coordinates(currentLocation.latitude - sqrt(0.5) * deltaPhi,
+                currentLocation.longitude + sqrt(0.5) * deltaLambda),
+            Coordinates(currentLocation.latitude - sqrt(0.5) * deltaPhi,
+                currentLocation.longitude - sqrt(0.5) * deltaLambda),
+        )
+    }
+}
