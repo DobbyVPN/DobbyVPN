@@ -48,7 +48,7 @@ class LogsRepository(
                 sink.writeUtf8(log)
                 sink.writeUtf8("\n")
             }
-            _logState.update { it + log }
+            _logState.update { (it + log).takeLast(50) }
         }.onFailure { it.printStackTrace() }
     }
 
