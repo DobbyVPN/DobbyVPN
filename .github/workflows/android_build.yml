@@ -54,11 +54,6 @@ jobs:
             build-tools;34.0.0
             platforms;android-34
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64 mingw-w64
-
       - name: Bundle Install
         working-directory: kmp_client
         run: |
