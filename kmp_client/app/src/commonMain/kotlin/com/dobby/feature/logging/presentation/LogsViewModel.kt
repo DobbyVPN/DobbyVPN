@@ -39,12 +39,12 @@ class LogsViewModel(
     }
 
     fun copyLogsToClipBoard() {
-        copyLogsInteractor.copy(uiState.value.logMessages)
+        copyLogsInteractor.copy(logsRepository.readAllLogs())
     }
 
     fun reloadLogs() {
         scope.launch {
-            val freshLogs = logsRepository.readAllLogs()
+            val freshLogs = logsRepository.readAllLogs().takeLast(50)
             _uiState.value = _uiState.value.copy(logMessages = freshLogs.toList())
         }
     }
