@@ -56,7 +56,7 @@ object LocationManager {
 
     // all distances are in kilometres
     private fun maxDistanceToAirport(accuracy: Double): Double = accuracy + 1.5
-    const val MAX_DISTANCE_TO_BORDER: Double = 100.0
+    private fun maxDistanceToBorder(accuracy: Double): Double = accuracy + 6.0
 
     private suspend fun getLocation() = geolocator?.currentLocationOrNull()
 
@@ -74,7 +74,7 @@ object LocationManager {
         if (!geocoderResults.all { country2 -> country1 == country2 }) {
             return true
         }
-        val nearbyLocations = getNearbyLocations(currentLocation.coordinates)
+        val nearbyLocations = getNearbyLocations(currentLocation)
         for (nearbyLocation in nearbyLocations) {
             val nearbyGeocoderResults = geocoder?.reverse(nearbyLocation)?.getOrNull()?.map { place ->
                 place.country
@@ -110,24 +110,22 @@ object LocationManager {
         return 2 * EARTH_RADIUS * atan2(sqrt(a), sqrt(1 - a))
     }
 
-    private fun getNearbyLocations(currentLocation: Coordinates): List<Coordinates> {
-        val delta = MAX_DISTANCE_TO_BORDER / EARTH_RADIUS // angular distance
-        val phi = currentLocation.latitude * PI / 180.0
+    private fun getNearbyLocations(currentLocation: Location): List<Coordinates> {
+        val delta = maxDistanceToBorder(currentLocation.accuracy / 1000.0) / EARTH_RADIUS // angular distance
+        val lat = currentLocation.coordinates.latitude
+        val lon = currentLocation.coordinates.longitude
+        val phi = lat * PI / 180.0
         val deltaPhi = delta * 180.0 / PI
         val deltaLambda = 2 * asin(sin(delta / 2) / cos(phi)) * 180.0 / PI
         return listOf(
-            Coordinates(currentLocation.latitude + deltaPhi, currentLocation.longitude),
-            Coordinates(currentLocation.latitude - deltaPhi, currentLocation.longitude),
-            Coordinates(currentLocation.latitude, currentLocation.longitude + deltaLambda),
-            Coordinates(currentLocation.latitude, currentLocation.longitude - deltaLambda),
-            Coordinates(currentLocation.latitude + sqrt(0.5) * deltaPhi,
-                currentLocation.longitude + sqrt(0.5) * deltaLambda),
-            Coordinates(currentLocation.latitude + sqrt(0.5) * deltaPhi,
-                currentLocation.longitude - sqrt(0.5) * deltaLambda),
-            Coordinates(currentLocation.latitude - sqrt(0.5) * deltaPhi,
-                currentLocation.longitude + sqrt(0.5) * deltaLambda),
-            Coordinates(currentLocation.latitude - sqrt(0.5) * deltaPhi,
-                currentLocation.longitude - sqrt(0.5) * deltaLambda),
+            Coordinates(lat + deltaPhi, lon),
+            Coordinates(lat - deltaPhi, lon),
+            Coordinates(lat, lon + deltaLambda),
+            Coordinates(lat, lon - deltaLambda),
+            Coordinates(lat + sqrt(0.5) * deltaPhi, lon + sqrt(0.5) * deltaLambda),
+            Coordinates(lat + sqrt(0.5) * deltaPhi, lon - sqrt(0.5) * deltaLambda),
+            Coordinates(lat - sqrt(0.5) * deltaPhi, lon + sqrt(0.5) * deltaLambda),
+            Coordinates(lat - sqrt(0.5) * deltaPhi, lon - sqrt(0.5) * deltaLambda),
         )
     }
 }
