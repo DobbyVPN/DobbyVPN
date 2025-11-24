@@ -1,6 +1,7 @@
 package com.dobby.feature.authentication.domain
 
 import dev.jordond.compass.Coordinates
+import dev.jordond.compass.Location
 import dev.jordond.compass.Priority
 import dev.jordond.compass.geocoder.Geocoder
 import dev.jordond.compass.geolocation.Geolocator
@@ -54,13 +55,13 @@ object LocationManager {
     }
 
     // all distances are in kilometres
-    const val MAX_DISTANCE_TO_AIRPORT: Double = 10.0
+    private fun maxDistanceToAirport(accuracy: Double): Double = accuracy + 1.5
     const val MAX_DISTANCE_TO_BORDER: Double = 100.0
 
-    private suspend fun getLocation() = geolocator?.currentLocationOrNull()?.coordinates
+    private suspend fun getLocation() = geolocator?.currentLocationOrNull()
 
-    private suspend fun closeToBorder(currentLocation: Coordinates): Boolean? {
-        val geocoderResults = geocoder?.reverse(currentLocation)?.getOrNull()?.map { place ->
+    private suspend fun closeToBorder(currentLocation: Location): Boolean? {
+        val geocoderResults = geocoder?.reverse(currentLocation.coordinates)?.getOrNull()?.map { place ->
             place.country
         }
         if (geocoderResults == null) {
@@ -73,7 +74,7 @@ object LocationManager {
         if (!geocoderResults.all { country2 -> country1 == country2 }) {
             return true
         }
-        val nearbyLocations = getNearbyLocations(currentLocation)
+        val nearbyLocations = getNearbyLocations(currentLocation.coordinates)
         for (nearbyLocation in nearbyLocations) {
             val nearbyGeocoderResults = geocoder?.reverse(nearbyLocation)?.getOrNull()?.map { place ->
                 place.country
@@ -91,9 +92,9 @@ object LocationManager {
         return false
     }
 
-    private fun closeToAirport(userLocation: Coordinates): Boolean =
+    private fun closeToAirport(currentLocation: Location): Boolean =
         AirportsList.airportsCoordinatesRU.any { airport: Coordinates ->
-            distance(userLocation, airport) <= MAX_DISTANCE_TO_AIRPORT
+            distance(currentLocation.coordinates, airport) <= maxDistanceToAirport(currentLocation.accuracy)
         }
 
     private const val EARTH_RADIUS: Double = 6371.0
