@@ -94,7 +94,7 @@ object LocationManager {
 
     private fun closeToAirport(currentLocation: Location): Boolean =
         AirportsList.airportsCoordinatesRU.any { airport: Coordinates ->
-            distance(currentLocation.coordinates, airport) <= maxDistanceToAirport(currentLocation.accuracy)
+            distance(currentLocation.coordinates, airport) <= maxDistanceToAirport(currentLocation.accuracy / 1000.0)
         }
 
     private const val EARTH_RADIUS: Double = 6371.0
