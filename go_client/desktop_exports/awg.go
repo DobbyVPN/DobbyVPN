@@ -2,18 +2,17 @@ package main
 
 import "C"
 import (
-	log "github.com/sirupsen/logrus"
 	"go_client/awg"
 	"sync"
+
+	log "github.com/sirupsen/logrus"
 )
 
 var awgClient *awg.AwgClient
 var awgMu sync.Mutex
 
 //export StartAwg
-func StartAwg(key *C.char) {
-	str_key := C.GoString(key)
-
+func StartAwg(tunnel, config string) {
 	awgMu.Lock()
 	defer awgMu.Unlock()
 
@@ -26,7 +25,7 @@ func StartAwg(key *C.char) {
 		}
 	}
 
-	_awgClient, err := awg.NewAwgClient(str_key)
+	_awgClient, err := awg.NewAwgClient(tunnel, config)
 	if err != nil {
 		log.Errorf("Failed to create awgClient: %v", err)
 		return

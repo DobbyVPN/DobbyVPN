@@ -2,23 +2,23 @@ package main
 
 import "C"
 import (
-	log "github.com/sirupsen/logrus"
 	"go_client/outline"
 	"sync"
+
+	log "github.com/sirupsen/logrus"
 )
 
 var outlineClient *outline.OutlineClient
 var outlineMu sync.Mutex
 
 //export StartOutline
-func StartOutline(key *C.char) {
-    log.Infof("StartOutline")
-	str_key := C.GoString(key)
+func StartOutline(str_key string) {
+	log.Infof("StartOutline")
 
-    log.Infof("Make lock")
+	log.Infof("Make lock")
 	outlineMu.Lock()
 	defer outlineMu.Unlock()
-    log.Infof("locked")
+	log.Infof("locked")
 
 	if outlineClient != nil {
 		log.Infof("Disconnect existing outline client")
