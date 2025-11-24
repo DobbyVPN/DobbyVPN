@@ -4,6 +4,8 @@ import dev.jordond.compass.Coordinates
 
 object AirportsList {
     val airportsCoordinatesRU = listOf(
+        Coordinates(59.9385, 30.2707), // SPbU MCS (for testing, remove this later)
+
         Coordinates(55.972500, 37.413056), // Sheremetyevo International Airport SVO
         Coordinates(55.408611, 37.906389), // Domodedovo International Airport DME
         Coordinates(59.800278, 30.262500), // Pulkovo Airport LED
