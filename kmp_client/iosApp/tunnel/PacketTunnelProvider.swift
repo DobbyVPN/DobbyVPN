@@ -25,6 +25,37 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }()
     
+    private var memoryTimer: DispatchSourceTimer?
+
+    func startMemoryLogging() {
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .background))
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.setEventHandler { [weak self] in
+            self?.reportMemoryUsageMB()
+        }
+        timer.resume()
+        memoryTimer = timer
+    }
+    
+    func reportMemoryUsageMB() {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<natural_t>.stride)
+
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+
+        if result == KERN_SUCCESS {
+            let usedBytes = info.phys_footprint
+            let usedMB = Double(usedBytes) / 1024.0 / 1024.0
+            logs.writeLog(log: "[Memory] VPN use: \(String(format: "%.2f", usedMB)) MB")
+        } else {
+            logs.writeLog(log: "[Memory] unable to get info")
+        }
+    }
+    
     override func startTunnel(options: [String : NSObject]?) async throws {
         logs.writeLog(log: "startTunnel in PacketTunnelProvider, thread: \(Thread.current)")
         
@@ -64,6 +95,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         Task { await self.readPacketsFromTunnel() }
         Task { await self.processPacketsToDevice() }
         Task { await self.processPacketsFromDevice() }
+        
+        startMemoryLogging()
         
         self.startRepeatingHealthCheck()
         
