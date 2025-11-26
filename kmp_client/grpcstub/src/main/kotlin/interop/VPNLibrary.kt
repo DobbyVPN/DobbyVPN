@@ -6,7 +6,7 @@ interface VPNLibrary {
     fun StopOutline()
 
     // Cloak
-    fun StartCloakClient(localHost: String, localPort: String, config: String)
+    fun StartCloakClient(localHost: String, localPort: String, config: String, udp: Boolean)
     fun StopCloakClient()
 
     // Awg

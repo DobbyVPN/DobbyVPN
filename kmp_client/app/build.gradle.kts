@@ -87,6 +87,9 @@ kotlin {
         }
 
         jvmMain.dependencies {
+            implementation(project(":grpcstub"))
+            runtimeOnly(libs.grpc.netty)
+
             implementation(compose.desktop.currentOs)
             implementation(libs.skiko.win)
             implementation(libs.skiko.mac.amd64)

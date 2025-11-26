@@ -31,7 +31,7 @@ type App struct {
 }
 
 // NewApp creates a new App that will run on Windows. It expects exactly one argument: the interface name (e.g. "tun0").
-func NewApp(config string) (*App, error) {
+func NewApp(tunnel, config string) (*App, error) {
 	iface := strings.TrimSpace(config)
 	if len(iface) == 0 {
 		return nil, fmt.Errorf("interface name is required")
