@@ -83,6 +83,8 @@ kotlin {
             implementation(libs.ktor.serialization.kotlinx.json)
 
             implementation(libs.tomlkt)
+
+            implementation(libs.datetime)
         }
 
         jvmMain.dependencies {
