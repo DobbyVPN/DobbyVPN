@@ -1,6 +1,7 @@
 // LogsRepository.kt
 package com.dobby.feature.logging.domain
 
+import korlibs.time.DateTime
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,9 +44,12 @@ class LogsRepository(
     }
 
     fun writeLog(log: String) {
+        val now = DateTime.now().format("yyyy-MM-dd HH:mm:ss")
+        val logEntry = "[$now] $log"
+
         runCatching {
             fileSystem.appendingSink(logFilePath).buffer().use { sink ->
-                sink.writeUtf8(log)
+                sink.writeUtf8(logEntry)
                 sink.writeUtf8("\n")
             }
             _logState.update { (it + log).takeLast(50) }

@@ -26,6 +26,46 @@ public class VpnManagerImpl: VpnManager {
     
     public static var isUserInitiatedStop = true
     
+    private var xpcHeartbeatTimer: DispatchSourceTimer?
+    private let heartbeatInterval: TimeInterval = 10
+
+    @available(iOS 9.0, *)
+    private func startXPCHeartbeat(session: NETunnelProviderSession) {
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
+        timer.schedule(deadline: .now() + 10, repeating: 10)
+
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+
+            do {
+                try session.sendProviderMessage("heartbeat".data(using: .utf8)!) { response in
+                    if let response = response,
+                       let str = String(data: response, encoding: .utf8),
+                       str == "alive" {
+                        self.logs.writeLog(log: "XPC heartbeat: Tunnel alive")
+                    } else {
+                        self.logs.writeLog(log: "XPC heartbeat: Tunnel NOT responding")
+                        if !VpnManagerImpl.isUserInitiatedStop {
+                            self.handleRuntimeRetry()
+                        }
+                    }
+                }
+            } catch {
+                self.logs.writeLog(log: "XPC heartbeat error: \(error)")
+            }
+            
+        }
+
+        timer.resume()
+        self.xpcHeartbeatTimer = timer
+    }
+
+    private func stopXPCHeartbeat() {
+        xpcHeartbeatTimer?.cancel()
+        xpcHeartbeatTimer = nil
+    }
+
+    
     init(connectionRepository: ConnectionStateRepository) {
 //        VpnManagerImpl.startSentry()
         self.connectionRepository = connectionRepository
@@ -152,6 +192,13 @@ public class VpnManagerImpl: VpnManager {
                     }
                 }
             }
+            if #available(iOS 9.0, *) {
+                if let session = manager.connection as? NETunnelProviderSession {
+                    self.startXPCHeartbeat(session: session)
+                } else {
+                    self.logs.writeLog(log: "Could not cast connection to NETunnelProviderSession")
+                }
+            }
         }
     }
 
@@ -160,6 +207,7 @@ public class VpnManagerImpl: VpnManager {
         VpnManagerImpl.isUserInitiatedStop = true
         self.logs.writeLog(log: "Actually vpnManager is \(vpnManager)")
         self.logs.writeLog(log: "[stop] User initiated stopVPNTunnel()")
+        self.stopXPCHeartbeat()
         vpnManager?.connection.stopVPNTunnel()
         self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")
     }

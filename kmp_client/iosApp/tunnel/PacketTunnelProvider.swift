@@ -26,7 +26,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }()
     
     private var memoryTimer: DispatchSourceTimer?
-
+    
     func startMemoryLogging() {
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .background))
         timer.schedule(deadline: .now() + 5, repeating: 5)
@@ -111,7 +111,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
-        completionHandler?(messageData)
+        if let msg = String(data: messageData, encoding: .utf8), msg == "heartbeat" {
+            completionHandler?("alive".data(using: .utf8))
+        } else {
+            completionHandler?(messageData)
+        }
     }
 
     private func startRepeatingHealthCheck(maxRepeats: Int = 3) {
