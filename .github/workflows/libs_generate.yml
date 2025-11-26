@@ -47,7 +47,7 @@ jobs:
         if: matrix.os == 'windows'
         working-directory: go_client
         run: |
-          go build -buildmode=c-shared -o lib_windows.dll ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_windows.dll ./desktop_exports/...
         env:
           CGO_ENABLED: '1'
           GOOS: 'windows'
@@ -59,7 +59,7 @@ jobs:
         if: matrix.os == 'ubuntu'
         working-directory: go_client
         run: |
-          go build -buildmode=c-shared -o lib_linux.so ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_linux.so ./desktop_exports/...
         env:
           CGO_ENABLED: '1'
           GOOS: 'linux'
@@ -71,7 +71,7 @@ jobs:
         if: matrix.os == 'macos'
         working-directory: go_client
         run: |
-          go build -buildmode=c-shared -o lib_macos.dylib ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_macos.dylib ./desktop_exports/...
         env:
           CGO_ENABLED: '1'
           GOOS: 'darwin'
@@ -126,7 +126,7 @@ jobs:
           export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
           export CC=aarch64-linux-android21-clang
           export CXX=aarch64-linux-android21-clang++
-          go build -v -buildmode=c-shared -o liboutline.so ./kotlin_exports/...
+          go build -v -trimpath -ldflags="-buildid=" -buildmode=c-shared -o liboutline.so ./kotlin_exports/...
         env:
           CGO_ENABLED: '1'
           GOOS: 'android'
