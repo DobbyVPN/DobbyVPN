@@ -43,9 +43,9 @@ class VPNLibraryLoader {
         }
     }
 
-    fun startAwg(key: String) {
+    fun startAwg(key: String, config: String) {
         try {
-            INSTANCE.StartAwg(key, key)
+            INSTANCE.StartAwg(key, config)
         } catch (e: UnsatisfiedLinkError) {
             e.printStackTrace()
         } catch (e: Exception) {

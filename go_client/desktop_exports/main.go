@@ -77,6 +77,7 @@ func (s *server) UrlTest(_ context.Context, in *pb.UrlTestRequest) (*pb.UrlTestR
 func (s *server) CouldStart(_ context.Context, in *pb.Empty) (*pb.CouldStartResponce, error) {
 	log.Printf("CouldStart")
 	result := CouldStart()
+	log.Printf("CouldStart:", result)
 	return &pb.CouldStartResponce{Result: result}, nil
 }
 
