@@ -5,7 +5,6 @@ import dev.jordond.compass.Location
 import dev.jordond.compass.Priority
 import dev.jordond.compass.geocoder.Geocoder
 import dev.jordond.compass.geolocation.Geolocator
-import dev.jordond.compass.geolocation.currentLocationOrNull
 import dev.jordond.compass.permissions.LocationPermissionController
 import dev.jordond.compass.permissions.PermissionState
 import kotlin.math.PI
@@ -28,12 +27,7 @@ object LocationManager {
         if (locationPermissionController == null) {
             return PermissionState.NotDetermined
         }
-        // check if permission has already been granted
-        if (locationPermissionController!!.hasPermission()) {
-            return PermissionState.Granted
-        }
-        // if not, request the permission
-        return locationPermissionController!!.requirePermissionFor(Priority.Balanced)
+        return locationPermissionController!!.requirePermissionFor(Priority.HighAccuracy)
     }
 
     suspend fun inRedZone(): RedZoneCheckResult {
@@ -58,7 +52,7 @@ object LocationManager {
     private fun maxDistanceToAirport(accuracy: Double): Double = accuracy + 1.5
     private fun maxDistanceToBorder(accuracy: Double): Double = accuracy + 6.0
 
-    private suspend fun getLocation() = geolocator?.currentLocationOrNull()
+    private suspend fun getLocation() = geolocator?.current(Priority.HighAccuracy)?.getOrNull()
 
     private suspend fun closeToBorder(currentLocation: Location): Boolean? {
         val geocoderResults = geocoder?.reverse(currentLocation.coordinates)?.getOrNull()?.map { place ->
