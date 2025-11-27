@@ -124,6 +124,9 @@ jobs:
         run: |
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.11718014
           export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          export DEBUG_PREFIX_FLAGS="-fdebug-prefix-map=$ANDROID_SDK_ROOT=/android-sdk -fdebug-prefix-map=$ANDROID_NDK_HOME=/android-ndk"
+          export CGO_CFLAGS="$DEBUG_PREFIX_FLAGS ${CGO_CFLAGS:-}"
+          export CGO_LDFLAGS="$DEBUG_PREFIX_FLAGS ${CGO_LDFLAGS:-}"
           export CC=aarch64-linux-android21-clang
           export CXX=aarch64-linux-android21-clang++
           go build -v -trimpath -ldflags="-buildid=" -buildvcs=false -buildmode=c-shared -o liboutline.so ./kotlin_exports/...
