@@ -3,19 +3,20 @@ package main
 import "C"
 import (
 	"go_client/cloak"
+
 	log "github.com/sirupsen/logrus"
 )
 
 //export StartCloakClient
-func StartCloakClient(localHost *C.char, localPort *C.char, config *C.char, udp bool) {
-    log.Infof("StartCloakClient")
+func StartCloakClient(localHost, localPort, config string, udp bool) {
+	log.Infof("StartCloakClient")
 	cloak.StartCloakClient(
-		C.GoString(localHost),
-		C.GoString(localPort),
-		C.GoString(config),
+		localHost,
+		localPort,
+		config,
 		bool(udp),
 	)
-    log.Infof("end StartCloakClient")
+	log.Infof("end StartCloakClient")
 }
 
 //export StopCloakClient

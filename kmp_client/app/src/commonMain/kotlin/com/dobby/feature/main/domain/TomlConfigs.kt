@@ -39,5 +39,6 @@ data class TomlConfigs(
     val Version: String? = null,
     val Protocol: String? = null,
     val Shadowsocks: ShadowsocksBlock? = null,
-    val Cloak: CloakConfig? = null
+    val Cloak: CloakConfig? = null,
+    val AWG: String? = null,
 )

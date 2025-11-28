@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?if $(var.DOBBYVPN_PLATFORM) = "amd64" Or $(var.DOBBYVPN_PLATFORM) = "arm64"?>
+	<?define PlatformProgramFilesFolder = "ProgramFiles64Folder"?>
+<?else?>
+	<?define PlatformProgramFilesFolder = "ProgramFilesFolder"?>
+<?endif?>
+
+<?if $(var.DOBBYVPN_PLATFORM) = "amd64"?>
+	<?define UpgradeCode = "876b57e4-4490-4442-a983-721ee141b00d"?>
+<?elseif $(var.DOBBYVPN_PLATFORM) = "x86"?>
+	<?define UpgradeCode = "945200da-4a7e-4b02-a06f-00fcd09e48da"?>
+<?elseif $(var.DOBBYVPN_PLATFORM) = "arm"?>
+	<?define UpgradeCode = "220a4807-8e24-4594-9880-92034e062a57"?>
+<?elseif $(var.DOBBYVPN_PLATFORM) = "arm64"?>
+	<?define UpgradeCode = "940bb00d-6a17-409c-93c6-0347e2dfed80"?>
+<?else?>
+	<?error Unknown platform ?>
+<?endif?>
+
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+	<Product
+		Id="*"
+		Name="DobbyVPN"
+		Language="1033"
+		Version="$(var.DOBBYVPN_VERSION)"
+		Manufacturer="DobbyVPN"
+		UpgradeCode="$(var.UpgradeCode)">
+		<Package
+			InstallerVersion="500"
+			Compressed="yes"
+			InstallScope="perMachine"
+			Description="DobbyVPN"
+			ReadOnly="yes" />
+
+		<MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+		<!-- <Icon Id="wireguard.ico" SourceFile="..\ui\icon\wireguard.ico" /> FIXME -->
+		<!-- <Property Id="ARPPRODUCTICON" Value="wireguard.ico" /> -->
+		<Property Id="ARPURLINFOABOUT" Value="https://github.com/DobbyVPN" />
+		<Property Id="ARPNOMODIFY" Value="yes" />
+		<Property Id="DISABLEADVTSHORTCUTS" Value="yes" />
+		<Property Id="DISABLEROLLBACK" Value="yes" />
+		<Property Id="MSIDISABLERMRESTART" Value="1" />
+		<Property Id="MSIRMSHUTDOWN" Value="1" />
+
+		<!--
+			Upgrading
+		-->
+		<MajorUpgrade
+			AllowDowngrades="no"
+			AllowSameVersionUpgrades="yes"
+			DowngradeErrorMessage="A newer version of [ProductName] is already installed."
+			Schedule="afterInstallExecute"
+			IgnoreRemoveFailure="yes" />
+
+		<!--
+			Folders
+		-->
+		<Directory Id="TARGETDIR" Name="SourceDir">
+			<Directory Id="$(var.PlatformProgramFilesFolder)">
+				<Directory Id="DobbyVPNFolder" Name="DobbyVPN" />
+			</Directory>
+			<Directory Id="ProgramMenuFolder" />
+		</Directory>
+
+		<!--
+			Components
+		-->
+		<ComponentGroup Id="DobbyVPNComponents">
+			<Component Directory="DobbyVPNFolder" Id="DobbyVPNExecutable" Guid="c3508d23-3362-47ce-9220-321bdb1a1acc">
+				<File Source="..\$(var.DOBBYVPN_PLATFORM)\dobbyvpn.exe" KeyPath="yes">
+					<Shortcut Id="DobbyVPNStartMenuShortcut" Directory="ProgramMenuFolder" Name="DobbyVPN" Description="DobbyVPN" WorkingDirectory="DobbyVPNFolder" Advertise="yes" />
+				</File>
+				<ServiceControl Id="DummyService.3AA0C492_29F4_4342_B608_DB95B2DECB13" Name="DummyService.3AA0C492_29F4_4342_B608_DB95B2DECB13" /><!-- A dummy to make WiX create ServiceControl table for us. -->
+			</Component>
+		</ComponentGroup>
+
+		<!--
+			Features
+		-->
+		<Feature Id="DobbyVPNFeature" Title="DobbyVPN" Level="1">
+			<ComponentGroupRef Id="DobbyVPNComponents" />
+		</Feature>
+
+		<!--
+			Custom actions (Running service)
+		-->
+		<!-- <CustomAction Id="CheckWow64" BinaryKey="customactions.dll" DllEntry="CheckWow64" />
+		<InstallExecuteSequence>
+			<Custom Action="CheckWow64" After="FindRelatedProducts">NOT REMOVE</Custom>
+		</InstallExecuteSequence> -->
+	</Product>
+</Wix>

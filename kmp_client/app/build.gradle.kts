@@ -1,3 +1,4 @@
+import org.gradle.kotlin.dsl.implementation
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -88,6 +89,9 @@ kotlin {
         }
 
         jvmMain.dependencies {
+            implementation(project(":grpcstub"))
+            runtimeOnly(libs.grpc.netty)
+
             implementation(compose.desktop.currentOs)
             implementation(libs.skiko.win)
             implementation(libs.skiko.mac.amd64)
@@ -195,6 +199,7 @@ buildConfig {
 
 
 dependencies {
+    implementation(project(":grpcstub"))
     implementation(project(":awg"))
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
