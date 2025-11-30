@@ -19,3 +19,9 @@ data object AboutScreen
 
 @Serializable
 data object AuthenticationSettingsScreen
+
+@Serializable
+data object LoadingScreen
+
+@Serializable
+data object WebViewScreen

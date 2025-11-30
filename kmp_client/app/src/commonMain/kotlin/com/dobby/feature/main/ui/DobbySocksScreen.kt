@@ -17,7 +17,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.dobby.feature.authentication.domain.HideConfigsManager
 import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.util.koinViewModel
@@ -33,27 +32,12 @@ fun DobbySocksScreen(
     logsViewModel: LogsViewModel = koinViewModel(),
     modifier: Modifier = Modifier,
 ) {
-    mainViewModel.setConfigsRepository(HideConfigsManager.getConfigs())
     val uiMainState by mainViewModel.uiState.collectAsState()
     val uiLogState by logsViewModel.uiState.collectAsState()
-    val authState by HideConfigsManager.authState.collectAsState()
 
-    var connectionURL by remember(
-        key1 = authState,
-        key2 = uiMainState.connectionURL
-    ) {
-        mutableStateOf(uiMainState.connectionURL)
-    }
+    var connectionURL by remember { mutableStateOf(uiMainState.connectionURL) }
 
     var showLogsDialog by remember { mutableStateOf(false) }
-
-    HideConfigsManager.authenticate(
-        onSuccess = {
-            mainViewModel.setConfigsRepository(it)
-        }, onFailure = {
-            logsViewModel.clearLogs()
-        }
-    )
 
     MainScope().launch {
         while (true) {
@@ -133,37 +117,32 @@ fun DobbySocksScreen(
             }
         }
 
-        // don't show logs until authentication is finished
-        // (we clear the logs on auth failure instead of hiding them)
-        if (HideConfigsManager.authStatus == HideConfigsManager.AuthStatus.SUCCESS ||
-            HideConfigsManager.authStatus == HideConfigsManager.AuthStatus.FAILURE) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.25f)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color.Gray.copy(alpha = 0.1f))
-                    .padding(8.dp)
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onDoubleTap = {
-                                showLogsDialog = true
-                            }
-                        )
-                    }
-            ) {
-                LazyColumn(state = listState) {
-                    items(uiLogState.logMessages) { message ->
-                        val isBold = message.contains("!!!")
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.25f)
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color.Gray.copy(alpha = 0.1f))
+                .padding(8.dp)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onDoubleTap = {
+                            showLogsDialog = true
+                        }
+                    )
+                }
+        ) {
+            LazyColumn(state = listState) {
+                items(uiLogState.logMessages) { message ->
+                    val isBold = message.contains("!!!")
 
-                        Text(
-                            text = message,
-                            modifier = Modifier.padding(8.dp),
-                            fontSize = MaterialTheme.typography.bodyMedium.fontSize,
-                            fontWeight = if (isBold) FontWeight.W700 else FontWeight.W400,
-                            color = Color.Black
-                        )
-                    }
+                    Text(
+                        text = message,
+                        modifier = Modifier.padding(8.dp),
+                        fontSize = MaterialTheme.typography.bodyMedium.fontSize,
+                        fontWeight = if (isBold) FontWeight.W700 else FontWeight.W400,
+                        color = Color.Black
+                    )
                 }
             }
         }

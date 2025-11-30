@@ -95,7 +95,6 @@ object AirportsList {
         Coordinates(54.238889, 37.600278), // Klokovo TYA
         Coordinates(56.090278, 47.347222), // CSY
         Coordinates(57.727778, 60.130556), // Gran' Airport USSG
-        Coordinates(59.951389, 30.313889), // Petropavlovskaya Heliport ULLQ
         Coordinates(53.689444, 127.091667), // Zeya Airport UHBE
         Coordinates(57.338611, 43.095000), // Yur'evecz Airport UUIC
         Coordinates(43.205278, 44.606667), // Beslan Airport OGZ

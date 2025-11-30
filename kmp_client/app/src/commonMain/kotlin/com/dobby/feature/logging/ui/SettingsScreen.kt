@@ -14,7 +14,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.dobby.feature.authentication.domain.HideConfigsManager
 import com.dobby.navigation.AboutScreen
 import com.dobby.navigation.DiagnosticsScreen
 import com.dobby.navigation.LogsScreen
@@ -42,12 +41,7 @@ fun SettingsScreen(
                 modifier = Modifier
                     .padding(horizontal = 8.dp)
                     .clickable {
-                        // don't show logs until authentication is finished
-                        // (we clear the logs on auth failure instead of hiding them)
-                        if (HideConfigsManager.authStatus == HideConfigsManager.AuthStatus.SUCCESS ||
-                            HideConfigsManager.authStatus == HideConfigsManager.AuthStatus.FAILURE) {
-                            onNavigate.invoke(LogsScreen)
-                        }
+                        onNavigate.invoke(LogsScreen)
                     },
             )
 

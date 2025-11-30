@@ -29,17 +29,12 @@ import net.peanuuutz.tomlkt.decodeFromString
 val httpClient = HttpClient()
 
 class MainViewModel(
+    private val configsRepository: DobbyConfigsRepository,
     private val connectionStateRepository: ConnectionStateRepository,
     private val permissionEventsChannel: PermissionEventsChannel,
     private val vpnManager: VpnManager,
     private val awgManager: AwgManager,
 ) : ViewModel() {
-    private lateinit var configsRepository: DobbyConfigsRepository
-    fun setConfigsRepository(configsRepository: DobbyConfigsRepository) {
-        this.configsRepository = configsRepository
-        configsInit()
-    }
-
     //region Cloak states
     private val _uiState = MutableStateFlow(MainUiState())
 
@@ -47,16 +42,16 @@ class MainViewModel(
     //endregion
 
     //region AmneziaWG states
-    val awgVersion: String = awgManager.getAwgVersion()
+    val awgVersion: String
 
-    lateinit var awgConfigState: MutableState<String>
+    var awgConfigState: MutableState<String>
         private set
 
-    lateinit var awgConnectionState: MutableState<AwgConnectionState>
+    var awgConnectionState: MutableState<AwgConnectionState>
         private set
     //endregion
 
-    fun configsInit() {
+    init {
         // Cloak init
         viewModelScope.launch {
             _uiState.emit(
@@ -79,6 +74,8 @@ class MainViewModel(
         }
 
         // AmneziaWG init
+        awgVersion = awgManager.getAwgVersion()
+
         val awgConfigStoredValue = configsRepository.getAwgConfig()
         val awgConnectionStoredValue =
             if (configsRepository.getIsAmneziaWGEnabled()) AwgConnectionState.ON

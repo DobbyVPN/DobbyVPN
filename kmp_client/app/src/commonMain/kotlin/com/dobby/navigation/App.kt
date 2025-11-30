@@ -14,6 +14,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -30,6 +31,9 @@ import com.dobby.feature.logging.ui.AboutScreen
 import com.dobby.feature.logging.ui.LogScreen
 import com.dobby.feature.logging.ui.SettingsScreen
 import com.dobby.feature.authentication.ui.AuthenticationSettingsScreen
+import com.dobby.feature.authentication.ui.AuthenticationScreen
+import com.dobby.feature.authentication.ui.LoadingScreen
+import com.dobby.feature.authentication.ui.WebViewScreen
 import com.dobby.feature.main.ui.DobbySocksScreen
 
 @Composable
@@ -40,6 +44,7 @@ fun App(modifier: Modifier = Modifier) {
         val navController = rememberNavController()
         val keyboardController = LocalSoftwareKeyboardController.current
         HideConfigsManager.authStatus = HideConfigsManager.AuthStatus.NONE
+        val authState by HideConfigsManager.authState.collectAsState()
 
         Scaffold(
             modifier = modifier
@@ -47,7 +52,9 @@ fun App(modifier: Modifier = Modifier) {
                     detectTapGestures(onTap = { keyboardController?.hide() })
                 },
             bottomBar = {
-                BottomBar(navController::navigate)
+                if (authState == HideConfigsManager.AuthStatus.SUCCESS) {
+                    BottomBar(navController::navigate)
+                }
             },
             content = { innerPadding ->
                 NavHost(
@@ -56,22 +63,77 @@ fun App(modifier: Modifier = Modifier) {
                     startDestination = MainScreen
                 ) {
                     composable<MainScreen> {
-                        DobbySocksScreen()
+                        if (authState == HideConfigsManager.AuthStatus.NONE) {
+                            AuthenticationScreen(
+                                onNavigate = navController::navigate,
+                                screen = MainScreen
+                            )
+                        } else {
+                            DobbySocksScreen()
+                        }
                     }
                     composable<DiagnosticsScreen> {
-                        DiagnosticScreen()
+                        if (authState == HideConfigsManager.AuthStatus.NONE) {
+                            AuthenticationScreen(
+                                onNavigate = navController::navigate,
+                                screen = DiagnosticsScreen
+                            )
+                        } else {
+                            DiagnosticScreen()
+                        }
                     }
                     composable<LogsScreen> {
-                        LogScreen()
+                        if (authState == HideConfigsManager.AuthStatus.NONE) {
+                            AuthenticationScreen(
+                                onNavigate = navController::navigate,
+                                screen = LogsScreen
+                            )
+                        } else {
+                            LogScreen()
+                        }
                     }
                     composable<SettingsScreen> {
-                        SettingsScreen(onNavigate = navController::navigate)
+                        if (authState == HideConfigsManager.AuthStatus.NONE) {
+                            AuthenticationScreen(
+                                onNavigate = navController::navigate,
+                                screen = SettingsScreen
+                            )
+                        } else {
+                            SettingsScreen(onNavigate = navController::navigate)
+                        }
                     }
                     composable<AboutScreen> {
-                        AboutScreen()
+                        if (authState == HideConfigsManager.AuthStatus.NONE) {
+                            AuthenticationScreen(
+                                onNavigate = navController::navigate,
+                                screen = AboutScreen
+                            )
+                        } else {
+                            AboutScreen()
+                        }
                     }
                     composable<AuthenticationSettingsScreen> {
-                        AuthenticationSettingsScreen()
+                        if (authState == HideConfigsManager.AuthStatus.NONE) {
+                            AuthenticationScreen(
+                                onNavigate = navController::navigate,
+                                screen = AuthenticationSettingsScreen
+                            )
+                        } else {
+                            AuthenticationSettingsScreen()
+                        }
+                    }
+                    composable<WebViewScreen> {
+                        if (authState == HideConfigsManager.AuthStatus.NONE) {
+                            AuthenticationScreen(
+                                onNavigate = navController::navigate,
+                                screen = MainScreen
+                            )
+                        } else {
+                            WebViewScreen()
+                        }
+                    }
+                    composable<LoadingScreen> {
+                        LoadingScreen()
                     }
                 }
             }

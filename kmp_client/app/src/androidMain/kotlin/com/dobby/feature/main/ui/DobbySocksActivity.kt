@@ -3,6 +3,7 @@ package com.dobby.feature.main.ui
 import android.content.Intent
 import android.net.VpnService
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
@@ -33,6 +34,10 @@ class DobbySocksActivity : FragmentActivity() {
                 checkVpnPermissionAndStart()
             }
         }
+        window?.setFlags(
+            WindowManager.LayoutParams.FLAG_SECURE,
+            WindowManager.LayoutParams.FLAG_SECURE
+        )
         setContent {
             CkClientTheme {
                 App()
