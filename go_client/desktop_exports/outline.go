@@ -2,7 +2,7 @@ package main
 
 import "C"
 import (
-	log "github.com/sirupsen/logrus"
+	log "go_client/logger"
 	"go_client/outline"
 	"sync"
 )
@@ -12,19 +12,19 @@ var outlineMu sync.Mutex
 
 //export StartOutline
 func StartOutline(key *C.char) {
-    log.Infof("StartOutline")
+	log.Infof("StartOutline")
 	str_key := C.GoString(key)
 
-    log.Infof("Make lock")
+	log.Infof("Make lock")
 	outlineMu.Lock()
 	defer outlineMu.Unlock()
-    log.Infof("locked")
+	log.Infof("locked")
 
 	if outlineClient != nil {
 		log.Infof("Disconnect existing outline client")
 		err := outlineClient.Disconnect()
 		if err != nil {
-			log.Errorf("Failed to disconnect existing outline client: %v", err)
+			log.Infof("Failed to disconnect existing outline client: %v", err)
 			return
 		}
 	}
@@ -33,7 +33,7 @@ func StartOutline(key *C.char) {
 	log.Infof("Connect outline client")
 	err := outlineClient.Connect()
 	if err != nil {
-		log.Errorf("Failed to connect outline client: %v", err)
+		log.Infof("Failed to connect outline client: %v", err)
 	}
 }
 
@@ -45,7 +45,7 @@ func StopOutline() {
 		log.Infof("Disconnect outline client")
 		err := outlineClient.Disconnect()
 		if err != nil {
-			log.Errorf("Failed to disconnect outline client: %v", err)
+			log.Infof("Failed to disconnect outline client: %v", err)
 		}
 		outlineClient = nil
 	}
