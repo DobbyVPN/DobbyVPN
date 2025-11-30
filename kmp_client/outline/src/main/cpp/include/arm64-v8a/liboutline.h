@@ -19,11 +19,24 @@ typedef struct { const char *p; ptrdiff_t n; } _GoString_;
 /* Start of preamble from import "C" comments.  */
 
 
+#line 3 "awg.go"
+
+#include <stdlib.h>
+#include <string.h>
+
+#line 1 "cgo-generated-wrapper"
+
+
 
 #line 3 "outline.go"
 
 #include <stdlib.h>
 #include <string.h>
+#include <android/log.h>
+
+static void goLog(const char* tag, const char* msg) {
+    __android_log_print(ANDROID_LOG_DEBUG, tag, "%s", msg);
+}
 
 #line 1 "cgo-generated-wrapper"
 
@@ -81,13 +94,21 @@ typedef struct { void *data; GoInt len; GoInt cap; } GoSlice;
 extern "C" {
 #endif
 
+extern GoInt32 AwgTurnOn(GoString interfaceName, GoInt32 tunFd, GoString settings);
+extern void AwgTurnOff(GoInt32 tunnelHandle);
+extern GoInt32 AwgGetSocketV4(GoInt32 tunnelHandle);
+extern GoInt32 AwgGetSocketV6(GoInt32 tunnelHandle);
+extern GoString AwgGetConfig(GoInt32 tunnelHandle);
+extern GoString AwgVersion();
 extern void StartCloakClient(char* localHostC, char* localPortC, char* configC, GoUint8 udp);
 extern void StopCloakClient();
+extern void InitLogger(char* path);
 extern void Connect();
 extern void Disconnect();
 extern int Read(char* buf, int maxLen);
 extern int Write(char* buf, int length);
 extern void NewOutlineClient(char* config);
+extern void StopOutlineClient();
 
 #ifdef __cplusplus
 }
