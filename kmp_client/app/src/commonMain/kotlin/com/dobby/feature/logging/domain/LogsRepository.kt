@@ -58,9 +58,6 @@ class LogsRepository(
 
     fun clearLogs() {
         runCatching {
-            if (fileSystem.exists(logFilePath)) {
-                fileSystem.delete(logFilePath)
-            }
             fileSystem.sink(logFilePath).buffer().use { }
             _logState.value = emptyList()
         }.onFailure { it.printStackTrace() }

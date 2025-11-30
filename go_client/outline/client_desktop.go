@@ -4,8 +4,8 @@ package outline
 
 import (
 	"context"
-	log "github.com/sirupsen/logrus"
 	"go_client/common"
+	log "go_client/logger"
 	outlineCommon "go_client/outline/common"
 	"go_client/outline/internal"
 	"sync"
@@ -67,13 +67,13 @@ func (c *OutlineClient) Disconnect() error {
 	log.Infof("Disconnect: locked c.mu")
 
 	if c.cancel != nil {
-	    log.Infof("Disconnect: c.cancel != nil")
+		log.Infof("Disconnect: c.cancel != nil")
 		c.cancel()
 		c.cancel = nil
 	}
-    log.Infof("Disconnect: common.Client.MarkInactive")
+	log.Infof("Disconnect: common.Client.MarkInactive")
 	common.Client.MarkInactive(outlineCommon.Name)
-    log.Infof("Disconnect: MarkedInactive")
+	log.Infof("Disconnect: MarkedInactive")
 	return nil
 }
 

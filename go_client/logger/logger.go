@@ -1,9 +1,11 @@
 package logger
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
 	"sync"
 )
 
@@ -30,13 +32,11 @@ func SetPath(path string) error {
 		return fmt.Errorf("cannot open log file: %w", err)
 	}
 
-	handler := slog.NewTextHandler(file, &slog.HandlerOptions{
-		AddSource: true,
-	})
+	h := &customHandler{file: file}
 
 	logger.file = file
 	logger.path = path
-	logger.logger = slog.New(handler)
+	logger.logger = slog.New(h)
 
 	return nil
 }
@@ -47,4 +47,40 @@ func Infof(format string, args ...any) {
 	}
 	msg := fmt.Sprintf(format, args...)
 	logger.logger.Info(msg)
+}
+
+type customHandler struct {
+	file *os.File
+}
+
+func (h *customHandler) Enabled(_ context.Context, _ slog.Level) bool {
+	return true
+}
+
+func (h *customHandler) Handle(_ context.Context, r slog.Record) error {
+	t := r.Time.Format("2006-01-02 15:04:05")
+
+	msg := r.Message
+
+	var src string
+	if r.PC != 0 {
+		fs := runtime.CallersFrames([]uintptr{r.PC})
+		f, _ := fs.Next()
+		src = fmt.Sprintf("%s:%d", f.File, f.Line)
+	}
+
+	_, err := fmt.Fprintf(h.file,
+		"[%s] \"%s\" source=%s\n",
+		t, msg, src,
+	)
+
+	return err
+}
+
+func (h *customHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return h
+}
+
+func (h *customHandler) WithGroup(name string) slog.Handler {
+	return h
 }

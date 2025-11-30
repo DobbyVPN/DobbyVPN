@@ -107,6 +107,10 @@ class OutlineGo {
         @Throws(IllegalStateException::class)
         external fun stopCloakClient(): Unit
 
+        @JvmStatic
+        @Throws(IllegalStateException::class)
+        external fun initLogger(path: String): Unit
+
         /**
          * Безопасный вызов newOutlineClient с проверкой загрузки библиотек
          */
@@ -197,4 +201,15 @@ class OutlineGo {
             }
         }
     }
+
+        suspend fun safeInitLogger(path: String): Int = withContext(Dispatchers.IO) {
+            try {
+                ensureLibrariesLoaded()
+                initLogger(path)
+                1
+            } catch (e: Exception) {
+                Log.e(TAG, "Read failed", e)
+                -1
+            }
+        }
 }
