@@ -20,8 +20,8 @@ export GOARCH := $(NDK_GO_ARCH_MAP_$(ANDROID_ARCH_NAME))
 export GOOS := android
 export CGO_ENABLED := 1
 
-# Prefer Go toolchain from provided GOROOT (setup-go, F-Droid, etc.)
-GO ?= $(if $(GOROOT),$(GOROOT)/bin/go,go)
+# Use GO passed from the caller, fall back to system go
+GO ?= go
 
 default: $(DESTDIR)/libwg-go.so
 

@@ -8,6 +8,7 @@ plugins {
 
 val pkg: String = "com.dobby.awg"
 val cmakeAndroidPackageName: String = providers.environmentVariable("ANDROID_PACKAGE_NAME").getOrElse(pkg)
+val goBinaryPath: String? = providers.gradleProperty("goBinaryPath").orNull
 
 android {
     namespace = pkg
@@ -41,6 +42,7 @@ android {
                 cmake {
                     targets("libwg-go.so")
                     arguments("-DGRADLE_USER_HOME=${project.gradle.gradleUserHomeDir}")
+                    goBinaryPath?.let { arguments("-DGO_BINARY=$it") }
                 }
             }
         }
