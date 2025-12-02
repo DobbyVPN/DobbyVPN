@@ -1,7 +1,9 @@
 default_platform(:android)
 
 FULL_VERSION    = "#{ENV['APP_MAJOR_VERSION']}.#{ENV['APP_MINOR_VERSION']}.#{ENV['APP_MAINTENANCE_VERSION']}"
-VERSION_CODE    = "#{ENV['APP_MAJOR_VERSION']}#{ENV['APP_MINOR_VERSION']}#{ENV['APP_MAINTENANCE_VERSION']}"
+VERSION_CODE    = ENV['APP_MAJOR_VERSION'].to_i * 1_000_000 +
+                  ENV['APP_MINOR_VERSION'].to_i * 1_000 +
+                  ENV['APP_MAINTENANCE_VERSION'].to_i
 COMMIT          = ENV["GITHUB_SHA"]
 REPO            = ENV["GITHUB_REPOSITORY"]
 COMMIT_LINK     = "https://github.com/#{REPO}/tree/#{COMMIT}"

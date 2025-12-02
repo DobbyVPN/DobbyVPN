@@ -91,7 +91,7 @@ jobs:
       - name: Create version file for F-Droid
         run: |
           VERSION_NAME="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          VERSION_CODE="${APP_MAJOR_VERSION}${APP_MINOR_VERSION}${APP_MAINTENANCE_VERSION}"
+          VERSION_CODE=$((APP_MAJOR_VERSION * 1000000 + APP_MINOR_VERSION * 1000 + APP_MAINTENANCE_VERSION))
           {
             echo "versionName=${VERSION_NAME}"
             echo "versionCode=${VERSION_CODE}"
