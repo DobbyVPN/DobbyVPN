@@ -20,16 +20,12 @@ export GOARCH := $(NDK_GO_ARCH_MAP_$(ANDROID_ARCH_NAME))
 export GOOS := android
 export CGO_ENABLED := 1
 
-GO_VERSION := 1.22.3
-GO_PLATFORM := $(shell uname -s | tr '[:upper:]' '[:lower:]')-$(NDK_GO_ARCH_MAP_$(shell uname -m))
-GO_TARBALL := go$(GO_VERSION).$(GO_PLATFORM).tar.gz
-GO_HASH_darwin-amd64 := 610e48c1df4d2f852de8bc2e7fd2dc1521aac216f0c0026625db12f67f192024
-GO_HASH_darwin-arm64 := 02abeab3f4b8981232237ebd88f0a9bad933bc9621791cd7720a9ca29eacbe9d
-GO_HASH_linux-amd64 := 8920ea521bad8f6b7bc377b4824982e011c19af27df88a815e3586ea895f1b36
+# Use GO passed from the caller, fall back to system go
+GO ?= go
 
 default: $(DESTDIR)/libwg-go.so
 
 $(DESTDIR)/libwg-go.so:
-	go build -tags linux -ldflags="-X github.com/amnezia-vpn/amneziawg-go/ipc.socketDirectory=/data/data/$(ANDROID_PACKAGE_NAME)/cache/amneziawg -buildid=" -v -trimpath -buildvcs=false -o "$@" -buildmode c-shared
+	$(GO) build -tags linux -ldflags="-X github.com/amnezia-vpn/amneziawg-go/ipc.socketDirectory=/data/data/$(ANDROID_PACKAGE_NAME)/cache/amneziawg -buildid=" -v -trimpath -buildvcs=false -o "$@" -buildmode c-shared
 
 .DELETE_ON_ERROR:
