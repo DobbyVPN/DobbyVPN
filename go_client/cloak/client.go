@@ -3,10 +3,11 @@ package cloak
 import (
 	"encoding/json"
 	"github.com/cbeuw/Cloak/exported_client"
+	log "github.com/sirupsen/logrus"
 	"go_client/common"
 	"sync"
 
-	log "go_client/logger"
+	_ "go_client/logger"
 )
 
 const Name = "cloak"
@@ -17,26 +18,35 @@ var (
 	RemoteHostIP string
 )
 
+func InitLog() {
+	exported_client.InitLog()
+
+	log.SetFormatter(&log.TextFormatter{
+		FullTimestamp: true,
+	})
+	log.SetLevel(log.InfoLevel)
+}
+
 func StartCloakClient(localHost, localPort, config string, udp bool) {
-	log.Infof("StartCloakClient inner")
+    log.Infof("StartCloakClient inner")
 	mu.Lock()
 	defer mu.Unlock()
 
-	log.Infof("Get lock")
+    log.Infof("Get lock")
 
 	if client != nil {
-		log.Infof("Need to stop old cloak client")
-		mu.Unlock()
+	    log.Infof("Need to stop old cloak client")
+	    mu.Unlock()
 		StopCloakClient()
-		mu.Lock()
+	    mu.Lock()
 	}
 
-	log.Infof("deleted old cloak client")
+    log.Infof("deleted old cloak client")
 
 	var rawConfig exported_client.Config
 	err := json.Unmarshal([]byte(config), &rawConfig)
 	if err != nil {
-		log.Infof("cloak client: Failed to unmarshal config - %v", err)
+		log.Errorf("cloak client: Failed to unmarshal config - %v", err)
 		return
 	}
 	log.Infof("cloak client: rawConfig parsed successfully: %+v", rawConfig)
@@ -62,7 +72,7 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 	common.Client.SetVpnClient(Name, client)
 	err = common.Client.Connect(Name)
 	if err != nil {
-		log.Infof("cloak client: Failed to connect to cloak client - %v", err)
+		log.Errorf("cloak client: Failed to connect to cloak client - %v", err)
 		return
 	}
 
@@ -72,15 +82,15 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 }
 
 func StopCloakClient() {
-	log.Infof("StopCloakClient inner")
+    log.Infof("StopCloakClient inner")
 	defer common.Client.MarkInactive(Name)
 	mu.Lock()
 	defer mu.Unlock()
-	log.Infof("Get mutex")
+    log.Infof("Get mutex")
 	if RemoteHostIP != "" {
-		common.Client.MarkInCriticalSection(Name)
+	    common.Client.MarkInCriticalSection(Name)
 		StopRoutingCloak(RemoteHostIP)
-		common.Client.MarkOutOffCriticalSection(Name)
+	    common.Client.MarkOutOffCriticalSection(Name)
 		RemoteHostIP = ""
 	}
 
@@ -88,10 +98,10 @@ func StopCloakClient() {
 		return
 	}
 
-	log.Infof("Start client disconnected")
+    log.Infof("Start client disconnected")
 
 	common.Client.Disconnect(Name)
 	client = nil
 
-	log.Infof("Client disconnected")
+    log.Infof("Client disconnected")
 }

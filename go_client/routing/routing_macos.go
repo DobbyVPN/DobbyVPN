@@ -5,7 +5,7 @@ package routing
 
 import (
 	"fmt"
-	log "go_client/logger"
+	log "github.com/sirupsen/logrus"
 	"os/exec"
 )
 

@@ -6,7 +6,7 @@ package internal
 import (
 	"context"
 	"fmt"
-	log "go_client/logger"
+	"log"
 	"sync"
 
 	"go_client/common"
@@ -22,44 +22,44 @@ func (app App) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to discover gateway: %w", err)
 	}
-	log.Infof("gatewayIP: %s", gatewayIP.String())
+	logging.Info.Printf("gatewayIP: %s", gatewayIP.String())
 
 	trafficCopyWg := &sync.WaitGroup{}
 	defer trafficCopyWg.Wait()
 
 	// Создаём TUN
-	log.Infof("Outline/Run: Start creating tun")
+	logging.Info.Printf("Outline/Run: Start creating tun")
 	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
 	if err != nil {
 		return fmt.Errorf("failed to create tun device: %w", err)
 	}
 	defer tun.Close()
-	log.Infof("Tun created")
+	log.Printf("Tun created")
 
 	// Создаём OutlineDevice
-	log.Infof("Outline/Run: Start device")
+	logging.Info.Printf("Outline/Run: Start device")
 	ss, err := NewOutlineDevice(*app.TransportConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create OutlineDevice: %w", err)
 	}
 	defer ss.Close()
 	ss.Refresh()
-	log.Infof("Device created")
+	log.Printf("Device created")
 
 	common.Client.MarkInCriticalSection(outlineCommon.Name)
 	// Поднимаем роутинг
 	if err := routing.StartRouting(ss.GetServerIP().String(), gatewayIP.String(), app.RoutingConfig.TunDeviceName); err != nil {
-		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+	    common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
 	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 	defer func() {
-		common.Client.MarkInCriticalSection(outlineCommon.Name)
-		log.Infof("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
-		routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
-		log.Infof("[Routing] Routes cleaned up")
-		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
-	}()
+        common.Client.MarkInCriticalSection(outlineCommon.Name)
+        log.Printf("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
+        routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
+        log.Printf("[Routing] Routes cleaned up")
+        common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+    }()
 
 	// Запускаем копирование трафика TUN ↔ Outline
 	trafficCopyWg.Add(2)
@@ -104,13 +104,13 @@ func (app App) Run(ctx context.Context) error {
 				}
 			}
 		}
-		log.Infof("OutlineDevice -> tun stopped")
+		log.Printf("OutlineDevice -> tun stopped")
 	}()
 
 	trafficCopyWg.Wait()
 
 	tun.Close()
 	ss.Close()
-	log.Infof("Tun and device closed")
+	log.Printf("Tun and device closed")
 	return nil
 }

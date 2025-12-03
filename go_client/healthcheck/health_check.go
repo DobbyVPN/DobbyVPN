@@ -3,8 +3,8 @@ package healthcheck
 import (
 	"context"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"go_client/common"
-	log "go_client/logger"
 	"sync"
 	"sync/atomic"
 	"time"

@@ -68,7 +68,7 @@ import "C"
 import (
 	"syscall"
 
-	log "go_client/logger"
+	log "github.com/sirupsen/logrus"
 )
 
 // In Android, once an app starts the VpnService, all outgoing traffic are routed by the system
@@ -78,14 +78,14 @@ import (
 // The Android system provides an API VpnService.protect(int socketFD)
 // This tells the system to bypass the socket around the VPN.
 func protector(network string, address string, c syscall.RawConn) error {
-	log.Infof("Using Android VPN mode.")
+	log.Println("Using Android VPN mode.")
 	fn := func(s uintptr) {
 		fd := int(s)
 		path := "protect_path"
 
 		socket, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 		if err != nil {
-			log.Infof(err.Error())
+			log.Println(err)
 			return
 		}
 
@@ -95,7 +95,7 @@ func protector(network string, address string, c syscall.RawConn) error {
 
 		err = syscall.Connect(socket, &syscall.SockaddrUnix{Name: path})
 		if err != nil {
-			log.Infof(err.Error())
+			log.Println(err)
 			return
 		}
 
@@ -104,11 +104,11 @@ func protector(network string, address string, c syscall.RawConn) error {
 		dummy := []byte{1}
 		n, err := syscall.Read(socket, dummy)
 		if err != nil {
-			log.Infof(err.Error())
+			log.Println(err)
 			return
 		}
 		if n != 1 {
-			log.Infof("Failed to protect fd: ", fd)
+			log.Println("Failed to protect fd: ", fd)
 			return
 		}
 	}

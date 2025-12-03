@@ -3,7 +3,6 @@ package internal
 import (
 	"errors"
 	"fmt"
-	log "go_client/logger"
 	"os"
 )
 
@@ -67,7 +66,7 @@ func restoreSystemDNSServer() {
 		if _, err := os.Stat(backup.backup); err == nil {
 			// backup exist - replace original with it
 			if err := os.Rename(backup.backup, backup.original); err != nil {
-				log.Infof(
+				logging.Err.Printf(
 					"failed to restore DNS config from backup '%s' to '%s': %v\n",
 					backup.backup,
 					backup.original,
@@ -75,16 +74,16 @@ func restoreSystemDNSServer() {
 				)
 				continue
 			}
-			log.Infof("DNS config restored from '%s' to '%s'\n", backup.backup, backup.original)
+			logging.Info.Printf("DNS config restored from '%s' to '%s'\n", backup.backup, backup.original)
 		} else if errors.Is(err, os.ErrNotExist) {
 			// backup not exist - just remove original, because it's created by ourselves
 			if err := os.Remove(backup.original); err != nil {
-				log.Infof("failed to remove Outline DNS config file '%s': %v\n", backup.original, err)
+				logging.Err.Printf("failed to remove Outline DNS config file '%s': %v\n", backup.original, err)
 				continue
 			}
-			log.Infof("Outline DNS config '%s' has been removed\n", backup.original)
+			logging.Info.Printf("Outline DNS config '%s' has been removed\n", backup.original)
 		} else {
-			log.Infof("failed to check the existence of DNS config backup file '%s': %v\n", backup.backup, err)
+			logging.Err.Printf("failed to check the existence of DNS config backup file '%s': %v\n", backup.backup, err)
 		}
 	}
 }

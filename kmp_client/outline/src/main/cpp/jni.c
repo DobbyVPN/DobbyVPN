@@ -77,14 +77,3 @@ Java_com_dobby_outline_OutlineGo_stopCloakClient(JNIEnv *env, jclass clazz)
     // Вызываем Go-экспорт
     StopCloakClient();
 }
-
-JNIEXPORT void JNICALL
-Java_com_dobby_outline_OutlineGo_initLogger(JNIEnv *env, jclass clazz,
-                                                  jstring jPath)
-{
-    const char *path = (*env)->GetStringUTFChars(env, jPath, NULL);
-    // Вызываем Go-экспорт
-    InitLogger(path);
-    // Копируем данные обратно в Java-буфер
-    (*env)->ReleaseStringUTFChars(env, jPath, path);
-}

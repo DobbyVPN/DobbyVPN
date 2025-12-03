@@ -1,7 +1,6 @@
 package interop
 
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.logging.domain.provideLogFilePath
 import com.sun.jna.*
 import java.io.File
 import java.net.URLDecoder
@@ -22,9 +21,6 @@ interface VPNLibrary : Library {
 
     // Healthcheck
     fun CouldStart(): Boolean
-
-    // InitLogger
-    fun InitLogger(path: String)
 }
 
 internal class VPNLibraryLoader(
@@ -56,10 +52,6 @@ internal class VPNLibraryLoader(
             INSTANCE = Native.load(libPath, VPNLibrary::class.java)
 
             logger.log("Library loaded successfully.")
-            val path: String = provideLogFilePath().toString()
-            logger.log("Start go logger init $path")
-            initLogger(path)
-            logger.log("Go logger init successfully.")
         } catch (e: Exception) {
             logger.log("Failed to load library: ${e.message}")
             e.printStackTrace()
@@ -160,18 +152,5 @@ internal class VPNLibraryLoader(
             e.printStackTrace()
         }
         return false
-    }
-
-    fun initLogger(path: String) {
-        try {
-            INSTANCE.InitLogger(path)
-            logger.log("InitLogger called successfully.")
-        } catch (e: UnsatisfiedLinkError) {
-            logger.log("Failed to call InitLogger: ${e.message}")
-            e.printStackTrace()
-        } catch (e: Exception) {
-            logger.log("An error occurred while calling InitLogger: ${e.message}")
-            e.printStackTrace()
-        }
     }
 }

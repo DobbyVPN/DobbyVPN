@@ -2,8 +2,8 @@ package main
 
 import "C"
 import (
+	log "github.com/sirupsen/logrus"
 	"go_client/awg"
-	log "go_client/logger"
 	"sync"
 )
 
@@ -21,14 +21,14 @@ func StartAwg(key *C.char) {
 		log.Infof("Disconnect existing awgClient")
 		err := awgClient.Disconnect()
 		if err != nil {
-			log.Infof("Failed to disconnect existing awgClient: %v", err)
+			log.Errorf("Failed to disconnect existing awgClient: %v", err)
 			return
 		}
 	}
 
 	_awgClient, err := awg.NewAwgClient(str_key)
 	if err != nil {
-		log.Infof("Failed to create awgClient: %v", err)
+		log.Errorf("Failed to create awgClient: %v", err)
 		return
 	}
 
@@ -36,7 +36,7 @@ func StartAwg(key *C.char) {
 	log.Infof("Connect awgClient")
 	err = awgClient.Connect()
 	if err != nil {
-		log.Infof("Failed to connect awgClient: %v", err)
+		log.Errorf("Failed to connect awgClient: %v", err)
 	}
 }
 
@@ -48,7 +48,7 @@ func StopAwg() {
 		log.Infof("Disconnect awgClient")
 		err := awgClient.Disconnect()
 		if err != nil {
-			log.Infof("Failed to disconnect awgClient: %v", err)
+			log.Errorf("Failed to disconnect awgClient: %v", err)
 		}
 		awgClient = nil
 	}

@@ -2,7 +2,6 @@ package internal
 
 import (
 	"fmt"
-	log "go_client/logger"
 	"os"
 )
 
@@ -31,6 +30,6 @@ func enableIPv6(enabled bool) (bool, error) {
 		return prevEnabled, fmt.Errorf("failed to write IPv6 config: %w", err)
 	}
 
-	log.Infof("updated global IPv6 support: %v\n", enabled)
+	logging.Info.Printf("updated global IPv6 support: %v\n", enabled)
 	return prevEnabled, nil
 }

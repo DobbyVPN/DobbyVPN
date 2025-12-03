@@ -6,7 +6,7 @@ package internal
 import (
 	"errors"
 	"fmt"
-	log "go_client/logger"
+	log "github.com/sirupsen/logrus"
 	//"os/exec"
 	"context"
 	"sync"
@@ -54,7 +54,7 @@ func (app App) Run(ctx context.Context) error {
 	}
 	defer tun.Close()
 
-	log.Infof("Tun created")
+	log.Printf("Tun created")
 
 	ss, err := NewOutlineDevice(*app.TransportConfig)
 	if err != nil {
@@ -64,24 +64,24 @@ func (app App) Run(ctx context.Context) error {
 
 	ss.Refresh()
 
-	log.Infof("Device created")
+	log.Printf("Device created")
 
-	var closeOnce sync.Once
-	closeAll := func() {
-		closeOnce.Do(func() {
-			log.Infof("[Outline] Closing interfaces")
-			_ = tun.Close()
-			_ = ss.Close()
-		})
-	}
+    var closeOnce sync.Once
+    closeAll := func() {
+        closeOnce.Do(func() {
+            log.Infof("[Outline] Closing interfaces")
+            _ = tun.Close()
+            _ = ss.Close()
+        })
+    }
 
-	defer closeAll()
+    defer closeAll()
 
 	go func() {
-		<-ctx.Done()
-		closeAll()
-		log.Infof("[Outline] Cancel received — closing interfaces")
-	}()
+        <-ctx.Done()
+        closeAll()
+        log.Infof("[Outline] Cancel received — closing interfaces")
+    }()
 
 	trafficCopyWg.Add(2)
 
@@ -139,7 +139,7 @@ func (app App) Run(ctx context.Context) error {
 
 			}
 		}
-		log.Infof("OutlineDevice -> tun stopped")
+		log.Printf("OutlineDevice -> tun stopped")
 	}()
 
 	common.Client.MarkInCriticalSection(outlineCommon.Name)
@@ -147,7 +147,7 @@ func (app App) Run(ctx context.Context) error {
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
-	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+    common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 
 	defer func() {
 		common.Client.MarkInCriticalSection(outlineCommon.Name)

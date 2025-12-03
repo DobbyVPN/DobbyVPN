@@ -5,10 +5,11 @@ package outline
 import (
 	"fmt"
 	"go_client/common"
-	log "go_client/logger"
 	outlineCommon "go_client/outline/common"
 	"go_client/outline/internal"
+	"log"
 	"net"
+	// _ "go_client/logger"
 )
 
 type OutlineClient struct {
@@ -18,7 +19,7 @@ type OutlineClient struct {
 
 func NewClient(transportConfig string) *OutlineClient {
 	c := &OutlineClient{config: transportConfig}
-	log.Infof("outline client created")
+	log.Println("outline client created")
 	common.Client.SetVpnClient(outlineCommon.Name, c)
 	return c
 }
@@ -26,12 +27,12 @@ func NewClient(transportConfig string) *OutlineClient {
 func (c *OutlineClient) Connect() error {
 	od, err := internal.NewOutlineDevice(c.config)
 	if err != nil {
-		log.Infof("failed to create outline device: %v\n", err)
+		log.Printf("failed to create outline device: %v\n", err)
 		return err
 	}
 
-	log.Infof("outline device created")
-	log.Infof("outline client connected")
+	log.Println("outline device created")
+	log.Println("outline client connected")
 
 	c.device = od
 	common.Client.MarkActive(outlineCommon.Name)
@@ -41,10 +42,10 @@ func (c *OutlineClient) Connect() error {
 func (c *OutlineClient) Disconnect() error {
 	err := c.device.Close()
 	if err != nil {
-		log.Infof("failed to close outline device: %v\n", err)
+		log.Printf("failed to close outline device: %v\n", err)
 		return err
 	}
-	log.Infof("outline client disconnected")
+	log.Println("outline client disconnected")
 	common.Client.MarkInactive(outlineCommon.Name)
 	return nil
 }
@@ -60,9 +61,9 @@ func (c *OutlineClient) GetServerIP() net.IP {
 func (c *OutlineClient) Read() ([]byte, error) {
 	buf := make([]byte, 65536)
 	n, err := c.device.Read(buf)
-	log.Infof(fmt.Sprintf("outline client: read data; size: %d (%d)", n, n%8))
+	log.Println(fmt.Sprintf("outline client: read data; size: %d (%d)", n, n%8))
 	if err != nil {
-		log.Infof("failed to read data: %v\n", err)
+		log.Printf("failed to read data: %v\n", err)
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
 
@@ -77,9 +78,9 @@ func (c *OutlineClient) Read() ([]byte, error) {
 
 func (c *OutlineClient) Write(buf []byte) (int, error) {
 	n, err := c.device.Write(buf)
-	log.Infof(fmt.Sprintf("outline client: write data; size: %d (%d)", n, n%8))
+	log.Println(fmt.Sprintf("outline client: write data; size: %d (%d)", n, n%8))
 	if err != nil {
-		log.Infof("failed to write data: %v\n", err)
+		log.Printf("failed to write data: %v\n", err)
 		return 0, fmt.Errorf("failed to write data: %w", err)
 	}
 	return n, nil

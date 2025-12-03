@@ -2,9 +2,9 @@ package main
 
 import "C"
 import (
+	log "github.com/sirupsen/logrus"
 	"go_client/common"
 	"go_client/healthcheck"
-	log "go_client/logger"
 )
 
 //export StartHealthCheck
