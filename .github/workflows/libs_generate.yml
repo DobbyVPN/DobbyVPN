@@ -137,9 +137,9 @@ jobs:
 
       - name: Copy libs arm64 .so
         run: |
-          mkdir -p kmp_client/outline/src/main/cpp/include
+          mkdir -p kmp_client/outline/src/main/cpp/include/arm64-v8a
           mkdir -p kmp_client/outline/src/main/jniLibs/arm64-v8a
-          cp go_client/liboutline.h kmp_client/outline/src/main/cpp/include/liboutline.h
+          cp go_client/liboutline.h kmp_client/outline/src/main/cpp/include/arm64-v8a/liboutline.h
           cp go_client/liboutline.so kmp_client/outline/src/main/jniLibs/arm64-v8a/liboutline.so
 
       - name: Build .aar

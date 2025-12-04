@@ -5,82 +5,74 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"runtime"
 	"sync"
+	"time"
 )
 
 type Logger struct {
 	file   *os.File
 	logger *slog.Logger
-	path   string
 }
 
-var logger *Logger = &Logger{}
-var initMu sync.Mutex
+var (
+	lg     = &Logger{}
+	initMu sync.Mutex
+)
 
 func SetPath(path string) error {
-	if logger.file != nil {
+	if lg.logger != nil {
 		return nil
 	}
+
 	initMu.Lock()
 	defer initMu.Unlock()
-	if logger.file != nil {
+
+	if lg.logger != nil {
 		return nil
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("cannot open log file: %w", err)
 	}
 
-	h := &customHandler{file: file}
-
-	logger.file = file
-	logger.path = path
-	logger.logger = slog.New(h)
-
+	lg.file = f
+	lg.logger = slog.New(&simpleHandler{file: f})
 	return nil
 }
 
 func Infof(format string, args ...any) {
-	if logger.logger == nil {
+	if lg.logger == nil {
 		return
 	}
-	msg := fmt.Sprintf(format, args...)
-	logger.logger.Info(msg)
+	lg.logger.Info(fmt.Sprintf(format, args...))
 }
 
-type customHandler struct {
+type simpleHandler struct {
 	file *os.File
 }
 
-func (h *customHandler) Enabled(_ context.Context, _ slog.Level) bool {
+func (h *simpleHandler) Enabled(_ context.Context, _ slog.Level) bool {
 	return true
 }
 
-func (h *customHandler) Handle(_ context.Context, r slog.Record) error {
-	t := r.Time.Format("2006-01-02 15:04:05")
+func (h *simpleHandler) Handle(_ context.Context, r slog.Record) error {
+	t := time.Now().Format("2006-01-02 15:04:05")
 
-	msg := r.Message
-
-	var src string
-	if r.PC != 0 {
-		fs := runtime.CallersFrames([]uintptr{r.PC})
-		f, _ := fs.Next()
-		src = fmt.Sprintf("%s:%d", f.File, f.Line)
-	}
-
-	_, err := fmt.Fprintf(h.file,
-		"[%s] \"%s\" source=%s\n",
-		t, msg, src,
+	_, err := fmt.Fprintf(
+		h.file,
+		"[%s] \"%s\" [from go]\n",
+		t,
+		r.Message,
 	)
 
 	return err
 }
 
-func (h *customHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+func (h *simpleHandler) WithAttrs(_ []slog.Attr) slog.Handler {
 	return h
 }
 
-func (h *customHandler) WithGroup(name string) slog.Handler {
+func (h *simpleHandler) WithGroup(_ string) slog.Handler {
 	return h
 }
