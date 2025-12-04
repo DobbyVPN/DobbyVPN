@@ -5,8 +5,8 @@ go 1.24.3
 replace github.com/cbeuw/Cloak => ./modules/Cloak
 
 require (
-	github.com/Jigsaw-Code/outline-sdk v0.0.16
-	github.com/Jigsaw-Code/outline-sdk/x v0.0.0-20240507000320-2e2d2af31add
+	github.com/Jigsaw-Code/outline-sdk v0.0.20
+	github.com/Jigsaw-Code/outline-sdk/x v0.0.8
 	github.com/amnezia-vpn/amneziawg-go v0.2.12
 	github.com/cbeuw/Cloak v0.0.0-00010101000000-000000000000
 	github.com/jackpal/gateway v1.1.1
@@ -14,7 +14,34 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/vishvananda/netlink v1.2.1-beta.2
-	golang.org/x/sys v0.31.0
+	golang.org/x/sys v0.36.0
+)
+
+require (
+	github.com/emirpasic/gods v1.12.0 // indirect
+	github.com/go-logr/logr v1.2.0 // indirect
+	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
+	github.com/google/go-licenses v1.6.0 // indirect
+	github.com/google/licenseclassifier v0.0.0-20210722185704-3043a050f148 // indirect
+	github.com/inconshreveable/mousetrap v1.0.1 // indirect
+	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
+	github.com/kevinburke/ssh_config v0.0.0-20190725054713-01f96b0aa0cd // indirect
+	github.com/mitchellh/go-homedir v1.1.0 // indirect
+	github.com/otiai10/copy v1.6.0 // indirect
+	github.com/sergi/go-diff v1.2.0 // indirect
+	github.com/spf13/cobra v1.6.0 // indirect
+	github.com/spf13/pflag v1.0.5 // indirect
+	github.com/src-d/gcfg v1.4.0 // indirect
+	github.com/xanzy/ssh-agent v0.2.1 // indirect
+	go.opencensus.io v0.23.0 // indirect
+	golang.org/x/mod v0.28.0 // indirect
+	golang.org/x/sync v0.17.0 // indirect
+	golang.org/x/text v0.29.0 // indirect
+	golang.org/x/tools v0.37.0 // indirect
+	gopkg.in/src-d/go-billy.v4 v4.3.2 // indirect
+	gopkg.in/src-d/go-git.v4 v4.13.1 // indirect
+	gopkg.in/warnings.v0 v0.1.2 // indirect
+	k8s.io/klog/v2 v2.80.1 // indirect
 )
 
 require (
@@ -33,8 +60,8 @@ require (
 	github.com/stretchr/testify v1.10.0 // indirect
 	github.com/tevino/abool/v2 v2.1.0 // indirect
 	github.com/vishvananda/netns v0.0.4 // indirect
-	golang.org/x/crypto v0.36.0 // indirect
-	golang.org/x/net v0.38.0 // indirect
+	golang.org/x/crypto v0.42.0 // indirect
+	golang.org/x/net v0.44.0 // indirect
 	golang.org/x/time v0.7.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect

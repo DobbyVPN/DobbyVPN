@@ -3,11 +3,11 @@ package internal
 import (
 	"context"
 	"fmt"
+
 	"github.com/Jigsaw-Code/outline-sdk/dns"
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/Jigsaw-Code/outline-sdk/network/dnstruncate"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/Jigsaw-Code/outline-sdk/x/config"
 	"github.com/Jigsaw-Code/outline-sdk/x/connectivity"
 	log "go_client/logger"
 )
@@ -23,7 +23,7 @@ func newOutlinePacketProxy(transportConfig string) (opp *outlinePacketProxy, err
 	opp = &outlinePacketProxy{}
 
 	log.Infof("outline client: creating UDP packet listener...")
-	if opp.remotePl, err = config.NewPacketListener(transportConfig); err != nil {
+	if opp.remotePl, err = configProviders.NewPacketListener(context.Background(), transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create UDP packet listener: %w", err)
 	}
 
