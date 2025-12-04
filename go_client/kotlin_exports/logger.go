@@ -5,7 +5,7 @@ import (
 	log "go_client/logger"
 )
 
-//export StartCloakClient
-func InitLogger(path string) {
-	log.SetPath(path)
+//export InitLogger
+func InitLogger(path *C.char) {
+	log.SetPath(C.GoString(path))
 }

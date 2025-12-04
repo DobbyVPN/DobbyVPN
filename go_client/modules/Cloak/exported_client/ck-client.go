@@ -8,7 +8,8 @@ import (
 	"github.com/cbeuw/Cloak/internal/client"
 	"github.com/cbeuw/Cloak/internal/common"
 	mux "github.com/cbeuw/Cloak/internal/multiplex"
-	log "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus"
+	log "go_client/logger"
 	"net"
 	"os"
 	"sync"
@@ -98,7 +99,7 @@ func (c *CkClient) Connect() error {
 			udpAddr, _ := net.ResolveUDPAddr("udp", localConfig.LocalAddr)
 			conn, err := net.ListenUDP("udp", udpAddr)
 			if err != nil {
-				log.Warnf("ck-client: goroutines: err %v\n", err)
+				log.Infof("ck-client: goroutines: err %v\n", err)
 				return
 			}
 
@@ -110,7 +111,7 @@ func (c *CkClient) Connect() error {
 		} else {
 			l, err := net.Listen("tcp", localConfig.LocalAddr)
 			if err != nil {
-				log.Warnf("ck-client: goroutines: err %v\n", err)
+				log.Infof("ck-client: goroutines: err %v\n", err)
 				return
 			}
 
@@ -126,11 +127,11 @@ func (c *CkClient) Connect() error {
 }
 
 func (c *CkClient) Disconnect() error {
-	log.StandardLogger().ExitFunc = func(int) {
+	logrus.StandardLogger().ExitFunc = func(int) {
 		panic("panic from log.StandardLogger().ExitFunc")
 	}
 	defer func() {
-		log.StandardLogger().ExitFunc = func(int) {
+		logrus.StandardLogger().ExitFunc = func(int) {
 			os.Exit(1)
 		}
 	}()
@@ -148,7 +149,7 @@ func (c *CkClient) Disconnect() error {
 	if c.listener != nil {
 		addr := c.listener.Addr().String()
 		if err := c.listener.Close(); err != nil {
-			log.Warnf("ck-client: error closing TCP listener %v: %v", addr, err)
+			log.Infof("ck-client: error closing TCP listener %v: %v", addr, err)
 		} else {
 			log.Infof("ck-client: TCP listener %v closed", addr)
 		}
@@ -158,7 +159,7 @@ func (c *CkClient) Disconnect() error {
 	if c.udpConn != nil {
 		addr := c.udpConn.LocalAddr().String()
 		if err := c.udpConn.Close(); err != nil {
-			log.Warnf("ck-client: error closing UDP conn %v: %v", addr, err)
+			log.Infof("ck-client: error closing UDP conn %v: %v", addr, err)
 		} else {
 			log.Infof("ck-client: UDP listener %v closed", addr)
 		}
@@ -182,8 +183,4 @@ func (c *CkClient) Refresh() error {
 	}
 
 	return c.Connect()
-}
-
-func InitLog() {
-	log_init()
 }

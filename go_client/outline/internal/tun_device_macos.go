@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/songgao/water"
-	"log"
+	log "go_client/logger"
 	"os/exec"
 	"os/user"
 
@@ -18,7 +18,7 @@ import (
 func checkRoot() bool {
 	user, err := user.Current()
 	if err != nil {
-		log.Printf("Failed to get current user")
+		log.Infof("Failed to get current user")
 		return false
 	}
 	return user.Uid == "0"
@@ -50,7 +50,7 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 		return nil, fmt.Errorf("failed to create TUN/TAP device: %w", err)
 	}
 
-	log.Printf("Successfully created TUN/TAP device\n")
+	log.Infof("Successfully created TUN/TAP device\n")
 
 	defer func() {
 		if err != nil {
@@ -58,7 +58,7 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 		}
 	}()
 
-	log.Printf("Tun successful")
+	log.Infof("Tun successful")
 
 	tunDev := &tunDevice{tun, tun.Name()}
 
@@ -74,7 +74,7 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 	//if err := tunDev.bringUp(); err != nil {
 	//	return nil, fmt.Errorf("failed to bring up TUN/TAP device: %w", err)
 	//}
-	log.Printf("TUN device %s is configured with IP %s\n", tunDev.Interface.Name(), "10.0.85.2")
+	log.Infof("TUN device %s is configured with IP %s\n", tunDev.Interface.Name(), "10.0.85.2")
 	return tunDev, nil
 }
 
@@ -83,24 +83,24 @@ func (d *tunDevice) MTU() int {
 }
 
 func (d *tunDevice) configureSubnet(ip string) error {
-	fmt.Printf("Configuring subnet for TUN device %s with IP %s\n", d.name, ip)
+	log.Infof("Configuring subnet for TUN device %s with IP %s\n", d.name, ip)
 	cmd := exec.Command("ifconfig", d.name, ip, "netmask", "255.255.255.0", "up")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to configure subnet: %w, output: %s", err, output)
 	}
 
-	fmt.Printf("Subnet configuration completed for TUN device %s\n", d.name)
+	log.Infof("Subnet configuration completed for TUN device %s\n", d.name)
 	return nil
 }
 
 func (d *tunDevice) bringUp() error {
-	fmt.Printf("Bringing up TUN device %s\n", d.name)
+	log.Infof("Bringing up TUN device %s\n", d.name)
 	cmd := exec.Command("ifconfig", d.name, "up")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to bring up device: %w, output: %s", err, output)
 	}
-	fmt.Printf("TUN device %s is now active\n", d.name)
+	log.Infof("TUN device %s is now active\n", d.name)
 	return nil
 }
