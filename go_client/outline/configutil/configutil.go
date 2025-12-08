@@ -7,9 +7,7 @@ import (
 	"strings"
 )
 
-// NormalizeTransportConfig converts an Outline access key into a configurl
-// string understood by the Outline SDK. If the config is already multi-part
-// (contains custom transports), it is returned as-is.
+
 func NormalizeTransportConfig(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -32,8 +30,7 @@ func NormalizeTransportConfig(raw string) (string, error) {
 		return raw, nil
 	}
 
-	// Preserve the exact path/query that the share link provides because the
-	// Outline websocket endpoint expects it verbatim.
+
 	path := u.EscapedPath()
 	if path == "" {
 		path = "/"
@@ -43,8 +40,6 @@ func NormalizeTransportConfig(raw string) (string, error) {
 		pathWithQuery = path + "?" + rawQuery
 	}
 
-	// Remove the Outline-specific hint from the Shadowsocks URL before handing
-	// it to the config parser, but keep any other parameters.
 	query.Del("outline")
 	u.Path = ""
 	u.RawQuery = query.Encode()
@@ -67,8 +62,7 @@ func NormalizeTransportConfig(raw string) (string, error) {
 	return strings.Join(parts, "|"), nil
 }
 
-// ExtractShadowsocksHost returns the hostname from the last Shadowsocks segment
-// within the given config string.
+
 func ExtractShadowsocksHost(config string) (string, error) {
 	config = strings.TrimSpace(config)
 	if config == "" {
