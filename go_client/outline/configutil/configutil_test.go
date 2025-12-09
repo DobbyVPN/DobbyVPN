@@ -14,6 +14,18 @@ func TestNormalizeTransportConfigOutlineShareKey(t *testing.T) {
 	}
 }
 
+func TestNormalizeTransportConfigOutlineShareKeyWithPrefix(t *testing.T) {
+	raw := "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ=@example.com:443/?outline=1&prefix=HTTP%2F1.1%20"
+	normalized, err := NormalizeTransportConfig(raw)
+	if err != nil {
+		t.Fatalf("NormalizeTransportConfig returned error: %v", err)
+	}
+	expectedPrefix := "tls:certname=example.com&sni=example.com|ws:tcp_path=%2F%3Foutline%3D1%26prefix%3DHTTP%252F1.1%2520&udp_path=%2F%3Foutline%3D1%26prefix%3DHTTP%252F1.1%2520|ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ=@example.com:443?prefix=HTTP%2F1.1+"
+	if normalized != expectedPrefix {
+		t.Fatalf("unexpected normalized config.\nwant: %s\n got: %s", expectedPrefix, normalized)
+	}
+}
+
 func TestNormalizeTransportConfigAlreadyMultiPart(t *testing.T) {
 	raw := "tls:sni=example.com|ss://foo"
 	normalized, err := NormalizeTransportConfig(raw)

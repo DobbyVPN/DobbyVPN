@@ -12,6 +12,7 @@ import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
+import com.dobby.feature.main.domain.ShadowsocksConfig
 import com.dobby.feature.main.domain.TomlConfigs
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.main.ui.MainUiState
@@ -22,6 +23,7 @@ import kotlinx.coroutines.runBlocking
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
+import io.ktor.http.encodeURLParameter
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import net.peanuuutz.tomlkt.Toml
@@ -170,8 +172,11 @@ class MainViewModel(
             logger.log("Detected Shadowsocks config, applying Outline parameters")
             configsRepository.setIsOutlineEnabled(true)
             configsRepository.setMethodPasswordOutline("${ss.Method}:${ss.Password}")
-            val outlineSuffix = if (ss.Outline == true) "/?outline=1" else ""
+            val outlineSuffix = buildShadowsocksQuerySuffix(ss)
             configsRepository.setServerPortOutline("${ss.Server}:${ss.Port}$outlineSuffix")
+            if (!ss.Prefix.isNullOrBlank()) {
+                logger.log("Shadowsocks prefix configured, length=${ss.Prefix.length}")
+            }
             logger.log("Outline method, password, and server: ${ss.Method}@${ss.Server}:${ss.Port}")
         } else {
             logger.log("Shadowsocks config didn't detected, turn off")
@@ -268,5 +273,17 @@ class MainViewModel(
         awgManager.onAwgDisconnect()
     }
     //endregion
+
+    private fun buildShadowsocksQuerySuffix(ss: ShadowsocksConfig): String {
+        val queryParams = mutableListOf<String>()
+        if (ss.Outline == true) {
+            queryParams += "outline=1"
+        }
+        ss.Prefix
+            ?.takeIf { it.isNotBlank() }
+            ?.let { prefix -> queryParams += "prefix=${prefix.encodeURLParameter()}" }
+
+        return if (queryParams.isEmpty()) "" else "/?${queryParams.joinToString("&")}"
+    }
 }
 

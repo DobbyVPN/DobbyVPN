@@ -8,7 +8,8 @@ data class ShadowsocksConfig(
     val Port: Int,
     val Method: String,
     val Password: String,
-    val Outline: Boolean? = null
+    val Outline: Boolean? = null,
+    val Prefix: String? = null
 )
 
 @Serializable
