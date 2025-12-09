@@ -19,6 +19,10 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
+        ndk {
+            // Limit native builds to a single ABI to avoid unnecessary variants
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
