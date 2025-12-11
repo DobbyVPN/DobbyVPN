@@ -205,7 +205,7 @@ class MainViewModel(
     }
 
     private fun getConfigByURL(connectionUrl: String): String {
-        logger.log("getConfigByURL() called with: $connectionUrl")
+        logger.log("getConfigByURL() called")
 
         return if (connectionUrl.startsWith("http://") || connectionUrl.startsWith("https://")) {
             try {
