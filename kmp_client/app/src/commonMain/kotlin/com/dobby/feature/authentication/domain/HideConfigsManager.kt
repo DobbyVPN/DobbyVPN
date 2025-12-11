@@ -78,7 +78,7 @@ object HideConfigsManager: KoinComponent {
                 }, onAuthFailure = {
                     scope.launch {
                         val inRedZone = LocationManager.inRedZone()
-                        if (inRedZone != RedZoneCheckResult.RED_ZONE) {
+                        if (inRedZone == RedZoneCheckResult.NOT_RED_ZONE) {
                             onSuccess()
                             authStatus = AuthStatus.SUCCESS
                         } else {
