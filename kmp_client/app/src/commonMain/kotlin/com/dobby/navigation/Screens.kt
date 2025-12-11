@@ -6,19 +6,7 @@ import kotlinx.serialization.Serializable
 data object MainScreen
 
 @Serializable
-data object DiagnosticsScreen
-
-@Serializable
 data object SettingsScreen
-
-@Serializable
-data object LogsScreen
-
-@Serializable
-data object AboutScreen
-
-@Serializable
-data object AuthenticationSettingsScreen
 
 @Serializable
 data object LoadingScreen

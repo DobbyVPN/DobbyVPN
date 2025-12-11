@@ -6,21 +6,32 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.navigation.NavController
 import com.dobby.feature.authentication.domain.HideConfigsManager
 import com.dobby.navigation.LoadingScreen
+import com.dobby.navigation.MainScreen
+import com.dobby.navigation.SettingsScreen
 import com.dobby.navigation.WebViewScreen
 
 @Composable
 fun AuthenticationScreen(
-    onNavigate: (Any) -> Unit = {},
     screen: Any,
+    navController: NavController
 ) {
-    onNavigate.invoke(LoadingScreen)
+    navController.navigate(LoadingScreen) {
+        popUpTo(SettingsScreen) { inclusive = true }
+        popUpTo(MainScreen) { inclusive = true }
+    }
+
     HideConfigsManager.authenticate(
         onSuccess = {
-            onNavigate.invoke(screen)
+            navController.navigate(screen) {
+                popUpTo(LoadingScreen) { inclusive = true }
+            }
         }, onFailure = {
-            onNavigate.invoke(WebViewScreen)
+            navController.navigate(WebViewScreen) {
+                popUpTo(LoadingScreen) { inclusive = true }
+            }
         }
     )
 }

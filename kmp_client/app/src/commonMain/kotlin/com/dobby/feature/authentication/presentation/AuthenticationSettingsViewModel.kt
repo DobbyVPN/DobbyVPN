@@ -29,6 +29,7 @@ class AuthenticationSettingsViewModel(): ViewModel() {
                 _hideConfigsSettingState.emit(true)
             }
             _tryEnableHideConfigsStatus.emit(res)
+            HideConfigsManager.authStatus = HideConfigsManager.AuthStatus.SUCCESS
         }
     }
 
