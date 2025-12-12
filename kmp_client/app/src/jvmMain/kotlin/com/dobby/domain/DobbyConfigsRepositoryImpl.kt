@@ -77,6 +77,14 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("isOutlineEnabled", isOutlineEnabled.toString())
     }
 
+    override fun getOutlineTransportConfig(): String {
+        return prefs.get("OutlineTransportConfigKey", "")
+    }
+
+    override fun setOutlineTransportConfig(config: String) {
+        prefs.put("OutlineTransportConfigKey", config)
+    }
+
     override fun getAwgConfig(): String {
         return prefs.get("awgConfig", DEFAULT_AWG_CONFIG)
     }
