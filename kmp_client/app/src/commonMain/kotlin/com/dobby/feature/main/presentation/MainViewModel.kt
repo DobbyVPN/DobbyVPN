@@ -149,22 +149,55 @@ class MainViewModel(
         logger.log("Connection config saved to repository")
 
         try {
-            parseToml(connectionConfig)
+            parseConfig(connectionConfig)
         } catch (e: Exception) {
-            val errorMsg = "Error during parsing TOML: ${e.message}"
+            val errorMsg = "Error during parsing config: ${e.message}"
             logger.log(errorMsg)
             throw RuntimeException(errorMsg)
         }
     }
 
-    private fun parseToml(connectionConfig: String) {
-        logger.log("Start parseToml()")
+    private fun parseConfig(connectionConfig: String) {
+        logger.log("Start parseConfig()")
 
         if (connectionConfig.isBlank()) {
-            logger.log("Connection config is blank, skipping parseToml()")
+            logger.log("Connection config is blank, skipping")
             return
         }
 
+        // Определяем тип конфига: URI или TOML
+        val trimmed = connectionConfig.trim()
+        if (isTransportUri(trimmed)) {
+            // Это URI — сохраняем напрямую
+            logger.log("Detected transport URI, saving directly")
+            configsRepository.setOutlineTransportConfig(trimmed)
+            configsRepository.setIsOutlineEnabled(true)
+            configsRepository.setIsCloakEnabled(false) // URI не содержит Cloak
+            logger.log("Transport config saved: $trimmed")
+            return
+        }
+
+        // Это TOML — парсим как раньше
+        logger.log("Detected TOML config, parsing...")
+        parseTomlConfig(trimmed)
+    }
+
+    /**
+     * Проверяет, является ли строка transport URI.
+     * Поддерживаемые форматы:
+     * - ss://... (Shadowsocks)
+     * - ws:... (WebSocket)
+     * - tls:... (TLS)
+     * - Комбинации: tls:...|ws:...|ss://...
+     */
+    private fun isTransportUri(config: String): Boolean {
+        return config.startsWith("ss://") ||
+               config.startsWith("ws:") ||
+               config.startsWith("tls:") ||
+               config.contains("|ss://")
+    }
+
+    private fun parseTomlConfig(connectionConfig: String) {
         val root = Toml.decodeFromString<TomlConfigs>(connectionConfig)
         val ss = root.Shadowsocks?.Direct ?: root.Shadowsocks?.Local
 
@@ -179,7 +212,7 @@ class MainViewModel(
             }
             logger.log("Outline method, password, and server: ${ss.Method}@${ss.Server}:${ss.Port}")
         } else {
-            logger.log("Shadowsocks config didn't detected, turn off")
+            logger.log("Shadowsocks config not detected, disabling Outline")
             configsRepository.setIsOutlineEnabled(false)
         }
 
@@ -190,11 +223,11 @@ class MainViewModel(
             configsRepository.setCloakConfig(cloakJson)
             logger.log("Cloak config saved successfully (length=${cloakJson.length})")
         } else {
-            logger.log("Cloak config didn't detected, turn off")
+            logger.log("Cloak config not detected, disabling Cloak")
             configsRepository.setIsCloakEnabled(false)
         }
 
-        logger.log("Finish parseToml()")
+        logger.log("Finish parseTomlConfig()")
     }
 
     private fun getConfigByURL(connectionUrl: String): String {

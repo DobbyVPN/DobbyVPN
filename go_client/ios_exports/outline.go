@@ -29,12 +29,7 @@ type OutlineDevice struct {
 var configProviders = configurl.NewDefaultProviders()
 
 func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
-	normalizedConfig, err := configutil.NormalizeTransportConfig(transportConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	ip, err := resolveShadowsocksServerIPFromConfig(normalizedConfig)
+	ip, err := resolveShadowsocksServerIPFromConfig(transportConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -42,11 +37,11 @@ func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 		svrIP: ip,
 	}
 
-	if od.sd, err = configProviders.NewStreamDialer(context.Background(), normalizedConfig); err != nil {
+	if od.sd, err = configProviders.NewStreamDialer(context.Background(), transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create TCP dialer: %w", err)
 	}
 
-	if od.pp, err = newOutlinePacketProxy(normalizedConfig); err != nil {
+	if od.pp, err = newOutlinePacketProxy(transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create delegate UDP proxy: %w", err)
 	}
 

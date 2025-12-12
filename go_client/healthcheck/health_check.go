@@ -42,7 +42,7 @@ func (h *healthChecker) start() {
 				status.reconnected = err == nil
 			}
 			lastStatus.Store(&status)
-			log.Infof(status.String())
+			log.Infof("%s", status.String())
 
 		case <-h.ctx.Done():
 			ticker.Stop()
