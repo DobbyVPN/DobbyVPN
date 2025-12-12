@@ -80,8 +80,8 @@ fun DobbySocksScreen(
                 onValueChange = { connectionURL = it },
                 label = { Text("Subscription URL") },
                 singleLine = false,
-                minLines = 2,
-                maxLines = 2,
+                minLines = 3,
+                maxLines = 3,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(6.dp))

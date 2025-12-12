@@ -48,7 +48,7 @@ public class HealthCheck {
             try safeRepeat(repeatCount) {
                 self.httpGetBody(urlString: "https://gist.githubusercontent.com/BrudLord/f844290711659cab9a05f618922019fb/raw/f42498ef3a3447a395056dd0f7d168a0b66e6083/shadowsocks") { success, body, errorMessage in
                     if success {
-                        self.logs.writeLog(log: "[httpGetBody] GET request successful! Body: \(body)")
+                        self.logs.writeLog(log: "[httpGetBody] GET request successful!")
                     } else {
                         self.logs.writeLog(log: "[httpGetBody] GET request failed. Error: \(errorMessage ?? "Unknown")")
                     }

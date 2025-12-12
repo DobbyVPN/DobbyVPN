@@ -1,1 +1,61 @@
-Open Source opionated VPN client implementing major VPN protocols.
+<p>Open-source opinionated VPN client implementing major VPN protocols.</p>
+
+<p>Supported protocols:</p>
+<ul>
+  <li>Shadowsocks</li>
+  <li>Shadowsocks + Cloak</li>
+</ul>
+
+<p>Work in progress:</p>
+<ul>
+  <li>AmneziaWG</li>
+</ul>
+
+<p>More protocols will be added along the way.</p>
+
+<p>Server setup:</p>
+<ul>
+  <li>Cloak: <a href="https://github.com/DobbyVPN/dotline-server">https://github.com/DobbyVPN/dotline-server</a></li>
+  <li>Outline: <a href="https://getoutline.org/get-started/#step-1">https://getoutline.org/get-started/#step-1</a></li>
+</ul>
+
+<p>Dobby accepts configuration files in the following formats:</p>
+
+<p><strong>Shadowsocks:</strong></p>
+<pre><code>Version = "0.3"
+Protocol = "shadowsocks"
+
+[Shadowsocks.Direct]
+Server = "&lt;address&gt;"
+Port = &lt;port&gt;
+Method = "&lt;method&gt;"
+Password = "&lt;password&gt;"
+Outline = true
+</code></pre>
+
+<p><strong>Shadowsocks via Cloak:</strong></p>
+<pre><code>Version = "0.3"
+Protocol = "shadowsocks via Cloak"
+
+[Shadowsocks.Local]
+Server = "&lt;address&gt;"
+Port = &lt;port&gt;
+Method = "&lt;method&gt;"
+Password = "&lt;password&gt;"
+Outline = true
+
+[Cloak]
+Transport = "CDN"
+ProxyMethod = "shadowsocks"
+EncryptionMethod = "plain"
+UID = "&lt;UID&gt;"
+PublicKey = "&lt;public_key&gt;"
+ServerName = "&lt;server_name&gt;"
+NumConn = 8
+BrowserSig = "chrome"
+StreamTimeout = 300
+RemoteHost = "&lt;address&gt;"
+RemotePort = "&lt;port&gt;"
+CDNWsUrlPath = "&lt;url_path&gt;"
+CDNOriginHost = "&lt;server_name&gt;"
+</code></pre>

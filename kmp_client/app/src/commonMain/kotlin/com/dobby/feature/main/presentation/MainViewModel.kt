@@ -16,6 +16,7 @@ import com.dobby.feature.main.domain.ShadowsocksConfig
 import com.dobby.feature.main.domain.TomlConfigs
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.main.ui.MainUiState
+import com.dobby.vpn.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -93,7 +94,7 @@ class MainViewModel(
         connectionUrl: String,
         isConnected: Boolean
     ) {
-        logger.log("The connection button was clicked with URL: $connectionUrl")
+        logger.log("The connection button was clicked with URL: ${maskUrl(connectionUrl)}")
 
         if (!configsRepository.couldStart()) {
             logger.log("We couldn't do this operation, configsRepository.couldStart() returned FALSE")
@@ -103,7 +104,7 @@ class MainViewModel(
         logger.log("Proceeding with setConfig for the provided URL...")
         if (!isConnected) {
             try {
-                logger.log("We get config by $connectionUrl")
+                logger.log("We get config by ${maskUrl(connectionUrl)}")
                 setConfig(connectionUrl)
             } catch (e: Exception) {
                 logger.log("Error during setConfig: ${e.message}")
@@ -136,8 +137,20 @@ class MainViewModel(
         }
     }
 
+    fun maskUrl(url: String): String {
+        val firstPartEnd = url.indexOf('/', url.indexOf("/") + 1)
+        if (firstPartEnd == -1) return "***"
+
+        val lastPartStart = url.lastIndexOf('/')
+        if (lastPartStart <= firstPartEnd) return "***"
+
+        val lastSegment = url.substring(lastPartStart + 1)
+
+        return url.substring(0, firstPartEnd + 1) + "***" + "/" + lastSegment
+    }
+
     private fun setConfig(connectionUrl: String) {
-        logger.log("Start setConfig() with connectionUrl: $connectionUrl")
+        logger.log("Start setConfig()")
 
         configsRepository.setConnectionURL(connectionUrl)
         logger.log("Connection URL saved to repository")
@@ -207,10 +220,6 @@ class MainViewModel(
             configsRepository.setMethodPasswordOutline("${ss.Method}:${ss.Password}")
             val outlineSuffix = buildShadowsocksQuerySuffix(ss)
             configsRepository.setServerPortOutline("${ss.Server}:${ss.Port}$outlineSuffix")
-            if (!ss.Prefix.isNullOrBlank()) {
-                logger.log("Shadowsocks prefix configured, length=${ss.Prefix.length}")
-            }
-            logger.log("Outline method, password, and server: ${ss.Method}@${ss.Server}:${ss.Port}")
         } else {
             logger.log("Shadowsocks config not detected, disabling Outline")
             configsRepository.setIsOutlineEnabled(false)
@@ -231,7 +240,7 @@ class MainViewModel(
     }
 
     private fun getConfigByURL(connectionUrl: String): String {
-        logger.log("getConfigByURL() called with: $connectionUrl")
+        logger.log("getConfigByURL() called")
 
         return if (connectionUrl.startsWith("http://") || connectionUrl.startsWith("https://")) {
             try {
@@ -239,7 +248,7 @@ class MainViewModel(
                 runBlocking {
                     httpClient.get(connectionUrl) {
                         headers {
-                            append("User-Agent", "DobbyVPN")
+                            append("User-Agent", "DobbyVPN v${BuildConfig.VERSION_NAME}")
                         }
                     }.bodyAsText()
                 }.also {

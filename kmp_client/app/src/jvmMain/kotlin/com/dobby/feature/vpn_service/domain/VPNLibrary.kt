@@ -95,7 +95,7 @@ internal class VPNLibraryLoader(
 
     fun startCloak(localHost: String, localPort: String, config: String, udp: Boolean) {
         try {
-            logger.log("Run localHost: $localHost; localPort: $localPort; config: $config; $udp")
+            logger.log("Run localHost: $localHost; localPort: $localPort; $udp")
             INSTANCE.StartCloakClient(localHost, localPort, config)
             logger.log("startCloak called successfully.")
         } catch (e: UnsatisfiedLinkError) {

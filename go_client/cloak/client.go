@@ -39,7 +39,7 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 		log.Infof("cloak client: Failed to unmarshal config - %v", err)
 		return
 	}
-	log.Infof("cloak client: rawConfig parsed successfully: %+v", rawConfig)
+	log.Infof("cloak client: rawConfig parsed successfully")
 
 	rawConfig.LocalHost = localHost
 	rawConfig.LocalPort = localPort

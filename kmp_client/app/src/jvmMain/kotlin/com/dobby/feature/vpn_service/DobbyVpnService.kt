@@ -39,11 +39,11 @@ internal class DobbyVpnService(
 
 
     private fun startCloakOutline() {
+        logger.log("Start startCloakOutline")
         val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
         val serverPort = dobbyConfigsRepository.getServerPortOutline()
         val localHost = "127.0.0.1"
         val localPort = "1984"
-        logger.log("startCloakOutline with key: $methodPassword $serverPort")
         runBlocking {
             connectionState.update(isConnected = true)
             logger.log("CloakIsEnable = " + dobbyConfigsRepository.getIsCloakEnabled())
