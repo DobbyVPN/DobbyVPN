@@ -20,7 +20,11 @@ func Connect() {
 		log.Infof("Connect() failed: client is nil")
 		return
 	}
-	client.Connect()
+	err := client.Connect()
+	if err != nil {
+		log.Infof("Connect() error: " + err.Error())
+		return
+	}
 	log.Infof("Connect() finished")
 }
 
