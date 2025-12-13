@@ -217,12 +217,18 @@ class MainViewModel(
         if (ss != null) {
             logger.log("Detected Shadowsocks config, applying Outline parameters")
             configsRepository.setIsOutlineEnabled(true)
+            
+            // Сохраняем в старом формате для совместимости
             configsRepository.setMethodPasswordOutline("${ss.Method}:${ss.Password}")
             val outlineSuffix = buildShadowsocksQuerySuffix(ss)
             configsRepository.setServerPortOutline("${ss.Server}:${ss.Port}$outlineSuffix")
+            
+            // Очищаем transport config чтобы использовался TOML
+            configsRepository.setOutlineTransportConfig("")
         } else {
             logger.log("Shadowsocks config not detected, disabling Outline")
             configsRepository.setIsOutlineEnabled(false)
+            configsRepository.setOutlineTransportConfig("")
         }
 
         if (root.Cloak != null) {
@@ -328,4 +334,3 @@ class MainViewModel(
         return if (queryParams.isEmpty()) "" else "/?${queryParams.joinToString("&")}"
     }
 }
-
