@@ -22,16 +22,16 @@ data class CloakConfig(
     val Transport: String,
     val ProxyMethod: String,
     val EncryptionMethod: String,
-    val UID: String,
+    var UID: String,
     val PublicKey: String,
-    val ServerName: String,
+    var ServerName: String,
     val NumConn: Int,
     val BrowserSig: String? = null,
     val StreamTimeout: Int? = null,
-    val RemoteHost: String,
+    var RemoteHost: String,
     val RemotePort: String,
-    val CDNWsUrlPath: String? = null,
-    val CDNOriginHost: String? = null
+    var CDNWsUrlPath: String? = null,
+    var CDNOriginHost: String? = null
 )
 
 @Serializable

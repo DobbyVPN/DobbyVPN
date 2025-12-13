@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.AwgManager
 import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
@@ -15,7 +16,6 @@ import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.domain.TomlConfigs
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.main.ui.MainUiState
-import com.dobby.vpn.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -92,7 +92,7 @@ class MainViewModel(
         connectionUrl: String,
         isConnected: Boolean
     ) {
-        logger.log("The connection button was clicked with URL: ${maskUrl(connectionUrl)}")
+        logger.log("The connection button was clicked with URL: ${maskStr(connectionUrl)}")
 
         if (!configsRepository.couldStart()) {
             logger.log("We couldn't do this operation, configsRepository.couldStart() returned FALSE")
@@ -102,7 +102,7 @@ class MainViewModel(
         logger.log("Proceeding with setConfig for the provided URL...")
         if (!isConnected) {
             try {
-                logger.log("We get config by ${maskUrl(connectionUrl)}")
+                logger.log("We get config by ${maskStr(connectionUrl)}")
                 setConfig(connectionUrl)
             } catch (e: Exception) {
                 logger.log("Error during setConfig: ${e.message}")
@@ -135,20 +135,8 @@ class MainViewModel(
         }
     }
 
-    fun maskUrl(url: String): String {
-        val firstPartEnd = url.indexOf('/', url.indexOf("/") + 1)
-        if (firstPartEnd == -1) return "***"
-
-        val lastPartStart = url.lastIndexOf('/')
-        if (lastPartStart <= firstPartEnd) return "***"
-
-        val lastSegment = url.substring(lastPartStart + 1)
-
-        return url.substring(0, firstPartEnd + 1) + "***" + "/" + lastSegment
-    }
-
     private fun setConfig(connectionUrl: String) {
-        logger.log("Start setConfig()")
+        logger.log("Start setConfig() with connectionUrl: ${maskStr(connectionUrl)}")
 
         configsRepository.setConnectionURL(connectionUrl)
         logger.log("Connection URL saved to repository")
@@ -185,6 +173,7 @@ class MainViewModel(
             configsRepository.setMethodPasswordOutline("${ss.Method}:${ss.Password}")
             val outlineSuffix = if (ss.Outline == true) "/?outline=1" else ""
             configsRepository.setServerPortOutline("${ss.Server}:${ss.Port}$outlineSuffix")
+            logger.log("Outline method, password, and server: ${ss.Method}:${maskStr(ss.Password)}@${maskStr(ss.Server)}:${ss.Port}")
         } else {
             logger.log("Shadowsocks config didn't detected, turn off")
             configsRepository.setIsOutlineEnabled(false)
@@ -195,7 +184,13 @@ class MainViewModel(
             configsRepository.setIsCloakEnabled(true)
             val cloakJson = Json { prettyPrint = true }.encodeToString(root.Cloak)
             configsRepository.setCloakConfig(cloakJson)
-            logger.log("Cloak config saved successfully (length=${cloakJson.length})")
+            root.Cloak.UID = maskStr(root.Cloak.UID)
+            root.Cloak.RemoteHost = maskStr(root.Cloak.RemoteHost)
+            root.Cloak.ServerName = maskStr(root.Cloak.ServerName)
+            root.Cloak.CDNOriginHost = root.Cloak.CDNOriginHost?.let { maskStr(it) }
+            root.Cloak.CDNWsUrlPath = root.Cloak.CDNWsUrlPath?.let { maskStr(it) }
+            val cloakJsonForLog = Json { prettyPrint = true }.encodeToString(root.Cloak)
+            logger.log("Cloak config saved successfully (config=${cloakJsonForLog})")
         } else {
             logger.log("Cloak config didn't detected, turn off")
             configsRepository.setIsCloakEnabled(false)
@@ -205,7 +200,7 @@ class MainViewModel(
     }
 
     private fun getConfigByURL(connectionUrl: String): String {
-        logger.log("getConfigByURL() called")
+        logger.log("getConfigByURL() called with: ${maskStr(connectionUrl)}")
 
         return if (connectionUrl.startsWith("http://") || connectionUrl.startsWith("https://")) {
             try {

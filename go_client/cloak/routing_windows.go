@@ -13,19 +13,19 @@ import (
 )
 
 func StartRoutingCloak(proxyIP string) error {
-	log.Infof("Start StartRoutingCloak")
+	log.Infof("StartRoutingCloak(%s)\n", log.maskStr(proxyIP))
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
-		log.Infof("Can't find gatewayIP, err = %v", err)
+		log.Infof("Can't find gatewayIP, err = %v \n", err)
 		return err
 	}
 	log.Infof("found gatewayIP = %s\n", gatewayIP.String())
 	interfaceName, err := routing.FindInterfaceByGateway(gatewayIP.String())
 	if err != nil {
-		log.Infof("Can't find interfaceName, err = %v", err)
+		log.Infof("Can't find interfaceName, err = %v \n", err)
 		return err
 	}
-	log.Infof("found interfaceName = %s", interfaceName)
+	log.Infof("found interfaceName = %s\n", interfaceName)
 
 	netInterface, err := routing.GetNetworkInterfaceByIP(interfaceName)
 	command := fmt.Sprintf("route change %s %s if \"%s\"", proxyIP, gatewayIP.String(), netInterface.Name)
@@ -35,7 +35,7 @@ func StartRoutingCloak(proxyIP string) error {
 			proxyIP, gatewayIP.String(), netInterface.Name)
 		_, err = routing.ExecuteCommand(netshCommand)
 		if err != nil {
-			log.Infof("Outline/routing: Failed to add or update proxy route for IP: %v", err)
+			log.Infof("Outline/routing: Failed to add or update proxy route for IP %s: %v\n", log.maskStr(proxyIP), err)
 		}
 	}
 	return nil
@@ -46,7 +46,7 @@ func StopRoutingCloak(proxyIp string) {
 	command := fmt.Sprintf("route delete %s", proxyIp)
 	_, err := routing.ExecuteCommand(command)
 	if err != nil {
-		log.Infof("Outline/routing: Failed to delete proxy route for IP: %v", err)
+		log.Infof("Outline/routing: Failed to delete proxy route for IP %s: %v\n", log.maskStr(proxyIp), err)
 	}
 	log.Infof("Outline/routing: Cleaned up routing table and rules.")
 }

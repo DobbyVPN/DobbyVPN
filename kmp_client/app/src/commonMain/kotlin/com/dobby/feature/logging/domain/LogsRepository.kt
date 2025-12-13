@@ -20,6 +20,19 @@ interface SentryLogsRepository{
     }
 }
 
+fun maskStr(input: String): String {
+    val prefixes = listOf("http://", "https://")
+    val prefix = prefixes.firstOrNull { input.startsWith(it) } ?: ""
+
+    val rest = input.removePrefix(prefix)
+
+    if (rest.length <= 2) {
+        return prefix + rest
+    }
+
+    return prefix + "${rest.first()}***${rest.last()}"
+}
+
 class LogsRepository(
     private val logFilePath: Path = provideLogFilePath()
 ) {

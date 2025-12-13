@@ -19,6 +19,19 @@ var (
 	initMu sync.Mutex
 )
 
+func maskStr(input string) string {
+	runes := []rune(input)
+
+	switch len(runes) {
+	case 0:
+		return ""
+	case 1, 2:
+		return input
+	default:
+		return string(runes[0]) + "***" + string(runes[len(runes)-1])
+	}
+}
+
 func SetPath(path string) error {
 	if lg.logger != nil {
 		return nil
