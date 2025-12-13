@@ -132,6 +132,17 @@ class DobbyVpnService : VpnService() {
         val isServiceStartedFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) ?: false
         val shouldTurnOutlineOn = dobbyConfigsRepository.getIsOutlineEnabled()
         if (shouldTurnOutlineOn || !isServiceStartedFromUi) {
+            // First, check for transport URI config (e.g., ss://..., tls:...|ws:...|ss://...)
+            val transportConfig = dobbyConfigsRepository.getOutlineTransportConfig()
+            if (transportConfig.isNotEmpty()) {
+                logger.log("Start connecting Outline with transport config")
+                outlineLibFacade.init(transportConfig)
+                logger.log("outlineLibFacade inited with transport config")
+                enableCloakIfNeeded(force = !isServiceStartedFromUi)
+                return
+            }
+
+            // Fallback to legacy method/password config
             val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
             val serverPort = dobbyConfigsRepository.getServerPortOutline()
             if (methodPassword.isEmpty() || serverPort.isEmpty()) {

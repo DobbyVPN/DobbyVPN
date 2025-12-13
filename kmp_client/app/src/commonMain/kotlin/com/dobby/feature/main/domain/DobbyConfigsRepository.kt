@@ -40,6 +40,10 @@ interface DobbyConfigsRepository {
     fun getIsOutlineEnabled(): Boolean
 
     fun setIsOutlineEnabled(isOutlineEnabled: Boolean)
+
+    fun getOutlineTransportConfig(): String
+
+    fun setOutlineTransportConfig(config: String)
     // endregion
 
     // region amnezia

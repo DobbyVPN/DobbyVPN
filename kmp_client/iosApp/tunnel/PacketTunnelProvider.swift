@@ -66,10 +66,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
-        let methodPassword = configsRepository.getMethodPasswordOutline()
-        let serverPort = configsRepository.getServerPortOutline()
         
-        let config = buildOutlineConfig(methodPassword: methodPassword, serverPort: serverPort)
+        // First, check for transport URI config (e.g., ss://..., tls:...|ws:...|ss://...)
+        let transportConfig = configsRepository.getOutlineTransportConfig()
+        let config: String
+        if !transportConfig.isEmpty {
+            logs.writeLog(log: "Using transport config")
+            config = transportConfig
+        } else {
+            // Fallback to legacy method/password config
+            let methodPassword = configsRepository.getMethodPasswordOutline()
+            let serverPort = configsRepository.getServerPortOutline()
+            config = buildOutlineConfig(methodPassword: methodPassword, serverPort: serverPort)
+        }
 
         let remoteAddress = "254.1.1.1"
         let localAddress = "198.18.0.1"

@@ -40,8 +40,6 @@ internal class DobbyVpnService(
 
     private fun startCloakOutline() {
         logger.log("Start startCloakOutline")
-        val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
-        val serverPort = dobbyConfigsRepository.getServerPortOutline()
         val localHost = "127.0.0.1"
         val localPort = "1984"
         runBlocking {
@@ -50,6 +48,18 @@ internal class DobbyVpnService(
             if (dobbyConfigsRepository.getIsCloakEnabled()) {
                 vpnLibrary.startCloak(localHost, localPort, dobbyConfigsRepository.getCloakConfig(), false)
             }
+
+            // First, check for transport URI config (e.g., ss://..., tls:...|ws:...|ss://...)
+            val transportConfig = dobbyConfigsRepository.getOutlineTransportConfig()
+            if (transportConfig.isNotEmpty()) {
+                logger.log("Starting Outline with transport config")
+                vpnLibrary.startOutline(transportConfig)
+                return@runBlocking
+            }
+
+            // Fallback to legacy method/password config
+            val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
+            val serverPort = dobbyConfigsRepository.getServerPortOutline()
             vpnLibrary.startOutline(buildOutlineUrl(methodPassword, serverPort))
         }
     }

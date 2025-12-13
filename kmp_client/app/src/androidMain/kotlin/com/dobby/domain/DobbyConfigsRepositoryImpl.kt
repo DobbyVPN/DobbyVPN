@@ -107,6 +107,18 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun getOutlineTransportConfig(): String {
+        return (prefs.getString("OutlineTransportConfigKey", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getOutlineTransportConfig, size = ${it.length}")
+        }
+    }
+
+    override fun setOutlineTransportConfig(config: String) {
+        prefs.edit().putString("OutlineTransportConfigKey", config).apply().also {
+            AndroidLog("DOBBY_TAG", "setOutlineTransportConfig, size = ${config.length}")
+        }
+    }
+
     override fun getAwgConfig(): String {
         return (prefs.getString("awgConfig", DEFAULT_AWG_CONFIG) ?: "").also {
             AndroidLog("DOBBY_TAG", "getAwgConfig, size = ${it.length}")

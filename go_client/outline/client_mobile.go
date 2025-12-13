@@ -39,6 +39,11 @@ func (c *OutlineClient) Connect() error {
 }
 
 func (c *OutlineClient) Disconnect() error {
+	if c.device == nil {
+		log.Infof("outline device is nil, nothing to disconnect")
+		common.Client.MarkInactive(outlineCommon.Name)
+		return nil
+	}
 	err := c.device.Close()
 	if err != nil {
 		log.Infof("failed to close outline device: %v\n", err)
@@ -50,14 +55,23 @@ func (c *OutlineClient) Disconnect() error {
 }
 
 func (c *OutlineClient) Refresh() error {
+	if c.device == nil {
+		return fmt.Errorf("outline device is not initialized")
+	}
 	return c.device.Refresh()
 }
 
 func (c *OutlineClient) GetServerIP() net.IP {
+	if c.device == nil {
+		return nil
+	}
 	return c.device.GetServerIP()
 }
 
 func (c *OutlineClient) Read() ([]byte, error) {
+	if c.device == nil {
+		return nil, fmt.Errorf("outline device is not initialized")
+	}
 	buf := make([]byte, 65536)
 	n, err := c.device.Read(buf)
 	//log.Infof(fmt.Sprintf("outline client: read data; size: %d (%d)", n, n%8))
@@ -76,6 +90,9 @@ func (c *OutlineClient) Read() ([]byte, error) {
 }
 
 func (c *OutlineClient) Write(buf []byte) (int, error) {
+	if c.device == nil {
+		return 0, fmt.Errorf("outline device is not initialized")
+	}
 	n, err := c.device.Write(buf)
 	//log.Infof(fmt.Sprintf("outline client: write data; size: %d (%d)", n, n%8))
 	if err != nil {

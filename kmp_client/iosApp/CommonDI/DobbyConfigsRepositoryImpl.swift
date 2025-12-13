@@ -13,6 +13,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let isOutlineEnabledKey = "isOutlineEnabledKey"
     private let connectionURLKey = "connectionURLKey"
     private let connectionConfigKey = "connectionConfigKey"
+    private let outlineTransportConfigKey = "OutlineTransportConfigKey"
 
     public func getConnectionURL() -> String {
         return userDefaults.string(forKey: connectionURLKey) ?? ""
@@ -69,6 +70,14 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     
     public func setIsOutlineEnabled(isOutlineEnabled: Bool) {
         userDefaults.set(isOutlineEnabled, forKey: isOutlineEnabledKey)
+    }
+
+    public func getOutlineTransportConfig() -> String {
+        return userDefaults.string(forKey: outlineTransportConfigKey) ?? ""
+    }
+
+    public func setOutlineTransportConfig(config: String) {
+        userDefaults.set(config, forKey: outlineTransportConfigKey)
     }
     
     public func getAwgConfig() -> String {
