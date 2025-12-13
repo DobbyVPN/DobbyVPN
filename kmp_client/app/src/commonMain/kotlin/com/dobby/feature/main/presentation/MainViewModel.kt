@@ -27,6 +27,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import net.peanuuutz.tomlkt.Toml
 import net.peanuuutz.tomlkt.decodeFromString
+import com.dobby.vpn.BuildConfig
 
 val httpClient = HttpClient()
 
