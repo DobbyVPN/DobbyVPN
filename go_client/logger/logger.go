@@ -19,7 +19,7 @@ var (
 	initMu sync.Mutex
 )
 
-func maskStr(input string) string {
+func MaskStr(input string) string {
 	runes := []rune(input)
 
 	switch len(runes) {

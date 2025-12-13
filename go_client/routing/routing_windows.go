@@ -50,7 +50,7 @@ func ExecuteCommand(command string) (string, error) {
 	if err != nil {
 		return string(output), fmt.Errorf("command execution failed: %w, output: %s", err, output)
 	}
-	log.Infof("Outline/routing: Command executed: %s, output: %s", log.maskStr(command), output)
+	log.Infof("Outline/routing: Command executed: %s, output: %s", log.MaskStr(command), output)
 	return string(output), nil
 }
 
