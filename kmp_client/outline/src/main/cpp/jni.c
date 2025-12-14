@@ -41,11 +41,23 @@ Java_com_dobby_outline_OutlineGo_read(JNIEnv *env, jclass clazz,
     return read;
 }
 
-JNIEXPORT void JNICALL
+JNIEXPORT jint JNICALL
 Java_com_dobby_outline_OutlineGo_connect(JNIEnv *env, jclass clazz)
 {
-    // Вызываем Go-экспорт
-    Connect();
+    // Вызываем Go-экспорт, возвращает 0 при успехе, -1 при ошибке
+    return Connect();
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_dobby_outline_OutlineGo_getLastError(JNIEnv *env, jclass clazz)
+{
+    char* err = GetLastError();
+    if (err == NULL) {
+        return NULL;
+    }
+    jstring result = (*env)->NewStringUTF(env, err);
+    free(err); // освобождаем память выделенную C.CString
+    return result;
 }
 
 JNIEXPORT void JNICALL

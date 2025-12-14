@@ -77,6 +77,38 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("isOutlineEnabled", isOutlineEnabled.toString())
     }
 
+    override fun getPrefixOutline(): String {
+        return prefs.get("PrefixOutlineKey", "")
+    }
+
+    override fun setPrefixOutline(prefix: String) {
+        prefs.put("PrefixOutlineKey", prefix)
+    }
+
+    override fun getTcpPathOutline(): String {
+        return prefs.get("TcpPathOutlineKey", "")
+    }
+
+    override fun setTcpPathOutline(tcpPath: String) {
+        prefs.put("TcpPathOutlineKey", tcpPath)
+    }
+
+    override fun getIsWebsocketEnabled(): Boolean {
+        return prefs.get("isWebsocketEnabled", "false").equals("true")
+    }
+
+    override fun setIsWebsocketEnabled(enabled: Boolean) {
+        prefs.put("isWebsocketEnabled", enabled.toString())
+    }
+
+    override fun getUdpPathOutline(): String {
+        return prefs.get("UdpPathOutlineKey", "")
+    }
+
+    override fun setUdpPathOutline(udpPath: String) {
+        prefs.put("UdpPathOutlineKey", udpPath)
+    }
+
     override fun getAwgConfig(): String {
         return prefs.get("awgConfig", DEFAULT_AWG_CONFIG)
     }

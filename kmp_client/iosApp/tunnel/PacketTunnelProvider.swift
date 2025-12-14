@@ -68,8 +68,20 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
         let methodPassword = configsRepository.getMethodPasswordOutline()
         let serverPort = configsRepository.getServerPortOutline()
+        let prefix = configsRepository.getPrefixOutline()
+        let websocketEnabled = configsRepository.getIsWebsocketEnabled()
+        let tcpPath = configsRepository.getTcpPathOutline()
+        let udpPath = configsRepository.getUdpPathOutline()
         
-        let config = buildOutlineConfig(methodPassword: methodPassword, serverPort: serverPort)
+        let config = buildOutlineConfig(
+            methodPassword: methodPassword,
+            serverPort: serverPort,
+            prefix: prefix,
+            websocketEnabled: websocketEnabled,
+            tcpPath: tcpPath,
+            udpPath: udpPath
+        )
+        logs.writeLog(log: "Outline config built (prefix=\(!prefix.isEmpty), ws=\(websocketEnabled), tcpPath=\(!tcpPath.isEmpty), udpPath=\(!udpPath.isEmpty))")
 
         let remoteAddress = "254.1.1.1"
         let localAddress = "198.18.0.1"
@@ -185,9 +197,63 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    func buildOutlineConfig(methodPassword: String, serverPort: String) -> String {
+    func buildOutlineConfig(
+        methodPassword: String,
+        serverPort: String,
+        prefix: String = "",
+        websocketEnabled: Bool = false,
+        tcpPath: String = "",
+        udpPath: String = ""
+    ) -> String {
         let encoded = methodPassword.data(using: .utf8)?.base64EncodedString() ?? ""
-        return "ss://\(encoded)@\(serverPort)"
+        let baseUrl = "ss://\(encoded)@\(serverPort)"
+
+        func extractHost(_ hostPortMaybeWithQuery: String) -> String {
+            let hostPort = hostPortMaybeWithQuery.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? hostPortMaybeWithQuery
+            let trimmed = hostPort.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("[") {
+                // IPv6: [2001:db8::1]:443
+                if let start = trimmed.firstIndex(of: "["), let end = trimmed.firstIndex(of: "]"), start < end {
+                    return String(trimmed[trimmed.index(after: start)..<end])
+                }
+            }
+            if let lastColon = trimmed.lastIndex(of: ":"), trimmed.filter({ $0 == ":" }).count == 1 {
+                return String(trimmed[..<lastColon])
+            }
+            return trimmed
+        }
+
+        // Add prefix parameter if present (URL-encoded)
+        let ssUrl: String
+        if !prefix.isEmpty {
+            let separator = serverPort.contains("?") ? "&" : "?"
+            let encodedPrefix = prefix.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? prefix
+            ssUrl = "\(baseUrl)\(separator)prefix=\(encodedPrefix)"
+        } else {
+            ssUrl = baseUrl
+        }
+
+        // Wrap with WebSocket over TLS transport if enabled (wss://)
+        if websocketEnabled {
+            let effectiveHost = extractHost(serverPort).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            var wsParams: [String] = []
+            // outline-sdk v0.0.16: ws: не поддерживает опцию host= (будет "Unsupported option host")
+            // Доменные параметры задаём через TLS SNI (tls:sni=...).
+            if !tcpPath.isEmpty { wsParams.append("tcp_path=\(tcpPath)") }
+            if !udpPath.isEmpty { wsParams.append("udp_path=\(udpPath)") }
+            
+            let wsParamsStr = wsParams.joined(separator: "&")
+            // Use tls:sni|ws: for WebSocket over TLS (wss://) with SNI
+            let tlsPrefix = "tls:sni=\(effectiveHost)"
+            if !wsParamsStr.isEmpty {
+                return "\(tlsPrefix)|ws:\(wsParamsStr)|\(ssUrl)"
+            } else {
+                return "\(tlsPrefix)|ws:|\(ssUrl)"
+            }
+        } else {
+            return ssUrl
+        }
     }
 
     private func startCloak() {

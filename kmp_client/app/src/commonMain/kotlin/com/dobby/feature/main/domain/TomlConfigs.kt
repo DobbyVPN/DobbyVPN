@@ -8,7 +8,12 @@ data class ShadowsocksConfig(
     val Port: Int,
     val Method: String,
     val Password: String,
-    val Outline: Boolean? = null
+    // websocket/outline mode
+    val Mode: String,
+    val Prefix: String? = null,
+    // WebSocket transport options (only Mode="websocket")
+    val TcpPath: String? = null,
+    val UdpPath: String? = null
 )
 
 @Serializable

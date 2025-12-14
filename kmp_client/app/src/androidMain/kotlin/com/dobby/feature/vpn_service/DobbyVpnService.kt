@@ -43,10 +43,60 @@ private const val IS_FROM_UI = "isLaunchedFromUi"
 
 private fun buildOutlineUrl(
     methodPassword: String,
-    serverPort: String
+    serverPort: String,
+    prefix: String = "",
+    websocketEnabled: Boolean = false,
+    tcpPath: String = "",
+    udpPath: String = ""
 ): String {
     val encoded = Base64.getEncoder().encodeToString(methodPassword.toByteArray())
-    return "ss://$encoded@$serverPort"
+    val baseUrl = "ss://$encoded@$serverPort"
+
+    fun extractHost(hostPortMaybeWithQuery: String): String {
+        val hostPort = hostPortMaybeWithQuery.substringBefore("?").trim()
+        if (hostPort.startsWith("[")) {
+            // IPv6 in brackets: [2001:db8::1]:443
+            return hostPort.substringAfter("[").substringBefore("]")
+        }
+        // host:port (best-effort)
+        val lastColon = hostPort.lastIndexOf(':')
+        return if (lastColon > 0 && hostPort.count { it == ':' } == 1) {
+            hostPort.substring(0, lastColon)
+        } else {
+            hostPort
+        }
+    }
+
+    // Add prefix parameter if present (URL-encoded)
+    val ssUrl = if (prefix.isNotEmpty()) {
+        val separator = if (serverPort.contains("?")) "&" else "?"
+        val encodedPrefix = java.net.URLEncoder.encode(prefix, "UTF-8")
+        "$baseUrl${separator}prefix=$encodedPrefix"
+    } else {
+        baseUrl
+    }
+
+    // Wrap with WebSocket over TLS transport if enabled (wss://)
+    val result = if (websocketEnabled) {
+        val effectiveHost = extractHost(serverPort).trim()
+        val wsParams = buildList {
+            if (tcpPath.isNotEmpty()) add("tcp_path=$tcpPath")
+            if (udpPath.isNotEmpty()) add("udp_path=$udpPath")
+        }.joinToString("&")
+        
+        // Use tls:sni|ws: for WebSocket over TLS (wss://) with SNI
+        val tlsPrefix = "tls:sni=$effectiveHost"
+        if (wsParams.isNotEmpty()) {
+            "$tlsPrefix|ws:$wsParams|$ssUrl"
+        } else {
+            "$tlsPrefix|ws:|$ssUrl"
+        }
+    } else {
+        ssUrl
+    }
+    
+    android.util.Log.d("BuildOutlineUrl", "websocketEnabled=$websocketEnabled, tcpPath='$tcpPath', udpPath='$udpPath', result: $result")
+    return result
 }
 
 class DobbyVpnService : VpnService() {
@@ -134,13 +184,34 @@ class DobbyVpnService : VpnService() {
         if (shouldTurnOutlineOn || !isServiceStartedFromUi) {
             val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
             val serverPort = dobbyConfigsRepository.getServerPortOutline()
+            val prefix = dobbyConfigsRepository.getPrefixOutline()
+            val websocketEnabled = dobbyConfigsRepository.getIsWebsocketEnabled()
+            val tcpPath = dobbyConfigsRepository.getTcpPathOutline()
+            val udpPath = dobbyConfigsRepository.getUdpPathOutline()
+            logger.log("DEBUG: tcpPath='$tcpPath', udpPath='$udpPath'")
             if (methodPassword.isEmpty() || serverPort.isEmpty()) {
                 logger.log("Previously used outline apiKey is empty")
                 return
             }
             logger.log("Start connecting Outline")
-            outlineLibFacade.init(buildOutlineUrl(methodPassword, serverPort))
-            logger.log("outlineLibFacade inited")
+            val outlineUrl = buildOutlineUrl(
+                methodPassword = methodPassword,
+                serverPort = serverPort,
+                prefix = prefix,
+                websocketEnabled = websocketEnabled,
+                tcpPath = tcpPath,
+                udpPath = udpPath
+            )
+            logger.log("Outline URL built (prefix=${prefix.isNotEmpty()}, ws=$websocketEnabled, tcpPath=${tcpPath.isNotEmpty()}, udpPath=${udpPath.isNotEmpty()})")
+            logger.log("Outline URL: $outlineUrl")
+            val connected = outlineLibFacade.init(outlineUrl)
+            if (!connected) {
+                logger.log("Outline connection FAILED, stopping VPN service")
+                connectionState.tryUpdate(isConnected = false)
+                stopSelf()
+                return
+            }
+            logger.log("outlineLibFacade connected successfully")
             enableCloakIfNeeded(force = !isServiceStartedFromUi)
         } else {
             logger.log("Start disconnecting Outline")

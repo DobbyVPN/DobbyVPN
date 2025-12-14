@@ -171,13 +171,30 @@ class MainViewModel(
         if (ss != null) {
             logger.log("Detected Shadowsocks config, applying Outline parameters")
             configsRepository.setIsOutlineEnabled(true)
-            configsRepository.setMethodPasswordOutline("${ss.Method}:${ss.Password}")
-            val outlineSuffix = if (ss.Outline == true) "/?outline=1" else ""
-            configsRepository.setServerPortOutline("${ss.Server}:${ss.Port}$outlineSuffix")
+            // Trim whitespace to avoid base64 encoding issues
+            configsRepository.setMethodPasswordOutline("${ss.Method.trim()}:${ss.Password.trim()}")
+            configsRepository.setServerPortOutline("${ss.Server.trim()}:${ss.Port}")
+            configsRepository.setPrefixOutline(ss.Prefix ?: "") // Don't trim! Spaces may be intentional
+            // WebSocket transport options
+            val mode = ss.Mode.trim().lowercase()
+            val websocketEnabled = when (mode) {
+                "websocket" -> true
+                "outline" -> false
+                else -> throw IllegalArgumentException("Unsupported Shadowsocks.Mode='$mode' (allowed: outline, websocket)")
+            }
+            configsRepository.setIsWebsocketEnabled(websocketEnabled)
+            configsRepository.setTcpPathOutline(ss.TcpPath?.trim() ?: "")
+            configsRepository.setUdpPathOutline(ss.UdpPath?.trim() ?: "")
             logger.log("Outline method, password, and server: ${ss.Method}:${maskStr(ss.Password)}@${maskStr(ss.Server)}:${ss.Port}")
+            logger.log("Outline prefix: ${ss.Prefix ?: "(none)"}")
+            logger.log("Outline mode: ${ss.Mode}, websocket: $websocketEnabled, tcpPath: ${ss.TcpPath ?: "(none)"}, udpPath: ${ss.UdpPath ?: "(none)"}")
         } else {
             logger.log("Shadowsocks config didn't detected, turn off")
             configsRepository.setIsOutlineEnabled(false)
+            configsRepository.setPrefixOutline("")
+            configsRepository.setIsWebsocketEnabled(false)
+            configsRepository.setTcpPathOutline("")
+            configsRepository.setUdpPathOutline("")
         }
 
         if (root.Cloak != null) {

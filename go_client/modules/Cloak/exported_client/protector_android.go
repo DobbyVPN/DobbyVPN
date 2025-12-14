@@ -85,7 +85,7 @@ func protector(network string, address string, c syscall.RawConn) error {
 
 		socket, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 		if err != nil {
-			log.Infof(err.Error())
+			log.Infof("Socket() failed: %v", err)
 			return
 		}
 
@@ -95,7 +95,7 @@ func protector(network string, address string, c syscall.RawConn) error {
 
 		err = syscall.Connect(socket, &syscall.SockaddrUnix{Name: path})
 		if err != nil {
-			log.Infof(err.Error())
+			log.Infof("Connect() failed: %v", err)
 			return
 		}
 
@@ -104,11 +104,11 @@ func protector(network string, address string, c syscall.RawConn) error {
 		dummy := []byte{1}
 		n, err := syscall.Read(socket, dummy)
 		if err != nil {
-			log.Infof(err.Error())
+			log.Infof("Read() failed: %v", err)
 			return
 		}
 		if n != 1 {
-			log.Infof("Failed to protect fd: ", fd)
+			log.Infof("Failed to protect fd: %d", fd)
 			return
 		}
 	}

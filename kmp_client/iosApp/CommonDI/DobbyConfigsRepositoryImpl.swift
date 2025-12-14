@@ -13,6 +13,10 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let isOutlineEnabledKey = "isOutlineEnabledKey"
     private let connectionURLKey = "connectionURLKey"
     private let connectionConfigKey = "connectionConfigKey"
+    private let PrefixOutlineKey = "PrefixOutlineKey"
+    private let TcpPathOutlineKey = "TcpPathOutlineKey"
+    private let isWebsocketEnabledKey = "isWebsocketEnabledKey"
+    private let UdpPathOutlineKey = "UdpPathOutlineKey"
 
     public func getConnectionURL() -> String {
         return userDefaults.string(forKey: connectionURLKey) ?? ""
@@ -69,6 +73,38 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     
     public func setIsOutlineEnabled(isOutlineEnabled: Bool) {
         userDefaults.set(isOutlineEnabled, forKey: isOutlineEnabledKey)
+    }
+
+    public func getPrefixOutline() -> String {
+        return userDefaults.string(forKey: PrefixOutlineKey) ?? ""
+    }
+
+    public func setPrefixOutline(prefix: String) {
+        userDefaults.set(prefix, forKey: PrefixOutlineKey)
+    }
+
+    public func getTcpPathOutline() -> String {
+        return userDefaults.string(forKey: TcpPathOutlineKey) ?? ""
+    }
+
+    public func setTcpPathOutline(tcpPath: String) {
+        userDefaults.set(tcpPath, forKey: TcpPathOutlineKey)
+    }
+
+    public func getIsWebsocketEnabled() -> Bool {
+        return userDefaults.bool(forKey: isWebsocketEnabledKey)
+    }
+
+    public func setIsWebsocketEnabled(enabled: Bool) {
+        userDefaults.set(enabled, forKey: isWebsocketEnabledKey)
+    }
+
+    public func getUdpPathOutline() -> String {
+        return userDefaults.string(forKey: UdpPathOutlineKey) ?? ""
+    }
+
+    public func setUdpPathOutline(udpPath: String) {
+        userDefaults.set(udpPath, forKey: UdpPathOutlineKey)
     }
     
     public func getAwgConfig() -> String {

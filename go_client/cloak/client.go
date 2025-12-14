@@ -19,6 +19,14 @@ var (
 
 func StartCloakClient(localHost, localPort, config string, udp bool) {
 	log.Infof("StartCloakClient inner")
+	
+	// Перехватываем panic на верхнем уровне
+	defer func() {
+		if r := recover(); r != nil {
+			log.Infof("StartCloakClient: recovered from panic: %v", r)
+		}
+	}()
+	
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -73,6 +81,14 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 
 func StopCloakClient() {
 	log.Infof("StopCloakClient inner")
+	
+	// Перехватываем panic
+	defer func() {
+		if r := recover(); r != nil {
+			log.Infof("StopCloakClient: recovered from panic: %v", r)
+		}
+	}()
+	
 	defer common.Client.MarkInactive(Name)
 	mu.Lock()
 	defer mu.Unlock()

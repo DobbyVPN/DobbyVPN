@@ -88,9 +88,20 @@ class OutlineGo {
         @Throws(IllegalStateException::class)
         external fun read(out: ByteArray, maxLen: Int): Int
 
+        /**
+         * Подключается к Outline серверу
+         * @return 0 при успехе, -1 при ошибке (используйте getLastError() для получения деталей)
+         */
         @JvmStatic
         @Throws(IllegalStateException::class)
-        external fun connect(): Unit
+        external fun connect(): Int
+
+        /**
+         * Возвращает последнюю ошибку из Go кода
+         * @return строка с ошибкой или null если ошибок нет
+         */
+        @JvmStatic
+        external fun getLastError(): String?
 
         @JvmStatic
         @Throws(IllegalStateException::class)
@@ -157,10 +168,14 @@ class OutlineGo {
         suspend fun safeConnect(): Int = withContext(Dispatchers.IO) {
             try {
                 ensureLibrariesLoaded()
-                connect()
-                1
+                val result = connect()
+                if (result != 0) {
+                    val error = getLastError()
+                    Log.e(TAG, "Connect failed: $error")
+                }
+                result
             } catch (e: Exception) {
-                Log.e(TAG, "Read failed", e)
+                Log.e(TAG, "Connect failed with exception", e)
                 -1
             }
         }

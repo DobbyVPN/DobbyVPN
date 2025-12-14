@@ -5,6 +5,7 @@ package exported_client
 
 import (
 	"encoding/binary"
+	"fmt"
 	"github.com/cbeuw/Cloak/internal/client"
 	"github.com/cbeuw/Cloak/internal/common"
 	mux "github.com/cbeuw/Cloak/internal/multiplex"
@@ -30,7 +31,15 @@ func NewCkClient(config Config) *CkClient {
 	return &CkClient{config: client.RawConfig(config)}
 }
 
-func (c *CkClient) Connect() error {
+func (c *CkClient) Connect() (returnErr error) {
+	// Перехватываем panic в ProcessRawConfig (например, при websocket=false)
+	defer func() {
+		if r := recover(); r != nil {
+			log.Infof("ck-client Connect: recovered from panic: %v", r)
+			returnErr = fmt.Errorf("panic in Connect: %v", r)
+		}
+	}()
+	
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -39,6 +48,7 @@ func (c *CkClient) Connect() error {
 
 	localConfig, remoteConfig, authInfo, err := c.config.ProcessRawConfig(common.RealWorldState)
 	if err != nil {
+		c.connected = false
 		return err
 	}
 
