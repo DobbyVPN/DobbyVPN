@@ -12,7 +12,6 @@ import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.main.domain.ShadowsocksConfig
 import com.dobby.feature.main.domain.TomlConfigs
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.main.ui.MainUiState
@@ -24,7 +23,6 @@ import kotlinx.coroutines.runBlocking
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
-import io.ktor.http.encodeURLParameter
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import net.peanuuutz.tomlkt.Toml
@@ -162,73 +160,43 @@ class MainViewModel(
         logger.log("Connection config saved to repository")
 
         try {
-            parseConfig(connectionConfig)
+            parseToml(connectionConfig)
         } catch (e: Exception) {
-            val errorMsg = "Error during parsing config: ${e.message}"
+            val errorMsg = "Error during parsing TOML: ${e.message}"
             logger.log(errorMsg)
             throw RuntimeException(errorMsg)
         }
     }
 
-    private fun parseConfig(connectionConfig: String) {
-        logger.log("Start parseConfig()")
+    private fun parseToml(connectionConfig: String) {
+        logger.log("Start parseToml()")
 
         if (connectionConfig.isBlank()) {
-            logger.log("Connection config is blank, skipping")
+            logger.log("Connection config is blank, skipping parseToml()")
             return
         }
 
-        // Определяем тип конфига: URI или TOML
-        val trimmed = connectionConfig.trim()
-        if (isTransportUri(trimmed)) {
-            // Это URI — сохраняем напрямую
-            logger.log("Detected transport URI, saving directly")
-            configsRepository.setOutlineTransportConfig(trimmed)
-            configsRepository.setIsOutlineEnabled(true)
-            configsRepository.setIsCloakEnabled(false) // URI не содержит Cloak
-            logger.log("Transport config saved: $trimmed")
-            return
-        }
-
-        // Это TOML — парсим как раньше
-        logger.log("Detected TOML config, parsing...")
-        parseTomlConfig(trimmed)
-    }
-
-    /**
-     * Проверяет, является ли строка transport URI.
-     * Поддерживаемые форматы:
-     * - ss://... (Shadowsocks)
-     * - ws:... (WebSocket)
-     * - tls:... (TLS)
-     * - Комбинации: tls:...|ws:...|ss://...
-     */
-    private fun isTransportUri(config: String): Boolean {
-        return config.startsWith("ss://") ||
-               config.startsWith("ws:") ||
-               config.startsWith("tls:") ||
-               config.contains("|ss://")
-    }
-
-    private fun parseTomlConfig(connectionConfig: String) {
         val root = Toml.decodeFromString<TomlConfigs>(connectionConfig)
         val ss = root.Shadowsocks?.Direct ?: root.Shadowsocks?.Local
 
         if (ss != null) {
             logger.log("Detected Shadowsocks config, applying Outline parameters")
             configsRepository.setIsOutlineEnabled(true)
+            val prefix = ss.Prefix?.trim().orEmpty()
+            configsRepository.setPrefixOutline(prefix)
+            val dataPrefix = ss.DataPrefix?.trim().orEmpty()
+            configsRepository.setDataPrefixOutline(dataPrefix)
             
             // Сохраняем в старом формате для совместимости
             configsRepository.setMethodPasswordOutline("${ss.Method}:${ss.Password}")
-            val outlineSuffix = buildShadowsocksQuerySuffix(ss)
+            val outlineSuffix = if (ss.Outline == true) "/?outline=1" else ""
             configsRepository.setServerPortOutline("${ss.Server}:${ss.Port}$outlineSuffix")
             
-            // Очищаем transport config чтобы использовался TOML
-            configsRepository.setOutlineTransportConfig("")
         } else {
-            logger.log("Shadowsocks config not detected, disabling Outline")
+            logger.log("Shadowsocks config didn't detected, turn off")
             configsRepository.setIsOutlineEnabled(false)
-            configsRepository.setOutlineTransportConfig("")
+            configsRepository.setPrefixOutline("")
+            configsRepository.setDataPrefixOutline("")
         }
 
         if (root.Cloak != null) {
@@ -238,11 +206,11 @@ class MainViewModel(
             configsRepository.setCloakConfig(cloakJson)
             logger.log("Cloak config saved successfully (length=${cloakJson.length})")
         } else {
-            logger.log("Cloak config not detected, disabling Cloak")
+            logger.log("Cloak config didn't detected, turn off")
             configsRepository.setIsCloakEnabled(false)
         }
 
-        logger.log("Finish parseTomlConfig()")
+        logger.log("Finish parseToml()")
     }
 
     private fun getConfigByURL(connectionUrl: String): String {
@@ -322,15 +290,4 @@ class MainViewModel(
     }
     //endregion
 
-    private fun buildShadowsocksQuerySuffix(ss: ShadowsocksConfig): String {
-        val queryParams = mutableListOf<String>()
-        if (ss.Outline == true) {
-            queryParams += "outline=1"
-        }
-        ss.Prefix
-            ?.takeIf { it.isNotBlank() }
-            ?.let { prefix -> queryParams += "prefix=${prefix.encodeURLParameter()}" }
-
-        return if (queryParams.isEmpty()) "" else "/?${queryParams.joinToString("&")}"
-    }
 }

@@ -43,10 +43,25 @@ private const val IS_FROM_UI = "isLaunchedFromUi"
 
 private fun buildOutlineUrl(
     methodPassword: String,
-    serverPort: String
+    serverPort: String,
+    prefix: String,
+    dataPrefix: String
 ): String {
     val encoded = Base64.getEncoder().encodeToString(methodPassword.toByteArray())
-    return "ss://$encoded@$serverPort"
+    
+    // Build ss:// URL with optional data prefix as query parameter
+    // Use & if serverPort already contains query params (e.g. ?outline=1)
+    val dataPrefixParam = if (dataPrefix.isNotEmpty()) {
+        val encodedDataPrefix = java.net.URLEncoder.encode(dataPrefix, "UTF-8")
+        val separator = if (serverPort.contains("?")) "&" else "?"
+        "${separator}prefix=$encodedDataPrefix"
+    } else ""
+    
+    val ssUrl = "ss://$encoded@$serverPort$dataPrefixParam"
+    
+    // Wrap with transport prefix if provided
+    val cleanedPrefix = prefix.trim().trim('|')
+    return if (cleanedPrefix.isEmpty()) ssUrl else "$cleanedPrefix|$ssUrl"
 }
 
 class DobbyVpnService : VpnService() {
@@ -132,25 +147,16 @@ class DobbyVpnService : VpnService() {
         val isServiceStartedFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) ?: false
         val shouldTurnOutlineOn = dobbyConfigsRepository.getIsOutlineEnabled()
         if (shouldTurnOutlineOn || !isServiceStartedFromUi) {
-            // First, check for transport URI config (e.g., ss://..., tls:...|ws:...|ss://...)
-            val transportConfig = dobbyConfigsRepository.getOutlineTransportConfig()
-            if (transportConfig.isNotEmpty()) {
-                logger.log("Start connecting Outline with transport config")
-                outlineLibFacade.init(transportConfig)
-                logger.log("outlineLibFacade inited with transport config")
-                enableCloakIfNeeded(force = !isServiceStartedFromUi)
-                return
-            }
-
-            // Fallback to legacy method/password config
             val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
             val serverPort = dobbyConfigsRepository.getServerPortOutline()
+            val prefix = dobbyConfigsRepository.getPrefixOutline()
+            val dataPrefix = dobbyConfigsRepository.getDataPrefixOutline()
             if (methodPassword.isEmpty() || serverPort.isEmpty()) {
                 logger.log("Previously used outline apiKey is empty")
                 return
             }
             logger.log("Start connecting Outline")
-            outlineLibFacade.init(buildOutlineUrl(methodPassword, serverPort))
+            outlineLibFacade.init(buildOutlineUrl(methodPassword, serverPort, prefix, dataPrefix))
             logger.log("outlineLibFacade inited")
             enableCloakIfNeeded(force = !isServiceStartedFromUi)
         } else {

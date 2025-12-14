@@ -9,7 +9,8 @@ data class ShadowsocksConfig(
     val Method: String,
     val Password: String,
     val Outline: Boolean? = null,
-    val Prefix: String? = null
+    val Prefix: String? = null,       // Transport wrapper, e.g. "ws:tcp_path=/path"
+    val DataPrefix: String? = null    // Shadowsocks data prefix, e.g. "PUT /path HTTP/1.1\r\n"
 )
 
 @Serializable

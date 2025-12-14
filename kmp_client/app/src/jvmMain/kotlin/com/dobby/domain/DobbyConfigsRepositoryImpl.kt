@@ -61,6 +61,10 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("MethodPasswordOutlineKey", newConfig)
     }
 
+    override fun setPrefixOutline(newPrefix: String) {
+        prefs.put("PrefixOutlineKey", newPrefix)
+    }
+
     override fun getServerPortOutline(): String {
         return prefs.get("ServerPortOutlineKey", "")
     }
@@ -69,20 +73,24 @@ internal class DobbyConfigsRepositoryImpl(
         return prefs.get("MethodPasswordOutlineKey", "")
     }
 
+    override fun getPrefixOutline(): String {
+        return prefs.get("PrefixOutlineKey", "")
+    }
+
+    override fun setDataPrefixOutline(newDataPrefix: String) {
+        prefs.put("DataPrefixOutlineKey", newDataPrefix)
+    }
+
+    override fun getDataPrefixOutline(): String {
+        return prefs.get("DataPrefixOutlineKey", "")
+    }
+
     override fun getIsOutlineEnabled(): Boolean {
         return prefs.get("isOutlineEnabled", "false").equals("true")
     }
 
     override fun setIsOutlineEnabled(isOutlineEnabled: Boolean) {
         prefs.put("isOutlineEnabled", isOutlineEnabled.toString())
-    }
-
-    override fun getOutlineTransportConfig(): String {
-        return prefs.get("OutlineTransportConfigKey", "")
-    }
-
-    override fun setOutlineTransportConfig(config: String) {
-        prefs.put("OutlineTransportConfigKey", config)
     }
 
     override fun getAwgConfig(): String {

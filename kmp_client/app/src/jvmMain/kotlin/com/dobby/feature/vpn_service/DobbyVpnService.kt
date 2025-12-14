@@ -10,10 +10,25 @@ import java.util.Base64
 
 private fun buildOutlineUrl(
     methodPassword: String,
-    serverPort: String
+    serverPort: String,
+    prefix: String,
+    dataPrefix: String
 ): String {
     val encoded = Base64.getEncoder().encodeToString(methodPassword.toByteArray())
-    return "ss://$encoded@$serverPort"
+    
+    // Build ss:// URL with optional data prefix as query parameter
+    // Use & if serverPort already contains query params (e.g. ?outline=1)
+    val dataPrefixParam = if (dataPrefix.isNotEmpty()) {
+        val encodedDataPrefix = java.net.URLEncoder.encode(dataPrefix, "UTF-8")
+        val separator = if (serverPort.contains("?")) "&" else "?"
+        "${separator}prefix=$encodedDataPrefix"
+    } else ""
+    
+    val ssUrl = "ss://$encoded@$serverPort$dataPrefixParam"
+    
+    // Wrap with transport prefix if provided
+    val cleanedPrefix = prefix.trim().trim('|')
+    return if (cleanedPrefix.isEmpty()) ssUrl else "$cleanedPrefix|$ssUrl"
 }
 
 internal class DobbyVpnService(
@@ -40,6 +55,10 @@ internal class DobbyVpnService(
 
     private fun startCloakOutline() {
         logger.log("Start startCloakOutline")
+        val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
+        val serverPort = dobbyConfigsRepository.getServerPortOutline()
+        val prefix = dobbyConfigsRepository.getPrefixOutline()
+        val dataPrefix = dobbyConfigsRepository.getDataPrefixOutline()
         val localHost = "127.0.0.1"
         val localPort = "1984"
         runBlocking {
@@ -48,19 +67,7 @@ internal class DobbyVpnService(
             if (dobbyConfigsRepository.getIsCloakEnabled()) {
                 vpnLibrary.startCloak(localHost, localPort, dobbyConfigsRepository.getCloakConfig(), false)
             }
-
-            // First, check for transport URI config (e.g., ss://..., tls:...|ws:...|ss://...)
-            val transportConfig = dobbyConfigsRepository.getOutlineTransportConfig()
-            if (transportConfig.isNotEmpty()) {
-                logger.log("Starting Outline with transport config")
-                vpnLibrary.startOutline(transportConfig)
-                return@runBlocking
-            }
-
-            // Fallback to legacy method/password config
-            val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
-            val serverPort = dobbyConfigsRepository.getServerPortOutline()
-            vpnLibrary.startOutline(buildOutlineUrl(methodPassword, serverPort))
+            vpnLibrary.startOutline(buildOutlineUrl(methodPassword, serverPort, prefix, dataPrefix))
         }
     }
 

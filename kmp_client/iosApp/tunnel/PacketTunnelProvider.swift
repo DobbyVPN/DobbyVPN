@@ -66,19 +66,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
-        
-        // First, check for transport URI config (e.g., ss://..., tls:...|ws:...|ss://...)
-        let transportConfig = configsRepository.getOutlineTransportConfig()
-        let config: String
-        if !transportConfig.isEmpty {
-            logs.writeLog(log: "Using transport config")
-            config = transportConfig
-        } else {
-            // Fallback to legacy method/password config
-            let methodPassword = configsRepository.getMethodPasswordOutline()
-            let serverPort = configsRepository.getServerPortOutline()
-            config = buildOutlineConfig(methodPassword: methodPassword, serverPort: serverPort)
-        }
+        let methodPassword = configsRepository.getMethodPasswordOutline()
+        let serverPort = configsRepository.getServerPortOutline()
+        let prefix = configsRepository.getPrefixOutline()
+        let dataPrefix = configsRepository.getDataPrefixOutline()
+
+        let config = buildOutlineConfig(methodPassword: methodPassword, serverPort: serverPort, prefix: prefix, dataPrefix: dataPrefix)
 
         let remoteAddress = "254.1.1.1"
         let localAddress = "198.18.0.1"
@@ -194,9 +187,25 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    func buildOutlineConfig(methodPassword: String, serverPort: String) -> String {
+    func buildOutlineConfig(methodPassword: String, serverPort: String, prefix: String, dataPrefix: String) -> String {
         let encoded = methodPassword.data(using: .utf8)?.base64EncodedString() ?? ""
-        return "ss://\(encoded)@\(serverPort)"
+        
+        // Build ss:// URL with optional data prefix as query parameter
+        // Use & if serverPort already contains query params (e.g. ?outline=1)
+        let dataPrefixParam: String
+        if !dataPrefix.isEmpty {
+            let encodedDataPrefix = dataPrefix.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+            let separator = serverPort.contains("?") ? "&" : "?"
+            dataPrefixParam = "\(separator)prefix=\(encodedDataPrefix)"
+        } else {
+            dataPrefixParam = ""
+        }
+        
+        let ssUrl = "ss://\(encoded)@\(serverPort)\(dataPrefixParam)"
+        
+        // Wrap with transport prefix if provided
+        let cleanedPrefix = prefix.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "|"))
+        return cleanedPrefix.isEmpty ? ssUrl : "\(cleanedPrefix)|\(ssUrl)"
     }
 
     private func startCloak() {

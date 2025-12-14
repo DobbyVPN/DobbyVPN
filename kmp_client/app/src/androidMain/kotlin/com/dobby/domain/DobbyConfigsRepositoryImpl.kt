@@ -83,6 +83,12 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun setPrefixOutline(newPrefix: String) {
+        prefs.edit().putString("PrefixOutlineKey", newPrefix).apply().also {
+            AndroidLog("DOBBY_TAG", "setPrefixOutline, size = ${newPrefix.length}")
+        }
+    }
+
     override fun getServerPortOutline(): String {
         return (prefs.getString("ServerPortOutlineKey", "") ?: "").also {
             AndroidLog("DOBBY_TAG", "getServerPortOutline, size = ${it.length}")
@@ -95,6 +101,24 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun getPrefixOutline(): String {
+        return (prefs.getString("PrefixOutlineKey", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getPrefixOutline, size = ${it.length}")
+        }
+    }
+
+    override fun setDataPrefixOutline(newDataPrefix: String) {
+        prefs.edit().putString("DataPrefixOutlineKey", newDataPrefix).apply().also {
+            AndroidLog("DOBBY_TAG", "setDataPrefixOutline, size = ${newDataPrefix.length}")
+        }
+    }
+
+    override fun getDataPrefixOutline(): String {
+        return (prefs.getString("DataPrefixOutlineKey", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getDataPrefixOutline, size = ${it.length}")
+        }
+    }
+
     override fun getIsOutlineEnabled(): Boolean {
         return prefs.getBoolean("isOutlineEnabled", false).also {
             AndroidLog("DOBBY_TAG", "getIsOutlineEnabled = $it")
@@ -104,18 +128,6 @@ internal class DobbyConfigsRepositoryImpl(
     override fun setIsOutlineEnabled(isOutlineEnabled: Boolean) {
         prefs.edit().putBoolean("isOutlineEnabled", isOutlineEnabled).apply().also {
             AndroidLog("DOBBY_TAG", "setIsOutlineEnabled = $isOutlineEnabled")
-        }
-    }
-
-    override fun getOutlineTransportConfig(): String {
-        return (prefs.getString("OutlineTransportConfigKey", "") ?: "").also {
-            AndroidLog("DOBBY_TAG", "getOutlineTransportConfig, size = ${it.length}")
-        }
-    }
-
-    override fun setOutlineTransportConfig(config: String) {
-        prefs.edit().putString("OutlineTransportConfigKey", config).apply().also {
-            AndroidLog("DOBBY_TAG", "setOutlineTransportConfig, size = ${config.length}")
         }
     }
 

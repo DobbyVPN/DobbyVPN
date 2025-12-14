@@ -10,10 +10,11 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let isCloakEnabledKey = "isCloakEnabledKey"
     private let MethodPasswordOutlineKey = "MethodPasswordOutlineKey"
     private let ServerPortOutlineKey = "ServerPortOutlineKey"
+    private let PrefixOutlineKey = "PrefixOutlineKey"
+    private let DataPrefixOutlineKey = "DataPrefixOutlineKey"
     private let isOutlineEnabledKey = "isOutlineEnabledKey"
     private let connectionURLKey = "connectionURLKey"
     private let connectionConfigKey = "connectionConfigKey"
-    private let outlineTransportConfigKey = "OutlineTransportConfigKey"
 
     public func getConnectionURL() -> String {
         return userDefaults.string(forKey: connectionURLKey) ?? ""
@@ -54,6 +55,22 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     public func setServerPortOutline(newConfig: String) {
         userDefaults.set(newConfig, forKey: ServerPortOutlineKey)
     }
+
+    public func getPrefixOutline() -> String {
+        return userDefaults.string(forKey: PrefixOutlineKey) ?? ""
+    }
+
+    public func setPrefixOutline(newPrefix: String) {
+        userDefaults.set(newPrefix, forKey: PrefixOutlineKey)
+    }
+
+    public func getDataPrefixOutline() -> String {
+        return userDefaults.string(forKey: DataPrefixOutlineKey) ?? ""
+    }
+
+    public func setDataPrefixOutline(newDataPrefix: String) {
+        userDefaults.set(newDataPrefix, forKey: DataPrefixOutlineKey)
+    }
     
     public func getMethodPasswordOutline() -> String {
         return userDefaults.string(forKey: MethodPasswordOutlineKey) ?? ""
@@ -70,14 +87,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     
     public func setIsOutlineEnabled(isOutlineEnabled: Bool) {
         userDefaults.set(isOutlineEnabled, forKey: isOutlineEnabledKey)
-    }
-
-    public func getOutlineTransportConfig() -> String {
-        return userDefaults.string(forKey: outlineTransportConfigKey) ?? ""
-    }
-
-    public func setOutlineTransportConfig(config: String) {
-        userDefaults.set(config, forKey: outlineTransportConfigKey)
     }
     
     public func getAwgConfig() -> String {

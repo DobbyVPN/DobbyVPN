@@ -22,17 +22,11 @@ type outlinePacketProxy struct {
 func newOutlinePacketProxy(transportConfig string) (opp *outlinePacketProxy, err error) {
 	opp = &outlinePacketProxy{}
 
-	log.Infof("outline client: creating DNS truncate packet proxy (fallback)...")
-	if opp.fallback, err = dnstruncate.NewPacketProxy(); err != nil {
-		return nil, fmt.Errorf("failed to create DNS truncate packet proxy: %w", err)
-	}
-
-	log.Infof("outline client: creating UDP packet listener...")
 	if opp.remotePl, err = configProviders.NewPacketListener(context.Background(), transportConfig); err != nil {
 		// UDP not supported (e.g., WebSocket without udp_path), use DNS truncate mode
 		log.Infof("UDP packet listener not available (%v), using DNS truncate mode", err)
-		if opp.DelegatePacketProxy, err = network.NewDelegatePacketProxy(opp.fallback); err != nil {
-			return nil, fmt.Errorf("failed to create delegate UDP proxy: %w", err)
+		if opp.remotePl, err = configProviders.NewPacketListener(context.Background(), transportConfig); err != nil {
+			return nil, fmt.Errorf("failed to create UDP packet listener: %w", err)
 		}
 		return opp, nil
 	}
@@ -51,11 +45,6 @@ func newOutlinePacketProxy(transportConfig string) (opp *outlinePacketProxy, err
 }
 
 func (proxy *outlinePacketProxy) testConnectivityAndRefresh(resolverAddr, domain string) error {
-	// If UDP is not available, we're already in DNS truncate mode
-	if proxy.remotePl == nil {
-		log.Infof("UDP not available, staying in DNS truncate mode")
-		return nil
-	}
 
 	dialer := transport.PacketListenerDialer{Listener: proxy.remotePl}
 	dnsResolver := dns.NewUDPResolver(dialer, resolverAddr)

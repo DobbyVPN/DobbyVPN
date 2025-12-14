@@ -33,17 +33,21 @@ interface DobbyConfigsRepository {
 
     fun setMethodPasswordOutline(newConfig: String)
 
+    fun setPrefixOutline(newPrefix: String)
+
     fun getServerPortOutline() : String
 
     fun getMethodPasswordOutline() : String
 
+    fun getPrefixOutline(): String
+
+    fun setDataPrefixOutline(newDataPrefix: String)
+
+    fun getDataPrefixOutline(): String
+
     fun getIsOutlineEnabled(): Boolean
 
     fun setIsOutlineEnabled(isOutlineEnabled: Boolean)
-
-    fun getOutlineTransportConfig(): String
-
-    fun setOutlineTransportConfig(config: String)
     // endregion
 
     // region amnezia
