@@ -1,5 +1,6 @@
 package com.dobby.feature.vpn_service
 
+import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
@@ -61,6 +62,7 @@ internal class DobbyVpnService(
         val dataPrefix = dobbyConfigsRepository.getDataPrefixOutline()
         val localHost = "127.0.0.1"
         val localPort = "1984"
+        logger.log("startCloakOutline with key: methodPassword = ${maskStr(methodPassword)} serverPort = ${maskStr(serverPort)}")
         runBlocking {
             connectionState.update(isConnected = true)
             logger.log("CloakIsEnable = " + dobbyConfigsRepository.getIsCloakEnabled())
