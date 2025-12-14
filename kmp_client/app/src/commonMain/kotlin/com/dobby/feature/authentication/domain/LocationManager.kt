@@ -86,8 +86,8 @@ object LocationManager {
         return false
     }
 
-    private fun closeToAirport(currentLocation: Location): Boolean =
-        AirportsList.airportsCoordinatesRU.any { airport: Coordinates ->
+    private suspend fun closeToAirport(currentLocation: Location): Boolean =
+        AirportsList.loadAirportsCoordinates().any { airport: Coordinates ->
             distance(currentLocation.coordinates, airport) <= maxDistanceToAirport(currentLocation.accuracy / 1000.0)
         }
 
