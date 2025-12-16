@@ -1,6 +1,7 @@
 package interop
 
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.logging.domain.provideLogFilePath
 import com.sun.jna.*
 import java.io.File
@@ -68,7 +69,7 @@ internal class VPNLibraryLoader(
 
     fun startOutline(key: String) {
         try {
-            logger.log("Run key: $key")
+            logger.log("Run key: ${maskStr(key)}")
             INSTANCE.StartOutline(key)
             logger.log("NewOutlineClient called successfully.")
         } catch (e: UnsatisfiedLinkError) {
@@ -122,7 +123,7 @@ internal class VPNLibraryLoader(
 
     fun startAwg(key: String) {
         try {
-            logger.log("Run key: $key")
+            logger.log("Run key: ${maskStr(key)}")
             INSTANCE.StartAwg(key)
             logger.log("NewOutlineClient called successfully.")
         } catch (e: UnsatisfiedLinkError) {

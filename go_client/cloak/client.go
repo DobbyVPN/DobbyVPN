@@ -12,9 +12,9 @@ import (
 const Name = "cloak"
 
 var (
-	client       *exported_client.CkClient
-	mu           sync.Mutex
-	RemoteHostIP string
+	client      *exported_client.CkClient
+	mu          sync.Mutex
+	cloakConfig exported_client.Config
 )
 
 func StartCloakClient(localHost, localPort, config string, udp bool) {
@@ -46,10 +46,17 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 	rawConfig.UDP = udp
 	log.Infof("cloak client: rawConfig updated with LocalHost=%s, LocalPort=%s, UDP=%v", localHost, localPort, udp)
 
+	// Forbidden words in logs
+	log.AddForbiddenWord(string(rawConfig.UID))
+	log.AddForbiddenWord(rawConfig.ServerName)
+	log.AddForbiddenWord(rawConfig.RemoteHost)
+	log.AddForbiddenWord(rawConfig.CDNWsUrlPath)
+	log.AddForbiddenWord(rawConfig.CDNOriginHost)
+
 	// Cloak routing
-	RemoteHostIP = rawConfig.RemoteHost
+	cloakConfig = rawConfig
 	common.Client.MarkInCriticalSection(Name)
-	err = StartRoutingCloak(RemoteHostIP)
+	err = StartRoutingCloak(cloakConfig.RemoteHost)
 	common.Client.MarkOutOffCriticalSection(Name)
 	if err != nil {
 		log.Infof("Can't routing cloak, %v", err)
@@ -76,12 +83,20 @@ func StopCloakClient() {
 	defer common.Client.MarkInactive(Name)
 	mu.Lock()
 	defer mu.Unlock()
+
+	// Remove forbidden words in logs
+	log.RemoveForbiddenWord(string(cloakConfig.UID))
+	log.RemoveForbiddenWord(cloakConfig.ServerName)
+	log.RemoveForbiddenWord(cloakConfig.RemoteHost)
+	log.RemoveForbiddenWord(cloakConfig.CDNWsUrlPath)
+	log.RemoveForbiddenWord(cloakConfig.CDNOriginHost)
+
 	log.Infof("Get mutex")
-	if RemoteHostIP != "" {
+	if cloakConfig.RemoteHost != "" {
 		common.Client.MarkInCriticalSection(Name)
-		StopRoutingCloak(RemoteHostIP)
+		StopRoutingCloak(cloakConfig.RemoteHost)
 		common.Client.MarkOutOffCriticalSection(Name)
-		RemoteHostIP = ""
+		cloakConfig.RemoteHost = ""
 	}
 
 	if client == nil {
