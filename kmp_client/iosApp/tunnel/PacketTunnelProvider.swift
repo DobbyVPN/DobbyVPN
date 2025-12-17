@@ -99,9 +99,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
         settings.ipv4Settings?.excludedRoutes = excludedRoutes
 
-        settings.ipv6Settings = NEIPv6Settings(addresses: [], networkPrefixLengths: [])
-        settings.ipv6Settings?.excludedRoutes = [NEIPv6Route.default()]
-
+        settings.ipv6Settings = nil
         settings.dnsSettings = NEDNSSettings(servers: dnsServers)
         settings.dnsSettings?.matchDomains = [""]
 
