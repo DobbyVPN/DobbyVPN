@@ -163,6 +163,11 @@ public class VpnManagerImpl: VpnManager {
     
     public func start() {
         self.logs.writeLog(log: "call start")
+        do {
+            HealthCheck.shared.fullCheckUp()
+        } catch {
+            logs.writeLog(log: "[startTunnel] HealthCheck error: \(error.localizedDescription)")
+        }
         self.logs.writeLog(log: "Routing table without vpn:")
         getOrCreateManager { (manager, error) in
             guard let manager = manager else {
