@@ -274,7 +274,7 @@ public class HealthCheck {
         }
     }
     
-    func httpGetBody(urlString: String, completion: @escaping (Bool, String?, String?) -> Void) {
+    public func httpGetBody(urlString: String, completion: @escaping (Bool, String?, String?) -> Void) {
         let randomQuery = "?_=\(Int.random(in: 0...100000))"
         guard let url = URL(string: urlString + randomQuery) else {
             completion(false, nil, "Invalid URL")

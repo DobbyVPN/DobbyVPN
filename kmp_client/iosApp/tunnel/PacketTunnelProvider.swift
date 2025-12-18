@@ -16,8 +16,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var configs = configsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
     
-    private var healthTimer: DispatchSourceTimer?
-    
     private var packetContinuation: AsyncStream<(Data, NSNumber)>.Continuation!
     private lazy var packetStream: AsyncStream<(Data, NSNumber)> = {
         AsyncStream<(Data, NSNumber)>(bufferingPolicy: .bufferingOldest(20)) { continuation in
@@ -26,6 +24,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }()
     
     private var memoryTimer: DispatchSourceTimer?
+    private var healthTimer: DispatchSourceTimer?
     
     func startMemoryLogging() {
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .background))
