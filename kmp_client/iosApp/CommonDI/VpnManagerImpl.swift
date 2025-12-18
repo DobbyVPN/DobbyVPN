@@ -26,6 +26,9 @@ public class VpnManagerImpl: VpnManager {
     
     public static var isUserInitiatedStop = true
     
+    private var internetFailureCount = 0
+    private let maxInternetFailures = 3
+    private var intertenConnectionTimer: DispatchSourceTimer?
     private var xpcHeartbeatTimer: DispatchSourceTimer?
     private let heartbeatInterval: TimeInterval = 10
 
@@ -192,6 +195,7 @@ public class VpnManagerImpl: VpnManager {
                         try manager.connection.startVPNTunnel()
                         self.logs.writeLog(log: "Tunnel was started! changed connection.status")
                         self.logs.writeLog(log: "Tunnel was started! manager.connection.status = \(manager.connection.status)")
+                        self.startInternetCheck()
                     } catch {
                         self.logs.writeLog(log: "Error starting VPNTunnel \(error)")
                     }
@@ -251,6 +255,56 @@ public class VpnManagerImpl: VpnManager {
         newVpnManager.isEnabled = true
         return newVpnManager
     }
+    
+    func startInternetCheck() {
+        internetFailureCount = 0
+        let timer = DispatchSource.makeTimerSource(
+            queue: DispatchQueue.global(qos: .background)
+        )
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+
+            HealthCheck.shared.httpGetBody(
+                urlString: "https://google.com/gen_204"
+            ) { success, body, errorMessage in
+
+                if success {
+                    self.internetFailureCount = 0
+                    self.logs.writeLog(
+                        log: "[InternetCheck] Internet check - OK"
+                    )
+                    return
+                }
+
+                self.internetFailureCount += 1
+                self.logs.writeLog(
+                    log: "[InternetCheck] Internet check - FAIL \(self.internetFailureCount)/\(self.maxInternetFailures). Error: \(errorMessage ?? "Unknown")"
+                )
+
+                guard self.internetFailureCount >= self.maxInternetFailures else {
+                    return
+                }
+
+                self.logs.writeLog(
+                    log: "[InternetCheck] Internet lost. Stopping VPN"
+                )
+
+                self.intertenConnectionTimer?.cancel()
+                self.intertenConnectionTimer = nil
+
+                DispatchQueue.main.async {
+                    VpnManagerImpl.isUserInitiatedStop = false
+                    self.stop()
+                }
+            }
+        }
+
+        timer.resume()
+        self.intertenConnectionTimer = timer
+    }
+
     
     
 //    static func startSentry() {
