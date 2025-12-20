@@ -94,8 +94,7 @@ kotlin {
 
             implementation("com.russhwolf:multiplatform-settings-no-arg:1.3.0")
 
-            implementation("app.softwork:kotlinx-serialization-csv:0.0.23")
-            implementation("app.softwork:kotlinx-serialization-flf:0.0.23")
+            implementation("org.jetbrains.kotlinx:kotlinx-serialization-protobuf:1.9.0")
 
             implementation(compose.components.resources)
         }
