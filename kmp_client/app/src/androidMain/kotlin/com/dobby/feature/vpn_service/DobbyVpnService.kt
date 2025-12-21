@@ -212,6 +212,9 @@ class DobbyVpnService : VpnService() {
                 return
             }
             logger.log("outlineLibFacade connected successfully")
+            if (websocketEnabled) {
+                logger.log("WebSocket transport connected successfully")
+            }
             enableCloakIfNeeded(force = !isServiceStartedFromUi)
         } else {
             logger.log("Start disconnecting Outline")
@@ -240,9 +243,14 @@ class DobbyVpnService : VpnService() {
         val shouldEnableCloak = dobbyConfigsRepository.getIsCloakEnabled() || force
         val cloakConfig = dobbyConfigsRepository.getCloakConfig().ifEmpty { return }
         if (shouldEnableCloak && cloakConfig.isNotEmpty()) {
+            val localPort = dobbyConfigsRepository.getCloakLocalPort().toString()
             serviceScope.launch {
                 logger.log("Cloak: connect start")
-                val result = cloakConnectInteractor.connect(config = cloakConfig)
+                val result = cloakConnectInteractor.connect(
+                    config = cloakConfig,
+                    localHost = "127.0.0.1",
+                    localPort = localPort
+                )
                 logger.log("Cloak connection result is $result")
             }
         } else {

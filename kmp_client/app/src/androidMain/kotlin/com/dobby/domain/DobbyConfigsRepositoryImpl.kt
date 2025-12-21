@@ -71,6 +71,18 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun getCloakLocalPort(): Int {
+        return prefs.getInt("cloakLocalPort", 1984).also {
+            AndroidLog("DOBBY_TAG", "getCloakLocalPort: $it")
+        }
+    }
+
+    override fun setCloakLocalPort(port: Int) {
+        prefs.edit().putInt("cloakLocalPort", port).apply().also {
+            AndroidLog("DOBBY_TAG", "setCloakLocalPort: $port")
+        }
+    }
+
     override fun setServerPortOutline(newConfig: String) {
         prefs.edit().putString("ServerPortOutlineKey", newConfig).apply().also {
             AndroidLog("DOBBY_TAG", "setServerPortOutline, size = ${newConfig.length}")

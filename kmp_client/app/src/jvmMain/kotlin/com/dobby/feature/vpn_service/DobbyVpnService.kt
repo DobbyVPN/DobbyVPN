@@ -93,7 +93,7 @@ internal class DobbyVpnService(
         val tcpPath = dobbyConfigsRepository.getTcpPathOutline()
         val udpPath = dobbyConfigsRepository.getUdpPathOutline()
         val localHost = "127.0.0.1"
-        val localPort = "1984"
+        val localPort = dobbyConfigsRepository.getCloakLocalPort().toString()
         logger.log("startCloakOutline with key: methodPassword = ${maskStr(methodPassword)} serverPort = ${maskStr(serverPort)}")
         logger.log("Outline prefix: ${prefix.ifEmpty { "(none)" }}")
         logger.log("Outline websocket: $websocketEnabled, tcpPath: ${tcpPath.ifEmpty { "(none)" }}, udpPath: ${udpPath.ifEmpty { "(none)" }}")
@@ -112,6 +112,9 @@ internal class DobbyVpnService(
                 udpPath = udpPath
             )
             logger.log("Outline URL built (prefix=${prefix.isNotEmpty()}, ws=$websocketEnabled, tcpPath=${tcpPath.isNotEmpty()}, udpPath=${udpPath.isNotEmpty()})")
+            if (websocketEnabled) {
+                logger.log("WebSocket transport requested (will connect if server supports it)")
+            }
             vpnLibrary.startOutline(outlineUrl)
         }
     }

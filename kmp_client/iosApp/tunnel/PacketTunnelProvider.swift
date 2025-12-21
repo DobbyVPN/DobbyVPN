@@ -82,6 +82,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             udpPath: udpPath
         )
         logs.writeLog(log: "Outline config built (prefix=\(!prefix.isEmpty), ws=\(websocketEnabled), tcpPath=\(!tcpPath.isEmpty), udpPath=\(!udpPath.isEmpty))")
+        if websocketEnabled {
+            logs.writeLog(log: "WebSocket transport requested (wss)")
+        }
 
         let remoteAddress = "254.1.1.1"
         let localAddress = "198.18.0.1"
@@ -257,14 +260,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func startCloak() {
-        let localHost = "127.0.0.1"
-        let localPort = "1984"
+        let localPort = String(configsRepository.getCloakLocalPort())
         logs.writeLog(log: "startCloakOutline: entering")
         
         if configsRepository.getIsCloakEnabled() {
             do {
                 logs.writeLog(log: "startCloakOutline: starting cloak")
-                Cloak_outlineStartCloakClient(localHost, localPort, configsRepository.getCloakConfig(), false)
+                Cloak_outlineStartCloakClient("127.0.0.1", localPort, configsRepository.getCloakConfig(), false)
                 logs.writeLog(log: "startCloakOutline: started")
             } catch {
                 logs.writeLog(log: "startCloakOutline error: \(error)")

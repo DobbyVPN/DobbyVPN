@@ -148,13 +148,17 @@ class MainViewModel(
         configsRepository.setConnectionConfig(connectionConfig)
         logger.log("Connection config saved to repository")
 
-        try {
-            parseToml(connectionConfig)
-        } catch (e: Exception) {
-            val errorMsg = "Error during parsing TOML: ${e.message}"
-            logger.log(errorMsg)
-            throw RuntimeException(errorMsg)
-        }
+        runCatching { parseToml(connectionConfig) }
+            .onFailure { e ->
+                logger.log("Error during parsing TOML (ignored): ${e.message}")
+                configsRepository.setIsOutlineEnabled(false)
+                configsRepository.setIsCloakEnabled(false)
+                configsRepository.setCloakConfig("")
+                configsRepository.setPrefixOutline("")
+                configsRepository.setIsWebsocketEnabled(false)
+                configsRepository.setTcpPathOutline("")
+                configsRepository.setUdpPathOutline("")
+            }
     }
 
     private fun parseToml(connectionConfig: String) {
@@ -166,52 +170,134 @@ class MainViewModel(
         }
 
         val root = Toml.decodeFromString<TomlConfigs>(connectionConfig)
-        val ss = root.Shadowsocks?.Direct ?: root.Shadowsocks?.Local
 
-        if (ss != null) {
-            logger.log("Detected Shadowsocks config, applying Outline parameters")
+        val outline = root.Outline
+
+        if (outline != null) {
+            logger.log("Detected [Outline] config, applying Outline parameters")
+
             configsRepository.setIsOutlineEnabled(true)
-            // Trim whitespace to avoid base64 encoding issues
-            configsRepository.setMethodPasswordOutline("${ss.Method.trim()}:${ss.Password.trim()}")
-            configsRepository.setServerPortOutline("${ss.Server.trim()}:${ss.Port}")
-            configsRepository.setPrefixOutline(ss.Prefix ?: "") // Don't trim! Spaces may be intentional
-            // WebSocket transport options
-            val mode = ss.Mode.trim().lowercase()
-            val websocketEnabled = when (mode) {
-                "websocket" -> true
-                "outline" -> false
-                else -> throw IllegalArgumentException("Unsupported Shadowsocks.Mode='$mode' (allowed: outline, websocket)")
+            val method = outline.Method.trim()
+            val password = outline.Password.trim()
+            val cloakEnabled = outline.Cloak == true
+            if (method.isEmpty() || password.isEmpty()) {
+                logger.log("Invalid [Outline]: Method/Password are required. Disabling Outline/Cloak.")
+                configsRepository.setIsOutlineEnabled(false)
+                configsRepository.setIsCloakEnabled(false)
+                configsRepository.setCloakConfig("")
+                return
             }
+
+            configsRepository.setMethodPasswordOutline("$method:$password")
+
+            if (cloakEnabled) {
+                // When Cloak is enabled, Outline must connect to local Cloak endpoint.
+                val localPort = if (outline.LocalPort in 1..65535) outline.LocalPort else 1984
+                if (outline.LocalPort !in 1..65535) {
+                    logger.log("Invalid Outline.LocalPort=${outline.LocalPort}; using default 1984")
+                }
+
+                configsRepository.setCloakLocalPort(localPort)
+
+                // Ignore Outline.Server/Port when Cloak is enabled.
+                configsRepository.setServerPortOutline("127.0.0.1:$localPort")
+                logger.log("Cloak enabled: Outline will connect to local endpoint 127.0.0.1:$localPort (ignoring Outline.Server/Port)")
+            } else {
+                val server = outline.Server?.trim().orEmpty()
+                val port = outline.Port
+                if (port == null) {
+                    logger.log("Invalid [Outline]: Port is required Disabling Outline.")
+                    configsRepository.setIsOutlineEnabled(false)
+                    return
+                }
+                if (server.isEmpty()) {
+                    logger.log("Invalid [Outline]: Server is required. Disabling Outline.")
+                    configsRepository.setIsOutlineEnabled(false)
+                    return
+                }
+                configsRepository.setServerPortOutline("${server}:${port}")
+            }
+
+
+            val websocketEnabled = outline.Websocket == true
             configsRepository.setIsWebsocketEnabled(websocketEnabled)
-            configsRepository.setTcpPathOutline(ss.TcpPath?.trim() ?: "")
-            configsRepository.setUdpPathOutline(ss.UdpPath?.trim() ?: "")
-            logger.log("Outline method, password, and server: ${ss.Method}:${maskStr(ss.Password)}@${maskStr(ss.Server)}:${ss.Port}")
-            logger.log("Outline prefix: ${ss.Prefix ?: "(none)"}")
-            logger.log("Outline mode: ${ss.Mode}, websocket: $websocketEnabled, tcpPath: ${ss.TcpPath ?: "(none)"}, udpPath: ${ss.UdpPath ?: "(none)"}")
+            configsRepository.setPrefixOutline(outline.Prefix ?: "") // Don't trim! Spaces may be intentional
+            configsRepository.setTcpPathOutline(outline.TcpPath?.trim() ?: "")
+            configsRepository.setUdpPathOutline(outline.UdpPath?.trim() ?: "")
+
+            logger.log("Outline prefix: ${outline.Prefix ?: "(none)"}")
+            logger.log("Outline websocket: $websocketEnabled, tcpPath: ${outline.TcpPath ?: "(none)"}, udpPath: ${outline.UdpPath ?: "(none)"}")
+
+            logger.log("Outline method, password, and server: ${method}:${maskStr(password)}@${maskStr(configsRepository.getServerPortOutline())}")
+            
+            if (cloakEnabled) {
+                logger.log("Cloak enabled inside [Outline], building Cloak config")
+
+                val transport = outline.Transport?.trim().orEmpty()
+                val encryptionMethod = outline.EncryptionMethod?.trim().orEmpty()
+                val uid = outline.UID?.trim().orEmpty()
+                val publicKey = outline.PublicKey?.trim().orEmpty()
+                val remoteHost = outline.RemoteHost?.trim().orEmpty()
+                val remotePort = outline.RemotePort?.trim().orEmpty()
+
+                if (
+                    transport.isEmpty() ||
+                    encryptionMethod.isEmpty() ||
+                    uid.isEmpty() ||
+                    publicKey.isEmpty() ||
+                    remoteHost.isEmpty() ||
+                    remotePort.isEmpty()
+                ) {
+                    logger.log("Invalid [Outline] Cloak fields: Transport/EncryptionMethod/UID/PublicKey/RemoteHost/RemotePort are required. Disabling Cloak.")
+                    configsRepository.setIsCloakEnabled(false)
+                    configsRepository.setCloakConfig("")
+                    return
+                }
+
+                val serverName = outline.ServerName?.trim().orEmpty().ifEmpty { remoteHost }
+                val cdnOriginHost = outline.CDNOriginHost?.trim().orEmpty().ifEmpty { remoteHost }
+
+                val cloakConfig = CloakClientConfig(
+                    Transport = transport,
+                    EncryptionMethod = encryptionMethod,
+                    UID = uid,
+                    PublicKey = publicKey,
+                    ServerName = serverName,
+                    NumConn = outline.NumConn,
+                    BrowserSig = outline.BrowserSig,
+                    StreamTimeout = outline.StreamTimeout,
+                    RemoteHost = remoteHost,
+                    RemotePort = remotePort,
+                    CDNWsUrlPath = outline.CDNWsUrlPath?.trim(),
+                    CDNOriginHost = cdnOriginHost
+                )
+
+                configsRepository.setIsCloakEnabled(true)
+                val cloakJson = Json { prettyPrint = true }.encodeToString(cloakConfig)
+                configsRepository.setCloakConfig(cloakJson)
+
+                val cloakForLog = cloakConfig.copy(
+                    UID = maskStr(cloakConfig.UID),
+                    RemoteHost = maskStr(cloakConfig.RemoteHost),
+                    ServerName = maskStr(cloakConfig.ServerName),
+                    CDNOriginHost = maskStr(cloakConfig.CDNOriginHost),
+                    CDNWsUrlPath = cloakConfig.CDNWsUrlPath?.let { maskStr(it) }
+                )
+                val cloakJsonForLog = Json { prettyPrint = true }.encodeToString(cloakForLog)
+                logger.log("Cloak config saved successfully (config=${cloakJsonForLog})")
+            } else {
+                configsRepository.setIsCloakEnabled(false)
+                configsRepository.setCloakConfig("")
+            }
         } else {
-            logger.log("Shadowsocks config didn't detected, turn off")
+            logger.log("Outline config not detected, turning off")
             configsRepository.setIsOutlineEnabled(false)
+            configsRepository.setIsCloakEnabled(false)
+            configsRepository.setCloakConfig("")
             configsRepository.setPrefixOutline("")
             configsRepository.setIsWebsocketEnabled(false)
             configsRepository.setTcpPathOutline("")
             configsRepository.setUdpPathOutline("")
-        }
-
-        if (root.Cloak != null) {
-            logger.log("Detected Cloak config, enabling Cloak mode")
-            configsRepository.setIsCloakEnabled(true)
-            val cloakJson = Json { prettyPrint = true }.encodeToString(root.Cloak)
-            configsRepository.setCloakConfig(cloakJson)
-            root.Cloak.UID = maskStr(root.Cloak.UID)
-            root.Cloak.RemoteHost = maskStr(root.Cloak.RemoteHost)
-            root.Cloak.ServerName = maskStr(root.Cloak.ServerName)
-            root.Cloak.CDNOriginHost = root.Cloak.CDNOriginHost?.let { maskStr(it) }
-            root.Cloak.CDNWsUrlPath = root.Cloak.CDNWsUrlPath?.let { maskStr(it) }
-            val cloakJsonForLog = Json { prettyPrint = true }.encodeToString(root.Cloak)
-            logger.log("Cloak config saved successfully (config=${cloakJsonForLog})")
-        } else {
-            logger.log("Cloak config didn't detected, turn off")
-            configsRepository.setIsCloakEnabled(false)
         }
 
         logger.log("Finish parseToml()")

@@ -53,6 +53,14 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("isCloakEnabled", isCloakEnabled.toString())
     }
 
+    override fun getCloakLocalPort(): Int {
+        return prefs.get("cloakLocalPort", "1984").toIntOrNull() ?: 1984
+    }
+
+    override fun setCloakLocalPort(port: Int) {
+        prefs.put("cloakLocalPort", port.toString())
+    }
+
     override fun setServerPortOutline(newConfig: String) {
         prefs.put("ServerPortOutlineKey", newConfig)
     }

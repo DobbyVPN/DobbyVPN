@@ -32,6 +32,11 @@ var providers = configurl.NewDefaultProviders()
 
 func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 	log.Infof("outline client: resolving server IP from config...")
+	if strings.Contains(transportConfig, "|ws:") || strings.HasPrefix(strings.TrimSpace(transportConfig), "ws:") {
+		log.Infof("outline client: WebSocket transport detected in config")
+	} else {
+		log.Infof("outline client: WebSocket transport not detected in config (plain)")
+	}
 	ip, err := resolveShadowsocksServerIPFromConfig(transportConfig)
 	if err != nil {
 		return nil, err

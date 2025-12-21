@@ -26,6 +26,10 @@ interface DobbyConfigsRepository {
     fun getIsCloakEnabled(): Boolean
 
     fun setIsCloakEnabled(isCloakEnabled: Boolean)
+
+    fun getCloakLocalPort(): Int
+
+    fun setCloakLocalPort(port: Int)
     // endregion
 
     // region outline

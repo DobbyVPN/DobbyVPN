@@ -8,6 +8,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     
     private let cloakConfigKey = "cloakConfigKey"
     private let isCloakEnabledKey = "isCloakEnabledKey"
+    private let cloakLocalPortKey = "cloakLocalPortKey"
     private let MethodPasswordOutlineKey = "MethodPasswordOutlineKey"
     private let ServerPortOutlineKey = "ServerPortOutlineKey"
     private let isOutlineEnabledKey = "isOutlineEnabledKey"
@@ -48,6 +49,15 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setIsCloakEnabled(isCloakEnabled: Bool) {
         userDefaults.set(isCloakEnabled, forKey: isCloakEnabledKey)
+    }
+
+    public func getCloakLocalPort() -> Int32 {
+        let v = userDefaults.object(forKey: cloakLocalPortKey) as? Int ?? 1984
+        return Int32(v)
+    }
+
+    public func setCloakLocalPort(port: Int32) {
+        userDefaults.set(Int(port), forKey: cloakLocalPortKey)
     }
 
     public func getServerPortOutline() -> String {
