@@ -15,8 +15,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var logs = NativeModuleHolder.logsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
     
-    private var healthTimer: DispatchSourceTimer?
-    
     private var packetContinuation: AsyncStream<(Data, NSNumber)>.Continuation!
     private lazy var packetStream: AsyncStream<(Data, NSNumber)> = {
         AsyncStream<(Data, NSNumber)>(bufferingPolicy: .bufferingOldest(20)) { continuation in
@@ -25,6 +23,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }()
     
     private var memoryTimer: DispatchSourceTimer?
+    private var healthTimer: DispatchSourceTimer?
     
     func startMemoryLogging() {
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .background))
@@ -100,7 +99,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let localAddress = "198.18.0.1"
         let subnetMask = "255.255.0.0"
         let dnsServers = ["1.1.1.1", "8.8.8.8"]
-        
+
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
         settings.mtu = 1200
         settings.ipv4Settings = NEIPv4Settings(
@@ -112,8 +111,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.ipv6Settings = nil
         settings.dnsSettings = NEDNSSettings(servers: dnsServers)
         settings.dnsSettings?.matchDomains = [""]
+
         
-        logs.writeLog(log: "Settings are ready:\n \(settings)")
+        logs.writeLog(log: "Settings are ready:")
         try await self.setTunnelNetworkSettings(settings)
         logs.writeLog(log: "Tunnel settings applied")
         
@@ -303,7 +303,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let proto = data[9]
         return " route \(sourceIP) → \(destinationIP), proto: \(proto)"
     }
-
     /// Extract IP from "ip:port"
     func extractIP(from serverPort: String) -> String? {
         guard !serverPort.isEmpty else { return nil }
