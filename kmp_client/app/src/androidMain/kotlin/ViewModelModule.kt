@@ -8,6 +8,7 @@ import org.koin.dsl.module
 
 actual val sharedModule = module {
     singleOf(::PermissionEventsChannel)
+    singleOf(::HealthCheckManager)
     viewModelOf(::LogsViewModel)
     viewModelOf(::DiagnosticViewModel)
     viewModelOf(::MainViewModel)

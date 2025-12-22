@@ -24,7 +24,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }()
     
     private var memoryTimer: DispatchSourceTimer?
-    private var healthTimer: DispatchSourceTimer?
     
     func startMemoryLogging() {
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .background))
@@ -57,13 +56,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     
     override func startTunnel(options: [String : NSObject]?) async throws {
         logs.writeLog(log: "startTunnel in PacketTunnelProvider, thread: \(Thread.current)")
-        
-        do {
-            HealthCheck.shared.fullCheckUp()
-        } catch {
-            logs.writeLog(log: "[startTunnel] HealthCheck error: \(error.localizedDescription)")
-        }
-
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
         let methodPassword = configsRepository.getMethodPasswordOutline()
         let serverPort = configsRepository.getServerPortOutline()
@@ -119,15 +111,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         Task { await self.processPacketsFromDevice() }
         
         startMemoryLogging()
-        
-        self.startRepeatingHealthCheck()
-        
+                
         logs.writeLog(log: "startTunnel: all packet loops started")
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         logs.writeLog(log: "Stopping tunnel with reason: \(reason)")
-        VpnManagerImpl.isUserInitiatedStop = true
+        configsRepository.setIsUserInitStop(isUserInitStop: true)
         stopCloak()
         completionHandler()
     }
@@ -138,28 +128,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         } else {
             completionHandler?(messageData)
         }
-    }
-
-    private func startRepeatingHealthCheck(maxRepeats: Int = 3) {
-        var repeats = 0
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
-        
-        timer.schedule(deadline: .now(), repeating: 10)
-        timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            do {
-                HealthCheckImpl.shared.fullCheckUp()
-                repeats += 1
-                if repeats >= maxRepeats { timer.cancel() }
-            } catch {
-                self.logs.writeLog(log: "[HealthCheck] Error: \(error.localizedDescription)")
-                repeats += 1
-                if repeats >= maxRepeats { timer.cancel() }
-            }
-        }
-        
-        timer.resume()
-        self.healthTimer = timer
     }
     
     private func readPacketsFromTunnel() async {
@@ -183,7 +151,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func processPacketsToDevice() async {
         logs.writeLog(log: "Starting async processPacketsToDevice()…")
 
-        for await (packet, proto) in packetStream {
+        for await (packet, _) in packetStream {
             device.write(data: packet)
         }
     }
@@ -214,13 +182,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "startCloakOutline: entering")
         
         if configsRepository.getIsCloakEnabled() {
-            do {
-                logs.writeLog(log: "startCloakOutline: starting cloak")
-                Cloak_outlineStartCloakClient(localHost, localPort, configsRepository.getCloakConfig(), false)
-                logs.writeLog(log: "startCloakOutline: started")
-            } catch {
-                logs.writeLog(log: "startCloakOutline error: \(error)")
-            }
+            logs.writeLog(log: "startCloakOutline: starting cloak")
+            Cloak_outlineStartCloakClient(localHost, localPort, configsRepository.getCloakConfig(), false)
+            logs.writeLog(log: "startCloakOutline: started")
         } else {
             logs.writeLog(log: "startCloakOutline: cloak disabled")
         }
@@ -291,7 +255,7 @@ class DeviceFacade {
         logs = _logs
         logs?.writeLog(log: "[DeviceFacade] Device initiaization finished (has error:\(err != nil))")
         if (err != nil) {
-            logs?.writeLog(log: "[DeviceFacade] Error: \(err))")
+            logs?.writeLog(log: "[DeviceFacade] Error: \(String(describing: err)))")
         }
     }
     

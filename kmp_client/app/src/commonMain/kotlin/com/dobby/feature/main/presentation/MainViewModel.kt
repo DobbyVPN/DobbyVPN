@@ -6,6 +6,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.dobby.feature.diagnostic.domain.HealthCheck
+import com.dobby.feature.diagnostic.domain.HealthCheckManager
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.AwgManager
@@ -33,14 +35,16 @@ val httpClient = HttpClient()
 
 class MainViewModel(
     private val configsRepository: DobbyConfigsRepository,
-    private val connectionStateRepository: ConnectionStateRepository,
+    val connectionStateRepository: ConnectionStateRepository,
     private val permissionEventsChannel: PermissionEventsChannel,
     private val vpnManager: VpnManager,
     private val awgManager: AwgManager,
     private val logger: Logger,
+    healthCheck: HealthCheck,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
+    private val healthCheckManager: HealthCheckManager = HealthCheckManager(healthCheck, this, configsRepository, logger)
 
     //region AmneziaWG states
     val awgVersion: String
@@ -111,10 +115,12 @@ class MainViewModel(
         viewModelScope.launch {
             val currentState = connectionStateRepository.flow.value
             logger.log("Current connection state: $currentState")
+            configsRepository.setIsUserInitStop(currentState)
 
             when (currentState) {
                 true -> {
                     logger.log("Stopping VPN service due to active connection")
+                    healthCheckManager.stopHealthCheck()
                     stopVpnService()
                 }
                 false -> {
@@ -231,12 +237,13 @@ class MainViewModel(
         }
     }
 
-    private fun startVpnService() {
+    fun startVpnService() {
         logger.log("Starting VPN service...")
         vpnManager.start()
+        healthCheckManager.startHealthCheck()
     }
 
-    private suspend fun stopVpnService() {
+    suspend fun stopVpnService() {
         logger.log("Stopping VPN service...")
         vpnManager.stop()
         configsRepository.setIsOutlineEnabled(false)
