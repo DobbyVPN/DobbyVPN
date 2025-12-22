@@ -39,11 +39,8 @@ class MainViewModel(
     private val awgManager: AwgManager,
     private val logger: Logger,
 ) : ViewModel() {
-    //region Cloak states
     private val _uiState = MutableStateFlow(MainUiState())
-
     val uiState: StateFlow<MainUiState> = _uiState
-    //endregion
 
     //region AmneziaWG states
     val awgVersion: String
@@ -56,7 +53,6 @@ class MainViewModel(
     //endregion
 
     init {
-        // Cloak init
         viewModelScope.launch {
             _uiState.emit(
                 MainUiState(
@@ -90,8 +86,7 @@ class MainViewModel(
 
     //region Cloak functions
     fun onConnectionButtonClicked(
-        connectionUrl: String,
-        isConnected: Boolean
+        connectionUrl: String
     ) {
         logger.log("The connection button was clicked with URL: ${maskStr(connectionUrl)}")
 
@@ -101,7 +96,7 @@ class MainViewModel(
         }
 
         logger.log("Proceeding with setConfig for the provided URL...")
-        if (!isConnected) {
+        if (!connectionStateRepository.flow.value) {
             try {
                 logger.log("We get config by ${maskStr(connectionUrl)}")
                 setConfig(connectionUrl)

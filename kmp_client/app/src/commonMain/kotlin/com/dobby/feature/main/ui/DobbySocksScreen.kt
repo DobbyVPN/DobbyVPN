@@ -91,7 +91,7 @@ fun DobbySocksScreen(
 
             Button(
                 onClick = {
-                    mainViewModel.onConnectionButtonClicked(connectionURL, uiMainState.isConnected)
+                    mainViewModel.onConnectionButtonClicked(connectionURL)
                 },
                 shape = RoundedCornerShape(6.dp),
                 colors = ButtonDefaults.buttonColors(
