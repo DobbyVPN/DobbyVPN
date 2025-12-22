@@ -81,7 +81,9 @@ func protector(network string, address string, c syscall.RawConn) error {
 	log.Infof("Using Android VPN mode.")
 	fn := func(s uintptr) {
 		fd := int(s)
-		path := "protect_path"
+		// Use Linux abstract namespace to avoid filesystem permissions/paths on Android.
+		// Must match the Android-side LocalServerSocket name.
+		path := "\x00protect_path"
 
 		socket, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 		if err != nil {

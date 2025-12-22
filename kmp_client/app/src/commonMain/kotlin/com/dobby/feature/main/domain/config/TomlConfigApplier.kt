@@ -7,6 +7,8 @@ import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.TomlConfigs
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import net.peanuuutz.tomlkt.Toml
 import net.peanuuutz.tomlkt.decodeFromString
 
@@ -138,7 +140,7 @@ class TomlConfigApplier(
             )
 
             configsRepository.setIsCloakEnabled(true)
-            val cloakJson = Json { prettyPrint = true }.encodeToString(cloakConfig)
+            val cloakJson = buildCloakJson(cloakConfig, mask = false)
             configsRepository.setCloakConfig(cloakJson)
 
             val cloakForLog = cloakConfig.copy(
@@ -148,11 +150,48 @@ class TomlConfigApplier(
                 CDNOriginHost = maskStr(cloakConfig.CDNOriginHost),
                 CDNWsUrlPath = cloakConfig.CDNWsUrlPath?.let { maskStr(it) }
             )
-            val cloakJsonForLog = Json { prettyPrint = true }.encodeToString(cloakForLog)
+            val cloakJsonForLog = buildCloakJson(cloakForLog, mask = true)
             logger.log("Cloak config saved successfully (config=${cloakJsonForLog})")
         }
 
         logger.log("Finish parseToml()")
+    }
+
+    /**
+     * Cloak JSON must match what the Go Cloak RawConfig expects.
+     * Historically different builds expect different keys (e.g. ServerName vs SNI vs server_name),
+     * so we emit a small compatibility set of aliases.
+     *
+     * Important: do NOT replace this with plain `Json.encodeToString(CloakClientConfig)` unless you
+     * also keep these aliases and enable defaults. Some Cloak builds read SNI/server_name instead
+     * of ServerName, and default fields (like ProxyMethod) may be required.
+     */
+    private fun buildCloakJson(config: CloakClientConfig, mask: Boolean): String {
+        val json = Json { prettyPrint = true }
+        val obj = buildJsonObject {
+            put("Transport", config.Transport)
+            put("ProxyMethod", config.ProxyMethod)
+            put("EncryptionMethod", config.EncryptionMethod)
+            put("UID", config.UID)
+            put("PublicKey", config.PublicKey)
+
+            // ServerName aliases (compat across Cloak forks/versions)
+            put("ServerName", config.ServerName)
+            put("SNI", config.ServerName)
+            put("server_name", config.ServerName)
+
+            put("NumConn", config.NumConn)
+            config.BrowserSig?.let { put("BrowserSig", it) }
+            config.StreamTimeout?.let { put("StreamTimeout", it) }
+
+            put("RemoteHost", config.RemoteHost)
+            put("RemotePort", config.RemotePort)
+
+            config.CDNWsUrlPath?.let { put("CDNWsUrlPath", it) }
+            put("CDNOriginHost", config.CDNOriginHost)
+        }
+        // We don't log secrets here; caller already masked values if needed.
+        return json.encodeToString(obj)
     }
 
     private fun disableOutlineAndCloak() {

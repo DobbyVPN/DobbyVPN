@@ -48,6 +48,34 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 		return
 	}
 	log.Infof("cloak client: rawConfig parsed successfully")
+	// Debug (safe): validate required fields without logging secrets
+	{
+		var m map[string]interface{}
+		_ = json.Unmarshal([]byte(config), &m)
+		_, hasServerName := m["ServerName"]
+		_, hasServername := m["server_name"]
+		_, hasSNI := m["SNI"]
+		log.Infof("cloak client: rawConfig fields (len): ServerName=%d RemoteHost=%d PublicKey=%d UID=%d; keys: has(ServerName)=%v has(server_name)=%v has(SNI)=%v",
+			len(rawConfig.ServerName), len(rawConfig.RemoteHost), len(rawConfig.PublicKey), len(rawConfig.UID), hasServerName, hasServername, hasSNI)
+	}
+
+	// Compatibility: some configs may use different JSON field names (e.g. server_name / SNI).
+	// If ServerName didn't populate, try to extract it from the raw JSON map.
+	if rawConfig.ServerName == "" {
+		var m map[string]interface{}
+		if json.Unmarshal([]byte(config), &m) == nil {
+			if v, ok := m["ServerName"].(string); ok && v != "" {
+				rawConfig.ServerName = v
+			} else if v, ok := m["server_name"].(string); ok && v != "" {
+				rawConfig.ServerName = v
+			} else if v, ok := m["SNI"].(string); ok && v != "" {
+				rawConfig.ServerName = v
+			} else if v, ok := m["sni"].(string); ok && v != "" {
+				rawConfig.ServerName = v
+			}
+		}
+		log.Infof("cloak client: ServerName post-fallback len=%d", len(rawConfig.ServerName))
+	}
 
 	rawConfig.LocalHost = localHost
 	rawConfig.LocalPort = localPort

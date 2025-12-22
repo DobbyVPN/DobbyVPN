@@ -135,6 +135,7 @@ class DobbyVpnService : VpnService() {
         serviceScope.launch {
             connectionState.flow.drop(1).collect { isConnected ->
                 if (!isConnected) {
+                    stopCloakClient()
                     vpnInterface?.close()
                     vpnInterface = null
                     stopSelf()
@@ -158,7 +159,7 @@ class DobbyVpnService : VpnService() {
             inputStream?.close()
             outputStream?.close()
             vpnInterface?.close()
-            disableCloakIfNeeded()
+            stopCloakClient()
         }.onFailure { it.printStackTrace() }
         tunnelManager.updateState(null, TunnelState.DOWN)
         super.onDestroy()
@@ -166,59 +167,92 @@ class DobbyVpnService : VpnService() {
 
     private fun startCloakOutline(intent: Intent?) {
         logger.log("Tunnel: Start curl before connection")
-        serviceScope.launch {
-            val ipAddress = ipFetcher.fetchIp()
-            withContext(Dispatchers.Main) {
-                connectionState.update(isConnected = true)
-                if (ipAddress != null) {
-                    logger.log("Tunnel: response from curl: $ipAddress")
-                    setupVpn()
-                } else {
-                    logger.log("Tunnel: Failed to fetch IP, cancelling VPN setup.")
-                    stopSelf()
-                }
-            }
-        }
         val isServiceStartedFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) ?: false
         val shouldTurnOutlineOn = dobbyConfigsRepository.getIsOutlineEnabled()
         if (shouldTurnOutlineOn || !isServiceStartedFromUi) {
-            val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
-            val serverPort = dobbyConfigsRepository.getServerPortOutline()
-            val prefix = dobbyConfigsRepository.getPrefixOutline()
-            val websocketEnabled = dobbyConfigsRepository.getIsWebsocketEnabled()
-            val tcpPath = dobbyConfigsRepository.getTcpPathOutline()
-            val udpPath = dobbyConfigsRepository.getUdpPathOutline()
-            logger.log("DEBUG: tcpPath='$tcpPath', udpPath='$udpPath'")
-            if (methodPassword.isEmpty() || serverPort.isEmpty()) {
-                logger.log("Previously used outline apiKey is empty")
-                return
-            }
-            logger.log("Start connecting Outline")
-            val outlineUrl = buildOutlineUrl(
-                methodPassword = methodPassword,
-                serverPort = serverPort,
-                prefix = prefix,
-                websocketEnabled = websocketEnabled,
-                tcpPath = tcpPath,
-                udpPath = udpPath
-            )
-            logger.log("Outline URL built (prefix=${prefix.isNotEmpty()}, ws=$websocketEnabled, tcpPath=${tcpPath.isNotEmpty()}, udpPath=${udpPath.isNotEmpty()})")
-            logger.log("Outline URL: $outlineUrl")
-            val connected = outlineLibFacade.init(outlineUrl)
-            if (!connected) {
-                logger.log("Outline connection FAILED, stopping VPN service")
-                connectionState.tryUpdate(isConnected = false)
-                stopSelf()
-                return
-            }
-            logger.log("outlineLibFacade connected successfully")
-            if (websocketEnabled) {
-                logger.log("WebSocket transport connected successfully")
-            }
-            enableCloakIfNeeded(force = !isServiceStartedFromUi)
+            serviceScope.launch {
+                val ipAddress = ipFetcher.fetchIp()
+                if (ipAddress != null) {
+                    logger.log("Tunnel: response from curl: $ipAddress")
+                } else {
+                    logger.log("Tunnel: Failed to fetch IP, continuing anyway.")
+                }
+
+                val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
+                val serverPort = dobbyConfigsRepository.getServerPortOutline()
+                val prefix = dobbyConfigsRepository.getPrefixOutline()
+                val websocketEnabled = dobbyConfigsRepository.getIsWebsocketEnabled()
+                val tcpPath = dobbyConfigsRepository.getTcpPathOutline()
+                val udpPath = dobbyConfigsRepository.getUdpPathOutline()
+                logger.log("DEBUG: tcpPath='$tcpPath', udpPath='$udpPath'")
+
+                if (methodPassword.isEmpty() || serverPort.isEmpty()) {
+                    logger.log("Previously used outline apiKey is empty")
+                    connectionState.tryUpdate(isConnected = false)
+                    stopCloakClient()
+                    stopSelf()
+                    return@launch
+                }
+
+                // If Cloak is enabled, start it BEFORE Outline tries to connect to 127.0.0.1:LocalPort.
+                val shouldEnableCloak = dobbyConfigsRepository.getIsCloakEnabled() || !isServiceStartedFromUi
+                if (shouldEnableCloak) {
+                    val cloakConfig = dobbyConfigsRepository.getCloakConfig()
+                    val localPort = dobbyConfigsRepository.getCloakLocalPort().toString()
+                    if (cloakConfig.isNotEmpty()) {
+                        logger.log("Cloak: connect start")
+                        val cloakResult = cloakConnectInteractor.connect(
+                            config = cloakConfig,
+                            localHost = "127.0.0.1",
+                            localPort = localPort
+                        )
+                        logger.log("Cloak connection result is $cloakResult")
+                        if (cloakResult is ConnectResult.Error || cloakResult is ConnectResult.ValidationError) {
+                            logger.log("Cloak failed to start, stopping VPN service")
+                            connectionState.tryUpdate(isConnected = false)
+                            stopCloakClient()
+                            stopSelf()
+                            return@launch
+                        }
+                    } else {
+                        logger.log("Cloak enabled but config is empty, stopping VPN service")
+                        connectionState.tryUpdate(isConnected = false)
+                        stopCloakClient()
+                        stopSelf()
+                        return@launch
+                    }
+                }
+
+                logger.log("Start connecting Outline")
+                val outlineUrl = buildOutlineUrl(
+                    methodPassword = methodPassword,
+                    serverPort = serverPort,
+                    prefix = prefix,
+                    websocketEnabled = websocketEnabled,
+                    tcpPath = tcpPath,
+                    udpPath = udpPath
+                )
+                logger.log("Outline URL built (prefix=${prefix.isNotEmpty()}, ws=$websocketEnabled, tcpPath=${tcpPath.isNotEmpty()}, udpPath=${udpPath.isNotEmpty()})")
+                logger.log("Outline URL: $outlineUrl")
+                val connected = outlineLibFacade.init(outlineUrl)
+                if (!connected) {
+                    logger.log("Outline connection FAILED, stopping VPN service")
+                    connectionState.tryUpdate(isConnected = false)
+                    stopCloakClient()
+                    stopSelf()
+                    return@launch
+                }
+                logger.log("outlineLibFacade connected successfully")
+                if (websocketEnabled) {
+                    logger.log("WebSocket transport connected successfully")
+                }
+
+                setupVpn()
+                connectionState.update(isConnected = true)
         } else {
             logger.log("Start disconnecting Outline")
             vpnInterface?.close()
+            stopCloakClient()
             stopSelf()
         }
     }
@@ -258,13 +292,12 @@ class DobbyVpnService : VpnService() {
         }
     }
 
-    private fun disableCloakIfNeeded() {
-        if (dobbyConfigsRepository.getIsCloakEnabled()) {
-            logger.log("Disabling Cloak!")
-            serviceScope.launch {
-                cloakConnectInteractor.disconnect()
-                dobbyConfigsRepository.setIsCloakEnabled(false)
-            }
+    private fun stopCloakClient() {
+        runCatching {
+            logger.log("Stopping Cloak client (if running)...")
+            serviceScope.launch { cloakConnectInteractor.disconnect() }
+        }.onFailure { e ->
+            logger.log("Failed to stop Cloak client: ${e.message}")
         }
     }
 

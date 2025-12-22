@@ -5,6 +5,7 @@ import app
 import CommonDI
 import Sentry
 import Foundation
+import Darwin
 import SystemConfiguration
 import Network
 
@@ -86,13 +87,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         let cloakConfig = configsRepository.getCloakConfig()
         var excludedRoutes: [NEIPv4Route] = []
-        if let ip = extractIP(from: serverPort),
+        if let hostOrIp = extractIP(from: serverPort),
+           let ip = resolveIPv4IfNeeded(hostOrIp),
            let route = makeExcludedRoute(host: ip) {
             excludedRoutes.append(route)
         }
         if let remoteHost = extractRemoteHost(from: cloakConfig),
-           let route = makeExcludedRoute(host: remoteHost) {
+           let ip = resolveIPv4IfNeeded(remoteHost),
+           let route = makeExcludedRoute(host: ip) {
             excludedRoutes.append(route)
+        }
+        if !excludedRoutes.isEmpty {
+            let list = excludedRoutes.map { "\($0.destinationAddress)/\($0.destinationSubnetMask)" }.joined(separator: ", ")
+            logs.writeLog(log: "Excluded IPv4 routes: \(list)")
+        } else {
+            logs.writeLog(log: "Excluded IPv4 routes: (none)")
         }
 
         let remoteAddress = "254.1.1.1"
@@ -326,6 +335,43 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     /// Convert host/IP to /32 excluded route
     func makeExcludedRoute(host: String) -> NEIPv4Route? {
         return NEIPv4Route(destinationAddress: host, subnetMask: "255.255.255.255")
+    }
+
+    private func isValidIPv4(_ s: String) -> Bool {
+        let parts = s.split(separator: ".")
+        guard parts.count == 4 else { return false }
+        for p in parts {
+            guard let n = Int(p), (0...255).contains(n) else { return false }
+        }
+        return true
+    }
+
+    /// If host is not an IPv4 literal, resolves it to IPv4 (first A record). Returns nil on failure.
+    private func resolveIPv4IfNeeded(_ host: String) -> String? {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if isValidIPv4(trimmed) { return trimmed }
+
+        var hints = addrinfo(
+            ai_flags: AI_ADDRCONFIG,
+            ai_family: AF_INET,
+            ai_socktype: SOCK_STREAM,
+            ai_protocol: 0,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil
+        )
+        var res: UnsafeMutablePointer<addrinfo>?
+        let rc = getaddrinfo(trimmed, nil, &hints, &res)
+        guard rc == 0, let first = res else { return nil }
+        defer { freeaddrinfo(res) }
+
+        var addr = first.pointee.ai_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
+        var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        let ptr = inet_ntop(AF_INET, &addr, &buffer, socklen_t(INET_ADDRSTRLEN))
+        guard ptr != nil else { return nil }
+        return String(cString: buffer)
     }
 }
 
