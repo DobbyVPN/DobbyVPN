@@ -13,9 +13,9 @@ import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.main.domain.TomlConfigs
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.main.ui.MainUiState
+import com.dobby.feature.main.domain.config.TomlConfigApplier
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -23,10 +23,6 @@ import kotlinx.coroutines.runBlocking
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import net.peanuuutz.tomlkt.Toml
-import net.peanuuutz.tomlkt.decodeFromString
 import com.dobby.vpn.BuildConfig
 
 val httpClient = HttpClient()
@@ -44,6 +40,11 @@ class MainViewModel(
 
     val uiState: StateFlow<MainUiState> = _uiState
     //endregion
+
+    private val tomlConfigApplier = TomlConfigApplier(
+        configsRepository = configsRepository,
+        logger = logger
+    )
 
     //region AmneziaWG states
     val awgVersion: String
@@ -148,7 +149,7 @@ class MainViewModel(
         configsRepository.setConnectionConfig(connectionConfig)
         logger.log("Connection config saved to repository")
 
-        runCatching { parseToml(connectionConfig) }
+        runCatching { tomlConfigApplier.apply(connectionConfig) }
             .onFailure { e ->
                 logger.log("Error during parsing TOML (ignored): ${e.message}")
                 configsRepository.setIsOutlineEnabled(false)
@@ -159,148 +160,6 @@ class MainViewModel(
                 configsRepository.setTcpPathOutline("")
                 configsRepository.setUdpPathOutline("")
             }
-    }
-
-    private fun parseToml(connectionConfig: String) {
-        logger.log("Start parseToml()")
-
-        if (connectionConfig.isBlank()) {
-            logger.log("Connection config is blank, skipping parseToml()")
-            return
-        }
-
-        val root = Toml.decodeFromString<TomlConfigs>(connectionConfig)
-
-        val outline = root.Outline
-
-        if (outline != null) {
-            logger.log("Detected [Outline] config, applying Outline parameters")
-
-            configsRepository.setIsOutlineEnabled(true)
-            val method = outline.Method.trim()
-            val password = outline.Password.trim()
-            val cloakEnabled = outline.Cloak == true
-            if (method.isEmpty() || password.isEmpty()) {
-                logger.log("Invalid [Outline]: Method/Password are required. Disabling Outline/Cloak.")
-                configsRepository.setIsOutlineEnabled(false)
-                configsRepository.setIsCloakEnabled(false)
-                configsRepository.setCloakConfig("")
-                return
-            }
-
-            configsRepository.setMethodPasswordOutline("$method:$password")
-
-            if (cloakEnabled) {
-                // When Cloak is enabled, Outline must connect to local Cloak endpoint.
-                val localPort = if (outline.LocalPort in 1..65535) outline.LocalPort else 1984
-                if (outline.LocalPort !in 1..65535) {
-                    logger.log("Invalid Outline.LocalPort=${outline.LocalPort}; using default 1984")
-                }
-
-                configsRepository.setCloakLocalPort(localPort)
-
-                // Ignore Outline.Server/Port when Cloak is enabled.
-                configsRepository.setServerPortOutline("127.0.0.1:$localPort")
-                logger.log("Cloak enabled: Outline will connect to local endpoint 127.0.0.1:$localPort (ignoring Outline.Server/Port)")
-            } else {
-                val server = outline.Server?.trim().orEmpty()
-                val port = outline.Port
-                if (port == null) {
-                    logger.log("Invalid [Outline]: Port is required Disabling Outline.")
-                    configsRepository.setIsOutlineEnabled(false)
-                    return
-                }
-                if (server.isEmpty()) {
-                    logger.log("Invalid [Outline]: Server is required. Disabling Outline.")
-                    configsRepository.setIsOutlineEnabled(false)
-                    return
-                }
-                configsRepository.setServerPortOutline("${server}:${port}")
-            }
-
-
-            val websocketEnabled = outline.Websocket == true
-            configsRepository.setIsWebsocketEnabled(websocketEnabled)
-            configsRepository.setPrefixOutline(outline.Prefix ?: "") // Don't trim! Spaces may be intentional
-            configsRepository.setTcpPathOutline(outline.TcpPath?.trim() ?: "")
-            configsRepository.setUdpPathOutline(outline.UdpPath?.trim() ?: "")
-
-            logger.log("Outline prefix: ${outline.Prefix ?: "(none)"}")
-            logger.log("Outline websocket: $websocketEnabled, tcpPath: ${outline.TcpPath ?: "(none)"}, udpPath: ${outline.UdpPath ?: "(none)"}")
-
-            logger.log("Outline method, password, and server: ${method}:${maskStr(password)}@${maskStr(configsRepository.getServerPortOutline())}")
-            
-            if (cloakEnabled) {
-                logger.log("Cloak enabled inside [Outline], building Cloak config")
-
-                val transport = outline.Transport?.trim().orEmpty()
-                val encryptionMethod = outline.EncryptionMethod?.trim().orEmpty()
-                val uid = outline.UID?.trim().orEmpty()
-                val publicKey = outline.PublicKey?.trim().orEmpty()
-                val remoteHost = outline.RemoteHost?.trim().orEmpty()
-                val remotePort = outline.RemotePort?.trim().orEmpty()
-
-                if (
-                    transport.isEmpty() ||
-                    encryptionMethod.isEmpty() ||
-                    uid.isEmpty() ||
-                    publicKey.isEmpty() ||
-                    remoteHost.isEmpty() ||
-                    remotePort.isEmpty()
-                ) {
-                    logger.log("Invalid [Outline] Cloak fields: Transport/EncryptionMethod/UID/PublicKey/RemoteHost/RemotePort are required. Disabling Cloak.")
-                    configsRepository.setIsCloakEnabled(false)
-                    configsRepository.setCloakConfig("")
-                    return
-                }
-
-                val serverName = outline.ServerName?.trim().orEmpty().ifEmpty { remoteHost }
-                val cdnOriginHost = outline.CDNOriginHost?.trim().orEmpty().ifEmpty { remoteHost }
-
-                val cloakConfig = CloakClientConfig(
-                    Transport = transport,
-                    EncryptionMethod = encryptionMethod,
-                    UID = uid,
-                    PublicKey = publicKey,
-                    ServerName = serverName,
-                    NumConn = outline.NumConn,
-                    BrowserSig = outline.BrowserSig,
-                    StreamTimeout = outline.StreamTimeout,
-                    RemoteHost = remoteHost,
-                    RemotePort = remotePort,
-                    CDNWsUrlPath = outline.CDNWsUrlPath?.trim(),
-                    CDNOriginHost = cdnOriginHost
-                )
-
-                configsRepository.setIsCloakEnabled(true)
-                val cloakJson = Json { prettyPrint = true }.encodeToString(cloakConfig)
-                configsRepository.setCloakConfig(cloakJson)
-
-                val cloakForLog = cloakConfig.copy(
-                    UID = maskStr(cloakConfig.UID),
-                    RemoteHost = maskStr(cloakConfig.RemoteHost),
-                    ServerName = maskStr(cloakConfig.ServerName),
-                    CDNOriginHost = maskStr(cloakConfig.CDNOriginHost),
-                    CDNWsUrlPath = cloakConfig.CDNWsUrlPath?.let { maskStr(it) }
-                )
-                val cloakJsonForLog = Json { prettyPrint = true }.encodeToString(cloakForLog)
-                logger.log("Cloak config saved successfully (config=${cloakJsonForLog})")
-            } else {
-                configsRepository.setIsCloakEnabled(false)
-                configsRepository.setCloakConfig("")
-            }
-        } else {
-            logger.log("Outline config not detected, turning off")
-            configsRepository.setIsOutlineEnabled(false)
-            configsRepository.setIsCloakEnabled(false)
-            configsRepository.setCloakConfig("")
-            configsRepository.setPrefixOutline("")
-            configsRepository.setIsWebsocketEnabled(false)
-            configsRepository.setTcpPathOutline("")
-            configsRepository.setUdpPathOutline("")
-        }
-
-        logger.log("Finish parseToml()")
     }
 
     private fun getConfigByURL(connectionUrl: String): String {

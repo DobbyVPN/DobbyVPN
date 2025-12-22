@@ -13,7 +13,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     
     private var device = DeviceFacade()
     private var logs = NativeModuleHolder.logsRepository
-    private var configs = configsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
     
     private var healthTimer: DispatchSourceTimer?
@@ -86,6 +85,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(log: "WebSocket transport requested (wss)")
         }
 
+        let cloakConfig = configsRepository.getCloakConfig()
+        var excludedRoutes: [NEIPv4Route] = []
+        if let ip = extractIP(from: serverPort),
+           let route = makeExcludedRoute(host: ip) {
+            excludedRoutes.append(route)
+        }
+        if let remoteHost = extractRemoteHost(from: cloakConfig),
+           let route = makeExcludedRoute(host: remoteHost) {
+            excludedRoutes.append(route)
+        }
+
         let remoteAddress = "254.1.1.1"
         let localAddress = "198.18.0.1"
         let subnetMask = "255.255.0.0"
@@ -93,10 +103,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
         settings.mtu = 1200
-        settings.ipv4Settings = NEIPv4Settings(addresses: [localAddress], subnetMasks: [subnetMask])
+        settings.ipv4Settings = NEIPv4Settings(
+            addresses: [localAddress],
+            subnetMasks: [subnetMask]
+        )
         settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
-        settings.ipv6Settings = NEIPv6Settings(addresses: [], networkPrefixLengths: [])
-        settings.ipv6Settings?.excludedRoutes = [NEIPv6Route.default()]
+        settings.ipv4Settings?.excludedRoutes = excludedRoutes
+        settings.ipv6Settings = nil
         settings.dnsSettings = NEDNSSettings(servers: dnsServers)
         settings.dnsSettings?.matchDomains = [""]
         
@@ -289,6 +302,31 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let destinationIP = data[16..<20].map { String($0) }.joined(separator: ".")
         let proto = data[9]
         return " route \(sourceIP) → \(destinationIP), proto: \(proto)"
+    }
+
+    /// Extract IP from "ip:port"
+    func extractIP(from serverPort: String) -> String? {
+        guard !serverPort.isEmpty else { return nil }
+        return serverPort.split(separator: ":").first.map(String.init)
+    }
+
+    /// Extract RemoteHost from cloak JSON
+    func extractRemoteHost(from cloakConfig: String) -> String? {
+        guard
+            !cloakConfig.isEmpty,
+            let data = cloakConfig.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let remoteHost = json["RemoteHost"] as? String,
+            !remoteHost.isEmpty
+        else {
+            return nil
+        }
+        return remoteHost
+    }
+
+    /// Convert host/IP to /32 excluded route
+    func makeExcludedRoute(host: String) -> NEIPv4Route? {
+        return NEIPv4Route(destinationAddress: host, subnetMask: "255.255.255.255")
     }
 }
 
