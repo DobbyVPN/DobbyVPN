@@ -148,7 +148,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             do {
-                HealthCheck.shared.fullCheckUp()
+                HealthCheckImpl.shared.fullCheckUp()
                 repeats += 1
                 if repeats >= maxRepeats { timer.cancel() }
             } catch {

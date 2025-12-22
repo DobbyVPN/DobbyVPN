@@ -167,7 +167,7 @@ public class VpnManagerImpl: VpnManager {
     public func start() {
         self.logs.writeLog(log: "call start")
         do {
-            HealthCheck.shared.fullCheckUp()
+            HealthCheckImpl.shared.fullCheckUp()
         } catch {
             logs.writeLog(log: "[startTunnel] HealthCheck error: \(error.localizedDescription)")
         }
