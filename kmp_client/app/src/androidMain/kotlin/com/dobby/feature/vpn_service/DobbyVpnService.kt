@@ -18,6 +18,7 @@ import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
+import com.dobby.feature.vpn_service.domain.ConnectResult
 import com.dobby.feature.vpn_service.domain.CloakConnectionInteractor
 import com.dobby.feature.vpn_service.domain.IpFetcher
 import kotlinx.coroutines.SupervisorJob
@@ -249,6 +250,7 @@ class DobbyVpnService : VpnService() {
 
                 setupVpn()
                 connectionState.update(isConnected = true)
+            }
         } else {
             logger.log("Start disconnecting Outline")
             vpnInterface?.close()
