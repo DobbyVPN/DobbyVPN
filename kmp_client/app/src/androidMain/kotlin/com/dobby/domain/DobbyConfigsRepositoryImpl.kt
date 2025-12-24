@@ -71,6 +71,18 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun getCloakLocalPort(): Int {
+        return prefs.getInt("cloakLocalPort", 1984).also {
+            AndroidLog("DOBBY_TAG", "getCloakLocalPort: $it")
+        }
+    }
+
+    override fun setCloakLocalPort(port: Int) {
+        prefs.edit().putInt("cloakLocalPort", port).apply().also {
+            AndroidLog("DOBBY_TAG", "setCloakLocalPort: $port")
+        }
+    }
+
     override fun setServerPortOutline(newConfig: String) {
         prefs.edit().putString("ServerPortOutlineKey", newConfig).apply().also {
             AndroidLog("DOBBY_TAG", "setServerPortOutline, size = ${newConfig.length}")
@@ -104,6 +116,54 @@ internal class DobbyConfigsRepositoryImpl(
     override fun setIsOutlineEnabled(isOutlineEnabled: Boolean) {
         prefs.edit().putBoolean("isOutlineEnabled", isOutlineEnabled).apply().also {
             AndroidLog("DOBBY_TAG", "setIsOutlineEnabled = $isOutlineEnabled")
+        }
+    }
+
+    override fun getPrefixOutline(): String {
+        return (prefs.getString("PrefixOutlineKey", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getPrefixOutline, value = $it")
+        }
+    }
+
+    override fun setPrefixOutline(prefix: String) {
+        prefs.edit().putString("PrefixOutlineKey", prefix).apply().also {
+            AndroidLog("DOBBY_TAG", "setPrefixOutline, value = $prefix")
+        }
+    }
+
+    override fun getTcpPathOutline(): String {
+        return (prefs.getString("TcpPathOutlineKey", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getTcpPathOutline, value = $it")
+        }
+    }
+
+    override fun setTcpPathOutline(tcpPath: String) {
+        prefs.edit().putString("TcpPathOutlineKey", tcpPath).apply().also {
+            AndroidLog("DOBBY_TAG", "setTcpPathOutline, value = $tcpPath")
+        }
+    }
+
+    override fun getIsWebsocketEnabled(): Boolean {
+        return prefs.getBoolean("isWebsocketEnabled", false).also {
+            AndroidLog("DOBBY_TAG", "getIsWebsocketEnabled = $it")
+        }
+    }
+
+    override fun setIsWebsocketEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("isWebsocketEnabled", enabled).apply().also {
+            AndroidLog("DOBBY_TAG", "setIsWebsocketEnabled = $enabled")
+        }
+    }
+
+    override fun getUdpPathOutline(): String {
+        return (prefs.getString("UdpPathOutlineKey", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getUdpPathOutline, value = $it")
+        }
+    }
+
+    override fun setUdpPathOutline(udpPath: String) {
+        prefs.edit().putString("UdpPathOutlineKey", udpPath).apply().also {
+            AndroidLog("DOBBY_TAG", "setUdpPathOutline, value = $udpPath")
         }
     }
 
