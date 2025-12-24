@@ -22,7 +22,8 @@ platform :android do
       }
     )
 
-    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} ../DobbyVPN-v#{FULL_VERSION}-unsign.apk"
+    # Keep artifacts inside kmp_client so GitHub Actions upload paths are stable.
+    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} DobbyVPN-v#{FULL_VERSION}-unsign.apk"
   end
 
   desc "Build and sign Android APK"
@@ -46,7 +47,8 @@ platform :android do
       }
     )
 
-    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} ../DobbyVPN-v#{FULL_VERSION}-sign.apk"
+    # Keep artifacts inside kmp_client so GitHub Actions upload paths are stable.
+    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} DobbyVPN-v#{FULL_VERSION}-sign.apk"
   end
 
   desc "Build Desktop artifacts"
