@@ -9,6 +9,19 @@ import interop.VPNLibraryLoader
 import kotlinx.coroutines.runBlocking
 import java.util.Base64
 
+private fun extractHostFromHostPort(hostPortMaybeWithQuery: String): String {
+    val hostPort = hostPortMaybeWithQuery.substringBefore("?").trim()
+    if (hostPort.startsWith("[")) {
+        return hostPort.substringAfter("[").substringBefore("]")
+    }
+    val lastColon = hostPort.lastIndexOf(':')
+    return if (lastColon > 0 && hostPort.count { it == ':' } == 1) {
+        hostPort.substring(0, lastColon)
+    } else {
+        hostPort
+    }
+}
+
 private fun buildOutlineUrl(
     methodPassword: String,
     serverPort: String,
@@ -19,19 +32,6 @@ private fun buildOutlineUrl(
 ): String {
     val encoded = Base64.getEncoder().encodeToString(methodPassword.toByteArray())
     val baseUrl = "ss://$encoded@$serverPort"
-
-    fun extractHost(hostPortMaybeWithQuery: String): String {
-        val hostPort = hostPortMaybeWithQuery.substringBefore("?").trim()
-        if (hostPort.startsWith("[")) {
-            return hostPort.substringAfter("[").substringBefore("]")
-        }
-        val lastColon = hostPort.lastIndexOf(':')
-        return if (lastColon > 0 && hostPort.count { it == ':' } == 1) {
-            hostPort.substring(0, lastColon)
-        } else {
-            hostPort
-        }
-    }
 
     // Add prefix parameter if present (URL-encoded)
     val ssUrl = if (prefix.isNotEmpty()) {
@@ -44,7 +44,7 @@ private fun buildOutlineUrl(
 
     // Wrap with WebSocket over TLS transport if enabled (wss://)
     return if (websocketEnabled) {
-        val effectiveHost = extractHost(serverPort).trim()
+        val effectiveHost = extractHostFromHostPort(serverPort).trim()
         val wsParams = buildList {
             if (tcpPath.isNotEmpty()) add("tcp_path=$tcpPath")
             if (udpPath.isNotEmpty()) add("udp_path=$udpPath")

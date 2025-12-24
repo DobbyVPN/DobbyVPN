@@ -12,6 +12,7 @@ import com.dobby.feature.main.domain.AwgManager
 import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
+import com.dobby.feature.main.domain.clearOutlineAndCloakConfig
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.main.ui.MainUiState
@@ -42,7 +43,8 @@ class MainViewModel(
     //endregion
 
     private val tomlConfigApplier = TomlConfigApplier(
-        configsRepository = configsRepository,
+        outlineRepo = configsRepository,
+        cloakRepo = configsRepository,
         logger = logger
     )
 
@@ -152,13 +154,7 @@ class MainViewModel(
         runCatching { tomlConfigApplier.apply(connectionConfig) }
             .onFailure { e ->
                 logger.log("Error during parsing TOML (ignored): ${e.message}")
-                configsRepository.setIsOutlineEnabled(false)
-                configsRepository.setIsCloakEnabled(false)
-                configsRepository.setCloakConfig("")
-                configsRepository.setPrefixOutline("")
-                configsRepository.setIsWebsocketEnabled(false)
-                configsRepository.setTcpPathOutline("")
-                configsRepository.setUdpPathOutline("")
+                configsRepository.clearOutlineAndCloakConfig()
             }
     }
 
@@ -206,8 +202,7 @@ class MainViewModel(
     private suspend fun stopVpnService() {
         logger.log("Stopping VPN service...")
         vpnManager.stop()
-        configsRepository.setIsOutlineEnabled(false)
-        configsRepository.setIsCloakEnabled(false)
+        configsRepository.clearOutlineAndCloakConfig()
         connectionStateRepository.update(isConnected = false)
         logger.log("VPN service stopped successfully, state reset to disconnected")
     }

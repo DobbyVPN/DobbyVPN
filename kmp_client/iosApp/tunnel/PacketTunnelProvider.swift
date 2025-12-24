@@ -237,7 +237,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let hostPort = hostPortMaybeWithQuery.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? hostPortMaybeWithQuery
             let trimmed = hostPort.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.hasPrefix("[") {
-                // IPv6: [2001:db8::1]:443
+                // IPv6 в квадратных скобках: [2001:db8::1]:443
                 if let start = trimmed.firstIndex(of: "["), let end = trimmed.firstIndex(of: "]"), start < end {
                     return String(trimmed[trimmed.index(after: start)..<end])
                 }
@@ -248,7 +248,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return trimmed
         }
 
-        // Add prefix parameter if present (URL-encoded)
+        // Добавляем параметр prefix, если он задан (URL-encoding)
         let ssUrl: String
         if !prefix.isEmpty {
             let separator = serverPort.contains("?") ? "&" : "?"
@@ -258,7 +258,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             ssUrl = baseUrl
         }
 
-        // Wrap with WebSocket over TLS transport if enabled (wss://)
+        // Если включён WebSocket — оборачиваем в WebSocket over TLS transport (wss://)
         if websocketEnabled {
             let effectiveHost = extractHost(serverPort).trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -269,7 +269,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             if !udpPath.isEmpty { wsParams.append("udp_path=\(udpPath)") }
             
             let wsParamsStr = wsParams.joined(separator: "&")
-            // Use tls:sni|ws: for WebSocket over TLS (wss://) with SNI
+            // Используем tls:sni|ws: для WebSocket over TLS (wss://) через SNI
             let tlsPrefix = "tls:sni=\(effectiveHost)"
             if !wsParamsStr.isEmpty {
                 return "\(tlsPrefix)|ws:\(wsParamsStr)|\(ssUrl)"
@@ -312,13 +312,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let proto = data[9]
         return " route \(sourceIP) → \(destinationIP), proto: \(proto)"
     }
-    /// Extract IP from "ip:port"
+    /// Извлекает IP из строки "ip:port"
     func extractIP(from serverPort: String) -> String? {
         guard !serverPort.isEmpty else { return nil }
         return serverPort.split(separator: ":").first.map(String.init)
     }
 
-    /// Extract RemoteHost from cloak JSON
+    /// Извлекает RemoteHost из Cloak JSON
     func extractRemoteHost(from cloakConfig: String) -> String? {
         guard
             !cloakConfig.isEmpty,
@@ -332,7 +332,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return remoteHost
     }
 
-    /// Convert host/IP to /32 excluded route
+    /// Преобразует host/IP в исключённый маршрут /32
     func makeExcludedRoute(host: String) -> NEIPv4Route? {
         return NEIPv4Route(destinationAddress: host, subnetMask: "255.255.255.255")
     }
@@ -346,7 +346,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return true
     }
 
-    /// If host is not an IPv4 literal, resolves it to IPv4 (first A record). Returns nil on failure.
+    /// Если host не является IPv4-литералом, резолвит его в IPv4 (первый A-record). Возвращает nil при ошибке.
     private func resolveIPv4IfNeeded(_ host: String) -> String? {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }

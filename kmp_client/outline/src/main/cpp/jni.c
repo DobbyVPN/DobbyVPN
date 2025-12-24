@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0
  *
- * JNI-обёртка для liboutline.so
+ * JNI wrapper for liboutline.so
  */
 
 #include <jni.h>
@@ -12,7 +12,7 @@ JNIEXPORT void JNICALL
 Java_com_dobby_outline_OutlineGo_newOutlineClient(JNIEnv *env, jclass clazz, jstring jConfig)
 {
 const char *config_str = (*env)->GetStringUTFChars(env, jConfig, NULL);
-// Вызываем Go-экспорт
+// Go Export
 NewOutlineClient((char*)config_str);
 (*env)->ReleaseStringUTFChars(env, jConfig, config_str);
 }
@@ -22,9 +22,9 @@ Java_com_dobby_outline_OutlineGo_write(JNIEnv *env, jclass clazz,
                                        jbyteArray jBuf, jint length)
 {
     jbyte *buf = (*env)->GetByteArrayElements(env, jBuf, NULL);
-    // Вызываем Go-экспорт
+    // Go Export
     jint written = Write((char*)buf, length);
-    // Не копируем данные обратно
+    // Dont copy data back
     (*env)->ReleaseByteArrayElements(env, jBuf, buf, JNI_ABORT);
     return written;
 }
@@ -34,9 +34,9 @@ Java_com_dobby_outline_OutlineGo_read(JNIEnv *env, jclass clazz,
                                       jbyteArray jBuf, jint maxLen)
 {
     jbyte *buf = (*env)->GetByteArrayElements(env, jBuf, NULL);
-    // Вызываем Go-экспорт
+    // Go Export
     jint read = Read((char*)buf, maxLen);
-    // Копируем данные обратно в Java-буфер
+    // Copy data back to Java buffer
     (*env)->ReleaseByteArrayElements(env, jBuf, buf, 0);
     return read;
 }
@@ -44,7 +44,7 @@ Java_com_dobby_outline_OutlineGo_read(JNIEnv *env, jclass clazz,
 JNIEXPORT jint JNICALL
 Java_com_dobby_outline_OutlineGo_connect(JNIEnv *env, jclass clazz)
 {
-    // Вызываем Go-экспорт, возвращает 0 при успехе, -1 при ошибке
+    // Go Export, returns 0 on success, -1 on error
     return Connect();
 }
 
@@ -56,14 +56,14 @@ Java_com_dobby_outline_OutlineGo_getLastError(JNIEnv *env, jclass clazz)
         return NULL;
     }
     jstring result = (*env)->NewStringUTF(env, err);
-    free(err); // освобождаем память выделенную C.CString
+    free(err); // free memory allocated by C.CString
     return result;
 }
 
 JNIEXPORT void JNICALL
 Java_com_dobby_outline_OutlineGo_disconnect(JNIEnv *env, jclass clazz)
 {
-    // Вызываем Go-экспорт
+    // Go Export
     Disconnect();
 }
 
@@ -75,9 +75,9 @@ Java_com_dobby_outline_OutlineGo_startCloakClient(JNIEnv *env, jclass clazz,
     const char *localHost = (*env)->GetStringUTFChars(env, jLocalHost, NULL);
     const char *localPort = (*env)->GetStringUTFChars(env, jLocalPort, NULL);
     const char *conf = (*env)->GetStringUTFChars(env, jConf, NULL);
-    // Вызываем Go-экспорт
+    // Go Export
     StartCloakClient(localHost, localPort, conf, udp);
-    // Копируем данные обратно в Java-буфер
+    // Copy data back to Java buffer
     (*env)->ReleaseStringUTFChars(env, jLocalHost, localHost);
     (*env)->ReleaseStringUTFChars(env, jLocalPort, localPort);
     (*env)->ReleaseStringUTFChars(env, jConf, conf);
@@ -86,7 +86,7 @@ Java_com_dobby_outline_OutlineGo_startCloakClient(JNIEnv *env, jclass clazz,
 JNIEXPORT void JNICALL
 Java_com_dobby_outline_OutlineGo_stopCloakClient(JNIEnv *env, jclass clazz)
 {
-    // Вызываем Go-экспорт
+    // Go Export
     StopCloakClient();
 }
 
@@ -95,8 +95,8 @@ Java_com_dobby_outline_OutlineGo_initLogger(JNIEnv *env, jclass clazz,
                                                   jstring jPath)
 {
     const char *path = (*env)->GetStringUTFChars(env, jPath, NULL);
-    // Вызываем Go-экспорт
+    // Go Export
     InitLogger(path);
-    // Копируем данные обратно в Java-буфер
+    // Copy data back to Java buffer
     (*env)->ReleaseStringUTFChars(env, jPath, path);
 }

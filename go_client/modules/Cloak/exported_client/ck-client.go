@@ -32,7 +32,6 @@ func NewCkClient(config Config) *CkClient {
 }
 
 func (c *CkClient) Connect() (returnErr error) {
-	// Перехватываем panic в ProcessRawConfig (например, при websocket=false)
 	defer func() {
 		if r := recover(); r != nil {
 			log.Infof("ck-client Connect: recovered from panic: %v", r)
