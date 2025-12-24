@@ -22,6 +22,16 @@ class TomlConfigApplier(
     private val configsRepository: DobbyConfigsRepository,
     private val logger: Logger,
 ) {
+    private companion object {
+        const val DEFAULT_METHOD = "chacha20-ietf-poly1305"
+        const val DEFAULT_CLOAK_LOCAL_PORT = 1984
+        const val DEFAULT_HTTPS_PORT = 443
+        const val DEFAULT_CLOAK_PROXY_METHOD = "shadowsocks"
+        const val DEFAULT_CLOAK_NUM_CONN = 8
+        const val DEFAULT_CLOAK_BROWSER_SIG = "chrome"
+        const val DEFAULT_CLOAK_STREAM_TIMEOUT = 300
+    }
+
     fun apply(connectionConfig: String) {
         logger.log("Start parseToml()")
 
@@ -43,12 +53,13 @@ class TomlConfigApplier(
         logger.log("Detected [Outline] config, applying Outline parameters")
         configsRepository.setIsOutlineEnabled(true)
 
-        val method = outline.Method.trim()
-        val password = outline.Password.trim()
+        val method = outline.Method?.trim().orEmpty().ifEmpty { DEFAULT_METHOD }
+        val password = outline.Password?.trim().orEmpty()
         val cloakEnabled = outline.Cloak == true
+        val websocketEnabled = outline.WebSocket == true
 
-        if (method.isEmpty() || password.isEmpty()) {
-            logger.log("Invalid [Outline]: Method/Password are required. Disabling Outline/Cloak.")
+        if (password.isEmpty()) {
+            logger.log("Invalid [Outline]: Password is required. Disabling Outline/Cloak.")
             disableOutlineAndCloak()
             logger.log("Finish parseToml()")
             return
@@ -58,24 +69,20 @@ class TomlConfigApplier(
 
         // Decide where Outline connects (direct or via local Cloak).
         if (cloakEnabled) {
-            val localPort = if (outline.LocalPort in 1..65535) outline.LocalPort else 1984
-            if (outline.LocalPort !in 1..65535) {
-                logger.log("Invalid Outline.LocalPort=${outline.LocalPort}; using default 1984")
-            }
-            configsRepository.setCloakLocalPort(localPort)
-            configsRepository.setServerPortOutline("127.0.0.1:$localPort")
-            logger.log("Cloak enabled: Outline will connect to local endpoint 127.0.0.1:$localPort (ignoring Outline.Server/Port)")
+            configsRepository.setCloakLocalPort(DEFAULT_CLOAK_LOCAL_PORT)
+            configsRepository.setServerPortOutline("127.0.0.1:$DEFAULT_CLOAK_LOCAL_PORT")
+            logger.log("Cloak enabled: Outline will connect to local endpoint 127.0.0.1:$DEFAULT_CLOAK_LOCAL_PORT (ignoring Outline.Server/Port)")
         } else {
             val server = outline.Server?.trim().orEmpty()
-            val port = outline.Port
-            if (port == null) {
-                logger.log("Invalid [Outline]: Port is required Disabling Outline.")
+            val port = outline.Port ?: if (websocketEnabled) DEFAULT_HTTPS_PORT else null
+            if (server.isEmpty()) {
+                logger.log("Invalid [Outline]: Server is required. Disabling Outline.")
                 disableOutlineAndCloak()
                 logger.log("Finish parseToml()")
                 return
             }
-            if (server.isEmpty()) {
-                logger.log("Invalid [Outline]: Server is required. Disabling Outline.")
+            if (port == null) {
+                logger.log("Invalid [Outline]: Port is required (unless WebSocket=true, then default is 443). Disabling Outline.")
                 disableOutlineAndCloak()
                 logger.log("Finish parseToml()")
                 return
@@ -86,14 +93,23 @@ class TomlConfigApplier(
         }
 
         // Always persist to avoid stale values from previous configs.
-        val websocketEnabled = outline.Websocket == true
         configsRepository.setIsWebsocketEnabled(websocketEnabled)
         configsRepository.setPrefixOutline(outline.Prefix ?: "") // Don't trim! Spaces may be intentional
-        configsRepository.setTcpPathOutline(outline.TcpPath?.trim() ?: "")
-        configsRepository.setUdpPathOutline(outline.UdpPath?.trim() ?: "")
+
+        val webSocketPath = outline.WebSocketPath?.trim().orEmpty()
+        if (websocketEnabled) {
+            configsRepository.setTcpPathOutline(webSocketPath)
+            configsRepository.setUdpPathOutline(webSocketPath)
+        } else {
+            configsRepository.setTcpPathOutline("")
+            configsRepository.setUdpPathOutline("")
+        }
 
         logger.log("Outline prefix: ${outline.Prefix ?: "(none)"}")
-        logger.log("Outline websocket: $websocketEnabled, tcpPath: ${outline.TcpPath ?: "(none)"}, udpPath: ${outline.UdpPath ?: "(none)"}")
+        logger.log(
+            "Outline websocket: $websocketEnabled, " +
+                "webSocketPath: ${outline.WebSocketPath ?: "(none)"}"
+        )
         logger.log("Outline method, password, and server: ${method}:${maskStr(password)}@${maskStr(configsRepository.getServerPortOutline())}")
 
         if (cloakEnabled) {
@@ -103,8 +119,13 @@ class TomlConfigApplier(
             val encryptionMethod = outline.EncryptionMethod?.trim().orEmpty()
             val uid = outline.UID?.trim().orEmpty()
             val publicKey = outline.PublicKey?.trim().orEmpty()
-            val remoteHost = outline.RemoteHost?.trim().orEmpty()
-            val remotePort = outline.RemotePort?.trim().orEmpty()
+            val hostFromServer = outline.Server?.trim().orEmpty()
+            val remoteHost = outline.RemoteHost?.trim().orEmpty().ifEmpty { hostFromServer }
+            val remotePort = outline.RemotePort?.trim().orEmpty().ifEmpty {
+                outline.Port?.toString() ?: DEFAULT_HTTPS_PORT.toString()
+            }
+            val serverName = outline.ServerName?.trim().orEmpty().ifEmpty { hostFromServer }
+            val cdnOriginHost = outline.CDNOriginHost?.trim().orEmpty().ifEmpty { hostFromServer }
 
             if (
                 transport.isEmpty() ||
@@ -114,28 +135,27 @@ class TomlConfigApplier(
                 remoteHost.isEmpty() ||
                 remotePort.isEmpty()
             ) {
-                logger.log("Invalid [Outline] Cloak fields: Transport/EncryptionMethod/UID/PublicKey/RemoteHost/RemotePort are required. Disabling Cloak.")
+                logger.log("Invalid [Outline] Cloak fields: Transport/EncryptionMethod/UID/PublicKey/Server/Port are required. Disabling Cloak.")
                 configsRepository.setIsCloakEnabled(false)
                 configsRepository.setCloakConfig("")
                 logger.log("Finish parseToml()")
                 return
             }
 
-            val serverName = outline.ServerName?.trim().orEmpty().ifEmpty { remoteHost }
-            val cdnOriginHost = outline.CDNOriginHost?.trim().orEmpty().ifEmpty { remoteHost }
 
             val cloakConfig = CloakClientConfig(
                 Transport = transport,
+                ProxyMethod = outline.ProxyMethod?.trim().orEmpty().ifEmpty { DEFAULT_CLOAK_PROXY_METHOD },
                 EncryptionMethod = encryptionMethod,
                 UID = uid,
                 PublicKey = publicKey,
                 ServerName = serverName,
-                NumConn = outline.NumConn,
-                BrowserSig = outline.BrowserSig,
-                StreamTimeout = outline.StreamTimeout,
+                NumConn = outline.NumConn ?: DEFAULT_CLOAK_NUM_CONN,
+                BrowserSig = outline.BrowserSig?.trim().orEmpty().ifEmpty { DEFAULT_CLOAK_BROWSER_SIG },
+                StreamTimeout = outline.StreamTimeout ?: DEFAULT_CLOAK_STREAM_TIMEOUT,
                 RemoteHost = remoteHost,
                 RemotePort = remotePort,
-                CDNWsUrlPath = outline.CDNWsUrlPath?.trim(),
+                CDNWsUrlPath = outline.CDNWsUrlPath?.trim()?.takeIf { it.isNotEmpty() },
                 CDNOriginHost = cdnOriginHost
             )
 
@@ -157,15 +177,6 @@ class TomlConfigApplier(
         logger.log("Finish parseToml()")
     }
 
-    /**
-     * Cloak JSON must match what the Go Cloak RawConfig expects.
-     * Historically different builds expect different keys (e.g. ServerName vs SNI vs server_name),
-     * so we emit a small compatibility set of aliases.
-     *
-     * Important: do NOT replace this with plain `Json.encodeToString(CloakClientConfig)` unless you
-     * also keep these aliases and enable defaults. Some Cloak builds read SNI/server_name instead
-     * of ServerName, and default fields (like ProxyMethod) may be required.
-     */
     private fun buildCloakJson(config: CloakClientConfig, mask: Boolean): String {
         val json = Json { prettyPrint = true }
         val obj = buildJsonObject {
