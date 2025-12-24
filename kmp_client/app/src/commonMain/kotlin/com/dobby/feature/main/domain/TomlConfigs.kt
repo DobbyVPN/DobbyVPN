@@ -15,6 +15,7 @@ data class OutlineConfig(
 
     // Cloak (configured inside [Outline])
     val Cloak: Boolean? = null,
+    val ProxyMethod: String? = null,
     val Transport: String? = null,
     val EncryptionMethod: String? = null,
     val UID: String? = null,
