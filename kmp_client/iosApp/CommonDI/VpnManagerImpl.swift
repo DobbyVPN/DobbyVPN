@@ -24,11 +24,11 @@ public class VpnManagerImpl: VpnManager {
         getOrCreateManager { (manager, error) in
             if (manager?.connection.status == .connected) {
                 self.state = manager?.connection.status ?? .invalid
-                connectionRepository.tryUpdate(isConnected: true)
+                connectionRepository.tryUpdateVpnStarted(isStarted: true)
                 self.vpnManager = manager
             } else {
                 self.state = manager?.connection.status ?? .invalid
-                connectionRepository.tryUpdate(isConnected: false)
+                connectionRepository.tryUpdateVpnStarted(isStarted: false)
             }
         }
 

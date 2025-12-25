@@ -23,19 +23,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }()
     
-    private var memoryTimer: DispatchSourceTimer?
-    
-    func startMemoryLogging() {
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .background))
-        timer.schedule(deadline: .now() + 5, repeating: 5)
-        timer.setEventHandler { [weak self] in
-            self?.reportMemoryUsageMB()
-        }
-        timer.resume()
-        memoryTimer = timer
-    }
-    
-    func reportMemoryUsageMB() {
+    func reportMemoryUsageMB() -> Double {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<natural_t>.stride)
 
@@ -49,9 +37,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let usedBytes = info.phys_footprint
             let usedMB = Double(usedBytes) / 1024.0 / 1024.0
             logs.writeLog(log: "[Memory] VPN use: \(String(format: "%.2f", usedMB)) MB")
-        } else {
-            logs.writeLog(log: "[Memory] unable to get info")
+            return usedMB
         }
+        logs.writeLog(log: "[Memory] unable to get info")
+        return 0.0
     }
     
     override func startTunnel(options: [String : NSObject]?) async throws {
@@ -109,9 +98,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         Task { await self.readPacketsFromTunnel() }
         Task { await self.processPacketsToDevice() }
         Task { await self.processPacketsFromDevice() }
-        
-        startMemoryLogging()
-                
+                        
         logs.writeLog(log: "startTunnel: all packet loops started")
     }
 
@@ -123,8 +110,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
-        if let msg = String(data: messageData, encoding: .utf8), msg == "heartbeat" {
-            completionHandler?("alive".data(using: .utf8))
+        if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
+            completionHandler?("Memory:\(reportMemoryUsageMB())".data(using: .utf8))
         } else {
             completionHandler?(messageData)
         }

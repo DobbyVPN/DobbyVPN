@@ -4,16 +4,25 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 class ConnectionStateRepository {
+    private val _statusFlow = MutableStateFlow(false)
+    val statusFlow = _statusFlow.asStateFlow()
 
-    private val _connectionFlow = MutableStateFlow(false)
+    private val _vpnStartedFlow = MutableStateFlow(false)
+    val vpnStartedFlow = _vpnStartedFlow.asStateFlow()
 
-    val flow = _connectionFlow.asStateFlow()
-
-    suspend fun update(isConnected: Boolean) {
-        _connectionFlow.emit(isConnected)
+    suspend fun updateStatus(isConnected: Boolean) {
+        _statusFlow.emit(isConnected)
     }
 
-    fun tryUpdate(isConnected: Boolean) {
-        _connectionFlow.tryEmit(isConnected)
+    fun tryUpdateStatus(isConnected: Boolean) {
+        _statusFlow.tryEmit(isConnected)
+    }
+
+    suspend fun updateVpnStarted(isStarted: Boolean) {
+        _vpnStartedFlow.emit(isStarted)
+    }
+
+    fun tryUpdateVpnStarted(isStarted: Boolean) {
+        _vpnStartedFlow.tryEmit(isStarted)
     }
 }

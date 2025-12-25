@@ -6,10 +6,8 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import com.dobby.awg.TunnelManager
 import com.dobby.awg.TunnelState
 import com.dobby.feature.logging.Logger
@@ -21,7 +19,6 @@ import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.vpn_service.domain.CloakConnectionInteractor
 import com.dobby.feature.vpn_service.domain.IpFetcher
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.isActive
@@ -30,11 +27,6 @@ import java.io.BufferedReader
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStreamReader
-import java.net.InetAddress
-import java.net.InetSocketAddress
-import java.net.Socket
-import java.net.SocketTimeoutException
-import java.net.UnknownHostException
 import java.nio.ByteBuffer
 import kotlin.coroutines.cancellation.CancellationException
 import java.util.Base64
@@ -83,7 +75,7 @@ class DobbyVpnService : VpnService() {
         initLogger()
         logger.log("Finish go logger init")
         serviceScope.launch {
-            connectionState.flow.drop(1).collect { isConnected ->
+            connectionState.statusFlow.drop(1).collect { isConnected ->
                 if (!isConnected) {
                     vpnInterface?.close()
                     vpnInterface = null
@@ -102,7 +94,7 @@ class DobbyVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        connectionState.tryUpdate(isConnected = false)
+        connectionState.tryUpdateVpnStarted(isStarted = false)
         serviceScope.cancel()
         runCatching {
             inputStream?.close()
@@ -119,7 +111,7 @@ class DobbyVpnService : VpnService() {
         serviceScope.launch {
             val ipAddress = ipFetcher.fetchIp()
             withContext(Dispatchers.Main) {
-                connectionState.update(isConnected = true)
+                connectionState.updateVpnStarted(isStarted = true)
                 if (ipAddress != null) {
                     logger.log("Tunnel: response from curl: $ipAddress")
                     setupVpn()
@@ -207,13 +199,6 @@ class DobbyVpnService : VpnService() {
             logRoutingTable()
 
             serviceScope.launch {
-                logger.log("Start function resolveAndLogDomain('google.com')")
-                val ipAddress = resolveAndLogDomain("google.com")
-                logger.log("Start function ping('1.1.1.1')")
-                async { ping("1.1.1.1") }.await()
-                ipAddress?.let(::checkServerAvailability)
-                    ?: logger.log("MyVpnService: Unable to resolve IP for google.com")
-
                 logger.log("Start curl after connection")
                 val response = ipFetcher.fetchIp()
                 logger.log("Response from curl: $response")
@@ -247,50 +232,6 @@ class DobbyVpnService : VpnService() {
         }
     }
 
-    private suspend fun resolveAndLogDomain(domain: String): String? {
-        return withContext(Dispatchers.IO) {
-            try {
-                withTimeout(5000L) {
-                    val address = InetAddress.getByName(domain)
-                    val ipAddress = address.hostAddress
-                    logger.log("VpnService: Domain resolved successfully. Domain: $domain, IP: $ipAddress")
-                    ipAddress
-                }
-            } catch (e: TimeoutCancellationException) {
-                logger.log("VpnService: Domain resolution timed out. Domain: $domain")
-                null
-            } catch (e: UnknownHostException) {
-                logger.log("VpnService: Failed to resolve domain. Domain: $domain: ${e.message}")
-                null
-            } catch (e: Exception) {
-                logger.log("VpnService: Exception during domain resolution. Domain: $domain, Error: ${e.message}")
-                null
-            }
-        }
-    }
-
-    private fun ping(host: String) {
-        serviceScope.launch {
-            try {
-                val processBuilder = ProcessBuilder("ping", "-c", "4", host)
-                processBuilder.redirectErrorStream(true)
-                val process = processBuilder.start()
-
-                val reader = BufferedReader(InputStreamReader(process.inputStream))
-                val output = StringBuilder()
-                var line: String?
-                while (reader.readLine().also { line = it } != null) {
-                    output.append(line).append("\n")
-                }
-
-                process.waitFor()
-                logger.log("VpnService: Ping output:\n$output")
-            } catch (e: Exception) {
-                logger.log("MyVpnService: Failed to execute ping command: ${e.message}")
-            }
-        }
-    }
-
     private fun startReadingPackets() {
         serviceScope.launch {
             vpnInterface?.let { vpn ->
@@ -315,45 +256,6 @@ class DobbyVpnService : VpnService() {
                     }
                     buffer.clear()
                 }
-            }
-        }
-    }
-
-    private fun checkServerAvailability(host: String) {
-        serviceScope.launch {
-            try {
-                val socket = Socket()
-                val socketAddress = InetSocketAddress(host, 443)
-
-                socket.connect(socketAddress, 5000)
-
-                if (socket.isConnected) {
-//                    val writer = OutputStreamWriter(socket.getOutputStream(), "UTF-8")
-//                    val reader = BufferedReader(InputStreamReader(socket.getInputStream(), "UTF-8"))
-//
-//                    val request = "GET / HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n"
-//                    writer.write(request)
-//                    writer.flush()
-//
-//                    val response = StringBuilder()
-//                    var line: String?
-//                    while (reader.readLine().also { line = it } != null) {
-//                        response.append(line).append("\n")
-//                    }
-
-                    logger.log("VpnService: Successfully reached $host on port 443 via TCP")
-                    //Logger.log("MyVpnService: Response from server:\n$response")
-
-//                    writer.close()
-//                    reader.close()
-                    socket.close()
-                } else {
-                    logger.log("VpnService: Failed to reach $host on port 443 via TCP")
-                }
-            } catch (e: SocketTimeoutException) {
-                logger.log("VpnService: Timeout error when connecting to $host on port 443 via TCP: ${e.message}")
-            } catch (e: Exception) {
-                logger.log("VpnService: Error when connecting to $host on port 443 via TCP: ${e.message}")
             }
         }
     }
