@@ -47,7 +47,7 @@ internal class DobbyVpnService(
         val localPort = "1984"
         logger.log("startCloakOutline with key: methodPassword = ${maskStr(methodPassword)} serverPort = ${maskStr(serverPort)}")
         runBlocking {
-            connectionState.update(isConnected = true)
+            connectionState.updateVpnStarted(isStarted = true)
             logger.log("CloakIsEnable = " + dobbyConfigsRepository.getIsCloakEnabled())
             if (dobbyConfigsRepository.getIsCloakEnabled()) {
                 vpnLibrary.startCloak(localHost, localPort, dobbyConfigsRepository.getCloakConfig(), false)
@@ -66,7 +66,7 @@ internal class DobbyVpnService(
                 logger.log("StopCloak")
                 vpnLibrary.stopCloak()
             }
-            connectionState.update(isConnected = false)
+            connectionState.updateVpnStarted(isStarted = false)
         }
     }
 

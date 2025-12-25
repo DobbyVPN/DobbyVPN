@@ -1,3 +1,4 @@
+import com.dobby.feature.diagnostic.domain.HealthCheck
 import com.dobby.feature.diagnostic.domain.IpRepository
 import com.dobby.feature.logging.domain.CopyLogsInteractor
 import com.dobby.feature.logging.domain.LogsRepository
@@ -20,6 +21,7 @@ fun makeNativeModule(
     connectionStateRepository: NativeInjectionFactory<ConnectionStateRepository>,
     vpnManager: NativeInjectionFactory<VpnManager>,
     awgManager: NativeInjectionFactory<AwgManager>,
+    healthCheck: NativeInjectionFactory<HealthCheck>,
 ): Module {
     return module {
         factory { vpnManager() }
@@ -30,5 +32,6 @@ fun makeNativeModule(
         single { ipRepository() }
         single { connectionStateRepository() }
         single { configsRepository() }
+        single { healthCheck() }
     }
 }

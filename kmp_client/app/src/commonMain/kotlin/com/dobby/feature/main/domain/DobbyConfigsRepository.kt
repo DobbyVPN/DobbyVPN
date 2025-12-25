@@ -53,6 +53,10 @@ interface DobbyConfigsRepository {
     // endregion
 
     fun couldStart(): Boolean
+
+    fun getIsUserInitStop(): Boolean
+
+    fun setIsUserInitStop(isUserInitStop: Boolean)
 }
 
 enum class VpnInterface {

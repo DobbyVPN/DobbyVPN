@@ -1,6 +1,7 @@
 import android.content.Context.MODE_PRIVATE
 import com.dobby.domain.DobbyConfigsRepositoryImpl
 import com.dobby.feature.diagnostic.IpRepositoryImpl
+import com.dobby.feature.diagnostic.domain.HealthCheckImpl
 import com.dobby.feature.logging.CopyLogsInteractorImpl
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogsRepository
@@ -29,7 +30,8 @@ val androidMainModule = makeNativeModule(
     },
     connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(androidContext()) },
-    awgManager = { AwgManagerImpl(androidContext()) }
+    awgManager = { AwgManagerImpl(androidContext()) },
+    healthCheck = { HealthCheckImpl() }
 )
 
 val androidVpnModule = module {
