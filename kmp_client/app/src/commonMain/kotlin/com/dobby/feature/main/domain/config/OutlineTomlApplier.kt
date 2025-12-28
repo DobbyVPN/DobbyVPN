@@ -19,13 +19,12 @@ internal class OutlineTomlApplier(
         const val DEFAULT_HTTPS_PORT = 443
     }
 
-    fun apply(outline: OutlineConfig): Pair<Boolean, Boolean>? {
+    fun apply(outline: OutlineConfig, cloakEnabled: Boolean): Pair<Boolean, Boolean>? {
         logger.log("Detected [Outline] config, applying Outline parameters")
         outlineRepo.setIsOutlineEnabled(true)
 
         val method = outline.Method?.trim().orEmpty().ifEmpty { DEFAULT_METHOD }
         val password = outline.Password?.trim().orEmpty()
-        val cloakEnabled = outline.Cloak == true
         val websocketEnabled = outline.WebSocket == true
 
         if (password.isEmpty()) {
@@ -68,8 +67,15 @@ internal class OutlineTomlApplier(
 
         val webSocketPath = outline.WebSocketPath?.trim().orEmpty()
         if (websocketEnabled) {
-            outlineRepo.setTcpPathOutline(webSocketPath)
-            outlineRepo.setUdpPathOutline(webSocketPath)
+            val base = webSocketPath.trimEnd('/')
+            if (base.isBlank()) {
+                outlineRepo.setTcpPathOutline("")
+                outlineRepo.setUdpPathOutline("")
+            } else {
+                // One input variable, but final URI needs tcp/udp suffixes.
+                outlineRepo.setTcpPathOutline("$base/tcp")
+                outlineRepo.setUdpPathOutline("$base/udp")
+            }
         } else {
             outlineRepo.setTcpPathOutline("")
             outlineRepo.setUdpPathOutline("")

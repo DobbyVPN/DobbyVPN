@@ -19,8 +19,8 @@ internal class CloakTomlApplier(
         const val DEFAULT_HTTPS_PORT = 443
         const val DEFAULT_CLOAK_PROXY_METHOD = "shadowsocks"
         const val DEFAULT_CLOAK_NUM_CONN = 8
-        const val DEFAULT_CLOAK_BROWSER_SIG = "chrome"
         const val DEFAULT_CLOAK_STREAM_TIMEOUT = 300
+        const val CLOAK_TRANSPORT_CDN = "CDN"
     }
 
     fun apply(outline: OutlineConfig, cloakEnabled: Boolean) {
@@ -31,7 +31,7 @@ internal class CloakTomlApplier(
 
         logger.log("Cloak enabled inside [Outline], building Cloak config")
 
-        val transport = outline.Transport?.trim().orEmpty()
+        val transport = outline.Transport?.trim().orEmpty().ifEmpty { CLOAK_TRANSPORT_CDN }
         val encryptionMethod = outline.EncryptionMethod?.trim().orEmpty()
         val uid = outline.UID?.trim().orEmpty()
         val publicKey = outline.PublicKey?.trim().orEmpty()
@@ -52,7 +52,7 @@ internal class CloakTomlApplier(
             remoteHost.isEmpty() ||
             remotePort.isEmpty()
         ) {
-            logger.log("Invalid [Outline] Cloak fields: Transport/EncryptionMethod/UID/PublicKey/Server/Port are required. Disabling Cloak.")
+            logger.log("Invalid [Cloak] fields: EncryptionMethod/UID/PublicKey/RemoteHost/RemotePort are required. Disabling Cloak.")
             cloakRepo.clearCloakConfig()
             return
         }
@@ -65,7 +65,7 @@ internal class CloakTomlApplier(
             PublicKey = publicKey,
             ServerName = serverName,
             NumConn = outline.NumConn ?: DEFAULT_CLOAK_NUM_CONN,
-            BrowserSig = outline.BrowserSig?.trim().orEmpty().ifEmpty { DEFAULT_CLOAK_BROWSER_SIG },
+            BrowserSig = outline.BrowserSig?.trim()?.takeIf { it.isNotEmpty() },
             StreamTimeout = outline.StreamTimeout ?: DEFAULT_CLOAK_STREAM_TIMEOUT,
             RemoteHost = remoteHost,
             RemotePort = remotePort,
