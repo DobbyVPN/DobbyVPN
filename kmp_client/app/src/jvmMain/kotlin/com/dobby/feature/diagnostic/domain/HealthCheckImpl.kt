@@ -146,6 +146,6 @@ class HealthCheckImpl(
     }
 
     override fun getTimeToWakeUp(): Int {
-        return 2
+        return 15
     }
 }
