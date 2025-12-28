@@ -91,7 +91,7 @@ fun DobbySocksScreen(
 
             Button(
                 onClick = {
-                    mainViewModel.onConnectionButtonClicked(connectionURL, uiMainState.isConnected)
+                    mainViewModel.onConnectionButtonClicked(connectionURL)
                 },
                 shape = RoundedCornerShape(6.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -100,7 +100,7 @@ fun DobbySocksScreen(
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(if (uiMainState.isConnected) "Disconnect" else "Connect")
+                Text(if (uiMainState.isVpnStarted) "Stop" else "Start")
             }
         }
 

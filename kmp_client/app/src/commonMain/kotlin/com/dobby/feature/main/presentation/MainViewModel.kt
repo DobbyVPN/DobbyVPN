@@ -1,11 +1,9 @@
 package com.dobby.feature.main.presentation
 
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.dobby.feature.diagnostic.domain.HealthCheck
+import com.dobby.feature.diagnostic.domain.HealthCheckManager
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.AwgManager
@@ -15,30 +13,31 @@ import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.clearOutlineAndCloakConfig
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.domain.VpnInterface
+import com.dobby.feature.main.domain.TomlConfigs
 import com.dobby.feature.main.ui.MainUiState
 import com.dobby.feature.main.domain.config.TomlConfigApplier
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import com.dobby.vpn.BuildConfig
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 
 val httpClient = HttpClient()
 
 class MainViewModel(
-    private val configsRepository: DobbyConfigsRepository,
-    private val connectionStateRepository: ConnectionStateRepository,
+    val configsRepository: DobbyConfigsRepository,
+    val connectionStateRepository: ConnectionStateRepository,
     private val permissionEventsChannel: PermissionEventsChannel,
     private val vpnManager: VpnManager,
     private val awgManager: AwgManager,
     private val logger: Logger,
+    healthCheck: HealthCheck,
 ) : ViewModel() {
-    //region Cloak states
     private val _uiState = MutableStateFlow(MainUiState())
-
     val uiState: StateFlow<MainUiState> = _uiState
     //endregion
 
@@ -57,9 +56,9 @@ class MainViewModel(
     var awgConnectionState: MutableState<AwgConnectionState>
         private set
     //endregion
+    private val healthCheckManager: HealthCheckManager = HealthCheckManager(healthCheck, this, configsRepository, logger)
 
     init {
-        // Cloak init
         viewModelScope.launch {
             _uiState.emit(
                 MainUiState(
@@ -67,10 +66,17 @@ class MainViewModel(
                 )
             )
         }
-
         viewModelScope.launch {
-            connectionStateRepository.flow.collect { isConnected ->
+            connectionStateRepository.statusFlow.collect { isConnected ->
+                logger.log("Update connection state: $isConnected")
                 val newState = _uiState.value.copy(isConnected = isConnected)
+                _uiState.emit(newState)
+            }
+        }
+        viewModelScope.launch {
+            connectionStateRepository.vpnStartedFlow.collect { isStarted ->
+                logger.log("Update vpn started state: $isStarted")
+                val newState = _uiState.value.copy(isVpnStarted = isStarted)
                 _uiState.emit(newState)
             }
         }
@@ -79,22 +85,11 @@ class MainViewModel(
                 .permissionsGrantedEvents
                 .collect { isPermissionGranted -> startVpn(isPermissionGranted) }
         }
-
-        // AmneziaWG init
-        awgVersion = awgManager.getAwgVersion()
-
-        val awgConfigStoredValue = configsRepository.getAwgConfig()
-        val awgConnectionStoredValue =
-            if (configsRepository.getIsAmneziaWGEnabled()) AwgConnectionState.ON
-            else AwgConnectionState.OFF
-        awgConfigState = mutableStateOf(awgConfigStoredValue)
-        awgConnectionState = mutableStateOf(awgConnectionStoredValue)
     }
 
     //region Cloak functions
     fun onConnectionButtonClicked(
-        connectionUrl: String,
-        isConnected: Boolean
+        connectionUrl: String
     ) {
         logger.log("The connection button was clicked with URL: ${maskStr(connectionUrl)}")
 
@@ -103,29 +98,35 @@ class MainViewModel(
             return
         }
 
-        logger.log("Proceeding with setConfig for the provided URL...")
-        if (!isConnected) {
-            try {
-                logger.log("We get config by ${maskStr(connectionUrl)}")
-                setConfig(connectionUrl)
-            } catch (e: Exception) {
-                logger.log("Error during setConfig: ${e.message}")
-                return
-            } finally {
-                logger.log("Finish setConfig()")
+        viewModelScope.launch(Dispatchers.IO) {
+            logger.log("Proceeding with setConfig for the provided URL...")
+            if (!connectionStateRepository.vpnStartedFlow.value) {
+                try {
+                    logger.log("We get config by ${maskStr(connectionUrl)}")
+                    setConfig(connectionUrl)
+                } catch (e: Exception) {
+                    logger.log("Error during setConfig: ${e.message}")
+                    return@launch
+                } finally {
+                    logger.log("Finish setConfig()")
+                }
             }
-        }
 
-        viewModelScope.launch {
-            val currentState = connectionStateRepository.flow.value
-            logger.log("Current connection state: $currentState")
+            val currentState = connectionStateRepository.vpnStartedFlow.value
+            logger.log("Current vpnStarted state: $currentState")
+            configsRepository.setIsUserInitStop(currentState)
 
             when (currentState) {
                 true -> {
                     logger.log("Stopping VPN service due to active connection")
+                    connectionStateRepository.updateVpnStarted(false)
+                    connectionStateRepository.updateStatus(false)
+                    healthCheckManager.stopHealthCheck()
                     stopVpnService()
                 }
                 false -> {
+                    connectionStateRepository.updateVpnStarted(true)
+                    logger.log("Update vpnStarted state: VpnState = ${connectionStateRepository.vpnStartedFlow.value}")
                     logger.log("VPN is currently disconnected")
                     if (isPermissionCheckNeeded) {
                         logger.log("Permission check required, triggering permission dialog")
@@ -139,7 +140,7 @@ class MainViewModel(
         }
     }
 
-    private fun setConfig(connectionUrl: String) {
+    private suspend fun setConfig(connectionUrl: String) {
         logger.log("Start setConfig() with connectionUrl: ${maskStr(connectionUrl)}")
 
         configsRepository.setConnectionURL(connectionUrl)
@@ -158,21 +159,17 @@ class MainViewModel(
             }
     }
 
-    private fun getConfigByURL(connectionUrl: String): String {
+    private suspend fun getConfigByURL(connectionUrl: String): String {
         logger.log("getConfigByURL() called with: ${maskStr(connectionUrl)}")
 
         return if (connectionUrl.startsWith("http://") || connectionUrl.startsWith("https://")) {
             try {
                 logger.log("Fetching config from remote URL...")
-                runBlocking {
-                    httpClient.get(connectionUrl) {
-                        headers {
-                            append("User-Agent", "DobbyVPN v${BuildConfig.VERSION_NAME}")
-                        }
-                    }.bodyAsText()
-                }.also {
-                    logger.log("Successfully fetched remote config (${it.length} bytes)")
-                }
+                httpClient.get(connectionUrl) {
+                    headers {
+                        append("User-Agent", "DobbyVPN v${BuildConfig.VERSION_NAME}")
+                    }
+                }.bodyAsText()
             } catch (e: Exception) {
                 val errorMsg = "Can't get config by url. Error: ${e.message}"
                 logger.log(errorMsg)
@@ -194,44 +191,20 @@ class MainViewModel(
         }
     }
 
-    private fun startVpnService() {
+    fun startVpnService() {
         logger.log("Starting VPN service...")
         vpnManager.start()
+        healthCheckManager.startHealthCheck()
     }
 
-    private suspend fun stopVpnService() {
+    fun stopVpnService(stoppedByHealthCheck: Boolean = false) {
         logger.log("Stopping VPN service...")
         vpnManager.stop()
-        configsRepository.clearOutlineAndCloakConfig()
-        connectionStateRepository.update(isConnected = false)
+        if (!stoppedByHealthCheck) {
+            configsRepository.clearOutlineAndCloakConfig()
+            connectionStateRepository.update(isConnected = false)
+        }
         logger.log("VPN service stopped successfully, state reset to disconnected")
     }
     //endregion
-
-    //region AmneziaWG functions
-    fun onAwgConfigEdit(newConfig: String) {
-        var configDelegate by awgConfigState
-        configsRepository.setAwgConfig(newConfig)
-        configDelegate = newConfig
-    }
-
-    fun onAwgConnect() {
-        viewModelScope.launch { permissionEventsChannel.checkPermissions() }
-
-        var connectionStateDelegate by awgConnectionState
-        connectionStateDelegate = AwgConnectionState.ON
-        configsRepository.setIsAmneziaWGEnabled(true)
-        configsRepository.setVpnInterface(VpnInterface.AMNEZIA_WG)
-        awgManager.onAwgConnect()
-    }
-
-    fun onAwgDisconnect() {
-        var connectionStateDelegate by awgConnectionState
-        connectionStateDelegate = AwgConnectionState.OFF
-        configsRepository.setIsAmneziaWGEnabled(false)
-        configsRepository.setVpnInterface(VpnInterface.AMNEZIA_WG)
-        awgManager.onAwgDisconnect()
-    }
-    //endregion
 }
-

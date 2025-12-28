@@ -98,7 +98,7 @@ internal class DobbyVpnService(
         logger.log("Outline prefix: ${prefix.ifEmpty { "(none)" }}")
         logger.log("Outline websocket: $websocketEnabled, tcpPath: ${tcpPath.ifEmpty { "(none)" }}, udpPath: ${udpPath.ifEmpty { "(none)" }}")
         runBlocking {
-            connectionState.update(isConnected = true)
+            connectionState.updateVpnStarted(isStarted = true)
             logger.log("CloakIsEnable = " + dobbyConfigsRepository.getIsCloakEnabled())
             if (dobbyConfigsRepository.getIsCloakEnabled()) {
                 vpnLibrary.startCloak(localHost, localPort, dobbyConfigsRepository.getCloakConfig(), false)
@@ -129,7 +129,7 @@ internal class DobbyVpnService(
                 logger.log("StopCloak")
                 vpnLibrary.stopCloak()
             }
-            connectionState.update(isConnected = false)
+            connectionState.updateVpnStarted(isStarted = false)
         }
     }
 

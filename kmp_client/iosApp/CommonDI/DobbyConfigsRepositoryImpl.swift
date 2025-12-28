@@ -18,6 +18,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let TcpPathOutlineKey = "TcpPathOutlineKey"
     private let isWebsocketEnabledKey = "isWebsocketEnabledKey"
     private let UdpPathOutlineKey = "UdpPathOutlineKey"
+    private let isUserInitStopKey = "isUserInitStopKey"
 
     public func getConnectionURL() -> String {
         return userDefaults.string(forKey: connectionURLKey) ?? ""
@@ -137,5 +138,14 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func couldStart() -> Bool {
         return true
+    }
+    
+    public func getIsUserInitStop() -> Bool {
+        return userDefaults.bool(forKey: isUserInitStopKey)
+    }
+
+    
+    public func setIsUserInitStop(isUserInitStop: Bool) {
+        userDefaults.set(isUserInitStop, forKey: isUserInitStopKey)
     }
 }

@@ -195,6 +195,18 @@ internal class DobbyConfigsRepositoryImpl(
         return true
     }
 
+    override fun getIsUserInitStop(): Boolean {
+        return prefs.getBoolean("isUserInitStop", true).also {
+            AndroidLog("DOBBY_TAG", "getIsUserInitStop = $it")
+        }
+    }
+
+    override fun setIsUserInitStop(isUserInitStop: Boolean) {
+        prefs.edit().putBoolean("isUserInitStop", isUserInitStop).apply().also {
+            AndroidLog("DOBBY_TAG", "setIsUserInitStop = $isUserInitStop")
+        }
+    }
+
     companion object {
         const val DEFAULT_AWG_CONFIG = """[Interface]
 PrivateKey = <...>
