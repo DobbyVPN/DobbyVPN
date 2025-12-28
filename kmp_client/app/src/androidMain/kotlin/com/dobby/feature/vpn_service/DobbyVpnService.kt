@@ -205,7 +205,7 @@ class DobbyVpnService : VpnService() {
 
                 if (methodPassword.isEmpty() || serverPort.isEmpty()) {
                     logger.log("Previously used outline apiKey is empty")
-                    connectionState.tryUpdate(isConnected = false)
+                    connectionState.tryUpdateStatus(false)
                     stopCloakClient()
                     stopSelf()
                     return@launch
@@ -226,14 +226,14 @@ class DobbyVpnService : VpnService() {
                         logger.log("Cloak connection result is $cloakResult")
                         if (cloakResult is ConnectResult.Error || cloakResult is ConnectResult.ValidationError) {
                             logger.log("Cloak failed to start, stopping VPN service")
-                            connectionState.tryUpdate(isConnected = false)
+                            connectionState.tryUpdateStatus(false)
                             stopCloakClient()
                             stopSelf()
                             return@launch
                         }
                     } else {
                         logger.log("Cloak enabled but config is empty, stopping VPN service")
-                        connectionState.tryUpdate(isConnected = false)
+                        connectionState.tryUpdateStatus(false)
                         stopCloakClient()
                         stopSelf()
                         return@launch
@@ -254,7 +254,7 @@ class DobbyVpnService : VpnService() {
                 val connected = outlineLibFacade.init(outlineUrl)
                 if (!connected) {
                     logger.log("Outline connection FAILED, stopping VPN service")
-                    connectionState.tryUpdate(isConnected = false)
+                    connectionState.tryUpdateStatus(false)
                     stopCloakClient()
                     stopSelf()
                     return@launch
@@ -265,7 +265,7 @@ class DobbyVpnService : VpnService() {
                 }
 
                 setupVpn()
-                connectionState.update(isConnected = true)
+                connectionState.updateStatus(true)
             }
         } else {
             logger.log("Start disconnecting Outline")

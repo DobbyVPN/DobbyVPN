@@ -241,13 +241,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "startCloakOutline: entering")
         
         if configsRepository.getIsCloakEnabled() {
-            do {
-                logs.writeLog(log: "startCloakOutline: starting cloak")
-                Cloak_outlineStartCloakClient("127.0.0.1", localPort, configsRepository.getCloakConfig(), false)
-                logs.writeLog(log: "startCloakOutline: started")
-            } catch {
-                logs.writeLog(log: "startCloakOutline error: \(error)")
-            }
+            logs.writeLog(log: "startCloakOutline: starting cloak")
+            Cloak_outlineStartCloakClient("127.0.0.1", localPort, configsRepository.getCloakConfig(), false)
+            logs.writeLog(log: "startCloakOutline: started")
         } else {
             logs.writeLog(log: "startCloakOutline: cloak disabled")
         }
