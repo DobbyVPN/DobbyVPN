@@ -35,7 +35,7 @@ class HealthCheckManager(
         logger.log("[HC] Initial state: startAttempts=$startAttemptsCount, retries=$retriesCount")
 
         healthJob = scope.launch {
-            delay(2_000)
+            delay(healthCheck.timeToWakeUp * 1_000L)
 
             logger.log("[HC] Health check started")
 
@@ -106,7 +106,7 @@ class HealthCheckManager(
                     logger.log("[HC] Connected → counters reset")
                 }
 
-                delay(2_000)
+                delay(10_000)
             }
 
             logger.log("[HC] Health check loop finished (job inactive)")

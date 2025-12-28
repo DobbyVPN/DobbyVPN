@@ -8,6 +8,8 @@ import Network
 
 public final class HealthCheckImpl: HealthCheck {
 
+    public let timeToWakeUp = 2
+
     public static let shared = HealthCheckImpl()
 
     private let logs = NativeModuleHolder.logsRepository

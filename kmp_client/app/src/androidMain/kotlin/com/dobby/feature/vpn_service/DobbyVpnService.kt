@@ -30,6 +30,7 @@ import java.io.InputStreamReader
 import java.nio.ByteBuffer
 import kotlin.coroutines.cancellation.CancellationException
 import java.util.Base64
+import android.os.Debug
 
 private const val IS_FROM_UI = "isLaunchedFromUi"
 
@@ -44,6 +45,8 @@ private fun buildOutlineUrl(
 class DobbyVpnService : VpnService() {
 
     companion object {
+        @Volatile
+        var instance: DobbyVpnService? = null
 
         fun createIntent(context: Context): Intent {
             return Intent(context, DobbyVpnService::class.java).apply {
@@ -71,6 +74,7 @@ class DobbyVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         logger.log("Start go logger init with file = ${provideLogFilePath().toString()}")
         initLogger()
         logger.log("Finish go logger init")
@@ -103,7 +107,15 @@ class DobbyVpnService : VpnService() {
             disableCloakIfNeeded()
         }.onFailure { it.printStackTrace() }
         tunnelManager.updateState(null, TunnelState.DOWN)
+        instance = null
         super.onDestroy()
+    }
+
+    fun getMemoryUsageMB(): Double {
+        val memInfo = Debug.MemoryInfo()
+        Debug.getMemoryInfo(memInfo)
+
+        return memInfo.totalPss / 1024.0
     }
 
     private fun startCloakOutline(intent: Intent?) {

@@ -18,7 +18,7 @@ val jvmMainModule = makeNativeModule(
     connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(get()) },
     awgManager = { AwgManagerImpl(get()) },
-    healthCheck = { HealthCheckImpl() }
+    healthCheck = { HealthCheckImpl(get()) }
 )
 
 val jvmVpnModule = module {

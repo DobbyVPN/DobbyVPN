@@ -31,7 +31,7 @@ val androidMainModule = makeNativeModule(
     connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(androidContext()) },
     awgManager = { AwgManagerImpl(androidContext()) },
-    healthCheck = { HealthCheckImpl() }
+    healthCheck = { HealthCheckImpl(get()) }
 )
 
 val androidVpnModule = module {
