@@ -1,5 +1,7 @@
 package com.dobby.feature.main.presentation
 
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dobby.feature.diagnostic.domain.HealthCheck
@@ -48,12 +50,14 @@ class MainViewModel(
     )
 
     //region AmneziaWG states
-    val awgVersion: String
+    val awgVersion: String = awgManager.getAwgVersion()
 
-    var awgConfigState: MutableState<String>
+    var awgConfigState: MutableState<String> = mutableStateOf(configsRepository.getAwgConfig())
         private set
 
-    var awgConnectionState: MutableState<AwgConnectionState>
+    var awgConnectionState: MutableState<AwgConnectionState> = mutableStateOf(
+        if (configsRepository.getIsAmneziaWGEnabled()) AwgConnectionState.ON else AwgConnectionState.OFF
+    )
         private set
     //endregion
     private val healthCheckManager: HealthCheckManager = HealthCheckManager(healthCheck, this, configsRepository, logger)
@@ -202,7 +206,7 @@ class MainViewModel(
         vpnManager.stop()
         if (!stoppedByHealthCheck) {
             configsRepository.clearOutlineAndCloakConfig()
-            connectionStateRepository.update(isConnected = false)
+            connectionStateRepository.updateStatus(false)
         }
         logger.log("VPN service stopped successfully, state reset to disconnected")
     }
