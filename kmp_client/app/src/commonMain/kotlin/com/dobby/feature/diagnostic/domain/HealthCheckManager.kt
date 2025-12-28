@@ -35,7 +35,7 @@ class HealthCheckManager(
         logger.log("[HC] Initial state: startAttempts=$startAttemptsCount, retries=$retriesCount")
 
         healthJob = scope.launch {
-            delay(healthCheck.timeToWakeUp * 1_000L)
+            delay(healthCheck.getTimeToWakeUp() * 1_000L)
 
             logger.log("[HC] Health check started")
 

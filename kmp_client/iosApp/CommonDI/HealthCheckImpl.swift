@@ -8,8 +8,6 @@ import Network
 
 public final class HealthCheckImpl: HealthCheck {
 
-    public let timeToWakeUp = 2
-
     public static let shared = HealthCheckImpl()
 
     private let logs = NativeModuleHolder.logsRepository
@@ -270,5 +268,9 @@ public final class HealthCheckImpl: HealthCheck {
 
         _ = semaphore.wait(timeout: .now() + timeout)
         return memory
+    }
+
+    public func getTimeToWakeUp() -> Int32 {
+        return 2
     }
 }

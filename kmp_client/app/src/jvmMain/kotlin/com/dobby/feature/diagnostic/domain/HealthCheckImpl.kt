@@ -13,8 +13,6 @@ class HealthCheckImpl(
 
     private val timeoutMs = 1_000L
 
-    override val timeToWakeUp = 15
-
     @Volatile
     var currentMemoryUsageMb: Double = -1.0
         private set
@@ -145,5 +143,9 @@ class HealthCheckImpl(
         val runtime = Runtime.getRuntime()
         val usedBytes = runtime.totalMemory() - runtime.freeMemory()
         return usedBytes / 1024.0 / 1024.0
+    }
+
+    override fun getTimeToWakeUp(): Int {
+        return 2
     }
 }

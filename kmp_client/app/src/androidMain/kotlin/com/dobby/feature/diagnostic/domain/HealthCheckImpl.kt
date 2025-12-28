@@ -12,8 +12,6 @@ class HealthCheckImpl(
     private val logger: Logger,
 ) : HealthCheck {
 
-    override val timeToWakeUp = 2
-
     private val timeoutMs = 1_000L
 
     @Volatile
@@ -73,6 +71,10 @@ class HealthCheckImpl(
 
         logger.log("[HealthCheck] RESULT = $ok")
         return ok
+    }
+
+    override fun getTimeToWakeUp(): Int {
+        return 2
     }
 
     private fun runWithRetry(
