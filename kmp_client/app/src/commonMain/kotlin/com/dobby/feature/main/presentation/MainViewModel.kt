@@ -206,7 +206,7 @@ class MainViewModel(
         vpnManager.stop()
         if (!stoppedByHealthCheck) {
             configsRepository.clearOutlineAndCloakConfig()
-            connectionStateRepository.updateStatus(false)
+            connectionStateRepository.tryUpdateStatus(false)
         }
         logger.log("VPN service stopped successfully, state reset to disconnected")
     }
