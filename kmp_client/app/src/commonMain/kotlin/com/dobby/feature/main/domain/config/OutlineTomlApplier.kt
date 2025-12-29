@@ -25,6 +25,7 @@ internal class OutlineTomlApplier(
 
         val method = outline.Method?.trim().orEmpty().ifEmpty { DEFAULT_METHOD }
         val password = outline.Password?.trim().orEmpty()
+        val cloakEnabled = outline.Cloak == true
         val websocketEnabled = outline.WebSocket == true
 
         if (password.isEmpty()) {
