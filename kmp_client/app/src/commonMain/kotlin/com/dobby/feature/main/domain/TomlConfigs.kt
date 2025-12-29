@@ -10,7 +10,7 @@ data class OutlineConfig(
     val Method: String? = null,
     val Password: String? = null,
     val WebSocket: Boolean? = null,
-    val Prefix: String? = null,
+    val DisguisePrefix: String? = null,
     val WebSocketPath: String? = null,
 
     // Cloak (configured inside [Outline])

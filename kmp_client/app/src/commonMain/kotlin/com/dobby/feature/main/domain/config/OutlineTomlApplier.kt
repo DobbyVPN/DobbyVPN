@@ -64,7 +64,9 @@ internal class OutlineTomlApplier(
 
         // Always persist to avoid stale values from previous configs.
         outlineRepo.setIsWebsocketEnabled(websocketEnabled)
-        outlineRepo.setPrefixOutline(outline.Prefix ?: "") // Don't trim! Spaces may be intentional
+        // Don't trim! Spaces may be intentional (e.g. "POST ").
+        val disguisePrefix = outline.DisguisePrefix ?: ""
+        outlineRepo.setPrefixOutline(disguisePrefix)
 
         val webSocketPath = outline.WebSocketPath?.trim().orEmpty()
         if (websocketEnabled) {
@@ -81,7 +83,7 @@ internal class OutlineTomlApplier(
             outlineRepo.setUdpPathOutline("")
         }
 
-        logger.log("Outline prefix: ${outline.Prefix ?: "(none)"}")
+        logger.log("Outline disguisePrefix: ${disguisePrefix.ifEmpty { "(none)" }}")
         logger.log("Outline websocket: $websocketEnabled, webSocketPath: ${outline.WebSocketPath ?: "(none)"}")
         logger.log("Outline method, password, and server: ${method}:${maskStr(password)}@${maskStr(outlineRepo.getServerPortOutline())}")
 
