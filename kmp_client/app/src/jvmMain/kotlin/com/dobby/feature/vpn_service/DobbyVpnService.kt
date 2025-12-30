@@ -68,21 +68,38 @@ internal class DobbyVpnService(
     private val vpnLibrary: VPNLibraryLoader,
     private val connectionState: ConnectionStateRepository
 ) {
+    private val startStopLock = Any()
+    private var runningInterface: VpnInterface? = null
 
     fun startService() {
-        when(dobbyConfigsRepository.getVpnInterface()) {
-            VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
-            VpnInterface.AMNEZIA_WG -> startAwg()
+        synchronized(startStopLock) {
+            if (runningInterface != null) {
+                stopCurrentLocked()
+            }
+
+            val iface = dobbyConfigsRepository.getVpnInterface()
+            when (iface) {
+                VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
+                VpnInterface.AMNEZIA_WG -> startAwg()
+            }
+            runningInterface = iface
         }
     }
 
     fun stopService() {
-        when(dobbyConfigsRepository.getVpnInterface()) {
-            VpnInterface.CLOAK_OUTLINE -> stopCloakOutline()
-            VpnInterface.AMNEZIA_WG -> stopAwg()
+        synchronized(startStopLock) {
+            stopCurrentLocked()
         }
     }
 
+    private fun stopCurrentLocked() {
+        when (runningInterface) {
+            VpnInterface.CLOAK_OUTLINE -> stopCloakOutline()
+            VpnInterface.AMNEZIA_WG -> stopAwg()
+            null -> return
+        }
+        runningInterface = null
+    }
 
     private fun startCloakOutline() {
         logger.log("Start startCloakOutline")
@@ -136,12 +153,14 @@ internal class DobbyVpnService(
     private fun startAwg() {
         val apiKey = dobbyConfigsRepository.getAwgConfig()
         logger.log("startAwg with key: $apiKey")
+        runBlocking { connectionState.updateVpnStarted(isStarted = true) }
         vpnLibrary.startAwg(apiKey)
     }
 
     private fun stopAwg() {
         logger.log("stopAwg")
         vpnLibrary.stopAwg()
+        runBlocking { connectionState.updateVpnStarted(isStarted = false) }
     }
 
 }

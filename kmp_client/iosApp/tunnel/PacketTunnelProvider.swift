@@ -16,6 +16,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var logs = NativeModuleHolder.logsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
     
+    private var readPacketsTask: Task<Void, Never>?
+    private var processToDeviceTask: Task<Void, Never>?
+    private var processFromDeviceTask: Task<Void, Never>?
+    
     private var packetContinuation: AsyncStream<(Data, NSNumber)>.Continuation!
     private lazy var packetStream: AsyncStream<(Data, NSNumber)> = {
         AsyncStream<(Data, NSNumber)>(bufferingPolicy: .bufferingOldest(20)) { continuation in
@@ -46,6 +50,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     override func startTunnel(options: [String : NSObject]?) async throws {
         logs.writeLog(log: "startTunnel in PacketTunnelProvider, thread: \(Thread.current)")
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
+        
+        // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
+        await teardownForStop(reason: "pre-start cleanup")
         let methodPassword = configsRepository.getMethodPasswordOutline()
         let serverPort = configsRepository.getServerPortOutline()
         let prefix = configsRepository.getPrefixOutline()
@@ -111,12 +118,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "Start go logger init path = \(path)")
         Cloak_outlineInitLogger(path)
         logs.writeLog(log: "Finish go logger init")
-        device.initialize(config: config, _logs: logs)
+        if !device.initialize(config: config, _logs: logs) {
+            logs.writeLog(log: "[startTunnel] Device initialization failed; aborting startTunnel")
+            throw NSError(domain: "PacketTunnelProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: "Outline device initialization failed"])
+        }
         startCloak()
         
-        Task { await self.readPacketsFromTunnel() }
-        Task { await self.processPacketsToDevice() }
-        Task { await self.processPacketsFromDevice() }
+        readPacketsTask = Task { await self.readPacketsFromTunnel() }
+        processToDeviceTask = Task { await self.processPacketsToDevice() }
+        processFromDeviceTask = Task { await self.processPacketsFromDevice() }
                         
         logs.writeLog(log: "startTunnel: all packet loops started")
     }
@@ -124,8 +134,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         logs.writeLog(log: "Stopping tunnel with reason: \(reason)")
         configsRepository.setIsUserInitStop(isUserInitStop: true)
-        stopCloak()
-        completionHandler()
+        Task {
+            await teardownForStop(reason: "stopTunnel(\(reason))")
+            completionHandler()
+        }
     }
     
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
@@ -139,7 +151,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func readPacketsFromTunnel() async {
         logs.writeLog(log: "Starting async readPacketsFromTunnel()…")
 
-        while true {
+        while !Task.isCancelled {
             do {
                 let (packets, protocols) = try await packetFlow.readPacketsAsync()
                 
@@ -149,6 +161,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     packetContinuation.yield((packets[i], protocols[i]))
                 }
             } catch {
+                if Task.isCancelled { break }
                 logs.writeLog(log: "[readPacketsFromTunnel] Error: \(error.localizedDescription)")
             }
         }
@@ -158,6 +171,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "Starting async processPacketsToDevice()…")
 
         for await (packet, _) in packetStream {
+            if Task.isCancelled { break }
             device.write(data: packet)
         }
     }
@@ -165,14 +179,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func processPacketsFromDevice() async {
         logs.writeLog(log: "Starting async processPacketsFromDevice()…")
 
-        while true {
-            autoreleasepool {
-                let data = device.readFromDevice()
-                
-                let ok = packetFlow.writePackets([data], withProtocols: [NSNumber(value: AF_INET)])
-                if !ok {
-                    logs.writeLog(log: "Failed to write packets to NEPacketFlow")
-                }
+        while !Task.isCancelled {
+            let data: Data = autoreleasepool {
+                device.readFromDevice()
+            }
+            if data.isEmpty {
+                usleep(5_000)
+                continue
+            }
+            
+            let ok = packetFlow.writePackets([data], withProtocols: [NSNumber(value: AF_INET)])
+            if !ok {
+                logs.writeLog(log: "Failed to write packets to NEPacketFlow")
             }
         }
     }
@@ -192,7 +210,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let hostPort = hostPortMaybeWithQuery.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? hostPortMaybeWithQuery
             let trimmed = hostPort.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.hasPrefix("[") {
-                // IPv6 в квадратных скобках: [2001:db8::1]:443
+                // IPv6 wrapped in square brackets: [2001:db8::1]:443
                 if let start = trimmed.firstIndex(of: "["), let end = trimmed.firstIndex(of: "]"), start < end {
                     return String(trimmed[trimmed.index(after: start)..<end])
                 }
@@ -203,7 +221,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return trimmed
         }
 
-        // Добавляем параметр prefix, если он задан (URL-encoding)
+        // Add the `prefix` query param if present (URL-encoded)
         let ssUrl: String
         if !prefix.isEmpty {
             let separator = serverPort.contains("?") ? "&" : "?"
@@ -213,18 +231,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             ssUrl = baseUrl
         }
 
-        // Если включён WebSocket — оборачиваем в WebSocket over TLS transport (wss://)
+        // If WebSocket is enabled, wrap the Shadowsocks URL into WebSocket-over-TLS transport (wss://)
         if websocketEnabled {
             let effectiveHost = extractHost(serverPort).trimmingCharacters(in: .whitespacesAndNewlines)
 
             var wsParams: [String] = []
-            // outline-sdk v0.0.16: ws: не поддерживает опцию host= (будет "Unsupported option host")
-            // Доменные параметры задаём через TLS SNI (tls:sni=...).
+            // outline-sdk v0.0.16: ws: does not support the `host=` option ("Unsupported option host")
+            // Domain-related routing should be configured via TLS SNI (tls:sni=...).
             if !tcpPath.isEmpty { wsParams.append("tcp_path=\(tcpPath)") }
             if !udpPath.isEmpty { wsParams.append("udp_path=\(udpPath)") }
             
             let wsParamsStr = wsParams.joined(separator: "&")
-            // Используем tls:sni|ws: для WebSocket over TLS (wss://) через SNI
+            // Use tls:sni|ws: for WebSocket-over-TLS (wss://) via SNI
             let tlsPrefix = "tls:sni=\(effectiveHost)"
             if !wsParamsStr.isEmpty {
                 return "\(tlsPrefix)|ws:\(wsParamsStr)|\(ssUrl)"
@@ -255,6 +273,27 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             Cloak_outlineStopCloakClient()
         }
     }
+    
+    @MainActor
+    private func teardownForStop(reason: String) async {
+        logs.writeLog(log: "[teardown] begin (\(reason))")
+        
+        packetContinuation?.finish()
+        
+        readPacketsTask?.cancel()
+        processToDeviceTask?.cancel()
+        processFromDeviceTask?.cancel()
+        
+        stopCloak()
+        Cloak_outlineStopHealthCheck()
+        device.close()
+        
+        readPacketsTask = nil
+        processToDeviceTask = nil
+        processFromDeviceTask = nil
+        
+        logs.writeLog(log: "[teardown] end (\(reason))")
+    }
 
     func parseIPv4Packet(_ data: Data) -> String {
         guard data.count >= 20 else { return "Invalid IPv4 packet" }
@@ -263,13 +302,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let proto = data[9]
         return " route \(sourceIP) → \(destinationIP), proto: \(proto)"
     }
-    /// Извлекает IP из строки "ip:port"
+    /// Extracts the host/IP part from a string like "ip:port"
     func extractIP(from serverPort: String) -> String? {
         guard !serverPort.isEmpty else { return nil }
         return serverPort.split(separator: ":").first.map(String.init)
     }
 
-    /// Извлекает RemoteHost из Cloak JSON
+    /// Extracts `RemoteHost` from Cloak JSON
     func extractRemoteHost(from cloakConfig: String) -> String? {
         guard
             !cloakConfig.isEmpty,
@@ -283,7 +322,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return remoteHost
     }
 
-    /// Преобразует host/IP в исключённый маршрут /32
+    /// Converts host/IP into an excluded /32 route
     func makeExcludedRoute(host: String) -> NEIPv4Route? {
         return NEIPv4Route(destinationAddress: host, subnetMask: "255.255.255.255")
     }
@@ -297,7 +336,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return true
     }
 
-    /// Если host не является IPv4-литералом, резолвит его в IPv4 (первый A-record). Возвращает nil при ошибке.
+    /// If `host` is not an IPv4 literal, resolves it to IPv4 (first A record). Returns nil on error.
     private func resolveIPv4IfNeeded(_ host: String) -> String? {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -342,16 +381,18 @@ class DeviceFacade {
     private var device: Cloak_outlineOutlineDevice? = nil
     private var logs: LogsRepository? = nil
 
-    func initialize(config: String, _logs: LogsRepository) {
+    func initialize(config: String, _logs: LogsRepository) -> Bool {
         logs?.writeLog(log: "[DeviceFacade] Device initiaization started with config: \(config)")
-        var err: NSErrorPointer = nil
-        device = Cloak_outlineNewOutlineDevice(config, err)
+        var err: NSError?
+        device = Cloak_outlineNewOutlineDevice(config, &err)
         
         logs = _logs
-        logs?.writeLog(log: "[DeviceFacade] Device initiaization finished (has error:\(err != nil))")
-        if (err != nil) {
-            logs?.writeLog(log: "[DeviceFacade] Error: \(String(describing: err)))")
+        logs?.writeLog(log: "[DeviceFacade] Device initialization finished (has error:\(err != nil))")
+        if let err {
+            logs?.writeLog(log: "[DeviceFacade] Error: \(err)")
         }
+        
+        return device != nil && err == nil
     }
     
     func write(data: Data) {
@@ -368,11 +409,21 @@ class DeviceFacade {
         do {
             let data = try device?.read()
 //            logs?.writeLog(log: "[DeviceFacade] read \(data?.count ?? 0) bytes")
-            return data!
+            return data ?? Data()
         } catch let error {
             logs?.writeLog(log: "[DeviceFacade] read error: \(error)")
             return Data()
         }
+    }
+    
+    func close() {
+        guard let device else { return }
+        var err: NSError?
+        _ = device.close(&err)
+        if let err {
+            logs?.writeLog(log: "[DeviceFacade] close error: \(err)")
+        }
+        self.device = nil
     }
 
 }
