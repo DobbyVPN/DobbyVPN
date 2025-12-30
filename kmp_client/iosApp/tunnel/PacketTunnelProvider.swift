@@ -48,7 +48,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     
     override func startTunnel(options: [String : NSObject]?) async throws {
-        logs.writeLog(log: "startTunnel in PacketTunnelProvider, thread: \(Thread.current)")
+        let tid = UInt64(pthread_mach_thread_np(pthread_self()))
+        logs.writeLog(log: "startTunnel in PacketTunnelProvider, tid: \(tid)")
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
         
         // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
@@ -418,10 +419,10 @@ class DeviceFacade {
     
     func close() {
         guard let device else { return }
-        var err: NSError?
-        _ = device.close(&err)
-        if let err {
-            logs?.writeLog(log: "[DeviceFacade] close error: \(err)")
+        do {
+            try device.close()
+        } catch {
+            logs?.writeLog(log: "[DeviceFacade] close error: \(error)")
         }
         self.device = nil
     }
