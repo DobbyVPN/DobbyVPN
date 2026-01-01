@@ -23,9 +23,6 @@ import androidx.compose.ui.unit.sp
 import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.util.koinViewModel
-import kotlinx.coroutines.MainScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import org.jetbrains.compose.ui.tooling.preview.Preview
 
 @Preview
@@ -41,13 +38,6 @@ fun DobbySocksScreen(
     var connectionURL by remember { mutableStateOf(uiMainState.connectionURL) }
 
     var showLogsDialog by remember { mutableStateOf(false) }
-
-    MainScope().launch {
-        while (true) {
-            logsViewModel.reloadLogs()
-            delay(1000L)
-        }
-    }
 
     Column(
         modifier = modifier

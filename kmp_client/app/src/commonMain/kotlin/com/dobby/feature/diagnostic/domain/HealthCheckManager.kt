@@ -106,7 +106,7 @@ class HealthCheckManager(
                     logger.log("[HC] Connected → counters reset")
                 }
 
-                delay(10_000)
+                delay(2_000)
             }
 
             logger.log("[HC] Health check loop finished (job inactive)")

@@ -1,7 +1,6 @@
 package com.dobby.outline
 
 import android.util.Log
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
