@@ -4,6 +4,9 @@ import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.presentation.MainViewModel
 import kotlinx.coroutines.*
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 class HealthCheckManager(
     private val healthCheck: HealthCheck,
@@ -23,6 +26,8 @@ class HealthCheckManager(
     private var retriesCount: Int = 0
     private val maxRetriesCount: Int = 3
 
+    private var healthCheckStartMark: TimeSource.Monotonic.ValueTimeMark? = null
+
     fun startHealthCheck() {
         logger.log("[HC] startHealthCheck() called")
 
@@ -33,6 +38,8 @@ class HealthCheckManager(
 
         logger.log("[HC] Health check scheduled (start in 5s)")
         logger.log("[HC] Initial state: startAttempts=$startAttemptsCount, retries=$retriesCount")
+
+        healthCheckStartMark = TimeSource.Monotonic.markNow()
 
         healthJob = scope.launch {
             delay(healthCheck.getTimeToWakeUp() * 1_000L)
@@ -106,7 +113,9 @@ class HealthCheckManager(
                     logger.log("[HC] Connected → counters reset")
                 }
 
-                delay(2_000)
+                val delayDuration = getHealthCheckDelay()
+                logger.log("[HC] Next tick in $delayDuration")
+                delay(delayDuration)
             }
 
             logger.log("[HC] Health check loop finished (job inactive)")
@@ -132,4 +141,17 @@ class HealthCheckManager(
         stopHealthCheck()
         mainViewModel.stopVpnService()
     }
+
+    private fun getHealthCheckDelay(): Duration {
+        val mark = healthCheckStartMark ?: return 2.seconds
+        val elapsed = mark.elapsedNow()
+
+        return when {
+            elapsed < 30.seconds -> 2.seconds
+            elapsed < 90.seconds -> 5.seconds
+            else -> 10.seconds
+        }
+    }
+
+
 }
