@@ -7,15 +7,26 @@ import com.dobby.feature.vpn_service.OutlineLibFacade
 internal class OutlineLibFacadeImpl : OutlineLibFacade {
 
     private val TAG = "OutlineLibFacade"
+    var lastError: String? = null
+        private set
 
-    override fun init(apiKey: String) {
-        Log.d(TAG, "init() called with apiKey=${apiKey.take(6)}...") // не логируем полный ключ!
-        OutlineGo.newOutlineClient(apiKey).apply {
-            Log.d(TAG, "Connecting Outline...")
-            OutlineGo.connect()
-            Log.d(TAG, "Connect finished")
+    override fun init(apiKey: String): Boolean {
+        Log.d(TAG, "init() called with apiKey length=${apiKey.length}, starts with: ${apiKey.take(30)}...")
+        OutlineGo.newOutlineClient(apiKey)
+        Log.d(TAG, "Connecting Outline...")
+        val result = OutlineGo.connect()
+        return if (result == 0) {
+            Log.d(TAG, "Connect finished successfully")
+            lastError = null
+            true
+        } else {
+            lastError = OutlineGo.getLastError()
+            Log.e(TAG, "Connect FAILED: $lastError")
+            false
         }
     }
+
+    fun isConnected(): Boolean = lastError == null
 
     override fun disconnect() {
         Log.d(TAG, "disconnect() called")

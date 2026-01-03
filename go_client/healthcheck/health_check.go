@@ -42,7 +42,8 @@ func (h *healthChecker) start() {
 				status.reconnected = err == nil
 			}
 			lastStatus.Store(&status)
-			log.Infof(status.String())
+			// Infof is printf-like; pass a constant format string to satisfy `go vet`.
+			log.Infof("%s", status.String())
 
 		case <-h.ctx.Done():
 			ticker.Stop()

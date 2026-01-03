@@ -7,7 +7,6 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/Jigsaw-Code/outline-sdk/network/dnstruncate"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/Jigsaw-Code/outline-sdk/x/config"
 	"github.com/Jigsaw-Code/outline-sdk/x/connectivity"
 	log "go_client/logger"
 )
@@ -23,7 +22,7 @@ func newOutlinePacketProxy(transportConfig string) (opp *outlinePacketProxy, err
 	opp = &outlinePacketProxy{}
 
 	log.Infof("outline client: creating UDP packet listener...")
-	if opp.remotePl, err = config.NewPacketListener(transportConfig); err != nil {
+	if opp.remotePl, err = providers.NewPacketListener(context.Background(), transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create UDP packet listener: %w", err)
 	}
 
@@ -50,7 +49,8 @@ func (proxy *outlinePacketProxy) testConnectivityAndRefresh(resolverAddr, domain
 	dnsResolver := dns.NewUDPResolver(dialer, resolverAddr)
 	result, err := connectivity.TestConnectivityWithResolver(context.Background(), dnsResolver, domain)
 	if err != nil {
-		log.Infof(fmt.Sprintf("connectivity test failed. Refresh skipped. Error: %v\n", err))
+		// Infof is printf-like; use a constant format string (avoids `go vet` non-constant format warning).
+		log.Infof("connectivity test failed. Refresh skipped. Error: %v", err)
 		return err
 	}
 	if result != nil {
