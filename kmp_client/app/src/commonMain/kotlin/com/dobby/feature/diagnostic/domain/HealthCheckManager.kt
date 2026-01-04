@@ -3,10 +3,16 @@ package com.dobby.feature.diagnostic.domain
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.presentation.MainViewModel
-import kotlinx.coroutines.*
-import kotlin.time.TimeMark
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
 class HealthCheckManager(
@@ -31,8 +37,10 @@ class HealthCheckManager(
     private val maxRestartAttemptsCount: Int = 3
 
     private var lastVpnStartMark: TimeMark? = null
+    private var lastOkLogMark: TimeMark? = null
+    private var lastConnected: Boolean = false
 
-    private var healthCheckStartMark: TimeSource.Monotonic.ValueTimeMark? = null
+    private var healthCheckStartMark: TimeMark? = null
 
     fun startHealthCheck() {
         logger.log("[HC] startHealthCheck() called")
@@ -61,6 +69,8 @@ class HealthCheckManager(
                     "[HC] Tick | consecutiveFailures=$consecutiveFailuresCount/$consecutiveFailuresBeforeRestart | restartAttempts=$restartAttemptsCount/$maxRestartAttemptsCount"
                 )
 
+                var nextDelay: Duration? = null
+
                 if (configsRepository.getIsUserInitStop()) {
                     logger.log("[HC] Stop condition: getIsUserInitStop() == true")
                     turnOffVpn()
@@ -81,59 +91,77 @@ class HealthCheckManager(
                 mainViewModel.connectionStateRepository.updateStatus(connected)
 
                 if (!connected) {
+                    lastConnected = false
                     val sinceStartMs = (lastVpnStartMark?.elapsedNow()?.inWholeMilliseconds)
                         ?: Long.MAX_VALUE
                     if (sinceStartMs < gracePeriodMs) {
                         logger.log("[HC] Not connected during grace period (${sinceStartMs}ms < ${gracePeriodMs}ms) → skip restart")
                         consecutiveFailuresCount = 0
-                        delay(10_000)
-                        continue
+                        nextDelay = getHealthCheckDelay()
                     }
 
-                    consecutiveFailuresCount++
-                    logger.log("[HC] Not connected → consecutiveFailuresCount=$consecutiveFailuresCount/$consecutiveFailuresBeforeRestart")
+                    if (nextDelay == null) {
+                        consecutiveFailuresCount++
+                        logger.log("[HC] Not connected → consecutiveFailuresCount=$consecutiveFailuresCount/$consecutiveFailuresBeforeRestart")
 
-                    if (consecutiveFailuresCount < consecutiveFailuresBeforeRestart) {
-                        delay(10_000)
-                        continue
+                        if (consecutiveFailuresCount < consecutiveFailuresBeforeRestart) {
+                            nextDelay = getHealthCheckDelay()
+                        }
                     }
 
-                    restartAttemptsCount++
-                    logger.log("[HC] Failure threshold reached → restartAttemptsCount=$restartAttemptsCount/$maxRestartAttemptsCount")
+                    if (nextDelay == null) {
+                        restartAttemptsCount++
+                        logger.log("[HC] Failure threshold reached → restartAttemptsCount=$restartAttemptsCount/$maxRestartAttemptsCount")
 
-                    val isUserInitStop = configsRepository.getIsUserInitStop()
-                    logger.log("[HC] Cached isUserInitStop=$isUserInitStop before restart")
+                        val isUserInitStop = configsRepository.getIsUserInitStop()
+                        logger.log("[HC] Cached isUserInitStop=$isUserInitStop before restart")
 
-                    logger.log("[HC] Stopping VPN service (health-check restart)")
-                    mainViewModel.stopVpnService(stoppedByHealthCheck = true)
-                    logger.log("[HC] stopVpnService() called")
+                        logger.log("[HC] Stopping VPN service (health-check restart)")
+                        mainViewModel.stopVpnService(stoppedByHealthCheck = true)
+                        logger.log("[HC] stopVpnService() called")
 
-                    if (restartAttemptsCount >= maxRestartAttemptsCount) {
-                        logger.log("[HC] restartAttemptsCount limit reached → turning off VPN & stopping health check")
-                        turnOffVpn()
-                        return@launch
+                        if (restartAttemptsCount >= maxRestartAttemptsCount) {
+                            logger.log("[HC] restartAttemptsCount limit reached → turning off VPN & stopping health check")
+                            turnOffVpn()
+                            return@launch
+                        }
+
+                        logger.log("[HC] Waiting ${restartDelayMs}ms before restart attempt")
+                        delay(restartDelayMs)
+
+                        logger.log("[HC] Restoring isUserInitStop=$isUserInitStop")
+                        configsRepository.setIsUserInitStop(isUserInitStop)
+
+                        logger.log("[HC] Starting VPN service (restart)")
+                        mainViewModel.startVpnService()
+                        lastVpnStartMark = TimeSource.Monotonic.markNow()
+                        healthCheckStartMark = TimeSource.Monotonic.markNow()
+                        consecutiveFailuresCount = 0
+                        lastOkLogMark = null
+
+                        logger.log("[HC] Waiting 3s after restart")
+                        nextDelay = 3.seconds
                     }
-
-                    logger.log("[HC] Waiting ${restartDelayMs}ms before restart attempt")
-                    delay(restartDelayMs)
-
-                    logger.log("[HC] Restoring isUserInitStop=$isUserInitStop")
-                    configsRepository.setIsUserInitStop(isUserInitStop)
-
-                    logger.log("[HC] Starting VPN service (restart)")
-                    mainViewModel.startVpnService()
-                    lastVpnStartMark = TimeSource.Monotonic.markNow()
-                    consecutiveFailuresCount = 0
-
-                    logger.log("[HC] Waiting 3s after restart")
-                    delay(3_000)
                 } else {
+                    val isTransitionToConnected = !lastConnected
+                    lastConnected = true
+
+                    val nowMark = TimeSource.Monotonic.markNow()
+                    val okDue = lastOkLogMark == null
+                            || ((lastOkLogMark?.elapsedNow()?.inWholeSeconds ?: 0) >= 60)
+                    if (isTransitionToConnected || okDue) {
+                        logger.log("[HC] OK")
+                        lastOkLogMark = nowMark
+                    }
+
                     consecutiveFailuresCount = 0
                     restartAttemptsCount = 0
                     logger.log("[HC] Connected → counters reset")
+
+                    nextDelay = 60.seconds
                 }
 
-                val delayDuration = getHealthCheckDelay()
+                val delayDuration = nextDelay ?: getHealthCheckDelay()
                 logger.log("[HC] Next tick in $delayDuration")
                 delay(delayDuration)
             }
@@ -151,6 +179,10 @@ class HealthCheckManager(
 
         restartAttemptsCount = 0
         consecutiveFailuresCount = 0
+        lastConnected = false
+        lastOkLogMark = null
+        lastVpnStartMark = null
+        healthCheckStartMark = null
 
         logger.log("[HC] State reset after stop")
     }
@@ -172,6 +204,4 @@ class HealthCheckManager(
             else -> 10.seconds
         }
     }
-
-
 }
