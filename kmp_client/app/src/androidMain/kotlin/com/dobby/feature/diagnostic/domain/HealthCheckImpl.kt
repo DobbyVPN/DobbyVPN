@@ -12,7 +12,7 @@ class HealthCheckImpl(
     private val logger: Logger,
 ) : HealthCheck {
 
-    private val timeoutMs = 1_000L
+    private val timeoutMs = 2_500L
 
     @Volatile
     var currentMemoryUsageMb: Double = -1.0
@@ -21,7 +21,7 @@ class HealthCheckImpl(
     override fun isConnected(): Boolean {
         logger.log("[HealthCheck] START")
 
-        val checks: List<Pair<String, () -> Boolean>> = listOf(
+        val networkChecks: List<Pair<String, () -> Boolean>> = listOf(
             "Ping 8.8.8.8" to {
                 pingAddress("8.8.8.8", 53, "Google")
             },
@@ -39,27 +39,28 @@ class HealthCheckImpl(
             }
         )
 
-        var ok = true
+        var networkPassed = 0
 
-        for ((name, check) in checks) {
-            if (!runWithRetry(name = name, attempts = 2, block = check)) {
-                ok = false
+        for ((name, check) in networkChecks) {
+            if (runWithRetry(name = name, attempts = 2, block = check)) {
+                networkPassed++
             }
         }
 
-        if (!runWithRetry("VPN Interface Check", attempts = 1) {
+        val interfaceOk = runWithRetry("VPN Interface Check", attempts = 2) {
                 isVpnInterfaceExists()
-            }) {
-            ok = false
-        }
+            }
 
-        if (!runWithRetry("Tunnel heartbeat check", attempts = 1) {
+        val heartbeatOk = runWithRetry("Tunnel heartbeat check", attempts = 2) {
                 val mem = getTunnelMemoryUsage()
                 currentMemoryUsageMb = mem
                 mem >= 0
-            }) {
-            ok = false
-        }
+            }
+
+        val networkOk = networkPassed >= 2
+        logger.log("[HealthCheck] Network checks: $networkPassed/${networkChecks.size} passed")
+
+        val ok = heartbeatOk && (interfaceOk || networkOk)
 
         if (currentMemoryUsageMb >= 0) {
             logger.log(

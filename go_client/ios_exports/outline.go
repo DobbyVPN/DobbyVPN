@@ -109,7 +109,12 @@ func resolveShadowsocksServerIPFromConfig(transportConfig string) (net.IP, error
 		return nil, fmt.Errorf("failed to parse ss:// config: %w", err)
 	}
 
-	ipList, err := net.LookupIP(parsedURL.Hostname())
+	host := strings.TrimSpace(parsedURL.Hostname())
+	if host == "" {
+		return nil, fmt.Errorf("invalid ss:// config: missing hostname (host part=%q)", parsedURL.Host)
+	}
+
+	ipList, err := net.LookupIP(host)
 	if err != nil {
 		return nil, fmt.Errorf("invalid server hostname: %w", err)
 	}

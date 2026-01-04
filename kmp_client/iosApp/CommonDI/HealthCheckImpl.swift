@@ -11,7 +11,8 @@ public final class HealthCheckImpl: HealthCheck {
     public static let shared = HealthCheckImpl()
 
     private let logs = NativeModuleHolder.logsRepository
-    private let timeout: TimeInterval = 1.0
+    // 1s is often too short right after tunnel start (especially for WSS + DNS warmup).
+    private let timeout: TimeInterval = 3.0
 
     public private(set) var currentMemmoryUsageMb = 0.0
 
@@ -40,27 +41,30 @@ public final class HealthCheckImpl: HealthCheck {
             })
         ]
 
-        var ok = true
+        var networkPassed = 0
 
         for (name, check) in checks {
-            if !runWithRetry(name: name, block: check) {
-                ok = false
+            if runWithRetry(name: name, block: check) {
+                networkPassed += 1
             }
         }
 
-        if !runWithRetry(name: "VPN Interface Check", attempts: 1, block: {
+        let interfaceOk = runWithRetry(name: "VPN Interface Check", attempts: 2, block: {
             self.isVPNInterfaceExists()
-        }) {
-            ok = false
-        }
+        })
 
-        if !runWithRetry(name: "XPC heartbeat check", attempts: 1, block: {
+        let heartbeatOk = runWithRetry(name: "XPC heartbeat check", attempts: 2, block: {
             let mem = self.isTunnelAliveViaXPC()
             self.currentMemmoryUsageMb = mem
             return mem >= 0
-        }) {
-            ok = false
-        }
+        })
+        
+        let networkOk = networkPassed >= 2
+        logs.writeLog(log: "[HealthCheck] Network checks: \(networkPassed)/\(checks.count) passed")
+
+        // Primary signal: tunnel is alive + VPN interface exists.
+        // Network checks are best-effort diagnostics (some networks block google.com/gen_204).
+        let ok = heartbeatOk && (interfaceOk || networkOk)
         
         if self.currentMemmoryUsageMb >= 0 {
             logs.writeLog(

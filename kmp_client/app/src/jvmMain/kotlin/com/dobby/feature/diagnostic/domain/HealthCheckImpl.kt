@@ -11,7 +11,7 @@ class HealthCheckImpl(
     private val logger: Logger,
 ) : HealthCheck {
 
-    private val timeoutMs = 1_000L
+    private val timeoutMs = 2_500L
 
     @Volatile
     var currentMemoryUsageMb: Double = -1.0
@@ -38,11 +38,11 @@ class HealthCheckImpl(
             }
         )
 
-        var ok = true
+        var passed = 0
 
         for ((name, check) in checks) {
-            if (!runWithRetry(name = name, attempts = 2, block = check)) {
-                ok = false
+            if (runWithRetry(name = name, attempts = 2, block = check)) {
+                passed++
             }
         }
 
@@ -57,6 +57,9 @@ class HealthCheckImpl(
             logger.log("[HealthCheck] Memory usage: unknown")
         }
 
+        // On desktop we don't have a tunnel heartbeat; treat as connected if most checks pass.
+        val ok = passed >= 3
+        logger.log("[HealthCheck] Network checks: $passed/${checks.size} passed")
         logger.log("[HealthCheck] RESULT = $ok")
         return ok
     }
