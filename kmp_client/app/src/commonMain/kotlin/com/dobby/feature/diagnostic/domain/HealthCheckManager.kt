@@ -4,6 +4,8 @@ import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.presentation.MainViewModel
 import kotlinx.coroutines.*
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 class HealthCheckManager(
     private val healthCheck: HealthCheck,
@@ -26,8 +28,7 @@ class HealthCheckManager(
     private var restartAttemptsCount: Int = 0
     private val maxRestartAttemptsCount: Int = 3
 
-    @Volatile
-    private var lastVpnStartAtMs: Long = 0L
+    private var lastVpnStartMark: TimeMark? = null
 
     fun startHealthCheck() {
         logger.log("[HC] startHealthCheck() called")
@@ -37,7 +38,7 @@ class HealthCheckManager(
             return
         }
 
-        lastVpnStartAtMs = System.currentTimeMillis()
+        lastVpnStartMark = TimeSource.Monotonic.markNow()
 
         logger.log("[HC] Health check scheduled (start in ${healthCheck.getTimeToWakeUp()}s)")
         logger.log(
@@ -74,7 +75,8 @@ class HealthCheckManager(
                 mainViewModel.connectionStateRepository.updateStatus(connected)
 
                 if (!connected) {
-                    val sinceStartMs = System.currentTimeMillis() - lastVpnStartAtMs
+                    val sinceStartMs = (lastVpnStartMark?.elapsedNow()?.inWholeMilliseconds)
+                        ?: Long.MAX_VALUE
                     if (sinceStartMs < gracePeriodMs) {
                         logger.log("[HC] Not connected during grace period (${sinceStartMs}ms < ${gracePeriodMs}ms) → skip restart")
                         consecutiveFailuresCount = 0
@@ -114,7 +116,7 @@ class HealthCheckManager(
 
                     logger.log("[HC] Starting VPN service (restart)")
                     mainViewModel.startVpnService()
-                    lastVpnStartAtMs = System.currentTimeMillis()
+                    lastVpnStartMark = TimeSource.Monotonic.markNow()
                     consecutiveFailuresCount = 0
 
                     logger.log("[HC] Waiting 3s after restart")
