@@ -41,13 +41,6 @@ fun LogScreen(
 
     val uiState by viewModel.uiState.collectAsState()
 
-    MainScope().launch {
-        while (true) {
-            viewModel.reloadLogs()
-            delay(1000L)
-        }
-    }
-
     Column(modifier = modifier) {
         Button(
             onClick = { viewModel.copyLogsToClipBoard() },

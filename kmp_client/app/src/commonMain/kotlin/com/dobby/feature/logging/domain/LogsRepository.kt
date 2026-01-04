@@ -44,7 +44,7 @@ class LogsRepository(
         if (!fileSystem.exists(logFilePath)) {
             fileSystem.sink(logFilePath).buffer().use { }
         }
-        _logState.value = readLogs()
+        _logState.value = readLogs(50)
     }
 
     fun setSentryLogger(_sentryLogger: SentryLogsRepository) : LogsRepository {
@@ -65,7 +65,7 @@ class LogsRepository(
                 sink.writeUtf8(logEntry)
                 sink.writeUtf8("\n")
             }
-            _logState.update { (it + log).takeLast(50) }
+            _logState.update { (it + logEntry).takeLast(50) }
         }.onFailure { it.printStackTrace() }
     }
 
@@ -76,14 +76,26 @@ class LogsRepository(
         }.onFailure { it.printStackTrace() }
     }
 
-    fun readAllLogs(): List<String> = readLogs()
+    fun readAllLogs(): List<String> = readLogs(50)
 
-    private fun readLogs(): List<String> {
+    private fun readLogs(limit: Int): List<String> {
+        if (!fileSystem.exists(logFilePath)) return emptyList()
+
+        val deque = ArrayDeque<String>(limit)
+
         return runCatching {
-            if (!fileSystem.exists(logFilePath)) return emptyList()
             fileSystem.source(logFilePath).buffer().use { source ->
-                source.readUtf8().lines().filter { it.isNotBlank() }
+                while (true) {
+                    val line = source.readUtf8Line() ?: break
+                    if (line.isNotBlank()) {
+                        if (deque.size == limit) {
+                            deque.removeFirst()
+                        }
+                        deque.addLast(line)
+                    }
+                }
             }
+            deque.toList()
         }.getOrElse {
             it.printStackTrace()
             emptyList()

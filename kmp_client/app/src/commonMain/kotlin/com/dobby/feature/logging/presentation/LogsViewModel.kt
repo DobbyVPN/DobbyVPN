@@ -1,7 +1,6 @@
 // LogsViewModel.kt
 package com.dobby.feature.logging.presentation
 
-import androidx.compose.ui.util.fastJoinToString
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dobby.feature.logging.domain.CopyLogsInteractor
@@ -11,15 +10,27 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+private object InstanceIdGenerator {
+    private var counter = 0
+
+    fun nextId(): Int {
+        counter += 1
+        return counter
+    }
+}
+
 class LogsViewModel(
     private val logsRepository: LogsRepository,
     private val copyLogsInteractor: CopyLogsInteractor
 ) : ViewModel() {
+
+    private val vmId = InstanceIdGenerator.nextId()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -30,6 +41,12 @@ class LogsViewModel(
         scope.launch {
             logsRepository.logState.collect { newLogList ->
                 _uiState.value = LogsUiState(newLogList.toList())
+            }
+        }
+        viewModelScope.launch {
+            while (true) {
+                reloadLogs()
+                delay(1000)
             }
         }
     }
