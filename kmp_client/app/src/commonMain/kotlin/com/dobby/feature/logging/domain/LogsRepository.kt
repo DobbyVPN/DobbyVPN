@@ -76,15 +76,29 @@ class LogsRepository(
         }.onFailure { it.printStackTrace() }
     }
 
-    fun readAllLogs(): List<String> = readLogs(50)
+    fun readAllLogs(): List<String> = readLogs(-1)
+
+    fun readUILogs(): List<String> = readLogs(50)
 
     private fun readLogs(limit: Int): List<String> {
         if (!fileSystem.exists(logFilePath)) return emptyList()
 
-        val deque = ArrayDeque<String>(limit)
-
         return runCatching {
             fileSystem.source(logFilePath).buffer().use { source ->
+
+                if (limit <= 0) {
+                    val result = mutableListOf<String>()
+                    while (true) {
+                        val line = source.readUtf8Line() ?: break
+                        if (line.isNotBlank()) {
+                            result.add(line)
+                        }
+                    }
+                    return@use result
+                }
+
+                val deque = ArrayDeque<String>(limit)
+
                 while (true) {
                     val line = source.readUtf8Line() ?: break
                     if (line.isNotBlank()) {
@@ -94,11 +108,13 @@ class LogsRepository(
                         deque.addLast(line)
                     }
                 }
+
+                deque.toList()
             }
-            deque.toList()
         }.getOrElse {
             it.printStackTrace()
             emptyList()
         }
     }
+
 }
