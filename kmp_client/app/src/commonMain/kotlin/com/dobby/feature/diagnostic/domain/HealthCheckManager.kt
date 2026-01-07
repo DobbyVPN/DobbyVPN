@@ -37,8 +37,6 @@ class HealthCheckManager(
     private val maxRestartAttemptsCount: Int = 3
 
     private var lastVpnStartMark: TimeMark? = null
-    private var lastOkLogMark: TimeMark? = null
-    private var lastConnected: Boolean = false
 
     private var healthCheckStartMark: TimeMark? = null
 
@@ -87,11 +85,11 @@ class HealthCheckManager(
                     false
                 }
 
-                logger.log("[HC] Updating connection state to: $connected")
-                mainViewModel.connectionStateRepository.updateStatus(connected)
+                if (connected) {
+                    mainViewModel.connectionStateRepository.updateStatus(true)
+                }
 
                 if (!connected) {
-                    lastConnected = false
                     val sinceStartMs = (lastVpnStartMark?.elapsedNow()?.inWholeMilliseconds)
                         ?: Long.MAX_VALUE
                     if (sinceStartMs < gracePeriodMs) {
@@ -117,6 +115,7 @@ class HealthCheckManager(
                         logger.log("[HC] Cached isUserInitStop=$isUserInitStop before restart")
 
                         logger.log("[HC] Stopping VPN service (health-check restart)")
+                        mainViewModel.connectionStateRepository.updateStatus(false)
                         mainViewModel.stopVpnService(stoppedByHealthCheck = true)
                         logger.log("[HC] stopVpnService() called")
 
@@ -137,28 +136,17 @@ class HealthCheckManager(
                         lastVpnStartMark = TimeSource.Monotonic.markNow()
                         healthCheckStartMark = TimeSource.Monotonic.markNow()
                         consecutiveFailuresCount = 0
-                        lastOkLogMark = null
 
                         logger.log("[HC] Waiting 3s after restart")
                         nextDelay = 3.seconds
                     }
                 } else {
-                    val isTransitionToConnected = !lastConnected
-                    lastConnected = true
-
-                    val nowMark = TimeSource.Monotonic.markNow()
-                    val okDue = lastOkLogMark == null
-                            || ((lastOkLogMark?.elapsedNow()?.inWholeSeconds ?: 0) >= 60)
-                    if (isTransitionToConnected || okDue) {
-                        logger.log("[HC] OK")
-                        lastOkLogMark = nowMark
-                    }
-
+                    logger.log("[HC] OK")
                     consecutiveFailuresCount = 0
                     restartAttemptsCount = 0
                     logger.log("[HC] Connected → counters reset")
 
-                    nextDelay = 60.seconds
+                    nextDelay = getHealthCheckDelay()
                 }
 
                 val delayDuration = nextDelay ?: getHealthCheckDelay()
@@ -179,8 +167,6 @@ class HealthCheckManager(
 
         restartAttemptsCount = 0
         consecutiveFailuresCount = 0
-        lastConnected = false
-        lastOkLogMark = null
         lastVpnStartMark = null
         healthCheckStartMark = null
 

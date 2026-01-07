@@ -12,7 +12,9 @@ class HealthCheckImpl(
     private val logger: Logger,
 ) : HealthCheck {
 
-    private val timeoutMs = 2_500L
+    private val tcpTimeoutMs = 1_000L
+    private val dnsTimeoutMs = 1_000L
+    private val httpTimeoutMs = 1_000L
 
     @Volatile
     var currentMemoryUsageMb: Double = -1.0
@@ -48,19 +50,20 @@ class HealthCheckImpl(
         }
 
         val interfaceOk = runWithRetry("VPN Interface Check", attempts = 2) {
-                isVpnInterfaceExists()
-            }
+            isVpnInterfaceExists()
+        }
 
         val heartbeatOk = runWithRetry("Tunnel heartbeat check", attempts = 2) {
-                val mem = getTunnelMemoryUsage()
-                currentMemoryUsageMb = mem
-                mem >= 0
-            }
+            val mem = getTunnelMemoryUsage()
+            currentMemoryUsageMb = mem
+            mem >= 0
+        }
 
         val networkOk = networkPassed >= 2
         logger.log("[HealthCheck] Network checks: $networkPassed/${networkChecks.size} passed")
 
-        val ok = heartbeatOk && (interfaceOk || networkOk)
+        // If the VPN interface is missing, VPN is not up.
+        val ok = heartbeatOk && interfaceOk && networkOk
 
         if (currentMemoryUsageMb >= 0) {
             logger.log(
@@ -105,7 +108,7 @@ class HealthCheckImpl(
             }
         }
 
-        return if (latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+        return if (latch.await(dnsTimeoutMs, TimeUnit.MILLISECONDS)) {
             result
         } else {
             null
@@ -117,8 +120,8 @@ class HealthCheckImpl(
             val url = URL(urlString)
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = timeoutMs.toInt()
-                readTimeout = timeoutMs.toInt()
+                connectTimeout = httpTimeoutMs.toInt()
+                readTimeout = httpTimeoutMs.toInt()
                 useCaches = false
             }
             conn.connect()
@@ -140,7 +143,7 @@ class HealthCheckImpl(
             Socket().use { socket ->
                 socket.connect(
                     InetSocketAddress(host, port),
-                    timeoutMs.toInt()
+                    tcpTimeoutMs.toInt()
                 )
             }
             val ms = SystemClock.elapsedRealtime() - start
