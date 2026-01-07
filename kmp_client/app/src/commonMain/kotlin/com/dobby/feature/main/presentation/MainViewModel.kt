@@ -26,7 +26,6 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import com.dobby.vpn.BuildConfig
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
 
 val httpClient = HttpClient()
 
@@ -109,7 +108,7 @@ class MainViewModel(
             return
         }
 
-        viewModelScope.launch(IO) {
+        viewModelScope.launch(Dispatchers.Default) {
             logger.log("Proceeding with setConfig for the provided URL...")
             if (!connectionStateRepository.vpnStartedFlow.value) {
                 try {
