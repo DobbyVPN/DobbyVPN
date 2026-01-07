@@ -13,5 +13,3 @@ import "github.com/sirupsen/logrus"
 func init() {
 	logrus.StandardLogger().ExitFunc = func(int) {}
 }
-
-

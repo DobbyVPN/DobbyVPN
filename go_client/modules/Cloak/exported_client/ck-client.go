@@ -12,7 +12,6 @@ import (
 	"github.com/sirupsen/logrus"
 	log "go_client/logger"
 	"net"
-	"os"
 	"sync"
 )
 
