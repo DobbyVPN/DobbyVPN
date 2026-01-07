@@ -136,14 +136,10 @@ func (c *CkClient) Connect() (returnErr error) {
 }
 
 func (c *CkClient) Disconnect() error {
-	logrus.StandardLogger().ExitFunc = func(int) {
-		panic("panic from log.StandardLogger().ExitFunc")
-	}
-	defer func() {
-		logrus.StandardLogger().ExitFunc = func(int) {
-			os.Exit(1)
-		}
-	}()
+	prevExit := logrus.StandardLogger().ExitFunc
+	logrus.StandardLogger().ExitFunc = func(int) {}
+	defer func() { logrus.StandardLogger().ExitFunc = prevExit }()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

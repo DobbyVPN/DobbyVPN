@@ -23,6 +23,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.runBlocking
 import org.koin.android.ext.android.inject
 import java.io.BufferedReader
 import java.io.FileInputStream
@@ -159,12 +160,12 @@ class DobbyVpnService : VpnService() {
 
     override fun onDestroy() {
         connectionState.tryUpdateVpnStarted(isStarted = false)
-        serviceScope.cancel()
         runCatching {
+            runBlocking { stopCloakClient() }
             teardownVpn()
             outlineLibFacade.disconnect()
-            stopCloakClient()
         }.onFailure { it.printStackTrace() }
+        serviceScope.cancel()
         tunnelManager.updateState(null, TunnelState.DOWN)
         instance = null
         super.onDestroy()
@@ -329,10 +330,10 @@ class DobbyVpnService : VpnService() {
         }
     }
 
-    private fun stopCloakClient() {
+    private suspend fun stopCloakClient() {
         runCatching {
             logger.log("Stopping Cloak client (if running)...")
-            serviceScope.launch { cloakConnectInteractor.disconnect() }
+            cloakConnectInteractor.disconnect()
         }.onFailure { e ->
             logger.log("Failed to stop Cloak client: ${e.message}")
         }
