@@ -218,7 +218,7 @@ class DobbyVpnService : VpnService() {
                 }
 
                 // If Cloak is enabled, start it BEFORE Outline tries to connect to 127.0.0.1:LocalPort.
-                val shouldEnableCloak = dobbyConfigsRepository.getIsCloakEnabled() || !isServiceStartedFromUi
+                val shouldEnableCloak = dobbyConfigsRepository.getIsCloakEnabled()
                 if (shouldEnableCloak) {
                     val cloakConfig = dobbyConfigsRepository.getCloakConfig()
                     val localPort = dobbyConfigsRepository.getCloakLocalPort().toString()
@@ -240,13 +240,21 @@ class DobbyVpnService : VpnService() {
                             return@withLock
                         }
                     } else {
-                        logger.log("Cloak enabled but config is empty, stopping VPN service")
-                        connectionState.tryUpdateStatus(false)
-                        teardownVpn()
-                        outlineLibFacade.disconnect()
-                        stopCloakClient()
-                        stopSelf()
-                        return@withLock
+                        val outlineHost = extractHostFromHostPort(serverPort).lowercase()
+                        val cloakRequired = outlineHost == "127.0.0.1" || outlineHost == "localhost"
+
+                        logger.log("Cloak enabled but config is empty")
+                        if (cloakRequired) {
+                            logger.log("Cloak is required for Outline host=$outlineHost, stopping VPN service")
+                            connectionState.tryUpdateStatus(false)
+                            teardownVpn()
+                            outlineLibFacade.disconnect()
+                            stopCloakClient()
+                            stopSelf()
+                            return@withLock
+                        } else {
+                            logger.log("Cloak config empty → continuing without Cloak (Outline host=$outlineHost)")
+                        }
                     }
                 }
 
