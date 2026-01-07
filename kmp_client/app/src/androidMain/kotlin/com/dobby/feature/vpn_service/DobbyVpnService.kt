@@ -139,10 +139,11 @@ class DobbyVpnService : VpnService() {
         serviceScope.launch {
             connectionState.statusFlow.drop(1).collect { isConnected ->
                 if (!isConnected) {
-                    stopCloakClient()
-                    vpnInterface?.close()
-                    vpnInterface = null
-                    stopSelf()
+                    startStopMutex.withLock {
+                        stopCloakClient()
+                        teardownVpn()
+                        stopSelf()
+                    }
                 }
             }
         }

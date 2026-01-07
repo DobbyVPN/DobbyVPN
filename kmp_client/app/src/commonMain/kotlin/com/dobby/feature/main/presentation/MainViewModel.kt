@@ -85,6 +85,13 @@ class MainViewModel(
             }
         }
         viewModelScope.launch {
+            connectionStateRepository.restartPendingFlow.collect { isPending ->
+                logger.log("Update restart pending state: $isPending")
+                val newState = _uiState.value.copy(isRestartPending = isPending)
+                _uiState.emit(newState)
+            }
+        }
+        viewModelScope.launch {
             permissionEventsChannel
                 .permissionsGrantedEvents
                 .collect { isPermissionGranted -> startVpn(isPermissionGranted) }
@@ -102,7 +109,7 @@ class MainViewModel(
             return
         }
 
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(IO) {
             logger.log("Proceeding with setConfig for the provided URL...")
             if (!connectionStateRepository.vpnStartedFlow.value) {
                 try {
@@ -129,6 +136,7 @@ class MainViewModel(
                     stopVpnService()
                 }
                 false -> {
+                    healthCheckManager.onUserManualStartRequested()
                     connectionStateRepository.updateVpnStarted(true)
                     logger.log("Update vpnStarted state: VpnState = ${connectionStateRepository.vpnStartedFlow.value}")
                     logger.log("VPN is currently disconnected")
@@ -191,6 +199,7 @@ class MainViewModel(
             startVpnService()
         } else {
             logger.log("Permission denied — skipping VPN start")
+            connectionStateRepository.tryUpdateVpnStarted(false)
             // TODO: show Toast/snackbar
         }
     }

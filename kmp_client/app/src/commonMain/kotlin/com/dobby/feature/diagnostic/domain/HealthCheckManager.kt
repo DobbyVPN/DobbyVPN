@@ -40,6 +40,11 @@ class HealthCheckManager(
 
     private var healthCheckStartMark: TimeMark? = null
 
+    fun onUserManualStartRequested() {
+        mainViewModel.connectionStateRepository.tryUpdateRestartPending(false)
+        logger.log("[HC] User requested manual start → restartPending=false")
+    }
+
     fun startHealthCheck() {
         logger.log("[HC] startHealthCheck() called")
 
@@ -126,12 +131,24 @@ class HealthCheckManager(
                         }
 
                         logger.log("[HC] Waiting ${restartDelayMs}ms before restart attempt")
+                        mainViewModel.connectionStateRepository.tryUpdateRestartPending(true)
                         delay(restartDelayMs)
 
+                        // If user pressed Start while we were waiting, don't auto-start again.
+                        if (!mainViewModel.connectionStateRepository.restartPendingFlow.value
+                            || mainViewModel.connectionStateRepository.vpnStartedFlow.value
+                        ) {
+                            logger.log("[HC] Auto-restart cancelled by user action (or already started) → skip restart")
+                            mainViewModel.connectionStateRepository.tryUpdateRestartPending(false)
+                            consecutiveFailuresCount = 0
+                            nextDelay = getHealthCheckDelay()
+                        } else {
                         logger.log("[HC] Restoring isUserInitStop=$isUserInitStop")
                         configsRepository.setIsUserInitStop(isUserInitStop)
 
                         logger.log("[HC] Starting VPN service (restart)")
+                        mainViewModel.connectionStateRepository.updateVpnStarted(true)
+                        mainViewModel.connectionStateRepository.tryUpdateRestartPending(false)
                         mainViewModel.startVpnService()
                         lastVpnStartMark = TimeSource.Monotonic.markNow()
                         healthCheckStartMark = TimeSource.Monotonic.markNow()
@@ -139,12 +156,14 @@ class HealthCheckManager(
 
                         logger.log("[HC] Waiting 3s after restart")
                         nextDelay = 3.seconds
+                        }
                     }
                 } else {
                     logger.log("[HC] OK")
                     consecutiveFailuresCount = 0
                     restartAttemptsCount = 0
                     logger.log("[HC] Connected → counters reset")
+                    mainViewModel.connectionStateRepository.tryUpdateRestartPending(false)
 
                     nextDelay = getHealthCheckDelay()
                 }
@@ -169,6 +188,7 @@ class HealthCheckManager(
         consecutiveFailuresCount = 0
         lastVpnStartMark = null
         healthCheckStartMark = null
+        mainViewModel.connectionStateRepository.tryUpdateRestartPending(false)
 
         logger.log("[HC] State reset after stop")
     }

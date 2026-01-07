@@ -26,6 +26,23 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             self.packetContinuation = continuation
         }
     }()
+
+    private var cloakStarted: Bool = false
+
+    private func extractHost(from hostPortMaybeWithQuery: String) -> String {
+        let hostPort = hostPortMaybeWithQuery.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? hostPortMaybeWithQuery
+        let trimmed = hostPort.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("[") {
+            // IPv6 in brackets: [2001:db8::1]:443
+            if let start = trimmed.firstIndex(of: "["), let end = trimmed.firstIndex(of: "]"), start < end {
+                return String(trimmed[trimmed.index(after: start)..<end])
+            }
+        }
+        if let lastColon = trimmed.lastIndex(of: ":"), trimmed.filter({ $0 == ":" }).count == 1 {
+            return String(trimmed[..<lastColon])
+        }
+        return trimmed
+    }
     
     func reportMemoryUsageMB() -> Double {
         var info = task_vm_info_data_t()
@@ -60,6 +77,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let websocketEnabled = configsRepository.getIsWebsocketEnabled()
         let tcpPath = configsRepository.getTcpPathOutline()
         let udpPath = configsRepository.getUdpPathOutline()
+
+        // Validate config early (prevents passing empty config into native layer).
+        if methodPassword.isEmpty || serverPort.isEmpty {
+            logs.writeLog(log: "[startTunnel] Empty Outline config (methodPassword/serverPort) → abort")
+            throw NSError(
+                domain: "PacketTunnelProvider",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Empty Outline configuration"]
+            )
+        }
         
         let config = buildOutlineConfig(
             methodPassword: methodPassword,
@@ -75,16 +102,24 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         let cloakConfig = configsRepository.getCloakConfig()
+        // Avoid DNS resolution at tunnel start (can hang in full offline / captive portal cases).
+        // Only exclude routes when the host is already an IPv4 literal.
         var excludedRoutes: [NEIPv4Route] = []
-        if let hostOrIp = extractIP(from: serverPort),
-           let ip = resolveIPv4IfNeeded(hostOrIp),
-           let route = makeExcludedRoute(host: ip) {
-            excludedRoutes.append(route)
+        if let hostOrIp = extractIP(from: serverPort) {
+            let trimmed = hostOrIp.trimmingCharacters(in: .whitespacesAndNewlines)
+            if isValidIPv4(trimmed), let route = makeExcludedRoute(host: trimmed) {
+                excludedRoutes.append(route)
+            } else {
+                logs.writeLog(log: "Excluded route for Outline host skipped (not IPv4 literal): \(trimmed)")
+            }
         }
-        if let remoteHost = extractRemoteHost(from: cloakConfig),
-           let ip = resolveIPv4IfNeeded(remoteHost),
-           let route = makeExcludedRoute(host: ip) {
-            excludedRoutes.append(route)
+        if let remoteHost = extractRemoteHost(from: cloakConfig) {
+            let trimmed = remoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
+            if isValidIPv4(trimmed), let route = makeExcludedRoute(host: trimmed) {
+                excludedRoutes.append(route)
+            } else {
+                logs.writeLog(log: "Excluded route for Cloak RemoteHost skipped (not IPv4 literal): \(trimmed)")
+            }
         }
         if !excludedRoutes.isEmpty {
             let list = excludedRoutes.map { "\($0.destinationAddress)/\($0.destinationSubnetMask)" }.joined(separator: ", ")
@@ -123,7 +158,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(log: "[startTunnel] Device initialization failed; aborting startTunnel")
             throw NSError(domain: "PacketTunnelProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: "Outline device initialization failed"])
         }
-        startCloak()
+        try startCloak(outlineServerPort: serverPort)
         
         readPacketsTask = Task { await self.readPacketsFromTunnel() }
         processToDeviceTask = Task { await self.processPacketsToDevice() }
@@ -255,13 +290,28 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    private func startCloak() {
+    private func startCloak(outlineServerPort: String) throws {
         let localPort = String(configsRepository.getCloakLocalPort())
         logs.writeLog(log: "startCloakOutline: entering")
         
         if configsRepository.getIsCloakEnabled() {
+            let cloakConfig = configsRepository.getCloakConfig()
+            if cloakConfig.isEmpty {
+                let host = extractHost(from: outlineServerPort).lowercased()
+                let cloakRequired = (host == "127.0.0.1" || host == "localhost")
+                logs.writeLog(log: "startCloakOutline: enabled but config empty (required=\(cloakRequired), host=\(host))")
+                if cloakRequired {
+                    throw NSError(
+                        domain: "PacketTunnelProvider",
+                        code: -3,
+                        userInfo: [NSLocalizedDescriptionKey: "Cloak enabled but config is empty"]
+                    )
+                }
+                return
+            }
             logs.writeLog(log: "startCloakOutline: starting cloak")
-            Cloak_outlineStartCloakClient("127.0.0.1", localPort, configsRepository.getCloakConfig(), false)
+            Cloak_outlineStartCloakClient("127.0.0.1", localPort, cloakConfig, false)
+            cloakStarted = true
             logs.writeLog(log: "startCloakOutline: started")
         } else {
             logs.writeLog(log: "startCloakOutline: cloak disabled")
@@ -269,9 +319,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func stopCloak() {
-        if configsRepository.getIsCloakEnabled() {
+        if cloakStarted {
             logs.writeLog(log: "stopCloakOutline")
             Cloak_outlineStopCloakClient()
+            cloakStarted = false
         }
     }
     
