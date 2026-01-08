@@ -8,20 +8,55 @@ import "C"
 import (
 	log "go_client/logger"
 	"go_client/outline"
+	"sync"
 	"unsafe"
 )
 
 var client *outline.OutlineClient
+var lastError string
+var errorMu sync.Mutex
+
+//export GetLastError
+func GetLastError() *C.char {
+	errorMu.Lock()
+	defer errorMu.Unlock()
+	if lastError == "" {
+		return nil
+	}
+	return C.CString(lastError)
+}
+
+//export ClearLastError
+func ClearLastError() {
+	errorMu.Lock()
+	defer errorMu.Unlock()
+	lastError = ""
+}
+
+func setLastError(err string) {
+	errorMu.Lock()
+	defer errorMu.Unlock()
+	lastError = err
+	log.Infof("Error set: %s", err)
+}
 
 //export Connect
-func Connect() {
+func Connect() C.int {
 	log.Infof("Connect() called")
+	ClearLastError()
 	if client == nil {
+		setLastError("client is nil")
 		log.Infof("Connect() failed: client is nil")
-		return
+		return -1
 	}
-	client.Connect()
-	log.Infof("Connect() finished")
+	err := client.Connect()
+	if err != nil {
+		setLastError(err.Error())
+		log.Infof("Connect() failed: %v", err)
+		return -1
+	}
+	log.Infof("Connect() finished successfully")
+	return 0
 }
 
 //export Disconnect
@@ -82,7 +117,7 @@ func NewOutlineClient(config *C.char) {
 	log.Infof("NewOutlineClient() called")
 	StopOutlineClient()
 	goConfig := C.GoString(config)
-	log.Infof("Config length=" + string(rune(len(goConfig))))
+	log.Infof("Config length=%d, config: %s", len(goConfig), goConfig)
 	cl := outline.NewClient(goConfig)
 	client = cl
 	log.Infof("NewOutlineClient() finished")

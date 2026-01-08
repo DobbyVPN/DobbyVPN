@@ -11,7 +11,11 @@ public final class HealthCheckImpl: HealthCheck {
     public static let shared = HealthCheckImpl()
 
     private let logs = NativeModuleHolder.logsRepository
-    private let timeout: TimeInterval = 1.0
+    // Keep checks snappy; HealthCheckManager is tolerant to short flaps.
+    private let tcpTimeout: TimeInterval = 1.0
+    private let dnsTimeout: TimeInterval = 1.0
+    private let httpTimeout: TimeInterval = 1.0
+    private let xpcTimeout: TimeInterval = 1.0
 
     public private(set) var currentMemmoryUsageMb = 0.0
 
@@ -24,7 +28,7 @@ public final class HealthCheckImpl: HealthCheck {
             }),
 
             ("DNS google.com", {
-                self.resolveDNSWithTimeout(host: "google.com") != "Timeout"
+                self.resolveDNSWithTimeout(host: "google.com") != nil
             }),
 
             ("Ping google.com (DNS)", {
@@ -40,27 +44,29 @@ public final class HealthCheckImpl: HealthCheck {
             })
         ]
 
-        var ok = true
+        var networkPassed = 0
 
         for (name, check) in checks {
-            if !runWithRetry(name: name, block: check) {
-                ok = false
+            if runWithRetry(name: name, timeoutPerAttempt: 2.0, block: check) {
+                networkPassed += 1
             }
         }
 
-        if !runWithRetry(name: "VPN Interface Check", attempts: 1, block: {
+        let interfaceOk = runWithRetry(name: "VPN Interface Check", attempts: 2, timeoutPerAttempt: 1.0, block: {
             self.isVPNInterfaceExists()
-        }) {
-            ok = false
-        }
+        })
 
-        if !runWithRetry(name: "XPC heartbeat check", attempts: 1, block: {
+        let heartbeatOk = runWithRetry(name: "XPC heartbeat check", attempts: 2, timeoutPerAttempt: xpcTimeout + 0.5, block: {
             let mem = self.isTunnelAliveViaXPC()
             self.currentMemmoryUsageMb = mem
             return mem >= 0
-        }) {
-            ok = false
-        }
+        })
+        
+        let networkOk = networkPassed == checks.count
+        logs.writeLog(log: "[HealthCheck] Network checks: \(networkPassed)/\(checks.count) passed")
+
+        // If the VPN interface is missing, VPN is not up.
+        let ok = heartbeatOk && interfaceOk && networkOk
         
         if self.currentMemmoryUsageMb >= 0 {
             logs.writeLog(
@@ -79,11 +85,19 @@ public final class HealthCheckImpl: HealthCheck {
     private func runWithRetry(
         name: String,
         attempts: Int = 2,
-        block: () -> Bool
+        timeoutPerAttempt: TimeInterval? = nil,
+        block: @escaping () -> Bool
     ) -> Bool {
         for attempt in 1...attempts {
             logs.writeLog(log: "[HealthCheck] \(name) attempt \(attempt)")
-            if block() {
+            let ok: Bool
+            if let timeoutPerAttempt {
+                ok = runWithTimeout(timeout: timeoutPerAttempt, block: block)
+            } else {
+                ok = block()
+            }
+
+            if ok {
                 return true
             }
         }
@@ -91,24 +105,51 @@ public final class HealthCheckImpl: HealthCheck {
         return false
     }
 
-    private func resolveDNSWithTimeout(host: String) -> String {
-        var result = "Timeout"
+    private func runWithTimeout(
+        timeout: TimeInterval,
+        block: @escaping () -> Bool
+    ) -> Bool {
+        let semaphore = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var result = false
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ok = block()
+            lock.lock()
+            result = ok
+            lock.unlock()
+            semaphore.signal()
+        }
+
+        let wait = semaphore.wait(timeout: .now() + timeout)
+        if wait == .timedOut {
+            return false
+        }
+        lock.lock()
+        let value = result
+        lock.unlock()
+        return value
+    }
+
+    private func resolveDNSWithTimeout(host: String) -> String? {
+        var result: String? = nil
         let group = DispatchGroup()
         group.enter()
 
         DispatchQueue.global(qos: .userInitiated).async {
-            result = self.resolveDNS(host: host)
+            let resolved = self.resolveDNS(host: host)
+            result = resolved
             group.leave()
         }
 
-        let wait = group.wait(timeout: .now() + timeout)
+        let wait = group.wait(timeout: .now() + dnsTimeout)
         if wait == .timedOut {
-            return "Timeout"
+            return nil
         }
         return result
     }
 
-    private func resolveDNS(host: String) -> String {
+    private func resolveDNS(host: String) -> String? {
         var hints = addrinfo(
             ai_flags: AI_PASSIVE,
             ai_family: AF_UNSPEC,
@@ -124,7 +165,7 @@ public final class HealthCheckImpl: HealthCheck {
         let status = getaddrinfo(host, nil, &hints, &infoPointer)
 
         guard status == 0, let first = infoPointer else {
-            return String(cString: gai_strerror(status))
+            return nil
         }
 
         defer { freeaddrinfo(infoPointer) }
@@ -146,7 +187,7 @@ public final class HealthCheckImpl: HealthCheck {
             ptr = ptr?.pointee.ai_next
         }
 
-        return "Can't resolve DNS"
+        return nil
     }
 
     private func httpPing(urlString: String) -> Bool {
@@ -157,24 +198,33 @@ public final class HealthCheckImpl: HealthCheck {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = timeout
+        request.timeoutInterval = httpTimeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
-        URLSession.shared.dataTask(with: request) { _, response, error in
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = httpTimeout
+        config.timeoutIntervalForResource = httpTimeout
+        let session = URLSession(configuration: config)
+
+        let task = session.dataTask(with: request) { _, response, error in
             if error == nil,
                let http = response as? HTTPURLResponse,
                (200..<400).contains(http.statusCode) {
                 success = true
             }
             semaphore.signal()
-        }.resume()
+        }
+        task.resume()
 
-        _ = semaphore.wait(timeout: .now() + timeout)
+        let wait = semaphore.wait(timeout: .now() + httpTimeout)
+        if wait == .timedOut {
+            task.cancel()
+        }
         return success
     }
 
     private func pingAddress(_ address: String, name: String) -> Bool {
-        switch tcpPing(address: address) {
+        switch tcpPingWithTimeout(address: address) {
         case .success(let ms):
             logs.writeLog(log: "[ping \(name)] \(ms) ms")
             return true
@@ -182,6 +232,35 @@ public final class HealthCheckImpl: HealthCheck {
             logs.writeLog(log: "[ping \(name)] error: \(error.localizedDescription)")
             return false
         }
+    }
+
+    private func tcpPingWithTimeout(address: String) -> Result<Int32, Error> {
+        // The Go ping helper might block longer than desired; enforce a hard wall-clock timeout.
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: Result<Int32, Error> = .failure(
+            NSError(
+                domain: "CloakTcpPing",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Timeout"]
+            )
+        )
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            result = self.tcpPing(address: address)
+            semaphore.signal()
+        }
+
+        let wait = semaphore.wait(timeout: .now() + tcpTimeout)
+        if wait == .timedOut {
+            return .failure(
+                NSError(
+                    domain: "CloakTcpPing",
+                    code: -2,
+                    userInfo: [NSLocalizedDescriptionKey: "Timeout"]
+                )
+            )
+        }
+        return result
     }
 
     private func tcpPing(address: String) -> Result<Int32, Error> {
@@ -205,21 +284,23 @@ public final class HealthCheckImpl: HealthCheck {
     }
 
     private func isVPNInterfaceExists() -> Bool {
-        guard
-            let dict = CFNetworkCopySystemProxySettings()?.takeRetainedValue() as? [String: Any],
-            let scoped = dict["__SCOPED__"] as? [String: Any]
-        else {
+        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddrPtr) == 0, let firstAddr = ifaddrPtr else {
             return false
         }
+        defer { freeifaddrs(ifaddrPtr) }
 
-        for key in scoped.keys {
-            if key.contains("utun")
-                || key.contains("tun")
-                || key.contains("tap")
-                || key.contains("ppp")
-                || key.contains("ipsec") {
+        var ptr: UnsafeMutablePointer<ifaddrs>? = firstAddr
+        while let p = ptr {
+            let name = String(cString: p.pointee.ifa_name).lowercased()
+            if name.contains("utun")
+                || name.contains("tun")
+                || name.contains("tap")
+                || name.contains("ppp")
+                || name.contains("ipsec") {
                 return true
             }
+            ptr = p.pointee.ifa_next
         }
         return false
     }
@@ -266,7 +347,7 @@ public final class HealthCheckImpl: HealthCheck {
             }
         }
 
-        _ = semaphore.wait(timeout: .now() + timeout)
+        _ = semaphore.wait(timeout: .now() + xpcTimeout)
         return memory
     }
 

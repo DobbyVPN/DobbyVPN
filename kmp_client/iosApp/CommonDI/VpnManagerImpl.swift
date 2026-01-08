@@ -39,6 +39,10 @@ public class VpnManagerImpl: VpnManager {
         ) { [weak self] notification in
             guard let self,
                   let connection = notification.object as? NEVPNConnection else { return }
+            
+            if let myConnection = self.vpnManager?.connection, myConnection !== connection {
+                return
+            }
 
             switch connection.status {
             case .connected:
@@ -74,7 +78,6 @@ public class VpnManagerImpl: VpnManager {
     
     public func start() {
         self.logs.writeLog(log: "call start")
-        HealthCheckImpl.shared.isConnected()
         self.logs.writeLog(log: "Routing table without vpn:")
         getOrCreateManager { (manager, error) in
             guard let manager = manager else {

@@ -2,7 +2,11 @@ package com.dobby.feature.vpn_service
 
 interface OutlineLibFacade {
 
-    fun init(apiKey: String)
+    /**
+     * Initialize and connect to Outline server
+     * @return true if connection successful, false otherwise
+     */
+    fun init(apiKey: String): Boolean
 
     fun disconnect()
 
