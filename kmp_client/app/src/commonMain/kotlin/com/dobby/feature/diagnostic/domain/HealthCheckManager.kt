@@ -98,7 +98,6 @@ class HealthCheckManager(
                         ?: Long.MAX_VALUE
                     if (sinceStartMs < gracePeriodMs) {
                         logger.log("[HC] Not connected during grace period (${sinceStartMs}ms < ${gracePeriodMs}ms) → ignore")
-                        consecutiveFailuresCount = 0
                         nextDelay = getHealthCheckDelay()
                     }
 
