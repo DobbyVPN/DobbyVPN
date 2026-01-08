@@ -62,7 +62,7 @@ public final class HealthCheckImpl: HealthCheck {
             return mem >= 0
         })
         
-        let networkOk = networkPassed >= 2
+        let networkOk = networkPassed == checks.count
         logs.writeLog(log: "[HealthCheck] Network checks: \(networkPassed)/\(checks.count) passed")
 
         // If the VPN interface is missing, VPN is not up.

@@ -59,7 +59,7 @@ class HealthCheckImpl(
             mem >= 0
         }
 
-        val networkOk = networkPassed >= 2
+        val networkOk = networkPassed == networkChecks.size
         logger.log("[HealthCheck] Network checks: $networkPassed/${networkChecks.size} passed")
 
         // If the VPN interface is missing, VPN is not up.
