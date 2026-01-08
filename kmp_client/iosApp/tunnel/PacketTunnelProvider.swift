@@ -102,23 +102,35 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         let cloakConfig = configsRepository.getCloakConfig()
-        // Avoid DNS resolution at tunnel start (can hang in full offline / captive portal cases).
-        // Only exclude routes when the host is already an IPv4 literal.
+        // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
+        // DNS resolution at tunnel start can hang in offline/captive-portal cases, so we do it with a hard timeout.
         var excludedRoutes: [NEIPv4Route] = []
         if let hostOrIp = extractIP(from: serverPort) {
             let trimmed = hostOrIp.trimmingCharacters(in: .whitespacesAndNewlines)
-            if isValidIPv4(trimmed), let route = makeExcludedRoute(host: trimmed) {
+            if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
+               let route = makeExcludedRoute(host: ip) {
                 excludedRoutes.append(route)
+                if ip == trimmed {
+                    logs.writeLog(log: "Excluded route for Outline host: \(ip)/32")
+                } else {
+                    logs.writeLog(log: "Excluded route for Outline host resolved: \(trimmed) → \(ip)/32")
+                }
             } else {
-                logs.writeLog(log: "Excluded route for Outline host skipped (not IPv4 literal): \(trimmed)")
+                logs.writeLog(log: "Excluded route for Outline host skipped (can't resolve to IPv4): \(trimmed)")
             }
         }
         if let remoteHost = extractRemoteHost(from: cloakConfig) {
             let trimmed = remoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
-            if isValidIPv4(trimmed), let route = makeExcludedRoute(host: trimmed) {
+            if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
+               let route = makeExcludedRoute(host: ip) {
                 excludedRoutes.append(route)
+                if ip == trimmed {
+                    logs.writeLog(log: "Excluded route for Cloak RemoteHost: \(ip)/32")
+                } else {
+                    logs.writeLog(log: "Excluded route for Cloak RemoteHost resolved: \(trimmed) → \(ip)/32")
+                }
             } else {
-                logs.writeLog(log: "Excluded route for Cloak RemoteHost skipped (not IPv4 literal): \(trimmed)")
+                logs.writeLog(log: "Excluded route for Cloak RemoteHost skipped (can't resolve to IPv4): \(trimmed)")
             }
         }
         if !excludedRoutes.isEmpty {
@@ -414,6 +426,30 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let ptr = inet_ntop(AF_INET, &addr, &buffer, socklen_t(INET_ADDRSTRLEN))
         guard ptr != nil else { return nil }
         return String(cString: buffer)
+    }
+
+    private func resolveIPv4IfNeededWithTimeout(_ host: String, timeout: TimeInterval) -> String? {
+        let group = DispatchGroup()
+        group.enter()
+        let lock = NSLock()
+        var result: String? = nil
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ip = self.resolveIPv4IfNeeded(host)
+            lock.lock()
+            result = ip
+            lock.unlock()
+            group.leave()
+        }
+
+        let wait = group.wait(timeout: .now() + timeout)
+        if wait == .timedOut {
+            return nil
+        }
+        lock.lock()
+        let value = result
+        lock.unlock()
+        return value
     }
 }
 

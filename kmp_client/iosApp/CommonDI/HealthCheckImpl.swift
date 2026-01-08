@@ -28,7 +28,7 @@ public final class HealthCheckImpl: HealthCheck {
             }),
 
             ("DNS google.com", {
-                self.resolveDNSWithTimeout(host: "google.com") != "Timeout"
+                self.resolveDNSWithTimeout(host: "google.com") != nil
             }),
 
             ("Ping google.com (DNS)", {
@@ -47,16 +47,16 @@ public final class HealthCheckImpl: HealthCheck {
         var networkPassed = 0
 
         for (name, check) in checks {
-            if runWithRetry(name: name, block: check) {
+            if runWithRetry(name: name, timeoutPerAttempt: 2.0, block: check) {
                 networkPassed += 1
             }
         }
 
-        let interfaceOk = runWithRetry(name: "VPN Interface Check", attempts: 2, block: {
+        let interfaceOk = runWithRetry(name: "VPN Interface Check", attempts: 2, timeoutPerAttempt: 1.0, block: {
             self.isVPNInterfaceExists()
         })
 
-        let heartbeatOk = runWithRetry(name: "XPC heartbeat check", attempts: 2, block: {
+        let heartbeatOk = runWithRetry(name: "XPC heartbeat check", attempts: 2, timeoutPerAttempt: xpcTimeout + 0.5, block: {
             let mem = self.isTunnelAliveViaXPC()
             self.currentMemmoryUsageMb = mem
             return mem >= 0
@@ -85,11 +85,19 @@ public final class HealthCheckImpl: HealthCheck {
     private func runWithRetry(
         name: String,
         attempts: Int = 2,
-        block: () -> Bool
+        timeoutPerAttempt: TimeInterval? = nil,
+        block: @escaping () -> Bool
     ) -> Bool {
         for attempt in 1...attempts {
             logs.writeLog(log: "[HealthCheck] \(name) attempt \(attempt)")
-            if block() {
+            let ok: Bool
+            if let timeoutPerAttempt {
+                ok = runWithTimeout(timeout: timeoutPerAttempt, block: block)
+            } else {
+                ok = block()
+            }
+
+            if ok {
                 return true
             }
         }
@@ -97,7 +105,33 @@ public final class HealthCheckImpl: HealthCheck {
         return false
     }
 
-    private func resolveDNSWithTimeout(host: String) -> String {
+    private func runWithTimeout(
+        timeout: TimeInterval,
+        block: @escaping () -> Bool
+    ) -> Bool {
+        let semaphore = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var result = false
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ok = block()
+            lock.lock()
+            result = ok
+            lock.unlock()
+            semaphore.signal()
+        }
+
+        let wait = semaphore.wait(timeout: .now() + timeout)
+        if wait == .timedOut {
+            return false
+        }
+        lock.lock()
+        let value = result
+        lock.unlock()
+        return value
+    }
+
+    private func resolveDNSWithTimeout(host: String) -> String? {
         var result: String? = nil
         let group = DispatchGroup()
         group.enter()
@@ -110,12 +144,12 @@ public final class HealthCheckImpl: HealthCheck {
 
         let wait = group.wait(timeout: .now() + dnsTimeout)
         if wait == .timedOut {
-            return "Timeout"
+            return nil
         }
-        return result ?? "Timeout"
+        return result
     }
 
-    private func resolveDNS(host: String) -> String {
+    private func resolveDNS(host: String) -> String? {
         var hints = addrinfo(
             ai_flags: AI_PASSIVE,
             ai_family: AF_UNSPEC,
@@ -131,7 +165,7 @@ public final class HealthCheckImpl: HealthCheck {
         let status = getaddrinfo(host, nil, &hints, &infoPointer)
 
         guard status == 0, let first = infoPointer else {
-            return String(cString: gai_strerror(status))
+            return nil
         }
 
         defer { freeaddrinfo(infoPointer) }
@@ -153,7 +187,7 @@ public final class HealthCheckImpl: HealthCheck {
             ptr = ptr?.pointee.ai_next
         }
 
-        return "Can't resolve DNS"
+        return nil
     }
 
     private func httpPing(urlString: String) -> Bool {
