@@ -88,3 +88,14 @@ Java_com_dobby_outline_OutlineGo_initLogger(JNIEnv *env, jclass clazz,
     // Копируем данные обратно в Java-буфер
     (*env)->ReleaseStringUTFChars(env, jPath, path);
 }
+
+JNIEXPORT jint JNICALL
+Java_com_dobby_outline_OutlineGo_checkServerAlive(JNIEnv *env, jclass clazz,
+                                            jstring jAddress, jint jPort)
+{
+    const char *address = (*env)->GetStringUTFChars(env, jAddress, NULL);
+    // Вызываем Go-экспорт
+    CheckServerAlive(address, jPort);
+    // Копируем данные обратно в Java-буфер
+    (*env)->ReleaseStringUTFChars(env, jAddress, address);
+}

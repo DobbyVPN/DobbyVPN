@@ -28,7 +28,7 @@ class HealthCheckManager(
 
     private var healthCheckStartMark: TimeSource.Monotonic.ValueTimeMark? = null
 
-    fun startHealthCheck() {
+    fun startHealthCheck(address: String, port: Int) {
         logger.log("[HC] startHealthCheck() called")
 
         if (healthJob?.isActive == true) {
@@ -42,6 +42,15 @@ class HealthCheckManager(
         healthCheckStartMark = TimeSource.Monotonic.markNow()
 
         healthJob = scope.launch {
+            val serverAlive = healthCheck.checkServerAlive(address, port)
+
+            if (!serverAlive) {
+                logger.log("[HC] Server isn't alive")
+                turnOffVpn()
+                return@launch
+            }
+            logger.log("[HC] Server is alive")
+
             delay(healthCheck.getTimeToWakeUp() * 1_000L)
 
             logger.log("[HC] Health check started")

@@ -41,6 +41,8 @@ class MainViewModel(
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
     private val healthCheckManager: HealthCheckManager = HealthCheckManager(healthCheck, this, configsRepository, logger)
+    private lateinit var serverAddress: String
+    private lateinit var serverPort: Int
 
     init {
         viewModelScope.launch {
@@ -160,6 +162,8 @@ class MainViewModel(
             logger.log("Detected Shadowsocks config, applying Outline parameters")
             configsRepository.setIsOutlineEnabled(true)
             configsRepository.setMethodPasswordOutline("${ss.Method}:${ss.Password}")
+            serverAddress = ss.Server
+            serverPort = ss.Port
             val outlineSuffix = if (ss.Outline == true) "/?outline=1" else ""
             configsRepository.setServerPortOutline("${ss.Server}:${ss.Port}$outlineSuffix")
             logger.log("Outline method, password, and server: ${ss.Method}:${maskStr(ss.Password)}@${maskStr(ss.Server)}:${ss.Port}")
@@ -178,6 +182,8 @@ class MainViewModel(
             root.Cloak.ServerName = maskStr(root.Cloak.ServerName)
             root.Cloak.CDNOriginHost = root.Cloak.CDNOriginHost?.let { maskStr(it) }
             root.Cloak.CDNWsUrlPath = root.Cloak.CDNWsUrlPath?.let { maskStr(it) }
+            serverAddress = root.Cloak.RemoteHost
+            serverPort = root.Cloak.RemotePort.toInt()
             val cloakJsonForLog = Json { prettyPrint = true }.encodeToString(root.Cloak)
             logger.log("Cloak config saved successfully (config=${cloakJsonForLog})")
         } else {
@@ -223,7 +229,7 @@ class MainViewModel(
     fun startVpnService() {
         logger.log("Starting VPN service...")
         vpnManager.start()
-        healthCheckManager.startHealthCheck()
+        healthCheckManager.startHealthCheck(serverAddress, serverPort)
     }
 
     fun stopVpnService(stoppedByHealthCheck: Boolean = false) {
