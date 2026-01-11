@@ -64,6 +64,7 @@ Restart=always
 
 [Install]
 Alias=vpnserver.service
+WantedBy=multi-user.target
 ```
 
 It can be created with symbolic link
