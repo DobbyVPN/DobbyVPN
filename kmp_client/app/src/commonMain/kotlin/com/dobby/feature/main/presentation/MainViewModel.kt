@@ -177,13 +177,13 @@ class MainViewModel(
             configsRepository.setIsCloakEnabled(true)
             val cloakJson = Json { prettyPrint = true }.encodeToString(root.Cloak)
             configsRepository.setCloakConfig(cloakJson)
+            serverAddress = root.Cloak.RemoteHost
+            serverPort = root.Cloak.RemotePort.toInt()
             root.Cloak.UID = maskStr(root.Cloak.UID)
             root.Cloak.RemoteHost = maskStr(root.Cloak.RemoteHost)
             root.Cloak.ServerName = maskStr(root.Cloak.ServerName)
             root.Cloak.CDNOriginHost = root.Cloak.CDNOriginHost?.let { maskStr(it) }
             root.Cloak.CDNWsUrlPath = root.Cloak.CDNWsUrlPath?.let { maskStr(it) }
-            serverAddress = root.Cloak.RemoteHost
-            serverPort = root.Cloak.RemotePort.toInt()
             val cloakJsonForLog = Json { prettyPrint = true }.encodeToString(root.Cloak)
             logger.log("Cloak config saved successfully (config=${cloakJsonForLog})")
         } else {
