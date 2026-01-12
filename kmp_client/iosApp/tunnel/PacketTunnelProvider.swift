@@ -29,9 +29,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }()
 
     private var cloakStarted: Bool = false
-    private var pathMonitor: NWPathMonitor?
+    private var pathMonitor: Network.NWPathMonitor?
     private var pathMonitorQueue: DispatchQueue?
-    private var lastPathStatus: NWPath.Status?
+    private var lastPathStatus: Network.NWPath.Status?
 
     private func extractHost(from hostPortMaybeWithQuery: String) -> String {
         let hostPort = hostPortMaybeWithQuery.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? hostPortMaybeWithQuery
@@ -352,7 +352,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func startPathLogging() {
         // Logs-only: helps correlate "Wi‑Fi off/on" with tunnel lifecycle and health-check decisions.
-        let monitor = NWPathMonitor()
+        let monitor = Network.NWPathMonitor()
         let q = DispatchQueue(label: "vpn.dobby.app.tunnel.path.\(tunnelId)")
         pathMonitor = monitor
         pathMonitorQueue = q
