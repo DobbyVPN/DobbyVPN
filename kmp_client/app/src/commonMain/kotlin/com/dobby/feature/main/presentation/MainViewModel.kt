@@ -42,7 +42,7 @@ class MainViewModel(
     val uiState: StateFlow<MainUiState> = _uiState
     private val healthCheckManager: HealthCheckManager = HealthCheckManager(healthCheck, this, configsRepository, logger)
     private lateinit var serverAddress: String
-    private lateinit var serverPort: Int
+    private var serverPort: Int = 0
 
     init {
         viewModelScope.launch {
