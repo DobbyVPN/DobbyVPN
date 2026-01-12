@@ -28,7 +28,7 @@ interface VPNLibrary : Library {
     fun InitLogger(path: String)
 
     // CheckServerAlive
-    fun CheckServerAlive(address: String, port: Int)
+    fun CheckServerAlive(address: String, port: Int): Int
 }
 
 class VPNLibraryLoader(
@@ -181,7 +181,7 @@ class VPNLibraryLoader(
 
     fun checkServerAlive(address: String, port: Int): Boolean {
         try {
-            val res = INSTANCE.checkServerAlive(address, port)
+            val res = INSTANCE.CheckServerAlive(address, port)
             logger.log("CheckServerAlive called successfully.")
             return res == 0
         } catch (e: UnsatisfiedLinkError) {

@@ -238,6 +238,8 @@ class MainViewModel(
         if (!stoppedByHealthCheck) {
             configsRepository.setIsOutlineEnabled(false)
             configsRepository.setIsCloakEnabled(false)
+            serverAddress = ""
+            serverPort = 0
         }
         logger.log("VPN service stopped successfully, state reset to disconnected")
     }
