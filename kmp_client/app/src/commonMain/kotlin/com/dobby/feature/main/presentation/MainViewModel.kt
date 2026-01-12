@@ -216,7 +216,7 @@ class MainViewModel(
         }
     }
 
-    private fun startVpn(isPermissionGranted: Boolean) {
+    private suspend fun startVpn(isPermissionGranted: Boolean) {
         if (isPermissionGranted) {
             logger.log("Permission granted — starting VPN service")
             startVpnService()
@@ -226,7 +226,7 @@ class MainViewModel(
         }
     }
 
-    fun startVpnService() {
+    suspend fun startVpnService() {
         logger.log("Starting VPN service...")
         vpnManager.start()
         healthCheckManager.startHealthCheck(serverAddress, serverPort)
