@@ -275,12 +275,6 @@ public final class HealthCheckImpl: HealthCheck {
     }
 
     public func checkServerAlive(address: String, port: Int32) -> Bool {
-        var ret: Int32 = 0
-        let success = Cloak_outlineCheckServerAlive(address, port, &ret)
-
-        if success {
-            return ret == 0
-        }
-        return false
+        return Cloak_outlineCheckServerAlive(address, Int(port)) == 0
     }
 }
