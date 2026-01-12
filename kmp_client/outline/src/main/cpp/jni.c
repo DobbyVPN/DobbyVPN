@@ -95,7 +95,8 @@ Java_com_dobby_outline_OutlineGo_checkServerAlive(JNIEnv *env, jclass clazz,
 {
     const char *address = (*env)->GetStringUTFChars(env, jAddress, NULL);
     // Вызываем Go-экспорт
-    CheckServerAlive(address, jPort);
+    jint res = CheckServerAlive(address, jPort);
     // Копируем данные обратно в Java-буфер
     (*env)->ReleaseStringUTFChars(env, jAddress, address);
+    return res;
 }
