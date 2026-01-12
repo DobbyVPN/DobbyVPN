@@ -29,7 +29,7 @@ func UrlTest(url string, standard int) (int32, error) {
 //export CheckServerAlive
 func CheckServerAlive(addressC *C.char, port C.int) C.int {
 	address := C.GoString(addressC)
-	res := healthcheck.CheckServerAlive(address, port)
+	res := healthcheck.CheckServerAlive(address, int(port))
 	log.Infof("Health check result: %v", res)
 	if res == nil {
 		return 0
