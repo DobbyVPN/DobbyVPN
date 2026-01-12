@@ -36,6 +36,10 @@ import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.cancellation.CancellationException
 import java.util.Base64
 import android.os.Debug
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import java.util.UUID
 
 private const val IS_FROM_UI = "isLaunchedFromUi"
 
@@ -110,6 +114,8 @@ class DobbyVpnService : VpnService() {
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
+    private val serviceId: String = UUID.randomUUID().toString().take(8)
+    private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
 
     private val logger: Logger by inject()
     private val ipFetcher: IpFetcher by inject()
@@ -134,16 +140,52 @@ class DobbyVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        logger.log("[svc:$serviceId] onCreate()")
         logger.log("Start go logger init with file = ${provideLogFilePath().toString()}")
         initLogger()
         logger.log("Finish go logger init")
+
+        // Logs-only: track network transitions to correlate with crashes / restarts.
+        runCatching {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    logger.log("[svc:$serviceId] net:onAvailable net=$network")
+                }
+
+                override fun onLost(network: Network) {
+                    logger.log("[svc:$serviceId] net:onLost net=$network")
+                }
+
+                override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                    val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    val validated = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    val transports = buildList {
+                        if (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) add("WIFI")
+                        if (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) add("CELL")
+                        if (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) add("ETH")
+                        if (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) add("VPN")
+                    }.joinToString("|")
+                    logger.log("[svc:$serviceId] net:onCapabilitiesChanged net=$network transports=$transports internet=$hasInternet validated=$validated")
+                }
+            }
+            defaultNetworkCallback = cb
+            cm.registerDefaultNetworkCallback(cb)
+            logger.log("[svc:$serviceId] net:registerDefaultNetworkCallback OK")
+        }.onFailure { e ->
+            logger.log("[svc:$serviceId] net:registerDefaultNetworkCallback FAILED: ${e.message}")
+        }
+
         serviceScope.launch {
             connectionState.statusFlow.drop(1).collect { isConnected ->
+                logger.log("[svc:$serviceId] statusFlow update: isConnected=$isConnected")
                 if (!isConnected) {
                     startStopMutex.withLock {
+                        logger.log("[svc:$serviceId] statusFlow requested stop → begin teardown")
                         stopCloakClient()
                         teardownVpn()
                         stopSelf()
+                        logger.log("[svc:$serviceId] statusFlow requested stop → stopSelf() called")
                     }
                 }
             }
@@ -151,6 +193,7 @@ class DobbyVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        logger.log("[svc:$serviceId] onStartCommand(startId=$startId flags=$flags intentFromUi=${intent?.getBooleanExtra(IS_FROM_UI, false)}) vpnInterface=${vpnInterface?.fd} readJob=${readJob?.isActive} writeJob=${writeJob?.isActive}")
         when (dobbyConfigsRepository.getVpnInterface()) {
             VpnInterface.CLOAK_OUTLINE -> startCloakOutline(intent)
             VpnInterface.AMNEZIA_WG -> startAwg()
@@ -159,16 +202,27 @@ class DobbyVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        logger.log("[svc:$serviceId] onDestroy() begin vpnInterface=${vpnInterface?.fd} readJob=${readJob?.isActive} writeJob=${writeJob?.isActive}")
         connectionState.tryUpdateVpnStarted(isStarted = false)
         runCatching {
             runBlocking { stopCloakClient() }
             teardownVpn()
             outlineLibFacade.disconnect()
         }.onFailure { it.printStackTrace() }
+        runCatching {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            defaultNetworkCallback?.let { cb ->
+                cm.unregisterNetworkCallback(cb)
+                logger.log("[svc:$serviceId] net:unregisterNetworkCallback OK")
+            }
+        }.onFailure { e ->
+            logger.log("[svc:$serviceId] net:unregisterNetworkCallback FAILED: ${e.message}")
+        }
         serviceScope.cancel()
         tunnelManager.updateState(null, TunnelState.DOWN)
         instance = null
         super.onDestroy()
+        logger.log("[svc:$serviceId] onDestroy() end")
     }
 
     fun getMemoryUsageMB(): Double {
@@ -181,8 +235,10 @@ class DobbyVpnService : VpnService() {
     private fun startCloakOutline(intent: Intent?) {
         serviceScope.launch {
             startStopMutex.withLock {
+                logger.log("[svc:$serviceId] startCloakOutline(): lock acquired vpnInterface=${vpnInterface?.fd}")
                 val isServiceStartedFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) ?: false
                 val shouldTurnOutlineOn = dobbyConfigsRepository.getIsOutlineEnabled()
+                logger.log("[svc:$serviceId] startCloakOutline(): fromUi=$isServiceStartedFromUi shouldTurnOutlineOn=$shouldTurnOutlineOn")
 
                 if (!shouldTurnOutlineOn && isServiceStartedFromUi) {
                     logger.log("Start disconnecting Outline")
@@ -291,6 +347,7 @@ class DobbyVpnService : VpnService() {
 
                 setupVpn()
                 connectionState.updateStatus(true)
+                logger.log("[svc:$serviceId] startCloakOutline(): completed (status=true) vpnInterface=${vpnInterface?.fd}")
             }
         }
     }
@@ -340,6 +397,10 @@ class DobbyVpnService : VpnService() {
     }
 
     private fun teardownVpn() {
+        val fdBefore = vpnInterface?.fd
+        val readActive = readJob?.isActive
+        val writeActive = writeJob?.isActive
+        logger.log("[svc:$serviceId] teardownVpn(): begin fd=$fdBefore readJob=$readActive writeJob=$writeActive")
         runCatching { readJob?.cancel() }
         runCatching { writeJob?.cancel() }
         runCatching { routingJob?.cancel() }
@@ -355,18 +416,25 @@ class DobbyVpnService : VpnService() {
         inputStream = null
         outputStream = null
         vpnInterface = null
+        logger.log("[svc:$serviceId] teardownVpn(): end fd=$fdBefore")
     }
 
     private fun setupVpn() {
         teardownVpn()
 
-        vpnInterface = vpnInterfaceFactory
-            .create(context = this@DobbyVpnService, vpnService = this@DobbyVpnService)
-            .establish()
+        logger.log("[svc:$serviceId] setupVpn(): begin")
+        vpnInterface = runCatching {
+            vpnInterfaceFactory
+                .create(context = this@DobbyVpnService, vpnService = this@DobbyVpnService)
+                .establish()
+        }.onFailure { e ->
+            logger.log("[svc:$serviceId] setupVpn(): establish FAILED: ${e.message}")
+        }.getOrNull()
 
         if (vpnInterface != null) {
             inputStream = FileInputStream(vpnInterface?.fileDescriptor)
             outputStream = FileOutputStream(vpnInterface?.fileDescriptor)
+            logger.log("[svc:$serviceId] setupVpn(): established fd=${vpnInterface?.fd}")
 
             logger.log("Start reading packets")
             startReadingPackets()
@@ -413,6 +481,7 @@ class DobbyVpnService : VpnService() {
     private fun startReadingPackets() {
         readJob = serviceScope.launch {
             vpnInterface?.let { vpn ->
+                logger.log("[svc:$serviceId] readLoop: start fd=${vpn.fd}")
                 val buffer = ByteBuffer.allocate(bufferSize)
 
                 while (isActive) {
@@ -427,13 +496,16 @@ class DobbyVpnService : VpnService() {
                         logger.log("VpnService: Packet reading coroutine was cancelled.")
                         break
                     } catch (e: Exception) {
+                        logger.log("[svc:$serviceId] readLoop: exception fd=${vpn.fd} msg=${e.message}")
                         android.util.Log.e(
                             "DobbyTAG",
-                            "VpnService: Failed to write packet to Outline: ${e.message}"
+                            "VpnService: Failed to write packet to Outline: ${e.message}",
+                            e
                         )
                     }
                     buffer.clear()
                 }
+                logger.log("[svc:$serviceId] readLoop: end fd=${vpn.fd} isActive=$isActive")
             }
         }
     }
@@ -441,6 +513,7 @@ class DobbyVpnService : VpnService() {
     private fun startWritingPackets() {
         writeJob = serviceScope.launch {
             vpnInterface?.let {
+                logger.log("[svc:$serviceId] writeLoop: start fd=${it.fd}")
                 val buffer = ByteArray(bufferSize)
 
                 while (isActive) {
@@ -453,9 +526,10 @@ class DobbyVpnService : VpnService() {
                         logger.log("VpnService: Packet writing coroutine was cancelled.")
                         break
                     } catch (e: Exception) {
-                        logger.log("VpnService: Failed to read packet from tunnel: ${e.message}")
+                        logger.log("[svc:$serviceId] writeLoop: exception fd=${it.fd} msg=${e.message}")
                     }
                 }
+                logger.log("[svc:$serviceId] writeLoop: end fd=${it.fd} isActive=$isActive")
             }
         }
     }

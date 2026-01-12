@@ -30,6 +30,7 @@ type OutlineDevice struct {
 var providers = configurl.NewDefaultProviders()
 
 func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
+	defer guard("NewOutlineDevice")()
 	ip, err := resolveShadowsocksServerIPFromConfig(transportConfig)
 	if err != nil {
 		return nil, err
@@ -54,18 +55,22 @@ func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 }
 
 func (d *OutlineDevice) Close() error {
+	defer guard("OutlineDevice.Close")()
 	return d.IPDevice.Close()
 }
 
 func (d *OutlineDevice) Refresh() error {
+	defer guard("OutlineDevice.Refresh")()
 	return d.pp.testConnectivityAndRefresh(connectivityTestResolver, connectivityTestDomain)
 }
 
 func (d *OutlineDevice) GetServerIP() net.IP {
+	defer guard("OutlineDevice.GetServerIP")()
 	return d.svrIP
 }
 
 func (d *OutlineDevice) Read() ([]byte, error) {
+	defer guard("OutlineDevice.Read")()
 	buf := make([]byte, 65536)
 	n, err := d.IPDevice.Read(buf)
 	if err != nil {
@@ -75,6 +80,7 @@ func (d *OutlineDevice) Read() ([]byte, error) {
 }
 
 func (d *OutlineDevice) Write(buf []byte) (int, error) {
+	defer guard("OutlineDevice.Write")()
 	n, err := d.IPDevice.Write(buf)
 	if err != nil {
 		return 0, fmt.Errorf("failed to write data: %w", err)

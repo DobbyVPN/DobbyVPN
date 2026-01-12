@@ -39,6 +39,7 @@ func newOutlinePacketProxy(transportConfig string) (opp *outlinePacketProxy, err
 }
 
 func (proxy *outlinePacketProxy) testConnectivityAndRefresh(resolverAddr, domain string) error {
+	defer guard("outlinePacketProxy.testConnectivityAndRefresh")()
 	dialer := transport.PacketListenerDialer{Listener: proxy.remotePl}
 	dnsResolver := dns.NewUDPResolver(dialer, resolverAddr)
 	result, err := connectivity.TestConnectivityWithResolver(context.Background(), dnsResolver, domain)

@@ -8,6 +8,7 @@ import "C"
 import (
 	log "go_client/logger"
 	"go_client/outline"
+	"runtime/debug"
 	"sync"
 	"unsafe"
 )
@@ -40,8 +41,28 @@ func setLastError(err string) {
 	log.Infof("Error set: %s", err)
 }
 
+func guardExport(fnName string) func() {
+	return func() {
+		if r := recover(); r != nil {
+			msg := "panic in " + fnName + ": " + unsafeToString(r)
+			setLastError(msg)
+			log.Infof("%s\n%s", msg, string(debug.Stack()))
+		}
+	}
+}
+
+func unsafeToString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	default:
+		return "non-string panic"
+	}
+}
+
 //export Connect
 func Connect() C.int {
+	defer guardExport("Connect")()
 	log.Infof("Connect() called")
 	ClearLastError()
 	if client == nil {
@@ -61,6 +82,7 @@ func Connect() C.int {
 
 //export Disconnect
 func Disconnect() {
+	defer guardExport("Disconnect")()
 	log.Infof("Disconnect() called")
 	if client == nil {
 		log.Infof("Disconnect(): client is nil")
@@ -72,6 +94,7 @@ func Disconnect() {
 
 //export Read
 func Read(buf *C.char, maxLen C.int) C.int {
+	defer guardExport("Read")()
 	//log.Infof("Read() called")
 	if client == nil {
 		log.Infof("Read(): client is nil")
@@ -86,6 +109,9 @@ func Read(buf *C.char, maxLen C.int) C.int {
 	if copyLen > int(maxLen) {
 		copyLen = int(maxLen)
 	}
+	if copyLen <= 0 {
+		return 0
+	}
 	C.memcpy(
 		unsafe.Pointer(buf),
 		unsafe.Pointer(&data[0]),
@@ -97,6 +123,7 @@ func Read(buf *C.char, maxLen C.int) C.int {
 
 //export Write
 func Write(buf *C.char, length C.int) C.int {
+	defer guardExport("Write")()
 	//log.Infof("Write() called, length=" + string(rune(length)))
 	if client == nil {
 		log.Infof("Write(): client is nil")
@@ -114,6 +141,7 @@ func Write(buf *C.char, length C.int) C.int {
 
 //export NewOutlineClient
 func NewOutlineClient(config *C.char) {
+	defer guardExport("NewOutlineClient")()
 	log.Infof("NewOutlineClient() called")
 	StopOutlineClient()
 	goConfig := C.GoString(config)
@@ -125,6 +153,7 @@ func NewOutlineClient(config *C.char) {
 
 //export StopOutlineClient
 func StopOutlineClient() {
+	defer guardExport("StopOutlineClient")()
 	log.Infof("StopOutlineClient() called")
 	if client != nil {
 		client.Disconnect()

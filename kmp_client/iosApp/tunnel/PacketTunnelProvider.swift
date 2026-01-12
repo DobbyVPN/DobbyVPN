@@ -11,6 +11,7 @@ import Network
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
     private let launchId = UUID().uuidString
+    private let tunnelId = String(UUID().uuidString.prefix(8))
     
     private var device = DeviceFacade()
     private var logs = NativeModuleHolder.logsRepository
@@ -28,6 +29,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }()
 
     private var cloakStarted: Bool = false
+    private var pathMonitor: NWPathMonitor?
+    private var pathMonitorQueue: DispatchQueue?
+    private var lastPathStatus: NWPath.Status?
 
     private func extractHost(from hostPortMaybeWithQuery: String) -> String {
         let hostPort = hostPortMaybeWithQuery.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? hostPortMaybeWithQuery
@@ -66,17 +70,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     
     override func startTunnel(options: [String : NSObject]?) async throws {
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
-        logs.writeLog(log: "startTunnel in PacketTunnelProvider, tid: \(tid)")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId)")
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
         
         // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
         await teardownForStop(reason: "pre-start cleanup")
+
+        startPathLogging()
+
         let methodPassword = configsRepository.getMethodPasswordOutline()
         let serverPort = configsRepository.getServerPortOutline()
         let prefix = configsRepository.getPrefixOutline()
         let websocketEnabled = configsRepository.getIsWebsocketEnabled()
         let tcpPath = configsRepository.getTcpPathOutline()
         let udpPath = configsRepository.getUdpPathOutline()
+        logs.writeLog(log: "[tunnel:\(tunnelId)] config snapshot: serverPort.len=\(serverPort.count) methodPassword.len=\(methodPassword.count) ws=\(websocketEnabled) tcpPath.len=\(tcpPath.count) udpPath.len=\(udpPath.count)")
 
         // Validate config early (prevents passing empty config into native layer).
         if methodPassword.isEmpty || serverPort.isEmpty {
@@ -170,6 +178,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(log: "[startTunnel] Device initialization failed; aborting startTunnel")
             throw NSError(domain: "PacketTunnelProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: "Outline device initialization failed"])
         }
+        logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
         try startCloak(outlineServerPort: serverPort)
         
         readPacketsTask = Task { await self.readPacketsFromTunnel() }
@@ -180,7 +189,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        logs.writeLog(log: "Stopping tunnel with reason: \(reason)")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel reason=\(reason.rawValue) (\(reason))")
         configsRepository.setIsUserInitStop(isUserInitStop: true)
         Task {
             await teardownForStop(reason: "stopTunnel(\(reason))")
@@ -197,7 +206,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     
     private func readPacketsFromTunnel() async {
-        logs.writeLog(log: "Starting async readPacketsFromTunnel()…")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] readPacketsFromTunnel(): start")
 
         while !Task.isCancelled {
             do {
@@ -213,19 +222,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 logs.writeLog(log: "[readPacketsFromTunnel] Error: \(error.localizedDescription)")
             }
         }
+        logs.writeLog(log: "[tunnel:\(tunnelId)] readPacketsFromTunnel(): end cancelled=\(Task.isCancelled)")
     }
 
     private func processPacketsToDevice() async {
-        logs.writeLog(log: "Starting async processPacketsToDevice()…")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] processPacketsToDevice(): start")
 
         for await (packet, _) in packetStream {
             if Task.isCancelled { break }
             device.write(data: packet)
         }
+        logs.writeLog(log: "[tunnel:\(tunnelId)] processPacketsToDevice(): end cancelled=\(Task.isCancelled)")
     }
 
     private func processPacketsFromDevice() async {
-        logs.writeLog(log: "Starting async processPacketsFromDevice()…")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] processPacketsFromDevice(): start")
 
         while !Task.isCancelled {
             let data: Data = autoreleasepool {
@@ -238,9 +249,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             
             let ok = packetFlow.writePackets([data], withProtocols: [NSNumber(value: AF_INET)])
             if !ok {
-                logs.writeLog(log: "Failed to write packets to NEPacketFlow")
+                logs.writeLog(log: "[tunnel:\(tunnelId)] Failed to write packets to NEPacketFlow")
             }
         }
+        logs.writeLog(log: "[tunnel:\(tunnelId)] processPacketsFromDevice(): end cancelled=\(Task.isCancelled)")
     }
 
     func buildOutlineConfig(
@@ -337,10 +349,33 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             cloakStarted = false
         }
     }
+
+    private func startPathLogging() {
+        // Logs-only: helps correlate "Wi‑Fi off/on" with tunnel lifecycle and health-check decisions.
+        let monitor = NWPathMonitor()
+        let q = DispatchQueue(label: "vpn.dobby.app.tunnel.path.\(tunnelId)")
+        pathMonitor = monitor
+        pathMonitorQueue = q
+
+        monitor.pathUpdateHandler = { [weak self] path in
+            guard let self else { return }
+            let status = path.status
+            if self.lastPathStatus != status {
+                self.lastPathStatus = status
+                let ifaces = path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",")
+                let expensive = path.isExpensive
+                let constrained = path.isConstrained
+                self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] pathUpdate status=\(status) ifaces=[\(ifaces)] expensive=\(expensive) constrained=\(constrained)")
+            }
+        }
+
+        monitor.start(queue: q)
+        logs.writeLog(log: "[tunnel:\(tunnelId)] NWPathMonitor started")
+    }
     
     @MainActor
     private func teardownForStop(reason: String) async {
-        logs.writeLog(log: "[teardown] begin (\(reason))")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason)) tasks(read=\(readPacketsTask != nil) toDev=\(processToDeviceTask != nil) fromDev=\(processFromDeviceTask != nil)) cloakStarted=\(cloakStarted)")
         
         packetContinuation?.finish()
         
@@ -351,12 +386,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         stopCloak()
         Cloak_outlineStopHealthCheck()
         device.close()
+
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        pathMonitorQueue = nil
+        lastPathStatus = nil
         
         readPacketsTask = nil
         processToDeviceTask = nil
         processFromDeviceTask = nil
         
-        logs.writeLog(log: "[teardown] end (\(reason))")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason))")
     }
 
     func parseIPv4Packet(_ data: Data) -> String {

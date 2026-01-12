@@ -5,5 +5,8 @@ import (
 )
 
 func InitLogger(path string) {
-	log.SetPath(path)
+	defer guard("InitLogger")()
+	if err := log.SetPath(path); err != nil {
+		log.Infof("[ios_exports] InitLogger failed: %v", err)
+	}
 }

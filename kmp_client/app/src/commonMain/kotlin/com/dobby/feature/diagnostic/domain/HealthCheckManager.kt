@@ -65,13 +65,16 @@ class HealthCheckManager(
             logger.log("[HC] Health check started")
 
             while (isActive) {
+                val vpnStarted = mainViewModel.connectionStateRepository.vpnStartedFlow.value
+                val restartPending = mainViewModel.connectionStateRepository.restartPendingFlow.value
+                val isUserInitStopNow = configsRepository.getIsUserInitStop()
                 logger.log(
-                    "[HC] Tick | consecutiveFailures=$consecutiveFailuresCount/$consecutiveFailuresBeforeTurnOff"
+                    "[HC] Tick | consecutiveFailures=$consecutiveFailuresCount/$consecutiveFailuresBeforeTurnOff | vpnStarted=$vpnStarted restartPending=$restartPending isUserInitStop=$isUserInitStopNow"
                 )
 
                 var nextDelay: Duration? = null
 
-                if (configsRepository.getIsUserInitStop()) {
+                if (isUserInitStopNow) {
                     logger.log("[HC] Stop condition: getIsUserInitStop() == true")
                     turnOffVpn()
                     return@launch
@@ -123,10 +126,10 @@ class HealthCheckManager(
                         mainViewModel.connectionStateRepository.tryUpdateRestartPending(true)
                         delay(restartDelayMs)
 
-                        if (!mainViewModel.connectionStateRepository.restartPendingFlow.value
-                            || mainViewModel.connectionStateRepository.vpnStartedFlow.value
-                        ) {
-                            logger.log("[HC] Auto-restart cancelled by user action (or already started) → skip restart")
+                        val restartPendingNow = mainViewModel.connectionStateRepository.restartPendingFlow.value
+                        val vpnStartedNow = mainViewModel.connectionStateRepository.vpnStartedFlow.value
+                        if (!restartPendingNow || vpnStartedNow) {
+                            logger.log("[HC] Auto-restart cancelled/invalid → skip restart (restartPending=$restartPendingNow vpnStarted=$vpnStartedNow)")
                             mainViewModel.connectionStateRepository.tryUpdateRestartPending(false)
                             nextDelay = getHealthCheckDelay()
                         } else {
