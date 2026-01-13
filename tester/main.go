@@ -1,23 +1,13 @@
 package main
 
-import "C"
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"time"
-
-	pb "tester/vpnserver"
-
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 var (
@@ -26,174 +16,20 @@ var (
 	TESTER_CONFIG   string = ""
 	IPINFO_URL      string = "https://api.myip.com/"
 	TESTING_CONFIG  string = ""
-	LOCALHOST_IP    string = ""
 )
-
-type IPData struct {
-	IP      string `json:"ip"`
-	Country string `json:"country"`
-	CC      string `json:"cc"`
-}
-
-func getIpData() (*IPData, error) {
-	client := http.Client{
-		Timeout: 2 * time.Second,
-	}
-	resp, err := client.Get(IPINFO_URL)
-	if err != nil {
-		return nil, fmt.Errorf("Error getting ip info: %v", err)
-	}
-
-	var ipData IPData
-	err = json.NewDecoder(resp.Body).Decode(&ipData)
-	if err != nil {
-		return nil, fmt.Errorf("Error decoding JSON: %v", err)
-	}
-
-	resp.Body.Close()
-	client.CloseIdleConnections()
-
-	log.Printf("Got ip: ip=%v, country_code=%v", ipData.IP, ipData.CC)
-
-	return &ipData, nil
-}
-
-type TesterConfig struct {
-	Tests []TestConfig `json:"tests"`
-}
-
-type TestConfig struct {
-	Description string     `json:"description"`
-	Steps       []TestStep `json:"steps"`
-}
-
-type TestStep struct {
-	Action string                 `json:"action"`
-	Args   map[string]interface{} `json:"args"`
-}
-
-func parceIpMatch(ip string) string {
-	switch ip {
-	case "localhost":
-		return LOCALHOST_IP
-	default:
-		return ip
-	}
-}
 
 func runTestStep(testStep TestStep) error {
 	log.Printf("Running test step\n")
 
 	switch testStep.Action {
 	case "assert":
-		if ip, ok := testStep.Args["ip"].(string); ok {
-			log.Printf("Checking ip exact match")
-
-			ipMatch := parceIpMatch(ip)
-
-			ipData, err := getIpData()
-			if err != nil {
-				return fmt.Errorf("Error loading current ip: %v", err)
-			}
-
-			if ipData.IP != ipMatch {
-				return fmt.Errorf("Assertion error: current ip: %v, expected: %v", ipData.IP, ipMatch)
-			} else {
-				log.Printf("Assertion succeed")
-
-				return nil
-			}
-		}
-
-		if ipCountryCode, ok := testStep.Args["ip_cc"].(string); ok {
-			log.Printf("Checking ip country code match")
-
-			ipData, err := getIpData()
-			if err != nil {
-				return fmt.Errorf("Error loading current ip: %v", err)
-			}
-
-			if ipData.CC != ipCountryCode {
-				return fmt.Errorf("Assertion error: current ip coutrye code: %v, expected: %v", ipData.CC, ipCountryCode)
-			} else {
-				log.Printf("Assertion succeed")
-
-				return nil
-			}
-		}
-
-		return fmt.Errorf("Invalid assertion arguments")
+		return assertStep(testStep)
 	case "timeout":
-		if seconds, ok := testStep.Args["seconds"].(string); ok {
-			log.Printf("Sleeping %v seconds\n", seconds)
-
-			secondsAsInt, err := strconv.Atoi(seconds)
-			if err == nil {
-				time.Sleep(time.Second * time.Duration(secondsAsInt))
-
-				log.Printf("Sleeping done\n")
-
-				return nil
-			}
-		}
-
-		return fmt.Errorf("Invalid timeout arguments")
+		return timeoutStep(testStep)
 	case "StartAwg":
-		if tunnel, ok := testStep.Args["tunnel"].(string); ok {
-			if config, ok := testStep.Args["config"].(string); ok {
-				log.Printf("Creating gRPC client\n")
-
-				conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
-				if err != nil {
-					return fmt.Errorf("Did not connect: %v", err)
-				}
-				defer conn.Close()
-
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				defer cancel()
-
-				log.Printf("Starting tunnel\n")
-
-				vpnclient := pb.NewVpnClient(conn)
-				log.Printf("Created gRPC client")
-
-				_, err = vpnclient.StartAwg(ctx, &pb.StartAwgRequest{Tunnel: tunnel, Config: config})
-				if err != nil {
-					return fmt.Errorf("Failed to StartAwg: %v", err)
-				}
-
-				log.Printf("Sent StartAwg")
-
-				return nil
-			}
-		}
-
-		return fmt.Errorf("Invalid StartAwg arguments")
+		return startAwgStep(testStep)
 	case "StopAwg":
-		log.Printf("Creating gRPC client\n")
-
-		conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			return fmt.Errorf("Did not connect: %v", err)
-		}
-		defer conn.Close()
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-
-		log.Printf("Starting tunnel\n")
-
-		vpnclient := pb.NewVpnClient(conn)
-		log.Printf("Created gRPC client")
-
-		_, err = vpnclient.StopAwg(ctx, &pb.Empty{})
-		if err != nil {
-			return fmt.Errorf("Failed to StopAwg: %v", err)
-		}
-
-		log.Printf("Sent StopAwg")
-
-		return nil
+		return stopAwgStep()
 	default:
 		return fmt.Errorf("Unexpected action %v", testStep.Action)
 	}
@@ -275,12 +111,12 @@ func main() {
 
 	data, err := os.ReadFile(TESTER_CONFIG)
 	if err != nil {
-		log.Fatalf("Error reading file:", err)
+		log.Fatalf("Error reading file: %v", err)
 	}
 
 	var testerConfig TesterConfig
 	if err := json.Unmarshal(data, &testerConfig); err != nil {
-		log.Fatalf("Error parsing json file:", err)
+		log.Fatalf("Error parsing json file: %v", err)
 	}
 
 	err = prepare()
@@ -296,4 +132,8 @@ func main() {
 			log.Fatalf("Error while running test: %v", err)
 		}
 	}
+
+	log.SetPrefix("[LOG] ")
+
+	log.Printf("✓ All tests passed")
 }
