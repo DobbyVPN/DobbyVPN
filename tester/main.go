@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	pb "tester/vpnserver"
@@ -21,8 +23,10 @@ import (
 var (
 	GRPC_EXECUTABLE string = ""
 	GRPC_ADDRESS    string = ""
+	TESTER_CONFIG   string = ""
 	IPINFO_URL      string = "https://api.myip.com/"
 	TESTING_CONFIG  string = ""
+	LOCALHOST_IP    string = ""
 )
 
 type IPData struct {
@@ -54,76 +58,169 @@ func getIpData() (*IPData, error) {
 	return &ipData, nil
 }
 
-func testing() error {
-	log.Printf("Testing if everything's ok with network\n")
-
-	ipData, err := getIpData()
-	if err != nil {
-		return fmt.Errorf("Error getting ip data: %v\n", err)
-	}
-
-	if ipData.CC != "RU" {
-		return fmt.Errorf("Expected RU country, got %v", ipData.CC)
-	}
-
-	log.Printf("Creating gRPC client\n")
-
-	conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return fmt.Errorf("Did not connect: %v", err)
-	} else {
-		log.Printf("Created gRPC client")
-	}
-	defer conn.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	log.Printf("Starting tunnel\n")
-
-	vpnclient := pb.NewVpnClient(conn)
-	_, err = vpnclient.StartAwg(ctx, &pb.StartAwgRequest{Tunnel: "awg", Config: TESTING_CONFIG})
-	if err != nil {
-		return fmt.Errorf("Failed to StartAwg: %v", err)
-	} else {
-		log.Printf("Sent StartAwg")
-	}
-
-	log.Printf("Sleeping 2 seconds\n")
-
-	time.Sleep(time.Second * 2)
-
-	log.Printf("Testing if ip has changed\n")
-
-	ipData, err = getIpData()
-	if err != nil {
-		return fmt.Errorf("Error getting ip data: %v\n", err)
-	}
-
-	if ipData.CC != "NL" {
-		return fmt.Errorf("Expected NL country, got %v", ipData.CC)
-	}
-
-	return nil
+type TesterConfig struct {
+	Tests []TestConfig `json:"tests"`
 }
 
-func main() {
-	flag.StringVar(&GRPC_EXECUTABLE, "path", "grpcvpnserver", "VPN service executable absolute path")
-	flag.StringVar(&GRPC_ADDRESS, "addr", "localhost:50051", "The address to connect to")
-	flag.Parse()
+type TestConfig struct {
+	Description string     `json:"description"`
+	Steps       []TestStep `json:"steps"`
+}
 
-	log.SetPrefix("[LOG] ")
-	log.Printf("Running %v\n", GRPC_EXECUTABLE)
+type TestStep struct {
+	Action string                 `json:"action"`
+	Args   map[string]interface{} `json:"args"`
+}
 
-	cmd := exec.Command("sudo", GRPC_EXECUTABLE)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		log.Fatalf("Failed to start: %v\n", err)
+func parceIpMatch(ip string) string {
+	switch ip {
+	case "localhost":
+		return LOCALHOST_IP
+	default:
+		return ip
 	}
+}
 
-	log.Printf("Subprocess PID: %d\n", cmd.Process.Pid)
+func runTestStep(testStep TestStep) error {
+	log.Printf("Running test step\n")
 
+	switch testStep.Action {
+	case "assert":
+		if ip, ok := testStep.Args["ip"].(string); ok {
+			log.Printf("Checking ip exact match")
+
+			ipMatch := parceIpMatch(ip)
+
+			ipData, err := getIpData()
+			if err != nil {
+				return fmt.Errorf("Error loading current ip: %v", err)
+			}
+
+			if ipData.IP != ipMatch {
+				return fmt.Errorf("Assertion error: current ip: %v, expected: %v", ipData.IP, ipMatch)
+			} else {
+				log.Printf("Assertion succeed")
+
+				return nil
+			}
+		}
+
+		if ipCountryCode, ok := testStep.Args["ip_cc"].(string); ok {
+			log.Printf("Checking ip country code match")
+
+			ipData, err := getIpData()
+			if err != nil {
+				return fmt.Errorf("Error loading current ip: %v", err)
+			}
+
+			if ipData.CC != ipCountryCode {
+				return fmt.Errorf("Assertion error: current ip coutrye code: %v, expected: %v", ipData.CC, ipCountryCode)
+			} else {
+				log.Printf("Assertion succeed")
+
+				return nil
+			}
+		}
+
+		return fmt.Errorf("Invalid assertion arguments")
+	case "timeout":
+		if seconds, ok := testStep.Args["seconds"].(string); ok {
+			log.Printf("Sleeping %v seconds\n", seconds)
+
+			secondsAsInt, err := strconv.Atoi(seconds)
+			if err == nil {
+				time.Sleep(time.Second * time.Duration(secondsAsInt))
+
+				log.Printf("Sleeping done\n")
+
+				return nil
+			}
+		}
+
+		return fmt.Errorf("Invalid timeout arguments")
+	case "StartAwg":
+		if tunnel, ok := testStep.Args["tunnel"].(string); ok {
+			if config, ok := testStep.Args["config"].(string); ok {
+				log.Printf("Creating gRPC client\n")
+
+				conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
+				if err != nil {
+					return fmt.Errorf("Did not connect: %v", err)
+				}
+				defer conn.Close()
+
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+
+				log.Printf("Starting tunnel\n")
+
+				vpnclient := pb.NewVpnClient(conn)
+				log.Printf("Created gRPC client")
+
+				_, err = vpnclient.StartAwg(ctx, &pb.StartAwgRequest{Tunnel: tunnel, Config: config})
+				if err != nil {
+					return fmt.Errorf("Failed to StartAwg: %v", err)
+				}
+
+				log.Printf("Sent StartAwg")
+
+				return nil
+			}
+		}
+
+		return fmt.Errorf("Invalid StartAwg arguments")
+	case "StopAwg":
+		log.Printf("Creating gRPC client\n")
+
+		conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("Did not connect: %v", err)
+		}
+		defer conn.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		log.Printf("Starting tunnel\n")
+
+		vpnclient := pb.NewVpnClient(conn)
+		log.Printf("Created gRPC client")
+
+		_, err = vpnclient.StopAwg(ctx, &pb.Empty{})
+		if err != nil {
+			return fmt.Errorf("Failed to StopAwg: %v", err)
+		}
+
+		log.Printf("Sent StopAwg")
+
+		return nil
+	default:
+		return fmt.Errorf("Unexpected action %v", testStep.Action)
+	}
+}
+
+func runTest(testNumber int, testerConfig TestConfig) error {
+	log.Printf("Running test: %v\n", testerConfig.Description)
+
+	tmpFile, err := os.CreateTemp("./", "vpnserver-output-*.log")
+	if err != nil {
+		return fmt.Errorf("Error creating vpn subprocess temporal log file: %v", err)
+	}
+	defer tmpFile.Close()
+
+	path, err := filepath.Abs(tmpFile.Name())
+	if err != nil {
+		return fmt.Errorf("Error printing temporal file absolute path: %v", err)
+	}
+	log.Printf("Created temp log file: %v\n", path)
+
+	cmd := exec.Command(GRPC_EXECUTABLE)
+	cmd.Stdout = tmpFile
+	cmd.Stderr = tmpFile
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("Failed to start vpn subprocess: %v\n", err)
+	}
 	defer func() {
 		log.Println("Interrupting subprocess...")
 		cmd.Process.Kill()
@@ -138,8 +235,65 @@ func main() {
 		}
 	}()
 
-	err := testing()
+	log.Printf("VPN subprocess run, PID: %d\n", cmd.Process.Pid)
+
+	for index, step := range testerConfig.Steps {
+		log.SetPrefix(fmt.Sprintf("[LOG test:%d step:%d] ", testNumber, index))
+		err := runTestStep(step)
+		if err != nil {
+			return fmt.Errorf("Error while running test step: %v\n", err)
+		}
+	}
+
+	return nil
+}
+
+func prepare() error {
+	log.Printf("Preparing")
+
+	ipData, err := getIpData()
 	if err != nil {
-		log.Printf("Error while testing: %v\n", err)
+		return fmt.Errorf("Error geting localhost ip: %v", err)
+	}
+	log.Printf("Setting LOCALHOST_IP=%v\n", ipData.IP)
+	LOCALHOST_IP = ipData.IP
+
+	log.Printf("Preparing completed")
+
+	return nil
+}
+
+func main() {
+	flag.StringVar(&GRPC_EXECUTABLE, "path", "grpcvpnserver", "VPN service executable absolute path")
+	flag.StringVar(&GRPC_ADDRESS, "addr", "localhost:50051", "The address to connect to")
+	flag.StringVar(&TESTER_CONFIG, "conf", "./config.json", "Tester config path")
+	flag.Parse()
+
+	log.SetPrefix("[LOG] ")
+
+	log.Printf("Reading config %v\n", TESTER_CONFIG)
+
+	data, err := os.ReadFile(TESTER_CONFIG)
+	if err != nil {
+		log.Fatalf("Error reading file:", err)
+	}
+
+	var testerConfig TesterConfig
+	if err := json.Unmarshal(data, &testerConfig); err != nil {
+		log.Fatalf("Error parsing json file:", err)
+	}
+
+	err = prepare()
+	if err != nil {
+		log.Fatalf("Error while prepating: %v", err)
+	}
+
+	for testNumber, testerConfig := range testerConfig.Tests {
+		log.SetPrefix(fmt.Sprintf("[LOG test:%d] ", testNumber))
+
+		err := runTest(testNumber, testerConfig)
+		if err != nil {
+			log.Fatalf("Error while running test: %v", err)
+		}
 	}
 }
