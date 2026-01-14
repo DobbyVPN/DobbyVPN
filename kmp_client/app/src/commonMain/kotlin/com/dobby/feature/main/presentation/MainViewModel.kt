@@ -228,8 +228,8 @@ class MainViewModel(
 
     suspend fun startVpnService() {
         logger.log("Starting VPN service...")
-        vpnManager.start()
         healthCheckManager.startHealthCheck(serverAddress, serverPort)
+        vpnManager.start()
     }
 
     fun stopVpnService(stoppedByHealthCheck: Boolean = false) {

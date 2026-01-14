@@ -11,7 +11,8 @@ func CheckServerAlive(address string, port int) error {
 	target := fmt.Sprintf("%s:%d", address, port)
 
 	d := net.Dialer{
-		Timeout: 1 * time.Second,
+		Timeout:   1 * time.Second,
+		KeepAlive: -1,
 	}
 
 	var lastErr error
@@ -26,17 +27,34 @@ func CheckServerAlive(address string, port int) error {
 			continue
 		}
 
-		defer conn.Close()
+		func() {
+			defer conn.Close()
 
-		_ = conn.SetDeadline(time.Now().Add(1 * time.Second))
+			_ = conn.SetDeadline(time.Now().Add(1 * time.Second))
 
-		_, err = conn.Write([]byte{0x00})
-		if err != nil {
-			lastErr = err
-			continue
+			if _, err := conn.Write([]byte{0x00}); err != nil {
+				lastErr = err
+				return
+			}
+
+			buf := make([]byte, 1)
+			_, err = conn.Read(buf)
+			if err != nil {
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					lastErr = nil
+					return
+				}
+
+				lastErr = err
+				return
+			}
+
+			lastErr = nil
+		}()
+
+		if lastErr == nil {
+			return nil
 		}
-
-		return nil
 	}
 
 	return lastErr
