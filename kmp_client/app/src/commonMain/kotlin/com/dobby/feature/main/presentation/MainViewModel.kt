@@ -41,6 +41,8 @@ class MainViewModel(
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
     private val healthCheckManager: HealthCheckManager = HealthCheckManager(healthCheck, this, configsRepository, logger)
+    private lateinit var serverAddress: String
+    private var serverPort: Int = 0
 
     init {
         viewModelScope.launch {
@@ -160,6 +162,8 @@ class MainViewModel(
             logger.log("Detected Shadowsocks config, applying Outline parameters")
             configsRepository.setIsOutlineEnabled(true)
             configsRepository.setMethodPasswordOutline("${ss.Method}:${ss.Password}")
+            serverAddress = ss.Server
+            serverPort = ss.Port
             val outlineSuffix = if (ss.Outline == true) "/?outline=1" else ""
             configsRepository.setServerPortOutline("${ss.Server}:${ss.Port}$outlineSuffix")
             logger.log("Outline method, password, and server: ${ss.Method}:${maskStr(ss.Password)}@${maskStr(ss.Server)}:${ss.Port}")
@@ -173,6 +177,8 @@ class MainViewModel(
             configsRepository.setIsCloakEnabled(true)
             val cloakJson = Json { prettyPrint = true }.encodeToString(root.Cloak)
             configsRepository.setCloakConfig(cloakJson)
+            serverAddress = root.Cloak.RemoteHost
+            serverPort = root.Cloak.RemotePort.toInt()
             root.Cloak.UID = maskStr(root.Cloak.UID)
             root.Cloak.RemoteHost = maskStr(root.Cloak.RemoteHost)
             root.Cloak.ServerName = maskStr(root.Cloak.ServerName)
@@ -210,7 +216,7 @@ class MainViewModel(
         }
     }
 
-    private fun startVpn(isPermissionGranted: Boolean) {
+    private suspend fun startVpn(isPermissionGranted: Boolean) {
         if (isPermissionGranted) {
             logger.log("Permission granted — starting VPN service")
             startVpnService()
@@ -220,10 +226,10 @@ class MainViewModel(
         }
     }
 
-    fun startVpnService() {
+    suspend fun startVpnService() {
         logger.log("Starting VPN service...")
+        healthCheckManager.startHealthCheck(serverAddress, serverPort)
         vpnManager.start()
-        healthCheckManager.startHealthCheck()
     }
 
     fun stopVpnService(stoppedByHealthCheck: Boolean = false) {
@@ -232,6 +238,8 @@ class MainViewModel(
         if (!stoppedByHealthCheck) {
             configsRepository.setIsOutlineEnabled(false)
             configsRepository.setIsCloakEnabled(false)
+            serverAddress = ""
+            serverPort = 0
         }
         logger.log("VPN service stopped successfully, state reset to disconnected")
     }

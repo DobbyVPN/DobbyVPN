@@ -273,4 +273,8 @@ public final class HealthCheckImpl: HealthCheck {
     public func getTimeToWakeUp() -> Int32 {
         return 2
     }
+
+    public func checkServerAlive(address: String, port: Int32) -> Bool {
+        return Cloak_outlineCheckServerAlive(address, Int(port)) == 0
+    }
 }

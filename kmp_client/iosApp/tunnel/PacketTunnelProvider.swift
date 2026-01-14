@@ -88,10 +88,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         try await self.setTunnelNetworkSettings(settings)
         logs.writeLog(log: "Tunnel settings applied")
         
-        let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
-        logs.writeLog(log: "Start go logger init path = \(path)")
-        Cloak_outlineInitLogger(path)
-        logs.writeLog(log: "Finish go logger init")
         device.initialize(config: config, _logs: logs)
         startCloak()
         

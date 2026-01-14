@@ -6,6 +6,7 @@ import com.dobby.feature.vpn_service.DobbyVpnService
 import java.net.*
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import com.dobby.outline.OutlineGo
 import kotlin.concurrent.thread
 
 class HealthCheckImpl(
@@ -71,6 +72,10 @@ class HealthCheckImpl(
 
         logger.log("[HealthCheck] RESULT = $ok")
         return ok
+    }
+
+    override fun checkServerAlive(address: String, port: Int): Boolean {
+        return OutlineGo.checkServerAlive(address, port) == 0
     }
 
     override fun getTimeToWakeUp(): Int {
