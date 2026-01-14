@@ -32,6 +32,24 @@ func CheckServerAlive(address string, port int) error {
 
 			_ = conn.SetDeadline(time.Now().Add(1 * time.Second))
 
+			// We intentionally perform both Write and Read in addition to Dial.
+			//
+			// On iOS and mobile networks, a successful TCP connect (Dial) does NOT
+			// necessarily mean that the remote service is actually listening.
+			// The connection may be accepted optimistically by a proxy, NAT, or
+			// SYN-proxy before reaching the real server.
+			//
+			// Write() alone is also insufficient: it only confirms that the OS
+			// accepted data into a local send buffer, not that the server received it.
+			//
+			// Read() forces TCP to resolve the real connection state:
+			//   - timeout  -> the server is alive but silent (acceptable)
+			//   - data     -> the server is alive and responding
+			//   - EOF/RST  -> the connection was not actually accepted by the service
+			//
+			// This sequence minimizes false-positive "alive" results caused by
+			// optimistic TCP connections.
+
 			if _, err := conn.Write([]byte{0x00}); err != nil {
 				lastErr = err
 				return
