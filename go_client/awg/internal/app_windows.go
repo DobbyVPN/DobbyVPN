@@ -15,6 +15,7 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/tun"
 	"github.com/amnezia-vpn/amneziawg-windows/conf"
 	"github.com/amnezia-vpn/amneziawg-windows/elevate"
+	"github.com/amnezia-vpn/amneziawg-windows/tunnel"
 	"github.com/amnezia-vpn/amneziawg-windows/version"
 )
 
@@ -70,7 +71,7 @@ func (a *App) Run() error {
 	if err != nil {
 		return err
 	}
-	err = CopyConfigOwnerToIPCSecurityDescriptor(path)
+	err = tunnel.CopyConfigOwnerToIPCSecurityDescriptor(path)
 	if err != nil {
 		return err
 	}
