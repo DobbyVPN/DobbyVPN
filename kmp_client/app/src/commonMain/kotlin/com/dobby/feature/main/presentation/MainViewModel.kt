@@ -97,6 +97,14 @@ class MainViewModel(
         }
     }
 
+    fun onConnectionUrlChanged(connectionUrl: String) {
+        _uiState.value = _uiState.value.copy(connectionURL = connectionUrl)
+
+        viewModelScope.launch(Dispatchers.Default) {
+            configsRepository.setConnectionURL(connectionUrl)
+        }
+    }
+
     //region Cloak functions
     fun onConnectionButtonClicked(
         connectionUrl: String
@@ -113,7 +121,13 @@ class MainViewModel(
             if (!connectionStateRepository.vpnStartedFlow.value) {
                 try {
                     logger.log("We get config by ${maskStr(connectionUrl)}")
-                    setConfig(connectionUrl)
+                    val ok = setConfig(connectionUrl)
+                    if (!ok) {
+                        logger.log("Config is invalid or failed to apply → abort start (no HC/VPN)")
+                        connectionStateRepository.updateVpnStarted(false)
+                        connectionStateRepository.updateStatus(false)
+                        return@launch
+                    }
                 } catch (e: Exception) {
                     logger.log("Error during setConfig: ${e.message}")
                     return@launch
@@ -151,7 +165,7 @@ class MainViewModel(
         }
     }
 
-    private suspend fun setConfig(connectionUrl: String) {
+    private suspend fun setConfig(connectionUrl: String): Boolean {
         logger.log("Start setConfig() with connectionUrl: ${maskStr(connectionUrl)}")
 
         configsRepository.setConnectionURL(connectionUrl)
@@ -163,11 +177,19 @@ class MainViewModel(
         configsRepository.setConnectionConfig(connectionConfig)
         logger.log("Connection config saved to repository")
 
-        runCatching { tomlConfigApplier.apply(connectionConfig) }
+        val applied = runCatching { tomlConfigApplier.apply(connectionConfig) }
             .onFailure { e ->
-                logger.log("Error during parsing TOML (ignored): ${e.message}")
+                logger.log("Error during parsing TOML: ${e.message}")
                 configsRepository.clearOutlineAndCloakConfig()
             }
+            .getOrDefault(false)
+
+        if (!applied) {
+            logger.log("Config not applied (invalid/unsupported) → will not start VPN/HC")
+            return false
+        }
+
+        return true
     }
 
     private suspend fun getConfigByURL(connectionUrl: String): String {

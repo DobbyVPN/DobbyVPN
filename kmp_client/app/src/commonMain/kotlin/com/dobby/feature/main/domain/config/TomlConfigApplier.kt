@@ -17,12 +17,12 @@ class TomlConfigApplier(
     private val outlineApplier = OutlineTomlApplier(outlineRepo, cloakRepo, logger)
     private val cloakApplier = CloakTomlApplier(cloakRepo, logger)
 
-    fun apply(connectionConfig: String) {
+    fun apply(connectionConfig: String): Boolean {
         logger.log("Start parseToml()")
 
         if (connectionConfig.isBlank()) {
             logger.log("Connection config is blank, skipping parseToml()")
-            return
+            return false
         }
 
         val root = Toml.decodeFromString<TomlConfigs>(connectionConfig)
@@ -32,16 +32,18 @@ class TomlConfigApplier(
             logger.log("Outline config not detected, turning off")
             disableOutlineAndCloak()
             logger.log("Finish parseToml()")
-            return
+            return false
         }
 
         val outlineResult = outlineApplier.apply(outline) ?: run {
+            disableOutlineAndCloak()
             logger.log("Finish parseToml()")
-            return
+            return false
         }
         val (cloakEnabled, _) = outlineResult
         cloakApplier.apply(outline, cloakEnabled)
         logger.log("Finish parseToml()")
+        return true
     }
 
     private fun disableOutlineAndCloak() {

@@ -12,9 +12,9 @@ class HealthCheckImpl(
     private val logger: Logger,
 ) : HealthCheck {
 
-    private val tcpTimeoutMs = 1_000L
-    private val dnsTimeoutMs = 1_000L
-    private val httpTimeoutMs = 1_000L
+    private val tcpTimeoutMs = 1_500L
+    private val dnsTimeoutMs = 2_000L
+    private val httpTimeoutMs = 3_000L
 
     @Volatile
     var currentMemoryUsageMb: Double = -1.0

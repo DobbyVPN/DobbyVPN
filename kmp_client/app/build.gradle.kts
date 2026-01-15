@@ -10,7 +10,7 @@ plugins {
     alias(libs.plugins.hydraulic.conveyor)
 
     id("com.github.gmazzo.buildconfig") version "5.6.5"
-    id("io.sentry.kotlin.multiplatform.gradle") version "0.18.0"
+    id("io.sentry.kotlin.multiplatform.gradle") version "0.18.0" apply false
 }
 
 version = "1.0"
@@ -19,6 +19,12 @@ java {
     toolchain {
         languageVersion.set(JavaLanguageVersion.of(17))
     }
+}
+
+// Keep it enabled by default (CI/release), but allow disabling for local Xcode builds via: -PdisableSentry=true
+val disableSentry = providers.gradleProperty("disableSentry").orNull?.lowercase() in setOf("1", "true", "yes")
+if (!disableSentry) {
+    apply(plugin = "io.sentry.kotlin.multiplatform.gradle")
 }
 
 kotlin {

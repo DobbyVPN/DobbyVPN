@@ -80,6 +80,11 @@ class HealthCheckManager(
                     return@launch
                 }
 
+                if (!vpnStarted && !restartPending) {
+                    logger.log("[HC] vpnStarted=false and restartPending=false → exiting health check loop")
+                    return@launch
+                }
+
                 val connected = try {
                     logger.log("[HC] Calling healthCheck.isConnected()")
                     val result = healthCheck.isConnected()
@@ -90,7 +95,16 @@ class HealthCheckManager(
                     false
                 }
 
-                if (connected) {
+                if (!isActive) return@launch
+
+                val vpnStartedNow = mainViewModel.connectionStateRepository.vpnStartedFlow.value
+                val restartPendingNow = mainViewModel.connectionStateRepository.restartPendingFlow.value
+                if (!vpnStartedNow && !restartPendingNow) {
+                    logger.log("[HC] Stop observed after check → exit without applying results")
+                    return@launch
+                }
+
+                if (connected && vpnStartedNow && !restartPendingNow) {
                     mainViewModel.connectionStateRepository.updateStatus(true)
                 }
 

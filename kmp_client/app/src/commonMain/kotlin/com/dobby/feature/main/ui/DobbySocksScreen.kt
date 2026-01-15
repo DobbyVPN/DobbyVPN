@@ -35,8 +35,6 @@ fun DobbySocksScreen(
     val uiMainState by mainViewModel.uiState.collectAsState()
     val uiLogState by logsViewModel.uiState.collectAsState()
 
-    var connectionURL by remember { mutableStateOf(uiMainState.connectionURL) }
-
     var showLogsDialog by remember { mutableStateOf(false) }
 
     Column(
@@ -66,8 +64,8 @@ fun DobbySocksScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             TextField(
-                value = connectionURL,
-                onValueChange = { connectionURL = it },
+                value = uiMainState.connectionURL,
+                onValueChange = mainViewModel::onConnectionUrlChanged,
                 label = { Text("Subscription URL") },
                 singleLine = false,
                 minLines = 3,
@@ -81,7 +79,7 @@ fun DobbySocksScreen(
 
             Button(
                 onClick = {
-                    mainViewModel.onConnectionButtonClicked(connectionURL)
+                    mainViewModel.onConnectionButtonClicked(uiMainState.connectionURL)
                 },
                 shape = RoundedCornerShape(6.dp),
                 colors = ButtonDefaults.buttonColors(

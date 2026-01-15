@@ -36,6 +36,12 @@ fun maskStr(input: String): String {
 class LogsRepository(
     private val logFilePath: Path = provideLogFilePath()
 ) {
+    companion object {
+        private const val UI_TAIL_LINES: Int = 50
+
+        private const val EXPORT_TAIL_LINES: Int = 50
+    }
+
     private val _logState = MutableStateFlow<List<String>>(emptyList())
     val logState: StateFlow<List<String>> = _logState.asStateFlow()
     private var sentryLogger: SentryLogsRepository? = null
@@ -44,7 +50,7 @@ class LogsRepository(
         if (!fileSystem.exists(logFilePath)) {
             fileSystem.sink(logFilePath).buffer().use { }
         }
-        _logState.value = readLogs(50)
+        _logState.value = readLogs(UI_TAIL_LINES)
     }
 
     fun setSentryLogger(_sentryLogger: SentryLogsRepository) : LogsRepository {
@@ -65,7 +71,7 @@ class LogsRepository(
                 sink.writeUtf8(logEntry)
                 sink.writeUtf8("\n")
             }
-            _logState.update { (it + logEntry).takeLast(50) }
+            _logState.update { (it + logEntry).takeLast(UI_TAIL_LINES) }
         }.onFailure { it.printStackTrace() }
     }
 
@@ -76,7 +82,7 @@ class LogsRepository(
         }.onFailure { it.printStackTrace() }
     }
 
-    fun readAllLogs(): List<String> = readLogs(50)
+    fun readAllLogs(): List<String> = readLogs(EXPORT_TAIL_LINES)
 
     private fun readLogs(limit: Int): List<String> {
         if (!fileSystem.exists(logFilePath)) return emptyList()

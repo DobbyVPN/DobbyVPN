@@ -23,3 +23,26 @@ go.work.sum
 
 #configs
 *ckclient.json
+
+# iOS / Xcode build artifacts
+**/DerivedData/
+**/xcuserdata/
+**/*.xcuserstate
+**/*.xccheckout
+**/*.xcscmblueprint
+
+# Xcode project workspace artifacts (auto-generated inside *.xcodeproj)
+**/*.xcodeproj/project.xcworkspace/
+**/*.xcodeproj/project.xcworkspace/**/*
+
+# iOS outputs
+**/*.ipa
+**/*.dSYM
+**/*.dSYM.zip
+**/*.xcarchive
+
+# KMP/Xcode integration output (frameworks produced for Xcode)
+**/app/build/xcode-frameworks/
+
+# Generated XCFrameworks (project-local)
+**/*.xcframework

@@ -385,6 +385,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         
         stopCloak()
         Cloak_outlineStopHealthCheck()
+
+        do {
+            try await self.setTunnelNetworkSettings(nil)
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] cleared tunnel network settings")
+        } catch {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] failed to clear tunnel network settings: \(error.localizedDescription)")
+        }
+
         device.close()
 
         pathMonitor?.cancel()

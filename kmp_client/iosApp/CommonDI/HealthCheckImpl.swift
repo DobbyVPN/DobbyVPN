@@ -11,11 +11,10 @@ public final class HealthCheckImpl: HealthCheck {
     public static let shared = HealthCheckImpl()
 
     private let logs = NativeModuleHolder.logsRepository
-    // Keep checks snappy; HealthCheckManager is tolerant to short flaps.
-    private let tcpTimeout: TimeInterval = 1.0
-    private let dnsTimeout: TimeInterval = 1.0
-    private let httpTimeout: TimeInterval = 1.0
-    private let xpcTimeout: TimeInterval = 1.0
+    private let tcpTimeout: TimeInterval = 1.5
+    private let dnsTimeout: TimeInterval = 2.0
+    private let httpTimeout: TimeInterval = 3.0
+    private let xpcTimeout: TimeInterval = 1.5
 
     public private(set) var currentMemmoryUsageMb = 0.0
 
@@ -47,7 +46,12 @@ public final class HealthCheckImpl: HealthCheck {
         var networkPassed = 0
 
         for (name, check) in checks {
-            if runWithRetry(name: name, timeoutPerAttempt: 2.0, block: check) {
+            let timeoutPerAttempt: TimeInterval = {
+                if name.hasPrefix("HTTP") { return httpTimeout + 0.5 }
+                if name.hasPrefix("DNS") { return dnsTimeout + 0.5 }
+                return tcpTimeout + 0.5
+            }()
+            if runWithRetry(name: name, timeoutPerAttempt: timeoutPerAttempt, block: check) {
                 networkPassed += 1
             }
         }
@@ -62,6 +66,7 @@ public final class HealthCheckImpl: HealthCheck {
             return mem >= 0
         })
         
+        // Strict mode: require all network checks to pass.
         let networkOk = networkPassed == checks.count
         logs.writeLog(log: "[HealthCheck] Network checks: \(networkPassed)/\(checks.count) passed")
 
