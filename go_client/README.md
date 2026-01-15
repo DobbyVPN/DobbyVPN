@@ -103,3 +103,40 @@ sudo systemctl stop vpnserver.service
 ```bash
 sudo systemctl disable vpnserver.service
 ```
+
+### MacOS intaller
+
+#### Helpful documentation
+
+##### How to create service config
+
+Create service file `.../vpnserver.plist`
+with following data
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dobbyvpn</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>...</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>WorkingDirectory</key>
+    <string>ServiceWorkingDir</string>
+
+    <key>StandardOutPath</key>
+    <string>ServiceStdoutPath</string>
+    <key>StandardErrorPath</key>
+    <string>ServiceStderrPath</string>
+</dict>
+</plist>
+```
