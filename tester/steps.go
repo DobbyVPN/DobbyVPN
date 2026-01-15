@@ -173,3 +173,77 @@ func stopOutlineStep() error {
 
 	return nil
 }
+
+func startCloakStep(testStep TestStep) error {
+	if localHost, ok := testStep.Args["localHost"].(string); ok {
+		if localPort, ok := testStep.Args["localPort"].(string); ok {
+			if config, ok := testStep.Args["config"].(string); ok {
+				if udp, ok := testStep.Args["udp"].(string); ok {
+					log.Printf("Creating gRPC client\n")
+
+					conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
+					if err != nil {
+						return fmt.Errorf("Did not connect: %v", err)
+					}
+					defer conn.Close()
+
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+
+					log.Printf("Starting tunnel\n")
+
+					vpnclient := pb.NewVpnClient(conn)
+					log.Printf("Created gRPC client")
+
+					udpAsBoolean, err := strconv.ParseBool(udp)
+					if err != nil {
+						return fmt.Errorf("Cannot parse udp value: %v", err)
+					}
+
+					_, err = vpnclient.StartCloakClient(ctx, &pb.StartCloakClientRequest{
+						LocalHost: localHost,
+						LocalPort: localPort,
+						Config:    config,
+						Udp:       udpAsBoolean,
+					})
+					if err != nil {
+						return fmt.Errorf("Failed to StartCloakClient: %v", err)
+					}
+
+					log.Printf("Sent StartCloakClient")
+
+					return nil
+				}
+			}
+		}
+	}
+
+	return fmt.Errorf("Invalid StartCloakClient arguments")
+}
+
+func stopCloakStep() error {
+	log.Printf("Creating gRPC client\n")
+
+	conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("Did not connect: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	log.Printf("Starting tunnel\n")
+
+	vpnclient := pb.NewVpnClient(conn)
+	log.Printf("Created gRPC client")
+
+	_, err = vpnclient.StopCloakClient(ctx, &pb.Empty{})
+	if err != nil {
+		return fmt.Errorf("Failed to StopCloakClient: %v", err)
+	}
+
+	log.Printf("Sent StopCloakClient")
+
+	return nil
+}

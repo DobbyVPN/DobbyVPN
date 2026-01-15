@@ -35,6 +35,10 @@ func runTestStep(testStep TestStep) error {
 		return startOutlineStep(testStep)
 	case "StopOutline":
 		return stopOutlineStep()
+	case "StartCloak":
+		return startCloakStep(testStep)
+	case "StopCloak":
+		return stopCloakStep()
 	default:
 		return fmt.Errorf("Unexpected action %v", testStep.Action)
 	}
