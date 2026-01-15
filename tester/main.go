@@ -31,6 +31,10 @@ func runTestStep(testStep TestStep) error {
 		return startAwgStep(testStep)
 	case "StopAwg":
 		return stopAwgStep()
+	case "StartOutline":
+		return startOutlineStep(testStep)
+	case "StopOutline":
+		return stopOutlineStep()
 	default:
 		return fmt.Errorf("Unexpected action %v", testStep.Action)
 	}

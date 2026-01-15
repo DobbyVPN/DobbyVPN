@@ -20,13 +20,60 @@
                 {
                     "action": "timeout",
                     "args": {
-                        "seconds": "1"
+                        "seconds": "2"
                     }
                 },
                 {
                     "action": "assert",
                     "args": {
                         "ip_cc": "NL"
+                    }
+                }
+            ]
+        },
+        {
+            "description": "A simple shadowsocks connect test",
+            "mode": "normal",
+            "steps": [
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip": "localhost"
+                    }
+                },
+                {
+                    "action": "StartOutline",
+                    "args": {
+                        "key": "..."
+                    }
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "2"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip_cc": "FI"
+                    }
+                },
+                {
+                    "action": "StopOutline",
+                    "args": {
+                    }
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "2"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip": "localhost"
                     }
                 }
             ]

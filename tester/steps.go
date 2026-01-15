@@ -115,3 +115,61 @@ func stopAwgStep() error {
 
 	return nil
 }
+
+func startOutlineStep(testStep TestStep) error {
+	if config, ok := testStep.Args["key"].(string); ok {
+		log.Printf("Creating gRPC client\n")
+
+		conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("Did not connect: %v", err)
+		}
+		defer conn.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		log.Printf("Starting tunnel\n")
+
+		vpnclient := pb.NewVpnClient(conn)
+		log.Printf("Created gRPC client")
+
+		_, err = vpnclient.StartOutline(ctx, &pb.StartOutlineRequest{Config: config})
+		if err != nil {
+			return fmt.Errorf("Failed to StartOutline: %v", err)
+		}
+
+		log.Printf("Sent StartOutline")
+
+		return nil
+	}
+
+	return fmt.Errorf("Invalid StartOutline arguments")
+}
+
+func stopOutlineStep() error {
+	log.Printf("Creating gRPC client\n")
+
+	conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("Did not connect: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	log.Printf("Starting tunnel\n")
+
+	vpnclient := pb.NewVpnClient(conn)
+	log.Printf("Created gRPC client")
+
+	_, err = vpnclient.StopOutline(ctx, &pb.Empty{})
+	if err != nil {
+		return fmt.Errorf("Failed to StopOutline: %v", err)
+	}
+
+	log.Printf("Sent StopOutline")
+
+	return nil
+}
