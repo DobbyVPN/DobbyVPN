@@ -60,6 +60,8 @@ class MainViewModel(
         private set
     //endregion
     private val healthCheckManager: HealthCheckManager = HealthCheckManager(healthCheck, this, configsRepository, logger)
+    private lateinit var serverAddress: String
+    private var serverPort: Int = 0
 
     init {
         viewModelScope.launch {
@@ -214,7 +216,7 @@ class MainViewModel(
         }
     }
 
-    private fun startVpn(isPermissionGranted: Boolean) {
+    private suspend fun startVpn(isPermissionGranted: Boolean) {
         if (isPermissionGranted) {
             logger.log("Permission granted — starting VPN service")
             startVpnService()
@@ -225,10 +227,10 @@ class MainViewModel(
         }
     }
 
-    fun startVpnService() {
+    suspend fun startVpnService() {
         logger.log("Starting VPN service...")
+        healthCheckManager.startHealthCheck(serverAddress, serverPort)
         vpnManager.start()
-        healthCheckManager.startHealthCheck()
     }
 
     fun stopVpnService(stoppedByHealthCheck: Boolean = false) {

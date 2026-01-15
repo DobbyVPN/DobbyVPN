@@ -121,6 +121,10 @@ class OutlineGo {
         @Throws(IllegalStateException::class)
         external fun initLogger(path: String): Unit
 
+        @JvmStatic
+        @Throws(IllegalStateException::class)
+        external fun checkServerAlive(address: String, port: Int): Int
+
         /**
          * Safe call to newOutlineClient with a library-loaded check.
          */
@@ -214,7 +218,6 @@ class OutlineGo {
                 -1
             }
         }
-    }
 
         suspend fun safeInitLogger(path: String): Int = withContext(Dispatchers.IO) {
             try {
@@ -226,4 +229,14 @@ class OutlineGo {
                 -1
             }
         }
+        suspend fun safeCheckServerAlive(address: String, port: Int): Int = withContext(Dispatchers.IO) {
+            try {
+                ensureLibrariesLoaded()
+                checkServerAlive(address, port)
+            } catch (e: Exception) {
+                Log.e(TAG, "Read failed", e)
+                -1
+            }
+        }
+    }
 }

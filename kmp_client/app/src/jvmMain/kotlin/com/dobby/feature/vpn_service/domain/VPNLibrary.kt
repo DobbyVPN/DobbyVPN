@@ -26,9 +26,12 @@ interface VPNLibrary : Library {
 
     // InitLogger
     fun InitLogger(path: String)
+
+    // CheckServerAlive
+    fun CheckServerAlive(address: String, port: Int): Int
 }
 
-internal class VPNLibraryLoader(
+class VPNLibraryLoader(
     private val logger: Logger
 ) {
     private lateinit var INSTANCE: VPNLibrary
@@ -174,5 +177,20 @@ internal class VPNLibraryLoader(
             logger.log("An error occurred while calling InitLogger: ${e.message}")
             e.printStackTrace()
         }
+    }
+
+    fun checkServerAlive(address: String, port: Int): Boolean {
+        try {
+            val res = INSTANCE.CheckServerAlive(address, port)
+            logger.log("CheckServerAlive called successfully.")
+            return res == 0
+        } catch (e: UnsatisfiedLinkError) {
+            logger.log("Failed to call checkServerAlive: ${e.message}")
+            e.printStackTrace()
+        } catch (e: Exception) {
+            logger.log("An error occurred while calling checkServerAlive: ${e.message}")
+            e.printStackTrace()
+        }
+        return false
     }
 }

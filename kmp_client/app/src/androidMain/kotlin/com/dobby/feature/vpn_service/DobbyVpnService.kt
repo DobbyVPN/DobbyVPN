@@ -11,8 +11,6 @@ import kotlinx.coroutines.withContext
 import com.dobby.awg.TunnelManager
 import com.dobby.awg.TunnelState
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.logging.domain.initLogger
-import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface

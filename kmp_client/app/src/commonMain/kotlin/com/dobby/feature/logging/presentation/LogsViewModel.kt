@@ -61,7 +61,7 @@ class LogsViewModel(
 
     fun reloadLogs() {
         scope.launch {
-            val freshLogs = logsRepository.readAllLogs().takeLast(50)
+            val freshLogs = logsRepository.readUILogs()
             _uiState.value = _uiState.value.copy(logMessages = freshLogs.toList())
         }
     }

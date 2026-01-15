@@ -39,7 +39,7 @@ class LogsRepository(
     companion object {
         private const val UI_TAIL_LINES: Int = 50
 
-        private const val EXPORT_TAIL_LINES: Int = 50
+        private const val EXPORT_TAIL_LINES: Int = -1
     }
 
     private val _logState = MutableStateFlow<List<String>>(emptyList())
@@ -84,13 +84,27 @@ class LogsRepository(
 
     fun readAllLogs(): List<String> = readLogs(EXPORT_TAIL_LINES)
 
+    fun readUILogs(): List<String> = readLogs(UI_TAIL_LINES)
+
     private fun readLogs(limit: Int): List<String> {
         if (!fileSystem.exists(logFilePath)) return emptyList()
 
-        val deque = ArrayDeque<String>(limit)
-
         return runCatching {
             fileSystem.source(logFilePath).buffer().use { source ->
+
+                if (limit <= 0) {
+                    val result = mutableListOf<String>()
+                    while (true) {
+                        val line = source.readUtf8Line() ?: break
+                        if (line.isNotBlank()) {
+                            result.add(line)
+                        }
+                    }
+                    return@use result
+                }
+
+                val deque = ArrayDeque<String>(limit)
+
                 while (true) {
                     val line = source.readUtf8Line() ?: break
                     if (line.isNotBlank()) {
@@ -100,11 +114,13 @@ class LogsRepository(
                         deque.addLast(line)
                     }
                 }
+
+                deque.toList()
             }
-            deque.toList()
         }.getOrElse {
             it.printStackTrace()
             emptyList()
         }
     }
+
 }

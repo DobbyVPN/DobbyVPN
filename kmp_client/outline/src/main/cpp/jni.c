@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0
  *
  * JNI wrapper for liboutline.so
+ * Provides a bridge between Java/Kotlin and Go-exported functions.
  */
 
 #include <jni.h>
@@ -63,7 +64,7 @@ Java_com_dobby_outline_OutlineGo_getLastError(JNIEnv *env, jclass clazz)
 JNIEXPORT void JNICALL
 Java_com_dobby_outline_OutlineGo_disconnect(JNIEnv *env, jclass clazz)
 {
-    // Go Export
+    // Call Go-exported function to close the connection
     Disconnect();
 }
 
@@ -75,9 +76,9 @@ Java_com_dobby_outline_OutlineGo_startCloakClient(JNIEnv *env, jclass clazz,
     const char *localHost = (*env)->GetStringUTFChars(env, jLocalHost, NULL);
     const char *localPort = (*env)->GetStringUTFChars(env, jLocalPort, NULL);
     const char *conf = (*env)->GetStringUTFChars(env, jConf, NULL);
-    // Go Export
+    // Call Go-exported function to start the Cloak client
     StartCloakClient(localHost, localPort, conf, udp);
-    // Copy data back to Java buffer
+    // Release UTF-8 strings obtained from Java
     (*env)->ReleaseStringUTFChars(env, jLocalHost, localHost);
     (*env)->ReleaseStringUTFChars(env, jLocalPort, localPort);
     (*env)->ReleaseStringUTFChars(env, jConf, conf);
@@ -86,17 +87,29 @@ Java_com_dobby_outline_OutlineGo_startCloakClient(JNIEnv *env, jclass clazz,
 JNIEXPORT void JNICALL
 Java_com_dobby_outline_OutlineGo_stopCloakClient(JNIEnv *env, jclass clazz)
 {
-    // Go Export
+    // Call Go-exported function to stop the Cloak client
     StopCloakClient();
 }
 
 JNIEXPORT void JNICALL
 Java_com_dobby_outline_OutlineGo_initLogger(JNIEnv *env, jclass clazz,
-                                                  jstring jPath)
+                                            jstring jPath)
 {
     const char *path = (*env)->GetStringUTFChars(env, jPath, NULL);
-    // Go Export
+    // Call Go-exported function to initialize the logger
     InitLogger(path);
-    // Copy data back to Java buffer
+    // Release UTF-8 string obtained from Java
     (*env)->ReleaseStringUTFChars(env, jPath, path);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_dobby_outline_OutlineGo_checkServerAlive(JNIEnv *env, jclass clazz,
+                                                  jstring jAddress, jint jPort)
+{
+    const char *address = (*env)->GetStringUTFChars(env, jAddress, NULL);
+    // Call Go-exported function to check server availability
+    jint res = CheckServerAlive(address, jPort);
+    // Release UTF-8 string obtained from Java
+    (*env)->ReleaseStringUTFChars(env, jAddress, address);
+    return res;
 }

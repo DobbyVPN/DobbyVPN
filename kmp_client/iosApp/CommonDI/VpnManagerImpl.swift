@@ -3,6 +3,7 @@ import NetworkExtension
 import Sentry
 import Foundation
 import SystemConfiguration
+import MyLibrary
 
 public class VpnManagerImpl: VpnManager {
     private static let launchId = UUID().uuidString
@@ -19,6 +20,11 @@ public class VpnManagerImpl: VpnManager {
 
     
     init(connectionRepository: ConnectionStateRepository) {
+        let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
+        logs.writeLog(log: "Start go logger init path = \(path)")
+        Cloak_outlineInitLogger(path)
+        logs.writeLog(log: "Finish go logger init")
+        
 //        VpnManagerImpl.startSentry()
         self.connectionRepository = connectionRepository
         getOrCreateManager { (manager, error) in
