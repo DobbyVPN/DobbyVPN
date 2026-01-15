@@ -6,6 +6,7 @@ type TesterConfig struct {
 
 type TestConfig struct {
 	Description string     `json:"description"`
+	Mode        string     `json:"mode"`
 	Steps       []TestStep `json:"steps"`
 }
 

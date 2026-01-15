@@ -2,6 +2,7 @@
     "tests": [
         {
             "description": "A simple awg test",
+            "mode": "normal",
             "steps": [
                 {
                     "action": "assert",

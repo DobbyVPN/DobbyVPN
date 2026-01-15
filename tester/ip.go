@@ -9,9 +9,9 @@ import (
 )
 
 type IPData struct {
-	IP      string `json:"ip"`
+	IP      string `json:"query"`
 	Country string `json:"country"`
-	CC      string `json:"cc"`
+	CC      string `json:"countryCode"`
 }
 
 func getIpData() (*IPData, error) {

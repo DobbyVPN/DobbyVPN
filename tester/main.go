@@ -6,16 +6,17 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
-	"path/filepath"
+
+	"tester/executor"
 )
 
 var (
 	GRPC_EXECUTABLE string = ""
 	GRPC_ADDRESS    string = ""
 	TESTER_CONFIG   string = ""
-	IPINFO_URL      string = "https://api.myip.com/"
+	IPINFO_URL      string = "http://ip-api.com/json"
 	TESTING_CONFIG  string = ""
+	// IPINFO_URL      string = "https://api.myip.com/"
 )
 
 func runTestStep(testStep TestStep) error {
@@ -38,40 +39,14 @@ func runTestStep(testStep TestStep) error {
 func runTest(testNumber int, testerConfig TestConfig) error {
 	log.Printf("Running test: %v\n", testerConfig.Description)
 
-	tmpFile, err := os.CreateTemp("./", "vpnserver-output-*.log")
+	ex := &executor.Executor{}
+	cancel, err := ex.Execute(GRPC_EXECUTABLE, testerConfig.Mode)
 	if err != nil {
-		return fmt.Errorf("Error creating vpn subprocess temporal log file: %v", err)
+		return fmt.Errorf("Cannot execute vpn server: %v\n", err)
 	}
-	defer tmpFile.Close()
+	defer cancel()
 
-	path, err := filepath.Abs(tmpFile.Name())
-	if err != nil {
-		return fmt.Errorf("Error printing temporal file absolute path: %v", err)
-	}
-	log.Printf("Created temp log file: %v\n", path)
-
-	cmd := exec.Command(GRPC_EXECUTABLE)
-	cmd.Stdout = tmpFile
-	cmd.Stderr = tmpFile
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("Failed to start vpn subprocess: %v\n", err)
-	}
-	defer func() {
-		log.Println("Interrupting subprocess...")
-		cmd.Process.Kill()
-
-		err := cmd.Wait()
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				log.Printf("Subprocess exited with code: %d\n", exitErr.ExitCode())
-			} else {
-				log.Printf("Wait error: %v\n", err)
-			}
-		}
-	}()
-
-	log.Printf("VPN subprocess run, PID: %d\n", cmd.Process.Pid)
+	log.Printf("Started vpn server\n")
 
 	for index, step := range testerConfig.Steps {
 		log.SetPrefix(fmt.Sprintf("[LOG test:%d step:%d] ", testNumber, index))
