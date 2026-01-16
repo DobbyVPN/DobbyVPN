@@ -102,7 +102,7 @@ class HealthCheckManager(
                 }
 
                 val connected = try {
-                    logger.log("[HC] Calling healthCheck.isConnected()")
+                    logger.log("[HC] Calling isConnected()")
                     val result = isConnected()
                     logger.log("[HC] isConnected() result = $result")
                     result
@@ -226,6 +226,7 @@ class HealthCheckManager(
         }
         if (!result) {
             result = healthCheck.fullConnectionCheckUp()
+            lastFullConnectionSucceed = result
         }
         return result
     }

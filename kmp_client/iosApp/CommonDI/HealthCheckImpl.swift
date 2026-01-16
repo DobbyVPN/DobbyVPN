@@ -19,11 +19,11 @@ public final class HealthCheckImpl: HealthCheck {
         logs.writeLog(log: "Start shortConnectionCheckUp")
 
         let checks: [(String, () -> Bool)] = [
-            ("HTTP https://1.1.1.1", {
-                self.httpPing(urlString: "https://1.1.1.1")
-            }),
             ("HTTP https://google.com/gen_204", {
                 self.httpPing(urlString: "https://google.com/gen_204")
+            }),
+            ("HTTP https://1.1.1.1", {
+                self.httpPing(urlString: "https://1.1.1.1")
             })
         ]
 

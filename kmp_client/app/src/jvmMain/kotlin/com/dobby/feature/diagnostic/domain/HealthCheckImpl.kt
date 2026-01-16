@@ -23,11 +23,11 @@ class HealthCheckImpl(
         logger.log("Start shortConnectionCheckUp")
 
         val checks: List<Pair<String, () -> Boolean>> = listOf(
-            "HTTP https://1.1.1.1" to {
-                httpPing("https://1.1.1.1")
-            },
             "HTTP https://google.com/gen_204" to {
                 httpPing("https://google.com/gen_204")
+            },
+            "HTTP https://1.1.1.1" to {
+                httpPing("https://1.1.1.1")
             }
         )
 
