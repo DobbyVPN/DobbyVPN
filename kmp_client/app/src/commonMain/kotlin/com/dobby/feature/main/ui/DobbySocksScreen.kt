@@ -24,6 +24,9 @@ import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.util.koinViewModel
 import org.jetbrains.compose.ui.tooling.preview.Preview
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 @Preview
 @Composable
@@ -93,17 +96,16 @@ fun DobbySocksScreen(
         }
 
         val listState = rememberLazyListState()
-        val lastAutoScrollMs = remember { mutableStateOf(0L) }
+        val lastAutoScrollMark = remember { mutableStateOf<TimeMark?>(null) }
 
         LaunchedEffect(uiLogState.logMessages.size) {
             if (uiLogState.logMessages.isNotEmpty()) {
-                val now = System.currentTimeMillis()
                 val lastIndex = uiLogState.logMessages.lastIndex
                 val visible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
                 val nearBottom = visible >= (lastIndex - 1)
-                val allowScroll = (now - lastAutoScrollMs.value) >= 500
+                val allowScroll = lastAutoScrollMark.value?.elapsedNow()?.let { it >= 500.milliseconds } ?: true
                 if (nearBottom && allowScroll) {
-                    lastAutoScrollMs.value = now
+                    lastAutoScrollMark.value = TimeSource.Monotonic.markNow()
                     listState.animateScrollToItem(lastIndex)
                 }
             }
