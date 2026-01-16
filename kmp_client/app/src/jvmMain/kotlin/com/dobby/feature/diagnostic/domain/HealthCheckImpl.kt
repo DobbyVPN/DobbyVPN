@@ -13,58 +13,95 @@ class HealthCheckImpl(
     private val vpnLibrary: VPNLibraryLoader,
 ) : HealthCheck {
 
-    private val timeoutMs = 2_500L
+    private val timeoutMs = 1_000L
 
     @Volatile
     var currentMemoryUsageMb: Double = -1.0
         private set
 
-    override fun isConnected(): Boolean {
-        logger.log("[HealthCheck] START")
+    override fun shortConnectionCheckUp(): Boolean {
+        logger.log("Start shortConnectionCheckUp")
 
         val checks: List<Pair<String, () -> Boolean>> = listOf(
-            "Ping 8.8.8.8" to {
-                pingAddress("8.8.8.8", 53, "Google")
-            },
-            "DNS google.com" to {
-                resolveDnsWithTimeout("google.com") != null
-            },
-            "Ping google.com (DNS)" to {
-                pingAddress("google.com", 80, "GoogleDNS")
-            },
-            "Ping one.one.one.one (DNS)" to {
-                pingAddress("one.one.one.one", 80, "OnesDNS")
+            "HTTP https://1.1.1.1" to {
+                httpPing("https://1.1.1.1")
             },
             "HTTP https://google.com/gen_204" to {
                 httpPing("https://google.com/gen_204")
             }
         )
 
-        var passed = 0
+        val networkOk = checks.any { (name, check) ->
+            runWithRetry(name = name, attempts = 2, block = check)
+        }
 
-        for ((name, check) in checks) {
-            if (runWithRetry(name = name, attempts = 2, block = check)) {
-                passed++
+        logger.log("End shortConnectionCheckUp => $networkOk")
+        return networkOk
+    }
+
+
+    override fun fullConnectionCheckUp(): Boolean {
+        logger.log("[HealthCheck] START")
+        logger.log("Start fullConnectionCheckUp")
+
+        val groups: List<Pair<String, List<Pair<String, () -> Boolean>>>> = listOf(
+
+            // --- Group 1: TCP ping to public DNS servers ---
+            "TCP Ping group" to listOf(
+                "Ping 8.8.8.8" to { pingAddress("8.8.8.8", 53, "Google") },
+                "Ping 1.1.1.1" to { pingAddress("1.1.1.1", 53, "OneOneOneOne") }
+            ),
+
+            // --- Group 2: DNS resolve ---
+            "DNS Resolve group" to listOf(
+                "DNS google.com" to { resolveDnsWithTimeout("google.com") != null },
+                "DNS one.one.one.one" to { resolveDnsWithTimeout("one.one.one.one") != null }
+            ),
+
+            // --- Group 3: DNS-based TCP ping ---
+            "DNS Ping group" to listOf(
+                "Ping google.com (DNS)" to { pingAddress("google.com", 80, "GoogleDNS") },
+                "Ping one.one.one.one (DNS)" to { pingAddress("one.one.one.one", 80, "OnesDNS") }
+            )
+        )
+
+        var result = true
+
+        for ((groupName, checks) in groups) {
+            logger.log("[HealthCheck] Checking group: $groupName")
+
+            val groupOk = checks.any { (name, check) ->
+                runWithRetry(name = name, attempts = 2, block = check)
             }
+
+            if (!groupOk) {
+                logger.log("[HealthCheck] Group FAILED: $groupName")
+                result = false
+            } else {
+                logger.log("[HealthCheck] Group OK: $groupName")
+            }
+        }
+
+        if (!shortConnectionCheckUp()) {
+            logger.log("[HealthCheck] shortConnectionCheckUp FAILED inside full check")
+            result = false
         }
 
         currentMemoryUsageMb = getProcessMemoryUsageMb()
 
         if (currentMemoryUsageMb >= 0) {
             logger.log(
-                "[HealthCheck] Memory usage: %.2f MB"
-                    .format(currentMemoryUsageMb)
+                "[HealthCheck] Memory usage: %.2f MB".format(currentMemoryUsageMb)
             )
         } else {
             logger.log("[HealthCheck] Memory usage: unknown")
+            result = false
         }
 
-        // On desktop we don't have a tunnel heartbeat; treat as connected if most checks pass.
-        val ok = passed >= 3
-        logger.log("[HealthCheck] Network checks: $passed/${checks.size} passed")
-        logger.log("[HealthCheck] RESULT = $ok")
-        return ok
+        logger.log("[HealthCheck] RESULT = $result")
+        return result
     }
+
 
     private fun runWithRetry(
         name: String,

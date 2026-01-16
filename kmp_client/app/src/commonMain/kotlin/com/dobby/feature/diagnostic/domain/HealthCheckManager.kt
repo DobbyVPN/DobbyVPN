@@ -37,6 +37,8 @@ class HealthCheckManager(
 
     private var healthCheckStartMark: TimeMark? = null
 
+    private var lastFullConnectionSucceed = false
+
     fun onUserManualStartRequested() {
         mainViewModel.connectionStateRepository.tryUpdateRestartPending(false)
         logger.log("[HC] User requested manual start → restartPending=false")
@@ -101,7 +103,7 @@ class HealthCheckManager(
 
                 val connected = try {
                     logger.log("[HC] Calling healthCheck.isConnected()")
-                    val result = healthCheck.isConnected()
+                    val result = isConnected()
                     logger.log("[HC] isConnected() result = $result")
                     result
                 } catch (t: Throwable) {
@@ -205,6 +207,8 @@ class HealthCheckManager(
         healthCheckStartMark = null
         mainViewModel.connectionStateRepository.tryUpdateRestartPending(false)
 
+        lastFullConnectionSucceed = false
+
         logger.log("[HC] State reset after stop")
     }
 
@@ -213,6 +217,17 @@ class HealthCheckManager(
         mainViewModel.connectionStateRepository.updateVpnStarted(false)
         stopHealthCheck()
         mainViewModel.stopVpnService()
+    }
+
+    private fun isConnected(): Boolean {
+        var result = false
+        if (lastFullConnectionSucceed) {
+            result = healthCheck.shortConnectionCheckUp()
+        }
+        if (!result) {
+            result = healthCheck.fullConnectionCheckUp()
+        }
+        return result
     }
 
     private fun getHealthCheckDelay(): Duration {
