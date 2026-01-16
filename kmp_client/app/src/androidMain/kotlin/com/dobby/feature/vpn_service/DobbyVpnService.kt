@@ -480,57 +480,57 @@ class DobbyVpnService : VpnService() {
 
     private fun startReadingPackets() {
         readJob = serviceScope.launch {
-            vpnInterface?.let { vpn ->
-                logger.log("[svc:$serviceId] readLoop: start fd=${vpn.fd}")
-                val buffer = ByteBuffer.allocate(bufferSize)
+            val vpn = vpnInterface ?: return@launch
 
-                while (isActive) {
-                    try {
-                        val length = inputStream?.read(buffer.array()) ?: 0
-                        if (length > 0) {
-                            outlineLibFacade.writeData(buffer.array(), length)
-                            // val hexString = packetData.joinToString(separator = " ") { byte -> "%02x".format(byte) }
-                            // Logger.log("MyVpnService: Packet Data Written (Hex): $hexString")
-                        }
-                    } catch (e: CancellationException) {
-                        logger.log("VpnService: Packet reading coroutine was cancelled.")
-                        break
-                    } catch (e: Exception) {
-                        logger.log("[svc:$serviceId] readLoop: exception fd=${vpn.fd} msg=${e.message}")
-                        android.util.Log.e(
-                            "DobbyTAG",
-                            "VpnService: Failed to write packet to Outline: ${e.message}",
-                            e
-                        )
+            val fdSafe: Int? = runCatching { vpn.fd }.getOrNull()
+            logger.log("[svc:$serviceId] readLoop: start fd=$fdSafe")
+
+            val buffer = ByteBuffer.allocate(bufferSize)
+
+            while (isActive) {
+                try {
+                    val length = inputStream?.read(buffer.array()) ?: 0
+                    if (length > 0) {
+                        outlineLibFacade.writeData(buffer.array(), length)
+                        // val hexString = packetData.joinToString(separator = " ") { byte -> "%02x".format(byte) }
+                        // Logger.log("MyVpnService: Packet Data Written (Hex): $hexString")
                     }
+                } catch (e: CancellationException) {
+                    logger.log("[svc:$serviceId] readLoop: cancelled fd=$fdSafe")
+                    break
+                } catch (e: Exception) {
+                    logger.log("[svc:$serviceId] readLoop: exception fd=$fdSafe msg=${e.message}")
+                } finally {
                     buffer.clear()
                 }
-                logger.log("[svc:$serviceId] readLoop: end fd=${vpn.fd} isActive=$isActive")
             }
+
+            logger.log("[svc:$serviceId] readLoop: end fd=$fdSafe isActive=$isActive")
         }
     }
 
     private fun startWritingPackets() {
         writeJob = serviceScope.launch {
-            vpnInterface?.let {
-                logger.log("[svc:$serviceId] writeLoop: start fd=${it.fd}")
-                val buffer = ByteArray(bufferSize)
+            val vpn = vpnInterface ?: return@launch
+            val fdSafe: Int? = runCatching { vpn.fd }.getOrNull()
+            logger.log("[svc:$serviceId] writeLoop: start fd=$fdSafe")
 
-                while (isActive) {
-                    try {
-                        val length: Int = outlineLibFacade.readData(buffer)
-                        if (length > 0) {
-                            outputStream?.write(buffer, 0, length)
-                        }
-                    } catch (e: CancellationException) {
-                        logger.log("VpnService: Packet writing coroutine was cancelled.")
-                        break
-                    } catch (e: Exception) {
-                        logger.log("[svc:$serviceId] writeLoop: exception fd=${it.fd} msg=${e.message}")
-                    }
+            val buffer = ByteArray(bufferSize)
+
+            while (isActive) {
+                try {
+                    val length = outlineLibFacade.readData(buffer)
+                    if (length > 0) {
+                        outputStream?.write(buffer, 0, length)
+                    }                } catch (e: CancellationException) {
+                    logger.log("[svc:$serviceId] writeLoop: cancelled fd=$fdSafe")
+                    break
+                } catch (e: Exception) {
+                    logger.log("[svc:$serviceId] writeLoop: exception fd=$fdSafe msg=${e.message}")
                 }
-                logger.log("[svc:$serviceId] writeLoop: end fd=${it.fd} isActive=$isActive")
             }
+
+            logger.log("[svc:$serviceId] writeLoop: end fd=$fdSafe isActive=$isActive")
         }
     }
 }
