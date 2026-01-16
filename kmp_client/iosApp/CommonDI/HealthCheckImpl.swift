@@ -361,6 +361,6 @@ public final class HealthCheckImpl: HealthCheck {
     }
 
     public func checkServerAlive(address: String, port: Int32) -> Bool {
-        return Cloak_outlineCheckServerAlive(address, Int(port)) == 0
+        return pingAddress("\(address):\(port)", name: "ServerAlive")
     }
 }

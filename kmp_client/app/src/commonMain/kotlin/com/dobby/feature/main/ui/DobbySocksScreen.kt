@@ -93,10 +93,19 @@ fun DobbySocksScreen(
         }
 
         val listState = rememberLazyListState()
+        val lastAutoScrollMs = remember { mutableStateOf(0L) }
 
         LaunchedEffect(uiLogState.logMessages.size) {
             if (uiLogState.logMessages.isNotEmpty()) {
-                listState.animateScrollToItem(uiLogState.logMessages.lastIndex)
+                val now = System.currentTimeMillis()
+                val lastIndex = uiLogState.logMessages.lastIndex
+                val visible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                val nearBottom = visible >= (lastIndex - 1)
+                val allowScroll = (now - lastAutoScrollMs.value) >= 500
+                if (nearBottom && allowScroll) {
+                    lastAutoScrollMs.value = now
+                    listState.animateScrollToItem(lastIndex)
+                }
             }
         }
 

@@ -61,14 +61,18 @@ class HealthCheckManager(
 
         logger.log("[HC] Health check started")
 
-        val serverAlive = healthCheck.checkServerAlive(address, port)
-
-        if (!serverAlive) {
-            logger.log("[HC] Server isn't alive")
-            turnOffVpn()
-            return
+        val skipPrecheck = shouldSkipServerAliveCheck(address, port)
+        if (skipPrecheck) {
+            logger.log("[HC] ServerAlive precheck skipped (local Cloak endpoint)")
+        } else {
+            val serverAlive = healthCheck.checkServerAlive(address, port)
+            if (!serverAlive) {
+                logger.log("[HC] Server isn't alive")
+                turnOffVpn()
+                return
+            }
+            logger.log("[HC] Server is alive")
         }
-        logger.log("[HC] Server is alive")
 
         healthJob = scope.launch {
 
@@ -220,5 +224,12 @@ class HealthCheckManager(
             elapsed < 90.seconds -> 5.seconds
             else -> 10.seconds
         }
+    }
+
+    private fun shouldSkipServerAliveCheck(address: String, port: Int): Boolean {
+        if (!configsRepository.getIsCloakEnabled()) return false
+        val localPort = configsRepository.getCloakLocalPort()
+        val isLocalHost = address == "127.0.0.1" || address == "localhost"
+        return isLocalHost && port == localPort
     }
 }

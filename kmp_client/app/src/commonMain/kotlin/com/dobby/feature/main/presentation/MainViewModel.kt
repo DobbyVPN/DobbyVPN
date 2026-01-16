@@ -26,6 +26,7 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import com.dobby.vpn.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 val httpClient = HttpClient()
 
@@ -60,8 +61,8 @@ class MainViewModel(
         private set
     //endregion
     private val healthCheckManager: HealthCheckManager = HealthCheckManager(healthCheck, this, configsRepository, logger)
-    private lateinit var serverAddress: String
-    private var serverPort: Int = 0
+    private var serverAddress: String? = null
+    private var serverPort: Int? = null
 
     init {
         viewModelScope.launch {
@@ -191,6 +192,7 @@ class MainViewModel(
             return false
         }
 
+        updateServerTargetFromConfig()
         return true
     }
 
@@ -229,7 +231,18 @@ class MainViewModel(
 
     suspend fun startVpnService() {
         logger.log("Starting VPN service...")
-        healthCheckManager.startHealthCheck(serverAddress, serverPort)
+        val address = serverAddress
+        val port = serverPort
+        if (address == null || port == null) {
+            if (!updateServerTargetFromConfig()) {
+                logger.log("Server address/port is not set → skipping health check start")
+                vpnManager.start()
+                return
+            }
+        }
+        withContext(Dispatchers.Default) {
+            healthCheckManager.startHealthCheck(serverAddress!!, serverPort!!)
+        }
         vpnManager.start()
     }
 
@@ -241,6 +254,41 @@ class MainViewModel(
             connectionStateRepository.tryUpdateStatus(false)
         }
         logger.log("VPN service stopped successfully, state reset to disconnected")
+    }
+
+    private fun updateServerTargetFromConfig(): Boolean {
+        val serverPortOutline = configsRepository.getServerPortOutline()
+        val parsed = parseHostPort(serverPortOutline)
+        return if (parsed == null) {
+            logger.log("Failed to parse server address/port from Outline config: ${maskStr(serverPortOutline)}")
+            serverAddress = null
+            serverPort = null
+            false
+        } else {
+            serverAddress = parsed.first
+            serverPort = parsed.second
+            logger.log("Server target resolved: ${maskStr(serverAddress ?: "")}:$serverPort")
+            true
+        }
+    }
+
+    private fun parseHostPort(hostPortMaybeWithQuery: String): Pair<String, Int>? {
+        val hostPort = hostPortMaybeWithQuery.substringBefore("?").trim()
+        if (hostPort.isBlank()) return null
+
+        return if (hostPort.startsWith("[")) {
+            val host = hostPort.substringAfter("[").substringBefore("]")
+            val portStr = hostPort.substringAfter("]:", "")
+            val port = portStr.toIntOrNull() ?: return null
+            host to port
+        } else {
+            val lastColon = hostPort.lastIndexOf(':')
+            if (lastColon <= 0) return null
+            val host = hostPort.substring(0, lastColon)
+            val portStr = hostPort.substring(lastColon + 1)
+            val port = portStr.toIntOrNull() ?: return null
+            host to port
+        }
     }
     //endregion
 }

@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private object InstanceIdGenerator {
     private var counter = 0
@@ -38,14 +39,12 @@ class LogsViewModel(
     val uiState: StateFlow<LogsUiState> = _uiState.asStateFlow()
 
     init {
-        scope.launch {
-            logsRepository.logState.collect { newLogList ->
-                _uiState.value = LogsUiState(newLogList.toList())
-            }
-        }
         viewModelScope.launch {
             while (true) {
-                reloadLogs()
+                val freshLogs = withContext(Dispatchers.Default) {
+                    logsRepository.readUILogs()
+                }
+                _uiState.value = _uiState.value.copy(logMessages = freshLogs)
                 delay(1000)
             }
         }
@@ -61,8 +60,10 @@ class LogsViewModel(
 
     fun reloadLogs() {
         scope.launch {
-            val freshLogs = logsRepository.readUILogs()
-            _uiState.value = _uiState.value.copy(logMessages = freshLogs.toList())
+            val freshLogs = withContext(Dispatchers.Default) {
+                logsRepository.readUILogs()
+            }
+            _uiState.value = _uiState.value.copy(logMessages = freshLogs)
         }
     }
 

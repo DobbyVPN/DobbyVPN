@@ -78,6 +78,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         startPathLogging()
 
+        configsRepository.sync()
+
         let methodPassword = configsRepository.getMethodPasswordOutline()
         let serverPort = configsRepository.getServerPortOutline()
         let prefix = configsRepository.getPrefixOutline()
