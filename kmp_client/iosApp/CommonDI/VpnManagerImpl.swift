@@ -45,6 +45,10 @@ public class VpnManagerImpl: VpnManager {
         ) { [weak self] notification in
             guard let self,
                   let connection = notification.object as? NEVPNConnection else { return }
+            
+            if let myConnection = self.vpnManager?.connection, myConnection !== connection {
+                return
+            }
 
             switch connection.status {
             case .connected:
@@ -80,11 +84,19 @@ public class VpnManagerImpl: VpnManager {
     
     public func start() {
         self.logs.writeLog(log: "call start")
-        HealthCheckImpl.shared.isConnected()
         self.logs.writeLog(log: "Routing table without vpn:")
         getOrCreateManager { (manager, error) in
             guard let manager = manager else {
                 self.logs.writeLog(log: "Created VPNManager is nil")
+                return
+            }
+            let status = manager.connection.status
+            if status == .connecting || status == .disconnecting || status == .reasserting {
+                self.logs.writeLog(log: "[start] Skip: connection is transitioning (\(status.rawValue))")
+                return
+            }
+            if status == .connected {
+                self.logs.writeLog(log: "[start] Skip: already connected")
                 return
             }
             if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
@@ -112,9 +124,18 @@ public class VpnManagerImpl: VpnManager {
     }
 
     public func stop() {
-        self.logs.writeLog(log: "Actually vpnManager is \(vpnManager)")
+        self.logs.writeLog(log: "Actually vpnManager is \(String(describing: vpnManager))")
+        guard let manager = vpnManager else {
+            self.logs.writeLog(log: "[stop] Skip: vpnManager is nil")
+            return
+        }
+        let status = manager.connection.status
+        if status == .disconnected || status == .disconnecting || status == .invalid {
+            self.logs.writeLog(log: "[stop] Skip: status=\(status.rawValue)")
+            return
+        }
         self.logs.writeLog(log: "[stop] User initiated stopVPNTunnel()")
-        vpnManager?.connection.stopVPNTunnel()
+        manager.connection.stopVPNTunnel()
         self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")
     }
 
@@ -125,6 +146,7 @@ public class VpnManagerImpl: VpnManager {
             if let existingManager = managers?.first(where: { $0.localizedDescription == VpnManagerImpl.dobbyName }) {
                 vpnManager = existingManager
                 self.logs.writeLog(log: "Existing manager found.")
+                self.applyProtocolDefaults(manager: existingManager)
                 completion(existingManager, nil)
             } else {
                 self.logs.writeLog(log: "Existing manager not found.")
@@ -145,12 +167,34 @@ public class VpnManagerImpl: VpnManager {
         proto.serverAddress = "159.69.19.209:443"
         proto.providerConfiguration = [:]
         proto.includeAllNetworks = true
+        proto.excludeLocalNetworks = true
+        if #available(iOS 16.4, *) {
+            proto.excludeCellularServices = false
+            proto.excludeAPNs = false
+        }
+        proto.enforceRoutes = false
         if #available(iOS 17.4, *) {
             proto.excludeDeviceCommunication = false
         }
         newVpnManager.protocolConfiguration = proto
         newVpnManager.isEnabled = true
         return newVpnManager
+    }
+
+    private func applyProtocolDefaults(manager: NETunnelProviderManager) {
+        guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else { return }
+        proto.providerBundleIdentifier = VpnManagerImpl.dobbyBundleIdentifier
+        proto.includeAllNetworks = true
+        proto.excludeLocalNetworks = true
+        if #available(iOS 16.4, *) {
+            proto.excludeCellularServices = false
+            proto.excludeAPNs = false
+        }
+        proto.enforceRoutes = false
+        if #available(iOS 17.4, *) {
+            proto.excludeDeviceCommunication = false
+        }
+        manager.protocolConfiguration = proto
     }
 
     

@@ -12,10 +12,10 @@
 JNIEXPORT void JNICALL
 Java_com_dobby_outline_OutlineGo_newOutlineClient(JNIEnv *env, jclass clazz, jstring jConfig)
 {
-    const char *config_str = (*env)->GetStringUTFChars(env, jConfig, NULL);
-    // Call Go-exported function to create a new Outline client
-    NewOutlineClient((char*)config_str);
-    (*env)->ReleaseStringUTFChars(env, jConfig, config_str);
+const char *config_str = (*env)->GetStringUTFChars(env, jConfig, NULL);
+// Go Export
+NewOutlineClient((char*)config_str);
+(*env)->ReleaseStringUTFChars(env, jConfig, config_str);
 }
 
 JNIEXPORT jint JNICALL
@@ -23,9 +23,9 @@ Java_com_dobby_outline_OutlineGo_write(JNIEnv *env, jclass clazz,
                                        jbyteArray jBuf, jint length)
 {
     jbyte *buf = (*env)->GetByteArrayElements(env, jBuf, NULL);
-    // Call Go-exported function to write data
+    // Go Export
     jint written = Write((char*)buf, length);
-    // Do not copy data back to the Java buffer
+    // Dont copy data back
     (*env)->ReleaseByteArrayElements(env, jBuf, buf, JNI_ABORT);
     return written;
 }
@@ -35,18 +35,30 @@ Java_com_dobby_outline_OutlineGo_read(JNIEnv *env, jclass clazz,
                                       jbyteArray jBuf, jint maxLen)
 {
     jbyte *buf = (*env)->GetByteArrayElements(env, jBuf, NULL);
-    // Call Go-exported function to read data
+    // Go Export
     jint read = Read((char*)buf, maxLen);
-    // Copy read data back into the Java buffer
+    // Copy data back to Java buffer
     (*env)->ReleaseByteArrayElements(env, jBuf, buf, 0);
     return read;
 }
 
-JNIEXPORT void JNICALL
+JNIEXPORT jint JNICALL
 Java_com_dobby_outline_OutlineGo_connect(JNIEnv *env, jclass clazz)
 {
-    // Call Go-exported function to establish a connection
-    Connect();
+    // Go Export, returns 0 on success, -1 on error
+    return Connect();
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_dobby_outline_OutlineGo_getLastError(JNIEnv *env, jclass clazz)
+{
+    char* err = GetLastError();
+    if (err == NULL) {
+        return NULL;
+    }
+    jstring result = (*env)->NewStringUTF(env, err);
+    free(err); // free memory allocated by C.CString
+    return result;
 }
 
 JNIEXPORT void JNICALL

@@ -7,6 +7,9 @@ import com.dobby.feature.main.domain.AwgManager
 import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
+import com.dobby.feature.main.domain.DobbyConfigsRepositoryAwg
+import com.dobby.feature.main.domain.DobbyConfigsRepositoryCloak
+import com.dobby.feature.main.domain.DobbyConfigsRepositoryOutline
 import org.koin.core.module.Module
 import org.koin.core.scope.Scope
 import org.koin.dsl.module
@@ -32,6 +35,10 @@ fun makeNativeModule(
         single { ipRepository() }
         single { connectionStateRepository() }
         single { configsRepository() }
+
+        single<DobbyConfigsRepositoryOutline> { get<DobbyConfigsRepository>() }
+        single<DobbyConfigsRepositoryCloak> { get<DobbyConfigsRepository>() }
+        single<DobbyConfigsRepositoryAwg> { get<DobbyConfigsRepository>() }
         single { healthCheck() }
     }
 }

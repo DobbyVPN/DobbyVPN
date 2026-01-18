@@ -9,7 +9,6 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/Jigsaw-Code/outline-sdk/network/dnstruncate"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/Jigsaw-Code/outline-sdk/x/config"
 	"github.com/Jigsaw-Code/outline-sdk/x/connectivity"
 )
 
@@ -23,7 +22,7 @@ type outlinePacketProxy struct {
 func newOutlinePacketProxy(transportConfig string) (opp *outlinePacketProxy, err error) {
 	opp = &outlinePacketProxy{}
 
-	if opp.remotePl, err = config.NewPacketListener(transportConfig); err != nil {
+	if opp.remotePl, err = providers.NewPacketListener(context.Background(), transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create UDP packet listener: %w", err)
 	}
 	if opp.remote, err = network.NewPacketProxyFromPacketListener(opp.remotePl); err != nil {
@@ -40,6 +39,7 @@ func newOutlinePacketProxy(transportConfig string) (opp *outlinePacketProxy, err
 }
 
 func (proxy *outlinePacketProxy) testConnectivityAndRefresh(resolverAddr, domain string) error {
+	defer guard("outlinePacketProxy.testConnectivityAndRefresh")()
 	dialer := transport.PacketListenerDialer{Listener: proxy.remotePl}
 	dnsResolver := dns.NewUDPResolver(dialer, resolverAddr)
 	result, err := connectivity.TestConnectivityWithResolver(context.Background(), dnsResolver, domain)

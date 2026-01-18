@@ -24,6 +24,9 @@ import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.util.koinViewModel
 import org.jetbrains.compose.ui.tooling.preview.Preview
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 @Preview
 @Composable
@@ -34,8 +37,6 @@ fun DobbySocksScreen(
 ) {
     val uiMainState by mainViewModel.uiState.collectAsState()
     val uiLogState by logsViewModel.uiState.collectAsState()
-
-    var connectionURL by remember { mutableStateOf(uiMainState.connectionURL) }
 
     var showLogsDialog by remember { mutableStateOf(false) }
 
@@ -66,8 +67,8 @@ fun DobbySocksScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             TextField(
-                value = connectionURL,
-                onValueChange = { connectionURL = it },
+                value = uiMainState.connectionURL,
+                onValueChange = mainViewModel::onConnectionUrlChanged,
                 label = { Text("Subscription URL") },
                 singleLine = false,
                 minLines = 3,
@@ -81,7 +82,7 @@ fun DobbySocksScreen(
 
             Button(
                 onClick = {
-                    mainViewModel.onConnectionButtonClicked(connectionURL)
+                    mainViewModel.onConnectionButtonClicked(uiMainState.connectionURL)
                 },
                 shape = RoundedCornerShape(6.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -95,10 +96,18 @@ fun DobbySocksScreen(
         }
 
         val listState = rememberLazyListState()
+        val lastAutoScrollMark = remember { mutableStateOf<TimeMark?>(null) }
 
         LaunchedEffect(uiLogState.logMessages.size) {
             if (uiLogState.logMessages.isNotEmpty()) {
-                listState.animateScrollToItem(uiLogState.logMessages.lastIndex)
+                val lastIndex = uiLogState.logMessages.lastIndex
+                val visible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                val nearBottom = visible >= (lastIndex - 1)
+                val allowScroll = lastAutoScrollMark.value?.elapsedNow()?.let { it >= 500.milliseconds } ?: true
+                if (nearBottom && allowScroll) {
+                    lastAutoScrollMark.value = TimeSource.Monotonic.markNow()
+                    listState.animateScrollToItem(lastIndex)
+                }
             }
         }
 

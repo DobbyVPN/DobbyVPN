@@ -4,16 +4,59 @@
 package exported_client
 
 import (
+	"errors"
 	"encoding/binary"
+	"fmt"
 	"github.com/cbeuw/Cloak/internal/client"
 	"github.com/cbeuw/Cloak/internal/common"
 	mux "github.com/cbeuw/Cloak/internal/multiplex"
 	"github.com/sirupsen/logrus"
 	log "go_client/logger"
 	"net"
-	"os"
+	"strings"
 	"sync"
+	"time"
 )
+
+var errListenerClosed = errors.New("listener closed")
+
+// closeQuiescingListener wraps a net.Listener so that once it is closed intentionally,
+type closeQuiescingListener struct {
+	net.Listener
+	mu     sync.Mutex
+	closed bool
+}
+
+func (l *closeQuiescingListener) Close() error {
+	l.mu.Lock()
+	l.closed = true
+	l.mu.Unlock()
+	return l.Listener.Close()
+}
+
+func (l *closeQuiescingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		return c, nil
+	}
+
+	l.mu.Lock()
+	closed := l.closed
+	l.mu.Unlock()
+
+	if closed && isClosedListenerErr(err) {
+		// Terminate RouteTCP goroutine without hitting its "Accept error -> log.Fatal -> continue" path.
+		panic(errListenerClosed)
+	}
+	return nil, err
+}
+
+func isClosedListenerErr(err error) bool {
+	if errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "use of closed network connection")
+}
 
 type CkClient struct {
 	mu        sync.Mutex
@@ -22,6 +65,7 @@ type CkClient struct {
 	session   *mux.Session
 	listener  net.Listener
 	udpConn   *net.UDPConn
+	routeDone chan struct{}
 }
 
 type Config client.RawConfig
@@ -30,7 +74,14 @@ func NewCkClient(config Config) *CkClient {
 	return &CkClient{config: client.RawConfig(config)}
 }
 
-func (c *CkClient) Connect() error {
+func (c *CkClient) Connect() (returnErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Infof("ck-client Connect: recovered from panic: %v", r)
+			returnErr = fmt.Errorf("panic in Connect: %v", r)
+		}
+	}()
+	
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -39,6 +90,7 @@ func (c *CkClient) Connect() error {
 
 	localConfig, remoteConfig, authInfo, err := c.config.ProcessRawConfig(common.RealWorldState)
 	if err != nil {
+		c.connected = false
 		return err
 	}
 
@@ -89,9 +141,18 @@ func (c *CkClient) Connect() error {
 		}
 	}
 
+	done := make(chan struct{})
+	c.routeDone = done
+
 	go func() {
+		// Signal completion so Disconnect() can wait for the routing goroutine to exit.
+		defer close(done)
 		defer func() {
 			if r := recover(); r != nil {
+				// Expected on normal shutdown (listener closed) — don't spam logs.
+				if v, ok := r.(error); ok && errors.Is(v, errListenerClosed) {
+					return
+				}
 				log.Infof("ck-client: recovered from panic from: %v", r)
 			}
 		}()
@@ -109,12 +170,13 @@ func (c *CkClient) Connect() error {
 			client.RouteUDP(func() (*net.UDPConn, error) { return conn, nil }, localConfig.Timeout, remoteConfig.Singleplex, seshMaker)
 			log.Infof("ck-client: stop listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
 		} else {
-			l, err := net.Listen("tcp", localConfig.LocalAddr)
+			baseListener, err := net.Listen("tcp", localConfig.LocalAddr)
 			if err != nil {
 				log.Infof("ck-client: goroutines: err %v\n", err)
 				return
 			}
 
+			l := &closeQuiescingListener{Listener: baseListener}
 			c.listener = l
 
 			log.Infof("ck-client: start listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
@@ -127,14 +189,10 @@ func (c *CkClient) Connect() error {
 }
 
 func (c *CkClient) Disconnect() error {
-	logrus.StandardLogger().ExitFunc = func(int) {
-		panic("panic from log.StandardLogger().ExitFunc")
-	}
-	defer func() {
-		logrus.StandardLogger().ExitFunc = func(int) {
-			os.Exit(1)
-		}
-	}()
+	prevExit := logrus.StandardLogger().ExitFunc
+	logrus.StandardLogger().ExitFunc = func(int) {}
+	defer func() { logrus.StandardLogger().ExitFunc = prevExit }()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -171,6 +229,17 @@ func (c *CkClient) Disconnect() error {
 		c.session.Close()
 		c.session = nil
 		log.Infof("ck-client: session closed")
+	}
+
+	// Best-effort: wait for routing goroutine to exit so stop is deterministic.
+	if c.routeDone != nil {
+		select {
+		case <-c.routeDone:
+			// ok
+		case <-time.After(2 * time.Second):
+			log.Infof("ck-client: routing goroutine did not exit within timeout")
+		}
+		c.routeDone = nil
 	}
 
 	log.Infof("ck-client: fully disconnected")

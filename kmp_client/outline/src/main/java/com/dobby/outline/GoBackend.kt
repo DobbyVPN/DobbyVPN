@@ -7,7 +7,7 @@ import kotlinx.coroutines.withContext
 class OutlineGo {
     companion object {
         init {
-            Log.d(TAG, "Start Libraries loadeding")
+            Log.d(TAG, "Start loading libraries")
             System.loadLibrary("outline")
             System.loadLibrary("outline_jni")
             Log.d(TAG, "Libraries loaded successfully")
@@ -20,18 +20,18 @@ class OutlineGo {
         private val loadingLock = Object()
 
         /**
-         * Загружает библиотеки асинхронно
-         * @return true если библиотеки успешно загружены
+         * Loads native libraries asynchronously.
+         * @return true if libraries were loaded successfully
          */
         suspend fun loadLibraries(): Boolean = withContext(Dispatchers.IO) {
             synchronized(loadingLock) {
-                Log.d(TAG, "Start Libraries loadeding")
+                Log.d(TAG, "Start loading libraries")
                 if (isLibrariesLoaded) {
                     return@withContext true
                 }
 
                 try {
-                    // Сначала загружаем Go-библиотеку, затем нашу JNI-обёртку
+                    // Load the Go library first, then our JNI wrapper.
                     System.loadLibrary("outline")
                     System.loadLibrary("outline_jni")
                     isLibrariesLoaded = true
@@ -45,8 +45,8 @@ class OutlineGo {
         }
 
         /**
-         * Проверяет, загружены ли библиотеки
-         * @throws IllegalStateException если библиотеки не загружены
+         * Checks if the libraries are loaded
+         * @throws IllegalStateException if libraries are not loaded
          */
         @Throws(IllegalStateException::class)
         fun ensureLibrariesLoaded() {
@@ -56,40 +56,51 @@ class OutlineGo {
         }
 
         /**
-         * Инициализирует устройство с переданной Shadowsocks-конфигурацией
-         * @throws IllegalStateException если библиотеки не загружены
+         * Initializes the device with the provided Shadowsocks config.
+         * @throws IllegalStateException if libraries are not loaded
          */
         @JvmStatic
         @Throws(IllegalStateException::class)
         external fun newOutlineClient(config: String): Unit
 
         /**
-         * Пишет данные в Go-устройство.
+         * Writes data to the Go device.
          *
-         * @param data байты для записи
-         * @param length сколько байт записать из массива (обычно data.size)
-         * @return сколько байт действительно записано, или -1 при ошибке
-         * @throws IllegalStateException если библиотеки не загружены
+         * @param data bytes to write
+         * @param length number of bytes to write from the array (usually data.size)
+         * @return number of bytes actually written, or -1 on error
+         * @throws IllegalStateException if libraries are not loaded
          */
         @JvmStatic
         @Throws(IllegalStateException::class)
         external fun write(data: ByteArray, length: Int): Int
 
         /**
-         * Читает данные из Go-устройства.
+         * Reads data from the Go device.
          *
-         * @param out буфер для приёма (должен быть достаточного размера)
-         * @param maxLen максимально читаемое количество байт (обычно out.size)
-         * @return сколько байт прочитано, или -1 при ошибке
-         * @throws IllegalStateException если библиотеки не загружены
+         * @param out receive buffer (must be large enough)
+         * @param maxLen maximum number of bytes to read (usually out.size)
+         * @return number of bytes read, or -1 on error
+         * @throws IllegalStateException if libraries are not loaded
          */
         @JvmStatic
         @Throws(IllegalStateException::class)
         external fun read(out: ByteArray, maxLen: Int): Int
 
+        /**
+         * Connects to the Outline server.
+         * @return 0 on success, -1 on error (use getLastError() for details)
+         */
         @JvmStatic
         @Throws(IllegalStateException::class)
-        external fun connect(): Unit
+        external fun connect(): Int
+
+        /**
+         * Returns the last error from Go code.
+         * @return error string or null if there is no error
+         */
+        @JvmStatic
+        external fun getLastError(): String?
 
         @JvmStatic
         @Throws(IllegalStateException::class)
@@ -115,7 +126,7 @@ class OutlineGo {
         external fun checkServerAlive(address: String, port: Int): Int
 
         /**
-         * Безопасный вызов newOutlineClient с проверкой загрузки библиотек
+         * Safe call to newOutlineClient with a library-loaded check.
          */
         suspend fun safeNewOutlineClient(config: String): Boolean = withContext(Dispatchers.IO) {
             Log.d(TAG, "Start safeNewOutlineClient")
@@ -132,7 +143,7 @@ class OutlineGo {
         }
 
         /**
-         * Безопасный вызов write с проверкой загрузки библиотек
+         * Safe call to write with a library-loaded check.
          */
         suspend fun safeWrite(data: ByteArray, length: Int): Int = withContext(Dispatchers.IO) {
             try {
@@ -145,7 +156,7 @@ class OutlineGo {
         }
 
         /**
-         * Безопасный вызов read с проверкой загрузки библиотек
+         * Safe call to read with a library-loaded check.
          */
         suspend fun safeRead(out: ByteArray, maxLen: Int): Int = withContext(Dispatchers.IO) {
             try {
@@ -160,10 +171,14 @@ class OutlineGo {
         suspend fun safeConnect(): Int = withContext(Dispatchers.IO) {
             try {
                 ensureLibrariesLoaded()
-                connect()
-                1
+                val result = connect()
+                if (result != 0) {
+                    val error = getLastError()
+                    Log.e(TAG, "Connect failed: $error")
+                }
+                result
             } catch (e: Exception) {
-                Log.e(TAG, "Read failed", e)
+                Log.e(TAG, "Connect failed with exception", e)
                 -1
             }
         }
@@ -188,7 +203,7 @@ class OutlineGo {
                 startCloakClient(localHost, localPort, config, udp)
                 1
             } catch (e: Exception) {
-                Log.e(TAG, "Read failed", e)
+                Log.e(TAG, "StartCloakClient failed", e)
                 -1
             }
         }
@@ -199,7 +214,7 @@ class OutlineGo {
                 stopCloakClient()
                 1
             } catch (e: Exception) {
-                Log.e(TAG, "Read failed", e)
+                Log.e(TAG, "StopCloakClient failed", e)
                 -1
             }
         }
@@ -210,7 +225,7 @@ class OutlineGo {
                 initLogger(path)
                 1
             } catch (e: Exception) {
-                Log.e(TAG, "Read failed", e)
+                Log.e(TAG, "InitLogger failed", e)
                 -1
             }
         }

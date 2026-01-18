@@ -13,7 +13,9 @@ class HealthCheckImpl(
     private val logger: Logger,
 ) : HealthCheck {
 
-    private val timeoutMs = 1_000L
+    private val tcpTimeoutMs = 1_500L
+    private val dnsTimeoutMs = 2_000L
+    private val httpTimeoutMs = 3_000L
 
     @Volatile
     var currentMemoryUsageMb: Double = -1.0
@@ -22,7 +24,7 @@ class HealthCheckImpl(
     override fun isConnected(): Boolean {
         logger.log("[HealthCheck] START")
 
-        val checks: List<Pair<String, () -> Boolean>> = listOf(
+        val networkChecks: List<Pair<String, () -> Boolean>> = listOf(
             "Ping 8.8.8.8" to {
                 pingAddress("8.8.8.8", 53, "Google")
             },
@@ -40,27 +42,29 @@ class HealthCheckImpl(
             }
         )
 
-        var ok = true
+        var networkPassed = 0
 
-        for ((name, check) in checks) {
-            if (!runWithRetry(name = name, attempts = 2, block = check)) {
-                ok = false
+        for ((name, check) in networkChecks) {
+            if (runWithRetry(name = name, attempts = 2, block = check)) {
+                networkPassed++
             }
         }
 
-        if (!runWithRetry("VPN Interface Check", attempts = 1) {
-                isVpnInterfaceExists()
-            }) {
-            ok = false
+        val interfaceOk = runWithRetry("VPN Interface Check", attempts = 2) {
+            isVpnInterfaceExists()
         }
 
-        if (!runWithRetry("Tunnel heartbeat check", attempts = 1) {
-                val mem = getTunnelMemoryUsage()
-                currentMemoryUsageMb = mem
-                mem >= 0
-            }) {
-            ok = false
+        val heartbeatOk = runWithRetry("Tunnel heartbeat check", attempts = 2) {
+            val mem = getTunnelMemoryUsage()
+            currentMemoryUsageMb = mem
+            mem >= 0
         }
+
+        val networkOk = networkPassed == networkChecks.size
+        logger.log("[HealthCheck] Network checks: $networkPassed/${networkChecks.size} passed")
+
+        // If the VPN interface is missing, VPN is not up.
+        val ok = heartbeatOk && interfaceOk && networkOk
 
         if (currentMemoryUsageMb >= 0) {
             logger.log(
@@ -109,7 +113,7 @@ class HealthCheckImpl(
             }
         }
 
-        return if (latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+        return if (latch.await(dnsTimeoutMs, TimeUnit.MILLISECONDS)) {
             result
         } else {
             null
@@ -121,8 +125,8 @@ class HealthCheckImpl(
             val url = URL(urlString)
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = timeoutMs.toInt()
-                readTimeout = timeoutMs.toInt()
+                connectTimeout = httpTimeoutMs.toInt()
+                readTimeout = httpTimeoutMs.toInt()
                 useCaches = false
             }
             conn.connect()
@@ -144,7 +148,7 @@ class HealthCheckImpl(
             Socket().use { socket ->
                 socket.connect(
                     InetSocketAddress(host, port),
-                    timeoutMs.toInt()
+                    tcpTimeoutMs.toInt()
                 )
             }
             val ms = SystemClock.elapsedRealtime() - start
