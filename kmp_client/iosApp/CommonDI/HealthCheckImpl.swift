@@ -37,9 +37,11 @@ public final class HealthCheckImpl: HealthCheck {
             ("Ping one.one.one.one (DNS)", {
                 self.pingAddress("one.one.one.one:80", name: "OnesDNS")
             }),
+            // ("HTTP https://google.com/gen_204", {
+            //     self.httpPing(urlString: "https://google.com/gen_204")
 
-            ("HTTP https://google.com/gen_204", {
-                self.httpPing(urlString: "https://google.com/gen_204")
+            ("HTTP https://one.one.one.one", {
+                self.httpPing(urlString: "https://one.one.one.one")
             })
         ]
 
