@@ -203,7 +203,6 @@ class DobbyVpnService : VpnService() {
 
     override fun onDestroy() {
         logger.log("[svc:$serviceId] onDestroy() begin vpnInterface=${vpnInterface?.fd} readJob=${readJob?.isActive} writeJob=${writeJob?.isActive}")
-        connectionState.tryUpdateVpnStarted(isStarted = false)
         runCatching {
             runBlocking { stopCloakClient() }
             teardownVpn()
