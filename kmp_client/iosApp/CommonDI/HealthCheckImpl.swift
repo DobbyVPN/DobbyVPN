@@ -227,8 +227,8 @@ public final class HealthCheckImpl: HealthCheck {
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = httpTimeout
-        config.timeoutIntervalForResource = httpTimeout
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout
         let session = URLSession(configuration: config)
 
         let task = session.dataTask(with: request) { _, response, error in
@@ -241,7 +241,7 @@ public final class HealthCheckImpl: HealthCheck {
         }
         task.resume()
 
-        let wait = semaphore.wait(timeout: .now() + httpTimeout)
+        let wait = semaphore.wait(timeout: .now() + timeout)
         if wait == .timedOut {
             task.cancel()
         }
@@ -275,7 +275,7 @@ public final class HealthCheckImpl: HealthCheck {
             semaphore.signal()
         }
 
-        let wait = semaphore.wait(timeout: .now() + tcpTimeout)
+        let wait = semaphore.wait(timeout: .now() + timeout)
         if wait == .timedOut {
             return .failure(
                 NSError(
