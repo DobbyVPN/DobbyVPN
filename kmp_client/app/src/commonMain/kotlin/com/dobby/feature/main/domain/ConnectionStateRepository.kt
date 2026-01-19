@@ -10,9 +10,6 @@ class ConnectionStateRepository {
     private val _vpnStartedFlow = MutableStateFlow(false)
     val vpnStartedFlow = _vpnStartedFlow.asStateFlow()
 
-    private val _restartPendingFlow = MutableStateFlow(false)
-    val restartPendingFlow = _restartPendingFlow.asStateFlow()
-
     suspend fun updateStatus(isConnected: Boolean) {
         _statusFlow.emit(isConnected)
     }
@@ -27,13 +24,5 @@ class ConnectionStateRepository {
 
     fun tryUpdateVpnStarted(isStarted: Boolean) {
         _vpnStartedFlow.tryEmit(isStarted)
-    }
-
-    suspend fun updateRestartPending(isPending: Boolean) {
-        _restartPendingFlow.emit(isPending)
-    }
-
-    fun tryUpdateRestartPending(isPending: Boolean) {
-        _restartPendingFlow.tryEmit(isPending)
     }
 }

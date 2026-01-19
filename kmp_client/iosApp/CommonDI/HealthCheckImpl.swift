@@ -11,82 +11,101 @@ public final class HealthCheckImpl: HealthCheck {
     public static let shared = HealthCheckImpl()
 
     private let logs = NativeModuleHolder.logsRepository
-    private let tcpTimeout: TimeInterval = 1.5
-    private let dnsTimeout: TimeInterval = 2.0
-    private let httpTimeout: TimeInterval = 3.0
-    private let xpcTimeout: TimeInterval = 1.5
+    private let timeout: TimeInterval = 1.0
 
     public private(set) var currentMemmoryUsageMb = 0.0
 
-    public func isConnected() -> Bool {
-        logs.writeLog(log: "[HealthCheck] START")
+    public func shortConnectionCheckUp() -> Bool {
+        logs.writeLog(log: "Start shortConnectionCheckUp")
 
         let checks: [(String, () -> Bool)] = [
-            ("Ping 8.8.8.8", {
-                self.pingAddress("8.8.8.8:53", name: "Google")
+            ("HTTP https://google.com/gen_204", {
+                self.httpPing(urlString: "https://google.com/gen_204")
             }),
-
-            ("DNS google.com", {
-                self.resolveDNSWithTimeout(host: "google.com") != nil
-            }),
-
-            ("Ping google.com (DNS)", {
-                self.pingAddress("google.com:80", name: "GoogleDNS")
-            }),
-
-            ("Ping one.one.one.one (DNS)", {
-                self.pingAddress("one.one.one.one:80", name: "OnesDNS")
-            }),
-            // ("HTTP https://google.com/gen_204", {
-            //     self.httpPing(urlString: "https://google.com/gen_204")
-
-            ("HTTP https://one.one.one.one", {
-                self.httpPing(urlString: "https://one.one.one.one")
+            ("HTTP https://1.1.1.1", {
+                self.httpPing(urlString: "https://1.1.1.1")
             })
         ]
 
-        var networkPassed = 0
+        let networkOk = checks.contains { (name, check) in
+            self.runWithRetry(name: name, block: check)
+        }
 
-        for (name, check) in checks {
-            let timeoutPerAttempt: TimeInterval = {
-                if name.hasPrefix("HTTP") { return httpTimeout + 0.5 }
-                if name.hasPrefix("DNS") { return dnsTimeout + 0.5 }
-                return tcpTimeout + 0.5
-            }()
-            if runWithRetry(name: name, timeoutPerAttempt: timeoutPerAttempt, block: check) {
-                networkPassed += 1
+        let vpnOk = runWithRetry(name: "VPN Interface Check", attempts: 1) {
+            self.isVPNInterfaceExists()
+        }
+
+        let result = vpnOk && networkOk
+        logs.writeLog(log: "End shortConnectionCheckUp => \(result)")
+        return result
+    }
+
+
+    public func fullConnectionCheckUp() -> Bool {
+        logs.writeLog(log: "[HealthCheck] START")
+        logs.writeLog(log: "Start fullConnectionCheckUp")
+
+        let groups: [(String, [(String, () -> Bool)])] = [
+
+            // Group 1: TCP Ping
+            ("TCP Ping group", [
+                ("Ping 8.8.8.8", { self.pingAddress("8.8.8.8:53", name: "Google") }),
+                ("Ping 1.1.1.1", { self.pingAddress("1.1.1.1:53", name: "OneOneOneOne") })
+            ]),
+
+            // Group 2: DNS Resolve
+            ("DNS Resolve group", [
+                ("DNS google.com", { self.resolveDNSWithTimeout(host: "google.com") != "Timeout" }),
+                ("DNS one.one.one.one", { self.resolveDNSWithTimeout(host: "one.one.one.one") != "Timeout" })
+            ]),
+
+            // Group 3: DNS Ping (TCP)
+            ("DNS Ping group", [
+                ("Ping google.com (DNS)", { self.pingAddress("google.com:80", name: "GoogleDNS") }),
+                ("Ping one.one.one.one (DNS)", { self.pingAddress("one.one.one.one:80", name: "OnesDNS") })
+            ])
+        ]
+
+        var result = true
+
+        for (groupName, checks) in groups {
+            logs.writeLog(log: "[HealthCheck] Checking group: \(groupName)")
+
+            let groupOk = checks.contains { (name, check) in
+                self.runWithRetry(name: name, block: check)
+            }
+
+            if !groupOk {
+                logs.writeLog(log: "[HealthCheck] Group FAILED: \(groupName)")
+                result = false
+            } else {
+                logs.writeLog(log: "[HealthCheck] Group OK: \(groupName)")
             }
         }
 
-        let interfaceOk = runWithRetry(name: "VPN Interface Check", attempts: 2, timeoutPerAttempt: 1.0, block: {
-            self.isVPNInterfaceExists()
-        })
+        if !shortConnectionCheckUp() {
+            logs.writeLog(log: "[HealthCheck] shortConnectionCheckUp FAILED inside full check")
+            result = false
+        }
 
-        let heartbeatOk = runWithRetry(name: "XPC heartbeat check", attempts: 2, timeoutPerAttempt: xpcTimeout + 0.5, block: {
+        let heartbeatOk = runWithRetry(name: "XPC heartbeat check", attempts: 1) {
             let mem = self.isTunnelAliveViaXPC()
             self.currentMemmoryUsageMb = mem
             return mem >= 0
-        })
-        
-        // Strict mode: require all network checks to pass.
-        let networkOk = networkPassed == checks.count
-        logs.writeLog(log: "[HealthCheck] Network checks: \(networkPassed)/\(checks.count) passed")
-
-        // If the VPN interface is missing, VPN is not up.
-        let ok = heartbeatOk && interfaceOk && networkOk
-        
-        if self.currentMemmoryUsageMb >= 0 {
-            logs.writeLog(
-                log: "[HealthCheck] Memory usage: \(currentMemmoryUsageMb)MB, max: 50 MB"
-            )
-        } else {
-            logs.writeLog(
-                log: "[HealthCheck] Memory usage: unknown (can't get it by XPC) MB, max: 50 MB"
-            )
         }
 
-        logs.writeLog(log: "[HealthCheck] RESULT = \(ok)")
-        return ok
+        if !heartbeatOk {
+            result = false
+        }
+
+        if currentMemmoryUsageMb >= 0 {
+            logs.writeLog(log: "[HealthCheck] Memory usage: \(currentMemmoryUsageMb)MB")
+        } else {
+            logs.writeLog(log: "[HealthCheck] Memory usage: unknown (can't get XPC memory)")
+        }
+
+        logs.writeLog(log: "[HealthCheck] RESULT = \(result)")
+        return result
     }
 
     private func runWithRetry(
@@ -144,19 +163,18 @@ public final class HealthCheckImpl: HealthCheck {
         group.enter()
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let resolved = self.resolveDNS(host: host)
-            result = resolved
+            result = self.resolveDNS(host: host)
             group.leave()
         }
 
-        let wait = group.wait(timeout: .now() + dnsTimeout)
+        let wait = group.wait(timeout: .now() + timeout)
         if wait == .timedOut {
-            return nil
+            return "Timeout"
         }
         return result
     }
 
-    private func resolveDNS(host: String) -> String? {
+    private func resolveDNS(host: String) -> String {
         var hints = addrinfo(
             ai_flags: AI_PASSIVE,
             ai_family: AF_UNSPEC,
@@ -172,7 +190,7 @@ public final class HealthCheckImpl: HealthCheck {
         let status = getaddrinfo(host, nil, &hints, &infoPointer)
 
         guard status == 0, let first = infoPointer else {
-            return nil
+            return String(cString: gai_strerror(status))
         }
 
         defer { freeaddrinfo(infoPointer) }
@@ -194,7 +212,7 @@ public final class HealthCheckImpl: HealthCheck {
             ptr = ptr?.pointee.ai_next
         }
 
-        return nil
+        return "Can't resolve DNS"
     }
 
     private func httpPing(urlString: String) -> Bool {
@@ -205,12 +223,12 @@ public final class HealthCheckImpl: HealthCheck {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = httpTimeout
+        request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = httpTimeout
-        config.timeoutIntervalForResource = httpTimeout
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout
         let session = URLSession(configuration: config)
 
         let task = session.dataTask(with: request) { _, response, error in
@@ -223,7 +241,7 @@ public final class HealthCheckImpl: HealthCheck {
         }
         task.resume()
 
-        let wait = semaphore.wait(timeout: .now() + httpTimeout)
+        let wait = semaphore.wait(timeout: .now() + timeout)
         if wait == .timedOut {
             task.cancel()
         }
@@ -257,7 +275,7 @@ public final class HealthCheckImpl: HealthCheck {
             semaphore.signal()
         }
 
-        let wait = semaphore.wait(timeout: .now() + tcpTimeout)
+        let wait = semaphore.wait(timeout: .now() + timeout)
         if wait == .timedOut {
             return .failure(
                 NSError(
@@ -354,7 +372,7 @@ public final class HealthCheckImpl: HealthCheck {
             }
         }
 
-        _ = semaphore.wait(timeout: .now() + xpcTimeout)
+        _ = semaphore.wait(timeout: .now() + timeout)
         return memory
     }
 
