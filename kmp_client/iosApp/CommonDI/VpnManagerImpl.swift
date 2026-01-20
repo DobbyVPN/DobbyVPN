@@ -129,11 +129,6 @@ public class VpnManagerImpl: VpnManager {
             self.logs.writeLog(log: "[stop] Skip: vpnManager is nil")
             return
         }
-        let status = manager.connection.status
-        if status == .disconnected || status == .disconnecting || status == .invalid {
-            self.logs.writeLog(log: "[stop] Skip: status=\(status.rawValue)")
-            return
-        }
         self.logs.writeLog(log: "[stop] User initiated stopVPNTunnel()")
         manager.connection.stopVPNTunnel()
         self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")

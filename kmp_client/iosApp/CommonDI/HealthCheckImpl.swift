@@ -11,7 +11,7 @@ public final class HealthCheckImpl: HealthCheck {
     public static let shared = HealthCheckImpl()
 
     private let logs = NativeModuleHolder.logsRepository
-    private let timeout: TimeInterval = 1.0
+    private let timeout: TimeInterval = 4.0
 
     public private(set) var currentMemmoryUsageMb = 0.0
 
@@ -22,8 +22,8 @@ public final class HealthCheckImpl: HealthCheck {
             ("HTTP https://google.com/gen_204", {
                 self.httpPing(urlString: "https://google.com/gen_204")
             }),
-            ("HTTP https://1.1.1.1", {
-                self.httpPing(urlString: "https://1.1.1.1")
+            ("HTTP https://one.one.one.one", {
+                self.httpPing(urlString: "https://one.one.one.one")
             })
         ]
 
@@ -42,50 +42,57 @@ public final class HealthCheckImpl: HealthCheck {
 
 
     public func fullConnectionCheckUp() -> Bool {
-        logs.writeLog(log: "[HealthCheck] START")
-        logs.writeLog(log: "Start fullConnectionCheckUp")
+        logs.writeLog(log: "[HC] Start fullConnectionCheckUp")
 
         let groups: [(String, [(String, () -> Bool)])] = [
-
-            // Group 1: TCP Ping
             ("TCP Ping group", [
                 ("Ping 8.8.8.8", { self.pingAddress("8.8.8.8:53", name: "Google") }),
                 ("Ping 1.1.1.1", { self.pingAddress("1.1.1.1:53", name: "OneOneOneOne") })
             ]),
-
-            // Group 2: DNS Resolve
             ("DNS Resolve group", [
                 ("DNS google.com", { self.resolveDNSWithTimeout(host: "google.com") != "Timeout" }),
                 ("DNS one.one.one.one", { self.resolveDNSWithTimeout(host: "one.one.one.one") != "Timeout" })
             ]),
-
-            // Group 3: DNS Ping (TCP)
             ("DNS Ping group", [
                 ("Ping google.com (DNS)", { self.pingAddress("google.com:80", name: "GoogleDNS") }),
                 ("Ping one.one.one.one (DNS)", { self.pingAddress("one.one.one.one:80", name: "OnesDNS") })
             ])
         ]
 
-        var result = true
+        var failedGroups: [String] = []
 
         for (groupName, checks) in groups {
-            logs.writeLog(log: "[HealthCheck] Checking group: \(groupName)")
+            logs.writeLog(log: "[HC] Checking group: \(groupName)")
 
             let groupOk = checks.contains { (name, check) in
                 self.runWithRetry(name: name, block: check)
             }
 
             if !groupOk {
-                logs.writeLog(log: "[HealthCheck] Group FAILED: \(groupName)")
-                result = false
+                logs.writeLog(log: "[HC] Group FAILED: \(groupName)")
+                failedGroups.append(groupName)
             } else {
-                logs.writeLog(log: "[HealthCheck] Group OK: \(groupName)")
+                logs.writeLog(log: "[HC] Group OK: \(groupName)")
             }
         }
 
-        if !shortConnectionCheckUp() {
-            logs.writeLog(log: "[HealthCheck] shortConnectionCheckUp FAILED inside full check")
-            result = false
+        logs.writeLog(log: "[HC] Checking group: Short health check group")
+
+        let shortOk = shortConnectionCheckUp()
+
+        if !shortOk {
+            logs.writeLog(log: "[HC] Group FAILED: Short health check group")
+            failedGroups.append("Short health check group")
+        } else {
+            logs.writeLog(log: "[HC] Group OK: Short health check group")
+        }
+
+        var result = failedGroups.count <= 1
+        if !result {
+            logs.writeLog(
+                log: "[HC] Too many failed groups (\(failedGroups.count)): " +
+                     failedGroups.joined(separator: ", ")
+            )
         }
 
         let heartbeatOk = runWithRetry(name: "XPC heartbeat check", attempts: 1) {
@@ -99,12 +106,12 @@ public final class HealthCheckImpl: HealthCheck {
         }
 
         if currentMemmoryUsageMb >= 0 {
-            logs.writeLog(log: "[HealthCheck] Memory usage: \(currentMemmoryUsageMb)MB")
+            logs.writeLog(log: "[HC] Memory usage: \(currentMemmoryUsageMb)MB")
         } else {
-            logs.writeLog(log: "[HealthCheck] Memory usage: unknown (can't get XPC memory)")
+            logs.writeLog(log: "[HC] Memory usage: unknown (can't get XPC memory)")
         }
 
-        logs.writeLog(log: "[HealthCheck] RESULT = \(result)")
+        logs.writeLog(log: "[HC] RESULT = \(result)")
         return result
     }
 
@@ -115,7 +122,7 @@ public final class HealthCheckImpl: HealthCheck {
         block: @escaping () -> Bool
     ) -> Bool {
         for attempt in 1...attempts {
-            logs.writeLog(log: "[HealthCheck] \(name) attempt \(attempt)")
+            logs.writeLog(log: "[HC] \(name) attempt \(attempt)")
             let ok: Bool
             if let timeoutPerAttempt {
                 ok = runWithTimeout(timeout: timeoutPerAttempt, block: block)
@@ -127,7 +134,7 @@ public final class HealthCheckImpl: HealthCheck {
                 return true
             }
         }
-        logs.writeLog(log: "[HealthCheck] \(name) FAILED after \(attempts) attempts")
+        logs.writeLog(log: "[HC] \(name) FAILED after \(attempts) attempts")
         return false
     }
 
@@ -251,10 +258,10 @@ public final class HealthCheckImpl: HealthCheck {
     private func pingAddress(_ address: String, name: String) -> Bool {
         switch tcpPingWithTimeout(address: address) {
         case .success(let ms):
-            logs.writeLog(log: "[ping \(name)] \(ms) ms")
+            logs.writeLog(log: "[HC] [ping \(name)] \(ms) ms")
             return true
         case .failure(let error):
-            logs.writeLog(log: "[ping \(name)] error: \(error.localizedDescription)")
+            logs.writeLog(log: "[HC] [ping \(name)] error: \(error.localizedDescription)")
             return false
         }
     }

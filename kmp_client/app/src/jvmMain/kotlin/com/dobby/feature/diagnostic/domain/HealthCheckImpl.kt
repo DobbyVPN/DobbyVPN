@@ -41,67 +41,68 @@ class HealthCheckImpl(
 
 
     override fun fullConnectionCheckUp(): Boolean {
-        logger.log("[HealthCheck] START")
-        logger.log("Start fullConnectionCheckUp")
+        logger.log("[HC] Start fullConnectionCheckUp")
 
         val groups: List<Pair<String, List<Pair<String, () -> Boolean>>>> = listOf(
-
-            // --- Group 1: TCP ping to public DNS servers ---
             "TCP Ping group" to listOf(
                 "Ping 8.8.8.8" to { pingAddress("8.8.8.8", 53, "Google") },
                 "Ping 1.1.1.1" to { pingAddress("1.1.1.1", 53, "OneOneOneOne") }
             ),
-
-            // --- Group 2: DNS resolve ---
             "DNS Resolve group" to listOf(
                 "DNS google.com" to { resolveDnsWithTimeout("google.com") != null },
                 "DNS one.one.one.one" to { resolveDnsWithTimeout("one.one.one.one") != null }
             ),
-
-            // --- Group 3: DNS-based TCP ping ---
             "DNS Ping group" to listOf(
                 "Ping google.com (DNS)" to { pingAddress("google.com", 80, "GoogleDNS") },
                 "Ping one.one.one.one (DNS)" to { pingAddress("one.one.one.one", 80, "OnesDNS") }
             )
         )
 
-        var result = true
+        val failedGroups = mutableListOf<String>()
 
         for ((groupName, checks) in groups) {
-            logger.log("[HealthCheck] Checking group: $groupName")
+            logger.log("[HC] Checking group: $groupName")
 
             val groupOk = checks.any { (name, check) ->
                 runWithRetry(name = name, attempts = 2, block = check)
             }
 
             if (!groupOk) {
-                logger.log("[HealthCheck] Group FAILED: $groupName")
-                result = false
+                logger.log("[HC] Group FAILED: $groupName")
+                failedGroups += groupName
             } else {
-                logger.log("[HealthCheck] Group OK: $groupName")
+                logger.log("[HC] Group OK: $groupName")
             }
         }
 
-        if (!shortConnectionCheckUp()) {
-            logger.log("[HealthCheck] shortConnectionCheckUp FAILED inside full check")
-            result = false
+        logger.log("[HC] Checking group: Short health check group")
+
+        val shortOk = shortConnectionCheckUp()
+
+        if (!shortOk) {
+            logger.log("[HC] Group FAILED: Short health check group")
+            failedGroups += "Short health check group"
+        } else {
+            logger.log("[HC] Group OK: Short health check group")
+        }
+
+        var result = failedGroups.size <= 1
+        if (!result) {
+            logger.log("[HC] Too many failed groups (${failedGroups.size}): ${failedGroups.joinToString()}")
         }
 
         currentMemoryUsageMb = getProcessMemoryUsageMb()
 
         if (currentMemoryUsageMb >= 0) {
-            logger.log(
-                "[HealthCheck] Memory usage: %.2f MB".format(currentMemoryUsageMb)
-            )
+            logger.log("[HC] Memory usage: %.2f MB".format(currentMemoryUsageMb))
         } else {
-            logger.log("[HealthCheck] Memory usage: unknown")
+            logger.log("[HC] Memory usage: unknown")
             result = false
         }
 
-        logger.log("[HealthCheck] RESULT = $result")
+        logger.log("[HC] RESULT = $result")
         return result
     }
-
 
     private fun runWithRetry(
         name: String,
@@ -109,10 +110,10 @@ class HealthCheckImpl(
         block: () -> Boolean
     ): Boolean {
         repeat(attempts) { attempt ->
-            logger.log("[HealthCheck] $name attempt ${attempt + 1}")
+            logger.log("[HC] $name attempt ${attempt + 1}")
             if (block()) return true
         }
-        logger.log("[HealthCheck] $name FAILED after $attempts attempts")
+        logger.log("[HC] $name FAILED after $attempts attempts")
         return false
     }
 
@@ -173,9 +174,9 @@ class HealthCheckImpl(
         }
 
         if (success) {
-            logger.log("[ping $name] $elapsedMs ms")
+            logger.log("[HC] [ping $name] $elapsedMs ms")
         } else {
-            logger.log("[ping $name] error")
+            logger.log("[HC] [ping $name] error")
         }
 
         return success
