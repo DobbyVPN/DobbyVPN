@@ -69,6 +69,7 @@ class DobbyVpnService : VpnService() {
     private val dobbyConfigsRepository: DobbyConfigsRepository by inject()
     private val outlineLibFacade: OutlineLibFacade by inject()
     private val connectionState: ConnectionStateRepository by inject()
+    private val geoRoutingService: com.dobby.feature.vpn_service.domain.GeoRoutingService by inject()
 
     private val bufferSize = 65536
     private var inputStream: FileInputStream? = null
@@ -117,12 +118,19 @@ class DobbyVpnService : VpnService() {
     private fun startCloakOutline(intent: Intent?) {
         logger.log("Tunnel: Start curl before connection")
         serviceScope.launch {
+            val countryCode = geoRoutingService.getCountryCode()
+            if (countryCode != null) {
+                logger.log("Tunnel: Country detected before VPN setup: $countryCode")
+            } else {
+                logger.log("Tunnel: Could not detect country before VPN setup")
+            }
+            
             val ipAddress = ipFetcher.fetchIp()
             withContext(Dispatchers.Main) {
                 connectionState.update(isConnected = true)
                 if (ipAddress != null) {
                     logger.log("Tunnel: response from curl: $ipAddress")
-                    setupVpn()
+                    setupVpn(countryCode)
                 } else {
                     logger.log("Tunnel: Failed to fetch IP, cancelling VPN setup.")
                     stopSelf()
@@ -189,9 +197,9 @@ class DobbyVpnService : VpnService() {
         }
     }
 
-    private fun setupVpn() {
+    private fun setupVpn(countryCode: String? = null) {
         vpnInterface = vpnInterfaceFactory
-            .create(context = this@DobbyVpnService, vpnService = this@DobbyVpnService)
+            .create(context = this@DobbyVpnService, vpnService = this@DobbyVpnService, countryCode = countryCode)
             .establish()
 
         if (vpnInterface != null) {
