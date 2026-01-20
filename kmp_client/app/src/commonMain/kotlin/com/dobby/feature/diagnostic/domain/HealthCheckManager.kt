@@ -54,14 +54,17 @@ class HealthCheckManager(
 
         logger.log("[HC] Health check started")
 
-        val serverAlive = healthCheck.checkServerAlive(address, port)
-        if (!serverAlive) {
-            logger.log("[HC] Server isn't alive")
-            turnOffVpn()
-            return
+        if (address != "localhost" && address != "127.0.0.1") {
+            val serverAlive = healthCheck.checkServerAlive(address, port)
+            if (!serverAlive) {
+                logger.log("[HC] Server isn't alive")
+                turnOffVpn()
+                return
+            }
+            logger.log("[HC] Server is alive")
+
         }
 
-        logger.log("[HC] Server is alive")
 
         healthJob = scope.launch {
             delay(healthCheck.getTimeToWakeUp() * 1_000L)
