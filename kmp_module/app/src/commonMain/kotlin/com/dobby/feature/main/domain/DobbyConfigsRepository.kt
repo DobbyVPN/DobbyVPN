@@ -4,7 +4,8 @@ interface DobbyConfigsRepository :
     DobbyConfigsRepositoryOutline,
     DobbyConfigsRepositoryCloak,
     DobbyConfigsRepositoryAwg,
-    DobbyConfigsRepositoryVpn {
+    DobbyConfigsRepositoryVpn,
+    DobbyConfigsRepositoryXray {
 
     // region global configs
 
@@ -31,7 +32,8 @@ interface DobbyConfigsRepository :
 
 enum class VpnInterface {
     CLOAK_OUTLINE,
-    AMNEZIA_WG;
+    AMNEZIA_WG,
+    XRAY;
 
     companion object {
         val DEFAULT_VALUE = CLOAK_OUTLINE

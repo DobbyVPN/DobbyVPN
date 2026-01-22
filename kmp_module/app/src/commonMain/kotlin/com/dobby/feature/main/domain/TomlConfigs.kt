@@ -53,8 +53,27 @@ data class ExcludeIPsConfig(
 )
 
 @Serializable
+data class XrayClientConfig(
+    val tag: String?,
+    val protocol: String?,
+    val address: String?,
+    val port: Int?,
+    val id: String?,
+    val flow: String?,
+    val encryption: String?,
+    val network: String?,
+    val security: String?,
+    val fingerprint: String?,
+    val serverName: String?,
+    val publicKey: String?,
+    val shortId: String?,
+    val spiderX: String?,
+)
+
+@Serializable
 data class TomlConfigs(
     val Description: String? = null,
     val Outline: OutlineConfig? = null,
+    val Xray: XrayClientConfig? = null,
     val ExcludeIPs: ExcludeIPsConfig? = null
 )

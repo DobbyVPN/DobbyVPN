@@ -46,6 +46,7 @@ class MainViewModel(
         outlineRepo = configsRepository,
         cloakRepo = configsRepository,
         mainRepo = configsRepository,
+        xrayRepo = configsRepository,
         logger = logger
     )
 
