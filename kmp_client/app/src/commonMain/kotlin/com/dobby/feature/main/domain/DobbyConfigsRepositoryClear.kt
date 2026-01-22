@@ -20,6 +20,11 @@ fun DobbyConfigsRepositoryAwg.clearAwgConfig() {
     setAwgConfig("")
 }
 
+fun DobbyConfigsRepositoryXray.clearXrayConfig() {
+    setIsXrayEnabled(false)
+    setXrayConfig("")
+}
+
 fun DobbyConfigsRepository.clearOutlineAndCloakConfig() {
     clearOutlineConfig()
     clearCloakConfig()
