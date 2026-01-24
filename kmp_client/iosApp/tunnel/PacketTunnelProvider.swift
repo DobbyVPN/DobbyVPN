@@ -121,9 +121,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                let route = makeExcludedRoute(host: ip) {
                 excludedRoutes.append(route)
                 if ip == trimmed {
-                    logs.writeLog(log: "Excluded route for Outline host: \(ip)/32")
+                    logs.writeLog(log: "Excluded route for Outline host: \(maskStr(value: ip))/32")
                 } else {
-                    logs.writeLog(log: "Excluded route for Outline host resolved: \(trimmed) → \(ip)/32")
+                    logs.writeLog(log: "Excluded route for Outline host resolved: \(maskStr(value: trimmed)) → \(maskStr(value: ip))/32")
                 }
             } else {
                 logs.writeLog(log: "Excluded route for Outline host skipped (can't resolve to IPv4): \(trimmed)")
@@ -135,12 +135,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                let route = makeExcludedRoute(host: ip) {
                 excludedRoutes.append(route)
                 if ip == trimmed {
-                    logs.writeLog(log: "Excluded route for Cloak RemoteHost: \(ip)/32")
+                    logs.writeLog(log: "Excluded route for Cloak RemoteHost: \(maskStr(value: ip))/32")
                 } else {
-                    logs.writeLog(log: "Excluded route for Cloak RemoteHost resolved: \(trimmed) → \(ip)/32")
+                    logs.writeLog(log: "Excluded route for Cloak RemoteHost resolved: \(maskStr(value: trimmed)) → \(maskStr(value: ip))/32")
                 }
             } else {
-                logs.writeLog(log: "Excluded route for Cloak RemoteHost skipped (can't resolve to IPv4): \(trimmed)")
+                logs.writeLog(log: "Excluded route for Cloak RemoteHost skipped (can't resolve to IPv4): \(maskStr(value: trimmed))")
             }
         }
         if !excludedRoutes.isEmpty {
@@ -241,17 +241,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] processPacketsFromDevice(): start")
 
         while !Task.isCancelled {
-            let data: Data = autoreleasepool {
-                device.readFromDevice()
-            }
-            if data.isEmpty {
-                usleep(5_000)
-                continue
-            }
-            
-            let ok = packetFlow.writePackets([data], withProtocols: [NSNumber(value: AF_INET)])
-            if !ok {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] Failed to write packets to NEPacketFlow")
+            autoreleasepool {
+                let data = device.readFromDevice()
+
+                let ok = packetFlow.writePackets([data], withProtocols: [NSNumber(value: AF_INET)])
+                if !ok {
+                    logs.writeLog(log: "[tunnel:\(tunnelId)] Failed to write packets to NEPacketFlow")
+                }
             }
         }
         logs.writeLog(log: "[tunnel:\(tunnelId)] processPacketsFromDevice(): end cancelled=\(Task.isCancelled)")

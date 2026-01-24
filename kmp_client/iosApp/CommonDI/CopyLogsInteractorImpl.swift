@@ -50,3 +50,11 @@ class CopyLogsInteractorImpl: CopyLogsInteractor {
         return top
     }
 }
+
+public func maskStr(value: String) -> String {
+    guard value.count > 2 else { return value }   // если длина 1–2 символа — не маскируем
+    
+    let first = value.first!
+    let last = value.last!
+    return "\(first)***\(last)"
+}

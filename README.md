@@ -22,6 +22,7 @@ WebSocket = true # flag to enable WebSocket
 Server = "www.myserver.com"
 Password = "Qwerty123"
 WebSocketPath = "/WS_Ooth5OoCoo7reDah5oich1gai0che2ugh8pho" # one URL for both TCP and UDP for simplicity for now 
+DisguisePrefix = "POST " # see ref. # 1 below
 ```
 
 **ShadowSocks over cloak** (caddy -> cloak -> outline-ss-server)

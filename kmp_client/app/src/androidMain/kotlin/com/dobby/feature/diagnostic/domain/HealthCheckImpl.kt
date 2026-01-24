@@ -8,74 +8,114 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import com.dobby.outline.OutlineGo
 import kotlin.concurrent.thread
+import kotlin.math.log
 
 class HealthCheckImpl(
     private val logger: Logger,
 ) : HealthCheck {
 
-    private val tcpTimeoutMs = 1_500L
-    private val dnsTimeoutMs = 2_000L
-    private val httpTimeoutMs = 3_000L
+    private val timeoutMs = 1_000L
 
     @Volatile
     var currentMemoryUsageMb: Double = -1.0
         private set
 
-    override fun isConnected(): Boolean {
-        logger.log("[HealthCheck] START")
+    override fun shortConnectionCheckUp(): Boolean {
+        logger.log("[HC] Check internet connection")
 
-        val networkChecks: List<Pair<String, () -> Boolean>> = listOf(
-            "Ping 8.8.8.8" to {
-                pingAddress("8.8.8.8", 53, "Google")
-            },
-            "DNS google.com" to {
-                resolveDnsWithTimeout("google.com") != null
-            },
-            "Ping google.com (DNS)" to {
-                pingAddress("google.com", 80, "GoogleDNS")
-            },
-            "Ping one.one.one.one (DNS)" to {
-                pingAddress("one.one.one.one", 80, "OnesDNS")
-            },
+        val checks: List<Pair<String, () -> Boolean>> = listOf(
             "HTTP https://google.com/gen_204" to {
                 httpPing("https://google.com/gen_204")
+            },
+            "HTTP https://one.one.one.one" to {
+                httpPing("https://one.one.one.one")
             }
         )
 
-        var networkPassed = 0
-
-        for ((name, check) in networkChecks) {
-            if (runWithRetry(name = name, attempts = 2, block = check)) {
-                networkPassed++
-            }
+        val networkOk = checks.any { (name, check) ->
+            runWithRetry(name = name, attempts = 2, block = check)
         }
 
-        val interfaceOk = runWithRetry("VPN Interface Check", attempts = 2) {
+        val vpnOk = runWithRetry(
+            name = "VPN Interface Check",
+            attempts = 1
+        ) {
             isVpnInterfaceExists()
         }
 
-        val heartbeatOk = runWithRetry("Tunnel heartbeat check", attempts = 2) {
-            val mem = getTunnelMemoryUsage()
-            currentMemoryUsageMb = mem
-            mem >= 0
+        val result = vpnOk && networkOk
+
+        logger.log("[HC] Finish internet check => $result")
+        return result
+    }
+
+    override fun fullConnectionCheckUp(): Boolean {
+        logger.log("[HC] Start fullConnectionCheckUp")
+
+        val groups: List<Pair<String, List<Pair<String, () -> Boolean>>>> = listOf(
+            "TCP Ping group" to listOf(
+                "Ping 8.8.8.8" to { pingAddress("8.8.8.8", 53, "Google") },
+                "Ping 1.1.1.1" to { pingAddress("1.1.1.1", 53, "OneOneOneOne") }
+            ),
+            "DNS Resolve group" to listOf(
+                "DNS google.com" to { resolveDnsWithTimeout("google.com") != null },
+                "DNS one.one.one.one" to { resolveDnsWithTimeout("one.one.one.one") != null }
+            ),
+            "DNS Ping group" to listOf(
+                "Ping google.com (DNS)" to { pingAddress("google.com", 80, "GoogleDNS") },
+                "Ping one.one.one.one (DNS)" to { pingAddress("one.one.one.one", 80, "OnesDNS") }
+            )
+        )
+
+        val failedGroups = mutableListOf<String>()
+
+        for ((groupName, checks) in groups) {
+            logger.log("[HC] Checking group: $groupName")
+
+            val groupOk = checks.any { (name, check) ->
+                runWithRetry(name = name, attempts = 2, block = check)
+            }
+
+            if (!groupOk) {
+                logger.log("[HC] Group FAILED: $groupName")
+                failedGroups += groupName
+            } else {
+                logger.log("[HC] Group OK: $groupName")
+            }
         }
 
-        val networkOk = networkPassed == networkChecks.size
-        logger.log("[HealthCheck] Network checks: $networkPassed/${networkChecks.size} passed")
+        logger.log("[HC] Checking group: Short health check group")
 
-        // If the VPN interface is missing, VPN is not up.
-        val ok = heartbeatOk && interfaceOk && networkOk
+        val shortOk = shortConnectionCheckUp()
+
+        if (!shortOk) {
+            logger.log("[HC] Group FAILED: Short health check group")
+            failedGroups += "Short health check group"
+        } else {
+            logger.log("[HC] Group OK: Short health check group")
+        }
+
+        var result = failedGroups.size <= 1
+        if (!result) {
+            logger.log("[HC] Too many failed groups (${failedGroups.size}): ${failedGroups.joinToString()}")
+        }
+
+        if (!runWithRetry("Tunnel heartbeat check", 1) {
+                val mem = getTunnelMemoryUsage()
+                currentMemoryUsageMb = mem
+                mem >= 0
+            }) {
+            result = false
+        }
 
         if (currentMemoryUsageMb >= 0) {
-            logger.log(
-                "[HealthCheck] Memory usage: %.2f MB".format(currentMemoryUsageMb)
-            )
+            logger.log("[HC] Memory usage: %.2f MB".format(currentMemoryUsageMb))
         } else {
-            logger.log("[HealthCheck] Memory usage: unknown")
+            logger.log("[HC] Memory usage: unknown")
         }
 
-        logger.log("[HealthCheck] RESULT = $ok")
-        return ok
+        logger.log("[HC] RESULT = $result")
+        return result
     }
 
     override fun checkServerAlive(address: String, port: Int): Boolean {
@@ -92,10 +132,10 @@ class HealthCheckImpl(
         block: () -> Boolean
     ): Boolean {
         repeat(attempts) { attempt ->
-            logger.log("[HealthCheck] $name attempt ${attempt + 1}")
+            logger.log("[HC] $name attempt ${attempt + 1}")
             if (block()) return true
         }
-        logger.log("[HealthCheck] $name FAILED after $attempts attempts")
+        logger.log("[HC]  $name FAILED after $attempts attempts")
         return false
     }
 
@@ -113,7 +153,7 @@ class HealthCheckImpl(
             }
         }
 
-        return if (latch.await(dnsTimeoutMs, TimeUnit.MILLISECONDS)) {
+        return if (latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
             result
         } else {
             null
@@ -125,8 +165,8 @@ class HealthCheckImpl(
             val url = URL(urlString)
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = httpTimeoutMs.toInt()
-                readTimeout = httpTimeoutMs.toInt()
+                connectTimeout = timeoutMs.toInt()
+                readTimeout = timeoutMs.toInt()
                 useCaches = false
             }
             conn.connect()
@@ -135,8 +175,6 @@ class HealthCheckImpl(
             false
         }
     }
-
-    // ---------- TCP Ping ----------
 
     private fun pingAddress(
         host: String,
@@ -148,14 +186,14 @@ class HealthCheckImpl(
             Socket().use { socket ->
                 socket.connect(
                     InetSocketAddress(host, port),
-                    tcpTimeoutMs.toInt()
+                    timeoutMs.toInt()
                 )
             }
             val ms = SystemClock.elapsedRealtime() - start
-            logger.log("[ping $name] $ms ms")
+            logger.log("[HC] [ping $name] $ms ms")
             true
         } catch (e: Throwable) {
-            logger.log("[ping $name] error: ${e.message}")
+            logger.log("[HC] [ping $name] error: ${e.message}")
             false
         }
     }
