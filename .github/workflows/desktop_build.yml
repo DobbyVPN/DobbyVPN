@@ -10,6 +10,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Download Go AAR
+        uses: actions/download-artifact@v4
+        with:
+          name: outline-debug.aar
+          path: kmp_client/libs
+
+      - name: Download So
+        uses: actions/download-artifact@v4
+        with:
+          name: liboutline.so
+          path: kmp_client/outline/src/main/jniLibs/arm64-v8a
+
+      - name: Download .h
+        uses: actions/download-artifact@v4
+        with:
+          name: liboutline.h
+          path: kmp_client/outline/src/main/cpp/include/arm64-v8a
+
       - name: Download Windows lib
         uses: actions/download-artifact@v4
         with:
@@ -22,15 +40,11 @@ jobs:
           name: lib_ubuntu
           path: kmp_client/libs
 
-      - name: Download MacOS lib
+      - name: Download macOS lib
         uses: actions/download-artifact@v4
         with:
           name: lib_macos
           path: kmp_client/libs
-
-      - name: Print libs
-        run: |
-          ls kmp_client/libs
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -38,6 +52,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
           check-latest: true
+
+      - name: Install Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
 
       - name: Cache Gradle dependencies
         uses: actions/cache@v4
@@ -48,27 +68,17 @@ jobs:
           key: >
             ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
 
-      - name: Fill gradle.properties
+      - name: Build desktop via Fastlane
+        working-directory: kmp_client
         run: |
-          echo "projectRepositoryCommit=$GITHUB_SHA"
-          echo "projectRepositoryCommit=$GITHUB_SHA" >> kmp_client/gradle.properties
-          echo "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$GITHUB_SHA"
-          echo "projectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$GITHUB_SHA" >> kmp_client/gradle.properties
-          echo "gradle.properties:"
-          cat kmp_client/gradle.properties
-
-      - name: Build with Gradle
-        run: |
-          cd kmp_client
-          chmod +x ./gradlew
-          ./gradlew build
-
-      - name: Download Skiko runtimes
-        run: |
-          cd kmp_client
-          chmod +x ./gradlew
-          ./gradlew --no-daemon -q dependencies 
-          ./gradlew --no-daemon -q printConveyorConfig
+          bundle install
+          bundle exec fastlane android build_desktop
+        env:
+          APP_MAJOR_VERSION: ${{ vars.MAJOR }}
+          APP_MINOR_VERSION: ${{ vars.MINOR }}
+          APP_MAINTENANCE_VERSION: ${{ vars.MAINTENANCE }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Conveyor build site
         uses: hydraulic-software/conveyor/actions/build@v16.0
@@ -79,11 +89,6 @@ jobs:
           extra_flags: "--passphrase=\"${{ secrets.CONVEYOR_PASSPHRASE }}\" -f kmp_client/conveyor.conf"
           signing_key: ${{ secrets.CONVEYOR_SIGNING_KEY }}
           agree_to_license: 1
-
-      - name: Display file tree with sizes after Linux build
-        run: |
-          echo "Displaying the size of files and directories in 'output' directory:"
-          du -ah output | sort -rh
 
       - name: Find files
         id: find_deb
@@ -101,31 +106,31 @@ jobs:
           name: dobbyVPN-linux.deb
           path: ${{ env.DEB_FILE }}
 
-      - name: Upload Tar Gz
+      - name: Upload tar.gz
         uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-linux.tar.gz
           path: ${{ env.TARGZ_FILE }}
 
-      - name: Upload Zip for Mac aarch64
+      - name: Upload zip for macOS aarch64
         uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-macos-aarch64.zip
           path: ${{ env.MAC_AARCH64_FILE }}
 
-      - name: Upload Zip for Mac amd64
+      - name: Upload zip for macOS amd64
         uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-macos-amd64.zip
           path: ${{ env.MAC_AMD64_FILE }}
 
-      - name: Upload Msix
+      - name: Upload MSIX
         uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-windows.msix
           path: ${{ env.MSIX_FILE }}
 
-      - name: Upload Windows Zip
+      - name: Upload Windows zip
         uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-windows.zip
@@ -140,6 +145,3 @@ jobs:
         run: |
           echo "Displaying the size of files and directories in 'output' directory:"
           du -ah output | sort -rh
-
-      - name: Delete output directory
-        run: rm -rf output

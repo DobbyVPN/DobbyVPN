@@ -1,5 +1,7 @@
 // @file:Suppress("UnstableApiUsage")
 
+import org.gradle.api.tasks.Copy
+
 plugins {
     id("com.android.library")
     kotlin("android")
@@ -60,6 +62,19 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+    }
+
+    val outputDir = rootProject.layout.projectDirectory.dir("libs")
+    val copyOutlineAar = tasks.register<Copy>("copyOutlineAar") {
+        from(layout.buildDirectory.dir("outputs/aar")) {
+            include("outline-debug.aar", "outline-release.aar")
+        }
+
+        into(outputDir)
+    }
+
+    afterEvaluate {
+        tasks.named("build").configure { finalizedBy(copyOutlineAar) }
     }
 }
 

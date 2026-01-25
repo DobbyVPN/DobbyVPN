@@ -1,13 +1,13 @@
 name: Build VPN Libraries
 
 on:
-  workflow_call:
+  workflow_call: {}
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Tag for new library release"
+        description: 'Tag for new library release'
         required: false
-        default: ""
+        default: ''
         type: string
 
 jobs:
@@ -15,93 +15,74 @@ jobs:
     runs-on: ${{ matrix.os }}-latest
     strategy:
       matrix:
-        os: [ windows, ubuntu, macos ]
+        os: [windows, ubuntu, macos]
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23.x"
+          go-version: '1.23.x'
 
       - name: Vendor Cloak/internal
         run: |
-          git clone --depth 1 https://github.com/cbeuw/Cloak tmp
-          cp -r tmp/internal go_client/modules/Cloak/
-
-      - name: Update utls
-        run: |
-          cd go_client
-          go get -u github.com/refraction-networking/utls@latest
-          go mod tidy
-          cd ..
-
-      - name: Check utls version
-        run: |
-          cd go_client
-          go list -m github.com/refraction-networking/utls
-          cd ..
+          cp -r Cloak/internal go_client/modules/Cloak/
 
       - name: Download Go modules
+        working-directory: go_client
         run: |
-          cd go_client
+          go mod tidy
           go mod download
-          cd ..
 
       - name: Install compiler
-        if: matrix.os != 'windows-latest'
+        if: matrix.os != 'windows'
         id: install_cc
         uses: rlalik/setup-cpp-compiler@master
         with:
           compiler: latest
 
-      - name: Verify GCC Installation
-        if: matrix.os != 'windows-latest'
-        run: |
-          gcc --version
-          g++ --version
-
-      - name: Build windows library
+      - name: Build Windows library
         if: matrix.os == 'windows'
+        working-directory: go_client
         run: |
-          cd go_client
-          go build -buildmode=c-shared -o lib_windows.dll ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_windows.dll ./desktop_exports/...
         env:
-          CGO_ENABLED: "1"
-          GOOS: "windows"
-          GOARCH: "amd64"
+          CGO_ENABLED: '1'
+          GOOS: 'windows'
+          GOARCH: 'amd64'
           CC: ${{ steps.install_cc.outputs.cc }}
           CXX: ${{ steps.install_cc.outputs.cxx }}
 
-      - name: Build linux library
+      - name: Build Linux library
         if: matrix.os == 'ubuntu'
+        working-directory: go_client
         run: |
-          cd go_client
-          go build -buildmode=c-shared -o lib_linux.so ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_linux.so ./desktop_exports/...
         env:
-          CGO_ENABLED: "1"
-          GOOS: "linux"
-          GOARCH: "amd64"
+          CGO_ENABLED: '1'
+          GOOS: 'linux'
+          GOARCH: 'amd64'
           CC: ${{ steps.install_cc.outputs.cc }}
           CXX: ${{ steps.install_cc.outputs.cxx }}
 
-      - name: Build macos library
+      - name: Build macOS library
         if: matrix.os == 'macos'
+        working-directory: go_client
         run: |
-          cd go_client
-          go build -buildmode=c-shared -o lib_macos.dylib ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_macos.dylib ./desktop_exports/...
         env:
-          CGO_ENABLED: "1"
-          GOOS: "darwin"
-          GOARCH: "arm64"
+          CGO_ENABLED: '1'
+          GOOS: 'darwin'
+          GOARCH: 'arm64'
           CC: ${{ steps.install_cc.outputs.cc }}
           CXX: ${{ steps.install_cc.outputs.cxx }}
 
-      - name: Upload Built Libraries
-        uses: actions/upload-artifact@master
+      - name: Upload built libraries
+        uses: actions/upload-artifact@v4
         with:
-          name: "lib_${{ matrix.os }}"
+          name: lib_${{ matrix.os }}
           path: |
             go_client/lib_windows.dll
             go_client/lib_linux.so
@@ -109,9 +90,10 @@ jobs:
 
   build_android_lib:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -120,31 +102,15 @@ jobs:
 
       - name: Vendor Cloak/internal
         run: |
-          git clone --depth 1 https://github.com/cbeuw/Cloak tmp
-          mkdir -p go_client/modules/Cloak
-          cp -r tmp/internal go_client/modules/Cloak/
-          rm -rf tmp
-
-      - name: Update utls
-        run: |
-          cd go_client
-          go get -u github.com/refraction-networking/utls@latest
-          go mod tidy
-          cd ..
-
-      - name: Check utls version
-        run: |
-          cd go_client
-          go list -m github.com/refraction-networking/utls
-          cd ..
+          cp -r Cloak/internal go_client/modules/Cloak/
 
       - name: Download Go modules
+        working-directory: go_client
         run: |
-          cd go_client
+          go mod tidy
           go mod download
-          cd ..
 
-      - name: Setup Android SDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: >
@@ -154,56 +120,59 @@ jobs:
             ndk;27.0.11718014
 
       - name: Set up Android NDK and build arm64 .so
+        working-directory: go_client
         run: |
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.11718014
           export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          export DEBUG_PREFIX_FLAGS="-fdebug-prefix-map=$ANDROID_SDK_ROOT=/android-sdk -fdebug-prefix-map=$ANDROID_NDK_HOME=/android-ndk"
+          export CGO_CFLAGS="$DEBUG_PREFIX_FLAGS ${CGO_CFLAGS:-}"
+          export CGO_LDFLAGS="$DEBUG_PREFIX_FLAGS ${CGO_LDFLAGS:-}"
           export CC=aarch64-linux-android21-clang
           export CXX=aarch64-linux-android21-clang++
-  
-  
-          cd go_client
-          go build -v -buildmode=c-shared -o liboutline.so ./kotlin_exports/...
-          cd ..
-
-          mkdir -p kmp_client/outline/src/main/cpp/include
-          mkdir -p kmp_client/outline/src/main/jniLibs/arm64-v8a
-          cp go_client/liboutline.h kmp_client/outline/src/main/cpp/include/liboutline.h
-          cp go_client/liboutline.so kmp_client/outline/src/main/jniLibs/arm64-v8a/liboutline.so
+          go build -v -trimpath -ldflags="-buildid=" -buildvcs=false -buildmode=c-shared -o liboutline.so ./kotlin_exports/...
         env:
-          CGO_ENABLED: "1"
-          GOOS: "android"
-          GOARCH: "arm64"
+          CGO_ENABLED: '1'
+          GOOS: 'android'
+          GOARCH: 'arm64'
 
+      - name: Copy libs arm64 .so
+        run: |
+          mkdir -p kmp_client/outline/src/main/cpp/include/arm64-v8a
+          mkdir -p kmp_client/outline/src/main/jniLibs/arm64-v8a
+          cp go_client/liboutline.h kmp_client/outline/src/main/cpp/include/arm64-v8a/liboutline.h
+          cp go_client/liboutline.so kmp_client/outline/src/main/jniLibs/arm64-v8a/liboutline.so
 
       - name: Build .aar
+        working-directory: kmp_client
         run: |
-          cd kmp_client
           ./gradlew :outline:build
 
-      - name: Tree
-        run: |
-          ls
-          tree
-
-      - name: Upload So
+      - name: Upload .so
         uses: actions/upload-artifact@v4
         with:
           name: liboutline.so
           path: kmp_client/outline/src/main/jniLibs/arm64-v8a/liboutline.so
 
+      - name: Upload .h
+        uses: actions/upload-artifact@v4
+        with:
+          name: liboutline.h
+          path: go_client/liboutline.h
+
       - name: Upload Go AAR
         uses: actions/upload-artifact@v4
         with:
           name: outline-debug.aar
-          path: kmp_client/outline/build/outputs/aar/outline-debug.aar
-
+          path: kmp_client/libs/outline-debug.aar
 
   build_ios_lib:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
-      - name: Setup Go
+      - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
@@ -211,50 +180,28 @@ jobs:
 
       - name: Vendor Cloak/internal
         run: |
-          git clone --depth 1 https://github.com/cbeuw/Cloak tmp
-          mkdir -p go_client/modules/Cloak
-          cp -r tmp/internal go_client/modules/Cloak/
-          rm -rf tmp
+          cp -r Cloak/internal go_client/modules/Cloak/
 
-      - name: Download Go modules
+      - name: Download Go modules & dependencies
+        working-directory: go_client
         run: |
-          cd go_client
           go mod download
-          cd ..
-
-      - name: Update utls
-        run: |
-          cd go_client
-          go get -u github.com/refraction-networking/utls@latest
           go mod tidy
-          cd ..
-
-      - name: Check utls version
-        run: |
-          cd go_client
-          go list -m github.com/refraction-networking/utls
-          cd ..
 
       - name: Install gomobile & init
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
-          gomobile init     
+          gomobile init
 
       - name: Fetch gomobile runtime
+        working-directory: go_client
         run: |
-          cd go_client            
           go get golang.org/x/mobile/bind@latest
-          cd ..
 
       - name: Build iOS XCFramework
+        working-directory: go_client
         run: |
-          cd go_client
           GO111MODULE=on gomobile bind -target=ios -o MyLibrary.xcframework ./ios_exports
-          cd ..
-
-      - name: Show files
-        run: |
-          ls -laR go_client
 
       - name: Upload iOS XCFramework
         uses: actions/upload-artifact@v4
@@ -262,11 +209,10 @@ jobs:
           name: MyLibrary.xcframework
           path: go_client/MyLibrary.xcframework
 
-
   release:
     if: ${{ github.event.inputs.release_tag != '' }}
     runs-on: ubuntu-latest
-    needs: [build_desktop_libs, build_android_lib, build_ios_lib ]
+    needs: [build_desktop_libs, build_android_lib, build_ios_lib]
     permissions: write-all
     steps:
       - name: Checkout code
@@ -275,31 +221,31 @@ jobs:
       - name: Make release dir
         run: mkdir release
 
-      - name: Download windows library
+      - name: Download Windows library
         uses: actions/download-artifact@v4
         with:
           name: lib_windows
           path: release
 
-      - name: Download linux library
+      - name: Download Linux library
         uses: actions/download-artifact@v4
         with:
           name: lib_ubuntu
           path: release
 
-      - name: Download macos library
+      - name: Download macOS library
         uses: actions/download-artifact@v4
         with:
           name: lib_macos
           path: release
 
-      - name: Download android library
+      - name: Download Android library
         uses: actions/download-artifact@v4
         with:
           name: outline-debug.aar
           path: release
 
-      - name: Download ios library
+      - name: Download iOS library
         uses: actions/download-artifact@v4
         with:
           name: MyLibrary.xcframework

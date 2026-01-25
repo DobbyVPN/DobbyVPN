@@ -5,7 +5,7 @@ package routing
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
+	log "go_client/logger"
 	"os/exec"
 )
 
@@ -17,7 +17,7 @@ func ExecuteCommand(command string) (string, error) {
 	if err != nil {
 		return string(output), fmt.Errorf("command execution failed: %w, output: %s", err, output)
 	}
-	log.Infof("Outline/routing: Command executed: %s, output: %s", command, output)
+	log.Infof("Outline/routing: Command executed: %s, output: %s", log.MaskStr(command), output)
 	return string(output), nil
 }
 

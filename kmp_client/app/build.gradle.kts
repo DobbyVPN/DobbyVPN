@@ -10,7 +10,7 @@ plugins {
     alias(libs.plugins.hydraulic.conveyor)
 
     id("com.github.gmazzo.buildconfig") version "5.6.5"
-    id("io.sentry.kotlin.multiplatform.gradle") version "0.18.0"
+    id("io.sentry.kotlin.multiplatform.gradle") version "0.18.0" apply false
 }
 
 version = "1.0"
@@ -19,6 +19,12 @@ java {
     toolchain {
         languageVersion.set(JavaLanguageVersion.of(17))
     }
+}
+
+// Keep it enabled by default (CI/release), but allow disabling for local Xcode builds via: -PdisableSentry=true
+val disableSentry = providers.gradleProperty("disableSentry").orNull?.lowercase() in setOf("1", "true", "yes")
+if (!disableSentry) {
+    apply(plugin = "io.sentry.kotlin.multiplatform.gradle")
 }
 
 kotlin {
@@ -57,7 +63,7 @@ kotlin {
             implementation(libs.koin.android)
             implementation(libs.koin.androidx.compose)
 
-            implementation(files("../libs/outline-debug.aar"))
+            implementation(project(":outline"))
 
             implementation(libs.okhttp)
             implementation(libs.ktor.client.okhttp)
@@ -88,6 +94,8 @@ kotlin {
             implementation(libs.ktor.serialization.kotlinx.json)
 
             implementation(libs.tomlkt)
+
+            implementation(libs.datetime)
 
             implementation(libs.compass.geocoder)
             implementation(libs.compass.geolocation)
@@ -137,13 +145,27 @@ android {
         targetSdk = 35
 
         applicationId = providers.gradleProperty("packageName").get()
-        versionCode = providers.gradleProperty("versionCode").get().toInt()
-        versionName = providers.gradleProperty("versionName").get()
+        versionCode = providers.gradleProperty("android.injected.version.code")
+            .orElse(providers.gradleProperty("versionCode"))
+            .map { it.toInt() }
+            .getOrElse(1)
+
+        versionName = providers.gradleProperty("android.injected.version.name")
+            .orElse(providers.gradleProperty("versionName"))
+            .getOrElse("0.0.1")
 
         vectorDrawables {
             useSupportLibrary = true
         }
     }
+
+    dependenciesInfo {
+        // Disables dependency metadata when building APKs.
+        includeInApk = false
+        // Disables dependency metadata when building Android App Bundles.
+        includeInBundle = false
+    }
+
 
     buildTypes {
         release {
@@ -176,13 +198,20 @@ buildConfig {
     buildConfigField(
         "int",
         "VERSION_CODE",
-        providers.gradleProperty("versionCode").get().toInt()
+        providers.gradleProperty("android.injected.version.code")
+            .orElse(providers.gradleProperty("versionCode"))
+            .map { it.toInt() }
+            .getOrElse(1)
     )
+
     buildConfigField(
         "String",
         "VERSION_NAME",
-        "\"${providers.gradleProperty("versionName").getOrElse("N/A")}\""
+        "\"${providers.gradleProperty("android.injected.version.name")
+            .orElse(providers.gradleProperty("versionName"))
+            .getOrElse("0.0.1")}\""
     )
+
     buildConfigField(
         "String",
         "PROJECT_REPOSITORY_COMMIT",

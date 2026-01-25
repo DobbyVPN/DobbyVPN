@@ -14,16 +14,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.util.koinViewModel
-import kotlinx.coroutines.MainScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import org.jetbrains.compose.ui.tooling.preview.Preview
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 @Preview
 @Composable
@@ -35,28 +38,17 @@ fun DobbySocksScreen(
     val uiMainState by mainViewModel.uiState.collectAsState()
     val uiLogState by logsViewModel.uiState.collectAsState()
 
-    var connectionURL by remember { mutableStateOf(uiMainState.connectionURL) }
-
     var showLogsDialog by remember { mutableStateOf(false) }
-
-    MainScope().launch {
-        while (true) {
-            logsViewModel.reloadLogs()
-            delay(1000L)
-        }
-    }
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .padding(16.dp),
-        verticalArrangement = Arrangement.SpaceBetween
+        verticalArrangement = Arrangement.Top
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            verticalArrangement = Arrangement.Center
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.Top
         ) {
             Row(
                 modifier = Modifier
@@ -64,31 +56,25 @@ fun DobbySocksScreen(
                     .padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Status",
-                    fontSize = 24.sp,
-                    color = Color.Black,
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-
                 Spacer(modifier = Modifier.weight(1f))
-
                 TagChip(
-                    tagText = if (uiMainState.isConnected) "connected" else "disconnected",
+                    tagText = if (uiMainState.isConnected) "Status: connected" else "Status: disconnected",
                     color = if (uiMainState.isConnected) 0xFFDCFCE7 else 0xFFFEE2E2
                 )
+                Spacer(modifier = Modifier.weight(1f))
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
             TextField(
-                value = connectionURL,
-                onValueChange = { connectionURL = it },
+                value = uiMainState.connectionURL,
+                onValueChange = mainViewModel::onConnectionUrlChanged,
                 label = { Text("Subscription URL") },
                 singleLine = false,
+                minLines = 3,
+                maxLines = 3,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.3f)
                     .clip(RoundedCornerShape(6.dp))
             )
 
@@ -96,7 +82,7 @@ fun DobbySocksScreen(
 
             Button(
                 onClick = {
-                    mainViewModel.onConnectionButtonClicked(connectionURL)
+                    mainViewModel.onConnectionButtonClicked(uiMainState.connectionURL)
                 },
                 shape = RoundedCornerShape(6.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -105,22 +91,30 @@ fun DobbySocksScreen(
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(if (uiMainState.isConnected) "Disconnect" else "Connect")
+                Text(if (uiMainState.isVpnStarted) "Stop" else "Start")
             }
         }
 
         val listState = rememberLazyListState()
+        val lastAutoScrollMark = remember { mutableStateOf<TimeMark?>(null) }
 
         LaunchedEffect(uiLogState.logMessages.size) {
             if (uiLogState.logMessages.isNotEmpty()) {
-                listState.animateScrollToItem(uiLogState.logMessages.lastIndex)
+                val lastIndex = uiLogState.logMessages.lastIndex
+                val visible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                val nearBottom = visible >= (lastIndex - 1)
+                val allowScroll = lastAutoScrollMark.value?.elapsedNow()?.let { it >= 500.milliseconds } ?: true
+                if (nearBottom && allowScroll) {
+                    lastAutoScrollMark.value = TimeSource.Monotonic.markNow()
+                    listState.animateScrollToItem(lastIndex)
+                }
             }
         }
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.25f)
+                .weight(1f)
                 .clip(RoundedCornerShape(6.dp))
                 .background(Color.Gray.copy(alpha = 0.1f))
                 .padding(8.dp)
@@ -134,13 +128,28 @@ fun DobbySocksScreen(
         ) {
             LazyColumn(state = listState) {
                 items(uiLogState.logMessages) { message ->
-                    val isBold = message.contains("!!!")
-
                     Text(
-                        text = message,
-                        modifier = Modifier.padding(8.dp),
-                        fontSize = MaterialTheme.typography.bodyMedium.fontSize,
-                        fontWeight = if (isBold) FontWeight.W700 else FontWeight.W400,
+                        buildAnnotatedString {
+                            withStyle(
+                                style = SpanStyle(
+                                    fontWeight = FontWeight.W700,
+                                )
+                            ) {
+                                append("> ")
+                            }
+
+                            withStyle(
+                                style = SpanStyle(
+                                    fontWeight = FontWeight.W400,
+                                )
+                            ) {
+                                append(message)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 0.dp, horizontal = 4.dp),
+                        fontSize = 14.sp,
                         color = Color.Black
                     )
                 }

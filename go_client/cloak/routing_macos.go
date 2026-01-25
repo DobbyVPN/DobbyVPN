@@ -1,5 +1,5 @@
-//go:build darwin
-// +build darwin
+//go:build darwin && !(android || ios)
+// +build darwin,!android,!ios
 
 package cloak
 
@@ -9,7 +9,7 @@ import (
 	"go_client/routing"
 
 	"github.com/jackpal/gateway"
-	log "github.com/sirupsen/logrus"
+	log "go_client/logger"
 )
 
 func StartRoutingCloak(proxyIP string) error {

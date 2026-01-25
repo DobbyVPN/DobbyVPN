@@ -10,6 +10,7 @@ type vpnClient interface {
 
 type vpnClientWithState struct {
 	connected bool
+	inCriticalSection bool
 	vpnClient
 }
 
@@ -21,12 +22,15 @@ type CommonClient struct {
 func (c *CommonClient) Connect(clientName string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if client, ok := c.vpnClients[clientName]; ok && !client.connected {
+	if client, ok := c.vpnClients[clientName]; ok && !client.connected && !client.inCriticalSection {
+		c.mu.Unlock()
 		err := client.Connect()
+		c.mu.Lock()
 		if err != nil {
 			return err
 		}
 		client.connected = true
+		c.vpnClients[clientName] = client
 	}
 	return nil
 }
@@ -34,12 +38,15 @@ func (c *CommonClient) Connect(clientName string) error {
 func (c *CommonClient) Disconnect(clientName string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if client, ok := c.vpnClients[clientName]; ok && client.connected {
+	if client, ok := c.vpnClients[clientName]; ok && client.connected && !client.inCriticalSection {
+		c.mu.Unlock()
 		err := client.Disconnect()
+		c.mu.Lock()
 		if err != nil {
 			return err
 		}
 		client.connected = false
+		c.vpnClients[clientName] = client
 	}
 	return nil
 }
@@ -47,7 +54,7 @@ func (c *CommonClient) Disconnect(clientName string) error {
 func (c *CommonClient) Refresh(clientName string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if client, ok := c.vpnClients[clientName]; ok && client.connected {
+	if client, ok := c.vpnClients[clientName]; ok && client.connected && !client.inCriticalSection {
 		return client.Refresh()
 	}
 	return nil
@@ -67,6 +74,7 @@ func (c *CommonClient) MarkActive(clientName string) {
 	defer c.mu.Unlock()
 	if client, ok := c.vpnClients[clientName]; ok {
 		client.connected = true
+		c.vpnClients[clientName] = client
 	}
 }
 
@@ -75,7 +83,37 @@ func (c *CommonClient) MarkInactive(clientName string) {
 	defer c.mu.Unlock()
 	if client, ok := c.vpnClients[clientName]; ok {
 		client.connected = false
+		c.vpnClients[clientName] = client
 	}
+}
+
+func (c *CommonClient) MarkInCriticalSection(clientName string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if client, ok := c.vpnClients[clientName]; ok {
+		client.inCriticalSection = true
+		c.vpnClients[clientName] = client
+	}
+}
+
+func (c *CommonClient) MarkOutOffCriticalSection(clientName string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if client, ok := c.vpnClients[clientName]; ok {
+		client.inCriticalSection = false
+		c.vpnClients[clientName] = client
+	}
+}
+
+func (c *CommonClient) CouldStart() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, client := range c.vpnClients {
+		if client.inCriticalSection {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *CommonClient) GetClientNames(active bool) []string {

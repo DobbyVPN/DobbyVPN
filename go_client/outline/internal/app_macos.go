@@ -6,12 +6,14 @@ package internal
 import (
 	"errors"
 	"fmt"
-	log "github.com/sirupsen/logrus"
+	log "go_client/logger"
 	//"os/exec"
 	"context"
 	"sync"
 	//"time"
 
+	"go_client/common"
+	outlineCommon "go_client/outline/common"
 	"go_client/routing"
 
 	"github.com/jackpal/gateway"
@@ -52,7 +54,7 @@ func (app App) Run(ctx context.Context) error {
 	}
 	defer tun.Close()
 
-	log.Printf("Tun created")
+	log.Infof("Tun created")
 
 	ss, err := NewOutlineDevice(*app.TransportConfig)
 	if err != nil {
@@ -62,24 +64,24 @@ func (app App) Run(ctx context.Context) error {
 
 	ss.Refresh()
 
-	log.Printf("Device created")
+	log.Infof("Device created")
 
-    var closeOnce sync.Once
-    closeAll := func() {
-        closeOnce.Do(func() {
-            log.Infof("[Outline] Closing interfaces")
-            _ = tun.Close()
-            _ = ss.Close()
-        })
-    }
+	var closeOnce sync.Once
+	closeAll := func() {
+		closeOnce.Do(func() {
+			log.Infof("[Outline] Closing interfaces")
+			_ = tun.Close()
+			_ = ss.Close()
+		})
+	}
 
-    defer closeAll()
+	defer closeAll()
 
 	go func() {
-        <-ctx.Done()
-        closeAll()
-        log.Infof("[Outline] Cancel received — closing interfaces")
-    }()
+		<-ctx.Done()
+		closeAll()
+		log.Infof("[Outline] Cancel received — closing interfaces")
+	}()
 
 	trafficCopyWg.Add(2)
 
@@ -137,18 +139,23 @@ func (app App) Run(ctx context.Context) error {
 
 			}
 		}
-		log.Printf("OutlineDevice -> tun stopped")
+		log.Infof("OutlineDevice -> tun stopped")
 	}()
 
+	common.Client.MarkInCriticalSection(outlineCommon.Name)
 	if err := routing.StartRouting(ss.GetServerIP().String(), gatewayIP.String(), tun.(*tunDevice).name); err != nil {
+		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 		return fmt.Errorf("failed to configure routing: %w", err)
 	}
+	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 
-    defer func() {
-    	log.Infof("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
-    	routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
-    	log.Infof("[Routing] Routes cleaned up")
-    }()
+	defer func() {
+		common.Client.MarkInCriticalSection(outlineCommon.Name)
+		log.Infof("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
+		routing.StopRouting(ss.GetServerIP().String(), gatewayIP.String())
+		log.Infof("[Routing] Routes cleaned up")
+		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+	}()
 
 	log.Infof("Outline/app: Start trafficCopyWg...\n")
 

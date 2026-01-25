@@ -3,13 +3,12 @@ package cloak_outline
 import (
 	"context"
 	"fmt"
-	"log"
+	log "go_client/logger"
 
 	"github.com/Jigsaw-Code/outline-sdk/dns"
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/Jigsaw-Code/outline-sdk/network/dnstruncate"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/Jigsaw-Code/outline-sdk/x/config"
 	"github.com/Jigsaw-Code/outline-sdk/x/connectivity"
 )
 
@@ -23,7 +22,7 @@ type outlinePacketProxy struct {
 func newOutlinePacketProxy(transportConfig string) (opp *outlinePacketProxy, err error) {
 	opp = &outlinePacketProxy{}
 
-	if opp.remotePl, err = config.NewPacketListener(transportConfig); err != nil {
+	if opp.remotePl, err = providers.NewPacketListener(context.Background(), transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create UDP packet listener: %w", err)
 	}
 	if opp.remote, err = network.NewPacketProxyFromPacketListener(opp.remotePl); err != nil {
@@ -40,18 +39,19 @@ func newOutlinePacketProxy(transportConfig string) (opp *outlinePacketProxy, err
 }
 
 func (proxy *outlinePacketProxy) testConnectivityAndRefresh(resolverAddr, domain string) error {
+	defer guard("outlinePacketProxy.testConnectivityAndRefresh")()
 	dialer := transport.PacketListenerDialer{Listener: proxy.remotePl}
 	dnsResolver := dns.NewUDPResolver(dialer, resolverAddr)
 	result, err := connectivity.TestConnectivityWithResolver(context.Background(), dnsResolver, domain)
 	if err != nil {
-		log.Printf("connectivity test failed. Refresh skipped. Error: %v\n", err)
+		log.Infof("connectivity test failed. Refresh skipped. Error: %v\n", err)
 		return err
 	}
 	if result != nil {
-		log.Printf("remote server cannot handle UDP traffic, switch to DNS truncate mode.")
+		log.Infof("remote server cannot handle UDP traffic, switch to DNS truncate mode.")
 		return proxy.SetProxy(proxy.fallback)
 	} else {
-		log.Printf("remote server supports UDP, we will delegate all UDP packets to it")
+		log.Infof("remote server supports UDP, we will delegate all UDP packets to it")
 		return proxy.SetProxy(proxy.remote)
 	}
 }

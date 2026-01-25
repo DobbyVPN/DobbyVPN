@@ -1,8 +1,0 @@
-framework module "MyLibrary" {
-	header "ref.h"
-    header "Cloak_outline.objc.h"
-    header "Universe.objc.h"
-    header "MyLibrary.h"
-
-    export *
-}

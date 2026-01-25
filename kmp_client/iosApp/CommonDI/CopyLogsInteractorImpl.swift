@@ -7,8 +7,7 @@ class CopyLogsInteractorImpl: CopyLogsInteractor {
     
     func doCopy(logs: [String]) {
         let logText = logs.joined(separator: "\n")
-        
-        // Форматируем дату для имени файла
+
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
@@ -19,23 +18,22 @@ class CopyLogsInteractorImpl: CopyLogsInteractor {
         
         do {
             try logText.write(to: fileURL, atomically: true, encoding: .utf8)
-            self.logs.writeLog(log: "Логи сохранены во временный файл: \(fileURL.path)")
+            self.logs.writeLog(log: "Write logs in temporary file: \(fileURL.path)")
         } catch {
-            self.logs.writeLog(log: "Ошибка сохранения логов: \(error.localizedDescription)")
+            self.logs.writeLog(log: "Error in log saving: \(error.localizedDescription)")
             return
         }
         
         let activityVC = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
-        activityVC.excludedActivityTypes = [.assignToContact, .addToReadingList] // можно убрать ненужные
+        activityVC.excludedActivityTypes = [.assignToContact, .addToReadingList]
         
         if let topVC = topViewController() {
             topVC.present(activityVC, animated: true)
         } else {
-            self.logs.writeLog(log: "Не удалось найти активный ViewController для показа UIActivityViewController")
+            self.logs.writeLog(log: "Can't find active ViewController to view UIActivityViewController")
         }
     }
     
-    /// Находим topViewController из активной UIWindowScene
     private func topViewController() -> UIViewController? {
         guard let windowScene = UIApplication.shared.connectedScenes
                 .compactMap({ $0 as? UIWindowScene })
@@ -51,4 +49,12 @@ class CopyLogsInteractorImpl: CopyLogsInteractor {
         }
         return top
     }
+}
+
+public func maskStr(value: String) -> String {
+    guard value.count > 2 else { return value }   // если длина 1–2 символа — не маскируем
+    
+    let first = value.first!
+    let last = value.last!
+    return "\(first)***\(last)"
 }

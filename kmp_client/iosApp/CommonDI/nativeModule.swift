@@ -37,6 +37,9 @@ public class NativeModuleHolder {
         },
         authenticationManager: { scope in
             return AuthenticationManagerImpl()
+        },
+        healthCheck: { scope in
+            return HealthCheckImpl()
         }
     )
     

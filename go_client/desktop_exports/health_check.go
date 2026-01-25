@@ -1,6 +1,11 @@
 package main
 
-import "go_client/healthcheck"
+import "C"
+import (
+	"go_client/common"
+	"go_client/healthcheck"
+	log "go_client/logger"
+)
 
 //export StartHealthCheck
 func StartHealthCheck(period int, sendMetrics bool) {
@@ -25,4 +30,21 @@ func TcpPing(address string) (int32, error) {
 //export UrlTest
 func UrlTest(url string, standard int) (int32, error) {
 	return healthcheck.UrlTest(url, standard)
+}
+
+//export CouldStart
+func CouldStart() bool {
+	log.Infof("Call CouldStart: %v", common.Client.CouldStart())
+	return common.Client.CouldStart()
+}
+
+//export CheckServerAlive
+func CheckServerAlive(addressC *C.char, port C.int) C.int {
+	address := C.GoString(addressC)
+	res := healthcheck.CheckServerAlive(address, int(port))
+	log.Infof("Health check result: %v", res)
+	if res == nil {
+		return 0
+	}
+	return -1
 }

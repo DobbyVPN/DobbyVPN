@@ -25,8 +25,13 @@ class DobbyVpnInterfaceFactory(
         logger.log("VPN interface created: address is 10.111.222.1")
 
         val dnsServers = getDnsServers(context)
-        val dns_server = dnsServers.get(0)
-        builder.addDnsServer(dns_server)
+            .filter { it.isNotBlank() }
+            .distinct()
+        if (dnsServers.isNotEmpty()) {
+            dnsServers.forEach { builder.addDnsServer(it) }
+        } else {
+            logger.log("No DNS servers from active network; using default DNS only")
+        }
         reservedBypassSubnets.forEach { subnet ->
             try {
                 val parts = subnet.split("/")
@@ -45,17 +50,18 @@ class DobbyVpnInterfaceFactory(
 
         // TODO add minSdk for the app if necessary
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            val activeNetwork: Network? = connectivityManager.activeNetwork
+            runCatching {
+                val connectivityManager =
+                    context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val activeNetwork: Network? = connectivityManager.activeNetwork
 
-            connectivityManager.getNetworkCapabilities(activeNetwork)?.let {
                 val linkProperties = connectivityManager.getLinkProperties(activeNetwork)
-                if (linkProperties != null) {
-                    val dnsAddresses = linkProperties.dnsServers
-                    dnsAddresses.forEach {
-                        dnsServers.add(it.hostAddress)
-                    }
+                val dnsAddresses = linkProperties?.dnsServers.orEmpty()
+                dnsAddresses.forEach { addr ->
+                    addr.hostAddress?.let { dnsServers.add(it) }
                 }
+            }.onFailure {
+                // ignore; we'll fall back to default DNS
             }
         }
         return dnsServers

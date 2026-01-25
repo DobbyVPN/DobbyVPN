@@ -1,6 +1,8 @@
 package interop
 
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.domain.maskStr
+import com.dobby.feature.logging.domain.provideLogFilePath
 import com.sun.jna.*
 import java.io.File
 import java.net.URLDecoder
@@ -18,9 +20,18 @@ interface VPNLibrary : Library {
     // Awg
     fun StartAwg(key: String)
     fun StopAwg()
+
+    // Healthcheck
+    fun CouldStart(): Boolean
+
+    // InitLogger
+    fun InitLogger(path: String)
+
+    // CheckServerAlive
+    fun CheckServerAlive(address: String, port: Int): Int
 }
 
-internal class VPNLibraryLoader(
+class VPNLibraryLoader(
     private val logger: Logger
 ) {
     private lateinit var INSTANCE: VPNLibrary
@@ -49,6 +60,10 @@ internal class VPNLibraryLoader(
             INSTANCE = Native.load(libPath, VPNLibrary::class.java)
 
             logger.log("Library loaded successfully.")
+            val path: String = provideLogFilePath().toString()
+            logger.log("Start go logger init $path")
+            initLogger(path)
+            logger.log("Go logger init successfully.")
         } catch (e: Exception) {
             logger.log("Failed to load library: ${e.message}")
             e.printStackTrace()
@@ -57,7 +72,7 @@ internal class VPNLibraryLoader(
 
     fun startOutline(key: String) {
         try {
-            logger.log("Run key: $key")
+            logger.log("Run key: ${maskStr(key)}")
             INSTANCE.StartOutline(key)
             logger.log("NewOutlineClient called successfully.")
         } catch (e: UnsatisfiedLinkError) {
@@ -84,7 +99,7 @@ internal class VPNLibraryLoader(
 
     fun startCloak(localHost: String, localPort: String, config: String, udp: Boolean) {
         try {
-            logger.log("Run localHost: $localHost; localPort: $localPort; config: $config; $udp")
+            logger.log("Run localHost: $localHost; localPort: $localPort; udp: $udp")
             INSTANCE.StartCloakClient(localHost, localPort, config)
             logger.log("startCloak called successfully.")
         } catch (e: UnsatisfiedLinkError) {
@@ -111,7 +126,7 @@ internal class VPNLibraryLoader(
 
     fun startAwg(key: String) {
         try {
-            logger.log("Run key: $key")
+            logger.log("Run key: ${maskStr(key)}")
             INSTANCE.StartAwg(key)
             logger.log("NewOutlineClient called successfully.")
         } catch (e: UnsatisfiedLinkError) {
@@ -134,5 +149,48 @@ internal class VPNLibraryLoader(
             logger.log("An error occurred while calling StopOutline: ${e.message}")
             e.printStackTrace()
         }
+    }
+
+    fun couldStart(): Boolean {
+        try {
+            var res = INSTANCE.CouldStart()
+            logger.log("CouldStart called successfully.")
+            return res
+        } catch (e: UnsatisfiedLinkError) {
+            logger.log("Failed to call CouldStart: ${e.message}")
+            e.printStackTrace()
+        } catch (e: Exception) {
+            logger.log("An error occurred while calling CouldStart: ${e.message}")
+            e.printStackTrace()
+        }
+        return false
+    }
+
+    fun initLogger(path: String) {
+        try {
+            INSTANCE.InitLogger(path)
+            logger.log("InitLogger called successfully.")
+        } catch (e: UnsatisfiedLinkError) {
+            logger.log("Failed to call InitLogger: ${e.message}")
+            e.printStackTrace()
+        } catch (e: Exception) {
+            logger.log("An error occurred while calling InitLogger: ${e.message}")
+            e.printStackTrace()
+        }
+    }
+
+    fun checkServerAlive(address: String, port: Int): Boolean {
+        try {
+            val res = INSTANCE.CheckServerAlive(address, port)
+            logger.log("CheckServerAlive called successfully.")
+            return res == 0
+        } catch (e: UnsatisfiedLinkError) {
+            logger.log("Failed to call checkServerAlive: ${e.message}")
+            e.printStackTrace()
+        } catch (e: Exception) {
+            logger.log("An error occurred while calling checkServerAlive: ${e.message}")
+            e.printStackTrace()
+        }
+        return false
     }
 }

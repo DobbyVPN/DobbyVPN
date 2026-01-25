@@ -1,0 +1,2 @@
+* Add Version 0.0.47
+* Fix library build
