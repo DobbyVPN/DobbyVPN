@@ -1,7 +1,7 @@
-import app
 import LocalAuthentication
+import app
 
-class AuthenticationManagerImpl : AuthenticationManager {
+class AuthenticationManagerImpl: AuthenticationManager {
     private var context = LAContext()
 
     func isAuthenticationAvailable() -> Bool {
@@ -10,21 +10,21 @@ class AuthenticationManagerImpl : AuthenticationManager {
     }
 
     func authenticate(
-        onAuthSuccess: () -> Void,
-        onAuthFailure: () -> Void
+        onAuthSuccess: @escaping () -> Void,
+        onAuthFailure: @escaping () -> Void
     ) {
-        if (!isAuthenticationAvailable()) {
-            onAuthSuccess()
+        if !isAuthenticationAvailable() {
+            onAuthFailure()  // Аутентификация не доступна — вызываем onAuthFailure
             return
         }
-        self.context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Biometric login") {
-            success, authenticatedError in
-        	DispatchQueue.main.async {
-        		if success {
-        			onAuthSuccess()
-        		} else{
-        			onAuthFailure()
-        		}
+        
+        self.context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Biometric login") { success, authenticatedError in
+            DispatchQueue.main.async {
+                if success {
+                    onAuthSuccess()
+                } else {
+                    onAuthFailure()
+                }
             }
         }
     }
