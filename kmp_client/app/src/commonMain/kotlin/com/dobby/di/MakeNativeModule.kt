@@ -10,6 +10,7 @@ import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryAwg
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryCloak
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryOutline
+import com.dobby.feature.main.domain.DobbyConfigsRepositoryXray
 import org.koin.core.module.Module
 import org.koin.core.scope.Scope
 import org.koin.dsl.module
@@ -39,6 +40,7 @@ fun makeNativeModule(
         single<DobbyConfigsRepositoryOutline> { get<DobbyConfigsRepository>() }
         single<DobbyConfigsRepositoryCloak> { get<DobbyConfigsRepository>() }
         single<DobbyConfigsRepositoryAwg> { get<DobbyConfigsRepository>() }
+        single<DobbyConfigsRepositoryXray> { get<DobbyConfigsRepository>() }
         single { healthCheck() }
     }
 }
