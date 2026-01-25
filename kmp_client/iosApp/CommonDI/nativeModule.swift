@@ -11,11 +11,15 @@ class SentryLogsRepositoryImpl : SentryLogsRepository {
 
 public class NativeModuleHolder {
     private static let path = LogsRepository_iosKt.provideLogFilePath()
-    public static let logsRepository = LogsRepository.init(logFilePath: path).setSentryLogger(_sentryLogger: SentryLogsRepositoryImpl())
+    private static let chan = LogEventsChannel()
+    public static let logsRepository = LogsRepository.init(logFilePath: path, logEventsChannel: chan).setSentryLogger(_sentryLogger: SentryLogsRepositoryImpl())
     
     public static let shared: Koin_coreModule = MakeNativeModuleKt.makeNativeModule(
         copyLogsInteractor: { scope in
             return CopyLogsInteractorImpl()
+        },
+        logEventsChannel: { scope in
+            return chan
         },
         logsRepository: { scope in
             return logsRepository

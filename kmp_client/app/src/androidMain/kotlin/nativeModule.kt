@@ -6,6 +6,7 @@ import com.dobby.feature.logging.CopyLogsInteractorImpl
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.authentication.domain.AuthenticationManagerImpl
+import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.main.domain.AwgManagerImpl
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.VpnManagerImpl
@@ -22,7 +23,8 @@ import org.koin.dsl.module
 
 val androidMainModule = makeNativeModule(
     copyLogsInteractor = { CopyLogsInteractorImpl(get()) },
-    logsRepository = { LogsRepository() },
+    logEventsChannel = { LogEventsChannel() },
+    logsRepository = { LogsRepository( logEventsChannel = get()) },
     ipRepository = { IpRepositoryImpl(get()) },
     configsRepository = {
         DobbyConfigsRepositoryImpl(
