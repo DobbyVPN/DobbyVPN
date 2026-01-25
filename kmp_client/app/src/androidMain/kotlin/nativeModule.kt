@@ -33,7 +33,6 @@ val androidMainModule = makeNativeModule(
     vpnManager = { VpnManagerImpl(androidContext()) },
     awgManager = { AwgManagerImpl(androidContext()) },
     authenticationManager = { AuthenticationManagerImpl(androidContext())},
-    awgManager = { AwgManagerImpl(androidContext()) },
     healthCheck = { HealthCheckImpl(get()) }
 )
 
