@@ -25,7 +25,7 @@ fun makeNativeModule(
     connectionStateRepository: NativeInjectionFactory<ConnectionStateRepository>,
     vpnManager: NativeInjectionFactory<VpnManager>,
     awgManager: NativeInjectionFactory<AwgManager>,
-    authenticationManager: NativeInjectionFactory<AuthenticationManager>
+    authenticationManager: NativeInjectionFactory<AuthenticationManager>,
     healthCheck: NativeInjectionFactory<HealthCheck>,
 ): Module {
     return module {
