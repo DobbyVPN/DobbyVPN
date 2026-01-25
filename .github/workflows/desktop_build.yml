@@ -34,6 +34,14 @@ jobs:
           name: windows_grpcvpnserver.exe
           path: kmp_module/services
 
+      - name: Download Wintun DLL
+        run: |
+          # Download the official Wintun zip
+          curl -L -o wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
+          # Unzip the specific AMD64 dll directly to the target folder
+          unzip -j wintun.zip wintun/bin/amd64/wintun.dll -d kmp_module/services/
+          rm wintun.zip
+
       - name: Download Linux gRPC vpn service
         uses: actions/download-artifact@v4
         with:
