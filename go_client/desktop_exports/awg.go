@@ -1,6 +1,5 @@
 package main
 
-import "C"
 import (
 	"go_client/awg"
 	"sync"
@@ -11,7 +10,6 @@ import (
 var awgClient *awg.AwgClient
 var awgMu sync.Mutex
 
-//export StartAwg
 func StartAwg(tunnel, config string) {
 	awgMu.Lock()
 	defer awgMu.Unlock()
@@ -39,7 +37,6 @@ func StartAwg(tunnel, config string) {
 	}
 }
 
-//export StopAwg
 func StopAwg() {
 	awgMu.Lock()
 	defer awgMu.Unlock()

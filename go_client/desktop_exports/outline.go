@@ -1,6 +1,5 @@
 package main
 
-import "C"
 import (
 	"go_client/outline"
 	"sync"
@@ -11,7 +10,6 @@ import (
 var outlineClient *outline.OutlineClient
 var outlineMu sync.Mutex
 
-//export StartOutline
 func StartOutline(str_key string) {
 	log.Infof("StartOutline")
 
@@ -37,7 +35,6 @@ func StartOutline(str_key string) {
 	}
 }
 
-//export StopOutline
 func StopOutline() {
 	outlineMu.Lock()
 	defer outlineMu.Unlock()
