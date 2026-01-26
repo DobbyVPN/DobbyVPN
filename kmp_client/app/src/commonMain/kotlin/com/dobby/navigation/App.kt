@@ -137,9 +137,8 @@ private fun BottomBar(
                     onClick = {
                         selectedItem = index
                         navController.navigate(screens[index]) {
-                            popUpTo(screens[index]) {
-                                inclusive = true
-                            }
+                            launchSingleTop = true
+                            restoreState = true
                         }
                     }
                 )
