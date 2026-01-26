@@ -3,7 +3,6 @@
 ## Prerequisites
 
 * Wix v5
-* Wintun
 * Prebuilt application
 
 ### Install wix
@@ -13,13 +12,6 @@
 ```bash
 dotnet tool install --global wix
 wix --version
-```
-
-### Install wintun
-
-```bash
-wget -O wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
-tar -xvzf wintun.zip
 ```
 
 ### Download prebuild application
