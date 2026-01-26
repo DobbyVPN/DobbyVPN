@@ -1,0 +1,52 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
+			<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNExecutable" Guid="5a8e6ab1-0ea6-45a5-9a93-316fdde30dc7">
+				<File Source="dobby-vpn\bin\Dobby Vpn.exe" KeyPath="yes">
+					<Shortcut 
+						Id="DobbyVPNStartMenuShortcut" 
+						Directory="ProgramMenuFolder" 
+						Name="DobbyVPN" 
+						Description="DobbyVPN: Secure VPN" 
+						WorkingDirectory="DobbyVPNFolderBin" 
+						Advertise="yes" />
+				</File>
+			</Component>
+			<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNServerService" Guid="1ef0c193-dccb-41a5-ae7e-b1f0c214924d">
+				<File Source="dobby-vpn\bin\grpcvpnserver.exe" KeyPath="yes" />
+				<File Source="wintun\bin\$(var.DOBBYVPN_PLATFORM)\wintun.dll" />
+
+				<ServiceInstall 
+						Id="svc.Install"
+						Name="DobbyVPN Server"
+						DisplayName="DobbyVPN Server"
+						Description="DobbyVPN grpc vpn server, that manages all tunnels connections."
+						Type="ownProcess"
+						Start="auto"
+						ErrorControl="normal"
+						Arguments="-mode=service" >
+					<ServiceDependency Id="Nsi" />
+					<ServiceDependency Id="TcpIp" />
+				</ServiceInstall>
+        		<ServiceControl
+						Id="svc.Control"
+						Name="DobbyVPN Server"
+						Start="install"
+						Stop="both"
+						Remove="uninstall"
+						Wait="yes" />
+				<ServiceConfig 
+						Id="svc.Config"
+						ServiceName="DobbyVPN Server"
+						OnInstall="yes"
+						ServiceSid="unrestricted" />
+			</Component>
+			
+			<Files Directory="DobbyVPNFolderBin" Include="dobby-vpn\bin\**.dll" />
+			<Files Directory="DobbyVPNFolderApp" Include="dobby-vpn\app\**" />
+			<Files Directory="DobbyVPNFolderLib" Include="dobby-vpn\lib\**" />
+			<Files Directory="DobbyVPNFolderConf" Include="dobby-vpn\conf\**" />
+			<Files Directory="DobbyVPNFolderLegal" Include="dobby-vpn\legal\**" />
+    </ComponentGroup>
+  </Fragment>
+</Wix>
