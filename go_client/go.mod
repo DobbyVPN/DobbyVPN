@@ -9,7 +9,6 @@ require (
 	github.com/Jigsaw-Code/outline-sdk/x v0.0.0-20240507000320-2e2d2af31add
 	github.com/amnezia-vpn/amneziawg-go v0.2.15
 	github.com/amnezia-vpn/amneziawg-windows v0.1.6
-	github.com/amnezia-vpn/amneziawg-windows-client v0.0.0-20250826060645-0d4a326a4234
 	github.com/cbeuw/Cloak v0.0.0-00010101000000-000000000000
 	github.com/jackpal/gateway v1.1.1
 	github.com/lorenzosaino/go-sysctl v0.3.1

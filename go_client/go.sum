@@ -8,8 +8,6 @@ github.com/amnezia-vpn/amneziawg-go v0.2.15 h1:hQnFOJJHXrInorORe3JJwiAD55m1an81E
 github.com/amnezia-vpn/amneziawg-go v0.2.15/go.mod h1:nRkPpIzjCxMW8pZKXTRkpqAQVlmFJdVOGkeQSC7wbms=
 github.com/amnezia-vpn/amneziawg-windows v0.1.6 h1:OQEfFB0qmNcppP/EsY/L7m6QohRJHhqAVnTOIt5PCWM=
 github.com/amnezia-vpn/amneziawg-windows v0.1.6/go.mod h1:ZfJ0n+h7jRiU9B8wXy0OHHPiGIzSbviYvKyZs/E2ZZY=
-github.com/amnezia-vpn/amneziawg-windows-client v0.0.0-20250826060645-0d4a326a4234 h1:Ig2ZPcT73FDnu3FHeTiunMDLjJLAxnCdNuQRLjrCWLg=
-github.com/amnezia-vpn/amneziawg-windows-client v0.0.0-20250826060645-0d4a326a4234/go.mod h1:8pDOvtM14yD2fHBJ8A5rrq2hDkQg0ZcTclqk20IURM4=
 github.com/andybalholm/brotli v1.2.0 h1:ukwgCxwYrmACq68yiUqwIWnGY0cTPox/M94sVwToPjQ=
 github.com/andybalholm/brotli v1.2.0/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/cbeuw/connutil v0.0.0-20200411215123-966bfaa51ee3 h1:LRxW8pdmWmyhoNh+TxUjxsAinGtCsVGjsl3xg6zoRSs=
