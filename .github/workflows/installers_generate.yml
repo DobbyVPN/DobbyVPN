@@ -124,10 +124,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-macos-amd64.pkg
-          path: installer/macos/bin/amd64/dobbyVPN-macos-amd64.msi
+          path: installer/macos/bin/amd64/dobbyVPN-macos-amd64.pkg
 
       - name: Upload MacOS aarch64 installer
         uses: actions/upload-artifact@v4
         with:
           name: dobbyVPN-macos-aarch64.pkg
-          path: installer/macos/bin/aarch64/dobbyVPN-macos-aarch64.msi
+          path: installer/macos/bin/aarch64/dobbyVPN-macos-aarch64.pkg
