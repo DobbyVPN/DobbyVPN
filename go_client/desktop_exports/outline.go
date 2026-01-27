@@ -1,19 +1,17 @@
 package main
 
-import "C"
 import (
-	log "go_client/logger"
 	"go_client/outline"
 	"sync"
+
+	log "go_client/logger"
 )
 
 var outlineClient *outline.OutlineClient
 var outlineMu sync.Mutex
 
-//export StartOutline
-func StartOutline(key *C.char) {
+func StartOutline(str_key string) {
 	log.Infof("StartOutline")
-	str_key := C.GoString(key)
 
 	log.Infof("Make lock")
 	outlineMu.Lock()

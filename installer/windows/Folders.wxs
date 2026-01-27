@@ -1,0 +1,14 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="DobbyVPN">
+        <Directory Id="DobbyVPNFolderBin" Name="bin" />
+        <Directory Id="DobbyVPNFolderApp" Name="app" />
+        <Directory Id="DobbyVPNFolderLib" Name="lib" />
+        <Directory Id="DobbyVPNFolderConf" Name="conf" />
+        <Directory Id="DobbyVPNFolderLegal" Name="legal" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+  </Fragment>
+</Wix>

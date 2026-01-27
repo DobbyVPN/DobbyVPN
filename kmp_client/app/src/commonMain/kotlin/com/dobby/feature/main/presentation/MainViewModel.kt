@@ -8,24 +8,17 @@ import com.dobby.feature.diagnostic.domain.HealthCheck
 import com.dobby.feature.diagnostic.domain.HealthCheckManager
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.maskStr
-import com.dobby.feature.main.domain.AwgManager
-import com.dobby.feature.main.domain.VpnManager
-import com.dobby.feature.main.domain.ConnectionStateRepository
-import com.dobby.feature.main.domain.DobbyConfigsRepository
-import com.dobby.feature.main.domain.clearOutlineAndCloakConfig
-import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.main.domain.VpnInterface
-import com.dobby.feature.main.domain.TomlConfigs
-import com.dobby.feature.main.ui.MainUiState
+import com.dobby.feature.main.domain.*
 import com.dobby.feature.main.domain.config.TomlConfigApplier
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
+import com.dobby.feature.main.ui.MainUiState
+import com.dobby.vpn.BuildConfig
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
-import com.dobby.vpn.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 val httpClient = HttpClient()
@@ -35,7 +28,6 @@ class MainViewModel(
     val connectionStateRepository: ConnectionStateRepository,
     private val permissionEventsChannel: PermissionEventsChannel,
     private val vpnManager: VpnManager,
-    private val awgManager: AwgManager,
     private val logger: Logger,
     healthCheck: HealthCheck,
 ) : ViewModel() {
@@ -49,17 +41,6 @@ class MainViewModel(
         logger = logger
     )
 
-    //region AmneziaWG states
-    val awgVersion: String = awgManager.getAwgVersion()
-
-    var awgConfigState: MutableState<String> = mutableStateOf(configsRepository.getAwgConfig())
-        private set
-
-    var awgConnectionState: MutableState<AwgConnectionState> = mutableStateOf(
-        if (configsRepository.getIsAmneziaWGEnabled()) AwgConnectionState.ON else AwgConnectionState.OFF
-    )
-        private set
-    //endregion
     private val healthCheckManager: HealthCheckManager = HealthCheckManager(healthCheck, this, configsRepository, logger)
     private var serverAddress: String? = null
     private var serverPort: Int? = null

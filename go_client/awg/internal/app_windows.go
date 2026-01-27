@@ -4,15 +4,19 @@ package internal
 
 import (
 	"fmt"
+	"log"
+	"net"
+	"os"
+	"strings"
+
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/device"
 	"github.com/amnezia-vpn/amneziawg-go/ipc"
 	"github.com/amnezia-vpn/amneziawg-go/tun"
-	"golang.org/x/sys/windows"
-	"net"
-	"os"
-	"os/signal"
-	"strings"
+	"github.com/amnezia-vpn/amneziawg-windows/conf"
+	"github.com/amnezia-vpn/amneziawg-windows/elevate"
+	"github.com/amnezia-vpn/amneziawg-windows/tunnel"
+	"github.com/amnezia-vpn/amneziawg-windows/version"
 )
 
 const (
@@ -21,63 +25,116 @@ const (
 )
 
 type App struct {
-	InterfaceName string
-	logger        *device.Logger
-	tdev          tun.Device
-	dev           *device.Device
-	uapiListener  net.Listener
-	errs          chan error
-	term          chan os.Signal
+	InterfaceName   string
+	InterfaceConfig string
+	config          *conf.Config
+	logger          *device.Logger
+	nativeTun       *tun.NativeTun
+	dev             *device.Device
+	uapiListener    net.Listener
+	watcher         *interfaceWatcher
+	errs            chan error
+	term            chan os.Signal
 }
 
-// NewApp creates a new App that will run on Windows. It expects exactly one argument: the interface name (e.g. "tun0").
-func NewApp(config string) (*App, error) {
-	iface := strings.TrimSpace(config)
+// NewApp creates a new App that will run on Windows.
+func NewApp(interfaceName, awgq_config string) (*App, error) {
+	iface := strings.TrimSpace(interfaceName)
 	if len(iface) == 0 {
 		return nil, fmt.Errorf("interface name is required")
 	}
 
-	logLevel := device.LogLevelVerbose
-	logger := device.NewLogger(logLevel, fmt.Sprintf("(%s) ", iface))
+	app := &App{
+		InterfaceName:   iface,
+		InterfaceConfig: awgq_config,
+		errs:            make(chan error, 1),
+		term:            make(chan os.Signal, 1),
+	}
 
-	return &App{
-		InterfaceName: iface,
-		logger:        logger,
-		errs:          make(chan error, 1),
-		term:          make(chan os.Signal, 1),
-	}, nil
+	app.logger = device.NewLogger(device.LogLevelVerbose, fmt.Sprintf("(%s) ", app.InterfaceName))
+
+	return app, nil
 }
 
 func (a *App) Run() error {
-	tdev, err := tun.CreateTUN(a.InterfaceName, 0)
+	var err error
+
+	defer a.Stop()
+
+	a.config, err = conf.FromWgQuickWithUnknownEncoding(a.InterfaceConfig, a.InterfaceName)
 	if err != nil {
-		a.logger.Errorf("Failed to create TUN device: %v", err)
 		return err
 	}
-	a.tdev = tdev
 
-	if realIface, err := tdev.Name(); err == nil {
-		a.InterfaceName = realIface
-	}
-
-	a.dev = device.NewDevice(a.tdev, conn.NewDefaultBind(), a.logger)
-	if err := a.dev.Up(); err != nil {
-		a.logger.Errorf("Failed to bring up device: %v", err)
-		return err
-	}
-	a.logger.Verbosef("Device started")
-
-	uapi, err := ipc.UAPIListen(a.InterfaceName)
+	a.config.DeduplicateNetworkEntries()
+	path, err := os.Executable()
 	if err != nil {
-		a.logger.Errorf("Failed to listen on UAPI socket: %v", err)
 		return err
 	}
-	a.uapiListener = uapi
+	err = tunnel.CopyConfigOwnerToIPCSecurityDescriptor(path)
+	if err != nil {
+		return err
+	}
+	a.logger.Verbosef("Starting %v", version.UserAgent())
 
+	a.logger.Verbosef("Watching network interfaces")
+	a.watcher, err = watchInterface()
+	if err != nil {
+		return err
+	}
+
+	a.logger.Verbosef("Resolving DNS names")
+	uapiConf, err := a.config.ToUAPI()
+	if err != nil {
+		return err
+	}
+
+	wintun, err := tun.CreateTUN(a.InterfaceName, device.DefaultMTU)
+	if err != nil {
+		return err
+	}
+
+	a.nativeTun = wintun.(*tun.NativeTun)
+	wintunVersion, err := a.nativeTun.RunningVersion()
+	if err != nil {
+		log.Printf("Warning: unable to determine Wintun version: %v", err)
+	} else {
+		log.Printf("Using Wintun/%d.%d", (wintunVersion>>16)&0xffff, wintunVersion&0xffff)
+	}
+
+	err = enableFirewall(a.config, a.nativeTun)
+	if err != nil {
+		return err
+	}
+
+	a.logger.Verbosef("Dropping privileges")
+	err = elevate.DropAllPrivileges(true)
+	if err != nil {
+		return err
+	}
+
+	a.logger.Verbosef("Creating interface instance")
+	bind := conn.NewDefaultBind()
+	a.dev = device.NewDevice(wintun, bind, &device.Logger{log.Printf, log.Printf})
+
+	a.logger.Verbosef("Setting interface configuration")
+	a.uapiListener, err = ipc.UAPIListen(a.config.Name)
+	if err != nil {
+		return err
+	}
+
+	err = a.dev.IpcSet(uapiConf)
+	if err != nil {
+		return err
+	}
+
+	a.logger.Verbosef("Bringing peers up")
+	a.dev.Up()
+
+	a.watcher.Configure(bind.(conn.BindSocketToInterface), a.config, a.nativeTun)
+
+	a.logger.Verbosef("Listening for UAPI requests")
 	go a.acceptLoop()
-	a.logger.Verbosef("UAPI listener started")
-
-	signal.Notify(a.term, os.Interrupt, os.Kill, windows.SIGTERM)
 
 	select {
 	case <-a.term:
@@ -86,11 +143,24 @@ func (a *App) Run() error {
 	case <-a.dev.Wait():
 	}
 
-	a.Stop()
 	return nil
 }
 
+func (a *App) acceptLoop() {
+	for {
+		c, err := a.uapiListener.Accept()
+		if err != nil {
+			a.errs <- err
+			return
+		}
+		go a.dev.IpcHandle(c)
+	}
+}
+
 func (a *App) Stop() {
+	if a.watcher != nil {
+		a.watcher.Destroy()
+	}
 	if a.uapiListener != nil {
 		a.uapiListener.Close()
 	}
@@ -98,15 +168,4 @@ func (a *App) Stop() {
 		a.dev.Close()
 	}
 	a.logger.Verbosef("Shutting down")
-}
-
-func (a *App) acceptLoop() {
-	for {
-		conn, err := a.uapiListener.Accept()
-		if err != nil {
-			a.errs <- err
-			return
-		}
-		go a.dev.IpcHandle(conn)
-	}
 }

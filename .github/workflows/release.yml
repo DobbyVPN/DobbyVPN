@@ -30,10 +30,15 @@ jobs:
     uses: ./.github/workflows/desktop_build.yml
     secrets: inherit
 
+  installers_build:
+    needs: desktop_build
+    uses: ./.github/workflows/installers_build.yml
+    secrets: inherit
+
   release:
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    needs: [desktop_build, android_build, ios_build]
+    needs: [installers_build, android_build, ios_build]
     permissions: write-all
     env:
       APP_MAJOR_VERSION: ${{ vars.MAJOR }}
@@ -52,28 +57,34 @@ jobs:
           name: dobbyVPN-linux.deb
           path: release
 
-      - name: Download Linux tar.gz client
+      - name: Download Windows x86 MSI client
         uses: actions/download-artifact@v4
         with:
-          name: dobbyVPN-linux.tar.gz
+          name: dobbyVPN-windows-x86.msi
           path: release
 
-      - name: Download Windows MSIX client
+      - name: Download Windows amd64 MSI client
         uses: actions/download-artifact@v4
         with:
-          name: dobbyVPN-windows.msix
+          name: dobbyVPN-windows-amd64.msi
           path: release
 
-      - name: Download windows zip client
+      - name: Download Windows arm64 MSI client
         uses: actions/download-artifact@v4
         with:
-          name: dobbyVPN-windows.zip
+          name: dobbyVPN-windows-arm64.msi
           path: release
 
-      - name: Download macos aarch client
+      - name: Download macos amd64 client
         uses: actions/download-artifact@v4
         with:
-          name: dobbyVPN-macos-aarch64.zip
+          name: dobbyVPN-macos-amd64.pkg
+          path: release
+
+      - name: Download macos aarch64 client
+        uses: actions/download-artifact@v4
+        with:
+          name: dobbyVPN-macos-aarch64.pkg
           path: release
 
       - name: Download Android client (signed)

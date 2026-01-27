@@ -49,7 +49,7 @@ private fun buildOutlineUrl(
             if (tcpPath.isNotEmpty()) add("tcp_path=$tcpPath")
             if (udpPath.isNotEmpty()) add("udp_path=$udpPath")
         }.joinToString("&")
-        
+
         // Use tls:sni|ws: for WebSocket over TLS (wss://) with SNI
         val tlsPrefix = "tls:sni=$effectiveHost"
         if (wsParams.isNotEmpty()) {
