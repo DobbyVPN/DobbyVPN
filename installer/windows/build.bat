@@ -11,10 +11,21 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 	if not exist "wintun\" call :wintun
 
 	echo [+] Checking dobby-vpn
-	if exist "dobby-vpn\" (
-		echo [+] Application folder exist
+	if exist "dobbyVPN-windows.zip" (
+		echo [+] Application zip file exist
+		mkdir "dobbyVPN-windows"
+		tar -xf "dobbyVPN-windows.zip" -C "dobbyVPN-windows" || goto :error
 	) else (
-		echo [+] Application folder not exist
+		echo [+] Application zip file not exist
+		goto :error
+	)
+
+	echo [+] Checking grpcvpnserver.exe
+	if exist "grpcvpnserver.exe" (
+		echo [+] Inserting grpcvpnserver.exe to the dobbyvpn application
+		xcopy "grpcvpnserver.exe" ".\dobbyVPN-windows\bin\." /Y
+	) else (
+		echo [+] grpcvpnserver.exe not exist
 		goto :error
 	)
 
@@ -32,7 +43,7 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 	if not exist "bin\%~1" mkdir "bin\%~1"
 
 	echo [+] Compiling %1
-	wix build -src .\Package.wxs -src .\Folders.wxs -src .\AppComponents.wxs -b .\ -d "DOBBYVPN_PLATFORM=%1" -d "DOBBYVPN_VERSION=%DOBBYVPN_VERSION%" -arch %2 -o bin/%1/dobby-vpn-%DOBBYVPN_VERSION%.msi || goto :error
+	wix build -src .\Package.wxs -src .\Folders.wxs -src .\AppComponents.wxs -b .\ -d "DOBBYVPN_PLATFORM=%1" -d "DOBBYVPN_VERSION=%DOBBYVPN_VERSION%" -arch %2 -o bin/%1/dobbyVPN-windows-%1.msi || goto :error
 	goto :eof
 
 :wintun

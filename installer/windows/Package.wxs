@@ -6,7 +6,7 @@
 		Language="1033"
 		Version="$(var.DOBBYVPN_VERSION)">
 
-		<Icon Id="dobbyvpn.ico" SourceFile="dobby-vpn/app/app.ico" />
+		<Icon Id="dobbyvpn.ico" SourceFile="dobbyVPN-windows/app/app.ico" />
 
 		<Property Id="ARPPRODUCTICON" Value="dobbyvpn.ico" />
 		<Property Id="ARPURLINFOABOUT" Value="https://github.com/DobbyVPN/DobbyVPN" />

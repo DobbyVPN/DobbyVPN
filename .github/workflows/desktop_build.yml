@@ -28,23 +28,23 @@ jobs:
           name: liboutline.h
           path: kmp_client/outline/src/main/cpp/include/arm64-v8a
 
-      - name: Download Windows lib
+      - name: Download Windows gRPC vpn service
         uses: actions/download-artifact@v4
         with:
-          name: lib_windows
-          path: kmp_client/libs
+          name: windows_grpcvpnserver
+          path: kmp_client/services
 
-      - name: Download Linux lib
+      - name: Download Linux gRPC vpn service
         uses: actions/download-artifact@v4
         with:
-          name: lib_ubuntu
-          path: kmp_client/libs
+          name: ubuntu_grpcvpnserver
+          path: kmp_client/services
 
-      - name: Download macOS lib
+      - name: Download macOS gRPC vpn service
         uses: actions/download-artifact@v4
         with:
-          name: lib_macos
-          path: kmp_client/libs
+          name: macos_grpcvpnserver
+          path: kmp_client/services
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -94,10 +94,8 @@ jobs:
         id: find_deb
         run: |
           echo "DEB_FILE=$(find ./output -name '*.deb' -type f)" >> $GITHUB_ENV
-          echo "TARGZ_FILE=$(find ./output -name '*.tar.gz' -type f)" >> $GITHUB_ENV
           echo "MAC_AARCH64_FILE=$(find ./output -name '*-mac-aarch64.zip' -type f)" >> $GITHUB_ENV
           echo "MAC_AMD64_FILE=$(find ./output -name '*-mac-amd64.zip' -type f)" >> $GITHUB_ENV
-          echo "MSIX_FILE=$(find ./output -name '*.msix' -type f)" >> $GITHUB_ENV
           echo "WIN_ZIP_FILE=$(find ./output -name '*-windows-amd64.zip' -type f)" >> $GITHUB_ENV
 
       - name: Upload Debian
@@ -105,12 +103,6 @@ jobs:
         with:
           name: dobbyVPN-linux.deb
           path: ${{ env.DEB_FILE }}
-
-      - name: Upload tar.gz
-        uses: actions/upload-artifact@v4
-        with:
-          name: dobbyVPN-linux.tar.gz
-          path: ${{ env.TARGZ_FILE }}
 
       - name: Upload zip for macOS aarch64
         uses: actions/upload-artifact@v4
@@ -123,12 +115,6 @@ jobs:
         with:
           name: dobbyVPN-macos-amd64.zip
           path: ${{ env.MAC_AMD64_FILE }}
-
-      - name: Upload MSIX
-        uses: actions/upload-artifact@v4
-        with:
-          name: dobbyVPN-windows.msix
-          path: ${{ env.MSIX_FILE }}
 
       - name: Upload Windows zip
         uses: actions/upload-artifact@v4

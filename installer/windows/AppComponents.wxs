@@ -2,7 +2,7 @@
   <Fragment>
     <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
 			<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNExecutable" Guid="5a8e6ab1-0ea6-45a5-9a93-316fdde30dc7">
-				<File Source="dobby-vpn\bin\Dobby Vpn.exe" KeyPath="yes">
+				<File Source="dobbyVPN-windows\bin\Dobby Vpn.exe" KeyPath="yes">
 					<Shortcut 
 						Id="DobbyVPNStartMenuShortcut" 
 						Directory="ProgramMenuFolder" 
@@ -13,7 +13,7 @@
 				</File>
 			</Component>
 			<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNServerService" Guid="1ef0c193-dccb-41a5-ae7e-b1f0c214924d">
-				<File Source="dobby-vpn\bin\grpcvpnserver.exe" KeyPath="yes" />
+				<File Source="dobbyVPN-windows\bin\grpcvpnserver.exe" KeyPath="yes" />
 				<File Source="wintun\bin\$(var.DOBBYVPN_PLATFORM)\wintun.dll" />
 
 				<ServiceInstall 
@@ -42,11 +42,11 @@
 						ServiceSid="unrestricted" />
 			</Component>
 			
-			<Files Directory="DobbyVPNFolderBin" Include="dobby-vpn\bin\**.dll" />
-			<Files Directory="DobbyVPNFolderApp" Include="dobby-vpn\app\**" />
-			<Files Directory="DobbyVPNFolderLib" Include="dobby-vpn\lib\**" />
-			<Files Directory="DobbyVPNFolderConf" Include="dobby-vpn\conf\**" />
-			<Files Directory="DobbyVPNFolderLegal" Include="dobby-vpn\legal\**" />
+			<Files Directory="DobbyVPNFolderBin" Include="dobbyVPN-windows\bin\**.dll" />
+			<Files Directory="DobbyVPNFolderApp" Include="dobbyVPN-windows\app\**" />
+			<Files Directory="DobbyVPNFolderLib" Include="dobbyVPN-windows\lib\**" />
+			<Files Directory="DobbyVPNFolderConf" Include="dobbyVPN-windows\conf\**" />
+			<Files Directory="DobbyVPNFolderLegal" Include="dobbyVPN-windows\legal\**" />
     </ComponentGroup>
   </Fragment>
 </Wix>
