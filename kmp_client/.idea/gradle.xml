@@ -12,6 +12,8 @@
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/app" />
             <option value="$PROJECT_DIR$/awg" />
+            <option value="$PROJECT_DIR$/grpcprotos" />
+            <option value="$PROJECT_DIR$/grpcstub" />
             <option value="$PROJECT_DIR$/outline" />
           </set>
         </option>

@@ -30,10 +30,16 @@ jobs:
           name: liboutline.so
           path: kmp_client/outline/src/main/jniLibs/arm64-v8a
 
+      - name: Download .h
+        uses: actions/download-artifact@v4
+        with:
+          name: liboutline.h
+          path: kmp_client/outline/src/main/cpp/include/arm64-v8a
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23.3'
+          go-version: '1.24.3'
 
       - name: Set up JDK 17 (Temurin)
         uses: actions/setup-java@v5

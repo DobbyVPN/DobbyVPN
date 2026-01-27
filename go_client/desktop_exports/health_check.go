@@ -3,8 +3,7 @@ package main
 import (
 	"go_client/common"
 	"go_client/healthcheck"
-
-	log "github.com/sirupsen/logrus"
+	log "go_client/logger"
 )
 
 func StartHealthCheck(period int, sendMetrics bool) {
@@ -28,6 +27,15 @@ func UrlTest(url string, standard int) (int32, error) {
 }
 
 func CouldStart() bool {
-	log.Infof("Call CouldStart: %v\n", common.Client.CouldStart())
+	log.Infof("Call CouldStart: %v", common.Client.CouldStart())
 	return common.Client.CouldStart()
+}
+
+func CheckServerAlive(address string, port int) int {
+	res := healthcheck.CheckServerAlive(address, port)
+	log.Infof("Health check result: %v", res)
+	if res == nil {
+		return 0
+	}
+	return -1
 }

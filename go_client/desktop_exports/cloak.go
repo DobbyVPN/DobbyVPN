@@ -2,8 +2,7 @@ package main
 
 import (
 	"go_client/cloak"
-
-	log "github.com/sirupsen/logrus"
+	log "go_client/logger"
 )
 
 func StartCloakClient(localHost, localPort, config string, udp bool) {

@@ -9,11 +9,11 @@ import (
 	"go_client/routing"
 
 	"github.com/jackpal/gateway"
-	log "github.com/sirupsen/logrus"
+	log "go_client/logger"
 )
 
 func StartRoutingCloak(proxyIP string) error {
-	log.Infof("StartRoutingCloak(%s)\n", proxyIP)
+	log.Infof("StartRoutingCloak(%s)\n", log.MaskStr(proxyIP))
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
 		log.Infof("Can't find gatewayIP, err = %v \n", err)
@@ -35,18 +35,18 @@ func StartRoutingCloak(proxyIP string) error {
 			proxyIP, gatewayIP.String(), netInterface.Name)
 		_, err = routing.ExecuteCommand(netshCommand)
 		if err != nil {
-			log.Infof("Outline/routing: Failed to add or update proxy route for IP %s: %v\n", proxyIP, err)
+			log.Infof("Cloak/routing: Failed to add or update proxy route for IP %s: %v", log.MaskStr(proxyIP), err)
 		}
 	}
 	return nil
 }
 
 func StopRoutingCloak(proxyIp string) {
-	log.Infof("Outline/routing: Cleaning up routing table and rules...")
+	log.Infof("Cloak/routing: Cleaning up routing table and rules...")
 	command := fmt.Sprintf("route delete %s", proxyIp)
 	_, err := routing.ExecuteCommand(command)
 	if err != nil {
-		log.Infof("Outline/routing: Failed to delete proxy route for IP %s: %v\n", proxyIp, err)
+		log.Infof("Cloak/routing: Failed to delete proxy route for IP %s: %v\n", log.MaskStr(proxyIp), err)
 	}
-	log.Infof("Outline/routing: Cleaned up routing table and rules.")
+	log.Infof("Cloak/routing: Cleaned up routing table and rules.")
 }

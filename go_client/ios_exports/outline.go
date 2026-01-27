@@ -1,6 +1,7 @@
 package cloak_outline
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -10,7 +11,7 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/Jigsaw-Code/outline-sdk/network/lwip2transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/Jigsaw-Code/outline-sdk/x/config"
+	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
 )
 
 const (
@@ -25,9 +26,11 @@ type OutlineDevice struct {
 	svrIP net.IP
 }
 
-var configToDialer = config.NewDefaultConfigToDialer()
+// Use configurl.NewDefaultProviders() for full transport chain support
+var providers = configurl.NewDefaultProviders()
 
 func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
+	defer guard("NewOutlineDevice")()
 	ip, err := resolveShadowsocksServerIPFromConfig(transportConfig)
 	if err != nil {
 		return nil, err
@@ -36,7 +39,7 @@ func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 		svrIP: ip,
 	}
 
-	if od.sd, err = configToDialer.NewStreamDialer(transportConfig); err != nil {
+	if od.sd, err = providers.NewStreamDialer(context.Background(), transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create TCP dialer: %w", err)
 	}
 
@@ -52,18 +55,22 @@ func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 }
 
 func (d *OutlineDevice) Close() error {
+	defer guard("OutlineDevice.Close")()
 	return d.IPDevice.Close()
 }
 
 func (d *OutlineDevice) Refresh() error {
+	defer guard("OutlineDevice.Refresh")()
 	return d.pp.testConnectivityAndRefresh(connectivityTestResolver, connectivityTestDomain)
 }
 
 func (d *OutlineDevice) GetServerIP() net.IP {
+	defer guard("OutlineDevice.GetServerIP")()
 	return d.svrIP
 }
 
 func (d *OutlineDevice) Read() ([]byte, error) {
+	defer guard("OutlineDevice.Read")()
 	buf := make([]byte, 65536)
 	n, err := d.IPDevice.Read(buf)
 	if err != nil {
@@ -73,6 +80,7 @@ func (d *OutlineDevice) Read() ([]byte, error) {
 }
 
 func (d *OutlineDevice) Write(buf []byte) (int, error) {
+	defer guard("OutlineDevice.Write")()
 	n, err := d.IPDevice.Write(buf)
 	if err != nil {
 		return 0, fmt.Errorf("failed to write data: %w", err)
@@ -80,21 +88,39 @@ func (d *OutlineDevice) Write(buf []byte) (int, error) {
 	return n, nil
 }
 
+// resolveShadowsocksServerIPFromConfig extracts server IP from transport config
+// Supports multi-part configs (e.g., "ws:...|ss://...")
 func resolveShadowsocksServerIPFromConfig(transportConfig string) (net.IP, error) {
-	if strings.Contains(transportConfig, "|") {
-		return nil, errors.New("multi-part config is not supported")
-	}
 	if transportConfig = strings.TrimSpace(transportConfig); transportConfig == "" {
 		return nil, errors.New("config is required")
 	}
-	url, err := url.Parse(transportConfig)
+
+	// For multi-part configs (pipe-separated), find the ss:// part
+	parts := strings.Split(transportConfig, "|")
+	var ssConfig string
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "ss://") {
+			ssConfig = part
+			break
+		}
+	}
+
+	if ssConfig == "" {
+		return nil, errors.New("config must contain 'ss://' part")
+	}
+
+	parsedURL, err := url.Parse(ssConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
+		return nil, fmt.Errorf("failed to parse ss:// config: %w", err)
 	}
-	if url.Scheme != "ss" {
-		return nil, errors.New("config must start with 'ss://'")
+
+	host := strings.TrimSpace(parsedURL.Hostname())
+	if host == "" {
+		return nil, fmt.Errorf("invalid ss:// config: missing hostname (host part=%q)", parsedURL.Host)
 	}
-	ipList, err := net.LookupIP(url.Hostname())
+
+	ipList, err := net.LookupIP(host)
 	if err != nil {
 		return nil, fmt.Errorf("invalid server hostname: %w", err)
 	}

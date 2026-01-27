@@ -1,9 +1,10 @@
 package internal
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"log"
+	log "go_client/logger"
 	"net"
 	"net/url"
 	"strings"
@@ -11,7 +12,7 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/Jigsaw-Code/outline-sdk/network/lwip2transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/Jigsaw-Code/outline-sdk/x/config"
+	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
 )
 
 const (
@@ -26,10 +27,16 @@ type OutlineDevice struct {
 	svrIP net.IP
 }
 
-var configModule = config.NewDefaultConfigToDialer()
+// Use configurl.NewDefaultProviders() for full transport chain support
+var providers = configurl.NewDefaultProviders()
 
 func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
-	log.Println("oultine client: resolving server IP from config...")
+	log.Infof("outline client: resolving server IP from config...")
+	if strings.Contains(transportConfig, "|ws:") || strings.HasPrefix(strings.TrimSpace(transportConfig), "ws:") {
+		log.Infof("outline client: WebSocket transport detected in config")
+	} else {
+		log.Infof("outline client: WebSocket transport not detected in config (plain)")
+	}
 	ip, err := resolveShadowsocksServerIPFromConfig(transportConfig)
 	if err != nil {
 		return nil, err
@@ -38,17 +45,17 @@ func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 		svrIP: ip,
 	}
 
-	log.Println("outline client: creating stream dialer...")
-	if od.sd, err = configModule.NewStreamDialer(transportConfig); err != nil {
+	log.Infof("outline client: creating stream dialer...")
+	if od.sd, err = providers.NewStreamDialer(context.Background(), transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create TCP dialer: %w", err)
 	}
 
-	log.Println("outline client: creating packet proxy...")
+	log.Infof("outline client: creating packet proxy...")
 	if od.pp, err = newOutlinePacketProxy(transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create delegate UDP proxy: %w", err)
 	}
 
-	log.Println("outline client: configuring lwIP...")
+	log.Infof("outline client: configuring lwIP...")
 	if od.IPDevice, err = lwip2transport.ConfigureDevice(od.sd, od.pp); err != nil {
 		return nil, fmt.Errorf("failed to configure lwIP: %w", err)
 	}
@@ -68,21 +75,39 @@ func (d *OutlineDevice) GetServerIP() net.IP {
 	return d.svrIP
 }
 
+// resolveShadowsocksServerIPFromConfig extracts server IP from transport config
+// Supports multi-part configs (e.g., "ws:...|ss://...")
 func resolveShadowsocksServerIPFromConfig(transportConfig string) (net.IP, error) {
-	if strings.Contains(transportConfig, "|") {
-		return nil, errors.New("multi-part config is not supported")
-	}
 	if transportConfig = strings.TrimSpace(transportConfig); transportConfig == "" {
 		return nil, errors.New("config is required")
 	}
-	url, err := url.Parse(transportConfig)
+
+	// For multi-part configs (pipe-separated), find the ss:// part
+	parts := strings.Split(transportConfig, "|")
+	var ssConfig string
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "ss://") {
+			ssConfig = part
+			break
+		}
+	}
+
+	if ssConfig == "" {
+		return nil, errors.New("config must contain 'ss://' part")
+	}
+
+	parsedURL, err := url.Parse(ssConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
+		return nil, fmt.Errorf("failed to parse ss:// config: %w", err)
 	}
-	if url.Scheme != "ss" {
-		return nil, errors.New("config must start with 'ss://'")
+
+	host := strings.TrimSpace(parsedURL.Hostname())
+	if host == "" {
+		return nil, fmt.Errorf("invalid ss:// config: missing hostname (host part=%q)", parsedURL.Host)
 	}
-	ipList, err := net.LookupIP(url.Hostname())
+
+	ipList, err := net.LookupIP(host)
 	if err != nil {
 		return nil, fmt.Errorf("invalid server hostname: %w", err)
 	}

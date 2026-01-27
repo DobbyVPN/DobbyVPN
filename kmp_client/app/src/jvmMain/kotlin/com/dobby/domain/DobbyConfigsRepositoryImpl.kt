@@ -53,6 +53,14 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("isCloakEnabled", isCloakEnabled.toString())
     }
 
+    override fun getCloakLocalPort(): Int {
+        return prefs.get("cloakLocalPort", "1984").toIntOrNull() ?: 1984
+    }
+
+    override fun setCloakLocalPort(port: Int) {
+        prefs.put("cloakLocalPort", port.toString())
+    }
+
     override fun setServerPortOutline(newConfig: String) {
         prefs.put("ServerPortOutlineKey", newConfig)
     }
@@ -77,6 +85,38 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("isOutlineEnabled", isOutlineEnabled.toString())
     }
 
+    override fun getPrefixOutline(): String {
+        return prefs.get("PrefixOutlineKey", "")
+    }
+
+    override fun setPrefixOutline(prefix: String) {
+        prefs.put("PrefixOutlineKey", prefix)
+    }
+
+    override fun getTcpPathOutline(): String {
+        return prefs.get("TcpPathOutlineKey", "")
+    }
+
+    override fun setTcpPathOutline(tcpPath: String) {
+        prefs.put("TcpPathOutlineKey", tcpPath)
+    }
+
+    override fun getIsWebsocketEnabled(): Boolean {
+        return prefs.get("isWebsocketEnabled", "false").equals("true")
+    }
+
+    override fun setIsWebsocketEnabled(enabled: Boolean) {
+        prefs.put("isWebsocketEnabled", enabled.toString())
+    }
+
+    override fun getUdpPathOutline(): String {
+        return prefs.get("UdpPathOutlineKey", "")
+    }
+
+    override fun setUdpPathOutline(udpPath: String) {
+        prefs.put("UdpPathOutlineKey", udpPath)
+    }
+
     override fun getAwgConfig(): String {
         return prefs.get("awgConfig", DEFAULT_AWG_CONFIG)
     }
@@ -95,6 +135,14 @@ internal class DobbyConfigsRepositoryImpl(
 
     override fun couldStart(): Boolean {
         return vpnLibrary.couldStart()
+    }
+
+    override fun getIsUserInitStop(): Boolean {
+        return prefs.get("isUserInitStop", "true").equals("true")
+    }
+
+    override fun setIsUserInitStop(isUserInitStop: Boolean) {
+        prefs.put("isUserInitStop", isUserInitStop.toString())
     }
 
     companion object {

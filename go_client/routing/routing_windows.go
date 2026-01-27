@@ -10,7 +10,7 @@ import (
 	"strings"
 	"syscall"
 
-	log "github.com/sirupsen/logrus"
+	log "go_client/logger"
 )
 
 var ipv4Subnets = []string{
@@ -50,7 +50,7 @@ func ExecuteCommand(command string) (string, error) {
 	if err != nil {
 		return string(output), fmt.Errorf("command execution failed: %w, output: %s", err, output)
 	}
-	log.Infof("Outline/routing: Command executed: %s, output: %s", command, output)
+	log.Infof("Outline/routing: Command executed: %s, output: %s", log.MaskStr(command), output)
 	return string(output), nil
 }
 
@@ -77,7 +77,7 @@ func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, MacAdd
 
 func StopRouting(proxyIp string, TunDeviceName string, GatewayIP string, InterfaceName string) {
 	log.Infof("Outline/routing: Cleaning up routing table and rules...")
- 	deleteProxyRoute(proxyIp, GatewayIP, InterfaceName)
+	deleteProxyRoute(proxyIp, GatewayIP, InterfaceName)
 	removeReservedSubnetBypass()
 	stopRoutingIpv4(TunDeviceName)
 	log.Infof("Outline/routing: Cleaned up routing table and rules.")

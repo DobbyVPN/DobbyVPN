@@ -34,6 +34,9 @@ public class NativeModuleHolder {
         },
         awgManager: { scope in
             return AwgManagerImpl()
+        },
+        healthCheck: { scope in
+            return HealthCheckImpl()
         }
     )
     

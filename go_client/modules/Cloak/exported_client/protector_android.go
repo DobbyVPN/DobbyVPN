@@ -68,7 +68,7 @@ import "C"
 import (
 	"syscall"
 
-	log "github.com/sirupsen/logrus"
+	log "go_client/logger"
 )
 
 // In Android, once an app starts the VpnService, all outgoing traffic are routed by the system
@@ -78,14 +78,16 @@ import (
 // The Android system provides an API VpnService.protect(int socketFD)
 // This tells the system to bypass the socket around the VPN.
 func protector(network string, address string, c syscall.RawConn) error {
-	log.Println("Using Android VPN mode.")
+	log.Infof("Using Android VPN mode.")
 	fn := func(s uintptr) {
 		fd := int(s)
-		path := "protect_path"
+		// Use Linux abstract namespace to avoid filesystem permissions/paths on Android.
+		// Must match the Android-side LocalServerSocket name.
+		path := "\x00protect_path"
 
 		socket, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 		if err != nil {
-			log.Println(err)
+			log.Infof("Socket() failed: %v", err)
 			return
 		}
 
@@ -95,7 +97,7 @@ func protector(network string, address string, c syscall.RawConn) error {
 
 		err = syscall.Connect(socket, &syscall.SockaddrUnix{Name: path})
 		if err != nil {
-			log.Println(err)
+			log.Infof("Connect() failed: %v", err)
 			return
 		}
 
@@ -104,11 +106,11 @@ func protector(network string, address string, c syscall.RawConn) error {
 		dummy := []byte{1}
 		n, err := syscall.Read(socket, dummy)
 		if err != nil {
-			log.Println(err)
+			log.Infof("Read() failed: %v", err)
 			return
 		}
 		if n != 1 {
-			log.Println("Failed to protect fd: ", fd)
+			log.Infof("Failed to protect fd: %d", fd)
 			return
 		}
 	}

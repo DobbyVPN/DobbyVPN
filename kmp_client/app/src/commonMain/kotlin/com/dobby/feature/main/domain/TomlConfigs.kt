@@ -3,24 +3,37 @@ package com.dobby.feature.main.domain
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class ShadowsocksConfig(
-    val Server: String,
-    val Port: Int,
-    val Method: String,
-    val Password: String,
-    val Outline: Boolean? = null
+data class OutlineConfig(
+    val Description: String? = null,
+    val Server: String? = null,
+    val Port: Int? = null,
+    val Method: String? = null,
+    val Password: String? = null,
+    val WebSocket: Boolean? = null,
+    val DisguisePrefix: String? = null,
+    val WebSocketPath: String? = null,
+
+    // Cloak (configured inside [Outline])
+    val Cloak: Boolean? = null,
+    val ProxyMethod: String? = null,
+    val Transport: String? = null,
+    val EncryptionMethod: String? = null,
+    val UID: String? = null,
+    val PublicKey: String? = null,
+    val ServerName: String? = null,
+    val RemoteHost: String? = null,
+    val RemotePort: String? = null,
+    val CDNWsUrlPath: String? = null,
+    val CDNOriginHost: String? = null,
+    val NumConn: Int? = null,
+    val BrowserSig: String? = null,
+    val StreamTimeout: Int? = null
 )
 
 @Serializable
-data class ShadowsocksBlock(
-    val Local: ShadowsocksConfig? = null,
-    val Direct: ShadowsocksConfig? = null
-)
-
-@Serializable
-data class CloakConfig(
+data class CloakClientConfig(
     val Transport: String,
-    val ProxyMethod: String,
+    val ProxyMethod: String? = null,
     val EncryptionMethod: String,
     val UID: String,
     val PublicKey: String,
@@ -30,15 +43,14 @@ data class CloakConfig(
     val StreamTimeout: Int? = null,
     val RemoteHost: String,
     val RemotePort: String,
-    val CDNWsUrlPath: String? = null,
-    val CDNOriginHost: String? = null
+    var CDNWsUrlPath: String? = null,
+    val CDNOriginHost: String
 )
 
 @Serializable
 data class TomlConfigs(
-    val Version: String? = null,
-    val Protocol: String? = null,
-    val Shadowsocks: ShadowsocksBlock? = null,
-    val Cloak: CloakConfig? = null,
+    // Optional top-level label (some configs put it outside [Outline]); ignored by the app.
+    val Description: String? = null,
+    val Outline: OutlineConfig? = null,
     val AWG: String? = null,
 )

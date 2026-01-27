@@ -30,10 +30,9 @@ jobs:
         run: |
           cp -r Cloak/internal go_client/modules/Cloak/
 
-      - name: Update utls & download Go modules
+      - name: Download Go modules
         working-directory: go_client
         run: |
-          go get -u github.com/refraction-networking/utls@latest
           go mod tidy
           go mod download
 
@@ -48,7 +47,7 @@ jobs:
         if: matrix.os == 'windows'
         working-directory: go_client
         run: |
-          go build -buildmode=c-shared -o lib_windows.dll ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_windows.dll ./desktop_exports/...
         env:
           CGO_ENABLED: '1'
           GOOS: 'windows'
@@ -60,7 +59,7 @@ jobs:
         if: matrix.os == 'ubuntu'
         working-directory: go_client
         run: |
-          go build -buildmode=c-shared -o lib_linux.so ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_linux.so ./desktop_exports/...
         env:
           CGO_ENABLED: '1'
           GOOS: 'linux'
@@ -72,7 +71,7 @@ jobs:
         if: matrix.os == 'macos'
         working-directory: go_client
         run: |
-          go build -buildmode=c-shared -o lib_macos.dylib ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_macos.dylib ./desktop_exports/...
         env:
           CGO_ENABLED: '1'
           GOOS: 'darwin'
@@ -105,10 +104,9 @@ jobs:
         run: |
           cp -r Cloak/internal go_client/modules/Cloak/
 
-      - name: Update utls & download Go modules
+      - name: Download Go modules
         working-directory: go_client
         run: |
-          go get -u github.com/refraction-networking/utls@latest
           go mod tidy
           go mod download
 
@@ -126,9 +124,12 @@ jobs:
         run: |
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.11718014
           export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          export DEBUG_PREFIX_FLAGS="-fdebug-prefix-map=$ANDROID_SDK_ROOT=/android-sdk -fdebug-prefix-map=$ANDROID_NDK_HOME=/android-ndk"
+          export CGO_CFLAGS="$DEBUG_PREFIX_FLAGS ${CGO_CFLAGS:-}"
+          export CGO_LDFLAGS="$DEBUG_PREFIX_FLAGS ${CGO_LDFLAGS:-}"
           export CC=aarch64-linux-android21-clang
           export CXX=aarch64-linux-android21-clang++
-          go build -v -buildmode=c-shared -o liboutline.so ./kotlin_exports/...
+          go build -v -trimpath -ldflags="-buildid=" -buildvcs=false -buildmode=c-shared -o liboutline.so ./kotlin_exports/...
         env:
           CGO_ENABLED: '1'
           GOOS: 'android'
@@ -136,9 +137,9 @@ jobs:
 
       - name: Copy libs arm64 .so
         run: |
-          mkdir -p kmp_client/outline/src/main/cpp/include
+          mkdir -p kmp_client/outline/src/main/cpp/include/arm64-v8a
           mkdir -p kmp_client/outline/src/main/jniLibs/arm64-v8a
-          cp go_client/liboutline.h kmp_client/outline/src/main/cpp/include/liboutline.h
+          cp go_client/liboutline.h kmp_client/outline/src/main/cpp/include/arm64-v8a/liboutline.h
           cp go_client/liboutline.so kmp_client/outline/src/main/jniLibs/arm64-v8a/liboutline.so
 
       - name: Build .aar
@@ -151,6 +152,12 @@ jobs:
         with:
           name: liboutline.so
           path: kmp_client/outline/src/main/jniLibs/arm64-v8a/liboutline.so
+
+      - name: Upload .h
+        uses: actions/upload-artifact@v4
+        with:
+          name: liboutline.h
+          path: go_client/liboutline.h
 
       - name: Upload Go AAR
         uses: actions/upload-artifact@v4
@@ -179,7 +186,6 @@ jobs:
         working-directory: go_client
         run: |
           go mod download
-          go get -u github.com/refraction-networking/utls@latest
           go mod tidy
 
       - name: Install gomobile & init

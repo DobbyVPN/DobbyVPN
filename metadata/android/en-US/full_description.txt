@@ -1,1 +1,24 @@
-Open Source opionated VPN client implementing major VPN protocols.
+<p>Open-source opinionated VPN client implementing major VPN protocols.</p>
+
+<p><strong>Supported protocols:</strong></p>
+<ul>
+  <li>Shadowsocks (Outline)</li>
+  <li>Shadowsocks over WebSocket</li>
+  <li>Shadowsocks over Cloak</li>
+</ul>
+
+<p><strong>Config format</strong></p>
+<p>Dobby consumes “subscription” / “dynamic keys” as YAML over HTTPS. The full up-to-date format (with examples) is documented in the project README:</p>
+<p><a href="https://github.com/DobbyVPN/DobbyVPN/blob/main/README.md">https://github.com/DobbyVPN/DobbyVPN/blob/main/README.md</a></p>
+
+<p><strong>Work in progress</strong></p>
+<ul>
+  <li>AmneziaWG</li>
+</ul>
+
+<p><strong>References</strong></p>
+<ul>
+  <li>Connection Prefix Disguises: <a href="https://developers.google.com/outline/docs/guides/service-providers/prefixing">https://developers.google.com/outline/docs/guides/service-providers/prefixing</a></li>
+  <li>Cloak: <a href="https://github.com/cbeuw/Cloak">https://github.com/cbeuw/Cloak</a></li>
+  <li>Outline setup: <a href="https://getoutline.org/get-started/#step-1">https://getoutline.org/get-started/#step-1</a></li>
+</ul>

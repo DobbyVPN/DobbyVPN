@@ -3,40 +3,38 @@ import NetworkExtension
 import Sentry
 import Foundation
 import SystemConfiguration
+import MyLibrary
 
 public class VpnManagerImpl: VpnManager {
     private static let launchId = UUID().uuidString
     private var logs = NativeModuleHolder.logsRepository
     
-    private let maxInitialRetries = 3
-    private let maxRuntimeRetries = 3
-    private let retryInterval: TimeInterval = 15
-    
-    private var initialRetryCount = 0
-    private var runtimeRetryCount = 0
-    
-    private var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
-    private var dobbyName = "Dobby_VPN_4"
+    public static var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
+    public static var dobbyName = "Dobby_VPN_4"
     
     private var vpnManager: NETunnelProviderManager?
     private var connectionRepository: ConnectionStateRepository
     
     private var observer: NSObjectProtocol?
     @Published private(set) var state: NEVPNStatus = .invalid
-    
-    public static var isUserInitiatedStop = true
+
     
     init(connectionRepository: ConnectionStateRepository) {
+        let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
+        logs.writeLog(log: "Start go logger init path = \(path)")
+        Cloak_outlineInitLogger(path)
+        logs.writeLog(log: "Finish go logger init")
+        
 //        VpnManagerImpl.startSentry()
         self.connectionRepository = connectionRepository
         getOrCreateManager { (manager, error) in
             if (manager?.connection.status == .connected) {
                 self.state = manager?.connection.status ?? .invalid
-                connectionRepository.tryUpdate(isConnected: true)
+                connectionRepository.tryUpdateVpnStarted(isStarted: true)
                 self.vpnManager = manager
             } else {
                 self.state = manager?.connection.status ?? .invalid
-                connectionRepository.tryUpdate(isConnected: false)
+                connectionRepository.tryUpdateVpnStarted(isStarted: false)
             }
         }
 
@@ -47,34 +45,17 @@ public class VpnManagerImpl: VpnManager {
         ) { [weak self] notification in
             guard let self,
                   let connection = notification.object as? NEVPNConnection else { return }
+            
+            if let myConnection = self.vpnManager?.connection, myConnection !== connection {
+                return
+            }
 
-            state = connection.status
             switch connection.status {
             case .connected:
-                self.logs.writeLog(log: "VPN connected. Update ui and isUserInitiatedStop and put manager")
-                VpnManagerImpl.isUserInitiatedStop = false
-                self.initialRetryCount = 3
-                if self.vpnManager == nil {
-                    getOrCreateManager { manager, _ in
-                        self.vpnManager = manager
-                    }
-                }
-                connectionRepository.tryUpdate(isConnected: true)
+                self.logs.writeLog(log: "VPN connected")
 
             case .disconnected:
-                self.logs.writeLog(log: "VPN disconnected.\(connection.status.rawValue)")
-                connectionRepository.tryUpdate(isConnected: false)
-                self.logs.writeLog(log: "isUserInitiatedStop = \(VpnManagerImpl.isUserInitiatedStop)")
-
-                if !VpnManagerImpl.isUserInitiatedStop {
-                    if self.initialRetryCount < self.maxInitialRetries {
-                        self.handleInitialRetry()
-                    } else if self.runtimeRetryCount < self.maxRuntimeRetries {
-                        self.handleRuntimeRetry()
-                    } else {
-                        self.logs.writeLog(log: "Max retry count reached (init=\(self.initialRetryCount), runtime=\(self.runtimeRetryCount)). Stop auto-restart.")
-                    }
-                }
+                self.logs.writeLog(log: "VPN disconnected")
                 
             case .connecting:
                 self.logs.writeLog(log: "VPN is connecting…")
@@ -101,26 +82,6 @@ public class VpnManagerImpl: VpnManager {
         }
     }
     
-    private func handleInitialRetry() {
-        initialRetryCount += 1
-        logs.writeLog(log: "Initial connection failed. Retry \(initialRetryCount)/\(maxInitialRetries) in \(Int(retryInterval))s")
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + retryInterval) {
-            self.logs.writeLog(log: "Attempting initial reconnect (\(self.initialRetryCount)/\(self.maxInitialRetries))...")
-            self.start()
-        }
-    }
-
-    private func handleRuntimeRetry() {
-        runtimeRetryCount += 1
-        logs.writeLog(log: "VPN disconnected unexpectedly. Retry \(runtimeRetryCount)/\(maxRuntimeRetries) in \(Int(retryInterval))s")
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + retryInterval) {
-            self.logs.writeLog(log: "Attempting runtime reconnect (\(self.runtimeRetryCount)/\(self.maxRuntimeRetries))...")
-            self.start()
-        }
-    }
-    
     public func start() {
         self.logs.writeLog(log: "call start")
         self.logs.writeLog(log: "Routing table without vpn:")
@@ -129,13 +90,21 @@ public class VpnManagerImpl: VpnManager {
                 self.logs.writeLog(log: "Created VPNManager is nil")
                 return
             }
+            let status = manager.connection.status
+            if status == .connecting || status == .disconnecting || status == .reasserting {
+                self.logs.writeLog(log: "[start] Skip: connection is transitioning (\(status.rawValue))")
+                return
+            }
+            if status == .connected {
+                self.logs.writeLog(log: "[start] Skip: already connected")
+                return
+            }
             if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
                 let address = proto.serverAddress ?? "nil"
                 self.logs.writeLog(log: "VPN Manager serverAddress = \(address)")
             }
             self.vpnManager = manager
             self.vpnManager?.isEnabled = true
-            VpnManagerImpl.isUserInitiatedStop = false
             manager.saveToPreferences { saveError in
                 if let saveError = saveError {
                     self.logs.writeLog(log: "Failed to save VPN configuration: \(saveError)")
@@ -145,7 +114,6 @@ public class VpnManagerImpl: VpnManager {
                         self.logs.writeLog(log: "self.vpnManager = \(manager)")
                         self.logs.writeLog(log: "starting tunnel !\(manager.connection.status)")
                         try manager.connection.startVPNTunnel()
-                        self.logs.writeLog(log: "Tunnel was started! changed connection.status")
                         self.logs.writeLog(log: "Tunnel was started! manager.connection.status = \(manager.connection.status)")
                     } catch {
                         self.logs.writeLog(log: "Error starting VPNTunnel \(error)")
@@ -156,11 +124,13 @@ public class VpnManagerImpl: VpnManager {
     }
 
     public func stop() {
-        guard state == .connected else { return }
-        VpnManagerImpl.isUserInitiatedStop = true
-        self.logs.writeLog(log: "Actually vpnManager is \(vpnManager)")
+        self.logs.writeLog(log: "Actually vpnManager is \(String(describing: vpnManager))")
+        guard let manager = vpnManager else {
+            self.logs.writeLog(log: "[stop] Skip: vpnManager is nil")
+            return
+        }
         self.logs.writeLog(log: "[stop] User initiated stopVPNTunnel()")
-        vpnManager?.connection.stopVPNTunnel()
+        manager.connection.stopVPNTunnel()
         self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")
     }
 
@@ -168,9 +138,10 @@ public class VpnManagerImpl: VpnManager {
         NETunnelProviderManager.loadAllFromPreferences { [weak self] (managers, error) in
             guard let self else { return }
             
-            if let existingManager = managers?.first(where: { $0.localizedDescription == self.dobbyName }) {
+            if let existingManager = managers?.first(where: { $0.localizedDescription == VpnManagerImpl.dobbyName }) {
                 vpnManager = existingManager
                 self.logs.writeLog(log: "Existing manager found.")
+                self.applyProtocolDefaults(manager: existingManager)
                 completion(existingManager, nil)
             } else {
                 self.logs.writeLog(log: "Existing manager not found.")
@@ -184,13 +155,19 @@ public class VpnManagerImpl: VpnManager {
 
     private func makeManager() -> NETunnelProviderManager {
         let newVpnManager = NETunnelProviderManager()
-        newVpnManager.localizedDescription = dobbyName
+        newVpnManager.localizedDescription = VpnManagerImpl.dobbyName
         
         let proto = NETunnelProviderProtocol()
-        proto.providerBundleIdentifier = dobbyBundleIdentifier
+        proto.providerBundleIdentifier = VpnManagerImpl.dobbyBundleIdentifier
         proto.serverAddress = "159.69.19.209:443"
         proto.providerConfiguration = [:]
         proto.includeAllNetworks = true
+        proto.excludeLocalNetworks = true
+        if #available(iOS 16.4, *) {
+            proto.excludeCellularServices = false
+            proto.excludeAPNs = false
+        }
+        proto.enforceRoutes = false
         if #available(iOS 17.4, *) {
             proto.excludeDeviceCommunication = false
         }
@@ -198,6 +175,23 @@ public class VpnManagerImpl: VpnManager {
         newVpnManager.isEnabled = true
         return newVpnManager
     }
+
+    private func applyProtocolDefaults(manager: NETunnelProviderManager) {
+        guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else { return }
+        proto.providerBundleIdentifier = VpnManagerImpl.dobbyBundleIdentifier
+        proto.includeAllNetworks = true
+        proto.excludeLocalNetworks = true
+        if #available(iOS 16.4, *) {
+            proto.excludeCellularServices = false
+            proto.excludeAPNs = false
+        }
+        proto.enforceRoutes = false
+        if #available(iOS 17.4, *) {
+            proto.excludeDeviceCommunication = false
+        }
+        manager.protocolConfiguration = proto
+    }
+
     
     
 //    static func startSentry() {

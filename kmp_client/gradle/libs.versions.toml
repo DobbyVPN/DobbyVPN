@@ -34,6 +34,7 @@ jnaVersion = "5.13.0"
 gsonVersion = "2.8.9"
 okio = "3.6.0"
 tomlkt = "0.5.0"
+datetime="4.0.10"
 
 [libraries]
 androidx-compiler = { module = "androidx.compose.compiler:compiler", version.ref = "compiler" }
@@ -77,6 +78,7 @@ kotlinx-coroutines-swing = { group = "org.jetbrains.kotlinx", name = "kotlinx-co
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jnaVersion"}
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gsonVersion"}
 tomlkt = { module = "net.peanuuutz.tomlkt:tomlkt", version.ref = "tomlkt" }
+datetime = { module = "com.soywiz.korlibs.klock:klock", version.ref = "datetime" }
 
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version = "1.10.2" }
 grpc-protobuf = { group = "io.grpc", name = "grpc-protobuf", version = "1.77.0" }

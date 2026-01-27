@@ -7,6 +7,7 @@ project("outline_jni")
 
 # Путь к заголовкам liboutline.h
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include/${ANDROID_ABI}")
+add_link_options("LINKER:--build-id=none")
 
 # 1) Собираем JNI-обёртку
 add_library(outline_jni
