@@ -17,6 +17,14 @@ echo [+] Making Scripts/ folder
 mkdir Scripts
 cp -R ../../postinstall.sh Scripts/
 
+echo [+] Inserting vpnservice.plist file
+mkdir Scripts
+cp vpnservice.plist "bin/aarch64/Dobby Vpn.app/Contents/Resources/"
+
+echo [+] Inserting grpcvpnserver file
+mkdir Scripts
+cp grpcvpnserver "bin/aarch64/Dobby Vpn.app/Contents/Resources/"
+
 echo [+] Building aarch64 PGK installer
 pkgbuild --root Payload \
          --scripts Scripts \
@@ -39,6 +47,14 @@ cp -R "Dobby Vpn.app" Payload/
 echo [+] Making Scripts/ folder
 mkdir Scripts
 cp -R ../../postinstall.sh Scripts/
+
+echo [+] Inserting vpnservice.plist file
+mkdir Scripts
+cp vpnservice.plist "bin/amd64/Dobby Vpn.app/Contents/Resources/"
+
+echo [+] Inserting grpcvpnserver file
+mkdir Scripts
+cp grpcvpnserver "bin/amd64/Dobby Vpn.app/Contents/Resources/"
 
 echo [+] Building amd64 PGK installer
 pkgbuild --root Payload \
