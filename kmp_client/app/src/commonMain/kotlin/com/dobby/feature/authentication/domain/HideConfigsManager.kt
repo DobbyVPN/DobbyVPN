@@ -10,7 +10,7 @@ import org.koin.core.component.KoinComponent
 import org.koin.core.component.get
 
 object HideConfigsManager: KoinComponent {
-    private val authenticationManager: AuthenticationManager = get()
+    val authenticationManager: AuthenticationManager = get()
 
     private val scope = MainScope()
 

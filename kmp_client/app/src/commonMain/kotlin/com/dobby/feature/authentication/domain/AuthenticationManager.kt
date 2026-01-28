@@ -6,4 +6,5 @@ interface AuthenticationManager {
         onAuthSuccess: () -> Unit,
         onAuthFailure: () -> Unit
     )
+    fun requireLocationPermission()
 }

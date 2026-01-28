@@ -72,4 +72,7 @@ class AuthenticationManagerImpl(
 
         biometricPrompt.authenticate(promptInfo)
     }
+
+    override fun requireLocationPermission() {
+    }
 }

@@ -9,4 +9,7 @@ class AuthenticationManagerImpl: AuthenticationManager {
     ) {
         onAuthSuccess()
     }
+
+    override fun requireLocationPermission() {
+    }
 }

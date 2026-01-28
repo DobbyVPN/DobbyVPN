@@ -1,5 +1,6 @@
 package com.dobby.feature.authentication.domain
 
+import com.dobby.feature.authentication.domain.HideConfigsManager.settings
 import dev.jordond.compass.Coordinates
 import dev.jordond.compass.Location
 import dev.jordond.compass.Priority
@@ -7,12 +8,17 @@ import dev.jordond.compass.geocoder.Geocoder
 import dev.jordond.compass.geolocation.Geolocator
 import dev.jordond.compass.permissions.LocationPermissionController
 import dev.jordond.compass.permissions.PermissionState
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.launch
+import org.koin.core.component.KoinComponent
 import kotlin.math.PI
 import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.time.measureTime
+import org.koin.core.component.get
 
 expect val geocoder: Geocoder?
 expect val geolocator: Geolocator?
@@ -22,8 +28,21 @@ enum class RedZoneCheckResult {
     RED_ZONE, NOT_RED_ZONE, ERROR
 }
 
-object LocationManager {
+object LocationManager: KoinComponent {
+    val authenticationManager: AuthenticationManager = get()
+
+    init {
+        MainScope().launch {
+            println("settings.getBoolean(\"isHideConfigsEnabled\", false) = ${settings.getBoolean("isHideConfigsEnabled", false)}")
+            if (settings.getBoolean("isHideConfigsEnabled", false)) {
+                println("call requestLocationPermission")
+                requestLocationPermission()
+            }
+        }
+    }
+
     suspend fun requestLocationPermission(): PermissionState {
+        authenticationManager.requireLocationPermission()
         if (locationPermissionController == null) {
             return PermissionState.NotDetermined
         }
