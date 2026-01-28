@@ -54,5 +54,7 @@
 	</array>
 	<key>UIUserInterfaceStyle</key>
     <string>Light</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>This app uses your device location to hide your configurations when in potentially dangerous areas. You will still be able to access them using your biometric credential.</string>
 </dict>
 </plist>

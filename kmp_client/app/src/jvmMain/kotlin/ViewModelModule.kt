@@ -1,4 +1,5 @@
 import com.dobby.feature.diagnostic.presentation.DiagnosticViewModel
+import com.dobby.feature.authentication.presentation.AuthenticationSettingsViewModel
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.main.domain.PermissionEventsChannel
@@ -12,4 +13,5 @@ actual val sharedModule = module {
     singleOf(::LogsViewModel)
     singleOf(::DiagnosticViewModel)
     singleOf(::MainViewModel)
+    singleOf(::AuthenticationSettingsViewModel)
 }

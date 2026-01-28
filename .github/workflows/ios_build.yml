@@ -16,6 +16,10 @@ jobs:
         with:
           submodules: true
 
+      - name: Update the airports data
+        working-directory: kmp_client/app/src/commonMain/resources
+        run: ./updateairports.sh
+
       - name: Set up JDK 21.0.6 (Temurin)
         uses: actions/setup-java@v5
         with:
