@@ -2,6 +2,7 @@ package com.dobby.feature.authentication.domain
 
 import com.russhwolf.settings.Settings
 import dev.jordond.compass.permissions.PermissionState
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,24 +21,30 @@ object HideConfigsManager: KoinComponent {
         SUCCESS, ERROR_NO_BIOMETRICS, ERROR_NO_LOCATION, IN_PROGRESS
     }
 
-    suspend fun tryEnableHideConfigs(): TryEnableHideConfigsResult {
+    fun tryEnableHideConfigs(endingFunc: (TryEnableHideConfigsResult) -> Job) {
         if (!authenticationManager.isAuthenticationAvailable()) {
-            return TryEnableHideConfigsResult.ERROR_NO_BIOMETRICS
+            endingFunc(TryEnableHideConfigsResult.ERROR_NO_BIOMETRICS)
         }
-        return if (LocationManager.requestLocationPermission() == PermissionState.Granted) {
-            settings.putBoolean("isHideConfigsEnabled", true)
-            TryEnableHideConfigsResult.SUCCESS
-        } else {
-            TryEnableHideConfigsResult.ERROR_NO_LOCATION
+        LocationManager.requestLocationPermission { res ->
+            if (res == AuthPermissionState.Granted) {
+                settings.putBoolean("isHideConfigsEnabled", true)
+                endingFunc(TryEnableHideConfigsResult.SUCCESS)
+            } else {
+                endingFunc(TryEnableHideConfigsResult.ERROR_NO_LOCATION)
+            }
         }
     }
 
     fun disableHideConfigs() = settings.putBoolean("isHideConfigsEnabled", false)
 
-    suspend fun isHideConfigsEnabled(): Boolean {
+    fun isHideConfigsEnabled(): Boolean {
         if (!settings.hasKey("isHideConfigsEnabled")) {
             // when the user opens the app for the first time, try to enable the 'hide configurations' feature
-            settings.putBoolean("isHideConfigsEnabled", tryEnableHideConfigs() == TryEnableHideConfigsResult.SUCCESS)
+            tryEnableHideConfigs { res ->
+                scope.launch {
+                    settings.putBoolean("isHideConfigsEnabled", res == TryEnableHideConfigsResult.SUCCESS)
+                }
+            }
         }
         return settings.getBoolean("isHideConfigsEnabled", false)
     }

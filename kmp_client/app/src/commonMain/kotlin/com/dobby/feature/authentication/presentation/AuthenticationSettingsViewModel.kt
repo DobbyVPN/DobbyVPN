@@ -24,12 +24,16 @@ class AuthenticationSettingsViewModel(): ViewModel() {
     fun tryEnableHideConfigs() {
         scope.launch {
             _tryEnableHideConfigsStatus.emit(HideConfigsManager.TryEnableHideConfigsResult.IN_PROGRESS)
-            val res = HideConfigsManager.tryEnableHideConfigs()
-            if (res == HideConfigsManager.TryEnableHideConfigsResult.SUCCESS) {
-                _hideConfigsSettingState.emit(true)
+            HideConfigsManager.tryEnableHideConfigs { res ->
+                scope.launch {
+                    if (res == HideConfigsManager.TryEnableHideConfigsResult.SUCCESS) {
+                        _hideConfigsSettingState.emit(true)
+                    }
+
+                    _tryEnableHideConfigsStatus.emit(res)
+                    HideConfigsManager.authStatus = HideConfigsManager.AuthStatus.SUCCESS
+                }
             }
-            _tryEnableHideConfigsStatus.emit(res)
-            HideConfigsManager.authStatus = HideConfigsManager.AuthStatus.SUCCESS
         }
     }
 

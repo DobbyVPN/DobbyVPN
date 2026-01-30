@@ -10,6 +10,7 @@ class AuthenticationManagerImpl: AuthenticationManager {
         onAuthSuccess()
     }
 
-    override fun requireLocationPermission() {
+    override fun requireLocationPermission(): AuthPermissionState {
+        return AuthPermissionState.NotDetermined
     }
 }

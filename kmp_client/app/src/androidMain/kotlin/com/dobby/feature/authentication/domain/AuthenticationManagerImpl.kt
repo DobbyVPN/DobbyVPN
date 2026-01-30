@@ -8,6 +8,11 @@ import androidx.biometric.BiometricPrompt.ERROR_NEGATIVE_BUTTON
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import dev.jordond.compass.Priority
+import dev.jordond.compass.permissions.PermissionState
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.launch
 
 private lateinit var activity : FragmentActivity
 
@@ -73,6 +78,19 @@ class AuthenticationManagerImpl(
         biometricPrompt.authenticate(promptInfo)
     }
 
-    override fun requireLocationPermission() {
+    override fun requireLocationPermission(endingFunc: (AuthPermissionState) -> Job) {
+        val controller = locationPermissionController ?: return
+
+        MainScope().launch {
+            val status = controller.requirePermissionFor(Priority.HighAccuracy)
+
+            val state: AuthPermissionState = when (status) {
+                PermissionState.Granted -> AuthPermissionState.Granted
+                PermissionState.Denied -> AuthPermissionState.Denied
+                PermissionState.NotDetermined -> AuthPermissionState.NotDetermined
+                PermissionState.DeniedForever -> AuthPermissionState.NotDetermined
+            }
+            endingFunc(state)
+        }
     }
 }

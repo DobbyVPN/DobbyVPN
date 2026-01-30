@@ -27,13 +27,19 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import com.dobby.feature.authentication.domain.HideConfigsManager
 import com.dobby.feature.authentication.presentation.AuthenticationSettingsViewModel
+import com.dobby.feature.logging.presentation.SettingsViewModel
 import com.dobby.vpn.BuildConfig
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 @Composable
 fun SettingsScreen(
     modifier: Modifier = Modifier,
     authenticationSettingsViewModel: AuthenticationSettingsViewModel,
+    settingsViewModel: SettingsViewModel
 ) {
+    val showBiometricDialog by settingsViewModel.showBiometricDialog.collectAsState()
+
     val isHideConfigsEnabled by authenticationSettingsViewModel.hideConfigsSettingState.collectAsState()
     val tryEnableHideConfigsStatus by authenticationSettingsViewModel.tryEnableHideConfigsStatus.collectAsState()
 
@@ -74,14 +80,17 @@ fun SettingsScreen(
                     Switch(
                         checked = isHideConfigsEnabled,
                         onCheckedChange = { checked ->
-                            if (checked) {
-                                authenticationSettingsViewModel.tryEnableHideConfigs()
-                            } else {
-                                authenticationSettingsViewModel.disableHideConfigs()
-                            }
+                            settingsViewModel.onHideConfigsToggle(checked)
                         },
                     )
                 }
+            }
+
+            if (showBiometricDialog) {
+                BiometricPermissionDialog(
+                    onAccept = { settingsViewModel.onDialogConfirm() },
+                    onDecline = { settingsViewModel.onDialogDismiss() }
+                )
             }
 
             when (tryEnableHideConfigsStatus) {

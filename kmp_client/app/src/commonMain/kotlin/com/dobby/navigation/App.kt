@@ -33,11 +33,13 @@ import com.dobby.feature.logging.ui.SettingsScreen
 import com.dobby.feature.authentication.ui.AuthenticationScreen
 import com.dobby.feature.authentication.ui.LoadingScreen
 import com.dobby.feature.authentication.ui.WebViewScreen
+import com.dobby.feature.logging.presentation.SettingsViewModel
 import com.dobby.feature.main.ui.DobbySocksScreen
 import com.dobby.util.koinViewModel
 
 @Composable
 fun App(modifier: Modifier = Modifier) {
+    val settingsViewModel: SettingsViewModel = koinViewModel()
     val authenticationSettingsViewModel: AuthenticationSettingsViewModel = koinViewModel()
     val tryEnableHideConfigsStatus by authenticationSettingsViewModel.tryEnableHideConfigsStatus.collectAsState()
 
@@ -88,6 +90,7 @@ fun App(modifier: Modifier = Modifier) {
                             HideConfigsManager.authStatus = HideConfigsManager.AuthStatus.SUCCESS
                             SettingsScreen(
                                 authenticationSettingsViewModel = authenticationSettingsViewModel,
+                                settingsViewModel = settingsViewModel,
                             )
                         }
                     }
