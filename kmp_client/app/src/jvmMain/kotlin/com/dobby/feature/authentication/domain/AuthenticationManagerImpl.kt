@@ -1,5 +1,7 @@
 package com.dobby.feature.authentication.domain
 
+import kotlinx.coroutines.Job
+
 class AuthenticationManagerImpl: AuthenticationManager {
     override fun isAuthenticationAvailable() = false
 
@@ -10,7 +12,6 @@ class AuthenticationManagerImpl: AuthenticationManager {
         onAuthSuccess()
     }
 
-    override fun requireLocationPermission(): AuthPermissionState {
-        return AuthPermissionState.NotDetermined
+    override fun requireLocationPermission(endingFunc: (AuthPermissionState) -> Job) {
     }
 }
