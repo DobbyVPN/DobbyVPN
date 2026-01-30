@@ -10,9 +10,9 @@ import org.koin.dsl.module
 
 actual val sharedModule = module {
     singleOf(::PermissionEventsChannel)
-    viewModelOf(::LogsViewModel)
-    viewModelOf(::DiagnosticViewModel)
-    viewModelOf(::MainViewModel)
-    viewModelOf(::AuthenticationSettingsViewModel)
-    viewModelOf(::SettingsViewModel)
+    singleOf(::LogsViewModel)
+    singleOf(::DiagnosticViewModel)
+    singleOf(::MainViewModel)
+    singleOf(::AuthenticationSettingsViewModel)
+    singleOf(::SettingsViewModel)
 }
