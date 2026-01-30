@@ -24,7 +24,7 @@ fun BiometricPermissionDialog(
         },
         confirmButton = {
             Text(
-                "Yes",
+                "Sure",
                 modifier = Modifier
                     .padding(8.dp)
                     .clickable { onAccept() }
@@ -32,7 +32,7 @@ fun BiometricPermissionDialog(
         },
         dismissButton = {
             Text(
-                "No",
+                "I would rather not",
                 modifier = Modifier
                     .padding(8.dp)
                     .clickable { onDecline() }

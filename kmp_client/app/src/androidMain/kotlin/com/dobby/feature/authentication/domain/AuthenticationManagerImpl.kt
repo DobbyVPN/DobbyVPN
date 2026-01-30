@@ -93,4 +93,8 @@ class AuthenticationManagerImpl(
             endingFunc(state)
         }
     }
+
+    override fun requireLocationService(endingFunc: (Boolean) -> Unit) {
+        endingFunc(false)
+    }
 }

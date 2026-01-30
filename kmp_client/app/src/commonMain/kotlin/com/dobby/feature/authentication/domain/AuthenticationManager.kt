@@ -16,4 +16,5 @@ interface AuthenticationManager {
         onAuthFailure: () -> Unit
     )
     fun requireLocationPermission(endingFunc: (AuthPermissionState) -> Job)
+    fun requireLocationService(endingFunc: (Boolean) -> Unit)
 }

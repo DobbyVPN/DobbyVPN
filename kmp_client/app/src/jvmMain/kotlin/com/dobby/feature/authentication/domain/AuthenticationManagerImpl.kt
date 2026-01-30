@@ -14,4 +14,7 @@ class AuthenticationManagerImpl: AuthenticationManager {
 
     override fun requireLocationPermission(endingFunc: (AuthPermissionState) -> Job) {
     }
+
+    override fun requireLocationService(endingFunc: () -> Job) {
+    }
 }

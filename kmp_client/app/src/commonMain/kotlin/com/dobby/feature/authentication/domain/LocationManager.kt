@@ -31,18 +31,6 @@ enum class RedZoneCheckResult {
 object LocationManager: KoinComponent {
     val authenticationManager: AuthenticationManager = get()
 
-    init {
-        MainScope().launch {
-            println("settings.getBoolean(\"isHideConfigsEnabled\", false) = ${settings.getBoolean("isHideConfigsEnabled", false)}")
-            if (settings.getBoolean("isHideConfigsEnabled", false)) {
-                println("call requestLocationPermission")
-                requestLocationPermission {
-                    Job()
-                }
-            }
-        }
-    }
-
     fun requestLocationPermission(endingFunc: (AuthPermissionState) -> Job) {
         authenticationManager.requireLocationPermission(endingFunc)
     }
