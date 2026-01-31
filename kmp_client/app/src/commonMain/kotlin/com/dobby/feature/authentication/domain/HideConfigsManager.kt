@@ -17,6 +17,8 @@ object HideConfigsManager: KoinComponent {
 
     val settings = Settings()
 
+    var triedBiometricAuth = false
+
     enum class TryEnableHideConfigsResult {
         SUCCESS, ERROR_NO_BIOMETRICS, ERROR_NO_LOCATION, IN_PROGRESS
     }
@@ -40,11 +42,7 @@ object HideConfigsManager: KoinComponent {
     fun isHideConfigsEnabled(): Boolean {
         if (!settings.hasKey("isHideConfigsEnabled")) {
             // when the user opens the app for the first time, try to enable the 'hide configurations' feature
-            tryEnableHideConfigs { res ->
-                scope.launch {
-                    settings.putBoolean("isHideConfigsEnabled", res == TryEnableHideConfigsResult.SUCCESS)
-                }
-            }
+            settings.putBoolean("isHideConfigsEnabled", false)
         }
         return settings.getBoolean("isHideConfigsEnabled", false)
     }
@@ -78,24 +76,52 @@ object HideConfigsManager: KoinComponent {
                 return@launch
             }
             // if 'hide configurations' feature is enabled, show the authentication prompt
+            if (triedBiometricAuth) {
+                geoAuth(
+                    onSuccess,
+                    onFailure
+                )
+                return@launch
+            }
             authenticationManager.authenticate(
                 onAuthSuccess = {
                     onSuccess()
                     authStatus = AuthStatus.SUCCESS
                 }, onAuthFailure = {
+                    triedBiometricAuth = true
                     scope.launch {
-                        val inRedZone = LocationManager.inRedZone()
-                        if (inRedZone == RedZoneCheckResult.NOT_RED_ZONE) {
-                            onSuccess()
-                            authStatus = AuthStatus.SUCCESS
-                        } else {
-                            onFailure()
-                            authStatus = AuthStatus.FAILURE
-                        }
+                        geoAuth(
+                            onSuccess,
+                            onFailure
+                        )
                     }
                 }
             )
         }
+    }
 
+    fun geoAuth(
+        onSuccess: () -> Unit,
+        onFailure: () -> Unit
+    ) {
+        authenticationManager.requireLocationService { res ->
+            if (!res) {
+                onFailure()
+                authStatus = AuthStatus.FAILURE
+                return@requireLocationService
+            }
+            authenticationManager.requireLocationPermission {
+                scope.launch {
+                    val inRedZone = LocationManager.inRedZone()
+                    if (inRedZone == RedZoneCheckResult.NOT_RED_ZONE) {
+                        onSuccess()
+                        authStatus = AuthStatus.SUCCESS
+                    } else {
+                        onFailure()
+                        authStatus = AuthStatus.FAILURE
+                    }
+                }
+            }
+        }
     }
 }

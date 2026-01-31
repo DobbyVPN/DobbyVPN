@@ -1,6 +1,7 @@
 package com.dobby.feature.authentication.domain
 
 import android.content.Context
+import android.content.Intent
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
 import androidx.biometric.BiometricPrompt
@@ -13,6 +14,9 @@ import dev.jordond.compass.permissions.PermissionState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
+import android.provider.Settings
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
 
 private lateinit var activity : FragmentActivity
 
@@ -95,6 +99,51 @@ class AuthenticationManagerImpl(
     }
 
     override fun requireLocationService(endingFunc: (Boolean) -> Unit) {
-        endingFunc(false)
+        val locationManager =
+            context.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+
+        fun isGpsEnabled(): Boolean {
+            return locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ||
+                    locationManager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER)
+        }
+
+        if (isGpsEnabled()) {
+            endingFunc(true)
+            return
+        }
+
+        val dialog = android.app.AlertDialog.Builder(activity)
+            .setTitle("Enable location")
+            .setMessage("Location services are turned off. Please enable them to continue.")
+            .setCancelable(true)
+            .setPositiveButton("Open settings") { _, _ ->
+
+                        val lifecycle = activity.lifecycle
+                val observer = object : DefaultLifecycleObserver {
+                    override fun onResume(owner: LifecycleOwner) {
+                        super.onResume(owner)
+
+                        lifecycle.removeObserver(this)
+
+                        endingFunc(isGpsEnabled())
+                    }
+                }
+
+                lifecycle.addObserver(observer)
+
+                try {
+                    activity.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                } catch (e: Exception) {
+                    activity.startActivity(Intent(Settings.ACTION_SETTINGS))
+                }
+            }
+            .setNegativeButton("Cancel") { _, _ ->
+                endingFunc(false)
+            }
+            .create()
+
+        dialog.show()
     }
+
+
 }
