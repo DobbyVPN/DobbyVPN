@@ -1,4 +1,5 @@
 import LocalAuthentication
+import UIKit
 import app
 import CoreLocation
 
@@ -38,6 +39,60 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
     
     func requireLocationPermission(endingFunc: @escaping (AuthPermissionState) -> any Kotlinx_coroutines_coreJob) {
         manager.requestLocationPermission(callback: endingFunc)
+    }
+    
+    func requireLocationService(endingFunc: @escaping (KotlinBoolean) -> Void) {
+        let locationManager = CLLocationManager()
+
+        func isLocationEnabled() -> Bool {
+            return CLLocationManager.locationServicesEnabled()
+        }
+
+        // Если сервисы включены — сразу отвечаем
+        if isLocationEnabled() {
+            endingFunc(true)
+            return
+        }
+
+        // Если выключены — показываем alert
+        let alert = UIAlertController(
+            title: "Enable location",
+            message: "Location services are turned off. Please enable them to continue.",
+            preferredStyle: .alert
+        )
+
+        alert.addAction(UIAlertAction(title: "Open settings", style: .default) { _ in
+            
+            // Подписываемся на событие возвращения в приложение
+            var observer: NSObjectProtocol?
+            observer = NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                NotificationCenter.default.removeObserver(observer!)
+                endingFunc(KotlinBoolean(value: isLocationEnabled()))
+            }
+
+            // Пытаемся открыть настройки локации
+            if let url = URL(string: UIApplication.openSettingsURLString),
+               UIApplication.shared.canOpenURL(url) {
+                UIApplication.shared.open(url)
+            } else {
+                endingFunc(false)
+            }
+        })
+
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+            endingFunc(false)
+        })
+
+        // Получаем top-most view controller для показа алерта
+        if let rootVC = UIApplication.shared.windows.first?.rootViewController {
+            rootVC.present(alert, animated: true)
+        } else {
+            endingFunc(false)
+        }
     }
 }
 
