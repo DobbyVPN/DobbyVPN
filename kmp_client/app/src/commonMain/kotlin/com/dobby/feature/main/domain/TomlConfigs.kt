@@ -1,6 +1,7 @@
 package com.dobby.feature.main.domain
 
 import kotlinx.serialization.Serializable
+import net.peanuuutz.tomlkt.TomlElement
 
 @Serializable
 data class OutlineConfig(
@@ -49,20 +50,21 @@ data class CloakClientConfig(
 
 @Serializable
 data class XrayClientConfig(
-    val tag: String?,
-    val protocol: String?,
-    val address: String?,
-    val port: Int?,
-    val id: String?,
-    val flow: String?,
-    val encryption: String?,
-    val network: String?,
-    val security: String?,
-    val fingerprint: String?,
-    val serverName: String?,
-    val publicKey: String?,
-    val shortId: String?,
-    val spiderX: String?,
+    val version: TomlElement? = null,
+    val log: TomlElement? = null,
+    val api: TomlElement? = null,
+    val dns: TomlElement? = null,
+    val routing: TomlElement? = null,
+    val policy: TomlElement? = null,
+    val inbounds: TomlElement? = null,
+    val outbounds: TomlElement? = null,
+    val transport: TomlElement? = null,
+    val stats: TomlElement? = null,
+    val reverse: TomlElement? = null,
+    val fakedns: TomlElement? = null,
+    val metrics: TomlElement? = null,
+    val observatory: TomlElement? = null,
+    val burstObservatory: TomlElement? = null,
 )
 
 
