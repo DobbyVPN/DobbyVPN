@@ -113,6 +113,7 @@ class DobbyVpnService : VpnService() {
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
+    private var goTunFd: Int? = null
     private val serviceId: String = UUID.randomUUID().toString().take(8)
     private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
 
@@ -412,14 +413,17 @@ class DobbyVpnService : VpnService() {
                 // Tear down any existing VPN interface
                 teardownVpn()
 
-                // Setup VPN interface for Xray (without packet read/write loops)
                 setupVpnForXray()
-                val tunFd = vpnInterface?.detachFd()
-                if (tunFd == null || tunFd < 0) {
+
+                val dupPfd = vpnInterface?.dup()
+                val tunFd = dupPfd?.detachFd() ?: -1
+                goTunFd = if (tunFd != -1) tunFd else null
+
+                if (tunFd < 0) {
                     logger.log("[svc:$serviceId] startXray(): failed to create VPN interface")
                     connectionState.tryUpdateStatus(false)
-                    teardownVpn()
                     xrayLibFacade.disconnect()
+                    teardownVpn()
                     stopSelf()
                     return@withLock
                 }
@@ -483,6 +487,7 @@ class DobbyVpnService : VpnService() {
         val readActive = readJob?.isActive
         val writeActive = writeJob?.isActive
         logger.log("[svc:$serviceId] teardownVpn(): begin fd=$fdBefore readJob=$readActive writeJob=$writeActive")
+
         runCatching { readJob?.cancel() }
         runCatching { writeJob?.cancel() }
         runCatching { routingJob?.cancel() }
@@ -491,6 +496,19 @@ class DobbyVpnService : VpnService() {
         writeJob = null
         routingJob = null
         postConnectCurlJob = null
+
+        // Manually close the FD we gave to Go, in case Go hasn't closed it yet.
+        goTunFd?.let { fd ->
+            logger.log("[svc:$serviceId] teardownVpn(): closing goTunFd=$fd")
+            runCatching {
+                // We adopt the FD back into a ParcelFileDescriptor just to close it cleanly
+                ParcelFileDescriptor.adoptFd(fd).close()
+            }.onFailure { e ->
+                // It's possible Go already closed it, which is fine.
+                logger.log("[svc:$serviceId] teardownVpn(): goTunFd close failed (might be already closed): ${e.message}")
+            }
+        }
+        goTunFd = null
 
         runCatching { inputStream?.close() }
         runCatching { outputStream?.close() }
