@@ -5,7 +5,7 @@ import androidx.compose.ui.Modifier
 
 @Composable
 expect fun WebViewScreen(
-    url: String = "https://www.google.com",
+    url: String = "https://www.dobby.hair/",
     modifier: Modifier = Modifier,
     enableJavaScript: Boolean = true
 )
