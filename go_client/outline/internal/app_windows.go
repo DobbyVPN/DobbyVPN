@@ -95,6 +95,23 @@ func (app App) Run(ctx context.Context) error {
 		os.Exit(1)
 	}
 
+	log.Infof("[Routing] Pre-resolving server IP from config...")
+	serverIP, err := ResolveServerIPFromConfig(*app.TransportConfig)
+	if err != nil {
+		return fmt.Errorf("failed to resolve server IP from config: %w", err)
+	}
+	log.Infof("[Routing] Server IP resolved: %s", serverIP.String())
+
+	if serverIP.String() != "127.0.0.1" {
+		log.Infof("[Routing] Adding early route for server %s via %s", serverIP.String(), gatewayIP.String())
+		common.Client.MarkInCriticalSection(outlineCommon.Name)
+		routing.AddOrUpdateProxyRoute(serverIP.String(), gatewayIP.String(), netInterface.Name)
+		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+		log.Infof("[Routing] Early server route added successfully")
+	} else {
+		log.Infof("[Routing] Skipping early route for localhost (Cloak mode)")
+	}
+
 	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, TunDeviceIP)
 	if err != nil {
 		return fmt.Errorf("failed to create tun device: %w", err)
@@ -130,7 +147,7 @@ func (app App) Run(ctx context.Context) error {
 	log.Infof("[Routing] Generated spoofed MAC: original=%s new=%v", tunInterface.HardwareAddr, src)
 
 	log.Infof("[Routing] Starting routing configuration:")
-	log.Infof("  Server IP:     %s", ss.GetServerIP().String())
+	log.Infof("  Server IP:     %s", serverIP.String())
 	log.Infof("  Gateway IP:    %s", gatewayIP.String())
 	log.Infof("  TUN Interface: %s", tunInterface.Name)
 	log.Infof("  TUN MAC:       %s", tunInterface.HardwareAddr.String())
@@ -140,7 +157,7 @@ func (app App) Run(ctx context.Context) error {
 
 	common.Client.MarkInCriticalSection(outlineCommon.Name)
 	if err := routing.StartRouting(
-		ss.GetServerIP().String(),
+		serverIP.String(),
 		gatewayIP.String(),
 		tunInterface.Name,
 		tunInterface.HardwareAddr.String(),
@@ -159,8 +176,8 @@ func (app App) Run(ctx context.Context) error {
 
 	defer func() {
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
-		log.Infof("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
-		routing.StopRouting(ss.GetServerIP().String(), tunInterface.Name, gatewayIP.String(), netInterface.Name)
+		log.Infof("[Routing] Cleaning up routes for %s...", serverIP.String())
+		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name)
 		log.Infof("[Routing] Routes cleaned up")
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 	}()
