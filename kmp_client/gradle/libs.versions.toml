@@ -1,5 +1,6 @@
 [versions]
 agp = "8.5.2"
+biometricKtx = "1.4.0-alpha02"
 compiler = "1.5.15"
 kotlin = "2.2.0"
 coreKtx = "1.15.0"
@@ -34,8 +35,10 @@ gsonVersion = "2.8.9"
 okio = "3.6.0"
 tomlkt = "0.5.0"
 datetime="4.0.10"
+compass = "1.2.2"
 
 [libraries]
+androidx-biometric-ktx = { module = "androidx.biometric:biometric-ktx", version.ref = "biometricKtx" }
 androidx-compiler = { module = "androidx.compose.compiler:compiler", version.ref = "compiler" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
@@ -79,6 +82,11 @@ gson = { group = "com.google.code.gson", name = "gson", version.ref = "gsonVersi
 tomlkt = { module = "net.peanuuutz.tomlkt:tomlkt", version.ref = "tomlkt" }
 datetime = { module = "com.soywiz.korlibs.klock:klock", version.ref = "datetime" }
 
+compass-geocoder = { module = "dev.jordond.compass:geocoder", version.ref = "compass" }
+compass-geocoder-mobile = { module = "dev.jordond.compass:geocoder-mobile", version.ref = "compass" }
+compass-geolocation = { module = "dev.jordond.compass:geolocation", version.ref = "compass" }
+compass-geolocation-mobile = { module = "dev.jordond.compass:geolocation-mobile", version.ref = "compass" }
+compass-permissions-mobile = { module = "dev.jordond.compass:permissions-mobile", version.ref = "compass" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
