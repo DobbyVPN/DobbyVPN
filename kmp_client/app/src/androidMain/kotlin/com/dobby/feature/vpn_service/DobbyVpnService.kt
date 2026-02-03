@@ -8,6 +8,7 @@ import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Debug
 import android.os.ParcelFileDescriptor
+import android.system.Os
 import com.dobby.awg.TunnelManager
 import com.dobby.awg.TunnelState
 import com.dobby.feature.logging.Logger
@@ -32,6 +33,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.koin.android.ext.android.inject
 import java.io.BufferedReader
+import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStreamReader
@@ -498,17 +500,29 @@ class DobbyVpnService : VpnService() {
         postConnectCurlJob = null
 
         // Manually close the FD we gave to Go, in case Go hasn't closed it yet.
-        goTunFd?.let { fd ->
-            logger.log("[svc:$serviceId] teardownVpn(): closing goTunFd=$fd")
-            runCatching {
-                // We adopt the FD back into a ParcelFileDescriptor just to close it cleanly
-                ParcelFileDescriptor.adoptFd(fd).close()
-            }.onFailure { e ->
-                // It's possible Go already closed it, which is fine.
-                logger.log("[svc:$serviceId] teardownVpn(): goTunFd close failed (might be already closed): ${e.message}")
+        goTunFd?.let { targetFd ->
+            logger.log("[svc:$serviceId] teardownVpn(): safely terminating goTunFd=$targetFd")
+            try {
+                // Open /dev/null
+                val devNull = FileInputStream(File("/dev/null"))
+                val nullFd = devNull.fd
+
+                // Overwrite the VPN FD (targetFd) with the Null FD.
+                // This ATOMICALLY closes the VPN interface and replaces it with /dev/null.
+                // Go still holds 'targetFd', but now it points to /dev/null.
+                Os.dup2(nullFd, targetFd)
+
+                // Close our handle to /dev/null
+                devNull.close()
+
+                logger.log("[svc:$serviceId] teardownVpn(): successfully redirected goTunFd to /dev/null")
+            } catch (e: Exception) {
+                // If this fails, it might mean Go already closed it. That's fine.
+                logger.log("[svc:$serviceId] teardownVpn(): safe termination warning: ${e.message}")
             }
         }
         goTunFd = null
+
 
         runCatching { inputStream?.close() }
         runCatching { outputStream?.close() }
