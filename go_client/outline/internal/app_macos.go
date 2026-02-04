@@ -31,12 +31,23 @@ func add_route(proxyIp string) {
 	}
 }
 
-func (app App) Run(ctx context.Context) error {
+// signalInit sends the initialization result to the channel (if provided) exactly once.
+func signalInit(initResult chan<- error, err error) {
+	if initResult != nil {
+		select {
+		case initResult <- err:
+		default:
+		}
+	}
+}
+
+func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	// this WaitGroup must Wait() after tun is closed
 
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
-		panic(err)
+		signalInit(initResult, err)
+		return err
 	}
 
 	log.Infof("gatewayIP: %s", gatewayIP.String())
@@ -45,13 +56,17 @@ func (app App) Run(ctx context.Context) error {
 	defer trafficCopyWg.Wait()
 
 	if !checkRoot() {
-		return errors.New("this operation requires superuser privileges. Please run the program with sudo or as root")
+		err := errors.New("this operation requires superuser privileges. Please run the program with sudo or as root")
+		signalInit(initResult, err)
+		return err
 	}
 
 	log.Infof("[Routing] Pre-resolving server IP from config...")
 	serverIP, err := ResolveServerIPFromConfig(*app.TransportConfig)
 	if err != nil {
-		return fmt.Errorf("failed to resolve server IP from config: %w", err)
+		err = fmt.Errorf("failed to resolve server IP from config: %w", err)
+		signalInit(initResult, err)
+		return err
 	}
 	log.Infof("[Routing] Server IP resolved: %s", serverIP.String())
 
@@ -67,7 +82,9 @@ func (app App) Run(ctx context.Context) error {
 
 	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
 	if err != nil {
-		return fmt.Errorf("failed to create tun device: %w, open app with sudo", err)
+		err = fmt.Errorf("failed to create tun device: %w, open app with sudo", err)
+		signalInit(initResult, err)
+		return err
 	}
 	defer tun.Close()
 
@@ -75,11 +92,17 @@ func (app App) Run(ctx context.Context) error {
 
 	ss, err := NewOutlineDevice(*app.TransportConfig)
 	if err != nil {
-		return fmt.Errorf("failed to create OutlineDevice: %w", err)
+		err = fmt.Errorf("failed to create OutlineDevice: %w", err)
+		signalInit(initResult, err)
+		return err
 	}
 	defer ss.Close()
 
-	ss.Refresh()
+	if err := ss.Refresh(); err != nil {
+		err = fmt.Errorf("failed to refresh OutlineDevice: %w", err)
+		signalInit(initResult, err)
+		return err
+	}
 
 	log.Infof("Device created")
 
@@ -162,9 +185,14 @@ func (app App) Run(ctx context.Context) error {
 	common.Client.MarkInCriticalSection(outlineCommon.Name)
 	if err := routing.StartRouting(serverIP.String(), gatewayIP.String(), tun.(*tunDevice).name); err != nil {
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
-		return fmt.Errorf("failed to configure routing: %w", err)
+		err = fmt.Errorf("failed to configure routing: %w", err)
+		signalInit(initResult, err)
+		return err
 	}
 	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+
+	// Signal successful initialization
+	signalInit(initResult, nil)
 
 	defer func() {
 		common.Client.MarkInCriticalSection(outlineCommon.Name)

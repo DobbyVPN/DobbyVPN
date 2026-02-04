@@ -65,12 +65,26 @@ func ExtractIPPacketFromEthernet(ethernetPacket []byte) ([]byte, error) {
 	return ethernetPacket[14:], nil
 }
 
-func (app App) Run(ctx context.Context) error {
+// signalInit sends the initialization result to the channel (if provided) exactly once.
+// After signaling, further calls are no-ops.
+func signalInit(initResult chan<- error, err error) {
+	if initResult != nil {
+		select {
+		case initResult <- err:
+		default:
+			// Already signaled
+		}
+	}
+}
+
+func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	trafficCopyWg := &sync.WaitGroup{}
 	defer trafficCopyWg.Wait()
 
 	if !checkRoot() {
-		return errors.New("this operation requires superuser privileges. Please run the program with administrator")
+		err := errors.New("this operation requires superuser privileges. Please run the program with administrator")
+		signalInit(initResult, err)
+		return err
 	}
 
 	TunGateway := "10.0.85.1"
@@ -82,23 +96,28 @@ func (app App) Run(ctx context.Context) error {
 
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
-		panic(err)
+		signalInit(initResult, err)
+		return err
 	}
 	interfaceName, err := routing.FindInterfaceByGateway(gatewayIP.String())
 	if err != nil {
-		panic(err)
+		signalInit(initResult, err)
+		return err
 	}
 
 	netInterface, err := routing.GetNetworkInterfaceByIP(interfaceName)
 	if err != nil {
 		log.Infof("Error:", err)
-		os.Exit(1)
+		signalInit(initResult, err)
+		return err
 	}
 
 	log.Infof("[Routing] Pre-resolving server IP from config...")
 	serverIP, err := ResolveServerIPFromConfig(*app.TransportConfig)
 	if err != nil {
-		return fmt.Errorf("failed to resolve server IP from config: %w", err)
+		err = fmt.Errorf("failed to resolve server IP from config: %w", err)
+		signalInit(initResult, err)
+		return err
 	}
 	log.Infof("[Routing] Server IP resolved: %s", serverIP.String())
 
@@ -114,13 +133,17 @@ func (app App) Run(ctx context.Context) error {
 
 	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, TunDeviceIP)
 	if err != nil {
-		return fmt.Errorf("failed to create tun device: %w", err)
+		err = fmt.Errorf("failed to create tun device: %w", err)
+		signalInit(initResult, err)
+		return err
 	}
 	defer tun.Close()
 
 	ss, err := NewOutlineDevice(*app.TransportConfig)
 	if err != nil {
-		return fmt.Errorf("failed to create OutlineDevice: %w", err)
+		err = fmt.Errorf("failed to create OutlineDevice: %w", err)
+		signalInit(initResult, err)
+		return err
 	}
 	log.Infof("Create Device")
 	defer ss.Close()
@@ -128,7 +151,9 @@ func (app App) Run(ctx context.Context) error {
 	log.Infof("[Outline] Refreshing Shadowsocks session...")
 	if err := ss.Refresh(); err != nil {
 		log.Infof("Failed to refresh OutlineDevice: %v", err)
-		return fmt.Errorf("failed to refresh OutlineDevice: %w", err)
+		err = fmt.Errorf("failed to refresh OutlineDevice: %w", err)
+		signalInit(initResult, err)
+		return err
 	}
 	log.Infof("[Outline] Session refreshed successfully")
 
@@ -136,7 +161,9 @@ func (app App) Run(ctx context.Context) error {
 	tunInterface, err := routing.GetNetworkInterfaceByIP(TunDeviceIP)
 	if err != nil {
 		log.Infof("Could not find TUN interface: %v", err)
-		os.Exit(1)
+		err = fmt.Errorf("failed to find TUN interface: %w", err)
+		signalInit(initResult, err)
+		return err
 	}
 	log.Infof("[Routing] Found TUN interface: %s (HWAddr=%s)", tunInterface.Name, tunInterface.HardwareAddr)
 
@@ -168,11 +195,16 @@ func (app App) Run(ctx context.Context) error {
 	); err != nil {
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 		log.Infof("Failed to configure routing: %v", err)
-		return fmt.Errorf("failed to configure routing: %w", err)
+		err = fmt.Errorf("failed to configure routing: %w", err)
+		signalInit(initResult, err)
+		return err
 	}
 	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 
 	log.Infof("[Routing] Routing successfully configured")
+
+	// Signal successful initialization - connection is ready
+	signalInit(initResult, nil)
 
 	defer func() {
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
