@@ -9,6 +9,6 @@ python3 -m pip install protobuf
 
 protoc --python_out=. airportinfo.proto
 
-OUTPUT_DIR="$(dirname "$0")/../../kmp_client/app/src/commonMain/composeResources/files"
+OUTPUT_DIR="$(dirname "$0")/../../../kmp_client/app/src/commonMain/composeResources/files"
 mkdir -p "$OUTPUT_DIR"
 python3 parsecsv.py "$OUTPUT_DIR/airports"
