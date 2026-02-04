@@ -105,6 +105,14 @@ jobs:
           name: airports
           path: kmp_client/app/src/commonMain/composeResources/files/airports
 
+      - name: Find
+        run: |
+          find . -iname "airports"
+
+      - name: Tree
+        run: |
+          ls -R .
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
