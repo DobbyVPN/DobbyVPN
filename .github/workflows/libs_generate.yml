@@ -95,6 +95,16 @@ jobs:
         with:
           submodules: true
 
+      - name: Update the airports data
+        working-directory: .github/file_updates/airports_update
+        run: ./updateairports.sh
+
+      - name: Upload the airports data
+        uses: actions/upload-artifact@v4
+        with:
+          name: airports
+          path: kmp_client/app/src/commonMain/composeResources/files/airports
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
