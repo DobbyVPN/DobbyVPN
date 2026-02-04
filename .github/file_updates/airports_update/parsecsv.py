@@ -1,5 +1,8 @@
 import csv
+import sys
 import airportinfo_pb2
+
+output_path = sys.argv[1]
 
 airport_list = airportinfo_pb2.AirportList()
 
@@ -15,5 +18,5 @@ with open('airports.csv') as csvfile:
         airport.latitude_deg = lat
         airport.longitude_deg = lon
 
-with open('../composeResources/files/airports', 'wb') as output:
+with open(output_path, 'wb') as output:
     output.write(airport_list.SerializeToString())

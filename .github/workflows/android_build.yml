@@ -19,7 +19,7 @@ jobs:
           submodules: true
 
       - name: Update the airports data
-        working-directory: kmp_client/app/src/commonMain/resources
+        working-directory: .github/file_updates/airports_update
         run: ./updateairports.sh
 
       - name: Download Go AAR
