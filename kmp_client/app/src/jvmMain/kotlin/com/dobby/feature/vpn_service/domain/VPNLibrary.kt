@@ -5,8 +5,6 @@ import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.logging.domain.provideLogFilePath
 import com.sun.jna.*
 import java.io.File
-import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
 
 interface VPNLibrary : Library {
     // Outline
@@ -46,8 +44,9 @@ class VPNLibraryLoader(
                 else -> throw UnsupportedOperationException("Unsupported OS")
             }
 
-            val encodedPath = this::class.java.protectionDomain.codeSource.location.path
-            val decodedPath = File(URLDecoder.decode(encodedPath, StandardCharsets.UTF_8.name())).parentFile.parent
+            // Using toURI() for proper Unicode/Cyrillic path support on Windows
+            val decodedPath = File(this::class.java.protectionDomain.codeSource.location.toURI())
+                .parentFile.parent
             // set path for windows as default
 
             val libPath = when {
