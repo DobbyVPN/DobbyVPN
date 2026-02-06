@@ -10,9 +10,32 @@ import (
 var outlineClient *outline.OutlineClient
 var outlineMu sync.Mutex
 
+var outlineLastError string
+var outlineErrorMu sync.Mutex
+
+//export GetOutlineLastError
+func GetOutlineLastError() *C.char {
+	outlineErrorMu.Lock()
+	defer outlineErrorMu.Unlock()
+	if outlineLastError == "" {
+		return nil
+	}
+	return C.CString(outlineLastError)
+}
+
+func setOutlineLastError(err string) {
+	outlineErrorMu.Lock()
+	defer outlineErrorMu.Unlock()
+	outlineLastError = err
+	if err != "" {
+		log.Infof("Outline error set: %s", err)
+	}
+}
+
 //export StartOutline
-func StartOutline(key *C.char) {
+func StartOutline(key *C.char) C.int {
 	log.Infof("StartOutline")
+	setOutlineLastError("")
 	str_key := C.GoString(key)
 
 	log.Infof("Make lock")
@@ -25,7 +48,8 @@ func StartOutline(key *C.char) {
 		err := outlineClient.Disconnect()
 		if err != nil {
 			log.Infof("Failed to disconnect existing outline client: %v", err)
-			return
+			setOutlineLastError(err.Error())
+			return -1
 		}
 	}
 
@@ -34,7 +58,11 @@ func StartOutline(key *C.char) {
 	err := outlineClient.Connect()
 	if err != nil {
 		log.Infof("Failed to connect outline client: %v", err)
+		setOutlineLastError(err.Error())
+		return -1
 	}
+	log.Infof("Outline client connected successfully")
+	return 0
 }
 
 //export StopOutline

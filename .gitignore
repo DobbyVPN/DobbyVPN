@@ -46,3 +46,9 @@ go.work.sum
 
 # Generated XCFrameworks (project-local)
 **/*.xcframework
+
+# Python virtual environments (from scripts like updateairports.sh)
+**/.venv/
+**/venv/
+**/__pycache__/
+*.pyc

@@ -21,6 +21,15 @@ func ExecuteCommand(command string) (string, error) {
 	return string(output), nil
 }
 
+// AddProxyRoute adds a direct route to the proxy server via the real gateway
+// This should be called BEFORE creating any connections to prevent routing loops
+func AddProxyRoute(proxyIP string, gatewayIP string) {
+	addSpecificRoute := fmt.Sprintf("sudo route add -net %s/32 %s", proxyIP, gatewayIP)
+	if _, err := ExecuteCommand(addSpecificRoute); err != nil {
+		log.Infof("failed to add early route for proxyIP: %v (may already exist)", err)
+	}
+}
+
 func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
 	removeOldDefaultRoute := fmt.Sprintf("sudo route delete default")
 	if _, err := ExecuteCommand(removeOldDefaultRoute); err != nil {
