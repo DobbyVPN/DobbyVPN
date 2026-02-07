@@ -74,4 +74,9 @@ class VPNLibraryLoader {
         }
         return false
     }
+
+    fun checkServerAlive(address: String, port: Int): Boolean {
+//        TODO("Not yet implemented")
+        return true
+    }
 }

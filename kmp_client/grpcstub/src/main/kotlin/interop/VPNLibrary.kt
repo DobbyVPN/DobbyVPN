@@ -15,4 +15,10 @@ interface VPNLibrary {
 
     // Healthcheck
     fun CouldStart(): Boolean
+
+    // InitLogger
+    fun InitLogger(path: String)
+
+    // CheckServerAlive
+    fun CheckServerAlive(address: String, port: Int): Int
 }

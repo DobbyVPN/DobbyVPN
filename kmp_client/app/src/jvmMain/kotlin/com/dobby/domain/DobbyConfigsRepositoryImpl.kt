@@ -6,7 +6,7 @@ import java.util.prefs.Preferences
 import interop.VPNLibraryLoader
 
 internal class DobbyConfigsRepositoryImpl(
-    private val prefs: Preferences = Preferences.systemRoot(),
+    private val prefs: Preferences = Preferences.userRoot(),
     private val vpnLibrary: VPNLibraryLoader,
 ) : DobbyConfigsRepository {
 

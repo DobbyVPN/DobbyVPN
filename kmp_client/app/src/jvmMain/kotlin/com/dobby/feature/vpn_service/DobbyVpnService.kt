@@ -154,7 +154,7 @@ internal class DobbyVpnService(
         val apiKey = dobbyConfigsRepository.getAwgConfig()
         logger.log("startAwg with key: $apiKey")
         runBlocking { connectionState.updateVpnStarted(isStarted = true) }
-        vpnLibrary.startAwg(apiKey)
+        vpnLibrary.startAwg("awg0", apiKey)
     }
 
     private fun stopAwg() {

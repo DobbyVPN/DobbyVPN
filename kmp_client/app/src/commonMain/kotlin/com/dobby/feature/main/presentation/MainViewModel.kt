@@ -38,6 +38,7 @@ class MainViewModel(
     private val tomlConfigApplier = TomlConfigApplier(
         outlineRepo = configsRepository,
         cloakRepo = configsRepository,
+        awgRepo = configsRepository,
         logger = logger
     )
 

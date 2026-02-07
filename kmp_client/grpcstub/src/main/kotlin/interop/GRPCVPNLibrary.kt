@@ -38,6 +38,15 @@ class GRPCVPNLibrary : VPNLibrary, Closeable {
         return runBlocking { CLIENT.CouldStart() }
     }
 
+    override fun InitLogger(path: String) {
+//        TODO("Not yet implemented")
+    }
+
+    override fun CheckServerAlive(address: String, port: Int): Int {
+//        TODO("Not yet implemented")
+        return 0
+    }
+
     override fun close() {
         this.CLIENT.close()
     }
