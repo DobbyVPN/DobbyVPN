@@ -4,7 +4,9 @@ import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.CloakClientConfig
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryCloak
+import com.dobby.feature.main.domain.DobbyConfigsRepositoryVpn
 import com.dobby.feature.main.domain.OutlineConfig
+import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.main.domain.clearCloakConfig
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -12,6 +14,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 internal class CloakTomlApplier(
+    private val vpnRepo: DobbyConfigsRepositoryVpn,
     private val cloakRepo: DobbyConfigsRepositoryCloak,
     private val logger: Logger,
 ) {
@@ -84,6 +87,8 @@ internal class CloakTomlApplier(
             CDNOriginHost = maskStr(cloakConfig.CDNOriginHost),
             CDNWsUrlPath = cloakConfig.CDNWsUrlPath?.let { maskStr(it) }
         )
+
+        vpnRepo.setVpnInterface(VpnInterface.CLOAK_OUTLINE)
         logger.log("Cloak config saved successfully (config=${buildCloakJson(cloakForLog)})")
     }
 

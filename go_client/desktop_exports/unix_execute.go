@@ -78,7 +78,7 @@ func (s *server) UrlTest(_ context.Context, in *pb.UrlTestRequest) (*pb.UrlTestR
 func (s *server) CouldStart(_ context.Context, in *pb.Empty) (*pb.CouldStartResponce, error) {
 	log.Printf("CouldStart")
 	result := CouldStart()
-	log.Printf("CouldStart:", result)
+	log.Printf("CouldStart: %v", result)
 	return &pb.CouldStartResponce{Result: result}, nil
 }
 
@@ -117,6 +117,6 @@ func (c *executor) Execute(port int, mode string) {
 	case "normal":
 		run(port)
 	default:
-		log.Fatalf("Invalid run mode")
+		log.Printf("[ERROR] Invalid run mode")
 	}
 }

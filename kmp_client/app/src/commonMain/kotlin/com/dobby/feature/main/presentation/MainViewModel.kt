@@ -37,6 +37,7 @@ class MainViewModel(
         outlineRepo = configsRepository,
         cloakRepo = configsRepository,
         awgRepo = configsRepository,
+        vpnRepo = configsRepository,
         logger = logger
     )
 
