@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/Jigsaw-Code/outline-sdk/network/lwip2transport"
@@ -165,4 +166,50 @@ func resolveShadowsocksServerIPFromConfig(transportConfig string) (net.IP, error
 		}
 	}
 	return nil, errors.New("IPv6 only Shadowsocks server is not supported yet")
+}
+
+type OutlineClient struct {
+	fd     int
+	dev    network.IPDevice
+	sd     transport.StreamDialer
+	pp     *outlinePacketProxy
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+}
+
+func NewOutlineClient(config string, fd int) (*OutlineClient, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ip, err := resolveShadowsocksServerIPFromConfig(config)
+	if err != nil {
+		return nil, err
+	}
+
+	sd, err := providers.NewStreamDialer(ctx, config)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	pp, err := newOutlinePacketProxy(config)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	dev, err := lwip2transport.ConfigureDevice(sd, pp)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	return &OutlineClient{
+		fd:     fd,
+		dev:    dev,
+		sd:     sd,
+		pp:     pp,
+		ctx:    ctx,
+		cancel: cancel,
+	}, nil
 }
