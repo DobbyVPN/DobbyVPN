@@ -4,89 +4,120 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"net/url"
-	"strings"
-	"sync"
-
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/Jigsaw-Code/outline-sdk/network/lwip2transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
-)
-
-const (
-	connectivityTestDomain   = "www.google.com"
-	connectivityTestResolver = "1.1.1.1:53"
+	"golang.org/x/sys/unix"
+	"net"
+	"net/url"
+	"strings"
+	"sync"
 )
 
 type OutlineDevice struct {
-	network.IPDevice
-	sd    transport.StreamDialer
-	pp    *outlinePacketProxy
-	svrIP net.IP
+	dev    network.IPDevice
+	sd     transport.StreamDialer
+	pp     *outlinePacketProxy
+	svrIP  net.IP
+	ctx    context.Context
+	fd     int
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // Use configurl.NewDefaultProviders() for full transport chain support
 var providers = configurl.NewDefaultProviders()
+var client *OutlineDevice
 
-func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
+func NewOutlineDevice(transportConfig string, fd int) (err error) {
 	defer guard("NewOutlineDevice")()
+	ctx, cancel := context.WithCancel(context.Background())
 	ip, err := resolveShadowsocksServerIPFromConfig(transportConfig)
 	if err != nil {
-		return nil, err
+		cancel()
+		return err
 	}
-	od = &OutlineDevice{
-		svrIP: ip,
-	}
-
-	if od.sd, err = providers.NewStreamDialer(context.Background(), transportConfig); err != nil {
-		return nil, fmt.Errorf("failed to create TCP dialer: %w", err)
-	}
-
-	if od.pp, err = newOutlinePacketProxy(transportConfig); err != nil {
-		return nil, fmt.Errorf("failed to create delegate UDP proxy: %w", err)
+	client = &OutlineDevice{
+		svrIP:  ip,
+		fd:     fd,
+		ctx:    ctx,
+		cancel: cancel,
 	}
 
-	if od.IPDevice, err = lwip2transport.ConfigureDevice(od.sd, od.pp); err != nil {
-		return nil, fmt.Errorf("failed to configure lwIP: %w", err)
+	if client.sd, err = providers.NewStreamDialer(context.Background(), transportConfig); err != nil {
+		cancel()
+		return fmt.Errorf("failed to create TCP dialer: %w", err)
 	}
 
-	return od, nil
+	if client.pp, err = newOutlinePacketProxy(transportConfig); err != nil {
+		cancel()
+		return fmt.Errorf("failed to create delegate UDP proxy: %w", err)
+	}
+
+	if client.dev, err = lwip2transport.ConfigureDevice(client.sd, client.pp); err != nil {
+		cancel()
+		return fmt.Errorf("failed to configure lwIP: %w", err)
+	}
+
+	return nil
 }
 
-func (d *OutlineDevice) Close() error {
-	defer guard("OutlineDevice.Close")()
-	return d.IPDevice.Close()
+func Connect() error {
+	client.wg.Add(1)
+	go func() {
+		defer client.wg.Done()
+		buf := make([]byte, 65536)
+		for {
+			select {
+			case <-client.ctx.Done():
+				return
+			default:
+			}
+
+			n, err := unix.Read(client.fd, buf)
+			if err != nil {
+				return
+			}
+			_, err = client.dev.Write(buf[:n])
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// lwip → TUN
+	client.wg.Add(1)
+	go func() {
+		defer client.wg.Done()
+		buf := make([]byte, 65536)
+		for {
+			select {
+			case <-client.ctx.Done():
+				return
+			default:
+			}
+
+			n, err := client.dev.Read(buf)
+			if err != nil {
+				return
+			}
+			_, err = unix.Write(client.fd, buf[:n])
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return nil
 }
 
-func (d *OutlineDevice) Refresh() error {
-	defer guard("OutlineDevice.Refresh")()
-	return d.pp.testConnectivityAndRefresh(connectivityTestResolver, connectivityTestDomain)
-}
-
-func (d *OutlineDevice) GetServerIP() net.IP {
-	defer guard("OutlineDevice.GetServerIP")()
-	return d.svrIP
-}
-
-func (d *OutlineDevice) Read() ([]byte, error) {
-	defer guard("OutlineDevice.Read")()
-	buf := make([]byte, 65536)
-	n, err := d.IPDevice.Read(buf)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read data: %w", err)
+func Disconnect() error {
+	client.cancel()
+	client.wg.Wait()
+	if client.dev != nil {
+		_ = client.dev.Close()
 	}
-	return buf[:n], nil
-}
-
-func (d *OutlineDevice) Write(buf []byte) (int, error) {
-	defer guard("OutlineDevice.Write")()
-	n, err := d.IPDevice.Write(buf)
-	if err != nil {
-		return 0, fmt.Errorf("failed to write data: %w", err)
-	}
-	return n, nil
+	return nil
 }
 
 // extractTLSSNIHost extracts the host from "tls:sni=HOST" part of the config.
@@ -166,50 +197,4 @@ func resolveShadowsocksServerIPFromConfig(transportConfig string) (net.IP, error
 		}
 	}
 	return nil, errors.New("IPv6 only Shadowsocks server is not supported yet")
-}
-
-type OutlineClient struct {
-	fd     int
-	dev    network.IPDevice
-	sd     transport.StreamDialer
-	pp     *outlinePacketProxy
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-}
-
-func NewOutlineClient(config string, fd int) (*OutlineClient, error) {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	ip, err := resolveShadowsocksServerIPFromConfig(config)
-	if err != nil {
-		return nil, err
-	}
-
-	sd, err := providers.NewStreamDialer(ctx, config)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-
-	pp, err := newOutlinePacketProxy(config)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-
-	dev, err := lwip2transport.ConfigureDevice(sd, pp)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-
-	return &OutlineClient{
-		fd:     fd,
-		dev:    dev,
-		sd:     sd,
-		pp:     pp,
-		ctx:    ctx,
-		cancel: cancel,
-	}, nil
 }
