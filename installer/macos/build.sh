@@ -4,26 +4,25 @@ mkdir "bin/"
 mkdir "bin/amd64"
 mkdir "bin/aarch64"
 
-echo [+] Extracting dobby-vpn-1.1-mac-aarch64.zip
-unzip "dobby-vpn-1.1-mac-aarch64.zip" -d "bin/aarch64/"
+echo [+] Extracting dobbyVPN-macos-aarch64.zip
+unzip "dobbyVPN-macos-aarch64.zip" -d "bin/aarch64/"
 
-cd  bin/aarch64/
+echo [+] Switching workdir to bin/aarch64/
+cd bin/aarch64/
+
+echo [+] Making Scripts/ folder
+mkdir Scripts
+cp ../../postinstall.sh Scripts/
+
+echo [+] Inserting vpnservice.plist file
+cp ../../vpnservice.plist "Dobby Vpn.app/Contents/Resources/"
+
+echo [+] Inserting macos_grpcvpnserver file
+cp ../../macos_grpcvpnserver "Dobby Vpn.app/Contents/Resources/"
 
 echo [+] Making Payload/ folder
 mkdir Payload
 cp -R "Dobby Vpn.app" Payload/
-
-echo [+] Making Scripts/ folder
-mkdir Scripts
-cp -R ../../postinstall.sh Scripts/
-
-echo [+] Inserting vpnservice.plist file
-mkdir Scripts
-cp vpnservice.plist "bin/aarch64/Dobby Vpn.app/Contents/Resources/"
-
-echo [+] Inserting grpcvpnserver file
-mkdir Scripts
-cp grpcvpnserver "bin/aarch64/Dobby Vpn.app/Contents/Resources/"
 
 echo [+] Building aarch64 PGK installer
 pkgbuild --root Payload \
@@ -35,26 +34,25 @@ pkgbuild --root Payload \
 
 cd ../../
 
-echo [+] Extracting dobby-vpn-1.1-mac-amd64.zip
-unzip "dobby-vpn-1.1-mac-amd64.zip" -d "bin/amd64/"
+echo [+] Extracting dobbyVPN-macos-amd64.zip
+unzip "dobbyVPN-macos-amd64.zip" -d "bin/amd64/"
 
-cd  bin/amd64/
+echo [+] Switching workdir to bin/amd64/
+cd bin/amd64/
+
+echo [+] Making Scripts/ folder
+mkdir Scripts
+cp ../../postinstall.sh Scripts/
+
+echo [+] Inserting vpnservice.plist file
+cp ../../vpnservice.plist "Dobby Vpn.app/Contents/Resources/"
+
+echo [+] Inserting macos_grpcvpnserver file
+cp ../../macos_grpcvpnserver "Dobby Vpn.app/Contents/Resources/"
 
 echo [+] Making Payload/ folder
 mkdir Payload
 cp -R "Dobby Vpn.app" Payload/
-
-echo [+] Making Scripts/ folder
-mkdir Scripts
-cp -R ../../postinstall.sh Scripts/
-
-echo [+] Inserting vpnservice.plist file
-mkdir Scripts
-cp vpnservice.plist "bin/amd64/Dobby Vpn.app/Contents/Resources/"
-
-echo [+] Inserting grpcvpnserver file
-mkdir Scripts
-cp grpcvpnserver "bin/amd64/Dobby Vpn.app/Contents/Resources/"
 
 echo [+] Building amd64 PGK installer
 pkgbuild --root Payload \

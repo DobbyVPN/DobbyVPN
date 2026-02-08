@@ -1,14 +1,7 @@
 name: Build VPN Libraries
 
 on:
-  workflow_call: {}
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: 'Tag for new library release'
-        required: false
-        default: ''
-        type: string
+  workflow_call:
 
 jobs:
   build_desktop_libs:
@@ -47,7 +40,7 @@ jobs:
         if: matrix.os == 'windows'
         working-directory: go_client
         run: |
-          go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/...
         env:
           CGO_ENABLED: '1'
           GOOS: 'windows'
@@ -59,7 +52,7 @@ jobs:
         if: matrix.os == 'ubuntu'
         working-directory: go_client
         run: |
-          go build -trimpath -ldflags="-buildid=" -o linux_grpcvpnserver ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/...
         env:
           CGO_ENABLED: '1'
           GOOS: 'linux'
@@ -82,10 +75,22 @@ jobs:
       - name: Upload built libraries
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}_grpcvpnserver
+          name: windows_grpcvpnserver.exe
           path: |
-            go_client/windows_grpcvpnserver
-            go_client/linux_grpcvpnserver
+            go_client/windows_grpcvpnserver.exe
+
+      - name: Upload built libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu_grpcvpnserver
+          path: |
+            go_client/ubuntu_grpcvpnserver
+
+      - name: Upload built libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos_grpcvpnserver
+          path: |
             go_client/macos_grpcvpnserver
 
   build_android_lib:

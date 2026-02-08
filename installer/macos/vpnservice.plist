@@ -7,7 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Applications/Dobby VPN.app/Contents/Resources/grpcvpnserver</string>
+        <string>/Applications/Dobby VPN.app/Contents/Resources/macos_grpcvpnserver</string>
     </array>
 
     <key>RunAtLoad</key>

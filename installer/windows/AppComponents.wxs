@@ -13,7 +13,7 @@
 				</File>
 			</Component>
 			<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNServerService" Guid="1ef0c193-dccb-41a5-ae7e-b1f0c214924d">
-				<File Source="dobbyVPN-windows\bin\grpcvpnserver.exe" KeyPath="yes" />
+				<File Source="dobbyVPN-windows\bin\windows_grpcvpnserver.exe" KeyPath="yes" />
 				<File Source="wintun\bin\$(var.DOBBYVPN_PLATFORM)\wintun.dll" />
 
 				<ServiceInstall 

@@ -32,12 +32,14 @@ class TomlConfigApplier(
         val root = Toml.decodeFromString<TomlConfigs>(connectionConfig)
 
         if (root.AWG != null) {
+            logger.log("AmneziaWG detected")
             awgApplier.apply(root.AWG)
+            disableOutlineAndCloak()
             logger.log("Finish parseToml()")
+
             return true
         } else {
-            logger.log("AmneziaWG config not detected, turning off")
-            disableAwg()
+            disableAmneziaWG()
         }
 
         val outline = root.Outline
@@ -65,7 +67,7 @@ class TomlConfigApplier(
         cloakRepo.clearCloakConfig()
     }
 
-    private fun disableAwg() {
+    private fun disableAmneziaWG() {
         awgRepo.clearAwgConfig()
     }
 }

@@ -16,6 +16,8 @@
 		<Property Id="MSIDISABLERMRESTART" Value="1" />
 		<Property Id="MSIRMSHUTDOWN" Value="1" />
 
+		<MediaTemplate EmbedCab="yes" />
+
 		<MajorUpgrade
 			AllowDowngrades="no"
 			AllowSameVersionUpgrades="yes"

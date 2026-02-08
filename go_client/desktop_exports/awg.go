@@ -4,8 +4,6 @@ import (
 	"go_client/awg"
 	log "go_client/logger"
 	"sync"
-
-	log "github.com/sirupsen/logrus"
 )
 
 var awgClient *awg.AwgClient

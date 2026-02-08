@@ -20,12 +20,12 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 		goto :error
 	)
 
-	echo [+] Checking grpcvpnserver.exe
-	if exist "grpcvpnserver.exe" (
-		echo [+] Inserting grpcvpnserver.exe to the dobbyvpn application
-		xcopy "grpcvpnserver.exe" ".\dobbyVPN-windows\bin\." /Y
+	echo [+] Checking windows_grpcvpnserver.exe
+	if exist "windows_grpcvpnserver.exe" (
+		echo [+] Inserting windows_grpcvpnserver.exe to the dobbyvpn application
+		xcopy "windows_grpcvpnserver.exe" ".\dobbyVPN-windows\bin\." /Y
 	) else (
-		echo [+] grpcvpnserver.exe not exist
+		echo [+] windows_grpcvpnserver.exe not exist
 		goto :error
 	)
 

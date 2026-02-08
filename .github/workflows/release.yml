@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - libs-delete
   pull_request:
     branches:
       - main

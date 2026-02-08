@@ -1,14 +1,7 @@
 name: Build desktop installers
 
 on:
-  workflow_call: {}
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: 'Tag for new library release'
-        required: false
-        default: ''
-        type: string
+  workflow_call:
 
 jobs:
   build_desktop_installers:
@@ -24,25 +17,19 @@ jobs:
       - name: Download Windows gRPC vpn service
         uses: actions/download-artifact@v4
         with:
-          name: windows_grpcvpnserver
-          path: kmp_client/services
-
-      - name: Download Linux gRPC vpn service
-        uses: actions/download-artifact@v4
-        with:
-          name: ubuntu_grpcvpnserver
-          path: kmp_client/services
+          name: windows_grpcvpnserver.exe
+          path: installer/windows/
 
       - name: Download macOS gRPC vpn service
         uses: actions/download-artifact@v4
         with:
           name: macos_grpcvpnserver
-          path: kmp_client/services
+          path: installer/macos/
 
       - name: Download Windows built application
         uses: actions/download-artifact@v4
         with:
-          name:  dobbyVPN-windows.zip
+          name: dobbyVPN-windows.zip
           path: installer/windows/
 
       - name: Download Linux built application
@@ -94,13 +81,7 @@ jobs:
         if: matrix.os == 'macos'
         working-directory: installer/macos/
         run: |
-          ./build.sh
-
-      - name: Upload Linux installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: dobbyVPN-linux.deb
-          path: installer/linux/dobbyVPN-linux.deb
+          sh build.sh
 
       - name: Upload Windows x86 installer
         uses: actions/upload-artifact@v4
