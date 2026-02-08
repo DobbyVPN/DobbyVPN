@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 
 	log "go_client/logger"
 )
@@ -68,18 +69,30 @@ func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, MacAdd
 
 	log.Infof("Outline/routing: Routing configuration completed successfully.")
 
-	if err := AddNeighbor(TunDeviceName, TunGateway, formatMACAddress(addr)); err != nil {
-		log.Infof("Outline/routing: CRITICAL: Failed to add ARP neighbor: %v", err)
-		return fmt.Errorf("failed to add ARP neighbor for gateway %s: %w", TunGateway, err)
+	macAddr := formatMACAddress(addr)
+	var lastErr error
+	const maxRetries = 3
+	for i := 1; i <= maxRetries; i++ {
+		lastErr = AddNeighbor(TunDeviceName, TunGateway, macAddr)
+		if lastErr == nil {
+			log.Infof("Outline/routing: ARP neighbor added successfully on attempt %d", i)
+			return nil
+		}
+		log.Infof("Outline/routing: AddNeighbor attempt %d/%d failed: %v", i, maxRetries, lastErr)
+		if i < maxRetries {
+			time.Sleep(2 * time.Second)
+		}
 	}
-	return nil
+	log.Infof("Outline/routing: CRITICAL: Failed to add ARP neighbor after %d attempts: %v", maxRetries, lastErr)
+	return fmt.Errorf("failed to add ARP neighbor for gateway %s: %w", TunGateway, lastErr)
 }
 
-func StopRouting(proxyIp string, TunDeviceName string, GatewayIP string, InterfaceName string) {
+func StopRouting(proxyIp string, TunDeviceName string, GatewayIP string, InterfaceName string, TunGateway string) {
 	log.Infof("Outline/routing: Cleaning up routing table and rules...")
 	deleteProxyRoute(proxyIp, GatewayIP, InterfaceName)
 	removeReservedSubnetBypass()
 	stopRoutingIpv4(TunDeviceName)
+	DeleteNeighbor(TunDeviceName, TunGateway)
 	log.Infof("Outline/routing: Cleaned up routing table and rules.")
 }
 
@@ -170,7 +183,28 @@ func formatMACAddress(mac []byte) string {
 	return strings.ToUpper(fmt.Sprintf("%02X-%02X-%02X-%02X-%02X-%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]))
 }
 
+func DeleteNeighbor(interfaceName, gatewayIP string) {
+	// Delete existing ARP entry (ignore errors — entry may not exist)
+	delCmd := fmt.Sprintf(`netsh interface ipv4 delete neighbors "%s" "%s"`, interfaceName, gatewayIP)
+	cmd := exec.Command("cmd", "/C", delCmd)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Infof("Outline/routing: DeleteNeighbor (ipv4) for %s on %s: %v, output: %s (may be expected if no entry existed)", gatewayIP, interfaceName, err, string(output))
+		// Also try legacy syntax
+		legacyCmd := fmt.Sprintf(`netsh interface ip delete neighbors "%s" "%s"`, interfaceName, gatewayIP)
+		cmd2 := exec.Command("cmd", "/C", legacyCmd)
+		cmd2.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		cmd2.CombinedOutput()
+	} else {
+		log.Infof("Outline/routing: Deleted existing ARP neighbor for %s on %s", gatewayIP, interfaceName)
+	}
+}
+
 func AddNeighbor(interfaceName, gatewayIP, macAddress string) error {
+	// Delete stale ARP entry first (prevents "entry already exists" error)
+	DeleteNeighbor(interfaceName, gatewayIP)
+
 	// Try "netsh interface ipv4 add neighbors" first (preferred on modern Windows)
 	netshCommand := fmt.Sprintf(
 		`netsh interface ipv4 add neighbors "%s" "%s" "%s"`,

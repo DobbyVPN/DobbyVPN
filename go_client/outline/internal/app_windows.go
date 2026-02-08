@@ -209,7 +209,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	defer func() {
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
 		log.Infof("[Routing] Cleaning up routes for %s...", serverIP.String())
-		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name)
+		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name, TunGateway)
 		log.Infof("[Routing] Routes cleaned up")
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 	}()
