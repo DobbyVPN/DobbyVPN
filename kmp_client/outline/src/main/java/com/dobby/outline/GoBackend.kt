@@ -61,7 +61,7 @@ class OutlineGo {
          */
         @JvmStatic
         @Throws(IllegalStateException::class)
-        external fun newOutlineClient(config: String, fd: Integer): Unit
+        external fun newOutlineClient(config: String, fd: Int): Unit
 
         /**
          * Connects to the Outline server.
@@ -104,7 +104,7 @@ class OutlineGo {
         /**
          * Safe call to newOutlineClient with a library-loaded check.
          */
-        suspend fun safeNewOutlineClient(config: String, fd: Integer): Boolean = withContext(Dispatchers.IO) {
+        suspend fun safeNewOutlineClient(config: String, fd: Int): Boolean = withContext(Dispatchers.IO) {
             Log.d(TAG, "Start safeNewOutlineClient")
             try {
                 if (!isLibrariesLoaded && !loadLibraries()) {

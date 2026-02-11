@@ -42,7 +42,7 @@ val androidVpnModule = module {
     single { Logger(get()) }
     factory<CloakLibFacade> { CloakLibFacadeImpl() }
     factory<OutlineLibFacade> { OutlineLibFacadeImpl() }
-    single<CloakConnectionInteractor> { CloakConnectionInteractor(get()) }
-    single<OutlineInteractor> { OutlineInteractor(get()) }
+    single<CloakConnectionInteractor> { CloakConnectionInteractor(get(), get(), get()) }
+    single<OutlineInteractor> { OutlineInteractor(get(), get(), get()) }
     factoryOf(::DobbyVpnInterfaceFactory)
 }
