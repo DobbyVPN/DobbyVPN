@@ -61,31 +61,7 @@ class OutlineGo {
          */
         @JvmStatic
         @Throws(IllegalStateException::class)
-        external fun newOutlineClient(config: String): Unit
-
-        /**
-         * Writes data to the Go device.
-         *
-         * @param data bytes to write
-         * @param length number of bytes to write from the array (usually data.size)
-         * @return number of bytes actually written, or -1 on error
-         * @throws IllegalStateException if libraries are not loaded
-         */
-        @JvmStatic
-        @Throws(IllegalStateException::class)
-        external fun write(data: ByteArray, length: Int): Int
-
-        /**
-         * Reads data from the Go device.
-         *
-         * @param out receive buffer (must be large enough)
-         * @param maxLen maximum number of bytes to read (usually out.size)
-         * @return number of bytes read, or -1 on error
-         * @throws IllegalStateException if libraries are not loaded
-         */
-        @JvmStatic
-        @Throws(IllegalStateException::class)
-        external fun read(out: ByteArray, maxLen: Int): Int
+        external fun newOutlineClient(config: String, fd: Integer): Unit
 
         /**
          * Connects to the Outline server.
@@ -93,7 +69,7 @@ class OutlineGo {
          */
         @JvmStatic
         @Throws(IllegalStateException::class)
-        external fun connect(): Int
+        external fun outlineConnect(): Int
 
         /**
          * Returns the last error from Go code.
@@ -104,7 +80,7 @@ class OutlineGo {
 
         @JvmStatic
         @Throws(IllegalStateException::class)
-        external fun disconnect(): Unit
+        external fun outlineDisconnect(): Unit
 
         @JvmStatic
         @Throws(IllegalStateException::class)
@@ -128,13 +104,13 @@ class OutlineGo {
         /**
          * Safe call to newOutlineClient with a library-loaded check.
          */
-        suspend fun safeNewOutlineClient(config: String): Boolean = withContext(Dispatchers.IO) {
+        suspend fun safeNewOutlineClient(config: String, fd: Integer): Boolean = withContext(Dispatchers.IO) {
             Log.d(TAG, "Start safeNewOutlineClient")
             try {
                 if (!isLibrariesLoaded && !loadLibraries()) {
                     return@withContext false
                 }
-                newOutlineClient(config)
+                newOutlineClient(config, fd)
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to create outline device", e)
@@ -142,36 +118,10 @@ class OutlineGo {
             }
         }
 
-        /**
-         * Safe call to write with a library-loaded check.
-         */
-        suspend fun safeWrite(data: ByteArray, length: Int): Int = withContext(Dispatchers.IO) {
-            try {
-                ensureLibrariesLoaded()
-                write(data, length)
-            } catch (e: Exception) {
-                Log.e(TAG, "Write failed", e)
-                -1
-            }
-        }
-
-        /**
-         * Safe call to read with a library-loaded check.
-         */
-        suspend fun safeRead(out: ByteArray, maxLen: Int): Int = withContext(Dispatchers.IO) {
-            try {
-                ensureLibrariesLoaded()
-                read(out, maxLen)
-            } catch (e: Exception) {
-                Log.e(TAG, "Read failed", e)
-                -1
-            }
-        }
-
         suspend fun safeConnect(): Int = withContext(Dispatchers.IO) {
             try {
                 ensureLibrariesLoaded()
-                val result = connect()
+                val result = outlineConnect()
                 if (result != 0) {
                     val error = getLastError()
                     Log.e(TAG, "Connect failed: $error")
@@ -186,7 +136,7 @@ class OutlineGo {
         suspend fun safeDisconnect(): Int = withContext(Dispatchers.IO) {
             try {
                 ensureLibrariesLoaded()
-                disconnect()
+                outlineDisconnect()
                 1
             } catch (e: Exception) {
                 Log.e(TAG, "Read failed", e)
