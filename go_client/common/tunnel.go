@@ -53,7 +53,7 @@ func (t *tunTransfer) readFromUserLoop() {
 		case <-t.stopCh:
 			return
 		default:
-			n, err := syscall.Read(syscall.Handle(t.tunFd), buf)
+			n, err := syscall.Read(t.tunFd, buf)
 			if err != nil {
 				continue
 			}
@@ -82,7 +82,7 @@ func (t *tunTransfer) writeToUserLoop() {
 				continue
 			}
 			if n > 0 {
-				_, _ = syscall.Write(syscall.Handle(t.tunFd), buf[:n])
+				_, _ = syscall.Write(t.tunFd, buf[:n])
 			}
 		}
 	}
