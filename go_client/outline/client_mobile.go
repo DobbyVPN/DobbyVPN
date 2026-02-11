@@ -3,7 +3,6 @@
 package outline
 
 import (
-	"fmt"
 	"go_client/common"
 	log "go_client/logger"
 	outlineCommon "go_client/outline/common"
@@ -13,11 +12,12 @@ import (
 
 type OutlineClient struct {
 	device *internal.OutlineDevice
+	fd     int
 	config string
 }
 
-func NewClient(transportConfig string) *OutlineClient {
-	c := &OutlineClient{config: transportConfig}
+func NewClient(transportConfig string, fd int) *OutlineClient {
+	c := &OutlineClient{config: transportConfig, fd: fd}
 	log.Infof("outline client created")
 	common.Client.SetVpnClient(outlineCommon.Name, c)
 	return c
@@ -35,6 +35,17 @@ func (c *OutlineClient) Connect() error {
 
 	c.device = od
 	common.Client.MarkActive(outlineCommon.Name)
+	log.Infof("start read/write goroutines")
+	common.StartTransfer(
+		c.fd,
+		func(buf []byte) (int, error) {
+			return c.device.Read(buf)
+		},
+		func(buf []byte) (int, error) {
+			return c.device.Write(buf)
+		},
+	)
+
 	return nil
 }
 
@@ -55,32 +66,4 @@ func (c *OutlineClient) Refresh() error {
 
 func (c *OutlineClient) GetServerIP() net.IP {
 	return c.device.GetServerIP()
-}
-
-func (c *OutlineClient) Read() ([]byte, error) {
-	buf := make([]byte, 65536)
-	n, err := c.device.Read(buf)
-	//log.Infof(fmt.Sprintf("outline client: read data; size: %d (%d)", n, n%8))
-	if err != nil {
-		log.Infof("failed to read data: %v\n", err)
-		return nil, fmt.Errorf("failed to read data: %w", err)
-	}
-
-	// TODO
-	// Return a slice containing only the actually read bytes.
-	// The TUN driver validates the capacity of the underlying buffer during write operations.
-	// Returning the full 64KB buffer would cause "no buffer space available" errors
-	// even if only a small portion contains actual data, because the TUN interface
-	// has limited buffer capacity (typically 32KB on Android devices).
-	return buf[:n], nil
-}
-
-func (c *OutlineClient) Write(buf []byte) (int, error) {
-	n, err := c.device.Write(buf)
-	//log.Infof(fmt.Sprintf("outline client: write data; size: %d (%d)", n, n%8))
-	if err != nil {
-		log.Infof("failed to write data: %v\n", err)
-		return 0, fmt.Errorf("failed to write data: %w", err)
-	}
-	return n, nil
 }

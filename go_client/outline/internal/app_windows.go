@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 
 	"go_client/common"
@@ -17,23 +16,6 @@ import (
 	log "go_client/logger"
 	outlineCommon "go_client/outline/common"
 )
-
-func add_route(proxyIp string) {
-	gatewayIP, err := gateway.DiscoverGateway()
-	if err != nil {
-		panic(err)
-	}
-	interfaceName, err := routing.FindInterfaceByGateway(gatewayIP.String())
-	if err != nil {
-		panic(err)
-	}
-	netInterface, err := routing.GetNetworkInterfaceByIP(interfaceName)
-	if err != nil {
-		fmt.Println("Error:", err)
-		os.Exit(1)
-	}
-	routing.AddOrUpdateProxyRoute(proxyIp, gatewayIP.String(), netInterface.Name)
-}
 
 func CreateEthernetPacket(dstMAC, srcMAC, ipPacket []byte) ([]byte, error) {
 	if len(ipPacket) == 0 {
