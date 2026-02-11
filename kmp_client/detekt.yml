@@ -1,0 +1,150 @@
+# detekt configuration for Kotlin Multiplatform project
+# Docs: https://detekt.dev/docs/rules/
+
+build:
+  maxIssues: 0  # Break build on any issue (strict mode for CI)
+  excludeCorrectable: false
+
+config:
+  validation: true
+
+complexity:
+  active: true
+  CyclomaticComplexMethod:
+    active: true
+    threshold: 20
+  LongMethod:
+    active: true
+    threshold: 60
+  LongParameterList:
+    active: true
+    functionThreshold: 8
+    constructorThreshold: 10
+    ignoreDefaultParameters: true
+    ignoreDataClasses: true
+    ignoreAnnotatedParameter: ["Composable"]
+  NestedBlockDepth:
+    active: true
+    threshold: 5
+  TooManyFunctions:
+    active: true
+    thresholdInFiles: 20
+    thresholdInClasses: 15
+    thresholdInInterfaces: 10
+    thresholdInObjects: 10
+    thresholdInEnums: 8
+    ignoreDeprecated: true
+    ignorePrivate: true
+    ignoreOverridden: true
+  ComplexCondition:
+    active: true
+    threshold: 4
+
+coroutines:
+  active: true
+  GlobalCoroutineUsage:
+    active: true
+  SuspendFunWithCoroutineScopeReceiver:
+    active: true
+
+empty-blocks:
+  active: true
+  EmptyCatchBlock:
+    active: true
+    allowedExceptionNameRegex: "_|(ignore|expected).*"
+  EmptyFunctionBlock:
+    active: true
+    ignoreOverridden: true
+
+exceptions:
+  active: true
+  SwallowedException:
+    active: true
+    ignoredExceptionTypes:
+      - "InterruptedException"
+      - "MalformedURLException"
+      - "NumberFormatException"
+      - "ParseException"
+  TooGenericExceptionCaught:
+    active: true
+    exceptionNames:
+      - "Error"
+      - "Exception"
+      - "RuntimeException"
+      - "Throwable"
+    allowedExceptionNameRegex: "_|(ignore|expected).*"
+  TooGenericExceptionThrown:
+    active: true
+    exceptionNames:
+      - "Error"
+      - "Exception"
+      - "RuntimeException"
+      - "Throwable"
+
+naming:
+  active: true
+  FunctionNaming:
+    active: true
+    functionPattern: "[a-zA-Z][a-zA-Z0-9]*"  # Allow PascalCase for @Composable
+    ignoreAnnotated: ["Composable"]
+  TopLevelPropertyNaming:
+    active: true
+    constantPattern: "[A-Z][A-Za-z0-9]*|[a-z][a-zA-Z0-9]*"
+  VariableNaming:
+    active: true
+    variablePattern: "[a-z][A-Za-z0-9]*"
+    privateVariablePattern: "_?[a-z][A-Za-z0-9]*"
+
+potential-bugs:
+  active: true
+  CastToNullableType:
+    active: true
+  DoubleMutabilityForCollection:
+    active: true
+  EqualsAlwaysReturnsTrueOrFalse:
+    active: true
+  UnreachableCatchBlock:
+    active: true
+  UnsafeCast:
+    active: true
+  UselessPostfixExpression:
+    active: true
+
+style:
+  active: true
+  ForbiddenComment:
+    active: false  # Allow TODO/FIXME during development
+  MagicNumber:
+    active: true
+    ignoreNumbers:
+      - "-1"
+      - "0"
+      - "1"
+      - "2"
+      - "100"
+    ignoreAnnotated: ["Composable", "Preview"]
+    ignorePropertyDeclaration: true
+    ignoreConstantDeclaration: true
+    ignoreCompanionObjectPropertyDeclaration: true
+    ignoreEnums: true
+  MaxLineLength:
+    active: true
+    maxLineLength: 140
+    excludeCommentStatements: true
+  ReturnCount:
+    active: true
+    max: 4
+    excludeGuardClauses: true
+  UnusedImports:
+    active: true
+  UnusedPrivateMember:
+    active: true
+    allowedNames: "(_|ignored|expected|serialVersionUID)"
+  WildcardImport:
+    active: true
+    excludeImports:
+      - "java.util.*"
+      - "kotlinx.android.synthetic.*"
+      - "androidx.compose.material3.*"
+      - "androidx.compose.ui.*"
+      - "androidx.compose.foundation.*"

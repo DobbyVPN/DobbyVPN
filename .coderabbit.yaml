@@ -1,0 +1,205 @@
+# CodeRabbit AI — automated code review
+# Docs: https://docs.coderabbit.ai/getting-started/configure-coderabbit
+
+language: en
+reviews:
+  auto_review:
+    enabled: true
+    drafts: false
+
+  request_changes_workflow: true
+
+  profile: assertive
+
+  path_instructions:
+    - path: "go_client/**/*.go"
+      instructions: >
+        This is a VPN client written in Go with platform-specific build tags
+        (android, ios, linux, windows, darwin). Pay attention to error handling,
+        resource cleanup (defer), goroutine leaks, and security implications.
+        Files in *_exports/ directories are gomobile/CGo bindings.
+
+    - path: "kmp_client/app/**/*.kt"
+      instructions: >
+        Kotlin Multiplatform project using Compose Multiplatform for UI.
+        Check for proper ViewModel usage, coroutine scope management,
+        and Koin dependency injection patterns.
+
+    - path: "kmp_client/iosApp/**/*.swift"
+      instructions: >
+        Swift code for the iOS app. Focus on memory management,
+        proper KMP framework interop, and PacketTunnelProvider correctness.
+
+    - path: "file_updates/**"
+      instructions: >
+        This directory contains scheduled data-update scripts (e.g.
+        airports database refresh). These intentionally fetch fresh
+        external data, so reproducibility rules for pinned downloads
+        and checksums do NOT apply here. Review only for correctness,
+        error handling, and data validation.
+
+    - path: ".github/workflows/update_airports*"
+      instructions: >
+        This is a scheduled workflow that fetches updated airport data
+        and opens a PR. It is intentionally non-reproducible (downloads
+        fresh CSV). Do NOT flag wget/curl without checksums or unpinned
+        resources here. Review only for error handling and that the
+        workflow correctly opens a PR for human review before merge.
+
+    - path: ".github/workflows/**"
+      instructions: >
+        CI workflows MUST preserve reproducible build properties.
+        Review any changes against F-Droid reproducible build requirements:
+
+        Go native libraries: builds MUST use -trimpath, -ldflags="-buildid=",
+        and -buildvcs=false. NDK builds must pin the exact NDK version and use
+        -fdebug-prefix-map to normalize SDK/NDK paths. Verify these flags are
+        not removed or weakened.
+
+        Android build: build-tools version must be pinned explicitly
+        (currently 34.0.0 — do NOT use >=35.0.0 due to apksigner
+        reproducibility regression). JDK distribution and version must be
+        pinned (temurin 17). The workflow must produce both signed and unsigned
+        APKs for independent verification.
+
+        General: warn if timestamps, non-deterministic sort orders, or
+        environment-dependent values are introduced. Warn if build-tools,
+        NDK, Go, or JDK versions are bumped without checking reproducibility
+        impact. Warn if new secrets or signing steps change the APK structure.
+
+        Inline shell ("run:" blocks): apply the same scrutiny as *.sh files.
+        Flag date/timestamp injection, wget/curl without hash verification,
+        apt-get without pinned versions, find without sort, $RANDOM, uuidgen.
+
+        Pinning: GitHub Actions must use exact version tags (e.g. @v4), not
+        @main or @latest. "check-latest: true" in setup-go/setup-java is
+        dangerous for reproducibility — it can silently upgrade patch
+        versions between runs. Tool installs via "go install ...@latest"
+        or "gem install" without version pins must be flagged.
+
+        Runner images: prefer pinned OS versions (e.g. ubuntu-24.04) over
+        ubuntu-latest, as the latter silently upgrades and may change
+        pre-installed tool versions.
+
+    - path: "kmp_client/**/build.gradle.kts"
+      instructions: >
+        Gradle build files must preserve F-Droid reproducible build compliance.
+        Check the following:
+
+        1) compileSdk, build-tools, and NDK versions must be pinned exactly,
+           not use dynamic ranges or "latest".
+        2) VCS info must not leak into release APKs (vcsInfo.include = false
+           in release buildType, or justified if present).
+        3) PNG crunching should be disabled (aaptOptions.cruncherEnabled = false)
+           or PNGs pre-optimized and committed, to avoid non-deterministic output.
+        4) Resource shrinker (shrinkResources) should be used with caution —
+           it can produce different APKs on different platforms.
+        5) vectorDrawables.generatedDensities should be empty ([]) to avoid
+           non-reproducible PNG generation from vector drawables.
+        6) Java toolchain must be pinned to an exact major version (currently 17).
+        7) dependenciesInfo.includeInApk and includeInBundle should stay false.
+        8) If baseline profiles are used, verify ArtProfile tasks are disabled
+           or deterministic, as baseline.prof/baseline.profm are often
+           non-reproducible.
+        9) Warn if R8/ProGuard minification is enabled without verifying
+           deterministic output across builds.
+
+    - path: "go_client/**"
+      instructions: >
+        In addition to code quality, check reproducible build compliance for
+        Go native libraries:
+
+        Any go build command must include -trimpath and -ldflags="-buildid="
+        to strip embedded build paths and non-deterministic build IDs.
+        Cross-compilation for Android must use -buildvcs=false.
+        CGO_CFLAGS and CGO_LDFLAGS should use -fdebug-prefix-map to normalize
+        SDK and NDK paths when building for Android.
+        Verify that gomobile invocations do not embed host-specific paths.
+
+    - path: "**/*.sh"
+      instructions: >
+        Shell scripts may be called during CI builds and MUST NOT introduce
+        non-determinism. Flag the following patterns:
+
+        1) wget/curl downloading unpinned resources without checksum
+           verification (sha256sum). Every fetched file must either be
+           committed to the repo or verified by hash after download.
+        2) apt-get install / brew install without pinned package versions
+           (e.g. "apt-get install -y foo" should be "apt-get install -y foo=1.2.3").
+        3) date, $RANDOM, uuidgen, or any command whose output varies
+           between runs, if the result ends up in build artifacts.
+        4) find/ls without deterministic sorting — output order is
+           filesystem-dependent and non-reproducible. Prefer "sort" pipe.
+        5) pip install / gem install without pinned versions or lockfile.
+        6) mktemp used in paths that end up in build artifacts.
+
+    - path: "kmp_client/**/Fastfile"
+      instructions: >
+        Fastlane lanes that participate in CI builds (build_android,
+        build_ios, build_desktop, build_kotlin_multiplatform) must preserve
+        reproducible builds. Check for:
+
+        1) No timestamp injection into build artifacts or version strings
+           (Date.now, Time.now, etc.).
+        2) No network requests that fetch unpinned/unversioned resources
+           during the build (e.g. downloading latest SDK, fetching remote
+           configs without hash verification).
+        3) No shell commands with the same non-determinism issues as
+           listed for *.sh files.
+        4) Version bumping lanes must use deterministic inputs only
+           (CI variables, git tags), not wall-clock time.
+
+    - path: "go_client/go.mod"
+      instructions: >
+        Go module file pins dependency versions. Check for:
+
+        1) No "latest" pseudo-versions — all dependencies must use exact
+           semver tags or commit hashes.
+        2) go.sum must not be deleted or regenerated without justification —
+           it pins cryptographic hashes of dependencies.
+        3) The Go version directive should match the version used in CI
+           workflows (currently 1.24.3 for Android, 1.23.x for desktop/iOS).
+        4) Replace directives must point to stable local paths or pinned
+           versions, not to remote @latest references.
+
+    - path: "go_client/go.sum"
+      instructions: >
+        go.sum contains cryptographic hashes of all dependencies and
+        ensures supply-chain integrity. Warn if entries are removed
+        without corresponding go.mod changes. Bulk replacement of
+        go.sum should be justified (e.g. Go version bump).
+
+    - path: "kmp_client/**/libs.versions.toml"
+      instructions: >
+        Version catalog for Kotlin/Android dependencies. Check for:
+
+        1) No dynamic version ranges ("+", "latest.release", "[1.0,2.0)").
+        2) No SNAPSHOT versions in release-facing builds.
+        3) Version bumps of AGP (Android Gradle Plugin), R8, or build-tools
+           should be flagged for reproducibility review.
+
+    - path: "**/*.py"
+      instructions: >
+        Python scripts used in the build pipeline must produce
+        deterministic output. Check for:
+
+        1) No use of set iteration, dict ordering (Python 3.7+ dicts are
+           ordered, but sets are not), or random/uuid without seed.
+        2) File writes should use sorted keys and deterministic formatting.
+        3) If the script processes external data (CSV, JSON), warn that
+           the input data should be pinned or committed to the repo.
+
+        Exception: scripts under file_updates/ are data-refresh utilities
+        that intentionally fetch fresh external data. Reproducibility
+        rules for pinned downloads do not apply to them.
+
+  tools:
+    golangci-lint:
+      enabled: true
+    detekt:
+      enabled: true
+    swiftlint:
+      enabled: true
+
+chat:
+  auto_reply: true

@@ -1,0 +1,28 @@
+# Lefthook — git hooks manager (runs linters before commit)
+
+pre-commit:
+  parallel: true
+  commands:
+    go-lint:
+      glob: "go_client/**/*.go"
+      run: cd go_client && golangci-lint run --new-from-rev=HEAD~1 ./...
+      stage_fixed: true
+
+    kotlin-detekt:
+      glob: "kmp_client/**/*.kt"
+      run: cd kmp_client && {gradlew} detekt
+      # {gradlew} resolves to ./gradlew on Unix, gradlew.bat on Windows
+
+    swift-lint:
+      glob: "kmp_client/iosApp/**/*.swift"
+      run: cd kmp_client/iosApp && swiftlint lint --config .swiftlint.yml --quiet
+      # SwiftLint available on macOS only — skip silently on other OS
+      only:
+        - os: darwin
+      fail_text: "SwiftLint found issues. Fix them before committing."
+
+pre-push:
+  commands:
+    trufflehog:
+      run: trufflehog git file://. --since-commit HEAD~5 --only-verified --fail
+      fail_text: "TruffleHog detected secrets. Remove them before pushing."
