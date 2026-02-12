@@ -1,0 +1,11 @@
+syntax = "proto2";
+
+message Airport {
+  optional string name = 1;
+  optional double latitude_deg = 2;
+  optional double longitude_deg = 3;
+}
+
+message AirportList {
+  repeated Airport airports = 4;
+}

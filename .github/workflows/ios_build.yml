@@ -16,6 +16,10 @@ jobs:
         with:
           submodules: true
 
+      - name: Update the airports data
+        working-directory: .github/file_updates/airports_update
+        run: ./updateairports.sh
+
       - name: Set up JDK 21.0.6 (Temurin)
         uses: actions/setup-java@v5
         with:
