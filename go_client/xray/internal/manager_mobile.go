@@ -5,17 +5,15 @@ package internal
 
 import (
 	"fmt"
-
 	log "go_client/logger"
-	xrayCommon "go_client/xray/common"
+	"os"
+	"strconv"
 
-	"github.com/xjasonlyu/tun2socks/v2/engine"
 	"github.com/xtls/xray-core/core"
 )
 
 type XrayManager struct {
 	xrayInstance *core.Instance
-	tunEngine    *engine.Key
 	configRaw    string
 	tunFD        int
 }
@@ -25,44 +23,41 @@ func NewXrayManager(config string, fd int) *XrayManager {
 }
 
 func (m *XrayManager) Start() error {
-	log.Infof("[Xray-Mobile] Starting...")
+	log.Infof("[Xray-Mobile] Starting Native TUN...")
 
-	// Start Xray Core
-	xrayConfig, err := GenerateXrayConfig(xrayCommon.LocalSocksPort, m.configRaw)
+	// Set the Environment Variable as required by Xray documentation
+	if err := os.Setenv("xray.tun.fd", strconv.Itoa(m.tunFD)); err != nil {
+		return fmt.Errorf("failed to set tun fd env: %w", err)
+	}
+
+	// Pass the FD as the interface name in format "fd://1234"
+	tunName := fmt.Sprintf("fd://%d", m.tunFD)
+
+	xrayConfig, err := GenerateXrayConfig(tunName, m.configRaw)
 	if err != nil {
 		return err
 	}
+
 	m.xrayInstance, err = core.New(xrayConfig)
 	if err != nil {
 		return err
 	}
+	// Extract user's log level and set up logger
+	loglevel, err := ExtractLogLevel(m.configRaw)
+	if err != nil {
+		log.Infof("[Xray] failed to parse log level, continuing whithout logs")
+	}
+	SetupXrayLogging(loglevel)
+
 	if err := m.xrayInstance.Start(); err != nil {
 		return err
 	}
 
-	// Start Tun2Socks using the File Descriptor
-	key := &engine.Key{
-		Device:     fmt.Sprintf("fd://%d", m.tunFD),
-		Proxy:      fmt.Sprintf("socks5://127.0.0.1:%d", xrayCommon.LocalSocksPort),
-		LogLevel:   "info",
-		UDPTimeout: 0,
-	}
-
-	engine.Insert(key)
-	m.tunEngine = key
-
-	// Start the engine in a goroutine
-	go engine.Start()
-
-	log.Infof("[Xray-Mobile] Tun2Socks started on FD: %d", m.tunFD)
-
+	log.Infof("[Xray-Mobile] Started using FD: %d", m.tunFD)
 	return nil
 }
 
 func (m *XrayManager) Stop() {
-	if m.tunEngine != nil {
-		engine.Stop()
-	}
 	if m.xrayInstance != nil {
 		m.xrayInstance.Close()
 	}

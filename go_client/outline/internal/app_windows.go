@@ -13,9 +13,10 @@ import (
 	"go_client/common"
 	"go_client/routing"
 
-	"github.com/jackpal/gateway"
 	log "go_client/logger"
 	outlineCommon "go_client/outline/common"
+
+	"github.com/jackpal/gateway"
 )
 
 func add_route(proxyIp string) {
@@ -160,7 +161,7 @@ func (app App) Run(ctx context.Context) error {
 	defer func() {
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
 		log.Infof("[Routing] Cleaning up routes for %s...", ss.GetServerIP().String())
-		routing.StopRouting(ss.GetServerIP().String(), tunInterface.Name, gatewayIP.String(), netInterface.Name)
+		routing.StopRouting(ss.GetServerIP().String(), tunInterface.Name, gatewayIP.String(), netInterface.Name, TunGateway)
 		log.Infof("[Routing] Routes cleaned up")
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 	}()

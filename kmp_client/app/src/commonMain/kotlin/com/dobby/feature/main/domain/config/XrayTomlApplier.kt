@@ -69,9 +69,9 @@ internal class XrayTomlApplier(
         add("observatory", config.observatory)
         add("burstObservatory", config.burstObservatory)
 
-        logger.log("Got map: $rootMap")
+        // logger.log("Got map: $rootMap")
 
-        logger.log("Got json: ${json.encodeToString(JsonObject(rootMap))}")
+        // logger.log("Got json: ${json.encodeToString(JsonObject(rootMap))}")
 
         return json.encodeToString(JsonObject(rootMap))
     }

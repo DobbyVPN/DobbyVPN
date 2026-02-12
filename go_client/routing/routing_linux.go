@@ -19,19 +19,27 @@ func ExecuteCommand(command string) (string, error) {
 	return string(output), nil
 }
 
-// startRouting — как на macOS: дефолт в туннель, исключения через gateway
+// AddProxyRoute adds a direct route to the proxy server via the real gateway
+// This should be called BEFORE creating any connections to prevent routing loops
+func AddProxyRoute(proxyIP string, gatewayIP string) {
+	if _, err := ExecuteCommand(fmt.Sprintf("sudo ip route add %s/32 via %s", proxyIP, gatewayIP)); err != nil {
+		log.Infof("failed to add early route for proxyIP: %v (may already exist)", err)
+	}
+}
+
+// startRouting — like how macOS: default in tunnel, exception gateway
 func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
-	// удалить старый дефолт
+	// Delete old default
 	if _, err := ExecuteCommand("sudo ip route del default"); err != nil {
 		log.Infof("failed to remove old default route: %v", err)
 	}
 
-	// дефолт через TUN
+	// Default via TUN
 	if _, err := ExecuteCommand(fmt.Sprintf("sudo ip route add default dev %s", tunName)); err != nil {
 		log.Infof("failed to add default via tun: %v", err)
 	}
 
-	// маршрут к proxyIP через реальный gateway
+	// Route to proxyIP via local gateway
 	if _, err := ExecuteCommand(fmt.Sprintf("sudo ip route add %s/32 via %s", proxyIP, gatewayIP)); err != nil {
 		log.Infof("failed to add specific route for proxyIP: %v", err)
 	}
@@ -40,17 +48,17 @@ func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
 }
 
 func StopRouting(proxyIP string, gatewayIP string) {
-	// удалить дефолт через туннель
+	// Delete default via tunnel
 	if _, err := ExecuteCommand("sudo ip route del default"); err != nil {
 		log.Infof("failed to remove tun default route: %v", err)
 	}
 
-	// восстановить дефолт через gateway
+	// Restore default via tunnel
 	if _, err := ExecuteCommand(fmt.Sprintf("sudo ip route add default via %s", gatewayIP)); err != nil {
 		log.Infof("failed to add old default route: %v", err)
 	}
 
-	// удалить маршрут к proxyIP
+	// Delete route to proxyIP
 	if _, err := ExecuteCommand(fmt.Sprintf("sudo ip route del %s/32", proxyIP)); err != nil {
 		log.Infof("failed to remove specific route for proxyIP: %v", err)
 	}

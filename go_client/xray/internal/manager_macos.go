@@ -1,30 +1,27 @@
-//go:build darwin && !(android || ios)
-// +build darwin,!android,!ios
+//go:build darwin
+// +build darwin
 
 package internal
 
 import (
 	"fmt"
+	"time"
 
 	log "go_client/logger"
 	"go_client/routing"
-	xrayCommon "go_client/xray/common"
 
 	"github.com/jackpal/gateway"
-	"github.com/xjasonlyu/tun2socks/v2/engine"
 	"github.com/xtls/xray-core/core"
 )
 
 const (
-	TunDevice  = "utun66" // Explicitly request utun66 or similar
+	TunDevice  = "utun66" // Xray will attempt to open this specific utun
 	TunIP      = "10.0.85.2"
 	TunGateway = "10.0.85.1"
-	TunMask    = "255.255.255.0"
 )
 
 type XrayManager struct {
 	xrayInstance *core.Instance
-	tunEngine    *engine.Key
 	configRaw    string
 	serverIP     string
 	physGateway  string
@@ -37,9 +34,10 @@ func NewXrayManager(config string) *XrayManager {
 }
 
 func (m *XrayManager) Start() error {
-	// Start Xray Core
-	log.Infof("[Xray] Building config...")
-	xrayConfig, err := GenerateXrayConfig(xrayCommon.LocalSocksPort, m.configRaw)
+	log.Infof("[Xray] Building Native TUN config...")
+
+	// Generate Config asking Xray to create "utun66"
+	xrayConfig, err := GenerateXrayConfig(TunDevice, m.configRaw)
 	if err != nil {
 		return fmt.Errorf("failed to generate xray config: %w", err)
 	}
@@ -49,32 +47,27 @@ func (m *XrayManager) Start() error {
 		return fmt.Errorf("failed to extract server IP: %w", err)
 	}
 
+	// Start Xray (opens the utun device)
 	m.xrayInstance, err = core.New(xrayConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create xray instance: %w", err)
 	}
+	// Extract user's log level and set up logger
+	loglevel, err := ExtractLogLevel(m.configRaw)
+	if err != nil {
+		log.Infof("[Xray] failed to parse log level, continuing whithout logs")
+	}
+	SetupXrayLogging(loglevel)
 
 	if err := m.xrayInstance.Start(); err != nil {
 		return fmt.Errorf("failed to start xray core: %w", err)
 	}
-	log.Infof("[Xray] Core started on 127.0.0.1:%d", xrayCommon.LocalSocksPort)
-
-	// Start Tun2Socks
-	// On macOS, "tun://utun66" attempts to create that specific interface.
-	log.Infof("[Xray] Starting Tun2Socks engine...")
-	key := &engine.Key{
-		Device:     fmt.Sprintf("tun://%s", TunDevice),
-		Proxy:      fmt.Sprintf("socks5://127.0.0.1:%d", xrayCommon.LocalSocksPort),
-		LogLevel:   "info",
-		UDPTimeout: 0,
-	}
-	engine.Insert(key)
-	m.tunEngine = key
-
-	go engine.Start()
-	log.Infof("[Xray] Tun2Socks started on %s", TunDevice)
+	log.Infof("[Xray] Core started with Native TUN on %s", TunDevice)
 
 	// Configure Networking
+	// Give the OS a moment to register the device if needed (usually instant, but safe to yield)
+	time.Sleep(500 * time.Millisecond)
+
 	physGateway, err := gateway.DiscoverGateway()
 	if err != nil {
 		m.Stop()
@@ -83,6 +76,8 @@ func (m *XrayManager) Start() error {
 	m.physGateway = physGateway.String()
 
 	// Assign IP to TUN interface
+	// macOS uses ifconfig for this usually.
+	// Syntax: ifconfig <interface> <local_ip> <remote_ip> up
 	if _, err := routing.ExecuteCommand(fmt.Sprintf("sudo ifconfig %s %s %s up", TunDevice, TunIP, TunGateway)); err != nil {
 		m.Stop()
 		return fmt.Errorf("failed to configure tun ip: %w", err)
@@ -101,10 +96,6 @@ func (m *XrayManager) Start() error {
 func (m *XrayManager) Stop() {
 	if m.serverIP != "" && m.physGateway != "" {
 		routing.StopRouting(m.serverIP, m.physGateway)
-	}
-
-	if m.tunEngine != nil {
-		engine.Stop()
 	}
 
 	if m.xrayInstance != nil {

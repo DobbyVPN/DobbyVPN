@@ -4,25 +4,16 @@ package internal
 
 import (
 	"fmt"
-	"time"
-
 	log "go_client/logger"
 	"go_client/routing"
-	xrayCommon "go_client/xray/common"
+	"time"
 
-	// Xray
-	"github.com/xtls/xray-core/core"
-
-	// Tun2Socks
-	"github.com/xjasonlyu/tun2socks/v2/engine"
-
-	// Gateway
 	"github.com/jackpal/gateway"
+	"github.com/xtls/xray-core/core"
 )
 
 const (
-	// Internal IP for the TUN adapter (similar to app.go)
-	TunDeviceName = "wintun"
+	TunDeviceName = "wintun" // Xray will create this interface
 	TunIP         = "10.0.85.2"
 	TunGateway    = "10.0.85.1"
 	TunMask       = "255.255.255.0"
@@ -30,7 +21,6 @@ const (
 
 type XrayManager struct {
 	xrayInstance  *core.Instance
-	tunEngine     *engine.Key
 	configRaw     string
 	serverIP      string
 	physGateway   string
@@ -38,17 +28,16 @@ type XrayManager struct {
 }
 
 func NewXrayManager(config string) *XrayManager {
-	return &XrayManager{
-		configRaw: config,
-	}
+	return &XrayManager{configRaw: config}
 }
 
 func (m *XrayManager) Start() error {
-	// Start Xray Core
-	log.Infof("[Xray] Building config...")
-	xrayConfig, err := GenerateXrayConfig(xrayCommon.LocalSocksPort, m.configRaw)
+	log.Infof("[Xray] Building Native TUN config...")
+
+	// Generate Config asking Xray to create "wintun"
+	xrayConfig, err := GenerateXrayConfig(TunDeviceName, m.configRaw)
 	if err != nil {
-		return fmt.Errorf("failed to generate xray config: %w", err)
+		return fmt.Errorf("failed to generate config: %w", err)
 	}
 
 	m.serverIP, err = ExtractServerIP(m.configRaw)
@@ -56,114 +45,83 @@ func (m *XrayManager) Start() error {
 		return err
 	}
 
+	// Start Xray (creates the Wintun adapter)
 	m.xrayInstance, err = core.New(xrayConfig)
 	if err != nil {
-		return fmt.Errorf("failed to create xray instance: %w", err)
+		return fmt.Errorf("failed to create xray: %w", err)
 	}
+	// Extract user's log level and set up logger
+	loglevel, err := ExtractLogLevel(m.configRaw)
+	if err != nil {
+		log.Infof("[Xray] failed to parse log level, continuing whithout logs")
+	}
+	SetupXrayLogging(loglevel)
 
 	if err := m.xrayInstance.Start(); err != nil {
-		return fmt.Errorf("failed to start xray core: %w", err)
+		return fmt.Errorf("failed to start xray: %w", err)
 	}
-	log.Infof("[Xray] Core started on 127.0.0.1:%d", xrayCommon.LocalSocksPort)
+	log.Infof("[Xray] Native TUN started on %s", TunDeviceName)
 
-	// Start Tun2Socks
-	log.Infof("[Xray] Starting Tun2Socks engine...")
-
-	key := &engine.Key{
-		Device:     fmt.Sprintf("tun://%s", TunDeviceName),
-		Proxy:      fmt.Sprintf("socks5://127.0.0.1:%d", xrayCommon.LocalSocksPort),
-		LogLevel:   "info",
-		UDPTimeout: 0,
-	}
-
-	// This creates the interface "wintun" and starts the packet loop
-	engine.Insert(key)
-
-	go engine.Start()
-
-	m.tunEngine = key
-	log.Infof("[Xray] Tun2Socks started")
-
-	// Configure Network & Routing
-
-	// A. Find Physical Gateway
-	// Wintun might take a few milliseconds to appear
+	// Configure Routing
+	// Give the OS a moment to register the device if needed (usually instant, but safe to yield)
 	time.Sleep(500 * time.Millisecond)
 
-	physicalGatewayIP, err := gateway.DiscoverGateway()
+	physGateway, err := gateway.DiscoverGateway()
 	if err != nil {
 		return err
 	}
-	m.physGateway = physicalGatewayIP.String()
+	m.physGateway = physGateway.String()
 
-	log.Infof("[Routing] Discovering interfaces...")
-	physicalInterfaceName, err := routing.FindInterfaceByGateway(m.physGateway)
+	physInterface, err := routing.FindInterfaceByGateway(m.physGateway)
+	if err != nil {
+		return err
+	}
 
-	// Recover physical interface object
-	netInterface, err := routing.GetNetworkInterfaceByIP(physicalInterfaceName)
+	netInterface, err := routing.GetNetworkInterfaceByIP(physInterface)
 	m.InterfaceName = netInterface.Name
-	if err != nil {
-		return fmt.Errorf("could not resolve physical interface: %v", err)
-	}
-	log.Infof("[Routing] Physical Interface: %s", m.InterfaceName)
 
-	// B. Setup TUN IP
-	// Since tun2socks created the device, we ensure IP is correct
-	setIpCmd := fmt.Sprintf("netsh interface ip set address \"%s\" static %s %s %s", TunDeviceName, TunIP, TunMask, TunGateway)
-	routing.ExecuteCommand(setIpCmd)
-
-	// C. Set DNS
-	setDnsCmd := fmt.Sprintf("netsh interface ip set dns \"%s\" static 8.8.8.8", TunDeviceName)
-	routing.ExecuteCommand(setDnsCmd)
-
-	// D. Extract TUN MAC
-	tunInterface, err := routing.GetNetworkInterfaceByIP(TunIP)
-	if err != nil {
-		return fmt.Errorf("failed to find TUN interface after creation: %w", err)
-	}
+	// Configure IP/DNS on the interface Xray just created
+	routing.ExecuteCommand(fmt.Sprintf("netsh interface ip set address \"%s\" static %s %s %s", TunDeviceName, TunIP, TunMask, TunGateway))
+	routing.ExecuteCommand(fmt.Sprintf("netsh interface ip set dns \"%s\" static 8.8.8.8", TunDeviceName))
 
 	// Spoof MAC logic for uniqueness
-	dst := tunInterface.HardwareAddr
-	spoofedMac := make([]byte, len(dst))
-	copy(spoofedMac, dst)
-	if len(spoofedMac) > 2 {
-		spoofedMac[2] += 2
+	dst := netInterface.HardwareAddr
+	var spoofedMac []byte
+	// Check if MAC is empty (common with Wintun) and assign a dummy one
+	if len(dst) == 0 {
+		// Create a dummy private MAC (e.g., 02:00:00:00:00:01)
+		spoofedMac = []byte{0x02, 0x00, 0x00, 0x00, 0x00, 0x01}
+		log.Infof("[Routing] Wintun has no MAC, using dummy: %v", spoofedMac)
+	} else {
+		spoofedMac = make([]byte, len(dst))
+		copy(spoofedMac, dst)
+		if len(spoofedMac) > 2 {
+			spoofedMac[2] += 2
+		}
 	}
 
-	// D. Apply Routing Rules
-	log.Infof("[Routing] Applying system routes...")
+	// Apply Routes
 	err = routing.StartRouting(
 		m.serverIP,
 		m.physGateway,
 		TunDeviceName,
-		tunInterface.HardwareAddr.String(),
+		dst.String(),
 		m.InterfaceName,
 		TunGateway,
 		TunIP,
 		spoofedMac,
 	)
 
-	if err != nil {
-		m.Stop()
-		return fmt.Errorf("routing setup failed: %w", err)
-	}
-
-	return nil
+	return err
 }
 
 func (m *XrayManager) Stop() {
-	log.Infof("[Xray] Stopping...")
+	// Clean up routing tables first
+	routing.StopRouting(m.serverIP, TunDeviceName, m.physGateway, m.InterfaceName, TunGateway)
 
-	// 1. Stop Routing
-	routing.StopRouting(m.serverIP, TunDeviceName, m.physGateway, m.InterfaceName)
-
-	// 2. Stop Tun2Socks
-	if m.tunEngine != nil {
-		engine.Stop()
-	}
-
-	// 3. Stop Xray
 	if m.xrayInstance != nil {
-		m.xrayInstance.Close()
+		if err := m.xrayInstance.Close(); err != nil {
+			log.Infof("[Xray] Error closing instance: %v", err)
+		}
 	}
 }
