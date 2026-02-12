@@ -16,7 +16,7 @@ internal class OutlineLibFacadeImpl : OutlineLibFacade {
             Log.d(TAG, "Connect finished successfully")
             true
         } else {
-            val lastError = OutlineGo.Companion.getLastError()
+            val lastError = OutlineGo.getLastError()
             Log.e(TAG, "Connect FAILED: $lastError")
             false
         }
