@@ -55,6 +55,7 @@ func (c *OutlineClient) Disconnect() error {
 		log.Infof("failed to close outline device: %v\n", err)
 		return err
 	}
+	common.StopTransfer()
 	log.Infof("outline client disconnected")
 	common.Client.MarkInactive(outlineCommon.Name)
 	return nil
