@@ -5,6 +5,7 @@ package common
 import (
 	"sync"
 	"syscall"
+	log "go_client/logger"
 )
 
 type ReaderFunc func(p []byte) (int, error)
@@ -48,6 +49,8 @@ func (t *tunTransfer) readFromUserLoop() {
 
 	buf := make([]byte, defaultBufSize)
 
+	log.Infof("Start readFromUserLoop")
+
 	for {
 		select {
 		case <-t.stopCh:
@@ -57,7 +60,7 @@ func (t *tunTransfer) readFromUserLoop() {
 			if err != nil {
 				continue
 			}
-			if n > 0 && t.readFn != nil {
+			if n > 0 && t.writeFn != nil {
 				_, _ = t.writeFn(buf[:n])
 			}
 		}
@@ -69,15 +72,19 @@ func (t *tunTransfer) writeToUserLoop() {
 
 	buf := make([]byte, defaultBufSize)
 
+	log.Infof("Start writeToUserLoop")
+
 	for {
 		select {
 		case <-t.stopCh:
 			return
 		default:
-			if t.writeFn == nil {
+			if t.readFn == nil {
 				continue
 			}
+        	log.Infof("[writeToUserLoop] start readFn")
 			n, err := t.readFn(buf)
+        	log.Infof("[writeToUserLoop] readFn, err = %v, n = %v", err, n)
 			if err != nil {
 				continue
 			}
