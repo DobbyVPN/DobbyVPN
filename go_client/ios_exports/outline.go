@@ -17,8 +17,8 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
 )
-const utunControlName = "com.apple.net.utun_control"
 
+const utunControlName = "com.apple.net.utun_control"
 
 func guardExport(fnName string) func() {
 	return func() {
@@ -161,7 +161,6 @@ func GetTunnelFileDescriptor() int {
 
 	return -1
 }
-+
 
 // extractTLSSNIHost extracts the host from "tls:sni=HOST" part of the config.
 // Returns empty string if not found.
