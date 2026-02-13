@@ -37,7 +37,6 @@ func NewOutlineClient(transportConfig string) (err error) {
 	defer guardExport("NewOutlineClient")()
 	log.Infof("NewOutlineClient() called")
 
-	// если клиент уже был — корректно закрываем
 	if client != nil {
 		if err := OutlineDisconnect(); err != nil {
 			return fmt.Errorf("NewOutlineClient(): disconnect failed: %w", err)
@@ -53,7 +52,10 @@ func NewOutlineClient(transportConfig string) (err error) {
 	log.Infof("Fd was found, fd = %d", fd)
 	log.Infof("Config length=%d", len(transportConfig))
 
-	client = outline.NewClient(transportConfig, fd)
+	client = outline.NewClient(
+	    transportConfig,
+	    fd
+    )
 
 	log.Infof("NewOutlineClient() finished")
 	return nil
@@ -81,7 +83,6 @@ func OutlineDisconnect() error {
 	log.Infof("OutlineDisconnect() called")
 
 	if client == nil {
-		// это не ошибка — просто нечего отключать
 		return nil
 	}
 

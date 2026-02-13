@@ -1,6 +1,6 @@
-//go:build android || ios
+//go:build ios
 
-package common
+package tunnel
 
 import (
 	"encoding/binary"
@@ -33,7 +33,6 @@ func StartTransfer(fd int, readFn ReaderFunc, writeFn WriterFunc) {
 	transferMu.Lock()
 	defer transferMu.Unlock()
 
-	// На всякий случай остановим старый инстанс
 	if transferInst != nil {
 		stopLocked()
 	}
@@ -53,7 +52,6 @@ func (t *tunTransfer) startLoops() {
 	go t.writeToTunLoop()
 }
 
-// tun -> lwip: СРЕЗАЕМ 4 байта AF
 func (t *tunTransfer) readFromTunLoop() {
 	defer t.wg.Done()
 
@@ -70,7 +68,6 @@ func (t *tunTransfer) readFromTunLoop() {
 			if err != nil {
 				continue
 			}
-			// utun header = 4 bytes, payload дальше
 			if n <= 4 || t.writeFn == nil {
 				continue
 			}
@@ -80,7 +77,6 @@ func (t *tunTransfer) readFromTunLoop() {
 	}
 }
 
-// lwip -> tun: ДОБАВЛЯЕМ 4 байта AF
 func (t *tunTransfer) writeToTunLoop() {
 	defer t.wg.Done()
 
@@ -114,7 +110,6 @@ func (t *tunTransfer) writeToTunLoop() {
 				continue
 			}
 
-			// utun ожидает AF в network byte order (BigEndian)
 			binary.BigEndian.PutUint32(out[:4], af)
 			copy(out[4:], in[:n])
 
