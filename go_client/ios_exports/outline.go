@@ -35,10 +35,8 @@ func NewOutlineClient(transportConfig string, fd int) (err error) {
 	if err != nil {
 		return fmt.Errorf("NewOutlineClient() failed: %v", err)
 	}
-	goConfig := C.GoString(transportConfig)
-	goFD := int(fd)
-	log.Infof("Config length=%d, config: %s", len(goConfig), goConfig)
-	client = outline.NewClient(goConfig, goFD)
+	log.Infof("Config length=%d", len(transportConfig))
+	client = outline.NewClient(transportConfig, fd)
 	log.Infof("NewOutlineClient() finished")
 	return nil
 }
