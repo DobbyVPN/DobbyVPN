@@ -29,7 +29,7 @@ var (
 	transferInst   *tunTransfer
 )
 
-func StartTransferDarwin(fd int, readFn ReaderFunc, writeFn WriterFunc) {
+func StartTransfer(fd int, readFn ReaderFunc, writeFn WriterFunc) {
 	transferMu.Lock()
 	defer transferMu.Unlock()
 
@@ -123,7 +123,7 @@ func (t *tunTransfer) writeToTunLoop() {
 	}
 }
 
-func StopTransferDarwin() {
+func StopTransfer() {
 	transferMu.Lock()
 	defer transferMu.Unlock()
 	stopLocked()
