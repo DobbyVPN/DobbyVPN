@@ -6,6 +6,8 @@ import (
 	log "go_client/logger"
 	"go_client/outline"
 	"runtime/debug"
+
+	"golang.org/x/sys/unix"
 )
 
 const utunControlName = "com.apple.net.utun_control"
@@ -26,22 +28,32 @@ func unsafeToString(v any) string {
 	case string:
 		return t
 	default:
-		return "non-string panic"
+		return fmt.Sprintf("%v", v)
 	}
 }
 
 func NewOutlineClient(transportConfig string) (err error) {
 	defer guardExport("NewOutlineClient")()
 	log.Infof("NewOutlineClient() called")
-	err = OutlineDisconnect()
-	if err != nil {
-		return fmt.Errorf("NewOutlineClient() failed: %v", err)
+
+	// если клиент уже был — корректно закрываем
+	if client != nil {
+		if err := OutlineDisconnect(); err != nil {
+			return fmt.Errorf("NewOutlineClient(): disconnect failed: %w", err)
+		}
 	}
+
 	log.Infof("Start fd search")
-    fd := GetTunnelFileDescriptor()
+	fd := GetTunnelFileDescriptor()
+	if fd < 0 {
+		return fmt.Errorf("NewOutlineClient(): utun fd not found")
+	}
+
 	log.Infof("Fd was found, fd = %d", fd)
 	log.Infof("Config length=%d", len(transportConfig))
+
 	client = outline.NewClient(transportConfig, fd)
+
 	log.Infof("NewOutlineClient() finished")
 	return nil
 }
@@ -49,14 +61,16 @@ func NewOutlineClient(transportConfig string) (err error) {
 func OutlineConnect() error {
 	defer guardExport("OutlineConnect")()
 	log.Infof("OutlineConnect() called")
+
 	if client == nil {
-		return fmt.Errorf("OutlineConnect() failed: client is nil")
+		return fmt.Errorf("OutlineConnect(): client is nil")
 	}
-	err := client.Connect()
-	if err != nil {
+
+	if err := client.Connect(); err != nil {
 		log.Infof("OutlineConnect() failed: %v", err)
-		return fmt.Errorf("OutlineConnect() failed: %v", err)
+		return fmt.Errorf("OutlineConnect(): %w", err)
 	}
+
 	log.Infof("OutlineConnect() finished successfully")
 	return nil
 }
@@ -64,30 +78,34 @@ func OutlineConnect() error {
 func OutlineDisconnect() error {
 	defer guardExport("OutlineDisconnect")()
 	log.Infof("OutlineDisconnect() called")
+
 	if client == nil {
-		return fmt.Errorf("OutlineDisconnect(): client is nil")
+		// это не ошибка — просто нечего отключать
+		return nil
 	}
+
 	client.Disconnect()
+	client = nil
+
 	log.Infof("OutlineDisconnect() finished")
 	return nil
 }
 
-
 func GetTunnelFileDescriptor() int32 {
 	ctlInfo := &unix.CtlInfo{}
 	copy(ctlInfo.Name[:], utunControlName)
+
 	for fd := 0; fd < 1024; fd++ {
 		addr, err := unix.Getpeername(fd)
 		if err != nil {
 			continue
 		}
-		addrCTL, loaded := addr.(*unix.SockaddrCtl)
-		if !loaded {
+		addrCTL, ok := addr.(*unix.SockaddrCtl)
+		if !ok {
 			continue
 		}
 		if ctlInfo.Id == 0 {
-			err = unix.IoctlCtlInfo(fd, ctlInfo)
-			if err != nil {
+			if err := unix.IoctlCtlInfo(fd, ctlInfo); err != nil {
 				continue
 			}
 		}
@@ -95,5 +113,6 @@ func GetTunnelFileDescriptor() int32 {
 			return int32(fd)
 		}
 	}
+
 	return -1
 }
