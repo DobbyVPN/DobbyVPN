@@ -91,7 +91,7 @@ func OutlineDisconnect() error {
 	return nil
 }
 
-func GetTunnelFileDescriptor() int32 {
+func GetTunnelFileDescriptor() int {
 	ctlInfo := &unix.CtlInfo{}
 	copy(ctlInfo.Name[:], utunControlName)
 
@@ -100,17 +100,20 @@ func GetTunnelFileDescriptor() int32 {
 		if err != nil {
 			continue
 		}
+
 		addrCTL, ok := addr.(*unix.SockaddrCtl)
 		if !ok {
 			continue
 		}
+
 		if ctlInfo.Id == 0 {
 			if err := unix.IoctlCtlInfo(fd, ctlInfo); err != nil {
 				continue
 			}
 		}
+
 		if addrCTL.ID == ctlInfo.Id {
-			return int32(fd)
+			return fd
 		}
 	}
 
