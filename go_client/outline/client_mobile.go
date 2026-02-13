@@ -4,6 +4,7 @@ package outline
 
 import (
 	"go_client/common"
+	"go_client/tunnel"
 	log "go_client/logger"
 	outlineCommon "go_client/outline/common"
 	"go_client/outline/internal"
@@ -36,7 +37,7 @@ func (c *OutlineClient) Connect() error {
 	c.device = od
 	common.Client.MarkActive(outlineCommon.Name)
 	log.Infof("start read/write goroutines")
-	common.StartTransfer(
+	tunnel.StartTransfer(
 		c.fd,
 		func(buf []byte) (int, error) {
 			return c.device.Read(buf)
@@ -55,7 +56,7 @@ func (c *OutlineClient) Disconnect() error {
 		log.Infof("failed to close outline device: %v\n", err)
 		return err
 	}
-	common.StopTransfer()
+	tunnel.StopTransfer()
 	log.Infof("outline client disconnected")
 	common.Client.MarkInactive(outlineCommon.Name)
 	return nil
