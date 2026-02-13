@@ -33,6 +33,17 @@ jobs:
         with:
           name: lib_windows
           path: kmp_client/libs
+          
+      - name: Download Wintun DLL
+        run: |
+          # Download the official Wintun zip
+          curl -L -o wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
+          
+          # Unzip the specific AMD64 dll directly to the target folder
+          unzip -j wintun.zip wintun/bin/amd64/wintun.dll -d kmp_client/libs/
+          
+          # Clean up
+          rm wintun.zip
 
       - name: Download Linux lib
         uses: actions/download-artifact@v4
