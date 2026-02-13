@@ -84,6 +84,10 @@ func OutlineConnect() error {
 	}
 	fd := GetTunnelFileDescriptor()
 
+	name := getUtunIfName(fd)
+
+	log.Infof("Get fd = %v, name = %v", fd, name)
+
 	common.StartTransfer(
 		fd,
 		func(buf []byte) (int, error) {
@@ -132,6 +136,34 @@ func (d *OutlineDevice) Write(buf []byte) (int, error) {
 	}
 	return n, nil
 }
+
+
+func getUtunIfName(fd int) string {
+    var name [16]byte
+    size := uint32(len(name))
+
+    err := unix.GetsockoptString(fd, unix.SYSPROTO_CONTROL, unix.UTUN_OPT_IFNAME)
+    if err == nil {
+        return err
+    }
+
+    // альтернативный способ через RawSyscall:
+    _, _, errno := unix.Syscall6(
+        unix.SYS_GETSOCKOPT,
+        uintptr(fd),
+        uintptr(unix.SYSPROTO_CONTROL),
+        uintptr(unix.UTUN_OPT_IFNAME),
+        uintptr(unsafe.Pointer(&name[0])),
+        uintptr(unsafe.Pointer(&size)),
+        0,
+    )
+    if errno != 0 {
+        return "unknown"
+    }
+
+    return string(name[:size-1])
+}
+
 
 func GetTunnelFileDescriptor() int {
 	ctlInfo := &unix.CtlInfo{}
