@@ -500,25 +500,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 }
 
 
-extension NEPacketTunnelFlow {
-    func readPacketsAsync() async throws -> ([Data], [NSNumber]) {
-        try await withCheckedThrowingContinuation { cont in
-            self.readPackets { packets, protocols in
-                cont.resume(returning: (packets, protocols))
-            }
-        }
-    }
-}
-
-
 class DeviceFacade {
-    private var device: Cloak_outlineOutlineDevice? = nil
     private var logs: LogsRepository? = nil
 
     func initialize(config: String, _logs: LogsRepository) -> Bool {
         logs?.writeLog(log: "[DeviceFacade] Device initiaization started with config: \(config)")
         var err: NSError?
-        device = Cloak_outlineNewOutlineDevice(config, &err)
+        Cloak_outlineNewOutlineClient(config, 1, &err)
         
         logs = _logs
         logs?.writeLog(log: "[DeviceFacade] Device initialization finished (has error:\(err != nil))")
@@ -529,29 +517,7 @@ class DeviceFacade {
         return device != nil && err == nil
     }
     
-    func write(data: Data) {
-        do {
-            var ret0_: Int = 0
-            try device?.write(data, ret0_: &ret0_)
-//            logs?.writeLog(log: "[DeviceFacade] wrote \(data.count) bytes")
-        } catch let error {
-            logs?.writeLog(log: "[DeviceFacade] write error: \(error)")
-        }
-    }
-
-    func readFromDevice() -> Data {
-        do {
-            let data = try device?.read()
-//            logs?.writeLog(log: "[DeviceFacade] read \(data?.count ?? 0) bytes")
-            return data ?? Data()
-        } catch let error {
-            logs?.writeLog(log: "[DeviceFacade] read error: \(error)")
-            return Data()
-        }
-    }
-    
     func close() {
-        guard let device else { return }
         do {
             try device.close()
         } catch {

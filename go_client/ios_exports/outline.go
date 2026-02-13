@@ -8,6 +8,8 @@ import (
 	"runtime/debug"
 )
 
+const utunControlName = "com.apple.net.utun_control"
+
 var client *outline.OutlineClient
 
 func guardExport(fnName string) func() {
@@ -28,13 +30,16 @@ func unsafeToString(v any) string {
 	}
 }
 
-func NewOutlineClient(transportConfig string, fd int) (err error) {
+func NewOutlineClient(transportConfig string) (err error) {
 	defer guardExport("NewOutlineClient")()
 	log.Infof("NewOutlineClient() called")
 	err = OutlineDisconnect()
 	if err != nil {
 		return fmt.Errorf("NewOutlineClient() failed: %v", err)
 	}
+	log.Infof("Start fd search")
+    var fd := GetTunnelFileDescriptor()
+	log.Infof("Fd was found, fd = %d", fd)
 	log.Infof("Config length=%d", len(transportConfig))
 	client = outline.NewClient(transportConfig, fd)
 	log.Infof("NewOutlineClient() finished")
@@ -65,4 +70,30 @@ func OutlineDisconnect() error {
 	client.Disconnect()
 	log.Infof("OutlineDisconnect() finished")
 	return nil
+}
+
+
+func GetTunnelFileDescriptor() int32 {
+	ctlInfo := &unix.CtlInfo{}
+	copy(ctlInfo.Name[:], utunControlName)
+	for fd := 0; fd < 1024; fd++ {
+		addr, err := unix.Getpeername(fd)
+		if err != nil {
+			continue
+		}
+		addrCTL, loaded := addr.(*unix.SockaddrCtl)
+		if !loaded {
+			continue
+		}
+		if ctlInfo.Id == 0 {
+			err = unix.IoctlCtlInfo(fd, ctlInfo)
+			if err != nil {
+				continue
+			}
+		}
+		if addrCTL.ID == ctlInfo.Id {
+			return int32(fd)
+		}
+	}
+	return -1
 }
