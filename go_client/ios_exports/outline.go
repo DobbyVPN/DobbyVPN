@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"runtime/debug"
 	"strings"
+    "unsafe"
 
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/Jigsaw-Code/outline-sdk/network/lwip2transport"
@@ -18,6 +19,11 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
 )
 
+
+const (
+    sysProtoControl = 2
+    utunOptIfName   = 2
+)
 const utunControlName = "com.apple.net.utun_control"
 
 func guardExport(fnName string) func() {
@@ -138,25 +144,21 @@ func (d *OutlineDevice) Write(buf []byte) (int, error) {
 }
 
 
+
 func getUtunIfName(fd int) string {
-    var name [16]byte
+    var name [32]byte
     size := uint32(len(name))
 
-    err := unix.GetsockoptString(fd, unix.SYSPROTO_CONTROL, unix.UTUN_OPT_IFNAME)
-    if err == nil {
-        return err
-    }
-
-    // альтернативный способ через RawSyscall:
     _, _, errno := unix.Syscall6(
         unix.SYS_GETSOCKOPT,
         uintptr(fd),
-        uintptr(unix.SYSPROTO_CONTROL),
-        uintptr(unix.UTUN_OPT_IFNAME),
+        uintptr(sysProtoControl),
+        uintptr(utunOptIfName),
         uintptr(unsafe.Pointer(&name[0])),
         uintptr(unsafe.Pointer(&size)),
         0,
     )
+
     if errno != 0 {
         return "unknown"
     }

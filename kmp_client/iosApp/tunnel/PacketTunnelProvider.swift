@@ -9,6 +9,8 @@ import Darwin
 import SystemConfiguration
 import Network
 
+
+
 class PacketTunnelProvider: NEPacketTunnelProvider {
     private let launchId = UUID().uuidString
     private let tunnelId = String(UUID().uuidString.prefix(8))
@@ -40,6 +42,22 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         logs.writeLog(log: "[Memory] unable to get info")
         return 0.0
+    }
+    
+    func logInterfaces() {
+        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
+        getifaddrs(&ifaddrPtr)
+        var ptr = ifaddrPtr
+        while ptr != nil {
+            if let name = ptr?.pointee.ifa_name {
+                let s = String(cString: name)
+                if s.starts(with: "utun") {
+                    logs.writeLog(log: "Active interface: \(s)")
+                }
+            }
+            ptr = ptr?.pointee.ifa_next
+        }
+        freeifaddrs(ifaddrPtr)
     }
     
     override func startTunnel(options: [String : NSObject]?) async throws {
@@ -115,6 +133,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "Settings are ready:")
         try await self.setTunnelNetworkSettings(settings)
         logs.writeLog(log: "Tunnel settings applied")
+        
+        logInterfaces()
         
         let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
         logs.writeLog(log: "Start go logger init path = \(path)")
