@@ -1,48 +1,51 @@
+//go:build android || ios
+
 package cloak_outline
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"go_client/common"
-	log "go_client/logger"
-	"golang.org/x/sys/unix"
 	"net"
 	"net/url"
 	"runtime/debug"
 	"strings"
-    "unsafe"
+	"sync"
+	"unsafe"
+
+	"go_client/common"
+	log "go_client/logger"
 
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/Jigsaw-Code/outline-sdk/network/lwip2transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
+
+	"golang.org/x/sys/unix"
 )
 
-
-const (
-    sysProtoControl = 2
-    utunOptIfName   = 2
-)
 const utunControlName = "com.apple.net.utun_control"
 
-func guardExport(fnName string) func() {
+var providers = configurl.NewDefaultProviders()
+
+// ------------------ GLOBAL STATE ------------------
+
+var (
+	clientMu sync.Mutex
+	client   *OutlineDevice
+)
+
+// ------------------ UTILS ------------------
+
+func guardExport(fn string) func() {
 	return func() {
 		if r := recover(); r != nil {
-			msg := "panic in " + fnName + ": " + unsafeToString(r)
-			log.Infof("%s\n%s", msg, string(debug.Stack()))
+			log.Infof("panic in %s: %v\n%s", fn, r, string(debug.Stack()))
 		}
 	}
 }
 
-func unsafeToString(v any) string {
-	switch t := v.(type) {
-	case string:
-		return t
-	default:
-		return fmt.Sprintf("%v", v)
-	}
-}
+// ------------------ DEVICE ------------------
 
 type OutlineDevice struct {
 	network.IPDevice
@@ -51,121 +54,109 @@ type OutlineDevice struct {
 	svrIP net.IP
 }
 
-// Use configurl.NewDefaultProviders() for full transport chain support
-var providers = configurl.NewDefaultProviders()
+// ------------------ CLIENT INIT ------------------
 
-var client *OutlineDevice
+func NewOutlineClient(config string) error {
+	defer guardExport("NewOutlineClient")()
 
-func NewOutlineClient(transportConfig string) error {
-	defer guard("NewOutlineDevice")()
-	ip, err := resolveShadowsocksServerIPFromConfig(transportConfig)
+	config = strings.TrimSpace(config)
+	if config == "" {
+		return errors.New("empty config")
+	}
+
+	ip, err := resolveShadowsocksServerIPFromConfig(config)
 	if err != nil {
 		return err
 	}
-	client = &OutlineDevice{
-		svrIP: ip,
+
+	od := &OutlineDevice{svrIP: ip}
+
+	if od.sd, err = providers.NewStreamDialer(context.Background(), config); err != nil {
+		return fmt.Errorf("create stream dialer: %w", err)
 	}
 
-	if client.sd, err = providers.NewStreamDialer(context.Background(), transportConfig); err != nil {
-		return fmt.Errorf("failed to create TCP dialer: %w", err)
+	if od.pp, err = newOutlinePacketProxy(config); err != nil {
+		return fmt.Errorf("create packet proxy: %w", err)
 	}
 
-	if client.pp, err = newOutlinePacketProxy(transportConfig); err != nil {
-		return fmt.Errorf("failed to create delegate UDP proxy: %w", err)
+	if od.IPDevice, err = lwip2transport.ConfigureDevice(od.sd, od.pp); err != nil {
+		return fmt.Errorf("configure lwip: %w", err)
 	}
 
-	if client.IPDevice, err = lwip2transport.ConfigureDevice(client.sd, client.pp); err != nil {
-		return fmt.Errorf("failed to configure lwIP: %w", err)
+	clientMu.Lock()
+	defer clientMu.Unlock()
+
+	// если уже был клиент — корректно отключим
+	if client != nil {
+		_ = OutlineDisconnect()
 	}
+
+	client = od
+	log.Infof("NewOutlineClient(): initialized, serverIP=%v", ip)
 
 	return nil
 }
+
+// ------------------ CONNECT ------------------
 
 func OutlineConnect() error {
 	defer guardExport("OutlineConnect")()
-	log.Infof("OutlineConnect() called")
 
-	if client == nil {
-		return fmt.Errorf("OutlineConnect(): client is nil")
+	clientMu.Lock()
+	od := client
+	clientMu.Unlock()
+
+	if od == nil || od.IPDevice == nil {
+		return errors.New("client not initialized")
 	}
+
 	fd := GetTunnelFileDescriptor()
+	if fd < 0 {
+		return errors.New("utun fd not found")
+	}
 
-	name := getUtunIfName(fd)
+	ifName, err := getUtunIfName(fd)
+	if err != nil {
+		log.Infof("utun name lookup failed: %v", err)
+	} else {
+		log.Infof("utun fd=%d name=%s", fd, ifName)
+	}
 
-	log.Infof("Get fd = %v, name = %v", fd, name)
-
-	common.StartTransfer(
+	common.StartTransferDarwin(
 		fd,
-		func(buf []byte) (int, error) {
-			return client.IPDevice.Read(buf)
+		func(p []byte) (int, error) {
+			return od.IPDevice.Read(p)
 		},
-		func(buf []byte) (int, error) {
-			return client.IPDevice.Write(buf)
+		func(p []byte) (int, error) {
+			return od.IPDevice.Write(p)
 		},
 	)
 
-	log.Infof("OutlineConnect() finished successfully")
+	log.Infof("OutlineConnect(): transfer started")
 	return nil
 }
+
+// ------------------ DISCONNECT ------------------
 
 func OutlineDisconnect() error {
 	defer guardExport("OutlineDisconnect")()
-	log.Infof("OutlineDisconnect() called")
 
-	if client == nil {
-		// это не ошибка — просто нечего отключать
-		return nil
+	common.StopTransferDarwin()
+
+	clientMu.Lock()
+	defer clientMu.Unlock()
+
+	if client != nil && client.IPDevice != nil {
+		_ = client.IPDevice.Close()
 	}
 
-	common.StopTransfer()
 	client = nil
 
-	log.Infof("OutlineDisconnect() finished")
+	log.Infof("OutlineDisconnect(): done")
 	return nil
 }
 
-func (d *OutlineDevice) Read() ([]byte, error) {
-	defer guard("OutlineDevice.Read")()
-	buf := make([]byte, 65536)
-	n, err := d.IPDevice.Read(buf)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read data: %w", err)
-	}
-	return buf[:n], nil
-}
-
-func (d *OutlineDevice) Write(buf []byte) (int, error) {
-	defer guard("OutlineDevice.Write")()
-	n, err := d.IPDevice.Write(buf)
-	if err != nil {
-		return 0, fmt.Errorf("failed to write data: %w", err)
-	}
-	return n, nil
-}
-
-
-
-func getUtunIfName(fd int) string {
-    var name [32]byte
-    size := uint32(len(name))
-
-    _, _, errno := unix.Syscall6(
-        unix.SYS_GETSOCKOPT,
-        uintptr(fd),
-        uintptr(sysProtoControl),
-        uintptr(utunOptIfName),
-        uintptr(unsafe.Pointer(&name[0])),
-        uintptr(unsafe.Pointer(&size)),
-        0,
-    )
-
-    if errno != 0 {
-        return "unknown"
-    }
-
-    return string(name[:size-1])
-}
-
+// ------------------ UTUN FD SEARCH ------------------
 
 func GetTunnelFileDescriptor() int {
 	ctlInfo := &unix.CtlInfo{}
@@ -177,7 +168,7 @@ func GetTunnelFileDescriptor() int {
 			continue
 		}
 
-		addrCTL, ok := addr.(*unix.SockaddrCtl)
+		addrCtl, ok := addr.(*unix.SockaddrCtl)
 		if !ok {
 			continue
 		}
@@ -188,26 +179,56 @@ func GetTunnelFileDescriptor() int {
 			}
 		}
 
-		if addrCTL.ID == ctlInfo.Id {
+		if addrCtl.ID == ctlInfo.Id {
 			return fd
 		}
 	}
-
 	return -1
 }
 
-// extractTLSSNIHost extracts the host from "tls:sni=HOST" part of the config.
-// Returns empty string if not found.
-func extractTLSSNIHost(transportConfig string) string {
-	parts := strings.Split(transportConfig, "|")
+// ------------------ UTUN NAME ------------------
+
+func getUtunIfName(fd int) (string, error) {
+	const (
+		sysProtoControl = 2
+		utunOptIfName   = 2
+	)
+
+	var name [32]byte
+	size := uint32(len(name))
+
+	_, _, errno := unix.Syscall6(
+		unix.SYS_GETSOCKOPT,
+		uintptr(fd),
+		uintptr(sysProtoControl),
+		uintptr(utunOptIfName),
+		uintptr(unsafe.Pointer(&name[0])),
+		uintptr(unsafe.Pointer(&size)),
+		0,
+	)
+
+	if errno != 0 {
+		return "", errno
+	}
+
+	if size == 0 {
+		return "", nil
+	}
+
+	return string(name[:size-1]), nil
+}
+
+// ------------------ CONFIG PARSING ------------------
+
+func extractTLSSNIHost(config string) string {
+	parts := strings.Split(config, "|")
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if strings.HasPrefix(part, "tls:") {
-			// Parse tls:sni=HOST or tls:sni=HOST&other_param=value
 			params := strings.TrimPrefix(part, "tls:")
-			for _, param := range strings.Split(params, "&") {
-				if strings.HasPrefix(param, "sni=") {
-					return strings.TrimPrefix(param, "sni=")
+			for _, p := range strings.Split(params, "&") {
+				if strings.HasPrefix(p, "sni=") {
+					return strings.TrimPrefix(p, "sni=")
 				}
 			}
 		}
@@ -215,62 +236,49 @@ func extractTLSSNIHost(transportConfig string) string {
 	return ""
 }
 
-// resolveShadowsocksServerIPFromConfig extracts server IP from transport config
-// For WSS configs (tls:sni=...|ws:...|ss://...), it uses the TLS SNI host.
-// For plain configs (ss://...), it uses the Shadowsocks host.
-func resolveShadowsocksServerIPFromConfig(transportConfig string) (net.IP, error) {
-	if transportConfig = strings.TrimSpace(transportConfig); transportConfig == "" {
-		return nil, errors.New("config is required")
+func resolveShadowsocksServerIPFromConfig(config string) (net.IP, error) {
+	config = strings.TrimSpace(config)
+	if config == "" {
+		return nil, errors.New("config required")
 	}
 
 	var host string
 
-	// First, check for TLS SNI host (used in WSS configs)
-	// This is the actual server we connect to for WebSocket over TLS
-	if sniHost := extractTLSSNIHost(transportConfig); sniHost != "" {
-		host = sniHost
+	if sni := extractTLSSNIHost(config); sni != "" {
+		host = sni
 	} else {
-		// Fall back to ss:// host for plain Shadowsocks configs
-		parts := strings.Split(transportConfig, "|")
-		var ssConfig string
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if strings.HasPrefix(part, "ss://") {
-				ssConfig = part
+		var ssPart string
+		for _, p := range strings.Split(config, "|") {
+			p = strings.TrimSpace(p)
+			if strings.HasPrefix(p, "ss://") {
+				ssPart = p
 				break
 			}
 		}
-
-		if ssConfig == "" {
-			return nil, errors.New("config must contain 'ss://' part")
+		if ssPart == "" {
+			return nil, errors.New("ss:// part not found")
 		}
-
-		parsedURL, err := url.Parse(ssConfig)
+		u, err := url.Parse(ssPart)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse ss:// config: %w", err)
+			return nil, err
 		}
-
-		host = strings.TrimSpace(parsedURL.Hostname())
-		if host == "" {
-			return nil, fmt.Errorf("invalid ss:// config: missing hostname (host part=%q)", parsedURL.Host)
-		}
+		host = u.Hostname()
 	}
 
-	// Skip resolution for localhost (used when Cloak is enabled)
 	if host == "127.0.0.1" || host == "localhost" {
 		return net.ParseIP("127.0.0.1").To4(), nil
 	}
 
-	ipList, err := net.LookupIP(host)
+	ips, err := net.LookupIP(host)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve server hostname %q: %w", host, err)
+		return nil, err
 	}
 
-	// We Support only IPv4 in this version
-	for _, ip := range ipList {
-		if ip = ip.To4(); ip != nil {
-			return ip, nil
+	for _, ip := range ips {
+		if v4 := ip.To4(); v4 != nil {
+			return v4, nil
 		}
 	}
-	return nil, errors.New("IPv6 only Shadowsocks server is not supported yet")
+
+	return nil, errors.New("IPv6-only server not supported")
 }
