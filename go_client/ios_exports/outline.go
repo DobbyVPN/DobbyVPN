@@ -38,7 +38,7 @@ func NewOutlineClient(transportConfig string) (err error) {
 		return fmt.Errorf("NewOutlineClient() failed: %v", err)
 	}
 	log.Infof("Start fd search")
-    var fd := GetTunnelFileDescriptor()
+    fd := GetTunnelFileDescriptor()
 	log.Infof("Fd was found, fd = %d", fd)
 	log.Infof("Config length=%d", len(transportConfig))
 	client = outline.NewClient(transportConfig, fd)
