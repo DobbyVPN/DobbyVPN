@@ -52,10 +52,7 @@ func NewOutlineClient(transportConfig string) (err error) {
 	log.Infof("Fd was found, fd = %d", fd)
 	log.Infof("Config length=%d", len(transportConfig))
 
-	client = outline.NewClient(
-	    transportConfig,
-	    fd
-    )
+	client = outline.NewClient(transportConfig, fd)
 
 	log.Infof("NewOutlineClient() finished")
 	return nil
