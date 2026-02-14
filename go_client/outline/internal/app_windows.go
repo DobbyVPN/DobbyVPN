@@ -7,16 +7,33 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 
 	"go_client/common"
 	"go_client/routing"
-	"go_client/tunnel"
 
 	"github.com/jackpal/gateway"
 	log "go_client/logger"
 	outlineCommon "go_client/outline/common"
 )
+
+func add_route(proxyIp string) {
+	gatewayIP, err := gateway.DiscoverGateway()
+	if err != nil {
+		panic(err)
+	}
+	interfaceName, err := routing.FindInterfaceByGateway(gatewayIP.String())
+	if err != nil {
+		panic(err)
+	}
+	netInterface, err := routing.GetNetworkInterfaceByIP(interfaceName)
+	if err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
+	}
+	routing.AddOrUpdateProxyRoute(proxyIp, gatewayIP.String(), netInterface.Name)
+}
 
 func CreateEthernetPacket(dstMAC, srcMAC, ipPacket []byte) ([]byte, error) {
 	if len(ipPacket) == 0 {
@@ -61,6 +78,8 @@ func signalInit(initResult chan<- error, err error) {
 }
 
 func (app App) Run(ctx context.Context, initResult chan<- error) error {
+	trafficCopyWg := &sync.WaitGroup{}
+	defer trafficCopyWg.Wait()
 
 	if !checkRoot() {
 		err := errors.New("this operation requires superuser privileges. Please run the program with administrator")
@@ -190,7 +209,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	defer func() {
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
 		log.Infof("[Routing] Cleaning up routes for %s...", serverIP.String())
-		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name)
+		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name, TunGateway)
 		log.Infof("[Routing] Routes cleaned up")
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 	}()
@@ -212,30 +231,103 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		log.Infof("[Outline] Cancel received — closing interfaces")
 	}()
 
-	log.Infof("[Tunnel] Starting transfer using unified tunnel.StartTransfer")
+	trafficCopyWg.Add(2)
 
-	tunnel.StartTransfer(
-		tun,
-		func(p []byte) (int, error) {
-			return ss.Read(p)
-		},
-		func(b []byte) (int, error) {
-			ipPacket, err := ExtractIPPacketFromEthernet(b)
-			if err != nil {
-				return 0, err
+	// TUN → Shadowsocks: read Ethernet frames from TAP, extract IP packets, send to SS
+	go func() {
+		defer trafficCopyWg.Done()
+		buffer := make([]byte, 65000)
+		var tunReadCount, tunWriteCount, tunReadErr, tunExtractErr, tunWriteErr uint64
+
+		for {
+			select {
+			case <-ctx.Done():
+				log.Infof("Outline/tun→ss: goroutine stopped (ctx cancelled). reads=%d writes=%d readErrs=%d extractErrs=%d writeErrs=%d",
+					tunReadCount, tunWriteCount, tunReadErr, tunExtractErr, tunWriteErr)
+				return
+			default:
+				n, err := tun.Read(buffer)
+				if err != nil {
+					tunReadErr++
+					if tunReadErr <= 5 || tunReadErr%1000 == 0 {
+						log.Infof("Outline/tun→ss: tun.Read error (#%d): %v", tunReadErr, err)
+					}
+					break
+				}
+				if n > 0 {
+					tunReadCount++
+					ipPacket, err := ExtractIPPacketFromEthernet(buffer[:n])
+					if err != nil {
+						tunExtractErr++
+						if tunExtractErr <= 5 || tunExtractErr%1000 == 0 {
+							log.Infof("Outline/tun→ss: ExtractIP error (#%d, frame=%d bytes): %v", tunExtractErr, n, err)
+						}
+						continue
+					}
+					_, err = ss.Write(ipPacket)
+					if err != nil {
+						tunWriteErr++
+						if tunWriteErr <= 5 || tunWriteErr%1000 == 0 {
+							log.Infof("Outline/tun→ss: ss.Write error (#%d): %v", tunWriteErr, err)
+						}
+						break
+					}
+					tunWriteCount++
+				}
 			}
-			return ss.Write(ipPacket)
-		},
-	)
+		}
+	}()
+
+	// Shadowsocks → TUN: read IP packets from SS, wrap in Ethernet, write to TAP
+	go func() {
+		defer trafficCopyWg.Done()
+		buf := make([]byte, 65000)
+		var ssReadCount, ssWriteCount, ssReadErr, ssCreateErr, ssWriteErr uint64
+
+		for {
+			select {
+			case <-ctx.Done():
+				log.Infof("Outline/ss→tun: goroutine stopped (ctx cancelled). reads=%d writes=%d readErrs=%d createErrs=%d writeErrs=%d",
+					ssReadCount, ssWriteCount, ssReadErr, ssCreateErr, ssWriteErr)
+				return
+			default:
+				n, err := ss.Read(buf)
+				if err != nil {
+					ssReadErr++
+					if ssReadErr <= 5 || ssReadErr%1000 == 0 {
+						log.Infof("Outline/ss→tun: ss.Read error (#%d): %v", ssReadErr, err)
+					}
+					break
+				}
+				if n > 0 {
+					ssReadCount++
+					ethernetPacket, err := CreateEthernetPacket(dst, src, buf[:n])
+					if err != nil {
+						ssCreateErr++
+						log.Infof("Outline/ss→tun: CreateEthernetPacket error (#%d): %v", ssCreateErr, err)
+						break
+					}
+					_, err = tun.Write(ethernetPacket)
+					if err != nil {
+						ssWriteErr++
+						if ssWriteErr <= 5 || ssWriteErr%1000 == 0 {
+							log.Infof("Outline/ss→tun: tun.Write error (#%d): %v", ssWriteErr, err)
+						}
+						break
+					}
+					ssWriteCount++
+				}
+			}
+		}
+		log.Infof("OutlineDevice -> tun stopped")
+	}()
 
 	log.Infof("Outline/app: Start trafficCopyWg...\n")
 
-	<-ctx.Done()
-
-	log.Infof("[Tunnel] Context cancelled, stopping transfer")
-	tunnel.StopTransfer()
+	trafficCopyWg.Wait()
 
 	log.Infof("Outline/app: received interrupt signal, terminating...\n")
+
 	tun.Close()
 	ss.Close()
 
