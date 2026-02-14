@@ -11,6 +11,7 @@ import (
 
 	"go_client/common"
 	"go_client/routing"
+	"go_client/tunnel"
 
 	"github.com/jackpal/gateway"
 	log "go_client/logger"
@@ -60,8 +61,6 @@ func signalInit(initResult chan<- error, err error) {
 }
 
 func (app App) Run(ctx context.Context, initResult chan<- error) error {
-	trafficCopyWg := &sync.WaitGroup{}
-	defer trafficCopyWg.Wait()
 
 	if !checkRoot() {
 		err := errors.New("this operation requires superuser privileges. Please run the program with administrator")
@@ -213,82 +212,30 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		log.Infof("[Outline] Cancel received — closing interfaces")
 	}()
 
-	trafficCopyWg.Add(2)
-	go func() {
-		defer trafficCopyWg.Done()
-		buffer := make([]byte, 65000)
+	log.Infof("[Tunnel] Starting transfer using unified tunnel.StartTransfer")
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				copy(buffer, make([]byte, len(buffer)))
-				n, err := tun.Read(buffer)
-				if err != nil {
-					//fmt.Printf("Error reading from device: %x %v\n", n, err)
-					break
-				}
-				if n > 0 {
-					//log.Printf("Read %d bytes from tun\n", n)
-					//log.Printf("Data from tun: % x\n", buffer[:n])
-					ipPacket, err := ExtractIPPacketFromEthernet(buffer[:n])
-					if err != nil {
-						fmt.Println("Error:", err)
-						continue
-					}
-					_, err = ss.Write(ipPacket)
-					if err != nil {
-						//   log.Printf("Error writing to device: %v", err)
-						break
-					}
-				}
+	tunnel.StartTransfer(
+		tun.Fd(),
+		func(p []byte) (int, error) {
+			return ss.Read(p)
+		},
+		func(b []byte) (int, error) {
+			ipPacket, err := ExtractIPPacketFromEthernet(b)
+			if err != nil {
+				return 0, err
 			}
-		}
-	}()
-
-	go func() {
-		defer trafficCopyWg.Done()
-		buf := make([]byte, 65000)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				copy(buf, make([]byte, len(buf)))
-				n, err := ss.Read(buf)
-				if err != nil {
-					//  fmt.Printf("Error reading from device: %v\n", err)
-					break
-				}
-				if n > 0 {
-					//log.Printf("Read %d bytes from OutlineDevice\n", n)
-					//log.Printf("Data from OutlineDevice: % x\n", buf[:n])
-
-					ethernetPacket, err := CreateEthernetPacket(dst, src, buf[:n])
-					if err != nil {
-						log.Infof("Error creating Ethernet packet: %v", err)
-						break
-					}
-
-					_, err = tun.Write(ethernetPacket)
-					if err != nil {
-						//    log.Printf("Error writing to tun: %v", err)
-						break
-					}
-				}
-
-			}
-		}
-		log.Infof("OutlineDevice -> tun stopped")
-	}()
+			return ss.Write(ipPacket)
+		},
+	)
 
 	log.Infof("Outline/app: Start trafficCopyWg...\n")
 
-	trafficCopyWg.Wait()
+	<-ctx.Done()
+
+	log.Infof("[Tunnel] Context cancelled, stopping transfer")
+	tunnel.StopTransfer()
 
 	log.Infof("Outline/app: received interrupt signal, terminating...\n")
-
 	tun.Close()
 	ss.Close()
 

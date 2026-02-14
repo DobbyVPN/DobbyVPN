@@ -1,10 +1,8 @@
-//go:build android
-
 package tunnel
 
 import (
+	"go_client/tunnel/internal"
 	"sync"
-	"syscall"
 )
 
 type ReaderFunc func(p []byte) (int, error)
@@ -53,11 +51,11 @@ func (t *tunTransfer) readFromUserLoop() {
 		case <-t.stopCh:
 			return
 		default:
-			n, err := syscall.Read(t.tunFd, buf)
-			if err != nil {
+			n, err := internal.Read(t.tunFd, buf)
+			if n <= 0 || err != nil {
 				continue
 			}
-			if n > 0 && t.readFn != nil {
+			if t.writeFn != nil {
 				_, _ = t.writeFn(buf[:n])
 			}
 		}
@@ -74,16 +72,14 @@ func (t *tunTransfer) writeToUserLoop() {
 		case <-t.stopCh:
 			return
 		default:
-			if t.writeFn == nil {
+			if t.readFn == nil {
 				continue
 			}
 			n, err := t.readFn(buf)
-			if err != nil {
+			if err != nil || n <= 0 {
 				continue
 			}
-			if n > 0 {
-				_, _ = syscall.Write(t.tunFd, buf[:n])
-			}
+			internal.Write(t.tunFd, n, buf)
 		}
 	}
 }

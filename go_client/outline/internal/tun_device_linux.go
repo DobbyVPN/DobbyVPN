@@ -81,3 +81,7 @@ func (d *tunDevice) bringUp() error {
 	}
 	return nil
 }
+
+func (d *tunDevice) Fd() int {
+	return int(d.Interface.Fd())
+}

@@ -40,9 +40,6 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("gatewayIP: %s", gatewayIP.String())
 
-	trafficCopyWg := &sync.WaitGroup{}
-	defer trafficCopyWg.Wait()
-
 	if !checkRoot() {
 		err := errors.New("this operation requires superuser privileges. Please run the program with sudo or as root")
 		signalInit(initResult, err)
@@ -111,64 +108,15 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		log.Infof("[Outline] Cancel received — closing interfaces")
 	}()
 
-	trafficCopyWg.Add(2)
-
-	go func() {
-		defer trafficCopyWg.Done()
-		buffer := make([]byte, 65536)
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				n, err := tun.Read(buffer)
-				if err != nil {
-					//fmt.Printf("Error reading from device: %x %v\n", n, err)
-					break
-				}
-				if n > 0 {
-					//log.Printf("Read %d bytes from tun\n", n)
-					//log.Printf("Data from tun: % x\n", buffer[:n])
-
-					_, err = ss.Write(buffer[:n])
-					if err != nil {
-						//   log.Printf("Error writing to device: %v", err)
-						break
-					}
-				}
-			}
-		}
-	}()
-
-	go func() {
-		defer trafficCopyWg.Done()
-		buf := make([]byte, 65536)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				n, err := ss.Read(buf)
-				if err != nil {
-					//  fmt.Printf("Error reading from device: %v\n", err)
-					break
-				}
-				if n > 0 {
-					//log.Printf("Read %d bytes from OutlineDevice\n", n)
-					//log.Printf("Data from OutlineDevice: % x\n", buf[:n])
-
-					_, err = tun.Write(buf[:n])
-					if err != nil {
-						//    log.Printf("Error writing to tun: %v", err)
-						break
-					}
-				}
-
-			}
-		}
-		log.Infof("OutlineDevice -> tun stopped")
-	}()
+	tunnel.StartTransfer(
+		tun.Fd(), // важно: fd utun
+		func(p []byte) (int, error) {
+			return ss.Read(p)
+		},
+		func(b []byte) (int, error) {
+			return ss.Write(b)
+		},
+	)
 
 	common.Client.MarkInCriticalSection(outlineCommon.Name)
 	if err := routing.StartRouting(serverIP.String(), gatewayIP.String(), tun.(*tunDevice).name); err != nil {
@@ -192,7 +140,10 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("Outline/app: Start trafficCopyWg...\n")
 
-	trafficCopyWg.Wait()
+	<-ctx.Done()
+
+	log.Infof("[Tunnel] Context cancelled — stopping transfer")
+	tunnel.StopTransfer()
 
 	log.Infof("Outline/app: received interrupt signal, terminating...\n")
 
