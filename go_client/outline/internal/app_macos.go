@@ -15,6 +15,7 @@ import (
 	"go_client/common"
 	outlineCommon "go_client/outline/common"
 	"go_client/routing"
+	"go_client/tunnel"
 
 	"github.com/jackpal/gateway"
 )

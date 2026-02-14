@@ -10,6 +10,7 @@ import (
 	log "go_client/logger"
 	outlineCommon "go_client/outline/common"
 	"go_client/routing"
+	"go_client/tunnel"
 
 	"github.com/jackpal/gateway"
 )
@@ -103,7 +104,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	}()
 
 	tunnel.StartTransfer(
-		tunDev,
+		tun,
 		func(buf []byte) (int, error) {
 			return ss.Read(buf)
 		},
