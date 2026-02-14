@@ -13,10 +13,10 @@ import com.dobby.feature.main.domain.VpnManagerImpl
 import com.dobby.feature.vpn_service.CloakLibFacade
 import com.dobby.feature.vpn_service.DobbyVpnInterfaceFactory
 import com.dobby.feature.vpn_service.OutlineLibFacade
-import com.dobby.feature.vpn_service.domain.CloakConnectionInteractor
-import com.dobby.feature.vpn_service.domain.CloakLibFacadeImpl
-import com.dobby.feature.vpn_service.domain.IpFetcher
-import com.dobby.feature.vpn_service.domain.OutlineLibFacadeImpl
+import com.dobby.feature.vpn_service.domain.cloak.CloakConnectionInteractor
+import com.dobby.feature.vpn_service.domain.cloak.CloakLibFacadeImpl
+import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
+import com.dobby.feature.vpn_service.domain.outline.OutlineLibFacadeImpl
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.dsl.factoryOf
 import org.koin.dsl.module
@@ -40,9 +40,9 @@ val androidMainModule = makeNativeModule(
 
 val androidVpnModule = module {
     single { Logger(get()) }
-    factoryOf(::IpFetcher)
     factory<CloakLibFacade> { CloakLibFacadeImpl() }
     factory<OutlineLibFacade> { OutlineLibFacadeImpl() }
-    single<CloakConnectionInteractor> { CloakConnectionInteractor(get()) }
+    single<CloakConnectionInteractor> { CloakConnectionInteractor(get(), get(), get()) }
+    single<OutlineInteractor> { OutlineInteractor(get(), get(), get()) }
     factoryOf(::DobbyVpnInterfaceFactory)
 }

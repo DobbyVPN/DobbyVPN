@@ -1,4 +1,4 @@
-package com.dobby.feature.vpn_service.domain
+package com.dobby.feature.vpn_service.domain.cloak
 
 sealed interface ConnectResult {
     data object ValidationError : ConnectResult

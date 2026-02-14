@@ -1,5 +1,6 @@
-package com.dobby.feature.vpn_service.domain
+package com.dobby.feature.vpn_service.domain.cloak
 
+import android.util.Log
 import com.dobby.feature.vpn_service.CloakLibFacade
 import com.dobby.outline.OutlineGo
 
@@ -11,13 +12,5 @@ class CloakLibFacadeImpl : CloakLibFacade {
 
     override fun stopClient() {
         OutlineGo.stopCloakClient()
-    }
-
-    override fun restartClient() {
-        android.util.Log.e(
-            "DobbyTAG",
-            "VpnService:  Cloak_outline.startAgain()\n\n\n"
-        )
-//        Cloak_outline.startAgain()
     }
 }
