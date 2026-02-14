@@ -1,7 +1,7 @@
 package tunnel
 
 import (
-	"go_client/tunnel/internal"
+	"io"
 	"sync"
 )
 
@@ -9,7 +9,7 @@ type ReaderFunc func(p []byte) (int, error)
 type WriterFunc func(b []byte) (int, error)
 
 type tunTransfer struct {
-	tunFd   int
+	tun     io.ReadWriteCloser
 	readFn  ReaderFunc
 	writeFn WriterFunc
 	stopCh  chan struct{}
@@ -22,12 +22,12 @@ var (
 )
 
 func StartTransfer(
-	fd int,
+	tun io.ReadWriteCloser,
 	readFn ReaderFunc,
 	writeFn WriterFunc,
 ) {
 	transferInst = &tunTransfer{
-		tunFd:   fd,
+		tun:     tun,
 		readFn:  readFn,
 		writeFn: writeFn,
 		stopCh:  make(chan struct{}),
@@ -37,11 +37,11 @@ func StartTransfer(
 
 func (t *tunTransfer) startLoops() {
 	t.wg.Add(2)
-	go t.readFromUserLoop()
-	go t.writeToUserLoop()
+	go t.readFromTunLoop()
+	go t.writeToTunLoop()
 }
 
-func (t *tunTransfer) readFromUserLoop() {
+func (t *tunTransfer) readFromTunLoop() {
 	defer t.wg.Done()
 
 	buf := make([]byte, defaultBufSize)
@@ -51,7 +51,7 @@ func (t *tunTransfer) readFromUserLoop() {
 		case <-t.stopCh:
 			return
 		default:
-			n, err := internal.Read(t.tunFd, buf)
+			n, err := t.tun.Read(buf)
 			if n <= 0 || err != nil {
 				continue
 			}
@@ -62,7 +62,7 @@ func (t *tunTransfer) readFromUserLoop() {
 	}
 }
 
-func (t *tunTransfer) writeToUserLoop() {
+func (t *tunTransfer) writeToTunLoop() {
 	defer t.wg.Done()
 
 	buf := make([]byte, defaultBufSize)
@@ -79,7 +79,7 @@ func (t *tunTransfer) writeToUserLoop() {
 			if err != nil || n <= 0 {
 				continue
 			}
-			internal.Write(t.tunFd, n, buf)
+			_, _ = t.tun.Write(buf[:n])
 		}
 	}
 }
@@ -90,5 +90,6 @@ func StopTransfer() {
 	}
 	close(transferInst.stopCh)
 	transferInst.wg.Wait()
+	_ = transferInst.tun.Close()
 	transferInst = nil
 }

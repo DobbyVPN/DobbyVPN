@@ -1,11 +1,10 @@
-//go:build android || ios
-
 package cloak_outline
 
 import (
 	"fmt"
 	log "go_client/logger"
 	"go_client/outline"
+	"os"
 	"runtime/debug"
 
 	"golang.org/x/sys/unix"
@@ -44,6 +43,7 @@ func NewOutlineClient(transportConfig string) (err error) {
 	}
 
 	log.Infof("Start fd search")
+
 	fd := GetTunnelFileDescriptor()
 	if fd < 0 {
 		return fmt.Errorf("NewOutlineClient(): utun fd not found")
@@ -52,7 +52,9 @@ func NewOutlineClient(transportConfig string) (err error) {
 	log.Infof("Fd was found, fd = %d", fd)
 	log.Infof("Config length=%d", len(transportConfig))
 
-	client = outline.NewClient(transportConfig, fd)
+	tunFile := os.NewFile(uintptr(fd), "utun")
+
+	client = outline.NewClient(transportConfig, tunFile)
 
 	log.Infof("NewOutlineClient() finished")
 	return nil

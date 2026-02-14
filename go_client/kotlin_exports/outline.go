@@ -5,9 +5,11 @@ package main
 #include <string.h>
 */
 import "C"
+
 import (
 	log "go_client/logger"
 	"go_client/outline"
+	"os"
 	"runtime/debug"
 	"sync"
 )
@@ -62,11 +64,18 @@ func unsafeToString(v any) string {
 func NewOutlineClient(config *C.char, fd C.int) {
 	defer guardExport("NewOutlineClient")()
 	log.Infof("NewOutlineClient() called")
+
 	OutlineDisconnect()
+
 	goConfig := C.GoString(config)
 	goFD := int(fd)
-	log.Infof("Config length=%d, config: %s", len(goConfig), goConfig)
-	client = outline.NewClient(goConfig, goFD)
+
+	log.Infof("Config length=%d", len(goConfig))
+
+	tunFile := os.NewFile(uintptr(goFD), "tun")
+
+	client = outline.NewClient(goConfig, tunFile)
+
 	log.Infof("NewOutlineClient() finished")
 }
 
@@ -74,18 +83,22 @@ func NewOutlineClient(config *C.char, fd C.int) {
 func OutlineConnect() C.int {
 	defer guardExport("OutlineConnect")()
 	log.Infof("OutlineConnect() called")
+
 	clearLastError()
+
 	if client == nil {
 		setLastError("client is nil")
 		log.Infof("OutlineConnect() failed: client is nil")
 		return -1
 	}
+
 	err := client.Connect()
 	if err != nil {
 		setLastError(err.Error())
 		log.Infof("OutlineConnect() failed: %v", err)
 		return -1
 	}
+
 	log.Infof("OutlineConnect() finished successfully")
 	return 0
 }
@@ -94,10 +107,14 @@ func OutlineConnect() C.int {
 func OutlineDisconnect() {
 	defer guardExport("OutlineDisconnect")()
 	log.Infof("OutlineDisconnect() called")
+
 	if client == nil {
 		log.Infof("OutlineDisconnect(): client is nil")
 		return
 	}
+
 	client.Disconnect()
+	client = nil
+
 	log.Infof("OutlineDisconnect() finished")
 }

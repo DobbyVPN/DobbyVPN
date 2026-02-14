@@ -215,7 +215,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	log.Infof("[Tunnel] Starting transfer using unified tunnel.StartTransfer")
 
 	tunnel.StartTransfer(
-		tun.Fd(),
+		tun,
 		func(p []byte) (int, error) {
 			return ss.Read(p)
 		},

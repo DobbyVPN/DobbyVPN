@@ -104,7 +104,3 @@ func (d *tunDevice) bringUp() error {
 	log.Infof("TUN device %s is now active\n", d.name)
 	return nil
 }
-
-func (d *tunDevice) Fd() int {
-	return int(d.Interface.Fd())
-}

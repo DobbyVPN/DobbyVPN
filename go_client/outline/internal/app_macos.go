@@ -109,7 +109,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	}()
 
 	tunnel.StartTransfer(
-		tun.Fd(), // важно: fd utun
+		tun,
 		func(p []byte) (int, error) {
 			return ss.Read(p)
 		},
