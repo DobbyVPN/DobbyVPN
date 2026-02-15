@@ -1,0 +1,107 @@
+name: F-Droid Compliance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-deps:
+    name: Check for proprietary dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Scan for blocked dependencies
+        working-directory: kmp_client
+        run: |
+          BLOCKED=(
+            "com.google.firebase"
+            "com.google.android.gms"
+            "com.google.gms"
+            "com.crashlytics"
+            "io.fabric"
+            "com.facebook.android"
+            "com.google.ads"
+          )
+          FOUND=0
+          for p in "${BLOCKED[@]}"; do
+            if grep -rq "$p" --include="*.gradle*" --include="*.toml" .; then
+              echo "::error::Proprietary dependency: $p"
+              FOUND=1
+            fi
+          done
+          exit $FOUND
+
+  check-binaries:
+    name: Check for committed binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Find binary files in repo
+        run: |
+          BINS=$(git ls-files | xargs file --mime-type 2>/dev/null \
+            | grep -E 'application/octet-stream|application/java-archive|application/zip|application/x-executable|application/x-sharedlib|application/x-mach-binary|application/x-pie-executable' \
+            | grep -v '.git/' \
+            | cut -d: -f1)
+          if [ -n "$BINS" ]; then
+            echo "::error::Binary files found in repository:"
+            echo "$BINS"
+            exit 1
+          fi
+          echo "No binaries found"
+
+  reproducible-build:
+    name: Reproducible build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'build-tools;34.0.0 platforms;android-35'
+
+      - name: Build 1
+        working-directory: kmp_client
+        run: |
+          ./gradlew app:assembleRelease -PdisableSentry=true \
+            -Pandroid.injected.version.code=1 \
+            -Pandroid.injected.version.name=0.0.1
+          cp app/build/outputs/apk/release/app-release-unsigned.apk /tmp/build1.apk
+
+      - name: Clean & Build 2
+        working-directory: kmp_client
+        run: |
+          ./gradlew clean
+          ./gradlew app:assembleRelease -PdisableSentry=true \
+            -Pandroid.injected.version.code=1 \
+            -Pandroid.injected.version.name=0.0.1
+          cp app/build/outputs/apk/release/app-release-unsigned.apk /tmp/build2.apk
+
+      - name: Compare
+        run: |
+          SHA1=$(sha256sum /tmp/build1.apk | cut -d' ' -f1)
+          SHA2=$(sha256sum /tmp/build2.apk | cut -d' ' -f1)
+          echo "Build 1: $SHA1"
+          echo "Build 2: $SHA2"
+          [ "$SHA1" = "$SHA2" ] && echo "Builds are identical" || exit 1
+
+      - name: Diff on failure
+        if: failure()
+        run: |
+          sudo apt-get install -y diffoscope
+          diffoscope /tmp/build1.apk /tmp/build2.apk --text /tmp/diff.txt || true
+          head -100 /tmp/diff.txt

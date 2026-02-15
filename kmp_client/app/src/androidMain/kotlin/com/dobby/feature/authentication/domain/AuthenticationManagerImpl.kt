@@ -1,24 +1,24 @@
 package com.dobby.feature.authentication.domain
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
 import androidx.biometric.BiometricPrompt
 import androidx.biometric.BiometricPrompt.ERROR_NEGATIVE_BUTTON
-import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
-import dev.jordond.compass.Priority
-import dev.jordond.compass.permissions.PermissionState
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
-import android.provider.Settings
-import androidx.lifecycle.DefaultLifecycleObserver
-import androidx.lifecycle.LifecycleOwner
 
-private lateinit var activity : FragmentActivity
+private lateinit var activity: FragmentActivity
 
 fun initBiometricAuthenticationManager(context: FragmentActivity) {
     activity = context
@@ -26,9 +26,11 @@ fun initBiometricAuthenticationManager(context: FragmentActivity) {
 
 class AuthenticationManagerImpl(
     private val context: Context
-): AuthenticationManager {
-    override fun isAuthenticationAvailable() = (BiometricManager.from(context).canAuthenticate(BIOMETRIC_WEAK)
-            == BiometricManager.BIOMETRIC_SUCCESS)
+) : AuthenticationManager {
+
+    override fun isAuthenticationAvailable() =
+        BiometricManager.from(context).canAuthenticate(BIOMETRIC_WEAK) ==
+                BiometricManager.BIOMETRIC_SUCCESS
 
     override fun authenticate(
         onAuthSuccess: () -> Unit,
@@ -53,8 +55,7 @@ class AuthenticationManagerImpl(
                             context,
                             "Authentication error: $errString",
                             Toast.LENGTH_SHORT
-                        )
-                            .show()
+                        ).show()
                     }
                     onAuthFailure()
                 }
@@ -72,7 +73,6 @@ class AuthenticationManagerImpl(
                 }
             })
 
-
         val promptInfo = BiometricPrompt.PromptInfo.Builder()
             .setTitle("Biometric login")
             .setConfirmationRequired(false)
@@ -83,19 +83,36 @@ class AuthenticationManagerImpl(
     }
 
     override fun requireLocationPermission(endingFunc: (AuthPermissionState) -> Job) {
-        val controller = locationPermissionController ?: return
+        val fineGranted = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
 
-        MainScope().launch {
-            val status = controller.requirePermissionFor(Priority.HighAccuracy)
-
-            val state: AuthPermissionState = when (status) {
-                PermissionState.Granted -> AuthPermissionState.Granted
-                PermissionState.Denied -> AuthPermissionState.Denied
-                PermissionState.NotDetermined -> AuthPermissionState.NotDetermined
-                PermissionState.DeniedForever -> AuthPermissionState.NotDetermined
-            }
-            endingFunc(state)
+        if (fineGranted) {
+            endingFunc(AuthPermissionState.Granted)
+            return
         }
+
+        val key = "location_perm_${System.currentTimeMillis()}"
+        val launcher = activity.activityResultRegistry.register(
+            key,
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { permissions ->
+            val granted =
+                permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+
+            endingFunc(
+                if (granted) AuthPermissionState.Granted
+                else AuthPermissionState.Denied
+            )
+        }
+
+        launcher.launch(
+            arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            )
+        )
     }
 
     override fun requireLocationService(endingFunc: (Boolean) -> Unit) {
@@ -117,24 +134,20 @@ class AuthenticationManagerImpl(
             .setMessage("Location services are turned off. Please enable them to continue.")
             .setCancelable(true)
             .setPositiveButton("Open settings") { _, _ ->
-
-                        val lifecycle = activity.lifecycle
+                val lifecycle = activity.lifecycle
                 val observer = object : DefaultLifecycleObserver {
                     override fun onResume(owner: LifecycleOwner) {
                         super.onResume(owner)
-
                         lifecycle.removeObserver(this)
-
                         endingFunc(isGpsEnabled())
                     }
                 }
-
                 lifecycle.addObserver(observer)
 
                 try {
-                    activity.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                    activity.startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS))
                 } catch (e: Exception) {
-                    activity.startActivity(Intent(Settings.ACTION_SETTINGS))
+                    activity.startActivity(Intent(android.provider.Settings.ACTION_SETTINGS))
                 }
             }
             .setNegativeButton("Cancel") { _, _ ->
@@ -144,6 +157,4 @@ class AuthenticationManagerImpl(
 
         dialog.show()
     }
-
-
 }

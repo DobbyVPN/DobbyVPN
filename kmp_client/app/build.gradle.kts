@@ -68,9 +68,6 @@ kotlin {
             implementation(libs.okhttp)
             implementation(libs.ktor.client.okhttp)
 
-            implementation(libs.compass.geocoder.mobile)
-            implementation(libs.compass.geolocation.mobile)
-            implementation(libs.compass.permissions.mobile)
         }
 
         commonMain.dependencies {
@@ -97,9 +94,6 @@ kotlin {
 
             implementation(libs.datetime)
 
-            implementation(libs.compass.geocoder)
-            implementation(libs.compass.geolocation)
-
             implementation("com.russhwolf:multiplatform-settings-no-arg:1.3.0")
 
             implementation(compose.components.resources)
@@ -124,6 +118,7 @@ kotlin {
 
             implementation(libs.compass.geocoder.mobile)
             implementation(libs.compass.geolocation.mobile)
+            implementation(libs.compass.permissions.mobile)
         }
     }
 }
