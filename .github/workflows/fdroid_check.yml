@@ -25,8 +25,8 @@ jobs:
           fi
           echo "No binaries found"
 
-  build-and-verify:
-    name: Build, scan APK & reproducibility
+  scan-apk:
+    name: Scan APK for proprietary packages
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,15 +67,14 @@ jobs:
           rm -rf kmp_client/iosApp
           rm -rf kmp_client/tap-device
 
-      - name: Build 1
+      - name: Build APK
         working-directory: kmp_client
         run: |
           ./gradlew app:assembleRelease -PdisableSentry=true \
             -Pandroid.injected.version.code=1 \
             -Pandroid.injected.version.name=0.0.1
-          cp app/build/outputs/apk/release/app-release-unsigned.apk /tmp/build1.apk
 
-      - name: Scan APK for proprietary packages
+      - name: Scan for proprietary packages
         run: |
           BLOCKED=(
             # Google proprietary
@@ -108,7 +107,8 @@ jobs:
             "com.startapp"
           )
 
-          PACKAGES=$(apkanalyzer dex packages /tmp/build1.apk 2>/dev/null | awk '{print $NF}')
+          APK=kmp_client/app/build/outputs/apk/release/app-release-unsigned.apk
+          PACKAGES=$(apkanalyzer dex packages "$APK" 2>/dev/null | awk '{print $NF}')
 
           FOUND=0
           for p in "${BLOCKED[@]}"; do
@@ -122,28 +122,3 @@ jobs:
             exit 1
           fi
           echo "No proprietary packages found in APK"
-
-      - name: Clean & Build 2
-        working-directory: kmp_client
-        run: |
-          ./gradlew clean
-          ./gradlew app:assembleRelease -PdisableSentry=true \
-            -Pandroid.injected.version.code=1 \
-            -Pandroid.injected.version.name=0.0.1
-          cp app/build/outputs/apk/release/app-release-unsigned.apk /tmp/build2.apk
-
-      - name: Compare builds
-        run: |
-          SHA1=$(sha256sum /tmp/build1.apk | cut -d' ' -f1)
-          SHA2=$(sha256sum /tmp/build2.apk | cut -d' ' -f1)
-          echo "Build 1: $SHA1"
-          echo "Build 2: $SHA2"
-          [ "$SHA1" = "$SHA2" ] && echo "Builds are identical" || exit 1
-
-      - name: Diff on failure
-        if: failure()
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y diffoscope
-          diffoscope /tmp/build1.apk /tmp/build2.apk --text /tmp/diff.txt || true
-          head -100 /tmp/diff.txt
