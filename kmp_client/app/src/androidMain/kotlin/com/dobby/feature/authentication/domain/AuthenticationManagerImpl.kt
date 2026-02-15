@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.widget.Toast
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
@@ -19,9 +20,21 @@ import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
 
 private lateinit var activity: FragmentActivity
+private lateinit var locationPermissionLauncher: ActivityResultLauncher<Array<String>>
+private var locationPermissionCallback: ((Boolean) -> Unit)? = null
 
 fun initBiometricAuthenticationManager(context: FragmentActivity) {
     activity = context
+
+    locationPermissionLauncher = context.registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted =
+            permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        locationPermissionCallback?.invoke(granted)
+        locationPermissionCallback = null
+    }
 }
 
 class AuthenticationManagerImpl(
@@ -92,22 +105,15 @@ class AuthenticationManagerImpl(
             return
         }
 
-        val key = "location_perm_${System.currentTimeMillis()}"
-        val launcher = activity.activityResultRegistry.register(
-            key,
-            ActivityResultContracts.RequestMultiplePermissions()
-        ) { permissions ->
-            val granted =
-                permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-
+        // Set callback and launch the pre-registered permission dialog
+        locationPermissionCallback = { granted ->
             endingFunc(
                 if (granted) AuthPermissionState.Granted
                 else AuthPermissionState.Denied
             )
         }
 
-        launcher.launch(
+        locationPermissionLauncher.launch(
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION
