@@ -21,10 +21,14 @@ rpc Status ()                                           returns (status string);
 rpc TcpPing (address string)                            returns (result int32, error string);
 rpc UrlTest (url string, standard int32 )               returns (result int32, error string);
 rpc CouldStart ()                                       returns (result int32);
+rpc CheckServerAlive (address string, port int32)       returns (result int32);
 
 // cloak
 rpc StartCloakClient (localHost string, localPort string , config string, udp bool) returns ();
 rpc StopCloakClient ()                                                              returns ();    
+
+// logger
+rpc InitLogger (path string)                                                        returns ();
 ```
 
 ## Build and run

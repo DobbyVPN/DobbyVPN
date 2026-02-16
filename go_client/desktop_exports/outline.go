@@ -35,7 +35,6 @@ func StartOutline(str_key string) {
 	}
 }
 
-//export StopOutline
 func StopOutline() {
 	outlineMu.Lock()
 	defer outlineMu.Unlock()

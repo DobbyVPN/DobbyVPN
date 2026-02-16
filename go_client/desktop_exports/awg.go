@@ -1,54 +1,53 @@
 package main
 
 import (
-	"log"
-
 	"go_client/awg"
+	log "go_client/logger"
 )
 
 var awgClient *awg.AwgClient
 
 func StartAwg(tunnel, config string) {
-	log.Printf("Starting awg")
+	log.Infof("Starting awg")
 
 	if awgClient != nil {
-		log.Printf("Disconnect existing awgClient")
+		log.Infof("Disconnect existing awgClient")
 
 		err := awgClient.Disconnect()
 		if err != nil {
-			log.Printf("Failed to disconnect existing awgClient: %v", err)
+			log.Infof("Failed to disconnect existing awgClient: %v", err)
 			return
 		}
 	}
 
-	log.Printf("Create new awgClient")
+	log.Infof("Create new awgClient")
 
 	_awgClient, err := awg.NewAwgClient(tunnel, config)
 	if err != nil {
-		log.Printf("Failed to create awgClient: %v", err)
+		log.Infof("Failed to create awgClient: %v", err)
 		return
 	}
 	awgClient = _awgClient
 
-	log.Printf("Connect awgClient")
+	log.Infof("Connect awgClient")
 	err = awgClient.Connect()
 	if err != nil {
-		log.Printf("Failed to connect awgClient: %v", err)
+		log.Infof("Failed to connect awgClient: %v", err)
 	}
 }
 
 func StopAwg() {
-	log.Printf("Stopping awg")
+	log.Infof("Stopping awg")
 
 	if awgClient != nil {
-		log.Printf("Disconnect awgClient")
+		log.Infof("Disconnect awgClient")
 
 		err := awgClient.Disconnect()
 		if err != nil {
-			log.Printf("Failed to disconnect awgClient: %v", err)
+			log.Infof("Failed to disconnect awgClient: %v", err)
 		}
 		awgClient = nil
 	} else {
-		log.Printf("awgClient is null")
+		log.Infof("awgClient is null")
 	}
 }

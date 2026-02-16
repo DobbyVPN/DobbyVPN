@@ -31,7 +31,7 @@ func CouldStart() bool {
 	return common.Client.CouldStart()
 }
 
-func CheckServerAlive(address string, port int) int {
+func CheckServerAlive(address string, port int) int32 {
 	res := healthcheck.CheckServerAlive(address, port)
 	log.Infof("Health check result: %v", res)
 	if res == nil {

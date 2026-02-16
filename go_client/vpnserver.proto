@@ -8,19 +8,26 @@ service Vpn {
   // awg.go
   rpc StartAwg (StartAwgRequest)  returns (Empty);
   rpc StopAwg (Empty)             returns (Empty);
+  
   // outline.go
   rpc StartOutline (StartOutlineRequest)  returns (Empty);
   rpc StopOutline (Empty)                 returns (Empty);
+  
   // health_check.go
-  rpc StartHealthCheck (StartHealthCheckRequest)  returns (Empty);
-  rpc StopHealthCheck (Empty)                     returns (Empty);
-  rpc Status (Empty)            returns (StatusResponce);
-  rpc TcpPing (TcpPingRequest)  returns (TcpPingResponce);
-  rpc UrlTest (UrlTestRequest)  returns (UrlTestResponce);
-  rpc CouldStart (Empty)        returns (CouldStartResponce);
+  rpc StartHealthCheck (StartHealthCheckRequest)    returns (Empty);
+  rpc StopHealthCheck (Empty)                       returns (Empty);
+  rpc Status (Empty)                                returns (StatusResponce);
+  rpc TcpPing (TcpPingRequest)                      returns (TcpPingResponce);
+  rpc UrlTest (UrlTestRequest)                      returns (UrlTestResponce);
+  rpc CouldStart (Empty)                            returns (CouldStartResponce);
+  rpc CheckServerAlive (CheckServerAliveRequest)    returns (CheckServerAliveResponce);
+  
   // cloak.go
   rpc StartCloakClient (StartCloakClientRequest)    returns (Empty);
   rpc StopCloakClient (Empty)                       returns (Empty);
+
+  // logger.go
+  rpc InitLogger (InitLoggerRequest)                returns (Empty);
 }
 
 message StartAwgRequest {
@@ -64,11 +71,24 @@ message CouldStartResponce {
   bool result = 1;
 }
 
+message CheckServerAliveRequest {
+  string address = 1;
+  int32 port = 2;
+}
+
+message CheckServerAliveResponce {
+  int32 result = 1;
+}
+
 message StartCloakClientRequest {
   string localHost = 1;
   string localPort = 2;
   string config = 3;
   bool udp = 4;
+}
+
+message InitLoggerRequest {
+  string path = 1;
 }
 
 message Empty {
