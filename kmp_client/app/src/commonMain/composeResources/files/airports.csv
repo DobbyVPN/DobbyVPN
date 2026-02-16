@@ -575,6 +575,7 @@ Paderborn Lippstadt Airport,51.612527,8.617459
 Weeze (Niederrhein) Airport,51.601362,6.141228
 Dortmund Airport,51.518299,7.61224
 Augsburg Airport,48.425278,10.931667
+Landshut Airfield,48.512019,12.034865
 Oberpfaffenhofen Airport,48.081402,11.2831
 Bodensee Airport Friedrichshafen,47.671299,9.51149
 Bamberg-Breitenau Airfield,49.920403,10.914233
@@ -795,7 +796,7 @@ Notodden Airport,59.565071,9.213152
 "Rørvik Airport, Ryum",64.838302612305,11.14610004425
 Røros Airport,62.578399658203,11.342300415039
 "Moss Airport, Rygge",59.378817,10.785439
-Svalbard Airport,78.246101,15.4656
+"Svalbard Airport, Longyear",78.246101,15.4656
 "Svolvær Airport, Helle",68.243301,14.6692
 "Stokmarknes Airport, Skagen",68.578827,15.033417
 Skien Airport,59.185001,9.56694
@@ -946,7 +947,7 @@ Malamala Airport,-24.816866,31.544085
 Margate Airport,-30.8574008942,30.343000412
 Mmabatho International Airport,-25.798400878900004,25.548000335699996
 Morningside Farm Airport,-25.7045001984,26.9090003967
-Mkuze Airport,-27.626100540161133,32.0443000793457
+Mkuze Airport,-27.626101,32.0443
 Newcastle Airport,-27.7705993652,29.976900100699996
 Oudtshoorn Airport,-33.6069984436,22.188999176
 O.R. Tambo International Airport,-26.140081,28.246801
@@ -1003,7 +1004,7 @@ Malabo International Airport,3.75527,8.70872
 RAF Ascension Island,-7.970179,-14.392744
 Saint Helena International Airport,-15.958898,-5.646066
 Sir Seewoosagur Ramgoolam International Airport,-20.430201,57.683601
-Sir Charles Gaetan Duval Airport,-19.7577,63.361
+Sir Charles Gaetan Duval Airport,-19.756696,63.359326
 Naval Support Facility Diego Garcia,-7.31327,72.411102
 Tiko Airport,4.08919000626,9.360529899600001
 Douala International Airport,4.00608,9.71948
@@ -1095,10 +1096,11 @@ Lichinga Airport,-13.274,35.2663
 Maputo Airport,-25.920799,32.572601
 Mueda Airport,-11.6729,39.563099
 Mocímboa da Praia Airport,-11.3618,40.3549
-Nampula Airport,-15.105600357055664,39.28179931640625
+Nacala International Airport,-14.4882,40.7122
+Nampula Airport,-15.1056,39.281799
 Pemba Airport,-12.993302,40.524867
 Quelimane Airport,-17.855499267578125,36.86909866333008
-Chingozi Airport,-16.104799270629883,33.640201568603516
+Tete Airport,-16.104799,33.640202
 Vilankulo Airport,-22.018400192260742,35.31330108642578
 Seychelles International Airport,-4.67434,55.521801
 Praslin Island Airport,-4.319256,55.691561
@@ -1114,7 +1116,7 @@ Robert Gabriel Mugabe International Airport,-17.931801,31.0928
 Kariba Airport,-16.5198,28.885
 Mutoko Airport,-17.4319,32.184502
 Masvingo International Airport,-20.0553,30.8591
-Gweru - Thornhill Air Base,-19.436718,29.861945
+Josiah Tungamirai Air Force Base,-19.436718,29.861945
 Hwange National Park Airport,-18.6299,27.021
 Chileka International Airport,-15.677189,34.972319
 Dwangwa Airport,-12.517527,34.131877
@@ -1181,7 +1183,7 @@ Greenville/Sinoe Airport,5.032124,-9.064236
 Spriggs Payne Airport,6.28906,-10.7587
 Roberts International Airport,6.23379,-10.3623
 Al Massira Airport,30.322478,-9.412003
-Tan Tan Airport,28.448200225830078,-11.161299705505371
+Tan Tan Airport,28.447563,-11.161749
 Zagora Airport,30.265788,-5.860808
 Bouarfa Airport,32.514306,-1.983056
 Fes Saïss International Airport,33.927299,-4.97796
@@ -1309,7 +1311,7 @@ Mitiga International Airport,32.89177,13.287878
 Al Abraq International Airport,32.789036,21.954864
 Sabha Airport,26.992452,14.466162
 Marsa al Brega Airport,30.378099,19.576401
-Ghadames East Airport,30.151699,9.71531
+Ghadames Airport,30.145484,9.702095
 Udbina Airfield,44.557598,15.7744
 Gisenyi Airport,-1.6771999597549438,29.258899688720703
 Kigali International Airport,-1.96863,30.1395
@@ -1471,7 +1473,7 @@ Central Illinois Regional Airport at Bloomington-Normal,40.4771,-88.915901
 Nashville International Airport,36.1245,-86.6782
 Burns Municipal Airport,43.590463,-118.955154
 Boise Air Terminal/Gowen Field,43.5644,-116.223
-General Edward Lawrence Logan International Airport,42.36197,-71.0079
+Boston Logan International Airport,42.36197,-71.0079
 Miley Memorial Field,42.58509827,-110.1110001
 Ozark Regional Airport,36.3689002991,-92.47049713130001
 Jack Brooks Regional Airport,29.9508,-94.020699
@@ -2757,10 +2759,10 @@ Ken Jones Airport,18.1987991333,-76.53450012210001
 Tinson Pen Airport,17.98859977722168,-76.82379913330078
 General Juan N. Álvarez International Airport,16.757126,-99.753113
 Del Norte International Airport,25.865601,-100.237
-Jesús Terán Peredo International Airport,21.699589,-102.318372
-Bahías de Huatulco International Airport,15.774909,-96.260319
+Aguascalientes International Airport,21.699589,-102.318372
+Bahías de Huatulco International Airport,15.775437,-96.260456
 General Mariano Matamoros International Airport,18.833922,-99.261818
-Ciudad del Carmen International Airport,18.65369987487793,-91.79900360107422
+Ciudad del Carmen International Airport,18.651516,-91.799355
 Bachigualato Federal International Airport,24.76504,-107.475228
 Chetumal International Airport,18.504985,-88.328018
 Ciudad Obregón International Airport,27.39259910583496,-109.83300018310547
@@ -2791,7 +2793,7 @@ General Rodolfo Sánchez Taboada International Airport,32.630629,-115.242805
 General Francisco J. Mujica International Airport,19.849899,-101.025002
 Minatitlán/Coatzacoalcos International Airport,18.103399,-94.580704
 Monclova International Airport,26.9557,-101.470001
-Benito Juárez International Airport,19.435137,-99.071328
+Mexico City Benito Juárez International Airport,19.435822,-99.07033
 Monterrey International Airport,25.778521,-100.106989
 General Rafael Buelna International Airport,23.162823,-106.264517
 Nogales International Airport,31.225756,-110.976934
@@ -2807,14 +2809,14 @@ Querétaro Intercontinental Airport,20.618779,-100.186449
 General Lucio Blanco International Airport,26.0089,-98.2285
 Los Cabos International Airport,23.151919,-109.720731
 Cabo San Lucas International Airport,22.949072,-109.939479
-General Felipe Ángeles International Airport,19.7357,-99.0257
+Felipe Ángeles International Airport,19.743824,-99.01507
 Ponciano Arriaga International Airport,22.260857,-100.93494
 Terán Air Base,16.739901,-93.173301
 Francisco Sarabia Tinoco International Airport,25.562265,-103.404608
 Angel Albino Corzo International Airport,16.561611,-93.025731
 General Abelardo L. Rodriguez International Airport,32.541043,-116.969976
 Felipe Carrillo Puerto International Airport Tulum,20.172098,-87.660272
-General Francisco Javier Mina International Airport,22.2964000702,-97.8658981323
+General Francisco Javier Mina International Airport,22.2964,-97.865898
 Adolfo López Mateos International Airport,19.3369,-99.56583
 Tapachula International Airport,14.794549,-92.369871
 Cancún International Airport,21.040817,-86.87347
@@ -2889,7 +2891,7 @@ Charles Kirkconnell International Airport,19.687,-79.882797
 Edward Bodden Little Cayman Airfield,19.660161,-80.088826
 Owen Roberts International Airport,19.292801,-81.357697
 Creel International Airport / Barrancas del Cobre Regional Airport,27.725133,-107.652015
-Base N°1 de la Fuerza Aérea Mexicana (General Alfredo Lezama Álvarez),19.735682,-99.002455
+Base N°1 de la Fuerza Aérea Mexicana (General Alfredo Lezama Álvarez),19.735231,-98.988153
 Clarence A. Bain Airport,24.287701,-77.684601
 Andros Town Airport,24.697901,-77.795601
 Congo Town Airport,24.158701,-77.589798
@@ -3022,7 +3024,7 @@ Herat - Khwaja Abdullah Ansari International Airport,34.209999,62.228298
 Bagram Airfield,34.946098,69.264999
 Jalalabad Airport,34.399799,70.498596
 Kabul International Airport,34.565899,69.212303
-Ahmad Shah Baba International Airport / Kandahar Airfield,31.505769,65.847963
+Ahmad Shah Baba International Airport,31.505769,65.847963
 Khost International Airport,33.284605,69.80734
 Maymana Zahiraddin Faryabi Airport,35.930801,64.760902
 Mazar-i-Sharif International Airport,36.70412,67.210459
@@ -3095,10 +3097,9 @@ Sardar-e-Jangal Airport,37.323333,49.617778
 Hamadan Airport,34.869202,48.552502
 Nojeh Air Base,35.211601,48.6534
 Imam Khomeini International Airport,35.416099548339844,51.152198791503906
-Mehrabad International Airport,35.68920135498047,51.31340026855469
+Mehrabad International Airport,35.689175,51.314392
 Qazvin Airport,36.240101,50.0471
-Naja Airport,35.776299,50.881001
-Payam Karaj International Airport,35.7761,50.826698
+Payam International Airport,35.7761,50.826698
 Bandar Abbas International Airport,27.2183,56.3778
 Jiroft Airport,28.723519,57.675037
 Ayatollah Hashemi Rafsanjani International Airport,30.271276,56.949692
@@ -3149,7 +3150,7 @@ Al Bateen Executive Airport,24.427062,54.459866
 Al Ain International Airport,24.2617,55.6092
 Al Dhafra Air Base,24.248199462900004,54.547698974599996
 Sir Bani Yas Airport,24.283611,52.580278
-Dubai International Airport,25.2527999878,55.3643989563
+Dubai International Airport,25.24979,55.370992
 Al Minhad Air Base,25.0268001556,55.3661994934
 Al Maktoum International Airport,24.896171,55.16235
 Fujairah International Airport,25.108411,56.328061
@@ -3169,7 +3170,6 @@ Dera Ismael Khan Airport [IN-ACTIVE],31.909401,70.896599
 Faisalabad International Airport,31.364923,72.995319
 New Gwadar International Airport,25.296733,62.498822
 Gilgit Airport,35.918800354003906,74.33360290527344
-Gwadar International Airport,25.232391,62.327671
 Islamabad International Airport,33.549,72.82566
 Shahbaz Air Base,28.28420066833496,68.44969940185547
 Jinnah International Airport,24.9065,67.160797
@@ -3186,18 +3186,19 @@ Pasni Airport,25.290501,63.3451
 Bacha Khan International Airport,33.9939,71.514603
 Quetta International Airport,30.2514,66.937798
 Shaikh Zaid Airport,28.383899688720703,70.27960205078125
+PAF Base Nur Khan (Benazir Bhutto International Airport),33.616699,73.099197
 Rafiqui Air Base,30.758100509643555,72.28250122070312
 Risalpur Air Base,34.08110046386719,71.97260284423828
 Rawalakot Airport,33.849701,73.798103
 Skardu International Airport,35.33866,75.538648
 Faisal Air Base,24.87420082092285,67.11849975585938
-Sukkur Airport,27.722000122070312,68.79170227050781
+Begum Nusrat Bhutto International Airport Sukkur,27.722,68.791702
 Sehwan Sharif Airport,26.473101,67.717201
 Mushaf Air Base,32.04859924316406,72.66500091552734
 Saidu Sharif Airport,34.813599,72.352798
 Sialkot International Airport,32.535941,74.364623
 Sui Airport,28.645099639892578,69.1769027709961
-Turbat International Airport,25.986400604248047,63.03020095825195
+Turbat International Airport,25.984767,63.028856
 Zhob Airport,31.358400344848633,69.4636001586914
 Al Asad Air Base,33.7855987549,42.4412002563
 Al Taqaddum Air Base,33.33810043335,43.597099304199
@@ -3806,7 +3807,7 @@ Recife/Guararapes - Gilberto Freyre International Airport,-8.12747,-34.922961
 Santos Dumont Airport,-22.910397,-43.16282
 Leite Lopes Airport,-21.134314,-47.774053
 Santa Cruz Air Force Base,-22.9324,-43.719101
-Rio Grande do Norte/São Gonçalo do Amarante–Governador Aluízio Alves International Airport,-5.768539,-35.366419
+Rio Grande do Norte/São Gonçalo do Amarante–Governador Aluízio Alves International Airport,-5.769822,-35.36661
 Professor Urbano Ernesto Stumpf Airport,-23.2292,-45.8615
 Marechal Cunha Machado International Airport,-2.586386,-44.235008
 Santa Maria Airport,-29.711399,-53.688202
@@ -3886,14 +3887,14 @@ General Ulpiano Paez International Airport,-2.210057,-80.985067
 Carlos Concha Torres International Airport,0.978519,-79.626602
 Tarapoa Airport,-0.122956,-76.337799
 Lieutenant Colonel Luis A. Mantilla International Airport,0.809506,-77.708099
-Aeropuerto Internacional Silvio Pettirossi,-25.240156,-57.519227
+Silvio Pettirossi International Airport,-25.240156,-57.519227
 Aeropuerto Nacional Juan de Ayolas,-27.378379,-56.856791
 Lieutenant Colonel Carmelo Peralta National Airport,-23.441609,-57.427039
-Aeropuerto Internacional Tte. Amín Ayub González,-27.227537,-55.837584
-Aeropuerto Internacional Guaraní,-25.457186,-54.839544
+Teniente Ramon A. Ayub Gonzalez International Airport,-27.227537,-55.837584
+Guaraní International Airport,-25.457186,-54.839544
 Aeropuerto Nacional de Salto del Guaira,-24.032844,-54.35267
-Aeropuerto Nacional de Itaipú,-25.407818,-54.619457
-Aeropuerto Internacional Dr. Luis Maria Argaña,-22.046499,-60.6217
+Itaipú Airport,-25.407818,-54.619457
+Dr. Luis María Argaña International Airport,-22.046499,-60.6217
 Aeródromo Don Carlos Miguel Gimenez,-26.881981,-58.319067
 Aeropuerto Nacional Dr. Augusto Roberto Fuster,-22.641427,-55.829993
 Santa Teresa Airport,-22.622487,-56.634393
@@ -3939,7 +3940,7 @@ Guillermo León Valencia Airport,2.454359,-76.609253
 German Olano Air Base,5.48361,-74.6574
 Antonio Nariño Airport,1.396722,-77.29093
 El Embrujo Airport,13.357461,-81.357977
-Paz De Ariporo Airport,5.87615,-71.8866
+Paz de Ariporo Airport,5.876146,-71.886671
 Mariquita Airport,5.21256,-74.8836
 Jose Maria Córdova International Airport,6.16454,-75.4231
 Almirante Padilla Airport,11.5262,-72.926
@@ -4305,7 +4306,7 @@ Strezhevoy Airport,60.7094,77.660004
 Tomsk Kamov Airport,56.380299,85.208298
 Spichenkovo Airport,53.811401,86.877197
 Dikson Airport,73.517807,80.379669
-Nagurskoye,80.803207,47.663586
+Nagurskoye Airfield,80.803207,47.663586
 Khatanga Airport,71.97810363769531,102.49099731445312
 Svetlogorsk Airport,66.839996,88.403336
 Igarka Airport,67.437202,86.621902
@@ -4582,7 +4583,7 @@ Begumpet Airport,17.4531,78.467598
 Kannur International Airport,11.916343,75.544979
 Kurnool Airport,15.716288,78.16923
 Madurai Airport,9.83450984955,78.09339904790001
-Mangaluru International Airport,12.95542,74.884934
+Mangaluru International Airport,12.95471,74.886812
 Chennai International Airport,12.990005,80.169296
 Mysore Airport,12.229751,76.653683
 Veer Savarkar International Airport / INS Utkrosh,11.640194,92.72902
@@ -4712,7 +4713,7 @@ Aji Pangeran Tumenggung Pranoto International Airport,-0.374478,117.250128
 Naha Airport,3.68478,125.527162
 Sam Ratulangi International Airport,1.548591,124.92625
 Warukin Airport,-2.21656,115.435997
-Syamsudin Noor International Airport,-3.44236,114.763
+Syamsudin Noor International Airport,-3.440112,114.761209
 Karel Sadsuitubun Airport,-5.760278,132.759444
 Namniwel Airport,-3.143159,126.976469
 Pattimura International Airport,-3.71026,128.089005
@@ -4925,6 +4926,7 @@ Mount Keith Airport,-27.28733,120.554937
 Mount Magnet Airport,-28.116100311279297,117.84200286865234
 Moree Airport,-29.498899459799997,149.845001221
 Moranbah Airport,-22.057800293,148.07699585
+Marree Airport,-29.6633,138.065002
 Moruya Airport,-35.8978004456,150.143997192
 Mount Gambier Airport,-37.744382,140.780561
 Narrandera Airport,-34.7022018433,146.511993408
