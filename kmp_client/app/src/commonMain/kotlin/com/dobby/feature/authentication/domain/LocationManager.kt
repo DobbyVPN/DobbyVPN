@@ -1,13 +1,5 @@
 package com.dobby.feature.authentication.domain
 
-import com.dobby.feature.authentication.domain.HideConfigsManager.TryEnableHideConfigsResult
-import com.dobby.feature.authentication.domain.HideConfigsManager.settings
-import dev.jordond.compass.Coordinates
-import dev.jordond.compass.Location
-import dev.jordond.compass.Priority
-import dev.jordond.compass.geocoder.Geocoder
-import dev.jordond.compass.geolocation.Geolocator
-import dev.jordond.compass.permissions.LocationPermissionController
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
@@ -20,9 +12,9 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 import org.koin.core.component.get
 
-expect val geocoder: Geocoder?
-expect val geolocator: Geolocator?
-expect val locationPermissionController: LocationPermissionController?
+expect val geocoder: AppGeocoder?
+expect val geolocator: AppGeolocator?
+expect val locationPermissionController: AppLocationPermissionController?
 
 enum class RedZoneCheckResult {
     RED_ZONE, NOT_RED_ZONE, ERROR
@@ -57,10 +49,10 @@ object LocationManager: KoinComponent {
     private fun maxDistanceToAirport(accuracy: Double): Double = accuracy + 1.5
     private fun maxDistanceToBorder(accuracy: Double): Double = accuracy + 6.0
 
-    private suspend fun getLocation() = geolocator?.current(Priority.HighAccuracy)?.getOrNull()
+    private suspend fun getLocation() = geolocator?.getCurrentLocation()
 
-    private suspend fun closeToBorder(currentLocation: Location): Boolean? {
-        val geocoderResults = geocoder?.reverse(currentLocation.coordinates)?.getOrNull()?.map { place ->
+    private suspend fun closeToBorder(currentLocation: AppLocation): Boolean? {
+        val geocoderResults = geocoder?.reverseGeocode(currentLocation.coordinates)?.map { place ->
             place.country
         }
         if (geocoderResults == null) {
@@ -75,7 +67,7 @@ object LocationManager: KoinComponent {
         }
         val nearbyLocations = getNearbyLocations(currentLocation)
         for (nearbyLocation in nearbyLocations) {
-            val nearbyGeocoderResults = geocoder?.reverse(nearbyLocation)?.getOrNull()?.map { place ->
+            val nearbyGeocoderResults = geocoder?.reverseGeocode(nearbyLocation)?.map { place ->
                 place.country
             }
             if (nearbyGeocoderResults == null) {
@@ -91,16 +83,16 @@ object LocationManager: KoinComponent {
         return false
     }
 
-    private suspend fun closeToAirport(currentLocation: Location): Boolean =
+    private suspend fun closeToAirport(currentLocation: AppLocation): Boolean =
         AirportsManager.loadAirports().airports.map { airport ->
-            Coordinates(airport.latitude_deg, airport.longitude_deg)
-        }.any { airport: Coordinates ->
+            AppCoordinates(airport.latitude_deg, airport.longitude_deg)
+        }.any { airport: AppCoordinates ->
             distance(currentLocation.coordinates, airport) <= maxDistanceToAirport(currentLocation.accuracy / 1000.0)
         }
 
     private const val EARTH_RADIUS: Double = 6371.0
 
-    private fun distance(location1: Coordinates, location2: Coordinates): Double {
+    private fun distance(location1: AppCoordinates, location2: AppCoordinates): Double {
         val phi1 = location1.latitude * PI / 180.0
         val phi2 = location2.latitude * PI / 180.0
         val lambda1 = location1.longitude * PI / 180.0
@@ -111,7 +103,7 @@ object LocationManager: KoinComponent {
         return 2 * EARTH_RADIUS * atan2(sqrt(a), sqrt(1 - a))
     }
 
-    private fun getNearbyLocations(currentLocation: Location): List<Coordinates> {
+    private fun getNearbyLocations(currentLocation: AppLocation): List<AppCoordinates> {
         val delta = maxDistanceToBorder(currentLocation.accuracy / 1000.0) / EARTH_RADIUS // angular distance
         val lat = currentLocation.coordinates.latitude
         val lon = currentLocation.coordinates.longitude
@@ -119,14 +111,14 @@ object LocationManager: KoinComponent {
         val deltaPhi = delta * 180.0 / PI
         val deltaLambda = 2 * asin(sin(delta / 2) / cos(phi)) * 180.0 / PI
         return listOf(
-            Coordinates(lat + deltaPhi, lon),
-            Coordinates(lat - deltaPhi, lon),
-            Coordinates(lat, lon + deltaLambda),
-            Coordinates(lat, lon - deltaLambda),
-            Coordinates(lat + sqrt(0.5) * deltaPhi, lon + sqrt(0.5) * deltaLambda),
-            Coordinates(lat + sqrt(0.5) * deltaPhi, lon - sqrt(0.5) * deltaLambda),
-            Coordinates(lat - sqrt(0.5) * deltaPhi, lon + sqrt(0.5) * deltaLambda),
-            Coordinates(lat - sqrt(0.5) * deltaPhi, lon - sqrt(0.5) * deltaLambda),
+            AppCoordinates(lat + deltaPhi, lon),
+            AppCoordinates(lat - deltaPhi, lon),
+            AppCoordinates(lat, lon + deltaLambda),
+            AppCoordinates(lat, lon - deltaLambda),
+            AppCoordinates(lat + sqrt(0.5) * deltaPhi, lon + sqrt(0.5) * deltaLambda),
+            AppCoordinates(lat + sqrt(0.5) * deltaPhi, lon - sqrt(0.5) * deltaLambda),
+            AppCoordinates(lat - sqrt(0.5) * deltaPhi, lon + sqrt(0.5) * deltaLambda),
+            AppCoordinates(lat - sqrt(0.5) * deltaPhi, lon - sqrt(0.5) * deltaLambda),
         )
     }
 }

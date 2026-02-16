@@ -42,7 +42,7 @@ def main():
             reader = csv.reader(infile)
             header = next(reader)
             type_idx = header.index("type")
-            writer = csv.writer(outfile)
+            writer = csv.writer(outfile, lineterminator="\n")
             writer.writerow(["name", "latitude_deg", "longitude_deg"])
             for row in reader:
                 if row[type_idx] in INCLUDED_TYPES:
