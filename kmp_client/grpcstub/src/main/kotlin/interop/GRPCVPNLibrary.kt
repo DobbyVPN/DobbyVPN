@@ -1,5 +1,7 @@
 package interop
 
+import interop.data.TcpPingResponce
+import interop.data.UrlTestResponce
 import io.grpc.ManagedChannelBuilder
 import kotlinx.coroutines.runBlocking
 import java.io.Closeable
@@ -11,27 +13,47 @@ class GRPCVPNLibrary : VPNLibrary, Closeable {
     private val CLIENT = GRPCVpnClient(CHANNEL)
 
     override fun StartOutline(key: String) {
-        runBlocking { CLIENT.StartOutline(key) }
+        return runBlocking { CLIENT.StartOutline(key) }
     }
 
     override fun StopOutline() {
-        runBlocking { CLIENT.StopOutline() }
+        return runBlocking { CLIENT.StopOutline() }
+    }
+
+    override fun StartHealthCheck(period: Int, sendMetrics: Boolean) {
+        return runBlocking { CLIENT.StartHealthCheck(period, sendMetrics) }
+    }
+
+    override fun StopHealthCheck() {
+        return runBlocking { CLIENT.StopHealthCheck() }
+    }
+
+    override fun Status(): String {
+        return runBlocking { CLIENT.Status() }
+    }
+
+    override fun TcpPing(address: String): TcpPingResponce {
+        return runBlocking { CLIENT.TcpPing(address) }
+    }
+
+    override fun UrlTest(url: String, standard: Int): UrlTestResponce {
+        return runBlocking { CLIENT.UrlTest(url, standard) }
     }
 
     override fun StartCloakClient(localHost: String, localPort: String, config: String, udp: Boolean) {
-        runBlocking { CLIENT.StartCloakClient(localHost, localPort, config, udp) }
+        return runBlocking { CLIENT.StartCloakClient(localHost, localPort, config, udp) }
     }
 
     override fun StopCloakClient() {
-        runBlocking { CLIENT.StopCloakClient() }
+        return runBlocking { CLIENT.StopCloakClient() }
     }
 
     override fun StartAwg(key: String, config: String) {
-        runBlocking { CLIENT.StartAwg(key, config) }
+        return runBlocking { CLIENT.StartAwg(key, config) }
     }
 
     override fun StopAwg() {
-        runBlocking { CLIENT.StopAwg() }
+        return runBlocking { CLIENT.StopAwg() }
     }
 
     override fun CouldStart(): Boolean {
@@ -39,12 +61,11 @@ class GRPCVPNLibrary : VPNLibrary, Closeable {
     }
 
     override fun InitLogger(path: String) {
-//        TODO("Not yet implemented")
+        return runBlocking { CLIENT.InitLogger(path) }
     }
 
     override fun CheckServerAlive(address: String, port: Int): Int {
-//        TODO("Not yet implemented")
-        return 0
+        return runBlocking { CLIENT.CheckServerAlive(address, port) }
     }
 
     override fun close() {

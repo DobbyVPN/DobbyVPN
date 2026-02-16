@@ -7,7 +7,11 @@ import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import interop.VPNLibraryLoader
 import kotlinx.coroutines.runBlocking
+import okio.Path
+import okio.Path.Companion.toPath
+import java.io.File
 import java.util.Base64
+import kotlin.math.log
 
 private fun extractHostFromHostPort(hostPortMaybeWithQuery: String): String {
     val hostPort = hostPortMaybeWithQuery.substringBefore("?").trim()
@@ -71,11 +75,30 @@ internal class DobbyVpnService(
     private val startStopLock = Any()
     private var runningInterface: VpnInterface? = null
 
+    private fun provideServiceLogFilePath(): Path {
+        val userHome = System.getProperty("user.home") ?: error("Unable to get user home directory")
+        val appDir = File(userHome, ".myapp")
+        if (!appDir.exists()) {
+            appDir.mkdirs()
+        }
+        val logFile = File(appDir, "app_logs_service.txt")
+
+        return logFile.absolutePath.toPath()
+    }
+
+    fun enableTunnelLogging() {
+        val logFilePath = provideServiceLogFilePath()
+        logger.log("Init tunnel logging to the path: $logFilePath")
+        vpnLibrary.initLogger(logFilePath.toString())
+    }
+
     fun startService() {
         synchronized(startStopLock) {
             if (runningInterface != null) {
                 stopCurrentLocked()
             }
+
+            enableTunnelLogging()
 
             val iface = dobbyConfigsRepository.getVpnInterface()
             when (iface) {

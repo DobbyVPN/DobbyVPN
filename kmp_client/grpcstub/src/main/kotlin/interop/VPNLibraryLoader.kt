@@ -1,82 +1,41 @@
 package interop
 
 class VPNLibraryLoader {
-    private val INSTANCE: VPNLibrary = GRPCVPNLibrary()
+    private val library: VPNLibrary = GRPCVPNLibrary()
 
     fun startOutline(key: String) {
-        try {
-            INSTANCE.StartOutline(key)
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        library.StartOutline(key)
     }
 
     fun stopOutline() {
-        try {
-            INSTANCE.StopOutline()
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        library.StopOutline()
     }
 
     fun startCloak(localHost: String, localPort: String, config: String, udp: Boolean) {
-        try {
-            INSTANCE.StartCloakClient(localHost, localPort, config, udp)
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        library.StartCloakClient(localHost, localPort, config, udp)
     }
 
     fun stopCloak() {
-        try {
-            INSTANCE.StopCloakClient()
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        library.StopCloakClient()
     }
 
     fun startAwg(key: String, config: String) {
-        try {
-            INSTANCE.StartAwg(key, config)
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        library.StartAwg(key, config)
     }
 
     fun stopAwg() {
-        try {
-            INSTANCE.StopAwg()
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        library.StopAwg()
+    }
+
+    fun initLogger(path: String) {
+        library.InitLogger(path)
     }
 
     fun couldStart(): Boolean {
-        try {
-            var res = INSTANCE.CouldStart()
-            return res
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        return false
+        return library.CouldStart()
     }
 
     fun checkServerAlive(address: String, port: Int): Boolean {
-//        TODO("Not yet implemented")
-        return true
+        return library.CheckServerAlive(address, port) != 0
     }
 }
