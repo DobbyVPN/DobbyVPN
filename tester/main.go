@@ -39,6 +39,8 @@ func runTestStep(testStep TestStep) error {
 		return startCloakStep(testStep)
 	case "StopCloak":
 		return stopCloakStep()
+	case "InitLogger":
+		return initLoggerStep(testStep)
 	default:
 		return fmt.Errorf("Unexpected action %v", testStep.Action)
 	}

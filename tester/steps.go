@@ -247,3 +247,34 @@ func stopCloakStep() error {
 
 	return nil
 }
+
+func initLoggerStep(testStep TestStep) error {
+	if path, ok := testStep.Args["path"].(string); ok {
+		log.Printf("Creating gRPC client\n")
+
+		conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("Did not connect: %v", err)
+		}
+		defer conn.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		log.Printf("Starting tunnel\n")
+
+		vpnclient := pb.NewVpnClient(conn)
+		log.Printf("Created gRPC client")
+
+		_, err = vpnclient.InitLogger(ctx, &pb.InitLoggerRequest{Path: path})
+		if err != nil {
+			return fmt.Errorf("Failed to InitLogger: %v", err)
+		}
+
+		log.Printf("Sent InitLogger")
+
+		return nil
+	}
+
+	return fmt.Errorf("Invalid InitLogger arguments")
+}
