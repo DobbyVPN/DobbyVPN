@@ -155,6 +155,13 @@ func SetPath(path string) error {
 	return nil
 }
 
+func Debugf(format string, args ...any) {
+	if lg.logger == nil {
+		return
+	}
+	lg.logger.Debug(fmt.Sprintf(format, args...))
+}
+
 func logRuntimeInfo() {
 	modulePath := "(unknown)"
 	moduleVersion := "(unknown)"
@@ -189,6 +196,20 @@ func Infof(format string, args ...any) {
 	} else {
 		lg.lgInfof(format, args...)
 	}
+}
+
+func Warnf(format string, args ...any) {
+	if lg.logger == nil {
+		return
+	}
+	lg.logger.Warn(fmt.Sprintf(format, args...))
+}
+
+func Errorf(format string, args ...any) {
+	if lg.logger == nil {
+		return
+	}
+	lg.logger.Error(fmt.Sprintf(format, args...))
 }
 
 type simpleHandler struct {
