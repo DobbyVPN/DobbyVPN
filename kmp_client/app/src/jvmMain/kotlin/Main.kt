@@ -9,13 +9,13 @@ import org.koin.mp.KoinPlatform
 import java.io.File
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.io.IOException
 
 fun main() = application {
     startDI(listOf(jvmMainModule, jvmVpnModule)){}
-    // Get path to the current jar-file
-    val encodedPath = this::class.java.protectionDomain.codeSource.location.path
-    val decodedPath = URLDecoder.decode(encodedPath, StandardCharsets.UTF_8.name())
-    val appDir = File(decodedPath).parentFile.absolutePath
+    // Get path to the current jar-file (using toURI() for proper Unicode/Cyrillic support)
+    val appDir = File(this::class.java.protectionDomain.codeSource.location.toURI())
+        .parentFile.absolutePath
     if (Platform.isWindows()) {
         // start device check
         val addTapDevice = AddTapDevice(KoinPlatform.getKoin().get<Logger>())

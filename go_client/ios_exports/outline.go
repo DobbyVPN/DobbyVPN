@@ -88,44 +88,77 @@ func (d *OutlineDevice) Write(buf []byte) (int, error) {
 	return n, nil
 }
 
+// extractTLSSNIHost extracts the host from "tls:sni=HOST" part of the config.
+// Returns empty string if not found.
+func extractTLSSNIHost(transportConfig string) string {
+	parts := strings.Split(transportConfig, "|")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "tls:") {
+			// Parse tls:sni=HOST or tls:sni=HOST&other_param=value
+			params := strings.TrimPrefix(part, "tls:")
+			for _, param := range strings.Split(params, "&") {
+				if strings.HasPrefix(param, "sni=") {
+					return strings.TrimPrefix(param, "sni=")
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // resolveShadowsocksServerIPFromConfig extracts server IP from transport config
-// Supports multi-part configs (e.g., "ws:...|ss://...")
+// For WSS configs (tls:sni=...|ws:...|ss://...), it uses the TLS SNI host.
+// For plain configs (ss://...), it uses the Shadowsocks host.
 func resolveShadowsocksServerIPFromConfig(transportConfig string) (net.IP, error) {
 	if transportConfig = strings.TrimSpace(transportConfig); transportConfig == "" {
 		return nil, errors.New("config is required")
 	}
 
-	// For multi-part configs (pipe-separated), find the ss:// part
-	parts := strings.Split(transportConfig, "|")
-	var ssConfig string
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, "ss://") {
-			ssConfig = part
-			break
+	var host string
+
+	// First, check for TLS SNI host (used in WSS configs)
+	// This is the actual server we connect to for WebSocket over TLS
+	if sniHost := extractTLSSNIHost(transportConfig); sniHost != "" {
+		host = sniHost
+	} else {
+		// Fall back to ss:// host for plain Shadowsocks configs
+		parts := strings.Split(transportConfig, "|")
+		var ssConfig string
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(part, "ss://") {
+				ssConfig = part
+				break
+			}
+		}
+
+		if ssConfig == "" {
+			return nil, errors.New("config must contain 'ss://' part")
+		}
+
+		parsedURL, err := url.Parse(ssConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse ss:// config: %w", err)
+		}
+
+		host = strings.TrimSpace(parsedURL.Hostname())
+		if host == "" {
+			return nil, fmt.Errorf("invalid ss:// config: missing hostname (host part=%q)", parsedURL.Host)
 		}
 	}
 
-	if ssConfig == "" {
-		return nil, errors.New("config must contain 'ss://' part")
-	}
-
-	parsedURL, err := url.Parse(ssConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse ss:// config: %w", err)
-	}
-
-	host := strings.TrimSpace(parsedURL.Hostname())
-	if host == "" {
-		return nil, fmt.Errorf("invalid ss:// config: missing hostname (host part=%q)", parsedURL.Host)
+	// Skip resolution for localhost (used when Cloak is enabled)
+	if host == "127.0.0.1" || host == "localhost" {
+		return net.ParseIP("127.0.0.1").To4(), nil
 	}
 
 	ipList, err := net.LookupIP(host)
 	if err != nil {
-		return nil, fmt.Errorf("invalid server hostname: %w", err)
+		return nil, fmt.Errorf("failed to resolve server hostname %q: %w", host, err)
 	}
 
-	// Мы поддерживаем только IPv4 в текущем коде
+	// We Support only IPv4 in this version
 	for _, ip := range ipList {
 		if ip = ip.To4(); ip != nil {
 			return ip, nil

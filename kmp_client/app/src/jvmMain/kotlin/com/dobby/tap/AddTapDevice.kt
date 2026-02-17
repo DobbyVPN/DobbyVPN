@@ -16,8 +16,14 @@ class AddTapDevice(
     fun addTapDevice(appDir: String) {
         val deviceName = "outline-tap0"
         val deviceHwid = "tap0901"
-        val tapInstallPath = "tap-windows6/tapinstall.exe"
-        val oemVistaPath = "tap-windows6/OemVista.inf"
+        
+        // Use absolute paths with proper quoting for paths with spaces
+        val tapInstallPath = File(appDir, "tap-windows6/tapinstall.exe").absolutePath
+        val oemVistaPath = File(appDir, "tap-windows6/OemVista.inf").absolutePath
+        
+        // Quote paths to handle spaces
+        val quotedTapInstall = "\"$tapInstallPath\""
+        val quotedOemVista = "\"$oemVistaPath\""
 
         updatePath()
         // Checking if a TAP device exists
@@ -27,7 +33,7 @@ class AddTapDevice(
             return
         }
         logger.log("Creating TAP network device...")
-        runAsAdmin(appDir, "$tapInstallPath install $oemVistaPath $deviceHwid")
+        runAsAdmin("$quotedTapInstall install $quotedOemVista $deviceHwid")
 
         // Find new TAP device name (we should change it to outline-tap0)
         val findTapDeviceName = FindTapDeviceName(logger)
@@ -78,17 +84,19 @@ class AddTapDevice(
     }
 
 
-    private fun runAsAdmin(appDir: String, command: String) {
+    private fun runAsAdmin(command: String) {
+        // Escape single quotes for PowerShell and use proper argument passing
+        val escapedCommand = command.replace("'", "''")
+        
         val processBuilder = ProcessBuilder(
             "powershell",
             "-Command",
-            "Start-Process powershell -WindowStyle Hidden -ArgumentList \"-NoProfile;  $command\" -Verb RunAs"
+            "Start-Process cmd -WindowStyle Hidden -ArgumentList '/c $escapedCommand' -Verb RunAs -Wait"
         )
 
         try {
             val process = processBuilder
                 .redirectErrorStream(true)
-                .directory(File(appDir))
                 .start()
 
             process.inputStream.bufferedReader().use { reader ->

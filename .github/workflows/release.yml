@@ -19,6 +19,11 @@ jobs:
     uses: ./.github/workflows/android_build.yml
     secrets: inherit
 
+  fdroid_check:
+    needs: libs_build
+    uses: ./.github/workflows/fdroid_check.yml
+    secrets: inherit
+
   ios_build:
     needs: libs_build
     uses: ./.github/workflows/ios_build.yml

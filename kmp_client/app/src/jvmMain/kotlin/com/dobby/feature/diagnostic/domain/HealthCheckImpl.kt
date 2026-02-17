@@ -20,7 +20,7 @@ class HealthCheckImpl(
         private set
 
     override fun shortConnectionCheckUp(): Boolean {
-        logger.log("Start shortConnectionCheckUp")
+        logger.log("[HC] Start shortConnectionCheckUp")
 
         val checks: List<Pair<String, () -> Boolean>> = listOf(
             "HTTP https://google.com/gen_204" to {
@@ -35,8 +35,17 @@ class HealthCheckImpl(
             runWithRetry(name = name, attempts = 2, block = check)
         }
 
-        logger.log("End shortConnectionCheckUp => $networkOk")
-        return networkOk
+        val vpnOk = runWithRetry(
+            name = "VPN Interface Check",
+            attempts = 1
+        ) {
+            isVpnInterfaceExists()
+        }
+
+        val result = vpnOk && networkOk
+
+        logger.log("[HC] End shortConnectionCheckUp => $result (vpn=$vpnOk, network=$networkOk)")
+        return result
     }
 
 
@@ -91,13 +100,19 @@ class HealthCheckImpl(
             logger.log("[HC] Too many failed groups (${failedGroups.size}): ${failedGroups.joinToString()}")
         }
 
-        currentMemoryUsageMb = getProcessMemoryUsageMb()
+        // Tunnel heartbeat check - verify Go library is responsive
+        if (!runWithRetry("Tunnel heartbeat check", 1) {
+                val mem = getTunnelMemoryUsage()
+                currentMemoryUsageMb = mem
+                mem >= 0
+            }) {
+            result = false
+        }
 
         if (currentMemoryUsageMb >= 0) {
             logger.log("[HC] Memory usage: %.2f MB".format(currentMemoryUsageMb))
         } else {
             logger.log("[HC] Memory usage: unknown")
-            result = false
         }
 
         logger.log("[HC] RESULT = $result")
@@ -188,11 +203,52 @@ class HealthCheckImpl(
         return usedBytes / 1024.0 / 1024.0
     }
 
+    /**
+     * Checks if a VPN interface (tun/tap/ppp/ipsec) exists on the system.
+     * This helps detect if the VPN tunnel is actually up.
+     */
+    private fun isVpnInterfaceExists(): Boolean {
+        return try {
+            NetworkInterface.getNetworkInterfaces()?.toList()?.any { iface ->
+                val name = iface.name.lowercase()
+                name.contains("tun") ||
+                    name.contains("tap") ||
+                    name.contains("ppp") ||
+                    name.contains("ipsec") ||
+                    name.contains("wg") ||       // WireGuard
+                    name.contains("outline")     // Outline TAP
+            } ?: false
+        } catch (e: Throwable) {
+            logger.log("[HC] Error checking VPN interface: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Gets tunnel memory usage by checking if Go library is responsive
+     * and measuring process memory.
+     */
+    private fun getTunnelMemoryUsage(): Double {
+        return try {
+            // Check if Go library is responsive by calling CouldStart
+            // This verifies the native library is loaded and working
+            val isResponsive = vpnLibrary.couldStart()
+            if (!isResponsive) {
+                logger.log("[HC] Go library not responsive (in critical section)")
+            }
+            // Return JVM memory usage as a proxy for process health
+            getProcessMemoryUsageMb()
+        } catch (e: Throwable) {
+            logger.log("[HC] Error getting tunnel memory: ${e.message}")
+            -1.0
+        }
+    }
+
     override fun checkServerAlive(address: String, port: Int): Boolean {
         return vpnLibrary.CheckServerAlive(address, port) != 0
     }
 
     override fun getTimeToWakeUp(): Int {
-        return 15
+        return 2
     }
 }

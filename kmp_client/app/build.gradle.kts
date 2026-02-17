@@ -52,6 +52,7 @@ kotlin {
         androidMain.dependencies {
             implementation(compose.preview)
             implementation(libs.androidx.activity.compose)
+            implementation(libs.androidx.biometric.ktx)
             implementation(libs.androidx.core.ktx)
             implementation(libs.androidx.lifecycle.runtime.ktx)
             implementation(libs.androidx.ui)
@@ -67,6 +68,7 @@ kotlin {
 
             implementation(libs.okhttp)
             implementation(libs.ktor.client.okhttp)
+
         }
 
         commonMain.dependencies {
@@ -92,6 +94,10 @@ kotlin {
             implementation(libs.tomlkt)
 
             implementation(libs.datetime)
+
+            implementation("com.russhwolf:multiplatform-settings-no-arg:1.3.0")
+
+            implementation(compose.components.resources)
         }
 
         jvmMain.dependencies {
@@ -113,6 +119,10 @@ kotlin {
         iosMain.dependencies {
 
             implementation(libs.ktor.client.darwin)
+
+            implementation(libs.compass.geocoder.mobile)
+            implementation(libs.compass.geolocation.mobile)
+            implementation(libs.compass.permissions.mobile)
         }
     }
 }
