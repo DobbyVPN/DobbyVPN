@@ -144,3 +144,22 @@ with following data
 </dict>
 </plist>
 ```
+
+### Windows installer
+
+#### Helpful documentation
+
+##### Create vpn service
+
+```bash
+sc.exe create "DobbyVPN Server" binPath="...\grpcvpnserver.exe -mode=service" type=own start=auto error=normal depend=nsi/tcpip displayname="DobbyVPN gRPC Server"
+sc.exe sidtype "DobbyVPN Server" unrestricted
+sc.exe start "DobbyVPN Server"
+```
+
+##### Stop vpn service
+
+```bash
+sc.exe stop "DobbyVPN Server"
+sc.exe delete "DobbyVPN Server"
+```
