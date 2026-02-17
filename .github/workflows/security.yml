@@ -1,85 +1,33 @@
-# CI Workflow: Security scanning (vulnerabilities + secrets)
 name: Security
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: read
-  security-events: write  # For SARIF upload to GitHub Security tab
 
 jobs:
-  # ================================================================
-  # GRYPE — vulnerability scanning of Go dependencies
-  # ================================================================
-  grype-go-client:
-    name: "Grype — go_client dependencies"
+  grype:
+    name: Grype — vulnerability scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Run Grype on go_client
-        uses: anchore/scan-action@v6
-        id: grype
+      - uses: anchore/scan-action@v6
         with:
           path: go_client/
           fail-build: false
           severity-cutoff: high
-          output-format: sarif
 
-      - name: Upload Grype SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        continue-on-error: true
-        with:
-          sarif_file: ${{ steps.grype.outputs.sarif }}
-          category: grype-go-client
-
-      - name: Upload Grype report artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: grype-go-client-report
-          path: ${{ steps.grype.outputs.sarif }}
-          retention-days: 30
-
-  # ================================================================
-  # TRUFFLEHOG — secret detection in code and git history
-  # ================================================================
   trufflehog:
-    name: "TruffleHog — secret detection"
+    name: TruffleHog — secret detection
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for scanning commits
-
-      - name: Run TruffleHog
-        uses: trufflesecurity/trufflehog@main
+          fetch-depth: 0
+      - uses: trufflesecurity/trufflehog@main
         with:
           extra_args: --only-verified --results=verified,unknown
-
-  # ================================================================
-  # SUMMARY
-  # ================================================================
-  security-summary:
-    name: "Security Summary"
-    runs-on: ubuntu-latest
-    needs: [grype-go-client, trufflehog]
-    if: always()
-    steps:
-      - name: Summary
-        run: |
-          echo "## 🔒 Security Scan Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Grype (go_client vulnerabilities) | ${{ needs.grype-go-client.result == 'success' && '✅ Clean' || '⚠️ Issues found' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| TruffleHog (secrets) | ${{ needs.trufflehog.result == 'success' && '✅ Clean' || '🚨 Secrets detected!' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Results also available in the **Security** tab (if GitHub Advanced Security is enabled)." >> $GITHUB_STEP_SUMMARY
