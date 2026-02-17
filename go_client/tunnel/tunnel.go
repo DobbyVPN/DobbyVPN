@@ -3,6 +3,8 @@ package tunnel
 import (
 	"io"
 	"sync"
+
+	"go_client/tunnel/internal"
 )
 
 type ReaderFunc func(p []byte) (int, error)
@@ -18,6 +20,7 @@ type tunTransfer struct {
 
 var (
 	defaultBufSize = 65536
+	transferMu     sync.Mutex
 	transferInst   *tunTransfer
 )
 
@@ -26,6 +29,13 @@ func StartTransfer(
 	readFn ReaderFunc,
 	writeFn WriterFunc,
 ) {
+	transferMu.Lock()
+	defer transferMu.Unlock()
+
+	if transferInst != nil {
+		stopLocked()
+	}
+
 	transferInst = &tunTransfer{
 		tun:     tun,
 		readFn:  readFn,
@@ -37,32 +47,38 @@ func StartTransfer(
 
 func (t *tunTransfer) startLoops() {
 	t.wg.Add(2)
-	go t.readFromTunLoop()
-	go t.writeToTunLoop()
+	go t.readLoop()
+	go t.writeLoop()
 }
 
-func (t *tunTransfer) readFromTunLoop() {
+func (t *tunTransfer) readLoop() {
 	defer t.wg.Done()
 
-	buf := make([]byte, defaultBufSize)
+	raw := make([]byte, defaultBufSize)
 
 	for {
 		select {
 		case <-t.stopCh:
 			return
 		default:
-			n, err := t.tun.Read(buf)
-			if n <= 0 || err != nil {
+			n, err := t.tun.Read(raw)
+			if err != nil || n <= 0 || t.writeFn == nil {
 				continue
 			}
-			if t.writeFn != nil {
-				_, _ = t.writeFn(buf[:n])
+
+			packet, ok := internal.DecodePacket(raw[:n])
+			if !ok {
+				continue
 			}
+
+			// TODO: Add georouting here
+
+			_, _ = t.writeFn(packet)
 		}
 	}
 }
 
-func (t *tunTransfer) writeToTunLoop() {
+func (t *tunTransfer) writeLoop() {
 	defer t.wg.Done()
 
 	buf := make([]byte, defaultBufSize)
@@ -75,21 +91,37 @@ func (t *tunTransfer) writeToTunLoop() {
 			if t.readFn == nil {
 				continue
 			}
+
 			n, err := t.readFn(buf)
 			if err != nil || n <= 0 {
 				continue
 			}
-			_, _ = t.tun.Write(buf[:n])
+
+			packet := buf[:n]
+
+			// TODO: Add georouting here
+
+			encoded, ok := internal.EncodePacket(packet)
+			if !ok {
+				continue
+			}
+
+			_, _ = t.tun.Write(encoded)
 		}
 	}
 }
 
 func StopTransfer() {
+	transferMu.Lock()
+	defer transferMu.Unlock()
+	stopLocked()
+}
+
+func stopLocked() {
 	if transferInst == nil {
 		return
 	}
 	close(transferInst.stopCh)
 	transferInst.wg.Wait()
-	_ = transferInst.tun.Close()
 	transferInst = nil
 }
