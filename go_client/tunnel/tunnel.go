@@ -66,7 +66,7 @@ func (t *tunTransfer) readLoop() {
 				continue
 			}
 
-			packet, ok := internal.DecodePacket(raw[:n])
+			packet, ok := internal.AdaptReadPackets(raw[:n])
 			if !ok {
 				continue
 			}
@@ -101,7 +101,7 @@ func (t *tunTransfer) writeLoop() {
 
 			// TODO: Add georouting here
 
-			encoded, ok := internal.EncodePacket(packet)
+			encoded, ok := internal.AdaptWritePackets(packet)
 			if !ok {
 				continue
 			}
