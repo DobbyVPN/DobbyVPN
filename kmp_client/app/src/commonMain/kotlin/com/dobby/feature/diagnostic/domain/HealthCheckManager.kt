@@ -21,20 +21,15 @@ class HealthCheckManager(
     private val configsRepository: DobbyConfigsRepository,
     private val logger: Logger,
 ) {
-
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.Default.limitedParallelism(1)
     )
     private var healthJob: Job? = null
-
     private val gracePeriodMs: Long = 15_000
     private val consecutiveFailuresBeforeTurnOff: Int = 2
     private val restartDelayMs: Long = 15_000
-
     private var consecutiveFailuresCount: Int = 0
-
     private var lastVpnStartMark: TimeMark? = null
-
     private var lastFullConnectionSucceed = false
 
     suspend fun startHealthCheck(address: String, port: Int) {

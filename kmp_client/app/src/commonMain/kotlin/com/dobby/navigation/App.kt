@@ -33,12 +33,16 @@ import com.dobby.feature.logging.ui.SettingsScreen
 import com.dobby.feature.authentication.ui.AuthenticationScreen
 import com.dobby.feature.authentication.ui.LoadingScreen
 import com.dobby.feature.authentication.ui.WebViewScreen
+import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.logging.presentation.SettingsViewModel
+import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.feature.main.ui.DobbySocksScreen
 import com.dobby.util.koinViewModel
 
 @Composable
 fun App(modifier: Modifier = Modifier) {
+    val mainViewModel: MainViewModel = koinViewModel()
+    val logsViewModel: LogsViewModel = koinViewModel()
     val settingsViewModel: SettingsViewModel = koinViewModel()
     val authenticationSettingsViewModel: AuthenticationSettingsViewModel = koinViewModel()
     val tryEnableHideConfigsStatus by authenticationSettingsViewModel.tryEnableHideConfigsStatus.collectAsState()
@@ -75,7 +79,7 @@ fun App(modifier: Modifier = Modifier) {
                                 navController = navController
                             )
                         } else {
-                            DobbySocksScreen()
+                            DobbySocksScreen(mainViewModel = mainViewModel, logsViewModel = logsViewModel)
                         }
                     }
                     composable<SettingsScreen> {
