@@ -14,7 +14,7 @@ var (
 	GRPC_EXECUTABLE string = ""
 	GRPC_ADDRESS    string = ""
 	TESTER_CONFIG   string = ""
-	IPINFO_URL      string = "http://ip-api.com/json"
+	IPINFO_URL      string = "https://ipinfo.io/json"
 	TESTING_CONFIG  string = ""
 	// IPINFO_URL      string = "https://api.myip.com/"
 )
