@@ -9,7 +9,8 @@ interface VPNLibrary {
     fun StopAwg()
 
     // Outline
-    fun StartOutline(key: String)
+    fun GetOutlineLastError(): String
+    fun StartOutline(key: String): Int
     fun StopOutline()
 
     // Healthcheck

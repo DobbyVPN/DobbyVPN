@@ -19,20 +19,21 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Vpn_StartAwg_FullMethodName         = "/vpnserver.Vpn/StartAwg"
-	Vpn_StopAwg_FullMethodName          = "/vpnserver.Vpn/StopAwg"
-	Vpn_StartOutline_FullMethodName     = "/vpnserver.Vpn/StartOutline"
-	Vpn_StopOutline_FullMethodName      = "/vpnserver.Vpn/StopOutline"
-	Vpn_StartHealthCheck_FullMethodName = "/vpnserver.Vpn/StartHealthCheck"
-	Vpn_StopHealthCheck_FullMethodName  = "/vpnserver.Vpn/StopHealthCheck"
-	Vpn_Status_FullMethodName           = "/vpnserver.Vpn/Status"
-	Vpn_TcpPing_FullMethodName          = "/vpnserver.Vpn/TcpPing"
-	Vpn_UrlTest_FullMethodName          = "/vpnserver.Vpn/UrlTest"
-	Vpn_CouldStart_FullMethodName       = "/vpnserver.Vpn/CouldStart"
-	Vpn_CheckServerAlive_FullMethodName = "/vpnserver.Vpn/CheckServerAlive"
-	Vpn_StartCloakClient_FullMethodName = "/vpnserver.Vpn/StartCloakClient"
-	Vpn_StopCloakClient_FullMethodName  = "/vpnserver.Vpn/StopCloakClient"
-	Vpn_InitLogger_FullMethodName       = "/vpnserver.Vpn/InitLogger"
+	Vpn_StartAwg_FullMethodName            = "/vpnserver.Vpn/StartAwg"
+	Vpn_StopAwg_FullMethodName             = "/vpnserver.Vpn/StopAwg"
+	Vpn_GetOutlineLastError_FullMethodName = "/vpnserver.Vpn/GetOutlineLastError"
+	Vpn_StartOutline_FullMethodName        = "/vpnserver.Vpn/StartOutline"
+	Vpn_StopOutline_FullMethodName         = "/vpnserver.Vpn/StopOutline"
+	Vpn_StartHealthCheck_FullMethodName    = "/vpnserver.Vpn/StartHealthCheck"
+	Vpn_StopHealthCheck_FullMethodName     = "/vpnserver.Vpn/StopHealthCheck"
+	Vpn_Status_FullMethodName              = "/vpnserver.Vpn/Status"
+	Vpn_TcpPing_FullMethodName             = "/vpnserver.Vpn/TcpPing"
+	Vpn_UrlTest_FullMethodName             = "/vpnserver.Vpn/UrlTest"
+	Vpn_CouldStart_FullMethodName          = "/vpnserver.Vpn/CouldStart"
+	Vpn_CheckServerAlive_FullMethodName    = "/vpnserver.Vpn/CheckServerAlive"
+	Vpn_StartCloakClient_FullMethodName    = "/vpnserver.Vpn/StartCloakClient"
+	Vpn_StopCloakClient_FullMethodName     = "/vpnserver.Vpn/StopCloakClient"
+	Vpn_InitLogger_FullMethodName          = "/vpnserver.Vpn/InitLogger"
 )
 
 // VpnClient is the client API for Vpn service.
@@ -43,7 +44,8 @@ type VpnClient interface {
 	StartAwg(ctx context.Context, in *StartAwgRequest, opts ...grpc.CallOption) (*Empty, error)
 	StopAwg(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	// outline.go
-	StartOutline(ctx context.Context, in *StartOutlineRequest, opts ...grpc.CallOption) (*Empty, error)
+	GetOutlineLastError(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetOutlineLastErrorResponse, error)
+	StartOutline(ctx context.Context, in *StartOutlineRequest, opts ...grpc.CallOption) (*StartOutlineResponse, error)
 	StopOutline(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	// health_check.go
 	StartHealthCheck(ctx context.Context, in *StartHealthCheckRequest, opts ...grpc.CallOption) (*Empty, error)
@@ -88,9 +90,19 @@ func (c *vpnClient) StopAwg(ctx context.Context, in *Empty, opts ...grpc.CallOpt
 	return out, nil
 }
 
-func (c *vpnClient) StartOutline(ctx context.Context, in *StartOutlineRequest, opts ...grpc.CallOption) (*Empty, error) {
+func (c *vpnClient) GetOutlineLastError(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetOutlineLastErrorResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
+	out := new(GetOutlineLastErrorResponse)
+	err := c.cc.Invoke(ctx, Vpn_GetOutlineLastError_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vpnClient) StartOutline(ctx context.Context, in *StartOutlineRequest, opts ...grpc.CallOption) (*StartOutlineResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StartOutlineResponse)
 	err := c.cc.Invoke(ctx, Vpn_StartOutline_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -216,7 +228,8 @@ type VpnServer interface {
 	StartAwg(context.Context, *StartAwgRequest) (*Empty, error)
 	StopAwg(context.Context, *Empty) (*Empty, error)
 	// outline.go
-	StartOutline(context.Context, *StartOutlineRequest) (*Empty, error)
+	GetOutlineLastError(context.Context, *Empty) (*GetOutlineLastErrorResponse, error)
+	StartOutline(context.Context, *StartOutlineRequest) (*StartOutlineResponse, error)
 	StopOutline(context.Context, *Empty) (*Empty, error)
 	// health_check.go
 	StartHealthCheck(context.Context, *StartHealthCheckRequest) (*Empty, error)
@@ -247,7 +260,10 @@ func (UnimplementedVpnServer) StartAwg(context.Context, *StartAwgRequest) (*Empt
 func (UnimplementedVpnServer) StopAwg(context.Context, *Empty) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StopAwg not implemented")
 }
-func (UnimplementedVpnServer) StartOutline(context.Context, *StartOutlineRequest) (*Empty, error) {
+func (UnimplementedVpnServer) GetOutlineLastError(context.Context, *Empty) (*GetOutlineLastErrorResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetOutlineLastError not implemented")
+}
+func (UnimplementedVpnServer) StartOutline(context.Context, *StartOutlineRequest) (*StartOutlineResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StartOutline not implemented")
 }
 func (UnimplementedVpnServer) StopOutline(context.Context, *Empty) (*Empty, error) {
@@ -336,6 +352,24 @@ func _Vpn_StopAwg_Handler(srv interface{}, ctx context.Context, dec func(interfa
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(VpnServer).StopAwg(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_GetOutlineLastError_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).GetOutlineLastError(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_GetOutlineLastError_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).GetOutlineLastError(ctx, req.(*Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -570,6 +604,10 @@ var Vpn_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StopAwg",
 			Handler:    _Vpn_StopAwg_Handler,
+		},
+		{
+			MethodName: "GetOutlineLastError",
+			Handler:    _Vpn_GetOutlineLastError_Handler,
 		},
 		{
 			MethodName: "StartOutline",

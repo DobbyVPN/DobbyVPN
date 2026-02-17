@@ -44,10 +44,22 @@ class GRPCVpnClient(private val channel: ManagedChannel) : Closeable {
     //endregion
 
     //region Outline
-    suspend fun StartOutline(key: String) {
+    suspend fun GetOutlineLastError(): String {
+        try {
+            val response = stub.getOutlineLastError(empty { })
+
+            return response.error
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
+    }
+
+    suspend fun StartOutline(key: String): Int {
         val request = startOutlineRequest { this.config = key }
         try {
-            stub.startOutline(request)
+            val response = stub.startOutline(request)
+
+            return response.result
         } catch (e: StatusException) {
             throw VPNServiceConnectionException(e)
         }

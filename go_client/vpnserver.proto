@@ -10,7 +10,8 @@ service Vpn {
   rpc StopAwg (Empty)             returns (Empty);
   
   // outline.go
-  rpc StartOutline (StartOutlineRequest)  returns (Empty);
+  rpc GetOutlineLastError(Empty)          returns (GetOutlineLastErrorResponse);
+  rpc StartOutline (StartOutlineRequest)  returns (StartOutlineResponse);
   rpc StopOutline (Empty)                 returns (Empty);
   
   // health_check.go
@@ -35,8 +36,16 @@ message StartAwgRequest {
   string config = 2;
 }
 
+message GetOutlineLastErrorResponse {
+  string error = 1;
+}
+
 message StartOutlineRequest {
   string config = 1;
+}
+
+message StartOutlineResponse {
+  int32 result = 1;
 }
 
 message StartHealthCheckRequest {

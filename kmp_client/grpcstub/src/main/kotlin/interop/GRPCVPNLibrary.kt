@@ -15,7 +15,14 @@ open class GRPCVPNLibrary : VPNLibrary, Closeable {
     /**
      * @throws interop.exceptions.VPNServiceConnectionException
      */
-    override fun StartOutline(key: String) {
+    override fun GetOutlineLastError(): String {
+        return runBlocking { client.GetOutlineLastError() }
+    }
+
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
+    override fun StartOutline(key: String): Int {
         return runBlocking { client.StartOutline(key) }
     }
 

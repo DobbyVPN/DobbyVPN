@@ -7,11 +7,23 @@ import interop.data.UrlTestResponce
 import interop.exceptions.VPNServiceConnectionException
 
 class RestartableGRPCVPNLibrary(private val logger: Logger) : GRPCVPNLibrary() {
-    override fun StartOutline(key: String) {
+    override fun GetOutlineLastError(): String {
+        try {
+            return super.GetOutlineLastError()
+        } catch (e: VPNServiceConnectionException) {
+            logger.log("[ERROR] Failed to GetOutlineLastError: ${e.parent}")
+
+            return ""
+        }
+    }
+
+    override fun StartOutline(key: String): Int {
         try {
             return super.StartOutline(key)
         } catch (e: VPNServiceConnectionException) {
             logger.log("[ERROR] Failed to StartOutline: ${e.parent}")
+
+            return -1
         }
     }
 

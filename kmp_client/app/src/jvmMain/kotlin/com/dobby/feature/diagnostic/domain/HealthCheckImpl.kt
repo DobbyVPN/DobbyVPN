@@ -232,7 +232,7 @@ class HealthCheckImpl(
         return try {
             // Check if Go library is responsive by calling CouldStart
             // This verifies the native library is loaded and working
-            val isResponsive = vpnLibrary.couldStart()
+            val isResponsive = vpnLibrary.CouldStart()
             if (!isResponsive) {
                 logger.log("[HC] Go library not responsive (in critical section)")
             }
