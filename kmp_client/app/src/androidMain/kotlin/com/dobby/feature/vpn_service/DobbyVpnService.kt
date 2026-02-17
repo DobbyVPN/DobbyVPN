@@ -234,7 +234,6 @@ class DobbyVpnService : VpnService() {
     }
 
     fun setupVpn() {
-        teardownVpn()
         logger.log("[svc:$serviceId] setupVpn(): begin")
         vpnInterface = runCatching {
             vpnInterfaceFactory
