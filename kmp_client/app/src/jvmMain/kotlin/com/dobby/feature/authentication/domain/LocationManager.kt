@@ -1,14 +1,10 @@
 package com.dobby.feature.authentication.domain
 
-import dev.jordond.compass.geocoder.Geocoder
-import dev.jordond.compass.geolocation.Geolocator
-import dev.jordond.compass.permissions.LocationPermissionController
-
-actual val geocoder: Geocoder?
+actual val geocoder: AppGeocoder?
     get() = null
 
-actual val geolocator: Geolocator?
+actual val geolocator: AppGeolocator?
     get() = null
 
-actual val locationPermissionController: LocationPermissionController?
+actual val locationPermissionController: AppLocationPermissionController?
     get() = null

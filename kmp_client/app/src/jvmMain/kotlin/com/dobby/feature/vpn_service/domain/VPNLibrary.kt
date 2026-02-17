@@ -5,13 +5,12 @@ import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.logging.domain.provideLogFilePath
 import com.sun.jna.*
 import java.io.File
-import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
 
 interface VPNLibrary : Library {
     // Outline
-    fun StartOutline(key: String)
+    fun StartOutline(key: String): Int
     fun StopOutline()
+    fun GetOutlineLastError(): String?
 
     // Cloak
     fun StartCloakClient(localHost: String, localPort: String, config: String)
@@ -45,8 +44,9 @@ class VPNLibraryLoader(
                 else -> throw UnsupportedOperationException("Unsupported OS")
             }
 
-            val encodedPath = this::class.java.protectionDomain.codeSource.location.path
-            val decodedPath = File(URLDecoder.decode(encodedPath, StandardCharsets.UTF_8.name())).parentFile.parent
+            // Using toURI() for proper Unicode/Cyrillic path support on Windows
+            val decodedPath = File(this::class.java.protectionDomain.codeSource.location.toURI())
+                .parentFile.parent
             // set path for windows as default
 
             val libPath = when {
@@ -70,17 +70,36 @@ class VPNLibraryLoader(
         }
     }
 
-    fun startOutline(key: String) {
+    var lastOutlineError: String? = null
+        private set
+
+    /**
+     * Starts Outline client and returns true if connection was successful.
+     * On failure, returns false and sets [lastOutlineError] with error details.
+     */
+    fun startOutline(key: String): Boolean {
+        lastOutlineError = null
         try {
             logger.log("Run key: ${maskStr(key)}")
-            INSTANCE.StartOutline(key)
-            logger.log("NewOutlineClient called successfully.")
+            val result = INSTANCE.StartOutline(key)
+            if (result == 0) {
+                logger.log("Outline connected successfully.")
+                return true
+            } else {
+                lastOutlineError = INSTANCE.GetOutlineLastError() ?: "Unknown error"
+                logger.log("Outline connection FAILED: $lastOutlineError")
+                return false
+            }
         } catch (e: UnsatisfiedLinkError) {
-            logger.log("Failed to call NewOutlineClient: ${e.message}")
+            lastOutlineError = "Library error: ${e.message}"
+            logger.log("Failed to call StartOutline: ${e.message}")
             e.printStackTrace()
+            return false
         } catch (e: Exception) {
-            logger.log("An error occurred while calling NewOutlineClient: ${e.message}")
+            lastOutlineError = "Exception: ${e.message}"
+            logger.log("An error occurred while calling StartOutline: ${e.message}")
             e.printStackTrace()
+            return false
         }
     }
 

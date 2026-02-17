@@ -75,48 +75,92 @@ func (d *OutlineDevice) GetServerIP() net.IP {
 	return d.svrIP
 }
 
-// resolveShadowsocksServerIPFromConfig extracts server IP from transport config
-// Supports multi-part configs (e.g., "ws:...|ss://...")
-func resolveShadowsocksServerIPFromConfig(transportConfig string) (net.IP, error) {
+// extractTLSSNIHost extracts the host from "tls:sni=HOST" part of the config.
+// Returns empty string if not found.
+func extractTLSSNIHost(transportConfig string) string {
+	parts := strings.Split(transportConfig, "|")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "tls:") {
+			// Parse tls:sni=HOST or tls:sni=HOST&other_param=value
+			params := strings.TrimPrefix(part, "tls:")
+			for _, param := range strings.Split(params, "&") {
+				if strings.HasPrefix(param, "sni=") {
+					return strings.TrimPrefix(param, "sni=")
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// ResolveServerIPFromConfig extracts and resolves the actual server IP from transport config.
+// For WSS configs (tls:sni=...|ws:...|ss://...), it uses the TLS SNI host.
+// For plain configs (ss://...), it uses the Shadowsocks host.
+// This is exported for use in routing setup before creating connections.
+func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 	if transportConfig = strings.TrimSpace(transportConfig); transportConfig == "" {
 		return nil, errors.New("config is required")
 	}
 
-	// For multi-part configs (pipe-separated), find the ss:// part
-	parts := strings.Split(transportConfig, "|")
-	var ssConfig string
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, "ss://") {
-			ssConfig = part
-			break
+	var host string
+
+	// First, check for TLS SNI host (used in WSS configs)
+	// This is the actual server we connect to for WebSocket over TLS
+	if sniHost := extractTLSSNIHost(transportConfig); sniHost != "" {
+		host = sniHost
+		log.Infof("outline client: detected WSS config, using TLS SNI host: %s", host)
+	} else {
+		// Fall back to ss:// host for plain Shadowsocks configs
+		parts := strings.Split(transportConfig, "|")
+		var ssConfig string
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(part, "ss://") {
+				ssConfig = part
+				break
+			}
 		}
+
+		if ssConfig == "" {
+			return nil, errors.New("config must contain 'ss://' part")
+		}
+
+		parsedURL, err := url.Parse(ssConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse ss:// config: %w", err)
+		}
+
+		host = strings.TrimSpace(parsedURL.Hostname())
+		if host == "" {
+			return nil, fmt.Errorf("invalid ss:// config: missing hostname (host part=%q)", parsedURL.Host)
+		}
+		log.Infof("outline client: using ss:// host: %s", host)
 	}
 
-	if ssConfig == "" {
-		return nil, errors.New("config must contain 'ss://' part")
+	// Skip resolution for localhost (used when Cloak is enabled)
+	if host == "127.0.0.1" || host == "localhost" {
+		log.Infof("outline client: localhost detected, skipping IP resolution")
+		return net.ParseIP("127.0.0.1").To4(), nil
 	}
 
-	parsedURL, err := url.Parse(ssConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse ss:// config: %w", err)
-	}
-
-	host := strings.TrimSpace(parsedURL.Hostname())
-	if host == "" {
-		return nil, fmt.Errorf("invalid ss:// config: missing hostname (host part=%q)", parsedURL.Host)
-	}
-
+	// Resolve hostname to IP
 	ipList, err := net.LookupIP(host)
 	if err != nil {
-		return nil, fmt.Errorf("invalid server hostname: %w", err)
+		return nil, fmt.Errorf("failed to resolve server hostname %q: %w", host, err)
 	}
 
 	// todo: we only tested IPv4 routing table, need to test IPv6 in the future
 	for _, ip := range ipList {
 		if ip = ip.To4(); ip != nil {
+			log.Infof("outline client: resolved %s -> %s", host, ip.String())
 			return ip, nil
 		}
 	}
 	return nil, errors.New("IPv6 only Shadowsocks server is not supported yet")
+}
+
+// resolveShadowsocksServerIPFromConfig is a wrapper for backward compatibility
+func resolveShadowsocksServerIPFromConfig(transportConfig string) (net.IP, error) {
+	return ResolveServerIPFromConfig(transportConfig)
 }

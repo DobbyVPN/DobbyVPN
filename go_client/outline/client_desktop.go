@@ -4,11 +4,13 @@ package outline
 
 import (
 	"context"
+	"fmt"
 	"go_client/common"
 	log "go_client/logger"
 	outlineCommon "go_client/outline/common"
 	"go_client/outline/internal"
 	"sync"
+	"time"
 )
 
 type OutlineClient struct {
@@ -49,15 +51,33 @@ func (c *OutlineClient) Connect() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
 
+	// Channel to receive initialization result from the goroutine
+	initResult := make(chan error, 1)
+
 	go func() {
-		if err := c.app.Run(ctx); err != nil {
+		err := c.app.Run(ctx, initResult)
+		if err != nil {
 			log.Infof("connect outline failed: %v", err)
 			common.Client.MarkInactive(outlineCommon.Name)
 		}
 	}()
 
-	common.Client.MarkActive(outlineCommon.Name)
-	return nil
+	// Wait for initialization result with timeout
+	select {
+	case err := <-initResult:
+		if err != nil {
+			c.cancel()
+			c.cancel = nil
+			return fmt.Errorf("failed to initialize outline connection: %w", err)
+		}
+		log.Infof("Outline connection initialized successfully")
+		common.Client.MarkActive(outlineCommon.Name)
+		return nil
+	case <-time.After(30 * time.Second):
+		c.cancel()
+		c.cancel = nil
+		return fmt.Errorf("timeout waiting for outline connection initialization")
+	}
 }
 
 func (c *OutlineClient) Disconnect() error {
