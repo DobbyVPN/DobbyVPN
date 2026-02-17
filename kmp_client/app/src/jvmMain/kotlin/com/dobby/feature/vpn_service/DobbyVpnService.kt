@@ -1,17 +1,14 @@
 package com.dobby.feature.vpn_service
 
-import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.domain.maskStr
+import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
-import interop.VPNLibraryLoader
+import interop.VPNLibrary
 import kotlinx.coroutines.runBlocking
-import okio.Path
-import okio.Path.Companion.toPath
-import java.io.File
-import java.util.Base64
-import kotlin.math.log
+import java.util.*
 
 private fun extractHostFromHostPort(hostPortMaybeWithQuery: String): String {
     val hostPort = hostPortMaybeWithQuery.substringBefore("?").trim()
@@ -69,27 +66,16 @@ private fun buildOutlineUrl(
 internal class DobbyVpnService(
     private val dobbyConfigsRepository: DobbyConfigsRepository,
     private val logger: Logger,
-    private val vpnLibrary: VPNLibraryLoader,
+    private val vpnLibrary: VPNLibrary,
     private val connectionState: ConnectionStateRepository
 ) {
     private val startStopLock = Any()
     private var runningInterface: VpnInterface? = null
 
-    private fun provideServiceLogFilePath(): Path {
-        val userHome = System.getProperty("user.home") ?: error("Unable to get user home directory")
-        val appDir = File(userHome, ".myapp")
-        if (!appDir.exists()) {
-            appDir.mkdirs()
-        }
-        val logFile = File(appDir, "app_logs_service.txt")
-
-        return logFile.absolutePath.toPath()
-    }
-
     fun enableTunnelLogging() {
-        val logFilePath = provideServiceLogFilePath()
+        val logFilePath = provideLogFilePath()
         logger.log("Init tunnel logging to the path: $logFilePath")
-        vpnLibrary.initLogger(logFilePath.toString())
+        vpnLibrary.InitLogger(logFilePath.toString())
     }
 
     fun startService() {
@@ -141,7 +127,7 @@ internal class DobbyVpnService(
             connectionState.updateVpnStarted(isStarted = true)
             logger.log("CloakIsEnable = " + dobbyConfigsRepository.getIsCloakEnabled())
             if (dobbyConfigsRepository.getIsCloakEnabled()) {
-                vpnLibrary.startCloak(localHost, localPort, dobbyConfigsRepository.getCloakConfig(), false)
+                vpnLibrary.StartCloakClient(localHost, localPort, dobbyConfigsRepository.getCloakConfig(), false)
             }
             val outlineUrl = buildOutlineUrl(
                 methodPassword = methodPassword,
@@ -155,7 +141,8 @@ internal class DobbyVpnService(
             if (websocketEnabled) {
                 logger.log("WebSocket transport requested (will connect if server supports it)")
             }
-            vpnLibrary.startOutline(outlineUrl)
+
+            vpnLibrary.StartOutline(outlineUrl)
         }
     }
 
@@ -163,11 +150,11 @@ internal class DobbyVpnService(
     private fun stopCloakOutline() {
         logger.log("StopOutline")
         runBlocking {
-            vpnLibrary.stopOutline()
+            vpnLibrary.StopOutline()
             logger.log("CloakIsEnable = " + dobbyConfigsRepository.getIsCloakEnabled())
             if (dobbyConfigsRepository.getIsCloakEnabled()) {
                 logger.log("StopCloak")
-                vpnLibrary.stopCloak()
+                vpnLibrary.StopCloakClient()
             }
             connectionState.updateVpnStarted(isStarted = false)
         }
@@ -177,12 +164,12 @@ internal class DobbyVpnService(
         val apiKey = dobbyConfigsRepository.getAwgConfig()
         logger.log("startAwg with key: $apiKey")
         runBlocking { connectionState.updateVpnStarted(isStarted = true) }
-        vpnLibrary.startAwg("awg0", apiKey)
+        vpnLibrary.StartAwg("awg0", apiKey)
     }
 
     private fun stopAwg() {
         logger.log("stopAwg")
-        vpnLibrary.stopAwg()
+        vpnLibrary.StopAwg()
         runBlocking { connectionState.updateVpnStarted(isStarted = false) }
     }
 

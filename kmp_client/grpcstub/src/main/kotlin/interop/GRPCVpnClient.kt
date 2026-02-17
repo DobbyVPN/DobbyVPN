@@ -12,7 +12,9 @@ import com.dobby.vpnserver.tcpPingRequest
 import com.dobby.vpnserver.urlTestRequest
 import interop.data.TcpPingResponce
 import interop.data.UrlTestResponce
+import interop.exceptions.VPNServiceConnectionException
 import io.grpc.ManagedChannel
+import io.grpc.StatusException
 import java.io.Closeable
 import java.util.concurrent.TimeUnit
 
@@ -25,26 +27,38 @@ class GRPCVpnClient(private val channel: ManagedChannel) : Closeable {
             this.tunnel = key
             this.config = config
         }
-        val response = stub.startAwg(request)
-        // response == Empty
+        try {
+            stub.startAwg(request)
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
     }
 
     suspend fun StopAwg() {
-        val response = stub.stopAwg(empty { })
-        // response == Empty
+        try {
+            stub.stopAwg(empty { })
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
     }
     //endregion
 
     //region Outline
     suspend fun StartOutline(key: String) {
         val request = startOutlineRequest { this.config = key }
-        val response = stub.startOutline(request)
-        // response == Empty
+        try {
+            stub.startOutline(request)
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
     }
 
     suspend fun StopOutline() {
-        val response = stub.stopOutline(empty { })
-        // response == Empty
+        try {
+            stub.stopOutline(empty { })
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
     }
     //endregion
 
@@ -54,27 +68,44 @@ class GRPCVpnClient(private val channel: ManagedChannel) : Closeable {
             this.period = period
             this.sendMetrics = sendMetrics
         }
-        val response = stub.startHealthCheck(request)
-        // response == empty
+
+        try {
+            stub.startHealthCheck(request)
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
     }
 
     suspend fun StopHealthCheck() {
-        val response = stub.stopHealthCheck(empty { })
-        // response == empty
+        try {
+            stub.stopHealthCheck(empty { })
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
     }
 
     suspend fun Status(): String {
-        val response = stub.status(empty { })
-        return response.status
+        try {
+            val response = stub.status(empty { })
+
+            return response.status
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
     }
 
     suspend fun TcpPing(address: String): TcpPingResponce {
         val request = tcpPingRequest {
             this.address = address
         }
-        val response = stub.tcpPing(request)
 
-        return TcpPingResponce(result = response.result, error = response.error)
+        try {
+            val response = stub.tcpPing(request)
+
+            return TcpPingResponce(result = response.result, error = response.error)
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
     }
 
     suspend fun UrlTest(url: String, standard: Int): UrlTestResponce {
@@ -82,15 +113,24 @@ class GRPCVpnClient(private val channel: ManagedChannel) : Closeable {
             this.url = url
             this.standard = standard
         }
-        val response = stub.urlTest(request)
 
-        return UrlTestResponce(result = response.result, error = response.error)
+        try {
+            val response = stub.urlTest(request)
+
+            return UrlTestResponce(result = response.result, error = response.error)
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
     }
 
     suspend fun CouldStart(): Boolean {
-        val response = stub.couldStart(empty { })
+        try {
+            val response = stub.couldStart(empty { })
 
-        return response.result
+            return response.result
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
     }
 
     suspend fun CheckServerAlive(address: String, port: Int): Int {
@@ -98,9 +138,14 @@ class GRPCVpnClient(private val channel: ManagedChannel) : Closeable {
             this.address = address
             this.port = port
         }
-        val response = stub.checkServerAlive(request)
 
-        return response.result
+        try {
+            val response = stub.checkServerAlive(request)
+
+            return response.result
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
     }
     //endregion
 
@@ -112,21 +157,32 @@ class GRPCVpnClient(private val channel: ManagedChannel) : Closeable {
             this.config = config
             this.udp = udp
         }
-        val response = stub.startCloakClient(request)
-        // response == Empty
+
+        try {
+            stub.startCloakClient(request)
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
     }
 
     suspend fun StopCloakClient() {
-        val response = stub.stopCloakClient(empty { })
-        // response == Empty
+        try {
+            stub.stopCloakClient(empty { })
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
     }
     //endregion
 
     //region InitLogger
     suspend fun InitLogger(path: String) {
         val request = initLoggerRequest { this.path = path }
-        val response = stub.initLogger(request)
-        // response == Empty
+
+        try {
+            stub.initLogger(request)
+        } catch (e: StatusException) {
+            throw VPNServiceConnectionException(e)
+        }
     }
     //endregion
 

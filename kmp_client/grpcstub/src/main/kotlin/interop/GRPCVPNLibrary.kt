@@ -6,69 +6,111 @@ import io.grpc.ManagedChannelBuilder
 import kotlinx.coroutines.runBlocking
 import java.io.Closeable
 
-class GRPCVPNLibrary : VPNLibrary, Closeable {
-    private val HOST = "localhost"
-    private val PORT = System.getenv("PORT")?.toInt() ?: 50051
-    private val CHANNEL = ManagedChannelBuilder.forAddress(HOST, PORT).usePlaintext().build()
-    private val CLIENT = GRPCVpnClient(CHANNEL)
+open class GRPCVPNLibrary : VPNLibrary, Closeable {
+    private val host = "localhost"
+    private val port = System.getenv("PORT")?.toInt() ?: 50051
+    private val channel = ManagedChannelBuilder.forAddress(host, port).usePlaintext().build()
+    private val client = GRPCVpnClient(channel)
 
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
     override fun StartOutline(key: String) {
-        return runBlocking { CLIENT.StartOutline(key) }
+        return runBlocking { client.StartOutline(key) }
     }
 
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
     override fun StopOutline() {
-        return runBlocking { CLIENT.StopOutline() }
+        return runBlocking { client.StopOutline() }
     }
 
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
     override fun StartHealthCheck(period: Int, sendMetrics: Boolean) {
-        return runBlocking { CLIENT.StartHealthCheck(period, sendMetrics) }
+        return runBlocking { client.StartHealthCheck(period, sendMetrics) }
     }
 
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
     override fun StopHealthCheck() {
-        return runBlocking { CLIENT.StopHealthCheck() }
+        return runBlocking { client.StopHealthCheck() }
     }
 
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
     override fun Status(): String {
-        return runBlocking { CLIENT.Status() }
+        return runBlocking { client.Status() }
     }
 
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
     override fun TcpPing(address: String): TcpPingResponce {
-        return runBlocking { CLIENT.TcpPing(address) }
+        return runBlocking { client.TcpPing(address) }
     }
 
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
     override fun UrlTest(url: String, standard: Int): UrlTestResponce {
-        return runBlocking { CLIENT.UrlTest(url, standard) }
+        return runBlocking { client.UrlTest(url, standard) }
     }
 
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
     override fun StartCloakClient(localHost: String, localPort: String, config: String, udp: Boolean) {
-        return runBlocking { CLIENT.StartCloakClient(localHost, localPort, config, udp) }
+        return runBlocking { client.StartCloakClient(localHost, localPort, config, udp) }
     }
 
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
     override fun StopCloakClient() {
-        return runBlocking { CLIENT.StopCloakClient() }
+        return runBlocking { client.StopCloakClient() }
     }
 
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
     override fun StartAwg(key: String, config: String) {
-        return runBlocking { CLIENT.StartAwg(key, config) }
+        return runBlocking { client.StartAwg(key, config) }
     }
 
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
     override fun StopAwg() {
-        return runBlocking { CLIENT.StopAwg() }
+        return runBlocking { client.StopAwg() }
     }
 
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
     override fun CouldStart(): Boolean {
-        return runBlocking { CLIENT.CouldStart() }
+        return runBlocking { client.CouldStart() }
     }
 
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
     override fun InitLogger(path: String) {
-        return runBlocking { CLIENT.InitLogger(path) }
+        return runBlocking { client.InitLogger(path) }
     }
 
+    /**
+     * @throws interop.exceptions.VPNServiceConnectionException
+     */
     override fun CheckServerAlive(address: String, port: Int): Int {
-        return runBlocking { CLIENT.CheckServerAlive(address, port) }
+        return runBlocking { client.CheckServerAlive(address, port) }
     }
 
     override fun close() {
-        this.CLIENT.close()
+        this.client.close()
     }
 }

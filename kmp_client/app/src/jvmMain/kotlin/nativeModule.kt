@@ -6,7 +6,8 @@ import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.VpnManagerImpl
 import com.dobby.feature.vpn_service.DobbyVpnService
-import interop.VPNLibraryLoader
+import com.dobby.feature.vpn_service.RestartableGRPCVPNLibrary
+import interop.VPNLibrary
 import org.koin.dsl.module
 
 val jvmMainModule = makeNativeModule(
@@ -20,6 +21,6 @@ val jvmMainModule = makeNativeModule(
 )
 
 val jvmVpnModule = module {
-    single<VPNLibraryLoader> { VPNLibraryLoader() }
+    single<VPNLibrary> { RestartableGRPCVPNLibrary(get()) }
     single<DobbyVpnService> { DobbyVpnService(get(), get(), get(), get()) }
 }
