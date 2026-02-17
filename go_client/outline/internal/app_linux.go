@@ -117,9 +117,6 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("[Tunnel] Context cancelled, stopping transfer")
 	tunnel.StopTransfer()
-
-	tun.Close()
-	ss.Close()
 	log.Infof("Tun and device closed")
 	return nil
 }

@@ -148,8 +148,5 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("Outline/app: received interrupt signal, terminating...\n")
 
-	tun.Close()
-	ss.Close()
-
 	return nil
 }
