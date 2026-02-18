@@ -6,12 +6,11 @@ package internal
 import (
 	"context"
 	"fmt"
-	log "go_client/logger"
-	"sync"
-
 	"go_client/common"
+	log "go_client/logger"
 	outlineCommon "go_client/outline/common"
 	"go_client/routing"
+	"go_client/tunnel"
 
 	"github.com/jackpal/gateway"
 )
@@ -35,9 +34,6 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		return err
 	}
 	log.Infof("gatewayIP: %s", gatewayIP.String())
-
-	trafficCopyWg := &sync.WaitGroup{}
-	defer trafficCopyWg.Wait()
 
 	log.Infof("[Routing] Pre-resolving server IP from config...")
 	serverIP, err := ResolveServerIPFromConfig(*app.TransportConfig)
@@ -107,56 +103,20 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 	}()
 
-	// Start traffic copy TUN ↔ Outline
-	trafficCopyWg.Add(2)
+	tunnel.StartTransfer(
+		tun,
+		func(buf []byte) (int, error) {
+			return ss.Read(buf)
+		},
+		func(buf []byte) (int, error) {
+			return ss.Write(buf)
+		},
+	)
 
-	go func() {
-		defer trafficCopyWg.Done()
-		buffer := make([]byte, 65536)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				n, err := tun.Read(buffer)
-				if err != nil {
-					break
-				}
-				if n > 0 {
-					if _, err = ss.Write(buffer[:n]); err != nil {
-						break
-					}
-				}
-			}
-		}
-	}()
+	<-ctx.Done()
 
-	go func() {
-		defer trafficCopyWg.Done()
-		buf := make([]byte, 65536)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				n, err := ss.Read(buf)
-				if err != nil {
-					break
-				}
-				if n > 0 {
-					if _, err = tun.Write(buf[:n]); err != nil {
-						break
-					}
-				}
-			}
-		}
-		log.Infof("OutlineDevice -> tun stopped")
-	}()
-
-	trafficCopyWg.Wait()
-
-	tun.Close()
-	ss.Close()
+	log.Infof("[Tunnel] Context cancelled, stopping transfer")
+	tunnel.StopTransfer()
 	log.Infof("Tun and device closed")
 	return nil
 }
