@@ -4,6 +4,10 @@
 version: "2"
 
 run:
+  skip-dirs:
+    - ios_exports
+    - kotlin_exports
+    - desktop_exports
   timeout: 5m
 
 output:
