@@ -12,22 +12,24 @@ plugins {
     id("com.github.gmazzo.buildconfig") version "5.6.5" apply false
 }
 
-// detekt configuration for all subprojects
+// detekt for all subprojects except vendored/ported modules
+val detektExcluded = setOf("outline", "awg")
 allprojects {
-    apply(plugin = "io.gitlab.arturbosch.detekt")
+    if (project.name !in detektExcluded) {
+        apply(plugin = "io.gitlab.arturbosch.detekt")
 
-    detekt {
-        buildUponDefaultConfig = true
-        config.setFrom(files("${rootProject.projectDir}/detekt.yml"))
-        parallel = true
-        // Generate reports
-        reports {
-            html.required.set(true)
-            html.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/detekt.html"))
-            xml.required.set(true)
-            xml.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/detekt.xml"))
-            sarif.required.set(true)
-            sarif.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/detekt.sarif"))
+        detekt {
+            buildUponDefaultConfig = true
+            config.setFrom(files("${rootProject.projectDir}/detekt.yml"))
+            parallel = true
+            reports {
+                html.required.set(true)
+                html.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/detekt.html"))
+                xml.required.set(true)
+                xml.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/detekt.xml"))
+                sarif.required.set(true)
+                sarif.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/detekt.sarif"))
+            }
         }
     }
 }

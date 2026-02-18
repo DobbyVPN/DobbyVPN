@@ -5,7 +5,7 @@ pre-commit:
   commands:
     go-lint:
       glob: "go_client/**/*.go"
-      run: cd go_client && golangci-lint run --new-from-rev=HEAD~1 ./...
+      run: cd go_client && golangci-lint run --new.from-rev=HEAD~1 ./...
       stage_fixed: true
 
     kotlin-detekt:

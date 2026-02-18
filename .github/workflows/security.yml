@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Grype
-        uses: anchore/scan-action/download-grype@v6
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.108.0
 
       - name: Run Grype scan
         run: grype dir:go_client/ --only-fixed --fail-on high -o table
@@ -29,6 +29,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: trufflesecurity/trufflehog@main
+      - uses: trufflesecurity/trufflehog@v3.93.3
         with:
           extra_args: --only-verified --results=verified,unknown

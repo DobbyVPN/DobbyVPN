@@ -83,6 +83,10 @@ exceptions:
 
 naming:
   active: true
+  MatchingDeclarationName:
+    active: true
+  UtilityClassWithPublicConstructor:
+    active: true
   FunctionNaming:
     active: true
     functionPattern: "[a-zA-Z][a-zA-Z0-9]*"  # Allow PascalCase for @Composable
@@ -136,9 +140,6 @@ style:
     ignoreConstantDeclaration: true
     ignoreCompanionObjectPropertyDeclaration: true
     ignoreEnums: true
-    excludes:
-      - "**/awg/src/main/java/com/dobby/awg/crypto/**"
-      - "**/awg/src/main/java/com/dobby/awg/config/**"
   MaxLineLength:
     active: true
     maxLineLength: 140
