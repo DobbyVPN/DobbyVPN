@@ -4,10 +4,6 @@
 version: "2"
 
 run:
-  skip-dirs:
-    - ios_exports
-    - kotlin_exports
-    - desktop_exports
   timeout: 5m
 
 output:
@@ -80,6 +76,10 @@ linters:
         - hugeParam
         - rangeValCopy
   exclusions:
+    paths:
+      - ios_exports
+      - kotlin_exports
+      - desktop_exports
     rules:
       - path: _test\.go
         linters:
@@ -87,11 +87,6 @@ linters:
           - goconst
           - gosec
           - gocritic
-      - path: (kotlin_exports|ios_exports|desktop_exports)/
-        linters:
-          - revive
-          - gocritic
-          - unparam
 
 formatters:
   enable:
