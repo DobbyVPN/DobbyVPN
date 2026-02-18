@@ -16,10 +16,8 @@ class AddTapDevice(
     fun addTapDevice(appDir: String) {
         val deviceName = "outline-tap0"
         val deviceHwid = "tap0901"
-        
-        // Use absolute paths with proper quoting for paths with spaces
-        val tapInstallPath = File(appDir, "tap-windows6/tapinstall.exe").absolutePath
-        val oemVistaPath = File(appDir, "tap-windows6/OemVista.inf").absolutePath
+        val tapInstallPath = "tap-windows6/tapinstall.exe"
+        val oemVistaPath = "tap-windows6/OemVista.inf"
 
         updatePath()
         // Checking if a TAP device exists
