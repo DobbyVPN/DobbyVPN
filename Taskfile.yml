@@ -18,7 +18,7 @@ tasks:
   install-golangci-lint:
     desc: "Install golangci-lint"
     status:
-      - command -v golangci-lint
+      - golangci-lint version
     cmds:
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6
     silent: true
@@ -26,7 +26,7 @@ tasks:
   install-lefthook:
     desc: "Install lefthook (git hooks manager)"
     status:
-      - command -v lefthook
+      - lefthook version
     cmds:
       - go install github.com/evilmartians/lefthook@latest
     silent: true
@@ -34,7 +34,7 @@ tasks:
   install-trufflehog:
     desc: "Install trufflehog (secret scanner)"
     status:
-      - command -v trufflehog
+      - trufflehog --version
     cmds:
       - go install github.com/trufflesecurity/trufflehog/v3@latest
     silent: true
@@ -115,8 +115,8 @@ tasks:
   report:go:client:
     dir: "{{.ROOT_DIR}}/go_client"
     cmds:
-      - golangci-lint run ./... --output.checkstyle.path="{{.REPORTS_DIR}}/go/go_client-checkstyle.xml" || true
-      - golangci-lint run ./... --output.json.path="{{.REPORTS_DIR}}/go/go_client-report.json" || true
+      - golangci-lint run ./... --output.text.path="" --output.checkstyle.path="{{.REPORTS_DIR}}/go/go_client-checkstyle.xml" || true
+      - golangci-lint run ./... --output.text.path="" --output.json.path="{{.REPORTS_DIR}}/go/go_client-report.json" || true
 
   report:kotlin:
     desc: "detekt reports (HTML + XML + SARIF)"
