@@ -15,11 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: anchore/scan-action@v6
-        with:
-          path: go_client/
-          fail-build: false
-          severity-cutoff: high
+
+      - name: Install Grype
+        uses: anchore/scan-action/download-grype@v6
+
+      - name: Run Grype scan
+        run: grype dir:go_client/ --only-fixed --fail-on high -o table
 
   trufflehog:
     name: TruffleHog — secret detection

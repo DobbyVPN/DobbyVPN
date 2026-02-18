@@ -4,7 +4,7 @@ import app
 import CoreLocation
 
 class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationManagerDelegate {
-    
+
     private var context = LAContext()
     private var manager = LocationManager()
 
@@ -35,12 +35,11 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
             }
         }
     }
-    
-    
+
     func requireLocationPermission(endingFunc: @escaping (AuthPermissionState) -> any Kotlinx_coroutines_coreJob) {
         manager.requestLocationPermission(callback: endingFunc)
     }
-    
+
     func requireLocationService(endingFunc: @escaping (KotlinBoolean) -> Void) {
         let locationManager = CLLocationManager()
 
@@ -48,13 +47,13 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
             return CLLocationManager.locationServicesEnabled()
         }
 
-        // Если сервисы включены — сразу отвечаем
+        // If location services are enabled, respond immediately
         if isLocationEnabled() {
             endingFunc(true)
             return
         }
 
-        // Если выключены — показываем alert
+        // If disabled, show an alert
         let alert = UIAlertController(
             title: "Enable location",
             message: "Location services are turned off. Please enable them to continue.",
@@ -62,19 +61,19 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
         )
 
         alert.addAction(UIAlertAction(title: "Open settings", style: .default) { _ in
-            
-            // Подписываемся на событие возвращения в приложение
+
+            // Subscribe to the app becoming active again
             var observer: NSObjectProtocol?
             observer = NotificationCenter.default.addObserver(
                 forName: UIApplication.didBecomeActiveNotification,
                 object: nil,
                 queue: .main
             ) { _ in
-                NotificationCenter.default.removeObserver(observer!)
+                if let obs = observer { NotificationCenter.default.removeObserver(obs) }
                 endingFunc(KotlinBoolean(value: isLocationEnabled()))
             }
 
-            // Пытаемся открыть настройки локации
+            // Try to open location settings
             if let url = URL(string: UIApplication.openSettingsURLString),
                UIApplication.shared.canOpenURL(url) {
                 UIApplication.shared.open(url)
@@ -87,7 +86,7 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
             endingFunc(false)
         })
 
-        // Получаем top-most view controller для показа алерта
+        // Get the top-most view controller to present the alert
         if let rootVC = UIApplication.shared.windows.first?.rootViewController {
             rootVC.present(alert, animated: true)
         } else {
@@ -96,12 +95,10 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
     }
 }
 
-
 class LocationManager: NSObject, CLLocationManagerDelegate {
     private var locationManager: CLLocationManager?
     private var logs = NativeModuleHolder.logsRepository
     private var callback: ((AuthPermissionState) -> Kotlinx_coroutines_coreJob)?
-
 
     override init() {
         super.init()
@@ -121,7 +118,7 @@ class LocationManager: NSObject, CLLocationManagerDelegate {
             _ = callback(.denied)
         }
     }
-    
+
     func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
         let state: AuthPermissionState
         switch status {
@@ -139,7 +136,7 @@ class LocationManager: NSObject, CLLocationManagerDelegate {
             state = .denied
         }
         _ = self.callback?(state)
-        
+
         self.callback = nil
     }
 }

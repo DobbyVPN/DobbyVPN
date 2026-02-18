@@ -12,16 +12,16 @@ import Network
 class PacketTunnelProvider: NEPacketTunnelProvider {
     private let launchId = UUID().uuidString
     private let tunnelId = String(UUID().uuidString.prefix(8))
-    
+
     private var device = DeviceFacade()
     private var logs = NativeModuleHolder.logsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
-    
+
     private var readPacketsTask: Task<Void, Never>?
     private var processToDeviceTask: Task<Void, Never>?
     private var processFromDeviceTask: Task<Void, Never>?
-    
-    private var packetContinuation: AsyncStream<(Data, NSNumber)>.Continuation!
+
+    private var packetContinuation: AsyncStream<(Data, NSNumber)>.Continuation?
     private lazy var packetStream: AsyncStream<(Data, NSNumber)> = {
         AsyncStream<(Data, NSNumber)>(bufferingPolicy: .bufferingOldest(20)) { continuation in
             self.packetContinuation = continuation
@@ -34,7 +34,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var lastPathStatus: Network.NWPath.Status?
 
     private func extractHost(from hostPortMaybeWithQuery: String) -> String {
-        let hostPort = hostPortMaybeWithQuery.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? hostPortMaybeWithQuery
+        let hostPort = hostPortMaybeWithQuery
+            .split(separator: "?", maxSplits: 1, omittingEmptySubsequences: true)
+            .first.map(String.init) ?? hostPortMaybeWithQuery
         let trimmed = hostPort.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("[") {
             // IPv6 in brackets: [2001:db8::1]:443
@@ -47,7 +49,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         return trimmed
     }
-    
+
     func reportMemoryUsageMB() -> Double {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<natural_t>.stride)
@@ -67,12 +69,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[Memory] unable to get info")
         return 0.0
     }
-    
-    override func startTunnel(options: [String : NSObject]?) async throws {
+
+    override func startTunnel(options: [String: NSObject]?) async throws {
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId)")
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
-        
+
         // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
         await teardownForStop(reason: "pre-start cleanup")
 
@@ -86,7 +88,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let websocketEnabled = configsRepository.getIsWebsocketEnabled()
         let tcpPath = configsRepository.getTcpPathOutline()
         let udpPath = configsRepository.getUdpPathOutline()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] config snapshot: serverPort.len=\(serverPort.count) methodPassword.len=\(methodPassword.count) ws=\(websocketEnabled) tcpPath.len=\(tcpPath.count) udpPath.len=\(udpPath.count)")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] config snapshot:" +
+            " serverPort.len=\(serverPort.count) methodPassword.len=\(methodPassword.count)" +
+            " ws=\(websocketEnabled) tcpPath.len=\(tcpPath.count) udpPath.len=\(udpPath.count)")
 
         // Validate config early (prevents passing empty config into native layer).
         if methodPassword.isEmpty || serverPort.isEmpty {
@@ -97,7 +101,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 userInfo: [NSLocalizedDescriptionKey: "Empty Outline configuration"]
             )
         }
-        
+
         let config = buildOutlineConfig(
             methodPassword: methodPassword,
             serverPort: serverPort,
@@ -106,14 +110,63 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             tcpPath: tcpPath,
             udpPath: udpPath
         )
-        logs.writeLog(log: "Outline config built (prefix=\(!prefix.isEmpty), ws=\(websocketEnabled), tcpPath=\(!tcpPath.isEmpty), udpPath=\(!udpPath.isEmpty))")
+        logs.writeLog(log: "Outline config built" +
+            " (prefix=\(!prefix.isEmpty), ws=\(websocketEnabled)," +
+            " tcpPath=\(!tcpPath.isEmpty), udpPath=\(!udpPath.isEmpty))")
         if websocketEnabled {
             logs.writeLog(log: "WebSocket transport requested (wss)")
         }
 
         let cloakConfig = configsRepository.getCloakConfig()
-        // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
-        // DNS resolution at tunnel start can hang in offline/captive-portal cases, so we do it with a hard timeout.
+        let excludedRoutes = buildExcludedRoutes(
+            serverPort: serverPort,
+            cloakConfig: cloakConfig
+        )
+
+        let remoteAddress = "254.1.1.1"
+        let localAddress = "198.18.0.1"
+        let subnetMask = "255.255.0.0"
+        let dnsServers = ["1.1.1.1", "8.8.8.8"]
+
+        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
+        settings.mtu = 1200
+        settings.ipv4Settings = NEIPv4Settings(
+            addresses: [localAddress],
+            subnetMasks: [subnetMask]
+        )
+        settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
+        settings.ipv4Settings?.excludedRoutes = excludedRoutes
+        settings.ipv6Settings = nil
+        settings.dnsSettings = NEDNSSettings(servers: dnsServers)
+        settings.dnsSettings?.matchDomains = [""]
+
+        logs.writeLog(log: "Settings are ready:")
+        try await self.setTunnelNetworkSettings(settings)
+        logs.writeLog(log: "Tunnel settings applied")
+
+        let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
+        logs.writeLog(log: "Start go logger init path = \(path)")
+        Cloak_outlineInitLogger(path)
+        logs.writeLog(log: "Finish go logger init")
+        if !device.initialize(config: config, logs: logs) {
+            logs.writeLog(log: "[startTunnel] Device initialization failed; aborting startTunnel")
+            throw NSError(
+                domain: "PacketTunnelProvider",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Outline device initialization failed"]
+            )
+        }
+        logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
+        try startCloak(outlineServerPort: serverPort)
+
+        readPacketsTask = Task { await self.readPacketsFromTunnel() }
+        processToDeviceTask = Task { await self.processPacketsToDevice() }
+        processFromDeviceTask = Task { await self.processPacketsFromDevice() }
+
+        logs.writeLog(log: "startTunnel: all packet loops started")
+    }
+
+    private func buildExcludedRoutes(serverPort: String, cloakConfig: String) -> [NEIPv4Route] {
         var excludedRoutes: [NEIPv4Route] = []
         if let hostOrIp = extractIP(from: serverPort) {
             let trimmed = hostOrIp.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -137,7 +190,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 if ip == trimmed {
                     logs.writeLog(log: "Excluded route for Cloak RemoteHost: \(maskStr(value: ip))/32")
                 } else {
-                    logs.writeLog(log: "Excluded route for Cloak RemoteHost resolved: \(maskStr(value: trimmed)) → \(maskStr(value: ip))/32")
+                    logs.writeLog(log: "Excluded route for Cloak RemoteHost resolved:" +
+                        " \(maskStr(value: trimmed)) → \(maskStr(value: ip))/32")
                 }
             } else {
                 logs.writeLog(log: "Excluded route for Cloak RemoteHost skipped (can't resolve to IPv4): \(maskStr(value: trimmed))")
@@ -149,45 +203,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         } else {
             logs.writeLog(log: "Excluded IPv4 routes: (none)")
         }
-
-        let remoteAddress = "254.1.1.1"
-        let localAddress = "198.18.0.1"
-        let subnetMask = "255.255.0.0"
-        let dnsServers = ["1.1.1.1", "8.8.8.8"]
-
-        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
-        settings.mtu = 1200
-        settings.ipv4Settings = NEIPv4Settings(
-            addresses: [localAddress],
-            subnetMasks: [subnetMask]
-        )
-        settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
-        settings.ipv4Settings?.excludedRoutes = excludedRoutes
-        settings.ipv6Settings = nil
-        settings.dnsSettings = NEDNSSettings(servers: dnsServers)
-        settings.dnsSettings?.matchDomains = [""]
-
-        
-        logs.writeLog(log: "Settings are ready:")
-        try await self.setTunnelNetworkSettings(settings)
-        logs.writeLog(log: "Tunnel settings applied")
-        
-        let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
-        logs.writeLog(log: "Start go logger init path = \(path)")
-        Cloak_outlineInitLogger(path)
-        logs.writeLog(log: "Finish go logger init")
-        if !device.initialize(config: config, _logs: logs) {
-            logs.writeLog(log: "[startTunnel] Device initialization failed; aborting startTunnel")
-            throw NSError(domain: "PacketTunnelProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: "Outline device initialization failed"])
-        }
-        logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
-        try startCloak(outlineServerPort: serverPort)
-        
-        readPacketsTask = Task { await self.readPacketsFromTunnel() }
-        processToDeviceTask = Task { await self.processPacketsToDevice() }
-        processFromDeviceTask = Task { await self.processPacketsFromDevice() }
-                        
-        logs.writeLog(log: "startTunnel: all packet loops started")
+        return excludedRoutes
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
@@ -198,26 +214,26 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             completionHandler()
         }
     }
-    
+
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
-            completionHandler?("Memory:\(reportMemoryUsageMB())".data(using: .utf8))
+            completionHandler?(Data("Memory:\(reportMemoryUsageMB())".utf8))
         } else {
             completionHandler?(messageData)
         }
     }
-    
+
     private func readPacketsFromTunnel() async {
         logs.writeLog(log: "[tunnel:\(tunnelId)] readPacketsFromTunnel(): start")
 
         while !Task.isCancelled {
             do {
                 let (packets, protocols) = try await packetFlow.readPacketsAsync()
-                
+
                 guard !packets.isEmpty else { continue }
 
                 for i in 0..<packets.count {
-                    packetContinuation.yield((packets[i], protocols[i]))
+                    packetContinuation?.yield((packets[i], protocols[i]))
                 }
             } catch {
                 if Task.isCancelled { break }
@@ -265,7 +281,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let baseUrl = "ss://\(encoded)@\(serverPort)"
 
         func extractHost(_ hostPortMaybeWithQuery: String) -> String {
-            let hostPort = hostPortMaybeWithQuery.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? hostPortMaybeWithQuery
+            let hostPort = hostPortMaybeWithQuery
+                .split(separator: "?", maxSplits: 1, omittingEmptySubsequences: true)
+                .first.map(String.init) ?? hostPortMaybeWithQuery
             let trimmed = hostPort.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.hasPrefix("[") {
                 // IPv6 wrapped in square brackets: [2001:db8::1]:443
@@ -298,7 +316,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             // Domain-related routing should be configured via TLS SNI (tls:sni=...).
             if !tcpPath.isEmpty { wsParams.append("tcp_path=\(tcpPath)") }
             if !udpPath.isEmpty { wsParams.append("udp_path=\(udpPath)") }
-            
+
             let wsParamsStr = wsParams.joined(separator: "&")
             // Use tls:sni|ws: for WebSocket-over-TLS (wss://) via SNI
             let tlsPrefix = "tls:sni=\(effectiveHost)"
@@ -315,7 +333,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startCloak(outlineServerPort: String) throws {
         let localPort = String(configsRepository.getCloakLocalPort())
         logs.writeLog(log: "startCloakOutline: entering")
-        
+
         if configsRepository.getIsCloakEnabled() {
             let cloakConfig = configsRepository.getCloakConfig()
             if cloakConfig.isEmpty {
@@ -351,9 +369,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startPathLogging() {
         // Logs-only: helps correlate "Wi‑Fi off/on" with tunnel lifecycle and health-check decisions.
         let monitor = Network.NWPathMonitor()
-        let q = DispatchQueue(label: "vpn.dobby.app.tunnel.path.\(tunnelId)")
+        let queue = DispatchQueue(label: "vpn.dobby.app.tunnel.path.\(tunnelId)")
         pathMonitor = monitor
-        pathMonitorQueue = q
+        pathMonitorQueue = queue
 
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
@@ -363,24 +381,28 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 let ifaces = path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",")
                 let expensive = path.isExpensive
                 let constrained = path.isConstrained
-                self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] pathUpdate status=\(status) ifaces=[\(ifaces)] expensive=\(expensive) constrained=\(constrained)")
+                self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] pathUpdate" +
+                    " status=\(status) ifaces=[\(ifaces)]" +
+                    " expensive=\(expensive) constrained=\(constrained)")
             }
         }
 
-        monitor.start(queue: q)
+        monitor.start(queue: queue)
         logs.writeLog(log: "[tunnel:\(tunnelId)] NWPathMonitor started")
     }
-    
+
     @MainActor
     private func teardownForStop(reason: String) async {
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason)) tasks(read=\(readPacketsTask != nil) toDev=\(processToDeviceTask != nil) fromDev=\(processFromDeviceTask != nil)) cloakStarted=\(cloakStarted)")
-        
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))" +
+            " tasks(read=\(readPacketsTask != nil) toDev=\(processToDeviceTask != nil)" +
+            " fromDev=\(processFromDeviceTask != nil)) cloakStarted=\(cloakStarted)")
+
         packetContinuation?.finish()
-        
+
         readPacketsTask?.cancel()
         processToDeviceTask?.cancel()
         processFromDeviceTask?.cancel()
-        
+
         stopCloak()
         Cloak_outlineStopHealthCheck()
 
@@ -397,11 +419,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         pathMonitor = nil
         pathMonitorQueue = nil
         lastPathStatus = nil
-        
+
         readPacketsTask = nil
         processToDeviceTask = nil
         processFromDeviceTask = nil
-        
+
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason))")
     }
 
@@ -437,11 +459,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return NEIPv4Route(destinationAddress: host, subnetMask: "255.255.255.255")
     }
 
-    private func isValidIPv4(_ s: String) -> Bool {
-        let parts = s.split(separator: ".")
+    private func isValidIPv4(_ address: String) -> Bool {
+        let parts = address.split(separator: ".")
         guard parts.count == 4 else { return false }
-        for p in parts {
-            guard let n = Int(p), (0...255).contains(n) else { return false }
+        for part in parts {
+            guard let num = Int(part), (0...255).contains(num) else { return false }
         }
         return true
     }
@@ -478,7 +500,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let group = DispatchGroup()
         group.enter()
         let lock = NSLock()
-        var result: String? = nil
+        var result: String?
 
         DispatchQueue.global(qos: .userInitiated).async {
             let ip = self.resolveIPv4IfNeeded(host)
@@ -499,7 +521,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 }
 
-
 extension NEPacketTunnelFlow {
     func readPacketsAsync() async throws -> ([Data], [NSNumber]) {
         try await withCheckedThrowingContinuation { cont in
@@ -510,29 +531,28 @@ extension NEPacketTunnelFlow {
     }
 }
 
-
 class DeviceFacade {
-    private var device: Cloak_outlineOutlineDevice? = nil
-    private var logs: LogsRepository? = nil
+    private var device: Cloak_outlineOutlineDevice?
+    private var logs: LogsRepository?
 
-    func initialize(config: String, _logs: LogsRepository) -> Bool {
+    func initialize(config: String, logs logRepo: LogsRepository) -> Bool {
         logs?.writeLog(log: "[DeviceFacade] Device initiaization started with config: \(config)")
         var err: NSError?
         device = Cloak_outlineNewOutlineDevice(config, &err)
-        
-        logs = _logs
+
+        logs = logRepo
         logs?.writeLog(log: "[DeviceFacade] Device initialization finished (has error:\(err != nil))")
         if let err {
             logs?.writeLog(log: "[DeviceFacade] Error: \(err)")
         }
-        
+
         return device != nil && err == nil
     }
-    
+
     func write(data: Data) {
         do {
-            var ret0_: Int = 0
-            try device?.write(data, ret0_: &ret0_)
+            var bytesWritten: Int = 0
+            try device?.write(data, ret0_: &bytesWritten)
 //            logs?.writeLog(log: "[DeviceFacade] wrote \(data.count) bytes")
         } catch let error {
             logs?.writeLog(log: "[DeviceFacade] write error: \(error)")
@@ -549,7 +569,7 @@ class DeviceFacade {
             return Data()
         }
     }
-    
+
     func close() {
         guard let device else { return }
         do {
@@ -559,5 +579,4 @@ class DeviceFacade {
         }
         self.device = nil
     }
-
 }

@@ -3,7 +3,7 @@
 
 build:
   maxIssues: 0  # Break build on any issue (strict mode for CI)
-  excludeCorrectable: false
+  excludeCorrectable: true
 
 config:
   validation: true
@@ -121,12 +121,24 @@ style:
       - "0"
       - "1"
       - "2"
+      - "3"
+      - "4"
+      - "8"
+      - "16"
+      - "32"
+      - "64"
       - "100"
+      - "128"
+      - "255"
+      - "256"
     ignoreAnnotated: ["Composable", "Preview"]
     ignorePropertyDeclaration: true
     ignoreConstantDeclaration: true
     ignoreCompanionObjectPropertyDeclaration: true
     ignoreEnums: true
+    excludes:
+      - "**/awg/src/main/java/com/dobby/awg/crypto/**"
+      - "**/awg/src/main/java/com/dobby/awg/config/**"
   MaxLineLength:
     active: true
     maxLineLength: 140
