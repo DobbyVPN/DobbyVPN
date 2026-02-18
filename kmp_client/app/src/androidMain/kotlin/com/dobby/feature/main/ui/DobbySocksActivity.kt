@@ -14,6 +14,7 @@ import com.dobby.feature.authentication.domain.HideConfigsManager
 import com.dobby.navigation.App
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.authentication.domain.initBiometricAuthenticationManager
+import com.dobby.feature.authentication.domain.initLocationProvider
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 
@@ -27,6 +28,7 @@ class DobbySocksActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
 
         initBiometricAuthenticationManager(this)
+        initLocationProvider(this)
 
         initVpnPermissionLauncher()
         lifecycleScope.launch {

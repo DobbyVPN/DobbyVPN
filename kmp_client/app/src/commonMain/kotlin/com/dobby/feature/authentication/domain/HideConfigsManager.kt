@@ -1,7 +1,6 @@
 package com.dobby.feature.authentication.domain
 
 import com.russhwolf.settings.Settings
-import dev.jordond.compass.permissions.PermissionState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.MutableStateFlow

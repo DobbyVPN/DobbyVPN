@@ -1,6 +1,7 @@
 name,latitude_deg,longitude_deg
 Ocean Reef Club Airport,25.325399,-80.274803
 Aleknagik / New Airport,59.2826004028,-158.617996216
+baccaratshh,35,35
 Sas Al Nakheel Air Base,24.44128,54.51696
 Burton-Nibbs International Airport,17.621194,-61.798347
 Honiara International Airport,-9.428,160.054993
@@ -575,6 +576,7 @@ Paderborn Lippstadt Airport,51.612527,8.617459
 Weeze (Niederrhein) Airport,51.601362,6.141228
 Dortmund Airport,51.518299,7.61224
 Augsburg Airport,48.425278,10.931667
+Landshut Airfield,48.512019,12.034865
 Oberpfaffenhofen Airport,48.081402,11.2831
 Bodensee Airport Friedrichshafen,47.671299,9.51149
 Bamberg-Breitenau Airfield,49.920403,10.914233
@@ -1095,10 +1097,11 @@ Lichinga Airport,-13.274,35.2663
 Maputo Airport,-25.920799,32.572601
 Mueda Airport,-11.6729,39.563099
 Mocímboa da Praia Airport,-11.3618,40.3549
-Nampula Airport,-15.105600357055664,39.28179931640625
+Nacala International Airport,-14.4882,40.7122
+Nampula Airport,-15.1056,39.281799
 Pemba Airport,-12.993302,40.524867
 Quelimane Airport,-17.855499267578125,36.86909866333008
-Chingozi Airport,-16.104799270629883,33.640201568603516
+Tete Airport,-16.104799,33.640202
 Vilankulo Airport,-22.018400192260742,35.31330108642578
 Seychelles International Airport,-4.67434,55.521801
 Praslin Island Airport,-4.319256,55.691561
@@ -3169,7 +3172,6 @@ Dera Ismael Khan Airport [IN-ACTIVE],31.909401,70.896599
 Faisalabad International Airport,31.364923,72.995319
 New Gwadar International Airport,25.296733,62.498822
 Gilgit Airport,35.918800354003906,74.33360290527344
-Gwadar International Airport,25.232391,62.327671
 Islamabad International Airport,33.549,72.82566
 Shahbaz Air Base,28.28420066833496,68.44969940185547
 Jinnah International Airport,24.9065,67.160797
@@ -3186,18 +3188,19 @@ Pasni Airport,25.290501,63.3451
 Bacha Khan International Airport,33.9939,71.514603
 Quetta International Airport,30.2514,66.937798
 Shaikh Zaid Airport,28.383899688720703,70.27960205078125
+PAF Base Nur Khan (Benazir Bhutto International Airport),33.616699,73.099197
 Rafiqui Air Base,30.758100509643555,72.28250122070312
 Risalpur Air Base,34.08110046386719,71.97260284423828
 Rawalakot Airport,33.849701,73.798103
 Skardu International Airport,35.33866,75.538648
 Faisal Air Base,24.87420082092285,67.11849975585938
-Sukkur Airport,27.722000122070312,68.79170227050781
+Begum Nusrat Bhutto International Airport Sukkur,27.722,68.791702
 Sehwan Sharif Airport,26.473101,67.717201
 Mushaf Air Base,32.04859924316406,72.66500091552734
 Saidu Sharif Airport,34.813599,72.352798
 Sialkot International Airport,32.535941,74.364623
 Sui Airport,28.645099639892578,69.1769027709961
-Turbat International Airport,25.986400604248047,63.03020095825195
+Turbat International Airport,25.984767,63.028856
 Zhob Airport,31.358400344848633,69.4636001586914
 Al Asad Air Base,33.7855987549,42.4412002563
 Al Taqaddum Air Base,33.33810043335,43.597099304199
@@ -3806,7 +3809,7 @@ Recife/Guararapes - Gilberto Freyre International Airport,-8.12747,-34.922961
 Santos Dumont Airport,-22.910397,-43.16282
 Leite Lopes Airport,-21.134314,-47.774053
 Santa Cruz Air Force Base,-22.9324,-43.719101
-Rio Grande do Norte/São Gonçalo do Amarante–Governador Aluízio Alves International Airport,-5.768539,-35.366419
+Rio Grande do Norte/São Gonçalo do Amarante–Governador Aluízio Alves International Airport,-5.769822,-35.36661
 Professor Urbano Ernesto Stumpf Airport,-23.2292,-45.8615
 Marechal Cunha Machado International Airport,-2.586386,-44.235008
 Santa Maria Airport,-29.711399,-53.688202

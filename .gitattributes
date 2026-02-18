@@ -1,1 +1,4 @@
 *.inf text eol=crlf
+
+# Ensure consistent line endings for generated airports data
+**/composeResources/files/airports.csv text eol=lf
