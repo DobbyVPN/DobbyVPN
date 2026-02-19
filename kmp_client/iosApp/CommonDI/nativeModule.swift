@@ -36,9 +36,6 @@ public class NativeModuleHolder {
         vpnManager: { scope in
             return VpnManagerImpl(connectionRepository: connectionStateRepository)
         },
-        awgManager: { scope in
-            return AwgManagerImpl()
-        },
         authenticationManager: { scope in
             return AuthenticationManagerImpl()
         },
