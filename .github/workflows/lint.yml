@@ -22,12 +22,20 @@ jobs:
           go-version-file: go_client/go.mod
           cache-dependency-path: go_client/go.sum
 
+      - name: Get packages to lint
+        id: packages
+        working-directory: go_client
+        run: |
+          # Exclude *_exports (CGo/platform-specific, can't compile on ubuntu)
+          PKGS=$(go list ./... | grep -v '_exports$' | tr '\n' ' ')
+          echo "list=$PKGS" >> $GITHUB_OUTPUT
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.1.6
           working-directory: go_client
-          args: --output.text.print-linter-name=true
+          args: --config .golangci.yml ${{ steps.packages.outputs.list }}
 
   lint-kotlin:
     name: "Kotlin Lint — detekt"

@@ -66,7 +66,10 @@ tasks:
     desc: "Lint go_client (Go)"
     dir: "{{.ROOT_DIR}}/go_client"
     cmds:
-      - golangci-lint run ./...
+      - cmd: golangci-lint run $(go list ./... | grep -v '_exports$')
+        platforms: [linux, darwin]
+      - cmd: 'powershell -Command "golangci-lint run (go list ./... | Where-Object {$_ -notmatch ''_exports$''})"'
+        platforms: [windows]
     sources:
       - "**/*.go"
 
@@ -113,10 +116,19 @@ tasks:
       - task: report:go:client
 
   report:go:client:
+    desc: "Generate golangci-lint reports for go_client"
     dir: "{{.ROOT_DIR}}/go_client"
     cmds:
-      - golangci-lint run ./... --output.text.path="" --output.checkstyle.path="{{.REPORTS_DIR}}/go/go_client-checkstyle.xml" || true
-      - golangci-lint run ./... --output.text.path="" --output.json.path="{{.REPORTS_DIR}}/go/go_client-report.json" || true
+      - cmd: golangci-lint run $(go list ./... | grep -v '_exports$') --output.text.path="" --output.checkstyle.path="{{.REPORTS_DIR}}/go/go_client-checkstyle.xml" || true
+        platforms: [linux, darwin]
+      - cmd: golangci-lint run $(go list ./... | grep -v '_exports$') --output.text.path="" --output.json.path="{{.REPORTS_DIR}}/go/go_client-report.json" || true
+        platforms: [linux, darwin]
+      - cmd: 'powershell -Command "$pkgs = go list ./... | Where-Object {$_ -notmatch ''_exports$''}; golangci-lint run $pkgs --output.text.path=\"\" --output.checkstyle.path=\"{{.REPORTS_DIR}}/go/go_client-checkstyle.xml\""'
+        platforms: [windows]
+        ignore_error: true
+      - cmd: 'powershell -Command "$pkgs = go list ./... | Where-Object {$_ -notmatch ''_exports$''}; golangci-lint run $pkgs --output.text.path=\"\" --output.json.path=\"{{.REPORTS_DIR}}/go/go_client-report.json\""'
+        platforms: [windows]
+        ignore_error: true
 
   report:kotlin:
     desc: "detekt reports (HTML + XML + SARIF)"

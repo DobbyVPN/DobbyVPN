@@ -3,10 +3,20 @@
 pre-commit:
   parallel: true
   commands:
-    go-lint:
+    go-lint-unix:
       glob: "go_client/**/*.go"
-      run: cd go_client && golangci-lint run --new.from-rev=HEAD~1 ./...
+      run: cd go_client && golangci-lint run --new.from-rev=HEAD~1 $(go list ./... | grep -v '_exports$')
       stage_fixed: true
+      only:
+        - os: linux
+        - os: darwin
+
+    go-lint-windows:
+      glob: "go_client/**/*.go"
+      run: cd go_client && powershell -Command "golangci-lint run --new.from-rev=HEAD~1 (go list ./... | Where-Object { $_ -notmatch '_exports$' })"
+      stage_fixed: true
+      only:
+        - os: windows
 
     kotlin-detekt:
       glob: "kmp_client/**/*.kt"
