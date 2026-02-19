@@ -27,7 +27,7 @@ jobs:
         with:
           version: v2.1.6
           working-directory: go_client
-          args: --config .golangci.yml ./awg/... ./cloak/... ./common/... ./healthcheck/... ./logger/... ./outline/... ./routing/... ./tunnel/...
+          args: --config .golangci.yml ./awg/... ./common/... ./healthcheck/... ./logger/... ./outline/... ./routing/... ./tunnel/...
 
   lint-kotlin:
     name: "Kotlin Lint — detekt"
