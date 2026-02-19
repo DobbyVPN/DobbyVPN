@@ -12,6 +12,7 @@ import (
 
 	"go_client/common"
 	"go_client/routing"
+	"go_client/tunnel"
 
 	"github.com/jackpal/gateway"
 	log "go_client/logger"
@@ -231,105 +232,52 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		log.Infof("[Outline] Cancel received — closing interfaces")
 	}()
 
-	trafficCopyWg.Add(2)
-
-	// TUN → Shadowsocks: read Ethernet frames from TAP, extract IP packets, send to SS
-	go func() {
-		defer trafficCopyWg.Done()
-		buffer := make([]byte, 65000)
-		var tunReadCount, tunWriteCount, tunReadErr, tunExtractErr, tunWriteErr uint64
-
-		for {
-			select {
-			case <-ctx.Done():
-				log.Infof("Outline/tun→ss: goroutine stopped (ctx cancelled). reads=%d writes=%d readErrs=%d extractErrs=%d writeErrs=%d",
-					tunReadCount, tunWriteCount, tunReadErr, tunExtractErr, tunWriteErr)
-				return
-			default:
-				n, err := tun.Read(buffer)
-				if err != nil {
-					tunReadErr++
-					if tunReadErr <= 5 || tunReadErr%1000 == 0 {
-						log.Infof("Outline/tun→ss: tun.Read error (#%d): %v", tunReadErr, err)
-					}
-					break
-				}
-				if n > 0 {
-					tunReadCount++
-					ipPacket, err := ExtractIPPacketFromEthernet(buffer[:n])
-					if err != nil {
-						tunExtractErr++
-						if tunExtractErr <= 5 || tunExtractErr%1000 == 0 {
-							log.Infof("Outline/tun→ss: ExtractIP error (#%d, frame=%d bytes): %v", tunExtractErr, n, err)
-						}
-						continue
-					}
-					_, err = ss.Write(ipPacket)
-					if err != nil {
-						tunWriteErr++
-						if tunWriteErr <= 5 || tunWriteErr%1000 == 0 {
-							log.Infof("Outline/tun→ss: ss.Write error (#%d): %v", tunWriteErr, err)
-						}
-						break
-					}
-					tunWriteCount++
-				}
+	tunnel.StartTransfer(
+		tun,
+		// ss → tun (readFn)
+		func(buf []byte) (int, error) {
+			n, err := ss.Read(buf)
+			if err != nil {
+				log.Infof("Outline/ss→tun: ss.Read error: %v", err)
+				return 0, err
 			}
-		}
-	}()
-
-	// Shadowsocks → TUN: read IP packets from SS, wrap in Ethernet, write to TAP
-	go func() {
-		defer trafficCopyWg.Done()
-		buf := make([]byte, 65000)
-		var ssReadCount, ssWriteCount, ssReadErr, ssCreateErr, ssWriteErr uint64
-
-		for {
-			select {
-			case <-ctx.Done():
-				log.Infof("Outline/ss→tun: goroutine stopped (ctx cancelled). reads=%d writes=%d readErrs=%d createErrs=%d writeErrs=%d",
-					ssReadCount, ssWriteCount, ssReadErr, ssCreateErr, ssWriteErr)
-				return
-			default:
-				n, err := ss.Read(buf)
-				if err != nil {
-					ssReadErr++
-					if ssReadErr <= 5 || ssReadErr%1000 == 0 {
-						log.Infof("Outline/ss→tun: ss.Read error (#%d): %v", ssReadErr, err)
-					}
-					break
-				}
-				if n > 0 {
-					ssReadCount++
-					ethernetPacket, err := CreateEthernetPacket(dst, src, buf[:n])
-					if err != nil {
-						ssCreateErr++
-						log.Infof("Outline/ss→tun: CreateEthernetPacket error (#%d): %v", ssCreateErr, err)
-						break
-					}
-					_, err = tun.Write(ethernetPacket)
-					if err != nil {
-						ssWriteErr++
-						if ssWriteErr <= 5 || ssWriteErr%1000 == 0 {
-							log.Infof("Outline/ss→tun: tun.Write error (#%d): %v", ssWriteErr, err)
-						}
-						break
-					}
-					ssWriteCount++
-				}
+			if n <= 0 {
+				return 0, nil
 			}
-		}
-		log.Infof("OutlineDevice -> tun stopped")
-	}()
 
-	log.Infof("Outline/app: Start trafficCopyWg...\n")
+			ethernetPacket, err := CreateEthernetPacket(dst, src, buf[:n])
+			if err != nil {
+				log.Infof("Outline/ss→tun: CreateEthernetPacket error: %v", err)
+				return 0, err
+			}
 
-	trafficCopyWg.Wait()
+			copy(buf, ethernetPacket)
+			return len(ethernetPacket), nil
+		},
+
+		// tun → ss (writeFn)
+		func(b []byte) (int, error) {
+			ipPacket, err := ExtractIPPacketFromEthernet(b)
+			if err != nil {
+				log.Infof("Outline/tun→ss: ExtractIP error: %v", err)
+				return 0, err
+			}
+
+			n, err := ss.Write(ipPacket)
+			if err != nil {
+				log.Infof("Outline/tun→ss: ss.Write error: %v", err)
+				return 0, err
+			}
+			return n, nil
+		},
+	)
+
+	<-ctx.Done()
+
+	log.Infof("[Tunnel] Context cancelled, stopping transfer")
+	tunnel.StopTransfer()
 
 	log.Infof("Outline/app: received interrupt signal, terminating...\n")
-
-	tun.Close()
-	ss.Close()
 
 	return nil
 

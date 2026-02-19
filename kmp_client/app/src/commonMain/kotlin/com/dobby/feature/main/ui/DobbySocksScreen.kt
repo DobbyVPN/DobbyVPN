@@ -31,8 +31,8 @@ import kotlin.time.TimeSource
 @Preview
 @Composable
 fun DobbySocksScreen(
-    mainViewModel: MainViewModel = koinViewModel(),
-    logsViewModel: LogsViewModel = koinViewModel(),
+    mainViewModel: MainViewModel,
+    logsViewModel: LogsViewModel,
     modifier: Modifier = Modifier,
 ) {
     val uiMainState by mainViewModel.uiState.collectAsState()
