@@ -1,10 +1,16 @@
 import app
 import Sentry
-
+import AuthenticationModule
 
 class SentryLogsRepositoryImpl : SentryLogsRepository {
     func log(string: String) {
         SentrySDK.capture(message: string)
+    }
+}
+
+class DobbyAuthLogger: AuthenticationLogger {
+    func writeLog(_ log: String) {
+        NativeModuleHolder.logsRepository.writeLog(log: log)
     }
 }
 
@@ -40,7 +46,7 @@ public class NativeModuleHolder {
             return AwgManagerImpl()
         },
         authenticationManager: { scope in
-            return AuthenticationManagerImpl()
+            return AuthenticationManagerImpl(logger: DobbyAuthLogger())
         },
         healthCheck: { scope in
             return HealthCheckImpl()

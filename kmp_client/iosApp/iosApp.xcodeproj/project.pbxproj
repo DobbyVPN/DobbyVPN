@@ -9,6 +9,12 @@
 /* Begin PBXBuildFile section */
 		058557BB273AAA24004C7B11 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 058557BA273AAA24004C7B11 /* Assets.xcassets */; };
 		058557D9273AAEEB004C7B11 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 058557D8273AAEEB004C7B11 /* Preview Assets.xcassets */; };
+		1FB717D52F47CB250013613B /* AuthenticationModule.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1FB717C52F47CA200013613B /* AuthenticationModule.framework */; };
+		1FB717D62F47CB250013613B /* AuthenticationModule.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 1FB717C52F47CA200013613B /* AuthenticationModule.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		1FB717DB2F47CE920013613B /* app.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1FB717DA2F47CE920013613B /* app.framework */; };
+		1FB717DC2F47CE920013613B /* app.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 1FB717DA2F47CE920013613B /* app.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		1FB717E02F47D0320013613B /* AuthenticationModule.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1FB717C52F47CA200013613B /* AuthenticationModule.framework */; };
+		1FB717E12F47D0320013613B /* AuthenticationModule.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 1FB717C52F47CA200013613B /* AuthenticationModule.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		2152FB042600AC8F00CF470E /* iOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2152FB032600AC8F00CF470E /* iOSApp.swift */; };
 		7555FF83242A565900829871 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7555FF82242A565900829871 /* ContentView.swift */; };
 		8C7731F12E566DCD00B3782E /* MyLibrary.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */; };
@@ -24,6 +30,20 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		1FB717D72F47CB250013613B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7555FF73242A565900829871 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1FB717C42F47CA200013613B;
+			remoteInfo = AuthenticationModule;
+		};
+		1FB717E22F47D0320013613B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7555FF73242A565900829871 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1FB717C42F47CA200013613B;
+			remoteInfo = AuthenticationModule;
+		};
 		A12013A62D80DE3200D43A3A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 7555FF73242A565900829871 /* Project object */;
@@ -48,6 +68,28 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		1FB717D92F47CB250013613B /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				1FB717D62F47CB250013613B /* AuthenticationModule.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1FB717DD2F47CE920013613B /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				1FB717DC2F47CE920013613B /* app.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A12012F62D7DAE1200D43A3A /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -65,6 +107,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
+				1FB717E12F47D0320013613B /* AuthenticationModule.framework in Embed Frameworks */,
 				A15F0FD52D874CDC007FA45D /* CommonDI.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
@@ -75,6 +118,9 @@
 /* Begin PBXFileReference section */
 		058557BA273AAA24004C7B11 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		058557D8273AAEEB004C7B11 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
+		1FB717C52F47CA200013613B /* AuthenticationModule.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = AuthenticationModule.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		1FB717DA2F47CE920013613B /* app.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = app.framework; sourceTree = "<group>"; };
+		1FB717DE2F47D0240013613B /* AuthenticationManagerImpl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthenticationManagerImpl.swift; sourceTree = "<group>"; };
 		2152FB032600AC8F00CF470E /* iOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSApp.swift; sourceTree = "<group>"; };
 		7555FF7B242A565900829871 /* doBBYVPN.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = doBBYVPN.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7555FF82242A565900829871 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -105,11 +151,20 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		1FB717C62F47CA200013613B /* AuthenticationModule */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = AuthenticationModule; sourceTree = "<group>"; };
 		A12013A12D80DE3200D43A3A /* tunnel */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (A12013A92D80DE3200D43A3A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = tunnel; sourceTree = "<group>"; };
 		A15F0FCF2D874CDC007FA45D /* CommonDI */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (A15F0FD82D874CDC007FA45D /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = CommonDI; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		1FB717C22F47CA200013613B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1FB717DB2F47CE920013613B /* app.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A120139C2D80DE3100D43A3A /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -125,6 +180,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1FB717D52F47CB250013613B /* AuthenticationModule.framework in Frameworks */,
 				F7DF1050154F40A18C26FC85 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -133,6 +189,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1FB717E02F47D0320013613B /* AuthenticationModule.framework in Frameworks */,
 				A15F0FD42D874CDC007FA45D /* CommonDI.framework in Frameworks */,
 				8CF4C2602E61E1C400A1B0E4 /* (null) in Frameworks */,
 				8CF4C2612E61E1C400A1B0E4 /* Sentry in Frameworks */,
@@ -150,9 +207,19 @@
 			path = "Preview Content";
 			sourceTree = "<group>";
 		};
+		1FB717DF2F47D0240013613B /* AuthenticationModule */ = {
+			isa = PBXGroup;
+			children = (
+				1FB717DE2F47D0240013613B /* AuthenticationManagerImpl.swift */,
+			);
+			path = AuthenticationModule;
+			sourceTree = "<group>";
+		};
 		42799AB246E5F90AF97AA0EF /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				1FB717DF2F47D0240013613B /* AuthenticationModule */,
+				1FB717DA2F47CE920013613B /* app.framework */,
 				8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */,
 				A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */,
 			);
@@ -166,6 +233,7 @@
 				7555FF7D242A565900829871 /* iosApp */,
 				A12013A12D80DE3200D43A3A /* tunnel */,
 				A15F0FCF2D874CDC007FA45D /* CommonDI */,
+				1FB717C62F47CA200013613B /* AuthenticationModule */,
 				7555FF7C242A565900829871 /* Products */,
 				42799AB246E5F90AF97AA0EF /* Frameworks */,
 			);
@@ -177,6 +245,7 @@
 				7555FF7B242A565900829871 /* doBBYVPN.app */,
 				A120139F2D80DE3100D43A3A /* tunnel.appex */,
 				A15F0FCE2D874CDC007FA45D /* CommonDI.framework */,
+				1FB717C52F47CA200013613B /* AuthenticationModule.framework */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -205,6 +274,13 @@
 /* End PBXGroup section */
 
 /* Begin PBXHeadersBuildPhase section */
+		1FB717C02F47CA200013613B /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A15F0FC92D874CDC007FA45D /* Headers */ = {
 			isa = PBXHeadersBuildPhase;
 			buildActionMask = 2147483647;
@@ -215,6 +291,30 @@
 /* End PBXHeadersBuildPhase section */
 
 /* Begin PBXNativeTarget section */
+		1FB717C42F47CA200013613B /* AuthenticationModule */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1FB717CD2F47CA200013613B /* Build configuration list for PBXNativeTarget "AuthenticationModule" */;
+			buildPhases = (
+				1FB717C02F47CA200013613B /* Headers */,
+				1FB717C12F47CA200013613B /* Sources */,
+				1FB717C22F47CA200013613B /* Frameworks */,
+				1FB717C32F47CA200013613B /* Resources */,
+				1FB717DD2F47CE920013613B /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				1FB717C62F47CA200013613B /* AuthenticationModule */,
+			);
+			name = AuthenticationModule;
+			packageProductDependencies = (
+			);
+			productName = AuthenticationModule;
+			productReference = 1FB717C52F47CA200013613B /* AuthenticationModule.framework */;
+			productType = "com.apple.product-type.framework";
+		};
 		7555FF7A242A565900829871 /* iosApp */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 7555FFA5242A565B00829871 /* Build configuration list for PBXNativeTarget "iosApp" */;
@@ -232,6 +332,7 @@
 			dependencies = (
 				A12013A72D80DE3200D43A3A /* PBXTargetDependency */,
 				A15F0FD32D874CDC007FA45D /* PBXTargetDependency */,
+				1FB717E32F47D0320013613B /* PBXTargetDependency */,
 			);
 			name = iosApp;
 			packageProductDependencies = (
@@ -272,10 +373,12 @@
 				A15F0FCA2D874CDC007FA45D /* Sources */,
 				A15F0FCB2D874CDC007FA45D /* Frameworks */,
 				A15F0FCC2D874CDC007FA45D /* Resources */,
+				1FB717D92F47CB250013613B /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				1FB717D82F47CB250013613B /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				A15F0FCF2D874CDC007FA45D /* CommonDI */,
@@ -294,10 +397,13 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastSwiftUpdateCheck = 1610;
+				LastSwiftUpdateCheck = 1640;
 				LastUpgradeCheck = 1540;
 				ORGANIZATIONNAME = orgName;
 				TargetAttributes = {
+					1FB717C42F47CA200013613B = {
+						CreatedOnToolsVersion = 16.4;
+					};
 					7555FF7A242A565900829871 = {
 						CreatedOnToolsVersion = 11.3.1;
 					};
@@ -328,11 +434,19 @@
 				7555FF7A242A565900829871 /* iosApp */,
 				A120139E2D80DE3100D43A3A /* tunnel */,
 				A15F0FCD2D874CDC007FA45D /* CommonDI */,
+				1FB717C42F47CA200013613B /* AuthenticationModule */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		1FB717C32F47CA200013613B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		7555FF79242A565900829871 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -395,6 +509,13 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		1FB717C12F47CA200013613B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		7555FF77242A565900829871 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -421,6 +542,16 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		1FB717D82F47CB250013613B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1FB717C42F47CA200013613B /* AuthenticationModule */;
+			targetProxy = 1FB717D72F47CB250013613B /* PBXContainerItemProxy */;
+		};
+		1FB717E32F47D0320013613B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1FB717C42F47CA200013613B /* AuthenticationModule */;
+			targetProxy = 1FB717E22F47D0320013613B /* PBXContainerItemProxy */;
+		};
 		A12013A72D80DE3200D43A3A /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = A120139E2D80DE3100D43A3A /* tunnel */;
@@ -439,6 +570,100 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		1FB717CB2F47CA200013613B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				BUILD_LIBRARY_FOR_DISTRIBUTION = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = F6CHJX72K5;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				ENABLE_MODULE_VERIFIER = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../app/build/bin/iosArm64/debugFramework",
+					"$(PROJECT_DIR)",
+				);
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 orgName. All rights reserved.";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
+				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
+				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app.AuthenticationModule;
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INSTALL_MODULE = YES;
+				SWIFT_INSTALL_OBJC_HEADER = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Debug;
+		};
+		1FB717CC2F47CA200013613B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				BUILD_LIBRARY_FOR_DISTRIBUTION = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = F6CHJX72K5;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				ENABLE_MODULE_VERIFIER = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../app/build/bin/iosArm64/releaseFramework",
+					"$(PROJECT_DIR)",
+				);
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 orgName. All rights reserved.";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
+				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
+				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app.AuthenticationModule;
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INSTALL_MODULE = YES;
+				SWIFT_INSTALL_OBJC_HEADER = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Release;
+		};
 		7555FFA3242A565B00829871 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = AB3632DC29227652001CCB65 /* Config.xcconfig */;
@@ -821,6 +1046,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		1FB717CD2F47CA200013613B /* Build configuration list for PBXNativeTarget "AuthenticationModule" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1FB717CB2F47CA200013613B /* Debug */,
+				1FB717CC2F47CA200013613B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		7555FF76242A565900829871 /* Build configuration list for PBXProject "iosApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
