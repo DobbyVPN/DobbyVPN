@@ -28,7 +28,7 @@ func CheckServerAlive(address string, port int) error {
 		}
 
 		func() {
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 
 			_ = conn.SetDeadline(time.Now().Add(1 * time.Second))
 
@@ -50,20 +50,20 @@ func CheckServerAlive(address string, port int) error {
 			// This sequence minimizes false-positive "alive" results caused by
 			// optimistic TCP connections.
 
-			if _, err := conn.Write([]byte{0x00}); err != nil {
-				lastErr = err
+			if _, writeErr := conn.Write([]byte{0x00}); writeErr != nil {
+				lastErr = writeErr
 				return
 			}
 
 			buf := make([]byte, 1)
-			_, err = conn.Read(buf)
-			if err != nil {
-				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			_, readErr := conn.Read(buf)
+			if readErr != nil {
+				if ne, ok := readErr.(net.Error); ok && ne.Timeout() {
 					lastErr = nil
 					return
 				}
 
-				lastErr = err
+				lastErr = readErr
 				return
 			}
 

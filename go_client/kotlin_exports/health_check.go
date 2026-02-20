@@ -7,7 +7,7 @@ import (
 )
 
 func StartHealthCheck(period int, sendMetrics bool) {
-	healthcheck.StartHealthCheck(period, sendMetrics)
+	healthcheck.StartHealthCheck(int32(period), sendMetrics)
 }
 
 func StopHealthCheck() {
@@ -19,11 +19,11 @@ func Status() string {
 }
 
 func TcpPing(address string) (int32, error) {
-	return healthcheck.TcpPing(address)
+	return healthcheck.TCPPing(address)
 }
 
 func UrlTest(url string, standard int) (int32, error) {
-	return healthcheck.UrlTest(url, standard)
+	return healthcheck.URLTest(url, standard)
 }
 
 //export CheckServerAlive

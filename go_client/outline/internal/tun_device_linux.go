@@ -20,10 +20,10 @@ type tunDevice struct {
 var _ network.IPDevice = (*tunDevice)(nil)
 
 func newTunDevice(name, ip string) (d network.IPDevice, err error) {
-	if len(name) == 0 {
+	if name == "" {
 		return nil, errors.New("name is required for TUN/TAP device")
 	}
-	if len(ip) == 0 {
+	if ip == "" {
 		return nil, errors.New("ip is required for TUN/TAP device")
 	}
 
@@ -40,7 +40,7 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 
 	defer func() {
 		if err != nil {
-			tun.Close()
+			_ = tun.Close()
 		}
 	}()
 
@@ -70,14 +70,14 @@ func (d *tunDevice) configureSubnet(ip string) error {
 		return fmt.Errorf("subnet address '%s' is not valid: %w", subnet, err)
 	}
 	if err := netlink.AddrAdd(d.link, addr); err != nil {
-		return fmt.Errorf("failed to add subnet to TUN/TAP device '%s': %w", d.Interface.Name(), err)
+		return fmt.Errorf("failed to add subnet to TUN/TAP device '%s': %w", d.Name(), err)
 	}
 	return nil
 }
 
 func (d *tunDevice) bringUp() error {
 	if err := netlink.LinkSetUp(d.link); err != nil {
-		return fmt.Errorf("failed to bring TUN/TAP device '%s' up: %w", d.Interface.Name(), err)
+		return fmt.Errorf("failed to bring TUN/TAP device '%s' up: %w", d.Name(), err)
 	}
 	return nil
 }

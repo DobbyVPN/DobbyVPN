@@ -7,7 +7,7 @@ import (
 
 func StartHealthCheck(period int, sendMetrics bool) {
 	defer guard("StartHealthCheck")()
-	healthcheck.StartHealthCheck(period, sendMetrics)
+	healthcheck.StartHealthCheck(int32(period), sendMetrics)
 }
 
 func StopHealthCheck() {
@@ -22,12 +22,12 @@ func Status() string {
 
 func TcpPing(address string) (int32, error) {
 	defer guard("TcpPing")()
-	return healthcheck.TcpPing(address)
+	return healthcheck.TCPPing(address)
 }
 
 func UrlTest(url string, standard int) (int32, error) {
 	defer guard("UrlTest")()
-	return healthcheck.UrlTest(url, standard)
+	return healthcheck.URLTest(url, standard)
 }
 
 func CheckServerAlive(address string, port int) int32 {

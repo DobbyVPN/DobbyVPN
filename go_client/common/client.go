@@ -9,7 +9,7 @@ type vpnClient interface {
 }
 
 type vpnClientWithState struct {
-	connected bool
+	connected         bool
 	inCriticalSection bool
 	vpnClient
 }
@@ -119,7 +119,7 @@ func (c *CommonClient) CouldStart() bool {
 func (c *CommonClient) GetClientNames(active bool) []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	var names []string
+	names := make([]string, 0, len(c.vpnClients))
 	for name, client := range c.vpnClients {
 		if client.connected != active {
 			continue
