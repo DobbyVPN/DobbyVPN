@@ -1,7 +1,7 @@
 package com.dobby.feature.diagnostic.domain
 
 import com.dobby.feature.logging.Logger
-import interop.VPNLibraryLoader
+import interop.VPNLibrary
 import java.net.*
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -10,7 +10,7 @@ import kotlin.system.measureTimeMillis
 
 class HealthCheckImpl(
     private val logger: Logger,
-    private val vpnLibrary: VPNLibraryLoader,
+    private val vpnLibrary: VPNLibrary,
 ) : HealthCheck {
 
     private val timeoutMs = 1_000L
@@ -232,7 +232,7 @@ class HealthCheckImpl(
         return try {
             // Check if Go library is responsive by calling CouldStart
             // This verifies the native library is loaded and working
-            val isResponsive = vpnLibrary.couldStart()
+            val isResponsive = vpnLibrary.CouldStart()
             if (!isResponsive) {
                 logger.log("[HC] Go library not responsive (in critical section)")
             }
@@ -245,7 +245,7 @@ class HealthCheckImpl(
     }
 
     override fun checkServerAlive(address: String, port: Int): Boolean {
-        return vpnLibrary.checkServerAlive(address, port)
+        return vpnLibrary.CheckServerAlive(address, port) != 0
     }
 
     override fun getTimeToWakeUp(): Int {

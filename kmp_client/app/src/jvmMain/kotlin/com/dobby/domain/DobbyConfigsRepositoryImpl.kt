@@ -2,12 +2,12 @@ package com.dobby.domain
 
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
+import interop.VPNLibrary
 import java.util.prefs.Preferences
-import interop.VPNLibraryLoader
 
 internal class DobbyConfigsRepositoryImpl(
-    private val prefs: Preferences = Preferences.systemRoot(),
-    private val vpnLibrary: VPNLibraryLoader,
+    private val prefs: Preferences = Preferences.userRoot(),
+    private val vpnLibrary: VPNLibrary,
 ) : DobbyConfigsRepository {
 
     override fun getVpnInterface(): VpnInterface {
@@ -134,7 +134,7 @@ internal class DobbyConfigsRepositoryImpl(
     }
 
     override fun couldStart(): Boolean {
-        return vpnLibrary.couldStart()
+        return vpnLibrary.CouldStart()
     }
 
     override fun getIsUserInitStop(): Boolean {

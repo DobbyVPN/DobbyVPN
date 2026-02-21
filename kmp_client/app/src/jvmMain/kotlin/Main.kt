@@ -7,49 +7,11 @@ import com.dobby.ui.theme.DesktopClientTheme
 import com.sun.jna.Platform
 import org.koin.mp.KoinPlatform
 import java.io.File
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import java.io.IOException
 
-fun ensureAdminPrivilegesMacOS() {
-    if (!isRunningAsRoot()) {
-        try {
-            val appPath = File(
-                object {}.javaClass.protectionDomain.codeSource.location.toURI()
-            ).parentFile.parentFile.parentFile.parentFile.absolutePath
-
-            val dobbyApp = File(appPath, "Dobby\\ Vpn.app/Contents/MacOS/Dobby\\ Vpn")
-
-            val command = arrayOf("sudo", dobbyApp.absolutePath)
-
-            println("Executing: ${command.joinToString(" ")}")
-
-            val process = ProcessBuilder(*command)
-                .redirectErrorStream(true)
-                .inheritIO()
-                .start()
-
-            val exitCode = process.waitFor()
-            println("Process exited with code $exitCode")
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-}
-
-
-fun isRunningAsRoot(): Boolean {
-    return try {
-        val process = ProcessBuilder("id", "-u").start()
-        val output = process.inputStream.bufferedReader().readText().trim()
-        output == "0"
-    } catch (e: IOException) {
-        false
-    }
-}
-
 fun main() = application {
-    if (Platform.isMac()) {
-        ensureAdminPrivilegesMacOS()
-    }
     startDI(listOf(jvmMainModule, jvmVpnModule)){}
     // Get path to the current jar-file (using toURI() for proper Unicode/Cyrillic support)
     val appDir = File(this::class.java.protectionDomain.codeSource.location.toURI())

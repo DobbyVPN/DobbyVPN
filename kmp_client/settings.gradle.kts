@@ -19,7 +19,9 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Ck-Client"
+rootProject.name = "kmp_client"
+include(":grpcprotos")
+include(":grpcstub")
 include(":outline")
-include(":app")
 include(":awg")
+include(":app")

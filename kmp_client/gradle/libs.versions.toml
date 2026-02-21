@@ -28,6 +28,7 @@ espressoCore = "3.6.1"
 appcompat = "1.6.1"
 material = "1.10.0"
 conveyor = "1.12"
+protobuf = "0.9.5"
 okhttp = "4.12.0"
 skiko = "0.8.15"
 jnaVersion = "5.13.0"
@@ -82,6 +83,21 @@ gson = { group = "com.google.code.gson", name = "gson", version.ref = "gsonVersi
 tomlkt = { module = "net.peanuuutz.tomlkt:tomlkt", version.ref = "tomlkt" }
 datetime = { module = "com.soywiz.korlibs.klock:klock", version.ref = "datetime" }
 
+kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version = "1.10.2" }
+grpc-protobuf = { group = "io.grpc", name = "grpc-protobuf", version = "1.77.0" }
+grpc-protobuf-lite = { group = "io.grpc", name = "grpc-protobuf-lite", version = "1.77.0" }
+grpc-netty = { group = "io.grpc", name = "grpc-netty", version = "1.77.0" }
+grpc-okhttp = { group = "io.grpc", name = "grpc-okhttp", version = "1.77.0" }
+grpc-testing = { group = "io.grpc", name = "grpc-testing", version = "1.77.0" }
+grpc-stub = { group = "io.grpc", name = "grpc-stub", version = "1.77.0" }
+grpc-kotlin-stub = { group = "io.grpc", name = "grpc-kotlin-stub", version = "1.5.0" }
+
+protoc = { group = "com.google.protobuf", name = "protoc", version = "4.33.1" }
+protobuf-kotlin = { group = "com.google.protobuf", name = "protobuf-kotlin", version = "4.33.1" }
+protobuf-kotlin-lite = { group = "com.google.protobuf", name = "protobuf-kotlin-lite", version = "4.33.1" }
+protobuf-java-util = { group = "com.google.protobuf", name = "protobuf-java-util", version = "4.33.1" }
+protoc-gen-grpc-java = { group = "io.grpc", name = "protoc-gen-grpc-java", version = "1.77.0" }
+protoc-gen-grpc-kotlin = { group = "io.grpc", name = "protoc-gen-grpc-kotlin", version = "1.5.0" }
 compass-geocoder = { module = "dev.jordond.compass:geocoder", version.ref = "compass" }
 compass-geocoder-mobile = { module = "dev.jordond.compass:geocoder-mobile", version.ref = "compass" }
 compass-geolocation = { module = "dev.jordond.compass:geolocation", version.ref = "compass" }
@@ -97,3 +113,5 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version = "2.0.20" }
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 hydraulic-conveyor = { id = "dev.hydraulic.conveyor", version.ref = "conveyor" }
+protobuf = { id = "com.google.protobuf", version.ref = "protobuf" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

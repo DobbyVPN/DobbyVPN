@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+option go_package = "go_client/vpnserver";
+
+package vpnserver;
+
+service Vpn {
+  // awg.go
+  rpc StartAwg (StartAwgRequest)  returns (Empty);
+  rpc StopAwg (Empty)             returns (Empty);
+  
+  // outline.go
+  rpc GetOutlineLastError(Empty)          returns (GetOutlineLastErrorResponse);
+  rpc StartOutline (StartOutlineRequest)  returns (StartOutlineResponse);
+  rpc StopOutline (Empty)                 returns (Empty);
+  
+  // health_check.go
+  rpc StartHealthCheck (StartHealthCheckRequest)    returns (Empty);
+  rpc StopHealthCheck (Empty)                       returns (Empty);
+  rpc Status (Empty)                                returns (StatusResponce);
+  rpc TcpPing (TcpPingRequest)                      returns (TcpPingResponce);
+  rpc UrlTest (UrlTestRequest)                      returns (UrlTestResponce);
+  rpc CouldStart (Empty)                            returns (CouldStartResponce);
+  rpc CheckServerAlive (CheckServerAliveRequest)    returns (CheckServerAliveResponce);
+  
+  // cloak.go
+  rpc StartCloakClient (StartCloakClientRequest)    returns (Empty);
+  rpc StopCloakClient (Empty)                       returns (Empty);
+
+  // logger.go
+  rpc InitLogger (InitLoggerRequest)                returns (Empty);
+}
+
+message StartAwgRequest {
+  string tunnel = 1;
+  string config = 2;
+}
+
+message GetOutlineLastErrorResponse {
+  string error = 1;
+}
+
+message StartOutlineRequest {
+  string config = 1;
+}
+
+message StartOutlineResponse {
+  int32 result = 1;
+}
+
+message StartHealthCheckRequest {
+  int32 period = 1;
+  bool sendMetrics = 2;
+}
+
+message StatusResponce {
+  string status = 1;
+}
+
+message TcpPingRequest {
+  string address = 1;
+}
+
+message TcpPingResponce {
+  int32 result = 1;
+  string error = 2;
+}
+
+message UrlTestRequest {
+  string url = 1;
+  int32 standard = 2;
+}
+
+message UrlTestResponce {
+  int32 result = 1;
+  string error = 2;
+}
+
+message CouldStartResponce {
+  bool result = 1;
+}
+
+message CheckServerAliveRequest {
+  string address = 1;
+  int32 port = 2;
+}
+
+message CheckServerAliveResponce {
+  int32 result = 1;
+}
+
+message StartCloakClientRequest {
+  string localHost = 1;
+  string localPort = 2;
+  string config = 3;
+  bool udp = 4;
+}
+
+message InitLoggerRequest {
+  string path = 1;
+}
+
+message Empty {
+}

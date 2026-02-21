@@ -52,4 +52,5 @@ data class TomlConfigs(
     // Optional top-level label (some configs put it outside [Outline]); ignored by the app.
     val Description: String? = null,
     val Outline: OutlineConfig? = null,
+    val AWG: String? = null,
 )
