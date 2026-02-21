@@ -23,15 +23,15 @@ func (l *xrayLogBridge) Handle(msg xrayLog.Message) {
 		if msg.Severity <= l.logLevel {
 			switch msg.Severity {
 			case xrayLog.Severity_Debug:
-				appLog.Debugf("[Xray-Core] %s", msg.String())
+				appLog.Debugf("[Xray-Core] %s", msg.Content)
 			case xrayLog.Severity_Info:
-				appLog.Infof("[Xray-Core] %s", msg.String())
+				appLog.Infof("[Xray-Core] %s", msg.Content)
 			case xrayLog.Severity_Warning:
-				appLog.Warnf("[Xray-Core] %s", msg.String())
+				appLog.Warnf("[Xray-Core] %s", msg.Content)
 			case xrayLog.Severity_Error:
-				appLog.Errorf("[Xray-Core] %s", msg.String())
+				appLog.Errorf("[Xray-Core] %s", msg.Content)
 			default:
-				appLog.Infof("[Xray-Core] %s", msg.String())
+				appLog.Infof("[Xray-Core] %s", msg.Content)
 			}
 		}
 	default:
