@@ -82,6 +82,12 @@ jobs:
         working-directory: installer/macos/
         run: |
           sh build.sh
+        env:
+          APP_MAJOR_VERSION: ${{ vars.MAJOR }}
+          APP_MINOR_VERSION: ${{ vars.MINOR }}
+          APP_MAINTENANCE_VERSION: ${{ vars.MAINTENANCE }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Upload Windows x86 installer
         uses: actions/upload-artifact@v4

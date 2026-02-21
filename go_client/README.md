@@ -1,165 +1,85 @@
-# gRPC tunnels server
+# Go Library
 
-Server, that is been run with super user privileges, 
-where all tunnels running and can be started/stopped via RPC calls
+VPN protocols multiplatform library. 
 
-## API reference
+On desktop platfotms this lirary is a gRPC server, to run with super user privileges in service to use go code via RPC.
 
-```
-// awg
-rpc StartAwg (tunnel, config string)    returns ();
-rpc StopAwg ()                          returns ();
+On mobile platforms this library is a `.so` library (on Android) or `.xcframework` library (on IOS) to import into the application to use go code via JNI.
 
-// outline
-rpc StartOutline (config string)        returns ();
-rpc StopOutline ()                      returns ();
+## Build
 
-// health_check
-rpc StartHealthCheck (period int32, sendMetrics bool)   returns ();
-rpc StopHealthCheck ()                                  returns ();
-rpc Status ()                                           returns (status string);
-rpc TcpPing (address string)                            returns (result int32, error string);
-rpc UrlTest (url string, standard int32 )               returns (result int32, error string);
-rpc CouldStart ()                                       returns (result int32);
-rpc CheckServerAlive (address string, port int32)       returns (result int32);
-
-// cloak
-rpc StartCloakClient (localHost string, localPort string , config string, udp bool) returns ();
-rpc StopCloakClient ()                                                              returns ();    
-
-// logger
-rpc InitLogger (path string)                                                        returns ();
+```bash
+cp -r Cloak/internal go_client/modules/Cloak/
+go mod tidy
+go mod download
 ```
 
-## Build and run
+### Windows
 
-#### Generate gRPC go files (if needed)
+```bash
+go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/...
+```
+
+### Linux/
+
+```bash
+go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/...
+```
+
+### MacOS
+
+```bash
+go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports/...
+```
+
+### Android
+
+```bash
+go build -v -trimpath -ldflags="-buildid=" -buildvcs=false -buildmode=c-shared -o liboutline.so ./kotlin_exports/...
+```
+
+### IOS
+
+```bash
+go install golang.org/x/mobile/cmd/gomobile@latest
+gomobile init
+go get golang.org/x/mobile/bind@latest
+GO111MODULE=on gomobile bind -target=ios -o MyLibrary.xcframework ./ios_exports
+```
+
+## RPC API reference
+
+```
+// awg.go
+rpc StartAwg (StartAwgRequest)  returns (Empty);
+rpc StopAwg (Empty)             returns (Empty);
+
+// outline.go
+rpc GetOutlineLastError(Empty)          returns (GetOutlineLastErrorResponse);
+rpc StartOutline (StartOutlineRequest)  returns (StartOutlineResponse);
+rpc StopOutline (Empty)                 returns (Empty);
+
+// health_check.go
+rpc StartHealthCheck (StartHealthCheckRequest)    returns (Empty);
+rpc StopHealthCheck (Empty)                       returns (Empty);
+rpc Status (Empty)                                returns (StatusResponce);
+rpc TcpPing (TcpPingRequest)                      returns (TcpPingResponce);
+rpc UrlTest (UrlTestRequest)                      returns (UrlTestResponce);
+rpc CouldStart (Empty)                            returns (CouldStartResponce);
+rpc CheckServerAlive (CheckServerAliveRequest)    returns (CheckServerAliveResponce);
+
+// cloak.go
+rpc StartCloakClient (StartCloakClientRequest)    returns (Empty);
+rpc StopCloakClient (Empty)                       returns (Empty);
+
+// logger.go
+rpc InitLogger (InitLoggerRequest)                returns (Empty);
+```
+
+Or this can be found in the [vpnserver.proto](./vpnserver.proto) file, that defines RPC API for the desktop library.
+
+Using this file should be generated required files in the [vpnserver/](./vpnserver/) folder, using this command:
 
 ```bash
 protoc --go_out=../ --go-grpc_out=../ vpnserver.proto
-```
-
-#### Build executable 
-
-```bash
-go build -o grpcvpnserver ./desktop_exports/...
-```
-
-## Installation
-
-`grpcvpnserver` executable should be run in service/daemon, so it is been set up in the installers
-
-### Linux intaller
-
-#### Helpful documentation
-
-##### How to create service config
-
-Create service file `/etc/systemd/system/vpnserver.service`
-with following data
-
-```
-[Unit]
-Description=DobbyVPN dervice
-
-[Service]
-ExecStart=<Service executable path>
-Restart=always
-
-[Install]
-Alias=vpnserver.service
-WantedBy=multi-user.target
-```
-
-It can be created with symbolic link
-
-```bash
-sudo ln -s <vpnserver.service path> /etc/systemd/system/vpnserver.service
-```
-
-##### How to enable and start service
-
-```bash
-sudo systemctl enable vpnserver.service
-sudo systemctl start vpnserver.service
-```
-
-##### How to check if its working
-
-```bash
-systemctl status vpnserver.service
-```
-
-##### How to check stdout
-
-```bash
-sudo journalctl -xeu vpnserver.service
-```
-
-##### How to interrupt service
-
-```bash
-sudo systemctl stop vpnserver.service
-```
-
-##### How to remove service
-
-```bash
-sudo systemctl disable vpnserver.service
-```
-
-### MacOS intaller
-
-#### Helpful documentation
-
-##### How to create service config
-
-Create service file `.../vpnserver.plist`
-with following data
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>dobbyvpn</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>...</string>
-    </array>
-
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-
-    <key>WorkingDirectory</key>
-    <string>ServiceWorkingDir</string>
-
-    <key>StandardOutPath</key>
-    <string>ServiceStdoutPath</string>
-    <key>StandardErrorPath</key>
-    <string>ServiceStderrPath</string>
-</dict>
-</plist>
-```
-
-### Windows installer
-
-#### Helpful documentation
-
-##### Create vpn service
-
-```bash
-sc.exe create "DobbyVPN Server" binPath="...\grpcvpnserver.exe -mode=service" type=own start=auto error=normal depend=nsi/tcpip displayname="DobbyVPN gRPC Server"
-sc.exe sidtype "DobbyVPN Server" unrestricted
-sc.exe start "DobbyVPN Server"
-```
-
-##### Stop vpn service
-
-```bash
-sc.exe stop "DobbyVPN Server"
-sc.exe delete "DobbyVPN Server"
 ```
