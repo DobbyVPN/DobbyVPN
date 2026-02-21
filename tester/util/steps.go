@@ -1,4 +1,4 @@
-package main
+package util
 
 import (
 	"context"
@@ -12,34 +12,63 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-var (
-	LOCALHOST_IP string = "127.0.0.1"
-)
+type Tester struct {
+	GrpcExecutablePath string
+	GrpcAddress        string
+	LocalhostIp        string
+}
 
-func parceIpMatch(ip string) string {
+func (tester *Tester) parceIpMatch(ip string) string {
 	switch ip {
 	case "localhost":
-		return LOCALHOST_IP
+		return tester.LocalhostIp
 	default:
 		return ip
 	}
 }
 
-func assertStep(testStep TestStep) error {
-	if ip, ok := testStep.Args["ip"].(string); ok {
-		ipMatch := parceIpMatch(ip)
+func (tester *Tester) RunTestStep(testStep TestStep) error {
+	log.Printf("Running test step\n")
 
-		return assertIpExact(ipMatch)
+	switch testStep.Action {
+	case "assert":
+		return tester.AssertStep(testStep)
+	case "timeout":
+		return tester.TimeoutStep(testStep)
+	case "StartAwg":
+		return tester.StartAwgStep(testStep)
+	case "StopAwg":
+		return tester.StopAwgStep()
+	case "StartOutline":
+		return tester.StartOutlineStep(testStep)
+	case "StopOutline":
+		return tester.StopOutlineStep()
+	case "StartCloak":
+		return tester.StartCloakStep(testStep)
+	case "StopCloak":
+		return tester.StopCloakStep()
+	case "InitLogger":
+		return tester.InitLoggerStep(testStep)
+	default:
+		return fmt.Errorf("Unexpected action %v", testStep.Action)
+	}
+}
+
+func (tester *Tester) AssertStep(testStep TestStep) error {
+	if ip, ok := testStep.Args["ip"].(string); ok {
+		ipMatch := tester.parceIpMatch(ip)
+
+		return AssertIpExact(ipMatch)
 	}
 
 	if ipCountryCode, ok := testStep.Args["ip_cc"].(string); ok {
-		return assertIpCountryCode(ipCountryCode)
+		return AssertIpCountryCode(ipCountryCode)
 	}
 
 	return fmt.Errorf("Invalid assertion arguments")
 }
 
-func timeoutStep(testStep TestStep) error {
+func (tester *Tester) TimeoutStep(testStep TestStep) error {
 	if seconds, ok := testStep.Args["seconds"].(string); ok {
 		log.Printf("Sleeping %v seconds\n", seconds)
 
@@ -56,12 +85,12 @@ func timeoutStep(testStep TestStep) error {
 	return fmt.Errorf("Invalid timeout arguments")
 }
 
-func startAwgStep(testStep TestStep) error {
+func (tester *Tester) StartAwgStep(testStep TestStep) error {
 	if tunnel, ok := testStep.Args["tunnel"].(string); ok {
 		if config, ok := testStep.Args["config"].(string); ok {
 			log.Printf("Creating gRPC client\n")
 
-			conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			conn, err := grpc.NewClient(tester.GrpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			if err != nil {
 				return fmt.Errorf("Did not connect: %v", err)
 			}
@@ -89,10 +118,10 @@ func startAwgStep(testStep TestStep) error {
 	return fmt.Errorf("Invalid StartAwg arguments")
 }
 
-func stopAwgStep() error {
+func (tester *Tester) StopAwgStep() error {
 	log.Printf("Creating gRPC client\n")
 
-	conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(tester.GrpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return fmt.Errorf("Did not connect: %v", err)
 	}
@@ -116,11 +145,11 @@ func stopAwgStep() error {
 	return nil
 }
 
-func startOutlineStep(testStep TestStep) error {
+func (tester *Tester) StartOutlineStep(testStep TestStep) error {
 	if config, ok := testStep.Args["key"].(string); ok {
 		log.Printf("Creating gRPC client\n")
 
-		conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		conn, err := grpc.NewClient(tester.GrpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			return fmt.Errorf("Did not connect: %v", err)
 		}
@@ -147,10 +176,10 @@ func startOutlineStep(testStep TestStep) error {
 	return fmt.Errorf("Invalid StartOutline arguments")
 }
 
-func stopOutlineStep() error {
+func (tester *Tester) StopOutlineStep() error {
 	log.Printf("Creating gRPC client\n")
 
-	conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(tester.GrpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return fmt.Errorf("Did not connect: %v", err)
 	}
@@ -174,14 +203,14 @@ func stopOutlineStep() error {
 	return nil
 }
 
-func startCloakStep(testStep TestStep) error {
+func (tester *Tester) StartCloakStep(testStep TestStep) error {
 	if localHost, ok := testStep.Args["localHost"].(string); ok {
 		if localPort, ok := testStep.Args["localPort"].(string); ok {
 			if config, ok := testStep.Args["config"].(string); ok {
 				if udp, ok := testStep.Args["udp"].(string); ok {
 					log.Printf("Creating gRPC client\n")
 
-					conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
+					conn, err := grpc.NewClient(tester.GrpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 					if err != nil {
 						return fmt.Errorf("Did not connect: %v", err)
 					}
@@ -221,10 +250,10 @@ func startCloakStep(testStep TestStep) error {
 	return fmt.Errorf("Invalid StartCloakClient arguments")
 }
 
-func stopCloakStep() error {
+func (tester *Tester) StopCloakStep() error {
 	log.Printf("Creating gRPC client\n")
 
-	conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(tester.GrpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return fmt.Errorf("Did not connect: %v", err)
 	}
@@ -248,11 +277,11 @@ func stopCloakStep() error {
 	return nil
 }
 
-func initLoggerStep(testStep TestStep) error {
+func (tester *Tester) InitLoggerStep(testStep TestStep) error {
 	if path, ok := testStep.Args["path"].(string); ok {
 		log.Printf("Creating gRPC client\n")
 
-		conn, err := grpc.NewClient(GRPC_ADDRESS, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		conn, err := grpc.NewClient(tester.GrpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			return fmt.Errorf("Did not connect: %v", err)
 		}

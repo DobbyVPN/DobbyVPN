@@ -1,14 +1,14 @@
-package main
+package util
 
 import (
 	"fmt"
 	"log"
 )
 
-func assertIpExact(ipMatch string) error {
+func AssertIpExact(ipMatch string) error {
 	log.Printf("Checking ip exact match")
 
-	ipData, err := getIpData()
+	ipData, err := GetIpData()
 	if err != nil {
 		return fmt.Errorf("Error loading current ip: %v", err)
 	}
@@ -22,10 +22,10 @@ func assertIpExact(ipMatch string) error {
 	}
 }
 
-func assertIpCountryCode(ipCountryCode string) error {
+func AssertIpCountryCode(ipCountryCode string) error {
 	log.Printf("Checking ip country code match")
 
-	ipData, err := getIpData()
+	ipData, err := GetIpData()
 	if err != nil {
 		return fmt.Errorf("Error loading current ip: %v", err)
 	}

@@ -1,4 +1,4 @@
-package main
+package util
 
 import (
 	"encoding/json"
@@ -8,15 +8,19 @@ import (
 	"time"
 )
 
+var (
+	IPINFO_URL string = "https://ipinfo.io/json"
+)
+
 type IPData struct {
 	IP      string `json:"ip"`
 	Country string `json:"region"`
 	CC      string `json:"country"`
 }
 
-func getIpData() (*IPData, error) {
+func GetIpData() (*IPData, error) {
 	client := http.Client{
-		Timeout: 2 * time.Second,
+		Timeout: 4 * time.Second,
 	}
 	resp, err := client.Get(IPINFO_URL)
 	if err != nil {

@@ -1,4 +1,4 @@
-package main
+package util
 
 type TesterConfig struct {
 	Tests []TestConfig `json:"tests"`
