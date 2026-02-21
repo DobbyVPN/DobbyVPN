@@ -187,8 +187,9 @@ func (h *simpleHandler) Handle(_ context.Context, r slog.Record) error {
 
 	_, err := fmt.Fprintf(
 		h.file,
-		"[%s] \"%s\" [from go]\n",
+		"[%s] [%s] \"%s\" [from go]\n",
 		t,
+		r.Level,
 		msg,
 	)
 
