@@ -1,9 +1,21 @@
 {
     "tests": [
         {
-            "description": "A simple awg test",
+            "description": "AmneziaWG test: simple test",
             "mode": "normal",
             "steps": [
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "InitLogger",
+                    "args": {
+                        "path": "vpnserver-output-0.log"
+                    }
+                },
                 {
                     "action": "assert",
                     "args": {
@@ -20,13 +32,120 @@
                 {
                     "action": "timeout",
                     "args": {
-                        "seconds": "2"
+                        "seconds": "8"
                     }
                 },
                 {
                     "action": "assert",
                     "args": {
                         "ip_cc": "NL"
+                    }
+                },
+                {
+                    "action": "StopAwg"
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip": "localhost"
+                    }
+                }
+            ]
+        },
+        {
+            "description": "AmneziaWG test: multiple turn on -s",
+            "mode": "normal",
+            "steps": [
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "InitLogger",
+                    "args": {
+                        "path": "vpnserver-output-1.log"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip": "localhost"
+                    }
+                },
+                {
+                    "action": "StartAwg",
+                    "args": {
+                        "tunnel": "awg",
+                        "config": "..."
+                    }
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip_cc": "NL"
+                    }
+                },
+                {
+                    "action": "StopAwg"
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip": "localhost"
+                    }
+                },
+                {
+                    "action": "StartAwg",
+                    "args": {
+                        "tunnel": "awg",
+                        "config": "..."
+                    }
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip_cc": "NL"
+                    }
+                },
+                {
+                    "action": "StopAwg"
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip": "localhost"
                     }
                 }
             ]
@@ -35,6 +154,18 @@
             "description": "A simple shadowsocks connect test",
             "mode": "normal",
             "steps": [
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "InitLogger",
+                    "args": {
+                        "path": "vpnserver-output-2.log"
+                    }
+                },
                 {
                     "action": "assert",
                     "args": {
@@ -50,7 +181,7 @@
                 {
                     "action": "timeout",
                     "args": {
-                        "seconds": "2"
+                        "seconds": "8"
                     }
                 },
                 {
@@ -67,7 +198,7 @@
                 {
                     "action": "timeout",
                     "args": {
-                        "seconds": "2"
+                        "seconds": "8"
                     }
                 },
                 {
@@ -82,6 +213,18 @@
             "description": "A simple cloak connect test",
             "mode": "normal",
             "steps": [
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "InitLogger",
+                    "args": {
+                        "path": "vpnserver-output-3.log"
+                    }
+                },
                 {
                     "action": "assert",
                     "args": {
@@ -106,7 +249,7 @@
                 {
                     "action": "timeout",
                     "args": {
-                        "seconds": "2"
+                        "seconds": "8"
                     }
                 },
                 {
@@ -128,7 +271,193 @@
                 {
                     "action": "timeout",
                     "args": {
-                        "seconds": "2"
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip": "localhost"
+                    }
+                }
+            ]
+        },
+        {
+            "description": "Testing vpn switch AmneziaWG -> turn off -> Outline -> turn off",
+            "mode": "normal",
+            "steps": [
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "InitLogger",
+                    "args": {
+                        "path": "vpnserver-output-4.log"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip": "localhost"
+                    }
+                },
+                {
+                    "action": "StartAwg",
+                    "args": {
+                        "tunnel": "awg",
+                        "config": "..."
+                    }
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip_cc": "NL"
+                    }
+                },
+                {
+                    "action": "StopAwg"
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip": "localhost"
+                    }
+                },
+                {
+                    "action": "StartOutline",
+                    "args": {
+                        "key": "..."
+                    }
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip_cc": "FI"
+                    }
+                },
+                {
+                    "action": "StopOutline",
+                    "args": {
+                    }
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip": "localhost"
+                    }
+                }
+            ]
+        },
+        {
+            "description": "Testing vpn switch Outline -> turn off -> AmneziaWG -> turn off",
+            "mode": "normal",
+            "steps": [
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "InitLogger",
+                    "args": {
+                        "path": "vpnserver-output-5.log"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip": "localhost"
+                    }
+                },
+                {
+                    "action": "StartOutline",
+                    "args": {
+                        "key": "..."
+                    }
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip_cc": "FI"
+                    }
+                },
+                {
+                    "action": "StopOutline",
+                    "args": {
+                    }
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip": "localhost"
+                    }
+                },
+                {
+                    "action": "StartAwg",
+                    "args": {
+                        "tunnel": "awg",
+                        "config": "..."
+                    }
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
+                    }
+                },
+                {
+                    "action": "assert",
+                    "args": {
+                        "ip_cc": "NL"
+                    }
+                },
+                {
+                    "action": "StopAwg"
+                },
+                {
+                    "action": "timeout",
+                    "args": {
+                        "seconds": "8"
                     }
                 },
                 {
