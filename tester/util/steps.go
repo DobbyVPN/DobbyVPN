@@ -28,8 +28,6 @@ func (tester *Tester) parceIpMatch(ip string) string {
 }
 
 func (tester *Tester) RunTestStep(testStep TestStep) error {
-	log.Printf("Running test step\n")
-
 	switch testStep.Action {
 	case "assert":
 		return tester.AssertStep(testStep)
@@ -99,10 +97,11 @@ func (tester *Tester) StartAwgStep(testStep TestStep) error {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 
-			log.Printf("Starting tunnel\n")
-
 			vpnclient := pb.NewVpnClient(conn)
+
 			log.Printf("Created gRPC client")
+
+			log.Printf("Sending StartAwg")
 
 			_, err = vpnclient.StartAwg(ctx, &pb.StartAwgRequest{Tunnel: tunnel, Config: config})
 			if err != nil {
@@ -130,10 +129,10 @@ func (tester *Tester) StopAwgStep() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	log.Printf("Starting tunnel\n")
-
 	vpnclient := pb.NewVpnClient(conn)
 	log.Printf("Created gRPC client")
+
+	log.Printf("Sending StopAwg")
 
 	_, err = vpnclient.StopAwg(ctx, &pb.Empty{})
 	if err != nil {
@@ -158,10 +157,10 @@ func (tester *Tester) StartOutlineStep(testStep TestStep) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		log.Printf("Starting tunnel\n")
-
 		vpnclient := pb.NewVpnClient(conn)
 		log.Printf("Created gRPC client")
+
+		log.Printf("Sending StartOutline")
 
 		_, err = vpnclient.StartOutline(ctx, &pb.StartOutlineRequest{Config: config})
 		if err != nil {
@@ -188,10 +187,10 @@ func (tester *Tester) StopOutlineStep() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	log.Printf("Starting tunnel\n")
-
 	vpnclient := pb.NewVpnClient(conn)
 	log.Printf("Created gRPC client")
+
+	log.Printf("Sending StopOutline")
 
 	_, err = vpnclient.StopOutline(ctx, &pb.Empty{})
 	if err != nil {
@@ -219,10 +218,10 @@ func (tester *Tester) StartCloakStep(testStep TestStep) error {
 					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 					defer cancel()
 
-					log.Printf("Starting tunnel\n")
-
 					vpnclient := pb.NewVpnClient(conn)
 					log.Printf("Created gRPC client")
+
+					log.Printf("Sending StartCloakClient")
 
 					udpAsBoolean, err := strconv.ParseBool(udp)
 					if err != nil {
@@ -262,10 +261,10 @@ func (tester *Tester) StopCloakStep() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	log.Printf("Starting tunnel\n")
-
 	vpnclient := pb.NewVpnClient(conn)
 	log.Printf("Created gRPC client")
+
+	log.Printf("Sending StopCloakClient")
 
 	_, err = vpnclient.StopCloakClient(ctx, &pb.Empty{})
 	if err != nil {
@@ -290,10 +289,10 @@ func (tester *Tester) InitLoggerStep(testStep TestStep) error {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
-		log.Printf("Starting tunnel\n")
-
 		vpnclient := pb.NewVpnClient(conn)
 		log.Printf("Created gRPC client")
+
+		log.Printf("Sending InitLogger")
 
 		_, err = vpnclient.InitLogger(ctx, &pb.InitLoggerRequest{Path: path})
 		if err != nil {
