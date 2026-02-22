@@ -18,10 +18,6 @@ jobs:
         with:
           submodules: true
 
-      - name: Update the airports data
-        working-directory: .github/file_updates/airports_update
-        run: ./updateairports.sh
-
       - name: Download Go AAR
         uses: actions/download-artifact@v4
         with:

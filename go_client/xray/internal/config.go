@@ -11,7 +11,7 @@ import (
 )
 
 // GenerateXrayConfig creates a config with a TUN inbound
-// tunName: Can be an interface name (Desktop) or "fd:123" (Mobile)
+// tunName: Can be an interface name (Desktop) or "fd://123" (Mobile)
 func GenerateXrayConfig(tunName string, vlessConfigStr string) (*core.Config, error) {
 
 	// 1. Unmarshal user config
@@ -21,12 +21,11 @@ func GenerateXrayConfig(tunName string, vlessConfigStr string) (*core.Config, er
 	}
 
 	// 2. Define the TUN Inbound
-	// Note: Platform specifics (like MTU) should be consistent.
 	tunInbound := map[string]interface{}{
 		"tag":      "tun-in",
 		"protocol": "tun",
 		"settings": map[string]interface{}{
-			"name": tunName, // "wintun", "tun0", or "fd:123"
+			"name": tunName, // "wintun", "tun0", or "fd://123"
 			"mtu":  1500,
 		},
 		"sniffing": map[string]interface{}{
