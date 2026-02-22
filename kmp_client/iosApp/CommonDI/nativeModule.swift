@@ -1,16 +1,10 @@
 import app
 import Sentry
-import AuthenticationModule
+
 
 class SentryLogsRepositoryImpl : SentryLogsRepository {
     func log(string: String) {
         SentrySDK.capture(message: string)
-    }
-}
-
-class DobbyAuthLogger: AuthenticationLogger {
-    func writeLog(_ log: String) {
-        NativeModuleHolder.logsRepository.writeLog(log: log)
     }
 }
 
@@ -21,7 +15,7 @@ public class NativeModuleHolder {
     public static let logsRepository = LogsRepository
         .init(logFilePath: path, logEventsChannel: chan)
         .setSentryLogger(_sentryLogger: SentryLogsRepositoryImpl())
-
+    
     public static let shared: Koin_coreModule = MakeNativeModuleKt.makeNativeModule(
         copyLogsInteractor: { _ in
             return CopyLogsInteractorImpl()
@@ -47,17 +41,18 @@ public class NativeModuleHolder {
         awgManager: { _ in
             return AwgManagerImpl()
         },
-        authenticationManager: { scope in
-            return AuthenticationManagerImpl(logger: DobbyAuthLogger())
+        authenticationManager: { _ in
+            return AuthenticationManagerImpl()
         },
         healthCheck: { _ in
             return HealthCheckImpl()
         }
     )
-
+    
     private init() {
     }
 }
+
 
 public let appGroupIdentifier = "group.vpn.dobby.app"
 

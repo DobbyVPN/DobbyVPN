@@ -3,26 +3,21 @@ import UIKit
 import app
 import CoreLocation
 
-public protocol AuthenticationLogger {
-    func writeLog(_ log: String)
-}
+class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationManagerDelegate {
 
-public class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationManagerDelegate {
-    private let logger: AuthenticationLogger?
     private var context = LAContext()
     private var manager = LocationManager()
 
-    public init(logger: AuthenticationLogger? = nil) {
-        self.logger = logger
+    override init() {
         super.init()
     }
 
-    public func isAuthenticationAvailable() -> Bool {
+    func isAuthenticationAvailable() -> Bool {
         var error: NSError?
         return context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error)
     }
 
-    public func authenticate(
+    func authenticate(
         onAuthSuccess: @escaping () -> Void,
         onAuthFailure: @escaping () -> Void
     ) {
@@ -40,13 +35,12 @@ public class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocat
             }
         }
     }
-    
-    
-    public func requireLocationPermission(endingFunc: @escaping (AuthPermissionState) -> any Kotlinx_coroutines_coreJob) {
+
+    func requireLocationPermission(endingFunc: @escaping (AuthPermissionState) -> any Kotlinx_coroutines_coreJob) {
         manager.requestLocationPermission(callback: endingFunc)
     }
-    
-    public func requireLocationService(endingFunc: @escaping (KotlinBoolean) -> Void) {
+
+    func requireLocationService(endingFunc: @escaping (KotlinBoolean) -> Void) {
         let locationManager = CLLocationManager()
 
         func isLocationEnabled() -> Bool {
@@ -103,16 +97,15 @@ public class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocat
 
 class LocationManager: NSObject, CLLocationManagerDelegate {
     private var locationManager: CLLocationManager?
-    private let logs: AuthenticationLogger?
+    private var logs = NativeModuleHolder.logsRepository
     private var callback: ((AuthPermissionState) -> Kotlinx_coroutines_coreJob)?
 
-    public init(logger: AuthenticationLogger? = nil) {
-        self.logs = logger
+    override init() {
         super.init()
         self.locationManager = CLLocationManager()
         self.locationManager?.delegate = self
     }
-    
+
     func requestLocationPermission(
         callback: @escaping (AuthPermissionState) -> Kotlinx_coroutines_coreJob
     ) {
@@ -121,7 +114,7 @@ class LocationManager: NSObject, CLLocationManagerDelegate {
         if CLLocationManager.locationServicesEnabled() {
             locationManager?.requestWhenInUseAuthorization()
         } else {
-            logs?.writeLog("Location services are not enabled")
+            logs.writeLog(log: "Location services are not enabled")
             _ = callback(.denied)
         }
     }
@@ -130,16 +123,16 @@ class LocationManager: NSObject, CLLocationManagerDelegate {
         let state: AuthPermissionState
         switch status {
         case .authorizedWhenInUse, .authorizedAlways:
-            logs?.writeLog("Location permission granted.")
+            logs.writeLog(log: "Location permission granted.")
             state = .granted
         case .denied, .restricted:
-            logs?.writeLog("Location permission denied.")
+            logs.writeLog(log: "Location permission denied.")
             state = .denied
         case .notDetermined:
-            logs?.writeLog("Location permission not determined.")
+            logs.writeLog(log: "Location permission not determined.")
             state = .notdetermined
         @unknown default:
-            logs?.writeLog("Unknown location permission status.")
+            logs.writeLog(log: "Unknown location permission status.")
             state = .denied
         }
         _ = self.callback?(state)
