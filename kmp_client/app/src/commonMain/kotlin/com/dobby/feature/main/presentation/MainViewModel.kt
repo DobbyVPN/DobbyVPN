@@ -12,10 +12,11 @@ import com.dobby.feature.main.domain.AwgManager
 import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
-import com.dobby.feature.main.domain.clearOutlineAndCloakConfig
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.main.domain.TomlConfigs
+import com.dobby.feature.main.domain.clearAllConfigs
+import com.dobby.feature.main.domain.clearXrayConfig
 import com.dobby.feature.main.ui.MainUiState
 import com.dobby.feature.main.domain.config.TomlConfigApplier
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -176,7 +177,7 @@ class MainViewModel(
         val applied = runCatching { tomlConfigApplier.apply(connectionConfig) }
             .onFailure { e ->
                 logger.log("Error during parsing TOML: ${e.message}")
-                configsRepository.clearOutlineAndCloakConfig()
+                configsRepository.clearAllConfigs()
             }
             .getOrDefault(false)
 
@@ -243,7 +244,7 @@ class MainViewModel(
         logger.log("Stopping VPN service...")
         vpnManager.stop()
         if (!stoppedByHealthCheck) {
-            configsRepository.clearOutlineAndCloakConfig()
+            configsRepository.clearAllConfigs()
             connectionStateRepository.tryUpdateStatus(false)
         }
         logger.log("VPN service stopped successfully, state reset to disconnected")

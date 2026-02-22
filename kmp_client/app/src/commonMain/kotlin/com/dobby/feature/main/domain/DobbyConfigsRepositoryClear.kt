@@ -25,7 +25,8 @@ fun DobbyConfigsRepositoryXray.clearXrayConfig() {
     setXrayConfig("")
 }
 
-fun DobbyConfigsRepository.clearOutlineAndCloakConfig() {
+fun DobbyConfigsRepository.clearAllConfigs() {
     clearOutlineConfig()
     clearCloakConfig()
+    clearXrayConfig()
 }

@@ -25,8 +25,10 @@ func StartXray(config *C.char) {
 		err := xrayClient.Disconnect()
 		if err != nil {
 			log.Infof("Failed to disconnect existing xray client: %v", err)
+			xrayClient = nil
 			return
 		}
+		xrayClient = nil
 	}
 
 	xrayClient = xray.NewXrayClient(str_config)
@@ -34,6 +36,7 @@ func StartXray(config *C.char) {
 	err := xrayClient.Connect()
 	if err != nil {
 		log.Infof("Failed to connect xray client: %v", err)
+		xrayClient = nil
 	}
 }
 

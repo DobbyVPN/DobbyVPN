@@ -39,6 +39,7 @@ func (c *XrayClient) Connect() error {
 	if err := c.manager.Start(); err != nil {
 		log.Infof("XrayClient: Connection failed: %v", err)
 		c.manager.Stop()
+		c.manager = nil
 		common.Client.MarkInactive(xrayCommon.Name)
 		return err
 	}

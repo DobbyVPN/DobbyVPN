@@ -39,8 +39,8 @@ internal class XrayTomlApplier(
 
         val xrayJsonString = buildXrayJson(config)
 
-        xrayRepo.setIsXrayEnabled(true)
         xrayRepo.setXrayConfig(xrayJsonString)
+        xrayRepo.setIsXrayEnabled(true)
 
         logger.log("Xray config applied successfully.")
         return true

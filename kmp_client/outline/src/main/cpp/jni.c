@@ -95,7 +95,7 @@ Java_com_dobby_outline_OutlineGo_newXrayClient(JNIEnv *env, jclass clazz, jstrin
 {
     const char *config_str = (*env)->GetStringUTFChars(env, jConfig, NULL);
     // Go Export: NewXrayClient(config, fd)
-    NewXrayClient(config_str, jFd);
+    NewXrayClient((char*)config_str, jFd);
     (*env)->ReleaseStringUTFChars(env, jConfig, config_str);
 }
 

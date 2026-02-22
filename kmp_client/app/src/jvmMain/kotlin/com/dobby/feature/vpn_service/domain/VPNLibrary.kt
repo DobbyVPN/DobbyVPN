@@ -174,30 +174,36 @@ class VPNLibraryLoader(
         }
     }
 
-    fun startXray(config: String) {
+    fun startXray(config: String): Boolean {
         try {
             logger.log("Run config: ${maskStr(config)}")
             INSTANCE.StartXray(config)
             logger.log("StartXray called successfully.")
+            return true
         } catch (e: UnsatisfiedLinkError) {
             logger.log("Failed to call StartXray: ${e.message}")
             e.printStackTrace()
+            return false
         } catch (e: Exception) {
             logger.log("An error occurred while calling StartXray: ${e.message}")
             e.printStackTrace()
+            return false
         }
     }
 
-    fun stopXray() {
+    fun stopXray(): Boolean {
         try {
             INSTANCE.StopXray()
             logger.log("StopXray called successfully.")
+            return true
         } catch (e: UnsatisfiedLinkError) {
             logger.log("Failed to call StopXray: ${e.message}")
             e.printStackTrace()
+            return false
         } catch (e: Exception) {
             logger.log("An error occurred while calling StopXray: ${e.message}")
             e.printStackTrace()
+            return false
         }
     }
 

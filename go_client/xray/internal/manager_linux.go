@@ -52,9 +52,16 @@ func (m *XrayManager) Start() error {
 	// Extract user's log level and set up logger
 	loglevel, err := ExtractLogLevel(m.configRaw)
 	if err != nil {
-		log.Infof("[Xray] failed to parse log level, continuing whithout logs")
+		log.Infof("[Xray] failed to parse log level, continuing without logs")
 	}
 	SetupXrayLogging(loglevel)
+	defer func() {
+		// Setting clean up if error occured
+		if err != nil && m.xrayInstance != nil {
+			_ = m.xrayInstance.Close()
+			m.xrayInstance = nil
+		}
+	}()
 
 	if err := m.xrayInstance.Start(); err != nil {
 		return fmt.Errorf("failed to start xray: %w", err)
@@ -67,7 +74,6 @@ func (m *XrayManager) Start() error {
 
 	physGateway, err := gateway.DiscoverGateway()
 	if err != nil {
-		m.Stop()
 		return fmt.Errorf("failed to discover gateway: %w", err)
 	}
 	m.physGateway = physGateway.String()
@@ -75,18 +81,15 @@ func (m *XrayManager) Start() error {
 	// Assign IP to TUN interface
 	// Xray creates the interface, but we must assign the IP/Mask
 	if _, err := routing.ExecuteCommand(fmt.Sprintf("sudo ip addr add %s dev %s", TunIP, TunDevice)); err != nil {
-		m.Stop()
 		return fmt.Errorf("failed to set tun ip: %w", err)
 	}
 	if _, err := routing.ExecuteCommand(fmt.Sprintf("sudo ip link set dev %s up", TunDevice)); err != nil {
-		m.Stop()
 		return fmt.Errorf("failed to up tun: %w", err)
 	}
 
 	// Apply System Routing
 	err = routing.StartRouting(m.serverIP, m.physGateway, TunDevice)
 	if err != nil {
-		m.Stop()
 		return fmt.Errorf("routing failed: %w", err)
 	}
 
@@ -99,6 +102,9 @@ func (m *XrayManager) Stop() {
 	}
 
 	if m.xrayInstance != nil {
-		m.xrayInstance.Close()
+		if err := m.xrayInstance.Close(); err != nil {
+			log.Infof("[Xray] Error closing instance: %v", err)
+		}
+		m.xrayInstance = nil
 	}
 }

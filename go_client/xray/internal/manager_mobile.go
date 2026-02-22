@@ -45,11 +45,13 @@ func (m *XrayManager) Start() error {
 	// Extract user's log level and set up logger
 	loglevel, err := ExtractLogLevel(m.configRaw)
 	if err != nil {
-		log.Infof("[Xray] failed to parse log level, continuing whithout logs")
+		log.Infof("[Xray] failed to parse log level, continuing without logs")
 	}
 	SetupXrayLogging(loglevel)
 
 	if err := m.xrayInstance.Start(); err != nil {
+		m.xrayInstance.Close()
+		m.xrayInstance = nil
 		return err
 	}
 
@@ -59,7 +61,10 @@ func (m *XrayManager) Start() error {
 
 func (m *XrayManager) Stop() {
 	if m.xrayInstance != nil {
-		m.xrayInstance.Close()
+		if err := m.xrayInstance.Close(); err != nil {
+			log.Infof("[Xray] Error closing instance: %v", err)
+		}
+		m.xrayInstance = nil
 	}
 	log.Infof("[Xray-Mobile] Stopped")
 }

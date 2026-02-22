@@ -31,7 +31,7 @@ func NewXrayManager(config string) *XrayManager {
 	return &XrayManager{configRaw: config}
 }
 
-func (m *XrayManager) Start() error {
+func (m *XrayManager) Start() (err error) {
 	log.Infof("[Xray] Building Native TUN config...")
 
 	// Generate Config asking Xray to create "wintun"
@@ -53,9 +53,17 @@ func (m *XrayManager) Start() error {
 	// Extract user's log level and set up logger
 	loglevel, err := ExtractLogLevel(m.configRaw)
 	if err != nil {
-		log.Infof("[Xray] failed to parse log level, continuing whithout logs")
+		log.Infof("[Xray] failed to parse log level, continuing without logs")
 	}
 	SetupXrayLogging(loglevel)
+
+	defer func() {
+		// Setting clean up if error occured
+		if err != nil && m.xrayInstance != nil {
+			_ = m.xrayInstance.Close()
+			m.xrayInstance = nil
+		}
+	}()
 
 	if err := m.xrayInstance.Start(); err != nil {
 		return fmt.Errorf("failed to start xray: %w", err)
@@ -68,21 +76,28 @@ func (m *XrayManager) Start() error {
 
 	physGateway, err := gateway.DiscoverGateway()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to discover gateway: %w", err)
 	}
 	m.physGateway = physGateway.String()
 
 	physInterface, err := routing.FindInterfaceByGateway(m.physGateway)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to find network interface by gateway %s: %w", m.physGateway, err)
 	}
 
 	netInterface, err := routing.GetNetworkInterfaceByIP(physInterface)
+	if err != nil {
+		return fmt.Errorf("failed to resolve network interface for %s: %w", physInterface, err)
+	}
 	m.InterfaceName = netInterface.Name
 
 	// Configure IP/DNS on the interface Xray just created
-	routing.ExecuteCommand(fmt.Sprintf("netsh interface ip set address \"%s\" static %s %s %s", TunDeviceName, TunIP, TunMask, TunGateway))
-	routing.ExecuteCommand(fmt.Sprintf("netsh interface ip set dns \"%s\" static 8.8.8.8", TunDeviceName))
+	if _, err = routing.ExecuteCommand(fmt.Sprintf("netsh interface ip set address \"%s\" static %s %s %s", TunDeviceName, TunIP, TunMask, TunGateway)); err != nil {
+		return fmt.Errorf("failed to set TUN address: %w", err)
+	}
+	if _, err = routing.ExecuteCommand(fmt.Sprintf("netsh interface ip set dns \"%s\" static 8.8.8.8", TunDeviceName)); err != nil {
+		return fmt.Errorf("failed to set TUN DNS: %w", err)
+	}
 
 	// Spoof MAC logic for uniqueness
 	dst := netInterface.HardwareAddr
@@ -123,5 +138,6 @@ func (m *XrayManager) Stop() {
 		if err := m.xrayInstance.Close(); err != nil {
 			log.Infof("[Xray] Error closing instance: %v", err)
 		}
+		m.xrayInstance = nil
 	}
 }

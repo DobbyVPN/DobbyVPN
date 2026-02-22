@@ -3,6 +3,7 @@ package internal
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 
 	xrayLog "github.com/xtls/xray-core/common/log"
@@ -33,6 +34,7 @@ func ExtractServerIP(configStr string) (string, error) {
 }
 
 // ExtractLogLevel parses the generic VLESS JSON to find the log level.
+// In error case returns xrayLog.Severity_Unknown
 func ExtractLogLevel(configStr string) (xrayLog.Severity, error) {
 	var config map[string]interface{}
 	if err := json.Unmarshal([]byte(configStr), &config); err != nil {
@@ -53,7 +55,7 @@ func ExtractLogLevel(configStr string) (xrayLog.Severity, error) {
 			case "none":
 				return xrayLog.Severity_Unknown, nil
 			default:
-				return xrayLog.Severity_Unknown, errors.New("log level is not presented, choose between debug|info|warning|error|none")
+				return xrayLog.Severity_Unknown, fmt.Errorf("unrecognized log level %q, choose between debug|info|warning|error|none", loglevel)
 			}
 		}
 	}
