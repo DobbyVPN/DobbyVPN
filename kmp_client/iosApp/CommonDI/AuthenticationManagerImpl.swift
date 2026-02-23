@@ -49,7 +49,7 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
 
         // If location services are enabled, respond immediately
         if isLocationEnabled() {
-            endingFunc(true)
+            endingFunc(KotlinBoolean(value: true))
             return
         }
 
@@ -61,34 +61,39 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
         )
 
         alert.addAction(UIAlertAction(title: "Open settings", style: .default) { _ in
-            // Try to open location settings
-            if let url = URL(string: UIApplication.openSettingsURLString),
-               UIApplication.shared.canOpenURL(url) {
-                // Subscribe to the app becoming active again (only if we can open settings)
-                var observer: NSObjectProtocol?
-                observer = NotificationCenter.default.addObserver(
-                    forName: UIApplication.didBecomeActiveNotification,
-                    object: nil,
-                    queue: .main
-                ) { _ in
+            guard let url = URL(string: UIApplication.openSettingsURLString),
+                  UIApplication.shared.canOpenURL(url) else {
+                endingFunc(KotlinBoolean(value: false))
+                return
+            }
+            
+            var observer: NSObjectProtocol?
+            observer = NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                if let obs = observer { NotificationCenter.default.removeObserver(obs) }
+                endingFunc(KotlinBoolean(value: isLocationEnabled()))
+            }
+            
+            UIApplication.shared.open(url) { success in
+                if !success {
                     if let obs = observer { NotificationCenter.default.removeObserver(obs) }
-                    endingFunc(KotlinBoolean(value: isLocationEnabled()))
+                    endingFunc(KotlinBoolean(value: false))
                 }
-                UIApplication.shared.open(url)
-            } else {
-                endingFunc(false)
             }
         })
 
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
-            endingFunc(false)
+            endingFunc(KotlinBoolean(value: false))
         })
 
         // Get the top-most view controller to present the alert
         if let rootVC = UIApplication.shared.windows.first?.rootViewController {
             rootVC.present(alert, animated: true)
         } else {
-            endingFunc(false)
+            endingFunc(KotlinBoolean(value: false))
         }
     }
 }

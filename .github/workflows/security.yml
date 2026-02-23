@@ -15,13 +15,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Grype
-        uses: anchore/scan-action/download-grype@efe7eb15af6f8f1d1d2617e83b70efe5c0a8a0f1 # v5.8.0
-        with:
-          grype-version: v0.108.0
-
       - name: Run Grype scan
-        run: grype dir:go_client/ --only-fixed --fail-on high -o table
+        uses: anchore/scan-action@7037fa011853d5a11690026fb85feee79f4c946c # v7.3.2
+        with:
+          path: go_client/
+          fail-build: true
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
 
   trufflehog:
     name: TruffleHog — secret detection

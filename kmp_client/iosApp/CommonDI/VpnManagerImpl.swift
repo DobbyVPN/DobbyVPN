@@ -116,7 +116,7 @@ public class VpnManagerImpl: VpnManager {
                 self.logs.writeLog(log: "VPN configuration saved successfully!")
                 do {
                     self.logs.writeLog(log: "self.vpnManager = \(manager)")
-                    self.logs.writeLog(log: "starting tunnel !\(manager.connection.status)")
+                    self.logs.writeLog(log: "starting tunnel \(manager.connection.status)")
                     try manager.connection.startVPNTunnel()
                     self.logs.writeLog(log: "Tunnel was started! manager.connection.status = \(manager.connection.status)")
                 } catch {
@@ -149,8 +149,8 @@ public class VpnManagerImpl: VpnManager {
             } else {
                 self.logs.writeLog(log: "Existing manager not found.")
                 self.vpnManager = self.makeManager()
-                self.vpnManager?.saveToPreferences { error in
-                    completion(self.vpnManager, error)
+                self.vpnManager?.saveToPreferences { [weak self] error in
+                    completion(self?.vpnManager, error)
                 }
             }
         }

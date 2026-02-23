@@ -26,10 +26,10 @@ func (c *CommonClient) Connect(clientName string) error {
 		c.mu.Unlock()
 		return nil
 	}
-	vpnClient := client.vpnClient
+	conn := client.vpnClient
 	c.mu.Unlock()
 
-	err := vpnClient.Connect()
+	err := conn.Connect()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -51,10 +51,10 @@ func (c *CommonClient) Disconnect(clientName string) error {
 		c.mu.Unlock()
 		return nil
 	}
-	vpnClient := client.vpnClient
+	conn := client.vpnClient
 	c.mu.Unlock()
 
-	err := vpnClient.Disconnect()
+	err := conn.Disconnect()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

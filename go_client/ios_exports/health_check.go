@@ -5,9 +5,9 @@ import (
 	log "go_client/logger"
 )
 
-func StartHealthCheck(period int, sendMetrics bool) {
+func StartHealthCheck(period int32, sendMetrics bool) {
 	defer guard("StartHealthCheck")()
-	healthcheck.StartHealthCheck(int32(period), sendMetrics)
+	healthcheck.StartHealthCheck(period, sendMetrics)
 }
 
 func StopHealthCheck() {
