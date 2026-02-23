@@ -42,7 +42,7 @@ Qizilagach Air Base,39.006162,48.806312
 Benguera Island Airport,-21.8533,35.438301
 Bezmer Air Base,42.454899,26.3522
 Aasiaat Airport,68.721802,-52.784698
-Narsarsuaq International Airport,61.1605,-45.425999
+Narsarsuaq Airport,61.1605,-45.425999
 Neerlerit Inaat Airport,70.743103,-22.650499
 Nuuk International Airport,64.191066,-51.67914
 Ilulissat Airport,69.243202,-51.057098
@@ -52,16 +52,18 @@ Kangerlussuaq International Airport,67.010446,-50.715294
 Sisimiut Airport,66.951302,-53.729301
 Pituffik Space Base,76.53063,-68.700541
 Akureyri International Airport,65.656573,-18.072018
+Bildudalur Airport,65.641296,-23.5462
 Egilsstaðir Airport,65.2833023071289,-14.401399612426758
 Grímsey Airport,66.5458,-18.0173
 Hornafjörður Airport,64.295601,-15.2272
 Húsavík Airport,65.952301,-17.426001
 Ísafjörður Airport,66.058098,-23.1353
 Keflavik International Airport,63.985001,-22.6056
-Rif Airport,64.9114,-23.823099
 Reykjavík Domestic Airport,64.128732,-21.93759
+Mývatn Airport,65.6558,-16.9181
 Siglufjörður Airport,66.137847,-18.908157
 Vestmannaeyjar Airport,63.42430114746094,-20.278900146484375
+Vopnafjörður Airport,65.720596,-14.8506
 Tourou International Airport,9.391186,2.507311
 Priština Adem Jashari International Airport,42.5728,21.035801
 Glauber de Andrade Rocha Airport,-14.907885,-40.914804
@@ -326,7 +328,7 @@ Grande Prairie Airport,55.1796989441,-118.885002136
 Yorkton Municipal Airport,51.26470184326172,-102.46199798583984
 North Battleford Airport,52.769409,-108.243742
 Gander International Airport,48.936258,-54.567719
-Sydney / J.A. Douglas McCurdy Airport,46.1614,-60.047798
+Sydney / J.A. Douglas McCurdy Airport,46.161072,-60.049759
 Quesnel Airport,53.026100158691406,-122.51000213623047
 Resolute Bay Airport,74.7169036865,-94.9693984985
 Rivière-du-Loup Airport,47.764400482177734,-69.58470153808594
@@ -719,7 +721,7 @@ RAF Honington,52.342602,0.772939
 RAF Wittering,52.612598,-0.476453
 RAF Waddington,53.166199,-0.523811
 RAF Topcliffe,54.204116,-1.380265
-RAF Cranwell,53.0303,-0.483242
+RAF Cranwell,53.027308,-0.493104
 RAF Barkston Heath,52.960616,-0.559428
 RAF Marham,52.648395,0.550692
 Mount Pleasant Airport / RAF Mount Pleasant,-51.822642,-58.445777
@@ -972,7 +974,7 @@ Sishen Airport,-27.6486,22.9993
 Skukuza Airport,-24.96085,31.588587
 Tzaneen Airport,-23.8244,30.3293
 Prince Mangosuthu Buthelezi Airport,-28.3206005096,31.4165000916
-Upington International Airport,-28.400517,21.263357
+Upington Airport,-28.400246,21.263592
 K. D. Matanzima Airport,-31.546363184900002,28.6733551025
 Vryburg Airport,-26.9824008942,24.7287998199
 Virginia Airport,-29.770599,31.058399
@@ -1030,7 +1032,7 @@ Mohéli Bandar Es Eslam Airport,-12.298096,43.766496
 Ouani Airport,-12.131047,44.430044
 Dzaoudzi Pamandzi International Airport,-12.809319,45.281815
 Roland Garros Airport,-20.890087,55.518894
-Pierrefonds Airport,-21.319362,55.422506
+Saint-Pierre Pierrefonds Airport,-21.319362,55.422506
 Ivato International Airport,-18.7969,47.478802
 Miandrivazo Airport,-19.562799,45.450802
 Sainte Marie Airport,-17.093901,49.8158
@@ -1286,7 +1288,7 @@ Assab International Airport,13.0718,42.645
 Juba International Airport,4.87201,31.601101
 Amboseli Airport,-2.645050048828125,37.25310134887695
 Eldoret International Airport,0.404458,35.238899
-Jomo Kenyatta International Airport,-1.31923997402,36.9277992249
+Jomo Kenyatta International Airport,-1.318886,36.928233
 Kisumu International Airport,-0.086139,34.728901
 Kitale Airport,0.971989,34.958599
 Lokichogio Airport,4.20412,34.348202
@@ -1295,6 +1297,7 @@ Manda Airport,-2.252431,40.912892
 Malindi International Airport,-3.22931,40.1017
 Moi International Airport,-4.03483,39.5942
 Mara Serena Lodge Airstrip,-1.406111,35.008057
+Lanet Military Airstrip,-0.298419,36.159193
 Nanyuki Airport,-0.062399,37.041008
 Nairobi Wilson Airport,-1.321720004081726,36.81480026245117
 Laikipia Air Base,0.032933,37.026901
@@ -1316,7 +1319,7 @@ Udbina Airfield,44.557598,15.7744
 Gisenyi Airport,-1.6771999597549438,29.258899688720703
 Kigali International Airport,-1.96863,30.1395
 Kamembe Airport,-2.462239980697632,28.907899856567383
-Dongola Airport,19.153900146499996,30.430099487299998
+Dongola Airport,19.153666,30.430069
 Paloich Airport,10.529167,32.500556
 El Fasher Airport,13.614899635314941,25.324600219726562
 Kassala Airport,15.387499809265137,36.328800201416016
@@ -1455,7 +1458,7 @@ Hancock County-Bar Harbor Airport,44.45000076,-68.3615036
 Birmingham-Shuttlesworth International Airport,33.562877,-86.750712
 Biggs Army Air Field (Fort Bliss),31.84950066,-106.3799973
 Eastern Sierra Regional Airport,37.3731,-118.363998
-Billings Logan International Airport,45.807824,-108.533667
+Billings Logan International Airport,45.808932,-108.541242
 Bismarck Municipal Airport,46.772734,-100.746874
 Keesler Air Force Base,30.4104003906,-88.92440032959999
 Rocky Mountain Metropolitan Airport,39.908798,-105.116997
@@ -1486,7 +1489,7 @@ Bert Mooney Airport,45.95479965209961,-112.49700164794922
 Baton Rouge Metropolitan Airport,30.533199,-91.149597
 Patrick Leahy Burlington International Airport,44.471901,-73.153297
 Buffalo Niagara International Airport,42.940498,-78.732201
-Bobe Hope / Hollywood Burbank Airport,34.202834,-118.35805
+Hollywood Burbank Airport,34.202834,-118.35805
 Beaver County Airport,40.772499,-80.391403
 Beverly Regional Airport,42.584202,-70.916496
 Bowling Green Warren County Regional Airport,36.964500427199994,-86.41970062259999
@@ -1496,7 +1499,7 @@ Arkansas International Airport,35.9642982483,-89.94400024410001
 Burley Municipal Airport,42.542598724399994,-113.772003174
 Bicycle Lake Army Air Field,35.2804985046,-116.629997253
 Bozeman Yellowstone International Airport,45.778853,-111.153711
-Columbia Metropolitan Airport,33.938172,-81.117499
+Columbia Metropolitan Airport,33.938172,-81.123022
 Akron Canton Regional Airport,40.916099548339844,-81.44219970703125
 Caribou Municipal Airport,46.871498,-68.017899
 Columbus Air Force Base,33.643799,-88.443802
@@ -1569,7 +1572,7 @@ Dothan Regional Airport,31.321300506591797,-85.44960021972656
 Dalhart Municipal Airport,36.0225982666,-102.54699707
 Dickinson Theodore Roosevelt Regional Airport,46.797533,-102.801905
 Laughlin Air Force Base,29.359501,-100.778002
-Duluth International Airport,46.842098,-92.193604
+Duluth International Airport,46.841873,-92.198746
 Columbia Gorge Regional Airport,45.620979,-121.170777
 Davis Monthan Air Force Base,32.1665000916,-110.883003235
 Deming Municipal Airport,32.262298584,-107.721000671
@@ -1620,8 +1623,8 @@ Evansville Regional Airport,38.0369987488,-87.5324020386
 Evanston-Uinta County Airport-Burns Field,41.27479935,-111.0350037
 New Bedford Regional Airport,41.67610168457031,-70.95690155029297
 Coastal Carolina Regional Airport,35.0730018616,-77.04290008539999
-Newark Liberty International Airport,40.692501,-74.168701
-Key West International Airport,24.556101,-81.759598
+Newark Liberty International Airport,40.6894,-74.170545
+Key West International Airport,24.556119,-81.759579
 Felker Army Air Field,37.1325,-76.608803
 Hector International Airport,46.9207,-96.815804
 Fresno Yosemite International Airport,36.775767,-119.718018
@@ -1683,7 +1686,7 @@ Gerald R. Ford International Airport,42.880798,-85.522797
 Seymour Johnson Air Force Base,35.339401,-77.960602
 Piedmont Triad International Airport,36.09937,-79.937262
 Greenville-Spartanburg International Airport,34.895699,-82.218903
-Wheeler Sack Army Air Field,44.05559921,-75.71949768
+Wheeler Sack Army Air Field,44.055599,-75.719498
 Great Falls International Airport,47.481998,-111.371002
 Golden Triangle Regional Airport,33.450298,-88.5914
 Gunnison Crested Butte Regional Airport,38.534672,-106.934566
@@ -1747,7 +1750,7 @@ Laughlin Bullhead International Airport,35.154726,-114.559322
 Kingman Airport,35.259499,-113.938004
 Greater Kankakee Airport,41.07139968869999,-87.8462982178
 Wilmington Airport,39.678699,-75.606499
-Wilmington International Airport,34.271719,-77.904644
+Wilmington International Airport,34.272345,-77.905117
 Wilmington Airpark,39.427898407,-83.792098999
 Ford Airport,45.81911,-88.114557
 Indianapolis International Airport,39.7173,-86.294403
@@ -1780,9 +1783,10 @@ Mid-Way Regional Airport,32.4587,-96.912399
 Jackson County Airport/Reynolds Field,42.260509,-84.463019
 Southwest Washington Regional Airport,46.11800003049999,-122.898002625
 Bakersfield International Airport,35.324799,-118.996002
+California City Municipal Airport,35.151377,-118.016059
 Southeast Colorado Regional Airport,38.066407,-102.691373
 Purdue University Airport,40.412875,-86.939363
-Lakeland Linder International Airport,27.989113,-82.018521
+Lakeland Linder International Airport,27.989267,-82.020715
 Capital Region International Airport,42.777582,-84.585721
 Laramie Regional Airport,41.31209945678711,-105.67500305175781
 Harry Reid International Airport,36.083361,-115.151817
@@ -1837,7 +1841,7 @@ McComb-Pike County Airport / John E Lewis Field,31.178499,-90.471901
 McClellan Airfield,38.667599,-121.401001
 Merced Regional Macready Field,37.284698,-120.514
 MacDill Air Force Base,27.8493,-82.521202
-Kansas City International Airport,39.2976,-94.713898
+Kansas City International Airport,39.301699,-94.713893
 McCook Ben Nelson Regional Airport,40.207787,-100.592794
 Middle Georgia Regional Airport,32.69279861450195,-83.64920043945312
 Orlando International Airport,28.429399490356445,-81.30899810791016
@@ -1858,7 +1862,8 @@ Morgantown Municipal Airport Walter L. (Bill) Hart Field,39.643305,-79.917598
 Manhattan Regional Airport,39.14099884033203,-96.6707992553711
 Sacramento Mather Airport,38.554744,-121.297989
 Manchester-Boston Regional Airport,42.932598,-71.435699
-Miami International Airport,25.7932,-80.290604
+Mojave Air &  Space Port,35.056391,-118.145342
+Miami International Airport,25.796011,-80.289751
 Minot Air Force Base,48.4156,-101.358002
 Delaware County Johnson Field,40.242298,-85.395897
 Millville Municipal Airport,39.367802,-75.072197
@@ -1873,7 +1878,7 @@ Miles City Airport - Frank Wiley Field,46.427268,-105.885372
 Monroe Regional Airport,32.510899,-92.037697
 Mc Entire Joint National Guard Base,33.92079926,-80.80130005
 Morristown Municipal Airport,40.799062,-74.414949
-Mc Minnville Municipal Airport,45.19440079,-123.1360016
+McMinnville Municipal Airport,45.194401,-123.136002
 Mobile Regional Airport,30.6912,-88.242798
 Modesto City Co-Harry Sham Field,37.625801,-120.954002
 Minot International Airport,48.25801,-101.279123
@@ -1886,7 +1891,7 @@ Dane County Regional Truax Field,43.1399,-89.337502
 Missoula Montana Airport,46.915816,-114.091107
 Minneapolis–Saint Paul International Airport / Wold–Chamberlain Field,44.880081,-93.221741
 Massena International Airport Richards Field,44.936157,-74.844304
-Louis Armstrong New Orleans International Airport,29.993401,-90.258003
+Louis Armstrong New Orleans International Airport,29.993401,-90.264673
 Selfridge Air National Guard Base Airport,42.613463,-82.836919
 Florida Keys Marathon International Airport,24.726006,-81.05138
 Montrose Regional Airport,38.5098,-107.893997
@@ -1984,7 +1989,7 @@ Palo Alto Airport,37.461102,-122.114998
 "Pine Bluff Regional Airport, Grider Field",34.174121,-91.935643
 Plattsburgh International Airport,44.650902,-73.468102
 Palm Beach International Airport,26.683201,-80.095596
-Carl R Keller Field,41.515647,-82.868328
+Erie-Ottawa International Airport,41.515647,-82.868328
 DeKalb Peachtree Airport,33.87633,-84.30213
 Eastern Oregon Regional Airport at Pendleton,45.695099,-118.841003
 Portland International Airport,45.588699,-122.598
@@ -2095,7 +2100,7 @@ Lackland Air Force Base,29.38419914,-98.58110046
 Taos Regional Airport,36.452494,-105.67749
 Salt Lake City International Airport,40.78886,-111.979866
 Salem-Willamette Valley Airport/McNary Field,44.9095,-123.002998
-Los Alamitos Army Air Field,33.79000092,-118.052002
+Los Alamitos Army Air Field,33.790864,-118.050342
 Adirondack Regional Airport,44.38691,-74.204629
 Salina Municipal Airport,38.79100036621094,-97.6521987915039
 Lake Cumberland Regional Airport,37.053398132299996,-84.6158981323
@@ -2128,7 +2133,7 @@ Sioux Gateway Airport / Brigadier General Bud Day Field,42.397605,-96.382237
 Saline County Regional Airport,34.590599,-92.479401
 Grant County Airport,32.636701,-108.154736
 Hunter Army Air Field,32.00999832,-81.14569855
-New York Stewart International Airport,41.501731,-74.100435
+New York Stewart International Airport,41.50421,-74.108901
 Stillwater Regional Airport,36.162132,-97.085581
 Syracuse Hancock International Airport,43.11119842529297,-76.1063003540039
 Whiteman Air Force Base,38.730301,-93.547897
@@ -2142,7 +2147,7 @@ Telluride Regional Airport,37.9538,-107.907997
 Tinker Air Force Base,35.4147,-97.386597
 Tacoma Narrows Airport,47.267407,-122.577295
 Space Coast Regional Airport,28.514799118042,-80.799201965332
-Tallahassee International Airport,30.400369,-84.35433
+Tallahassee International Airport,30.401209,-84.35433
 Miami Executive Airport,25.6479,-80.4328
 Troy Municipal Airport at N Kenneth Campbell Field,31.860399,-86.012101
 Eugene F. Kranz Toledo Express Airport,41.5868,-83.8078
@@ -2173,6 +2178,7 @@ Ukiah Municipal Airport,39.125999,-123.200996
 State College Regional Airport,40.849374,-77.84852
 University Oxford Airport,34.384300231934,-89.536796569824
 Huntsville Regional Airport,30.7469005585,-95.5871963501
+Newport State Airport,41.532207,-71.281039
 Moody Air Force Base,30.9678001404,-83.1930007935
 Vandenberg Space Force Base,34.737301,-120.584
 Victoria Regional Airport,28.85260009765625,-96.91850280761719
@@ -2180,7 +2186,7 @@ Vernal Regional Airport,40.436214,-109.511661
 North Las Vegas Airport,36.209074,-115.193982
 Visalia Municipal Airport,36.318699,-119.392998
 Valdosta Regional Airport,30.782499313354492,-83.27670288085938
-Van Nuys Airport,34.209800720215,-118.48999786377
+Van Nuys Airport,34.209801,-118.489998
 Volk Field,43.938999,-90.253403
 Destin-Fort Walton Beach Airport,30.481315,-86.515839
 Porter County Municipal Airport,41.45399857,-87.00710297
@@ -2697,11 +2703,11 @@ Samsun-Çarşamba Airport,41.253988,36.567546
 Istanbul Sabiha Gökçen International Airport,40.898602,29.3092
 İstanbul Airport,41.274874,28.732136
 Rize–Artvin Airport,41.179766,40.848802
-Bălți International Airport,47.837666,27.781108
+Bălți-Leadoveni International Airport,47.837666,27.781108
 Mărculești Air Base,47.862701,28.212799
 Cahul International Airport,45.8438,28.2637
 Chişinău International Airport,46.92774,28.931704
-Tiraspol Airport,46.868099,29.590599
+Tiraspol Airfield,46.868099,29.590599
 Daugavpils International Airport,55.944721,26.665001
 Ohrid St. Paul the Apostle Airport,41.18,20.7423
 Skopje International Airport,41.958087,21.622581
@@ -2743,7 +2749,7 @@ Puerto Barrios Airport,15.7309,-88.583801
 Rubelsanto Airport,15.992,-90.445297
 Retalhuleu Airport,14.521431,-91.697001
 San José Airport,13.9362,-90.8358
-Mundo Maya International Airport,16.912391,-89.864792
+Mundo Maya International Airport,16.913707,-89.866143
 Golosón International Airport,15.7425,-86.852997
 Ramón Villeda Morales International Airport,15.4526,-87.923599
 La Laguna Airport,16.4454,-85.906601
@@ -2810,13 +2816,13 @@ General Lucio Blanco International Airport,26.0089,-98.2285
 Los Cabos International Airport,23.151919,-109.720731
 Cabo San Lucas International Airport,22.949072,-109.939479
 Felipe Ángeles International Airport,19.743824,-99.01507
-Ponciano Arriaga International Airport,22.260857,-100.93494
+Ponciano Arriaga International Airport,22.262026,-100.935692
 Terán Air Base,16.739901,-93.173301
 Francisco Sarabia Tinoco International Airport,25.562265,-103.404608
 Angel Albino Corzo International Airport,16.561611,-93.025731
 General Abelardo L. Rodriguez International Airport,32.541043,-116.969976
 Felipe Carrillo Puerto International Airport Tulum,20.172098,-87.660272
-General Francisco Javier Mina International Airport,22.2964,-97.865898
+General Francisco Javier Mina International Airport,22.292622,-97.867058
 Adolfo López Mateos International Airport,19.3369,-99.56583
 Tapachula International Airport,14.794549,-92.369871
 Cancún International Airport,21.040817,-86.87347
@@ -3032,6 +3038,7 @@ Kunduz Airport,36.6651,68.910797
 Bahrain International Airport,26.267295,50.63764
 Sheik Isa Air Base,25.9184,50.590599
 Corisco International Airport,0.910937,9.33027
+Mecca East Airport,21.4375,39.994202
 Aradah Airport,21.226999,55.2673
 Abha International Airport,18.2404,42.656601
 Al-Ahsa International Airport,25.285299,49.485199
@@ -3047,7 +3054,7 @@ Gurayat Domestic Airport,31.412413,37.278898
 Ha'il Airport,27.437901,41.686298
 Jubail Airport,27.039,49.405102
 King Faisal Naval Base,21.348101,39.173
-King Abdulaziz International Airport,21.6796,39.156502
+King Abdulaziz International Airport,21.680241,39.157436
 King Khaled Military City Airport,27.9009,45.528198
 King Khalid Air Base,18.2973,42.803501
 Prince Mohammad Bin Abdulaziz Airport,24.5534,39.705101
@@ -3130,7 +3137,7 @@ Zanjan Airport,36.7737007141,48.3594017029
 Shahid Sadooghi Airport,31.9048995972,54.2765007019
 Zabol Airport,31.098301,61.5439
 Chabahar Konarak International Airport,25.44319,60.382167
-Zahedan International Airport,29.47570037841797,60.90620040893555
+Zahedan International Airport,29.4757,60.9062
 Iranshahr Airport,27.236099,60.720001
 Queen Alia International Airport,31.7226009369,35.9931983948
 Marka International (Amman Civil) Airport,31.9727,35.9916
@@ -3655,7 +3662,7 @@ Coronel Felipe Varela International Airport,-28.593117,-65.7512
 Vicecomodoro Angel D. La Paz Aragonés Airport,-27.765556335399996,-64.3099975586
 Capitan V A Almonacid Airport,-29.381599,-66.795799
 Termas de Río Hondo international Airport,-27.4966,-64.93595
-Teniente Benjamín Matienzo International Airport,-26.8409,-65.104897
+Teniente Benjamín Matienzo International Airport,-26.837397,-65.104195
 Domingo Faustino Sarmiento Airport,-31.571501,-68.418198
 Area De Material Airport,-33.085098,-64.261299
 Villa Dolores Airport,-31.9452,-65.146301
@@ -3711,7 +3718,7 @@ Bauru/Arealva–Moussa Nakhal Tobias State Airport,-22.160755,-49.070325
 Campo Délio Jardim de Mattos Airport,-22.875099,-43.384701
 Anápolis Airbase,-16.2292,-48.964298
 Araraquara Airport,-21.812,-48.132999
-Aracaju - Santa Maria International Airport,-10.984129,-37.071789
+Aracaju - Santa Maria Airport,-10.98394,-37.072873
 Piloto Osvaldo Marques Dias Airport,-9.866389,-56.106298
 Araçatuba Airport,-21.141479,-50.424575
 Romeu Zema Airport,-19.5632,-46.9604
@@ -3722,7 +3729,7 @@ Bacacheri Airport,-25.4051,-49.231998
 Major Brigadeiro Doorgal Borges Airport,-21.2672,-43.76101
 Presidente Juscelino Kubitschek International Airport,-15.869167,-47.920834
 Chafei Amsei Airport,-20.584631,-48.594125
-Atlas Brasil Cantanhede Airport,2.845855,-60.690944
+Atlas Brasil Cantanhede International Airport,2.84615,-60.690648
 Barra do Garças Airport,-15.861417,-52.389008
 Umberto Modiano Airport,-22.770881,-41.96308
 Coronel Adalberto Mendes da Silva Airport,-25.000323,-53.501208
@@ -4228,7 +4235,7 @@ Nikolayevsk-na-Amure Airport,53.154999,140.649994
 Okhotsk Airport,59.410065,143.056503
 Palana Airport,59.082064,159.891577
 Yelizovo Airport,53.168716,158.451068
-Yuzhno-Sakhalinsk Airport,46.885461,142.717466
+Yuzhno-Sakhalinsk International Airport,46.885461,142.717466
 Vladivostok International Airport,43.396256,132.148155
 Chita-Kadala International Airport,52.024841,113.305839
 Krasnokamensk Airport,50.033108,118.061142
@@ -4328,7 +4335,6 @@ Sochi International Airport,43.449902,39.9566
 Astrakhan Narimanovo Boris M. Kustodiev International Airport,46.282843,48.010511
 Elista Airport,46.3739013671875,44.33089828491211
 Volgograd International Airport,48.78134,44.339194
-Yuma Auxiliary Army Airfield 2,32.547501,-114.511786
 Kurchatov Chelyabinsk International Airport,55.303141,61.504927
 Magnitogorsk International Airport,53.391991,58.755235
 Sabetta International Airport,71.219167,72.052222
@@ -4626,7 +4632,7 @@ Surat Thani Airport,9.13259983063,99.135597229
 Narathiwat Airport,6.5199198722839355,101.74299621582031
 Chumphon Airport,10.7112,99.361702
 Nakhon Si Thammarat Airport,8.539620399475098,99.9447021484375
-Krabi Airport,8.09912014008,98.9861984253
+Krabi International Airport,8.095591,98.988955
 Songkhla Airport,7.186560153961182,100.60800170898438
 Pattani Airport,6.78546,101.153999
 Samui International Airport,9.54779,100.061996
@@ -4692,6 +4698,7 @@ Frans Kaisiepo Airport,-1.19002,136.108002
 Douw Aturure Airport,-3.397973,135.393071
 Stevanus Rumbewas Airport,-1.82842,136.062402
 Mozes Kilangin Airport,-4.52978,136.887388
+Sultan Muhammad Salahuddin Airport,-8.537184,118.685002
 Denpasar I Gusti Ngurah Rai International Airport,-8.748409,115.167123
 Lombok International Airport,-8.759962,116.278169
 Sultan Babullah Airport,0.831012,127.381611
@@ -5020,15 +5027,17 @@ Linfen Yaodu Airport,36.132629,111.641236
 Lüliang Dawu Airport,37.683333,111.142778
 Manzhouli Xijiao Airport,49.566667,117.33
 Baotou Donghe International Airport,40.560001,109.997002
+Shuozhou Zirun Airport,39.273241,112.691552
 Shijiazhuang Zhengding International Airport,38.280701,114.696999
 Tianjin Binhai International Airport,39.124401092499994,117.346000671
 Tongliao Airport,43.556702,122.199997
 Ulanqab Jining Airport,41.130266,113.107274
+Wuhai Airport,39.7934,106.7993
 Xilinhot Airport,43.91559982299805,115.96399688720703
 Yuncheng Yanhu International Airport,35.117823,111.034023
 Taiyuan Wusu International Airport,37.746899,112.627998
 Bayannur Tianjitai Airport,40.926358,107.74093
-Zhangjiakou Ningyuan Airport,40.738602,114.930278
+Zhangjiakou Ningyuan Airport,40.738664,114.933395
 Zhalantun Genghis Khan Airport,47.865942,122.768662
 Beihai Fucheng Airport,21.538659,109.293683
 Baise (Bose) Bama Airport,23.7206,106.959999
@@ -5078,6 +5087,7 @@ Golog Maqên Airport,34.418066,100.301144
 Golmud Airport,36.4006,94.786102
 Guyuan Liupanshan Airport,36.078889,106.216944
 Huatugou Airport,38.201645,90.837843
+Hanzhong Chenggu Airport,33.133527,107.203817
 Yinchuan Hedong International Airport,38.322758,106.393214
 Jiayuguan International Airport,39.859052,98.339344
 Lanzhou Zhongchuan International Airport,36.515202,103.620003
@@ -5161,7 +5171,7 @@ Wenzhou Longwan International Airport,27.910572,120.853465
 Xuzhou Guanyin International Airport,34.059056,117.555278
 Yangzhou Taizhou Airport,32.5634,119.7198
 Yichun Mingyueshan Airport,27.8025,114.3062
-Yancheng Nanyang International Airport,33.425833,120.203056
+Yancheng Nanyang International Airport,33.428317,120.20545
 Yantai Penglai International Airport,37.659724,120.978124
 Yiwu Airport,29.342095,120.03116
 Zhoushan Putuoshan Airport,29.9342,122.362
