@@ -34,5 +34,5 @@ pre-commit:
 pre-push:
   commands:
     trufflehog:
-      run: trufflehog git file://. --since-commit HEAD~5 --only-verified --fail
+      run: trufflehog git file://. --only-verified --fail
       fail_text: "TruffleHog detected secrets. Remove them before pushing."

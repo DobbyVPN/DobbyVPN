@@ -161,6 +161,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     }
 
     public func sync() {
-        userDefaults.synchronize()
+        // UserDefaults.synchronize() is deprecated and unnecessary on iOS 12+
+        // The system automatically persists changes
     }
 }

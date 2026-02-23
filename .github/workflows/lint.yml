@@ -13,7 +13,7 @@ on:
 jobs:
   lint-go-client:
     name: "Go Lint — go_client"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -31,7 +31,7 @@ jobs:
 
   lint-kotlin:
     name: "Kotlin Lint — detekt"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -49,16 +49,15 @@ jobs:
 
   lint-swift:
     name: "Swift Lint — SwiftLint"
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
       - name: Install SwiftLint
         env:
           HOMEBREW_NO_AUTO_UPDATE: 1
-        run: brew install swiftlint
+        run: brew install swiftlint@0.57.1 && brew link --overwrite swiftlint@0.57.1
 
       - name: Run SwiftLint
         working-directory: kmp_client/iosApp
         run: swiftlint lint --config .swiftlint.yml --quiet
-

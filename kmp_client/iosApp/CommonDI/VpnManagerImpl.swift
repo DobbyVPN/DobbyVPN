@@ -26,7 +26,8 @@ public class VpnManagerImpl: VpnManager {
 
 //        VpnManagerImpl.startSentry()
         self.connectionRepository = connectionRepository
-        getOrCreateManager { manager, _ in
+        getOrCreateManager { [weak self] manager, _ in
+            guard let self else { return }
             if manager?.connection.status == .connected {
                 self.state = manager?.connection.status ?? .invalid
                 connectionRepository.tryUpdateVpnStarted(isStarted: true)

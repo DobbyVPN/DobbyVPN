@@ -21,32 +21,50 @@ type CommonClient struct {
 
 func (c *CommonClient) Connect(clientName string) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if client, ok := c.vpnClients[clientName]; ok && !client.connected && !client.inCriticalSection {
+	client, ok := c.vpnClients[clientName]
+	if !ok || client.connected || client.inCriticalSection {
 		c.mu.Unlock()
-		err := client.Connect()
-		c.mu.Lock()
-		if err != nil {
-			return err
-		}
-		client.connected = true
-		c.vpnClients[clientName] = client
+		return nil
+	}
+	vpnClient := client.vpnClient
+	c.mu.Unlock()
+
+	err := vpnClient.Connect()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	// Re-fetch and update only the connected field
+	if current, exists := c.vpnClients[clientName]; exists {
+		current.connected = true
+		c.vpnClients[clientName] = current
 	}
 	return nil
 }
 
 func (c *CommonClient) Disconnect(clientName string) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if client, ok := c.vpnClients[clientName]; ok && client.connected && !client.inCriticalSection {
+	client, ok := c.vpnClients[clientName]
+	if !ok || !client.connected || client.inCriticalSection {
 		c.mu.Unlock()
-		err := client.Disconnect()
-		c.mu.Lock()
-		if err != nil {
-			return err
-		}
-		client.connected = false
-		c.vpnClients[clientName] = client
+		return nil
+	}
+	vpnClient := client.vpnClient
+	c.mu.Unlock()
+
+	err := vpnClient.Disconnect()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	// Re-fetch and update only the connected field
+	if current, exists := c.vpnClients[clientName]; exists {
+		current.connected = false
+		c.vpnClients[clientName] = current
 	}
 	return nil
 }

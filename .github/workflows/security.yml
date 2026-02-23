@@ -9,21 +9,23 @@ on:
 jobs:
   grype:
     name: Grype — vulnerability scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Grype
-        run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.108.0
+        uses: anchore/scan-action/download-grype@efe7eb15af6f8f1d1d2617e83b70efe5c0a8a0f1 # v5.8.0
+        with:
+          grype-version: v0.108.0
 
       - name: Run Grype scan
         run: grype dir:go_client/ --only-fixed --fail-on high -o table
 
   trufflehog:
     name: TruffleHog — secret detection
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:

@@ -61,21 +61,19 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
         )
 
         alert.addAction(UIAlertAction(title: "Open settings", style: .default) { _ in
-
-            // Subscribe to the app becoming active again
-            var observer: NSObjectProtocol?
-            observer = NotificationCenter.default.addObserver(
-                forName: UIApplication.didBecomeActiveNotification,
-                object: nil,
-                queue: .main
-            ) { _ in
-                if let obs = observer { NotificationCenter.default.removeObserver(obs) }
-                endingFunc(KotlinBoolean(value: isLocationEnabled()))
-            }
-
             // Try to open location settings
             if let url = URL(string: UIApplication.openSettingsURLString),
                UIApplication.shared.canOpenURL(url) {
+                // Subscribe to the app becoming active again (only if we can open settings)
+                var observer: NSObjectProtocol?
+                observer = NotificationCenter.default.addObserver(
+                    forName: UIApplication.didBecomeActiveNotification,
+                    object: nil,
+                    queue: .main
+                ) { _ in
+                    if let obs = observer { NotificationCenter.default.removeObserver(obs) }
+                    endingFunc(KotlinBoolean(value: isLocationEnabled()))
+                }
                 UIApplication.shared.open(url)
             } else {
                 endingFunc(false)

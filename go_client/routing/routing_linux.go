@@ -53,7 +53,7 @@ func StopRouting(proxyIP, gatewayIP string) {
 		log.Infof("failed to remove tun default route: %v", err)
 	}
 
-	// Restore default via tunnel
+	// Restore default via gateway
 	if _, err := ExecuteCommand(fmt.Sprintf("sudo ip route add default via %s", gatewayIP)); err != nil {
 		log.Infof("failed to add old default route: %v", err)
 	}
