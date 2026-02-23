@@ -22,12 +22,6 @@ reviews:
   review_status: true
   collapse_walkthrough: true
 
-  filters:
-    severity:
-      - critical
-      - major
-      - minor
-
   path_instructions:
     - path: "go_client/**/*.go"
       instructions: >
