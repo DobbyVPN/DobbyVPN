@@ -34,6 +34,11 @@ func (c *XrayClient) Connect() error {
 
 	log.Infof("XrayClient: Connecting...")
 
+	if c.manager != nil {
+		log.Infof("XrayClient: already connected; skipping Connect()")
+		return nil
+	}
+
 	c.manager = internal.NewXrayManager(c.config, c.fd)
 
 	if err := c.manager.Start(); err != nil {

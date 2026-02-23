@@ -29,4 +29,5 @@ fun DobbyConfigsRepository.clearAllConfigs() {
     clearOutlineConfig()
     clearCloakConfig()
     clearXrayConfig()
+    clearAwgConfig()
 }

@@ -74,8 +74,10 @@ func resolveIP(addr string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(ips) == 0 {
-		return "", errors.New("no IP found for domain")
+	for _, ip := range ips {
+		if ip4 := ip.To4(); ip4 != nil {
+			return ip4.String(), nil
+		}
 	}
-	return ips[0].String(), nil // Use the first resolved IP
+	return "", errors.New("no IPv4 address found for domain")
 }

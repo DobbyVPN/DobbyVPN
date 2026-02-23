@@ -65,7 +65,7 @@ func (m *XrayManager) Start() (err error) {
 		}
 	}()
 
-	if err := m.xrayInstance.Start(); err != nil {
+	if err = m.xrayInstance.Start(); err != nil {
 		return fmt.Errorf("failed to start xray: %w", err)
 	}
 	log.Infof("[Xray] Native TUN started on %s", TunDeviceName)
