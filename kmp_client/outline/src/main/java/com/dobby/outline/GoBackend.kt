@@ -188,5 +188,60 @@ class OutlineGo {
                 -1
             }
         }
+
+        /**
+         * Creates a new Xray client with the provided config and TUN file descriptor.
+         * @throws IllegalStateException if libraries are not loaded
+         */
+        @JvmStatic
+        @Throws(IllegalStateException::class)
+        external fun newXrayClient(config: String, tunFd: Int): Unit
+
+        /**
+         * Connects the Xray client.
+         * @return 0 on success, -1 on error
+         */
+        @JvmStatic
+        @Throws(IllegalStateException::class)
+        external fun xrayConnect(): Int
+
+        /**
+         * Disconnects the Xray client.
+         */
+        @JvmStatic
+        @Throws(IllegalStateException::class)
+        external fun xrayDisconnect(): Unit
+
+        suspend fun safeNewXrayClient(config: String, tunFd: Int): Boolean = withContext(Dispatchers.IO) {
+            try {
+                if (!isLibrariesLoaded && !loadLibraries()) {
+                    return@withContext false
+                }
+                newXrayClient(config, tunFd)
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create xray client", e)
+                false
+            }
+        }
+
+        suspend fun safeXrayConnect(): Int = withContext(Dispatchers.IO) {
+            try {
+                ensureLibrariesLoaded()
+                xrayConnect()
+            } catch (e: Exception) {
+                Log.e(TAG, "XrayConnect failed with exception", e)
+                -1
+            }
+        }
+
+        suspend fun safeXrayDisconnect(): Unit = withContext(Dispatchers.IO) {
+            try {
+                ensureLibrariesLoaded()
+                xrayDisconnect()
+            } catch (e: Exception) {
+                Log.e(TAG, "XrayDisconnect failed", e)
+            }
+        }
     }
 }

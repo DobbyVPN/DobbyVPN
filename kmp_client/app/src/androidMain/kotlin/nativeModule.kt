@@ -13,6 +13,9 @@ import com.dobby.feature.main.domain.VpnManagerImpl
 import com.dobby.feature.vpn_service.CloakLibFacade
 import com.dobby.feature.vpn_service.DobbyVpnInterfaceFactory
 import com.dobby.feature.vpn_service.OutlineLibFacade
+import com.dobby.feature.vpn_service.XrayLibFacade
+import com.dobby.feature.vpn_service.domain.XrayLibFacadeImpl
+
 import com.dobby.feature.vpn_service.domain.cloak.CloakConnectionInteractor
 import com.dobby.feature.vpn_service.domain.cloak.CloakLibFacadeImpl
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
@@ -42,6 +45,7 @@ val androidVpnModule = module {
     single { Logger(get()) }
     factory<CloakLibFacade> { CloakLibFacadeImpl() }
     factory<OutlineLibFacade> { OutlineLibFacadeImpl() }
+    factory<XrayLibFacade> { XrayLibFacadeImpl() }
     single<CloakConnectionInteractor> { CloakConnectionInteractor(get(), get(), get()) }
     single<OutlineInteractor> { OutlineInteractor(get(), get(), get()) }
     factoryOf(::DobbyVpnInterfaceFactory)

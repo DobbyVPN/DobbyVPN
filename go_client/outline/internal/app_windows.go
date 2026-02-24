@@ -14,9 +14,10 @@ import (
 	"go_client/routing"
 	"go_client/tunnel"
 
-	"github.com/jackpal/gateway"
 	log "go_client/logger"
 	outlineCommon "go_client/outline/common"
+
+	"github.com/jackpal/gateway"
 )
 
 func add_route(proxyIp string) {
@@ -211,6 +212,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
 		log.Infof("[Routing] Cleaning up routes for %s...", serverIP.String())
 		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name, TunGateway)
+
 		log.Infof("[Routing] Routes cleaned up")
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 	}()

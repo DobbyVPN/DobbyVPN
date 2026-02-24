@@ -2,11 +2,13 @@ package com.dobby.feature.vpn_service
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.VpnService
+import android.os.Debug
 import android.os.ParcelFileDescriptor
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import android.system.Os
 import com.dobby.awg.TunnelManager
 import com.dobby.awg.TunnelState
 import com.dobby.feature.logging.Logger
@@ -16,19 +18,17 @@ import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.vpn_service.domain.cloak.CloakConnectionInteractor
+import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import org.koin.android.ext.android.inject
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import android.os.Debug
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.system.Os
-import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
+import org.koin.android.ext.android.inject
 import java.io.File
 import java.io.FileInputStream
 import java.util.UUID
@@ -56,9 +56,9 @@ class DobbyVpnService : VpnService() {
     private val cloakConnectInteractor: CloakConnectionInteractor by inject()
     private val outlineInteractor: OutlineInteractor by inject ()
     private val dobbyConfigsRepository: DobbyConfigsRepository by inject()
+    private val xrayLibFacade: XrayLibFacade by inject()
     val connectionState: ConnectionStateRepository by inject()
     private val tunnelManager = TunnelManager(this, logger)
-
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val startStopMutex = Mutex()
 
@@ -123,13 +123,29 @@ class DobbyVpnService : VpnService() {
         when (dobbyConfigsRepository.getVpnInterface()) {
             VpnInterface.CLOAK_OUTLINE -> startCloakOutline(intent)
             VpnInterface.AMNEZIA_WG -> startAwg()
+            VpnInterface.XRAY -> startXray()
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
         logger.log("[svc:$serviceId] onDestroy() begin vpnInterface=${vpnInterface?.fd}")
+        connectionState.tryUpdateVpnStarted(isStarted = false)
+
+        runCatching {
+            xrayLibFacade.disconnect()
+        }.onFailure { e ->
+            logger.log("[svc:$serviceId] onDestroy(): failed to disconnect Xray: ${e.message}")
+        }
+
+        runCatching {
+            runBlocking { stopCloakClient() }
+        }.onFailure { e ->
+            logger.log("[svc:$serviceId] onDestroy(): failed to stop Cloak: ${e.message}")
+        }
+
         teardownVpn()
+
         runCatching {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             defaultNetworkCallback?.let { cb ->
@@ -180,6 +196,62 @@ class DobbyVpnService : VpnService() {
         }
     }
 
+    private fun startXray() {
+        serviceScope.launch {
+            startStopMutex.withLock {
+                logger.log("[svc:$serviceId] startXray(): lock acquired")
+                val config = dobbyConfigsRepository.getXrayConfig()
+                logger.log("[svc:$serviceId] startXray(): config length=${config.length}")
+
+                if (config.isEmpty()) {
+                    logger.log("[svc:$serviceId] startXray(): config is empty, stopping service")
+                    connectionState.tryUpdateStatus(false)
+                    xrayLibFacade.disconnect()
+                    teardownVpn()
+                    stopSelf()
+                    return@withLock
+                }
+
+                logger.log("[svc:$serviceId] startXray(): setting up VPN interface")
+                // Disconnect any existing Xray connection
+                xrayLibFacade.disconnect()
+                // Tear down any existing VPN interface
+                teardownVpn()
+
+                setupVpn()
+
+                val dupPfd = vpnInterface?.dup()
+                val tunFd = dupPfd?.detachFd() ?: -1
+                goTunFd = if (tunFd != -1) tunFd else null
+
+                if (tunFd < 0) {
+                    logger.log("[svc:$serviceId] startXray(): failed to create VPN interface")
+                    connectionState.tryUpdateStatus(false)
+                    xrayLibFacade.disconnect()
+                    teardownVpn()
+                    stopSelf()
+                    return@withLock
+                }
+
+                logger.log("[svc:$serviceId] startXray(): initializing Xray with tunFd=$tunFd")
+                val connected = xrayLibFacade.init(config, tunFd)
+                if (!connected) {
+                    logger.log("[svc:$serviceId] startXray(): Xray connection FAILED, stopping service")
+                    connectionState.tryUpdateStatus(false)
+                    xrayLibFacade.disconnect()
+                    teardownVpn()
+                    stopSelf()
+                    return@withLock
+                }
+
+                logger.log("[svc:$serviceId] startXray(): Xray connected successfully")
+
+                connectionState.updateStatus(true)
+                logger.log("[svc:$serviceId] startXray(): completed (status=true) vpnInterface=$tunFd")
+            }
+        }
+    }
+
     private suspend fun stopCloakClient() {
         runCatching {
             logger.log("Stopping Cloak client (if running)...")
@@ -226,6 +298,7 @@ class DobbyVpnService : VpnService() {
             }
         }
         goTunFd = null
+
         runCatching {
             vpnInterface?.close()
         }
@@ -242,4 +315,5 @@ class DobbyVpnService : VpnService() {
             logger.log("[svc:$serviceId] setupVpn(): establish FAILED: ${e.message}")
         }.getOrNull()
     }
+
 }

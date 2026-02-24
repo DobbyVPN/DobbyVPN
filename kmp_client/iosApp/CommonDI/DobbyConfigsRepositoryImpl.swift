@@ -19,6 +19,8 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let isWebsocketEnabledKey = "isWebsocketEnabledKey"
     private let UdpPathOutlineKey = "UdpPathOutlineKey"
     private let isUserInitStopKey = "isUserInitStopKey"
+    private let isXrayEnabledKey = "isXrayEnabledKey"
+    private let xrayConfigKey = "xrayConfigKey"
 
     public func getConnectionURL() -> String {
         return userDefaults.string(forKey: connectionURLKey) ?? ""
@@ -145,6 +147,24 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     public func setAwgConfig(newConfig: String) {}
     
     public func setIsAmneziaWGEnabled(isAmneziaWGEnabled: Bool) {}
+    
+    public func getXrayConfig() -> String {
+        return userDefaults.string(forKey: xrayConfigKey) ?? ""
+    }
+    
+    public func setXrayConfig(config: String) {
+        userDefaults.set(config, forKey: xrayConfigKey)
+        sync()
+    }
+
+    public func getIsXrayEnabled() -> Bool {
+        return userDefaults.bool(forKey: isXrayEnabledKey)
+    }
+
+    public func setIsXrayEnabled(isXrayEnabled: Bool) {
+        userDefaults.set(isXrayEnabled, forKey: isXrayEnabledKey)
+        sync()
+    }
     
     public func setVpnInterface(vpnInterface: VpnInterface) {}
 
