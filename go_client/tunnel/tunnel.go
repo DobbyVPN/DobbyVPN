@@ -144,6 +144,7 @@ func (t *tunTransfer) readLoop() {
 
 		switch action {
 		case georouting.RouteDirect:
+			logLoop("read", "RouteDirect chosen")
 			if t.directFn == nil {
 				onceNoDirectOutbound.Do(func() {
 					logLoop("read", "RouteDirect chosen but directFn is nil, outbound packets will fallback to drop")
@@ -155,6 +156,7 @@ func (t *tunTransfer) readLoop() {
 			}
 
 		case georouting.RouteProxy:
+			logLoop("read", "RouteProxy chosen")
 			if t.writeFn == nil {
 				logLoop("read", "RouteProxy chosen but writeFn is nil, dropping packet")
 				continue
