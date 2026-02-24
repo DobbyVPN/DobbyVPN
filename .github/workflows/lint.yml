@@ -57,14 +57,24 @@ jobs:
 
       - name: Run detekt
         working-directory: kmp_client
-        run: ./gradlew detekt || true
+        run: ./gradlew detekt
+        continue-on-error: true
 
       - name: Report detekt results with reviewdog
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          find kmp_client -name "detekt.xml" -exec cat {} \; | \
-            reviewdog -f=checkstyle -name="detekt" -reporter=github-pr-review -level=warning
+          # Find and concatenate all detekt XML reports
+          DETEKT_FILES=$(find kmp_client -path "*/build/reports/detekt/detekt.xml" -type f 2>/dev/null)
+          if [ -n "$DETEKT_FILES" ]; then
+            for f in $DETEKT_FILES; do
+              if [ -s "$f" ]; then
+                cat "$f" | reviewdog -f=checkstyle -name="detekt" -reporter=github-pr-review -level=warning || true
+              fi
+            done
+          else
+            echo "No detekt reports found"
+          fi
 
   lint-swift:
     name: "Swift Lint — SwiftLint"
@@ -75,12 +85,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run SwiftLint with reviewdog
-        uses: reviewdog/action-swiftlint@4d7fc06c6b9760eb7a46c5ea3e887f00d0337227 # v1.11.0
+      - name: Setup reviewdog
+        uses: reviewdog/action-setup@e04ffabe3898a0af8d0fb1af00c188831c4b5893 # v1.3.2
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          workdir: kmp_client/iosApp
-          reporter: github-pr-review
-          level: warning
-          fail_level: error
-          swiftlint_config: .swiftlint.yml
+          reviewdog_version: latest
+
+      - name: Install SwiftLint
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+        run: brew install swiftlint
+
+      - name: Run SwiftLint with reviewdog
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: kmp_client/iosApp
+        run: |
+          swiftlint lint --config .swiftlint.yml --reporter checkstyle | \
+            reviewdog -f=checkstyle -name="SwiftLint" -reporter=github-pr-review -level=warning

@@ -18,9 +18,18 @@ pre-commit:
       only:
         - os: windows
 
-    kotlin-detekt:
+    kotlin-detekt-unix:
       glob: "kmp_client/**/*.kt"
-      run: cd kmp_client && {gradlew} detekt
+      run: cd kmp_client && ./gradlew detekt
+      only:
+        - os: linux
+        - os: darwin
+
+    kotlin-detekt-windows:
+      glob: "kmp_client/**/*.kt"
+      run: cd kmp_client && gradlew.bat detekt
+      only:
+        - os: windows
 
     swift-lint:
       glob: "kmp_client/iosApp/**/*.swift"

@@ -24,7 +24,7 @@ jobs:
           trivy_target: go_client/
           reporter: github-pr-review
           level: warning
-          fail_level: high
+          fail_level: error
           trivy_flags: --severity HIGH,CRITICAL --ignore-unfixed
 
       - name: Run Trivy (Kotlin)
@@ -35,7 +35,7 @@ jobs:
           trivy_target: kmp_client/
           reporter: github-pr-review
           level: warning
-          fail_level: high
+          fail_level: error
           trivy_flags: --severity HIGH,CRITICAL --ignore-unfixed
 
   trufflehog:
