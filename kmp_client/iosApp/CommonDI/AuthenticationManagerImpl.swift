@@ -76,7 +76,7 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
                 if let obs = observer { NotificationCenter.default.removeObserver(obs) }
                 endingFunc(KotlinBoolean(value: isLocationEnabled()))
             }
-            
+
             UIApplication.shared.open(url) { success in
                 if !success {
                     if let obs = observer { NotificationCenter.default.removeObserver(obs) }

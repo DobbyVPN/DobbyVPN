@@ -84,7 +84,7 @@ public class VpnManagerImpl: VpnManager {
     public func start() {
         self.logs.writeLog(log: "call start")
         self.logs.writeLog(log: "Routing table without vpn:")
-        getOrCreateManager { manager, error in
+        getOrCreateManager { manager, _ in
             self.handleStart(manager: manager)
         }
     }

@@ -12,31 +12,26 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
       - name: Run Trivy (Go)
-        uses: reviewdog/action-trivy@a1e6d7dd5520369c076d7ce639a16442938535d8 # v1.14.0
+        uses: aquasecurity/trivy-action@0.30.0
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          trivy_command: fs
-          trivy_target: go_client/
-          reporter: github-pr-review
-          level: warning
-          fail_level: error
-          trivy_flags: --severity HIGH,CRITICAL --ignore-unfixed
+          scan-type: fs
+          scan-ref: go_client/
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
 
       - name: Run Trivy (Kotlin)
-        uses: reviewdog/action-trivy@a1e6d7dd5520369c076d7ce639a16442938535d8 # v1.14.0
+        uses: aquasecurity/trivy-action@0.30.0
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          trivy_command: fs
-          trivy_target: kmp_client/
-          reporter: github-pr-review
-          level: warning
-          fail_level: error
-          trivy_flags: --severity HIGH,CRITICAL --ignore-unfixed
+          scan-type: fs
+          scan-ref: kmp_client/
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
 
   trufflehog:
     name: TruffleHog — secret detection
