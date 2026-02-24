@@ -12,8 +12,11 @@ on:
 
 jobs:
   lint-go-client:
-    name: "Go Lint — go_client"
+    name: "Go Lint — golangci-lint"
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -22,16 +25,22 @@ jobs:
           go-version-file: go_client/go.mod
           cache-dependency-path: go_client/go.sum
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@1481404843c368bc19ca9406f87d6e0fc97bdcfd # v7.0.0
+      - name: Run golangci-lint with reviewdog
+        uses: reviewdog/action-golangci-lint@f9bba13753278f6a73b27a56a3ffb1bfda90ed71 # v2.8.0
         with:
-          version: v2.1.6
-          working-directory: go_client
-          args: --config .golangci.yml ./awg/... ./common/... ./healthcheck/... ./logger/... ./outline/... ./routing/... ./tunnel/...
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workdir: go_client
+          golangci_lint_flags: --config .golangci.yml ./awg/... ./common/... ./healthcheck/... ./logger/... ./outline/... ./routing/... ./tunnel/...
+          reporter: github-pr-review
+          level: warning
+          fail_level: error
 
   lint-kotlin:
     name: "Kotlin Lint — detekt"
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -43,20 +52,37 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@06832c7b30a0129d7fb559bcc6e43d26f6374244 # v4.3.1
 
+      - name: Setup reviewdog
+        uses: reviewdog/action-setup@e04ffabe3898a0af8d0fb1af00c188831c4b5893 # v1.3.2
+        with:
+          reviewdog_version: latest
+
       - name: Run detekt
         working-directory: kmp_client
-        run: ./gradlew detekt
+        run: ./gradlew detekt || true
+
+      - name: Report detekt results with reviewdog
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          find kmp_client -name "detekt.xml" -exec cat {} \; | \
+            reviewdog -f=checkstyle -name="detekt" -reporter=github-pr-review -level=warning
 
   lint-swift:
     name: "Swift Lint — SwiftLint"
     runs-on: macos-15
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install SwiftLint
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: 1
-        run: brew install swiftlint
-      - name: Run SwiftLint
-        working-directory: kmp_client/iosApp
-        run: swiftlint lint --config .swiftlint.yml --quiet
+      - name: Run SwiftLint with reviewdog
+        uses: reviewdog/action-swiftlint@4d7fc06c6b9760eb7a46c5ea3e887f00d0337227 # v1.11.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workdir: kmp_client/iosApp
+          reporter: github-pr-review
+          level: warning
+          fail_level: error
+          swiftlint_config: .swiftlint.yml

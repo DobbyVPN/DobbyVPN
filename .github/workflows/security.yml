@@ -7,22 +7,36 @@ on:
     branches: [main]
 
 jobs:
-  grype:
-    name: Grype — vulnerability scan
+  trivy:
+    name: Trivy — vulnerability scan
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Grype scan
-        uses: anchore/scan-action@7037fa011853d5a11690026fb85feee79f4c946c # v7.3.2
+      - name: Run Trivy (Go)
+        uses: reviewdog/action-trivy@a1e6d7dd5520369c076d7ce639a16442938535d8 # v1.14.0
         with:
-          path: go_client/
-          fail-build: true
-          severity-cutoff: high
-          only-fixed: true
-          output-format: table
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          trivy_command: fs
+          trivy_target: go_client/
+          reporter: github-pr-review
+          level: warning
+          fail_level: high
+          trivy_flags: --severity HIGH,CRITICAL --ignore-unfixed
+
+      - name: Run Trivy (Kotlin)
+        uses: reviewdog/action-trivy@a1e6d7dd5520369c076d7ce639a16442938535d8 # v1.14.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          trivy_command: fs
+          trivy_target: kmp_client/
+          reporter: github-pr-review
+          level: warning
+          fail_level: high
+          trivy_flags: --severity HIGH,CRITICAL --ignore-unfixed
 
   trufflehog:
     name: TruffleHog — secret detection

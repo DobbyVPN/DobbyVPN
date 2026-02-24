@@ -89,7 +89,7 @@ func (h *logrusToSlogHook) Fire(e *logrus.Entry) error {
 		lg.logger.Warn(msg)
 	case logrus.InfoLevel:
 		lg.logger.Info(msg)
-	default:
+	case logrus.DebugLevel, logrus.TraceLevel:
 		lg.logger.Debug(msg)
 	}
 

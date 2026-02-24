@@ -1,6 +1,7 @@
 package healthcheck
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -58,7 +59,8 @@ func CheckServerAlive(address string, port int) error {
 			buf := make([]byte, 1)
 			_, readErr := conn.Read(buf)
 			if readErr != nil {
-				if ne, ok := readErr.(net.Error); ok && ne.Timeout() {
+				var ne net.Error
+				if errors.As(readErr, &ne) && ne.Timeout() {
 					lastErr = nil
 					return
 				}
