@@ -1,7 +1,6 @@
 package tunnel
 
 import (
-	"go_client/direct"
 	"io"
 	"sync"
 
@@ -43,7 +42,7 @@ func StartTransfer(
 	readFn ReaderFunc,
 	writeFn WriterFunc,
 ) {
-	directEngine := direct.NewSimpleTCPDirect()
+	directEngine := NewSimpleTCPDirect()
 	StartTransferWithDirect(tun, readFn, writeFn, directEngine.Direct)
 }
 

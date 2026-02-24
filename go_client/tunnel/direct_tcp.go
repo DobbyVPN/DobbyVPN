@@ -1,4 +1,4 @@
-package direct
+package tunnel
 
 import (
 	"encoding/binary"
@@ -6,8 +6,6 @@ import (
 	"io"
 	"net"
 	"sync"
-
-	"go_client/tunnel"
 )
 
 // tcpFlowKey — 4-tuple (srcIP, srcPort, dstIP, dstPort) для однозначной идентификации TCP-сессии.
@@ -33,11 +31,11 @@ func NewSimpleTCPDirect() *SimpleTCPDirect {
 }
 
 // Direct реализует tunnel.DirectFunc.
-func (d *SimpleTCPDirect) Direct(packet []byte, dir tunnel.Direction) error {
+func (d *SimpleTCPDirect) Direct(packet []byte, dir Direction) error {
 	switch dir {
-	case tunnel.DirOutbound:
+	case DirOutbound:
 		return d.handleOutbound(packet)
-	case tunnel.DirInbound:
+	case DirInbound:
 		// В данной модели прямой трафик живёт полностью в контексте
 		// net.Conn, TUN по нему не видит входящих пакетов.
 		// Поэтому DirInbound просто игнорируем.
