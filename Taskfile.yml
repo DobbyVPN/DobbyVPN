@@ -1,6 +1,3 @@
-# Taskfile — crossplatform task runner (Windows/macOS/Linux)
-# Install: https://taskfile.dev/installation/
-
 version: "3"
 
 vars:
@@ -138,7 +135,6 @@ tasks:
         platforms: [linux, darwin]
       - cmd: gradlew.bat detekt || true
         platforms: [windows]
-      # Reports auto-generated in kmp_client/*/build/reports/detekt/
       - cmd: cp -r app/build/reports/detekt/* "{{.REPORTS_DIR}}/kotlin/" 2>/dev/null || true
         platforms: [linux, darwin]
       - cmd: xcopy /Y /E "app\build\reports\detekt\*" "{{.REPORTS_DIR}}\kotlin\" >nul 2>&1 || true

@@ -1,5 +1,3 @@
-# Lefthook — git hooks manager (runs linters before commit)
-
 pre-commit:
   parallel: true
   commands:

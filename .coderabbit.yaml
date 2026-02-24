@@ -1,6 +1,3 @@
-# CodeRabbit AI — automated code review
-# Docs: https://docs.coderabbit.ai/getting-started/configure-coderabbit
-
 language: en
 reviews:
   auto_review:

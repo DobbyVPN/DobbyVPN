@@ -1,8 +1,5 @@
-# detekt configuration for Kotlin Multiplatform project
-# Docs: https://detekt.dev/docs/rules/
-
 build:
-  maxIssues: 0  # Break build on any issue (strict mode for CI)
+  maxIssues: 0
   excludeCorrectable: true
 
 config:
@@ -89,7 +86,7 @@ naming:
     active: true
   FunctionNaming:
     active: true
-    functionPattern: "[a-zA-Z][a-zA-Z0-9]*"  # Allow PascalCase for @Composable
+    functionPattern: "[a-zA-Z][a-zA-Z0-9]*"
     ignoreAnnotated: ["Composable"]
   TopLevelPropertyNaming:
     active: true
@@ -117,7 +114,7 @@ potential-bugs:
 style:
   active: true
   ForbiddenComment:
-    active: false  # Allow TODO/FIXME during development
+    active: false
   MagicNumber:
     active: true
     ignoreNumbers:

@@ -1,20 +1,15 @@
-# SwiftLint configuration for iOS app
-# Docs: https://realm.github.io/SwiftLint/rule-directory.html
 
-# Paths to include
 included:
   - iosApp
   - CommonDI
   - tunnel
 
-# Paths to exclude
 excluded:
   - app.framework
 
-# Rules
 disabled_rules:
-  - trailing_comma         # Stylistic preference
-  - opening_brace          # Conflicts with some multi-platform patterns
+  - trailing_comma
+  - opening_brace
 
 opt_in_rules:
   - closure_body_length
@@ -44,7 +39,6 @@ opt_in_rules:
   - unneeded_parentheses_in_closure_argument
   - vertical_whitespace_closing_braces
 
-# Rule configurations
 line_length:
   warning: 140
   error: 250
@@ -93,4 +87,4 @@ cyclomatic_complexity:
   warning: 15
   error: 25
 
-reporter: "xcode"  # Use "checkstyle" for CI reports
+reporter: "xcode"
