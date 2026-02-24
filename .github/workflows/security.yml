@@ -23,6 +23,7 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: 1
+          trivyignores: .trivyignore
 
       - name: Run Trivy (Kotlin)
         uses: aquasecurity/trivy-action@0.30.0
@@ -32,6 +33,7 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: 1
+          trivyignores: .trivyignore
 
   trufflehog:
     name: TruffleHog — secret detection
