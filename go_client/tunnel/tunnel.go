@@ -1,10 +1,11 @@
 package tunnel
 
 import (
+	"go_client/tunnel/direct"
+	"go_client/tunnel/georouting"
 	"io"
 	"sync"
 
-	"go_client/georouting"
 	"go_client/tunnel/internal"
 )
 
@@ -18,16 +19,13 @@ const (
 	DirInbound                   // из сети в ОС (пишем в TUN)
 )
 
-// DirectFunc — хук для обхода VPN (наш gVisor-direct).
-type DirectFunc func(packet []byte, dir Direction) error
-
 type tunTransfer struct {
 	tun      io.ReadWriteCloser
 	readFn   ReaderFunc
 	writeFn  WriterFunc
-	directFn DirectFunc
 	stopCh   chan struct{}
 	wg       sync.WaitGroup
+	directFn *direct.DirectIPDevice
 }
 
 var (
@@ -42,8 +40,11 @@ func StartTransfer(
 	readFn ReaderFunc,
 	writeFn WriterFunc,
 ) {
-	directEngine := NewSimpleTCPDirect()
-	StartTransferWithDirect(tun, readFn, writeFn, directEngine.Direct)
+	directFn, err := direct.NewDirectIPDevice()
+	if err != nil {
+		return
+	}
+	StartTransferWithDirect(tun, readFn, writeFn, directFn)
 }
 
 // Новый интерфейс: с gVisor-direct.
@@ -51,7 +52,7 @@ func StartTransferWithDirect(
 	tun io.ReadWriteCloser,
 	readFn ReaderFunc,
 	writeFn WriterFunc,
-	directFn DirectFunc,
+	directFn *direct.DirectIPDevice,
 ) {
 	transferMu.Lock()
 	defer transferMu.Unlock()
@@ -71,9 +72,10 @@ func StartTransferWithDirect(
 }
 
 func (t *tunTransfer) startLoops() {
-	t.wg.Add(2)
+	t.wg.Add(3)
 	go t.readLoop()
 	go t.writeLoop()
+	go t.directLoop()
 }
 
 func (t *tunTransfer) readLoop() {
@@ -86,33 +88,32 @@ func (t *tunTransfer) readLoop() {
 		case <-t.stopCh:
 			return
 		default:
-			n, err := t.tun.Read(raw)
-			if err != nil || n <= 0 {
+		}
+
+		n, err := t.tun.Read(raw)
+		if err != nil || n <= 0 {
+			continue
+		}
+
+		packet, ok := internal.AdaptReadPackets(raw[:n])
+		if !ok {
+			continue
+		}
+
+		action := georouting.DecideOutbound(packet)
+
+		switch action {
+		case georouting.RouteDirect:
+			if t.directFn == nil {
 				continue
 			}
+			_, _ = t.directFn.Write(packet)
 
-			packet, ok := internal.AdaptReadPackets(raw[:n])
-			if !ok {
+		case georouting.RouteProxy:
+			if t.writeFn == nil {
 				continue
 			}
-
-			// Геороутинг: исходящий трафик из ОС.
-			action := georouting.DecideOutbound(packet)
-
-			switch action {
-			case georouting.RouteDirect:
-				if t.directFn != nil {
-					_ = t.directFn(packet, DirOutbound)
-				}
-				// Не отправляем в VPN, иначе смысл обхода теряется.
-				continue
-
-			case georouting.RouteProxy:
-				if t.writeFn == nil {
-					continue
-				}
-				_, _ = t.writeFn(packet)
-			}
+			_, _ = t.writeFn(packet)
 		}
 	}
 }
@@ -127,35 +128,69 @@ func (t *tunTransfer) writeLoop() {
 		case <-t.stopCh:
 			return
 		default:
-			if t.readFn == nil {
-				continue
-			}
-
-			n, err := t.readFn(buf)
-			if err != nil || n <= 0 {
-				continue
-			}
-
-			packet := buf[:n]
-
-			// Входящий трафик из сети, который мы хотим вернуть в ОС.
-			action := georouting.DecideInbound(packet)
-
-			switch action {
-			case georouting.RouteDirect:
-				if t.directFn != nil {
-					_ = t.directFn(packet, DirInbound)
-				}
-				continue
-
-			case georouting.RouteProxy:
-				encoded, ok := internal.AdaptWritePackets(packet)
-				if !ok {
-					continue
-				}
-				_, _ = t.tun.Write(encoded)
-			}
 		}
+
+		if t.readFn == nil {
+			continue
+		}
+
+		n, err := t.readFn(buf)
+		if err != nil || n <= 0 {
+			continue
+		}
+
+		packet := buf[:n]
+
+		action := georouting.DecideInbound(packet)
+
+		switch action {
+		case georouting.RouteProxy:
+			encoded, ok := internal.AdaptWritePackets(packet)
+			if !ok {
+				continue
+			}
+			_, _ = t.tun.Write(encoded)
+
+		default:
+			//, например, дропаем
+			continue
+		}
+	}
+}
+
+func (t *tunTransfer) directLoop() {
+	defer t.wg.Done()
+
+	if t.directFn == nil {
+		return
+	}
+
+	buf := make([]byte, defaultBufSize)
+
+	for {
+		select {
+		case <-t.stopCh:
+			return
+		default:
+		}
+
+		n, err := t.directFn.Read(buf)
+		if err != nil || n <= 0 {
+			// err может быть io.EOF, тогда можно сделать паузу/continue
+			continue
+		}
+
+		packet := buf[:n]
+
+		// если хочешь — можешь тут тоже сделать DecideInboundDirect()
+		// action := georouting.DecideInboundDirect(packet)
+
+		encoded, ok := internal.AdaptWritePackets(packet)
+		if !ok {
+			continue
+		}
+
+		_, _ = t.tun.Write(encoded)
 	}
 }
 
