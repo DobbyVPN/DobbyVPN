@@ -66,7 +66,10 @@ func ExtractLogLevel(configStr string) (xrayLog.Severity, error) {
 func resolveIP(addr string) (string, error) {
 	ip := net.ParseIP(addr)
 	if ip != nil {
-		return ip.String(), nil
+		if ip4 := ip.To4(); ip4 != nil {
+			return ip4.String(), nil
+		}
+		return "", errors.New("IPv6 address not supported; routing requires IPv4")
 	}
 
 	// If it's a domain, resolve it
