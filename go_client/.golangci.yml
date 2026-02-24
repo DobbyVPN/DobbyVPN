@@ -29,6 +29,14 @@ linters:
     - gocyclo
     - nestif
     - unparam
+    - govet
+    - errcheck
+    - staticcheck
+    - ineffassign
+    - errorlint
+    - nakedret
+    - noctx
+    - exhaustive
   settings:
     govet:
       enable-all: true

@@ -5,7 +5,7 @@ pre-commit:
   commands:
     go-lint-unix:
       glob: "go_client/**/*.go"
-      run: cd go_client && golangci-lint run --new.from-rev=HEAD~1 $(go list ./... | grep -v '_exports$')
+      run: cd go_client && golangci-lint run --new-from-rev=HEAD~1 $(go list ./... | grep -v '_exports$')
       stage_fixed: true
       only:
         - os: linux
@@ -13,7 +13,7 @@ pre-commit:
 
     go-lint-windows:
       glob: "go_client/**/*.go"
-      run: cd go_client && powershell -Command "golangci-lint run --new.from-rev=HEAD~1 (go list ./... | Where-Object { $_ -notmatch '_exports$' })"
+      run: cd go_client && powershell -Command "golangci-lint run --new-from-rev=HEAD~1 (go list ./... | Where-Object { $_ -notmatch '_exports$' })"
       stage_fixed: true
       only:
         - os: windows
@@ -21,12 +21,10 @@ pre-commit:
     kotlin-detekt:
       glob: "kmp_client/**/*.kt"
       run: cd kmp_client && {gradlew} detekt
-      # {gradlew} resolves to ./gradlew on Unix, gradlew.bat on Windows
 
     swift-lint:
       glob: "kmp_client/iosApp/**/*.swift"
       run: cd kmp_client/iosApp && swiftlint lint --config .swiftlint.yml --quiet
-      # SwiftLint available on macOS only — skip silently on other OS
       only:
         - os: darwin
       fail_text: "SwiftLint found issues. Fix them before committing."

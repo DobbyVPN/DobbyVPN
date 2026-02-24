@@ -8,12 +8,13 @@ reviews:
     drafts: false
     base_branches:
       - main
-    ignore_paths:
-      - "**/*.md"
-      - "**/*.txt"
-      - "**/LICENSE"
 
   request_changes_workflow: true
+
+  path_filters:
+    - "!**/*.md"
+    - "!**/*.txt"
+    - "!**/LICENSE"
   profile: chill
 
   high_level_summary: true

@@ -28,6 +28,16 @@ class CopyLogsInteractorImpl: CopyLogsInteractor {
         activityVC.excludedActivityTypes = [.assignToContact, .addToReadingList]
 
         if let topVC = topViewController() {
+            if let popover = activityVC.popoverPresentationController {
+                popover.sourceView = topVC.view
+                popover.sourceRect = CGRect(
+                    x: topVC.view.bounds.midX,
+                    y: topVC.view.bounds.midY,
+                    width: 0,
+                    height: 0
+                )
+                popover.permittedArrowDirections = []
+            }
             topVC.present(activityVC, animated: true)
         } else {
             self.logs.writeLog(log: "Can't find active ViewController to view UIActivityViewController")
