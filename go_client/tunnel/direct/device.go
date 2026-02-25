@@ -1,58 +1,72 @@
 package direct
 
 import (
-	"golang.zx2c4.com/wireguard/tun"
-	"net/netip"
+	"context"
+	"net"
 
-	"golang.zx2c4.com/wireguard/tun/netstack"
+	"github.com/Jigsaw-Code/outline-sdk/network"
+	"github.com/Jigsaw-Code/outline-sdk/network/lwip2transport"
+	"github.com/Jigsaw-Code/outline-sdk/transport"
 )
 
+// DirectIPDevice – адаптер вокруг lwIP-девайса,
+// чтобы снаружи он выглядел как твой старый DirectIPDevice.
 type DirectIPDevice struct {
-	dev tun.Device
-	net *netstack.Net
+	dev network.IPDevice
 }
 
+// directUDPListener – минимальный transport.PacketListener,
+// который просто создаёт локальный UDP-сокет,
+// через который можно писать в любой destination (host:port).
+type directUDPListener struct{}
+
+// ListenPacket создаёт net.PacketConn, который будет использоваться
+// PacketListenerProxy’ем для отправки/приёма UDP-пакетов.
+func (l directUDPListener) ListenPacket(ctx context.Context) (net.PacketConn, error) {
+	var lc net.ListenConfig
+	// 0.0.0.0:0 – «любой адрес / любой свободный порт»
+	return lc.ListenPacket(ctx, "udp", "0.0.0.0:0")
+}
+
+// NewDirectIPDevice поднимает lwIP-девайс, который ходит напрямую в интернет
+// через system TCP/UDP (без Shadowsocks/Outline/Cloak).
 func NewDirectIPDevice() (*DirectIPDevice, error) {
-	local := []netip.Addr{
-		netip.MustParseAddr("198.18.0.1"), // виртуальный IP для direct-машрутов
-	}
+	// TCP: обычный TCP-диалер. Внутри он использует net.Dialer с системным DNS.
+	// Документация: transport.TCPDialer реализует StreamDialer. :contentReference[oaicite:1]{index=1}
+	tcpDialer := &transport.TCPDialer{}
 
-	dns := []netip.Addr{
-		netip.MustParseAddr("8.8.8.8"),
-		netip.MustParseAddr("1.1.1.1"),
-	}
+	// UDP: строим PacketProxy из нашего directUDPListener’а.
+	udpListener := directUDPListener{}
 
-	// MTU мы возьмем 1500 (или можешь передавать сверху)
-	dev, netdev, err := netstack.CreateNetTUN(local, dns, 1500)
+	pp, err := network.NewPacketProxyFromPacketListener(udpListener)
 	if err != nil {
 		return nil, err
 	}
 
-	return &DirectIPDevice{
-		dev: dev,
-		net: netdev,
-	}, nil
-}
-
-func (d *DirectIPDevice) Write(pkt []byte) (int, error) {
-	// netTun.Write принимает [][]byte, offset=0
-	buffs := [][]byte{pkt}
-	return d.dev.Write(buffs, 0)
-}
-
-func (d *DirectIPDevice) Read(buf []byte) (int, error) {
-	// Read принимает [][]byte, sizes, offset
-	in := [][]byte{buf}
-	sizes := []int{0}
-
-	n, err := d.dev.Read(in, sizes, 0)
-	if err != nil || n == 0 {
-		return 0, err
+	// Конфигурируем singleton-девайс lwIP:
+	// TCP-трафик пойдёт через tcpDialer, UDP – через pp (наш plain UDP).
+	// Возвращается network.IPDevice (Read/Write IP-пакеты).
+	dev, err := lwip2transport.ConfigureDevice(tcpDialer, pp)
+	if err != nil {
+		return nil, err
 	}
 
-	return sizes[0], nil
+	return &DirectIPDevice{dev: dev}, nil
 }
 
+// Write – отправка IP-пакета в интернет.
+// Используется твоим tunnel.readLoop() при RouteDirect.
+func (d *DirectIPDevice) Write(pkt []byte) (int, error) {
+	return d.dev.Write(pkt)
+}
+
+// Read – чтение IP-пакета из интернета.
+// Используется твоим tunnel.directLoop().
+func (d *DirectIPDevice) Read(buf []byte) (int, error) {
+	return d.dev.Read(buf)
+}
+
+// Close – корректно закрывает lwIP-девайс.
 func (d *DirectIPDevice) Close() error {
 	return d.dev.Close()
 }
