@@ -12,37 +12,39 @@ class SentryLogsRepositoryImpl : SentryLogsRepository {
 public class NativeModuleHolder {
     private static let path = LogsRepository_iosKt.provideLogFilePath()
     private static let chan = LogEventsChannel()
-    public static let logsRepository = LogsRepository.init(logFilePath: path, logEventsChannel: chan).setSentryLogger(_sentryLogger: SentryLogsRepositoryImpl())
+    public static let logsRepository = LogsRepository
+        .init(logFilePath: path, logEventsChannel: chan)
+        .setSentryLogger(_sentryLogger: SentryLogsRepositoryImpl())
     
     public static let shared: Koin_coreModule = MakeNativeModuleKt.makeNativeModule(
-        copyLogsInteractor: { scope in
+        copyLogsInteractor: { _ in
             return CopyLogsInteractorImpl()
         },
-        logEventsChannel: { scope in
+        logEventsChannel: { _ in
             return chan
         },
-        logsRepository: { scope in
+        logsRepository: { _ in
             return logsRepository
         },
-        ipRepository: { scope in
+        ipRepository: { _ in
             return IpRepositoryImpl()
         },
-        configsRepository: { scope in
+        configsRepository: { _ in
             return configsRepository
         },
-        connectionStateRepository: { scope in
+        connectionStateRepository: { _ in
             return connectionStateRepository
         },
-        vpnManager: { scope in
+        vpnManager: { _ in
             return VpnManagerImpl(connectionRepository: connectionStateRepository)
         },
-        awgManager: { scope in
+        awgManager: { _ in
             return AwgManagerImpl()
         },
-        authenticationManager: { scope in
+        authenticationManager: { _ in
             return AuthenticationManagerImpl()
         },
-        healthCheck: { scope in
+        healthCheck: { _ in
             return HealthCheckImpl()
         }
     )

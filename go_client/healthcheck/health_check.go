@@ -53,7 +53,7 @@ func (h *healthChecker) start() {
 }
 
 func checkHealth() healthCheckStatus {
-	ms, err := UrlTest("https://www.gstatic.com/generate_204", 1)
+	ms, err := URLTest("https://www.gstatic.com/generate_204", 1)
 	return healthCheckStatus{at: time.Now(), isHealthy: err == nil, handshakeMs: ms, err: err}
 }
 
@@ -79,13 +79,13 @@ func (s healthCheckStatus) String() string {
 	)
 }
 
-func StartHealthCheck(period int, sendMetrics bool) {
+func StartHealthCheck(period int32, sendMetrics bool) {
 	mu.Lock()
 	defer mu.Unlock()
 	if checker != nil {
 		checker.stop()
 	}
-	checker = newHealthCheck(sendMetrics, int32(period))
+	checker = newHealthCheck(sendMetrics, period)
 	go checker.start()
 }
 

@@ -62,7 +62,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		signalInit(initResult, err)
 		return err
 	}
-	defer tun.Close()
+	defer func() { _ = tun.Close() }()
 	log.Infof("Tun created")
 
 	// Create OutlineDevice
@@ -73,7 +73,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		signalInit(initResult, err)
 		return err
 	}
-	defer ss.Close()
+	defer func() { _ = ss.Close() }()
 
 	if err := ss.Refresh(); err != nil {
 		err = fmt.Errorf("failed to refresh OutlineDevice: %w", err)

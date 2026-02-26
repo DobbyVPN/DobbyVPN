@@ -60,7 +60,7 @@ func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 		return nil, fmt.Errorf("failed to configure lwIP: %w", err)
 	}
 
-	return
+	return od, nil
 }
 
 func (d *OutlineDevice) Close() error {
@@ -103,37 +103,14 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 		return nil, errors.New("config is required")
 	}
 
-	var host string
-
-	// First, check for TLS SNI host (used in WSS configs)
-	// This is the actual server we connect to for WebSocket over TLS
-	if sniHost := extractTLSSNIHost(transportConfig); sniHost != "" {
-		host = sniHost
+	host := extractTLSSNIHost(transportConfig)
+	if host != "" {
 		log.Infof("outline client: detected WSS config, using TLS SNI host: %s", host)
 	} else {
-		// Fall back to ss:// host for plain Shadowsocks configs
-		parts := strings.Split(transportConfig, "|")
-		var ssConfig string
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if strings.HasPrefix(part, "ss://") {
-				ssConfig = part
-				break
-			}
-		}
-
-		if ssConfig == "" {
-			return nil, errors.New("config must contain 'ss://' part")
-		}
-
-		parsedURL, err := url.Parse(ssConfig)
+		var err error
+		host, err = extractSSHost(transportConfig)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse ss:// config: %w", err)
-		}
-
-		host = strings.TrimSpace(parsedURL.Hostname())
-		if host == "" {
-			return nil, fmt.Errorf("invalid ss:// config: missing hostname (host part=%q)", parsedURL.Host)
+			return nil, err
 		}
 		log.Infof("outline client: using ss:// host: %s", host)
 	}
@@ -158,6 +135,34 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 		}
 	}
 	return nil, errors.New("IPv6 only Shadowsocks server is not supported yet")
+}
+
+// extractSSHost extracts the host from ss:// part of the config.
+func extractSSHost(transportConfig string) (string, error) {
+	parts := strings.Split(transportConfig, "|")
+	var ssConfig string
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "ss://") {
+			ssConfig = part
+			break
+		}
+	}
+
+	if ssConfig == "" {
+		return "", errors.New("config must contain 'ss://' part")
+	}
+
+	parsedURL, err := url.Parse(ssConfig)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse ss:// config: %w", err)
+	}
+
+	host := strings.TrimSpace(parsedURL.Hostname())
+	if host == "" {
+		return "", fmt.Errorf("invalid ss:// config: missing hostname (host part=%q)", parsedURL.Host)
+	}
+	return host, nil
 }
 
 // resolveShadowsocksServerIPFromConfig is a wrapper for backward compatibility

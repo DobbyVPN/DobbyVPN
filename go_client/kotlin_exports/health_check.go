@@ -6,7 +6,7 @@ import (
 	log "go_client/logger"
 )
 
-func StartHealthCheck(period int, sendMetrics bool) {
+func StartHealthCheck(period int32, sendMetrics bool) {
 	healthcheck.StartHealthCheck(period, sendMetrics)
 }
 
@@ -19,11 +19,11 @@ func Status() string {
 }
 
 func TcpPing(address string) (int32, error) {
-	return healthcheck.TcpPing(address)
+	return healthcheck.TCPPing(address)
 }
 
 func UrlTest(url string, standard int) (int32, error) {
-	return healthcheck.UrlTest(url, standard)
+	return healthcheck.URLTest(url, standard)
 }
 
 //export CheckServerAlive

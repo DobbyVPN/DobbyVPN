@@ -5,7 +5,7 @@ import (
 	log "go_client/logger"
 )
 
-func StartHealthCheck(period int, sendMetrics bool) {
+func StartHealthCheck(period int32, sendMetrics bool) {
 	defer guard("StartHealthCheck")()
 	healthcheck.StartHealthCheck(period, sendMetrics)
 }
@@ -22,15 +22,16 @@ func Status() string {
 
 func TcpPing(address string) (int32, error) {
 	defer guard("TcpPing")()
-	return healthcheck.TcpPing(address)
+	return healthcheck.TCPPing(address)
 }
 
 func UrlTest(url string, standard int) (int32, error) {
 	defer guard("UrlTest")()
-	return healthcheck.UrlTest(url, standard)
+	return healthcheck.URLTest(url, standard)
 }
 
 func CheckServerAlive(address string, port int) int32 {
+	defer guard("CheckServerAlive")()
 	res := healthcheck.CheckServerAlive(address, port)
 	log.Infof("Health check result: %v", res)
 	if res == nil {

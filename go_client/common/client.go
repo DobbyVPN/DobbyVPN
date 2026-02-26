@@ -2,16 +2,16 @@ package common
 
 import "sync"
 
-type vpnClient interface {
+type vpnClientInterface interface {
 	Connect() error
 	Disconnect() error
 	Refresh() error
 }
 
 type vpnClientWithState struct {
-	connected bool
+	connected         bool
 	inCriticalSection bool
-	vpnClient
+	vpnClientInterface
 }
 
 type CommonClient struct {
@@ -21,34 +21,54 @@ type CommonClient struct {
 
 func (c *CommonClient) Connect(clientName string) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if client, ok := c.vpnClients[clientName]; ok && !client.connected && !client.inCriticalSection {
+	clientState, ok := c.vpnClients[clientName]
+	if !ok || clientState.connected || clientState.inCriticalSection {
 		c.mu.Unlock()
-		err := client.Connect()
-		c.mu.Lock()
-		if err != nil {
-			return err
-		}
-		client.connected = true
-		c.vpnClients[clientName] = client
+		return nil
 	}
-	return nil
+	clientState.inCriticalSection = true
+	c.vpnClients[clientName] = clientState
+	conn := clientState.vpnClientInterface
+	c.mu.Unlock()
+
+	err := conn.Connect()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if current, exists := c.vpnClients[clientName]; exists && current.vpnClientInterface == conn {
+		current.inCriticalSection = false
+		if err == nil {
+			current.connected = true
+		}
+		c.vpnClients[clientName] = current
+	}
+	return err
 }
 
 func (c *CommonClient) Disconnect(clientName string) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if client, ok := c.vpnClients[clientName]; ok && client.connected && !client.inCriticalSection {
+	clientState, ok := c.vpnClients[clientName]
+	if !ok || !clientState.connected || clientState.inCriticalSection {
 		c.mu.Unlock()
-		err := client.Disconnect()
-		c.mu.Lock()
-		if err != nil {
-			return err
-		}
-		client.connected = false
-		c.vpnClients[clientName] = client
+		return nil
 	}
-	return nil
+	clientState.inCriticalSection = true
+	c.vpnClients[clientName] = clientState
+	conn := clientState.vpnClientInterface
+	c.mu.Unlock()
+
+	err := conn.Disconnect()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if current, exists := c.vpnClients[clientName]; exists && current.vpnClientInterface == conn {
+		current.inCriticalSection = false
+		if err == nil {
+			current.connected = false
+		}
+		c.vpnClients[clientName] = current
+	}
+	return err
 }
 
 func (c *CommonClient) Refresh(clientName string) error {
@@ -60,13 +80,13 @@ func (c *CommonClient) Refresh(clientName string) error {
 	return nil
 }
 
-func (c *CommonClient) SetVpnClient(clientName string, client vpnClient) {
+func (c *CommonClient) SetVpnClient(clientName string, vc vpnClientInterface) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.vpnClients == nil {
 		c.vpnClients = make(map[string]vpnClientWithState)
 	}
-	c.vpnClients[clientName] = vpnClientWithState{vpnClient: client}
+	c.vpnClients[clientName] = vpnClientWithState{vpnClientInterface: vc}
 }
 
 func (c *CommonClient) MarkActive(clientName string) {
@@ -119,7 +139,7 @@ func (c *CommonClient) CouldStart() bool {
 func (c *CommonClient) GetClientNames(active bool) []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	var names []string
+	names := make([]string, 0, len(c.vpnClients))
 	for name, client := range c.vpnClients {
 		if client.connected != active {
 			continue

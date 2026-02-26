@@ -8,6 +8,6 @@ const (
 	pingTimeoutMilliseconds = 1000
 )
 
-func TcpPing(address string) (int32, error) {
+func TCPPing(address string) (int32, error) {
 	return speedtest.TcpPing(address, pingTimeoutMilliseconds)
 }

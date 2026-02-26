@@ -36,6 +36,7 @@ okio = "3.6.0"
 tomlkt = "0.5.0"
 datetime="4.0.10"
 compass = "1.2.2"
+detekt = "1.23.7"
 
 [libraries]
 androidx-biometric-ktx = { module = "androidx.biometric:biometric-ktx", version.ref = "biometricKtx" }
@@ -97,3 +98,4 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version = "2.0.20" }
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 hydraulic-conveyor = { id = "dev.hydraulic.conveyor", version.ref = "conveyor" }
+detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
