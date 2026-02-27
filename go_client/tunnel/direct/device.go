@@ -40,9 +40,18 @@ func NewDirectIPDevice() (*DirectIPDevice, error) {
 
 	tcpipErr := s.CreateNIC(1, ep)
 	if tcpipErr != nil {
-		return nil, fmt.Errorf("CreateNIC: %v", tcpipErr)
+		return nil, fmt.Errorf("CreateNIC: %s", tcpipErr.String())
 	}
 	s.SetPromiscuousMode(1, true)
+	s.SetSpoofing(1, true)
+
+	// Оптимизации TCP по аналогии с sing-tun
+	sOpt := tcpip.TCPSACKEnabled(true)
+	s.SetTransportProtocolOption(tcp.ProtocolNumber, &sOpt)
+
+	mOpt := tcpip.TCPModerateReceiveBufferOption(true)
+	s.SetTransportProtocolOption(tcp.ProtocolNumber, &mOpt)
+
 	// Добавляем маршруты для захвата всего трафика (default routes)
 	s.AddRoute(tcpip.Route{Destination: header.IPv4EmptySubnet, NIC: 1})
 	s.AddRoute(tcpip.Route{Destination: header.IPv6EmptySubnet, NIC: 1})
@@ -61,8 +70,8 @@ func NewDirectIPDevice() (*DirectIPDevice, error) {
 
 		// Узнаем, куда шел пакет и звоним туда через реальную ОС
 		target := fmt.Sprintf("%s:%d", r.ID().LocalAddress.String(), r.ID().LocalPort)
-		out, err := net.Dial("tcp", target)
-		if err != nil {
+		out, dialErr := net.Dial("tcp", target)
+		if dialErr != nil {
 			conn.Close()
 			return
 		}
@@ -92,21 +101,36 @@ func NewDirectIPDevice() (*DirectIPDevice, error) {
 
 		// Звоним в реальный UDP
 		target := fmt.Sprintf("%s:%d", r.ID().LocalAddress.String(), r.ID().LocalPort)
-		out, err := net.Dial("udp", target)
-		if err != nil {
+		out, dialErr := net.Dial("udp", target)
+		if dialErr != nil {
 			conn.Close()
 			return
 		}
 
+		// Для UDP лучше копировать пакетно, чтобы не склеивались в io.Copy
 		go func() {
 			defer conn.Close()
 			defer out.Close()
-			io.Copy(out, conn)
+			buf := make([]byte, 65535)
+			for {
+				n, err := conn.Read(buf)
+				if err != nil {
+					break
+				}
+				out.Write(buf[:n])
+			}
 		}()
 		go func() {
 			defer conn.Close()
 			defer out.Close()
-			io.Copy(conn, out)
+			buf := make([]byte, 65535)
+			for {
+				n, err := out.Read(buf)
+				if err != nil {
+					break
+				}
+				conn.Write(buf[:n])
+			}
 		}()
 	})
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
@@ -152,7 +176,7 @@ func (d *DirectIPDevice) Read(buf []byte) (int, error) {
 
 	// ToView копирует/собирает данные из пакета (заголовки + тело)
 	view := pkt.ToView()
-	n := copy(buf, view)
+	n := copy(buf, view.AsSlice())
 
 	return n, nil
 }
