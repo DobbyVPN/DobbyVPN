@@ -1,187 +1,234 @@
 package direct
 
 import (
-	"context"
 	"fmt"
-	"io"
 	"net"
-	"os"
+	"sync"
 
-	"gvisor.dev/gvisor/pkg/buffer"
-	"gvisor.dev/gvisor/pkg/tcpip"
-	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
-	"gvisor.dev/gvisor/pkg/tcpip/header"
-	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
-	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
-	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
-	"gvisor.dev/gvisor/pkg/tcpip/stack"
-	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
-	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
-	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
-	"gvisor.dev/gvisor/pkg/waiter"
+	log "go_client/logger"
 )
 
+const deviceLogPrefix = "direct:device"
+
+// ConnKey uniquely identifies a connection (5-tuple without protocol,
+// because TCP and UDP use separate maps).
+type ConnKey struct {
+	SrcIP   [4]byte
+	DstIP   [4]byte
+	SrcPort uint16
+	DstPort uint16
+}
+
+func makeConnKey(srcIP, dstIP net.IP, srcPort, dstPort uint16) ConnKey {
+	var k ConnKey
+	copy(k.SrcIP[:], srcIP.To4())
+	copy(k.DstIP[:], dstIP.To4())
+	k.SrcPort = srcPort
+	k.DstPort = dstPort
+	return k
+}
+
+// DirectIPDevice accepts raw IP packets, parses them, and proxies
+// TCP/UDP connections directly to the internet through the real OS network stack.
+// Response packets are reconstructed and returned via Read().
+// No gVisor or external userspace network stack is required.
 type DirectIPDevice struct {
-	ep *channel.Endpoint
-	s  *stack.Stack
+	responses chan []byte // buffered channel for response packets
+	tcpConns  sync.Map    // ConnKey -> *tcpProxy
+	udpConns  sync.Map    // ConnKey -> *udpProxy
+
+	closeOnce sync.Once
+	closedCh  chan struct{}
 }
 
 func NewDirectIPDevice() (*DirectIPDevice, error) {
-	// Инициализируем стек gVisor с нужными протоколами
-	opts := stack.Options{
-		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
-		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol4, icmp.NewProtocol6},
+	d := &DirectIPDevice{
+		responses: make(chan []byte, 4096),
+		closedCh:  make(chan struct{}),
 	}
-	s := stack.New(opts)
-
-	// Создаем виртуальный интерфейс. MTU 1500
-	const mtu = 1500
-	ep := channel.New(1024, uint32(mtu), "")
-
-	tcpipErr := s.CreateNIC(1, ep)
-	if tcpipErr != nil {
-		return nil, fmt.Errorf("CreateNIC: %s", tcpipErr.String())
-	}
-	s.SetPromiscuousMode(1, true)
-	s.SetSpoofing(1, true)
-
-	// Оптимизации TCP по аналогии с sing-tun
-	sOpt := tcpip.TCPSACKEnabled(true)
-	s.SetTransportProtocolOption(tcp.ProtocolNumber, &sOpt)
-
-	mOpt := tcpip.TCPModerateReceiveBufferOption(true)
-	s.SetTransportProtocolOption(tcp.ProtocolNumber, &mOpt)
-
-	// Добавляем маршруты для захвата всего трафика (default routes)
-	s.AddRoute(tcpip.Route{Destination: header.IPv4EmptySubnet, NIC: 1})
-	s.AddRoute(tcpip.Route{Destination: header.IPv6EmptySubnet, NIC: 1})
-
-	// Настраиваем перехват TCP с прозрачным проксированием
-	tcpFwd := tcp.NewForwarder(s, 0, 65535, func(r *tcp.ForwarderRequest) {
-		var wq waiter.Queue
-		ep, err := r.CreateEndpoint(&wq)
-		if err != nil {
-			r.Complete(true) // reject the connection
-			return
-		}
-		r.Complete(false)
-
-		conn := gonet.NewTCPConn(&wq, ep)
-
-		// Узнаем, куда шел пакет и звоним туда через реальную ОС
-		target := fmt.Sprintf("%s:%d", r.ID().LocalAddress.String(), r.ID().LocalPort)
-		out, dialErr := net.Dial("tcp", target)
-		if dialErr != nil {
-			conn.Close()
-			return
-		}
-
-		go func() {
-			defer conn.Close()
-			defer out.Close()
-			io.Copy(out, conn)
-		}()
-		go func() {
-			defer conn.Close()
-			defer out.Close()
-			io.Copy(conn, out)
-		}()
-	})
-	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
-
-	// Настраиваем перехват UDP с прозрачным проксированием
-	udpFwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) {
-		var wq waiter.Queue
-		ep, err := r.CreateEndpoint(&wq)
-		if err != nil {
-			return
-		}
-
-		conn := gonet.NewUDPConn(s, &wq, ep)
-
-		// Звоним в реальный UDP
-		target := fmt.Sprintf("%s:%d", r.ID().LocalAddress.String(), r.ID().LocalPort)
-		out, dialErr := net.Dial("udp", target)
-		if dialErr != nil {
-			conn.Close()
-			return
-		}
-
-		// Для UDP лучше копировать пакетно, чтобы не склеивались в io.Copy
-		go func() {
-			defer conn.Close()
-			defer out.Close()
-			buf := make([]byte, 65535)
-			for {
-				n, err := conn.Read(buf)
-				if err != nil {
-					break
-				}
-				out.Write(buf[:n])
-			}
-		}()
-		go func() {
-			defer conn.Close()
-			defer out.Close()
-			buf := make([]byte, 65535)
-			for {
-				n, err := out.Read(buf)
-				if err != nil {
-					break
-				}
-				conn.Write(buf[:n])
-			}
-		}()
-	})
-	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
-
-	return &DirectIPDevice{
-		ep: ep,
-		s:  s,
-	}, nil
+	log.Infof("[%s] created (pure-Go transparent proxy)", deviceLogPrefix)
+	return d, nil
 }
 
-// Запись пакетов из туннеля в gVisor
+// Write accepts a raw IP packet from the TUN and dispatches it
+// to the appropriate TCP or UDP proxy.
 func (d *DirectIPDevice) Write(pkt []byte) (int, error) {
+	select {
+	case <-d.closedCh:
+		return 0, fmt.Errorf("device closed")
+	default:
+	}
+
 	if len(pkt) == 0 {
 		return 0, nil
 	}
 
-	// Определяем версию IP по первому байту пакета
-	var proto tcpip.NetworkProtocolNumber
-	switch pkt[0] >> 4 {
-	case 4:
-		proto = ipv4.ProtocolNumber
-	case 6:
-		proto = ipv6.ProtocolNumber
-	default:
-		return 0, fmt.Errorf("unknown IP version")
+	// Only IPv4 for now
+	if pkt[0]>>4 != 4 {
+		return len(pkt), nil // silently drop non-IPv4
 	}
 
-	pkb := stack.NewPacketBuffer(stack.PacketBufferOptions{
-		Payload: buffer.MakeWithData(pkt),
-	})
-	d.ep.InjectInbound(proto, pkb)
+	ipH, transportData, err := ParseIPv4(pkt)
+	if err != nil {
+		return 0, fmt.Errorf("parse IPv4: %w", err)
+	}
+
+	switch ipH.Protocol {
+	case ProtoTCP:
+		d.handleTCP(ipH, transportData)
+	case ProtoUDP:
+		d.handleUDP(ipH, transportData)
+	default:
+		// Silently drop ICMP, etc. for now
+	}
 
 	return len(pkt), nil
 }
 
-// Чтение ответов от gVisor, которые пойдут обратно в туннель
+// Read returns the next response packet to be written back to the TUN.
+// Blocks until a packet is available or the device is closed.
 func (d *DirectIPDevice) Read(buf []byte) (int, error) {
-	pkt := d.ep.ReadContext(context.Background())
-	if pkt.IsNil() {
-		return 0, os.ErrClosed
+	select {
+	case pkt := <-d.responses:
+		n := copy(buf, pkt)
+		return n, nil
+	case <-d.closedCh:
+		return 0, fmt.Errorf("device closed")
 	}
-	defer pkt.DecRef()
-
-	// ToView копирует/собирает данные из пакета (заголовки + тело)
-	view := pkt.ToView()
-	n := copy(buf, view.AsSlice())
-
-	return n, nil
 }
 
 func (d *DirectIPDevice) Close() error {
-	d.ep.Close()
+	d.closeOnce.Do(func() {
+		log.Infof("[%s] closing", deviceLogPrefix)
+		close(d.closedCh)
+
+		// Close all TCP connections
+		d.tcpConns.Range(func(key, value any) bool {
+			if tp, ok := value.(*tcpProxy); ok {
+				tp.mu.Lock()
+				tp.closeLocked()
+				tp.mu.Unlock()
+			}
+			d.tcpConns.Delete(key)
+			return true
+		})
+
+		// Close all UDP connections
+		d.udpConns.Range(func(key, value any) bool {
+			if up, ok := value.(*udpProxy); ok {
+				up.Close()
+			}
+			d.udpConns.Delete(key)
+			return true
+		})
+	})
 	return nil
+}
+
+// ─── internal ───
+
+func (d *DirectIPDevice) handleTCP(ipH *IPv4Header, data []byte) {
+	tcpH, payload, err := ParseTCP(data)
+	if err != nil {
+		log.Infof("[%s] parse TCP failed: %v", deviceLogPrefix, err)
+		return
+	}
+
+	key := makeConnKey(ipH.SrcIP, ipH.DstIP, tcpH.SrcPort, tcpH.DstPort)
+
+	// Try to find existing connection
+	if val, ok := d.tcpConns.Load(key); ok {
+		tp := val.(*tcpProxy)
+		tp.handlePacket(ipH, tcpH, payload)
+		return
+	}
+
+	// New connection — must be a SYN
+	if tcpH.Flags&TCPFlagSYN == 0 {
+		// Not a SYN for an unknown connection — send RST
+		log.Infof("[%s] non-SYN for unknown connection, sending RST", deviceLogPrefix)
+		d.sendRSTForUnknown(ipH, tcpH)
+		return
+	}
+
+	tp := newTCPProxy(d, key, ipH.SrcIP, ipH.DstIP, tcpH.SrcPort, tcpH.DstPort)
+	d.tcpConns.Store(key, tp)
+	tp.handlePacket(ipH, tcpH, payload)
+}
+
+func (d *DirectIPDevice) handleUDP(ipH *IPv4Header, data []byte) {
+	udpH, payload, err := ParseUDP(data)
+	if err != nil {
+		log.Infof("[%s] parse UDP failed: %v", deviceLogPrefix, err)
+		return
+	}
+
+	key := makeConnKey(ipH.SrcIP, ipH.DstIP, udpH.SrcPort, udpH.DstPort)
+
+	// Try to find existing flow
+	if val, ok := d.udpConns.Load(key); ok {
+		up := val.(*udpProxy)
+		up.forwardPayload(payload)
+		return
+	}
+
+	// New UDP flow
+	up := newUDPProxy(d, key, ipH.SrcIP, ipH.DstIP, udpH.SrcPort, udpH.DstPort)
+	if err := up.start(); err != nil {
+		log.Infof("[%s] udp proxy start failed: %v", deviceLogPrefix, err)
+		return
+	}
+	d.udpConns.Store(key, up)
+	up.forwardPayload(payload)
+}
+
+func (d *DirectIPDevice) enqueueResponse(pkt []byte) {
+	select {
+	case d.responses <- pkt:
+	case <-d.closedCh:
+	default:
+		// Response channel full — drop packet (backpressure)
+		log.Infof("[%s] response channel full, dropping packet", deviceLogPrefix)
+	}
+}
+
+func (d *DirectIPDevice) removeTCP(key ConnKey) {
+	d.tcpConns.Delete(key)
+}
+
+func (d *DirectIPDevice) removeUDP(key ConnKey) {
+	d.udpConns.Delete(key)
+}
+
+// sendRSTForUnknown sends a RST for a TCP packet to an unknown connection.
+func (d *DirectIPDevice) sendRSTForUnknown(ipH *IPv4Header, tcpH *TCPHeader) {
+	rstH := &TCPHeader{
+		SrcPort: tcpH.DstPort,
+		DstPort: tcpH.SrcPort,
+		SeqNum:  tcpH.AckNum,
+		AckNum:  tcpH.SeqNum + 1,
+		Flags:   TCPFlagRST | TCPFlagACK,
+		Window:  0,
+	}
+
+	tcpSegment := MarshalTCP(rstH, nil)
+	csum := tcpChecksumFull(ipH.DstIP, ipH.SrcIP, tcpSegment)
+	tcpSegment[16] = byte(csum >> 8)
+	tcpSegment[17] = byte(csum)
+
+	rstIP := &IPv4Header{
+		ID:       0,
+		TTL:      64,
+		Protocol: ProtoTCP,
+		Flags:    0x02,
+		SrcIP:    ipH.DstIP,
+		DstIP:    ipH.SrcIP,
+	}
+	ipBuf := MarshalIPv4(rstIP, len(tcpSegment))
+
+	pkt := make([]byte, len(ipBuf)+len(tcpSegment))
+	copy(pkt, ipBuf)
+	copy(pkt[len(ipBuf):], tcpSegment)
+
+	d.enqueueResponse(pkt)
 }
