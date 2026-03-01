@@ -1,0 +1,39 @@
+services:
+  e2e-http:
+    image: hashicorp/http-echo:1.0.0
+    command: ["-listen=:5678", "-text=ok"]
+    ports:
+      - "18080:5678"
+    networks:
+      e2e_net:
+        ipv4_address: 172.29.0.10
+
+  e2e-ss:
+    image: teddysun/shadowsocks-libev:latest
+    environment:
+      - SERVER_ADDR=0.0.0.0
+      - SERVER_PORT=9000
+      - PASSWORD=e2e-password
+      - METHOD=aes-256-gcm
+      - TIMEOUT=300
+    ports:
+      - "18388:9000"
+    networks:
+      - e2e_net
+    depends_on:
+      - e2e-http
+
+  e2e-wss:
+    build:
+      context: ./wss_echo
+      dockerfile: Dockerfile
+    ports:
+      - "18443:8443"
+    networks:
+      - e2e_net
+
+networks:
+  e2e_net:
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24
