@@ -39,8 +39,9 @@ func runCloakClientAndWait(t *testing.T, config string, timeout time.Duration) (
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", "run", "./cmd/ck-client", "-c", config, "-verbosity", "warning")
 	cmd.Dir = cloakDir
+	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.CombinedOutput()
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, exec.ErrWaitDelay) {
 		return string(out), fmt.Errorf("cloak client did not fail fast within %s", timeout)
 	}
 	return string(out), err

@@ -33,7 +33,7 @@ tasks:
     cmds:
       - go test ./healthcheck ./common ./tunnel
 
-# TODO: Add kotlin_exports run
+# TODO: Restore ios_exports/kotlin_exports runtime tests when dedicated mobile CI environments are ready.
   tests:go:functional:
     desc: "Run Go functional tests including export boundary contracts"
     deps:
@@ -44,7 +44,7 @@ tasks:
         platforms: [linux]
       - cmd: go test ./cloak
         platforms: [windows]
-      - cmd: go test ./cloak ./ios_exports
+      - cmd: go test ./cloak
         platforms: [darwin]
 
   tests:go:e2e:
@@ -53,7 +53,7 @@ tasks:
       - prepare:cloak-internal
     dir: "{{.ROOT_DIR}}/go_client"
     cmds:
-      - go test -tags=e2e ./e2e ./healthcheck
+      - go test -v -tags=e2e ./e2e ./healthcheck
 
   tests:go:e2e:cloak:
     desc: "Run Cloak-only Docker e2e suite"
@@ -61,7 +61,7 @@ tasks:
       - prepare:cloak-internal
     dir: "{{.ROOT_DIR}}/go_client"
     cmds:
-      - go test -count=1 -tags=e2e -run TestCloakConnectViaDockerE2E ./e2e -v
+      - go test -v -count=1 -tags=e2e -run TestCloakConnectViaDockerE2E ./e2e
 
   install-tools:
     desc: "Install all linting tools"

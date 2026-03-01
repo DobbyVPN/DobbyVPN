@@ -713,6 +713,7 @@ func TestCloakConnectViaDockerE2E(t *testing.T) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", "run", "./cmd/ck-client", "-c", config, "-verbosity", "warning")
 	cmd.Dir = cloakDir
+	cmd.WaitDelay = 2 * time.Second
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start cloak client process: %v", err)
 	}
