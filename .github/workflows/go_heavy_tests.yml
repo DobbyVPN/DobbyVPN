@@ -1,0 +1,14 @@
+name: Go Heavy Tests (Manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  heavy-tests-placeholder:
+    name: "Heavy tests placeholder"
+    runs-on: ubuntu-24.04
+    environment: heavy-tests
+    steps:
+      - name: Placeholder
+        run: |
+          echo "TODO: Add runtime mobile-heavy tests (ios_exports/kotlin_exports) with dedicated simulator/emulator environments."

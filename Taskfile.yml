@@ -4,6 +4,65 @@ vars:
   REPORTS_DIR: "{{.ROOT_DIR}}/reports"
 
 tasks:
+  prepare:cloak-internal:
+    desc: "Vendor Cloak/internal into go_client/modules/Cloak"
+    cmds:
+      - cmd: |
+          mkdir -p "{{.ROOT_DIR}}/go_client/modules/Cloak"
+          rm -rf "{{.ROOT_DIR}}/go_client/modules/Cloak/internal"
+          cp -r "{{.ROOT_DIR}}/Cloak/internal" "{{.ROOT_DIR}}/go_client/modules/Cloak/"
+        platforms: [linux, darwin]
+      - cmd: |
+          powershell -Command "New-Item -ItemType Directory -Force -Path '{{.ROOT_DIR}}\go_client\modules\Cloak' | Out-Null; if (Test-Path '{{.ROOT_DIR}}\go_client\modules\Cloak\internal') { Remove-Item -Recurse -Force '{{.ROOT_DIR}}\go_client\modules\Cloak\internal' }; Copy-Item -Recurse -Force '{{.ROOT_DIR}}\Cloak\internal' '{{.ROOT_DIR}}\go_client\modules\Cloak\'"
+        platforms: [windows]
+
+  tests:
+    desc: "Run project test suites (currently Go only)"
+    cmds:
+      - task: tests:go
+
+  tests:go:
+    desc: "Run fast Go suites (unit + functional)"
+    cmds:
+      - task: tests:go:unit
+      - task: tests:go:functional
+
+  tests:go:unit:
+    desc: "Run Go unit tests for core packages"
+    dir: "{{.ROOT_DIR}}/go_client"
+    cmds:
+      - go test ./healthcheck ./common ./tunnel
+
+# TODO: Restore ios_exports/kotlin_exports runtime tests when dedicated mobile CI environments are ready.
+  tests:go:functional:
+    desc: "Run Go functional tests including export boundary contracts"
+    deps:
+      - prepare:cloak-internal
+    dir: "{{.ROOT_DIR}}/go_client"
+    cmds:
+      - cmd: CGO_ENABLED=1 go test ./cloak
+        platforms: [linux]
+      - cmd: go test ./cloak
+        platforms: [windows]
+      - cmd: go test ./cloak
+        platforms: [darwin]
+
+  tests:go:e2e:
+    desc: "Run full Docker-backed Go e2e suites"
+    deps:
+      - prepare:cloak-internal
+    dir: "{{.ROOT_DIR}}/go_client"
+    cmds:
+      - go test -v -tags=e2e ./e2e ./healthcheck
+
+  tests:go:e2e:cloak:
+    desc: "Run Cloak-only Docker e2e suite"
+    deps:
+      - prepare:cloak-internal
+    dir: "{{.ROOT_DIR}}/go_client"
+    cmds:
+      - go test -v -count=1 -tags=e2e -run TestCloakConnectViaDockerE2E ./e2e
+
   install-tools:
     desc: "Install all linting tools"
     cmds:
