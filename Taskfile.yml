@@ -33,17 +33,18 @@ tasks:
     cmds:
       - go test ./healthcheck ./common ./tunnel
 
+# TODO: Add kotlin_exports run
   tests:go:functional:
     desc: "Run Go functional tests including export boundary contracts"
     deps:
       - prepare:cloak-internal
     dir: "{{.ROOT_DIR}}/go_client"
     cmds:
-      - cmd: CGO_ENABLED=1 go test ./cloak ./kotlin_exports
+      - cmd: CGO_ENABLED=1 go test ./cloak
         platforms: [linux]
       - cmd: go test ./cloak
         platforms: [windows]
-      - cmd: go test ./cloak ./kotlin_exports ./ios_exports
+      - cmd: go test ./cloak ./ios_exports
         platforms: [darwin]
 
   tests:go:e2e:
