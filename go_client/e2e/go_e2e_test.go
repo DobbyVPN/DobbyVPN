@@ -98,18 +98,13 @@ func buildShadowsocksDialer(t *testing.T, host string, port int, method, passwor
 	ssAddr := net.JoinHostPort(host, strconv.Itoa(port))
 	requireReachableEndpointOrSkip(t, ssAddr)
 
-	plainConfig := fmt.Sprintf("ss://%s:%s@%s", method, password, ssAddr)
 	creds := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + password))
 	sip002Config := fmt.Sprintf("ss://%s@%s", creds, ssAddr)
 
 	providers := configurl.NewDefaultProviders()
-	dialer, err := providers.NewStreamDialer(context.Background(), plainConfig)
+	dialer, err := providers.NewStreamDialer(context.Background(), sip002Config)
 	if err != nil {
-		plainErr := err
-		dialer, err = providers.NewStreamDialer(context.Background(), sip002Config)
-		if err != nil {
-			t.Fatalf("failed to build shadowsocks dialer: plainErr=%v sip002Err=%v", plainErr, err)
-		}
+		t.Fatalf("failed to build shadowsocks dialer from SIP002 config: %v", err)
 	}
 	return dialer
 }
@@ -507,7 +502,7 @@ func TestHealthcheckTCPPingViaDockerE2E(t *testing.T) {
 func TestShadowsocksConnectViaDockerE2E(t *testing.T) {
 	ssHost := envOrDefault("E2E_SS_HOST", "127.0.0.1")
 	ssPort := envIntOrDefault(t, "E2E_SS_PORT", 18388)
-	ssMethod := envOrDefault("E2E_SS_METHOD", "aes-256-gcm")
+	ssMethod := envOrDefault("E2E_SS_METHOD", "chacha20-ietf-poly1305")
 	ssPassword := envOrDefault("E2E_SS_PASSWORD", "e2e-password")
 	targetAddr := envOrDefault("E2E_SS_TARGET", "172.29.0.10:5678")
 
@@ -526,7 +521,7 @@ func TestShadowsocksConnectViaDockerE2E(t *testing.T) {
 func TestShadowsocksWrongPasswordFailsViaDockerE2E(t *testing.T) {
 	ssHost := envOrDefault("E2E_SS_HOST", "127.0.0.1")
 	ssPort := envIntOrDefault(t, "E2E_SS_PORT", 18388)
-	ssMethod := envOrDefault("E2E_SS_METHOD", "aes-256-gcm")
+	ssMethod := envOrDefault("E2E_SS_METHOD", "chacha20-ietf-poly1305")
 	targetAddr := envOrDefault("E2E_SS_TARGET", "172.29.0.10:5678")
 	ssAddr := net.JoinHostPort(ssHost, strconv.Itoa(ssPort))
 	requireReachableEndpointOrSkip(t, ssAddr)
@@ -577,7 +572,7 @@ func TestOutlineLifecycleViaShadowsocksE2E(t *testing.T) {
 
 	ssHost := envOrDefault("E2E_SS_HOST", "127.0.0.1")
 	ssPort := envIntOrDefault(t, "E2E_SS_PORT", 18388)
-	ssMethod := envOrDefault("E2E_SS_METHOD", "aes-256-gcm")
+	ssMethod := envOrDefault("E2E_SS_METHOD", "chacha20-ietf-poly1305")
 	ssPassword := envOrDefault("E2E_SS_PASSWORD", "e2e-password")
 	targetAddr := envOrDefault("E2E_SS_TARGET", "172.29.0.10:5678")
 	dialer := buildShadowsocksDialer(t, ssHost, ssPort, ssMethod, ssPassword)

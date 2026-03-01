@@ -10,12 +10,21 @@ services:
 
   e2e-ss:
     image: teddysun/shadowsocks-libev:latest
-    environment:
-      - SERVER_ADDR=0.0.0.0
-      - SERVER_PORT=9000
-      - PASSWORD=e2e-password
-      - METHOD=aes-256-gcm
-      - TIMEOUT=300
+    command:
+      [
+        "ss-server",
+        "-s",
+        "0.0.0.0",
+        "-p",
+        "9000",
+        "-k",
+        "e2e-password",
+        "-m",
+        "chacha20-ietf-poly1305",
+        "-t",
+        "300",
+        "-u",
+      ]
     ports:
       - "18388:9000"
     networks:

@@ -10,4 +10,5 @@ jobs:
     environment: heavy-tests
     steps:
       - name: Placeholder
-        run: echo "TODO: Add runtime mobile-heavy tests (ios_exports/kotlin_exports) with dedicated simulator/emulator environments."
+        run: |
+          echo "TODO: Add runtime mobile-heavy tests (ios_exports/kotlin_exports) with dedicated simulator/emulator environments."

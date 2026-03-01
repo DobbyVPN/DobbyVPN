@@ -41,7 +41,7 @@ From repository root:
 - `E2E_URLTEST_STANDARD` (default: `1`)
 - `E2E_SS_HOST` (default: `127.0.0.1`)
 - `E2E_SS_PORT` (default: `18388`)
-- `E2E_SS_METHOD` (default: `aes-256-gcm`)
+- `E2E_SS_METHOD` (default: `chacha20-ietf-poly1305`)
 - `E2E_SS_PASSWORD` (default: `e2e-password`)
 - `E2E_SS_TARGET` (default: `172.29.0.10:5678`)
 - `E2E_WSS_HOST` (default: `127.0.0.1`)
