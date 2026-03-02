@@ -126,7 +126,7 @@ class VpnFullE2EContractTest {
         delay(200)
 
         assertTrue(vpn.startCalls >= 2)
-        assertEquals("second.example.org:8443", configs.serverPortOutline)
+        assertEquals("second.example.org:8443", configs.serverPortOutlineValue)
     }
 
     @Test
@@ -295,93 +295,113 @@ private class E2eCountingVpnManager(
     }
 }
 
-private data class E2eFakeConfigs(
-    var vpnInterface: VpnInterface = VpnInterface.CLOAK_OUTLINE,
-    var connectionUrl: String = "",
-    var connectionConfig: String = "",
-    var methodPasswordOutline: String = "",
-    var serverPortOutline: String = "",
-    var isOutlineEnabled: Boolean = false,
-    var prefixOutline: String = "",
-    var isWebsocketEnabled: Boolean = false,
-    var tcpPathOutline: String = "",
-    var udpPathOutline: String = "",
-    var cloakConfig: String = "",
-    var isCloakEnabled: Boolean = false,
-    var cloakLocalPort: Int = 1984,
-    var awgConfig: String = "",
-    var isAmneziaWGEnabled: Boolean = false,
-    var isUserInitStop: Boolean = false,
+private class E2eFakeConfigs(
+    vpnInterface: VpnInterface = VpnInterface.CLOAK_OUTLINE,
+    connectionUrl: String = "",
+    connectionConfig: String = "",
+    methodPasswordOutline: String = "",
+    serverPortOutline: String = "",
+    isOutlineEnabled: Boolean = false,
+    prefixOutline: String = "",
+    isWebsocketEnabled: Boolean = false,
+    tcpPathOutline: String = "",
+    udpPathOutline: String = "",
+    cloakConfig: String = "",
+    isCloakEnabled: Boolean = false,
+    cloakLocalPort: Int = 1984,
+    awgConfig: String = "",
+    isAmneziaWGEnabled: Boolean = false,
+    isUserInitStop: Boolean = false,
 ) : DobbyConfigsRepository {
-    override fun getVpnInterface(): VpnInterface = vpnInterface
+    private var _vpnInterface: VpnInterface = vpnInterface
+    private var _connectionUrl: String = connectionUrl
+    private var _connectionConfig: String = connectionConfig
+    private var _methodPasswordOutline: String = methodPasswordOutline
+    private var _serverPortOutline: String = serverPortOutline
+    private var _isOutlineEnabled: Boolean = isOutlineEnabled
+    private var _prefixOutline: String = prefixOutline
+    private var _isWebsocketEnabled: Boolean = isWebsocketEnabled
+    private var _tcpPathOutline: String = tcpPathOutline
+    private var _udpPathOutline: String = udpPathOutline
+    private var _cloakConfig: String = cloakConfig
+    private var _isCloakEnabled: Boolean = isCloakEnabled
+    private var _cloakLocalPort: Int = cloakLocalPort
+    private var _awgConfig: String = awgConfig
+    private var _isAmneziaWGEnabled: Boolean = isAmneziaWGEnabled
+    private var _isUserInitStop: Boolean = isUserInitStop
+
+    val serverPortOutlineValue: String
+        get() = _serverPortOutline
+
+    override fun getVpnInterface(): VpnInterface = _vpnInterface
     override fun setVpnInterface(vpnInterface: VpnInterface) {
-        this.vpnInterface = vpnInterface
+        this._vpnInterface = vpnInterface
     }
 
-    override fun getConnectionURL(): String = connectionUrl
+    override fun getConnectionURL(): String = _connectionUrl
     override fun setConnectionURL(connectionURL: String) {
-        connectionUrl = connectionURL
+        _connectionUrl = connectionURL
     }
 
-    override fun getConnectionConfig(): String = connectionConfig
+    override fun getConnectionConfig(): String = _connectionConfig
     override fun setConnectionConfig(connectionConfig: String) {
-        this.connectionConfig = connectionConfig
+        this._connectionConfig = connectionConfig
     }
 
     override fun couldStart(): Boolean = true
-    override fun getIsUserInitStop(): Boolean = isUserInitStop
+    override fun getIsUserInitStop(): Boolean = _isUserInitStop
     override fun setIsUserInitStop(isUserInitStop: Boolean) {
-        this.isUserInitStop = isUserInitStop
+        this._isUserInitStop = isUserInitStop
     }
 
     override fun setServerPortOutline(newConfig: String) {
-        serverPortOutline = newConfig
+        _serverPortOutline = newConfig
     }
     override fun setMethodPasswordOutline(newConfig: String) {
-        methodPasswordOutline = newConfig
+        _methodPasswordOutline = newConfig
     }
-    override fun getServerPortOutline(): String = serverPortOutline
-    override fun getMethodPasswordOutline(): String = methodPasswordOutline
-    override fun getIsOutlineEnabled(): Boolean = isOutlineEnabled
+    override fun getServerPortOutline(): String = _serverPortOutline
+    override fun getMethodPasswordOutline(): String = _methodPasswordOutline
+    override fun getIsOutlineEnabled(): Boolean = _isOutlineEnabled
     override fun setIsOutlineEnabled(isOutlineEnabled: Boolean) {
-        this.isOutlineEnabled = isOutlineEnabled
+        this._isOutlineEnabled = isOutlineEnabled
     }
-    override fun getPrefixOutline(): String = prefixOutline
+    override fun getPrefixOutline(): String = _prefixOutline
     override fun setPrefixOutline(prefix: String) {
-        prefixOutline = prefix
+        _prefixOutline = prefix
     }
-    override fun getIsWebsocketEnabled(): Boolean = isWebsocketEnabled
+    override fun getIsWebsocketEnabled(): Boolean = _isWebsocketEnabled
     override fun setIsWebsocketEnabled(enabled: Boolean) {
-        isWebsocketEnabled = enabled
+        _isWebsocketEnabled = enabled
     }
-    override fun getTcpPathOutline(): String = tcpPathOutline
+    override fun getTcpPathOutline(): String = _tcpPathOutline
     override fun setTcpPathOutline(tcpPath: String) {
-        tcpPathOutline = tcpPath
+        _tcpPathOutline = tcpPath
     }
-    override fun getUdpPathOutline(): String = udpPathOutline
+    override fun getUdpPathOutline(): String = _udpPathOutline
     override fun setUdpPathOutline(udpPath: String) {
-        udpPathOutline = udpPath
+        _udpPathOutline = udpPath
     }
 
-    override fun getCloakConfig(): String = cloakConfig
+    override fun getCloakConfig(): String = _cloakConfig
     override fun setCloakConfig(newConfig: String) {
-        cloakConfig = newConfig
+        _cloakConfig = newConfig
     }
-    override fun getIsCloakEnabled(): Boolean = isCloakEnabled
+    override fun getIsCloakEnabled(): Boolean = _isCloakEnabled
     override fun setIsCloakEnabled(isCloakEnabled: Boolean) {
-        this.isCloakEnabled = isCloakEnabled
+        this._isCloakEnabled = isCloakEnabled
     }
-    override fun getCloakLocalPort(): Int = cloakLocalPort
+    override fun getCloakLocalPort(): Int = _cloakLocalPort
     override fun setCloakLocalPort(port: Int) {
-        cloakLocalPort = port
+        _cloakLocalPort = port
     }
 
-    override fun getAwgConfig(): String = awgConfig
+    override fun getAwgConfig(): String = _awgConfig
     override fun setAwgConfig(newConfig: String) {
-        awgConfig = newConfig
+        _awgConfig = newConfig
     }
-    override fun getIsAmneziaWGEnabled(): Boolean = isAmneziaWGEnabled
+    override fun getIsAmneziaWGEnabled(): Boolean = _isAmneziaWGEnabled
     override fun setIsAmneziaWGEnabled(isAmneziaWGEnabled: Boolean) {
-        this.isAmneziaWGEnabled = isAmneziaWGEnabled
+        this._isAmneziaWGEnabled = isAmneziaWGEnabled
     }
 }

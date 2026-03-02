@@ -1,6 +1,9 @@
-name: Android Instrumented Tests (Manual)
+name: Android Instrumented Tests
 
 on:
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       suite:
@@ -41,15 +44,15 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Optional full build
-        if: ${{ inputs.run_full_build }}
+        if: ${{ github.event_name == 'pull_request' || inputs.run_full_build }}
         working-directory: kmp_client
         run: ./gradlew :app:assemble
 
       - name: Run Android instrumented baseline suite
-        if: ${{ inputs.suite == 'baseline' || inputs.suite == 'both' }}
+        if: ${{ github.event_name == 'pull_request' || inputs.suite == 'baseline' || inputs.suite == 'both' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: ${{ inputs.api-level }}
+          api-level: ${{ inputs.api-level || '34' }}
           arch: x86_64
           profile: pixel_6
           script: |
@@ -60,7 +63,7 @@ jobs:
         if: ${{ inputs.suite == 'heavy' || inputs.suite == 'both' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: ${{ inputs.api-level }}
+          api-level: ${{ inputs.api-level || '34' }}
           arch: x86_64
           profile: pixel_6
           script: |

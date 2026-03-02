@@ -22,7 +22,7 @@ class TomlConfigApplierFunctionalTest {
 
         assertFalse(applied)
         assertFalse(outlineRepo.isOutlineEnabled)
-        assertFalse(cloakRepo.isCloakEnabled)
+        assertFalse(cloakRepo.cloakEnabledValue)
     }
 
     @Test
@@ -44,8 +44,8 @@ class TomlConfigApplierFunctionalTest {
         assertFalse(outlineRepo.isOutlineEnabled)
         assertEquals("", outlineRepo.methodPassword)
         assertEquals("", outlineRepo.serverPort)
-        assertFalse(cloakRepo.isCloakEnabled)
-        assertEquals("", cloakRepo.cloakConfig)
+        assertFalse(cloakRepo.cloakEnabledValue)
+        assertEquals("", cloakRepo.cloakConfigValue)
     }
 
     @Test
@@ -66,7 +66,7 @@ class TomlConfigApplierFunctionalTest {
         assertFalse(applied)
         assertFalse(outlineRepo.isOutlineEnabled)
         assertEquals("", outlineRepo.methodPassword)
-        assertFalse(cloakRepo.isCloakEnabled)
+        assertFalse(cloakRepo.cloakEnabledValue)
     }
 
     @Test
@@ -96,8 +96,8 @@ class TomlConfigApplierFunctionalTest {
         assertEquals("/ws/tcp", outlineRepo.tcpPath)
         assertEquals("/ws/udp", outlineRepo.udpPath)
         assertEquals("POST ", outlineRepo.prefix)
-        assertFalse(cloakRepo.isCloakEnabled)
-        assertEquals("", cloakRepo.cloakConfig)
+        assertFalse(cloakRepo.cloakEnabledValue)
+        assertEquals("", cloakRepo.cloakConfigValue)
     }
 
     @Test
@@ -120,8 +120,8 @@ class TomlConfigApplierFunctionalTest {
         assertTrue(applied)
         assertTrue(outlineRepo.isOutlineEnabled)
         assertEquals("127.0.0.1:1984", outlineRepo.serverPort)
-        assertFalse(cloakRepo.isCloakEnabled)
-        assertEquals("", cloakRepo.cloakConfig)
+        assertFalse(cloakRepo.cloakEnabledValue)
+        assertEquals("", cloakRepo.cloakConfigValue)
     }
 
     @Test
@@ -210,26 +210,30 @@ private data class FakeOutlineRepo(
     }
 }
 
-private data class FakeCloakRepo(
-    var cloakConfig: String = "",
-    var isCloakEnabled: Boolean = false,
-    var cloakLocalPort: Int = 0,
+private class FakeCloakRepo(
+    initialCloakConfig: String = "",
+    initialCloakEnabled: Boolean = false,
+    initialCloakLocalPort: Int = 0,
 ) : DobbyConfigsRepositoryCloak {
-    override fun getCloakConfig(): String = cloakConfig
+    var cloakConfigValue: String = initialCloakConfig
+    var cloakEnabledValue: Boolean = initialCloakEnabled
+    var cloakLocalPortValue: Int = initialCloakLocalPort
+
+    override fun getCloakConfig(): String = cloakConfigValue
 
     override fun setCloakConfig(newConfig: String) {
-        cloakConfig = newConfig
+        cloakConfigValue = newConfig
     }
 
-    override fun getIsCloakEnabled(): Boolean = isCloakEnabled
+    override fun getIsCloakEnabled(): Boolean = cloakEnabledValue
 
     override fun setIsCloakEnabled(isCloakEnabled: Boolean) {
-        this.isCloakEnabled = isCloakEnabled
+        this.cloakEnabledValue = isCloakEnabled
     }
 
-    override fun getCloakLocalPort(): Int = cloakLocalPort
+    override fun getCloakLocalPort(): Int = cloakLocalPortValue
 
     override fun setCloakLocalPort(port: Int) {
-        cloakLocalPort = port
+        cloakLocalPortValue = port
     }
 }

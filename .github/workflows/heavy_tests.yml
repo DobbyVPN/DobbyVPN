@@ -1,6 +1,9 @@
-name: Heavy Tests (Manual Dispatch)
+name: Heavy Tests
 
 on:
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       run_full_build:
@@ -21,7 +24,7 @@ on:
 
 jobs:
   kotlin-heavy:
-    if: ${{ inputs.run_kotlin_heavy }}
+    if: ${{ github.event_name == 'pull_request' || inputs.run_kotlin_heavy }}
     name: "Kotlin heavy contracts"
     runs-on: ubuntu-24.04
     environment: heavy-tests
@@ -40,7 +43,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Full build (optional)
-        if: ${{ inputs.run_full_build }}
+        if: ${{ github.event_name == 'pull_request' || inputs.run_full_build }}
         working-directory: kmp_client
         run: |
           ./gradlew :app:assemble
@@ -50,7 +53,7 @@ jobs:
         run: ./gradlew :app:jvmTest --tests "*E2EContractTest"
 
   swift-heavy:
-    if: ${{ inputs.run_swift_heavy }}
+    if: ${{ github.event_name == 'pull_request' || inputs.run_swift_heavy }}
     name: "Swift heavy stage (manual)"
     runs-on: macos-14
     environment: heavy-tests
