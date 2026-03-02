@@ -5,6 +5,7 @@ import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.presentation.MainViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -15,6 +16,7 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class HealthCheckManager(
     private val healthCheck: HealthCheck,
     private val mainViewModel: MainViewModel,

@@ -204,7 +204,9 @@ class HealthCheckManagerFunctionalTest {
             configsRepository = configs,
             logger = createLogger(),
             scope = backgroundScope,
-            gracePeriodMs = 8,
+            // runTest controls coroutine virtual time, but HealthCheckManager uses monotonic wall clock;
+            // keep grace at 0 here to make this branch deterministic on CI.
+            gracePeriodMs = 0,
             consecutiveFailuresBeforeTurnOff = 2,
             restartDelayMs = 1,
             postRestartDelay = 2.milliseconds,
