@@ -33,8 +33,8 @@ class TomlConfigApplierFunctionalTest {
             serverPort = "old:1",
         )
         val cloakRepo = FakeCloakRepo(
-            isCloakEnabled = true,
-            cloakConfig = "old-json"
+            initialCloakEnabled = true,
+            initialCloakConfig = "old-json"
         )
         val applier = createApplier(outlineRepo, cloakRepo)
 
