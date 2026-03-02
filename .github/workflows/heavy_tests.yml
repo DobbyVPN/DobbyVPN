@@ -1,0 +1,68 @@
+name: Heavy Tests (Manual Dispatch)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_full_build:
+        description: "Run full app build before heavy tests"
+        type: boolean
+        required: false
+        default: true
+      run_kotlin_heavy:
+        description: "Run Kotlin heavy contracts"
+        type: boolean
+        required: false
+        default: true
+      run_swift_heavy:
+        description: "Run Swift heavy stage"
+        type: boolean
+        required: false
+        default: true
+
+jobs:
+  kotlin-heavy:
+    if: ${{ inputs.run_kotlin_heavy }}
+    name: "Kotlin heavy contracts"
+    runs-on: ubuntu-24.04
+    environment: heavy-tests
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Full build (optional)
+        if: ${{ inputs.run_full_build }}
+        working-directory: kmp_client
+        run: |
+          ./gradlew :app:assemble
+
+      - name: Run Kotlin full e2e contract subset
+        working-directory: kmp_client
+        run: ./gradlew :app:jvmTest --tests "*E2EContractTest"
+
+  swift-heavy:
+    if: ${{ inputs.run_swift_heavy }}
+    name: "Swift heavy stage (manual)"
+    runs-on: macos-14
+    environment: heavy-tests
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Select Xcode 16.1
+        run: sudo xcode-select -s /Applications/Xcode_16.1.app
+
+      - name: Swift heavy stage placeholder
+        run: |
+          echo "Swift heavy test stage is enabled."
+          echo "Add dedicated simulator-based iOS/tunnel heavy tests in this job when test targets are finalized."

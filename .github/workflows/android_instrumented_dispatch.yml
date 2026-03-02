@@ -1,0 +1,68 @@
+name: Android Instrumented Tests (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Which suite to run: baseline / heavy / both"
+        type: choice
+        required: false
+        default: both
+        options:
+          - baseline
+          - heavy
+          - both
+      api-level:
+        description: "Android API level for emulator"
+        type: string
+        required: false
+        default: "34"
+      run_full_build:
+        description: "Run full assemble before instrumented tests"
+        type: boolean
+        required: false
+        default: true
+
+jobs:
+  android-instrumented:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Optional full build
+        if: ${{ inputs.run_full_build }}
+        working-directory: kmp_client
+        run: ./gradlew :app:assemble
+
+      - name: Run Android instrumented baseline suite
+        if: ${{ inputs.suite == 'baseline' || inputs.suite == 'both' }}
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ inputs.api-level }}
+          arch: x86_64
+          profile: pixel_6
+          script: |
+            cd kmp_client
+            ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.dobby.feature.e2e.AndroidThinClientBaselineInstrumentedTest
+
+      - name: Run Android instrumented heavy suite
+        if: ${{ inputs.suite == 'heavy' || inputs.suite == 'both' }}
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ inputs.api-level }}
+          arch: x86_64
+          profile: pixel_6
+          script: |
+            cd kmp_client
+            ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.dobby.feature.e2e.AndroidThinClientHeavyInstrumentedTest

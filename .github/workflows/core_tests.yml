@@ -1,4 +1,4 @@
-name: Go Tests
+name: Core PR Tests (Go + Kotlin)
 
 on:
   pull_request:
@@ -58,3 +58,24 @@ jobs:
         run: |
           task tests:go:e2e
           task tests:go:e2e:cloak
+
+  kotlin-functional:
+    name: "Kotlin functional tests (PR)"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run Kotlin local-functional subset
+        working-directory: kmp_client
+        run: ./gradlew :app:jvmTest --tests "*FunctionalTest"

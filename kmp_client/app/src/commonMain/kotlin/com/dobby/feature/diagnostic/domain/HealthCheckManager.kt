@@ -20,14 +20,20 @@ class HealthCheckManager(
     private val mainViewModel: MainViewModel,
     private val configsRepository: DobbyConfigsRepository,
     private val logger: Logger,
-) {
-    private val scope = CoroutineScope(
+    private val scope: CoroutineScope = CoroutineScope(
         SupervisorJob() + Dispatchers.Default.limitedParallelism(1)
-    )
+    ),
+    private val gracePeriodMs: Long = 15_000,
+    private val consecutiveFailuresBeforeTurnOff: Int = 2,
+    private val restartDelayMs: Long = 15_000,
+    private val postRestartDelay: Duration = 3.seconds,
+    private val shortDelayThreshold: Duration = 30.seconds,
+    private val mediumDelayThreshold: Duration = 90.seconds,
+    private val shortDelay: Duration = 2.seconds,
+    private val mediumDelay: Duration = 5.seconds,
+    private val longDelay: Duration = 10.seconds,
+) {
     private var healthJob: Job? = null
-    private val gracePeriodMs: Long = 15_000
-    private val consecutiveFailuresBeforeTurnOff: Int = 2
-    private val restartDelayMs: Long = 15_000
     private var consecutiveFailuresCount: Int = 0
     private var lastVpnStartMark: TimeMark? = null
     private var lastFullConnectionSucceed = false
@@ -129,8 +135,8 @@ class HealthCheckManager(
 
                         lastVpnStartMark = TimeSource.Monotonic.markNow()
 
-                        logger.log("[HC] Waiting 3s after restart")
-                        nextDelay = 3.seconds
+                        logger.log("[HC] Waiting $postRestartDelay after restart")
+                        nextDelay = postRestartDelay
                     }
                 } else {
                     logger.log("[HC] OK")
@@ -183,13 +189,13 @@ class HealthCheckManager(
     }
 
     private fun getHealthCheckDelay(): Duration {
-        val mark = lastVpnStartMark ?: return 2.seconds
+        val mark = lastVpnStartMark ?: return shortDelay
         val elapsed = mark.elapsedNow()
 
         return when {
-            elapsed < 30.seconds -> 2.seconds
-            elapsed < 90.seconds -> 5.seconds
-            else -> 10.seconds
+            elapsed < shortDelayThreshold -> shortDelay
+            elapsed < mediumDelayThreshold -> mediumDelay
+            else -> longDelay
         }
     }
 }

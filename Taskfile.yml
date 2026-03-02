@@ -17,9 +17,10 @@ tasks:
         platforms: [windows]
 
   tests:
-    desc: "Run project test suites (currently Go only)"
+    desc: "Run project test suites (Go + local Kotlin functional)"
     cmds:
       - task: tests:go
+      - task: tests:kotlin:functional
 
   tests:go:
     desc: "Run fast Go suites (unit + functional)"
@@ -62,6 +63,16 @@ tasks:
     dir: "{{.ROOT_DIR}}/go_client"
     cmds:
       - go test -v -count=1 -tags=e2e -run TestCloakConnectViaDockerE2E ./e2e
+
+  tests:kotlin:functional:
+    desc: "Run local Kotlin functional tests (without full e2e suite)"
+    dir: "{{.ROOT_DIR}}/kmp_client"
+    cmds:
+      - cmd: ./gradlew :app:jvmTest --tests "*FunctionalTest"
+        platforms: [linux, darwin]
+      - cmd: gradlew.bat :app:jvmTest --tests "*FunctionalTest"
+        platforms: [windows]
+
 
   install-tools:
     desc: "Install all linting tools"
