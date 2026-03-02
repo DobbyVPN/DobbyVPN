@@ -147,7 +147,7 @@ Feidong Air Base,31.909401,117.658997
 Fuzhou Air Base,26.003857,119.312832
 Huian Air Base,25.0261,118.806999
 Hangzhou Jianqiao Airport,30.3353,120.240997
-Jiaxing Airport / Jiaxing Air Base,30.705535,120.679779
+Jiaxing Nanhu Airport,30.698056,120.663056
 Longtian Air Base,25.5728,119.459999
 Nanchang Xiangtang Air Base,28.421205,115.923375
 Ningbo Zhuangqiao Air Base,29.9228,121.573997
@@ -155,7 +155,7 @@ Shanghai Dachang Air Base,31.324438,121.409508
 Wuhan Hannan Municipal Airport,30.25521,114.062805
 Zhangshu Air Base,28.023283,115.549649
 Changchun Air Base,43.9053,125.197998
-Beijing Nanjiao Military Airport,39.48595,116.37236
+Beijing Nanjiao Airport,39.482845,116.372295
 Dingxin-Shuangchengzi Air Base,40.401402,99.789398
 Fuxin Air Base,42.078899,121.662003
 Gongzhuling Air Base,43.526293,124.78466
@@ -180,7 +180,7 @@ Ali Pulan Airport,30.397898,81.13317
 Shaodong Airport,27.2235,111.6741
 Ningxiang Airport,27.987589,112.604971
 Zhaotong Zhaoyang Airport （Not fully opened),27.205843,103.691511
-Bengbu Tenghu Airport (U.C.),33.165808,117.057295
+Bengbu Tenghu Airport,33.166389,117.058333
 Beijing Xijiao Airport,39.958592,116.256765
 Sanshilipu Air Base,39.289671,121.762195
 Brampton-Caledon Airport,43.7603,-79.875
@@ -557,7 +557,7 @@ Düsseldorf Airport,51.289501,6.76678
 Munich Airport,48.353802,11.7861
 Nuremberg Airport,49.498699,11.078056
 Leipzig/Halle Airport,51.420657,12.232705
-Saarbrücken Airport,49.217562,7.111667
+Saarbrücken Airport,49.214545,7.109735
 Stuttgart Airport,48.689899,9.22196
 Hannover Airport,52.461102,9.68508
 Bremen Airport,53.046786,8.78932
@@ -1695,7 +1695,7 @@ Grissom Air Reserve Base,40.648102,-86.1521
 Guymon Municipal Airport,36.6851005554,-101.508003235
 Greenwood–Leflore Airport,33.495025,-90.088204
 North Texas Regional Airport Perrin Field,33.7141,-96.673698
-Gary Chicago International Airport,41.617087,-87.413206
+Gary/Chicago International Airport,41.617087,-87.413206
 Dara Sakor International Airport,10.914244,103.226652
 Techo International Airport,11.359987,104.921272
 Hattiesburg Bobby L Chain Municipal Airport,31.26479912,-89.25279999
@@ -1945,6 +1945,7 @@ Karl Stefan Memorial Airport,41.985500335693,-97.435096740723
 Orangeburg Municipal Airport,33.456798553467,-80.859497070312
 Ogden Hinckley Airport,41.195899963379,-112.0120010376
 Ogdensburg International Airport,44.6819,-75.4655
+Oceanside Municipal Airport,33.217947,-117.351683
 OKC Will Rogers World Airport,35.393388,-97.598248
 L M Clayton Airport,48.094501,-105.574997
 Olympia Regional Airport,46.969399,-122.903
@@ -2495,7 +2496,7 @@ Turin Airport,45.200802,7.64963
 Riviera Villanova d'Albenga International Airport,44.050598,8.12743
 Genoa Cristoforo Colombo Airport,44.412039,8.840732
 Milano Linate Airport,45.445099,9.27674
-Cameri Air Base [MIL],45.529598,8.66922
+Cameri Air Base,45.529598,8.66922
 Parma Airport,44.826351,10.29705
 Novi Ligure Eugenio Mossi Airfield,44.779999,8.78639
 Piacenza San Damiano Air Base,44.91442,9.722318
@@ -2638,7 +2639,7 @@ Bern Airport,46.912736,7.498819
 Grenchen Airfield,47.181599,7.41719
 Zürich Airport,47.458056,8.548056
 Sankt Gallen Altenrhein Airport,47.485001,9.56077
-Samedan Airport,46.5341,9.88411
+Engadin Airport,46.5341,9.88411
 Jonava Air Base,55.009998,24.3633
 Esenboğa International Airport,40.128101,32.995098
 Etimesgut Air Base,39.949798584,32.6885986328
@@ -2979,9 +2980,9 @@ Bauerfield International Airport,-17.699301,168.320007
 Whitegrass Airport,-19.455099,169.223999
 Tiga Airport,-21.096407,167.80379
 Koné Airport,-21.053551,164.838768
-Île des Pins Airport,-22.588899612426758,167.45599365234375
+Île des Pins Airport,-22.5889,167.455994
 Lifou Airport,-20.774563,167.239328
-Nouméa Magenta Airport,-22.25812,166.472783
+Nouméa Magenta Airport,-22.257706,166.472822
 Maré Airport,-21.482438,168.038465
 Touho Airport,-20.790127,165.259524
 Ouvéa Airport,-20.640932,166.573024
@@ -3018,10 +3019,10 @@ Timaru Airport,-44.302799224853516,171.22500610351562
 Pukaki Airport,-44.2350006104,170.117996216
 Woodbourne Airport,-41.5182991027832,173.8699951171875
 Williams Field Skiway,-77.867401,167.057007
-Wanaka Airport,-44.722954,169.248419
-Whakatane Airport,-37.92060089111328,176.91400146484375
-Wellington International Airport,-41.327202,174.804993
-Wairoa Airport,-39.012118,177.404395
+Wanaka Airport,-44.722091,169.246287
+Whakatāne Airport,-37.922224,176.91696
+Wellington International Airport,-41.326839,174.806862
+Wairoa Airport,-39.011862,177.404401
 RNZAF Base Auckland-Whenuapai,-36.7878,174.630005
 Whangarei Airport,-35.769253,174.363713
 Westport Airport,-41.737111,171.579033
@@ -3842,7 +3843,7 @@ Brigadeiro Camarão Airport,-12.6944,-60.098301
 Eurico de Aguiar Salles International Airport,-20.258,-40.285
 Campo Fontenelle,-21.984692,-47.341207
 Presidente Itamar Franco Airport,-21.513086,-43.173069
-Chacalluta Airport,-18.348499,-70.338699
+Chacalluta International Airport,-18.348499,-70.338699
 Desierto de Atacama Airport,-27.2611999512,-70.7791976929
 Balmaceda Airport,-45.915968,-71.689499
 Barriles Airport,-22.1411,-70.062897
@@ -3851,7 +3852,7 @@ El Loa Airport,-22.498199,-68.903603
 Gral. Bernardo O´Higgins Airport,-36.5825,-72.031403
 President Carlos Ibáñez International Airport,-53.002602,-70.854599
 Teniente Vidal Airport,-45.5942,-72.106102
-Diego Aracena Airport,-20.5352,-70.181297
+Diego Aracena International Airport,-20.536273,-70.181373
 Comodoro Arturo Merino Benítez International Airport,-33.393001556396484,-70.78579711914062
 Ricardo García Posada Airport,-26.3111,-69.765198
 Andrés Sabella Gálvez International Airport,-23.445274,-70.445232
@@ -3990,7 +3991,9 @@ Planalto Serrano Regional Airport,-27.634128,-50.358253
 Linhares Municipal Airport,-19.355202,-40.07128
 Quixadá Airport,-4.979006,-38.987622
 Cayenne – Félix Eboué Airport,4.819964,-52.361326
+Maripasoula Airport,3.655907,-54.039431
 Saint-Georges-de-l'Oyapock Airport,3.8976,-51.8041
+Saint-Laurent-du-Maroni Airport,5.481891,-54.034964
 Teniente General Gerardo Pérez Pinedo Airport,-10.7291,-73.766502
 Caballococha Airport,-3.91686010361,-70.5082015991
 Iberia Airport,-11.4116,-69.488701
@@ -4672,7 +4675,8 @@ Dong Tac Airport,13.0496,109.334
 Tan Son Nhat International Airport,10.8188,106.652
 Van Don International Airport,21.120693,107.41539
 Vinh Airport,18.7376003265,105.67099762
-Dawei Airport,14.103899955749512,98.20359802246094
+Dawei Airport,14.1039,98.203598
+Heho Airport,20.74714,96.792029
 Kengtung Airport,21.301599502563477,99.63600158691406
 Kyaukpyu Airport,19.42639923095703,93.53479766845703
 Kawthoung Airport,10.049300193786621,98.53800201416016
@@ -4773,7 +4777,7 @@ Alas Leuser Airport,3.391456,97.863726
 Nanga Pinoh Airport,-0.34864,111.746155
 Rahadi Osman Airport,-1.817165,109.963469
 Ranai Airport,3.90871,108.388
-Supadio International Airport,-0.153023,109.404708
+Supadio International Airport,-0.152258,109.404493
 Pangsuma Airport,0.834579,112.940217
 Tebelian Airport,-0.045214,111.458049
 Depati Amir Airport,-2.1622,106.139
@@ -5009,7 +5013,7 @@ West Wyalong Airport,-33.9371986389,147.190994263
 Wynyard Airport,-40.997039,145.726
 Young Airport,-34.255576,148.247118
 Wujah Al Hajar Air Base,34.281226,35.680096
-Beijing Capital International Airport,40.080101013183594,116.58499908447266
+Beijing Capital International Airport,40.077349,116.596702
 Beijing Daxing International Airport,39.501289,116.413967
 Beijing Xijiao Airport,39.958592,116.256765
 Chengde Puning Airport,41.1225,118.073889
@@ -5156,7 +5160,7 @@ Qingdao Jiaodong International Airport,36.361953,120.088171
 Quanzhou Jinjiang International Airport,24.795855,118.588599
 Rugao Air Base,32.258341,120.501131
 Rizhao Shanzihe Airport,35.405033,119.324403
-Huai'an Lianshui International Airport,33.790833,119.125
+Huai'an Lianshui Airport,33.792712,119.126657
 Sanming Shaxian Airport,26.4263,117.8336
 Shangrao Sanqingshan Airport,28.3797,117.9643
 Shanghai Hongqiao International Airport,31.198104,121.33426
@@ -5174,7 +5178,7 @@ Yichun Mingyueshan Airport,27.8025,114.3062
 Yancheng Nanyang International Airport,33.428317,120.20545
 Yantai Penglai International Airport,37.659724,120.978124
 Yiwu Airport,29.342095,120.03116
-Zhoushan Putuoshan Airport,29.9342,122.362
+Zhoushan Putuoshan International Airport,29.933874,122.362307
 Ngari Gunsa Airport,32.09794,80.053971
 Anshun Huangguoshu Airport,26.260556,105.873333
 Qamdo Bangda Airport,30.553600311279297,97.1082992553711
@@ -5183,6 +5187,7 @@ Chongqing Jiangbei International Airport,29.712254,106.651895
 Dazhou Jinya Airport,31.048815,107.435646
 Daocheng Yading Airport,29.31632,100.060317
 Tongren Dejiang Airport (Under Construction),28.121,108.1631
+Guanghan Airport,30.9485,104.3296
 Guangyuan Panlong Airport,32.390254,105.694571
 Guiyang Longdongbao International Airport,26.541805,106.80402
 Hongyuan Airport,32.53154,102.35224
