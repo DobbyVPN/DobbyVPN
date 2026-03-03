@@ -22,7 +22,7 @@ func DecideOutbound(ipPacket []byte) RouteAction {
 		// На всякий случай если что-то не так — ведём себя как раньше
 		return RouteProxy
 	}
-	if inBypass(ip) {
+	if InBypass(ip) {
 		return RouteDirect
 	}
 	return RouteProxy
@@ -54,7 +54,7 @@ func extractDstIP(pkt []byte) (net.IP, error) {
 	return dst, nil
 }
 
-func inBypass(ip net.IP) bool {
+func InBypass(ip net.IP) bool {
 	if len(DefaultBypassCIDRs) == 0 {
 		return false
 	}

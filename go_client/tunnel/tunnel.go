@@ -1,302 +1,169 @@
 package tunnel
 
 import (
-	"errors"
-	"go_client/tunnel/direct"
-	"go_client/tunnel/georouting"
+	"context"
+	"fmt"
 	"io"
+	"net"
 	"sync"
+	"time"
 
 	log "go_client/logger"
-	"go_client/tunnel/internal"
+
+	"github.com/xjasonlyu/tun2socks/v2/core"
+	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
+	"github.com/xjasonlyu/tun2socks/v2/core/device/iobased"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
-type ReaderFunc func(p []byte) (int, error)
-type WriterFunc func(b []byte) (int, error)
+func mustCIDR(s string) *net.IPNet {
+	_, ipnet, err := net.ParseCIDR(s)
+	if err != nil {
+		panic(err)
+	}
+	return ipnet
+}
 
-type Direction int
+var DefaultBypassCIDRs = []*net.IPNet{
+	mustCIDR("103.21.244.0/22"),
+	mustCIDR("103.22.200.0/22"),
+	mustCIDR("103.31.4.0/22"),
+	mustCIDR("104.16.0.0/13"),
+	mustCIDR("104.24.0.0/14"),
+	mustCIDR("108.162.192.0/18"),
+	mustCIDR("131.0.72.0/22"),
+	mustCIDR("141.101.64.0/18"),
+	mustCIDR("162.158.0.0/15"),
+	mustCIDR("172.64.0.0/13"),
+	mustCIDR("173.245.48.0/20"),
+	mustCIDR("188.114.96.0/20"),
+	mustCIDR("190.93.240.0/20"),
+	mustCIDR("197.234.240.0/22"),
+	mustCIDR("198.41.128.0/17"),
+}
 
-const (
-	DirOutbound Direction = iota // из ОС в сеть (читаем из TUN)
-	DirInbound                   // из сети в ОС (пишем в TUN)
-)
+type DobbyTransportHandler struct {
+	bypassNetworks []*net.IPNet
+	proxyDial      func(ctx context.Context, network, addr string) (net.Conn, error)
+}
 
-type tunTransfer struct {
-	tun      io.ReadWriteCloser
-	readFn   ReaderFunc
-	writeFn  WriterFunc
-	stopCh   chan struct{}
-	wg       sync.WaitGroup
-	directFn *direct.DirectIPDevice
+func NewDobbyHandler(proxyDialer func(context.Context, string, string) (net.Conn, error)) *DobbyTransportHandler {
+	handler := &DobbyTransportHandler{
+		proxyDial:      proxyDialer,
+		bypassNetworks: DefaultBypassCIDRs,
+	}
+	return handler
+}
+
+func (h *DobbyTransportHandler) isBypass(ip net.IP) bool {
+	for _, network := range h.bypassNetworks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *DobbyTransportHandler) HandleTCP(conn adapter.TCPConn) {
+	defer conn.Close()
+
+	destAddr := conn.RemoteAddr().String()
+	host, _, _ := net.SplitHostPort(destAddr)
+	destIP := net.ParseIP(host)
+
+	var remoteConn net.Conn
+	var err error
+
+	if destIP != nil && h.isBypass(destIP) {
+		log.Infof("[Direct] %s", destAddr)
+		remoteConn, err = net.DialTimeout("tcp", destAddr, 5*time.Second)
+	} else {
+		log.Infof("[Proxy] %s", destAddr)
+		remoteConn, err = h.proxyDial(context.Background(), "tcp", destAddr)
+	}
+
+	if err != nil {
+		log.Infof("Failed to dial %s: %v", destAddr, err)
+		return
+	}
+	defer remoteConn.Close()
+
+	// Двусторонняя перекачка (Relay)
+	relay(conn, remoteConn)
+}
+
+func (h *DobbyTransportHandler) HandleUDP(conn adapter.UDPConn) {
+	// Для UDP в tun2socks v2 используется похожий механизм.
+	// В первой версии можно просто закрывать или реализовать простейший Proxy.
+	defer conn.Close()
+	destAddr := conn.RemoteAddr().String()
+	log.Infof("[UDP] Request to %s (not implemented in MVP)", destAddr)
+}
+
+// Вспомогательная функция для копирования трафика
+func relay(left, right net.Conn) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		io.Copy(right, left)
+		right.SetDeadline(time.Now()) // Прерываем ожидание на другой стороне
+	}()
+	go func() {
+		defer wg.Done()
+		io.Copy(left, right)
+		left.SetDeadline(time.Now())
+	}()
+	wg.Wait()
 }
 
 var (
-	defaultBufSize = 65536
-	transferMu     sync.Mutex
-	transferInst   *tunTransfer
-
-	// Чтобы не спамить одинаковыми логами в циклах.
-	onceNoDirectOutbound sync.Once
-	onceNoReadFnInbound  sync.Once
+	activeStack *stack.Stack
+	stackMu     sync.Mutex
 )
 
-const logPrefix = "tunnel"
-
-// helper для логов по горутинам
-func logLoop(loop string, format string, args ...any) {
-	log.Infof("["+logPrefix+":"+loop+"] "+format, args...)
-}
-
-func logLoopErr(loop string, msg string, err error) {
-	log.Infof("[Error: "+logPrefix+":"+loop+"] %s: %v", msg, err)
-}
-
-// Старый интерфейс, без directFn — чтобы не ломать существующий код.
-func StartTransfer(
+func StartDobbyTunnel(
 	tun io.ReadWriteCloser,
-	readFn ReaderFunc,
-	writeFn WriterFunc,
-) {
-	directFn, err := direct.NewDirectIPDevice()
+	outlineDialer func(context.Context, string, string) (net.Conn, error),
+) error {
+
+	stackMu.Lock()
+	defer stackMu.Unlock()
+
+	if activeStack != nil {
+		return fmt.Errorf("Dobby tunnel already running")
+	}
+
+	device, err := iobased.New(tun, 1500, 0)
 	if err != nil {
-		logLoopErr("core", "failed to create DirectIPDevice", err)
-		// старое поведение: просто не используем direct
-		directFn = nil
+		return err
 	}
-	StartTransferWithDirect(tun, readFn, writeFn, directFn)
+
+	handler := NewDobbyHandler(outlineDialer)
+
+	s, err := core.CreateStack(&core.Config{
+		LinkEndpoint:     device,
+		TransportHandler: handler,
+	})
+	if err != nil {
+		return err
+	}
+
+	activeStack = s
+
+	log.Infof("Dobby Tunnel started")
+
+	return nil
 }
 
-// Новый интерфейс: с gVisor-direct.
-func StartTransferWithDirect(
-	tun io.ReadWriteCloser,
-	readFn ReaderFunc,
-	writeFn WriterFunc,
-	directFn *direct.DirectIPDevice,
-) {
-	transferMu.Lock()
-	defer transferMu.Unlock()
+func StopDobbyTunnel() {
+	stackMu.Lock()
+	defer stackMu.Unlock()
 
-	if transferInst != nil {
-		logLoop("core", "StartTransferWithDirect called while previous transfer is active, stopping old one")
-		stopLocked()
+	if activeStack != nil {
+		activeStack.Close()
+		activeStack.Wait()
+		activeStack = nil
+		log.Infof("Dobby Tunnel stopped")
 	}
-
-	transferInst = &tunTransfer{
-		tun:      tun,
-		readFn:   readFn,
-		writeFn:  writeFn,
-		directFn: directFn,
-		stopCh:   make(chan struct{}),
-	}
-
-	logLoop("core", "starting transfer (direct=%t, readFn=%t, writeFn=%t)",
-		directFn != nil, readFn != nil, writeFn != nil)
-
-	transferInst.startLoops()
-}
-
-func (t *tunTransfer) startLoops() {
-	t.wg.Add(3)
-	go t.readLoop()
-	go t.writeLoop()
-	go t.directLoop()
-}
-
-func (t *tunTransfer) readLoop() {
-	defer func() {
-		logLoop("read", "stopped")
-		t.wg.Done()
-	}()
-
-	logLoop("read", "started")
-
-	raw := make([]byte, defaultBufSize)
-
-	for {
-		select {
-		case <-t.stopCh:
-			return
-		default:
-		}
-
-		n, err := t.tun.Read(raw)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				// обычное завершение — можно залогировать один раз, но без спама
-				logLoop("read", "tun.Read returned EOF")
-				return
-			}
-			logLoopErr("read", "error reading from TUN", err)
-			continue
-		}
-		if n <= 0 {
-			continue
-		}
-
-		packet, ok := internal.AdaptReadPackets(raw[:n])
-		if !ok {
-			logLoop("read", "AdaptReadPackets returned !ok (len=%d), dropping", n)
-			continue
-		}
-
-		action := georouting.DecideOutbound(packet)
-		logLoop("read", "outbound packet len=%d, action=%v", len(packet), action)
-
-		switch action {
-		case georouting.RouteDirect:
-			logLoop("read", "RouteDirect chosen")
-			if t.directFn == nil {
-				onceNoDirectOutbound.Do(func() {
-					logLoop("read", "RouteDirect chosen but directFn is nil, outbound packets will fallback to drop")
-				})
-				continue
-			}
-			if _, err := t.directFn.Write(packet); err != nil {
-				logLoopErr("read", "failed to write packet to directFn", err)
-			}
-
-		case georouting.RouteProxy:
-			logLoop("read", "RouteProxy chosen")
-			if t.writeFn == nil {
-				logLoop("read", "RouteProxy chosen but writeFn is nil, dropping packet")
-				continue
-			}
-			if _, err := t.writeFn(packet); err != nil {
-				logLoopErr("read", "failed to write packet to proxy writer", err)
-			}
-
-		default:
-			// на всякий случай логируем странное значение
-			logLoop("read", "unknown outbound action=%v, dropping", action)
-		}
-	}
-}
-
-func (t *tunTransfer) writeLoop() {
-	defer func() {
-		logLoop("write", "stopped")
-		t.wg.Done()
-	}()
-
-	logLoop("write", "started")
-
-	buf := make([]byte, defaultBufSize)
-
-	for {
-		select {
-		case <-t.stopCh:
-			return
-		default:
-		}
-
-		if t.readFn == nil {
-			onceNoReadFnInbound.Do(func() {
-				logLoop("write", "readFn is nil, inbound packets from proxy will be dropped")
-			})
-			continue
-		}
-
-		n, err := t.readFn(buf)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				logLoop("write", "readFn EOF, stopping writeLoop")
-				return
-			}
-			logLoopErr("write", "error reading from proxy", err)
-			continue
-		}
-		if n <= 0 {
-			continue
-		}
-
-		packet := buf[:n]
-		action := georouting.DecideInbound(packet)
-		logLoop("write", "inbound packet len=%d, action=%v", len(packet), action)
-
-		switch action {
-		case georouting.RouteProxy:
-			encoded, ok := internal.AdaptWritePackets(packet)
-			if !ok {
-				logLoop("write", "AdaptWritePackets returned !ok, dropping")
-				continue
-			}
-			if _, err := t.tun.Write(encoded); err != nil {
-				logLoopErr("write", "failed to write encoded packet to TUN", err)
-			}
-
-		default:
-			// Например, дропаем, но логируем, чтобы понимать, почему нет трафика.
-			logLoop("write", "dropping inbound packet, action=%v", action)
-			continue
-		}
-	}
-}
-
-func (t *tunTransfer) directLoop() {
-	defer func() {
-		logLoop("direct", "stopped")
-		t.wg.Done()
-	}()
-
-	if t.directFn == nil {
-		logLoop("direct", "directFn is nil, directLoop will exit immediately")
-		return
-	}
-
-	logLoop("direct", "started")
-
-	buf := make([]byte, defaultBufSize)
-
-	for {
-		select {
-		case <-t.stopCh:
-			return
-		default:
-		}
-
-		n, err := t.directFn.Read(buf)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				logLoop("direct", "directFn.Read EOF, stopping directLoop")
-				return
-			}
-			logLoopErr("direct", "error reading from directFn", err)
-			continue
-		}
-		if n <= 0 {
-			continue
-		}
-
-		packet := buf[:n]
-		logLoop("direct", "received packet from directFn len=%d", len(packet))
-
-		encoded, ok := internal.AdaptWritePackets(packet)
-		if !ok {
-			logLoop("direct", "AdaptWritePackets returned !ok, dropping")
-			continue
-		}
-
-		if _, err := t.tun.Write(encoded); err != nil {
-			logLoopErr("direct", "failed to write encoded direct packet to TUN", err)
-		}
-	}
-}
-
-func StopTransfer() {
-	transferMu.Lock()
-	defer transferMu.Unlock()
-	logLoop("core", "StopTransfer called")
-	stopLocked()
-}
-
-func stopLocked() {
-	if transferInst == nil {
-		logLoop("core", "stopLocked: transferInst is nil, nothing to stop")
-		return
-	}
-	logLoop("core", "stopping transfer")
-	close(transferInst.stopCh)
-	transferInst.wg.Wait()
-	transferInst = nil
-	logLoop("core", "transfer stopped")
 }

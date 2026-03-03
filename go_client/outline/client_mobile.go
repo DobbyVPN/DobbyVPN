@@ -29,44 +29,39 @@ func NewClient(transportConfig string, tun io.ReadWriteCloser) *OutlineClient {
 }
 
 func (c *OutlineClient) Connect() error {
+	// 1. Создаем устройство Outline (прокси)
 	od, err := internal.NewOutlineDevice(c.config)
 	if err != nil {
-		log.Infof("failed to create outline device: %v\n", err)
+		return err
+	}
+	c.device = od
+
+	// 2. Создаем функцию-диалер для прокси
+	proxyDialer := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		// Outline обычно предоставляет Dial через свой внутренний стек
+		return od.Dial(network, addr)
+	}
+
+	// 3. Запускаем туннель с поддержкой геороутинга
+	// Передаем c.tun (который io.ReadWriteCloser)
+	err = tunnel.StartDobbyTunnel(c.tun, proxyDialer)
+	if err != nil {
 		return err
 	}
 
-	log.Infof("outline device created")
-	log.Infof("outline client connected")
-
-	c.device = od
 	common.Client.MarkActive(outlineCommon.Name)
-
-	log.Infof("start read/write goroutines")
-
-	tunnel.StartTransfer(
-		c.tun,
-		func(buf []byte) (int, error) {
-			return c.device.Read(buf)
-		},
-		func(buf []byte) (int, error) {
-			return c.device.Write(buf)
-		},
-	)
-
+	log.Infof("Outline connected via Dobby Tunnel")
 	return nil
 }
 
 func (c *OutlineClient) Disconnect() error {
+
+	tunnel.StopDobbyTunnel()
+
 	if c.device != nil {
-		if err := c.device.Close(); err != nil {
-			log.Infof("failed to close outline device: %v\n", err)
-			return err
-		}
+		c.device.Close()
 	}
 
-	tunnel.StopTransfer()
-
-	log.Infof("outline client disconnected")
 	common.Client.MarkInactive(outlineCommon.Name)
 	return nil
 }
