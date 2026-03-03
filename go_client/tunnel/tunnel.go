@@ -52,6 +52,10 @@ func NewDobbyHandler(proxyDialer func(context.Context, string, string) (net.Conn
 		proxyDial:      proxyDialer,
 		bypassNetworks: DefaultBypassCIDRs,
 	}
+
+	serverIP := net.ParseIP("85.9.223.19")
+	handler.bypassNetworks = append(handler.bypassNetworks, &net.IPNet{IP: serverIP, Mask: net.CIDRMask(32, 32)})
+
 	return handler
 }
 
@@ -93,28 +97,54 @@ func (h *DobbyTransportHandler) HandleTCP(conn adapter.TCPConn) {
 }
 
 func (h *DobbyTransportHandler) HandleUDP(conn adapter.UDPConn) {
-	// Для UDP в tun2socks v2 используется похожий механизм.
-	// В первой версии можно просто закрывать или реализовать простейший Proxy.
+	// Временное решение: пускаем UDP напрямую, чтобы работал DNS
 	defer conn.Close()
 	destAddr := conn.RemoteAddr().String()
-	log.Infof("[UDP] Request to %s (not implemented in MVP)", destAddr)
+
+	// Создаем локальный сокет для выхода в мир
+	remoteConn, err := net.ListenPacket("udp", ":0")
+	if err != nil {
+		log.Infof("UDP Direct error: %v", err)
+		return
+	}
+	defer remoteConn.Close()
+
+	target, _ := net.ResolveUDPAddr("udp", destAddr)
+
+	// Перекачка UDP пакетов (упрощенная)
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, err := conn.Read(buf)
+			if err != nil {
+				return
+			}
+			remoteConn.WriteTo(buf[:n], target)
+		}
+	}()
+
+	buf := make([]byte, 2048)
+	for {
+		n, from, err := remoteConn.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+		if from.String() == target.String() {
+			conn.Write(buf[:n])
+		}
+	}
 }
 
-// Вспомогательная функция для копирования трафика
 func relay(left, right net.Conn) {
-	var wg sync.WaitGroup
-	wg.Add(2)
 	go func() {
-		defer wg.Done()
 		io.Copy(right, left)
-		right.SetDeadline(time.Now()) // Прерываем ожидание на другой стороне
+		if tcpRight, ok := right.(*net.TCPConn); ok {
+			tcpRight.CloseWrite()
+		} else {
+			right.Close()
+		}
 	}()
-	go func() {
-		defer wg.Done()
-		io.Copy(left, right)
-		left.SetDeadline(time.Now())
-	}()
-	wg.Wait()
+	io.Copy(left, right)
 }
 
 var (
