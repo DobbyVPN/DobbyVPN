@@ -19,23 +19,10 @@ object AirportsManager {
     suspend fun loadAirports(): AirportList {
         val data = Res.readBytes("files/airports.csv")
         val csv = data.decodeToString()
-        val airports = csv.lineSequence()
-            .drop(1) // skip header
-            .filter { it.isNotBlank() }
-            .map { line -> parseCsvLine(line) }
-            .filter { it.size >= 3 }
-            .map { fields ->
-                Airport(
-                    name = fields[0],
-                    latitude_deg = fields[1].toDoubleOrNull() ?: 0.0,
-                    longitude_deg = fields[2].toDoubleOrNull() ?: 0.0,
-                )
-            }
-            .toList()
-        return AirportList(airports)
+        return parseAirportsFromCsv(csv)
     }
 
-    private fun parseCsvLine(line: String): List<String> {
+    internal fun parseCsvLine(line: String): List<String> {
         val fields = mutableListOf<String>()
         val current = StringBuilder()
         var inQuotes = false
@@ -51,5 +38,22 @@ object AirportsManager {
         }
         fields.add(current.toString())
         return fields
+    }
+
+    internal fun parseAirportsFromCsv(csv: String): AirportList {
+        val airports = csv.lineSequence()
+            .drop(1) // skip header
+            .filter { it.isNotBlank() }
+            .map { line -> parseCsvLine(line) }
+            .filter { it.size >= 3 }
+            .map { fields ->
+                Airport(
+                    name = fields[0],
+                    latitude_deg = fields[1].toDoubleOrNull() ?: 0.0,
+                    longitude_deg = fields[2].toDoubleOrNull() ?: 0.0,
+                )
+            }
+            .toList()
+        return AirportList(airports)
     }
 }

@@ -1,17 +1,12 @@
 package com.dobby.feature.e2e
 
-import com.dobby.feature.diagnostic.domain.HealthCheck
 import com.dobby.feature.diagnostic.domain.HealthCheckManager
-import com.dobby.feature.logging.Logger
-import com.dobby.feature.logging.domain.LogEventsChannel
-import com.dobby.feature.logging.domain.LogsRepository
-import com.dobby.feature.main.domain.AwgManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
-import com.dobby.feature.main.domain.DobbyConfigsRepository
-import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.main.domain.VpnInterface
-import com.dobby.feature.main.domain.VpnManager
-import com.dobby.feature.main.presentation.MainViewModel
+import com.dobby.test.fixtures.TestCountingVpnManager
+import com.dobby.test.fixtures.TestFakeDobbyConfigs
+import com.dobby.test.fixtures.TestScriptedHealthCheck
+import com.dobby.test.fixtures.createTestLogger
+import com.dobby.test.fixtures.createTestViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -24,14 +19,14 @@ class VpnFullE2EContractTest {
 
     @Test
     fun `happy path end-to-end app start connect traffic disconnect`() = runBlocking {
-        val configs = E2eFakeConfigs()
+        val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
-        val vpn = E2eCountingVpnManager()
-        val vm = createVm(configs, state, vpn, E2eScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
+        val vpn = TestCountingVpnManager()
+        val vm = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
 
         vm.onConnectionButtonClicked(validConfigA())
         delay(250)
-        state.updateStatus(true) // emulate traffic flowing after connect
+        state.updateStatus(true)
         delay(50)
         vm.onConnectionButtonClicked(validConfigA())
         delay(250)
@@ -45,17 +40,17 @@ class VpnFullE2EContractTest {
 
     @Test
     fun `network down up end-to-end reconnect flow and recovery`() = runBlocking {
-        val configs = E2eFakeConfigs()
+        val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
         state.tryUpdateVpnStarted(true)
-        val vpn = E2eCountingVpnManager()
-        val health = E2eScriptedHealthCheck(fullScript = ArrayDeque(listOf(false, true)))
-        val vm = createVm(configs, state, vpn, health)
+        val vpn = TestCountingVpnManager()
+        val health = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(false, true)))
+        val vm = createTestViewModel(configs, state, vpn, healthCheck = health)
         val manager = HealthCheckManager(
             healthCheck = health,
             mainViewModel = vm,
             configsRepository = configs,
-            logger = createLogger(),
+            logger = createTestLogger(),
             gracePeriodMs = 0,
             restartDelayMs = 1,
             postRestartDelay = 1.milliseconds,
@@ -75,10 +70,10 @@ class VpnFullE2EContractTest {
 
     @Test
     fun `invalid config end-to-end reports disconnected without false connected`() = runBlocking {
-        val configs = E2eFakeConfigs()
+        val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
-        val vpn = E2eCountingVpnManager()
-        val vm = createVm(configs, state, vpn, E2eScriptedHealthCheck())
+        val vpn = TestCountingVpnManager()
+        val vm = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck())
 
         vm.onConnectionButtonClicked(
             """
@@ -96,10 +91,10 @@ class VpnFullE2EContractTest {
 
     @Test
     fun `stop cleanup end-to-end has no active tunnels or hanging connected state`() = runBlocking {
-        val configs = E2eFakeConfigs()
+        val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
-        val vpn = E2eCountingVpnManager()
-        val vm = createVm(configs, state, vpn, E2eScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
+        val vpn = TestCountingVpnManager()
+        val vm = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
 
         vm.onConnectionButtonClicked(validConfigA())
         delay(250)
@@ -113,10 +108,10 @@ class VpnFullE2EContractTest {
 
     @Test
     fun `server profile switch in ui works without app restart`() = runBlocking {
-        val configs = E2eFakeConfigs()
+        val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
-        val vpn = E2eCountingVpnManager()
-        val vm = createVm(configs, state, vpn, E2eScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
+        val vpn = TestCountingVpnManager()
+        val vm = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
 
         vm.onConnectionButtonClicked(validConfigA())
         delay(200)
@@ -131,17 +126,17 @@ class VpnFullE2EContractTest {
 
     @Test
     fun `background foreground transition keeps vpn state consistent`() = runBlocking {
-        val configs = E2eFakeConfigs(connectionUrl = validConfigA())
+        val configs = TestFakeDobbyConfigs(connectionUrl = validConfigA())
         val state = ConnectionStateRepository()
-        val vpn = E2eCountingVpnManager()
-        val vm1 = createVm(configs, state, vpn, E2eScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
+        val vpn = TestCountingVpnManager()
+        val vm1 = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
 
         vm1.onConnectionButtonClicked(validConfigA())
         delay(200)
         state.updateStatus(true)
         delay(100)
 
-        val vm2 = createVm(configs, state, vpn, E2eScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
+        val vm2 = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
         delay(150)
 
         assertTrue(vm2.uiState.value.isVpnStarted)
@@ -150,13 +145,13 @@ class VpnFullE2EContractTest {
 
     @Test
     fun `cold restart recovery keeps state consistent with actual vpn`() = runBlocking {
-        val configs = E2eFakeConfigs(connectionUrl = validConfigA())
+        val configs = TestFakeDobbyConfigs(connectionUrl = validConfigA())
         val persistentState = ConnectionStateRepository()
         persistentState.tryUpdateVpnStarted(true)
         persistentState.tryUpdateStatus(true)
-        val vpn = E2eCountingVpnManager(activeTunnels = 1)
+        val vpn = TestCountingVpnManager(activeTunnels = 1)
 
-        val vm = createVm(configs, persistentState, vpn, E2eScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
+        val vm = createTestViewModel(configs, persistentState, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
         delay(150)
 
         assertTrue(vm.uiState.value.isVpnStarted)
@@ -166,10 +161,10 @@ class VpnFullE2EContractTest {
 
     @Test
     fun `long session stability smoke has no state leak on repeated health updates`() = runBlocking {
-        val configs = E2eFakeConfigs()
+        val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
-        val vpn = E2eCountingVpnManager()
-        val vm = createVm(configs, state, vpn, E2eScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
+        val vpn = TestCountingVpnManager()
+        val vm = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
 
         vm.onConnectionButtonClicked(validConfigA())
         delay(200)
@@ -185,10 +180,10 @@ class VpnFullE2EContractTest {
 
     @Test
     fun `ui resilience under transient errors does not freeze state machine`() = runBlocking {
-        val configs = E2eFakeConfigs()
+        val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
-        val vpn = E2eCountingVpnManager()
-        val vm = createVm(configs, state, vpn, E2eScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
+        val vpn = TestCountingVpnManager()
+        val vm = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
 
         repeat(5) {
             vm.onConnectionButtonClicked(
@@ -213,10 +208,10 @@ class VpnFullE2EContractTest {
 
     @Test
     fun `secondary flows diagnostics and settings do not affect core connect path`() = runBlocking {
-        val configs = E2eFakeConfigs()
+        val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
-        val vpn = E2eCountingVpnManager()
-        val vm = createVm(configs, state, vpn, E2eScriptedHealthCheck())
+        val vpn = TestCountingVpnManager()
+        val vm = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck())
 
         vm.onConnectionUrlChanged("secondary-flow-url")
         delay(80)
@@ -226,27 +221,6 @@ class VpnFullE2EContractTest {
         assertFalse(state.statusFlow.value)
         assertEquals(0, vpn.startCalls)
         assertEquals(0, vpn.stopCalls)
-    }
-
-    private fun createVm(
-        configs: DobbyConfigsRepository,
-        state: ConnectionStateRepository,
-        vpn: VpnManager,
-        health: HealthCheck
-    ): MainViewModel {
-        return MainViewModel(
-            configsRepository = configs,
-            connectionStateRepository = state,
-            permissionEventsChannel = PermissionEventsChannel(),
-            vpnManager = vpn,
-            awgManager = object : AwgManager {
-                override fun getAwgVersion(): String = "test"
-                override fun onAwgConnect() = Unit
-                override fun onAwgDisconnect() = Unit
-            },
-            logger = createLogger(),
-            healthCheck = health
-        )
     }
 
     private fun validConfigA(): String = """
@@ -264,144 +238,4 @@ class VpnFullE2EContractTest {
         Method = "chacha20-ietf-poly1305"
         Password = "secret-pass-2"
     """.trimIndent()
-}
-
-private fun createLogger(): Logger = Logger(LogsRepository(logEventsChannel = LogEventsChannel()))
-
-private class E2eScriptedHealthCheck(
-    private val wakeup: Int = 0,
-    private val fullScript: ArrayDeque<Boolean> = ArrayDeque(),
-    private val shortScript: ArrayDeque<Boolean> = ArrayDeque()
-) : HealthCheck {
-    override fun shortConnectionCheckUp(): Boolean = shortScript.removeFirstOrNull() ?: true
-    override fun fullConnectionCheckUp(): Boolean = fullScript.removeFirstOrNull() ?: false
-    override fun checkServerAlive(address: String, port: Int): Boolean = true
-    override fun getTimeToWakeUp(): Int = wakeup
-}
-
-private class E2eCountingVpnManager(
-    var startCalls: Int = 0,
-    var stopCalls: Int = 0,
-    var activeTunnels: Int = 0
-) : VpnManager {
-    override fun start() {
-        startCalls++
-        activeTunnels++
-    }
-
-    override fun stop() {
-        stopCalls++
-        if (activeTunnels > 0) activeTunnels--
-    }
-}
-
-private class E2eFakeConfigs(
-    vpnInterface: VpnInterface = VpnInterface.CLOAK_OUTLINE,
-    connectionUrl: String = "",
-    connectionConfig: String = "",
-    methodPasswordOutline: String = "",
-    serverPortOutline: String = "",
-    isOutlineEnabled: Boolean = false,
-    prefixOutline: String = "",
-    isWebsocketEnabled: Boolean = false,
-    tcpPathOutline: String = "",
-    udpPathOutline: String = "",
-    cloakConfig: String = "",
-    isCloakEnabled: Boolean = false,
-    cloakLocalPort: Int = 1984,
-    awgConfig: String = "",
-    isAmneziaWGEnabled: Boolean = false,
-    isUserInitStop: Boolean = false,
-) : DobbyConfigsRepository {
-    private var _vpnInterface: VpnInterface = vpnInterface
-    private var _connectionUrl: String = connectionUrl
-    private var _connectionConfig: String = connectionConfig
-    private var _methodPasswordOutline: String = methodPasswordOutline
-    private var _serverPortOutline: String = serverPortOutline
-    private var _isOutlineEnabled: Boolean = isOutlineEnabled
-    private var _prefixOutline: String = prefixOutline
-    private var _isWebsocketEnabled: Boolean = isWebsocketEnabled
-    private var _tcpPathOutline: String = tcpPathOutline
-    private var _udpPathOutline: String = udpPathOutline
-    private var _cloakConfig: String = cloakConfig
-    private var _isCloakEnabled: Boolean = isCloakEnabled
-    private var _cloakLocalPort: Int = cloakLocalPort
-    private var _awgConfig: String = awgConfig
-    private var _isAmneziaWGEnabled: Boolean = isAmneziaWGEnabled
-    private var _isUserInitStop: Boolean = isUserInitStop
-
-    val serverPortOutlineValue: String
-        get() = _serverPortOutline
-
-    override fun getVpnInterface(): VpnInterface = _vpnInterface
-    override fun setVpnInterface(vpnInterface: VpnInterface) {
-        this._vpnInterface = vpnInterface
-    }
-
-    override fun getConnectionURL(): String = _connectionUrl
-    override fun setConnectionURL(connectionURL: String) {
-        _connectionUrl = connectionURL
-    }
-
-    override fun getConnectionConfig(): String = _connectionConfig
-    override fun setConnectionConfig(connectionConfig: String) {
-        this._connectionConfig = connectionConfig
-    }
-
-    override fun couldStart(): Boolean = true
-    override fun getIsUserInitStop(): Boolean = _isUserInitStop
-    override fun setIsUserInitStop(isUserInitStop: Boolean) {
-        this._isUserInitStop = isUserInitStop
-    }
-
-    override fun setServerPortOutline(newConfig: String) {
-        _serverPortOutline = newConfig
-    }
-    override fun setMethodPasswordOutline(newConfig: String) {
-        _methodPasswordOutline = newConfig
-    }
-    override fun getServerPortOutline(): String = _serverPortOutline
-    override fun getMethodPasswordOutline(): String = _methodPasswordOutline
-    override fun getIsOutlineEnabled(): Boolean = _isOutlineEnabled
-    override fun setIsOutlineEnabled(isOutlineEnabled: Boolean) {
-        this._isOutlineEnabled = isOutlineEnabled
-    }
-    override fun getPrefixOutline(): String = _prefixOutline
-    override fun setPrefixOutline(prefix: String) {
-        _prefixOutline = prefix
-    }
-    override fun getIsWebsocketEnabled(): Boolean = _isWebsocketEnabled
-    override fun setIsWebsocketEnabled(enabled: Boolean) {
-        _isWebsocketEnabled = enabled
-    }
-    override fun getTcpPathOutline(): String = _tcpPathOutline
-    override fun setTcpPathOutline(tcpPath: String) {
-        _tcpPathOutline = tcpPath
-    }
-    override fun getUdpPathOutline(): String = _udpPathOutline
-    override fun setUdpPathOutline(udpPath: String) {
-        _udpPathOutline = udpPath
-    }
-
-    override fun getCloakConfig(): String = _cloakConfig
-    override fun setCloakConfig(newConfig: String) {
-        _cloakConfig = newConfig
-    }
-    override fun getIsCloakEnabled(): Boolean = _isCloakEnabled
-    override fun setIsCloakEnabled(isCloakEnabled: Boolean) {
-        this._isCloakEnabled = isCloakEnabled
-    }
-    override fun getCloakLocalPort(): Int = _cloakLocalPort
-    override fun setCloakLocalPort(port: Int) {
-        _cloakLocalPort = port
-    }
-
-    override fun getAwgConfig(): String = _awgConfig
-    override fun setAwgConfig(newConfig: String) {
-        _awgConfig = newConfig
-    }
-    override fun getIsAmneziaWGEnabled(): Boolean = _isAmneziaWGEnabled
-    override fun setIsAmneziaWGEnabled(isAmneziaWGEnabled: Boolean) {
-        this._isAmneziaWGEnabled = isAmneziaWGEnabled
-    }
 }

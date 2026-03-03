@@ -83,10 +83,21 @@ func assertCloakConfigFailsE2E(t *testing.T, cfg string, localAddr string) {
 		}
 		return
 	}
-	// Local endpoint should usually not appear for invalid config.
-	// If it is unreachable, ensure process actually failed with a non-empty diagnostic.
-	if strings.TrimSpace(out) == "" {
+
+	outLower := strings.ToLower(strings.TrimSpace(out))
+	if outLower == "" {
 		t.Fatalf("expected non-empty failure diagnostics for invalid cloak config")
+	}
+	hasErrorIndicator := strings.Contains(outLower, "error") ||
+		strings.Contains(outLower, "fail") ||
+		strings.Contains(outLower, "invalid") ||
+		strings.Contains(outLower, "critical") ||
+		strings.Contains(outLower, "unable") ||
+		strings.Contains(outLower, "illegal") ||
+		strings.Contains(outLower, "cannot") ||
+		strings.Contains(outLower, "refused")
+	if !hasErrorIndicator {
+		t.Fatalf("expected error-related output for invalid cloak config, got: %q", out)
 	}
 }
 

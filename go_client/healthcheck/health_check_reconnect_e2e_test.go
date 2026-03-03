@@ -55,10 +55,22 @@ func TestHealthCheckTriggersReconnectOnUnhealthyE2E(t *testing.T) {
 
 	StartHealthCheck(1, false)
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		status := lastStatus.Load()
-		if status != nil && mock.refreshCalls.Load() > 0 {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.After(10 * time.Second)
+	for {
+		select {
+		case <-timeout:
+			t.Fatalf(
+				"timed out waiting healthcheck reconnect path; refreshCalls=%d status=%q",
+				mock.refreshCalls.Load(),
+				Status(),
+			)
+		case <-ticker.C:
+			status := lastStatus.Load()
+			if status == nil || mock.refreshCalls.Load() == 0 {
+				continue
+			}
 			if status.isHealthy {
 				t.Fatalf("expected unhealthy status, got healthy")
 			}
@@ -73,12 +85,5 @@ func TestHealthCheckTriggersReconnectOnUnhealthyE2E(t *testing.T) {
 			}
 			return
 		}
-		time.Sleep(100 * time.Millisecond)
 	}
-
-	t.Fatalf(
-		"timed out waiting healthcheck reconnect path; refreshCalls=%d status=%q",
-		mock.refreshCalls.Load(),
-		Status(),
-	)
 }

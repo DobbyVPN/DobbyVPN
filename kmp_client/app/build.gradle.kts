@@ -112,6 +112,10 @@ kotlin {
             implementation(libs.ktor.client.cio)
         }
 
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+        }
+
         jvmTest.dependencies {
             implementation(kotlin("test"))
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test")

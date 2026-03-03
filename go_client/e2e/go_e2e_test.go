@@ -131,8 +131,6 @@ func (m *mockTun) Read(p []byte) (int, error) {
 	case data := <-m.readCh:
 		n := copy(p, data)
 		return n, nil
-	case <-time.After(5 * time.Millisecond):
-		return 0, io.EOF
 	}
 }
 
@@ -392,11 +390,20 @@ func TestCommonClientConcurrentConnectE2E(t *testing.T) {
 		t.Fatal("first connect did not enter critical section in time")
 	}
 
+	secondStart := time.Now()
 	if err := client.Connect("outline"); err != nil {
 		t.Fatalf("second connect returned error: %v", err)
 	}
+	secondDuration := time.Since(secondStart)
+
+	if secondDuration > 200*time.Millisecond {
+		t.Fatalf("second connect should return immediately when skipped, took %s", secondDuration)
+	}
 	if calls := blocking.connectCalls.Load(); calls != 1 {
 		t.Fatalf("unexpected connect calls during contention: got %d want 1", calls)
+	}
+	if client.CouldStart() {
+		t.Fatal("expected CouldStart=false while first connect is still in critical section")
 	}
 
 	close(blocking.releaseCh)
@@ -407,6 +414,13 @@ func TestCommonClientConcurrentConnectE2E(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting first connect completion")
+	}
+
+	if calls := blocking.connectCalls.Load(); calls != 1 {
+		t.Fatalf("expected exactly 1 underlying connect call after both complete, got %d", calls)
+	}
+	if names := client.GetClientNames(true); len(names) != 1 || names[0] != "outline" {
+		t.Fatalf("expected outline to be active after connect, got %v", names)
 	}
 }
 
@@ -431,7 +445,7 @@ func TestCommonClientRefreshOnlyActiveE2E(t *testing.T) {
 	}
 }
 
-// Verifies StopTransfer remains safe when called repeatedly after active transfer.
+// Verifies StopTransfer remains safe when called repeatedly and goroutines have exited.
 func TestTunnelStopTransferIdempotentE2E(t *testing.T) {
 	tunnel.StopTransfer()
 	tun := newMockTun()
@@ -440,10 +454,28 @@ func TestTunnelStopTransferIdempotentE2E(t *testing.T) {
 		tunnel.StopTransfer()
 	}()
 
-	tunnel.StartTransfer(tun, nil, nil)
+	outboundCh := make(chan []byte, 1)
+	tunnel.StartTransfer(
+		tun,
+		nil,
+		func(packet []byte) (int, error) {
+			cp := make([]byte, len(packet))
+			copy(cp, packet)
+			outboundCh <- cp
+			return len(packet), nil
+		},
+	)
 	tunnel.StopTransfer()
 	tunnel.StopTransfer()
 	tunnel.StopTransfer()
+
+	tun.injectRead([]byte{0xDE, 0xAD})
+	select {
+	case pkt := <-outboundCh:
+		t.Fatalf("expected no outbound packet after StopTransfer, got %v", pkt)
+	case <-time.After(200 * time.Millisecond):
+		// No packet arrived -- goroutines have stopped as expected.
+	}
 }
 
 // Verifies TCP alive probe fails fast for invalid destination address.
@@ -718,14 +750,21 @@ func TestCloakConnectViaDockerE2E(t *testing.T) {
 	}()
 
 	localAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort))
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		conn, dialErr := net.DialTimeout("tcp", localAddr, 500*time.Millisecond)
-		if dialErr == nil {
-			_ = conn.Close()
-			break
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	waitDeadline := time.After(15 * time.Second)
+waitLoop:
+	for {
+		select {
+		case <-waitDeadline:
+			break waitLoop
+		case <-ticker.C:
+			conn, dialErr := net.DialTimeout("tcp", localAddr, 500*time.Millisecond)
+			if dialErr == nil {
+				_ = conn.Close()
+				break waitLoop
+			}
 		}
-		time.Sleep(200 * time.Millisecond)
 	}
 
 	conn, err := net.DialTimeout("tcp", localAddr, 3*time.Second)

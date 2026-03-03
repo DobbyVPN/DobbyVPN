@@ -5,6 +5,7 @@ import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryCloak
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryOutline
+import com.dobby.test.fixtures.createTestLogger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -152,10 +153,7 @@ class TomlConfigApplierFunctionalTest {
     private fun createApplier(
         outlineRepo: DobbyConfigsRepositoryOutline,
         cloakRepo: DobbyConfigsRepositoryCloak
-    ): TomlConfigApplier {
-        val logger = Logger(LogsRepository(logEventsChannel = LogEventsChannel()))
-        return TomlConfigApplier(outlineRepo, cloakRepo, logger)
-    }
+    ): TomlConfigApplier = TomlConfigApplier(outlineRepo, cloakRepo, createTestLogger())
 }
 
 private data class FakeOutlineRepo(

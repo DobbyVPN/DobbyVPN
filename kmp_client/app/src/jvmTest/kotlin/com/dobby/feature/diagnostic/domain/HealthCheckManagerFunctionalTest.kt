@@ -1,15 +1,11 @@
 package com.dobby.feature.diagnostic.domain
 
-import com.dobby.feature.logging.Logger
-import com.dobby.feature.logging.domain.LogEventsChannel
-import com.dobby.feature.logging.domain.LogsRepository
-import com.dobby.feature.main.domain.AwgManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
-import com.dobby.feature.main.domain.DobbyConfigsRepository
-import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.main.domain.VpnInterface
-import com.dobby.feature.main.domain.VpnManager
-import com.dobby.feature.main.presentation.MainViewModel
+import com.dobby.test.fixtures.TestCountingVpnManager
+import com.dobby.test.fixtures.TestFakeDobbyConfigs
+import com.dobby.test.fixtures.TestScriptedHealthCheck
+import com.dobby.test.fixtures.createTestLogger
+import com.dobby.test.fixtures.createTestViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.drop
@@ -24,17 +20,17 @@ class HealthCheckManagerFunctionalTest {
 
     @Test
     fun `lifecycle unhealthy to reconnect to recovered`() = runTest {
-        val configs = HcFakeConfigs()
+        val configs = TestFakeDobbyConfigs(methodPasswordOutline = "method:password")
         val connectionState = ConnectionStateRepository()
         connectionState.tryUpdateVpnStarted(true)
-        val vpn = CountingVpnManager()
-        val health = ScriptedHealthCheck(fullScript = ArrayDeque(listOf(false, true)))
-        val vm = createMainViewModel(configs, connectionState, vpn, health)
+        val vpn = TestCountingVpnManager()
+        val health = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(false, true)))
+        val vm = createTestViewModel(configs, connectionState, vpn, healthCheck = health)
         val manager = HealthCheckManager(
             healthCheck = health,
             mainViewModel = vm,
             configsRepository = configs,
-            logger = createLogger(),
+            logger = createTestLogger(),
             scope = backgroundScope,
             gracePeriodMs = 0,
             restartDelayMs = 1,
@@ -55,17 +51,17 @@ class HealthCheckManagerFunctionalTest {
 
     @Test
     fun `lifecycle unhealthy to failed turns off vpn`() = runTest {
-        val configs = HcFakeConfigs()
+        val configs = TestFakeDobbyConfigs(methodPasswordOutline = "method:password")
         val connectionState = ConnectionStateRepository()
         connectionState.tryUpdateVpnStarted(true)
-        val vpn = CountingVpnManager()
-        val health = ScriptedHealthCheck(fullScript = ArrayDeque(listOf(false, false, false)))
-        val vm = createMainViewModel(configs, connectionState, vpn, health)
+        val vpn = TestCountingVpnManager()
+        val health = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(false, false, false)))
+        val vm = createTestViewModel(configs, connectionState, vpn, healthCheck = health)
         val manager = HealthCheckManager(
             healthCheck = health,
             mainViewModel = vm,
             configsRepository = configs,
-            logger = createLogger(),
+            logger = createTestLogger(),
             scope = backgroundScope,
             gracePeriodMs = 0,
             consecutiveFailuresBeforeTurnOff = 2,
@@ -86,20 +82,20 @@ class HealthCheckManagerFunctionalTest {
 
     @Test
     fun `network flap emits sane false true transitions without stuck state`() = runTest {
-        val configs = HcFakeConfigs()
+        val configs = TestFakeDobbyConfigs(methodPasswordOutline = "method:password")
         val connectionState = ConnectionStateRepository()
         connectionState.tryUpdateVpnStarted(true)
-        val vpn = CountingVpnManager()
-        val health = ScriptedHealthCheck(
+        val vpn = TestCountingVpnManager()
+        val health = TestScriptedHealthCheck(
             fullScript = ArrayDeque(listOf(false, true, false, true, true)),
             shortScript = ArrayDeque(listOf(true, false, true, true))
         )
-        val vm = createMainViewModel(configs, connectionState, vpn, health)
+        val vm = createTestViewModel(configs, connectionState, vpn, healthCheck = health)
         val manager = HealthCheckManager(
             healthCheck = health,
             mainViewModel = vm,
             configsRepository = configs,
-            logger = createLogger(),
+            logger = createTestLogger(),
             scope = backgroundScope,
             gracePeriodMs = 10_000,
             restartDelayMs = 1,
@@ -126,20 +122,20 @@ class HealthCheckManagerFunctionalTest {
 
     @Test
     fun `idempotent start while active does not create duplicated loops`() = runTest {
-        val configs = HcFakeConfigs()
+        val configs = TestFakeDobbyConfigs(methodPasswordOutline = "method:password")
         val connectionState = ConnectionStateRepository()
         connectionState.tryUpdateVpnStarted(true)
-        val vpn = CountingVpnManager()
-        val health = ScriptedHealthCheck(
+        val vpn = TestCountingVpnManager()
+        val health = TestScriptedHealthCheck(
             fullScript = ArrayDeque(listOf(true)),
             shortScript = ArrayDeque(List(100) { true })
         )
-        val vm = createMainViewModel(configs, connectionState, vpn, health)
+        val vm = createTestViewModel(configs, connectionState, vpn, healthCheck = health)
         val manager = HealthCheckManager(
             healthCheck = health,
             mainViewModel = vm,
             configsRepository = configs,
-            logger = createLogger(),
+            logger = createTestLogger(),
             scope = backgroundScope,
             gracePeriodMs = 0,
             restartDelayMs = 1,
@@ -159,20 +155,20 @@ class HealthCheckManagerFunctionalTest {
 
     @Test
     fun `retry backoff policy changes polling pace over elapsed time`() = runTest {
-        val configs = HcFakeConfigs()
+        val configs = TestFakeDobbyConfigs(methodPasswordOutline = "method:password")
         val connectionState = ConnectionStateRepository()
         connectionState.tryUpdateVpnStarted(true)
-        val vpn = CountingVpnManager()
-        val health = ScriptedHealthCheck(
+        val vpn = TestCountingVpnManager()
+        val health = TestScriptedHealthCheck(
             fullScript = ArrayDeque(listOf(true)),
             shortScript = ArrayDeque(List(200) { true })
         )
-        val vm = createMainViewModel(configs, connectionState, vpn, health)
+        val vm = createTestViewModel(configs, connectionState, vpn, healthCheck = health)
         val manager = HealthCheckManager(
             healthCheck = health,
             mainViewModel = vm,
             configsRepository = configs,
-            logger = createLogger(),
+            logger = createTestLogger(),
             scope = backgroundScope,
             shortDelayThreshold = 20.milliseconds,
             mediumDelayThreshold = 45.milliseconds,
@@ -185,28 +181,25 @@ class HealthCheckManagerFunctionalTest {
         delay(65)
         manager.stopHealthCheck()
 
-        // Wall-clock based pacing can jitter a bit in CI; keep assertion on behavior, not exact count.
         assertTrue(health.shortCalls in 6..29, "expected paced checks with increasing delays")
     }
 
     @Test
     fun `edge timeout around grace period ignores early failures but not late failures`() = runTest {
-        val configs = HcFakeConfigs()
+        val configs = TestFakeDobbyConfigs(methodPasswordOutline = "method:password")
         val connectionState = ConnectionStateRepository()
         connectionState.tryUpdateVpnStarted(true)
-        val vpn = CountingVpnManager()
-        val health = ScriptedHealthCheck(
+        val vpn = TestCountingVpnManager()
+        val health = TestScriptedHealthCheck(
             fullScript = ArrayDeque(listOf(false, false, false))
         )
-        val vm = createMainViewModel(configs, connectionState, vpn, health)
+        val vm = createTestViewModel(configs, connectionState, vpn, healthCheck = health)
         val manager = HealthCheckManager(
             healthCheck = health,
             mainViewModel = vm,
             configsRepository = configs,
-            logger = createLogger(),
+            logger = createTestLogger(),
             scope = backgroundScope,
-            // runTest controls coroutine virtual time, but HealthCheckManager uses monotonic wall clock;
-            // keep grace at 0 here to make this branch deterministic on CI.
             gracePeriodMs = 0,
             consecutiveFailuresBeforeTurnOff = 2,
             restartDelayMs = 1,
@@ -221,167 +214,5 @@ class HealthCheckManagerFunctionalTest {
 
         assertFalse(connectionState.vpnStartedFlow.value)
         assertTrue(vpn.stopCalls >= 1)
-    }
-
-    private fun createMainViewModel(
-        configs: DobbyConfigsRepository,
-        connectionState: ConnectionStateRepository,
-        vpnManager: VpnManager,
-        healthCheck: HealthCheck
-    ): MainViewModel {
-        return MainViewModel(
-            configsRepository = configs,
-            connectionStateRepository = connectionState,
-            permissionEventsChannel = PermissionEventsChannel(),
-            vpnManager = vpnManager,
-            awgManager = object : AwgManager {
-                override fun getAwgVersion(): String = "test"
-                override fun onAwgConnect() = Unit
-                override fun onAwgDisconnect() = Unit
-            },
-            logger = createLogger(),
-            healthCheck = healthCheck
-        )
-    }
-}
-
-private fun createLogger(): Logger = Logger(LogsRepository(logEventsChannel = LogEventsChannel()))
-
-private class ScriptedHealthCheck(
-    private val wakeup: Int = 0,
-    val fullScript: ArrayDeque<Boolean> = ArrayDeque(),
-    val shortScript: ArrayDeque<Boolean> = ArrayDeque()
-) : HealthCheck {
-    var shortCalls: Int = 0
-    override fun shortConnectionCheckUp(): Boolean {
-        shortCalls++
-        return shortScript.removeFirstOrNull() ?: true
-    }
-
-    override fun fullConnectionCheckUp(): Boolean {
-        return fullScript.removeFirstOrNull() ?: false
-    }
-
-    override fun checkServerAlive(address: String, port: Int): Boolean = true
-    override fun getTimeToWakeUp(): Int = wakeup
-}
-
-private class CountingVpnManager : VpnManager {
-    var startCalls: Int = 0
-    var stopCalls: Int = 0
-    override fun start() {
-        startCalls++
-    }
-
-    override fun stop() {
-        stopCalls++
-    }
-}
-
-private class HcFakeConfigs(
-    vpnInterface: VpnInterface = VpnInterface.CLOAK_OUTLINE,
-    connectionUrl: String = "",
-    connectionConfig: String = "",
-    methodPasswordOutline: String = "method:password",
-    serverPortOutline: String = "",
-    isOutlineEnabled: Boolean = false,
-    prefixOutline: String = "",
-    isWebsocketEnabled: Boolean = false,
-    tcpPathOutline: String = "",
-    udpPathOutline: String = "",
-    cloakConfig: String = "",
-    isCloakEnabled: Boolean = false,
-    cloakLocalPort: Int = 1984,
-    awgConfig: String = "",
-    isAmneziaWGEnabled: Boolean = false,
-    isUserInitStop: Boolean = false,
-) : DobbyConfigsRepository {
-    private var _vpnInterface: VpnInterface = vpnInterface
-    private var _connectionUrl: String = connectionUrl
-    private var _connectionConfig: String = connectionConfig
-    private var _methodPasswordOutline: String = methodPasswordOutline
-    private var _serverPortOutline: String = serverPortOutline
-    private var _isOutlineEnabled: Boolean = isOutlineEnabled
-    private var _prefixOutline: String = prefixOutline
-    private var _isWebsocketEnabled: Boolean = isWebsocketEnabled
-    private var _tcpPathOutline: String = tcpPathOutline
-    private var _udpPathOutline: String = udpPathOutline
-    private var _cloakConfig: String = cloakConfig
-    private var _isCloakEnabled: Boolean = isCloakEnabled
-    private var _cloakLocalPort: Int = cloakLocalPort
-    private var _awgConfig: String = awgConfig
-    private var _isAmneziaWGEnabled: Boolean = isAmneziaWGEnabled
-    private var _isUserInitStop: Boolean = isUserInitStop
-
-    override fun getVpnInterface(): VpnInterface = _vpnInterface
-    override fun setVpnInterface(vpnInterface: VpnInterface) {
-        this._vpnInterface = vpnInterface
-    }
-
-    override fun getConnectionURL(): String = _connectionUrl
-    override fun setConnectionURL(connectionURL: String) {
-        _connectionUrl = connectionURL
-    }
-
-    override fun getConnectionConfig(): String = _connectionConfig
-    override fun setConnectionConfig(connectionConfig: String) {
-        this._connectionConfig = connectionConfig
-    }
-
-    override fun couldStart(): Boolean = true
-    override fun getIsUserInitStop(): Boolean = _isUserInitStop
-    override fun setIsUserInitStop(isUserInitStop: Boolean) {
-        this._isUserInitStop = isUserInitStop
-    }
-
-    override fun setServerPortOutline(newConfig: String) {
-        _serverPortOutline = newConfig
-    }
-    override fun setMethodPasswordOutline(newConfig: String) {
-        _methodPasswordOutline = newConfig
-    }
-    override fun getServerPortOutline(): String = _serverPortOutline
-    override fun getMethodPasswordOutline(): String = _methodPasswordOutline
-    override fun getIsOutlineEnabled(): Boolean = _isOutlineEnabled
-    override fun setIsOutlineEnabled(isOutlineEnabled: Boolean) {
-        this._isOutlineEnabled = isOutlineEnabled
-    }
-    override fun getPrefixOutline(): String = _prefixOutline
-    override fun setPrefixOutline(prefix: String) {
-        _prefixOutline = prefix
-    }
-    override fun getIsWebsocketEnabled(): Boolean = _isWebsocketEnabled
-    override fun setIsWebsocketEnabled(enabled: Boolean) {
-        _isWebsocketEnabled = enabled
-    }
-    override fun getTcpPathOutline(): String = _tcpPathOutline
-    override fun setTcpPathOutline(tcpPath: String) {
-        _tcpPathOutline = tcpPath
-    }
-    override fun getUdpPathOutline(): String = _udpPathOutline
-    override fun setUdpPathOutline(udpPath: String) {
-        _udpPathOutline = udpPath
-    }
-
-    override fun getCloakConfig(): String = _cloakConfig
-    override fun setCloakConfig(newConfig: String) {
-        _cloakConfig = newConfig
-    }
-    override fun getIsCloakEnabled(): Boolean = _isCloakEnabled
-    override fun setIsCloakEnabled(isCloakEnabled: Boolean) {
-        this._isCloakEnabled = isCloakEnabled
-    }
-    override fun getCloakLocalPort(): Int = _cloakLocalPort
-    override fun setCloakLocalPort(port: Int) {
-        _cloakLocalPort = port
-    }
-
-    override fun getAwgConfig(): String = _awgConfig
-    override fun setAwgConfig(newConfig: String) {
-        _awgConfig = newConfig
-    }
-    override fun getIsAmneziaWGEnabled(): Boolean = _isAmneziaWGEnabled
-    override fun setIsAmneziaWGEnabled(isAmneziaWGEnabled: Boolean) {
-        this._isAmneziaWGEnabled = isAmneziaWGEnabled
     }
 }
