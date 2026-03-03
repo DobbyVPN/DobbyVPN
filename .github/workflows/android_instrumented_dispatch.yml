@@ -29,6 +29,7 @@ on:
 jobs:
   android-instrumented:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,6 +83,12 @@ jobs:
         working-directory: kmp_client
         run: ./gradlew :app:assemble
 
+      - name: Enable KVM for hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
       - name: Run Android instrumented baseline suite
         if: ${{ github.event_name == 'pull_request' || inputs.suite == 'baseline' || inputs.suite == 'both' }}
         uses: reactivecircus/android-emulator-runner@v2
@@ -89,6 +96,10 @@ jobs:
           api-level: ${{ inputs.api-level || '34' }}
           arch: x86_64
           profile: pixel_6
+          force-avd-creation: true
+          emulator-boot-timeout: 900
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-boot-anim -camera-back none -camera-front none
           script: |
             cd kmp_client
             ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.dobby.feature.e2e.AndroidThinClientBaselineInstrumentedTest
@@ -100,6 +111,10 @@ jobs:
           api-level: ${{ inputs.api-level || '34' }}
           arch: x86_64
           profile: pixel_6
+          force-avd-creation: true
+          emulator-boot-timeout: 900
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-boot-anim -camera-back none -camera-front none
           script: |
             cd kmp_client
             ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.dobby.feature.e2e.AndroidThinClientHeavyInstrumentedTest
