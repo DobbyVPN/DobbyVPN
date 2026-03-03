@@ -43,6 +43,40 @@ jobs:
       - name: Setup Gradle cache
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Set up Go 1.24.3
+        if: ${{ github.event_name == 'pull_request' || inputs.run_full_build }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.3"
+
+      - name: Set up Android SDK (NDK for liboutline build)
+        if: ${{ github.event_name == 'pull_request' || inputs.run_full_build }}
+        uses: android-actions/setup-android@v3
+        with:
+          packages: >
+            platform-tools
+            ndk;27.0.11718014
+
+      - name: Prepare outline native headers/libs for Android assemble
+        if: ${{ github.event_name == 'pull_request' || inputs.run_full_build }}
+        run: |
+          cp -r Cloak/internal go_client/modules/Cloak/
+          cd go_client
+          go mod tidy
+          go mod download
+          export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.11718014
+          export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          export DEBUG_PREFIX_FLAGS="-fdebug-prefix-map=$ANDROID_SDK_ROOT=/android-sdk -fdebug-prefix-map=$ANDROID_NDK_HOME=/android-ndk"
+          export CGO_CFLAGS="$DEBUG_PREFIX_FLAGS ${CGO_CFLAGS:-}"
+          export CGO_LDFLAGS="$DEBUG_PREFIX_FLAGS ${CGO_LDFLAGS:-}"
+          export CC=aarch64-linux-android21-clang
+          export CXX=aarch64-linux-android21-clang++
+          CGO_ENABLED=1 GOOS=android GOARCH=arm64 go build -v -trimpath -ldflags="-buildid=" -buildvcs=false -buildmode=c-shared -o liboutline.so ./kotlin_exports/...
+          mkdir -p ../kmp_client/outline/src/main/cpp/include/arm64-v8a
+          mkdir -p ../kmp_client/outline/src/main/jniLibs/arm64-v8a
+          cp liboutline.h ../kmp_client/outline/src/main/cpp/include/arm64-v8a/liboutline.h
+          cp liboutline.so ../kmp_client/outline/src/main/jniLibs/arm64-v8a/liboutline.so
+
       - name: Optional full build
         if: ${{ github.event_name == 'pull_request' || inputs.run_full_build }}
         working-directory: kmp_client
