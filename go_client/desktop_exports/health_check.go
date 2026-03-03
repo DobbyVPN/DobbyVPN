@@ -8,7 +8,7 @@ import (
 )
 
 //export StartHealthCheck
-func StartHealthCheck(period int, sendMetrics bool) {
+func StartHealthCheck(period int32, sendMetrics bool) {
 	healthcheck.StartHealthCheck(period, sendMetrics)
 }
 
@@ -24,12 +24,12 @@ func Status() string {
 
 //export TcpPing
 func TcpPing(address string) (int32, error) {
-	return healthcheck.TcpPing(address)
+	return healthcheck.TCPPing(address)
 }
 
 //export UrlTest
 func UrlTest(url string, standard int) (int32, error) {
-	return healthcheck.UrlTest(url, standard)
+	return healthcheck.URLTest(url, standard)
 }
 
 //export CouldStart

@@ -4,7 +4,7 @@ import app
 import CoreLocation
 
 class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationManagerDelegate {
-    
+
     private var context = LAContext()
     private var manager = LocationManager()
 
@@ -35,12 +35,11 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
             }
         }
     }
-    
-    
+
     func requireLocationPermission(endingFunc: @escaping (AuthPermissionState) -> any Kotlinx_coroutines_coreJob) {
         manager.requestLocationPermission(callback: endingFunc)
     }
-    
+
     func requireLocationService(endingFunc: @escaping (KotlinBoolean) -> Void) {
         let locationManager = CLLocationManager()
 
@@ -48,13 +47,13 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
             return CLLocationManager.locationServicesEnabled()
         }
 
-        // Если сервисы включены — сразу отвечаем
+        // If location services are enabled, respond immediately
         if isLocationEnabled() {
-            endingFunc(true)
+            endingFunc(KotlinBoolean(value: true))
             return
         }
 
-        // Если выключены — показываем alert
+        // If disabled, show an alert
         let alert = UIAlertController(
             title: "Enable location",
             message: "Location services are turned off. Please enable them to continue.",
@@ -62,46 +61,47 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
         )
 
         alert.addAction(UIAlertAction(title: "Open settings", style: .default) { _ in
+            guard let url = URL(string: UIApplication.openSettingsURLString),
+                  UIApplication.shared.canOpenURL(url) else {
+                endingFunc(KotlinBoolean(value: false))
+                return
+            }
             
-            // Подписываемся на событие возвращения в приложение
             var observer: NSObjectProtocol?
             observer = NotificationCenter.default.addObserver(
                 forName: UIApplication.didBecomeActiveNotification,
                 object: nil,
                 queue: .main
             ) { _ in
-                NotificationCenter.default.removeObserver(observer!)
+                if let obs = observer { NotificationCenter.default.removeObserver(obs) }
                 endingFunc(KotlinBoolean(value: isLocationEnabled()))
             }
 
-            // Пытаемся открыть настройки локации
-            if let url = URL(string: UIApplication.openSettingsURLString),
-               UIApplication.shared.canOpenURL(url) {
-                UIApplication.shared.open(url)
-            } else {
-                endingFunc(false)
+            UIApplication.shared.open(url) { success in
+                if !success {
+                    if let obs = observer { NotificationCenter.default.removeObserver(obs) }
+                    endingFunc(KotlinBoolean(value: false))
+                }
             }
         })
 
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
-            endingFunc(false)
+            endingFunc(KotlinBoolean(value: false))
         })
 
-        // Получаем top-most view controller для показа алерта
+        // Get the top-most view controller to present the alert
         if let rootVC = UIApplication.shared.windows.first?.rootViewController {
             rootVC.present(alert, animated: true)
         } else {
-            endingFunc(false)
+            endingFunc(KotlinBoolean(value: false))
         }
     }
 }
-
 
 class LocationManager: NSObject, CLLocationManagerDelegate {
     private var locationManager: CLLocationManager?
     private var logs = NativeModuleHolder.logsRepository
     private var callback: ((AuthPermissionState) -> Kotlinx_coroutines_coreJob)?
-
 
     override init() {
         super.init()
@@ -121,7 +121,7 @@ class LocationManager: NSObject, CLLocationManagerDelegate {
             _ = callback(.denied)
         }
     }
-    
+
     func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
         let state: AuthPermissionState
         switch status {
@@ -139,7 +139,7 @@ class LocationManager: NSObject, CLLocationManagerDelegate {
             state = .denied
         }
         _ = self.callback?(state)
-        
+
         self.callback = nil
     }
 }

@@ -1,0 +1,49 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  trivy:
+    name: Trivy — vulnerability scan
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy (Go)
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          scan-type: fs
+          scan-ref: go_client/
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+          trivyignores: .trivyignore
+
+      - name: Run Trivy (Kotlin)
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          scan-type: fs
+          scan-ref: kmp_client/
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+          trivyignores: .trivyignore
+
+  trufflehog:
+    name: TruffleHog — secret detection
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: trufflesecurity/trufflehog@6961f2bace57ab32b23b3ba40f8f420f6bc7e004 # v3.93.3
+        with:
+          extra_args: --only-verified --results=verified,unknown

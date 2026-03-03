@@ -21,14 +21,14 @@ func ExecuteCommand(command string) (string, error) {
 
 // AddProxyRoute adds a direct route to the proxy server via the real gateway
 // This should be called BEFORE creating any connections to prevent routing loops
-func AddProxyRoute(proxyIP string, gatewayIP string) {
+func AddProxyRoute(proxyIP, gatewayIP string) {
 	if _, err := ExecuteCommand(fmt.Sprintf("sudo ip route add %s/32 via %s", proxyIP, gatewayIP)); err != nil {
 		log.Infof("failed to add early route for proxyIP: %v (may already exist)", err)
 	}
 }
 
-// startRouting — like how macOS: default in tunnel, exception gateway
-func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
+// StartRouting configures routing: default via tunnel, exception for gateway
+func StartRouting(proxyIP, gatewayIP, tunName string) error {
 	// Delete old default
 	if _, err := ExecuteCommand("sudo ip route del default"); err != nil {
 		log.Infof("failed to remove old default route: %v", err)
@@ -47,13 +47,13 @@ func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
 	return nil
 }
 
-func StopRouting(proxyIP string, gatewayIP string) {
+func StopRouting(proxyIP, gatewayIP string) {
 	// Delete default via tunnel
 	if _, err := ExecuteCommand("sudo ip route del default"); err != nil {
 		log.Infof("failed to remove tun default route: %v", err)
 	}
 
-	// Restore default via tunnel
+	// Restore default via gateway
 	if _, err := ExecuteCommand(fmt.Sprintf("sudo ip route add default via %s", gatewayIP)); err != nil {
 		log.Infof("failed to add old default route: %v", err)
 	}

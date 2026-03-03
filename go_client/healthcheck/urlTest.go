@@ -1,8 +1,9 @@
 package healthcheck
 
 import (
-	"github.com/matsuridayo/libneko/speedtest"
 	"net/http"
+
+	"github.com/matsuridayo/libneko/speedtest"
 )
 
 const (
@@ -11,6 +12,6 @@ const (
 
 var httpClient = &http.Client{}
 
-func UrlTest(url string, standard int) (int32, error) {
+func URLTest(url string, standard int) (int32, error) {
 	return speedtest.UrlTest(httpClient, url, urlTestTimeoutMilliseconds, standard)
 }
