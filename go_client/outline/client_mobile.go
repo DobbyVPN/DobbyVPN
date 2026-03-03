@@ -30,28 +30,30 @@ func NewClient(transportConfig string, tun io.ReadWriteCloser) *OutlineClient {
 }
 
 func (c *OutlineClient) Connect() error {
-	// 1. Создаем устройство Outline (прокси)
 	od, err := internal.NewOutlineDevice(c.config)
 	if err != nil {
+		log.Infof("failed to create outline device: %v", err)
 		return err
 	}
-	c.device = od
 
-	// 2. Создаем функцию-диалер для прокси
+	c.device = od
+	common.Client.MarkActive(outlineCommon.Name)
+
+	// Определяем функцию-диалер для TCP
 	proxyDialer := func(ctx context.Context, network, addr string) (net.Conn, error) {
-		// Outline обычно предоставляет Dial через свой внутренний стек
-		return od.Dial(network, addr)
+		// Вызываем метод DialStream, который мы прописали в OutlineDevice
+		return od.DialStream(ctx, addr)
 	}
 
-	// 3. Запускаем туннель с поддержкой геороутинга
-	// Передаем c.tun (который io.ReadWriteCloser)
+	log.Infof("Starting Dobby TCP Tunnel...")
+
+	// Передаем управление в tun2socks (gVisor)
 	err = tunnel.StartDobbyTunnel(c.tun, proxyDialer)
 	if err != nil {
+		log.Infof("failed to start dobby tunnel: %v", err)
 		return err
 	}
 
-	common.Client.MarkActive(outlineCommon.Name)
-	log.Infof("Outline connected via Dobby Tunnel")
 	return nil
 }
 
