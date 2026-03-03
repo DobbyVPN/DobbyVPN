@@ -1,6 +1,5 @@
 package com.dobby.feature.main.domain.config
 
-import com.dobby.feature.main.domain.DobbyConfigsRepositoryCloak
 import com.dobby.feature.main.domain.OutlineConfig
 import com.dobby.test.fixtures.createTestLogger
 import kotlin.test.Test
@@ -416,21 +415,4 @@ class CloakTomlApplierFunctionalTest {
         assertFalse(cloakRepo.cloakEnabledValue)
         assertEquals("", cloakRepo.cloakConfigValue)
     }
-}
-
-private class FakeCloakRepo(
-    initialCloakConfig: String = "",
-    initialCloakEnabled: Boolean = false,
-    initialCloakLocalPort: Int = 0,
-) : DobbyConfigsRepositoryCloak {
-    var cloakConfigValue: String = initialCloakConfig
-    var cloakEnabledValue: Boolean = initialCloakEnabled
-    var cloakLocalPortValue: Int = initialCloakLocalPort
-
-    override fun getCloakConfig(): String = cloakConfigValue
-    override fun setCloakConfig(newConfig: String) { cloakConfigValue = newConfig }
-    override fun getIsCloakEnabled(): Boolean = cloakEnabledValue
-    override fun setIsCloakEnabled(isCloakEnabled: Boolean) { cloakEnabledValue = isCloakEnabled }
-    override fun getCloakLocalPort(): Int = cloakLocalPortValue
-    override fun setCloakLocalPort(port: Int) { cloakLocalPortValue = port }
 }
