@@ -167,3 +167,13 @@ func StopDobbyTunnel() {
 		log.Infof("Dobby Tunnel stopped")
 	}
 }
+
+func StartTransfer(
+	io.ReadWriteCloser,
+	any,
+	any,
+) {
+}
+
+func StopTransfer() {
+}
