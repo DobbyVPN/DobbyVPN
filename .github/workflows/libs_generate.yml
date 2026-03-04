@@ -40,7 +40,7 @@ jobs:
         if: matrix.os == 'windows'
         working-directory: go_client
         run: |
-          go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
         env:
           CGO_ENABLED: '1'
           GOOS: 'windows'
@@ -52,7 +52,7 @@ jobs:
         if: matrix.os == 'ubuntu'
         working-directory: go_client
         run: |
-          go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
         env:
           CGO_ENABLED: '1'
           GOOS: 'linux'
@@ -64,7 +64,7 @@ jobs:
         if: matrix.os == 'macos'
         working-directory: go_client
         run: |
-          go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports/
         env:
           CGO_ENABLED: '1'
           GOOS: 'darwin'
