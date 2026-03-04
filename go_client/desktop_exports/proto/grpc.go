@@ -1,9 +1,9 @@
 package proto
 
 import (
-	protobuf "go_client/vpnserver"
+	"go_client/grpcproto"
 )
 
 type Server struct {
-	protobuf.UnimplementedVpnServer
+	grpcproto.UnimplementedVpnServer
 }

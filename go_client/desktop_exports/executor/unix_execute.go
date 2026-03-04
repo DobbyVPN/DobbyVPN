@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"net"
 
-	proto "go_client/desktop_exports/proto"
-	protobuf "go_client/vpnserver"
+	"go_client/desktop_exports/proto"
+	"go_client/grpcproto"
 
 	log "go_client/logger"
 
@@ -23,7 +23,7 @@ func run(port int) error {
 	}
 	s := grpc.NewServer()
 
-	protobuf.RegisterVpnServer(s, &proto.Server{})
+	grpcproto.RegisterVpnServer(s, &proto.Server{})
 
 	log.Infof("server listening at %v", lis.Addr())
 	if err := s.Serve(lis); err != nil {

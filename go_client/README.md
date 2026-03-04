@@ -81,5 +81,5 @@ Or this can be found in the [vpnserver.proto](./vpnserver.proto) file, that defi
 Using this file should be generated required files in the [vpnserver/](./vpnserver/) folder, using this command:
 
 ```bash
-protoc --go_out=../ --go-grpc_out=../ vpnserver.proto
+protoc --go_out=../ --go-grpc_out=../ ./grpcproto/vpnserver.proto
 ```

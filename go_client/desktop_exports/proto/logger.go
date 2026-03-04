@@ -3,13 +3,14 @@ package proto
 import (
 	"context"
 
-	api "go_client/desktop_exports/api"
+	"go_client/desktop_exports/api"
+	"go_client/grpcproto"
+
 	log "go_client/logger"
-	protobuf "go_client/vpnserver"
 )
 
-func (c *Server) InitLogger(_ context.Context, in *protobuf.InitLoggerRequest) (*protobuf.Empty, error) {
+func (c *Server) InitLogger(_ context.Context, in *grpcproto.InitLoggerRequest) (*grpcproto.Empty, error) {
 	log.Infof("InitLogger")
 	go api.InitLogger(in.Path)
-	return &protobuf.Empty{}, nil
+	return &grpcproto.Empty{}, nil
 }

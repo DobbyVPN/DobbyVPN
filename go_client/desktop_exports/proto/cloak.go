@@ -3,19 +3,20 @@ package proto
 import (
 	"context"
 
-	api "go_client/desktop_exports/api"
+	"go_client/desktop_exports/api"
+	"go_client/grpcproto"
+
 	log "go_client/logger"
-	protobuf "go_client/vpnserver"
 )
 
-func (s *Server) StartCloakClient(_ context.Context, in *protobuf.StartCloakClientRequest) (*protobuf.Empty, error) {
+func (s *Server) StartCloakClient(_ context.Context, in *grpcproto.StartCloakClientRequest) (*grpcproto.Empty, error) {
 	log.Infof("StartCloakClient")
 	go api.StartCloakClient(in.GetLocalHost(), in.GetLocalPort(), in.GetConfig(), in.GetUdp())
-	return &protobuf.Empty{}, nil
+	return &grpcproto.Empty{}, nil
 }
 
-func (s *Server) StopCloakClient(_ context.Context, in *protobuf.Empty) (*protobuf.Empty, error) {
+func (s *Server) StopCloakClient(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
 	log.Infof("StopCloakClient")
 	go api.StopCloakClient()
-	return &protobuf.Empty{}, nil
+	return &grpcproto.Empty{}, nil
 }

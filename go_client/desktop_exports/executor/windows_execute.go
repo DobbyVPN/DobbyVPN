@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"net"
 
-	proto "go_client/desktop_exports/proto"
+	"go_client/desktop_exports/proto"
+	"go_client/grpcproto"
+
 	log "go_client/logger"
-	protobuf "go_client/vpnserver"
 
 	"golang.org/x/sys/windows/svc"
 	"google.golang.org/grpc"
@@ -28,7 +29,7 @@ func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest
 	}
 	grpcServer := grpc.NewServer()
 
-	protobuf.RegisterVpnServer(grpcServer, &proto.Server{})
+	grpcproto.RegisterVpnServer(grpcServer, &proto.Server{})
 
 	go func() {
 		log.Infof("server listening at %v", lis.Addr())
@@ -64,7 +65,7 @@ func run(port int) error {
 	}
 	s := grpc.NewServer()
 
-	protobuf.RegisterVpnServer(s, &proto.Server{})
+	grpcproto.RegisterVpnServer(s, &proto.Server{})
 
 	log.Infof("server listening at %v", lis.Addr())
 	if err := s.Serve(lis); err != nil {

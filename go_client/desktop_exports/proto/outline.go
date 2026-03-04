@@ -3,25 +3,26 @@ package proto
 import (
 	"context"
 
-	api "go_client/desktop_exports/api"
+	"go_client/desktop_exports/api"
+	"go_client/grpcproto"
+
 	log "go_client/logger"
-	protobuf "go_client/vpnserver"
 )
 
-func (s *Server) GetOutlineLastError(_ context.Context, in *protobuf.Empty) (*protobuf.GetOutlineLastErrorResponse, error) {
+func (s *Server) GetOutlineLastError(_ context.Context, in *grpcproto.Empty) (*grpcproto.GetOutlineLastErrorResponse, error) {
 	log.Infof("GetOutlineLastError")
 	err := api.GetOutlineLastError()
-	return &protobuf.GetOutlineLastErrorResponse{Error: err}, nil
+	return &grpcproto.GetOutlineLastErrorResponse{Error: err}, nil
 }
 
-func (s *Server) StartOutline(_ context.Context, in *protobuf.StartOutlineRequest) (*protobuf.StartOutlineResponse, error) {
+func (s *Server) StartOutline(_ context.Context, in *grpcproto.StartOutlineRequest) (*grpcproto.StartOutlineResponse, error) {
 	log.Infof("StartOutline")
 	result := api.StartOutline(in.GetConfig())
-	return &protobuf.StartOutlineResponse{Result: result}, nil
+	return &grpcproto.StartOutlineResponse{Result: result}, nil
 }
 
-func (s *Server) StopOutline(_ context.Context, in *protobuf.Empty) (*protobuf.Empty, error) {
+func (s *Server) StopOutline(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
 	log.Infof("StopOutline")
 	go api.StopOutline()
-	return &protobuf.Empty{}, nil
+	return &grpcproto.Empty{}, nil
 }

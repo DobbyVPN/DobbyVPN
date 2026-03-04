@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-option go_package = "go_client/vpnserver";
+option go_package = "go_client/grpcproto";
 
-package vpnserver;
+package grpcproto;
 
 service Vpn {
   // awg.go

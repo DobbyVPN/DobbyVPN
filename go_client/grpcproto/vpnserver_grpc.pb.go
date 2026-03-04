@@ -2,9 +2,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v6.33.1
-// source: vpnserver.proto
+// source: grpcproto/vpnserver.proto
 
-package vpnserver
+package grpcproto
 
 import (
 	context "context"
@@ -19,21 +19,21 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Vpn_StartAwg_FullMethodName            = "/vpnserver.Vpn/StartAwg"
-	Vpn_StopAwg_FullMethodName             = "/vpnserver.Vpn/StopAwg"
-	Vpn_GetOutlineLastError_FullMethodName = "/vpnserver.Vpn/GetOutlineLastError"
-	Vpn_StartOutline_FullMethodName        = "/vpnserver.Vpn/StartOutline"
-	Vpn_StopOutline_FullMethodName         = "/vpnserver.Vpn/StopOutline"
-	Vpn_StartHealthCheck_FullMethodName    = "/vpnserver.Vpn/StartHealthCheck"
-	Vpn_StopHealthCheck_FullMethodName     = "/vpnserver.Vpn/StopHealthCheck"
-	Vpn_Status_FullMethodName              = "/vpnserver.Vpn/Status"
-	Vpn_TcpPing_FullMethodName             = "/vpnserver.Vpn/TcpPing"
-	Vpn_UrlTest_FullMethodName             = "/vpnserver.Vpn/UrlTest"
-	Vpn_CouldStart_FullMethodName          = "/vpnserver.Vpn/CouldStart"
-	Vpn_CheckServerAlive_FullMethodName    = "/vpnserver.Vpn/CheckServerAlive"
-	Vpn_StartCloakClient_FullMethodName    = "/vpnserver.Vpn/StartCloakClient"
-	Vpn_StopCloakClient_FullMethodName     = "/vpnserver.Vpn/StopCloakClient"
-	Vpn_InitLogger_FullMethodName          = "/vpnserver.Vpn/InitLogger"
+	Vpn_StartAwg_FullMethodName            = "/grpcproto.Vpn/StartAwg"
+	Vpn_StopAwg_FullMethodName             = "/grpcproto.Vpn/StopAwg"
+	Vpn_GetOutlineLastError_FullMethodName = "/grpcproto.Vpn/GetOutlineLastError"
+	Vpn_StartOutline_FullMethodName        = "/grpcproto.Vpn/StartOutline"
+	Vpn_StopOutline_FullMethodName         = "/grpcproto.Vpn/StopOutline"
+	Vpn_StartHealthCheck_FullMethodName    = "/grpcproto.Vpn/StartHealthCheck"
+	Vpn_StopHealthCheck_FullMethodName     = "/grpcproto.Vpn/StopHealthCheck"
+	Vpn_Status_FullMethodName              = "/grpcproto.Vpn/Status"
+	Vpn_TcpPing_FullMethodName             = "/grpcproto.Vpn/TcpPing"
+	Vpn_UrlTest_FullMethodName             = "/grpcproto.Vpn/UrlTest"
+	Vpn_CouldStart_FullMethodName          = "/grpcproto.Vpn/CouldStart"
+	Vpn_CheckServerAlive_FullMethodName    = "/grpcproto.Vpn/CheckServerAlive"
+	Vpn_StartCloakClient_FullMethodName    = "/grpcproto.Vpn/StartCloakClient"
+	Vpn_StopCloakClient_FullMethodName     = "/grpcproto.Vpn/StopCloakClient"
+	Vpn_InitLogger_FullMethodName          = "/grpcproto.Vpn/InitLogger"
 )
 
 // VpnClient is the client API for Vpn service.
@@ -594,7 +594,7 @@ func _Vpn_InitLogger_Handler(srv interface{}, ctx context.Context, dec func(inte
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Vpn_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "vpnserver.Vpn",
+	ServiceName: "grpcproto.Vpn",
 	HandlerType: (*VpnServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -659,5 +659,5 @@ var Vpn_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "vpnserver.proto",
+	Metadata: "grpcproto/vpnserver.proto",
 }
