@@ -191,8 +191,6 @@ func relay(left, right net.Conn, addr string) {
 	wg.Wait()
 }
 
-// ... (остальные функции StartDobbyTunnel и StopDobbyTunnel с добавленным Info-логированием)
-
 func StartDobbyTunnel(tun io.ReadWriteCloser, outlineDialer func(context.Context, string, string) (net.Conn, error)) error {
 	stackMu.Lock()
 	defer stackMu.Unlock()
@@ -221,4 +219,26 @@ func StartDobbyTunnel(tun io.ReadWriteCloser, outlineDialer func(context.Context
 	activeStack = s
 	log.Infof("[Dobby] Tunnel successfully started and stack is active")
 	return nil
+}
+
+func StopDobbyTunnel() {
+	stackMu.Lock()
+	defer stackMu.Unlock()
+
+	if activeStack != nil {
+		activeStack.Close()
+		activeStack.Wait()
+		activeStack = nil
+		log.Infof("Dobby Tunnel stopped")
+	}
+}
+
+func StartTransfer(
+	io.ReadWriteCloser,
+	any,
+	any,
+) {
+}
+
+func StopTransfer() {
 }
