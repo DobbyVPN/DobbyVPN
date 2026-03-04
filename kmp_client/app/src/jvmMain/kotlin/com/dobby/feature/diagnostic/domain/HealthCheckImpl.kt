@@ -212,11 +212,11 @@ class HealthCheckImpl(
             NetworkInterface.getNetworkInterfaces()?.toList()?.any { iface ->
                 val name = iface.name.lowercase()
                 name.contains("tun") ||
-                    name.contains("tap") ||
-                    name.contains("ppp") ||
-                    name.contains("ipsec") ||
-                    name.contains("wg") ||       // WireGuard
-                    name.contains("outline")     // Outline TAP
+                        name.contains("tap") ||
+                        name.contains("ppp") ||
+                        name.contains("ipsec") ||
+                        name.contains("wg") ||       // WireGuard
+                        name.contains("outline")     // Outline TAP
             } ?: false
         } catch (e: Throwable) {
             logger.log("[HC] Error checking VPN interface: ${e.message}")
@@ -245,7 +245,7 @@ class HealthCheckImpl(
     }
 
     override fun checkServerAlive(address: String, port: Int): Boolean {
-        return vpnLibrary.CheckServerAlive(address, port) != 0
+        return vpnLibrary.CheckServerAlive(address, port) == 0
     }
 
     override fun getTimeToWakeUp(): Int {

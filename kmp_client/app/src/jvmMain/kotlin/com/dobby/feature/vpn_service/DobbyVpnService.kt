@@ -1,7 +1,7 @@
 package com.dobby.feature.vpn_service
 
-import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.maskStr
+import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
@@ -120,13 +120,7 @@ internal class DobbyVpnService(
         val udpPath = dobbyConfigsRepository.getUdpPathOutline()
         val localHost = "127.0.0.1"
         val localPort = dobbyConfigsRepository.getCloakLocalPort().toString()
-        logger.log(
-            "startCloakOutline with key: methodPassword = ${maskStr(methodPassword)} serverPort = ${
-                maskStr(
-                    serverPort
-                )
-            }"
-        )
+        logger.log("startCloakOutline with key: methodPassword = ${maskStr(methodPassword)} serverPort = ${maskStr(serverPort)}")
         logger.log("Outline prefix: ${prefix.ifEmpty { "(none)" }}")
         logger.log("Outline websocket: $websocketEnabled, tcpPath: ${tcpPath.ifEmpty { "(none)" }}, udpPath: ${udpPath.ifEmpty { "(none)" }}")
         runBlocking {

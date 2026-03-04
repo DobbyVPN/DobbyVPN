@@ -22,7 +22,7 @@ func StartAwg(tunnel, config string) {
 
 	log.Infof("Create new awgClient")
 
-	_awgClient, err := awg.NewAwgClient(tunnel, config)
+	_awgClient, err := awg.NewAwgClient(config)
 	if err != nil {
 		log.Infof("Failed to create awgClient: %v", err)
 		return

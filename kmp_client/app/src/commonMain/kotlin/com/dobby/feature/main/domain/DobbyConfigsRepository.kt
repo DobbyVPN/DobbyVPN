@@ -3,10 +3,14 @@ package com.dobby.feature.main.domain
 interface DobbyConfigsRepository :
     DobbyConfigsRepositoryOutline,
     DobbyConfigsRepositoryCloak,
-    DobbyConfigsRepositoryAwg,
-    DobbyConfigsRepositoryVpn {
+    DobbyConfigsRepositoryAwg {
 
     // region global configs
+
+    fun getVpnInterface(): VpnInterface
+
+    fun setVpnInterface(vpnInterface: VpnInterface)
+
     fun getConnectionURL(): String
 
     fun setConnectionURL(connectionURL: String)
