@@ -167,7 +167,7 @@ class HealthCheckManager(
         mainViewModel.connectionStateRepository.updateStatus(false)
         mainViewModel.connectionStateRepository.updateVpnStarted(false)
         stopHealthCheck()
-        mainViewModel.stopVpnService()
+        mainViewModel.stopVpnService(stoppedByHealthCheck = true)
     }
 
     private fun isConnected(): Boolean {
