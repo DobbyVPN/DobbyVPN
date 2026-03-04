@@ -12,7 +12,7 @@ import (
 
 func (s *Server) StartHealthCheck(_ context.Context, in *grpcproto.StartHealthCheckRequest) (*grpcproto.Empty, error) {
 	log.Infof("StartHealthCheck")
-	go api.StartHealthCheck(int(in.GetPeriod()), in.GetSendMetrics())
+	go api.StartHealthCheck(in.GetPeriod(), in.GetSendMetrics())
 	return &grpcproto.Empty{}, nil
 }
 
