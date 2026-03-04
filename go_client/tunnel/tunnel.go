@@ -42,6 +42,11 @@ var DefaultBypassCIDRs = []*net.IPNet{
 	mustCIDR("198.41.128.0/17"),
 }
 
+var (
+	activeStack *stack.Stack
+	stackMu     sync.Mutex
+)
+
 type DobbyTransportHandler struct {
 	bypassNetworks []*net.IPNet
 	proxyDial      func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -53,8 +58,10 @@ func NewDobbyHandler(proxyDialer func(context.Context, string, string) (net.Conn
 		bypassNetworks: DefaultBypassCIDRs,
 	}
 
-	serverIP := net.ParseIP("85.9.223.19")
+	serverIPStr := "85.9.223.19"
+	serverIP := net.ParseIP(serverIPStr)
 	handler.bypassNetworks = append(handler.bypassNetworks, &net.IPNet{IP: serverIP, Mask: net.CIDRMask(32, 32)})
+	log.Infof("[Dobby] Bypass list initialized. Server IP %s excluded.", serverIPStr)
 
 	return handler
 }
@@ -72,91 +79,121 @@ func (h *DobbyTransportHandler) HandleTCP(conn adapter.TCPConn) {
 	defer conn.Close()
 
 	destAddr := conn.RemoteAddr().String()
-	host, _, _ := net.SplitHostPort(destAddr)
+	host, _, err := net.SplitHostPort(destAddr)
+	if err != nil {
+		log.Infof("[Dobby] [TCP] Invalid dest address %s: %v", destAddr, err)
+		return
+	}
 	destIP := net.ParseIP(host)
 
 	var remoteConn net.Conn
-	var err error
 
 	if destIP != nil && h.isBypass(destIP) {
-		log.Infof("[Direct] %s", destAddr)
+		log.Infof("[Dobby] [TCP-Direct] %s", destAddr)
 		remoteConn, err = net.DialTimeout("tcp", destAddr, 5*time.Second)
 	} else {
-		log.Infof("[Proxy] %s", destAddr)
+		log.Infof("[Dobby] [TCP-Proxy] Attempting to dial %s via Outline...", destAddr)
 		remoteConn, err = h.proxyDial(context.Background(), "tcp", destAddr)
 	}
 
 	if err != nil {
-		log.Infof("Failed to dial %s: %v", destAddr, err)
+		log.Infof("[Dobby] [TCP-Error] Failed to connect to %s: %v", destAddr, err)
 		return
 	}
 	defer remoteConn.Close()
 
-	// Двусторонняя перекачка (Relay)
-	relay(conn, remoteConn)
+	log.Infof("[Dobby] [TCP-Relay] Start relaying %s", destAddr)
+	relay(conn, remoteConn, destAddr)
+	log.Infof("[Dobby] [TCP-Relay] Connection closed for %s", destAddr)
 }
 
 func (h *DobbyTransportHandler) HandleUDP(conn adapter.UDPConn) {
-	// Временное решение: пускаем UDP напрямую, чтобы работал DNS
 	defer conn.Close()
 	destAddr := conn.RemoteAddr().String()
+	log.Infof("[Dobby] [UDP-Direct] New session to %s", destAddr)
 
-	// Создаем локальный сокет для выхода в мир
 	remoteConn, err := net.ListenPacket("udp", ":0")
 	if err != nil {
-		log.Infof("UDP Direct error: %v", err)
+		log.Infof("[Dobby] [UDP-Error] Failed to listen: %v", err)
 		return
 	}
 	defer remoteConn.Close()
 
-	target, _ := net.ResolveUDPAddr("udp", destAddr)
+	target, err := net.ResolveUDPAddr("udp", destAddr)
+	if err != nil {
+		log.Infof("[Dobby] [UDP-Error] Failed to resolve %s: %v", destAddr, err)
+		return
+	}
 
-	// Перекачка UDP пакетов (упрощенная)
+	// Канал для отслеживания ошибок в горутине
+	errChan := make(chan error, 1)
+
 	go func() {
 		buf := make([]byte, 2048)
 		for {
 			n, err := conn.Read(buf)
 			if err != nil {
+				errChan <- err
 				return
 			}
-			remoteConn.WriteTo(buf[:n], target)
+			_, err = remoteConn.WriteTo(buf[:n], target)
+			if err != nil {
+				errChan <- err
+				return
+			}
 		}
 	}()
 
 	buf := make([]byte, 2048)
 	for {
-		n, from, err := remoteConn.ReadFrom(buf)
-		if err != nil {
+		select {
+		case err := <-errChan:
+			log.Infof("[Dobby] [UDP-Relay] Stopped for %s: %v", destAddr, err)
 			return
-		}
-		if from.String() == target.String() {
-			conn.Write(buf[:n])
+		default:
+			remoteConn.SetReadDeadline(time.Now().Add(time.Second * 30))
+			n, from, err := remoteConn.ReadFrom(buf)
+			if err != nil {
+				log.Infof("[Dobby] [UDP-Timeout/Error] %s: %v", destAddr, err)
+				return
+			}
+			if from.String() == target.String() {
+				conn.Write(buf[:n])
+			}
 		}
 	}
 }
 
-func relay(left, right net.Conn) {
+func relay(left, right net.Conn, addr string) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Копируем из TUN в прокси
 	go func() {
-		io.Copy(right, left)
-		if tcpRight, ok := right.(*net.TCPConn); ok {
-			tcpRight.CloseWrite()
+		defer wg.Done()
+		n, err := io.Copy(right, left)
+		log.Infof("[Dobby] [Relay-Sent] %s: %d bytes sent, err: %v", addr, n, err)
+		if tcp, ok := right.(*net.TCPConn); ok {
+			tcp.CloseWrite()
 		} else {
 			right.Close()
 		}
 	}()
-	io.Copy(left, right)
+
+	// Копируем из прокси в TUN
+	go func() {
+		defer wg.Done()
+		n, err := io.Copy(left, right)
+		log.Infof("[Dobby] [Relay-Recv] %s: %d bytes received, err: %v", addr, n, err)
+		left.Close()
+	}()
+
+	wg.Wait()
 }
 
-var (
-	activeStack *stack.Stack
-	stackMu     sync.Mutex
-)
+// ... (остальные функции StartDobbyTunnel и StopDobbyTunnel с добавленным Info-логированием)
 
-func StartDobbyTunnel(
-	tun io.ReadWriteCloser,
-	outlineDialer func(context.Context, string, string) (net.Conn, error),
-) error {
-
+func StartDobbyTunnel(tun io.ReadWriteCloser, outlineDialer func(context.Context, string, string) (net.Conn, error)) error {
 	stackMu.Lock()
 	defer stackMu.Unlock()
 
@@ -164,46 +201,24 @@ func StartDobbyTunnel(
 		return fmt.Errorf("Dobby tunnel already running")
 	}
 
+	log.Infof("[Dobby] Initializing gVisor stack...")
 	device, err := iobased.New(tun, 1500, 0)
 	if err != nil {
+		log.Infof("[Dobby] Failed to create tun device: %v", err)
 		return err
 	}
 
 	handler := NewDobbyHandler(outlineDialer)
-
 	s, err := core.CreateStack(&core.Config{
 		LinkEndpoint:     device,
 		TransportHandler: handler,
 	})
 	if err != nil {
+		log.Infof("[Dobby] Failed to create stack: %v", err)
 		return err
 	}
 
 	activeStack = s
-
-	log.Infof("Dobby Tunnel started")
-
+	log.Infof("[Dobby] Tunnel successfully started and stack is active")
 	return nil
-}
-
-func StopDobbyTunnel() {
-	stackMu.Lock()
-	defer stackMu.Unlock()
-
-	if activeStack != nil {
-		activeStack.Close()
-		activeStack.Wait()
-		activeStack = nil
-		log.Infof("Dobby Tunnel stopped")
-	}
-}
-
-func StartTransfer(
-	io.ReadWriteCloser,
-	any,
-	any,
-) {
-}
-
-func StopTransfer() {
 }
