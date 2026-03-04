@@ -17,19 +17,19 @@ go mod download
 ### Windows
 
 ```bash
-go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/...
+go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
 ```
 
 ### Linux/
 
 ```bash
-go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/...
+go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
 ```
 
 ### MacOS
 
 ```bash
-go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports/...
+go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports/
 ```
 
 ### Android

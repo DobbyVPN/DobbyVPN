@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	executor "go_client/desktop_exports/executor"
 )
 
 func main() {
@@ -11,6 +12,6 @@ func main() {
 	flag.StringVar(&SERVER_MODE, "mode", "normal", "Run mode")
 	flag.Parse()
 
-	ex := &executor{}
+	ex := &executor.Executor{}
 	ex.Execute(SERVER_PORT, SERVER_MODE)
 }
