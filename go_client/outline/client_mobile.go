@@ -35,7 +35,7 @@ func (c *OutlineClient) Connect() error {
 
 	od, err := internal.NewOutlineDevice(c.config)
 	if err != nil {
-		log.Errorf("[Outline] Failed to create outline device: %v", err)
+		log.Infof("[Outline] Failed to create outline device: %v", err)
 		return err
 	}
 	log.Infof("[Outline] Device created successfully")
@@ -46,7 +46,7 @@ func (c *OutlineClient) Connect() error {
 	// Определяем функцию-диалер для TCP
 	proxyDialer := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		// Логгируем попытки соединения через прокси (осторожно, может быть спамно)
-		log.Debugf("[Outline] Dialing %s://%s", network, addr)
+		log.Infof("[Outline] Dialing %s://%s", network, addr)
 		return od.DialStream(ctx, addr)
 	}
 
@@ -55,7 +55,7 @@ func (c *OutlineClient) Connect() error {
 	// Передаем управление в tun2socks (gVisor)
 	err = tunnel.StartDobbyTunnel(c.tun, proxyDialer)
 	if err != nil {
-		log.Errorf("[Outline] Failed to start dobby tunnel: %v", err)
+		log.Infof("[Outline] Failed to start dobby tunnel: %v", err)
 		return err
 	}
 
@@ -66,10 +66,7 @@ func (c *OutlineClient) Connect() error {
 func (c *OutlineClient) Disconnect() error {
 	log.Infof("[Outline] Disconnecting...")
 
-	err := tunnel.StopDobbyTunnel()
-	if err != nil {
-		log.Warnf("[Outline] Error during tunnel stop: %v", err)
-	}
+	tunnel.StopDobbyTunnel()
 
 	if c.device != nil {
 		log.Infof("[Outline] Closing device connection")
@@ -83,7 +80,7 @@ func (c *OutlineClient) Disconnect() error {
 
 func (c *OutlineClient) Refresh() error {
 	if c.device == nil {
-		log.Warnf("[Outline] Refresh called, but device is nil")
+		log.Infof("[Outline] Refresh called, but device is nil")
 		return nil
 	}
 	log.Infof("[Outline] Refreshing device status")
@@ -92,10 +89,10 @@ func (c *OutlineClient) Refresh() error {
 
 func (c *OutlineClient) GetServerIP() net.IP {
 	if c.device == nil {
-		log.Warnf("[Outline] GetServerIP called, but device is nil")
+		log.Infof("[Outline] GetServerIP called, but device is nil")
 		return nil
 	}
 	ip := c.device.GetServerIP()
-	log.Debugf("[Outline] Current server IP: %v", ip)
+	log.Infof("[Outline] Current server IP: %v", ip)
 	return ip
 }
