@@ -3,12 +3,13 @@ package logger
 import (
 	"context"
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"log/slog"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 var (
@@ -88,7 +89,7 @@ func (h *logrusToSlogHook) Fire(e *logrus.Entry) error {
 		lg.logger.Warn(msg)
 	case logrus.InfoLevel:
 		lg.logger.Info(msg)
-	default:
+	case logrus.DebugLevel, logrus.TraceLevel:
 		lg.logger.Debug(msg)
 	}
 
@@ -130,7 +131,7 @@ func SetPath(path string) error {
 		return nil
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644) //nolint:gosec // G302: logs should be readable
 	if err != nil {
 		return fmt.Errorf("cannot open log file: %w", err)
 	}

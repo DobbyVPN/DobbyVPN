@@ -27,7 +27,7 @@ public final class HealthCheckImpl: HealthCheck {
             })
         ]
 
-        let networkOk = checks.contains { (name, check) in
+        let networkOk = checks.contains { name, check in
             self.runWithRetry(name: name, block: check)
         }
 
@@ -39,7 +39,6 @@ public final class HealthCheckImpl: HealthCheck {
         logs.writeLog(log: "End shortConnectionCheckUp => \(result)")
         return result
     }
-
 
     public func fullConnectionCheckUp() -> Bool {
         logs.writeLog(log: "[HC] Start fullConnectionCheckUp")
@@ -64,7 +63,7 @@ public final class HealthCheckImpl: HealthCheck {
         for (groupName, checks) in groups {
             logs.writeLog(log: "[HC] Checking group: \(groupName)")
 
-            let groupOk = checks.contains { (name, check) in
+            let groupOk = checks.contains { name, check in
                 self.runWithRetry(name: name, block: check)
             }
 
@@ -165,7 +164,7 @@ public final class HealthCheckImpl: HealthCheck {
     }
 
     private func resolveDNSWithTimeout(host: String) -> String? {
-        var result: String? = nil
+        var result: String?
         let group = DispatchGroup()
         group.enter()
 
@@ -203,11 +202,11 @@ public final class HealthCheckImpl: HealthCheck {
         defer { freeaddrinfo(infoPointer) }
 
         var ptr: UnsafeMutablePointer<addrinfo>? = first
-        while let addr = ptr?.pointee.ai_addr {
+        while let current = ptr, let addr = current.pointee.ai_addr {
             var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             if getnameinfo(
                 addr,
-                socklen_t(ptr!.pointee.ai_addrlen),
+                socklen_t(current.pointee.ai_addrlen),
                 &buffer,
                 socklen_t(buffer.count),
                 nil,
@@ -216,7 +215,7 @@ public final class HealthCheckImpl: HealthCheck {
             ) == 0 {
                 return String(cString: buffer)
             }
-            ptr = ptr?.pointee.ai_next
+            ptr = current.pointee.ai_next
         }
 
         return "Can't resolve DNS"
@@ -323,8 +322,8 @@ public final class HealthCheckImpl: HealthCheck {
         defer { freeifaddrs(ifaddrPtr) }
 
         var ptr: UnsafeMutablePointer<ifaddrs>? = firstAddr
-        while let p = ptr {
-            let name = String(cString: p.pointee.ifa_name).lowercased()
+        while let addr = ptr {
+            let name = String(cString: addr.pointee.ifa_name).lowercased()
             if name.contains("utun")
                 || name.contains("tun")
                 || name.contains("tap")
@@ -332,7 +331,7 @@ public final class HealthCheckImpl: HealthCheck {
                 || name.contains("ipsec") {
                 return true
             }
-            ptr = p.pointee.ifa_next
+            ptr = addr.pointee.ifa_next
         }
         return false
     }
@@ -357,22 +356,10 @@ public final class HealthCheckImpl: HealthCheck {
 
             do {
                 try session.sendProviderMessage(
-                    "getMemory".data(using: .utf8)!
+                    Data("getMemory".utf8)
                 ) { response in
                     defer { semaphore.signal() }
-
-                    guard
-                        let response,
-                        let str = String(data: response, encoding: .utf8),
-                        str.hasPrefix("Memory:")
-                    else {
-                        return
-                    }
-
-                    let value = str.replacingOccurrences(of: "Memory:", with: "")
-                    if let mem = Double(value) {
-                        memory = mem
-                    }
+                    memory = self.parseMemoryResponse(response)
                 }
             } catch {
                 semaphore.signal()
@@ -381,6 +368,15 @@ public final class HealthCheckImpl: HealthCheck {
 
         _ = semaphore.wait(timeout: .now() + timeout)
         return memory
+    }
+
+    private func parseMemoryResponse(_ response: Data?) -> Double {
+        guard let response,
+              let str = String(data: response, encoding: .utf8),
+              str.hasPrefix("Memory:")
+        else { return -1 }
+        let value = str.replacingOccurrences(of: "Memory:", with: "")
+        return Double(value) ?? -1
     }
 
     public func getTimeToWakeUp() -> Int32 {

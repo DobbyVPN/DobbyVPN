@@ -9,6 +9,29 @@ plugins {
     alias(libs.plugins.hydraulic.conveyor) apply false
     alias(libs.plugins.protobuf) apply false
     alias(libs.plugins.kotlin.jvm) apply false
+    alias(libs.plugins.detekt)
 
     id("com.github.gmazzo.buildconfig") version "5.6.5" apply false
+}
+
+// detekt for all subprojects except vendored/ported modules
+val detektExcluded = setOf("outline", "awg")
+allprojects {
+    if (project.name !in detektExcluded) {
+        apply(plugin = "io.gitlab.arturbosch.detekt")
+
+        detekt {
+            buildUponDefaultConfig = true
+            config.setFrom(files("${rootProject.projectDir}/detekt.yml"))
+            parallel = true
+            reports {
+                html.required.set(true)
+                html.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/detekt.html"))
+                xml.required.set(true)
+                xml.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/detekt.xml"))
+                sarif.required.set(true)
+                sarif.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/detekt.sarif"))
+            }
+        }
+    }
 }

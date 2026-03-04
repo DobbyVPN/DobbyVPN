@@ -23,9 +23,9 @@ const (
 )
 
 const (
-	ENV_WG_TUN_FD             = "WG_TUN_FD"
-	ENV_WG_UAPI_FD            = "WG_UAPI_FD"
-	ENV_WG_PROCESS_FOREGROUND = "WG_PROCESS_FOREGROUND"
+	envWgTunFD             = "WG_TUN_FD"
+	envWgUapiFD            = "WG_UAPI_FD"
+	envWgProcessForeground = "WG_PROCESS_FOREGROUND"
 )
 
 type App struct {
@@ -60,7 +60,7 @@ func NewApp(config string) (*App, error) {
 	}
 	app := &App{
 		InterfaceName: iface,
-		Foreground:    fg || os.Getenv(ENV_WG_PROCESS_FOREGROUND) == "1",
+		Foreground:    fg || os.Getenv(envWgProcessForeground) == "1",
 		configString:  config,
 		errs:          make(chan error, 1),
 		term:          make(chan os.Signal, 1),
@@ -117,7 +117,7 @@ func (a *App) Run() error {
 
 func (a *App) Stop() {
 	if a.uapiListener != nil {
-		a.uapiListener.Close()
+		_ = a.uapiListener.Close()
 	}
 	if a.dev != nil {
 		a.dev.Close()
@@ -130,7 +130,7 @@ func splitConfig(config string) []string {
 }
 
 func (a *App) openTun() (tun.Device, error) {
-	if fdStr := os.Getenv(ENV_WG_TUN_FD); fdStr != "" {
+	if fdStr := os.Getenv(envWgTunFD); fdStr != "" {
 		fd, err := strconv.ParseUint(fdStr, 10, 32)
 		if err != nil {
 			return nil, err
@@ -145,7 +145,7 @@ func (a *App) openTun() (tun.Device, error) {
 }
 
 func (a *App) openUAPI() (*os.File, error) {
-	if fdStr := os.Getenv(ENV_WG_UAPI_FD); fdStr != "" {
+	if fdStr := os.Getenv(envWgUapiFD); fdStr != "" {
 		fd, err := strconv.ParseUint(fdStr, 10, 32)
 		if err != nil {
 			return nil, err

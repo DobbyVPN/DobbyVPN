@@ -1,0 +1,43 @@
+pre-commit:
+  parallel: true
+  commands:
+    go-lint-unix:
+      glob: "go_client/**/*.go"
+      run: cd go_client && golangci-lint run --new-from-rev=HEAD~1 $(go list ./... | grep -v '_exports$')
+      stage_fixed: true
+      only:
+        - os: linux
+        - os: darwin
+
+    go-lint-windows:
+      glob: "go_client/**/*.go"
+      run: cd go_client && powershell -Command "golangci-lint run --new-from-rev=HEAD~1 (go list ./... | Where-Object { $_ -notmatch '_exports$' })"
+      stage_fixed: true
+      only:
+        - os: windows
+
+    kotlin-detekt-unix:
+      glob: "kmp_client/**/*.kt"
+      run: cd kmp_client && ./gradlew detekt
+      only:
+        - os: linux
+        - os: darwin
+
+    kotlin-detekt-windows:
+      glob: "kmp_client/**/*.kt"
+      run: cd kmp_client && gradlew.bat detekt
+      only:
+        - os: windows
+
+    swift-lint:
+      glob: "kmp_client/iosApp/**/*.swift"
+      run: cd kmp_client/iosApp && swiftlint lint --config .swiftlint.yml --quiet
+      only:
+        - os: darwin
+      fail_text: "SwiftLint found issues. Fix them before committing."
+
+pre-push:
+  commands:
+    trufflehog:
+      run: trufflehog git file://. --only-verified --fail
+      fail_text: "TruffleHog detected secrets. Remove them before pushing."
