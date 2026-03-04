@@ -1,0 +1,18 @@
+{
+  "ProxyBook": {
+    "e2e-http": [
+      "tcp",
+      "cloak-e2e-http:5678"
+    ]
+  },
+  "BindAddr": [
+    ":18445"
+  ],
+  "BypassUID": [
+    "BvGSsQV96aNGhKh/GQ2A3A=="
+  ],
+  "RedirAddr": "www.cloudflare.com",
+  "PrivateKey": "MFj24ELP061OgulDbVEP2NAzh9gvMjRs7az8APwsuk4=",
+  "AdminUID": "BvGSsQV96aNGhKh/GQ2A3A==",
+  "DatabasePath": "userinfo.db"
+}

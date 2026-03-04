@@ -4,7 +4,7 @@ biometricKtx = "1.4.0-alpha02"
 compiler = "1.5.15"
 kotlin = "2.2.0"
 coreKtx = "1.15.0"
-kotlinScriptRuntime = "2.0.20"
+kotlinScriptRuntime = "2.2.0"
 kotlinxSerializationJson = "1.6.3"
 ktorClientCio = "2.3.7"
 ktorClientContentNegotiation = "2.3.7"
@@ -94,7 +94,7 @@ android-application = { id = "com.android.application", version.ref = "agp" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 composeMultiplatform = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
 jetbrains-kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version = "2.0.20" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 hydraulic-conveyor = { id = "dev.hydraulic.conveyor", version.ref = "conveyor" }

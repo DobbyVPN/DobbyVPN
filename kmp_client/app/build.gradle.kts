@@ -112,6 +112,15 @@ kotlin {
             implementation(libs.ktor.client.cio)
         }
 
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+        }
+
+        jvmTest.dependencies {
+            implementation(kotlin("test"))
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test")
+        }
+
         iosMain.dependencies {
 
             implementation(libs.ktor.client.darwin)
@@ -138,6 +147,7 @@ android {
         targetSdk = 35
 
         applicationId = providers.gradleProperty("packageName").get()
+        testInstrumentationRunner = "com.dobby.test.DobbyTestRunner"
         versionCode = providers.gradleProperty("android.injected.version.code")
             .orElse(providers.gradleProperty("versionCode"))
             .map { it.toInt() }
@@ -222,4 +232,6 @@ dependencies {
     implementation(project(":awg"))
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
 }
