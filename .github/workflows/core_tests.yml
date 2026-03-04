@@ -1,4 +1,4 @@
-name: Core PR Tests (Go + Kotlin)
+name: Core PR Tests (Go + Kotlin + Swift)
 
 on:
   pull_request:
@@ -79,3 +79,18 @@ jobs:
       - name: Run all Kotlin jvmTest tests
         working-directory: kmp_client
         run: ./gradlew :app:jvmTest
+
+  swift-functional:
+    name: "Swift functional tests"
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Select Xcode 16.1
+        run: sudo xcode-select -s /Applications/Xcode_16.1.app
+
+      - name: Run Swift tests
+        working-directory: kmp_client/iosApp
+        run: xcodebuild test -project iosApp.xcodeproj -scheme DobbyVPNTests -destination 'platform=macOS'
