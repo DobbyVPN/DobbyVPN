@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/Jigsaw-Code/outline-sdk/network"
-	"github.com/Jigsaw-Code/outline-sdk/network/lwip2transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
 )
@@ -55,12 +54,15 @@ func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 		return nil, fmt.Errorf("failed to create delegate UDP proxy: %w", err)
 	}
 
-	log.Infof("outline client: configuring lwIP...")
-	if od.IPDevice, err = lwip2transport.ConfigureDevice(od.sd, od.pp); err != nil {
-		return nil, fmt.Errorf("failed to configure lwIP: %w", err)
-	}
-
 	return od, nil
+}
+
+func (d *OutlineDevice) DialStream(ctx context.Context, addr string) (net.Conn, error) {
+	return d.sd.DialStream(ctx, addr)
+}
+
+func (d *OutlineDevice) ListenPacket(ctx context.Context) (net.PacketConn, error) {
+	return d.pp.remotePl.ListenPacket(ctx)
 }
 
 func (d *OutlineDevice) Close() error {
