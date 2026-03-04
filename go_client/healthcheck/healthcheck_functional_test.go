@@ -1,6 +1,7 @@
 package healthcheck
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -19,8 +20,9 @@ func TestURLTestSuccessfulRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("URLTest failed: %v", err)
 	}
-	if ms <= 0 {
-		t.Errorf("Expected positive latency, got %d ms", ms)
+	// Local connections can be < 1ms, which rounds to 0
+	if ms < 0 {
+		t.Errorf("Expected non-negative latency, got %d ms", ms)
 	}
 	if ms > 500 {
 		t.Errorf("Latency too high for local server: %d ms", ms)
@@ -81,29 +83,31 @@ func TestURLTestTimeout(t *testing.T) {
 }
 
 func TestTCPPingSuccessfulConnection(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to create listener: %v", err)
+	var lc net.ListenConfig
+	listener, listenErr := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if listenErr != nil {
+		t.Fatalf("Failed to create listener: %v", listenErr)
 	}
 	defer listener.Close()
 
 	go func() {
 		for {
-			conn, err := listener.Accept()
-			if err != nil {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
 				return
 			}
 			conn.Close()
 		}
 	}()
 
-	ms, err := TCPPing(listener.Addr().String())
+	ms, pingErr := TCPPing(listener.Addr().String())
 
-	if err != nil {
-		t.Fatalf("TCPPing failed: %v", err)
+	if pingErr != nil {
+		t.Fatalf("TCPPing failed: %v", pingErr)
 	}
-	if ms <= 0 {
-		t.Errorf("Expected positive latency, got %d ms", ms)
+	// Local connections can be < 1ms, which rounds to 0
+	if ms < 0 {
+		t.Errorf("Expected non-negative latency, got %d ms", ms)
 	}
 	if ms > 100 {
 		t.Errorf("Latency too high for local connection: %d ms", ms)
