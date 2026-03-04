@@ -1,15 +1,15 @@
 package interop
 
-import com.dobby.vpnserver.VpnGrpcKt
-import com.dobby.vpnserver.checkServerAliveRequest
-import com.dobby.vpnserver.empty
-import com.dobby.vpnserver.initLoggerRequest
-import com.dobby.vpnserver.startAwgRequest
-import com.dobby.vpnserver.startCloakClientRequest
-import com.dobby.vpnserver.startHealthCheckRequest
-import com.dobby.vpnserver.startOutlineRequest
-import com.dobby.vpnserver.tcpPingRequest
-import com.dobby.vpnserver.urlTestRequest
+import com.dobby.grpcproto.VpnGrpcKt
+import com.dobby.grpcproto.checkServerAliveRequest
+import com.dobby.grpcproto.empty
+import com.dobby.grpcproto.initLoggerRequest
+import com.dobby.grpcproto.startAwgRequest
+import com.dobby.grpcproto.startCloakClientRequest
+import com.dobby.grpcproto.startHealthCheckRequest
+import com.dobby.grpcproto.startOutlineRequest
+import com.dobby.grpcproto.tcpPingRequest
+import com.dobby.grpcproto.urlTestRequest
 import interop.data.TcpPingResponce
 import interop.data.UrlTestResponce
 import interop.exceptions.VPNServiceConnectionException
