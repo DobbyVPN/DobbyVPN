@@ -73,6 +73,7 @@ jobs:
           CXX: ${{ steps.install_cc.outputs.cxx }}
 
       - name: Upload built libraries
+        if: matrix.os == 'windows'
         uses: actions/upload-artifact@v4
         with:
           name: windows_grpcvpnserver.exe
@@ -80,6 +81,7 @@ jobs:
             go_client/windows_grpcvpnserver.exe
 
       - name: Upload built libraries
+        if: matrix.os == 'ubuntu'
         uses: actions/upload-artifact@v4
         with:
           name: ubuntu_grpcvpnserver
@@ -87,6 +89,7 @@ jobs:
             go_client/ubuntu_grpcvpnserver
 
       - name: Upload built libraries
+        if: matrix.os == 'macos'
         uses: actions/upload-artifact@v4
         with:
           name: macos_grpcvpnserver
