@@ -148,7 +148,7 @@ internal class DobbyVpnService(
             }
 
             val connected = vpnLibrary.StartOutline(outlineUrl)
-            if (connected != 0) {
+            if (connected == 0) {
                 logger.log("Outline connection established successfully")
                 connectionState.updateVpnStarted(isStarted = true)
             } else {
