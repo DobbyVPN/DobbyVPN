@@ -3,7 +3,6 @@ package com.dobby.feature.diagnostic.presentation
 import com.dobby.feature.diagnostic.domain.IpRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -35,7 +34,7 @@ class DiagnosticViewModelFunctionalTest {
         val fakeRepo = FakeIpRepository(
             ipData = DomainIpData(ip = "1.2.3.4", city = "Moscow", country = "Russia")
         )
-        val vm = DiagnosticViewModel(fakeRepo)
+        val vm = DiagnosticViewModel(fakeRepo, testDispatcher)
 
         assertEquals(IpData.EMPTY, vm.uiState.value.ipData)
 
@@ -53,7 +52,7 @@ class DiagnosticViewModelFunctionalTest {
     @Test
     fun `reloadIpData sets failed on exception`() = runTest {
         val fakeRepo = FakeIpRepository(shouldThrow = true)
-        val vm = DiagnosticViewModel(fakeRepo)
+        val vm = DiagnosticViewModel(fakeRepo, testDispatcher)
 
         vm.reloadIpData()
         advanceUntilIdle()
@@ -68,7 +67,7 @@ class DiagnosticViewModelFunctionalTest {
         val fakeRepo = FakeIpRepository(
             hostnameIpData = DomainIpData(ip = "5.6.7.8", city = "Berlin", country = "Germany")
         )
-        val vm = DiagnosticViewModel(fakeRepo)
+        val vm = DiagnosticViewModel(fakeRepo, testDispatcher)
 
         assertEquals(IpData.EMPTY, vm.uiState.value.dnsData)
 
@@ -86,7 +85,7 @@ class DiagnosticViewModelFunctionalTest {
     @Test
     fun `reloadDnsIpData sets failed on exception`() = runTest {
         val fakeRepo = FakeIpRepository(shouldThrowHostname = true)
-        val vm = DiagnosticViewModel(fakeRepo)
+        val vm = DiagnosticViewModel(fakeRepo, testDispatcher)
 
         vm.reloadDnsIpData("example.com")
         advanceUntilIdle()
@@ -102,7 +101,7 @@ class DiagnosticViewModelFunctionalTest {
             ipData = DomainIpData(ip = "1.2.3.4", city = "Moscow", country = "Russia"),
             hostnameIpData = DomainIpData(ip = "5.6.7.8", city = "Berlin", country = "Germany")
         )
-        val vm = DiagnosticViewModel(fakeRepo)
+        val vm = DiagnosticViewModel(fakeRepo, testDispatcher)
 
         vm.reloadDnsIpData("example.com")
         advanceUntilIdle()
@@ -122,7 +121,7 @@ class DiagnosticViewModelFunctionalTest {
             ipData = DomainIpData(ip = "1.2.3.4", city = "Moscow", country = "Russia"),
             hostnameIpData = DomainIpData(ip = "5.6.7.8", city = "Berlin", country = "Germany")
         )
-        val vm = DiagnosticViewModel(fakeRepo)
+        val vm = DiagnosticViewModel(fakeRepo, testDispatcher)
 
         vm.reloadIpData()
         advanceUntilIdle()
@@ -141,7 +140,7 @@ class DiagnosticViewModelFunctionalTest {
         val fakeRepo = FakeIpRepository(
             hostnameIpData = DomainIpData(ip = "1.1.1.1", city = "", country = "")
         )
-        val vm = DiagnosticViewModel(fakeRepo)
+        val vm = DiagnosticViewModel(fakeRepo, testDispatcher)
 
         vm.reloadDnsIpData("custom-host.example.org")
         advanceUntilIdle()

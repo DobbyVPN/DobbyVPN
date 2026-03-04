@@ -8,11 +8,13 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dobby.feature.diagnostic.domain.IpRepository
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class DiagnosticViewModel(
     private val ipRepository: IpRepository,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : ViewModel() {
 
     private val _uiState: MutableState<UiData> = mutableStateOf(UiData.EMPTY)
@@ -23,7 +25,7 @@ class DiagnosticViewModel(
 
         state = UiData(IpData.LOADING, state.dnsData)
 
-        viewModelScope.launch(Dispatchers.Default) {
+        viewModelScope.launch(ioDispatcher) {
             val data = runCatching {
                 ipRepository.getIpData()
             }.getOrElse {
@@ -38,7 +40,7 @@ class DiagnosticViewModel(
 
         state = UiData(state.ipData, IpData.LOADING)
 
-        viewModelScope.launch(Dispatchers.Default) {
+        viewModelScope.launch(ioDispatcher) {
             val data = runCatching {
                 ipRepository.getHostnameIpData(hostname)
             }.getOrElse {

@@ -52,7 +52,7 @@ platform :android do
   desc "Build Desktop artifacts"
   lane :build_desktop do
     gradle(
-      task: "build",
+      task: "assemble",
       properties: {
         "projectRepositoryCommit" => COMMIT,
         "projectRepositoryCommitLink" => COMMIT_LINK,
