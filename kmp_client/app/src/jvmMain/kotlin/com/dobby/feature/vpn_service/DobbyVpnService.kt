@@ -8,7 +8,7 @@ import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import interop.VPNLibrary
 import kotlinx.coroutines.runBlocking
-import java.util.*
+import java.util.Base64
 
 private fun extractHostFromHostPort(hostPortMaybeWithQuery: String): String {
     val hostPort = hostPortMaybeWithQuery.substringBefore("?").trim()
@@ -120,7 +120,13 @@ internal class DobbyVpnService(
         val udpPath = dobbyConfigsRepository.getUdpPathOutline()
         val localHost = "127.0.0.1"
         val localPort = dobbyConfigsRepository.getCloakLocalPort().toString()
-        logger.log("startCloakOutline with key: methodPassword = ${maskStr(methodPassword)} serverPort = ${maskStr(serverPort)}")
+        logger.log(
+            "startCloakOutline with key: methodPassword = ${maskStr(methodPassword)} serverPort = ${
+                maskStr(
+                    serverPort
+                )
+            }"
+        )
         logger.log("Outline prefix: ${prefix.ifEmpty { "(none)" }}")
         logger.log("Outline websocket: $websocketEnabled, tcpPath: ${tcpPath.ifEmpty { "(none)" }}, udpPath: ${udpPath.ifEmpty { "(none)" }}")
         runBlocking {

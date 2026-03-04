@@ -6,13 +6,18 @@ import com.dobby.feature.diagnostic.domain.HealthCheck
 import com.dobby.feature.diagnostic.domain.HealthCheckManager
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.maskStr
-import com.dobby.feature.main.domain.*
+import com.dobby.feature.main.domain.ConnectionStateRepository
+import com.dobby.feature.main.domain.DobbyConfigsRepository
+import com.dobby.feature.main.domain.PermissionEventsChannel
+import com.dobby.feature.main.domain.VpnManager
+import com.dobby.feature.main.domain.clearOutlineAndCloakConfig
 import com.dobby.feature.main.domain.config.TomlConfigApplier
 import com.dobby.feature.main.ui.MainUiState
 import com.dobby.vpn.BuildConfig
-import io.ktor.client.*
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
+import io.ktor.client.HttpClient
+import io.ktor.client.request.get
+import io.ktor.client.request.headers
+import io.ktor.client.statement.bodyAsText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,7 +46,8 @@ class MainViewModel(
         logger = logger
     )
 
-    private val healthCheckManager: HealthCheckManager = HealthCheckManager(healthCheck, this, configsRepository, logger)
+    private val healthCheckManager: HealthCheckManager =
+        HealthCheckManager(healthCheck, this, configsRepository, logger)
     private var serverAddress: String? = null
     private var serverPort: Int? = null
 
@@ -125,6 +131,7 @@ class MainViewModel(
                     healthCheckManager.stopHealthCheck()
                     stopVpnService()
                 }
+
                 false -> {
                     connectionStateRepository.updateVpnStarted(true)
                     logger.log("Update vpnStarted state: VpnState = ${connectionStateRepository.vpnStartedFlow.value}")

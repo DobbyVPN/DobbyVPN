@@ -7,9 +7,6 @@ import com.dobby.ui.theme.DesktopClientTheme
 import com.sun.jna.Platform
 import org.koin.mp.KoinPlatform
 import java.io.File
-import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
-import java.io.IOException
 
 fun main() = application {
     startDI(listOf(jvmMainModule, jvmVpnModule)){}

@@ -15,9 +15,9 @@ import org.koin.dsl.module
 val jvmMainModule = makeNativeModule(
     copyLogsInteractor = { CopyLogsInteractorImpl() },
     logEventsChannel = { LogEventsChannel() },
-    logsRepository = { LogsRepository( logEventsChannel = get()) },
+    logsRepository = { LogsRepository(logEventsChannel = get()) },
     ipRepository = { IpRepositoryImpl(get()) },
-    configsRepository = { DobbyConfigsRepositoryImpl( vpnLibrary = get() ) },
+    configsRepository = { DobbyConfigsRepositoryImpl(vpnLibrary = get()) },
     connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(get()) },
     authenticationManager = { AuthenticationManagerImpl() },
