@@ -8,8 +8,8 @@ class OutlineGo {
     companion object {
         init {
             Log.d(TAG, "Start loading libraries")
-            System.loadLibrary("outline")
             System.loadLibrary("outline_jni")
+            System.loadLibrary("outline")
             Log.d(TAG, "Libraries loaded successfully")
         }
 

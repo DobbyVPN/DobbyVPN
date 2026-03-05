@@ -9,6 +9,8 @@
 #include <string.h>
 #include "liboutline.h"
 
+#define EXPORT __attribute__((visibility("default")))
+
 static JavaVM *g_vm = NULL;
 static jobject g_vpn_service_obj = NULL;
 static jmethodID g_protect_mid = NULL;
@@ -18,7 +20,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
     return JNI_VERSION_1_6;
 }
 
-int go_protect_socket(int fd) {
+EXPORT int go_protect_socket(int fd) {
     if (g_vm == NULL || g_vpn_service_obj == NULL || g_protect_mid == NULL) {
         return 0;
     }
