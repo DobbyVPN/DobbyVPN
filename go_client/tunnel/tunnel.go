@@ -3,14 +3,13 @@ package tunnel
 import (
 	"context"
 	"fmt"
-	"net"
-	"sync"
-
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 	M "github.com/xjasonlyu/tun2socks/v2/metadata" // Используем алиас M как в proxy.go
 	"github.com/xjasonlyu/tun2socks/v2/proxy"      // Пакет, содержащий интерфейс Proxy
 	"github.com/xjasonlyu/tun2socks/v2/proxy/proto"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
+	"net"
+	"sync"
 
 	log "go_client/logger"
 )
@@ -141,7 +140,9 @@ func StartEngine(fd int, proxyAddr string) {
 		return
 	}
 
-	directOutbound := proxy.NewDirect()
+	directOutbound := &ProtectedDirectProxy{
+		Proxy: proxy.NewDirect(),
+	}
 
 	wrapper := &DobbyProxy{
 		vpn:    vpnOutbound,
@@ -164,4 +165,50 @@ func StopEngine() {
 func stopLocked() {
 	engine.Stop()
 	isRunning = false
+}
+
+// SocketProtector — интерфейс для вызова VpnService.protect(fd) из Kotlin
+type SocketProtector interface {
+	Protect(fd int) bool
+}
+
+var globalProtector SocketProtector
+
+func RegisterProtector(p SocketProtector) {
+	globalProtector = p
+}
+
+// ProtectedDirectProxy реализует интерфейс proxy.Proxy
+type ProtectedDirectProxy struct {
+	// Встраиваем стандартный direct, чтобы иметь доступ к методам типа Addr() и Proto()
+	proxy.Proxy
+}
+
+// Определяем тип функции для защиты
+type ProtectDialer func(ctx context.Context, network, address string) (net.Conn, error)
+
+// Глобальная переменная, которую мы заполним при старте
+var CustomProtectedDialer ProtectDialer
+
+// Теперь обновляем твой прокси, чтобы он вызывал эту переменную
+func (p *ProtectedDirectProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
+	network := metadata.Network.String()
+	address := metadata.DestinationAddress()
+
+	// Если функция установлена — используем её, иначе — обычный Direct
+	if CustomProtectedDialer != nil {
+		log.Infof("[Router] Direct dialing %s via %s (PROTECTED)", address, network)
+		return CustomProtectedDialer(ctx, network, address)
+	}
+
+	log.Infof("[Router] Direct dialing %s (NO PROTECTION)", address)
+	return p.Proxy.DialContext(ctx, metadata)
+}
+
+// DialUDP для прямого выхода
+func (p *ProtectedDirectProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
+	// Для UDP логика защиты через Control в Dialer работает сложнее,
+	// пока оставим стандартный, но если байпас для UDP не заработает —
+	// нужно будет написать ProtectedListenPacket по аналогии.
+	return proxy.NewDirect().DialUDP(metadata)
 }

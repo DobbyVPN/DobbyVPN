@@ -101,6 +101,9 @@ class OutlineGo {
         @Throws(IllegalStateException::class)
         external fun checkServerAlive(address: String, port: Int): Int
 
+        @JvmStatic
+        external fun registerVpnService(vpnService: Any): Unit
+
         /**
          * Safe call to newOutlineClient with a library-loaded check.
          */
