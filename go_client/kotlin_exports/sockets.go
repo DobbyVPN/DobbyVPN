@@ -18,7 +18,6 @@ func init() {
 	tunnel.CustomProtectedDialer = DialContextWithProtect
 }
 
-//export DialContextWithProtect
 func DialContextWithProtect(ctx context.Context, network string, address string) (net.Conn, error) {
 	d := &net.Dialer{
 		Control: func(network, address string, c syscall.RawConn) error {
