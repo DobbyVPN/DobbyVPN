@@ -84,11 +84,12 @@ type DobbyProxy struct {
 	direct proxy.Proxy // Прямое соединение (Direct)
 }
 
-// DialContext выбирает исходящий путь для TCP
 func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
 	if isBypass(metadata) {
+		log.Infof("[Router] Using DIRECT for %s", metadata.DstIP)
 		return p.direct.DialContext(ctx, metadata)
 	}
+	log.Infof("[Router] Using VPN for %s", metadata.DstIP)
 	return p.vpn.DialContext(ctx, metadata)
 }
 
