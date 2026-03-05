@@ -102,7 +102,7 @@ class OutlineGo {
         external fun checkServerAlive(address: String, port: Int): Int
 
         @JvmStatic
-        external fun registerVpnService(vpnService: Any): Unit
+        external fun registerVpnService(service: android.net.VpnService)
 
         /**
          * Safe call to newOutlineClient with a library-loaded check.

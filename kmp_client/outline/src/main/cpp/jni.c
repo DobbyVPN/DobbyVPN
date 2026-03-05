@@ -35,26 +35,32 @@ int go_protect_socket(int fd) {
 
 JNIEXPORT void JNICALL
 Java_com_dobby_outline_OutlineGo_registerVpnService(JNIEnv *env, jclass clazz, jobject vpn_service) {
-    // 1. Сохраняем глобальную ссылку на инстанс сервиса
+    // 1. Очищаем старую ссылку, если она была (защита от утечек при перезапуске)
     if (g_vpn_service_obj != NULL) {
         (*env)->DeleteGlobalRef(env, g_vpn_service_obj);
     }
+
+    // 2. Создаем глобальную ссылку на переданный объект
     g_vpn_service_obj = (*env)->NewGlobalRef(env, vpn_service);
 
-    // 2. Явно ищем класс VpnService, а не Object
-    jclass vpn_service_class = (*env)->FindClass(env, "android/net/VpnService");
-    if (vpn_service_class == NULL) {
-        // Ошибка: класс не найден (маловероятно в Android контексте)
+    // 3. Ищем КЛАСС VpnService напрямую в системе
+    jclass vpn_cls = (*env)->FindClass(env, "android/net/VpnService");
+    if (vpn_cls == NULL) {
+        // Если класс не найден (теоретически невозможно на Android)
         return;
     }
 
-    // 3. Ищем метод protect в классе VpnService
-    // Сигнатура "(I)Z" означает: принимает int (I), возвращает boolean (Z)
-    g_protect_mid = (*env)->GetMethodID(env, vpn_service_class, "protect", "(I)Z");
+    // 4. Ищем метод protect в найденном КЛАССЕ VpnService
+    // Сигнатура "(I)Z" — принимает int, возвращает boolean
+    g_protect_mid = (*env)->GetMethodID(env, vpn_cls, "protect", "(I)Z");
 
     if (g_protect_mid == NULL) {
-        // Ошибка: метод не найден. Возможно, объект vpn_service не наследуется от VpnService
+        // Ошибка: метод не найден в классе VpnService
+        // Проверь, что твой объект в Kotlin действительно наследует VpnService
     }
+
+    // Освобождаем локальную ссылку на класс (GlobalRef для объекта остается!)
+    (*env)->DeleteLocalRef(env, vpn_cls);
 }
 
 JNIEXPORT void JNICALL
