@@ -4,75 +4,66 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	log "go_client/logger"
 	"net"
 	"net/url"
 	"strings"
 
-	"github.com/Jigsaw-Code/outline-sdk/network"
-	"github.com/Jigsaw-Code/outline-sdk/network/lwip2transport"
-	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
-)
-
-const (
-	connectivityTestDomain   = "www.google.com"
-	connectivityTestResolver = "1.1.1.1:53"
+	"github.com/armon/go-socks5"
+	log "go_client/logger"
 )
 
 type OutlineDevice struct {
-	network.IPDevice
-	sd    transport.StreamDialer
-	pp    *outlinePacketProxy
-	svrIP net.IP
+	listener  net.Listener
+	proxyAddr string
+	svrIP     net.IP
 }
 
-// Use configurl.NewDefaultProviders() for full transport chain support
-var providers = configurl.NewDefaultProviders()
-
-func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
-	log.Infof("outline client: resolving server IP from config...")
-	if strings.Contains(transportConfig, "|ws:") || strings.HasPrefix(strings.TrimSpace(transportConfig), "ws:") {
-		log.Infof("outline client: WebSocket transport detected in config")
-	} else {
-		log.Infof("outline client: WebSocket transport not detected in config (plain)")
-	}
-	ip, err := resolveShadowsocksServerIPFromConfig(transportConfig)
+func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
+	ip, err := ResolveServerIPFromConfig(transportConfig)
 	if err != nil {
 		return nil, err
 	}
-	od = &OutlineDevice{
-		svrIP: ip,
+
+	providers := configurl.NewDefaultProviders()
+
+	// TCP транспорт Outline
+	sd, err := providers.NewStreamDialer(context.Background(), transportConfig)
+	if err != nil {
+		return nil, err
 	}
 
-	log.Infof("outline client: creating stream dialer...")
-	if od.sd, err = providers.NewStreamDialer(context.Background(), transportConfig); err != nil {
-		return nil, fmt.Errorf("failed to create TCP dialer: %w", err)
+	// Создаем SOCKS5 сервер, который перенаправляет трафик в Outline Dialer
+	conf := &socks5.Config{
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return sd.DialStream(ctx, addr)
+		},
+	}
+	server, err := socks5.New(conf)
+	if err != nil {
+		return nil, err
 	}
 
-	log.Infof("outline client: creating packet proxy...")
-	if od.pp, err = newOutlinePacketProxy(transportConfig); err != nil {
-		return nil, fmt.Errorf("failed to create delegate UDP proxy: %w", err)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
 	}
 
-	log.Infof("outline client: configuring lwIP...")
-	if od.IPDevice, err = lwip2transport.ConfigureDevice(od.sd, od.pp); err != nil {
-		return nil, fmt.Errorf("failed to configure lwIP: %w", err)
+	addr := listener.Addr().String()
+	od := &OutlineDevice{
+		listener:  listener,
+		proxyAddr: addr,
+		svrIP:     ip,
 	}
+
+	go func() {
+		log.Infof("SOCKS5 server started")
+		if err := server.Serve(listener); err != nil {
+			log.Infof("SOCKS5 server stopped")
+		}
+	}()
 
 	return od, nil
-}
-
-func (d *OutlineDevice) Close() error {
-	return d.IPDevice.Close()
-}
-
-func (d *OutlineDevice) Refresh() error {
-	return d.pp.testConnectivityAndRefresh(connectivityTestResolver, connectivityTestDomain)
-}
-
-func (d *OutlineDevice) GetServerIP() net.IP {
-	return d.svrIP
 }
 
 // extractTLSSNIHost extracts the host from "tls:sni=HOST" part of the config.
@@ -168,4 +159,19 @@ func extractSSHost(transportConfig string) (string, error) {
 // resolveShadowsocksServerIPFromConfig is a wrapper for backward compatibility
 func resolveShadowsocksServerIPFromConfig(transportConfig string) (net.IP, error) {
 	return ResolveServerIPFromConfig(transportConfig)
+}
+
+func (d *OutlineDevice) GetServerIP() net.IP {
+	return d.svrIP
+}
+
+func (d *OutlineDevice) GetProxyAddr() string {
+	return d.proxyAddr
+}
+
+func (d *OutlineDevice) Close() error {
+	if d.listener != nil {
+		return d.listener.Close()
+	}
+	return nil
 }

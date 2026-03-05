@@ -431,3 +431,19 @@ func (d *tunDevice) bringUp() error {
 	log.Infof("Outline/newTunDevice: TUN device %s is now active\n", d.name)
 	return nil
 }
+
+func (d *tunDevice) GetFd() int {
+	if d.Interface == nil || d.Interface.ReadWriteCloser == nil {
+		return 0
+	}
+	// Вытаскиваем fd из твоей структуры wfile
+	if wf, ok := d.Interface.ReadWriteCloser.(*wfile); ok {
+		return int(wf.fd)
+	}
+	return 0
+}
+
+// Close закрывает устройство и освобождает Handle.
+func (d *tunDevice) Close() error {
+	return d.Interface.Close()
+}

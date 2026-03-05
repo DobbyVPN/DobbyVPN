@@ -6,6 +6,7 @@ package internal
 import (
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/songgao/water"
@@ -80,4 +81,16 @@ func (d *tunDevice) bringUp() error {
 		return fmt.Errorf("failed to bring TUN/TAP device '%s' up: %w", d.Name(), err)
 	}
 	return nil
+}
+
+func (d *tunDevice) GetFd() int {
+	if d.Interface == nil {
+		return -1
+	}
+	// water.Interface содержит методы Read/Write/Close,
+	// но дескриптор можно достать через рефлексию или зная структуру.
+	// Однако в большинстве случаев в Linux water.Interface.File — это *os.File.
+
+	// В текущей реализации библиотеки water для Linux:
+	return int(d.Interface.ReadWriteCloser.(*os.File).Fd())
 }
