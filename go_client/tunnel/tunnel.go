@@ -68,9 +68,11 @@ func isBypass(metadata *M.Metadata) bool {
 
 	for _, route := range DefaultBypassCIDRs {
 		if route.Contains(stdIP) {
+			log.Infof("[Router] BYPASS hit for IP: %s", stdIP)
 			return true
 		}
 	}
+	log.Infof("[Router] PROXY route for IP: %s", stdIP)
 	return false
 }
 
