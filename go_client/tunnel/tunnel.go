@@ -1,5 +1,6 @@
 package tunnel
 
+import "C"
 import (
 	"context"
 	"fmt"
@@ -8,10 +9,9 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/proxy"      // Пакет, содержащий интерфейс Proxy
 	"github.com/xjasonlyu/tun2socks/v2/proxy/proto"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
+	log "go_client/logger"
 	"net"
 	"sync"
-
-	log "go_client/logger"
 )
 
 var (
@@ -184,11 +184,11 @@ type ProtectedDirectProxy struct {
 	proxy.Proxy
 }
 
-// Определяем тип функции для защиты
 type ProtectDialer func(ctx context.Context, network, address string) (net.Conn, error)
+type ProtectPacketDialer func(ctx context.Context, network, address string) (net.PacketConn, error)
 
-// Глобальная переменная, которую мы заполним при старте
 var CustomProtectedDialer ProtectDialer
+var CustomProtectedPacketDialer ProtectPacketDialer
 
 // Теперь обновляем твой прокси, чтобы он вызывал эту переменную
 func (p *ProtectedDirectProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
@@ -204,11 +204,14 @@ func (p *ProtectedDirectProxy) DialContext(ctx context.Context, metadata *M.Meta
 	log.Infof("[Router] Direct dialing %s (NO PROTECTION)", address)
 	return p.Proxy.DialContext(ctx, metadata)
 }
-
-// DialUDP для прямого выхода
 func (p *ProtectedDirectProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
-	// Для UDP логика защиты через Control в Dialer работает сложнее,
-	// пока оставим стандартный, но если байпас для UDP не заработает —
-	// нужно будет написать ProtectedListenPacket по аналогии.
-	return proxy.NewDirect().DialUDP(metadata)
+	network := metadata.Network.String()
+	address := metadata.DestinationAddress()
+
+	if CustomProtectedPacketDialer != nil {
+		log.Infof("[Router] Direct UDP dialing %s (PROTECTED)", address)
+		return CustomProtectedPacketDialer(context.Background(), network, address)
+	}
+
+	return p.Proxy.DialUDP(metadata)
 }
