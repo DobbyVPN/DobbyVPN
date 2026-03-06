@@ -9,24 +9,55 @@ import com.dobby.feature.main.domain.AwgManagerImpl
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.VpnManagerImpl
 import com.dobby.feature.vpn_service.DobbyVpnService
-import com.dobby.feature.vpn_service.RestartableGRPCVPNLibrary
-import interop.VPNLibrary
+import com.dobby.feature.vpn_service.grpc.RestartableAwgGrpcLibrary
+import com.dobby.feature.vpn_service.grpc.RestartableCloakGrpcLibrary
+import com.dobby.feature.vpn_service.grpc.RestartableHealthCheckGrpcLibrary
+import com.dobby.feature.vpn_service.grpc.RestartableLoggerGrpcLibrary
+import com.dobby.feature.vpn_service.grpc.RestartableOutlineGrpcLibrary
+import interop.awg.AwgLibrary
+import interop.cloak.CloakLibrary
+import interop.healthcheck.HealthCheckLibrary
+import interop.logger.LoggerLibrary
+import interop.outline.OutlineLibrary
 import org.koin.dsl.module
 
 val jvmMainModule = makeNativeModule(
     copyLogsInteractor = { CopyLogsInteractorImpl() },
     logEventsChannel = { LogEventsChannel() },
-    logsRepository = { LogsRepository( logEventsChannel = get()) },
+    logsRepository = { LogsRepository(logEventsChannel = get()) },
     ipRepository = { IpRepositoryImpl(get()) },
-    configsRepository = { DobbyConfigsRepositoryImpl( vpnLibrary = get() ) },
+    configsRepository = {
+        DobbyConfigsRepositoryImpl(
+            healthCheckLibrary = get()
+        )
+    },
     connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(get()) },
     awgManager = { AwgManagerImpl(get()) },
     authenticationManager = { AuthenticationManagerImpl() },
-    healthCheck = { HealthCheckImpl(get(), get()) }
+    healthCheck = {
+        HealthCheckImpl(
+            logger = get(),
+            healthCheckLibrary = get()
+        )
+    }
 )
 
 val jvmVpnModule = module {
-    single<VPNLibrary> { RestartableGRPCVPNLibrary(get()) }
-    single<DobbyVpnService> { DobbyVpnService(get(), get(), get(), get()) }
+    single<AwgLibrary> { RestartableAwgGrpcLibrary(get()) }
+    single<OutlineLibrary> { RestartableOutlineGrpcLibrary(get()) }
+    single<CloakLibrary> { RestartableCloakGrpcLibrary(get()) }
+    single<HealthCheckLibrary> { RestartableHealthCheckGrpcLibrary(get()) }
+    single<LoggerLibrary> { RestartableLoggerGrpcLibrary(get()) }
+    single<DobbyVpnService> {
+        DobbyVpnService(
+            get(),
+            logger = get(),
+            awgLibrary = get(),
+            outlineLibrary = get(),
+            cloakLibrary = get(),
+            loggerLibrary = get(),
+            connectionState = get()
+        )
+    }
 }
