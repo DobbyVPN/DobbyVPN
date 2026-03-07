@@ -4,30 +4,32 @@ import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.test.fixtures.TestCountingVpnManager
 import com.dobby.test.fixtures.TestFakeDobbyConfigs
 import com.dobby.test.fixtures.createTestViewModel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModelFunctionalTest {
 
     @Test
-    fun `boundary contract start then stop maps to vpn manager calls`() = runBlocking {
+    fun `boundary contract start then stop maps to vpn manager calls`() = runTest {
         val configs = TestFakeDobbyConfigs()
         val connectionState = ConnectionStateRepository()
         val vpn = TestCountingVpnManager()
         val vm = createTestViewModel(configs, connectionState, vpn)
 
         vm.onConnectionButtonClicked(validOutlineConfig())
-        delay(200)
+        advanceUntilIdle()
 
         assertTrue(connectionState.vpnStartedFlow.value)
         assertTrue(vpn.startCalls >= 1)
 
         vm.onConnectionButtonClicked(validOutlineConfig())
-        delay(200)
+        advanceUntilIdle()
 
         assertFalse(connectionState.vpnStartedFlow.value)
         assertFalse(connectionState.statusFlow.value)
@@ -35,7 +37,7 @@ class MainViewModelFunctionalTest {
     }
 
     @Test
-    fun `invalid config maps to error path and no vpn start`() = runBlocking {
+    fun `invalid config maps to error path and no vpn start`() = runTest {
         val configs = TestFakeDobbyConfigs()
         val connectionState = ConnectionStateRepository()
         val vpn = TestCountingVpnManager()
@@ -48,7 +50,7 @@ class MainViewModelFunctionalTest {
             Port = 443
             """.trimIndent()
         )
-        delay(200)
+        advanceUntilIdle()
 
         assertFalse(connectionState.vpnStartedFlow.value)
         assertFalse(connectionState.statusFlow.value)
@@ -56,7 +58,7 @@ class MainViewModelFunctionalTest {
     }
 
     @Test
-    fun `idempotency repeated toggles do not leave intermediate connected state`() = runBlocking {
+    fun `idempotency repeated toggles do not leave intermediate connected state`() = runTest {
         val configs = TestFakeDobbyConfigs()
         val connectionState = ConnectionStateRepository()
         val vpn = TestCountingVpnManager()
@@ -65,7 +67,7 @@ class MainViewModelFunctionalTest {
 
         repeat(4) {
             vm.onConnectionButtonClicked(cfg)
-            delay(120)
+            advanceUntilIdle()
         }
 
         assertFalse(connectionState.vpnStartedFlow.value)
@@ -75,7 +77,7 @@ class MainViewModelFunctionalTest {
     }
 
     @Test
-    fun `transition guard keeps UI state consistent for rapid stop-start race`() = runBlocking {
+    fun `transition guard keeps UI state consistent for rapid stop-start race`() = runTest {
         val configs = TestFakeDobbyConfigs()
         val connectionState = ConnectionStateRepository()
         val vpn = TestCountingVpnManager()
@@ -85,13 +87,13 @@ class MainViewModelFunctionalTest {
         vm.onConnectionButtonClicked(cfg)
         vm.onConnectionButtonClicked(cfg)
         vm.onConnectionButtonClicked(cfg)
-        delay(400)
+        advanceUntilIdle()
 
         assertFalse(!connectionState.vpnStartedFlow.value && connectionState.statusFlow.value)
     }
 
     @Test
-    fun `cross impl parity same scenario gives same semantic ui result`() = runBlocking {
+    fun `cross impl parity same scenario gives same semantic ui result`() = runTest {
         val resultA = runScenarioWith(TestCountingVpnManager())
         val resultB = runScenarioWith(TestCountingVpnManager())
 
@@ -100,15 +102,15 @@ class MainViewModelFunctionalTest {
     }
 
     @Test
-    fun `non critical UI contract connection url is reflected in ui state`() = runBlocking {
+    fun `non critical UI contract connection url is reflected in ui state`() = runTest {
         val configs = TestFakeDobbyConfigs(connectionUrl = "initial")
         val connectionState = ConnectionStateRepository()
         val vm = createTestViewModel(configs, connectionState, TestCountingVpnManager())
-        delay(100)
+        advanceUntilIdle()
         assertEquals("initial", vm.uiState.value.connectionURL)
 
         vm.onConnectionUrlChanged("updated-url")
-        delay(100)
+        advanceUntilIdle()
         assertEquals("updated-url", vm.uiState.value.connectionURL)
     }
 
@@ -119,9 +121,7 @@ class MainViewModelFunctionalTest {
         val cfg = validOutlineConfig()
 
         vm.onConnectionButtonClicked(cfg)
-        delay(150)
         vm.onConnectionButtonClicked(cfg)
-        delay(150)
 
         return ScenarioResult(
             finalStarted = connectionState.vpnStartedFlow.value,

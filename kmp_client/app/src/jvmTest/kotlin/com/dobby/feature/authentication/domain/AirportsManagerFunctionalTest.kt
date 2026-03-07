@@ -47,6 +47,24 @@ class AirportsManagerFunctionalTest {
     }
 
     @Test
+    fun `parseCsvLine handles escaped double quotes in quoted fields`() {
+        val result = AirportsManager.parseCsvLine("\"John \"\"The Duke\"\" Wayne\",40.6413,-73.7781")
+
+        assertEquals(3, result.size)
+        assertEquals("John \"The Duke\" Wayne", result[0])
+        assertEquals("40.6413", result[1])
+        assertEquals("-73.7781", result[2])
+    }
+
+    @Test
+    fun `parseCsvLine handles multiple escaped quotes`() {
+        val result = AirportsManager.parseCsvLine("\"He said \"\"Hello\"\" and \"\"Goodbye\"\"\",1.0,2.0")
+
+        assertEquals(3, result.size)
+        assertEquals("He said \"Hello\" and \"Goodbye\"", result[0])
+    }
+
+    @Test
     fun `parseAirportsFromCsv skips header line`() {
         val csv = """
             name,latitude_deg,longitude_deg

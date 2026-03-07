@@ -59,12 +59,21 @@ func probeHTTPThroughCloak(localAddr string) (string, error) {
 		return "", err
 	}
 
+	var response strings.Builder
 	buf := make([]byte, 4096)
-	n, err := conn.Read(buf)
-	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "eof") {
-		return "", err
+	for {
+		n, readErr := conn.Read(buf)
+		if n > 0 {
+			response.Write(buf[:n])
+		}
+		if readErr != nil {
+			if strings.Contains(strings.ToLower(readErr.Error()), "eof") {
+				break
+			}
+			return response.String(), readErr
+		}
 	}
-	return string(buf[:n]), nil
+	return response.String(), nil
 }
 
 func assertCloakConfigFailsE2E(t *testing.T, cfg string, localAddr string) {
@@ -155,6 +164,6 @@ func TestCloakInvalidRemoteHostFailsFastViaDockerE2E(t *testing.T) {
 	uid := envOrDefault("E2E_CLOAK_UID", "BvGSsQV96aNGhKh/GQ2A3A==")
 	publicKey := envOrDefault("E2E_CLOAK_PUBLIC_KEY", "LWsatB8oVpTqOXFF2GK6ugW3wHhfutd5cuHGI6x57i4=")
 	serverName := envOrDefault("E2E_CLOAK_SERVER_NAME", "www.bing.com")
-	cfg := buildCloakClientConfig(localPort, uid, publicKey, serverName, "invalid.invalid.host", cloakPort)
+	cfg := buildCloakClientConfig(localPort, uid, publicKey, serverName, "nonexistent.invalid", cloakPort)
 	assertCloakConfigFailsE2E(t, cfg, net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort)))
 }

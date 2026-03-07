@@ -779,12 +779,21 @@ waitLoop:
 		t.Fatalf("failed to write request through cloak local endpoint: %v", err)
 	}
 
+	var response strings.Builder
 	buf := make([]byte, 4096)
-	n, err := conn.Read(buf)
-	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "eof") {
-		t.Fatalf("failed to read response through cloak local endpoint: %v", err)
+	for {
+		n, readErr := conn.Read(buf)
+		if n > 0 {
+			response.Write(buf[:n])
+		}
+		if readErr != nil {
+			if strings.Contains(strings.ToLower(readErr.Error()), "eof") {
+				break
+			}
+			t.Fatalf("failed to read response through cloak local endpoint: %v", readErr)
+		}
 	}
-	body := string(buf[:n])
+	body := response.String()
 	if !strings.Contains(body, targetMessage) {
 		t.Fatalf("expected proxied response to contain %q, got %q", targetMessage, body)
 	}

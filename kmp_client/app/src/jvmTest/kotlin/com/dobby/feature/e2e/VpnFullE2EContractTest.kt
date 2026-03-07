@@ -7,29 +7,32 @@ import com.dobby.test.fixtures.TestFakeDobbyConfigs
 import com.dobby.test.fixtures.TestScriptedHealthCheck
 import com.dobby.test.fixtures.createTestLogger
 import com.dobby.test.fixtures.createTestViewModel
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class VpnFullE2EContractTest {
 
     @Test
-    fun `happy path end-to-end app start connect traffic disconnect`() = runBlocking {
+    fun `happy path end-to-end app start connect traffic disconnect`() = runTest {
         val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
         val vpn = TestCountingVpnManager()
         val vm = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
 
         vm.onConnectionButtonClicked(validConfigA())
-        delay(250)
+        advanceUntilIdle()
         state.updateStatus(true)
-        delay(50)
+        advanceUntilIdle()
         vm.onConnectionButtonClicked(validConfigA())
-        delay(250)
+        advanceUntilIdle()
 
         assertTrue(vpn.startCalls >= 1)
         assertTrue(vpn.stopCalls >= 1)
@@ -39,7 +42,7 @@ class VpnFullE2EContractTest {
     }
 
     @Test
-    fun `network down up end-to-end reconnect flow and recovery`() = runBlocking {
+    fun `network down up end-to-end reconnect flow and recovery`() = runTest {
         val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
         state.tryUpdateVpnStarted(true)
@@ -51,6 +54,7 @@ class VpnFullE2EContractTest {
             mainViewModel = vm,
             configsRepository = configs,
             logger = createTestLogger(),
+            scope = backgroundScope,
             gracePeriodMs = 0,
             restartDelayMs = 1,
             postRestartDelay = 1.milliseconds,
@@ -69,7 +73,7 @@ class VpnFullE2EContractTest {
     }
 
     @Test
-    fun `invalid config end-to-end reports disconnected without false connected`() = runBlocking {
+    fun `invalid config end-to-end reports disconnected without false connected`() = runTest {
         val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
         val vpn = TestCountingVpnManager()
@@ -82,7 +86,7 @@ class VpnFullE2EContractTest {
             Port = 443
             """.trimIndent()
         )
-        delay(250)
+        advanceUntilIdle()
 
         assertFalse(state.vpnStartedFlow.value)
         assertFalse(state.statusFlow.value)
@@ -90,16 +94,16 @@ class VpnFullE2EContractTest {
     }
 
     @Test
-    fun `stop cleanup end-to-end has no active tunnels or hanging connected state`() = runBlocking {
+    fun `stop cleanup end-to-end has no active tunnels or hanging connected state`() = runTest {
         val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
         val vpn = TestCountingVpnManager()
         val vm = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
 
         vm.onConnectionButtonClicked(validConfigA())
-        delay(250)
+        advanceUntilIdle()
         vm.onConnectionButtonClicked(validConfigA())
-        delay(250)
+        advanceUntilIdle()
 
         assertEquals(0, vpn.activeTunnels)
         assertFalse(state.vpnStartedFlow.value)
@@ -107,44 +111,44 @@ class VpnFullE2EContractTest {
     }
 
     @Test
-    fun `server profile switch in ui works without app restart`() = runBlocking {
+    fun `server profile switch in ui works without app restart`() = runTest {
         val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
         val vpn = TestCountingVpnManager()
         val vm = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
 
         vm.onConnectionButtonClicked(validConfigA())
-        delay(200)
+        advanceUntilIdle()
         vm.onConnectionButtonClicked(validConfigA()) // stop
-        delay(200)
+        advanceUntilIdle()
         vm.onConnectionButtonClicked(validConfigB())
-        delay(200)
+        advanceUntilIdle()
 
         assertTrue(vpn.startCalls >= 2)
         assertEquals("second.example.org:8443", configs.serverPortOutlineValue)
     }
 
     @Test
-    fun `background foreground transition keeps vpn state consistent`() = runBlocking {
+    fun `background foreground transition keeps vpn state consistent`() = runTest {
         val configs = TestFakeDobbyConfigs(connectionUrl = validConfigA())
         val state = ConnectionStateRepository()
         val vpn = TestCountingVpnManager()
         val vm1 = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
 
         vm1.onConnectionButtonClicked(validConfigA())
-        delay(200)
+        advanceUntilIdle()
         state.updateStatus(true)
-        delay(100)
+        advanceUntilIdle()
 
         val vm2 = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
-        delay(150)
+        advanceUntilIdle()
 
         assertTrue(vm2.uiState.value.isVpnStarted)
         assertTrue(vm2.uiState.value.isConnected)
     }
 
     @Test
-    fun `cold restart recovery keeps state consistent with actual vpn`() = runBlocking {
+    fun `cold restart recovery keeps state consistent with actual vpn`() = runTest {
         val configs = TestFakeDobbyConfigs(connectionUrl = validConfigA())
         val persistentState = ConnectionStateRepository()
         persistentState.tryUpdateVpnStarted(true)
@@ -152,7 +156,7 @@ class VpnFullE2EContractTest {
         val vpn = TestCountingVpnManager(activeTunnels = 1)
 
         val vm = createTestViewModel(configs, persistentState, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
-        delay(150)
+        advanceUntilIdle()
 
         assertTrue(vm.uiState.value.isVpnStarted)
         assertTrue(vm.uiState.value.isConnected)
@@ -160,26 +164,26 @@ class VpnFullE2EContractTest {
     }
 
     @Test
-    fun `long session stability smoke has no state leak on repeated health updates`() = runBlocking {
+    fun `long session stability smoke has no state leak on repeated health updates`() = runTest {
         val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
         val vpn = TestCountingVpnManager()
         val vm = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck(fullScript = ArrayDeque(listOf(true))))
 
         vm.onConnectionButtonClicked(validConfigA())
-        delay(200)
+        advanceUntilIdle()
 
         repeat(300) { idx ->
             state.updateStatus(idx % 2 == 0)
         }
-        delay(100)
+        advanceUntilIdle()
 
         assertTrue(state.vpnStartedFlow.value)
         assertFalse(!state.vpnStartedFlow.value && state.statusFlow.value)
     }
 
     @Test
-    fun `ui resilience under transient errors does not freeze state machine`() = runBlocking {
+    fun `ui resilience under transient errors does not freeze state machine`() = runTest {
         val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
         val vpn = TestCountingVpnManager()
@@ -193,28 +197,28 @@ class VpnFullE2EContractTest {
                 Port = 443
                 """.trimIndent()
             )
-            delay(120)
+            advanceUntilIdle()
             vm.onConnectionButtonClicked(validConfigA())
-            delay(120)
+            advanceUntilIdle()
             vm.onConnectionButtonClicked(validConfigA())
-            delay(120)
+            advanceUntilIdle()
         }
 
         vm.onConnectionUrlChanged("stable-url")
-        delay(80)
+        advanceUntilIdle()
         assertEquals("stable-url", vm.uiState.value.connectionURL)
         assertFalse(!state.vpnStartedFlow.value && state.statusFlow.value)
     }
 
     @Test
-    fun `secondary flows diagnostics and settings do not affect core connect path`() = runBlocking {
+    fun `secondary flows diagnostics and settings do not affect core connect path`() = runTest {
         val configs = TestFakeDobbyConfigs()
         val state = ConnectionStateRepository()
         val vpn = TestCountingVpnManager()
         val vm = createTestViewModel(configs, state, vpn, healthCheck = TestScriptedHealthCheck())
 
         vm.onConnectionUrlChanged("secondary-flow-url")
-        delay(80)
+        advanceUntilIdle()
 
         assertEquals("secondary-flow-url", vm.uiState.value.connectionURL)
         assertFalse(state.vpnStartedFlow.value)

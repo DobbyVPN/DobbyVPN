@@ -88,7 +88,7 @@ func TestCloakTransportConfigValidationFunctional(t *testing.T) {
 		},
 		{
 			name:   "invalid UID/PublicKey/RemoteHost",
-			config: `{"UID":"%%%bad%%%", "PublicKey":"@@@bad@@@", "RemoteHost":"invalid.invalid.host"}`,
+			config: `{"UID":"%%%bad%%%", "PublicKey":"@@@bad@@@", "RemoteHost":"nonexistent.invalid"}`,
 		},
 	}
 

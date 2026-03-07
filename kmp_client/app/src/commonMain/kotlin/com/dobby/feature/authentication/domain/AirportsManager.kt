@@ -26,8 +26,14 @@ object AirportsManager {
         val fields = mutableListOf<String>()
         val current = StringBuilder()
         var inQuotes = false
-        for (ch in line) {
+        var i = 0
+        while (i < line.length) {
+            val ch = line[i]
             when {
+                ch == '"' && inQuotes && i + 1 < line.length && line[i + 1] == '"' -> {
+                    current.append('"')
+                    i++
+                }
                 ch == '"' -> inQuotes = !inQuotes
                 ch == ',' && !inQuotes -> {
                     fields.add(current.toString())
@@ -35,6 +41,7 @@ object AirportsManager {
                 }
                 else -> current.append(ch)
             }
+            i++
         }
         fields.add(current.toString())
         return fields

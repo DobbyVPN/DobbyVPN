@@ -38,6 +38,9 @@ func startHealthProbeListener(t *testing.T) (host string, port int, stop func())
 }
 
 func TestOutlineBoundaryNilClientFunctional(t *testing.T) {
+	originalClient := client
+	t.Cleanup(func() { client = originalClient })
+
 	client = nil
 
 	if err := OutlineDisconnect(); err != nil {
