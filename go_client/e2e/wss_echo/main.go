@@ -77,6 +77,7 @@ func main() {
 	srv := &http.Server{
 		Addr: ":8443",
 		TLSConfig: &tls.Config{
+			MinVersion:   tls.VersionTLS12,
 			Certificates: []tls.Certificate{cert},
 		},
 	}

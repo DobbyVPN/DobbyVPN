@@ -31,7 +31,12 @@ object GeoMath {
         val lon = currentLocation.coordinates.longitude
         val phi = lat * PI / 180.0
         val deltaPhi = delta * 180.0 / PI
-        val deltaLambda = 2 * asin(sin(delta / 2) / cos(phi)) * 180.0 / PI
+        val cosPhi = cos(phi)
+        val deltaLambda = if (cosPhi > 0.01) {
+            2 * asin(sin(delta / 2) / cosPhi) * 180.0 / PI
+        } else {
+            360.0
+        }
         return listOf(
             AppCoordinates(lat + deltaPhi, lon),
             AppCoordinates(lat - deltaPhi, lon),

@@ -77,18 +77,17 @@ class AirportsManagerFunctionalTest {
     }
 
     @Test
-    fun `parseAirportsFromCsv handles invalid coordinates as zero`() {
+    fun `parseAirportsFromCsv skips entries with invalid coordinates`() {
         val csv = """
             name,latitude_deg,longitude_deg
             JFK,invalid,not-a-number
+            LAX,33.9425,-118.4081
         """.trimIndent()
 
         val result = AirportsManager.parseAirportsFromCsv(csv)
 
         assertEquals(1, result.airports.size)
-        assertEquals("JFK", result.airports[0].name)
-        assertEquals(0.0, result.airports[0].latitude_deg)
-        assertEquals(0.0, result.airports[0].longitude_deg)
+        assertEquals("LAX", result.airports[0].name)
     }
 
     @Test

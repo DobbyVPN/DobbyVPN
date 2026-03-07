@@ -3,6 +3,7 @@
 package cloak_outline
 
 import (
+	"context"
 	"go_client/common"
 	"net"
 	"strings"
@@ -11,7 +12,8 @@ import (
 
 func startHealthProbeListener(t *testing.T) (host string, port int, stop func()) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to start tcp listener: %v", err)
 	}
@@ -59,7 +61,8 @@ func TestHealthcheckBoundaryContractFunctional(t *testing.T) {
 		t.Fatalf("CheckServerAlive should return 0 for healthy endpoint, got %d", code)
 	}
 
-	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	closed, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to reserve closed port: %v", err)
 	}

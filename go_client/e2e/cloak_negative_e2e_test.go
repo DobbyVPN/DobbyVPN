@@ -106,9 +106,10 @@ func TestCloakInvalidUIDFailsViaDockerE2E(t *testing.T) {
 	cloakPort := envIntOrDefault(t, "E2E_CLOAK_PORT", 18445)
 	requireReachableEndpointOrSkip(t, net.JoinHostPort(cloakHost, strconv.Itoa(cloakPort)))
 
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to allocate local cloak client port: %v", err)
+	var lc net.ListenConfig
+	l, listenErr := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if listenErr != nil {
+		t.Fatalf("failed to allocate local cloak client port: %v", listenErr)
 	}
 	localPort := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()
@@ -124,9 +125,10 @@ func TestCloakInvalidPublicKeyFailsViaDockerE2E(t *testing.T) {
 	cloakPort := envIntOrDefault(t, "E2E_CLOAK_PORT", 18445)
 	requireReachableEndpointOrSkip(t, net.JoinHostPort(cloakHost, strconv.Itoa(cloakPort)))
 
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to allocate local cloak client port: %v", err)
+	var lc net.ListenConfig
+	l, listenErr := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if listenErr != nil {
+		t.Fatalf("failed to allocate local cloak client port: %v", listenErr)
 	}
 	localPort := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()
@@ -142,9 +144,10 @@ func TestCloakInvalidRemoteHostFailsFastViaDockerE2E(t *testing.T) {
 	// Ensure only harness is up; negative config intentionally uses invalid host.
 	requireReachableEndpointOrSkip(t, net.JoinHostPort(envOrDefault("E2E_CLOAK_HOST", "127.0.0.1"), strconv.Itoa(cloakPort)))
 
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to allocate local cloak client port: %v", err)
+	var lc net.ListenConfig
+	l, listenErr := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if listenErr != nil {
+		t.Fatalf("failed to allocate local cloak client port: %v", listenErr)
 	}
 	localPort := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()

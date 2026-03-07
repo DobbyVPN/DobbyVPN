@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"go_client/common"
 	"net"
 	"strconv"
@@ -11,7 +12,8 @@ import (
 
 func startProbeListener(t *testing.T) (host string, port int, stop func()) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen on loopback: %v", err)
 	}
@@ -59,9 +61,10 @@ func TestHealthcheckBoundaryContractFunctional(t *testing.T) {
 		t.Fatalf("expected non-negative latency for healthy endpoint, got %d", ms)
 	}
 
-	closed, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to reserve closed port: %v", err)
+	var closedLc net.ListenConfig
+	closed, closedErr := closedLc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if closedErr != nil {
+		t.Fatalf("failed to reserve closed port: %v", closedErr)
 	}
 	closedPort := closed.Addr().(*net.TCPAddr).Port
 	_ = closed.Close()

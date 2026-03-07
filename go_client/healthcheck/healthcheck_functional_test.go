@@ -54,9 +54,9 @@ func TestURLTestServerError(t *testing.T) {
 
 	ms, err := URLTest(server.URL, 1)
 
-	// Server error should still return latency (connection succeeded)
-	if ms <= 0 {
-		t.Logf("Server error returned ms=%d, err=%v", ms, err)
+	// Server error should still return measurable latency (connection succeeded)
+	if ms < 0 {
+		t.Fatalf("expected non-negative latency on HTTP 500, got %d ms (err=%v)", ms, err)
 	}
 }
 

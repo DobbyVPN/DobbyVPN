@@ -46,12 +46,14 @@ object AirportsManager {
             .filter { it.isNotBlank() }
             .map { line -> parseCsvLine(line) }
             .filter { it.size >= 3 }
-            .map { fields ->
-                Airport(
-                    name = fields[0],
-                    latitude_deg = fields[1].toDoubleOrNull() ?: 0.0,
-                    longitude_deg = fields[2].toDoubleOrNull() ?: 0.0,
-                )
+            .mapNotNull { fields ->
+                val lat = fields[1].toDoubleOrNull()
+                val lon = fields[2].toDoubleOrNull()
+                if (lat != null && lon != null) {
+                    Airport(name = fields[0], latitude_deg = lat, longitude_deg = lon)
+                } else {
+                    null
+                }
             }
             .toList()
         return AirportList(airports)

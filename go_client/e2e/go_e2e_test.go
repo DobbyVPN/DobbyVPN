@@ -86,9 +86,6 @@ func httpRoundtripOverDialer(t *testing.T, dialer transport.StreamDialer, target
 			}
 			return response.String(), readErr
 		}
-		if n == 0 {
-			break
-		}
 	}
 	return response.String(), nil
 }
@@ -241,7 +238,8 @@ func (m *blockingVPNClient) Refresh() error {
 func startSilentTCPServer(t *testing.T) (host string, port int, stop func()) {
 	t.Helper()
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen failed: %v", err)
 	}
@@ -331,12 +329,13 @@ func TestHealthcheckTCPProbeE2E(t *testing.T) {
 		t.Fatalf("expected alive server, got error: %v", err)
 	}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen for closed port failed: %v", err)
+	var closedLc net.ListenConfig
+	closedLn, closedErr := closedLc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if closedErr != nil {
+		t.Fatalf("listen for closed port failed: %v", closedErr)
 	}
-	closedPort := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close()
+	closedPort := closedLn.Addr().(*net.TCPAddr).Port
+	_ = closedLn.Close()
 
 	if err := healthcheck.CheckServerAlive("127.0.0.1", closedPort); err == nil {
 		t.Fatal("expected error for closed port, got nil")
@@ -654,6 +653,7 @@ func TestWSSConnectViaDockerE2E(t *testing.T) {
 		HandshakeTimeout: 3 * time.Second,
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS12,
 		},
 	}
 
@@ -688,6 +688,7 @@ func TestWSSInvalidPathFailsViaDockerE2E(t *testing.T) {
 		HandshakeTimeout: 3 * time.Second,
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS12,
 		},
 	}
 	conn, resp, err := dialer.Dial(u, nil)
@@ -710,9 +711,10 @@ func TestCloakConnectViaDockerE2E(t *testing.T) {
 	targetMessage := envOrDefault("E2E_CLOAK_EXPECT_BODY", "cloak-ok")
 	requireReachableEndpointOrSkip(t, net.JoinHostPort(cloakHost, strconv.Itoa(cloakPort)))
 
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to allocate local cloak client port: %v", err)
+	var localLc net.ListenConfig
+	l, localErr := localLc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if localErr != nil {
+		t.Fatalf("failed to allocate local cloak client port: %v", localErr)
 	}
 	localPort := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()
