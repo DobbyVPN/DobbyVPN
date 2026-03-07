@@ -1,0 +1,15 @@
+services:
+  cloak-e2e-http:
+    image: hashicorp/http-echo:1.0.0
+    command: ["-listen=:5678", "-text=cloak-ok"]
+    ports:
+      - "19080:5678"
+
+  cloak-e2e-server:
+    build:
+      context: ../../../
+      dockerfile: go_client/e2e/cloak/Dockerfile
+    ports:
+      - "18445:18445"
+    depends_on:
+      - cloak-e2e-http

@@ -19,28 +19,21 @@ object AirportsManager {
     suspend fun loadAirports(): AirportList {
         val data = Res.readBytes("files/airports.csv")
         val csv = data.decodeToString()
-        val airports = csv.lineSequence()
-            .drop(1) // skip header
-            .filter { it.isNotBlank() }
-            .map { line -> parseCsvLine(line) }
-            .filter { it.size >= 3 }
-            .map { fields ->
-                Airport(
-                    name = fields[0],
-                    latitude_deg = fields[1].toDoubleOrNull() ?: 0.0,
-                    longitude_deg = fields[2].toDoubleOrNull() ?: 0.0,
-                )
-            }
-            .toList()
-        return AirportList(airports)
+        return parseAirportsFromCsv(csv)
     }
 
-    private fun parseCsvLine(line: String): List<String> {
+    internal fun parseCsvLine(line: String): List<String> {
         val fields = mutableListOf<String>()
         val current = StringBuilder()
         var inQuotes = false
-        for (ch in line) {
+        var i = 0
+        while (i < line.length) {
+            val ch = line[i]
             when {
+                ch == '"' && inQuotes && i + 1 < line.length && line[i + 1] == '"' -> {
+                    current.append('"')
+                    i++
+                }
                 ch == '"' -> inQuotes = !inQuotes
                 ch == ',' && !inQuotes -> {
                     fields.add(current.toString())
@@ -48,8 +41,28 @@ object AirportsManager {
                 }
                 else -> current.append(ch)
             }
+            i++
         }
         fields.add(current.toString())
         return fields
+    }
+
+    internal fun parseAirportsFromCsv(csv: String): AirportList {
+        val airports = csv.lineSequence()
+            .drop(1) // skip header
+            .filter { it.isNotBlank() }
+            .map { line -> parseCsvLine(line) }
+            .filter { it.size >= 3 }
+            .mapNotNull { fields ->
+                val lat = fields[1].toDoubleOrNull()
+                val lon = fields[2].toDoubleOrNull()
+                if (lat != null && lon != null) {
+                    Airport(name = fields[0], latitude_deg = lat, longitude_deg = lon)
+                } else {
+                    null
+                }
+            }
+            .toList()
+        return AirportList(airports)
     }
 }

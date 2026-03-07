@@ -8,11 +8,14 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dobby.feature.diagnostic.domain.IpRepository
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class DiagnosticViewModel(
     private val ipRepository: IpRepository,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : ViewModel() {
 
     private val _uiState: MutableState<UiData> = mutableStateOf(UiData.EMPTY)
@@ -23,11 +26,13 @@ class DiagnosticViewModel(
 
         state = UiData(IpData.LOADING, state.dnsData)
 
-        viewModelScope.launch(Dispatchers.Default) {
-            val data = runCatching {
-                ipRepository.getIpData()
-            }.getOrElse {
-                com.dobby.feature.diagnostic.domain.IpData(ip = "Failed", city = "", country = "")
+        viewModelScope.launch {
+            val data = withContext(ioDispatcher) {
+                runCatching {
+                    ipRepository.getIpData()
+                }.getOrElse {
+                    com.dobby.feature.diagnostic.domain.IpData(ip = "Failed", city = "", country = "")
+                }
             }
             state = UiData(IpData(data.ip, data.city, data.country), state.dnsData)
         }
@@ -38,11 +43,13 @@ class DiagnosticViewModel(
 
         state = UiData(state.ipData, IpData.LOADING)
 
-        viewModelScope.launch(Dispatchers.Default) {
-            val data = runCatching {
-                ipRepository.getHostnameIpData(hostname)
-            }.getOrElse {
-                com.dobby.feature.diagnostic.domain.IpData(ip = "Failed", city = "", country = "")
+        viewModelScope.launch {
+            val data = withContext(ioDispatcher) {
+                runCatching {
+                    ipRepository.getHostnameIpData(hostname)
+                }.getOrElse {
+                    com.dobby.feature.diagnostic.domain.IpData(ip = "Failed", city = "", country = "")
+                }
             }
             state = UiData(state.ipData, IpData(data.ip, data.city, data.country))
         }

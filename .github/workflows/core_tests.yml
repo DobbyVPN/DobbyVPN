@@ -1,0 +1,96 @@
+name: Core PR Tests (Go + Kotlin + Swift)
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  go-fast:
+    name: "Go fast + e2e suites"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go_client/go.mod
+          cache-dependency-path: go_client/go.sum
+
+      - name: Install Task
+        run: |
+          curl -sL https://taskfile.dev/install.sh | sh -s -- -d -b "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run fast Go tests
+        run: task tests:go
+
+      - name: Start e2e stacks
+        run: |
+          docker compose -f go_client/e2e/docker-compose.e2e.yml up -d --build
+          docker compose -f go_client/e2e/cloak/docker-compose.cloak.e2e.yml up -d --build
+
+      - name: Wait for e2e endpoints (hard fail)
+        run: |
+          set -euo pipefail
+          for attempt in {1..60}; do
+            ok=1
+            curl -fsS "http://127.0.0.1:18080/" >/dev/null || ok=0
+            curl -fsS "http://127.0.0.1:19080/" >/dev/null || ok=0
+            timeout 1 bash -lc "</dev/tcp/127.0.0.1/18388" || ok=0
+            timeout 1 bash -lc "</dev/tcp/127.0.0.1/18443" || ok=0
+            timeout 1 bash -lc "</dev/tcp/127.0.0.1/18445" || ok=0
+            if [ "${ok}" -eq 1 ]; then
+              echo "All e2e endpoints are reachable"
+              exit 0
+            fi
+            echo "Waiting for e2e endpoints... attempt ${attempt}/60"
+            sleep 2
+          done
+          echo "E2E endpoints did not become reachable in time"
+          docker compose -f go_client/e2e/docker-compose.e2e.yml ps || true
+          docker compose -f go_client/e2e/cloak/docker-compose.cloak.e2e.yml ps || true
+          exit 1
+
+      - name: Run full e2e suites
+        run: |
+          task tests:go:e2e
+          task tests:go:e2e:cloak
+
+  kotlin-functional:
+    name: "Kotlin functional tests (PR)"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run all Kotlin jvmTest tests
+        working-directory: kmp_client
+        run: ./gradlew :app:jvmTest
+
+  swift-functional:
+    name: "Swift functional tests"
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Select Xcode 16.1
+        run: sudo xcode-select -s /Applications/Xcode_16.1.app
+
+      - name: Run Swift tests
+        working-directory: kmp_client/iosApp
+        run: xcodebuild test -project iosApp.xcodeproj -scheme DobbyVPNTests -destination 'platform=macOS'
