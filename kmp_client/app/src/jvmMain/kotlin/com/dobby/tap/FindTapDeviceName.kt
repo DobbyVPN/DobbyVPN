@@ -3,7 +3,7 @@ import java.io.BufferedReader
 
 class FindTapDeviceName(
     private val logger: Logger
-){
+) {
     fun findTapDeviceName(): String? {
         val netAdaptersClassGuid = "{4D36E972-E325-11CE-BFC1-08002BE10318}"
         val netAdaptersKey = "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\$netAdaptersClassGuid"

@@ -1,7 +1,7 @@
 package com.dobby.feature.diagnostic.domain
 
 import com.dobby.feature.logging.Logger
-import interop.VPNLibraryLoader
+import interop.healthcheck.HealthCheckLibrary
 import java.net.*
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -10,7 +10,7 @@ import kotlin.system.measureTimeMillis
 
 class HealthCheckImpl(
     private val logger: Logger,
-    private val vpnLibrary: VPNLibraryLoader,
+    private val healthCheckLibrary: HealthCheckLibrary,
 ) : HealthCheck {
 
     private val timeoutMs = 1_000L
@@ -212,11 +212,11 @@ class HealthCheckImpl(
             NetworkInterface.getNetworkInterfaces()?.toList()?.any { iface ->
                 val name = iface.name.lowercase()
                 name.contains("tun") ||
-                    name.contains("tap") ||
-                    name.contains("ppp") ||
-                    name.contains("ipsec") ||
-                    name.contains("wg") ||       // WireGuard
-                    name.contains("outline")     // Outline TAP
+                        name.contains("tap") ||
+                        name.contains("ppp") ||
+                        name.contains("ipsec") ||
+                        name.contains("wg") ||       // WireGuard
+                        name.contains("outline")     // Outline TAP
             } ?: false
         } catch (e: Throwable) {
             logger.log("[HC] Error checking VPN interface: ${e.message}")
@@ -232,7 +232,7 @@ class HealthCheckImpl(
         return try {
             // Check if Go library is responsive by calling CouldStart
             // This verifies the native library is loaded and working
-            val isResponsive = vpnLibrary.couldStart()
+            val isResponsive = healthCheckLibrary.CouldStart()
             if (!isResponsive) {
                 logger.log("[HC] Go library not responsive (in critical section)")
             }
@@ -245,7 +245,7 @@ class HealthCheckImpl(
     }
 
     override fun checkServerAlive(address: String, port: Int): Boolean {
-        return vpnLibrary.checkServerAlive(address, port)
+        return healthCheckLibrary.CheckServerAlive(address, port) == 0
     }
 
     override fun getTimeToWakeUp(): Int {
