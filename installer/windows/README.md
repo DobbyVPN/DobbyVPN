@@ -7,9 +7,8 @@
 
 Requires theese file put in the current folder:
 
-* `dobby-vpn-1.1-mac-aarch64.zip`
-* `dobby-vpn-1.1-mac-amd64.zip`
-* `grpcvpnserver`
+* `dobbyVPN-windows.zip`
+* `windows_grpcvpnserver.exe`
 
 ### Install wix
 
