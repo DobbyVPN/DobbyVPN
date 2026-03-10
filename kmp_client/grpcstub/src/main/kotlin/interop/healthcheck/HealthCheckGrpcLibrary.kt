@@ -16,7 +16,7 @@ import kotlinx.coroutines.runBlocking
 open class HealthCheckGrpcLibrary(channel: ManagedChannel) : HealthCheckLibrary {
     private val stub = VpnGrpcKt.VpnCoroutineStub(channel)
 
-    override fun StartHealthCheck(period: Int, sendMetrics: Boolean) {
+    fun StartHealthCheck(period: Int, sendMetrics: Boolean) {
         return runBlocking {
             val request = startHealthCheckRequest {
                 this.period = period
@@ -30,7 +30,7 @@ open class HealthCheckGrpcLibrary(channel: ManagedChannel) : HealthCheckLibrary 
         }
     }
 
-    override fun StopHealthCheck() {
+    fun StopHealthCheck() {
         return runBlocking {
             try {
                 stub.stopHealthCheck(empty { })
@@ -40,7 +40,7 @@ open class HealthCheckGrpcLibrary(channel: ManagedChannel) : HealthCheckLibrary 
         }
     }
 
-    override fun Status(): String {
+    fun Status(): String {
         return runBlocking {
             try {
                 val response = stub.status(empty { })
@@ -52,7 +52,7 @@ open class HealthCheckGrpcLibrary(channel: ManagedChannel) : HealthCheckLibrary 
         }
     }
 
-    override fun TcpPing(address: String): TcpPingResponse {
+    fun TcpPing(address: String): TcpPingResponse {
         return runBlocking {
             val request = tcpPingRequest {
                 this.address = address
@@ -68,7 +68,7 @@ open class HealthCheckGrpcLibrary(channel: ManagedChannel) : HealthCheckLibrary 
         }
     }
 
-    override fun UrlTest(url: String, standard: Int): UrlTestResponse {
+    fun UrlTest(url: String, standard: Int): UrlTestResponse {
         return runBlocking {
             val request = urlTestRequest {
                 this.url = url

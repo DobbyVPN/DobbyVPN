@@ -15,11 +15,6 @@ service Vpn {
   rpc StopOutline (Empty)                 returns (Empty);
   
   // health_check.go
-  rpc StartHealthCheck (StartHealthCheckRequest)    returns (Empty);
-  rpc StopHealthCheck (Empty)                       returns (Empty);
-  rpc Status (Empty)                                returns (StatusResponce);
-  rpc TcpPing (TcpPingRequest)                      returns (TcpPingResponce);
-  rpc UrlTest (UrlTestRequest)                      returns (UrlTestResponce);
   rpc CouldStart (Empty)                            returns (CouldStartResponce);
   rpc CheckServerAlive (CheckServerAliveRequest)    returns (CheckServerAliveResponce);
   
@@ -46,34 +41,6 @@ message StartOutlineRequest {
 
 message StartOutlineResponse {
   int32 result = 1;
-}
-
-message StartHealthCheckRequest {
-  int32 period = 1;
-  bool sendMetrics = 2;
-}
-
-message StatusResponce {
-  string status = 1;
-}
-
-message TcpPingRequest {
-  string address = 1;
-}
-
-message TcpPingResponce {
-  int32 result = 1;
-  string error = 2;
-}
-
-message UrlTestRequest {
-  string url = 1;
-  int32 standard = 2;
-}
-
-message UrlTestResponce {
-  int32 result = 1;
-  string error = 2;
 }
 
 message CouldStartResponce {
