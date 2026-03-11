@@ -3,7 +3,7 @@ package main
 import "C"
 import (
 	"go_client/healthcheck"
-	log "go_client/logger"
+	"go_client/log"
 )
 
 func StartHealthCheck(period int32, sendMetrics bool) {

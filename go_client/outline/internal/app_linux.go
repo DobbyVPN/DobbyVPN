@@ -6,13 +6,12 @@ package internal
 import (
 	"context"
 	"fmt"
+	"github.com/jackpal/gateway"
 	"go_client/common"
-	log "go_client/logger"
+	"go_client/log"
 	outlineCommon "go_client/outline/common"
 	"go_client/routing"
 	"go_client/tunnel"
-
-	"github.com/jackpal/gateway"
 )
 
 // signalInit sends the initialization result to the channel (if provided) exactly once.
@@ -26,97 +25,77 @@ func signalInit(initResult chan<- error, err error) {
 }
 
 func (app App) Run(ctx context.Context, initResult chan<- error) error {
-	// Define gateway
+	// 1. Подготовка сети
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
 		err = fmt.Errorf("failed to discover gateway: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Infof("gatewayIP: %s", gatewayIP.String())
 
-	log.Infof("[Routing] Pre-resolving server IP from config...")
 	serverIP, err := ResolveServerIPFromConfig(*app.TransportConfig)
 	if err != nil {
-		err = fmt.Errorf("failed to resolve server IP from config: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Infof("[Routing] Server IP resolved: %s", serverIP.String())
 
-	if serverIP.String() != "127.0.0.1" {
-		log.Infof("[Routing] Adding early route for server %s via %s", serverIP.String(), gatewayIP.String())
-		common.Client.MarkInCriticalSection(outlineCommon.Name)
-		routing.AddProxyRoute(serverIP.String(), gatewayIP.String())
-		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
-		log.Infof("[Routing] Early server route added successfully")
-	} else {
-		log.Infof("[Routing] Skipping early route for localhost (Cloak mode)")
-	}
-
-	// Create TUN
-	log.Infof("Outline/Run: Start creating tun")
+	// 2. Создание TUN
 	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
 	if err != nil {
-		err = fmt.Errorf("failed to create tun device: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	defer func() { _ = tun.Close() }()
-	log.Infof("Tun created")
+	// Мы закрываем его вручную при выходе
+	defer tun.Close()
 
-	// Create OutlineDevice
-	log.Infof("Outline/Run: Start device")
+	// 3. Создание SOCKS5 прокси (Shadowsocks мост)
 	ss, err := NewOutlineDevice(*app.TransportConfig)
 	if err != nil {
-		err = fmt.Errorf("failed to create OutlineDevice: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	defer func() { _ = ss.Close() }()
 
-	if err := ss.Refresh(); err != nil {
-		err = fmt.Errorf("failed to refresh OutlineDevice: %w", err)
-		signalInit(initResult, err)
-		return err
-	}
-	log.Infof("Device created")
-
+	// 4. Настройка маршрутизации Linux (ip route)
 	common.Client.MarkInCriticalSection(outlineCommon.Name)
-	// Up routing
 	if err := routing.StartRouting(serverIP.String(), gatewayIP.String(), app.RoutingConfig.TunDeviceName); err != nil {
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
-		err = fmt.Errorf("failed to configure routing: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
 	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 
-	// Signal successful initialization
+	// 5. Запуск движка tun2socks
+	// Твоя структура tunDevice теперь поддерживает GetFd()
+	var fd int
+	if t, ok := tun.(interface{ GetFd() int }); ok {
+		fd = t.GetFd()
+	} else {
+		// Резервный вариант, если что-то пошло не так
+		signalInit(initResult, fmt.Errorf("could not get file descriptor for TUN"))
+		return nil
+	}
+
+	log.Infof("[Linux] Starting tun2socks engine on FD %d", fd)
+
+	// Вызываем StartEngine (без присвоения ошибки, т.к. она void)
+	tunnel.StartEngine(fd, ss.GetProxyAddr())
+
+	// Успешная инициализация
 	signalInit(initResult, nil)
 
+	// Очистка маршрутов при остановке
 	defer func() {
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
-		log.Infof("[Routing] Cleaning up routes for %s...", serverIP.String())
+		log.Infof("[Routing] Cleaning up routes...")
 		routing.StopRouting(serverIP.String(), gatewayIP.String())
-		log.Infof("[Routing] Routes cleaned up")
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 	}()
 
-	tunnel.StartTransfer(
-		tun,
-		func(buf []byte) (int, error) {
-			return ss.Read(buf)
-		},
-		func(buf []byte) (int, error) {
-			return ss.Write(buf)
-		},
-	)
-
+	// 6. Ожидание завершения
 	<-ctx.Done()
 
-	log.Infof("[Tunnel] Context cancelled, stopping transfer")
-	tunnel.StopTransfer()
-	log.Infof("Tun and device closed")
+	log.Infof("[Tunnel] Stopping engine")
+	tunnel.StopEngine()
+
 	return nil
 }

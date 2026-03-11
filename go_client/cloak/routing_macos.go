@@ -9,7 +9,7 @@ import (
 	"go_client/routing"
 
 	"github.com/jackpal/gateway"
-	log "go_client/logger"
+	"go_client/log"
 )
 
 func StartRoutingCloak(proxyIP string) error {

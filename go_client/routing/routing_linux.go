@@ -5,7 +5,7 @@ package routing
 
 import (
 	"fmt"
-	log "go_client/logger"
+	"go_client/log"
 	"os/exec"
 )
 

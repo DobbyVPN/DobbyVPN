@@ -4,11 +4,10 @@
 package internal
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	log "go_client/logger"
-	//"os/exec"
-	"context"
+	"go_client/log"
 	"sync"
 	//"time"
 
@@ -82,13 +81,6 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		signalInit(initResult, err)
 		return err
 	}
-	defer ss.Close()
-
-	if err := ss.Refresh(); err != nil {
-		err = fmt.Errorf("failed to refresh OutlineDevice: %w", err)
-		signalInit(initResult, err)
-		return err
-	}
 
 	log.Infof("Device created")
 
@@ -97,7 +89,6 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		closeOnce.Do(func() {
 			log.Infof("[Outline] Closing interfaces")
 			_ = tun.Close()
-			_ = ss.Close()
 		})
 	}
 
@@ -108,16 +99,6 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		closeAll()
 		log.Infof("[Outline] Cancel received — closing interfaces")
 	}()
-
-	tunnel.StartTransfer(
-		tun,
-		func(p []byte) (int, error) {
-			return ss.Read(p)
-		},
-		func(b []byte) (int, error) {
-			return ss.Write(b)
-		},
-	)
 
 	common.Client.MarkInCriticalSection(outlineCommon.Name)
 	if err := routing.StartRouting(serverIP.String(), gatewayIP.String(), tun.(*tunDevice).name); err != nil {
@@ -141,10 +122,26 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("Outline/app: Start trafficCopyWg...\n")
 
+	var fd int
+	if t, ok := tun.(interface{ GetFd() int }); ok {
+		fd = t.GetFd()
+	} else {
+		// Резервный вариант, если что-то пошло не так
+		signalInit(initResult, fmt.Errorf("could not get file descriptor for TUN"))
+		return nil
+	}
+
+	log.Infof("[Tunnel] Starting tun2socks engine...")
+	tunnel.StartEngine(fd, ss.GetProxyAddr())
+
+	// Сигнализируем об успешном запуске
+	signalInit(initResult, nil)
+
 	<-ctx.Done()
 
-	log.Infof("[Tunnel] Context cancelled — stopping transfer")
-	tunnel.StopTransfer()
+	log.Infof("[Tunnel] Context cancelled, stopping engine")
+	tunnel.StopEngine() // Вместо StopTransfer
+	return nil
 
 	log.Infof("Outline/app: received interrupt signal, terminating...\n")
 

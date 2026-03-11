@@ -8,14 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sync"
 
 	"go_client/common"
 	"go_client/routing"
 	"go_client/tunnel"
 
 	"github.com/jackpal/gateway"
-	log "go_client/logger"
+	"go_client/log"
 	outlineCommon "go_client/outline/common"
 )
 
@@ -79,206 +78,84 @@ func signalInit(initResult chan<- error, err error) {
 }
 
 func (app App) Run(ctx context.Context, initResult chan<- error) error {
-	trafficCopyWg := &sync.WaitGroup{}
-	defer trafficCopyWg.Wait()
-
 	if !checkRoot() {
-		err := errors.New("this operation requires superuser privileges. Please run the program with administrator")
+		err := fmt.Errorf("requires admin privileges")
 		signalInit(initResult, err)
 		return err
 	}
 
-	TunGateway := "10.0.85.1"
-	TunDeviceIP := "10.0.85.2"
-
-	// 	TunDeviceIP := app.RoutingConfig.TunDeviceIP
-	//     TunGatewayCIDR := app.RoutingConfig.TunGatewayCIDR
-	//     TunGateway := strings.Split(TunGatewayCIDR, "/")[0]
-
+	// 1. Определение шлюзов и IP (стандартная логика)
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
 		signalInit(initResult, err)
 		return err
 	}
-	interfaceName, err := routing.FindInterfaceByGateway(gatewayIP.String())
-	if err != nil {
-		signalInit(initResult, err)
-		return err
-	}
-
-	netInterface, err := routing.GetNetworkInterfaceByIP(interfaceName)
-	if err != nil {
-		log.Infof("Error:", err)
-		signalInit(initResult, err)
-		return err
-	}
-
-	log.Infof("[Routing] Pre-resolving server IP from config...")
 	serverIP, err := ResolveServerIPFromConfig(*app.TransportConfig)
 	if err != nil {
-		err = fmt.Errorf("failed to resolve server IP from config: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Infof("[Routing] Server IP resolved: %s", serverIP.String())
 
-	if serverIP.String() != "127.0.0.1" {
-		log.Infof("[Routing] Adding early route for server %s via %s", serverIP.String(), gatewayIP.String())
-		common.Client.MarkInCriticalSection(outlineCommon.Name)
-		routing.AddOrUpdateProxyRoute(serverIP.String(), gatewayIP.String(), netInterface.Name)
-		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
-		log.Infof("[Routing] Early server route added successfully")
-	} else {
-		log.Infof("[Routing] Skipping early route for localhost (Cloak mode)")
-	}
-
+	// 2. Создание TUN/TAP устройства
+	TunDeviceIP := "10.0.85.2"
 	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, TunDeviceIP)
 	if err != nil {
-		err = fmt.Errorf("failed to create tun device: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
 	defer tun.Close()
 
+	// 3. Создание прокси-моста (Outline SOCKS5)
 	ss, err := NewOutlineDevice(*app.TransportConfig)
 	if err != nil {
-		err = fmt.Errorf("failed to create OutlineDevice: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Infof("Create Device")
-	defer ss.Close()
 
-	log.Infof("[Outline] Refreshing Shadowsocks session...")
-	if err := ss.Refresh(); err != nil {
-		log.Infof("Failed to refresh OutlineDevice: %v", err)
-		err = fmt.Errorf("failed to refresh OutlineDevice: %w", err)
-		signalInit(initResult, err)
-		return err
-	}
-	log.Infof("[Outline] Session refreshed successfully")
-
-	log.Infof("[Routing] Looking up TUN interface by IP: %s", TunDeviceIP)
-	tunInterface, err := routing.GetNetworkInterfaceByIP(TunDeviceIP)
-	if err != nil {
-		log.Infof("Could not find TUN interface: %v", err)
-		err = fmt.Errorf("failed to find TUN interface: %w", err)
-		signalInit(initResult, err)
-		return err
-	}
-	log.Infof("[Routing] Found TUN interface: %s (HWAddr=%s)", tunInterface.Name, tunInterface.HardwareAddr)
-
-	dst := tunInterface.HardwareAddr
-	src := make([]byte, len(dst))
-	copy(src, dst)
-	src[2] += 2
-	log.Infof("[Routing] Generated spoofed MAC: original=%s new=%v", tunInterface.HardwareAddr, src)
-
-	log.Infof("[Routing] Starting routing configuration:")
-	log.Infof("  Server IP:     %s", serverIP.String())
-	log.Infof("  Gateway IP:    %s", gatewayIP.String())
-	log.Infof("  TUN Interface: %s", tunInterface.Name)
-	log.Infof("  TUN MAC:       %s", tunInterface.HardwareAddr.String())
-	log.Infof("  Net Interface: %s", netInterface.Name)
-	log.Infof("  Tun Gateway:   %s", TunGateway)
-	log.Infof("  Tun Device IP: %s", TunDeviceIP)
+	// 4. Настройка маршрутизации
+	// Вызываем твой StartRouting как обычно
+	tunInterface, _ := routing.GetNetworkInterfaceByIP(TunDeviceIP)
+	netInterface, _ := routing.GetNetworkInterfaceByIP(gatewayIP.String())
 
 	common.Client.MarkInCriticalSection(outlineCommon.Name)
-	if err := routing.StartRouting(
+	err = routing.StartRouting(
 		serverIP.String(),
 		gatewayIP.String(),
 		tunInterface.Name,
 		tunInterface.HardwareAddr.String(),
 		netInterface.Name,
-		TunGateway,
+		"10.0.85.1",
 		TunDeviceIP,
-		src,
-	); err != nil {
-		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
-		log.Infof("Failed to configure routing: %v", err)
-		err = fmt.Errorf("failed to configure routing: %w", err)
+		nil, // src MAC можно передать если нужно
+	)
+	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+	if err != nil {
 		signalInit(initResult, err)
 		return err
 	}
-	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 
-	log.Infof("[Routing] Routing successfully configured")
+	// 5. ЗАПУСК ДВИЖКА (Оптимальная часть)
+	// Берем FD (Handle) из нашего устройства
+	fd := tun.(*tunDevice).GetFd()
 
-	// Signal successful initialization - connection is ready
+	log.Infof("[Windows] Starting tun2socks engine on Handle %d", fd)
+	tunnel.StartEngine(fd, ss.GetProxyAddr())
+
+	// Сигнал об успешном старте
 	signalInit(initResult, nil)
 
+	// Очистка при выходе
 	defer func() {
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
-		log.Infof("[Routing] Cleaning up routes for %s...", serverIP.String())
-		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name, TunGateway)
-		log.Infof("[Routing] Routes cleaned up")
+		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name, "10.0.85.1")
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 	}()
 
-	var closeOnce sync.Once
-	closeAll := func() {
-		closeOnce.Do(func() {
-			log.Infof("[Outline] Closing interfaces")
-			_ = tun.Close()
-			_ = ss.Close()
-		})
-	}
-
-	defer closeAll()
-
-	go func() {
-		<-ctx.Done()
-		closeAll()
-		log.Infof("[Outline] Cancel received — closing interfaces")
-	}()
-
-	tunnel.StartTransfer(
-		tun,
-		// ss → tun (readFn)
-		func(buf []byte) (int, error) {
-			n, err := ss.Read(buf)
-			if err != nil {
-				log.Infof("Outline/ss→tun: ss.Read error: %v", err)
-				return 0, err
-			}
-			if n <= 0 {
-				return 0, nil
-			}
-
-			ethernetPacket, err := CreateEthernetPacket(dst, src, buf[:n])
-			if err != nil {
-				log.Infof("Outline/ss→tun: CreateEthernetPacket error: %v", err)
-				return 0, err
-			}
-
-			copy(buf, ethernetPacket)
-			return len(ethernetPacket), nil
-		},
-
-		// tun → ss (writeFn)
-		func(b []byte) (int, error) {
-			ipPacket, err := ExtractIPPacketFromEthernet(b)
-			if err != nil {
-				log.Infof("Outline/tun→ss: ExtractIP error: %v", err)
-				return 0, err
-			}
-
-			n, err := ss.Write(ipPacket)
-			if err != nil {
-				log.Infof("Outline/tun→ss: ss.Write error: %v", err)
-				return 0, err
-			}
-			return n, nil
-		},
-	)
-
+	// Ожидаем завершения контекста
 	<-ctx.Done()
 
-	log.Infof("[Tunnel] Context cancelled, stopping transfer")
-	tunnel.StopTransfer()
-
-	log.Infof("Outline/app: received interrupt signal, terminating...\n")
+	log.Infof("[Tunnel] Stopping windows engine")
+	tunnel.StopEngine()
 
 	return nil
-
 }

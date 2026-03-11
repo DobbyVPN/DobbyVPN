@@ -7,7 +7,7 @@ package main
 import "C"
 
 import (
-	log "go_client/logger"
+	"go_client/log"
 	"go_client/outline"
 	"os"
 	"runtime/debug"
