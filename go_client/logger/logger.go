@@ -100,21 +100,14 @@ func (h *logrusToSlogHook) Fire(e *logrus.Entry) error {
 	return nil
 }
 
-type LoggerBuffer struct {
-	buffer   []string
-	isFilled bool
-	size     int
-}
-
 type Logger struct {
 	file   *os.File
 	logger *slog.Logger
-	buffer LoggerBuffer
+	buffer []string
 }
 
 var (
-	buf    = LoggerBuffer{size: 0, isFilled: false, buffer: []string{}}
-	lg     = &Logger{buffer: buf}
+	lg     = &Logger{buffer: []string{}}
 	initMu sync.Mutex
 )
 
@@ -132,29 +125,8 @@ func MaskStr(input string) string {
 }
 
 func (logger *Logger) dumpBuffer() {
-	if lg.buffer.isFilled {
-		index := 0
-
-		for index < MAX_BUFFER_SIZE {
-			bufferIndex := (logger.buffer.size + index) % MAX_BUFFER_SIZE
-			msg := logger.buffer.buffer[bufferIndex]
-			logger.logger.Info(msg)
-			index += 1
-		}
-
-		logger.buffer.size = 0
-		logger.buffer.isFilled = false
-	} else {
-		index := 0
-
-		for index < logger.buffer.size {
-			msg := logger.buffer.buffer[index]
-			logger.logger.Info(msg)
-			index += 1
-		}
-
-		logger.buffer.size = 0
-		logger.buffer.isFilled = false
+	for _, message := range logger.buffer {
+		logger.logger.Info(message)
 	}
 }
 
@@ -186,19 +158,7 @@ func SetPath(path string) error {
 
 func (logger *Logger) bufInfof(format string, args ...any) {
 	message := fmt.Sprintf(format, args...)
-
-	if buf.isFilled {
-		logger.buffer.buffer[logger.buffer.size] = message
-		logger.buffer.size = (logger.buffer.size + 1) % MAX_BUFFER_SIZE
-	} else {
-		logger.buffer.buffer = append(logger.buffer.buffer, message)
-		logger.buffer.size = logger.buffer.size + 1
-
-		if logger.buffer.size == MAX_BUFFER_SIZE {
-			logger.buffer.isFilled = true
-			logger.buffer.size = 0
-		}
-	}
+	logger.buffer = append(logger.buffer, message)
 }
 
 func (logger *Logger) lgInfof(format string, args ...any) {
