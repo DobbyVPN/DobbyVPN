@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"github.com/jackpal/gateway"
 	"go_client/common"
-	log "go_client/logger"
+	"go_client/log"
 	outlineCommon "go_client/outline/common"
 	"go_client/routing"
 	"go_client/tunnel"

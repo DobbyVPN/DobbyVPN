@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	log "go_client/logger"
+	"go_client/log"
 	"io"
 	"net"
 	"os/exec"

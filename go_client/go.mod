@@ -4,11 +4,12 @@ go 1.24.3
 
 replace github.com/cbeuw/Cloak => ./modules/Cloak
 
+replace github.com/xjasonlyu/tun2socks/v2/log => ./go_client/log
+
 require (
 	github.com/Jigsaw-Code/outline-sdk v0.0.20
 	github.com/Jigsaw-Code/outline-sdk/x v0.0.8
 	github.com/amnezia-vpn/amneziawg-go v0.2.12
-	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
 	github.com/cbeuw/Cloak v0.0.0-00010101000000-000000000000
 	github.com/jackpal/gateway v1.1.1
 	github.com/matsuridayo/libneko v0.0.0-20240702024904-1c47a3af7199
@@ -48,8 +49,9 @@ require (
 	github.com/refraction-networking/utls v1.8.1 // indirect
 	github.com/shadowsocks/go-shadowsocks2 v0.1.5 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	github.com/stretchr/testify v1.10.0 // indirect
+	github.com/stretchr/testify v1.11.0 // indirect
 	github.com/tevino/abool/v2 v2.1.0 // indirect
+	github.com/things-go/go-socks5 v0.1.0 // indirect
 	github.com/vishvananda/netns v0.0.4 // indirect
 	golang.org/x/crypto v0.42.0 // indirect
 	golang.org/x/net v0.44.0 // indirect

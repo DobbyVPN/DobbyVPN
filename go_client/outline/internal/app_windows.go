@@ -14,7 +14,7 @@ import (
 	"go_client/tunnel"
 
 	"github.com/jackpal/gateway"
-	log "go_client/logger"
+	"go_client/log"
 	outlineCommon "go_client/outline/common"
 )
 

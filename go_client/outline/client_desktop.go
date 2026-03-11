@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 	"go_client/common"
-	log "go_client/logger"
+	"go_client/log"
 	outlineCommon "go_client/outline/common"
 	"go_client/outline/internal"
 	"sync"

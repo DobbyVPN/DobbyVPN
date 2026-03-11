@@ -7,7 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	log "go_client/logger"
+	"go_client/log"
 	"sync"
 	//"time"
 

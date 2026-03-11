@@ -68,7 +68,7 @@ import "C"
 import (
 	"syscall"
 
-	log "go_client/logger"
+	"go_client/log"
 )
 
 // In Android, once an app starts the VpnService, all outgoing traffic are routed by the system

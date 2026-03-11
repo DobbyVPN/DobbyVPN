@@ -5,11 +5,11 @@ import (
 	"context"
 	"fmt"
 	"github.com/xjasonlyu/tun2socks/v2/engine"
-	M "github.com/xjasonlyu/tun2socks/v2/metadata" // Используем алиас M как в proxy.go
-	"github.com/xjasonlyu/tun2socks/v2/proxy"      // Пакет, содержащий интерфейс Proxy
+	M "github.com/xjasonlyu/tun2socks/v2/metadata"
+	"github.com/xjasonlyu/tun2socks/v2/proxy"
 	"github.com/xjasonlyu/tun2socks/v2/proxy/proto"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
-	log "go_client/logger"
+	"go_client/log"
 	"net"
 	"sync"
 )
@@ -95,8 +95,10 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 // DialUDP выбирает исходящий путь для UDP
 func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	if isBypass(metadata) {
+		log.Infof("[Router] Using UDP DIRECT for %s", metadata.DstIP)
 		return p.direct.DialUDP(metadata)
 	}
+	log.Infof("[Router] Using UDP VPN for %s", metadata.DstIP)
 	return p.vpn.DialUDP(metadata)
 }
 
@@ -118,7 +120,8 @@ func StartEngine(fd int, proxyAddr string) {
 		stopLocked()
 	}
 
-	devicePath := fmt.Sprintf("fd://%d", fd)
+	// Конфигурируем tun2socks с DEBUG логами
+	devicePath := fmt.Sprintf("fd://%d?net=198.18.0.0/15", fd)
 	proxyURL := fmt.Sprintf("socks5://%s", proxyAddr)
 
 	log.Infof("[Engine] Starting Dobby with FD: %d", fd)
@@ -147,6 +150,10 @@ func StartEngine(fd int, proxyAddr string) {
 	wrapper := &DobbyProxy{
 		vpn:    vpnOutbound,
 		direct: directOutbound,
+	}
+
+	if tunnel.T() == nil {
+		log.Infof("tunnel.T() return nil")
 	}
 
 	tunnel.T().SetDialer(wrapper)
@@ -204,6 +211,7 @@ func (p *ProtectedDirectProxy) DialContext(ctx context.Context, metadata *M.Meta
 	log.Infof("[Router] Direct dialing %s (NO PROTECTION)", address)
 	return p.Proxy.DialContext(ctx, metadata)
 }
+
 func (p *ProtectedDirectProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	network := metadata.Network.String()
 	address := metadata.DestinationAddress()

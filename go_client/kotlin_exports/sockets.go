@@ -8,7 +8,7 @@ import "C"
 
 import (
 	"context"
-	log "go_client/logger"
+	"go_client/log"
 	"go_client/tunnel"
 	"net"
 	"syscall"

@@ -5,10 +5,11 @@ package outline
 import (
 	"fmt"
 	"go_client/common"
-	log "go_client/logger"
+	"go_client/log"
 	outlineCommon "go_client/outline/common"
 	"go_client/outline/internal"
 	"go_client/tunnel"
+	"golang.org/x/sys/unix"
 	"io"
 	"net"
 	"os"
@@ -51,6 +52,10 @@ func (c *OutlineClient) Connect() error {
 	var fd int
 	if f, ok := c.tun.(*os.File); ok {
 		fd = int(f.Fd())
+		err := unix.SetNonblock(fd, true)
+		if err != nil {
+			log.Infof("Set unix.SetNonblock error: %v", err)
+		}
 	} else {
 		// Если это не *os.File, нужно убедиться, как передается FD в NewClient
 		log.Infof("failed to get FD from tun: not an *os.File")

@@ -10,7 +10,7 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/tun"
 	log "github.com/sirupsen/logrus"
 	"go_client/common"
-	_ "go_client/logger"
+	_ "go_client/log"
 	"golang.org/x/sys/unix"
 	"math"
 	"net"
@@ -94,7 +94,7 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 				for {
 					conn, err := uapi.Accept()
 					if err != nil {
-					    logger.Errorf("UAPI Accept: %v", err)
+						logger.Errorf("UAPI Accept: %v", err)
 						return
 					}
 					go device.IpcHandle(conn)
@@ -107,8 +107,8 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	if err != nil {
 		logger.Errorf("Unable to bring up device: %v", err)
 		if uapiFile != nil {
-        	uapiFile.Close()
-        }
+			uapiFile.Close()
+		}
 		device.Close()
 		return -1
 	}

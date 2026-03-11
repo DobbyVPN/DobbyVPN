@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	log "go_client/logger"
+	"go_client/log"
 )
 
 var ipv4Subnets = []string{

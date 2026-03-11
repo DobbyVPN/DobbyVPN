@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"github.com/Jigsaw-Code/outline-sdk/network"
 	"github.com/songgao/water"
-	log "go_client/logger"
+	"go_client/log"
 	"os"
 	"os/exec"
 	"os/user"
