@@ -24,11 +24,6 @@ const (
 	Vpn_GetOutlineLastError_FullMethodName = "/grpcproto.Vpn/GetOutlineLastError"
 	Vpn_StartOutline_FullMethodName        = "/grpcproto.Vpn/StartOutline"
 	Vpn_StopOutline_FullMethodName         = "/grpcproto.Vpn/StopOutline"
-	Vpn_StartHealthCheck_FullMethodName    = "/grpcproto.Vpn/StartHealthCheck"
-	Vpn_StopHealthCheck_FullMethodName     = "/grpcproto.Vpn/StopHealthCheck"
-	Vpn_Status_FullMethodName              = "/grpcproto.Vpn/Status"
-	Vpn_TcpPing_FullMethodName             = "/grpcproto.Vpn/TcpPing"
-	Vpn_UrlTest_FullMethodName             = "/grpcproto.Vpn/UrlTest"
 	Vpn_CouldStart_FullMethodName          = "/grpcproto.Vpn/CouldStart"
 	Vpn_CheckServerAlive_FullMethodName    = "/grpcproto.Vpn/CheckServerAlive"
 	Vpn_StartCloakClient_FullMethodName    = "/grpcproto.Vpn/StartCloakClient"
@@ -48,11 +43,6 @@ type VpnClient interface {
 	StartOutline(ctx context.Context, in *StartOutlineRequest, opts ...grpc.CallOption) (*StartOutlineResponse, error)
 	StopOutline(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	// health_check.go
-	StartHealthCheck(ctx context.Context, in *StartHealthCheckRequest, opts ...grpc.CallOption) (*Empty, error)
-	StopHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
-	Status(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*StatusResponce, error)
-	TcpPing(ctx context.Context, in *TcpPingRequest, opts ...grpc.CallOption) (*TcpPingResponce, error)
-	UrlTest(ctx context.Context, in *UrlTestRequest, opts ...grpc.CallOption) (*UrlTestResponce, error)
 	CouldStart(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*CouldStartResponce, error)
 	CheckServerAlive(ctx context.Context, in *CheckServerAliveRequest, opts ...grpc.CallOption) (*CheckServerAliveResponce, error)
 	// cloak.go
@@ -114,56 +104,6 @@ func (c *vpnClient) StopOutline(ctx context.Context, in *Empty, opts ...grpc.Cal
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
 	err := c.cc.Invoke(ctx, Vpn_StopOutline_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) StartHealthCheck(ctx context.Context, in *StartHealthCheckRequest, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_StartHealthCheck_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) StopHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_StopHealthCheck_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) Status(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*StatusResponce, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(StatusResponce)
-	err := c.cc.Invoke(ctx, Vpn_Status_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) TcpPing(ctx context.Context, in *TcpPingRequest, opts ...grpc.CallOption) (*TcpPingResponce, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(TcpPingResponce)
-	err := c.cc.Invoke(ctx, Vpn_TcpPing_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) UrlTest(ctx context.Context, in *UrlTestRequest, opts ...grpc.CallOption) (*UrlTestResponce, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UrlTestResponce)
-	err := c.cc.Invoke(ctx, Vpn_UrlTest_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -232,11 +172,6 @@ type VpnServer interface {
 	StartOutline(context.Context, *StartOutlineRequest) (*StartOutlineResponse, error)
 	StopOutline(context.Context, *Empty) (*Empty, error)
 	// health_check.go
-	StartHealthCheck(context.Context, *StartHealthCheckRequest) (*Empty, error)
-	StopHealthCheck(context.Context, *Empty) (*Empty, error)
-	Status(context.Context, *Empty) (*StatusResponce, error)
-	TcpPing(context.Context, *TcpPingRequest) (*TcpPingResponce, error)
-	UrlTest(context.Context, *UrlTestRequest) (*UrlTestResponce, error)
 	CouldStart(context.Context, *Empty) (*CouldStartResponce, error)
 	CheckServerAlive(context.Context, *CheckServerAliveRequest) (*CheckServerAliveResponce, error)
 	// cloak.go
@@ -268,21 +203,6 @@ func (UnimplementedVpnServer) StartOutline(context.Context, *StartOutlineRequest
 }
 func (UnimplementedVpnServer) StopOutline(context.Context, *Empty) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StopOutline not implemented")
-}
-func (UnimplementedVpnServer) StartHealthCheck(context.Context, *StartHealthCheckRequest) (*Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method StartHealthCheck not implemented")
-}
-func (UnimplementedVpnServer) StopHealthCheck(context.Context, *Empty) (*Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method StopHealthCheck not implemented")
-}
-func (UnimplementedVpnServer) Status(context.Context, *Empty) (*StatusResponce, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Status not implemented")
-}
-func (UnimplementedVpnServer) TcpPing(context.Context, *TcpPingRequest) (*TcpPingResponce, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method TcpPing not implemented")
-}
-func (UnimplementedVpnServer) UrlTest(context.Context, *UrlTestRequest) (*UrlTestResponce, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method UrlTest not implemented")
 }
 func (UnimplementedVpnServer) CouldStart(context.Context, *Empty) (*CouldStartResponce, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CouldStart not implemented")
@@ -410,96 +330,6 @@ func _Vpn_StopOutline_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Vpn_StartHealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StartHealthCheckRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).StartHealthCheck(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_StartHealthCheck_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).StartHealthCheck(ctx, req.(*StartHealthCheckRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_StopHealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).StopHealthCheck(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_StopHealthCheck_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).StopHealthCheck(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_Status_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).Status(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_Status_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).Status(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_TcpPing_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(TcpPingRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).TcpPing(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_TcpPing_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).TcpPing(ctx, req.(*TcpPingRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_UrlTest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UrlTestRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).UrlTest(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_UrlTest_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).UrlTest(ctx, req.(*UrlTestRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Vpn_CouldStart_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Empty)
 	if err := dec(in); err != nil {
@@ -616,26 +446,6 @@ var Vpn_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StopOutline",
 			Handler:    _Vpn_StopOutline_Handler,
-		},
-		{
-			MethodName: "StartHealthCheck",
-			Handler:    _Vpn_StartHealthCheck_Handler,
-		},
-		{
-			MethodName: "StopHealthCheck",
-			Handler:    _Vpn_StopHealthCheck_Handler,
-		},
-		{
-			MethodName: "Status",
-			Handler:    _Vpn_Status_Handler,
-		},
-		{
-			MethodName: "TcpPing",
-			Handler:    _Vpn_TcpPing_Handler,
-		},
-		{
-			MethodName: "UrlTest",
-			Handler:    _Vpn_UrlTest_Handler,
 		},
 		{
 			MethodName: "CouldStart",
