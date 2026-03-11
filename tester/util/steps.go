@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
-	pb "tester/vpnserver"
+	protobuf "tester/grpcproto"
 	"time"
 
 	"google.golang.org/grpc"
@@ -97,13 +97,13 @@ func (tester *Tester) StartAwgStep(testStep TestStep) error {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 
-			vpnclient := pb.NewVpnClient(conn)
+			vpnclient := protobuf.NewVpnClient(conn)
 
 			log.Printf("Created gRPC client")
 
 			log.Printf("Sending StartAwg")
 
-			_, err = vpnclient.StartAwg(ctx, &pb.StartAwgRequest{Tunnel: tunnel, Config: config})
+			_, err = vpnclient.StartAwg(ctx, &protobuf.StartAwgRequest{Tunnel: tunnel, Config: config})
 			if err != nil {
 				return fmt.Errorf("Failed to StartAwg: %v", err)
 			}
@@ -129,12 +129,12 @@ func (tester *Tester) StopAwgStep() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	vpnclient := pb.NewVpnClient(conn)
+	vpnclient := protobuf.NewVpnClient(conn)
 	log.Printf("Created gRPC client")
 
 	log.Printf("Sending StopAwg")
 
-	_, err = vpnclient.StopAwg(ctx, &pb.Empty{})
+	_, err = vpnclient.StopAwg(ctx, &protobuf.Empty{})
 	if err != nil {
 		return fmt.Errorf("Failed to StopAwg: %v", err)
 	}
@@ -157,12 +157,12 @@ func (tester *Tester) StartOutlineStep(testStep TestStep) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		vpnclient := pb.NewVpnClient(conn)
+		vpnclient := protobuf.NewVpnClient(conn)
 		log.Printf("Created gRPC client")
 
 		log.Printf("Sending StartOutline")
 
-		_, err = vpnclient.StartOutline(ctx, &pb.StartOutlineRequest{Config: config})
+		_, err = vpnclient.StartOutline(ctx, &protobuf.StartOutlineRequest{Config: config})
 		if err != nil {
 			return fmt.Errorf("Failed to StartOutline: %v", err)
 		}
@@ -187,12 +187,12 @@ func (tester *Tester) StopOutlineStep() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	vpnclient := pb.NewVpnClient(conn)
+	vpnclient := protobuf.NewVpnClient(conn)
 	log.Printf("Created gRPC client")
 
 	log.Printf("Sending StopOutline")
 
-	_, err = vpnclient.StopOutline(ctx, &pb.Empty{})
+	_, err = vpnclient.StopOutline(ctx, &protobuf.Empty{})
 	if err != nil {
 		return fmt.Errorf("Failed to StopOutline: %v", err)
 	}
@@ -218,7 +218,7 @@ func (tester *Tester) StartCloakStep(testStep TestStep) error {
 					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 					defer cancel()
 
-					vpnclient := pb.NewVpnClient(conn)
+					vpnclient := protobuf.NewVpnClient(conn)
 					log.Printf("Created gRPC client")
 
 					log.Printf("Sending StartCloakClient")
@@ -228,7 +228,7 @@ func (tester *Tester) StartCloakStep(testStep TestStep) error {
 						return fmt.Errorf("Cannot parse udp value: %v", err)
 					}
 
-					_, err = vpnclient.StartCloakClient(ctx, &pb.StartCloakClientRequest{
+					_, err = vpnclient.StartCloakClient(ctx, &protobuf.StartCloakClientRequest{
 						LocalHost: localHost,
 						LocalPort: localPort,
 						Config:    config,
@@ -261,12 +261,12 @@ func (tester *Tester) StopCloakStep() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	vpnclient := pb.NewVpnClient(conn)
+	vpnclient := protobuf.NewVpnClient(conn)
 	log.Printf("Created gRPC client")
 
 	log.Printf("Sending StopCloakClient")
 
-	_, err = vpnclient.StopCloakClient(ctx, &pb.Empty{})
+	_, err = vpnclient.StopCloakClient(ctx, &protobuf.Empty{})
 	if err != nil {
 		return fmt.Errorf("Failed to StopCloakClient: %v", err)
 	}
@@ -289,12 +289,12 @@ func (tester *Tester) InitLoggerStep(testStep TestStep) error {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
-		vpnclient := pb.NewVpnClient(conn)
+		vpnclient := protobuf.NewVpnClient(conn)
 		log.Printf("Created gRPC client")
 
 		log.Printf("Sending InitLogger")
 
-		_, err = vpnclient.InitLogger(ctx, &pb.InitLoggerRequest{Path: path})
+		_, err = vpnclient.InitLogger(ctx, &protobuf.InitLoggerRequest{Path: path})
 		if err != nil {
 			return fmt.Errorf("Failed to InitLogger: %v", err)
 		}
