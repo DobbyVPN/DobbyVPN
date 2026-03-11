@@ -7,7 +7,10 @@ class AddTapDevice(
 
     private fun updatePath() {
         val currentPath = System.getenv("PATH")
-        val newPath = "$currentPath;${System.getenv("SystemRoot")}\\system32;${System.getenv("SystemRoot")}\\system32\\wbem;${System.getenv("SystemRoot")}\\system32\\WindowsPowerShell\\v1.0"
+        val newPath =
+            "$currentPath;${System.getenv("SystemRoot")}\\system32;${System.getenv("SystemRoot")}\\system32\\wbem;${
+                System.getenv("SystemRoot")
+            }\\system32\\WindowsPowerShell\\v1.0"
         System.setProperty("java.library.path", newPath)
 
         logger.log("Updated PATH: $newPath")
