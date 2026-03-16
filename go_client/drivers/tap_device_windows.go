@@ -264,8 +264,9 @@ func AddTapDevice(appDir string) {
 	log.Infof("Found TAP device name: %s", *tapName)
 
 	// Rename TAP device
-	cmd = exec.Command(fmt.Sprintf("netsh interface set interface name=\"%s\" newname=\"%s\"", *tapName, deviceName))
-	if cmd.Run() != nil {
+	tapDeviceRename, err := executeCommandForFind(fmt.Sprintf("netsh interface set interface name=\"%s\" newname=\"%s\"", *tapName, deviceName))
+	log.Infof("TAP device rename ouptut: %s", tapDeviceRename)
+	if err != nil {
 		log.Infof("Could not rename TAP device.")
 		return
 	}
