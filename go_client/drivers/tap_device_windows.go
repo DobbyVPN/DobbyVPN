@@ -229,8 +229,6 @@ func executeCommandForFind(command string) (string, error) {
 }
 
 func AddTapDevice(appDir string) {
-	var cmd *exec.Cmd
-
 	updatePath()
 
 	// Checking if a TAP device exists
