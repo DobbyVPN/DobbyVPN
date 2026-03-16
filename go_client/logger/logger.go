@@ -12,10 +12,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const (
-	MAX_BUFFER_SIZE = 1024
-)
-
 var (
 	forbiddenMu    sync.RWMutex
 	forbiddenWords = make([]string, 0)
