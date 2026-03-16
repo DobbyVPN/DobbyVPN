@@ -2,11 +2,13 @@ package interop
 
 import interop.awg.AwgGrpcLibrary
 import interop.cloak.CloakGrpcLibrary
+import interop.drivers.DriversGrpcLibrary
 import interop.healthcheck.HealthCheckGrpcLibrary
 import interop.logger.LoggerGrpcLibrary
 import interop.outline.OutlineGrpcLibrary
 import io.grpc.ManagedChannelBuilder
 import java.io.Closeable
+import java.sql.Driver
 import java.util.concurrent.TimeUnit
 
 object GrpcVpnLibrary: Closeable {
@@ -23,6 +25,7 @@ object GrpcVpnLibrary: Closeable {
     val cloakGrpcLibrary = CloakGrpcLibrary(channel)
     val healthCheckGrpcLibrary = HealthCheckGrpcLibrary(channel)
     val loggerGrpcLibrary = LoggerGrpcLibrary(channel)
+    val driversGrpcLibrary = DriversGrpcLibrary(channel)
 
     override fun close() {
         this.channel.shutdown().awaitTermination(TERMINATION_TIMEOUT, TimeUnit.SECONDS)

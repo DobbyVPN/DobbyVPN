@@ -24,6 +24,9 @@ service Vpn {
 
   // logger.go
   rpc InitLogger (InitLoggerRequest)                returns (Empty);
+
+  // drivers.go
+  rpc AddTapDevice (AddTapDeviceRequest)                returns (Empty);
 }
 
 message StartAwgRequest {
@@ -65,6 +68,10 @@ message StartCloakClientRequest {
 
 message InitLoggerRequest {
   string path = 1;
+}
+
+message AddTapDeviceRequest {
+  string appDir = 1;
 }
 
 message Empty {

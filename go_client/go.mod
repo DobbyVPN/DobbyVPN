@@ -8,49 +8,56 @@ require (
 	github.com/Jigsaw-Code/outline-sdk v0.0.20
 	github.com/Jigsaw-Code/outline-sdk/x v0.0.8
 	github.com/amnezia-vpn/amneziawg-go v0.2.16
-	github.com/amnezia-vpn/amneziawg-windows v0.1.8
 	github.com/cbeuw/Cloak v0.0.0-00010101000000-000000000000
+	github.com/eycorsican/go-tun2socks v1.16.11
 	github.com/jackpal/gateway v1.1.1
-	github.com/lorenzosaino/go-sysctl v0.3.1
 	github.com/matsuridayo/libneko v0.0.0-20240702024904-1c47a3af7199
 	github.com/sirupsen/logrus v1.9.3
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/vishvananda/netlink v1.2.1-beta.2
-	golang.org/x/crypto v0.44.0
 	golang.org/x/sys v0.38.0
 	google.golang.org/grpc v1.78.0
 	google.golang.org/protobuf v1.36.10
+	gvisor.dev/gvisor v0.0.0-20231202080848-1f7806d17489
 )
 
 require (
-	golang.org/x/text v0.31.0
+	golang.org/x/text v0.31.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251029180050-ab9386a59fda // indirect
 )
 
 require (
-	github.com/BurntSushi/toml v1.1.0 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
+	github.com/bazelbuild/rules_go v0.38.1 // indirect
+	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
+	github.com/cilium/ebpf v0.9.3 // indirect
+	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/eycorsican/go-tun2socks v1.16.11 // indirect
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
+	github.com/gofrs/flock v0.8.0 // indirect
+	github.com/google/btree v1.1.3 // indirect
+	github.com/google/subcommands v1.0.2-0.20190508160503-636abe8753b8 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/juju/ratelimit v1.0.2 // indirect
 	github.com/klauspost/compress v1.18.1 // indirect
+	github.com/kr/pty v1.1.1 // indirect
+	github.com/mohae/deepcopy v0.0.0-20170308212314-bb9b5e7adda9 // indirect
 	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
+	github.com/opencontainers/runtime-spec v1.1.0-rc.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/refraction-networking/utls v1.8.1 // indirect
 	github.com/shadowsocks/go-shadowsocks2 v0.1.5 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/stretchr/testify v1.10.0 // indirect
+	github.com/syndtr/gocapability v0.0.0-20200815063812-42c35b437635 // indirect
 	github.com/vishvananda/netns v0.0.4 // indirect
-	golang.org/x/exp/typeparams v0.0.0-20220613132600-b0d781184e0d // indirect
-	golang.org/x/lint v0.0.0-20210508222113-6edffad5e616 // indirect
+	golang.org/x/crypto v0.44.0 // indirect
+	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
 	golang.org/x/mod v0.29.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sync v0.18.0 // indirect
-	golang.org/x/tools v0.38.0 // indirect
-	golang.org/x/tools/go/expect v0.1.1-deprecated // indirect
+	golang.org/x/time v0.9.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	honnef.co/go/tools v0.3.2 // indirect
 )

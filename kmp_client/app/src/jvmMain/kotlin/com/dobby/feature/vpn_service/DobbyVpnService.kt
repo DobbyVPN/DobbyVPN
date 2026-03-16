@@ -6,11 +6,14 @@ import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
+import com.sun.jna.Platform
 import interop.awg.AwgLibrary
 import interop.cloak.CloakLibrary
+import interop.drivers.DriversLibrary
 import interop.logger.LoggerLibrary
 import interop.outline.OutlineLibrary
 import kotlinx.coroutines.runBlocking
+import java.io.File
 import java.util.*
 
 private fun extractHostFromHostPort(hostPortMaybeWithQuery: String): String {
@@ -73,10 +76,21 @@ internal class DobbyVpnService(
     private val outlineLibrary: OutlineLibrary,
     private val cloakLibrary: CloakLibrary,
     private val loggerLibrary: LoggerLibrary,
+    private val driversLibrary: DriversLibrary,
     private val connectionState: ConnectionStateRepository
 ) {
     private val startStopLock = Any()
     private var runningInterface: VpnInterface? = null
+
+    init {
+        // Get path to the current jar-file (using toURI() for proper Unicode/Cyrillic support)
+        val appDir = File(this::class.java.protectionDomain.codeSource.location.toURI())
+            .parentFile.absolutePath
+        if (Platform.isWindows()) {
+            // start device check
+            driversLibrary.AddTapDevice(appDir)
+        }
+    }
 
     fun enableTunnelLogging() {
         val logFilePath = provideLogFilePath()

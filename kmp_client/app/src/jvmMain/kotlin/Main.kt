@@ -11,15 +11,6 @@ import java.io.File
 fun main() = application {
     startDI(listOf(jvmMainModule, jvmVpnModule)){}
 
-    // Get path to the current jar-file (using toURI() for proper Unicode/Cyrillic support)
-    val appDir = File(this::class.java.protectionDomain.codeSource.location.toURI())
-        .parentFile.absolutePath
-    if (Platform.isWindows()) {
-        // start device check
-        val addTapDevice = AddTapDevice(KoinPlatform.getKoin().get<Logger>())
-        addTapDevice.addTapDevice(appDir)
-    }
-
     // Launch the main window and call your shared App composable.
     Window(onCloseRequest = ::exitApplication, title = "Dobby VPN 13") {
         DesktopClientTheme {
