@@ -82,20 +82,21 @@ internal class DobbyVpnService(
     private val startStopLock = Any()
     private var runningInterface: VpnInterface? = null
 
-    init {
-        // Get path to the current jar-file (using toURI() for proper Unicode/Cyrillic support)
-        val appDir = File(this::class.java.protectionDomain.codeSource.location.toURI())
-            .parentFile.absolutePath
-        if (Platform.isWindows()) {
-            // start device check
-            driversLibrary.AddTapDevice(appDir)
-        }
-    }
-
     fun enableTunnelLogging() {
         val logFilePath = provideLogFilePath()
         logger.log("Init tunnel logging to the path: $logFilePath")
         loggerLibrary.InitLogger(logFilePath.toString())
+    }
+
+    private fun enableTapDriver() {
+        // Get path to the current jar-file (using toURI() for proper Unicode/Cyrillic support)
+        val appDir = File(this::class.java.protectionDomain.codeSource.location.toURI())
+            .parentFile.absolutePath
+
+        if (Platform.isWindows()) {
+            // start device check
+            driversLibrary.AddTapDevice(appDir)
+        }
     }
 
     fun startService() {
@@ -105,6 +106,7 @@ internal class DobbyVpnService(
             }
 
             enableTunnelLogging()
+            enableTapDriver()
 
             val iface = dobbyConfigsRepository.getVpnInterface()
             when (iface) {
