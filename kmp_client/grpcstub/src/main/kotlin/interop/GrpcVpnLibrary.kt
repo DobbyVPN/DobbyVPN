@@ -8,7 +8,6 @@ import interop.logger.LoggerGrpcLibrary
 import interop.outline.OutlineGrpcLibrary
 import io.grpc.ManagedChannelBuilder
 import java.io.Closeable
-import java.sql.Driver
 import java.util.concurrent.TimeUnit
 
 object GrpcVpnLibrary: Closeable {
