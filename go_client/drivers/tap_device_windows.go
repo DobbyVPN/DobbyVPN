@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 )
 
 const (
@@ -68,27 +67,13 @@ func configureTapDevice(deviceName string) {
 	}
 }
 
-func runAsAdmin(appDir string, command string) error {
-	powershellPath, err := exec.LookPath("powershell.exe")
-	if err != nil {
-		return fmt.Errorf("Cannot find powershell executable: %s", err)
-	}
-
-	cmd := exec.Command(
-		powershellPath,
-		"-Command",
-		fmt.Sprintf("Start-Process powershell -WindowStyle Hidden -ArgumentList \"-NoProfile;  %s\" -Verb RunAs", command),
-	)
-	cmd.Dir = appDir
-
+func runAsAdmin(command string) error {
+	cmd := exec.Command("powershell.exe", "-Command", command)
 	output, err := cmd.CombinedOutput()
+	log.Infof("Powershell command \"%s\" output: %s", command, output)
 
 	if err != nil {
-		return fmt.Errorf(
-			"Error during running \"%s\" admin command: %s",
-			fmt.Sprintf("Start-Process powershell -WindowStyle Hidden -ArgumentList \"-NoProfile;  %s\" -Verb RunAs", command),
-			err,
-		)
+		return fmt.Errorf("Admin command \"%s\" error: %s", command, err)
 	} else {
 		sc := bufio.NewScanner(strings.NewReader(string(output)))
 		for sc.Scan() {
@@ -107,10 +92,11 @@ var (
 )
 
 func findTapDeviceName() (*string, error) {
-	findCommand := fmt.Sprintf(`reg query ^"%s^" /s /f ^"tap0901^" /e /d`, netAdaptersKey)
+	findCommand := fmt.Sprintf(`reg query %s /s /f tap0901 /e /d`, netAdaptersKey)
 	findCommandResult, err := executeCommandForFind(findCommand)
+	log.Infof("REG QUERY output: %s.", findCommandResult)
 	if err != nil {
-		return nil, fmt.Errorf("Cannot reg query: %v", err)
+		return nil, fmt.Errorf("Cannot run REG QUERY: %v", err)
 	}
 
 	re := regexp.MustCompile(`HKEY.*\d{4}$`)
@@ -119,15 +105,12 @@ func findTapDeviceName() (*string, error) {
 	for sc.Scan() {
 		line := sc.Text()
 		if re.MatchString(line) {
-			log.Infof("Found TAP device register: %s", line)
 			adapters = append(adapters, line)
 		}
 	}
 
 	if len(adapters) == 0 {
-		log.Infof("Can't find TAP device register")
-
-		return nil, nil
+		return nil, fmt.Errorf("Can't find TAP device register")
 	}
 
 	var latestTimestamp string = "0"
@@ -174,15 +157,15 @@ func findTapDeviceName() (*string, error) {
 func queryRegistryValue(key string, valueName string, multipleTokens bool) (*string, error) {
 	var result string
 
-	command := fmt.Sprintf(`reg query ^"%s^" /v ^"%s^"`, key, valueName)
+	command := fmt.Sprintf(`reg query %s /v %s`, key, valueName)
 	output, err := executeCommandForFind(command)
+	log.Infof("REG QUERY output: %s.", output)
 	if err != nil {
-		return nil, fmt.Errorf("Cannot req query: %s", err)
+		return nil, fmt.Errorf("Error running REG QUERY: %s", err)
 	}
 
 	if strings.TrimSpace(output) == "" {
-		log.Infof("Key \"%s\" isn't find or empty", key)
-		return nil, nil
+		return nil, fmt.Errorf("Key \"%s\" isn't find or empty", key)
 	}
 
 	var line *string = nil
@@ -213,16 +196,11 @@ func queryRegistryValue(key string, valueName string, multipleTokens bool) (*str
 }
 
 func executeCommandForFind(command string) (string, error) {
-	commandLine := `cmd.exe /C ` + command
-
-	cmd := exec.Command("cmd.exe")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CmdLine: commandLine, // Manually set the command line
-	}
+	cmd := exec.Command("cmd.exe", "/c", command)
 	output, err := cmd.CombinedOutput()
 
 	if err != nil {
-		return "", fmt.Errorf("Error while command execute: %s", err)
+		return "", fmt.Errorf("Command \"%s\" error: %s", command, err)
 	}
 
 	return string(output), nil
@@ -242,7 +220,11 @@ func AddTapDevice(appDir string) {
 	}
 
 	log.Infof("Creating TAP network device...")
-	err = runAsAdmin(appDir, fmt.Sprintf("%s install %s %s", tapInstallPath, oemVistaPath, deviceHwid))
+
+	pwd, err := os.Getwd()
+	log.Infof("Current working dierectory: %s", pwd)
+
+	err = runAsAdmin(fmt.Sprintf("%s install %s %s", filepath.Join(pwd, tapInstallPath), filepath.Join(pwd, oemVistaPath), deviceHwid))
 	if err != nil {
 		log.Infof("[ERROR] Error during adding TAP device: %s", err)
 		return
@@ -251,7 +233,7 @@ func AddTapDevice(appDir string) {
 	// Find new TAP device name (we should change it to outline-tap0)
 	tapName, err := findTapDeviceName()
 	if err != nil {
-		log.Infof("[ERROR] Error during finding TAP device name: %s", err)
+		log.Infof("[ERROR] Could not find TAP device name: %s", err)
 		return
 	}
 	if tapName == nil || *tapName == "" {
@@ -265,7 +247,7 @@ func AddTapDevice(appDir string) {
 	tapDeviceRename, err := executeCommandForFind(fmt.Sprintf("netsh interface set interface name=\"%s\" newname=\"%s\"", *tapName, deviceName))
 	log.Infof("TAP device rename ouptut: %s", tapDeviceRename)
 	if err != nil {
-		log.Infof("Could not rename TAP device.")
+		log.Infof("Could not rename TAP device: %s", err)
 		return
 	}
 
