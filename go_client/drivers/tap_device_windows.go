@@ -16,8 +16,8 @@ import (
 const (
 	deviceName     = "outline-tap0"
 	deviceHwid     = "tap0901"
-	tapInstallPath = "tap-windows6/tapinstall.exe"
-	oemVistaPath   = "tap-windows6/OemVista.inf"
+	tapInstallPath = "tap-windows6\\tapinstall.exe"
+	oemVistaPath   = "tap-windows6\\OemVista.inf"
 )
 
 func updatePath() {
@@ -68,21 +68,25 @@ func configureTapDevice(deviceName string) {
 }
 
 func runAsAdmin(command string) error {
-	cmd := exec.Command("powershell.exe", "-Command", command)
+	ex, _ := os.Executable()
+	exDir := filepath.Dir(ex)
+	log.Infof("Executable directory: %s", exDir)
+	log.Infof("Running command: %s", command)
+
+	cmd := exec.Command("cmd.exe", "/D", exDir, "/C", command)
 	output, err := cmd.CombinedOutput()
-	log.Infof("Powershell command \"%s\" output: %s", command, output)
+
+	sc := bufio.NewScanner(strings.NewReader(string(output)))
+	for sc.Scan() {
+		message := sc.Text()
+		log.Infof("%s", message)
+	}
 
 	if err != nil {
 		return fmt.Errorf("Admin command \"%s\" error: %s", command, err)
 	} else {
-		sc := bufio.NewScanner(strings.NewReader(string(output)))
-		for sc.Scan() {
-			message := sc.Text()
-			log.Infof("%s", message)
-		}
+		return nil
 	}
-
-	return nil
 }
 
 var (
@@ -94,7 +98,6 @@ var (
 func findTapDeviceName() (*string, error) {
 	findCommand := fmt.Sprintf(`reg query %s /s /f tap0901 /e /d`, netAdaptersKey)
 	findCommandResult, err := executeCommandForFind(findCommand)
-	log.Infof("REG QUERY output: %s.", findCommandResult)
 	if err != nil {
 		return nil, fmt.Errorf("Cannot run REG QUERY: %v", err)
 	}
@@ -159,7 +162,6 @@ func queryRegistryValue(key string, valueName string, multipleTokens bool) (*str
 
 	command := fmt.Sprintf(`reg query %s /v %s`, key, valueName)
 	output, err := executeCommandForFind(command)
-	log.Infof("REG QUERY output: %s.", output)
 	if err != nil {
 		return nil, fmt.Errorf("Error running REG QUERY: %s", err)
 	}
@@ -196,8 +198,15 @@ func queryRegistryValue(key string, valueName string, multipleTokens bool) (*str
 }
 
 func executeCommandForFind(command string) (string, error) {
+	log.Infof("Running command: %s", command)
 	cmd := exec.Command("cmd.exe", "/c", command)
 	output, err := cmd.CombinedOutput()
+
+	sc := bufio.NewScanner(strings.NewReader(string(output)))
+	for sc.Scan() {
+		message := sc.Text()
+		log.Infof("%s", message)
+	}
 
 	if err != nil {
 		return "", fmt.Errorf("Command \"%s\" error: %s", command, err)
@@ -221,10 +230,7 @@ func AddTapDevice(appDir string) {
 
 	log.Infof("Creating TAP network device...")
 
-	pwd, err := os.Getwd()
-	log.Infof("Current working dierectory: %s", pwd)
-
-	err = runAsAdmin(fmt.Sprintf("%s install %s %s", filepath.Join(pwd, tapInstallPath), filepath.Join(pwd, oemVistaPath), deviceHwid))
+	err = runAsAdmin(fmt.Sprintf(`%s install %s %s`, tapInstallPath, oemVistaPath, deviceHwid))
 	if err != nil {
 		log.Infof("[ERROR] Error during adding TAP device: %s", err)
 		return
