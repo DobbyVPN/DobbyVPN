@@ -99,7 +99,7 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 		return p.direct.DialUDP(metadata)
 	}
 	log.Infof("[Router] Using UDP VPN for %s", metadata.DstIP)
-	return p.direct.DialUDP(metadata)
+	return p.vpn.DialUDP(metadata)
 }
 
 // Addr возвращает адрес VPN прокси
