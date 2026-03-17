@@ -134,7 +134,6 @@ func StartEngine(fd int, proxyAddr string) {
 	}
 
 	engine.Insert(key)
-	engine.Start()
 
 	currentDialer := tunnel.T().Dialer()
 	vpnOutbound, ok := currentDialer.(proxy.Proxy)
@@ -157,6 +156,8 @@ func StartEngine(fd int, proxyAddr string) {
 	}
 
 	tunnel.T().SetDialer(wrapper)
+
+	engine.Start()
 
 	isRunning = true
 }
