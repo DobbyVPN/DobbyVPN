@@ -1,0 +1,120 @@
+name: Build desktop installers
+
+on:
+  workflow_call:
+
+jobs:
+  build_desktop_installers:
+    runs-on: ${{ matrix.os }}-latest
+    strategy:
+      matrix:
+        os: [windows, ubuntu, macos]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Download Windows gRPC vpn service
+        uses: actions/download-artifact@v4
+        with:
+          name: windows_grpcvpnserver.exe
+          path: installer/windows/
+
+      - name: Download macOS gRPC vpn service
+        uses: actions/download-artifact@v4
+        with:
+          name: macos_grpcvpnserver
+          path: installer/macos/
+
+      - name: Download Windows built application
+        uses: actions/download-artifact@v4
+        with:
+          name: dobbyVPN-windows.zip
+          path: installer/windows/
+
+      - name: Download Linux built application
+        uses: actions/download-artifact@v4
+        with:
+          name: dobbyVPN-linux.deb
+          path: installer/linux/
+
+      - name: Download MacOS amd64 built application
+        uses: actions/download-artifact@v4
+        with:
+          name: dobbyVPN-macos-amd64.zip
+          path: installer/macos/
+
+      - name: Download MacOS aarch64 built application
+        uses: actions/download-artifact@v4
+        with:
+          name: dobbyVPN-macos-aarch64.zip
+          path: installer/macos/
+
+      - name: Build Windows installer - Add msbuild to PATH
+        if: matrix.os == 'windows'
+        uses: microsoft/setup-msbuild@v1.1
+      
+      - name: Build Windows installer - Install WiX
+        if: matrix.os == 'windows'
+        working-directory: installer/windows
+        run: dotnet tool install --global wix
+        
+      - name: Build Windows installer
+        if: matrix.os == 'windows'
+        working-directory: installer/windows
+        run: |
+          ./build.bat
+        env:
+          APP_MAJOR_VERSION: ${{ vars.MAJOR }}
+          APP_MINOR_VERSION: ${{ vars.MINOR }}
+          APP_MAINTENANCE_VERSION: ${{ vars.MAINTENANCE }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Build Linux installer
+        if: matrix.os == 'ubuntu'
+        working-directory: installer/linux/
+        run: |
+          echo "[+] Linux installer has already been built"
+
+      - name: Build MacOS installer
+        if: matrix.os == 'macos'
+        working-directory: installer/macos/
+        run: |
+          sh build.sh
+        env:
+          APP_MAJOR_VERSION: ${{ vars.MAJOR }}
+          APP_MINOR_VERSION: ${{ vars.MINOR }}
+          APP_MAINTENANCE_VERSION: ${{ vars.MAINTENANCE }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Upload Windows x86 installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: dobbyVPN-windows-x86.msi
+          path: installer/windows/bin/x86/dobbyVPN-windows-x86.msi
+
+      - name: Upload Windows amd64 installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: dobbyVPN-windows-amd64.msi
+          path: installer/windows/bin/amd64/dobbyVPN-windows-amd64.msi
+
+      - name: Upload Windows arm64 installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: dobbyVPN-windows-arm64.msi
+          path: installer/windows/bin/arm64/dobbyVPN-windows-arm64.msi
+
+      - name: Upload MacOS amd64 installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: dobbyVPN-macos-amd64.pkg
+          path: installer/macos/bin/amd64/dobbyVPN-macos-amd64.pkg
+
+      - name: Upload MacOS aarch64 installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: dobbyVPN-macos-aarch64.pkg
+          path: installer/macos/bin/aarch64/dobbyVPN-macos-aarch64.pkg

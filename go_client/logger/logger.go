@@ -99,10 +99,11 @@ func (h *logrusToSlogHook) Fire(e *logrus.Entry) error {
 type Logger struct {
 	file   *os.File
 	logger *slog.Logger
+	buffer []string
 }
 
 var (
-	lg     = &Logger{}
+	lg     = &Logger{buffer: []string{}}
 	initMu sync.Mutex
 )
 
@@ -116,6 +117,12 @@ func MaskStr(input string) string {
 		return input
 	default:
 		return string(runes[0]) + "***" + string(runes[len(runes)-1])
+	}
+}
+
+func (logger *Logger) dumpBuffer() {
+	for _, message := range logger.buffer {
+		logger.logger.Info(message)
 	}
 }
 
@@ -138,17 +145,28 @@ func SetPath(path string) error {
 
 	lg.file = f
 	lg.logger = slog.New(&simpleHandler{file: f})
+	lg.dumpBuffer()
 
 	logrus.AddHook(&logrusToSlogHook{})
 
 	return nil
 }
 
+func (logger *Logger) bufInfof(format string, args ...any) {
+	message := fmt.Sprintf(format, args...)
+	logger.buffer = append(logger.buffer, message)
+}
+
+func (logger *Logger) lgInfof(format string, args ...any) {
+	logger.logger.Info(fmt.Sprintf(format, args...))
+}
+
 func Infof(format string, args ...any) {
 	if lg.logger == nil {
-		return
+		lg.bufInfof(format, args...)
+	} else {
+		lg.lgInfof(format, args...)
 	}
-	lg.logger.Info(fmt.Sprintf(format, args...))
 }
 
 type simpleHandler struct {
