@@ -15,9 +15,9 @@ import (
 
 const (
 	deviceName     = "outline-tap0"
+	tapInstallPath = "tap-windows6"
 	deviceHwid     = "tap0901"
-	tapInstallPath = "tap-windows6\\tapinstall.exe"
-	oemVistaPath   = "tap-windows6\\OemVista.inf"
+	oemVistaPath   = "OemVista.inf"
 )
 
 func updatePath() {
@@ -67,13 +67,14 @@ func configureTapDevice(deviceName string) {
 	}
 }
 
-func runAsAdmin(command string) error {
+func runAsAdmin() error {
 	ex, _ := os.Executable()
 	exDir := filepath.Dir(ex)
+	exDir = filepath.Join(exDir, tapInstallPath)
 	log.Infof("Executable directory: %s", exDir)
-	log.Infof("Running command: %s", command)
 
-	cmd := exec.Command("cmd.exe", "/D", exDir, "/C", command)
+	cmd := exec.Command("./tapinstall.exe", "install", oemVistaPath, deviceHwid)
+	cmd.Dir = exDir
 	output, err := cmd.CombinedOutput()
 
 	sc := bufio.NewScanner(strings.NewReader(string(output)))
@@ -83,7 +84,7 @@ func runAsAdmin(command string) error {
 	}
 
 	if err != nil {
-		return fmt.Errorf("Admin command \"%s\" error: %s", command, err)
+		return fmt.Errorf("Admin command error: %s", err)
 	} else {
 		return nil
 	}
@@ -220,7 +221,7 @@ func AddTapDevice(appDir string) {
 
 	// Checking if a TAP device exists
 	findTapDeviceOutput, err := executeCommandForFind(fmt.Sprintf("netsh interface show interface name=%s", deviceName))
-	log.Infof("TAP device existance check ouptut: %s", findTapDeviceOutput)
+	log.Infof("TAP device existence check output: %s", findTapDeviceOutput)
 
 	if err == nil {
 		log.Infof("TAP network device already exists.")
@@ -230,7 +231,7 @@ func AddTapDevice(appDir string) {
 
 	log.Infof("Creating TAP network device...")
 
-	err = runAsAdmin(fmt.Sprintf(`%s install %s %s`, tapInstallPath, oemVistaPath, deviceHwid))
+	err = runAsAdmin()
 	if err != nil {
 		log.Infof("[ERROR] Error during adding TAP device: %s", err)
 		return
