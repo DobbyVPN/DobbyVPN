@@ -11,7 +11,10 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
 	"go_client/log"
 	"net"
+	"os/exec"
+	"strings"
 	"sync"
+	"time"
 )
 
 var (
@@ -45,6 +48,27 @@ var DefaultBypassCIDRs = []*net.IPNet{
 	mustCIDR("190.93.240.0/20"),
 	mustCIDR("197.234.240.0/22"),
 	mustCIDR("198.41.128.0/17"),
+}
+
+func ResolveHostToCIDRs(host string) []*net.IPNet {
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		log.Infof("[Bypass] resolve failed for %s: %v", host, err)
+		return nil
+	}
+
+	var result []*net.IPNet
+	for _, ip := range ips {
+		if v4 := ip.To4(); v4 != nil {
+			_, n, _ := net.ParseCIDR(v4.String() + "/32")
+			result = append(result, n)
+			continue
+		}
+		_, n, _ := net.ParseCIDR(ip.String() + "/128")
+		result = append(result, n)
+		result = append(result, n)
+	}
+	return result
 }
 
 // isBypass проверяет метаданные соединения на попадание в список исключений
@@ -110,6 +134,121 @@ func (p *DobbyProxy) Addr() string {
 // Proto возвращает кастомный протокол или протокол VPN
 func (p *DobbyProxy) Proto() proto.Proto {
 	return p.vpn.Proto()
+}
+
+func waitForInterface(timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		ifaces, _ := net.Interfaces()
+		for _, ifc := range ifaces {
+			if strings.Contains(strings.ToLower(ifc.Name), "wintun") {
+				return ifc.Name, nil
+			}
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return "", fmt.Errorf("wintun not found")
+}
+
+func setInterfaceAddress(name, ip string) error {
+	cmd := exec.Command(
+		"netsh", "interface", "ipv4", "set", "address",
+		fmt.Sprintf(`name=%s`, name),
+		"source=static",
+		fmt.Sprintf(`addr=%s`, ip),
+		"mask=255.255.255.0",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("set ip failed: %w %s", err, out)
+	}
+	return nil
+}
+
+func setDNS(name, dns string) error {
+	cmd := exec.Command(
+		"netsh", "interface", "ipv4", "set", "dnsservers",
+		fmt.Sprintf(`name=%s`, name),
+		"static", dns,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("set dns failed: %w %s", err, out)
+	}
+	return nil
+}
+
+func StartEngineDesktop(proxyAddr string, iface string) {
+
+	log.Infof("[Engine] StartEngineDesktop proxy=%s iface=%s", proxyAddr, iface)
+	transferMu.Lock()
+	defer transferMu.Unlock()
+
+	if isRunning {
+		stopLocked()
+	}
+
+	// Конфигурируем tun2socks с DEBUG логами
+	proxyURL := fmt.Sprintf("socks5://%s", proxyAddr)
+
+	key := &engine.Key{
+		Proxy:     proxyURL,
+		Device:    "wintun",
+		Interface: iface,
+		LogLevel:  "info",
+		MTU:       1500,
+	}
+
+	engine.Insert(key)
+	engine.Start()
+
+	currentDialer := tunnel.T().Dialer()
+	vpnOutbound, ok := currentDialer.(proxy.Proxy)
+	if !ok {
+		log.Infof("[Engine] Current dialer is not a proxy")
+		return
+	}
+
+	directOutbound := &ProtectedDirectProxy{
+		Proxy: proxy.NewDirect(),
+	}
+
+	wrapper := &DobbyProxy{
+		vpn:    vpnOutbound,
+		direct: directOutbound,
+	}
+
+	if tunnel.T() == nil {
+		log.Infof("tunnel.T() return nil")
+	}
+
+	// ждём интерфейс
+	ifName, err := waitForInterface(5 * time.Second)
+	if err != nil {
+		log.Infof("wintun not found: %v", err)
+		engine.Stop()
+		return
+	}
+
+	if err := setInterfaceAddress(ifName, "10.0.85.2"); err != nil {
+		log.Infof("[Engine] failed to set interface address: %v", err)
+		engine.Stop()
+		return
+	}
+	if err := setDNS(ifName, "1.1.1.1"); err != nil {
+		log.Infof("[Engine] failed to set DNS: %v", err)
+		engine.Stop()
+		return
+	}
+
+	log.Infof("[Engine] Wintun ready: %s", ifName)
+
+	tunnel.T().SetDialer(wrapper)
+
+	DefaultBypassCIDRs = append(DefaultBypassCIDRs, ResolveHostToCIDRs("api.ipify.org")...)
+
+	isRunning = true
 }
 
 func StartEngine(fd int, proxyAddr string) {

@@ -38,8 +38,6 @@ var ipv4ReservedSubnets = []string{
 	"240.0.0.0/4",
 }
 
-const wireguardSystemConfigPath = "C:\\ProgramData\\WireGuard"
-
 func ExecuteCommand(command string) (string, error) {
 	cmd := exec.Command("cmd", "/C", command)
 
@@ -70,6 +68,10 @@ func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, MacAdd
 	log.Infof("Outline/routing: Routing configuration completed successfully.")
 
 	macAddr := formatMACAddress(addr)
+	if macAddr == "" {
+		log.Infof("Outline/routing: Interface %s has no usable MAC address; skipping ARP neighbor configuration", TunDeviceName)
+		return nil
+	}
 	var lastErr error
 	const maxRetries = 3
 	for i := 1; i <= maxRetries; i++ {
@@ -180,6 +182,9 @@ func stopRoutingIpv4(tunDeviceName string) {
 }
 
 func formatMACAddress(mac []byte) string {
+	if len(mac) < 6 {
+		return ""
+	}
 	return strings.ToUpper(fmt.Sprintf("%02X-%02X-%02X-%02X-%02X-%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]))
 }
 
@@ -239,7 +244,8 @@ func AddNeighbor(interfaceName, gatewayIP, macAddress string) error {
 	}
 	return nil
 }
-func FindInterfaceByGateway(gatewayIP string) (string, error) {
+
+func FindInterfaceIPByGateway(gatewayIP string) (string, error) {
 	cmd := exec.Command("route", "print")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow: true,
