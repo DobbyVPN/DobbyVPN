@@ -15,6 +15,7 @@ require (
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/vishvananda/netlink v1.2.1-beta.2
 	golang.org/x/sys v0.36.0
+	golang.zx2c4.com/wireguard/windows v0.5.3
 )
 
 require (
@@ -27,7 +28,7 @@ require (
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/refraction-networking/utls v1.8.1
+	github.com/refraction-networking/utls v1.8.1 // indirect
 	github.com/shadowsocks/go-shadowsocks2 v0.1.5 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/stretchr/testify v1.10.0 // indirect
@@ -36,7 +37,7 @@ require (
 	golang.org/x/crypto v0.42.0 // indirect
 	golang.org/x/net v0.44.0 // indirect
 	golang.org/x/time v0.7.0 // indirect
-	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
+	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
-	"time"
 
 	log "go_client/logger"
 )
@@ -55,36 +54,23 @@ func ExecuteCommand(command string) (string, error) {
 	return string(output), nil
 }
 
-func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, MacAddress string, InterfaceName string, TunGateway string, TunDeviceIP string, addr []byte) error {
+func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, InterfaceName string, TunGateway string, TunDeviceIP string) error {
 	log.Infof("Outline/routing: Starting routing configuration for Windows...")
-	log.Infof("Outline/routing: Proxy IP: %s, Tun Device Name: %s, Tun Gateway: %s, Tun Device IP: %s, Gateway IP: %s, Mac Address: %s, Interface Name: %s",
-		proxyIP, TunDeviceName, TunGateway, TunDeviceIP, GatewayIP, MacAddress, InterfaceName)
+	log.Infof("Outline/routing: Proxy IP: %s, Tun Device Name: %s, Tun Gateway: %s, Tun Device IP: %s, Gateway IP: %s, Interface Name: %s",
+		proxyIP, TunDeviceName, TunGateway, TunDeviceIP, GatewayIP, InterfaceName)
+
 	log.Infof("Outline/routing: Setting up IP rule...")
 	AddOrUpdateProxyRoute(proxyIP, GatewayIP, InterfaceName)
-	log.Infof("Outline/routing: Added IP proxy rules via table\n")
+	log.Infof("Outline/routing: Added IP proxy rules via table")
+
 	addOrUpdateReservedSubnetBypass(GatewayIP, InterfaceName)
-	log.Infof("Outline/routing: Added IP reserved rules via table\n")
-	addIpv4TapRedirect(TunGateway, TunDeviceName)
-	log.Infof("Outline/routing: Added IP rules via table\n")
+	log.Infof("Outline/routing: Added IP reserved rules via table")
+
+	addIpv4TunRedirect(TunGateway, TunDeviceName)
+	log.Infof("Outline/routing: Added default IPv4 redirect routes via TUN")
 
 	log.Infof("Outline/routing: Routing configuration completed successfully.")
-
-	macAddr := formatMACAddress(addr)
-	var lastErr error
-	const maxRetries = 3
-	for i := 1; i <= maxRetries; i++ {
-		lastErr = AddNeighbor(TunDeviceName, TunGateway, macAddr)
-		if lastErr == nil {
-			log.Infof("Outline/routing: ARP neighbor added successfully on attempt %d", i)
-			return nil
-		}
-		log.Infof("Outline/routing: AddNeighbor attempt %d/%d failed: %v", i, maxRetries, lastErr)
-		if i < maxRetries {
-			time.Sleep(2 * time.Second)
-		}
-	}
-	log.Infof("Outline/routing: CRITICAL: Failed to add ARP neighbor after %d attempts: %v", maxRetries, lastErr)
-	return fmt.Errorf("failed to add ARP neighbor for gateway %s: %w", TunGateway, lastErr)
+	return nil
 }
 
 func StopRouting(proxyIp string, TunDeviceName string, GatewayIP string, InterfaceName string, TunGateway string) {
@@ -92,22 +78,19 @@ func StopRouting(proxyIp string, TunDeviceName string, GatewayIP string, Interfa
 	deleteProxyRoute(proxyIp, GatewayIP, InterfaceName)
 	removeReservedSubnetBypass()
 	stopRoutingIpv4(TunDeviceName)
-	DeleteNeighbor(TunDeviceName, TunGateway)
 	log.Infof("Outline/routing: Cleaned up routing table and rules.")
 }
 
 func AddOrUpdateProxyRoute(proxyIp string, gatewayIp string, interfaceName string) {
-	// Use netsh directly since it supports interface names (unlike 'route' which needs numeric index)
 	netshCommand := fmt.Sprintf("netsh interface ipv4 set route %s/32 nexthop=%s interface=\"%s\" metric=0 store=active",
 		proxyIp, gatewayIp, interfaceName)
 	_, err := ExecuteCommand(netshCommand)
 	if err != nil {
-		// Route might not exist yet, try add
 		addCommand := fmt.Sprintf("netsh interface ipv4 add route %s/32 nexthop=%s interface=\"%s\" metric=0 store=active",
 			proxyIp, gatewayIp, interfaceName)
 		_, err = ExecuteCommand(addCommand)
 		if err != nil {
-			log.Infof("Outline/routing: Failed to add or update proxy route for IP %s: %v\n", proxyIp, err)
+			log.Infof("Outline/routing: Failed to add or update proxy route for IP %s: %v", proxyIp, err)
 		}
 	}
 }
@@ -116,23 +99,21 @@ func deleteProxyRoute(proxyIp string, GatewayIP string, InterfaceName string) {
 	command := fmt.Sprintf("netsh interface ipv4 delete route %s/32 \"%s\" %s", proxyIp, InterfaceName, GatewayIP)
 	_, err := ExecuteCommand(command)
 	if err != nil {
-		log.Infof("Outline/routing: Failed to delete proxy route for IP %s: %v\n", proxyIp, err)
+		log.Infof("Outline/routing: Failed to delete proxy route for IP %s: %v", proxyIp, err)
 	}
 }
 
 func addOrUpdateReservedSubnetBypass(gatewayIp string, interfaceName string) {
 	for _, subnet := range ipv4ReservedSubnets {
-		// Use netsh directly since it supports interface names
 		netshCommand := fmt.Sprintf("netsh interface ipv4 set route %s nexthop=%s interface=\"%s\" metric=0 store=active",
 			subnet, gatewayIp, interfaceName)
 		_, err := ExecuteCommand(netshCommand)
 		if err != nil {
-			// Route might not exist yet, try add
 			addCommand := fmt.Sprintf("netsh interface ipv4 add route %s nexthop=%s interface=\"%s\" metric=0 store=active",
 				subnet, gatewayIp, interfaceName)
 			_, err = ExecuteCommand(addCommand)
 			if err != nil {
-				log.Infof("Outline/routing: Failed to add or update route for subnet %s: %v\n", subnet, err)
+				log.Infof("Outline/routing: Failed to add or update route for subnet %s: %v", subnet, err)
 			}
 		}
 	}
@@ -143,22 +124,22 @@ func removeReservedSubnetBypass() {
 		command := fmt.Sprintf("route delete %s", subnet)
 		_, err := ExecuteCommand(command)
 		if err != nil {
-			log.Infof("Outline/routing: Failed to delete route for subnet %s: %v\n", subnet, err)
+			log.Infof("Outline/routing: Failed to delete route for subnet %s: %v", subnet, err)
 		}
 	}
 }
 
-func addIpv4TapRedirect(tapGatewayIP string, tapDeviceName string) {
+func addIpv4TunRedirect(tunGatewayIP string, tunDeviceName string) {
 	for _, subnet := range ipv4Subnets {
 		command := fmt.Sprintf("netsh interface ipv4 add route %s nexthop=%s interface=\"%s\" metric=0 store=active",
-			subnet, tapGatewayIP, tapDeviceName)
+			subnet, tunGatewayIP, tunDeviceName)
 		_, err := ExecuteCommand(command)
 		if err != nil {
 			setCommand := fmt.Sprintf("netsh interface ipv4 set route %s nexthop=%s interface=\"%s\" metric=0 store=active",
-				subnet, tapGatewayIP, tapDeviceName)
+				subnet, tunGatewayIP, tunDeviceName)
 			_, err = ExecuteCommand(setCommand)
 			if err != nil {
-				log.Infof("Outline/routing: Failed to add or set route for subnet %s: %v\n", subnet, err)
+				log.Infof("Outline/routing: Failed to add or set route for subnet %s: %v", subnet, err)
 			}
 		}
 	}
@@ -169,76 +150,15 @@ func stopRoutingIpv4(tunDeviceName string) {
 		command := fmt.Sprintf("netsh interface ipv4 delete route %s interface=\"%s\" store=active", subnet, tunDeviceName)
 		_, err := ExecuteCommand(command)
 		if err != nil {
-			// Fallback: try route delete
 			fallbackCmd := fmt.Sprintf("route delete %s", subnet)
 			_, err = ExecuteCommand(fallbackCmd)
 			if err != nil {
-				log.Infof("Outline/routing: Failed to delete route for subnet %s: %v\n", subnet, err)
+				log.Infof("Outline/routing: Failed to delete route for subnet %s: %v", subnet, err)
 			}
 		}
 	}
 }
 
-func formatMACAddress(mac []byte) string {
-	return strings.ToUpper(fmt.Sprintf("%02X-%02X-%02X-%02X-%02X-%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]))
-}
-
-func DeleteNeighbor(interfaceName, gatewayIP string) {
-	// Delete existing ARP entry (ignore errors — entry may not exist)
-	delCmd := fmt.Sprintf(`netsh interface ipv4 delete neighbors "%s" "%s"`, interfaceName, gatewayIP)
-	cmd := exec.Command("cmd", "/C", delCmd)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Infof("Outline/routing: DeleteNeighbor (ipv4) for %s on %s: %v, output: %s (may be expected if no entry existed)", gatewayIP, interfaceName, err, string(output))
-		// Also try legacy syntax
-		legacyCmd := fmt.Sprintf(`netsh interface ip delete neighbors "%s" "%s"`, interfaceName, gatewayIP)
-		cmd2 := exec.Command("cmd", "/C", legacyCmd)
-		cmd2.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		cmd2.CombinedOutput()
-	} else {
-		log.Infof("Outline/routing: Deleted existing ARP neighbor for %s on %s", gatewayIP, interfaceName)
-	}
-}
-
-func AddNeighbor(interfaceName, gatewayIP, macAddress string) error {
-	// Delete stale ARP entry first (prevents "entry already exists" error)
-	DeleteNeighbor(interfaceName, gatewayIP)
-
-	// Try "netsh interface ipv4 add neighbors" first (preferred on modern Windows)
-	netshCommand := fmt.Sprintf(
-		`netsh interface ipv4 add neighbors "%s" "%s" "%s"`,
-		interfaceName, gatewayIP, macAddress,
-	)
-
-	cmd := exec.Command("cmd", "/C", netshCommand)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-	}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Infof("Outline/routing: Failed to add neighbor (ipv4): %v, output: %s", err, string(output))
-
-		// Fallback: try legacy "netsh interface ip add neighbors"
-		legacyCommand := fmt.Sprintf(
-			`netsh interface ip add neighbors "%s" "%s" "%s"`,
-			interfaceName, gatewayIP, macAddress,
-		)
-		cmd2 := exec.Command("cmd", "/C", legacyCommand)
-		cmd2.SysProcAttr = &syscall.SysProcAttr{
-			HideWindow: true,
-		}
-		output2, err2 := cmd2.CombinedOutput()
-		if err2 != nil {
-			log.Infof("Outline/routing: Failed to add neighbor (legacy): %v, output: %s", err2, string(output2))
-			return fmt.Errorf("failed to add ARP neighbor entry for %s on %s: %w", gatewayIP, interfaceName, err2)
-		}
-		log.Infof("Outline/routing: ARP neighbor added (legacy) for %s -> %s on %s", gatewayIP, macAddress, interfaceName)
-	} else {
-		log.Infof("Outline/routing: ARP neighbor added for %s -> %s on %s", gatewayIP, macAddress, interfaceName)
-	}
-	return nil
-}
 func FindInterfaceByGateway(gatewayIP string) (string, error) {
 	cmd := exec.Command("route", "print")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -257,8 +177,8 @@ func FindInterfaceByGateway(gatewayIP string) (string, error) {
 			foundGateway = true
 			parts := strings.Fields(line)
 			if len(parts) >= 4 {
-				interfaceName := parts[3]
-				return interfaceName, nil
+				interfaceIP := parts[3]
+				return interfaceIP, nil
 			}
 		}
 	}
