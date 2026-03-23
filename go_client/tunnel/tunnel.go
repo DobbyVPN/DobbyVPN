@@ -66,7 +66,6 @@ func ResolveHostToCIDRs(host string) []*net.IPNet {
 		}
 		_, n, _ := net.ParseCIDR(ip.String() + "/128")
 		result = append(result, n)
-		result = append(result, n)
 	}
 	return result
 }
@@ -291,7 +290,7 @@ func StartEngine(fd int, proxyAddr string) {
 	}
 
 	// Конфигурируем tun2socks с DEBUG логами
-	devicePath := fmt.Sprintf("fd://%d?net=198.18.0.0/15", fd)
+	devicePath := fmt.Sprintf("fd://%d", fd)
 	proxyURL := fmt.Sprintf("socks5://%s", proxyAddr)
 
 	log.Infof("[Engine] Starting Dobby with FD: %d", fd)

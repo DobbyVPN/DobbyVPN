@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"reflect"
 
 	"go_client/routing"
 )
@@ -28,6 +29,7 @@ func checkRoot() bool {
 type tunDevice struct {
 	*water.Interface
 	name string
+	fd   int
 }
 
 var _ network.IPDevice = (*tunDevice)(nil)
@@ -59,22 +61,21 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 		}
 	}()
 
+	fd := extractFD(tun)
+
 	log.Infof("Tun successful")
 
-	tunDev := &tunDevice{tun, tun.Name()}
+	tunDev := &tunDevice{
+		Interface: tun,
+		name:      tun.Name(),
+		fd:        fd,
+	}
 
 	addTunRoute := fmt.Sprintf("sudo ifconfig %s inet 169.254.19.0 169.254.19.0 netmask 255.255.255.0", tun.Name())
 	if _, err := routing.ExecuteCommand(addTunRoute); err != nil {
 		return nil, fmt.Errorf("failed to add tun route: %w", err)
 	}
 
-	// Uncomment and implement if needed
-	//if err := tunDev.configureSubnet(ip); err != nil {
-	//	return nil, fmt.Errorf("failed to configure TUN/TAP device subnet: %w", err)
-	//}
-	//if err := tunDev.bringUp(); err != nil {
-	//	return nil, fmt.Errorf("failed to bring up TUN/TAP device: %w", err)
-	//}
 	log.Infof("TUN device %s is configured with IP %s\n", tunDev.Interface.Name(), "10.0.85.2")
 	return tunDev, nil
 }
@@ -106,14 +107,23 @@ func (d *tunDevice) bringUp() error {
 	return nil
 }
 
-func (d *tunDevice) GetFd() int {
-	if d.Interface == nil {
+func extractFD(iface *water.Interface) int {
+	rwc := iface.ReadWriteCloser
+
+	val := reflect.ValueOf(rwc)
+	if val.Kind() == reflect.Ptr {
+		val = val.Elem()
+	}
+
+	fileField := val.FieldByName("file")
+	if !fileField.IsValid() {
 		return -1
 	}
-	// water.Interface содержит методы Read/Write/Close,
-	// но дескриптор можно достать через рефлексию или зная структуру.
-	// Однако в большинстве случаев в Linux water.Interface.File — это *os.File.
 
-	// В текущей реализации библиотеки water для Linux:
-	return int(d.Interface.ReadWriteCloser.(*os.File).Fd())
+	file := fileField.Interface().(*os.File)
+	return int(file.Fd())
+}
+
+func (d *tunDevice) GetFd() int {
+	return d.GetFd()
 }

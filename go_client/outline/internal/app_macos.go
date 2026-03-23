@@ -142,8 +142,4 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	log.Infof("[Tunnel] Context cancelled, stopping engine")
 	tunnel.StopEngine() // Вместо StopTransfer
 	return nil
-
-	log.Infof("Outline/app: received interrupt signal, terminating...\n")
-
-	return nil
 }
