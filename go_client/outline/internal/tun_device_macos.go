@@ -108,11 +108,13 @@ func (d *tunDevice) bringUp() error {
 }
 
 func extractFD(iface *water.Interface) int {
-	rwc := iface.ReadWriteCloser
-
-	val := reflect.ValueOf(rwc)
+	val := reflect.ValueOf(iface.ReadWriteCloser)
 	if val.Kind() == reflect.Ptr {
 		val = val.Elem()
+	}
+
+	for i := 0; i < val.NumField(); i++ {
+		log.Infof("field: %s type=%s", val.Type().Field(i).Name, val.Field(i).Type())
 	}
 
 	fileField := val.FieldByName("file")
