@@ -120,10 +120,14 @@ func extractFD(iface *water.Interface) int {
 		return -1
 	}
 
-	file := fileField.Interface().(*os.File)
+	file, ok := fileField.Interface().(*os.File)
+	if !ok {
+		return -1
+	}
+
 	return int(file.Fd())
 }
 
 func (d *tunDevice) GetFd() int {
-	return d.GetFd()
+	return d.fd
 }

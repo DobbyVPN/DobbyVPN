@@ -9,8 +9,6 @@ import (
 	"os/exec"
 )
 
-const wireguardSystemConfigPathMacOS = "/opt/homebrew/etc/wireguard/"
-
 func ExecuteCommand(command string) (string, error) {
 	cmd := exec.Command("bash", "-c", command)
 	output, err := cmd.CombinedOutput()
