@@ -173,17 +173,19 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 	}
 
 	host := extractTLSSNIHost(transportConfig)
-
-	if host == "" {
-
+	if host != "" {
+		log.Infof("outline client: detected WSS config, using TLS SNI host: %s", host)
+	} else {
 		var err error
 		host, err = extractSSHost(transportConfig)
 		if err != nil {
 			return nil, err
 		}
+		log.Infof("outline client: using ss:// host: %s", host)
 	}
 
 	if host == "127.0.0.1" || host == "localhost" {
+		log.Infof("outline client: localhost detected, skipping IP resolution")
 		return net.ParseIP("127.0.0.1").To4(), nil
 	}
 
@@ -194,6 +196,7 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 
 	for _, ip := range ipList {
 		if ip = ip.To4(); ip != nil {
+			log.Infof("outline client: resolved %s -> %s", host, ip.String())
 			return ip, nil
 		}
 	}

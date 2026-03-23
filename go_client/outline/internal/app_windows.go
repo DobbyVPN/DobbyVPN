@@ -6,6 +6,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go_client/common"
 	"go_client/routing"
@@ -29,13 +30,9 @@ func signalInit(initResult chan<- error, err error) {
 }
 
 func (app App) Run(ctx context.Context, initResult chan<- error) error {
+
 	tunGateway := "10.0.85.1"
 	tunDeviceIP := "10.0.85.2"
-
-	// Если потом захочешь вернуть конфиг:
-	// tunDeviceIP := app.RoutingConfig.TunDeviceIP
-	// tunGatewayCIDR := app.RoutingConfig.TunGatewayCIDR
-	// tunGateway := strings.Split(tunGatewayCIDR, "/")[0]
 
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
@@ -57,17 +54,13 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		return err
 	}
 
-	log.Infof("[Routing] Pre-resolving server IP from config...")
 	serverIP, err := ResolveServerIPFromConfig(*app.TransportConfig)
 	if err != nil {
-		err = fmt.Errorf("failed to resolve server IP from config: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Infof("[Routing] Server IP resolved: %s", serverIP.String())
 
-	// Очень важно заранее защитить маршрут до самого VPN-сервера,
-	// чтобы после поднятия туннеля трафик к нему не ушёл в сам туннель.
+	// protect route to VPN server
 	if serverIP.String() != "127.0.0.1" {
 		log.Infof("[Routing] Adding early route for server %s via %s", serverIP.String(), gatewayIP.String())
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
@@ -78,6 +71,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		log.Infof("[Routing] Skipping early route for localhost (Cloak mode)")
 	}
 
+	// SOCKS (Outline)
 	ss, err := NewOutlineDevice(*app.TransportConfig)
 	if err != nil {
 		err = fmt.Errorf("failed to create OutlineDevice: %w", err)
@@ -100,56 +94,30 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	}
 	tunnel.SetDefaultInterfaceIndex(idx)
 
-	// Включаем protect dialer для direct/bypass соединений.
 	tunnel.CustomProtectedDialer = tunnel.DialContextWithProtect
 	tunnel.CustomProtectedPacketDialer = tunnel.DialUDPWithProtect
 
-	// Новый desktop-путь: tun2socks сам создаёт Wintun, сам поднимает dataplane,
-	// а внутри StartEngineDesktop уже назначаются IP и DNS на интерфейс.
 	tunnel.StartEngineDesktop(
 		ss.GetProxyAddr(),
 		netInterface.Name,
 	)
 
-	// После StartEngineDesktop интерфейс уже должен существовать и иметь IP 10.0.85.2.
-	log.Infof("[Routing] Looking up Wintun interface by IP: %s", tunDeviceIP)
-	tunInterface, err := routing.GetNetworkInterfaceByIP(tunDeviceIP)
+	// ждём интерфейс
+	tunInterface, err := routing.WaitForInterfaceByIP(tunDeviceIP, 5*time.Second)
 	if err != nil {
-		err = fmt.Errorf("failed to find Wintun interface by IP %s: %w", tunDeviceIP, err)
-		log.Infof("[Routing] %v", err)
 		tunnel.StopEngine()
 		signalInit(initResult, err)
 		return err
 	}
-	log.Infof("[Routing] Found Wintun interface: %s (HWAddr=%s)", tunInterface.Name, tunInterface.HardwareAddr)
 
-	dst := tunInterface.HardwareAddr
-	src := make([]byte, len(dst))
-	copy(src, dst)
-	if len(src) > 2 {
-		src[2] += 2
-	}
-	log.Infof("[Routing] Generated spoofed MAC: original=%s new=%v", tunInterface.HardwareAddr, src)
-
-	log.Infof("[Routing] Starting routing configuration:")
-	log.Infof("  Server IP:     %s", serverIP.String())
-	log.Infof("  Gateway IP:    %s", gatewayIP.String())
-	log.Infof("  TUN Interface: %s", tunInterface.Name)
-	log.Infof("  TUN MAC:       %s", tunInterface.HardwareAddr.String())
-	log.Infof("  Net Interface: %s", netInterface.Name)
-	log.Infof("  Tun Gateway:   %s", tunGateway)
-	log.Infof("  Tun Device IP: %s", tunDeviceIP)
-
-	common.Client.MarkInCriticalSection(outlineCommon.Name)
+	// routing
 	if err := routing.StartRouting(
 		serverIP.String(),
 		gatewayIP.String(),
 		tunInterface.Name,
-		tunInterface.HardwareAddr.String(),
 		netInterface.Name,
 		tunGateway,
 		tunDeviceIP,
-		src,
 	); err != nil {
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 		tunnel.StopEngine()
@@ -166,7 +134,6 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	// proxy поднят, wintun поднят, routing настроен.
 	signalInit(initResult, nil)
 
-	// Очистка при выходе
 	defer func() {
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
 		log.Infof("[Routing] Cleaning up routes for %s...", serverIP.String())
