@@ -5,6 +5,7 @@ Sas Al Nakheel Air Base,24.44128,54.51696
 Burton-Nibbs International Airport,17.621194,-61.798347
 Honiara International Airport,-9.428,160.054993
 Munda Airport,-8.32797,157.263
+(Duplicate)Vlora International Airport,40.605556,19.426111
 Nauru International Airport,-0.547893,166.919525
 Grandfather Skiway,-77.530242,-31.827393
 Boulder Clay Runway,-74.739373,164.03539
@@ -128,13 +129,13 @@ Luyang Air Base,33.685434,112.89053
 Xuzhou Daguozhang Air Base,34.229285,117.245665
 Zhucheng Air Base,36.027468,119.43778
 Baoji Air Base,34.53125,107.470679
-Gonghe Air Base,36.3367,100.480003
+Hainanzhou Gonghe Airport,36.3367,100.480003
 Huangdicun Naval Air Base,40.49979,120.659295
 Lanzhou Air Base,35.917801,104.218002
 Lintao Air Base,35.3083,103.835999
 Qingshui Air Base,39.554699,98.884201
 Ürümqi South Air Base,43.466593,87.531177
-Uxxaktal Air Base,42.1814,87.188103
+Malan Air Base,42.180621,87.186784
 Wugong Air Base,34.275907,108.2658
 Ürümqi Changji Air Base,43.951175,87.079232
 Wuwei Air Base,37.9883,102.567001
@@ -154,12 +155,12 @@ Ningbo Zhuangqiao Air Base,29.9228,121.573997
 Shanghai Dachang Air Base,31.324438,121.409508
 Wuhan Hannan Municipal Airport,30.25521,114.062805
 Zhangshu Air Base,28.023283,115.549649
-Changchun Air Base,43.9053,125.197998
+Changchun Air Base,43.906591,125.197005
 Beijing Nanjiao Airport,39.482845,116.372295
 Dingxin-Shuangchengzi Air Base,40.401402,99.789398
 Fuxin Air Base,42.078899,121.662003
 Gongzhuling Air Base,43.526293,124.78466
-Kaiyuan Air Base,42.525799,123.982002
+Kaiyuan Air Base,42.525934,123.984683
 Lalin Air Base,45.259457,126.893536
 Pingquan Air Base,40.900409,118.677878
 Shenyang Beiling Air Base,41.8708,123.439003
@@ -182,6 +183,7 @@ Ningxiang Airport,27.987589,112.604971
 Zhaotong Zhaoyang Airport （Not fully opened),27.205843,103.691511
 Bengbu Tenghu Airport,33.166389,117.058333
 Beijing Xijiao Airport,39.958592,116.256765
+Hancheng Heyang Airport,35.329133,110.3829
 Sanshilipu Air Base,39.289671,121.762195
 Brampton-Caledon Airport,43.7603,-79.875
 (Duplicate}Holguín Air Base,20.786418,-76.318513
@@ -1241,7 +1243,7 @@ Baco Airport,5.749655,36.560165
 Jimma Airport,7.66609001159668,36.81660079956055
 Kebri Dahar Airport,6.732577,44.241339
 Hawassa International Airport,7.100611,38.396455
-Alula Aba Nega Airport,13.4674,39.533501
+Mekele Alula Aba Nega Airport,13.4674,39.533501
 Asosa Airport,10.018500328063965,34.586299896240234
 Bujumbura Melchior Ndadaye International Airport,-3.32402,29.318501
 Gitega Airport,-3.417209,29.911308
@@ -1263,7 +1265,7 @@ El Arish International Airport,31.055324,33.827964
 Asyut International Airport,27.045962,31.01276
 Almaza Air Force Base,30.091702,31.359739
 Alexandria International Airport,30.93249,29.696437
-Abu Simbel Airport,22.374402,31.609881
+Abu Simbel Airport,22.375924,31.611734
 Bani Sweif Air Base,29.20224,31.013471
 Cairo International Airport,30.111534,31.396694
 Capital International Airport,30.06465,31.839974
@@ -1355,7 +1357,6 @@ Old Nabire Airport,-3.368586,135.496702
 Tabing Airport,-0.874989,100.351997
 Susilo Airport,0.063851,111.473572
 Bilorai Airport,-3.739503,137.031183
-Jakkur Aerodrome,13.07674,77.597645
 Maharshi Valmiki International Airport,26.747736,82.163664
 Sindhudurg Airport,16.002552,73.529846
 Navi Mumbai International Airport,18.984597,73.065253
@@ -1375,7 +1376,6 @@ Qalat Salih Air Base,31.456581115722656,47.289791107177734
 Rasheed Air Base,33.279327,44.493706
 Ruwayshid Air Base,32.40611267089844,39.12361145019531
 Sahl Sinjar Air Base,35.8592643737793,42.14213943481445
-Salum Air Base,34.1640739440918,44.7469482421875
 Samarra East Air Base / Dhuluiya Airport,34.16554,44.264304
 Tal Ashtah New Air Base,35.139721,44.133888
 Tuz Khurmatu Air Base,34.93722152709961,44.4827766418457
@@ -1443,7 +1443,7 @@ Curtis Field,31.178931,-99.324732
 Branson Airport,36.532082,-93.200544
 Bryce Canyon Airport,37.706401825,-112.144996643
 Boca Raton Airport,26.3785,-80.107697
-Baudette International Airport,48.7284011841,-94.612197876
+Baudette International Airport,48.728401,-94.612198
 Bradley International Airport,41.938555,-72.688016
 Igor I Sikorsky Memorial Airport,41.163502,-73.126198
 Laurence G Hanscom Field,42.470001,-71.289001
@@ -1597,6 +1597,7 @@ Pangborn Memorial Airport,47.398899,-120.207001
 Chippewa Valley Regional Airport,44.86579895019531,-91.48429870605469
 Elizabeth City Regional Airport & Coast Guard Air Station,36.260601,-76.174599
 Northwest Florida Beaches International Airport,30.357106,-85.795414
+Austin Executive Airport,30.398049,-97.566909
 Edwards Air Force Base,34.910781,-117.886391
 Needles Airport,34.7663002014,-114.623001099
 Dillant Hopkins Airport,42.898399,-72.270798
@@ -2380,7 +2381,7 @@ Creil Air Base,49.253502,2.51914
 Charles de Gaulle International Airport,49.00896,2.554117
 Melun-Villaroche Airfield,48.604698,2.67112
 Toussus-le-Noble Airport,48.7519,2.10619
-Paris-Orly Airport,48.72333,2.37944
+Paris-Orly Airport,48.729499,2.358963
 Pontoise-Cormeilles Aerodrome,49.096064,2.035543
 Vélizy-Villacoublay Air Base,48.774406,2.203102
 Troyes-Barberey Airport,48.322102,4.0167
@@ -2519,7 +2520,7 @@ Verona Villafranca Valerio Catullo Airport,45.394955,10.887303
 Marche Airport,43.616299,13.3623
 Venice Marco Polo Airport,45.505299,12.3519
 Siena-Ampugnano Airport,43.256302,11.255
-Sarzana-Luni Air Base,44.088001,9.98795
+Sarzana-Luni Bartolomeo Arrigoni Airport,44.087375,9.987877
 Ciampino–G. B. Pastine International Airport,41.798769,12.595331
 Pratica Di Mare Air Base,41.654499,12.4452
 Rome–Fiumicino Leonardo da Vinci International Airport,41.804532,12.251998
@@ -2628,7 +2629,7 @@ Tulcea Danube Delta Airport,45.0625,28.7143
 Târgu Mureş Transilvania International Airport,46.467701,24.4125
 Timișoara Traian Vuia International Airport,45.809898,21.3379
 Les Eplatures Airport,47.083900451699996,6.792840003970001
-Geneva Cointrin International Airport,46.238098,6.10895
+Geneva International Airport,46.238098,6.10895
 Sion Airport,46.219166,7.326944
 Alpnach Air Base,46.943901,8.28417
 Dübendorf Air Base,47.398602,8.64823
@@ -2654,7 +2655,7 @@ Konya Airport,37.979,32.561901
 Zonguldak Çaycuma Airport,41.506401,32.0886
 Malatya Erhaç Airport,38.435298919699996,38.0909996033
 Kayseri Erkilet International Airport,38.770401,35.495399
-Sivrihisar Airport,39.451499938964844,31.365299224853516
+Sivrihisar Airport,39.4515,31.365299
 Tokat Airport,40.32472,36.39056
 Çardak Airport,37.7855987549,29.7012996674
 Nevşehir Kapadokya Airport,38.7719,34.5345
@@ -2694,12 +2695,12 @@ Mardin Airport,37.223300933800004,40.6316986084
 Iğdır Airport,39.976627,43.876648
 Şırnak Şerafettin Elçi Airport,37.3647,42.0582
 Hakkari Yüksekova Airport,37.5497,44.2381
-Hatay Airport,36.362778,36.282223
+Hatay Airport,36.36079,36.285589
 Çukurova International Airport,36.891478,35.071235
 Süleyman Demirel International Airport,37.8554,30.368401
 Balıkesir Koca Seyit Airport,39.552533,27.010192
 Milas Bodrum International Airport,37.249314,27.66401
-Gazipaşa-Alanya Airport,36.299217,32.300598
+Gazipaşa-Alanya Airport,36.298832,32.297017
 Samsun-Çarşamba Airport,41.253988,36.567546
 Istanbul Sabiha Gökçen International Airport,40.898602,29.3092
 İstanbul Airport,41.274874,28.732136
@@ -2769,6 +2770,7 @@ Del Norte International Airport,25.865601,-100.237
 Aguascalientes International Airport,21.699589,-102.318372
 Bahías de Huatulco International Airport,15.775437,-96.260456
 General Mariano Matamoros International Airport,18.833922,-99.261818
+Ciudad Acuña International Airport,29.333662,-101.100555
 Ciudad del Carmen International Airport,18.651516,-91.799355
 Bachigualato Federal International Airport,24.76504,-107.475228
 Chetumal International Airport,18.504985,-88.328018
@@ -3102,7 +3104,7 @@ Isfahan Shahid Beheshti International Airport,32.755142,51.883877
 Badr Air Base,32.621101,51.696999
 Shahrekord Airport,32.2971992493,50.842201232899995
 Sardar-e-Jangal Airport,37.323333,49.617778
-Hamadan Airport,34.869202,48.552502
+Hamadan Airport,34.866416,48.56069
 Nojeh Air Base,35.211601,48.6534
 Imam Khomeini International Airport,35.416099548339844,51.152198791503906
 Mehrabad International Airport,35.689175,51.314392
@@ -3145,7 +3147,7 @@ Marka International (Amman Civil) Airport,31.9727,35.9916
 King Hussein International Airport,29.611601,35.018101
 Muwaffaq Salti Air Base,31.8256,36.782001
 Ahmed Al Jaber Air Base,28.9347991943,47.791900634799994
-Ali Al Salem Air Base,29.344632,47.511215
+Ali Al Salem Air Base,29.346905,47.520118
 Kuwait International Airport,29.224487,47.969813
 Beirut Rafic Hariri International Airport,33.819833,35.487443
 Rene Mouawad Air Base,34.589298,36.011299
@@ -3384,7 +3386,7 @@ Taiwan Taoyuan International Airport,25.0777,121.233002
 Hualien Chiashan Airport,24.023163,121.617991
 Narita International Airport,35.76858,140.388714
 Shinshu-Matsumoto Airport,36.166801,137.923004
-Ibaraki International Airport,36.181456,140.414434
+Ibaraki Airport,36.181456,140.414434
 Ioto (Iwo Jima) Airbase,24.784153,141.32261
 Kansai International Airport,34.427299,135.244003
 Nanki Shirahama Airport,33.6622009277,135.363998413
@@ -3401,6 +3403,7 @@ Sapporo Okadama Airport,43.117447,141.38134
 JASDF Kenebetsu Airfield,43.425154,144.741354
 Tokachi Airport,42.890499,143.158005
 Wakkanai Airport,45.4042015076,141.800994873
+Amakusa Airport,32.482498,130.158997
 Iki Airport,33.7490005493,129.785003662
 Yamaguchi Ube Airport,33.93,131.279007
 Tsushima Airport,34.2849006653,129.330993652
@@ -3474,7 +3477,7 @@ JMSDF Shimofusa Air Base,35.798901,140.011002
 Oshima Airport,34.782001495399996,139.36000061
 Miyakejima Airport,34.073600769,139.559997559
 Tokyo Haneda International Airport,35.549678,139.786958
-Utsunomiya Airport,36.5145,139.87101
+Utsunomiya Air Field,36.5145,139.87101
 Yokota Air Base,35.748501,139.348007
 Muan International Airport,34.991406,126.382814
 Gwangju Airport,35.123173,126.805444
@@ -3571,7 +3574,7 @@ Francisco B. Reyes (Busuanga) Airport,12.121865,120.100801
 Red Sea International Airport,25.627975,37.088914
 Levashovo Air Base,60.0867,30.1933
 Bada Air Base,51.406917,109.900091
-Balashov Air Base,51.533298,43.299999
+Balashov Air Base,51.531687,43.301718
 Borisoglebsk Air Base,51.366699,42.178299
 Khotilovo Air Base,57.654999,34.099998
 Lipetsk Air Base,52.634998,39.445
@@ -4083,7 +4086,7 @@ Dr. Antonio Nicolás Briceño Airport,9.340478,-70.584061
 Valle de La Pascua Airport,9.22202777863,-65.9935836792
 Araguaína Airport,-7.22787,-48.240501
 Cheddi Jagan International Airport,6.49855,-58.254101
-Eugene F. Correia International Airport,6.80628,-58.1059
+Eugene F. Correia International Airport,6.805881,-58.107657
 Kaieteur Airport,5.177349,-59.48898
 Lethem Airport,3.37276,-59.789398
 V. C. Bird International Airport,17.1367,-61.792702
@@ -4114,6 +4117,7 @@ Robert L. Bradshaw International Airport,17.310845,-62.719117
 Vance W. Amory International Airport,17.2057,-62.589901
 George F. L. Charles Airport,14.0202,-60.992901
 Hewanorra International Airport,13.7332,-60.952599
+Balkanabat International Airport,39.681052,54.206008
 Mary North Airport,37.66429901123047,61.82699966430664
 Queen Beatrix International Airport,12.501056,-70.014281
 Flamingo International Airport,12.131,-68.268501
@@ -4178,7 +4182,7 @@ Nasosnaya Air Base,40.591599,49.5574
 Khojaly Airport,39.901402,46.786999
 Kyurdamir Air Base,40.27360153198242,48.16360092163086
 Baku Kala Air Base,40.408409,50.200287
-Heydar Aliyev International Airport,40.467498779296875,50.04669952392578
+Heydar Aliyev International Airport,40.47278,50.050931
 Ganja International Airport,40.738692,46.320383
 Nakhchivan International Airport,39.188801,45.458401
 Gabala International Airport,40.808617,47.725389
@@ -4207,6 +4211,7 @@ Cherskiy Airport,68.7406005859375,161.33799743652344
 Tiksi Airport,71.697700500488,128.90299987793
 Zyryanka Airport,65.7485,150.8889
 Zhigansk Airport,66.7965011597,123.361000061
+Savannah Airstrip,-0.7165,29.6997
 Gudauta Air Base,43.104,40.5793
 Dollyar Air Base,40.8876,45.957001
 Tbilisi Marneuli Air Base,41.459202,44.783199
@@ -4289,7 +4294,7 @@ Vologda Airport,59.282501,39.944401
 Brest International Airport,52.108138,23.89676
 Gomel Airport,52.527000427246094,31.016700744628906
 Vitebsk Vostochny Airport,55.126499176025,30.349599838257
-Khrabrovo Airport,54.889882,20.598216
+Khrabrovo Airport,54.89161,20.598559
 Baranavichi Air Base,53.099998,26.049999
 Hrodna Airport,53.602001,24.053801
 Minsk National Airport,53.888071,28.039964
@@ -4366,21 +4371,21 @@ Roshchino International Airport,57.178984,65.327696
 Kurgan Airport,55.4753,65.415604
 Ashgabat Bezmein Air Base,38.012001,58.195
 Ashgabat International Airport,37.986801,58.361
-Turkmenbashi International Airport,40.063301,53.007198
+Turkmenbaşy International Airport,40.062833,53.005085
 Mary International Airport,37.62353,61.895668
-Daşoguz Airport,41.759853,59.836149
+Dashoguz International Airport,41.759853,59.836149
 Türkmenabat International Airport,38.930662,63.563982
 Dushanbe International Airport,38.543746,68.822977
-Kulob Airport,37.98809814453125,69.80500030517578
+Kulob International Airport,37.988098,69.805
 Khujand International Airport,40.215401,69.694702
-Qurghonteppa International Airport,37.86640167236328,68.86470031738281
+Bokhtar International Airport,37.866315,68.864475
 Namangan International Airport,40.984622,71.5578
 Andijan International Airport,40.727699,72.293999
 Fergana International Airport,40.358799,71.745003
 Nukus International Airport,42.4884,59.623299
 Urgench International Airport,41.58274,60.64338
 Navoi International Airport,40.117599,65.172658
-Bukhara International Airport,39.775002,64.483299
+Bukhara International Airport,39.775319,64.482279
 Samarkand International Airport,39.698187,66.98421
 Termez Airport,37.287261,67.311869
 Tashkent East Airport,41.312889,69.395535
@@ -4390,7 +4395,7 @@ Kostroma Sokerkino Airport,57.796902,41.019402
 Grabtsevo Airport,54.5499992371,36.3666687012
 Ivanovo South Airport,56.93939971923828,40.940799713134766
 Staroselye Airport,58.104198,38.929401
-Bryansk International Airport,53.214199,34.176399
+Bryansk International Airport,53.214403,34.175965
 Zhukovsky International Airport,55.553299,38.150002
 Domodedovo International Airport,55.408798,37.9063
 Golden Ring Yaroslavl International Airport,57.560699,40.157398
@@ -5085,8 +5090,8 @@ Orang (Chongjin) Airport,41.428538,129.647555
 Pyongyang Sunan International Airport,39.224098,125.669998
 Sunchon Air Base,39.412463,125.890273
 Sondok Airport,39.745201,127.473999
-Wonsan Kalma International Airport,39.166801,127.486
-Dunhuang Mogao International Airport,40.164041,94.811722
+Wonsan Kalma Airport,39.165219,127.487931
+Dunhuang Mogao International Airport,40.161953,94.812827
 Golog Maqên Airport,34.418066,100.301144
 Golmud Airport,36.4006,94.786102
 Guyuan Liupanshan Airport,36.078889,106.216944
@@ -5135,7 +5140,7 @@ Yuanmou Air Base,25.737499,101.882004
 Zhaotong Airport,27.327549,103.75617
 Xiamen Gaoqi International Airport,24.543889,118.127454
 Anqing Tianzhushan Airport / Anqing North Air Base,30.582199,117.050003
-Bengbu Tenghu Airport,32.847733,117.320244
+Bengbu Renheji Airport,32.847733,117.320244
 Changzhou Benniu International Airport,31.920485,119.77546
 Nanchang Changbei International Airport,28.864815,115.90271
 Dongying Shengli Airport,37.50137,118.789863
@@ -5221,6 +5226,7 @@ Fuyun Koktokay Airport,46.804169,89.512006
 Hami Airport,42.8414,93.669197
 Korla Licheng Airport,41.614979,86.140817
 Burqin Kanas Airport,48.2223,86.9959
+Barkol Dahe Airport,43.756544,93.137164
 Xinyuan Nalati Airport,43.4318,83.3786
 Ruoqiang Loulan Airport,38.974722,88.008333
 Shache Airport,38.24542,77.056149
