@@ -206,7 +206,100 @@ func setDNS(name, dns string) error {
 	return nil
 }
 
-func StartEngineDesktop(proxyAddr string, uplinkIface string) {
+func StartEngineDarwin(proxyAddr string) (string, error) {
+	log.Infof("[Engine] StartEngineDarwin proxy=%s", proxyAddr)
+
+	transferMu.Lock()
+	defer transferMu.Unlock()
+
+	if isRunning {
+		stopLocked()
+	}
+
+	proxyURL := fmt.Sprintf("socks5://%s", proxyAddr)
+
+	// 👇 ВАЖНО: utun без fd
+	deviceName := "utun233"
+
+	key := &engine.Key{
+		Proxy:    proxyURL,
+		Device:   deviceName,
+		LogLevel: "info",
+		MTU:      1500,
+	}
+
+	engine.Insert(key)
+
+	log.Infof("[Engine] Starting tun2socks (utun mode)...")
+	engine.Start()
+
+	// ⚠️ utun появляется не сразу
+	time.Sleep(500 * time.Millisecond)
+
+	// Проверим интерфейс
+	ifaces, _ := net.Interfaces()
+	found := false
+	for _, ifc := range ifaces {
+		if ifc.Name == deviceName {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		engine.Stop()
+		return "", fmt.Errorf("utun interface not found: %s", deviceName)
+	}
+
+	log.Infof("[Engine] utun created: %s", deviceName)
+
+	// --- НАСТРОЙКА IP ---
+	cmd := exec.Command(
+		"ifconfig",
+		deviceName,
+		"inet",
+		"198.18.0.1",
+		"198.18.0.1",
+		"netmask",
+		"255.255.0.0",
+		"up",
+	)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		engine.Stop()
+		return "", fmt.Errorf("ifconfig failed: %w (%s)", err, out)
+	}
+
+	log.Infof("[Engine] utun configured: %s", deviceName)
+
+	// --- Оборачиваем dialer ---
+	currentDialer := tunnel.T().Dialer()
+	vpnOutbound, ok := currentDialer.(proxy.Proxy)
+	if !ok {
+		engine.Stop()
+		return "", fmt.Errorf("dialer is not proxy")
+	}
+
+	directOutbound := &ProtectedDirectProxy{
+		Proxy: proxy.NewDirect(),
+	}
+
+	wrapper := &DobbyProxy{
+		vpn:    vpnOutbound,
+		direct: directOutbound,
+	}
+
+	tunnel.T().SetDialer(wrapper)
+
+	isRunning = true
+
+	log.Infof("[Engine] tun2socks started (darwin utun mode)")
+
+	return deviceName, nil
+}
+
+func StartEngineWindows(proxyAddr string, uplinkIface string) {
 
 	log.Infof("[Engine] StartEngineDesktop proxy=%s iface=%s", proxyAddr, uplinkIface)
 

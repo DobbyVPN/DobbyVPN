@@ -107,20 +107,16 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("Outline/app: Start trafficCopyWg...\n")
 
-	var fd int
-	if t, ok := tun.(interface{ GetFd() int }); ok {
-		fd = t.GetFd()
-	} else {
-		err = fmt.Errorf("could not get file descriptor for TUN")
+	log.Infof("[Tunnel] Starting tun2socks (darwin mode)...")
+
+	tunName, err := tunnel.StartEngineDarwin(ss.GetProxyAddr())
+	if err != nil {
 		signalInit(initResult, err)
 		return err
 	}
 
-	log.Infof("[Tunnel] Starting tun2socks engine...")
-	tunnel.StartEngine(fd, ss.GetProxyAddr())
-
 	common.Client.MarkInCriticalSection(outlineCommon.Name)
-	if err := routing.StartRouting(serverIP.String(), gatewayIP.String(), tun.(*tunDevice).name); err != nil {
+	if err := routing.StartRouting(serverIP.String(), gatewayIP.String(), tunName); err != nil {
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 		err = fmt.Errorf("failed to configure routing: %w", err)
 		signalInit(initResult, err)
