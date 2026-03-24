@@ -27,7 +27,6 @@ type tunDevice struct {
 var _ network.IPDevice = (*tunDevice)(nil)
 
 func newTunDevice(name, ip string) (network.IPDevice, error) {
-
 	log.Infof("[TUN] ====== START newTunDevice ======")
 	log.Infof("[TUN] requested name=%s ip=%s", name, ip)
 
@@ -44,8 +43,8 @@ func newTunDevice(name, ip string) (network.IPDevice, error) {
 	}
 
 	file := os.NewFile(uintptr(fd), ifName)
-
 	if file == nil {
+		unix.Close(fd)
 		return nil, fmt.Errorf("failed to wrap fd into os.File")
 	}
 
@@ -57,30 +56,37 @@ func newTunDevice(name, ip string) (network.IPDevice, error) {
 
 	log.Infof("[TUN] created %s (fd=%d)", ifName, fd)
 
-	// Проверим интерфейс до настройки
 	cmdCheck := exec.Command("ifconfig", ifName)
 	outCheck, _ := cmdCheck.CombinedOutput()
-	log.Infof("[TUN] ifconfig BEFORE:\n%s", outCheck)
+	log.Infof("[TUN] ifconfig BEFORE:\n%s", string(outCheck))
 
-	// Настраиваем IP
-	log.Infof("[TUN] configuring interface %s...", ifName)
+	log.Infof("[TUN] configuring interface %s as 169.254 link-local...", ifName)
 
-	cmd := exec.Command("ifconfig", ifName, ip, "10.0.85.1", "up")
+	cmd := exec.Command(
+		"ifconfig",
+		ifName,
+		"inet",
+		"169.254.19.0",
+		"169.254.19.0",
+		"netmask",
+		"255.255.255.0",
+		"up",
+	)
+
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Infof("[TUN] ifconfig FAILED: %s", out)
-		return nil, fmt.Errorf("ifconfig failed: %w (%s)", err, out)
+		_ = tun.Close()
+		log.Infof("[TUN] ifconfig FAILED: %s", string(out))
+		return nil, fmt.Errorf("ifconfig failed: %w (%s)", err, string(out))
 	}
 
-	log.Infof("[TUN] ifconfig OK: %s", out)
+	log.Infof("[TUN] ifconfig OK: %s", string(out))
 
-	// Проверим после настройки
 	cmdCheck2 := exec.Command("ifconfig", ifName)
 	outCheck2, _ := cmdCheck2.CombinedOutput()
-	log.Infof("[TUN] ifconfig AFTER:\n%s", outCheck2)
+	log.Infof("[TUN] ifconfig AFTER:\n%s", string(outCheck2))
 
 	log.Infof("[TUN] ====== SUCCESS newTunDevice ======")
-
 	return tun, nil
 }
 
@@ -122,9 +128,6 @@ func createUTUN(name string) (int, string, error) {
 
 	log.Infof("[UTUN] connect OK")
 
-	// Получаем имя интерфейса
-	log.Infof("[UTUN] getting interface name...")
-
 	ifName, err := unix.GetsockoptString(
 		fd,
 		2,
@@ -137,15 +140,6 @@ func createUTUN(name string) (int, string, error) {
 	}
 
 	log.Infof("[UTUN] interface name = %s", ifName)
-
-	// ⚠️ временно оставим, но будем видеть эффект
-	if err := unix.SetNonblock(fd, true); err != nil {
-		log.Infof("[UTUN] SetNonblock FAILED: %v", err)
-		unix.Close(fd)
-		return -1, "", err
-	}
-
-	log.Infof("[UTUN] set nonblock OK")
 
 	log.Infof("[UTUN] ====== SUCCESS createUTUN ======")
 

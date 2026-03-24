@@ -1,6 +1,3 @@
-//go:build darwin
-// +build darwin
-
 package internal
 
 import (
@@ -8,7 +5,6 @@ import (
 	"fmt"
 	"go_client/log"
 	"sync"
-	//"time"
 
 	"go_client/common"
 	outlineCommon "go_client/outline/common"
@@ -29,8 +25,6 @@ func signalInit(initResult chan<- error, err error) {
 }
 
 func (app App) Run(ctx context.Context, initResult chan<- error) error {
-	// this WaitGroup must Wait() after tun is closed
-
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
 		signalInit(initResult, err)
@@ -64,12 +58,12 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		signalInit(initResult, err)
 		return err
 	}
-	defer tun.Close()
 
 	log.Infof("Tun created")
 
 	ss, err := NewOutlineDevice(*app.TransportConfig)
 	if err != nil {
+		_ = tun.Close()
 		err = fmt.Errorf("failed to create OutlineDevice: %w", err)
 		signalInit(initResult, err)
 		return err
@@ -81,6 +75,8 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	closeAll := func() {
 		closeOnce.Do(func() {
 			log.Infof("[Outline] Closing interfaces")
+			tunnel.StopEngine()
+			_ = ss.Close()
 			_ = tun.Close()
 		})
 	}
@@ -92,18 +88,6 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		closeAll()
 		log.Infof("[Outline] Cancel received — closing interfaces")
 	}()
-
-	common.Client.MarkInCriticalSection(outlineCommon.Name)
-	if err := routing.StartRouting(serverIP.String(), gatewayIP.String(), tun.(*tunDevice).name); err != nil {
-		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
-		err = fmt.Errorf("failed to configure routing: %w", err)
-		signalInit(initResult, err)
-		return err
-	}
-	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
-
-	// Signal successful initialization
-	signalInit(initResult, nil)
 
 	defer func() {
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
@@ -119,7 +103,6 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	if t, ok := tun.(interface{ GetFd() int }); ok {
 		fd = t.GetFd()
 	} else {
-		// Резервный вариант, если что-то пошло не так
 		signalInit(initResult, fmt.Errorf("could not get file descriptor for TUN"))
 		return nil
 	}
@@ -127,12 +110,19 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	log.Infof("[Tunnel] Starting tun2socks engine...")
 	tunnel.StartEngine(fd, ss.GetProxyAddr())
 
-	// Сигнализируем об успешном запуске
+	common.Client.MarkInCriticalSection(outlineCommon.Name)
+	if err := routing.StartRouting(serverIP.String(), gatewayIP.String(), tun.(*tunDevice).name); err != nil {
+		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+		err = fmt.Errorf("failed to configure routing: %w", err)
+		signalInit(initResult, err)
+		return err
+	}
+	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+
 	signalInit(initResult, nil)
 
 	<-ctx.Done()
 
 	log.Infof("[Tunnel] Context cancelled, stopping engine")
-	tunnel.StopEngine() // Вместо StopTransfer
 	return nil
 }
