@@ -4,132 +4,196 @@
 package internal
 
 import (
-	"errors"
 	"fmt"
 	"github.com/Jigsaw-Code/outline-sdk/network"
-	"github.com/songgao/water"
 	"go_client/log"
 	"os"
 	"os/exec"
-	"os/user"
-	"reflect"
+	"sync"
 
-	"go_client/routing"
+	"golang.org/x/sys/unix"
 )
 
-func checkRoot() bool {
-	user, err := user.Current()
-	if err != nil {
-		log.Infof("Failed to get current user")
-		return false
-	}
-	return user.Uid == "0"
-}
+const utunControlName = "com.apple.net.utun_control"
 
 type tunDevice struct {
-	*water.Interface
+	file *os.File
 	name string
 	fd   int
+
+	closeOnce sync.Once
 }
 
 var _ network.IPDevice = (*tunDevice)(nil)
 
-func newTunDevice(name, ip string) (d network.IPDevice, err error) {
-	if !checkRoot() {
-		return nil, errors.New("this operation requires superuser privileges. Please run the program with sudo or as root")
-	}
+func newTunDevice(name, ip string) (network.IPDevice, error) {
 
-	if len(name) == 0 {
-		return nil, errors.New("name is required for TUN/TAP device")
-	}
-	if len(ip) == 0 {
-		return nil, errors.New("ip is required for TUN/TAP device")
-	}
+	log.Infof("[TUN] ====== START newTunDevice ======")
+	log.Infof("[TUN] requested name=%s ip=%s", name, ip)
 
-	tun, err := water.New(water.Config{
-		DeviceType: water.TUN,
-	})
+	fd, ifName, err := createUTUN(name)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create TUN/TAP device: %w", err)
+		log.Infof("[TUN] createUTUN FAILED: %v", err)
+		return nil, err
 	}
 
-	log.Infof("Successfully created TUN/TAP device\n")
+	log.Infof("[TUN] createUTUN OK: fd=%d ifName=%s", fd, ifName)
 
-	defer func() {
-		if err != nil {
-			tun.Close()
-		}
-	}()
-
-	fd := extractFD(tun)
-
-	log.Infof("Tun successful")
-
-	tunDev := &tunDevice{
-		Interface: tun,
-		name:      tun.Name(),
-		fd:        fd,
+	if fd <= 0 {
+		return nil, fmt.Errorf("invalid fd: %d", fd)
 	}
 
-	addTunRoute := fmt.Sprintf("sudo ifconfig %s inet 169.254.19.0 169.254.19.0 netmask 255.255.255.0", tun.Name())
-	if _, err := routing.ExecuteCommand(addTunRoute); err != nil {
-		return nil, fmt.Errorf("failed to add tun route: %w", err)
+	file := os.NewFile(uintptr(fd), ifName)
+
+	if file == nil {
+		return nil, fmt.Errorf("failed to wrap fd into os.File")
 	}
 
-	log.Infof("TUN device %s is configured with IP %s\n", tunDev.Interface.Name(), "10.0.85.2")
-	return tunDev, nil
+	tun := &tunDevice{
+		file: file,
+		name: ifName,
+		fd:   fd,
+	}
+
+	log.Infof("[TUN] created %s (fd=%d)", ifName, fd)
+
+	// Проверим интерфейс до настройки
+	cmdCheck := exec.Command("ifconfig", ifName)
+	outCheck, _ := cmdCheck.CombinedOutput()
+	log.Infof("[TUN] ifconfig BEFORE:\n%s", outCheck)
+
+	// Настраиваем IP
+	log.Infof("[TUN] configuring interface %s...", ifName)
+
+	cmd := exec.Command("ifconfig", ifName, ip, "10.0.85.1", "up")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Infof("[TUN] ifconfig FAILED: %s", out)
+		return nil, fmt.Errorf("ifconfig failed: %w (%s)", err, out)
+	}
+
+	log.Infof("[TUN] ifconfig OK: %s", out)
+
+	// Проверим после настройки
+	cmdCheck2 := exec.Command("ifconfig", ifName)
+	outCheck2, _ := cmdCheck2.CombinedOutput()
+	log.Infof("[TUN] ifconfig AFTER:\n%s", outCheck2)
+
+	log.Infof("[TUN] ====== SUCCESS newTunDevice ======")
+
+	return tun, nil
 }
 
-func (d *tunDevice) MTU() int {
+func createUTUN(name string) (int, string, error) {
+
+	log.Infof("[UTUN] creating utun...")
+
+	fd, err := unix.Socket(unix.AF_SYSTEM, unix.SOCK_DGRAM, 2)
+	if err != nil {
+		log.Infof("[UTUN] socket FAILED: %v", err)
+		return -1, "", err
+	}
+	log.Infof("[UTUN] socket OK fd=%d", fd)
+
+	ctlInfo := &unix.CtlInfo{}
+	copy(ctlInfo.Name[:], []byte(utunControlName))
+
+	log.Infof("[UTUN] ioctl ctl info...")
+
+	if err := unix.IoctlCtlInfo(fd, ctlInfo); err != nil {
+		log.Infof("[UTUN] IoctlCtlInfo FAILED: %v", err)
+		unix.Close(fd)
+		return -1, "", err
+	}
+
+	log.Infof("[UTUN] ctlInfo.Id=%d", ctlInfo.Id)
+
+	sc := &unix.SockaddrCtl{
+		ID: ctlInfo.Id,
+	}
+
+	log.Infof("[UTUN] connecting to kernel control...")
+
+	if err := unix.Connect(fd, sc); err != nil {
+		log.Infof("[UTUN] connect FAILED: %v", err)
+		unix.Close(fd)
+		return -1, "", err
+	}
+
+	log.Infof("[UTUN] connect OK")
+
+	// Получаем имя интерфейса
+	log.Infof("[UTUN] getting interface name...")
+
+	ifName, err := unix.GetsockoptString(
+		fd,
+		2,
+		2, // UTUN_OPT_IFNAME
+	)
+	if err != nil {
+		log.Infof("[UTUN] GetsockoptString FAILED: %v", err)
+		unix.Close(fd)
+		return -1, "", err
+	}
+
+	log.Infof("[UTUN] interface name = %s", ifName)
+
+	// ⚠️ временно оставим, но будем видеть эффект
+	if err := unix.SetNonblock(fd, true); err != nil {
+		log.Infof("[UTUN] SetNonblock FAILED: %v", err)
+		unix.Close(fd)
+		return -1, "", err
+	}
+
+	log.Infof("[UTUN] set nonblock OK")
+
+	log.Infof("[UTUN] ====== SUCCESS createUTUN ======")
+
+	return fd, ifName, nil
+}
+
+func (t *tunDevice) Read(p []byte) (int, error) {
+	n, err := t.file.Read(p)
+	if err != nil {
+		log.Infof("[TUN] READ error: %v", err)
+		return n, err
+	}
+
+	if n > 0 {
+		log.Infof("[TUN] READ %d bytes", n)
+	}
+
+	return n, nil
+}
+
+func (t *tunDevice) Write(p []byte) (int, error) {
+	n, err := t.file.Write(p)
+	if err != nil {
+		log.Infof("[TUN] WRITE error: %v", err)
+		return n, err
+	}
+
+	if n > 0 {
+		log.Infof("[TUN] WRITE %d bytes", n)
+	}
+
+	return n, nil
+}
+
+func (t *tunDevice) Close() error {
+	var err error
+	t.closeOnce.Do(func() {
+		log.Infof("[TUN] closing %s (fd=%d)", t.name, t.fd)
+		err = t.file.Close()
+	})
+	return err
+}
+
+func (t *tunDevice) MTU() int {
 	return 1500
 }
 
-func (d *tunDevice) configureSubnet(ip string) error {
-	log.Infof("Configuring subnet for TUN device %s with IP %s\n", d.name, ip)
-	cmd := exec.Command("ifconfig", d.name, ip, "netmask", "255.255.255.0", "up")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to configure subnet: %w, output: %s", err, output)
-	}
-
-	log.Infof("Subnet configuration completed for TUN device %s\n", d.name)
-	return nil
-}
-
-func (d *tunDevice) bringUp() error {
-	log.Infof("Bringing up TUN device %s\n", d.name)
-	cmd := exec.Command("ifconfig", d.name, "up")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to bring up device: %w, output: %s", err, output)
-	}
-	log.Infof("TUN device %s is now active\n", d.name)
-	return nil
-}
-
-func extractFD(iface *water.Interface) int {
-	val := reflect.ValueOf(iface.ReadWriteCloser)
-	if val.Kind() == reflect.Ptr {
-		val = val.Elem()
-	}
-
-	for i := 0; i < val.NumField(); i++ {
-		log.Infof("field: %s type=%s", val.Type().Field(i).Name, val.Field(i).Type())
-	}
-
-	fileField := val.FieldByName("file")
-	if !fileField.IsValid() {
-		return -1
-	}
-
-	file, ok := fileField.Interface().(*os.File)
-	if !ok {
-		return -1
-	}
-
-	return int(file.Fd())
-}
-
-func (d *tunDevice) GetFd() int {
-	return d.fd
+func (t *tunDevice) GetFd() int {
+	log.Infof("[TUN] GetFd called -> %d", t.fd)
+	return t.fd
 }

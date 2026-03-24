@@ -5,7 +5,6 @@ package internal
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"go_client/log"
 	"sync"
@@ -39,12 +38,6 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	}
 
 	log.Infof("gatewayIP: %s", gatewayIP.String())
-
-	if !checkRoot() {
-		err := errors.New("this operation requires superuser privileges. Please run the program with sudo or as root")
-		signalInit(initResult, err)
-		return err
-	}
 
 	log.Infof("[Routing] Pre-resolving server IP from config...")
 	serverIP, err := ResolveServerIPFromConfig(*app.TransportConfig)
