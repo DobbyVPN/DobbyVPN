@@ -16,6 +16,13 @@ import (
 
 const utunControlName = "com.apple.net.utun_control"
 
+// ВАЖНО: разные IP!
+const (
+	tunLocalIP = "169.254.19.1"
+	tunPeerIP  = "169.254.19.2"
+	tunMask    = "255.255.255.0"
+)
+
 type tunDevice struct {
 	file *os.File
 	name string
@@ -28,15 +35,11 @@ var _ network.IPDevice = (*tunDevice)(nil)
 
 func newTunDevice(name, ip string) (network.IPDevice, error) {
 	log.Infof("[TUN] ====== START newTunDevice ======")
-	log.Infof("[TUN] requested name=%s ip=%s", name, ip)
 
 	fd, ifName, err := createUTUN(name)
 	if err != nil {
-		log.Infof("[TUN] createUTUN FAILED: %v", err)
 		return nil, err
 	}
-
-	log.Infof("[TUN] createUTUN OK: fd=%d ifName=%s", fd, ifName)
 
 	if fd <= 0 {
 		return nil, fmt.Errorf("invalid fd: %d", fd)
@@ -45,7 +48,7 @@ func newTunDevice(name, ip string) (network.IPDevice, error) {
 	file := os.NewFile(uintptr(fd), ifName)
 	if file == nil {
 		unix.Close(fd)
-		return nil, fmt.Errorf("failed to wrap fd into os.File")
+		return nil, fmt.Errorf("failed to wrap fd")
 	}
 
 	tun := &tunDevice{
@@ -56,122 +59,76 @@ func newTunDevice(name, ip string) (network.IPDevice, error) {
 
 	log.Infof("[TUN] created %s (fd=%d)", ifName, fd)
 
-	cmdCheck := exec.Command("ifconfig", ifName)
-	outCheck, _ := cmdCheck.CombinedOutput()
-	log.Infof("[TUN] ifconfig BEFORE:\n%s", string(outCheck))
+	// BEFORE
+	outBefore, _ := exec.Command("ifconfig", ifName).CombinedOutput()
+	log.Infof("[TUN] BEFORE:\n%s", string(outBefore))
 
-	log.Infof("[TUN] configuring interface %s as 169.254 link-local...", ifName)
-
+	// КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ
 	cmd := exec.Command(
 		"ifconfig",
 		ifName,
 		"inet",
-		"169.254.19.0",
-		"169.254.19.0",
+		tunLocalIP,
+		tunPeerIP,
 		"netmask",
-		"255.255.255.0",
+		tunMask,
 		"up",
 	)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		_ = tun.Close()
-		log.Infof("[TUN] ifconfig FAILED: %s", string(out))
 		return nil, fmt.Errorf("ifconfig failed: %w (%s)", err, string(out))
 	}
 
-	log.Infof("[TUN] ifconfig OK: %s", string(out))
+	log.Infof("[TUN] configured %s: %s -> %s", ifName, tunLocalIP, tunPeerIP)
 
-	cmdCheck2 := exec.Command("ifconfig", ifName)
-	outCheck2, _ := cmdCheck2.CombinedOutput()
-	log.Infof("[TUN] ifconfig AFTER:\n%s", string(outCheck2))
+	// AFTER
+	outAfter, _ := exec.Command("ifconfig", ifName).CombinedOutput()
+	log.Infof("[TUN] AFTER:\n%s", string(outAfter))
 
-	log.Infof("[TUN] ====== SUCCESS newTunDevice ======")
+	log.Infof("[TUN] ====== SUCCESS ======")
 	return tun, nil
 }
 
 func createUTUN(name string) (int, string, error) {
-
-	log.Infof("[UTUN] creating utun...")
-
 	fd, err := unix.Socket(unix.AF_SYSTEM, unix.SOCK_DGRAM, 2)
 	if err != nil {
-		log.Infof("[UTUN] socket FAILED: %v", err)
 		return -1, "", err
 	}
-	log.Infof("[UTUN] socket OK fd=%d", fd)
 
 	ctlInfo := &unix.CtlInfo{}
 	copy(ctlInfo.Name[:], []byte(utunControlName))
 
-	log.Infof("[UTUN] ioctl ctl info...")
-
 	if err := unix.IoctlCtlInfo(fd, ctlInfo); err != nil {
-		log.Infof("[UTUN] IoctlCtlInfo FAILED: %v", err)
 		unix.Close(fd)
 		return -1, "", err
 	}
-
-	log.Infof("[UTUN] ctlInfo.Id=%d", ctlInfo.Id)
 
 	sc := &unix.SockaddrCtl{
 		ID: ctlInfo.Id,
 	}
 
-	log.Infof("[UTUN] connecting to kernel control...")
-
 	if err := unix.Connect(fd, sc); err != nil {
-		log.Infof("[UTUN] connect FAILED: %v", err)
 		unix.Close(fd)
 		return -1, "", err
 	}
 
-	log.Infof("[UTUN] connect OK")
-
-	ifName, err := unix.GetsockoptString(
-		fd,
-		2,
-		2, // UTUN_OPT_IFNAME
-	)
+	ifName, err := unix.GetsockoptString(fd, 2, 2)
 	if err != nil {
-		log.Infof("[UTUN] GetsockoptString FAILED: %v", err)
 		unix.Close(fd)
 		return -1, "", err
 	}
-
-	log.Infof("[UTUN] interface name = %s", ifName)
-
-	log.Infof("[UTUN] ====== SUCCESS createUTUN ======")
 
 	return fd, ifName, nil
 }
 
 func (t *tunDevice) Read(p []byte) (int, error) {
-	n, err := t.file.Read(p)
-	if err != nil {
-		log.Infof("[TUN] READ error: %v", err)
-		return n, err
-	}
-
-	if n > 0 {
-		log.Infof("[TUN] READ %d bytes", n)
-	}
-
-	return n, nil
+	return t.file.Read(p)
 }
 
 func (t *tunDevice) Write(p []byte) (int, error) {
-	n, err := t.file.Write(p)
-	if err != nil {
-		log.Infof("[TUN] WRITE error: %v", err)
-		return n, err
-	}
-
-	if n > 0 {
-		log.Infof("[TUN] WRITE %d bytes", n)
-	}
-
-	return n, nil
+	return t.file.Write(p)
 }
 
 func (t *tunDevice) Close() error {
@@ -188,6 +145,5 @@ func (t *tunDevice) MTU() int {
 }
 
 func (t *tunDevice) GetFd() int {
-	log.Infof("[TUN] GetFd called -> %d", t.fd)
 	return t.fd
 }

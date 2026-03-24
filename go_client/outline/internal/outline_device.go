@@ -148,9 +148,8 @@ func (c *truncatedDNSConn) Read(b []byte) (int, error) {
 	resp[6] = 0
 	resp[7] = 0
 
-	copy(b, resp)
-
-	return len(resp), nil
+	n := copy(b, resp)
+	return n, nil
 }
 
 func (c *truncatedDNSConn) Write(b []byte) (int, error) {

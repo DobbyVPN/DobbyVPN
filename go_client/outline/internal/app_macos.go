@@ -48,7 +48,12 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	if serverIP.String() != "127.0.0.1" {
 		log.Infof("[Routing] Adding early route for server %s via %s", serverIP.String(), gatewayIP.String())
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
-		routing.AddProxyRoute(serverIP.String(), gatewayIP.String())
+		if err := routing.AddProxyRoute(serverIP.String(), gatewayIP.String()); err != nil {
+			common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+			err = fmt.Errorf("failed to add early route for server: %w", err)
+			signalInit(initResult, err)
+			return err
+		}
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 		log.Infof("[Routing] Early server route added successfully")
 	} else {
@@ -106,8 +111,9 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	if t, ok := tun.(interface{ GetFd() int }); ok {
 		fd = t.GetFd()
 	} else {
-		signalInit(initResult, fmt.Errorf("could not get file descriptor for TUN"))
-		return nil
+		err = fmt.Errorf("could not get file descriptor for TUN")
+		signalInit(initResult, err)
+		return err
 	}
 
 	log.Infof("[Tunnel] Starting tun2socks engine...")
