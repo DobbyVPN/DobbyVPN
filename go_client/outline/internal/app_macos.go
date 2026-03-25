@@ -105,6 +105,9 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("[Tunnel] Starting tun2socks (darwin mode)...")
 
+	tunnel.CustomProtectedDialer = tunnel.DialContextWithProtect
+	tunnel.CustomProtectedPacketDialer = tunnel.DialUDPWithProtect
+
 	tunName, err := tunnel.StartEngineDarwin(ss.GetProxyAddr())
 	if err != nil {
 		signalInit(initResult, err)
