@@ -228,6 +228,9 @@ func StartEngineDarwin(proxyAddr string) (string, error) {
 
 	engine.Insert(key)
 
+	CustomProtectedDialer = DialContextWithProtect
+	CustomProtectedPacketDialer = DialUDPWithProtect
+
 	log.Infof("[Engine] Starting tun2socks (utun mode)...")
 	engine.Start()
 

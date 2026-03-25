@@ -98,6 +98,11 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("Outline/app: Start trafficCopyWg...\n")
 
+	idx, err := tunnel.GetDefaultInterfaceIndexDarwin()
+	if err == nil {
+		tunnel.SetDefaultInterfaceIndex(idx)
+	}
+
 	log.Infof("[Tunnel] Starting tun2socks (darwin mode)...")
 
 	tunName, err := tunnel.StartEngineDarwin(ss.GetProxyAddr())
