@@ -60,18 +60,10 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		log.Infof("[Routing] Skipping early route for localhost (Cloak mode)")
 	}
 
-	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
-	if err != nil {
-		err = fmt.Errorf("failed to create tun device: %w, open app with sudo", err)
-		signalInit(initResult, err)
-		return err
-	}
-
 	log.Infof("Tun created")
 
 	ss, err := NewOutlineDevice(*app.TransportConfig)
 	if err != nil {
-		_ = tun.Close()
 		err = fmt.Errorf("failed to create OutlineDevice: %w", err)
 		signalInit(initResult, err)
 		return err
@@ -85,7 +77,6 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 			log.Infof("[Outline] Closing interfaces")
 			tunnel.StopEngine()
 			_ = ss.Close()
-			_ = tun.Close()
 		})
 	}
 

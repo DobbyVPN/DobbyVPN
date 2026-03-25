@@ -217,8 +217,6 @@ func StartEngineDarwin(proxyAddr string) (string, error) {
 	}
 
 	proxyURL := fmt.Sprintf("socks5://%s", proxyAddr)
-
-	// 👇 ВАЖНО: utun без fd
 	deviceName := "utun233"
 
 	key := &engine.Key{
@@ -233,10 +231,9 @@ func StartEngineDarwin(proxyAddr string) (string, error) {
 	log.Infof("[Engine] Starting tun2socks (utun mode)...")
 	engine.Start()
 
-	// ⚠️ utun появляется не сразу
 	time.Sleep(500 * time.Millisecond)
 
-	// Проверим интерфейс
+	// Проверка интерфейса
 	ifaces, _ := net.Interfaces()
 	found := false
 	for _, ifc := range ifaces {
@@ -253,13 +250,13 @@ func StartEngineDarwin(proxyAddr string) (string, error) {
 
 	log.Infof("[Engine] utun created: %s", deviceName)
 
-	// --- НАСТРОЙКА IP ---
+	// ✅ FIX: нормальный peer
 	cmd := exec.Command(
 		"ifconfig",
 		deviceName,
 		"inet",
 		"198.18.0.1",
-		"198.18.0.1",
+		"198.18.0.2",
 		"netmask",
 		"255.255.0.0",
 		"up",
@@ -273,7 +270,6 @@ func StartEngineDarwin(proxyAddr string) (string, error) {
 
 	log.Infof("[Engine] utun configured: %s", deviceName)
 
-	// --- Оборачиваем dialer ---
 	currentDialer := tunnel.T().Dialer()
 	vpnOutbound, ok := currentDialer.(proxy.Proxy)
 	if !ok {
