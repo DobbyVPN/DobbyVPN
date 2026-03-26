@@ -51,7 +51,7 @@ class OutlineGo {
         @Throws(IllegalStateException::class)
         fun ensureLibrariesLoaded() {
             if (!isLibrariesLoaded) {
-                throw IllegalStateException("Libraries not loaded. Call loadLibraries() first")
+                error("Libraries not loaded. Call loadLibraries() first")
             }
         }
 

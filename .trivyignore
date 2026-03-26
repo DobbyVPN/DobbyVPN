@@ -1,0 +1,7 @@
+# Trivy ignore file
+# https://aquasecurity.github.io/trivy/latest/docs/configuration/filtering/#by-finding-ids
+
+# golang.org/x/crypto/ssh vulnerabilities - not applicable
+# AWG uses crypto for WireGuard, not SSH
+CVE-2024-45337
+CVE-2025-22869
