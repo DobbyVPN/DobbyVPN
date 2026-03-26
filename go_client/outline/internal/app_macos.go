@@ -98,9 +98,11 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("Outline/app: Start trafficCopyWg...\n")
 
-	idx, err := tunnel.GetDefaultInterfaceIndexDarwin()
-	if err == nil {
-		tunnel.SetDefaultInterfaceIndex(idx)
+	idx, ip, err := tunnel.GetDefaultInterfaceDarwin()
+	if err != nil {
+		log.Infof("[Darwin-Protect] failed to get default interface: %v", err)
+	} else {
+		tunnel.SetDefaultInterface(idx, ip)
 	}
 
 	log.Infof("[Tunnel] Starting tun2socks (darwin mode)...")

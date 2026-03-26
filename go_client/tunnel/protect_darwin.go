@@ -18,31 +18,55 @@ const (
 	IPV6_BOUND_IF = 125
 )
 
-var defaultInterfaceIndex int
+var (
+	defaultInterfaceIndex int
+	defaultInterfaceIP    net.IP
+)
 
-func GetDefaultInterfaceIndexDarwin() (int, error) {
+// --- INIT ---
+
+func GetDefaultInterfaceDarwin() (int, net.IP, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagUp != 0 &&
 			iface.Flags&net.FlagLoopback == 0 &&
-			!strings.HasPrefix(iface.Name, "utun") {
+			!strings.HasPrefix(iface.Name, "utun") &&
+			!strings.HasPrefix(iface.Name, "awdl") &&
+			!strings.HasPrefix(iface.Name, "llw") &&
+			!strings.HasPrefix(iface.Name, "bridge") {
 
-			return iface.Index, nil
+			addrs, err := iface.Addrs()
+			if err != nil {
+				continue
+			}
+
+			for _, addr := range addrs {
+				if ipnet, ok := addr.(*net.IPNet); ok {
+					if ipnet.IP.To4() != nil {
+						log.Infof("[Darwin-Protect] Selected iface=%s index=%d ip=%s",
+							iface.Name, iface.Index, ipnet.IP.String())
+						return iface.Index, ipnet.IP, nil
+					}
+				}
+			}
 		}
 	}
 
-	return 0, fmt.Errorf("no active interface found")
+	return 0, nil, fmt.Errorf("no suitable interface found")
 }
 
-// вызывается один раз
-func SetDefaultInterfaceIndex(idx int) {
+func SetDefaultInterface(idx int, ip net.IP) {
 	defaultInterfaceIndex = idx
-	log.Infof("[Darwin-Protect] Using interface index: %d", idx)
+	defaultInterfaceIP = ip
+
+	log.Infof("[Darwin-Protect] Using interface index=%d ip=%s", idx, ip)
 }
+
+// --- SOCKET PROTECT ---
 
 func protectSocket(fd uintptr, network string) {
 	if defaultInterfaceIndex == 0 {
@@ -81,6 +105,8 @@ func protectSocket(fd uintptr, network string) {
 	}
 }
 
+// --- HELPERS ---
+
 func normalizeTCP(address string) string {
 	host, _, _ := net.SplitHostPort(address)
 	ip := net.ParseIP(host)
@@ -99,7 +125,19 @@ func normalizeUDP(address string) string {
 	return "udp4"
 }
 
+// --- TCP ---
+
 func DialContextWithProtect(ctx context.Context, network, address string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(address)
+	if err == nil {
+		ip := net.ParseIP(host)
+		if ip != nil && ip.IsLoopback() {
+			log.Infof("[Darwin-Protect] skip protect for loopback %s", address)
+			var d net.Dialer
+			return d.DialContext(ctx, normalizeTCP(address), address)
+		}
+	}
+
 	realNet := normalizeTCP(address)
 
 	d := &net.Dialer{
@@ -110,10 +148,54 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 		},
 	}
 
+	// 🔥 КРИТИЧНО: фикс source IP
+	if defaultInterfaceIP != nil {
+		if realNet == "tcp4" && defaultInterfaceIP.To4() != nil {
+			d.LocalAddr = &net.TCPAddr{IP: defaultInterfaceIP}
+		}
+		if realNet == "tcp6" && defaultInterfaceIP.To16() != nil && defaultInterfaceIP.To4() == nil {
+			d.LocalAddr = &net.TCPAddr{IP: defaultInterfaceIP}
+		}
+	}
+
 	return d.DialContext(ctx, realNet, address)
 }
 
+// --- UDP ---
+
 func DialUDPWithProtect(ctx context.Context, network, address string) (net.PacketConn, error) {
+	host, _, err := net.SplitHostPort(address)
+	if err == nil {
+		ip := net.ParseIP(host)
+		if ip != nil && ip.IsLoopback() {
+			log.Infof("[Darwin-Protect] skip protect for loopback UDP %s", address)
+
+			realNet := normalizeUDP(address)
+			lc := net.ListenConfig{}
+
+			listenAddr := "0.0.0.0:0"
+			if realNet == "udp6" {
+				listenAddr = "[::]:0"
+			}
+
+			pc, err := lc.ListenPacket(ctx, realNet, listenAddr)
+			if err != nil {
+				return nil, err
+			}
+
+			udpAddr, err := net.ResolveUDPAddr(realNet, address)
+			if err != nil {
+				_ = pc.Close()
+				return nil, err
+			}
+
+			return &connectedUDPConn{
+				PacketConn: pc,
+				remoteAddr: udpAddr,
+			}, nil
+		}
+	}
+
 	realNet := normalizeUDP(address)
 
 	lc := net.ListenConfig{
@@ -124,12 +206,22 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 		},
 	}
 
-	addr := "0.0.0.0:0"
-	if realNet == "udp6" {
-		addr = "[::]:0"
+	listenAddr := "0.0.0.0:0"
+
+	if defaultInterfaceIP != nil {
+		if realNet == "udp4" && defaultInterfaceIP.To4() != nil {
+			listenAddr = defaultInterfaceIP.String() + ":0"
+		}
+		if realNet == "udp6" && defaultInterfaceIP.To16() != nil && defaultInterfaceIP.To4() == nil {
+			listenAddr = "[" + defaultInterfaceIP.String() + "]:0"
+		}
+	} else {
+		if realNet == "udp6" {
+			listenAddr = "[::]:0"
+		}
 	}
 
-	pc, err := lc.ListenPacket(ctx, realNet, addr)
+	pc, err := lc.ListenPacket(ctx, realNet, listenAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +237,8 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 		remoteAddr: udpAddr,
 	}, nil
 }
+
+// --- CONNECTED UDP ---
 
 type connectedUDPConn struct {
 	net.PacketConn
