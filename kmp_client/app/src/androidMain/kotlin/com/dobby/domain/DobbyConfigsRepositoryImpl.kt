@@ -191,6 +191,35 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun getXrayConfig(): String {
+        return (prefs.getString("xrayConfig", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getXrayConfig, size = ${it.length}")
+        }
+    }
+
+    override fun setXrayConfig(newConfig: String) {
+        prefs.edit().putString("xrayConfig", newConfig).apply().also {
+            AndroidLog("DOBBY_TAG", "setXrayConfig, size = ${newConfig.length}")
+        }
+    }
+
+    override fun getIsXrayEnabled(): Boolean {
+        return prefs.getBoolean("isXrayEnabled", false).also {
+            AndroidLog("DOBBY_TAG", "getIsXrayEnabled = $it")
+        }
+    }
+
+    override fun setIsXrayEnabled(isXrayEnabled: Boolean) {
+        if (isXrayEnabled) {
+            setVpnInterface(VpnInterface.XRAY) // TODO (find other place for this command?)
+        } else {
+            setVpnInterface(VpnInterface.DEFAULT_VALUE)
+        }
+        prefs.edit().putBoolean("isXrayEnabled", isXrayEnabled).apply().also {
+            AndroidLog("DOBBY_TAG", "setIsXrayEnabled = $isXrayEnabled")
+        }
+    }
+
     override fun couldStart(): Boolean {
         return true
     }
