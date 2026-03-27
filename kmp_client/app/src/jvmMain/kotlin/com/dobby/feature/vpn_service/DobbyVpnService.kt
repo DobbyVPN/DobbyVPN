@@ -81,6 +81,7 @@ internal class DobbyVpnService(
             when (iface) {
                 VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
                 VpnInterface.AMNEZIA_WG -> startAwg()
+                VpnInterface.TRUST_TUNNEL -> startTrustTunnel()
             }
             runningInterface = iface
         }
@@ -96,6 +97,7 @@ internal class DobbyVpnService(
         when (runningInterface) {
             VpnInterface.CLOAK_OUTLINE -> stopCloakOutline()
             VpnInterface.AMNEZIA_WG -> stopAwg()
+            VpnInterface.TRUST_TUNNEL -> stopTrustTunnel()
             null -> return
         }
         runningInterface = null
@@ -163,4 +165,20 @@ internal class DobbyVpnService(
         runBlocking { connectionState.updateVpnStarted(isStarted = false) }
     }
 
+    private fun startTrustTunnel() {
+        val config = dobbyConfigsRepository.getTrustTunnelConfig()
+        logger.log("startTrustTunnel with config length: ${config.length}")
+        if (config.isEmpty()) {
+            logger.log("TrustTunnel config is empty, cannot start")
+            return
+        }
+        runBlocking { connectionState.updateVpnStarted(isStarted = true) }
+        vpnLibrary.startTrustTunnel(config)
+    }
+
+    private fun stopTrustTunnel() {
+        logger.log("stopTrustTunnel")
+        vpnLibrary.stopTrustTunnel()
+        runBlocking { connectionState.updateVpnStarted(isStarted = false) }
+    }
 }

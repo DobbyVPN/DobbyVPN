@@ -1,6 +1,7 @@
 package com.dobby.feature.main.domain
 
 import kotlinx.serialization.Serializable
+import net.peanuuutz.tomlkt.TomlElement
 
 @Serializable
 data class OutlineConfig(
@@ -48,8 +49,21 @@ data class CloakClientConfig(
 )
 
 @Serializable
+data class TrustTunnelClientConfig(
+    val loglevel: String? = null,
+    val vpn_mode: String? = null,
+    val killswitch_enabled: Boolean? = null,
+    val endpoint: TomlElement? = null,    // Contains hostname, addresses, credentials
+    val listener: TomlElement? = null,    // Contains tun/socks5 settings
+    val dns_upstreams: TomlElement? = null,
+    val exclusions: TomlElement? = null
+)
+
+
+@Serializable
 data class TomlConfigs(
     // Optional top-level label (some configs put it outside [Outline]); ignored by the app.
     val Description: String? = null,
     val Outline: OutlineConfig? = null,
+    val TrustTunnel: TrustTunnelClientConfig? = null,
 )

@@ -20,6 +20,11 @@ fun DobbyConfigsRepositoryAwg.clearAwgConfig() {
     setAwgConfig("")
 }
 
+fun DobbyConfigsRepositoryTrustTunnel.clearTrustTunnelConfig() {
+    setIsTrustTunnelEnabled(false)
+    setTrustTunnelConfig("")
+}
+
 fun DobbyConfigsRepository.clearOutlineAndCloakConfig() {
     clearOutlineConfig()
     clearCloakConfig()

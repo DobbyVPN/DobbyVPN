@@ -113,3 +113,26 @@ Java_com_dobby_outline_OutlineGo_checkServerAlive(JNIEnv *env, jclass clazz,
     (*env)->ReleaseStringUTFChars(env, jAddress, address);
     return res;
 }
+
+JNIEXPORT void JNICALL
+Java_com_dobby_outline_OutlineGo_newTrustTunnelClient(JNIEnv *env, jclass clazz, jstring jConfig, jint jFd)
+{
+    const char *config_str = (*env)->GetStringUTFChars(env, jConfig, NULL);
+    // Go Export: NewTrustTunnelClient(config, fd)
+    NewTrustTunnelClient((char*)config_str, jFd);
+    (*env)->ReleaseStringUTFChars(env, jConfig, config_str);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_dobby_outline_OutlineGo_trustTunnelConnect(JNIEnv *env, jclass clazz)
+{
+    // Go Export: TrustTunnelConnect() returns 0 on success, -1 on error
+    return TrustTunnelConnect();
+}
+
+JNIEXPORT void JNICALL
+Java_com_dobby_outline_OutlineGo_trustTunnelDisconnect(JNIEnv *env, jclass clazz)
+{
+    // Call Go-exported function to disconnect TrustTunnel
+    TrustTunnelDisconnect();
+}

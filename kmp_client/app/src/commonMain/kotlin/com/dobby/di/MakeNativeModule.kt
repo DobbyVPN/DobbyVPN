@@ -6,6 +6,7 @@ import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.AwgManager
 import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
+import com.dobby.feature.main.domain.DobbyConfigsRepositoryTrustTunnel
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryAwg
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryCloak
@@ -39,6 +40,7 @@ fun makeNativeModule(
         single<DobbyConfigsRepositoryOutline> { get<DobbyConfigsRepository>() }
         single<DobbyConfigsRepositoryCloak> { get<DobbyConfigsRepository>() }
         single<DobbyConfigsRepositoryAwg> { get<DobbyConfigsRepository>() }
+        single<DobbyConfigsRepositoryTrustTunnel> { get<DobbyConfigsRepository>() }
         single { healthCheck() }
     }
 }

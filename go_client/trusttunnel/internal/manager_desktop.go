@@ -1,6 +1,7 @@
 //go:build !(android || ios)
+// +build !android,!ios
 
-package trusttunnel
+package internal
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/dobby_bridge
@@ -51,18 +52,27 @@ func go_log_message(level C.int, msg *C.char) {
 	}
 }
 
-type TrustTunnelManager struct{}
+//export go_protect_socket
+func go_protect_socket(fd C.int) C.int {
+	return 0
+}
 
-func NewTrustTunnelManager() *TrustTunnelManager {
-	return &TrustTunnelManager{}
+type TrustTunnelManager struct {
+	tomlConfig string
+}
+
+func NewTrustTunnelManager(tomlConfig string) *TrustTunnelManager {
+	return &TrustTunnelManager{
+		tomlConfig: tomlConfig,
+	}
 }
 
 // Start launches the VPN with the given TOML configuration.
-func (m *TrustTunnelManager) Start(tomlConfig string) error {
+func (m *TrustTunnelManager) Start() error {
 	// Hook the logger BEFORE starting the engine
 	C.dobby_vpn_set_log_callback((C.dobby_on_log_message_t)(C.c_log_message))
 
-	cConfig := C.CString(tomlConfig)
+	cConfig := C.CString(m.tomlConfig)
 	defer C.free(unsafe.Pointer(cConfig))
 
 	// Pass the TOML string, the bridged C callback, and a nil pointer for the argument

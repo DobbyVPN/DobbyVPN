@@ -238,5 +238,62 @@ class OutlineGo {
                 -1
             }
         }
+
+        /**
+         * Creates a new TrustTunnel client with the provided config and TUN file descriptor.
+         * @throws IllegalStateException if libraries are not loaded
+         */
+        @JvmStatic
+        @Throws(IllegalStateException::class)
+        external fun newTrustTunnelClient(config: String, tunFd: Int): Unit
+
+        /**
+         * Connects the TrustTunnel client.
+         * @return 0 on success, -1 on error
+         */
+        @JvmStatic
+        @Throws(IllegalStateException::class)
+        external fun trustTunnelConnect(): Int
+
+        /**
+         * Disconnects the TrustTunnel client.
+         */
+        @JvmStatic
+        @Throws(IllegalStateException::class)
+        external fun trustTunnelDisconnect(): Unit
+
+        suspend fun safeNewTrustTunnelClient(config: String, tunFd: Int): Boolean = withContext(Dispatchers.IO) {
+            try {
+                if (!isLibrariesLoaded && !loadLibraries()) {
+                    return@withContext false
+                }
+                newTrustTunnelClient(config, tunFd)
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create TrustTunnel client", e)
+                false
+            }
+        }
+
+        suspend fun safeTrustTunnelConnect(): Int = withContext(Dispatchers.IO) {
+            try {
+                ensureLibrariesLoaded()
+                trustTunnelConnect()
+            } catch (e: Exception) {
+                Log.e(TAG, "TrustTunnelConnect failed with exception", e)
+                -1
+            }
+        }
+
+        suspend fun safeTrustTunnelDisconnect(): Int = withContext(Dispatchers.IO) {
+            try {
+                ensureLibrariesLoaded()
+                trustTunnelDisconnect()
+                0
+            } catch (e: Exception) {
+                Log.e(TAG, "TrustTunnelDisconnect failed", e)
+                -1
+            }
+        }
     }
 }

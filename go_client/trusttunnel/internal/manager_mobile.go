@@ -1,6 +1,7 @@
 //go:build android || ios
+// +build android ios
 
-package trusttunnel
+package internal
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/dobby_bridge
@@ -74,18 +75,24 @@ func go_log_message(level C.int, msg *C.char) {
 	}
 }
 
-type TrustTunnelManager struct{}
-
-func NewTrustTunnelManager() *TrustTunnelManager {
-	return &TrustTunnelManager{}
+type TrustTunnelManager struct {
+	tomlConfig string
+	fd         int
 }
 
-func (m *TrustTunnelManager) Start(tomlConfig string) error {
+func NewTrustTunnelManager(tomlConfig string, fd int) *TrustTunnelManager {
+	return &TrustTunnelManager{
+		tomlConfig: tomlConfig,
+		fd:         fd,
+	}
+}
+
+func (m *TrustTunnelManager) Start() error {
 	// Register the global mobile callbacks
 	C.dobby_vpn_set_log_callback((C.dobby_on_log_message_t)(C.c_log_cb))
 	C.dobby_vpn_set_protect_callback((C.dobby_on_protect_socket_t)(C.c_protect_cb))
 
-	cConfig := C.CString(tomlConfig)
+	cConfig := C.CString(m.tomlConfig)
 	defer C.free(unsafe.Pointer(cConfig))
 
 	C.dobby_vpn_start(cConfig, (C.dobby_on_state_changed_t)(C.c_state_changed_cb), nil)

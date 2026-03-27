@@ -3,7 +3,8 @@ package com.dobby.feature.main.domain
 interface DobbyConfigsRepository :
     DobbyConfigsRepositoryOutline,
     DobbyConfigsRepositoryCloak,
-    DobbyConfigsRepositoryAwg {
+    DobbyConfigsRepositoryAwg,
+    DobbyConfigsRepositoryTrustTunnel {
 
     // region global configs
 
@@ -30,7 +31,8 @@ interface DobbyConfigsRepository :
 
 enum class VpnInterface {
     CLOAK_OUTLINE,
-    AMNEZIA_WG;
+    AMNEZIA_WG,
+    TRUST_TUNNEL;
 
     companion object {
         val DEFAULT_VALUE = CLOAK_OUTLINE

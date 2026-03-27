@@ -21,6 +21,10 @@ interface VPNLibrary : Library {
     fun StartAwg(key: String)
     fun StopAwg()
 
+    // TrustTunnel
+    fun StartTrustTunnel(config: String)
+    fun StopTrustTunnel()
+
     // Healthcheck
     fun CouldStart(): Boolean
 
@@ -148,6 +152,39 @@ class VPNLibraryLoader(
         } catch (e: Exception) {
             logger.log("An error occurred while calling StopOutline: ${e.message}")
             e.printStackTrace()
+        }
+    }
+
+    fun startTrustTunnel(config: String): Boolean {
+        try {
+            logger.log("Run config: ${maskStr(config)}")
+            INSTANCE.StartTrustTunnel(config)
+            logger.log("StartTrustTunnel called successfully.")
+            return true
+        } catch (e: UnsatisfiedLinkError) {
+            logger.log("Failed to call StartTrustTunnel: ${e.message}")
+            e.printStackTrace()
+            return false
+        } catch (e: Exception) {
+            logger.log("An error occurred while calling StartTrustTunnel: ${e.message}")
+            e.printStackTrace()
+            return false
+        }
+    }
+
+    fun stopTrustTunnel(): Boolean {
+        try {
+            INSTANCE.StopTrustTunnel()
+            logger.log("StopTrustTunnel called successfully.")
+            return true
+        } catch (e: UnsatisfiedLinkError) {
+            logger.log("Failed to call StopTrustTunnel: ${e.message}")
+            e.printStackTrace()
+            return false
+        } catch (e: Exception) {
+            logger.log("An error occurred while calling StopTrustTunnel: ${e.message}")
+            e.printStackTrace()
+            return false
         }
     }
 
