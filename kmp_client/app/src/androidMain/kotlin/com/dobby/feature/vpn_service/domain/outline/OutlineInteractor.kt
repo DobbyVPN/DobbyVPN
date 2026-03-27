@@ -128,7 +128,7 @@ class OutlineInteractor(
             return
         }
 
-        logger.log("[svc:${dobbyVpnService?.serviceId}] startCloakOutline(): initializing Xray with tunFd=$tunFd")
+        logger.log("[svc:${dobbyVpnService?.serviceId}] startCloakOutline(): initializing Outline with tunFd=$tunFd")
 
         val connected = outlineLibFacade.init(outlineUrl, tunFd)
         if (!connected) {

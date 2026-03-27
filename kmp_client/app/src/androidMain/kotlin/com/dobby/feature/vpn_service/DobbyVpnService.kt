@@ -29,6 +29,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.system.Os
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
+import com.dobby.outline.OutlineGo
 import java.io.File
 import java.io.FileInputStream
 import java.util.UUID
@@ -115,6 +116,8 @@ class DobbyVpnService : VpnService() {
                 }
             }
         }
+
+        OutlineGo.registerVpnService(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

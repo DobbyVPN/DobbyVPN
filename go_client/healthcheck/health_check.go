@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"go_client/common"
-	log "go_client/logger"
+	"go_client/log"
 	"sync"
 	"sync/atomic"
 	"time"

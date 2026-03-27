@@ -4,14 +4,14 @@
 package exported_client
 
 import (
-	"errors"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"github.com/cbeuw/Cloak/internal/client"
 	"github.com/cbeuw/Cloak/internal/common"
 	mux "github.com/cbeuw/Cloak/internal/multiplex"
 	"github.com/sirupsen/logrus"
-	log "go_client/logger"
+	"go_client/log"
 	"net"
 	"strings"
 	"sync"
@@ -81,7 +81,7 @@ func (c *CkClient) Connect() (returnErr error) {
 			returnErr = fmt.Errorf("panic in Connect: %v", r)
 		}
 	}()
-	
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

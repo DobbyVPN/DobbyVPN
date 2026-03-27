@@ -14,6 +14,8 @@ add_library(outline_jni
         SHARED
         jni.c)
 
+target_compile_options(outline_jni PRIVATE -fvisibility=default)
+
 # 2) Находим Android log библиотеку
 find_library(log-lib log)
 

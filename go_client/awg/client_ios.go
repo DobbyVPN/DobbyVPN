@@ -10,7 +10,7 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/tun"
 	log "github.com/sirupsen/logrus"
 	"go_client/common"
-	_ "go_client/logger"
+	_ "go_client/log"
 	"golang.org/x/sys/unix"
 	"math"
 	"os"

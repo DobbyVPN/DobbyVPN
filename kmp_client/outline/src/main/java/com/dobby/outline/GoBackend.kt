@@ -8,8 +8,8 @@ class OutlineGo {
     companion object {
         init {
             Log.d(TAG, "Start loading libraries")
-            System.loadLibrary("outline")
             System.loadLibrary("outline_jni")
+            System.loadLibrary("outline")
             Log.d(TAG, "Libraries loaded successfully")
         }
 
@@ -100,6 +100,9 @@ class OutlineGo {
         @JvmStatic
         @Throws(IllegalStateException::class)
         external fun checkServerAlive(address: String, port: Int): Int
+
+        @JvmStatic
+        external fun registerVpnService(service: android.net.VpnService)
 
         /**
          * Safe call to newOutlineClient with a library-loaded check.
