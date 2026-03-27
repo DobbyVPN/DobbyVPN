@@ -206,6 +206,62 @@ func setDNS(name, dns string) error {
 	return nil
 }
 
+func StartEngineLinux(fd int, proxyAddr string) error {
+	transferMu.Lock()
+	defer transferMu.Unlock()
+
+	if isRunning {
+		stopLocked()
+	}
+
+	if err := EnsureLinuxMarkIsConfigured(); err != nil {
+		return err
+	}
+
+	devicePath := fmt.Sprintf("fd://%d", fd)
+	proxyURL := fmt.Sprintf("socks5://%s", proxyAddr)
+
+	log.Infof("[Engine][Linux] Starting tun2socks with FD: %d", fd)
+
+	key := &engine.Key{
+		Proxy:    proxyURL,
+		Device:   devicePath,
+		LogLevel: "info",
+		MTU:      1500,
+	}
+
+	engine.Insert(key)
+
+	if tunnel.T() == nil {
+		return fmt.Errorf("tunnel.T() returned nil")
+	}
+
+	currentDialer := tunnel.T().Dialer()
+	vpnOutbound, ok := currentDialer.(proxy.Proxy)
+	if !ok {
+		return fmt.Errorf("current dialer is not proxy")
+	}
+
+	directOutbound := &ProtectedDirectProxy{
+		Proxy: proxy.NewDirect(),
+	}
+
+	wrapper := &DobbyProxy{
+		vpn:    vpnOutbound,
+		direct: directOutbound,
+	}
+
+	AddBypassHost("api.ipify.org")
+
+	tunnel.T().SetDialer(wrapper)
+
+	engine.Start()
+	isRunning = true
+
+	log.Infof("[Engine][Linux] tun2socks started successfully")
+	return nil
+}
+
 func StartEngineDarwin(proxyAddr string) (string, error) {
 	log.Infof("[Engine] StartEngineDarwin proxy=%s", proxyAddr)
 
