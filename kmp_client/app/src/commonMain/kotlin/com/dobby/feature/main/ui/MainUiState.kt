@@ -4,5 +4,4 @@ data class MainUiState(
     val connectionURL: String = "",
     val isConnected: Boolean = false,
     val isVpnStarted: Boolean = false,
-    val isRestartPending: Boolean = false,
 )

@@ -2,8 +2,10 @@ package cloak
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/cbeuw/Cloak/exported_client"
 	"go_client/common"
+	"net"
 	"sync"
 
 	log "go_client/logger"
@@ -19,14 +21,14 @@ var (
 
 func StartCloakClient(localHost, localPort, config string, udp bool) {
 	log.Infof("StartCloakClient inner")
-	
+
 	// Handle panic
 	defer func() {
 		if r := recover(); r != nil {
 			log.Infof("StartCloakClient: recovered from panic: %v", r)
 		}
 	}()
-	
+
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -49,7 +51,11 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 	}
 	log.Infof("cloak client: rawConfig parsed successfully")
 
-
+	rawConfig.RemoteHost, err = resolveRemoteHostIfNeeded(rawConfig.RemoteHost)
+	if err != nil {
+		log.Infof("Can't resolve Remote Host: %v", err)
+		return
+	}
 	rawConfig.LocalHost = localHost
 	rawConfig.LocalPort = localPort
 	rawConfig.UDP = udp
@@ -89,14 +95,14 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 
 func StopCloakClient() {
 	log.Infof("StopCloakClient inner")
-	
+
 	// Handle panic
 	defer func() {
 		if r := recover(); r != nil {
 			log.Infof("StopCloakClient: recovered from panic: %v", r)
 		}
 	}()
-	
+
 	defer common.Client.MarkInactive(Name)
 	mu.Lock()
 	defer mu.Unlock()
@@ -126,4 +132,27 @@ func StopCloakClient() {
 	client = nil
 
 	log.Infof("Client disconnected")
+}
+
+func resolveRemoteHostIfNeeded(host string) (string, error) {
+	if net.ParseIP(host) != nil {
+		log.Infof("cloak client: RemoteHost '%s' is valid IPv4", host)
+		return host, nil
+	}
+
+	log.Infof("cloak client: RemoteHost '%s' is not IPv4 -> resolving DNS...", host)
+
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return "", fmt.Errorf("DNS resolve failed: %w", err)
+	}
+
+	for _, ip := range ips {
+		if v4 := ip.To4(); v4 != nil {
+			log.Infof("cloak client: DNS resolved '%s' -> %s", host, v4.String())
+			return v4.String(), nil
+		}
+	}
+
+	return "", fmt.Errorf("DNS resolved only IPv6, IPv4 required")
 }

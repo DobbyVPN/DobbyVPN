@@ -1,78 +1,46 @@
-// LogsViewModel.kt
 package com.dobby.feature.logging.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dobby.feature.logging.domain.CopyLogsInteractor
+import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.ui.LogsUiState
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-
-private object InstanceIdGenerator {
-    private var counter = 0
-
-    fun nextId(): Int {
-        counter += 1
-        return counter
-    }
-}
 
 class LogsViewModel(
     private val logsRepository: LogsRepository,
+    private val logEventsChannel: LogEventsChannel,
     private val copyLogsInteractor: CopyLogsInteractor
 ) : ViewModel() {
-
-    private val vmId = InstanceIdGenerator.nextId()
-
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val _uiState = MutableStateFlow(LogsUiState())
     val uiState: StateFlow<LogsUiState> = _uiState.asStateFlow()
 
     init {
         viewModelScope.launch {
-            while (true) {
-                val freshLogs = withContext(Dispatchers.Default) {
-                    logsRepository.readUILogs()
+            logEventsChannel.logEvents.collect { line ->
+                _uiState.update { state ->
+                    state.copy(
+                        logMessages = (state.logMessages + line)
+                            .takeLast(LogsRepository.UI_TAIL_LINES)
+                    )
                 }
-                _uiState.value = _uiState.value.copy(logMessages = freshLogs)
-                delay(1000)
             }
         }
     }
 
     fun clearLogs() {
         logsRepository.clearLogs()
+        logEventsChannel.clear()
+        _uiState.value = LogsUiState(emptyList())
     }
 
     fun copyLogsToClipBoard() {
         copyLogsInteractor.copy(logsRepository.readAllLogs())
-    }
-
-    fun reloadLogs() {
-        scope.launch {
-            val freshLogs = withContext(Dispatchers.Default) {
-                logsRepository.readUILogs()
-            }
-            _uiState.value = _uiState.value.copy(logMessages = freshLogs)
-        }
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        scope.cancel()
-    }
-
-    fun dispose() {
-        scope.cancel()
     }
 }

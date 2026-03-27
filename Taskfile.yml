@@ -1,0 +1,185 @@
+version: "3"
+
+vars:
+  REPORTS_DIR: "{{.ROOT_DIR}}/reports"
+
+tasks:
+  install-tools:
+    desc: "Install all linting tools"
+    cmds:
+      - task: install-golangci-lint
+      - task: install-lefthook
+      - task: install-trufflehog
+    silent: false
+
+  install-golangci-lint:
+    desc: "Install golangci-lint"
+    status:
+      - golangci-lint version
+    cmds:
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6
+    silent: true
+
+  install-lefthook:
+    desc: "Install lefthook (git hooks manager)"
+    status:
+      - lefthook version
+    cmds:
+      - go install github.com/evilmartians/lefthook@latest
+    silent: true
+
+  install-trufflehog:
+    desc: "Install trufflehog (secret scanner)"
+    status:
+      - trufflehog --version
+    cmds:
+      - go install github.com/trufflesecurity/trufflehog/v3@latest
+    silent: true
+
+  hooks:
+    desc: "Install git hooks via lefthook"
+    cmds:
+      - lefthook install
+    silent: false
+
+  hooks:uninstall:
+    desc: "Uninstall git hooks"
+    cmds:
+      - lefthook uninstall
+    silent: false
+
+  lint:
+    desc: "Run all linters"
+    cmds:
+      - task: lint:go
+      - task: lint:kotlin
+
+  lint:go:
+    desc: "Run golangci-lint for go_client"
+    cmds:
+      - task: lint:go:client
+
+  lint:go:client:
+    desc: "Lint go_client (Go)"
+    dir: "{{.ROOT_DIR}}/go_client"
+    cmds:
+      - cmd: golangci-lint run $(go list ./... | grep -v '_exports$')
+        platforms: [linux, darwin]
+      - cmd: 'powershell -Command "golangci-lint run (go list ./... | Where-Object {$_ -notmatch ''_exports$''})"'
+        platforms: [windows]
+    sources:
+      - "**/*.go"
+
+  lint:kotlin:
+    desc: "Run detekt for Kotlin Multiplatform"
+    dir: "{{.ROOT_DIR}}/kmp_client"
+    cmds:
+      - cmd: ./gradlew detekt
+        platforms: [linux, darwin]
+      - cmd: gradlew.bat detekt
+        platforms: [windows]
+
+  lint:swift:
+    desc: "Run SwiftLint for iOS (macOS only)"
+    platforms: [darwin]
+    dir: "{{.ROOT_DIR}}/kmp_client/iosApp"
+    cmds:
+      - swiftlint lint --config .swiftlint.yml
+
+  report:
+    desc: "Generate all linter reports in reports/"
+    cmds:
+      - task: report:prepare
+      - task: report:go
+      - task: report:kotlin
+      - task: report:swift
+      - task: report:summary
+    silent: false
+
+  report:prepare:
+    desc: "Create reports directory"
+    cmds:
+      - cmd: mkdir -p {{.REPORTS_DIR}}/go {{.REPORTS_DIR}}/kotlin {{.REPORTS_DIR}}/swift
+        platforms: [linux, darwin]
+      - cmd: |
+          if not exist "{{.REPORTS_DIR}}\go" mkdir "{{.REPORTS_DIR}}\go"
+          if not exist "{{.REPORTS_DIR}}\kotlin" mkdir "{{.REPORTS_DIR}}\kotlin"
+          if not exist "{{.REPORTS_DIR}}\swift" mkdir "{{.REPORTS_DIR}}\swift"
+        platforms: [windows]
+
+  report:go:
+    desc: "golangci-lint reports (checkstyle XML + JSON)"
+    cmds:
+      - task: report:go:client
+
+  report:go:client:
+    desc: "Generate golangci-lint reports for go_client"
+    dir: "{{.ROOT_DIR}}/go_client"
+    cmds:
+      - cmd: golangci-lint run $(go list ./... | grep -v '_exports$') --output.text.path="" --output.checkstyle.path="{{.REPORTS_DIR}}/go/go_client-checkstyle.xml" || true
+        platforms: [linux, darwin]
+      - cmd: golangci-lint run $(go list ./... | grep -v '_exports$') --output.text.path="" --output.json.path="{{.REPORTS_DIR}}/go/go_client-report.json" || true
+        platforms: [linux, darwin]
+      - cmd: 'powershell -Command "$pkgs = go list ./... | Where-Object {$_ -notmatch ''_exports$''}; golangci-lint run $pkgs --output.text.path=\"\" --output.checkstyle.path=\"{{.REPORTS_DIR}}/go/go_client-checkstyle.xml\""'
+        platforms: [windows]
+        ignore_error: true
+      - cmd: 'powershell -Command "$pkgs = go list ./... | Where-Object {$_ -notmatch ''_exports$''}; golangci-lint run $pkgs --output.text.path=\"\" --output.json.path=\"{{.REPORTS_DIR}}/go/go_client-report.json\""'
+        platforms: [windows]
+        ignore_error: true
+
+  report:kotlin:
+    desc: "detekt reports (HTML + XML + SARIF)"
+    dir: "{{.ROOT_DIR}}/kmp_client"
+    cmds:
+      - cmd: ./gradlew detekt || true
+        platforms: [linux, darwin]
+      - cmd: gradlew.bat detekt || true
+        platforms: [windows]
+      - cmd: cp -r app/build/reports/detekt/* "{{.REPORTS_DIR}}/kotlin/" 2>/dev/null || true
+        platforms: [linux, darwin]
+      - cmd: xcopy /Y /E "app\build\reports\detekt\*" "{{.REPORTS_DIR}}\kotlin\" >nul 2>&1 || true
+        platforms: [windows]
+
+  report:swift:
+    desc: "SwiftLint report (checkstyle XML)"
+    platforms: [darwin]
+    dir: "{{.ROOT_DIR}}/kmp_client/iosApp"
+    cmds:
+      - swiftlint lint --config .swiftlint.yml --reporter checkstyle > "{{.REPORTS_DIR}}/swift/swiftlint-checkstyle.xml" || true
+      - swiftlint lint --config .swiftlint.yml --reporter json > "{{.REPORTS_DIR}}/swift/swiftlint-report.json" || true
+
+  report:summary:
+    desc: "Print reports summary"
+    cmds:
+      - cmd: |
+          echo ""
+          echo "========================================="
+          echo "  LINT REPORTS GENERATED"
+          echo "========================================="
+          echo ""
+          echo "Go (go_client): {{.REPORTS_DIR}}/go/go_client-checkstyle.xml"
+          echo "Kotlin (detekt): {{.REPORTS_DIR}}/kotlin/detekt.html"
+          echo "Swift:          {{.REPORTS_DIR}}/swift/swiftlint-checkstyle.xml"
+          echo ""
+          echo "Open detekt HTML report:"
+          echo "  {{.REPORTS_DIR}}/kotlin/detekt.html"
+          echo ""
+        platforms: [linux, darwin]
+      - cmd: |
+          echo.
+          echo =========================================
+          echo   LINT REPORTS GENERATED
+          echo =========================================
+          echo.
+          echo Go (go_client):  {{.REPORTS_DIR}}\go\go_client-checkstyle.xml
+          echo Kotlin (detekt): {{.REPORTS_DIR}}\kotlin\detekt.html
+          echo.
+        platforms: [windows]
+
+  clean:reports:
+    desc: "Remove all generated reports"
+    cmds:
+      - cmd: rm -rf {{.REPORTS_DIR}}
+        platforms: [linux, darwin]
+      - cmd: if exist "{{.REPORTS_DIR}}" rmdir /S /Q "{{.REPORTS_DIR}}"
+        platforms: [windows]

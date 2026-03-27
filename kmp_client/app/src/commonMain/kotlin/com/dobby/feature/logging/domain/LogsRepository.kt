@@ -2,14 +2,14 @@
 package com.dobby.feature.logging.domain
 
 import korlibs.time.DateTime
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import okio.FileSystem
 import okio.Path
 import okio.buffer
 import okio.use
+import org.koin.compose.koinInject
 
 expect val fileSystem: FileSystem
 expect fun provideLogFilePath(): Path
@@ -34,23 +34,24 @@ fun maskStr(input: String): String {
 }
 
 class LogsRepository(
-    private val logFilePath: Path = provideLogFilePath()
+    private val logFilePath: Path = provideLogFilePath(),
+    private val logEventsChannel: LogEventsChannel
 ) {
     companion object {
-        private const val UI_TAIL_LINES: Int = 50
+        const val UI_TAIL_LINES: Int = 50
 
-        private const val EXPORT_TAIL_LINES: Int = -1
+        const val EXPORT_TAIL_LINES: Int = -1
     }
 
-    private val _logState = MutableStateFlow<List<String>>(emptyList())
-    val logState: StateFlow<List<String>> = _logState.asStateFlow()
     private var sentryLogger: SentryLogsRepository? = null
 
     init {
         if (!fileSystem.exists(logFilePath)) {
             fileSystem.sink(logFilePath).buffer().use { }
         }
-        _logState.value = readLogs(UI_TAIL_LINES)
+        CoroutineScope(Dispatchers.Default).launch {
+            logEventsChannel.emitLogs(readLogs(UI_TAIL_LINES))
+        }
     }
 
     fun setSentryLogger(_sentryLogger: SentryLogsRepository) : LogsRepository {
@@ -71,14 +72,16 @@ class LogsRepository(
                 sink.writeUtf8(logEntry)
                 sink.writeUtf8("\n")
             }
-            _logState.update { (it + logEntry).takeLast(UI_TAIL_LINES) }
+            CoroutineScope(Dispatchers.Default).launch {
+                logEventsChannel.emitLog(logEntry)
+            }
         }.onFailure { it.printStackTrace() }
     }
 
     fun clearLogs() {
         runCatching {
             fileSystem.sink(logFilePath).buffer().use { }
-            _logState.value = emptyList()
+            logEventsChannel.clear()
         }.onFailure { it.printStackTrace() }
     }
 

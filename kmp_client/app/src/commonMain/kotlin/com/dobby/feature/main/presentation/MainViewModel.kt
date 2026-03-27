@@ -87,13 +87,6 @@ class MainViewModel(
             }
         }
         viewModelScope.launch {
-            connectionStateRepository.restartPendingFlow.collect { isPending ->
-                logger.log("Update restart pending state: $isPending")
-                val newState = _uiState.value.copy(isRestartPending = isPending)
-                _uiState.emit(newState)
-            }
-        }
-        viewModelScope.launch {
             permissionEventsChannel
                 .permissionsGrantedEvents
                 .collect { isPermissionGranted -> startVpn(isPermissionGranted) }
@@ -152,7 +145,6 @@ class MainViewModel(
                     stopVpnService()
                 }
                 false -> {
-                    healthCheckManager.onUserManualStartRequested()
                     connectionStateRepository.updateVpnStarted(true)
                     logger.log("Update vpnStarted state: VpnState = ${connectionStateRepository.vpnStartedFlow.value}")
                     logger.log("VPN is currently disconnected")

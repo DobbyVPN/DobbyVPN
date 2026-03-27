@@ -6,11 +6,7 @@ interface OutlineLibFacade {
      * Initialize and connect to Outline server
      * @return true if connection successful, false otherwise
      */
-    fun init(apiKey: String): Boolean
+    fun init(apiKey: String, tunFd: Int): Boolean
 
     fun disconnect()
-
-    fun writeData(data: ByteArray, length: Int)
-
-    fun readData(data: ByteArray): Int
 }

@@ -1,0 +1,33 @@
+name: Update Airports Data
+
+on:
+  schedule:
+    # Run weekly on Monday at 06:00 UTC
+    - cron: '0 6 * * 1'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  update_airports:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update airports CSV
+        run: python3 .github/file_updates/airports_update/extract_airports.py
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore: update airports data"
+          title: "chore: update airports data"
+          body: |
+            Automated weekly update of airports data from [ourairports.com](https://ourairports.com).
+
+            Only `large_airport` and `medium_airport` types are included.
+          branch: chore/update-airports
+          delete-branch: true

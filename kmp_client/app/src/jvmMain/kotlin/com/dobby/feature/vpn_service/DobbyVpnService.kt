@@ -117,7 +117,6 @@ internal class DobbyVpnService(
         logger.log("Outline prefix: ${prefix.ifEmpty { "(none)" }}")
         logger.log("Outline websocket: $websocketEnabled, tcpPath: ${tcpPath.ifEmpty { "(none)" }}, udpPath: ${udpPath.ifEmpty { "(none)" }}")
         runBlocking {
-            connectionState.updateVpnStarted(isStarted = true)
             logger.log("CloakIsEnable = " + dobbyConfigsRepository.getIsCloakEnabled())
             if (dobbyConfigsRepository.getIsCloakEnabled()) {
                 vpnLibrary.startCloak(localHost, localPort, dobbyConfigsRepository.getCloakConfig(), false)
@@ -134,7 +133,20 @@ internal class DobbyVpnService(
             if (websocketEnabled) {
                 logger.log("WebSocket transport requested (will connect if server supports it)")
             }
-            vpnLibrary.startOutline(outlineUrl)
+            
+            val connected = vpnLibrary.startOutline(outlineUrl)
+            if (connected) {
+                logger.log("Outline connection established successfully")
+                connectionState.updateVpnStarted(isStarted = true)
+            } else {
+                logger.log("Outline connection FAILED: ${vpnLibrary.lastOutlineError}")
+                // Stop Cloak if it was started
+                if (dobbyConfigsRepository.getIsCloakEnabled()) {
+                    logger.log("Stopping Cloak due to Outline failure")
+                    vpnLibrary.stopCloak()
+                }
+                connectionState.updateVpnStarted(isStarted = false)
+            }
         }
     }
 

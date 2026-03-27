@@ -71,7 +71,10 @@ class FindTapDeviceName(
     }
 
     private fun executeCommandForFind(command: String): String {
-        val process = ProcessBuilder(command.split(" ")).redirectErrorStream(true).start()
+        // Use cmd.exe /c to properly handle paths with spaces
+        val process = ProcessBuilder("cmd.exe", "/c", command)
+            .redirectErrorStream(true)
+            .start()
         return process.inputStream.bufferedReader().use(BufferedReader::readText).also {
             process.waitFor()
         }

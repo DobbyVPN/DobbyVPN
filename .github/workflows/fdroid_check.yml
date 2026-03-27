@@ -1,0 +1,124 @@
+name: F-Droid Compliance
+
+on:
+  workflow_call:
+
+jobs:
+  check-binaries:
+    name: Check for committed binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Find executable binaries in repo
+        run: |
+          BINS=$(git ls-files | xargs file --mime-type 2>/dev/null \
+            | grep -E 'application/java-archive|application/x-executable|application/x-sharedlib|application/x-mach-binary|application/x-pie-executable' \
+            | grep -v 'gradle-wrapper.jar' \
+            | cut -d: -f1)
+          if [ -n "$BINS" ]; then
+            echo "::error::Binary files found in repository:"
+            echo "$BINS"
+            exit 1
+          fi
+          echo "No binaries found"
+
+  scan-apk:
+    name: Scan APK for proprietary packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Download Go AAR
+        uses: actions/download-artifact@v4
+        with:
+          name: outline-debug.aar
+          path: kmp_client/libs
+
+      - name: Download .so
+        uses: actions/download-artifact@v4
+        with:
+          name: liboutline.so
+          path: kmp_client/outline/src/main/jniLibs/arm64-v8a
+
+      - name: Download .h
+        uses: actions/download-artifact@v4
+        with:
+          name: liboutline.h
+          path: kmp_client/outline/src/main/cpp/include/arm64-v8a
+
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: >
+            build-tools;34.0.0
+            platforms;android-35
+
+      - name: Remove non-Android modules
+        run: |
+          rm -rf kmp_client/iosApp
+          rm -rf kmp_client/tap-device
+
+      - name: Build APK
+        working-directory: kmp_client
+        run: |
+          ./gradlew app:assembleRelease -PdisableSentry=true \
+            -Pandroid.injected.version.code=1 \
+            -Pandroid.injected.version.name=0.0.1
+
+      - name: Scan for proprietary packages
+        run: |
+          BLOCKED=(
+            # Google proprietary
+            "com.google.firebase"
+            "com.google.android.gms"
+            "com.google.gms"
+            "com.google.android.play"
+            "com.google.android.libraries"
+            "com.google.mlkit"
+            "com.google.android.recaptcha"
+            "com.google.android.ump"
+            "com.google.ads"
+            # Analytics / tracking
+            "com.crashlytics"
+            "io.fabric"
+            "io.sentry"
+            "com.amplitude"
+            "com.mixpanel"
+            "com.appsflyer"
+            "com.adjust.sdk"
+            "com.flurry"
+            # Ads
+            "com.facebook.android"
+            "com.unity3d.ads"
+            "com.applovin"
+            "com.chartboost"
+            "com.vungle"
+            "com.ironsource"
+            "com.adcolony"
+            "com.startapp"
+          )
+
+          APK=kmp_client/app/build/outputs/apk/release/app-release-unsigned.apk
+          PACKAGES=$(apkanalyzer dex packages "$APK" 2>/dev/null | awk '{print $NF}')
+
+          FOUND=0
+          for p in "${BLOCKED[@]}"; do
+            if echo "$PACKAGES" | grep -q "^${p}"; then
+              echo "::error::Proprietary package in APK: $p"
+              FOUND=1
+            fi
+          done
+
+          if [ "$FOUND" -eq 1 ]; then
+            exit 1
+          fi
+          echo "No proprietary packages found in APK"
