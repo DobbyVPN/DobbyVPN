@@ -122,7 +122,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("[Tunnel] VPN dataplane is up, starting traffic handling...")
 
-	ifaceName, idx, err := tunnel.GetDefaultInterfaceNameDarwin()
+	ifaceName, idx, err := tunnel.GetDefaultInterfaceNameDarwin(gatewayIP)
 	if err != nil {
 		log.Infof("[Darwin-Protect] ERROR: failed to detect default interface for protected sockets: %v", err)
 	} else {

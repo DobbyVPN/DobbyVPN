@@ -6,7 +6,6 @@ package tunnel
 import (
 	"context"
 	"fmt"
-	"github.com/jackpal/gateway"
 	"net"
 	"strings"
 	"syscall"
@@ -41,12 +40,7 @@ func isReachableViaInterface(iface net.Interface, gw net.IP) bool {
 	return false
 }
 
-func GetDefaultInterfaceNameDarwin() (string, int, error) {
-	gatewayIP, err := gateway.DiscoverGateway()
-	if err != nil {
-		return "", 0, err
-	}
-
+func GetDefaultInterfaceNameDarwin(gatewayIP net.IP) (string, int, error) {
 	log.Infof("[Darwin-Protect][Detect] Gateway detected: %s", gatewayIP.String())
 
 	ifaces, err := net.Interfaces()
