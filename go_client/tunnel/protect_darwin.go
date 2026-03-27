@@ -33,6 +33,7 @@ func isReachableViaInterface(iface net.Interface, gw net.IP) bool {
 		}
 
 		if ipnet.Contains(gw) {
+			log.Infof("[Darwin-Protect][Detect] iface=%s contains gateway %s (cidr=%s)", iface.Name, gw.String(), ipnet.String())
 			return true
 		}
 	}
@@ -46,6 +47,8 @@ func GetDefaultInterfaceNameDarwin() (string, int, error) {
 		return "", 0, err
 	}
 
+	log.Infof("[Darwin-Protect][Detect] Gateway detected: %s", gatewayIP.String())
+
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return "", 0, err
@@ -53,13 +56,18 @@ func GetDefaultInterfaceNameDarwin() (string, int, error) {
 
 	for _, iface := range ifaces {
 
+		log.Infof("[Darwin-Protect][Detect] Checking iface=%s flags=%v", iface.Name, iface.Flags)
+
 		if iface.Flags&net.FlagUp == 0 {
+			log.Infof("[Darwin-Protect][Detect] skip %s: down", iface.Name)
 			continue
 		}
 		if iface.Flags&net.FlagLoopback != 0 {
+			log.Infof("[Darwin-Protect][Detect] skip %s: loopback", iface.Name)
 			continue
 		}
 		if len(iface.HardwareAddr) == 0 {
+			log.Infof("[Darwin-Protect][Detect] skip %s: no MAC", iface.Name)
 			continue
 		}
 
@@ -68,11 +76,12 @@ func GetDefaultInterfaceNameDarwin() (string, int, error) {
 			strings.HasPrefix(iface.Name, "llw") ||
 			strings.HasPrefix(iface.Name, "bridge") ||
 			strings.HasPrefix(iface.Name, "lo") {
+			log.Infof("[Darwin-Protect][Detect] skip %s: virtual/unsupported", iface.Name)
 			continue
 		}
 
 		if isReachableViaInterface(iface, gatewayIP) {
-			log.Infof("[Darwin-Protect] Selected REAL iface=%s index=%d", iface.Name, iface.Index)
+			log.Infof("[Darwin-Protect][Detect] SELECTED iface=%s index=%d (gateway reachable)", iface.Name, iface.Index)
 			return iface.Name, iface.Index, nil
 		}
 	}
@@ -82,18 +91,20 @@ func GetDefaultInterfaceNameDarwin() (string, int, error) {
 
 func SetDefaultInterface(idx int) {
 	defaultInterfaceIndex = idx
-	log.Infof("[Darwin-Protect] Using interface index=%d", idx)
+	log.Infof("[Darwin-Protect][State] Using interface index=%d for protected sockets", idx)
 }
 
 // --- SOCKET PROTECT ---
 
 func protectSocket(fd uintptr, network string) {
 	if defaultInterfaceIndex == 0 {
-		log.Infof("[Darwin-Protect] interface index not set")
+		log.Infof("[Darwin-Protect][Protect] SKIP: interface index not set")
 		return
 	}
 
 	var err error
+
+	log.Infof("[Darwin-Protect][Protect] Applying socket protect fd=%d net=%s ifindex=%d", fd, network, defaultInterfaceIndex)
 
 	switch network {
 	case "tcp4", "udp4":
@@ -113,14 +124,14 @@ func protectSocket(fd uintptr, network string) {
 		)
 
 	default:
-		log.Infof("[Darwin-Protect] unsupported network: %s", network)
+		log.Infof("[Darwin-Protect][Protect] SKIP: unsupported network=%s", network)
 		return
 	}
 
 	if err != nil {
-		log.Infof("[Darwin-Protect] setsockopt failed: %v", err)
+		log.Infof("[Darwin-Protect][Protect] ERROR: setsockopt failed: %v", err)
 	} else {
-		log.Infof("[Darwin-Protect] setsockopt OK (ifindex=%d)", defaultInterfaceIndex)
+		log.Infof("[Darwin-Protect][Protect] OK: socket bound to ifindex=%d", defaultInterfaceIndex)
 	}
 }
 
@@ -147,17 +158,20 @@ func normalizeUDP(address string) string {
 // --- TCP ---
 
 func DialContextWithProtect(ctx context.Context, network, address string) (net.Conn, error) {
+	log.Infof("[Darwin-Protect][TCP] Dial request: %s %s", network, address)
+
 	host, _, err := net.SplitHostPort(address)
 	if err == nil {
 		ip := net.ParseIP(host)
 		if ip != nil && ip.IsLoopback() {
-			log.Infof("[Darwin-Protect] skip loopback %s", address)
+			log.Infof("[Darwin-Protect][TCP] BYPASS: loopback %s", address)
 			var d net.Dialer
 			return d.DialContext(ctx, normalizeTCP(address), address)
 		}
 	}
 
 	realNet := normalizeTCP(address)
+	log.Infof("[Darwin-Protect][TCP] Normalized network: %s", realNet)
 
 	d := &net.Dialer{
 		Control: func(network, address string, c syscall.RawConn) error {
@@ -167,21 +181,31 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 		},
 	}
 
-	return d.DialContext(ctx, realNet, address)
+	conn, err := d.DialContext(ctx, realNet, address)
+	if err != nil {
+		log.Infof("[Darwin-Protect][TCP] ERROR: dial failed: %v", err)
+		return nil, err
+	}
+
+	log.Infof("[Darwin-Protect][TCP] OK: connected to %s via protected socket", address)
+	return conn, nil
 }
 
 // --- UDP ---
 
 func DialUDPWithProtect(ctx context.Context, network, address string) (net.PacketConn, error) {
+	log.Infof("[Darwin-Protect][UDP] Dial request: %s %s", network, address)
+
 	host, _, err := net.SplitHostPort(address)
 	if err == nil {
 		ip := net.ParseIP(host)
 		if ip != nil && ip.IsLoopback() {
-			log.Infof("[Darwin-Protect] skip loopback UDP %s", address)
+			log.Infof("[Darwin-Protect][UDP] BYPASS: loopback %s", address)
 
 			realNet := normalizeUDP(address)
 			pc, err := net.ListenPacket(realNet, "0.0.0.0:0")
 			if err != nil {
+				log.Infof("[Darwin-Protect][UDP] ERROR: listen failed: %v", err)
 				return nil, err
 			}
 
@@ -199,6 +223,7 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 	}
 
 	realNet := normalizeUDP(address)
+	log.Infof("[Darwin-Protect][UDP] Normalized network: %s", realNet)
 
 	lc := net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
@@ -215,6 +240,7 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 
 	pc, err := lc.ListenPacket(ctx, realNet, listenAddr)
 	if err != nil {
+		log.Infof("[Darwin-Protect][UDP] ERROR: ListenPacket failed: %v", err)
 		return nil, err
 	}
 
@@ -223,6 +249,8 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 		_ = pc.Close()
 		return nil, err
 	}
+
+	log.Infof("[Darwin-Protect][UDP] OK: socket ready for %s", address)
 
 	return &connectedUDPConn{
 		PacketConn: pc,
