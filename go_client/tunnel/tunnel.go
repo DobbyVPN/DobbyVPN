@@ -214,10 +214,6 @@ func StartEngineLinux(fd int, proxyAddr string) error {
 		stopLocked()
 	}
 
-	if err := EnsureLinuxMarkIsConfigured(); err != nil {
-		return err
-	}
-
 	devicePath := fmt.Sprintf("fd://%d", fd)
 	proxyURL := fmt.Sprintf("socks5://%s", proxyAddr)
 
