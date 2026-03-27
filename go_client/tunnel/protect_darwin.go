@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/jackpal/gateway"
 	"net"
+	"strings"
 	"syscall"
 
 	"go_client/log"
@@ -51,6 +52,25 @@ func GetDefaultInterfaceNameDarwin() (string, int, error) {
 	}
 
 	for _, iface := range ifaces {
+
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		if iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if len(iface.HardwareAddr) == 0 {
+			continue
+		}
+
+		if strings.HasPrefix(iface.Name, "utun") ||
+			strings.HasPrefix(iface.Name, "awdl") ||
+			strings.HasPrefix(iface.Name, "llw") ||
+			strings.HasPrefix(iface.Name, "bridge") ||
+			strings.HasPrefix(iface.Name, "lo") {
+			continue
+		}
+
 		if isReachableViaInterface(iface, gatewayIP) {
 			log.Infof("[Darwin-Protect] Selected REAL iface=%s index=%d", iface.Name, iface.Index)
 			return iface.Name, iface.Index, nil
