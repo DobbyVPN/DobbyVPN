@@ -22,10 +22,10 @@ var defaultInterfaceIndex int
 
 // --- INIT ---
 
-func GetDefaultInterfaceDarwin() (int, error) {
+func GetDefaultInterfaceNameDarwin() (string, int, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return 0, err
+		return "", 0, err
 	}
 
 	for _, iface := range ifaces {
@@ -37,11 +37,11 @@ func GetDefaultInterfaceDarwin() (int, error) {
 			!strings.HasPrefix(iface.Name, "bridge") {
 
 			log.Infof("[Darwin-Protect] Selected iface=%s index=%d", iface.Name, iface.Index)
-			return iface.Index, nil
+			return iface.Name, iface.Index, nil
 		}
 	}
 
-	return 0, fmt.Errorf("no suitable interface found")
+	return "", 0, fmt.Errorf("no suitable interface found")
 }
 
 func SetDefaultInterface(idx int) {

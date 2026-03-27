@@ -9,6 +9,22 @@ import (
 	"os/exec"
 )
 
+func AddScopedDefaultRoute(iface string) error {
+	log.Infof("[Routing] Adding scoped default via %s", iface)
+
+	_, err := run("route", "-n", "add", "default", "-ifscope", iface)
+	if err != nil {
+		log.Infof("[Routing] scoped default may already exist: %v", err)
+	}
+	return nil
+}
+
+func DeleteScopedDefaultRoute(iface string) {
+	log.Infof("[Routing] Deleting scoped default via %s", iface)
+
+	_, _ = run("route", "-n", "delete", "default", "-ifscope", iface)
+}
+
 func ExecuteCommand(command string) (string, error) {
 	cmd := exec.Command("bash", "-c", command)
 	output, err := cmd.CombinedOutput()

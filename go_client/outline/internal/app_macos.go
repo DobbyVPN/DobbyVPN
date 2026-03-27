@@ -98,12 +98,23 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("Outline/app: Start trafficCopyWg...\n")
 
-	idx, err := tunnel.GetDefaultInterfaceDarwin()
+	ifaceName, idx, err := tunnel.GetDefaultInterfaceNameDarwin()
 	if err != nil {
 		log.Infof("[Darwin-Protect] failed to get default interface: %v", err)
 	} else {
 		tunnel.SetDefaultInterface(idx)
+
+		// 🔥 ВАЖНО: добавляем scoped route
+		if err := routing.AddScopedDefaultRoute(ifaceName); err != nil {
+			log.Infof("[Routing] failed to add scoped default: %v", err)
+		}
 	}
+
+	defer func() {
+		if ifaceName != "" {
+			routing.DeleteScopedDefaultRoute(ifaceName)
+		}
+	}()
 
 	log.Infof("[Tunnel] Starting tun2socks (darwin mode)...")
 
