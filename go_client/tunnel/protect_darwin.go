@@ -6,8 +6,8 @@ package tunnel
 import (
 	"context"
 	"fmt"
+	"github.com/jackpal/gateway"
 	"net"
-	"strings"
 	"syscall"
 
 	"go_client/log"
@@ -22,26 +22,42 @@ var defaultInterfaceIndex int
 
 // --- INIT ---
 
+func isReachableViaInterface(iface net.Interface, gw net.IP) bool {
+	addrs, _ := iface.Addrs()
+
+	for _, addr := range addrs {
+		ip, ipnet, _ := net.ParseCIDR(addr.String())
+		if ip == nil || ip.To4() == nil {
+			continue
+		}
+
+		if ipnet.Contains(gw) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func GetDefaultInterfaceNameDarwin() (string, int, error) {
+	gatewayIP, err := gateway.DiscoverGateway()
+	if err != nil {
+		return "", 0, err
+	}
+
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return "", 0, err
 	}
 
 	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp != 0 &&
-			iface.Flags&net.FlagLoopback == 0 &&
-			!strings.HasPrefix(iface.Name, "utun") &&
-			!strings.HasPrefix(iface.Name, "awdl") &&
-			!strings.HasPrefix(iface.Name, "llw") &&
-			!strings.HasPrefix(iface.Name, "bridge") {
-
-			log.Infof("[Darwin-Protect] Selected iface=%s index=%d", iface.Name, iface.Index)
+		if isReachableViaInterface(iface, gatewayIP) {
+			log.Infof("[Darwin-Protect] Selected REAL iface=%s index=%d", iface.Name, iface.Index)
 			return iface.Name, iface.Index, nil
 		}
 	}
 
-	return "", 0, fmt.Errorf("no suitable interface found")
+	return "", 0, fmt.Errorf("no interface for gateway found")
 }
 
 func SetDefaultInterface(idx int) {

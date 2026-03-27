@@ -9,10 +9,10 @@ import (
 	"os/exec"
 )
 
-func AddScopedDefaultRoute(iface string) error {
-	log.Infof("[Routing] Adding scoped default via %s", iface)
+func AddScopedDefaultRoute(iface, gatewayIP string) error {
+	log.Infof("[Routing] Adding scoped default via %s (%s)", iface, gatewayIP)
 
-	_, err := run("route", "-n", "add", "default", "-ifscope", iface)
+	_, err := run("route", "-n", "add", "default", gatewayIP, "-ifscope", iface)
 	if err != nil {
 		log.Infof("[Routing] scoped default may already exist: %v", err)
 	}

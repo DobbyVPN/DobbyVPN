@@ -96,26 +96,6 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 	}()
 
-	log.Infof("Outline/app: Start trafficCopyWg...\n")
-
-	ifaceName, idx, err := tunnel.GetDefaultInterfaceNameDarwin()
-	if err != nil {
-		log.Infof("[Darwin-Protect] failed to get default interface: %v", err)
-	} else {
-		tunnel.SetDefaultInterface(idx)
-
-		// 🔥 ВАЖНО: добавляем scoped route
-		if err := routing.AddScopedDefaultRoute(ifaceName); err != nil {
-			log.Infof("[Routing] failed to add scoped default: %v", err)
-		}
-	}
-
-	defer func() {
-		if ifaceName != "" {
-			routing.DeleteScopedDefaultRoute(ifaceName)
-		}
-	}()
-
 	log.Infof("[Tunnel] Starting tun2socks (darwin mode)...")
 
 	tunnel.CustomProtectedDialer = tunnel.DialContextWithProtect
@@ -134,6 +114,26 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		signalInit(initResult, err)
 		return err
 	}
+
+	log.Infof("Outline/app: Start trafficCopyWg...\n")
+
+	ifaceName, idx, err := tunnel.GetDefaultInterfaceNameDarwin()
+	if err != nil {
+		log.Infof("[Darwin-Protect] failed to get default interface: %v", err)
+	} else {
+		tunnel.SetDefaultInterface(idx)
+
+		// 🔥 ВАЖНО: добавляем scoped route
+		if err := routing.AddScopedDefaultRoute(ifaceName, gatewayIP.String()); err != nil {
+			log.Infof("[Routing] failed to add scoped default: %v", err)
+		}
+	}
+
+	defer func() {
+		if ifaceName != "" {
+			routing.DeleteScopedDefaultRoute(ifaceName)
+		}
+	}()
 	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 
 	signalInit(initResult, nil)
