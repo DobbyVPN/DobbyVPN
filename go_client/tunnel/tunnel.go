@@ -227,6 +227,7 @@ func StartEngineLinux(fd int, proxyAddr string) error {
 	}
 
 	engine.Insert(key)
+	engine.Start()
 
 	if tunnel.T() == nil {
 		return fmt.Errorf("tunnel.T() returned nil")
@@ -250,8 +251,6 @@ func StartEngineLinux(fd int, proxyAddr string) error {
 	AddBypassHost("api.ipify.org")
 
 	tunnel.T().SetDialer(wrapper)
-
-	engine.Start()
 	isRunning = true
 
 	log.Infof("[Engine][Linux] tun2socks started successfully")
@@ -302,7 +301,6 @@ func StartEngineDarwin(proxyAddr string) (string, error) {
 
 	log.Infof("[Engine] utun created: %s", deviceName)
 
-	// ✅ FIX: нормальный peer
 	cmd := exec.Command(
 		"ifconfig",
 		deviceName,

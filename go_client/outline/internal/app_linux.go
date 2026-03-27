@@ -147,11 +147,32 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	closeAll := func() {
 		closeOnce.Do(func() {
 			log.Infof("[Linux][Lifecycle] Shutting down...")
+
+			common.Client.MarkInCriticalSection(outlineCommon.Name)
+			if err := routing.StopRouting(serverIP.String(), gatewayIP.String(), uplinkIface); err != nil {
+				log.Infof("[Linux][StopRouting][ERROR] %v", err)
+			}
+			common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+
+			if err := routing.CleanupMarkedRouting(
+				app.RoutingConfig.RoutingTableID,
+				app.RoutingConfig.RoutingTablePriority,
+				uplinkIface,
+				gatewayIP.String(),
+			); err != nil {
+				log.Infof("[Linux][CleanupMarkedRouting][WARN] %v", err)
+			}
+
 			tunnel.StopEngine()
+
 			_ = ss.Close()
+
 			_ = tun.Close()
+
+			log.Infof("[Linux][Lifecycle] Shutdown complete")
 		})
 	}
+
 	defer closeAll()
 
 	go func() {
@@ -186,7 +207,6 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		return err
 	}
 
-	// 🔥 критически важный лог
 	log.Infof("[Linux][Step 9][OK] tun2socks started — waiting for readiness...")
 
 	// FIX: предотвращаем blackhole

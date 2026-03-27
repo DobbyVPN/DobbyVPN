@@ -101,7 +101,6 @@ func SetupMarkedRouting(tableID, priority int, iface, gatewayIP string) error {
 		return fmt.Errorf("failed to add fwmark rule: %w", err)
 	}
 
-	// 🔥 проверка состояния
 	log.Infof("[Routing][Mark] Dumping rules...")
 	ExecuteCommand("ip rule show")
 
@@ -153,7 +152,6 @@ func StartRouting(proxyIP, gatewayIP, uplinkIface, tunName string) error {
 		return fmt.Errorf("failed to add direct route for proxy %s: %w", proxyIP, err)
 	}
 
-	// 🔥 проверка итогового состояния
 	log.Infof("[Routing][Start] Dumping main routing table...")
 	ExecuteCommand("ip route show")
 
