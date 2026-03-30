@@ -116,6 +116,7 @@ void dobby_vpn_start(const char *toml_config, dobby_on_state_changed_t state_cha
         // 4. Initialize the client safely
         m_vpn = new dobby_vpn_context();
         m_vpn->client = std::make_unique<ag::TrustTunnelClient>(std::move(*trusttunnel_config), std::move(callbacks));
+        
         // m_vpn->network_monitor = std::make_unique<ag::AutoNetworkMonitor>(m_vpn->client.get());
         // m_vpn->network_monitor->start();
         m_vpn->client->connect(ag::TrustTunnelClient::AutoSetup{});
