@@ -56,7 +56,7 @@ data class TrustTunnelClientConfig(
     val endpoint: TomlElement? = null,    // Contains hostname, addresses, credentials
     val listener: TomlElement? = null,    // Contains tun/socks5 settings
     val dns_upstreams: TomlElement? = null,
-    val exclusions: TomlElement? = null
+    val exclusions: TomlElement? = null,
 )
 
 

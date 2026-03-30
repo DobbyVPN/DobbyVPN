@@ -29,6 +29,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.system.Os
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
+import com.dobby.feature.vpn_service.domain.trusttunnel.TrustTunnelInteractor
 import java.io.File
 import java.io.FileInputStream
 import java.util.UUID
@@ -55,6 +56,7 @@ class DobbyVpnService : VpnService() {
     private val vpnInterfaceFactory: DobbyVpnInterfaceFactory by inject()
     private val cloakConnectInteractor: CloakConnectionInteractor by inject()
     private val outlineInteractor: OutlineInteractor by inject ()
+    private val trustTunnelInteractor: TrustTunnelInteractor by inject()
     private val dobbyConfigsRepository: DobbyConfigsRepository by inject()
     val connectionState: ConnectionStateRepository by inject()
     private val tunnelManager = TunnelManager(this, logger)
@@ -108,6 +110,7 @@ class DobbyVpnService : VpnService() {
                     startStopMutex.withLock {
                         logger.log("[svc:$serviceId] statusFlow requested stop → begin teardown")
                         stopCloakClient()
+                        startTrustTunnel()
                         teardownVpn()
                         stopSelf()
                         logger.log("[svc:$serviceId] statusFlow requested stop → stopSelf() called")
@@ -123,6 +126,7 @@ class DobbyVpnService : VpnService() {
         when (dobbyConfigsRepository.getVpnInterface()) {
             VpnInterface.CLOAK_OUTLINE -> startCloakOutline(intent)
             VpnInterface.AMNEZIA_WG -> startAwg()
+            VpnInterface.TRUST_TUNNEL -> startTrustTunnel()
         }
         return START_STICKY
     }
@@ -189,6 +193,21 @@ class DobbyVpnService : VpnService() {
         }
     }
 
+    private fun startTrustTunnel() {
+        logger.log("[svc:$serviceId] startTrustTunnel(): begin")
+        serviceScope.launch {
+            startStopMutex.withLock {
+                trustTunnelInteractor.startTrustTunnel(instance)
+            }
+        }
+    }
+
+    private fun stopTrustTunnel() {
+        logger.log("[svc:$serviceId] stopTrustTunnel(): begin")
+        trustTunnelInteractor.stopTrustTunnel()
+        logger.log("[svc:$serviceId] stopTrustTunnel(): end")
+    }
+
     fun teardownVpn() {
         val fdBefore = runCatching { vpnInterface?.fd }.getOrNull()
         logger.log("[svc:$serviceId] teardownVpn(): begin fd=$fdBefore")
@@ -199,6 +218,7 @@ class DobbyVpnService : VpnService() {
         }
         runCatching {
             runBlocking {
+                startTrustTunnel()
                 stopCloakClient()
             }
         }.onFailure { e ->

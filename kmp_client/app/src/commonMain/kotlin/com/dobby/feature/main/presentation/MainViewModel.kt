@@ -46,6 +46,7 @@ class MainViewModel(
     private val tomlConfigApplier = TomlConfigApplier(
         outlineRepo = configsRepository,
         cloakRepo = configsRepository,
+        trustTunnelRepo = configsRepository,
         logger = logger
     )
 

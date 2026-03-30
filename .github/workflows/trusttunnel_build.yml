@@ -47,7 +47,7 @@ jobs:
           sed -i 's/-Wall -Wextra -Wpedantic/-Wno-gnu-zero-variadic-macro-arguments/g' CMakeLists.txt
 
           # 2. Inject our bridge into their tree
-          echo 'add_subdirectory("../../../go_client/trusttunnel/dobby_bridge" "dobby_bridge_build")' >> CMakeLists.txt
+          echo 'add_subdirectory("../../../go_client/trusttunnel/internal/dobby_bridge" "dobby_bridge_build")' >> CMakeLists.txt
           
           mkdir build && cd build
           cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -98,7 +98,7 @@ jobs:
           sed -i '' 's/-Wall -Wextra -Wpedantic/-Wno-gnu-zero-variadic-macro-arguments/g' CMakeLists.txt
 
           # 2. Inject our bridge into their tree
-          echo 'add_subdirectory("../../../go_client/trusttunnel/dobby_bridge" "dobby_bridge_build")' >> CMakeLists.txt
+          echo 'add_subdirectory("../../../go_client/trusttunnel/internal/dobby_bridge" "dobby_bridge_build")' >> CMakeLists.txt
           
           mkdir build && cd build
           cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -151,7 +151,7 @@ jobs:
       - name: Configure and Build Bridge
         working-directory: TrustTunnelClient/platform/windows
         run: |
-          Add-Content -Path CMakeLists.txt -Value 'add_subdirectory("../../../go_client/trusttunnel/dobby_bridge" "dobby_bridge_build")'
+          Add-Content -Path CMakeLists.txt -Value 'add_subdirectory("../../../go_client/trusttunnel/internal/dobby_bridge" "dobby_bridge_build")'
           mkdir build
           cd build
           cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo `
@@ -201,10 +201,10 @@ jobs:
           sed -i 's/-Wall -Wextra -Wpedantic/-Wno-gnu-zero-variadic-macro-arguments/g' CMakeLists.txt
           
           # 2. Convert our bridge from a SHARED library to a STATIC library for gomobile
-          sed -i 's/SHARED/STATIC/g' ../../../go_client/trusttunnel/dobby_bridge/CMakeLists.txt
+          sed -i 's/SHARED/STATIC/g' ../../../go_client/trusttunnel/internal/dobby_bridge/CMakeLists.txt
           
           # 3. Inject into their tree
-          echo 'add_subdirectory("../../../go_client/trusttunnel/dobby_bridge" "dobby_bridge_build")' >> CMakeLists.txt
+          echo 'add_subdirectory("../../../go_client/trusttunnel/internal/dobby_bridge" "dobby_bridge_build")' >> CMakeLists.txt
           
           mkdir build && cd build
           
@@ -259,10 +259,10 @@ jobs:
           sed -i '' 's/-Wall -Wextra -Wpedantic/-Wno-gnu-zero-variadic-macro-arguments/g' CMakeLists.txt
           
           # 2. Convert our bridge from SHARED to STATIC (using macOS BSD sed syntax)
-          sed -i '' 's/SHARED/STATIC/g' ../../../go_client/trusttunnel/dobby_bridge/CMakeLists.txt
+          sed -i '' 's/SHARED/STATIC/g' ../../../go_client/trusttunnel/internal/dobby_bridge/CMakeLists.txt
           
           # 3. Inject into their tree
-          echo 'add_subdirectory("../../../go_client/trusttunnel/dobby_bridge" "dobby_bridge_build")' >> CMakeLists.txt
+          echo 'add_subdirectory("../../../go_client/trusttunnel/internal/dobby_bridge" "dobby_bridge_build")' >> CMakeLists.txt
           
           mkdir build && cd build
           

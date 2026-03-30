@@ -17,6 +17,7 @@ import com.dobby.feature.vpn_service.domain.cloak.CloakConnectionInteractor
 import com.dobby.feature.vpn_service.domain.cloak.CloakLibFacadeImpl
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
 import com.dobby.feature.vpn_service.domain.outline.OutlineLibFacadeImpl
+import com.dobby.feature.vpn_service.domain.trusttunnel.TrustTunnelInteractor
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.dsl.factoryOf
 import org.koin.dsl.module
@@ -44,5 +45,6 @@ val androidVpnModule = module {
     factory<OutlineLibFacade> { OutlineLibFacadeImpl() }
     single<CloakConnectionInteractor> { CloakConnectionInteractor(get(), get(), get()) }
     single<OutlineInteractor> { OutlineInteractor(get(), get(), get()) }
+    single<TrustTunnelInteractor> { TrustTunnelInteractor(get(), get(), get()) }
     factoryOf(::DobbyVpnInterfaceFactory)
 }

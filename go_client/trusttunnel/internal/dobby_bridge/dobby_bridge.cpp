@@ -126,14 +126,10 @@ void dobby_vpn_start(const char *toml_config, dobby_on_state_changed_t state_cha
 void dobby_vpn_stop() {
     if (!m_vpn) return;
     
-    ag::event_loop::submit(m_ev_loop.get(), []() {
-        if (m_vpn) {
-            m_vpn->client->disconnect();
-            m_vpn->network_monitor->stop();
-            delete m_vpn;
-            m_vpn = nullptr;
-        }
-    }).release();
+    m_vpn->client->disconnect();
+    m_vpn->network_monitor->stop();
+    delete m_vpn;
+    m_vpn = nullptr;
 
     ag::vpn_event_loop_stop(m_ev_loop.get());
     if (m_executor_thread.joinable()) {

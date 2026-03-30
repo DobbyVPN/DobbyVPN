@@ -191,6 +191,35 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun getTrustTunnelConfig(): String {
+        return (prefs.getString("trustTunnelConfig", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getTrustTunnelConfig, size = ${it.length}")
+        }
+    }
+
+    override fun setTrustTunnelConfig(config: String) {
+        prefs.edit().putString("trustTunnelConfig", config).apply().also {
+            AndroidLog("DOBBY_TAG", "setTrustTunnelConfig, size = ${config.length}")
+        }
+    }
+
+    override fun getIsTrustTunnelEnabled(): Boolean {
+        return prefs.getBoolean("isTrustTunnelEnabled", false).also {
+            AndroidLog("DOBBY_TAG", "getIsTrustTunnelEnabled = $it")
+        }
+    }
+
+    override fun setIsTrustTunnelEnabled(isTrustTunnelEnabled: Boolean) {
+        if (isTrustTunnelEnabled) {
+            setVpnInterface(VpnInterface.TRUST_TUNNEL)
+        } else {
+            setVpnInterface(VpnInterface.DEFAULT_VALUE)
+        }
+        prefs.edit().putBoolean("isTrustTunnelEnabled", isTrustTunnelEnabled).apply().also {
+            AndroidLog("DOBBY_TAG", "setIsTrustTunnelEnabled = $isTrustTunnelEnabled")
+        }
+    }
+
     override fun couldStart(): Boolean {
         return true
     }

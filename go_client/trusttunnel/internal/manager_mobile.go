@@ -15,6 +15,15 @@ package internal
 #include <stdlib.h>
 #include "dobby_bridge/dobby_bridge.h"
 
+// 1. Define the C-Callback type
+typedef int (*protect_cb_t)(int fd);
+
+// 2. Helper to execute the callback safely in C
+static inline int execute_protect_cb(protect_cb_t cb, int fd) {
+    if (cb == NULL) return 0;
+    return cb(fd);
+}
+
 // C "Gateway" functions
 extern void c_state_changed_cb(void* arg, int state);
 extern void c_log_cb(int level, const char* msg);
@@ -26,32 +35,26 @@ import (
 	"unsafe"
 )
 
-// SocketProtector is an interface that will be implemented in Kotlin/Swift.
-type SocketProtector interface {
-	Protect(fd int) bool
-}
+// Global reference to the Kotlin callback pointer
+var globalProtectCallback C.protect_cb_t
 
-// Global reference to the active mobile protector
-var activeProtector SocketProtector
-
-// SetSocketProtector is called from Kotlin/Swift to inject the OS-level protector
-func SetSocketProtector(protector SocketProtector) {
-	activeProtector = protector
+// SetMobileProtectCallback is called from your exported wrapper
+func SetMobileProtectCallback(ptr unsafe.Pointer) {
+	globalProtectCallback = (C.protect_cb_t)(ptr)
 }
 
 //export go_protect_socket
 func go_protect_socket(fd C.int) C.int {
-	// iOS NetworkExtension automatically handles routing, so it usually doesn't need this.
-	// On Android, we MUST call VpnService.protect() via the injected interface.
-	if activeProtector != nil {
-		if activeProtector.Protect(int(fd)) {
-			return 0 // 0 = Success (Socket Protected)
+	if globalProtectCallback != nil {
+		// Call the Kotlin function.
+		// Kotlin will return 1 for True (Protected), 0 for False.
+		res := C.execute_protect_cb(globalProtectCallback, fd)
+		if res == 1 {
+			return 0 // TrustTunnel C++ expects 0 for Success
 		}
-		return -1 // -1 = Failed to protect
+		return -1 // TrustTunnel C++ expects -1 for Failure
 	}
-
-	// Default to allow if no protector is registered
-	return 0
+	return 0 // Default allow
 }
 
 //export go_state_changed

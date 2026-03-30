@@ -39,7 +39,7 @@ func (c *TrustTunnelClient) Connect() error {
 		return nil
 	}
 
-	c.manager = internal.NewTrustTunnelManager(c.config)
+	c.manager = internal.NewTrustTunnelManager(c.config, c.fd)
 
 	if err := c.manager.Start(); err != nil {
 		log.Infof("TrustTunnelClient: Connection failed: %v", err)
