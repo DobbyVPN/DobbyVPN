@@ -116,7 +116,7 @@ void dobby_vpn_start(const char *toml_config, dobby_on_state_changed_t state_cha
         // 4. Initialize the client safely
         m_vpn = new dobby_vpn_context();
         m_vpn->client = std::make_unique<ag::TrustTunnelClient>(std::move(*trusttunnel_config), std::move(callbacks));
-        
+
         // m_vpn->network_monitor = std::make_unique<ag::AutoNetworkMonitor>(m_vpn->client.get());
         // m_vpn->network_monitor->start();
         m_vpn->client->connect(ag::TrustTunnelClient::AutoSetup{});
@@ -126,7 +126,8 @@ void dobby_vpn_start(const char *toml_config, dobby_on_state_changed_t state_cha
 
 void dobby_vpn_stop() {
     if (!m_vpn) return;
-    
+    infolog(g_logger, "Starting TrustTunnel vpn core stop.");
+
     m_vpn->client->disconnect();
     m_vpn->network_monitor->stop();
     delete m_vpn;
@@ -136,4 +137,6 @@ void dobby_vpn_stop() {
     if (m_executor_thread.joinable()) {
         m_executor_thread.join();
     }
+
+    infolog(g_logger, "End TrustTunnel vpn core stop.");
 }
