@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'go_client/trusttunnel/dobby_bridge/**'
+      - 'go_client/trusttunnel/internal/dobby_bridge/**'
 
 jobs:
   Linux:
