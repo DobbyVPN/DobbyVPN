@@ -5,6 +5,7 @@
 #include <thread>
 #include <optional>
 #include <variant>
+#include <future>
 
 #include <magic_enum/magic_enum.hpp>
 #include <toml++/toml.h>
@@ -128,11 +129,32 @@ void dobby_vpn_stop() {
     if (!m_vpn) return;
     infolog(g_logger, "Starting TrustTunnel vpn core stop.");
 
-    m_vpn->client->disconnect();
-    m_vpn->network_monitor->stop();
-    delete m_vpn;
-    m_vpn = nullptr;
+    // 1. Create a promise to block the Go thread safely
+    std::promise<void> stop_promise;
+    std::future<void> stop_future = stop_promise.get_future();
 
+    // 2. Submit the destruction logic to the exact SAME background thread that created it
+    ag::event_loop::submit(m_ev_loop.get(), [&stop_promise]() {
+        if (m_vpn) {
+            m_vpn->client->disconnect();
+            
+            // Protect against the null pointer!
+            if (m_vpn->network_monitor) {
+                m_vpn->network_monitor->stop();
+            }
+            
+            // Safely destroy the client on its native thread
+            delete m_vpn;
+            m_vpn = nullptr;
+        }
+        // 3. Signal to the main thread that the memory is safely freed
+        stop_promise.set_value(); 
+    }).release();
+
+    // 4. Force the main thread to wait for the background thread to finish
+    stop_future.wait();
+
+    // 5. Now it is 100% safe to kill the event loop and join the thread
     ag::vpn_event_loop_stop(m_ev_loop.get());
     if (m_executor_thread.joinable()) {
         m_executor_thread.join();
