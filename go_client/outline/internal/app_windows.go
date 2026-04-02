@@ -6,6 +6,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"go_client/tunnel/protected_dialer"
 	"time"
 
 	"go_client/common"
@@ -84,25 +85,19 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	log.Infof("[Windows] Uplink interface: %s", netInterface.Name)
 	log.Infof("[Windows] Proxy addr: %s", ss.GetProxyAddr())
 
-	// Запоминаем индекс дефолтного интерфейса до старта движка.
-	// Это нужно для protect dialer'а.
-	idx, err := tunnel.GetDefaultInterfaceIndex()
+	idx, err := protected_dialer.GetDefaultInterfaceIndex()
 	if err != nil {
 		err = fmt.Errorf("failed to get default interface index: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	tunnel.SetDefaultInterfaceIndex(idx)
-
-	tunnel.CustomProtectedDialer = tunnel.DialContextWithProtect
-	tunnel.CustomProtectedPacketDialer = tunnel.DialUDPWithProtect
+	protected_dialer.SetDefaultInterfaceIndex(idx)
 
 	tunnel.StartEngineWindows(
 		ss.GetProxyAddr(),
 		netInterface.Name,
 	)
 
-	// ждём интерфейс
 	tunInterface, err := routing.WaitForInterfaceByIP(tunDeviceIP, 5*time.Second)
 	if err != nil {
 		tunnel.StopEngine()
@@ -130,8 +125,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("[Routing] Routing successfully configured")
 
-	// Сигнал об успешной инициализации только после полного старта:
-	// proxy поднят, wintun поднят, routing настроен.
+	// Signal successful initialization - connection is ready
 	signalInit(initResult, nil)
 
 	defer func() {

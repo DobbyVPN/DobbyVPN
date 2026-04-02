@@ -6,6 +6,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"go_client/tunnel/protected_dialer"
 	"sync"
 	"time"
 
@@ -109,9 +110,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	log.Infof("[Linux][Step 5][OK] Policy routing configured")
 
 	// protected sockets
-	tunnel.SetLinuxSocketMark(app.RoutingConfig.RoutingTableID)
-	tunnel.CustomProtectedDialer = tunnel.DialContextWithMark
-	tunnel.CustomProtectedPacketDialer = tunnel.DialUDPWithMark
+	protected_dialer.SetLinuxSocketMark(app.RoutingConfig.RoutingTableID)
 
 	log.Infof("[Linux][Step 5] Protected dialers installed (SO_MARK=%d)", app.RoutingConfig.RoutingTableID)
 
@@ -194,12 +193,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	// 9. tun2socks
 	log.Infof("[Linux][Step 9] Starting tun2socks (fd=%d proxy=%s)", fd, ss.GetProxyAddr())
-	if err := tunnel.StartEngineLinux(fd, ss.GetProxyAddr()); err != nil {
-		err = fmt.Errorf("failed to start tun2socks: %w", err)
-		log.Infof("[Linux][Step 9][ERROR] %v", err)
-		signalInit(initResult, err)
-		return err
-	}
+	tunnel.StartEngineLinuxBased(fd, ss.GetProxyAddr())
 
 	log.Infof("[Linux][Step 9][OK] tun2socks started — waiting for readiness...")
 

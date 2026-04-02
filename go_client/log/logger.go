@@ -151,11 +151,6 @@ func Infof(format string, args ...any) {
 	lg.logger.Info(fmt.Sprintf(format, args...))
 }
 
-func Debugf(format string, args ...any) { Infof("[Debug]" + fmt.Sprintf(format, args...)) }
-func Warnf(format string, args ...any)  { Infof("[Warn]" + fmt.Sprintf(format, args...)) }
-func Errorf(format string, args ...any) { Infof("[Error]" + fmt.Sprintf(format, args...)) }
-func Fatalf(format string, args ...any) { Infof("[Fatal]" + fmt.Sprintf(format, args...)) }
-
 type simpleHandler struct {
 	file *os.File
 }

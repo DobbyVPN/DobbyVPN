@@ -161,17 +161,11 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     }
 
-    public func sync() {
-        // UserDefaults.synchronize() is deprecated and unnecessary on iOS 12+
-        // The system automatically persists changes
-    }
-
     public func getGeoRoutingConf() -> String {
         return userDefaults.string(forKey: geoRoutingConfKey) ?? ""
     }
 
     public func setGeoRoutingConf(geoRoutingConf: String) {
         userDefaults.set(geoRoutingConf, forKey: geoRoutingConfKey)
-
     }
 }

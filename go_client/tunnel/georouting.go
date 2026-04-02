@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	"go_client/log"
 	"net"
 	"strings"
@@ -12,6 +13,31 @@ var (
 	DefaultBypassCIDRs []*net.IPNet
 )
 
+func IsBypass(metadata *M.Metadata) bool {
+	if metadata == nil {
+		return false
+	}
+
+	destIP := metadata.DstIP
+	if !destIP.IsValid() {
+		return false
+	}
+
+	routesMu.RLock()
+	defer routesMu.RUnlock()
+
+	stdIP := net.IP(destIP.AsSlice())
+
+	for _, route := range DefaultBypassCIDRs {
+		if route.Contains(stdIP) {
+			log.Infof("[Router] BYPASS hit for IP: %s", stdIP)
+			return true
+		}
+	}
+	log.Infof("[Router] PROXY route for IP: %s", stdIP)
+	return false
+}
+
 func mustCIDR(s string) {
 	_, ipnet, err := net.ParseCIDR(s)
 	if err != nil {
@@ -21,7 +47,6 @@ func mustCIDR(s string) {
 	}
 }
 
-// SetGeoRoutingConf задаёт список подсетей, которые будут обходить VPN
 func SetGeoRoutingConf(cidrs string) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -35,7 +60,6 @@ func SetGeoRoutingConf(cidrs string) {
 	log.Infof("[Routing] Set DefaultBypassCIDRs: %v", DefaultBypassCIDRs)
 }
 
-// ClearGeoRoutingConf очищает список обхода маршрутизации
 func ClearGeoRoutingConf() {
 	mu.Lock()
 	defer mu.Unlock()

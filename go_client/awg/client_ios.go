@@ -54,24 +54,6 @@ type tunnelHandle struct {
 
 var tunnelHandles = make(map[int32]tunnelHandle)
 
-//func init() {
-//	signals := make(chan os.Signal)
-//	signal.Notify(signals, unix.SIGUSR2)
-//	go func() {
-//		buf := make([]byte, os.Getpagesize())
-//		for {
-//			select {
-//			case <-signals:
-//				n := runtime.Stack(buf, true)
-//				buf[n] = 0
-//				if uintptr(loggerFunc) != 0 {
-//					C.callLogger(loggerFunc, loggerCtx, 0, (*C.char)(unsafe.Pointer(&buf[0])))
-//				}
-//			}
-//		}
-//	}()
-//}
-
 func AwgTurnOn(_ string, tunFd int32, settings string) int32 {
 	logger := &device.Logger{
 		Verbosef: log.Infof,

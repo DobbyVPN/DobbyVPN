@@ -1,6 +1,6 @@
-//go:build windows
+//go:build windows && !(android || ios)
 
-package tunnel
+package protected_dialer
 
 import (
 	"context"
@@ -33,7 +33,6 @@ func GetDefaultInterfaceIndex() (int, error) {
 	return iface.Index, nil
 }
 
-// вызывается один раз при старте
 func SetDefaultInterfaceIndex(idx int) {
 	defaultInterfaceIndex = idx
 	log.Infof("[Windows-Protect] Using interface index: %d", idx)

@@ -1,9 +1,8 @@
-package cloak_outline
+package protected_dialer
 
 import (
 	"context"
 	"go_client/log"
-	"go_client/tunnel"
 	"net"
 	"syscall"
 )
@@ -11,11 +10,6 @@ import (
 const (
 	SO_NO_TC_NETPOLICY = 0x1101
 )
-
-func init() {
-	tunnel.CustomProtectedDialer = DialContextWithProtect
-	tunnel.CustomProtectedPacketDialer = DialUDPWithProtect
-}
 
 func DialContextWithProtect(ctx context.Context, network string, address string) (net.Conn, error) {
 	log.Infof("[iOS-Protect] Dialing TCP: %s", address)
@@ -66,7 +60,7 @@ func DialUDPWithProtect(ctx context.Context, network string, address string) (ne
 	return &connectedUDPConn{
 		PacketConn: pc,
 		remoteAddr: udpAddr,
-		target:     address, // Добавил для логов в Write
+		target:     address,
 	}, nil
 }
 
@@ -89,9 +83,6 @@ func (c *connectedUDPConn) Write(b []byte) (int, error) {
 	n, err := c.WriteTo(b, c.remoteAddr)
 	if err != nil {
 		log.Infof("[iOS-Protect] UDP Write to %s FAILED: %v", c.target, err)
-	} else {
-		// Раскомментируй для очень детальной отладки UDP трафика:
-		// log.Infof("[iOS-Protect] UDP Sent %d bytes to %s", n, c.target)
 	}
 	return n, err
 }

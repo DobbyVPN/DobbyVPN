@@ -57,14 +57,11 @@ func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, Interf
 	log.Infof("Outline/routing: Starting routing configuration for Windows...")
 	log.Infof("Outline/routing: Proxy IP: %s, Tun Device Name: %s, Tun Gateway: %s, Tun Device IP: %s, Gateway IP: %s, Interface Name: %s",
 		proxyIP, TunDeviceName, TunGateway, TunDeviceIP, GatewayIP, InterfaceName)
-
 	log.Infof("Outline/routing: Setting up IP rule...")
 	AddOrUpdateProxyRoute(proxyIP, GatewayIP, InterfaceName)
 	log.Infof("Outline/routing: Added IP proxy rules via table")
-
 	addOrUpdateReservedSubnetBypass(GatewayIP, InterfaceName)
 	log.Infof("Outline/routing: Added IP reserved rules via table")
-
 	addIpv4TunRedirect(TunGateway, TunDeviceName)
 	log.Infof("Outline/routing: Added default IPv4 redirect routes via TUN")
 

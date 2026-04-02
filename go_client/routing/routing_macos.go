@@ -12,7 +12,8 @@ import (
 func AddScopedDefaultRoute(iface, gatewayIP string) error {
 	log.Infof("[Routing][Scoped] Adding scoped default route: default -> %s (ifscope=%s)", gatewayIP, iface)
 
-	out, err := run("route", "-n", "add", "default", gatewayIP, "-ifscope", iface)
+	cmd := fmt.Sprintf("route -n add default %s -ifscope %s", gatewayIP, iface)
+	out, err := ExecuteCommand(cmd)
 	if err != nil {
 		log.Infof("[Routing][Scoped] WARN: scoped default may already exist or failed: %v | output=%s", err, out)
 	} else {
@@ -24,7 +25,8 @@ func AddScopedDefaultRoute(iface, gatewayIP string) error {
 func DeleteScopedDefaultRoute(iface string) {
 	log.Infof("[Routing][Scoped] Removing scoped default route (ifscope=%s)", iface)
 
-	out, err := run("route", "-n", "delete", "default", "-ifscope", iface)
+	cmd := fmt.Sprintf("route -n delete default -ifscope %s", iface)
+	out, err := ExecuteCommand(cmd)
 	if err != nil {
 		log.Infof("[Routing][Scoped] WARN: failed to delete scoped default: %v | output=%s", err, out)
 	} else {
@@ -48,25 +50,11 @@ func ExecuteCommand(command string) (string, error) {
 	return outStr, nil
 }
 
-func run(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	output, err := cmd.CombinedOutput()
-	outStr := string(output)
-
-	log.Infof("[Routing][CMD] %s %v => %s", name, args, outStr)
-
-	if err != nil {
-		log.Infof("[Routing][CMD] ERROR: %v", err)
-		return outStr, fmt.Errorf("command failed: %w (%s)", err, outStr)
-	}
-
-	return outStr, nil
-}
-
 func AddProxyRoute(proxyIP string, gatewayIP string) error {
 	log.Infof("[Routing][Bypass] Adding direct route for proxy: %s -> %s (bypass VPN)", proxyIP, gatewayIP)
 
-	out, err := run("route", "-n", "add", "-host", proxyIP, gatewayIP)
+	cmd := fmt.Sprintf("route -n add -host %s %s", proxyIP, gatewayIP)
+	out, err := ExecuteCommand(cmd)
 	if err != nil {
 		log.Infof("[Routing][Bypass] WARN: route may already exist: %v | output=%s", err, out)
 	} else {
@@ -77,22 +65,20 @@ func AddProxyRoute(proxyIP string, gatewayIP string) error {
 }
 
 func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
-
 	log.Infof("[Routing][Start] Switching system routing to VPN (tun=%s)", tunName)
 
-	// удаляем default (не критично если нет)
 	log.Infof("[Routing][Start] Deleting existing default route (if any)")
-	_, _ = run("route", "-n", "delete", "default")
+	_, _ = ExecuteCommand("route -n delete default")
 
-	// основной маршрут через TUN
 	log.Infof("[Routing][Start] Setting default route -> %s (VPN)", tunName)
-	if _, err := run("route", "-n", "add", "default", "-interface", tunName); err != nil {
+	cmdDefault := fmt.Sprintf("route -n add default -interface %s", tunName)
+	if _, err := ExecuteCommand(cmdDefault); err != nil {
 		return fmt.Errorf("failed to set default via %s: %w", tunName, err)
 	}
 
-	// маршрут до сервера мимо VPN
 	log.Infof("[Routing][Start] Ensuring VPN server bypass route: %s -> %s", proxyIP, gatewayIP)
-	if _, err := run("route", "-n", "add", "-host", proxyIP, gatewayIP); err != nil {
+	cmdProxy := fmt.Sprintf("route -n add -host %s %s", proxyIP, gatewayIP)
+	if _, err := ExecuteCommand(cmdProxy); err != nil {
 		log.Infof("[Routing][Start] WARN: proxy route may already exist: %v", err)
 	}
 
@@ -102,17 +88,18 @@ func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
 }
 
 func StopRouting(proxyIP string, gatewayIP string) error {
-
 	log.Infof("[Routing][Stop] Restoring system routing")
 
 	log.Infof("[Routing][Stop] Removing proxy bypass route: %s", proxyIP)
-	_, _ = run("route", "-n", "delete", "-host", proxyIP, gatewayIP)
+	cmdDeleteProxy := fmt.Sprintf("route -n delete -host %s %s", proxyIP, gatewayIP)
+	_, _ = ExecuteCommand(cmdDeleteProxy)
 
 	log.Infof("[Routing][Stop] Removing VPN default route")
-	_, _ = run("route", "-n", "delete", "default")
+	_, _ = ExecuteCommand("route -n delete default")
 
 	log.Infof("[Routing][Stop] Restoring default route -> %s (physical network)", gatewayIP)
-	if _, err := run("route", "-n", "add", "default", gatewayIP); err != nil {
+	cmdRestore := fmt.Sprintf("route -n add default %s", gatewayIP)
+	if _, err := ExecuteCommand(cmdRestore); err != nil {
 		return fmt.Errorf("failed to restore default: %w", err)
 	}
 

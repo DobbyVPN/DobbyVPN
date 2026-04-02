@@ -1,11 +1,10 @@
-//go:build linux
-// +build linux
+//go:build linux && !(android || ios)
+// +build linux,!android,!ios
 
-package tunnel
+package protected_dialer
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"syscall"
 
@@ -59,7 +58,7 @@ func normalizeUDP(address string) string {
 	return "udp4"
 }
 
-func DialContextWithMark(ctx context.Context, network, address string) (net.Conn, error) {
+func DialContextWithProtect(ctx context.Context, network, address string) (net.Conn, error) {
 	log.Infof("[Linux-Protect][TCP] Dial start: network=%s address=%s", network, address)
 
 	host, port, err := net.SplitHostPort(address)
@@ -106,7 +105,7 @@ func DialContextWithMark(ctx context.Context, network, address string) (net.Conn
 	return conn, nil
 }
 
-func DialUDPWithMark(ctx context.Context, network, address string) (net.PacketConn, error) {
+func DialUDPWithProtect(ctx context.Context, network, address string) (net.PacketConn, error) {
 	log.Infof("[Linux-Protect][UDP] Dial start: network=%s address=%s", network, address)
 
 	host, port, err := net.SplitHostPort(address)
@@ -204,15 +203,4 @@ func (c *connectedUDPConn) Write(b []byte) (int, error) {
 
 func (c *connectedUDPConn) RemoteAddr() net.Addr {
 	return c.remoteAddr
-}
-
-func EnsureLinuxMarkIsConfigured() error {
-	if linuxSocketMark == 0 {
-		err := fmt.Errorf("linux socket mark is not configured")
-		log.Infof("[Linux-Protect][State][ERROR] %v", err)
-		return err
-	}
-
-	log.Infof("[Linux-Protect][State][OK] mark=%d ready", linuxSocketMark)
-	return nil
 }

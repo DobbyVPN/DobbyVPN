@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"go_client/log"
+	"go_client/tunnel/protected_dialer"
 	"sync"
 
 	"go_client/common"
@@ -98,9 +99,6 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("[Tunnel] Starting tun2socks engine (darwin/utun mode)...")
 
-	tunnel.CustomProtectedDialer = tunnel.DialContextWithProtect
-	tunnel.CustomProtectedPacketDialer = tunnel.DialUDPWithProtect
-
 	tunName, err := tunnel.StartEngineDarwin(ss.GetProxyAddr())
 	if err != nil {
 		signalInit(initResult, err)
@@ -122,13 +120,13 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("[Tunnel] VPN dataplane is up, starting traffic handling...")
 
-	ifaceName, idx, err := tunnel.GetDefaultInterfaceNameDarwin(gatewayIP)
+	ifaceName, idx, err := protected_dialer.GetDefaultInterfaceNameDarwin(gatewayIP)
 	if err != nil {
 		log.Infof("[Darwin-Protect] ERROR: failed to detect default interface for protected sockets: %v", err)
 	} else {
 		log.Infof("[Darwin-Protect] Selected interface for direct traffic: %s (index=%d)", ifaceName, idx)
 
-		tunnel.SetDefaultInterface(idx)
+		protected_dialer.SetDefaultInterface(idx)
 
 		log.Infof("[Routing] Adding scoped default route via %s -> %s (for protected traffic bypass)", ifaceName, gatewayIP.String())
 		if err := routing.AddScopedDefaultRoute(ifaceName, gatewayIP.String()); err != nil {

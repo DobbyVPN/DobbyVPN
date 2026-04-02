@@ -7,21 +7,6 @@ import (
 	"go_client/log"
 )
 
-//export StartHealthCheck
-func StartHealthCheck(period int32, sendMetrics bool) {
-	healthcheck.StartHealthCheck(period, sendMetrics)
-}
-
-//export StopHealthCheck
-func StopHealthCheck() {
-	healthcheck.StopHealthCheck()
-}
-
-//export Status
-func Status() string {
-	return healthcheck.Status()
-}
-
 //export TcpPing
 func TcpPing(address string) (int32, error) {
 	return healthcheck.TCPPing(address)

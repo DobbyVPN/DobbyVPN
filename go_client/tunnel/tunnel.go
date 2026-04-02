@@ -1,6 +1,5 @@
 package tunnel
 
-import "C"
 import (
 	"context"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/proxy/proto"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
 	"go_client/log"
+	"go_client/tunnel/protected_dialer"
 	"net"
 	"os/exec"
 	"strings"
@@ -24,44 +24,13 @@ var (
 	routesMu sync.RWMutex
 )
 
-// isBypass проверяет метаданные соединения на попадание в список исключений
-func isBypass(metadata *M.Metadata) bool {
-	if metadata == nil {
-		return false
-	}
-
-	// Используем DestinationIP() из метаданных (структура M)
-	destIP := metadata.DstIP
-	if !destIP.IsValid() {
-		return false
-	}
-
-	routesMu.RLock()
-	defer routesMu.RUnlock()
-
-	// Конвертируем netip.Addr в стандартный net.IP для проверки
-	stdIP := net.IP(destIP.AsSlice())
-
-	for _, route := range DefaultBypassCIDRs {
-		if route.Contains(stdIP) {
-			log.Infof("[Router] BYPASS hit for IP: %s", stdIP)
-			return true
-		}
-	}
-	log.Infof("[Router] PROXY route for IP: %s", stdIP)
-	return false
-}
-
-// --- Реализация DobbyProxy (Диспетчер) ---
-
-// DobbyProxy реализует интерфейс proxy.Proxy
 type DobbyProxy struct {
-	vpn    proxy.Proxy // Основной прокси (например, Shadowsocks или Socks5)
-	direct proxy.Proxy // Прямое соединение (Direct)
+	vpn    proxy.Proxy
+	direct proxy.Proxy
 }
 
 func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
-	if isBypass(metadata) {
+	if IsBypass(metadata) {
 		log.Infof("[Router] Using DIRECT for %s", metadata.DstIP)
 		return p.direct.DialContext(ctx, metadata)
 	}
@@ -69,9 +38,8 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 	return p.vpn.DialContext(ctx, metadata)
 }
 
-// DialUDP выбирает исходящий путь для UDP
 func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
-	if isBypass(metadata) {
+	if IsBypass(metadata) {
 		log.Infof("[Router] Using UDP DIRECT for %s", metadata.DstIP)
 		return p.direct.DialUDP(metadata)
 	}
@@ -79,12 +47,10 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	return p.vpn.DialUDP(metadata)
 }
 
-// Addr возвращает адрес VPN прокси
 func (p *DobbyProxy) Addr() string {
 	return p.vpn.Addr()
 }
 
-// Proto возвращает кастомный протокол или протокол VPN
 func (p *DobbyProxy) Proto() proto.Proto {
 	return p.vpn.Proto()
 }
@@ -141,55 +107,6 @@ func setDNS(name, dns string) error {
 	if err != nil {
 		return fmt.Errorf("set dns failed: %w %s", err, out)
 	}
-	return nil
-}
-
-func StartEngineLinux(fd int, proxyAddr string) error {
-	transferMu.Lock()
-	defer transferMu.Unlock()
-
-	if isRunning {
-		stopLocked()
-	}
-
-	devicePath := fmt.Sprintf("fd://%d", fd)
-	proxyURL := fmt.Sprintf("socks5://%s", proxyAddr)
-
-	log.Infof("[Engine][Linux] Starting tun2socks with FD: %d", fd)
-
-	key := &engine.Key{
-		Proxy:    proxyURL,
-		Device:   devicePath,
-		LogLevel: "info",
-		MTU:      1500,
-	}
-
-	engine.Insert(key)
-	engine.Start()
-
-	if tunnel.T() == nil {
-		return fmt.Errorf("tunnel.T() returned nil")
-	}
-
-	currentDialer := tunnel.T().Dialer()
-	vpnOutbound, ok := currentDialer.(proxy.Proxy)
-	if !ok {
-		return fmt.Errorf("current dialer is not proxy")
-	}
-
-	directOutbound := &ProtectedDirectProxy{
-		Proxy: proxy.NewDirect(),
-	}
-
-	wrapper := &DobbyProxy{
-		vpn:    vpnOutbound,
-		direct: directOutbound,
-	}
-
-	tunnel.T().SetDialer(wrapper)
-	isRunning = true
-
-	log.Infof("[Engine][Linux] tun2socks started successfully")
 	return nil
 }
 
@@ -256,25 +173,7 @@ func StartEngineDarwin(proxyAddr string) (string, error) {
 
 	log.Infof("[Engine] utun configured: %s", deviceName)
 
-	currentDialer := tunnel.T().Dialer()
-	vpnOutbound, ok := currentDialer.(proxy.Proxy)
-	if !ok {
-		engine.Stop()
-		return "", fmt.Errorf("dialer is not proxy")
-	}
-
-	directOutbound := &ProtectedDirectProxy{
-		Proxy: proxy.NewDirect(),
-	}
-
-	wrapper := &DobbyProxy{
-		vpn:    vpnOutbound,
-		direct: directOutbound,
-	}
-
-	tunnel.T().SetDialer(wrapper)
-
-	isRunning = true
+	setTunnelRouting()
 
 	log.Infof("[Engine] tun2socks started (darwin utun mode)")
 
@@ -282,7 +181,6 @@ func StartEngineDarwin(proxyAddr string) (string, error) {
 }
 
 func StartEngineWindows(proxyAddr string, uplinkIface string) {
-
 	log.Infof("[Engine] StartEngineDesktop proxy=%s iface=%s", proxyAddr, uplinkIface)
 
 	transferMu.Lock()
@@ -330,31 +228,10 @@ func StartEngineWindows(proxyAddr string, uplinkIface string) {
 
 	log.Infof("[Engine] Wintun configured: %s", ifName)
 
-	currentDialer := tunnel.T().Dialer()
-	vpnOutbound, ok := currentDialer.(proxy.Proxy)
-	if !ok {
-		log.Infof("[Engine] Current dialer is not proxy")
-		engine.Stop()
-		return
-	}
-
-	directOutbound := &ProtectedDirectProxy{
-		Proxy: proxy.NewDirect(),
-	}
-
-	wrapper := &DobbyProxy{
-		vpn:    vpnOutbound,
-		direct: directOutbound,
-	}
-
-	tunnel.T().SetDialer(wrapper)
-
-	isRunning = true
-
-	log.Infof("[Engine] tun2socks started successfully")
+	setTunnelRouting()
 }
 
-func StartEngine(fd int, proxyAddr string) {
+func StartEngineLinuxBased(fd int, proxyAddr string) {
 	transferMu.Lock()
 	defer transferMu.Unlock()
 
@@ -362,7 +239,6 @@ func StartEngine(fd int, proxyAddr string) {
 		stopLocked()
 	}
 
-	// Конфигурируем tun2socks с DEBUG логами
 	devicePath := fmt.Sprintf("fd://%d", fd)
 	proxyURL := fmt.Sprintf("socks5://%s", proxyAddr)
 
@@ -376,8 +252,12 @@ func StartEngine(fd int, proxyAddr string) {
 	}
 
 	engine.Insert(key)
-
 	engine.Start()
+
+	setTunnelRouting()
+}
+
+func setTunnelRouting() {
 
 	currentDialer := tunnel.T().Dialer()
 	vpnOutbound, ok := currentDialer.(proxy.Proxy)
@@ -386,7 +266,7 @@ func StartEngine(fd int, proxyAddr string) {
 		return
 	}
 
-	directOutbound := &ProtectedDirectProxy{
+	directOutbound := &protected_dialer.ProtectedDirectProxy{
 		Proxy: proxy.NewDirect(),
 	}
 
@@ -417,46 +297,6 @@ func stopLocked() {
 	isRunning = false
 }
 
-// SocketProtector — интерфейс для вызова VpnService.protect(fd) из Kotlin
 type SocketProtector interface {
 	Protect(fd int) bool
-}
-
-// ProtectedDirectProxy реализует интерфейс proxy.Proxy
-type ProtectedDirectProxy struct {
-	// Встраиваем стандартный direct, чтобы иметь доступ к методам типа Addr() и Proto()
-	proxy.Proxy
-}
-
-type ProtectDialer func(ctx context.Context, network, address string) (net.Conn, error)
-type ProtectPacketDialer func(ctx context.Context, network, address string) (net.PacketConn, error)
-
-var CustomProtectedDialer ProtectDialer
-var CustomProtectedPacketDialer ProtectPacketDialer
-
-// Теперь обновляем твой прокси, чтобы он вызывал эту переменную
-func (p *ProtectedDirectProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
-	network := metadata.Network.String()
-	address := metadata.DestinationAddress()
-
-	// Если функция установлена — используем её, иначе — обычный Direct
-	if CustomProtectedDialer != nil {
-		log.Infof("[Router] Direct dialing %s via %s (PROTECTED)", address, network)
-		return CustomProtectedDialer(ctx, network, address)
-	}
-
-	log.Infof("[Router] Direct dialing %s (NO PROTECTION)", address)
-	return p.Proxy.DialContext(ctx, metadata)
-}
-
-func (p *ProtectedDirectProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
-	network := metadata.Network.String()
-	address := metadata.DestinationAddress()
-
-	if CustomProtectedPacketDialer != nil {
-		log.Infof("[Router] Direct UDP dialing %s (PROTECTED)", address)
-		return CustomProtectedPacketDialer(context.Background(), network, address)
-	}
-
-	return p.Proxy.DialUDP(metadata)
 }

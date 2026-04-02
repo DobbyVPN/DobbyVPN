@@ -1,7 +1,7 @@
-//go:build darwin
-// +build darwin
+//go:build darwin && !(android || ios)
+// +build darwin,!android,!ios
 
-package tunnel
+package protected_dialer
 
 import (
 	"context"

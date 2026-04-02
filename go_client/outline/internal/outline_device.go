@@ -27,7 +27,6 @@ type OutlineDevice struct {
 }
 
 func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
-
 	ip, err := ResolveServerIPFromConfig(transportConfig)
 	if err != nil {
 		return nil, err
@@ -89,7 +88,6 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	switch network {
 
 	case "tcp":
-
 		conn, err := d.streamDialer.DialStream(ctx, addr)
 		if err != nil {
 			log.Infof("[SOCKS5 TCP ERROR] %v", err)

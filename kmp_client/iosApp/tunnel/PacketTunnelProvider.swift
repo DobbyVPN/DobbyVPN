@@ -14,16 +14,16 @@ import Network
 class PacketTunnelProvider: NEPacketTunnelProvider {
     private let launchId = UUID().uuidString
     private let tunnelId = String(UUID().uuidString.prefix(8))
-    
+
     private let outlineInteractor: OutlineInteractor = OutlineInteractor()
     private let cloakInteractor: CloakInteractor = CloakInteractor()
-    
+
     private var logs = NativeModuleHolder.logsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
 
     private var pathMonitor: Network.NWPathMonitor?
     private var lastPathStatus: Network.NWPath.Status?
-    
+
     func reportMemoryUsageMB() -> Double {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<natural_t>.stride)
@@ -43,7 +43,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[Memory] unable to get info")
         return 0.0
     }
-    
+
     func logInterfaces() {
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
         getifaddrs(&ifaddrPtr)
@@ -59,19 +59,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         freeifaddrs(ifaddrPtr)
     }
-    
+
     override func startTunnel(options: [String : NSObject]?) async throws {
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId)")
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
-        
+
         // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
         await teardownForStop(reason: "pre-start cleanup")
 
         startPathLogging()
-
-        configsRepository.sync()
-        
 
         let cloakConfig = configsRepository.getCloakConfig()
         // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
@@ -129,13 +126,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.dnsSettings = NEDNSSettings(servers: dnsServers)
         settings.dnsSettings?.matchDomains = [""]
 
-        
+
         logs.writeLog(log: "Settings are ready:")
         try await self.setTunnelNetworkSettings(settings)
         logs.writeLog(log: "Tunnel settings applied")
-        
+
         logInterfaces()
-        
+
         let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
         logs.writeLog(log: "Start go logger init path = \(path)")
         Cloak_outlineInitLogger(path)
@@ -143,7 +140,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         try outlineInteractor.startOutline()
         logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
         try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
-                        
+
         logs.writeLog(log: "startTunnel: all packet loops started")
     }
 
@@ -155,7 +152,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             completionHandler()
         }
     }
-    
+
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
             completionHandler?("Memory:\(reportMemoryUsageMB())".data(using: .utf8))
@@ -185,11 +182,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         monitor.start(queue: q)
         logs.writeLog(log: "[tunnel:\(tunnelId)] NWPathMonitor started")
     }
-    
+
     @MainActor
     private func teardownForStop(reason: String) async {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason)")
-                
+
         do {
             try cloakInteractor.stopCloak()
         } catch {
@@ -206,7 +203,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         pathMonitor?.cancel()
         pathMonitor = nil
         lastPathStatus = nil
-        
+
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason))")
     }
 
