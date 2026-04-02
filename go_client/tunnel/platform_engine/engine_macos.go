@@ -11,14 +11,14 @@ import (
 	"time"
 )
 
-var lastIface string
+var LastIface string
 
 func startPlatformEngine(cfg interface{}) error {
 	c := cfg.(EngineConfig)
 	proxyAddr := c.ProxyAddr
 
 	deviceName := "utun233"
-	lastIface = deviceName
+	LastIface = deviceName
 
 	log.Infof("[Engine][Darwin] proxy=%s device=%s", proxyAddr, deviceName)
 
@@ -68,8 +68,8 @@ func startPlatformEngine(cfg interface{}) error {
 }
 
 func stopPlatformEngine() {
-	if lastIface == "" {
+	if LastIface == "" {
 		return
 	}
-	lastIface = ""
+	LastIface = ""
 }

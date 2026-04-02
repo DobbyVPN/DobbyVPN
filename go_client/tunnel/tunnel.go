@@ -19,7 +19,6 @@ var (
 	isRunning bool
 )
 
-// DobbyProxy решает, куда направлять пакеты
 type DobbyProxy struct {
 	vpn    proxy.Proxy
 	direct proxy.Proxy
@@ -51,7 +50,6 @@ func (p *DobbyProxy) Proto() proto.Proto {
 	return p.vpn.Proto()
 }
 
-// StartEngine запускает туннель с заданным конфигом
 func StartEngine(cfg platform_engine.EngineConfig) error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -90,7 +88,6 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 	return nil
 }
 
-// StopEngine останавливает туннель и откатывает системные изменения
 func StopEngine() {
 	mu.Lock()
 	defer mu.Unlock()

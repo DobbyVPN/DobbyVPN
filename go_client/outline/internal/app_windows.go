@@ -6,6 +6,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"go_client/tunnel/platform_engine"
 	"go_client/tunnel/protected_dialer"
 	"time"
 
@@ -93,10 +94,15 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	}
 	protected_dialer.SetDefaultInterfaceIndex(idx)
 
-	tunnel.StartEngineWindows(
-		ss.GetProxyAddr(),
-		netInterface.Name,
-	)
+	err = tunnel.StartEngine(platform_engine.EngineConfig{
+		ProxyAddr:   ss.GetProxyAddr(),
+		FD:          -1,
+		UplinkIface: netInterface.Name,
+	})
+	if err != nil {
+		log.Infof("Can't start tun2socks: %v", err)
+		return err
+	}
 
 	tunInterface, err := routing.WaitForInterfaceByIP(tunDeviceIP, 5*time.Second)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"go_client/log"
+	"go_client/tunnel/platform_engine"
 	"go_client/tunnel/protected_dialer"
 	"sync"
 
@@ -99,11 +100,17 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("[Tunnel] Starting tun2socks engine (darwin/utun mode)...")
 
-	tunName, err := tunnel.StartEngineDarwin(ss.GetProxyAddr())
+	err = tunnel.StartEngine(platform_engine.EngineConfig{
+		ProxyAddr:   ss.GetProxyAddr(),
+		FD:          -1,
+		UplinkIface: "",
+	})
 	if err != nil {
 		signalInit(initResult, err)
 		return err
 	}
+
+	tunName := platform_engine.LastIface
 
 	log.Infof("[Tunnel] tun2socks started, interface: %s", tunName)
 

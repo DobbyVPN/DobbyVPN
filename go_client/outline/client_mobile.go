@@ -9,6 +9,7 @@ import (
 	outlineCommon "go_client/outline/common"
 	"go_client/outline/internal"
 	"go_client/tunnel"
+	"go_client/tunnel/platform_engine"
 	"golang.org/x/sys/unix"
 	"io"
 	"net"
@@ -59,7 +60,15 @@ func (c *OutlineClient) Connect() error {
 	}
 
 	log.Infof("starting tun2socks engine with proxy %s", od.GetProxyAddr())
-	tunnel.StartEngineMobile(fd, od.GetProxyAddr())
+	err = tunnel.StartEngine(platform_engine.EngineConfig{
+		ProxyAddr:   od.GetProxyAddr(),
+		FD:          fd,
+		UplinkIface: "",
+	})
+	if err != nil {
+		log.Infof("Can't start tun2socks: %v", err)
+		return err
+	}
 
 	common.Client.MarkActive(outlineCommon.Name)
 	log.Infof("outline client connected successfully via tun2socks")

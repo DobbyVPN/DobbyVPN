@@ -6,6 +6,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"go_client/tunnel/platform_engine"
 	"go_client/tunnel/protected_dialer"
 	"sync"
 	"time"
@@ -193,7 +194,15 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	// 9. tun2socks
 	log.Infof("[Linux][Step 9] Starting tun2socks (fd=%d proxy=%s)", fd, ss.GetProxyAddr())
-	tunnel.StartEngineLinux(fd, ss.GetProxyAddr())
+	err = tunnel.StartEngine(platform_engine.EngineConfig{
+		ProxyAddr:   ss.GetProxyAddr(),
+		FD:          fd,
+		UplinkIface: "",
+	})
+	if err != nil {
+		log.Infof("Can't start tun2socks: %v", err)
+		return err
+	}
 
 	log.Infof("[Linux][Step 9][OK] tun2socks started — waiting for readiness...")
 
