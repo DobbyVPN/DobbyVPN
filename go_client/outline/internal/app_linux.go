@@ -193,7 +193,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	// 9. tun2socks
 	log.Infof("[Linux][Step 9] Starting tun2socks (fd=%d proxy=%s)", fd, ss.GetProxyAddr())
-	tunnel.StartEngineLinuxBased(fd, ss.GetProxyAddr())
+	tunnel.StartEngineLinux(fd, ss.GetProxyAddr())
 
 	log.Infof("[Linux][Step 9][OK] tun2socks started — waiting for readiness...")
 

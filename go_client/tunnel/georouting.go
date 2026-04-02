@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	mu                 sync.Mutex
+	routesMu           sync.RWMutex
 	DefaultBypassCIDRs []*net.IPNet
 )
 
@@ -48,8 +48,8 @@ func mustCIDR(s string) {
 }
 
 func SetGeoRoutingConf(cidrs string) {
-	mu.Lock()
-	defer mu.Unlock()
+	routesMu.Lock()
+	defer routesMu.Unlock()
 
 	paths := strings.Fields(cidrs)
 
@@ -61,8 +61,8 @@ func SetGeoRoutingConf(cidrs string) {
 }
 
 func ClearGeoRoutingConf() {
-	mu.Lock()
-	defer mu.Unlock()
+	routesMu.Lock()
+	defer routesMu.Unlock()
 
 	DefaultBypassCIDRs = nil
 	log.Infof("[Routing] Cleared DefaultBypassCIDRs")

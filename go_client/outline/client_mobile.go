@@ -59,7 +59,7 @@ func (c *OutlineClient) Connect() error {
 	}
 
 	log.Infof("starting tun2socks engine with proxy %s", od.GetProxyAddr())
-	tunnel.StartEngineLinuxBased(fd, od.GetProxyAddr())
+	tunnel.StartEngineMobile(fd, od.GetProxyAddr())
 
 	common.Client.MarkActive(outlineCommon.Name)
 	log.Infof("outline client connected successfully via tun2socks")
