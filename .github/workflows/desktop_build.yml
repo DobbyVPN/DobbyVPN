@@ -107,12 +107,14 @@ jobs:
       - name: Find files
         id: find_deb
         run: |
-          echo "DEB_FILE=$(find ./output -name '*.deb' -type f)" >> $GITHUB_ENV
-          echo "TARGZ_FILE=$(find ./output -name '*.tar.gz' -type f)" >> $GITHUB_ENV
-          echo "MAC_AARCH64_FILE=$(find ./output -name '*-mac-aarch64.zip' -type f)" >> $GITHUB_ENV
-          echo "MAC_AMD64_FILE=$(find ./output -name '*-mac-amd64.zip' -type f)" >> $GITHUB_ENV
-          echo "MSIX_FILE=$(find ./output -name '*.msix' -type f)" >> $GITHUB_ENV
-          echo "WIN_ZIP_FILE=$(find ./output -name '*-windows-amd64.zip' -type f)" >> $GITHUB_ENV
+          {
+            echo "DEB_FILE=$(find ./output -name '*.deb' -type f)"
+            echo "TARGZ_FILE=$(find ./output -name '*.tar.gz' -type f)"
+            echo "MAC_AARCH64_FILE=$(find ./output -name '*-mac-aarch64.zip' -type f)"
+            echo "MAC_AMD64_FILE=$(find ./output -name '*-mac-amd64.zip' -type f)"
+            echo "MSIX_FILE=$(find ./output -name '*.msix' -type f)"
+            echo "WIN_ZIP_FILE=$(find ./output -name '*-windows-amd64.zip' -type f)"
+          } >> "$GITHUB_ENV"
 
       - name: Upload Debian
         uses: actions/upload-artifact@v4

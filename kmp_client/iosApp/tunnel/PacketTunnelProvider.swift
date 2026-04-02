@@ -126,7 +126,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.dnsSettings = NEDNSSettings(servers: dnsServers)
         settings.dnsSettings?.matchDomains = [""]
 
-
         logs.writeLog(log: "Settings are ready:")
         try await self.setTunnelNetworkSettings(settings)
         logs.writeLog(log: "Tunnel settings applied")
