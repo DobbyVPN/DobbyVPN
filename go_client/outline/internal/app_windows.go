@@ -1,5 +1,5 @@
-//go:build windows
-// +build windows
+//go:build windows && !(android || ios)
+// +build windows,!android,!ios
 
 package internal
 

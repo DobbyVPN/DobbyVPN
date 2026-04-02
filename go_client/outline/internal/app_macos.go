@@ -1,5 +1,5 @@
-//go:build darwin
-// +build darwin
+//go:build darwin && !(android || ios)
+// +build darwin,!android,!ios
 
 package internal
 
