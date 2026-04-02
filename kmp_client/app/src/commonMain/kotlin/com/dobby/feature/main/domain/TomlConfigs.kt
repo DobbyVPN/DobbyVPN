@@ -48,8 +48,13 @@ data class CloakClientConfig(
 )
 
 @Serializable
+data class ExcludeIPsConfig(
+    val IPs: List<String>
+)
+
+@Serializable
 data class TomlConfigs(
-    // Optional top-level label (some configs put it outside [Outline]); ignored by the app.
     val Description: String? = null,
     val Outline: OutlineConfig? = null,
+    val ExcludeIPs: ExcludeIPsConfig? = null
 )

@@ -145,3 +145,18 @@ Java_com_dobby_outline_OutlineGo_checkServerAlive(JNIEnv *env, jclass clazz,
     (*env)->ReleaseStringUTFChars(env, jAddress, address);
     return res;
 }
+
+JNIEXPORT void JNICALL
+Java_com_dobby_outline_OutlineGo_setGeoRoutingConf(JNIEnv *env, jclass clazz, jstring cidrs_c) {
+    const char *cidrsС = (*env)->GetStringUTFChars(env, cidrs_c, NULL);
+    // Call Go-exported function to check server availability
+    SetGeoRoutingConf(cidrsС);
+    // Release UTF-8 string obtained from Java
+    (*env)->ReleaseStringUTFChars(env, cidrs_c, cidrsС);
+}
+
+JNIEXPORT void JNICALL
+Java_com_dobby_outline_OutlineGo_clearGeoRoutingConf(JNIEnv *env, jclass clazz) {
+    // Call Go-exported function to check server availability
+    ClearGeoRoutingConf();
+}

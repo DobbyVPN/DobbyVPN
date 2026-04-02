@@ -24,69 +24,6 @@ var (
 	routesMu sync.RWMutex
 )
 
-func mustCIDR(s string) *net.IPNet {
-	_, ipnet, err := net.ParseCIDR(s)
-	if err != nil {
-		panic(err)
-	}
-	return ipnet
-}
-
-var DefaultBypassCIDRs = []*net.IPNet{
-	mustCIDR("103.21.244.0/22"),
-	mustCIDR("103.22.200.0/22"),
-	mustCIDR("103.31.4.0/22"),
-	mustCIDR("104.16.0.0/13"),
-	mustCIDR("104.24.0.0/14"),
-	mustCIDR("108.162.192.0/18"),
-	mustCIDR("131.0.72.0/22"),
-	mustCIDR("141.101.64.0/18"),
-	mustCIDR("162.158.0.0/15"),
-	mustCIDR("172.64.0.0/13"),
-	mustCIDR("173.245.48.0/20"),
-	mustCIDR("188.114.96.0/20"),
-	mustCIDR("190.93.240.0/20"),
-	mustCIDR("197.234.240.0/22"),
-	mustCIDR("198.41.128.0/17"),
-}
-
-func ResolveHostToCIDRs(host string) []*net.IPNet {
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		log.Infof("[Bypass] resolve failed for %s: %v", host, err)
-		return nil
-	}
-
-	var result []*net.IPNet
-	for _, ip := range ips {
-		if v4 := ip.To4(); v4 != nil {
-			_, n, _ := net.ParseCIDR(v4.String() + "/32")
-			result = append(result, n)
-			continue
-		}
-		_, n, _ := net.ParseCIDR(ip.String() + "/128")
-		result = append(result, n)
-		result = append(result, n)
-	}
-	return result
-}
-func AddBypassHost(host string) {
-	cidrs := ResolveHostToCIDRs(host)
-	if len(cidrs) == 0 {
-		log.Infof("[Bypass] no IPs resolved for %s", host)
-		return
-	}
-
-	routesMu.Lock()
-	defer routesMu.Unlock()
-
-	DefaultBypassCIDRs = append(DefaultBypassCIDRs, cidrs...)
-
-	for _, c := range cidrs {
-		log.Infof("[Bypass] added %s for host %s", c.String(), host)
-	}
-}
-
 // isBypass проверяет метаданные соединения на попадание в список исключений
 func isBypass(metadata *M.Metadata) bool {
 	if metadata == nil {
@@ -207,7 +144,144 @@ func setDNS(name, dns string) error {
 	return nil
 }
 
-func StartEngineDesktop(proxyAddr string, uplinkIface string) {
+func StartEngineLinux(fd int, proxyAddr string) error {
+	transferMu.Lock()
+	defer transferMu.Unlock()
+
+	if isRunning {
+		stopLocked()
+	}
+
+	devicePath := fmt.Sprintf("fd://%d", fd)
+	proxyURL := fmt.Sprintf("socks5://%s", proxyAddr)
+
+	log.Infof("[Engine][Linux] Starting tun2socks with FD: %d", fd)
+
+	key := &engine.Key{
+		Proxy:    proxyURL,
+		Device:   devicePath,
+		LogLevel: "info",
+		MTU:      1500,
+	}
+
+	engine.Insert(key)
+	engine.Start()
+
+	if tunnel.T() == nil {
+		return fmt.Errorf("tunnel.T() returned nil")
+	}
+
+	currentDialer := tunnel.T().Dialer()
+	vpnOutbound, ok := currentDialer.(proxy.Proxy)
+	if !ok {
+		return fmt.Errorf("current dialer is not proxy")
+	}
+
+	directOutbound := &ProtectedDirectProxy{
+		Proxy: proxy.NewDirect(),
+	}
+
+	wrapper := &DobbyProxy{
+		vpn:    vpnOutbound,
+		direct: directOutbound,
+	}
+
+	tunnel.T().SetDialer(wrapper)
+	isRunning = true
+
+	log.Infof("[Engine][Linux] tun2socks started successfully")
+	return nil
+}
+
+func StartEngineDarwin(proxyAddr string) (string, error) {
+	log.Infof("[Engine] StartEngineDarwin proxy=%s", proxyAddr)
+
+	transferMu.Lock()
+	defer transferMu.Unlock()
+
+	if isRunning {
+		stopLocked()
+	}
+
+	proxyURL := fmt.Sprintf("socks5://%s", proxyAddr)
+	deviceName := "utun233"
+
+	key := &engine.Key{
+		Proxy:    proxyURL,
+		Device:   deviceName,
+		LogLevel: "info",
+		MTU:      1500,
+	}
+
+	engine.Insert(key)
+
+	log.Infof("[Engine] Starting tun2socks (utun mode)...")
+	engine.Start()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Проверка интерфейса
+	ifaces, _ := net.Interfaces()
+	found := false
+	for _, ifc := range ifaces {
+		if ifc.Name == deviceName {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		engine.Stop()
+		return "", fmt.Errorf("utun interface not found: %s", deviceName)
+	}
+
+	log.Infof("[Engine] utun created: %s", deviceName)
+
+	cmd := exec.Command(
+		"ifconfig",
+		deviceName,
+		"inet",
+		"198.18.0.1",
+		"198.18.0.2",
+		"netmask",
+		"255.255.0.0",
+		"up",
+	)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		engine.Stop()
+		return "", fmt.Errorf("ifconfig failed: %w (%s)", err, out)
+	}
+
+	log.Infof("[Engine] utun configured: %s", deviceName)
+
+	currentDialer := tunnel.T().Dialer()
+	vpnOutbound, ok := currentDialer.(proxy.Proxy)
+	if !ok {
+		engine.Stop()
+		return "", fmt.Errorf("dialer is not proxy")
+	}
+
+	directOutbound := &ProtectedDirectProxy{
+		Proxy: proxy.NewDirect(),
+	}
+
+	wrapper := &DobbyProxy{
+		vpn:    vpnOutbound,
+		direct: directOutbound,
+	}
+
+	tunnel.T().SetDialer(wrapper)
+
+	isRunning = true
+
+	log.Infof("[Engine] tun2socks started (darwin utun mode)")
+
+	return deviceName, nil
+}
+
+func StartEngineWindows(proxyAddr string, uplinkIface string) {
 
 	log.Infof("[Engine] StartEngineDesktop proxy=%s iface=%s", proxyAddr, uplinkIface)
 
@@ -273,8 +347,6 @@ func StartEngineDesktop(proxyAddr string, uplinkIface string) {
 		direct: directOutbound,
 	}
 
-	AddBypassHost("api.ipify.org")
-
 	tunnel.T().SetDialer(wrapper)
 
 	isRunning = true
@@ -291,7 +363,7 @@ func StartEngine(fd int, proxyAddr string) {
 	}
 
 	// Конфигурируем tun2socks с DEBUG логами
-	devicePath := fmt.Sprintf("fd://%d?net=198.18.0.0/15", fd)
+	devicePath := fmt.Sprintf("fd://%d", fd)
 	proxyURL := fmt.Sprintf("socks5://%s", proxyAddr)
 
 	log.Infof("[Engine] Starting Dobby with FD: %d", fd)
@@ -304,6 +376,8 @@ func StartEngine(fd int, proxyAddr string) {
 	}
 
 	engine.Insert(key)
+
+	engine.Start()
 
 	currentDialer := tunnel.T().Dialer()
 	vpnOutbound, ok := currentDialer.(proxy.Proxy)
@@ -327,8 +401,6 @@ func StartEngine(fd int, proxyAddr string) {
 
 	tunnel.T().SetDialer(wrapper)
 
-	engine.Start()
-
 	isRunning = true
 }
 
@@ -348,12 +420,6 @@ func stopLocked() {
 // SocketProtector — интерфейс для вызова VpnService.protect(fd) из Kotlin
 type SocketProtector interface {
 	Protect(fd int) bool
-}
-
-var globalProtector SocketProtector
-
-func RegisterProtector(p SocketProtector) {
-	globalProtector = p
 }
 
 // ProtectedDirectProxy реализует интерфейс proxy.Proxy

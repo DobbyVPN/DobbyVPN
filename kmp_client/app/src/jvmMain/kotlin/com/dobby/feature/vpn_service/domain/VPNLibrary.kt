@@ -28,6 +28,11 @@ interface VPNLibrary : Library {
 
     // CheckServerAlive
     fun CheckServerAlive(address: String, port: Int): Int
+
+    // GeoRouting
+    fun SetGeoRoutingConf(paths: String)
+
+    fun ClearGeoRoutingConf()
 }
 
 class VPNLibraryLoader(
@@ -211,5 +216,31 @@ class VPNLibraryLoader(
             e.printStackTrace()
         }
         return false
+    }
+
+    fun setGeoRoutingConf(paths: String) {
+        try {
+            INSTANCE.SetGeoRoutingConf(paths)
+            logger.log("SetGeoRoutingConf called successfully.")
+        } catch (e: UnsatisfiedLinkError) {
+            logger.log("Failed to call SetGeoRoutingConf: ${e.message}")
+            e.printStackTrace()
+        } catch (e: Exception) {
+            logger.log("An error occurred while calling SetGeoRoutingConf: ${e.message}")
+            e.printStackTrace()
+        }
+    }
+
+    fun clearGeoRoutingConf() {
+        try {
+            INSTANCE.ClearGeoRoutingConf()
+            logger.log("ClearGeoRoutingConf called successfully.")
+        } catch (e: UnsatisfiedLinkError) {
+            logger.log("Failed to call ClearGeoRoutingConf: ${e.message}")
+            e.printStackTrace()
+        } catch (e: Exception) {
+            logger.log("An error occurred while calling ClearGeoRoutingConf: ${e.message}")
+            e.printStackTrace()
+        }
     }
 }

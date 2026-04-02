@@ -97,7 +97,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	tunnel.CustomProtectedDialer = tunnel.DialContextWithProtect
 	tunnel.CustomProtectedPacketDialer = tunnel.DialUDPWithProtect
 
-	tunnel.StartEngineDesktop(
+	tunnel.StartEngineWindows(
 		ss.GetProxyAddr(),
 		netInterface.Name,
 	)

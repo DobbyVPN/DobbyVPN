@@ -5,6 +5,7 @@ import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import android.util.Log.i as AndroidLog
 import com.dobby.outline.OutlineGo
+import androidx.core.content.edit
 
 internal class DobbyConfigsRepositoryImpl(
     private val prefs: SharedPreferences
@@ -204,6 +205,18 @@ internal class DobbyConfigsRepositoryImpl(
     override fun setIsUserInitStop(isUserInitStop: Boolean) {
         prefs.edit().putBoolean("isUserInitStop", isUserInitStop).apply().also {
             AndroidLog("DOBBY_TAG", "setIsUserInitStop = $isUserInitStop")
+        }
+    }
+
+    override fun getGeoRoutingConf(): String {
+        return (prefs.getString("geoRoutingConf", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "geoRoutingConf, len(geoRoutingConf) = ${it.length}")
+        }
+    }
+
+    override fun setGeoRoutingConf(geoRoutingConf: String) {
+        prefs.edit { putString("geoRoutingConf", geoRoutingConf) }.also {
+            AndroidLog("DOBBY_TAG", "geoRoutingConf = $geoRoutingConf")
         }
     }
 

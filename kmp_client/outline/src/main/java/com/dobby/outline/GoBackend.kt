@@ -104,6 +104,12 @@ class OutlineGo {
         @JvmStatic
         external fun registerVpnService(service: android.net.VpnService)
 
+        @JvmStatic
+        external fun setGeoRoutingConf(cidrsC: String)
+
+        @JvmStatic
+        external fun clearGeoRoutingConf()
+
         /**
          * Safe call to newOutlineClient with a library-loaded check.
          */
@@ -189,6 +195,23 @@ class OutlineGo {
             } catch (e: Exception) {
                 Log.e(TAG, "Read failed", e)
                 -1
+            }
+        }
+
+        suspend fun safeSetGeoRoutingConf(cidrsC: String) {
+            try {
+                ensureLibrariesLoaded()
+                setGeoRoutingConf(cidrsC)
+            } catch (e: Exception) {
+                Log.e(TAG, "InitLogger failed", e)
+            }
+        }
+        suspend fun safeClearGeoRoutingConf() {
+            try {
+                ensureLibrariesLoaded()
+                clearGeoRoutingConf()
+            } catch (e: Exception) {
+                Log.e(TAG, "Read failed", e)
             }
         }
     }

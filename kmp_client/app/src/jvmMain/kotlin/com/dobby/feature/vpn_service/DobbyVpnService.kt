@@ -49,7 +49,7 @@ private fun buildOutlineUrl(
             if (tcpPath.isNotEmpty()) add("tcp_path=$tcpPath")
             if (udpPath.isNotEmpty()) add("udp_path=$udpPath")
         }.joinToString("&")
-        
+
         // Use tls:sni|ws: for WebSocket over TLS (wss://) with SNI
         val tlsPrefix = "tls:sni=$effectiveHost"
         if (wsParams.isNotEmpty()) {
@@ -78,6 +78,7 @@ internal class DobbyVpnService(
             }
 
             val iface = dobbyConfigsRepository.getVpnInterface()
+            vpnLibrary.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
             when (iface) {
                 VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
                 VpnInterface.AMNEZIA_WG -> startAwg()
@@ -98,6 +99,7 @@ internal class DobbyVpnService(
             VpnInterface.AMNEZIA_WG -> stopAwg()
             null -> return
         }
+        vpnLibrary.clearGeoRoutingConf()
         runningInterface = null
     }
 
@@ -131,7 +133,7 @@ internal class DobbyVpnService(
             if (websocketEnabled) {
                 logger.log("WebSocket transport requested (will connect if server supports it)")
             }
-            
+
             val connected = vpnLibrary.startOutline(outlineUrl)
             if (connected) {
                 logger.log("Outline connection established successfully")
