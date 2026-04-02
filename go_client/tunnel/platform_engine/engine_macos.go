@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && !(android || ios)
 
 package platform_engine
 
