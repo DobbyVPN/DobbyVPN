@@ -82,8 +82,6 @@ naming:
   active: true
   MatchingDeclarationName:
     active: true
-  UtilityClassWithPublicConstructor:
-    active: true
   FunctionNaming:
     active: true
     functionPattern: "[a-zA-Z][a-zA-Z0-9]*"
@@ -113,6 +111,8 @@ potential-bugs:
 
 style:
   active: true
+  UtilityClassWithPublicConstructor:
+    active: true
   ForbiddenComment:
     active: false
   MagicNumber:

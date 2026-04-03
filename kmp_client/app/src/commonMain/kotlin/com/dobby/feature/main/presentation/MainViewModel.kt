@@ -42,6 +42,7 @@ class MainViewModel(
     //endregion
 
     private val tomlConfigApplier = TomlConfigApplier(
+        vpnRepo = configsRepository,
         outlineRepo = configsRepository,
         cloakRepo = configsRepository,
         mainRepo = configsRepository,

@@ -1,13 +1,18 @@
 package com.dobby.feature.vpn_service
 
-import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.domain.maskStr
+import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
-import interop.VPNLibraryLoader
+import interop.awg.AwgLibrary
+import interop.cloak.CloakLibrary
+import interop.georouting.GeoroutingLibrary
+import interop.logger.LoggerLibrary
+import interop.outline.OutlineLibrary
 import kotlinx.coroutines.runBlocking
-import java.util.Base64
+import java.util.*
 
 private fun extractHostFromHostPort(hostPortMaybeWithQuery: String): String {
     val hostPort = hostPortMaybeWithQuery.substringBefore("?").trim()
@@ -65,11 +70,21 @@ private fun buildOutlineUrl(
 internal class DobbyVpnService(
     private val dobbyConfigsRepository: DobbyConfigsRepository,
     private val logger: Logger,
-    private val vpnLibrary: VPNLibraryLoader,
+    private val awgLibrary: AwgLibrary,
+    private val outlineLibrary: OutlineLibrary,
+    private val cloakLibrary: CloakLibrary,
+    private val loggerLibrary: LoggerLibrary,
+    private val georoutingLibrary: GeoroutingLibrary,
     private val connectionState: ConnectionStateRepository
 ) {
     private val startStopLock = Any()
     private var runningInterface: VpnInterface? = null
+
+    fun enableTunnelLogging() {
+        val logFilePath = provideLogFilePath()
+        logger.log("Init tunnel logging to the path: $logFilePath")
+        loggerLibrary.InitLogger(logFilePath.toString())
+    }
 
     fun startService() {
         synchronized(startStopLock) {
@@ -77,8 +92,10 @@ internal class DobbyVpnService(
                 stopCurrentLocked()
             }
 
+            enableTunnelLogging()
+
             val iface = dobbyConfigsRepository.getVpnInterface()
-            vpnLibrary.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
+            georoutingLibrary.SetGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
             when (iface) {
                 VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
                 VpnInterface.AMNEZIA_WG -> startAwg()
@@ -99,7 +116,7 @@ internal class DobbyVpnService(
             VpnInterface.AMNEZIA_WG -> stopAwg()
             null -> return
         }
-        vpnLibrary.clearGeoRoutingConf()
+        georoutingLibrary.ClearGeoRoutingConf()
         runningInterface = null
     }
 
@@ -119,7 +136,7 @@ internal class DobbyVpnService(
         runBlocking {
             logger.log("CloakIsEnable = " + dobbyConfigsRepository.getIsCloakEnabled())
             if (dobbyConfigsRepository.getIsCloakEnabled()) {
-                vpnLibrary.startCloak(localHost, localPort, dobbyConfigsRepository.getCloakConfig(), false)
+                cloakLibrary.StartCloakClient(localHost, localPort, dobbyConfigsRepository.getCloakConfig(), false)
             }
             val outlineUrl = buildOutlineUrl(
                 methodPassword = methodPassword,
@@ -134,16 +151,16 @@ internal class DobbyVpnService(
                 logger.log("WebSocket transport requested (will connect if server supports it)")
             }
 
-            val connected = vpnLibrary.startOutline(outlineUrl)
-            if (connected) {
+            val connected = outlineLibrary.StartOutline(outlineUrl)
+            if (connected == 0) {
                 logger.log("Outline connection established successfully")
                 connectionState.updateVpnStarted(isStarted = true)
             } else {
-                logger.log("Outline connection FAILED: ${vpnLibrary.lastOutlineError}")
+                logger.log("Outline connection FAILED: ${outlineLibrary.GetOutlineLastError()}")
                 // Stop Cloak if it was started
                 if (dobbyConfigsRepository.getIsCloakEnabled()) {
                     logger.log("Stopping Cloak due to Outline failure")
-                    vpnLibrary.stopCloak()
+                    cloakLibrary.StopCloakClient()
                 }
                 connectionState.updateVpnStarted(isStarted = false)
             }
@@ -154,11 +171,11 @@ internal class DobbyVpnService(
     private fun stopCloakOutline() {
         logger.log("StopOutline")
         runBlocking {
-            vpnLibrary.stopOutline()
+            outlineLibrary.StopOutline()
             logger.log("CloakIsEnable = " + dobbyConfigsRepository.getIsCloakEnabled())
             if (dobbyConfigsRepository.getIsCloakEnabled()) {
                 logger.log("StopCloak")
-                vpnLibrary.stopCloak()
+                cloakLibrary.StopCloakClient()
             }
             connectionState.updateVpnStarted(isStarted = false)
         }
@@ -168,12 +185,12 @@ internal class DobbyVpnService(
         val apiKey = dobbyConfigsRepository.getAwgConfig()
         logger.log("startAwg with key: $apiKey")
         runBlocking { connectionState.updateVpnStarted(isStarted = true) }
-        vpnLibrary.startAwg(apiKey)
+        awgLibrary.StartAwg("awg0", apiKey)
     }
 
     private fun stopAwg() {
         logger.log("stopAwg")
-        vpnLibrary.stopAwg()
+        awgLibrary.StopAwg()
         runBlocking { connectionState.updateVpnStarted(isStarted = false) }
     }
 
