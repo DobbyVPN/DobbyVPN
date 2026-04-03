@@ -13,7 +13,7 @@ import (
 
 var (
 	routesMu           sync.RWMutex
-	DefaultBypassCIDRs []*net.IPNet
+	defaultBypassCIDRs []*net.IPNet
 )
 
 func IsBypass(metadata *M.Metadata) bool {
@@ -31,7 +31,7 @@ func IsBypass(metadata *M.Metadata) bool {
 
 	stdIP := net.IP(destIP.AsSlice())
 
-	for _, route := range DefaultBypassCIDRs {
+	for _, route := range defaultBypassCIDRs {
 		if route.Contains(stdIP) {
 			log.Infof("[Router] BYPASS hit for IP: %s", stdIP)
 			return true
@@ -46,7 +46,7 @@ func mustCIDR(s string) {
 	if err != nil {
 		addBypassHost(s)
 	} else {
-		DefaultBypassCIDRs = append(DefaultBypassCIDRs, ipnet)
+		defaultBypassCIDRs = append(defaultBypassCIDRs, ipnet)
 	}
 }
 
@@ -60,15 +60,15 @@ func SetGeoRoutingConf(cidrs string) {
 		mustCIDR(cidr)
 	}
 
-	log.Infof("[Routing] Set DefaultBypassCIDRs: %v", DefaultBypassCIDRs)
+	log.Infof("[Routing] Set defaultBypassCIDRs: %v", defaultBypassCIDRs)
 }
 
 func ClearGeoRoutingConf() {
 	routesMu.Lock()
 	defer routesMu.Unlock()
 
-	DefaultBypassCIDRs = nil
-	log.Infof("[Routing] Cleared DefaultBypassCIDRs")
+	defaultBypassCIDRs = nil
+	log.Infof("[Routing] Cleared defaultBypassCIDRs")
 }
 
 func resolveHostToCIDRs(host string) []*net.IPNet {
@@ -104,7 +104,7 @@ func addBypassHost(host string) {
 	routesMu.Lock()
 	defer routesMu.Unlock()
 
-	DefaultBypassCIDRs = append(DefaultBypassCIDRs, cidrs...)
+	defaultBypassCIDRs = append(defaultBypassCIDRs, cidrs...)
 
 	for _, c := range cidrs {
 		log.Infof("[Bypass] added %s for host %s", c.String(), host)
