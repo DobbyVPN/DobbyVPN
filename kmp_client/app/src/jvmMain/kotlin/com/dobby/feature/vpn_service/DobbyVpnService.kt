@@ -8,6 +8,7 @@ import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import interop.awg.AwgLibrary
 import interop.cloak.CloakLibrary
+import interop.georouting.GeoroutingLibrary
 import interop.logger.LoggerLibrary
 import interop.outline.OutlineLibrary
 import kotlinx.coroutines.runBlocking
@@ -73,6 +74,7 @@ internal class DobbyVpnService(
     private val outlineLibrary: OutlineLibrary,
     private val cloakLibrary: CloakLibrary,
     private val loggerLibrary: LoggerLibrary,
+    private val georoutingLibrary: GeoroutingLibrary,
     private val connectionState: ConnectionStateRepository
 ) {
     private val startStopLock = Any()
@@ -93,7 +95,7 @@ internal class DobbyVpnService(
             enableTunnelLogging()
 
             val iface = dobbyConfigsRepository.getVpnInterface()
-            vpnLibrary.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
+            georoutingLibrary.SetGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
             when (iface) {
                 VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
                 VpnInterface.AMNEZIA_WG -> startAwg()
@@ -114,7 +116,7 @@ internal class DobbyVpnService(
             VpnInterface.AMNEZIA_WG -> stopAwg()
             null -> return
         }
-        vpnLibrary.clearGeoRoutingConf()
+        georoutingLibrary.ClearGeoRoutingConf()
         runningInterface = null
     }
 

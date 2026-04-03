@@ -2,6 +2,7 @@ package interop
 
 import interop.awg.AwgGrpcLibrary
 import interop.cloak.CloakGrpcLibrary
+import interop.georouting.GeoroutingGrpcLibrary
 import interop.healthcheck.HealthCheckGrpcLibrary
 import interop.logger.LoggerGrpcLibrary
 import interop.outline.OutlineGrpcLibrary
@@ -23,6 +24,7 @@ object GrpcVpnLibrary: Closeable {
     val cloakGrpcLibrary = CloakGrpcLibrary(channel)
     val healthCheckGrpcLibrary = HealthCheckGrpcLibrary(channel)
     val loggerGrpcLibrary = LoggerGrpcLibrary(channel)
+    val georoutingGrpcLibrary = GeoroutingGrpcLibrary(channel)
 
     override fun close() {
         this.channel.shutdown().awaitTermination(TERMINATION_TIMEOUT, TimeUnit.SECONDS)

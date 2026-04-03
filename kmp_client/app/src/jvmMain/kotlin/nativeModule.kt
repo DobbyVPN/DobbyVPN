@@ -11,11 +11,13 @@ import com.dobby.feature.main.domain.VpnManagerImpl
 import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.grpc.RestartableAwgGrpcLibrary
 import com.dobby.feature.vpn_service.grpc.RestartableCloakGrpcLibrary
+import com.dobby.feature.vpn_service.grpc.RestartableGeoroutingGrpcLibrary
 import com.dobby.feature.vpn_service.grpc.RestartableHealthCheckGrpcLibrary
 import com.dobby.feature.vpn_service.grpc.RestartableLoggerGrpcLibrary
 import com.dobby.feature.vpn_service.grpc.RestartableOutlineGrpcLibrary
 import interop.awg.AwgLibrary
 import interop.cloak.CloakLibrary
+import interop.georouting.GeoroutingLibrary
 import interop.healthcheck.HealthCheckLibrary
 import interop.logger.LoggerLibrary
 import interop.outline.OutlineLibrary
@@ -49,6 +51,7 @@ val jvmVpnModule = module {
     single<CloakLibrary> { RestartableCloakGrpcLibrary(get()) }
     single<HealthCheckLibrary> { RestartableHealthCheckGrpcLibrary(get()) }
     single<LoggerLibrary> { RestartableLoggerGrpcLibrary(get()) }
+    single<GeoroutingLibrary> { RestartableGeoroutingGrpcLibrary(get()) }
     single<DobbyVpnService> {
         DobbyVpnService(
             get(),
@@ -57,6 +60,7 @@ val jvmVpnModule = module {
             outlineLibrary = get(),
             cloakLibrary = get(),
             loggerLibrary = get(),
+            georoutingLibrary = get(),
             connectionState = get()
         )
     }
