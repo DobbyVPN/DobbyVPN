@@ -2,11 +2,11 @@ package protected_dialer
 
 import (
 	"context"
+	M "github.com/xjasonlyu/tun2socks/v2/metadata"
+	"github.com/xjasonlyu/tun2socks/v2/proxy"
 	"net"
 	"syscall"
 
-	M "github.com/xjasonlyu/tun2socks/v2/metadata"
-	"github.com/xjasonlyu/tun2socks/v2/proxy"
 	"go_client/log"
 )
 
@@ -82,7 +82,9 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 	if isLoopback(address) {
 		log.Infof("[Protect] UDP BYPASS loopback: %s", address)
 
-		pc, err := net.ListenPacket(realNet, listenAddr(realNet))
+		lc := net.ListenConfig{}
+
+		pc, err := lc.ListenPacket(ctx, realNet, listenAddr(realNet))
 		if err != nil {
 			return nil, err
 		}

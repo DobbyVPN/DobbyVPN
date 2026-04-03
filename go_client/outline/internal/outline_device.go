@@ -60,7 +60,9 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 		socks5.WithDial(od.handleDial),
 	)
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	lc := net.ListenConfig{}
+
+	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}

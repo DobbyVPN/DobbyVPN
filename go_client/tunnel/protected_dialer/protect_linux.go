@@ -3,6 +3,8 @@
 package protected_dialer
 
 import (
+	"fmt"
+	"math"
 	"syscall"
 
 	"go_client/log"
@@ -17,13 +19,18 @@ func SetLinuxSocketMark(mark int) {
 
 type linuxProtector struct{}
 
-func (l *linuxProtector) Protect(fd uintptr, network string) {
+func (l *linuxProtector) Protect(fdU uintptr, network string) {
 	if linuxSocketMark == 0 {
 		return
 	}
 
+	fd, err := UintptrToInt(fdU)
+	if err != nil {
+		log.Infof("[Linux-Protect] Protect fd err=%v", err)
+	}
+
 	_ = syscall.SetsockoptInt(
-		int(fd),
+		fd,
 		syscall.SOL_SOCKET,
 		syscall.SO_MARK,
 		linuxSocketMark,
@@ -32,4 +39,11 @@ func (l *linuxProtector) Protect(fd uintptr, network string) {
 
 func init() {
 	protector = &linuxProtector{}
+}
+
+func UintptrToInt(u uintptr) (int, error) {
+	if u > uintptr(math.MaxInt) {
+		return 0, fmt.Errorf("uintptr value %d overflows int", u)
+	}
+	return int(u), nil
 }

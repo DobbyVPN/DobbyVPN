@@ -1,11 +1,13 @@
 package tunnel
 
 import (
+	"context"
 	"net"
 	"strings"
 	"sync"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
+
 	"go_client/log"
 )
 
@@ -70,7 +72,10 @@ func ClearGeoRoutingConf() {
 }
 
 func resolveHostToCIDRs(host string) []*net.IPNet {
-	ips, err := net.LookupIP(host)
+	resolver := net.Resolver{}
+
+	ctx := context.Background()
+	ips, err := resolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		log.Infof("[Bypass] resolve failed for %s: %v", host, err)
 		return nil
@@ -78,7 +83,7 @@ func resolveHostToCIDRs(host string) []*net.IPNet {
 
 	var result []*net.IPNet
 	for _, ip := range ips {
-		if v4 := ip.To4(); v4 != nil {
+		if v4 := ip.IP.To4(); v4 != nil {
 			_, n, _ := net.ParseCIDR(v4.String() + "/32")
 			result = append(result, n)
 			continue

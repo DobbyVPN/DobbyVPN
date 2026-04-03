@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/vishvananda/netlink"
+
 	"go_client/log"
 )
 
@@ -46,7 +47,8 @@ func GetDefaultInterfaceNameLinux(gatewayIP string) (string, error) {
 		}
 
 		if r.Dst == nil && r.Gw != nil && r.Gw.String() == gatewayIP {
-			link, err := netlink.LinkByIndex(r.LinkIndex)
+			var link netlink.Link
+			link, err = netlink.LinkByIndex(r.LinkIndex)
 			if err != nil {
 				log.Infof("[Routing][Detect][ERROR] LinkByIndex(%d) failed: %v", r.LinkIndex, err)
 				return "", fmt.Errorf("failed to get link by index %d: %w", r.LinkIndex, err)

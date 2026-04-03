@@ -6,6 +6,7 @@ package internal
 import (
 	"errors"
 	"fmt"
+	"go_client/tunnel/protected_dialer"
 	"os"
 
 	"github.com/Jigsaw-Code/outline-sdk/network"
@@ -26,12 +27,12 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 	log.Infof("[TUN][Init] Creating TUN device name=%s ip=%s", name, ip)
 
 	if name == "" {
-		err := errors.New("name is required for TUN/TAP device")
+		err = errors.New("name is required for TUN/TAP device")
 		log.Infof("[TUN][Init][ERROR] %v", err)
 		return nil, err
 	}
 	if ip == "" {
-		err := errors.New("ip is required for TUN/TAP device")
+		err = errors.New("ip is required for TUN/TAP device")
 		log.Infof("[TUN][Init][ERROR] %v", err)
 		return nil, err
 	}
@@ -139,7 +140,11 @@ func (d *tunDevice) GetFd() int {
 
 	// путь 1: *os.File
 	if f, ok := d.ReadWriteCloser.(*os.File); ok {
-		fd := int(f.Fd())
+		fd, err := protected_dialer.UintptrToInt(f.Fd())
+		if err != nil {
+			log.Infof("[TUN][FD][ERROR] Failed to get FD: %v", err)
+			return -1
+		}
 		log.Infof("[TUN][FD][OK] Got fd via *os.File: %d", fd)
 		return fd
 	}
@@ -150,11 +155,15 @@ func (d *tunDevice) GetFd() int {
 	}
 
 	if f, ok := d.ReadWriteCloser.(fder); ok {
-		fd := int(f.Fd())
+		fd, err := protected_dialer.UintptrToInt(f.Fd())
+		if err != nil {
+			log.Infof("[TUN][FD][ERROR] Failed to get FD: %v", err)
+			return -1
+		}
 		log.Infof("[TUN][FD][OK] Got fd via Fd(): %d", fd)
 		return fd
 	}
 
-	log.Infof("[TUN][FD][ERROR] Unable to extract fd (unknown type: %T)", d.Interface.ReadWriteCloser)
+	log.Infof("[TUN][FD][ERROR] Unable to extract fd (unknown type: %T)", d.ReadWriteCloser)
 	return -1
 }
