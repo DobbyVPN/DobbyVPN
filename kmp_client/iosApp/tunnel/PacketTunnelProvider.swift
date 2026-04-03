@@ -135,6 +135,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
         logs.writeLog(log: "Start go logger init path = \(path)")
         Cloak_outlineInitLogger(path)
+        Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
         logs.writeLog(log: "Finish go logger init")
         try outlineInteractor.startOutline()
         logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
@@ -146,6 +147,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel reason=\(reason.rawValue) (\(reason))")
         configsRepository.setIsUserInitStop(isUserInitStop: true)
+        Cloak_outlineClearGeoRoutingConf()
         Task {
             await teardownForStop(reason: "stopTunnel(\(reason))")
             completionHandler()
