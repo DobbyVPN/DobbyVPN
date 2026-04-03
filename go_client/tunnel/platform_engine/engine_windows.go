@@ -5,15 +5,32 @@ package platform_engine
 import (
 	"fmt"
 	"net"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 	"go_client/log"
+	"go_client/routing"
 )
 
-var lastIface string
+var (
+	lastIface string
+	prevDNS   []string
+	prevDHCP  bool
+)
+
+func execAndLog(cmd string, context string) error {
+	out, err := routing.ExecuteCommand(cmd)
+	if err != nil {
+		log.Infof("[Engine][Windows][ERROR] %s: %v | output=%s",
+			context, err, out,
+		)
+		return err
+	}
+
+	log.Infof("[Engine][Windows][OK] %s: %s", context, out)
+	return nil
+}
 
 func startPlatformEngine(cfg interface{}) error {
 	c := cfg.(EngineConfig)
@@ -41,6 +58,8 @@ func startPlatformEngine(cfg interface{}) error {
 
 	lastIface = ifName
 
+	prevDNS, prevDHCP = getCurrentDNS(ifName)
+
 	if err := setInterfaceAddress(ifName, "10.0.85.2"); err != nil {
 		engine.Stop()
 		return err
@@ -58,10 +77,37 @@ func stopPlatformEngine() {
 		return
 	}
 
-	cmd := exec.Command("netsh", "interface", "ipv4", "set", "dnsservers", lastIface, "dhcp")
-	out, _ := cmd.CombinedOutput()
-	log.Infof("[Engine][Windows] Reset DNS: %s", out)
+	log.Infof("[Engine][Windows] Restoring DNS. DHCP=%v DNS=%v", prevDHCP, prevDNS)
+
+	if prevDHCP {
+		cmd := fmt.Sprintf(
+			"netsh interface ipv4 set dnsservers name=\"%s\" dhcp",
+			lastIface,
+		)
+		_ = execAndLog(cmd, "restore DNS (DHCP)")
+
+	} else if len(prevDNS) > 0 {
+
+		// primary
+		cmd := fmt.Sprintf(
+			"netsh interface ipv4 set dnsservers name=\"%s\" static %s primary",
+			lastIface, prevDNS[0],
+		)
+		_ = execAndLog(cmd, "restore DNS primary")
+
+		// additional
+		for i := 1; i < len(prevDNS); i++ {
+			cmd := fmt.Sprintf(
+				"netsh interface ipv4 add dnsservers name=\"%s\" %s index=%d",
+				lastIface, prevDNS[i], i+1,
+			)
+			_ = execAndLog(cmd, fmt.Sprintf("restore DNS index=%d", i+1))
+		}
+	}
+
 	lastIface = ""
+	prevDNS = nil
+	prevDHCP = false
 }
 
 func waitForWintun(timeout time.Duration) (string, error) {
@@ -79,21 +125,52 @@ func waitForWintun(timeout time.Duration) (string, error) {
 }
 
 func setInterfaceAddress(name, ip string) error {
-	cmd := exec.Command("netsh", "interface", "ipv4", "set", "address",
-		fmt.Sprintf(`name=%s`, name),
-		"source=static",
-		fmt.Sprintf(`addr=%s`, ip),
-		"mask=255.255.255.0",
+	cmd := fmt.Sprintf(
+		"netsh interface ipv4 set address name=\"%s\" source=static addr=%s mask=255.255.255.0",
+		name, ip,
 	)
-	_, err := cmd.CombinedOutput()
-	return err
+	return execAndLog(cmd, "setInterfaceAddress")
 }
 
 func setDNS(name, dns string) error {
-	cmd := exec.Command("netsh", "interface", "ipv4", "set", "dnsservers",
-		fmt.Sprintf(`name=%s`, name),
-		"static", dns,
+	cmd := fmt.Sprintf(
+		"netsh interface ipv4 set dnsservers name=\"%s\" static %s",
+		name, dns,
 	)
-	_, err := cmd.CombinedOutput()
-	return err
+	return execAndLog(cmd, "setDNS")
+}
+
+func getCurrentDNS(name string) ([]string, bool) {
+	cmd := fmt.Sprintf(
+		"netsh interface ipv4 show dnsservers name=\"%s\"",
+		name,
+	)
+
+	out, err := routing.ExecuteCommand(cmd)
+	if err != nil {
+		log.Infof("[Engine][Windows] Failed to get DNS: %v", err)
+		return nil, true
+	}
+
+	lines := strings.Split(out, "\n")
+
+	var dns []string
+	isDHCP := false
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		if strings.Contains(line, "DHCP") {
+			isDHCP = true
+		}
+
+		// ищем IP
+		if ip := net.ParseIP(line); ip != nil {
+			dns = append(dns, ip.String())
+		}
+	}
+
+	log.Infof("[Engine][Windows] Current DNS: DHCP=%v DNS=%v", isDHCP, dns)
+
+	return dns, isDHCP
 }
