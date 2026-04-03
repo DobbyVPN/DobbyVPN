@@ -145,6 +145,14 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("isUserInitStop", isUserInitStop.toString())
     }
 
+    override fun getGeoRoutingConf(): String {
+        return prefs.get("geoRoutingConf", "")
+    }
+
+    override fun setGeoRoutingConf(geoRoutingConf: String) {
+        prefs.put("geoRoutingConf", geoRoutingConf)
+    }
+
     companion object {
         const val DEFAULT_AWG_CONFIG = """[Interface]
 PrivateKey = <...>

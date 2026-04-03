@@ -19,6 +19,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let isWebsocketEnabledKey = "isWebsocketEnabledKey"
     private let udpPathOutlineKey = "UdpPathOutlineKey"
     private let isUserInitStopKey = "isUserInitStopKey"
+    private let geoRoutingConfKey = "geoRoutingConfKey"
 
     public func getConnectionURL() -> String {
         return userDefaults.string(forKey: connectionURLKey) ?? ""
@@ -26,7 +27,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setConnectionURL(connectionURL: String) {
         userDefaults.set(connectionURL, forKey: connectionURLKey)
-        sync()
+
     }
 
     public func getConnectionConfig() -> String {
@@ -35,7 +36,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setConnectionConfig(connectionConfig: String) {
         userDefaults.set(connectionConfig, forKey: connectionConfigKey)
-        sync()
+
     }
 
     public func getCloakConfig() -> String {
@@ -44,7 +45,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setCloakConfig(newConfig: String) {
         userDefaults.set(newConfig, forKey: cloakConfigKey)
-        sync()
+
     }
 
     public func getIsCloakEnabled() -> Bool {
@@ -53,7 +54,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setIsCloakEnabled(isCloakEnabled: Bool) {
         userDefaults.set(isCloakEnabled, forKey: isCloakEnabledKey)
-        sync()
+
     }
 
     public func getCloakLocalPort() -> Int32 {
@@ -63,7 +64,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setCloakLocalPort(port: Int32) {
         userDefaults.set(Int(port), forKey: cloakLocalPortKey)
-        sync()
+
     }
 
     public func getServerPortOutline() -> String {
@@ -72,7 +73,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setServerPortOutline(newConfig: String) {
         userDefaults.set(newConfig, forKey: serverPortOutlineKey)
-        sync()
+
     }
 
     public func getMethodPasswordOutline() -> String {
@@ -81,7 +82,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setMethodPasswordOutline(newConfig: String) {
         userDefaults.set(newConfig, forKey: methodPasswordOutlineKey)
-        sync()
+
     }
 
     public func getIsOutlineEnabled() -> Bool {
@@ -90,7 +91,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setIsOutlineEnabled(isOutlineEnabled: Bool) {
         userDefaults.set(isOutlineEnabled, forKey: isOutlineEnabledKey)
-        sync()
+
     }
 
     public func getPrefixOutline() -> String {
@@ -99,7 +100,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setPrefixOutline(prefix: String) {
         userDefaults.set(prefix, forKey: prefixOutlineKey)
-        sync()
+
     }
 
     public func getTcpPathOutline() -> String {
@@ -108,7 +109,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setTcpPathOutline(tcpPath: String) {
         userDefaults.set(tcpPath, forKey: tcpPathOutlineKey)
-        sync()
+
     }
 
     public func getIsWebsocketEnabled() -> Bool {
@@ -117,7 +118,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setIsWebsocketEnabled(enabled: Bool) {
         userDefaults.set(enabled, forKey: isWebsocketEnabledKey)
-        sync()
+
     }
 
     public func getUdpPathOutline() -> String {
@@ -126,7 +127,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setUdpPathOutline(udpPath: String) {
         userDefaults.set(udpPath, forKey: udpPathOutlineKey)
-        sync()
+
     }
 
     public func getAwgConfig() -> String {
@@ -157,11 +158,14 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setIsUserInitStop(isUserInitStop: Bool) {
         userDefaults.set(isUserInitStop, forKey: isUserInitStopKey)
-        sync()
+
     }
 
-    public func sync() {
-        // UserDefaults.synchronize() is deprecated and unnecessary on iOS 12+
-        // The system automatically persists changes
+    public func getGeoRoutingConf() -> String {
+        return userDefaults.string(forKey: geoRoutingConfKey) ?? ""
+    }
+
+    public func setGeoRoutingConf(geoRoutingConf: String) {
+        userDefaults.set(geoRoutingConf, forKey: geoRoutingConfKey)
     }
 }

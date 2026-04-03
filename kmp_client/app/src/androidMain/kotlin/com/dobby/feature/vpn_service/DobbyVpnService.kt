@@ -28,7 +28,9 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.system.Os
+import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
+import com.dobby.outline.OutlineGo
 import java.io.File
 import java.io.FileInputStream
 import java.util.UUID
@@ -52,6 +54,7 @@ class DobbyVpnService : VpnService() {
     val serviceId: String = UUID.randomUUID().toString().take(8)
     private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private val logger: Logger by inject()
+    private val geoRouting: GeoRouting by inject()
     private val vpnInterfaceFactory: DobbyVpnInterfaceFactory by inject()
     private val cloakConnectInteractor: CloakConnectionInteractor by inject()
     private val outlineInteractor: OutlineInteractor by inject ()
@@ -115,11 +118,14 @@ class DobbyVpnService : VpnService() {
                 }
             }
         }
+
+        OutlineGo.registerVpnService(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         logger.log("[svc:$serviceId] onStartCommand(startId=$startId flags=$flags intentFromUi=${intent?.getBooleanExtra(IS_FROM_UI, false)}) vpnInterface=${vpnInterface?.fd}")
         teardownVpn()
+        geoRouting.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
         when (dobbyConfigsRepository.getVpnInterface()) {
             VpnInterface.CLOAK_OUTLINE -> startCloakOutline(intent)
             VpnInterface.AMNEZIA_WG -> startAwg()
@@ -130,6 +136,7 @@ class DobbyVpnService : VpnService() {
     override fun onDestroy() {
         logger.log("[svc:$serviceId] onDestroy() begin vpnInterface=${vpnInterface?.fd}")
         teardownVpn()
+        geoRouting.clearGeoRoutingConf()
         runCatching {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             defaultNetworkCallback?.let { cb ->

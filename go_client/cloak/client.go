@@ -8,7 +8,7 @@ import (
 	"net"
 	"sync"
 
-	log "go_client/logger"
+	"go_client/log"
 )
 
 const Name = "cloak"

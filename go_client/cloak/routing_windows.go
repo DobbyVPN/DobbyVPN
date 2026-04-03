@@ -9,7 +9,7 @@ import (
 	"go_client/routing"
 
 	"github.com/jackpal/gateway"
-	log "go_client/logger"
+	"go_client/log"
 )
 
 func StartRoutingCloak(proxyIP string) error {
@@ -20,7 +20,7 @@ func StartRoutingCloak(proxyIP string) error {
 		return err
 	}
 	log.Infof("found gatewayIP = %s\n", gatewayIP.String())
-	interfaceName, err := routing.FindInterfaceByGateway(gatewayIP.String())
+	interfaceName, err := routing.FindInterfaceIPByGateway(gatewayIP.String())
 	if err != nil {
 		log.Infof("Can't find interfaceName, err = %v \n", err)
 		return err

@@ -4,23 +4,8 @@ import "C"
 import (
 	"go_client/common"
 	"go_client/healthcheck"
-	log "go_client/logger"
+	"go_client/log"
 )
-
-//export StartHealthCheck
-func StartHealthCheck(period int32, sendMetrics bool) {
-	healthcheck.StartHealthCheck(period, sendMetrics)
-}
-
-//export StopHealthCheck
-func StopHealthCheck() {
-	healthcheck.StopHealthCheck()
-}
-
-//export Status
-func Status() string {
-	return healthcheck.Status()
-}
 
 //export TcpPing
 func TcpPing(address string) (int32, error) {

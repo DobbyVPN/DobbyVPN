@@ -1,127 +1,103 @@
 package tunnel
 
 import (
-	"io"
+	"context"
+	"fmt"
+	"net"
 	"sync"
 
-	"go_client/tunnel/internal"
+	M "github.com/xjasonlyu/tun2socks/v2/metadata"
+	"github.com/xjasonlyu/tun2socks/v2/proxy"
+	"github.com/xjasonlyu/tun2socks/v2/proxy/proto"
+	"github.com/xjasonlyu/tun2socks/v2/tunnel"
+
+	"go_client/log"
+	"go_client/tunnel/platform_engine"
+	"go_client/tunnel/protected_dialer"
 )
-
-type ReaderFunc func(p []byte) (int, error)
-type WriterFunc func(b []byte) (int, error)
-
-type tunTransfer struct {
-	tun     io.ReadWriteCloser
-	readFn  ReaderFunc
-	writeFn WriterFunc
-	stopCh  chan struct{}
-	wg      sync.WaitGroup
-}
 
 var (
-	defaultBufSize = 65536
-	transferMu     sync.Mutex
-	transferInst   *tunTransfer
+	mu        sync.Mutex
+	isRunning bool
 )
 
-func StartTransfer(
-	tun io.ReadWriteCloser,
-	readFn ReaderFunc,
-	writeFn WriterFunc,
-) {
-	transferMu.Lock()
-	defer transferMu.Unlock()
+type DobbyProxy struct {
+	vpn    proxy.Proxy
+	direct proxy.Proxy
+}
 
-	if transferInst != nil {
-		stopLocked()
+func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (proxyConn net.Conn, err error) {
+	if IsBypass(metadata) {
+		log.Infof("[Router] Using DIRECT for %s", metadata.DstIP)
+		return p.direct.DialContext(ctx, metadata)
+	}
+	log.Infof("[Router] Using VPN for %s", metadata.DstIP)
+	return p.vpn.DialContext(ctx, metadata)
+}
+
+func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
+	if IsBypass(metadata) {
+		log.Infof("[Router] Using UDP DIRECT for %s", metadata.DstIP)
+		return p.direct.DialUDP(metadata)
+	}
+	log.Infof("[Router] Using UDP VPN for %s", metadata.DstIP)
+	return p.vpn.DialUDP(metadata)
+}
+
+func (p *DobbyProxy) Addr() string {
+	return p.vpn.Addr()
+}
+
+func (p *DobbyProxy) Proto() proto.Proto {
+	return p.vpn.Proto()
+}
+
+func StartEngine(cfg platform_engine.EngineConfig) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if isRunning {
+		StopEngine()
 	}
 
-	transferInst = &tunTransfer{
-		tun:     tun,
-		readFn:  readFn,
-		writeFn: writeFn,
-		stopCh:  make(chan struct{}),
+	err := platform_engine.StartPlatformEngine(cfg)
+	if err != nil {
+		return err
 	}
-	transferInst.startLoops()
-}
 
-func (t *tunTransfer) startLoops() {
-	t.wg.Add(2)
-	go t.readLoop()
-	go t.writeLoop()
-}
-
-func (t *tunTransfer) readLoop() {
-	defer t.wg.Done()
-
-	raw := make([]byte, defaultBufSize)
-
-	for {
-		select {
-		case <-t.stopCh:
-			return
-		default:
-			n, err := t.tun.Read(raw)
-			if err != nil || n <= 0 || t.writeFn == nil {
-				continue
-			}
-
-			packet, ok := internal.AdaptReadPackets(raw[:n])
-			if !ok {
-				continue
-			}
-
-			// TODO: Add georouting here
-
-			_, _ = t.writeFn(packet)
-		}
+	currentDialer := tunnel.T().Dialer()
+	vpnOutbound, ok := currentDialer.(proxy.Proxy)
+	if !ok {
+		log.Infof("[Engine] Current dialer is not a proxy")
+		return fmt.Errorf("current dialer is not a proxy")
 	}
-}
 
-func (t *tunTransfer) writeLoop() {
-	defer t.wg.Done()
-
-	buf := make([]byte, defaultBufSize)
-
-	for {
-		select {
-		case <-t.stopCh:
-			return
-		default:
-			if t.readFn == nil {
-				continue
-			}
-
-			n, err := t.readFn(buf)
-			if err != nil || n <= 0 {
-				continue
-			}
-
-			packet := buf[:n]
-
-			// TODO: Add georouting here
-
-			encoded, ok := internal.AdaptWritePackets(packet)
-			if !ok {
-				continue
-			}
-
-			_, _ = t.tun.Write(encoded)
-		}
+	directOutbound := &protected_dialer.ProtectedDirectProxy{
+		Proxy: proxy.NewDirect(),
 	}
+
+	wrapper := &DobbyProxy{
+		vpn:    vpnOutbound,
+		direct: directOutbound,
+	}
+
+	if tunnel.T() == nil {
+		log.Infof("[Engine] tunnel.T() return nil")
+	}
+
+	tunnel.T().SetDialer(wrapper)
+	isRunning = true
+	return nil
 }
 
-func StopTransfer() {
-	transferMu.Lock()
-	defer transferMu.Unlock()
-	stopLocked()
-}
+func StopEngine() {
+	mu.Lock()
+	defer mu.Unlock()
 
-func stopLocked() {
-	if transferInst == nil {
+	if !isRunning {
 		return
 	}
-	close(transferInst.stopCh)
-	transferInst.wg.Wait()
-	transferInst = nil
+
+	platform_engine.EngineStop()
+	isRunning = false
 }

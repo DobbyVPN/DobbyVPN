@@ -3,7 +3,7 @@ package main
 import "C"
 import (
 	"go_client/cloak"
-	log "go_client/logger"
+	"go_client/log"
 )
 
 //export StartCloakClient
