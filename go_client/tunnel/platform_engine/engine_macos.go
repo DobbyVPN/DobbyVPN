@@ -48,7 +48,7 @@ func startPlatformEngine(cfg interface{}) error {
 		return fmt.Errorf("utun interface not found: %s", deviceName)
 	}
 
-	// Настройка IP
+	// Setting IP
 	cmd := exec.Command(
 		"ifconfig",
 		deviceName,
