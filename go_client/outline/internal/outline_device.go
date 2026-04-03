@@ -188,15 +188,18 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 		return net.ParseIP("127.0.0.1").To4(), nil
 	}
 
-	ipList, err := net.LookupIP(host)
+	resolver := net.Resolver{}
+	ctx := context.Background()
+
+	ipList, err := resolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, ip := range ipList {
-		if ip = ip.To4(); ip != nil {
-			log.Infof("outline client: resolved %s -> %s", host, ip.String())
-			return ip, nil
+		if v4 := ip.IP.To4(); v4 != nil {
+			log.Infof("outline client: resolved %s -> %s", host, v4.String())
+			return v4, nil
 		}
 	}
 
