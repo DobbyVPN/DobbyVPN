@@ -1,7 +1,7 @@
 package cloak_outline
 
 import (
-	log "go_client/logger"
+	"go_client/log"
 	"runtime/debug"
 )
 

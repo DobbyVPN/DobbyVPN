@@ -1,10 +1,9 @@
 package api
 
 import (
+	"go_client/log"
 	"go_client/outline"
 	"sync"
-
-	log "go_client/logger"
 )
 
 var outlineClient *outline.OutlineClient

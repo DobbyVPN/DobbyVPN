@@ -23,6 +23,10 @@ interface DobbyConfigsRepository :
     fun getIsUserInitStop(): Boolean
 
     fun setIsUserInitStop(isUserInitStop: Boolean)
+
+    fun getGeoRoutingConf(): String
+
+    fun setGeoRoutingConf(geoRoutingConf: String)
 }
 
 enum class VpnInterface {

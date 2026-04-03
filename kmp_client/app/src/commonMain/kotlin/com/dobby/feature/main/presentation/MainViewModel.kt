@@ -14,8 +14,6 @@ import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.clearOutlineAndCloakConfig
 import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.main.domain.VpnInterface
-import com.dobby.feature.main.domain.TomlConfigs
 import com.dobby.feature.main.ui.MainUiState
 import com.dobby.feature.main.domain.config.TomlConfigApplier
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,6 +45,7 @@ class MainViewModel(
         vpnRepo = configsRepository,
         outlineRepo = configsRepository,
         cloakRepo = configsRepository,
+        mainRepo = configsRepository,
         logger = logger
     )
 

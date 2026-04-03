@@ -2,7 +2,7 @@ package api
 
 import (
 	"go_client/cloak"
-	log "go_client/logger"
+	"go_client/log"
 )
 
 func StartCloakClient(localHost, localPort, config string, udp bool) {

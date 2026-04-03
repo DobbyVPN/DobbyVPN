@@ -6,7 +6,7 @@ import (
 	"go_client/desktop_exports/api"
 	"go_client/grpcproto"
 
-	log "go_client/logger"
+	"go_client/log"
 )
 
 func (c *Server) InitLogger(_ context.Context, in *grpcproto.InitLoggerRequest) (*grpcproto.Empty, error) {

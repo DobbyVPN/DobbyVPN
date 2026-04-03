@@ -2,7 +2,7 @@ package api
 
 import (
 	"go_client/awg"
-	log "go_client/logger"
+	"go_client/log"
 )
 
 var awgClient *awg.AwgClient

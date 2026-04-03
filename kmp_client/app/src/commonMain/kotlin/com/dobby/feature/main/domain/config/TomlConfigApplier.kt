@@ -1,6 +1,7 @@
 package com.dobby.feature.main.domain.config
 
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryCloak
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryOutline
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryVpn
@@ -14,6 +15,7 @@ class TomlConfigApplier(
     private val vpnRepo: DobbyConfigsRepositoryVpn,
     private val outlineRepo: DobbyConfigsRepositoryOutline,
     private val cloakRepo: DobbyConfigsRepositoryCloak,
+    private val mainRepo: DobbyConfigsRepository,
     private val logger: Logger,
 ) {
     private val outlineApplier = OutlineTomlApplier(vpnRepo, outlineRepo, cloakRepo, logger)
@@ -44,6 +46,17 @@ class TomlConfigApplier(
         }
         val (cloakEnabled, _) = outlineResult
         cloakApplier.apply(outline, cloakEnabled)
+
+        val exclude = root.ExcludeIPs
+
+        if (exclude?.IPs != null && exclude.IPs.isNotEmpty()) {
+            val cidrsString = exclude.IPs.joinToString(" ")
+            logger.log("Applying ExcludeIPs: $cidrsString")
+            mainRepo.setGeoRoutingConf(cidrsString)
+        } else {
+            logger.log("ExcludeIPs not found or empty → clearing routing")
+        }
+
         logger.log("Finish parseToml()")
         return true
     }

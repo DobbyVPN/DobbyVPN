@@ -6,7 +6,7 @@ import (
 	"go_client/desktop_exports/api"
 	"go_client/grpcproto"
 
-	log "go_client/logger"
+	"go_client/log"
 )
 
 func (s *Server) StartAwg(_ context.Context, in *grpcproto.StartAwgRequest) (*grpcproto.Empty, error) {

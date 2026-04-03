@@ -2,23 +2,8 @@ package cloak_outline
 
 import (
 	"go_client/healthcheck"
-	log "go_client/logger"
+	"go_client/log"
 )
-
-func StartHealthCheck(period int32, sendMetrics bool) {
-	defer guard("StartHealthCheck")()
-	healthcheck.StartHealthCheck(period, sendMetrics)
-}
-
-func StopHealthCheck() {
-	defer guard("StopHealthCheck")()
-	healthcheck.StopHealthCheck()
-}
-
-func Status() string {
-	defer guard("Status")()
-	return healthcheck.Status()
-}
 
 func TcpPing(address string) (int32, error) {
 	defer guard("TcpPing")()

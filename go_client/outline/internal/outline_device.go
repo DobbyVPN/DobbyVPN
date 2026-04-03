@@ -4,101 +4,169 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	log "go_client/logger"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
-	"github.com/Jigsaw-Code/outline-sdk/network"
-	"github.com/Jigsaw-Code/outline-sdk/network/lwip2transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
-)
+	socks5 "github.com/things-go/go-socks5"
 
-const (
-	connectivityTestDomain   = "www.google.com"
-	connectivityTestResolver = "1.1.1.1:53"
+	"go_client/log"
 )
 
 type OutlineDevice struct {
-	network.IPDevice
-	sd    transport.StreamDialer
-	pp    *outlinePacketProxy
-	svrIP net.IP
+	listener     net.Listener
+	proxyAddr    string
+	svrIP        net.IP
+	streamDialer transport.StreamDialer
+	packetDialer transport.PacketDialer
+	useCloak     bool
 }
 
-// Use configurl.NewDefaultProviders() for full transport chain support
-var providers = configurl.NewDefaultProviders()
-
-func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
-	log.Infof("outline client: resolving server IP from config...")
-	if strings.Contains(transportConfig, "|ws:") || strings.HasPrefix(strings.TrimSpace(transportConfig), "ws:") {
-		log.Infof("outline client: WebSocket transport detected in config")
-	} else {
-		log.Infof("outline client: WebSocket transport not detected in config (plain)")
-	}
-	ip, err := resolveShadowsocksServerIPFromConfig(transportConfig)
+func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
+	ip, err := ResolveServerIPFromConfig(transportConfig)
 	if err != nil {
 		return nil, err
 	}
-	od = &OutlineDevice{
-		svrIP: ip,
+
+	ctx := context.Background()
+	providers := configurl.NewDefaultProviders()
+
+	sd, err := providers.NewStreamDialer(ctx, transportConfig)
+	if err != nil {
+		return nil, err
 	}
 
-	log.Infof("outline client: creating stream dialer...")
-	if od.sd, err = providers.NewStreamDialer(context.Background(), transportConfig); err != nil {
-		return nil, fmt.Errorf("failed to create TCP dialer: %w", err)
+	pd, err := providers.NewPacketDialer(ctx, transportConfig)
+	if err != nil {
+		return nil, err
 	}
 
-	log.Infof("outline client: creating packet proxy...")
-	if od.pp, err = newOutlinePacketProxy(transportConfig); err != nil {
-		return nil, fmt.Errorf("failed to create delegate UDP proxy: %w", err)
+	useCloak := ip.IsLoopback()
+
+	log.Infof("outline client: cloak mode = %v", useCloak)
+
+	od := &OutlineDevice{
+		svrIP:        ip,
+		streamDialer: sd,
+		packetDialer: pd,
+		useCloak:     useCloak,
 	}
 
-	log.Infof("outline client: configuring lwIP...")
-	if od.IPDevice, err = lwip2transport.ConfigureDevice(od.sd, od.pp); err != nil {
-		return nil, fmt.Errorf("failed to configure lwIP: %w", err)
+	server := socks5.NewServer(
+		socks5.WithDial(od.handleDial),
+	)
+
+	lc := net.ListenConfig{}
+
+	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
 	}
+
+	od.listener = listener
+	od.proxyAddr = listener.Addr().String()
+
+	go func() {
+		log.Infof("SOCKS5 started on %s", od.proxyAddr)
+		if err := server.Serve(listener); err != nil {
+			log.Infof("SOCKS5 stopped: %v", err)
+		}
+	}()
 
 	return od, nil
 }
 
-func (d *OutlineDevice) Close() error {
-	return d.IPDevice.Close()
-}
+func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
 
-func (d *OutlineDevice) Refresh() error {
-	return d.pp.testConnectivityAndRefresh(connectivityTestResolver, connectivityTestDomain)
-}
+	log.Infof("[SOCKS5] dial %s %s", network, addr)
 
-func (d *OutlineDevice) GetServerIP() net.IP {
-	return d.svrIP
-}
+	host, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
 
-// extractTLSSNIHost extracts the host from "tls:sni=HOST" part of the config.
-// Returns empty string if not found.
-func extractTLSSNIHost(transportConfig string) string {
-	parts := strings.Split(transportConfig, "|")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, "tls:") {
-			// Parse tls:sni=HOST or tls:sni=HOST&other_param=value
-			params := strings.TrimPrefix(part, "tls:")
-			for _, param := range strings.Split(params, "&") {
-				if strings.HasPrefix(param, "sni=") {
-					return strings.TrimPrefix(param, "sni=")
-				}
-			}
+	switch network {
+
+	case "tcp":
+		conn, err := d.streamDialer.DialStream(ctx, addr)
+		if err != nil {
+			log.Infof("[SOCKS5 TCP ERROR] %v", err)
+			return nil, err
 		}
+
+		log.Infof("[SOCKS5 TCP OK] %s", addr)
+		return conn, nil
+
+	case "udp":
+
+		// DNS fallback for Cloak
+		if d.useCloak && port == 53 {
+
+			log.Infof("[SOCKS5 DNS] returning truncated DNS (cloak mode)")
+
+			return newTruncatedDNSConn(host, port), nil
+		}
+
+		conn, err := d.packetDialer.DialPacket(ctx, addr)
+		if err != nil {
+			log.Infof("[SOCKS5 UDP ERROR] %v", err)
+			return nil, err
+		}
+
+		log.Infof("[SOCKS5 UDP OK] %s", addr)
+		return conn, nil
 	}
-	return ""
+
+	return nil, fmt.Errorf("unsupported network %s", network)
 }
 
-// ResolveServerIPFromConfig extracts and resolves the actual server IP from transport config.
-// For WSS configs (tls:sni=...|ws:...|ss://...), it uses the TLS SNI host.
-// For plain configs (ss://...), it uses the Shadowsocks host.
-// This is exported for use in routing setup before creating connections.
+type truncatedDNSConn struct {
+	req []byte
+}
+
+func newTruncatedDNSConn(host string, port int) net.Conn {
+	return &truncatedDNSConn{}
+}
+
+func (c *truncatedDNSConn) Read(b []byte) (int, error) {
+
+	if len(c.req) < 12 {
+		return 0, errors.New("invalid dns packet")
+	}
+
+	resp := make([]byte, len(c.req))
+	copy(resp, c.req)
+
+	// response
+	resp[2] |= 0x80
+
+	// truncated
+	resp[2] |= 0x02
+
+	resp[6] = 0
+	resp[7] = 0
+
+	n := copy(b, resp)
+	return n, nil
+}
+
+func (c *truncatedDNSConn) Write(b []byte) (int, error) {
+	c.req = make([]byte, len(b))
+	copy(c.req, b)
+	return len(b), nil
+}
+
+func (c *truncatedDNSConn) Close() error                       { return nil }
+func (c *truncatedDNSConn) LocalAddr() net.Addr                { return nil }
+func (c *truncatedDNSConn) RemoteAddr() net.Addr               { return nil }
+func (c *truncatedDNSConn) SetDeadline(t time.Time) error      { return nil }
+func (c *truncatedDNSConn) SetReadDeadline(t time.Time) error  { return nil }
+func (c *truncatedDNSConn) SetWriteDeadline(t time.Time) error { return nil }
+
 func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
+
 	if transportConfig = strings.TrimSpace(transportConfig); transportConfig == "" {
 		return nil, errors.New("config is required")
 	}
@@ -115,57 +183,86 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 		log.Infof("outline client: using ss:// host: %s", host)
 	}
 
-	// Skip resolution for localhost (used when Cloak is enabled)
 	if host == "127.0.0.1" || host == "localhost" {
 		log.Infof("outline client: localhost detected, skipping IP resolution")
 		return net.ParseIP("127.0.0.1").To4(), nil
 	}
 
-	// Resolve hostname to IP
-	ipList, err := net.LookupIP(host)
+	resolver := net.Resolver{}
+	ctx := context.Background()
+
+	ipList, err := resolver.LookupIPAddr(ctx, host)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve server hostname %q: %w", host, err)
+		return nil, err
 	}
 
-	// todo: we only tested IPv4 routing table, need to test IPv6 in the future
 	for _, ip := range ipList {
-		if ip = ip.To4(); ip != nil {
-			log.Infof("outline client: resolved %s -> %s", host, ip.String())
-			return ip, nil
+		if v4 := ip.IP.To4(); v4 != nil {
+			log.Infof("outline client: resolved %s -> %s", host, v4.String())
+			return v4, nil
 		}
 	}
+
 	return nil, errors.New("IPv6 only Shadowsocks server is not supported yet")
 }
 
-// extractSSHost extracts the host from ss:// part of the config.
-func extractSSHost(transportConfig string) (string, error) {
+func extractTLSSNIHost(transportConfig string) string {
+
 	parts := strings.Split(transportConfig, "|")
-	var ssConfig string
+
 	for _, part := range parts {
+
 		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, "ss://") {
-			ssConfig = part
-			break
+
+		if strings.HasPrefix(part, "tls:") {
+
+			params := strings.TrimPrefix(part, "tls:")
+
+			for _, param := range strings.Split(params, "&") {
+
+				if strings.HasPrefix(param, "sni=") {
+					return strings.TrimPrefix(param, "sni=")
+				}
+			}
 		}
 	}
 
-	if ssConfig == "" {
-		return "", errors.New("config must contain 'ss://' part")
-	}
-
-	parsedURL, err := url.Parse(ssConfig)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse ss:// config: %w", err)
-	}
-
-	host := strings.TrimSpace(parsedURL.Hostname())
-	if host == "" {
-		return "", fmt.Errorf("invalid ss:// config: missing hostname (host part=%q)", parsedURL.Host)
-	}
-	return host, nil
+	return ""
 }
 
-// resolveShadowsocksServerIPFromConfig is a wrapper for backward compatibility
-func resolveShadowsocksServerIPFromConfig(transportConfig string) (net.IP, error) {
-	return ResolveServerIPFromConfig(transportConfig)
+func extractSSHost(transportConfig string) (string, error) {
+
+	parts := strings.Split(transportConfig, "|")
+
+	for _, part := range parts {
+
+		part = strings.TrimSpace(part)
+
+		if strings.HasPrefix(part, "ss://") {
+
+			u, err := url.Parse(part)
+			if err != nil {
+				return "", err
+			}
+
+			return u.Hostname(), nil
+		}
+	}
+
+	return "", errors.New("ss:// not found")
+}
+
+func (d *OutlineDevice) GetServerIP() net.IP {
+	return d.svrIP
+}
+
+func (d *OutlineDevice) GetProxyAddr() string {
+	return d.proxyAddr
+}
+
+func (d *OutlineDevice) Close() error {
+	if d.listener != nil {
+		return d.listener.Close()
+	}
+	return nil
 }

@@ -28,7 +28,7 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           workdir: go_client
-          golangci_lint_flags: --config .golangci.yml ./awg/... ./common/... ./healthcheck/... ./logger/... ./outline/... ./routing/... ./tunnel/...
+          golangci_lint_flags: --config .golangci.yml ./awg/... ./common/... ./healthcheck/... ./log/... ./outline/... ./routing/... ./tunnel/...
           reporter: github-pr-review
           level: warning
           fail_level: error

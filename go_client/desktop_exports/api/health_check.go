@@ -3,7 +3,7 @@ package api
 import (
 	"go_client/common"
 	"go_client/healthcheck"
-	log "go_client/logger"
+	"go_client/log"
 )
 
 func CouldStart() bool {

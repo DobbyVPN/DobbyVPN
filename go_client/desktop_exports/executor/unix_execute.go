@@ -10,7 +10,7 @@ import (
 	"go_client/desktop_exports/proto"
 	"go_client/grpcproto"
 
-	log "go_client/logger"
+	"go_client/log"
 
 	"google.golang.org/grpc"
 )

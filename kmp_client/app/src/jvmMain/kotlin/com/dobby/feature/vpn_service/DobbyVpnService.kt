@@ -93,6 +93,7 @@ internal class DobbyVpnService(
             enableTunnelLogging()
 
             val iface = dobbyConfigsRepository.getVpnInterface()
+            vpnLibrary.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
             when (iface) {
                 VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
                 VpnInterface.AMNEZIA_WG -> startAwg()
@@ -113,6 +114,7 @@ internal class DobbyVpnService(
             VpnInterface.AMNEZIA_WG -> stopAwg()
             null -> return
         }
+        vpnLibrary.clearGeoRoutingConf()
         runningInterface = null
     }
 
