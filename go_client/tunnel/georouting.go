@@ -31,6 +31,8 @@ func IsBypass(metadata *M.Metadata) bool {
 
 	stdIP := net.IP(destIP.AsSlice())
 
+	log.Infof("[Router] IsBypass checker get ip: %s, exlude: %v", stdIP, DefaultBypassCIDRs)
+
 	for _, route := range DefaultBypassCIDRs {
 		if route.Contains(stdIP) {
 			log.Infof("[Router] BYPASS hit for IP: %s", stdIP)

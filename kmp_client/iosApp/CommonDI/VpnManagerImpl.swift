@@ -84,7 +84,6 @@ public class VpnManagerImpl: VpnManager {
     public func start() {
         self.logs.writeLog(log: "call start")
         self.logs.writeLog(log: "Routing table without vpn:")
-        Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
         getOrCreateManager { manager, _ in
             self.handleStart(manager: manager)
         }
@@ -135,7 +134,6 @@ public class VpnManagerImpl: VpnManager {
         }
         self.logs.writeLog(log: "[stop] User initiated stopVPNTunnel()")
         manager.connection.stopVPNTunnel()
-        Cloak_outlineClearGeoRoutingConf()
         self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")
     }
 
