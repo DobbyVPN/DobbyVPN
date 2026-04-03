@@ -42,7 +42,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb // indirect
-	gvisor.dev/gvisor v0.0.0-20250523182742-eede7a881b20 // indirect
 )
 
 require (
@@ -75,5 +74,6 @@ require (
 	golang.org/x/tools/go/expect v0.1.1-deprecated // indirect
 	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	gvisor.dev/gvisor v0.0.0-20250523182742-eede7a881b20 // indirect
 	honnef.co/go/tools v0.5.1 // indirect
 )

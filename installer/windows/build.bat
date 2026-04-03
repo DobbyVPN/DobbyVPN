@@ -31,8 +31,8 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 
 :build
 	call :msi amd64 x64 || goto :error
-	@REM call :msi x86 x86 || goto :error
-	@REM call :msi arm64 arm64 || goto :error
+	call :msi x86 x86 || goto :error
+	call :msi arm64 arm64 || goto :error
 
 :success
 	echo [+] Success.

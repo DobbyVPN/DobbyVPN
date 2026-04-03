@@ -76,7 +76,7 @@ func run(port int) error {
 }
 
 func (c *Executor) Execute(port int, mode string) {
-	log.Infof("Executing with mode: %v\n", mode)
+	log.Infof("Executing with mode: %v", mode)
 
 	switch mode {
 	case "normal":
