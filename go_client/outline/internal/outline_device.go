@@ -137,10 +137,10 @@ func (c *truncatedDNSConn) Read(b []byte) (int, error) {
 	resp := make([]byte, len(c.req))
 	copy(resp, c.req)
 
-	// QR = response
+	// response
 	resp[2] |= 0x80
 
-	// TC = truncated
+	// truncated
 	resp[2] |= 0x02
 
 	resp[6] = 0

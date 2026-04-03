@@ -73,7 +73,7 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 	tunDev := &tunDevice{tun, tunLink}
 
 	log.Infof("[TUN][Config] Configuring IP/subnet...")
-	if err := tunDev.configureSubnet(ip); err != nil {
+	if err = tunDev.configureSubnet(ip); err != nil {
 		err = fmt.Errorf("failed to configure TUN/TAP device subnet: %w", err)
 		log.Infof("[TUN][Config][ERROR] %v", err)
 		return nil, err
@@ -81,7 +81,7 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 	log.Infof("[TUN][Config][OK] IP configured")
 
 	log.Infof("[TUN][Link] Bringing interface UP...")
-	if err := tunDev.bringUp(); err != nil {
+	if err = tunDev.bringUp(); err != nil {
 		err = fmt.Errorf("failed to bring up TUN/TAP device: %w", err)
 		log.Infof("[TUN][Link][ERROR] %v", err)
 		return nil, err
@@ -106,7 +106,7 @@ func (d *tunDevice) configureSubnet(ip string) error {
 		return fmt.Errorf("subnet address '%s' is not valid: %w", subnet, err)
 	}
 
-	if err := netlink.AddrAdd(d.link, addr); err != nil {
+	if err = netlink.AddrAdd(d.link, addr); err != nil {
 		return fmt.Errorf("failed to add subnet to TUN/TAP device '%s': %w", d.Name(), err)
 	}
 
@@ -132,13 +132,13 @@ func (d *tunDevice) GetFd() int {
 		log.Infof("[TUN][FD][ERROR] Interface is nil")
 		return -1
 	}
-	if d.Interface.ReadWriteCloser == nil {
+	if d.ReadWriteCloser == nil {
 		log.Infof("[TUN][FD][ERROR] ReadWriteCloser is nil")
 		return -1
 	}
 
 	// путь 1: *os.File
-	if f, ok := d.Interface.ReadWriteCloser.(*os.File); ok {
+	if f, ok := d.ReadWriteCloser.(*os.File); ok {
 		fd := int(f.Fd())
 		log.Infof("[TUN][FD][OK] Got fd via *os.File: %d", fd)
 		return fd
@@ -149,7 +149,7 @@ func (d *tunDevice) GetFd() int {
 		Fd() uintptr
 	}
 
-	if f, ok := d.Interface.ReadWriteCloser.(fder); ok {
+	if f, ok := d.ReadWriteCloser.(fder); ok {
 		fd := int(f.Fd())
 		log.Infof("[TUN][FD][OK] Got fd via Fd(): %d", fd)
 		return fd

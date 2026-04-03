@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/vishvananda/netlink"
-
 	"go_client/log"
 )
 
@@ -101,12 +100,6 @@ func SetupMarkedRouting(tableID, priority int, iface, gatewayIP string) error {
 		return fmt.Errorf("failed to add fwmark rule: %w", err)
 	}
 
-	log.Infof("[Routing][Mark] Dumping rules...")
-	ExecuteCommand("ip rule show")
-
-	log.Infof("[Routing][Mark] Dumping table %d...", tableID)
-	ExecuteCommand(fmt.Sprintf("ip route show table %d", tableID))
-
 	log.Infof("[Routing][Mark][OK] fwmark routing configured")
 
 	return nil
@@ -127,7 +120,7 @@ func CleanupMarkedRouting(tableID, priority int, iface, gatewayIP string) error 
 
 	if len(errs) > 0 {
 		log.Infof("[Routing][Mark][Cleanup][WARN] %s", strings.Join(errs, "; "))
-		return fmt.Errorf(strings.Join(errs, "; "))
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
 	}
 
 	log.Infof("[Routing][Mark][Cleanup][OK] Cleaned")
@@ -152,9 +145,6 @@ func StartRouting(proxyIP, gatewayIP, uplinkIface, tunName string) error {
 		return fmt.Errorf("failed to add direct route for proxy %s: %w", proxyIP, err)
 	}
 
-	log.Infof("[Routing][Start] Dumping main routing table...")
-	ExecuteCommand("ip route show")
-
 	log.Infof("[Routing][Start][OK] default=VPN(%s), bypass=%s", tunName, proxyIP)
 
 	return nil
@@ -173,9 +163,6 @@ func StopRouting(proxyIP, gatewayIP, uplinkIface string) error {
 	if _, err := ExecuteCommand(fmt.Sprintf("ip route replace default via %s dev %s", gatewayIP, uplinkIface)); err != nil {
 		return fmt.Errorf("failed to restore default route via %s dev %s: %w", gatewayIP, uplinkIface, err)
 	}
-
-	log.Infof("[Routing][Stop] Dumping final routing table...")
-	ExecuteCommand("ip route show")
 
 	log.Infof("[Routing][Stop][OK] Routing restored")
 

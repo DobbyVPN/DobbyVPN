@@ -4,11 +4,12 @@ package platform_engine
 
 import (
 	"fmt"
-	"github.com/xjasonlyu/tun2socks/v2/engine"
-	"go_client/log"
 	"net"
 	"os/exec"
 	"time"
+
+	"github.com/xjasonlyu/tun2socks/v2/engine"
+	"go_client/log"
 )
 
 var LastIface string

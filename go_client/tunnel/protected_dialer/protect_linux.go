@@ -3,8 +3,9 @@
 package protected_dialer
 
 import (
-	"go_client/log"
 	"syscall"
+
+	"go_client/log"
 )
 
 var linuxSocketMark int

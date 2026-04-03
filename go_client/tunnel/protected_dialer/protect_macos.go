@@ -4,10 +4,11 @@ package protected_dialer
 
 import (
 	"fmt"
-	"go_client/log"
 	"net"
 	"strings"
 	"syscall"
+
+	"go_client/log"
 )
 
 const (

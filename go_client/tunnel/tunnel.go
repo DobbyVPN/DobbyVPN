@@ -3,6 +3,9 @@ package tunnel
 import (
 	"context"
 	"fmt"
+	"net"
+	"sync"
+
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
 	"github.com/xjasonlyu/tun2socks/v2/proxy/proto"
@@ -10,8 +13,6 @@ import (
 	"go_client/log"
 	"go_client/tunnel/platform_engine"
 	"go_client/tunnel/protected_dialer"
-	"net"
-	"sync"
 )
 
 var (

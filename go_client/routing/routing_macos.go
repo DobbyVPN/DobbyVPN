@@ -5,8 +5,9 @@ package routing
 
 import (
 	"fmt"
-	"go_client/log"
 	"os/exec"
+
+	"go_client/log"
 )
 
 func AddScopedDefaultRoute(iface, gatewayIP string) error {

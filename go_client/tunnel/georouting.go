@@ -1,11 +1,12 @@
 package tunnel
 
 import (
-	M "github.com/xjasonlyu/tun2socks/v2/metadata"
-	"go_client/log"
 	"net"
 	"strings"
 	"sync"
+
+	M "github.com/xjasonlyu/tun2socks/v2/metadata"
+	"go_client/log"
 )
 
 var (

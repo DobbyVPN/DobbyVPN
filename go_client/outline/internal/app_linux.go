@@ -72,7 +72,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 			serverIP, gatewayIP, uplinkIface)
 
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
-		if err := routing.AddProxyRoute(serverIP.String(), gatewayIP.String(), uplinkIface); err != nil {
+		if err = routing.AddProxyRoute(serverIP.String(), gatewayIP.String(), uplinkIface); err != nil {
 			common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 			err = fmt.Errorf("failed to add early route: %w", err)
 			log.Infof("[Linux][Step 4][ERROR] %v", err)
@@ -94,7 +94,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	)
 
 	common.Client.MarkInCriticalSection(outlineCommon.Name)
-	if err := routing.SetupMarkedRouting(
+	if err = routing.SetupMarkedRouting(
 		app.RoutingConfig.RoutingTableID,
 		app.RoutingConfig.RoutingTablePriority,
 		uplinkIface,
@@ -149,12 +149,12 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 			log.Infof("[Linux][Lifecycle] Shutting down...")
 
 			common.Client.MarkInCriticalSection(outlineCommon.Name)
-			if err := routing.StopRouting(serverIP.String(), gatewayIP.String(), uplinkIface); err != nil {
+			if err = routing.StopRouting(serverIP.String(), gatewayIP.String(), uplinkIface); err != nil {
 				log.Infof("[Linux][StopRouting][ERROR] %v", err)
 			}
 			common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 
-			if err := routing.CleanupMarkedRouting(
+			if err = routing.CleanupMarkedRouting(
 				app.RoutingConfig.RoutingTableID,
 				app.RoutingConfig.RoutingTablePriority,
 				uplinkIface,
@@ -178,14 +178,14 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	// 8. fd
 	t, ok := tun.(interface{ GetFd() int })
 	if !ok {
-		err := fmt.Errorf("TUN has no fd")
+		err = fmt.Errorf("TUN has no fd")
 		log.Infof("[Linux][Step 8][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
 	fd := t.GetFd()
 	if fd < 0 {
-		err := fmt.Errorf("invalid fd=%d", fd)
+		err = fmt.Errorf("invalid fd=%d", fd)
 		log.Infof("[Linux][Step 8][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
@@ -213,7 +213,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	log.Infof("[Linux][Step 10] Switching default route → TUN (%s)", app.RoutingConfig.TunDeviceName)
 
 	common.Client.MarkInCriticalSection(outlineCommon.Name)
-	if err := routing.StartRouting(serverIP.String(), gatewayIP.String(), uplinkIface, app.RoutingConfig.TunDeviceName); err != nil {
+	if err = routing.StartRouting(serverIP.String(), gatewayIP.String(), uplinkIface, app.RoutingConfig.TunDeviceName); err != nil {
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 		err = fmt.Errorf("failed to configure routing: %w", err)
 		log.Infof("[Linux][Step 10][ERROR] %v", err)
