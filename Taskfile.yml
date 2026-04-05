@@ -72,7 +72,7 @@ tasks:
 
   lint:kotlin:
     desc: "Run detekt for Kotlin Multiplatform"
-    dir: "{{.ROOT_DIR}}/kmp_client"
+    dir: "{{.ROOT_DIR}}/kmp_module"
     cmds:
       - cmd: ./gradlew detekt
         platforms: [linux, darwin]
@@ -129,7 +129,7 @@ tasks:
 
   report:kotlin:
     desc: "detekt reports (HTML + XML + SARIF)"
-    dir: "{{.ROOT_DIR}}/kmp_client"
+    dir: "{{.ROOT_DIR}}/kmp_module"
     cmds:
       - cmd: ./gradlew detekt || true
         platforms: [linux, darwin]

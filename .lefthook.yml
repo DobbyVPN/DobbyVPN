@@ -17,15 +17,15 @@ pre-commit:
         - os: windows
 
     kotlin-detekt-unix:
-      glob: "kmp_client/**/*.kt"
-      run: cd kmp_client && ./gradlew detekt
+      glob: "kmp_module/**/*.kt"
+      run: cd kmp_module && ./gradlew detekt
       only:
         - os: linux
         - os: darwin
 
     kotlin-detekt-windows:
-      glob: "kmp_client/**/*.kt"
-      run: cd kmp_client && gradlew.bat detekt
+      glob: "kmp_module/**/*.kt"
+      run: cd kmp_module && gradlew.bat detekt
       only:
         - os: windows
 

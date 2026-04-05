@@ -37,19 +37,19 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: outline-debug.aar
-          path: kmp_client/libs
+          path: kmp_module/libs
 
       - name: Download .so
         uses: actions/download-artifact@v4
         with:
           name: liboutline.so
-          path: kmp_client/outline/src/main/jniLibs/arm64-v8a
+          path: kmp_module/outline/src/main/jniLibs/arm64-v8a
 
       - name: Download .h
         uses: actions/download-artifact@v4
         with:
           name: liboutline.h
-          path: kmp_client/outline/src/main/cpp/include/arm64-v8a
+          path: kmp_module/outline/src/main/cpp/include/arm64-v8a
 
       - uses: actions/setup-java@v5
         with:
@@ -67,7 +67,7 @@ jobs:
           rm -rf swift_module
 
       - name: Build APK
-        working-directory: kmp_client
+        working-directory: kmp_module
         run: |
           ./gradlew app:assembleRelease -PdisableSentry=true \
             -Pandroid.injected.version.code=1 \
@@ -106,7 +106,7 @@ jobs:
             "com.startapp"
           )
 
-          APK=kmp_client/app/build/outputs/apk/release/app-release-unsigned.apk
+          APK=kmp_module/app/build/outputs/apk/release/app-release-unsigned.apk
           PACKAGES=$(apkanalyzer dex packages "$APK" 2>/dev/null | awk '{print $NF}')
 
           FOUND=0

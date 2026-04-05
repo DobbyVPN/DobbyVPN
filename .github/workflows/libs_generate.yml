@@ -137,13 +137,13 @@ jobs:
 
       - name: Copy libs arm64 .so
         run: |
-          mkdir -p kmp_client/outline/src/main/cpp/include/arm64-v8a
-          mkdir -p kmp_client/outline/src/main/jniLibs/arm64-v8a
-          cp go_module/liboutline.h kmp_client/outline/src/main/cpp/include/arm64-v8a/liboutline.h
-          cp go_module/liboutline.so kmp_client/outline/src/main/jniLibs/arm64-v8a/liboutline.so
+          mkdir -p kmp_module/outline/src/main/cpp/include/arm64-v8a
+          mkdir -p kmp_module/outline/src/main/jniLibs/arm64-v8a
+          cp go_module/liboutline.h kmp_module/outline/src/main/cpp/include/arm64-v8a/liboutline.h
+          cp go_module/liboutline.so kmp_module/outline/src/main/jniLibs/arm64-v8a/liboutline.so
 
       - name: Build .aar
-        working-directory: kmp_client
+        working-directory: kmp_module
         run: |
           ./gradlew :outline:build
 
@@ -151,7 +151,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: liboutline.so
-          path: kmp_client/outline/src/main/jniLibs/arm64-v8a/liboutline.so
+          path: kmp_module/outline/src/main/jniLibs/arm64-v8a/liboutline.so
 
       - name: Upload .h
         uses: actions/upload-artifact@v4
@@ -163,7 +163,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: outline-debug.aar
-          path: kmp_client/libs/outline-debug.aar
+          path: kmp_module/libs/outline-debug.aar
 
   build_ios_lib:
     runs-on: macos-14
@@ -232,7 +232,7 @@ jobs:
             -project swift_module/iosApp.xcodeproj
 
       - name: Build KMP iOS framework
-        working-directory: kmp_client
+        working-directory: kmp_module
         run: |
           ./gradlew linkReleaseFrameworkIosArm64
 
@@ -240,4 +240,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: app.framework
-          path: kmp_client/app/build/bin/iosArm64/releaseFramework/app.framework
+          path: kmp_module/app/build/bin/iosArm64/releaseFramework/app.framework

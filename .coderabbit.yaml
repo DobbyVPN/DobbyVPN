@@ -28,7 +28,7 @@ reviews:
         resource cleanup (defer), goroutine leaks, and security implications.
         Files in *_exports/ directories are gomobile/CGo bindings.
 
-    - path: "kmp_client/app/**/*.kt"
+    - path: "kmp_module/app/**/*.kt"
       instructions: >
         Kotlin Multiplatform project using Compose Multiplatform for UI.
         Check for proper ViewModel usage, coroutine scope management,
@@ -90,7 +90,7 @@ reviews:
         ubuntu-latest, as the latter silently upgrades and may change
         pre-installed tool versions.
 
-    - path: "kmp_client/**/build.gradle.kts"
+    - path: "kmp_module/**/build.gradle.kts"
       instructions: >
         Gradle build files must preserve F-Droid reproducible build compliance.
         Check the following:
@@ -142,7 +142,7 @@ reviews:
         5) pip install / gem install without pinned versions or lockfile.
         6) mktemp used in paths that end up in build artifacts.
 
-    - path: "kmp_client/**/Fastfile"
+    - path: "kmp_module/**/Fastfile"
       instructions: >
         Fastlane lanes that participate in CI builds (build_android,
         build_ios, build_desktop, build_kotlin_multiplatform) must preserve
@@ -178,7 +178,7 @@ reviews:
         without corresponding go.mod changes. Bulk replacement of
         go.sum should be justified (e.g. Go version bump).
 
-    - path: "kmp_client/**/libs.versions.toml"
+    - path: "kmp_module/**/libs.versions.toml"
       instructions: >
         Version catalog for Kotlin/Android dependencies. Check for:
 

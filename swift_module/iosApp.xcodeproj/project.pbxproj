@@ -557,7 +557,7 @@
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/CommonDI",
-					"$(SRCROOT)/../kmp_client/app/build/bin/iosArm64/debugFramework",
+					"$(SRCROOT)/../kmp_module/app/build/bin/iosArm64/debugFramework",
 					"$(PROJECT_DIR)",
 				);
 				INFOPLIST_FILE = iosApp/Info.plist;
@@ -592,7 +592,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/../kmp_client/app/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
+					"$(SRCROOT)/../kmp_module/app/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
 					"$(PROJECT_DIR)",
 				);
 				INFOPLIST_FILE = iosApp/Info.plist;
@@ -625,9 +625,9 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/../kmp_client/app/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
+					"$(SRCROOT)/../kmp_module/app/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
 					"$(PROJECT_DIR)/CommonDI",
-					"$(SRCROOT)/../kmp_client/app/build/bin/iosArm64/debugFramework",
+					"$(SRCROOT)/../kmp_module/app/build/bin/iosArm64/debugFramework",
 					"$(PROJECT_DIR)",
 				);
 				GCC_C_LANGUAGE_STANDARD = gnu17;
@@ -669,7 +669,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/../kmp_client/app/build/bin/iosArm64/releaseFramework",
+					"$(SRCROOT)/../kmp_module/app/build/bin/iosArm64/releaseFramework",
 					"$(PROJECT_DIR)/CommonDI",
 					"$(PROJECT_DIR)",
 				);
@@ -718,7 +718,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/../kmp_client/app/build/bin/iosArm64/debugFramework",
+					"$(SRCROOT)/../kmp_module/app/build/bin/iosArm64/debugFramework",
 					"$(PROJECT_DIR)",
 				);
 				GCC_C_LANGUAGE_STANDARD = gnu17;
@@ -770,7 +770,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/../kmp_client/app/build/bin/iosArm64/releaseFramework",
+					"$(SRCROOT)/../kmp_module/app/build/bin/iosArm64/releaseFramework",
 					"$(PROJECT_DIR)",
 				);
 				GCC_C_LANGUAGE_STANDARD = gnu17;
