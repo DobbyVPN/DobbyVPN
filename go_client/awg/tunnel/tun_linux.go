@@ -95,23 +95,18 @@ func (a *TunnelData) Run() error {
 
 	log.Infof("[AWG] Setting up linux subnet")
 
-	log.Infof("[AWG] Device up")
-	if err = a.dev.Up(); err != nil {
-		return fmt.Errorf("Error device up: %v", err)
-	}
-
 	log.Infof("[AWG] Setting up %s interface", a.InterfaceName)
 	if err = a.setUpInterface(); err != nil {
 		return err
 	}
 
 	log.Infof("[AWG] Adding all addresses")
-	if a.addAddresses(); err != nil {
+	if err = a.addAddresses(); err != nil {
 		return err
 	}
 
 	log.Infof("[AWG] Adding all routes")
-	if a.addRoutes(); err != nil {
+	if err = a.addRoutes(); err != nil {
 		return err
 	}
 
