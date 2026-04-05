@@ -200,10 +200,7 @@ jobs:
           # 1. Inject warning suppressions
           sed -i 's/-Wall -Wextra -Wpedantic/-Wno-gnu-zero-variadic-macro-arguments/g' CMakeLists.txt
           
-          # 2. Convert our bridge from a SHARED library to a STATIC library for gomobile
-          sed -i 's/SHARED/STATIC/g' ../../../go_client/trusttunnel/internal/dobby_bridge/CMakeLists.txt
-          
-          # 3. Inject into their tree
+          # 2. Inject into their tree
           echo 'add_subdirectory("../../../go_client/trusttunnel/internal/dobby_bridge" "dobby_bridge_build")' >> CMakeLists.txt
           
           mkdir build && cd build
@@ -221,7 +218,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dobby_bridge-android-arm64
-          path: TrustTunnelClient/platform/windows/build/dobby_bridge_build/libdobby_bridge.a
+          path: TrustTunnelClient/platform/windows/build/dobby_bridge_build/libdobby_bridge.so
 
 # -------------------------------------------------------------
 

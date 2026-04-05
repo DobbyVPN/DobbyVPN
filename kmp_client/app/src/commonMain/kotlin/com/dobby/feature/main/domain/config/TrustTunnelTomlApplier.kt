@@ -6,6 +6,9 @@ import com.dobby.feature.main.domain.TrustTunnelClientConfig
 import com.dobby.feature.main.domain.clearTrustTunnelConfig
 import kotlinx.serialization.encodeToString
 import net.peanuuutz.tomlkt.Toml
+import net.peanuuutz.tomlkt.TomlArray
+import net.peanuuutz.tomlkt.TomlLiteral
+import net.peanuuutz.tomlkt.TomlTable
 
 internal class TrustTunnelTomlApplier(
     private val trustTunnelRepo: DobbyConfigsRepositoryTrustTunnel,
@@ -27,6 +30,20 @@ internal class TrustTunnelTomlApplier(
         }
 
         try {
+            val endpointTable = config.endpoint as? TomlTable
+            val addressesArray = endpointTable?.get("addresses") as? TomlArray
+            val addressStr = (addressesArray?.get(0) as? TomlLiteral)?.content ?: ""
+            if (addressStr.isNotBlank() && addressStr.contains(":")) {
+                val host = addressStr.substringBeforeLast(":")
+                val port = addressStr.substringAfterLast(":").toIntOrNull() ?: 443
+
+                logger.log("Extracted TrustTunnel server for Health Check: $host:$port")
+                // Set server's ip and port for a health check
+                trustTunnelRepo.setServerPortOutline("${host}:${port}")
+            } else {
+                logger.log("Warning: Could not extract valid address from TrustTunnel config.")
+            }
+
             // Encode the data class back into a raw TOML string
             val rawToml = toml.encodeToString(config)
 

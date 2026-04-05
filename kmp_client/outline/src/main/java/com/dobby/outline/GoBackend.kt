@@ -8,6 +8,8 @@ class OutlineGo {
     companion object {
         init {
             Log.d(TAG, "Start loading libraries")
+            System.loadLibrary("c++_shared")
+            System.loadLibrary("dobby_bridge")
             System.loadLibrary("outline")
             System.loadLibrary("outline_jni")
             Log.d(TAG, "Libraries loaded successfully")
