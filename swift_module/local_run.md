@@ -8,7 +8,7 @@ This is the compiled Go part of our project. It is taken from CI, where it is st
 
 ### app.framework
 
-This is the compiled Kotlin part of our project. It is built locally. You need to install the SDK and, while being in the `kmp_client` directory, run
+This is the compiled Kotlin part of our project. It is built locally. You need to install the SDK and, while being in the `kmp_module` directory, run
 `./gradlew linkReleaseFrameworkIosArm64`,
 then copy the resulting framework into `iosApp`.
 

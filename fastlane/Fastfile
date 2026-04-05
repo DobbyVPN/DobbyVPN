@@ -14,7 +14,7 @@ platform :android do
 
     gradle(
       task: "assembleRelease",
-      project_dir: "kmp_client",
+      project_dir: "kmp_module",
       properties: {
         "projectRepositoryCommit" => COMMIT,
         "projectRepositoryCommitLink" => COMMIT_LINK,
@@ -35,7 +35,7 @@ platform :android do
 
     gradle(
       task: "assembleRelease",
-      project_dir: "kmp_client",
+      project_dir: "kmp_module",
       properties: {
         "projectRepositoryCommit" => COMMIT,
         "projectRepositoryCommitLink" => COMMIT_LINK,
@@ -55,7 +55,7 @@ platform :android do
   lane :build_desktop do
     gradle(
       task: "build",
-      project_dir: "kmp_client",
+      project_dir: "kmp_module",
       properties: {
         "projectRepositoryCommit" => COMMIT,
         "projectRepositoryCommitLink" => COMMIT_LINK,
@@ -66,7 +66,7 @@ platform :android do
 
     gradle(
       task: "dependencies",
-      project_dir: "kmp_client",
+      project_dir: "kmp_module",
       flags: "--no-daemon -q",
       properties: {
         "projectRepositoryCommit" => COMMIT,
@@ -78,7 +78,7 @@ platform :android do
 
     gradle(
       task: "printConveyorConfig",
-      project_dir: "kmp_client",
+      project_dir: "kmp_module",
       flags: "--no-daemon -q",
       properties: {
         "projectRepositoryCommit" => COMMIT,
@@ -121,7 +121,7 @@ platform :ios do
   lane :build_kotlin_multiplatform do
     gradle(
       task: "linkReleaseFrameworkIosArm64",
-      project_dir: "kmp_client",
+      project_dir: "kmp_module",
       properties: {
         "projectRepositoryCommit" => COMMIT,
         "projectRepositoryCommitLink" => COMMIT_LINK,

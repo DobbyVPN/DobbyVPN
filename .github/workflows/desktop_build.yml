@@ -14,44 +14,44 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: outline-debug.aar
-          path: kmp_client/libs
+          path: kmp_module/libs
 
       - name: Download So
         uses: actions/download-artifact@v4
         with:
           name: liboutline.so
-          path: kmp_client/outline/src/main/jniLibs/arm64-v8a
+          path: kmp_module/outline/src/main/jniLibs/arm64-v8a
 
       - name: Download .h
         uses: actions/download-artifact@v4
         with:
           name: liboutline.h
-          path: kmp_client/outline/src/main/cpp/include/arm64-v8a
+          path: kmp_module/outline/src/main/cpp/include/arm64-v8a
 
       - name: Download Windows lib
         uses: actions/download-artifact@v4
         with:
           name: lib_windows
-          path: kmp_client/libs
+          path: kmp_module/libs
 
       - name: Download Wintun DLL
         run: |
           curl -L -o wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
           echo "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51  wintun.zip" | sha256sum -c -
-          unzip -j wintun.zip wintun/bin/amd64/wintun.dll -d kmp_client/libs/
+          unzip -j wintun.zip wintun/bin/amd64/wintun.dll -d kmp_module/libs/
           rm wintun.zip
 
       - name: Download Linux lib
         uses: actions/download-artifact@v4
         with:
           name: lib_ubuntu
-          path: kmp_client/libs
+          path: kmp_module/libs
 
       - name: Download macOS lib
         uses: actions/download-artifact@v4
         with:
           name: lib_macos
-          path: kmp_client/libs
+          path: kmp_module/libs
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -94,7 +94,7 @@ jobs:
           OAUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           command: make site
-          extra_flags: "--passphrase=\"${{ secrets.CONVEYOR_PASSPHRASE }}\" -f kmp_client/conveyor.conf"
+          extra_flags: "--passphrase=\"${{ secrets.CONVEYOR_PASSPHRASE }}\" -f kmp_module/conveyor.conf"
           signing_key: ${{ secrets.CONVEYOR_SIGNING_KEY }}
           agree_to_license: 1
 
