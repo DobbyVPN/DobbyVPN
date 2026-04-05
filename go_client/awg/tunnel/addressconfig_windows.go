@@ -1,6 +1,6 @@
 //go:build windows
 
-package subnet
+package tunnel
 
 import (
 	"bytes"
