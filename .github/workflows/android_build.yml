@@ -81,10 +81,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dobbyvpn-android-sign.apk
-          path: DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-sign.apk
+          path: fastlane/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-sign.apk
 
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
           name: dobbyvpn-android-unsign.apk
-          path: DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-unsign.apk
+          path: fastlane/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-unsign.apk
