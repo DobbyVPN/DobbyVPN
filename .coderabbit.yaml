@@ -34,7 +34,7 @@ reviews:
         Check for proper ViewModel usage, coroutine scope management,
         and Koin dependency injection patterns.
 
-    - path: "kmp_client/iosApp/**/*.swift"
+    - path: "swift_module/**/*.swift"
       instructions: >
         Swift code for the iOS app. Focus on memory management,
         proper KMP framework interop, and PacketTunnelProvider correctness.

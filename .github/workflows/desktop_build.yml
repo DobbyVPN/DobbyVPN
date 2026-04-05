@@ -36,17 +36,10 @@ jobs:
 
       - name: Download Wintun DLL
         run: |
-            # Download the official Wintun zip
-            curl -L -o wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
-
-            # Verify integrity (SHA256 from official release)
-            echo "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51  wintun.zip" | sha256sum -c -
-
-            # Unzip the specific AMD64 dll directly to the target folder
-            unzip -j wintun.zip wintun/bin/amd64/wintun.dll -d kmp_client/libs/
-
-            # Clean up
-            rm wintun.zip
+          curl -L -o wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
+          echo "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51  wintun.zip" | sha256sum -c -
+          unzip -j wintun.zip wintun/bin/amd64/wintun.dll -d kmp_client/libs/
+          rm wintun.zip
 
       - name: Download Linux lib
         uses: actions/download-artifact@v4
@@ -82,10 +75,11 @@ jobs:
           key: >
             ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
 
+      - name: Bundle Install
+        run: bundle install
+
       - name: Build desktop via Fastlane
-        working-directory: kmp_client
         run: |
-          bundle install
           bundle exec fastlane android build_desktop
         env:
           APP_MAJOR_VERSION: ${{ vars.MAJOR }}
