@@ -49,6 +49,8 @@ platform :android do
     )
 
     sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} DobbyVPN-v#{FULL_VERSION}-sign.apk"
+
+    sh "pwd"
   end
 
   desc "Build Desktop artifacts"

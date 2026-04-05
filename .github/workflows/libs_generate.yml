@@ -28,10 +28,10 @@ jobs:
 
       - name: Vendor Cloak/internal
         run: |
-          cp -r Cloak/internal go_client/modules/Cloak/
+          cp -r Cloak/internal go_module/modules/Cloak/
 
       - name: Download Go modules
-        working-directory: go_client
+        working-directory: go_module
         run: |
           go mod tidy
           go mod download
@@ -45,7 +45,7 @@ jobs:
 
       - name: Build Windows library
         if: matrix.os == 'windows'
-        working-directory: go_client
+        working-directory: go_module
         run: |
           go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_windows.dll ./desktop_exports/...
         env:
@@ -57,7 +57,7 @@ jobs:
 
       - name: Build Linux library
         if: matrix.os == 'ubuntu'
-        working-directory: go_client
+        working-directory: go_module
         run: |
           go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_linux.so ./desktop_exports/...
         env:
@@ -69,7 +69,7 @@ jobs:
 
       - name: Build macOS library
         if: matrix.os == 'macos'
-        working-directory: go_client
+        working-directory: go_module
         run: |
           go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_macos.dylib ./desktop_exports/...
         env:
@@ -84,9 +84,9 @@ jobs:
         with:
           name: lib_${{ matrix.os }}
           path: |
-            go_client/lib_windows.dll
-            go_client/lib_linux.so
-            go_client/lib_macos.dylib
+            go_module/lib_windows.dll
+            go_module/lib_linux.so
+            go_module/lib_macos.dylib
 
   build_android_lib:
     runs-on: ubuntu-latest
@@ -102,10 +102,10 @@ jobs:
 
       - name: Vendor Cloak/internal
         run: |
-          cp -r Cloak/internal go_client/modules/Cloak/
+          cp -r Cloak/internal go_module/modules/Cloak/
 
       - name: Download Go modules
-        working-directory: go_client
+        working-directory: go_module
         run: |
           go mod tidy
           go mod download
@@ -120,7 +120,7 @@ jobs:
             ndk;27.0.11718014
 
       - name: Set up Android NDK and build arm64 .so
-        working-directory: go_client
+        working-directory: go_module
         run: |
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.11718014
           export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
@@ -139,8 +139,8 @@ jobs:
         run: |
           mkdir -p kmp_client/outline/src/main/cpp/include/arm64-v8a
           mkdir -p kmp_client/outline/src/main/jniLibs/arm64-v8a
-          cp go_client/liboutline.h kmp_client/outline/src/main/cpp/include/arm64-v8a/liboutline.h
-          cp go_client/liboutline.so kmp_client/outline/src/main/jniLibs/arm64-v8a/liboutline.so
+          cp go_module/liboutline.h kmp_client/outline/src/main/cpp/include/arm64-v8a/liboutline.h
+          cp go_module/liboutline.so kmp_client/outline/src/main/jniLibs/arm64-v8a/liboutline.so
 
       - name: Build .aar
         working-directory: kmp_client
@@ -157,7 +157,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: liboutline.h
-          path: go_client/liboutline.h
+          path: go_module/liboutline.h
 
       - name: Upload Go AAR
         uses: actions/upload-artifact@v4
@@ -180,10 +180,10 @@ jobs:
 
       - name: Vendor Cloak/internal
         run: |
-          cp -r Cloak/internal go_client/modules/Cloak/
+          cp -r Cloak/internal go_module/modules/Cloak/
 
       - name: Download Go modules & dependencies
-        working-directory: go_client
+        working-directory: go_module
         run: |
           go mod download
           go mod tidy
@@ -194,12 +194,12 @@ jobs:
           gomobile init
 
       - name: Fetch gomobile runtime
-        working-directory: go_client
+        working-directory: go_module
         run: |
           go get golang.org/x/mobile/bind@latest
 
       - name: Build iOS XCFramework
-        working-directory: go_client
+        working-directory: go_module
         run: |
           GO111MODULE=on gomobile bind -target=ios -o MyLibrary.xcframework ./ios_exports
 
@@ -207,7 +207,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MyLibrary.xcframework
-          path: go_client/MyLibrary.xcframework
+          path: go_module/MyLibrary.xcframework
 
 
   build_ios_app_lib:
