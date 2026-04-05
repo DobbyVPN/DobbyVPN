@@ -13,6 +13,7 @@ platform :android do
   lane :build_android do
 
     gradle(
+      project_dir: "kmp_client",
       task: "assembleRelease",
       properties: {
       "projectRepositoryCommit" => COMMIT,
@@ -22,7 +23,7 @@ platform :android do
       }
     )
 
-    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} ../DobbyVPN-v#{FULL_VERSION}-unsign.apk"
+    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} DobbyVPN-v#{FULL_VERSION}-unsign.apk"
   end
 
   desc "Build and sign Android APK"
@@ -30,9 +31,10 @@ platform :android do
 
     tmp = Dir.mktmpdir
     keystore_path = File.join(tmp, "keystore.jks")
-    File.write(keystore_path, Base64.decode64(ENV['KEYSTORE_FILE']))  
+    File.write(keystore_path, Base64.decode64(ENV['KEYSTORE_FILE']))
 
     gradle(
+      project_dir: "kmp_client",
       task: "assembleRelease",
       properties: {
       "projectRepositoryCommit" => COMMIT,
@@ -46,12 +48,13 @@ platform :android do
       }
     )
 
-    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} ../DobbyVPN-v#{FULL_VERSION}-sign.apk"
+    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} DobbyVPN-v#{FULL_VERSION}-sign.apk"
   end
 
   desc "Build Desktop artifacts"
   lane :build_desktop do
     gradle(
+      project_dir: "kmp_client",
       task: "build",
       properties: {
         "projectRepositoryCommit" => COMMIT,
@@ -62,6 +65,7 @@ platform :android do
     )
 
     gradle(
+      project_dir: "kmp_client",
       task: "dependencies",
       flags: "--no-daemon -q",
       properties: {
@@ -73,6 +77,7 @@ platform :android do
     )
 
     gradle(
+      project_dir: "kmp_client",
       task: "printConveyorConfig",
       flags: "--no-daemon -q",
       properties: {
@@ -87,9 +92,9 @@ end
 
 
 platform :ios do
-    PROJECT    = "iosApp/iosApp.xcodeproj"
+    PROJECT    = "kmp_client/iosApp/iosApp.xcodeproj"
     SCHEME     = "iosApp"
-    EXPORT_DIR = "iosApp/build/ipa"
+    EXPORT_DIR = "kmp_client/iosApp/build/ipa"
     IPA_NAME   = "DobbyVPN.ipa"
     TEAM_ID    = "F6CHJX72K5"
     BUNDLE_ID  = "vpn.dobby.app"
@@ -113,6 +118,7 @@ platform :ios do
     desc "Build Kotlin Multiplatform"
     lane :build_kotlin_multiplatform do
       gradle(
+        project_dir: "kmp_client",
         task: "linkReleaseFrameworkIosArm64",
         properties: {
           "projectRepositoryCommit" => COMMIT,
@@ -125,19 +131,19 @@ platform :ios do
 
     desc "Create keychain, import certificate, install provisioning profiles from base64 secrets"
     lane :prepare_signing do
-  
+
       keychain_name = "build.keychain-db"
       keychain_password = ENV['KEYCHAIN_PASSWORD']
-  
+
       tmp = Dir.mktmpdir
       cert_path = File.join(tmp, "cert.p12")
       profile1  = File.join(tmp, "profile1.mobileprovision")
       profile2  = File.join(tmp, "profile2.mobileprovision")
-  
+
       File.write(cert_path, Base64.decode64(ENV['CERT_P12_BASE64']))
       File.write(profile1,  Base64.decode64(ENV['PROVISION_DOBBY_BASE64']))
       File.write(profile2,  Base64.decode64(ENV['PROVISION_DOBBY_TUNNEL_BASE64']))
-  
+
       create_keychain(
         name: keychain_name,
         password: keychain_password,
@@ -145,7 +151,7 @@ platform :ios do
         unlock: true,
         timeout: 3600
       )
-  
+
       import_certificate(
         certificate_path: cert_path,
         certificate_password: ENV['CERT_P12_PASSWORD'],
@@ -154,11 +160,11 @@ platform :ios do
       )
 
       sh("security set-key-partition-list -S apple-tool:,apple: -s -k #{keychain_password} ~/Library/Keychains/#{keychain_name}")
-  
+
       install_provisioning_profile(path: profile1)
       install_provisioning_profile(path: profile2)
     end
-  
+
     desc "Build, archive and export IPA"
     lane :build_ios do
       export_options = {
@@ -177,7 +183,7 @@ platform :ios do
         configuration: "Release",
         sdk: "iphoneos",
         clean: true,
-        archive_path: "iosApp/build/iosApp.xcarchive",
+        archive_path: "kmp_client/iosApp/build/iosApp.xcarchive",
         export_method: "app-store",
         export_options: export_options,
         output_directory: EXPORT_DIR,
@@ -185,10 +191,10 @@ platform :ios do
         silent: false
       )
     end
-  
+
     desc "Upload IPA to TestFlight"
     lane :upload_testflight do
-  
+
       api_key = app_store_connect_api_key(
         key_id: ENV['APP_STORE_KEY_ID'],
         issuer_id: ENV['APP_STORE_ISSUER_ID'],
@@ -197,9 +203,9 @@ platform :ios do
         duration: 1200,
         in_house: false
       )
-  
+
       ipa_path = "#{EXPORT_DIR}/#{IPA_NAME}"
-  
+
       upload_to_testflight(
         ipa: ipa_path,
         api_key: api_key,
