@@ -73,6 +73,7 @@ func (a *TunnelData) Run() error {
 	}
 	a.watcher = watcher
 
+	log.Infof("[AWG] Create awg TUN device")
 	wintun, err := tun.CreateTUNWithRequestedGUID(a.InterfaceName, deterministicGUID(a.InterfaceConfig), 0)
 	if err != nil {
 		return fmt.Errorf("Failed to create TUN device: %s", err)
@@ -148,14 +149,14 @@ func (a *TunnelData) Stop() {
 }
 
 func (a *TunnelData) ipcAcceptLoop() {
-	log.Infof("Running IPC accept loop")
+	log.Infof("[AWG] Running IPC accept loop")
 
 	for {
 		c, err := a.uapi.Accept()
 		if err != nil {
 			a.errs <- err
 
-			log.Infof("[ERROR] Got IPC error, stopping IPC loop")
+			log.Infof("[AWG] [ERROR] Got IPC error, stopping IPC loop")
 			return
 		}
 		go a.dev.IpcHandle(c)
@@ -178,5 +179,4 @@ func (a *TunnelData) tunnelLoop() {
 		log.Infof("[ERROR] Got watcher error, stopping tunnel loop: %s", err)
 		return
 	}
-
 }
