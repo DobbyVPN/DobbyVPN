@@ -83,7 +83,6 @@ jobs:
             ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
 
       - name: Build desktop via Fastlane
-        working-directory: kmp_client
         run: |
           bundle install
           bundle exec fastlane android build_desktop
