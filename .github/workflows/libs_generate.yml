@@ -209,6 +209,39 @@ jobs:
           name: MyLibrary.xcframework
           path: go_client/MyLibrary.xcframework
 
+
+  build_ios_app_lib:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Select Xcode 16.1
+        run: sudo xcode-select -s /Applications/Xcode_16.1.app
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Resolve Swift Package Dependencies
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project swift_module/iosApp.xcodeproj
+
+      - name: Build KMP iOS framework
+        working-directory: kmp_client
+        run: |
+          ./gradlew linkReleaseFrameworkIosArm64
+
+      - name: Upload app.framework
+        uses: actions/upload-artifact@v4
+        with:
+          name: app.framework
+          path: kmp_client/app/build/bin/iosArm64/releaseFramework/app.framework
+
   release:
     if: ${{ github.event.inputs.release_tag != '' }}
     runs-on: ubuntu-latest

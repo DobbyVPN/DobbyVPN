@@ -64,8 +64,7 @@ jobs:
 
       - name: Remove non-Android modules
         run: |
-          rm -rf kmp_client/iosApp
-          rm -rf kmp_client/tap-device
+          rm -rf swift_module
 
       - name: Build APK
         working-directory: kmp_client

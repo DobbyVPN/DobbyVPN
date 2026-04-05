@@ -30,8 +30,8 @@ pre-commit:
         - os: windows
 
     swift-lint:
-      glob: "kmp_client/iosApp/**/*.swift"
-      run: cd kmp_client/iosApp && swiftlint lint --config .swiftlint.yml --quiet
+      glob: "swift_module/**/*.swift"
+      run: cd swift_module && swiftlint lint --config .swiftlint.yml --quiet
       only:
         - os: darwin
       fail_text: "SwiftLint found issues. Fix them before committing."

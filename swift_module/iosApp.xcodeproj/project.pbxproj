@@ -219,7 +219,6 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 7555FFA5242A565B00829871 /* Build configuration list for PBXNativeTarget "iosApp" */;
 			buildPhases = (
-				F36B1CEB2AD83DDC00CB74D5 /* Compile Kotlin Framework */,
 				7555FF77242A565900829871 /* Sources */,
 				B92378962B6B1156000C7307 /* Frameworks */,
 				7555FF79242A565900829871 /* Resources */,
@@ -373,24 +372,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "# This script is responsible for uploading debug symbols and source context for Sentry.\nif which sentry-cli >/dev/null; then\n  export SENTRY_ORG=dobby-jn\n  export SENTRY_PROJECT=apple-ios\n  ERROR=$(sentry-cli debug-files upload --include-sources \"$DWARF_DSYM_FOLDER_PATH\" 2>&1 >/dev/null)\n  if [ ! $? -eq 0 ]; then\n    echo \"warning: sentry-cli - $ERROR\"\n  fi\nelse\n  echo \"warning: sentry-cli not installed, download from https://github.com/getsentry/sentry-cli/releases\"\nfi\n";
-		};
-		F36B1CEB2AD83DDC00CB74D5 /* Compile Kotlin Framework */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Compile Kotlin Framework";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "if [ \"YES\" = \"$OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED\" ]; then\n  echo \"Skipping Gradle build task invocation due to OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED environment variable set to \\\"YES\\\"\"\n  exit 0\nfi\ncd \"$SRCROOT/..\"\n./gradlew :app:embedAndSignAppleFrameworkForXcode\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -576,7 +557,7 @@
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/CommonDI",
-					"$(SRCROOT)/../app/build/bin/iosArm64/debugFramework",
+					"$(SRCROOT)/../kmp_client/app/build/bin/iosArm64/debugFramework",
 					"$(PROJECT_DIR)",
 				);
 				INFOPLIST_FILE = iosApp/Info.plist;
@@ -611,7 +592,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/../app/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
+					"$(SRCROOT)/../kmp_client/app/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
 					"$(PROJECT_DIR)",
 				);
 				INFOPLIST_FILE = iosApp/Info.plist;
@@ -644,9 +625,9 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/../app/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
+					"$(SRCROOT)/../kmp_client/app/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
 					"$(PROJECT_DIR)/CommonDI",
-					"$(SRCROOT)/../app/build/bin/iosArm64/debugFramework",
+					"$(SRCROOT)/../kmp_client/app/build/bin/iosArm64/debugFramework",
 					"$(PROJECT_DIR)",
 				);
 				GCC_C_LANGUAGE_STANDARD = gnu17;
@@ -688,7 +669,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/../app/build/bin/iosArm64/releaseFramework",
+					"$(SRCROOT)/../kmp_client/app/build/bin/iosArm64/releaseFramework",
 					"$(PROJECT_DIR)/CommonDI",
 					"$(PROJECT_DIR)",
 				);
@@ -737,7 +718,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/../app/build/bin/iosArm64/debugFramework",
+					"$(SRCROOT)/../kmp_client/app/build/bin/iosArm64/debugFramework",
 					"$(PROJECT_DIR)",
 				);
 				GCC_C_LANGUAGE_STANDARD = gnu17;
@@ -789,7 +770,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/../app/build/bin/iosArm64/releaseFramework",
+					"$(SRCROOT)/../kmp_client/app/build/bin/iosArm64/releaseFramework",
 					"$(PROJECT_DIR)",
 				);
 				GCC_C_LANGUAGE_STANDARD = gnu17;
