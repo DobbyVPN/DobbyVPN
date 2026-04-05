@@ -6,13 +6,28 @@ import (
 	"fmt"
 	"net"
 
+	"go_client/awg/config"
 	"go_client/log"
 
+	"github.com/amnezia-vpn/amneziawg-go/conn"
+	"github.com/amnezia-vpn/amneziawg-go/tun"
 	sysctl "github.com/lorenzosaino/go-sysctl"
 	"github.com/vishvananda/netlink"
 
 	"golang.org/x/sys/unix"
 )
+
+type SubnetData struct {
+	InterfaceName string
+	Config        *config.Config
+}
+
+func CreateSubnetData(tun string, conf *config.Config, tdev tun.Device, bind conn.Bind) *SubnetData {
+	return &SubnetData{
+		InterfaceName: tun,
+		Config:        conf,
+	}
+}
 
 func (subnet *SubnetData) ConfigureSubnet() error {
 	var err error

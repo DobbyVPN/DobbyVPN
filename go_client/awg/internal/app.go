@@ -1,5 +1,3 @@
-//go:build linux
-
 package internal
 
 import (
@@ -14,7 +12,6 @@ import (
 
 type App struct {
 	TunnelData *tunnel.TunnelData
-	SubnetData *subnet.SubnetData
 }
 
 // NewApp creates a new App using a tunnel name and its config
@@ -24,17 +21,9 @@ func NewApp(tun, conf string) (*App, error) {
 		return nil, fmt.Errorf("Failed to read awg-quick config: %s", err)
 	}
 
-	tunnelData := &tunnel.TunnelData{
-		InterfaceName:   tun,
-		InterfaceConfig: awgqconfig,
-	}
-	subnetData := &subnet.SubnetData{
-		InterfaceName: tun,
-		Config:        *awgqconfig,
-	}
+	tunnelData := tunnel.CreateTunnelData(tun, awgqconfig)
 	app := &App{
 		TunnelData: tunnelData,
-		SubnetData: subnetData,
 	}
 
 	return app, nil
@@ -49,7 +38,8 @@ func (a *App) Run() error {
 	log.Infof("Wait for tunnel to run")
 	time.Sleep(100 * time.Millisecond)
 
-	err = a.SubnetData.ConfigureSubnet()
+	subnetData := subnet.CreateSubnetData(a.TunnelData.InterfaceName, a.TunnelData.InterfaceConfig, a.TunnelData.TunnelDevice, a.TunnelData.TunnelBind)
+	err = subnetData.ConfigureSubnet()
 	if err != nil {
 		a.TunnelData.Stop()
 

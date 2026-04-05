@@ -24,6 +24,7 @@ type TunnelData struct {
 	TunnelDevice    tun.Device
 	TunnelBind      conn.Bind
 	logger          *device.Logger
+	nativeTun       *tun.NativeTun
 	dev             *device.Device
 	uapiListener    net.Listener
 	errs            chan error
@@ -54,11 +55,22 @@ func (a *TunnelData) Run() error {
 	a.term = make(chan os.Signal, 1)
 	a.logger = device.NewLogger(device.LogLevelVerbose, fmt.Sprintf("(%s) ", a.InterfaceName))
 
-	tdev, err := a.openTun()
+	log.Infof("[AWG] DeduplicateNetworkEntries")
+	a.config.DeduplicateNetworkEntries()
+
+	a.TunnelDevice, err = a.openTun()
 	if err != nil {
 		return fmt.Errorf("Failed to create TUN device: %s", err)
 	}
-	a.TunnelDevice = tdev
+
+	a.nativeTun = a.TunnelDevice.(*tun.NativeTun)
+
+	wintunVersion, err := a.nativeTun.RunningVersion()
+	if err != nil {
+		log.Infof("[AWG] [WARNING] unable to determine Wintun version: %v", err)
+	} else {
+		log.Infof("[AWG] Using Wintun/%d.%d", (wintunVersion>>16)&0xffff, wintunVersion&0xffff)
+	}
 
 	fileUAPI, err := a.openUAPI()
 	if err != nil {
@@ -91,18 +103,18 @@ func (a *TunnelData) Run() error {
 	go a.ipcAcceptLoop()
 	go a.tunnelLoop()
 
-	log.Infof("[AWG] Device up")
+	log.Infof("[AWG] Bringing peers up")
 	return a.dev.Up()
 }
 
 func (a *TunnelData) Stop() {
+	log.Infof("[AWG] Shutting down")
 	if a.uapiListener != nil {
 		a.uapiListener.Close()
 	}
 	if a.dev != nil {
 		a.dev.Close()
 	}
-	a.logger.Verbosef("Shutting down")
 }
 
 func (a *TunnelData) openTun() (tun.Device, error) {
