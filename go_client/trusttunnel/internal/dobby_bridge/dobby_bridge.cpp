@@ -70,7 +70,7 @@ void dobby_vpn_start(const char *toml_config, dobby_on_state_changed_t state_cha
     // 1. Start Event Loop immediately
     m_ev_loop.reset(ag::vpn_event_loop_create());
     m_executor_thread = std::thread([]() { ag::vpn_event_loop_run(m_ev_loop.get()); });
-    ag::vpn_event_loop_dispatch_sync(m_ev_loop.get(), nullptr, nullptr);
+    // ag::vpn_event_loop_dispatch_sync(m_ev_loop.get(), nullptr, nullptr);
 
     // 2. Capture the RAW string, which is safely copyable across threads
     std::string config_str(toml_config);
@@ -126,39 +126,38 @@ void dobby_vpn_start(const char *toml_config, dobby_on_state_changed_t state_cha
 }
 
 void dobby_vpn_stop() {
-    if (!m_vpn) return;
     infolog(g_logger, "Starting TrustTunnel vpn core stop.");
 
-    // 1. Create a promise to block the Go thread safely
-    std::promise<void> stop_promise;
-    std::future<void> stop_future = stop_promise.get_future();
+    // Always stop the event loop if it exists, even if m_vpn is currently null
+    if (m_ev_loop) {
+        std::promise<void> stop_promise;
+        std::future<void> stop_future = stop_promise.get_future();
 
-    // 2. Submit the destruction logic to the exact SAME background thread that created it
-    ag::event_loop::submit(m_ev_loop.get(), [&stop_promise]() {
-        if (m_vpn) {
-            m_vpn->client->disconnect();
-            
-            // Protect against the null pointer!
-            if (m_vpn->network_monitor) {
-                m_vpn->network_monitor->stop();
+        // Submit cleanup task
+        ag::event_loop::submit(m_ev_loop.get(), [&stop_promise]() {
+            if (m_vpn) {
+                // Let the destructor handle all the safe async teardown!
+                // Do NOT manually call disconnect() or network_monitor->stop()
+                delete m_vpn;
+                m_vpn = nullptr;
             }
-            
-            // Safely destroy the client on its native thread
-            delete m_vpn;
-            m_vpn = nullptr;
-        }
-        // 3. Signal to the main thread that the memory is safely freed
-        stop_promise.set_value(); 
-    }).release();
+            stop_promise.set_value(); 
+        }).release();
 
-    // 4. Force the main thread to wait for the background thread to finish
-    stop_future.wait();
+        // Wait for cleanup task to finish safely
+        stop_future.wait();
 
-    // 5. Now it is 100% safe to kill the event loop and join the thread
-    ag::vpn_event_loop_stop(m_ev_loop.get());
+        // Stop the loop
+        ag::vpn_event_loop_stop(m_ev_loop.get());
+    }
+
+    // Always join the thread
     if (m_executor_thread.joinable()) {
         m_executor_thread.join();
     }
+
+    // Free the event loop memory so it is completely clean for the next start
+    m_ev_loop.reset();
 
     infolog(g_logger, "End TrustTunnel vpn core stop.");
 }

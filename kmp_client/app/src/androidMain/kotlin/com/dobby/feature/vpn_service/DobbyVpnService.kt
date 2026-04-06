@@ -110,7 +110,7 @@ class DobbyVpnService : VpnService() {
                     startStopMutex.withLock {
                         logger.log("[svc:$serviceId] statusFlow requested stop → begin teardown")
                         stopCloakClient()
-                        startTrustTunnel()
+                        stopTrustTunnel()
                         teardownVpn()
                         stopSelf()
                         logger.log("[svc:$serviceId] statusFlow requested stop → stopSelf() called")

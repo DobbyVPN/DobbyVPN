@@ -25,8 +25,8 @@ static inline int execute_protect_cb(protect_cb_t cb, int fd) {
 }
 
 // C "Gateway" functions
-extern void c_state_changed_cb(void* arg, int state);
-extern void c_log_cb(int level, const char* msg);
+extern void c_state_changed(void* arg, int state);
+extern void c_log_message(int level, const char* msg);
 extern int c_protect_cb(int fd);
 */
 import "C"
@@ -92,13 +92,13 @@ func NewTrustTunnelManager(tomlConfig string, fd int) *TrustTunnelManager {
 
 func (m *TrustTunnelManager) Start() error {
 	// Register the global mobile callbacks
-	C.dobby_vpn_set_log_callback((C.dobby_on_log_message_t)(C.c_log_cb))
+	C.dobby_vpn_set_log_callback((C.dobby_on_log_message_t)(C.c_log_message))
 	C.dobby_vpn_set_protect_callback((C.dobby_on_protect_socket_t)(C.c_protect_cb))
 
 	cConfig := C.CString(m.tomlConfig)
 	defer C.free(unsafe.Pointer(cConfig))
 
-	C.dobby_vpn_start(cConfig, (C.dobby_on_state_changed_t)(C.c_state_changed_cb), nil)
+	C.dobby_vpn_start(cConfig, (C.dobby_on_state_changed_t)(C.c_state_changed), nil)
 	return nil
 }
 
