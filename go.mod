@@ -1,6 +1,3 @@
 module dobby
 
-go 1.23.2
-
-require (
-)
+go 1.24.0

@@ -1,6 +1,5 @@
-package main
+package api
 
-import "C"
 import (
 	"go_module/log"
 	"go_module/outline"
@@ -13,14 +12,11 @@ var outlineMu sync.Mutex
 var outlineLastError string
 var outlineErrorMu sync.Mutex
 
-//export GetOutlineLastError
-func GetOutlineLastError() *C.char {
+func GetOutlineLastError() string {
 	outlineErrorMu.Lock()
 	defer outlineErrorMu.Unlock()
-	if outlineLastError == "" {
-		return nil
-	}
-	return C.CString(outlineLastError)
+
+	return outlineLastError
 }
 
 func setOutlineLastError(err string) {
@@ -32,11 +28,10 @@ func setOutlineLastError(err string) {
 	}
 }
 
-//export StartOutline
-func StartOutline(key *C.char) C.int {
+func StartOutline(key string) int32 {
 	log.Infof("StartOutline")
 	setOutlineLastError("")
-	str_key := C.GoString(key)
+	str_key := key
 
 	log.Infof("Make lock")
 	outlineMu.Lock()
@@ -65,7 +60,6 @@ func StartOutline(key *C.char) C.int {
 	return 0
 }
 
-//export StopOutline
 func StopOutline() {
 	outlineMu.Lock()
 	defer outlineMu.Unlock()

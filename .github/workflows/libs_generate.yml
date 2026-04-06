@@ -47,7 +47,7 @@ jobs:
         if: matrix.os == 'windows'
         working-directory: go_module
         run: |
-          go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_windows.dll ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
         env:
           CGO_ENABLED: '1'
           GOOS: 'windows'
@@ -59,7 +59,7 @@ jobs:
         if: matrix.os == 'ubuntu'
         working-directory: go_module
         run: |
-          go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_linux.so ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
         env:
           CGO_ENABLED: '1'
           GOOS: 'linux'
@@ -71,7 +71,7 @@ jobs:
         if: matrix.os == 'macos'
         working-directory: go_module
         run: |
-          go build -trimpath -ldflags="-buildid=" -buildmode=c-shared -o lib_macos.dylib ./desktop_exports/...
+          go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports/
         env:
           CGO_ENABLED: '1'
           GOOS: 'darwin'
@@ -80,13 +80,28 @@ jobs:
           CXX: ${{ steps.install_cc.outputs.cxx }}
 
       - name: Upload built libraries
+        if: matrix.os == 'windows'
         uses: actions/upload-artifact@v4
         with:
-          name: lib_${{ matrix.os }}
+          name: windows_grpcvpnserver.exe
           path: |
-            go_module/lib_windows.dll
-            go_module/lib_linux.so
-            go_module/lib_macos.dylib
+            go_module/windows_grpcvpnserver.exe
+
+      - name: Upload built libraries
+        if: matrix.os == 'ubuntu'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu_grpcvpnserver
+          path: |
+            go_module/ubuntu_grpcvpnserver
+
+      - name: Upload built libraries
+        if: matrix.os == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos_grpcvpnserver
+          path: |
+            go_module/macos_grpcvpnserver
 
   build_android_lib:
     runs-on: ubuntu-latest
@@ -208,10 +223,11 @@ jobs:
         with:
           name: MyLibrary.xcframework
           path: go_module/MyLibrary.xcframework
-
-
-  build_ios_app_lib:
-    runs-on: macos-14
+  release:
+    if: ${{ github.event.inputs.release_tag != '' }}
+    runs-on: ubuntu-latest
+    needs: [build_desktop_libs, build_android_lib, build_ios_lib]
+    permissions: write-all
     steps:
       - uses: actions/checkout@v4
         with:
