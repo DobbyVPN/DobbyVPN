@@ -18,7 +18,7 @@ INCLUDED_TYPES = {"large_airport", "medium_airport"}
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUTPUT = os.path.join(
     SCRIPT_DIR, "..", "..", "..",
-    "kmp_client", "app", "src", "commonMain", "composeResources", "files",
+    "kmp_module", "app", "src", "commonMain", "composeResources", "files",
     "airports.csv",
 )
 

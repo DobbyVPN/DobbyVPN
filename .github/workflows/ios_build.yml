@@ -16,12 +16,6 @@ jobs:
         with:
           submodules: true
 
-      - name: Set up JDK 21.0.6 (Temurin)
-        uses: actions/setup-java@v5
-        with:
-          java-version: '21.0.6'
-          distribution: 'temurin'
-
       - name: Select Xcode 16.1
         run: sudo xcode-select -s /Applications/Xcode_16.1.app
 
@@ -31,7 +25,7 @@ jobs:
           bundler-cache: true
 
       - name: Sentry auth
-        working-directory: kmp_client/iosApp
+        working-directory: swift_module
         run: |
           echo "[auth]" > .sentryclirc
           echo "token=${{ secrets.SENTRY_AUTH }}" >> .sentryclirc
@@ -40,27 +34,24 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: MyLibrary.xcframework
-          path: kmp_client/iosApp/MyLibrary.xcframework
+          path: swift_module/MyLibrary.xcframework
 
       - name: Bundle install
-        working-directory: kmp_client
-        run: |
-          bundle install
+        run: bundle install
 
       - name: Fastlane bump build and version
-        working-directory: kmp_client
         env:
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
         run: |
           bundle exec fastlane ios bump_build_and_version
 
-      - name: Fastlane build Kotlin Multiplatform
-        working-directory: kmp_client
-        run: |
-          bundle exec fastlane ios build_kotlin_multiplatform
+      - name: Download KMP framework
+        uses: actions/download-artifact@v4
+        with:
+          name: app.framework
+          path: swift_module/app.framework
 
       - name: Fastlane prepare_signing
-        working-directory: kmp_client
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           CERT_P12_PASSWORD: ${{ secrets.CERT_P12_PASSWORD }}
@@ -71,7 +62,6 @@ jobs:
           bundle exec fastlane ios prepare_signing
 
       - name: Fastlane build_ios
-        working-directory: kmp_client
         run: |
           bundle exec fastlane ios build_ios
 
@@ -79,11 +69,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: DobbyVPN.ipa
-          path: kmp_client/iosApp/build/ipa/*.ipa
+          path: swift_module/build/ipa/*.ipa
 
       - name: Fastlane upload_testflight
         if: ${{ github.ref == 'refs/heads/main' }}
-        working-directory: kmp_client
         env:
           APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
           APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
