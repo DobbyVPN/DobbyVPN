@@ -1,7 +1,7 @@
 package proto
 
 import (
-	"go_client/grpcproto"
+	"go_module/grpcproto"
 )
 
 type Server struct {

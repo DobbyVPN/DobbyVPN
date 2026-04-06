@@ -19,7 +19,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "kmp_client"
+rootProject.name = "kmp_module"
 include(":grpcprotos")
 include(":grpcstub")
 include(":outline")

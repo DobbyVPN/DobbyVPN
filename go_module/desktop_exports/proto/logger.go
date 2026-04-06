@@ -3,10 +3,10 @@ package proto
 import (
 	"context"
 
-	"go_client/desktop_exports/api"
-	"go_client/grpcproto"
+	"go_module/desktop_exports/api"
+	"go_module/grpcproto"
 
-	"go_client/log"
+	"go_module/log"
 )
 
 func (c *Server) InitLogger(_ context.Context, in *grpcproto.InitLoggerRequest) (*grpcproto.Empty, error) {

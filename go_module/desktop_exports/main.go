@@ -2,7 +2,7 @@ package main
 
 import (
 	"flag"
-	executor "go_client/desktop_exports/executor"
+	executor "go_module/desktop_exports/executor"
 )
 
 func main() {

@@ -1,6 +1,6 @@
 # Mobile client
 
-A cross-platform VPN client built using Kotlin Multiplatform (KMP), sharing business logic across Android, iOS, and Desktop while using VPN protocols for each platform from [go_client/](../go_client/) library.
+A cross-platform VPN client built using Kotlin Multiplatform (KMP), sharing business logic across Android, iOS, and Desktop while using VPN protocols for each platform from [go_module/](../go_module/) library.
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ A cross-platform VPN client built using Kotlin Multiplatform (KMP), sharing busi
 The project gradle layered architecture:
 
 ```
-kmp_client/
+kmp_module/
 ├── app/ --- UI library
 ├── awg/ --- Library to import AmneziaWG tunnel golang code (legacy)
 ├── grpcprotos/ --- Library to generate automatic code for gRPC client

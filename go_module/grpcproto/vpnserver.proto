@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = "go_client/grpcproto";
+option go_package = "go_module/grpcproto";
 
 package grpcproto;
 

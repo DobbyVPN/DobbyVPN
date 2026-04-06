@@ -1,7 +1,7 @@
 package api
 
 import (
-	"go_client/tunnel"
+	"go_module/tunnel"
 )
 
 func SetGeoRoutingConf(cidrs string) {

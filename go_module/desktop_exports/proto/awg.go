@@ -3,10 +3,10 @@ package proto
 import (
 	"context"
 
-	"go_client/desktop_exports/api"
-	"go_client/grpcproto"
+	"go_module/desktop_exports/api"
+	"go_module/grpcproto"
 
-	"go_client/log"
+	"go_module/log"
 )
 
 func (s *Server) StartAwg(_ context.Context, in *grpcproto.StartAwgRequest) (*grpcproto.Empty, error) {

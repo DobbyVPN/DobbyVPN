@@ -1,7 +1,7 @@
 package api
 
 import (
-	"go_client/log"
+	"go_module/log"
 )
 
 func InitLogger(path string) {

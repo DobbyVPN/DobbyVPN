@@ -9,7 +9,7 @@ On mobile platforms this library is a `.so` library (on Android) or `.xcframewor
 ## Build
 
 ```bash
-cp -r Cloak/internal go_client/modules/Cloak/
+cp -r Cloak/internal go_module/modules/Cloak/
 go mod tidy
 go mod download
 ```

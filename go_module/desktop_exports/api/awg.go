@@ -1,14 +1,8 @@
 package api
 
 import (
-<<<<<<<< HEAD:go_module/desktop_exports/api/awg.go
-	"go_client/awg"
-	"go_client/log"
-========
 	"go_module/awg"
 	"go_module/log"
-	"sync"
->>>>>>>> main:go_module/desktop_exports/awg.go
 )
 
 var awgClient *awg.AwgClient

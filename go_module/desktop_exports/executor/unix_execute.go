@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"net"
 
-	"go_client/desktop_exports/proto"
-	"go_client/grpcproto"
+	"go_module/desktop_exports/proto"
+	"go_module/grpcproto"
 
-	"go_client/log"
+	"go_module/log"
 
 	"google.golang.org/grpc"
 )

@@ -1,9 +1,9 @@
 package api
 
 import (
-	"go_client/common"
-	"go_client/healthcheck"
-	"go_client/log"
+	"go_module/common"
+	"go_module/healthcheck"
+	"go_module/log"
 )
 
 func CouldStart() bool {
