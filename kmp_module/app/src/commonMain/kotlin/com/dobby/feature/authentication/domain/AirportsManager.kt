@@ -1,6 +1,6 @@
 package com.dobby.feature.authentication.domain
 
-import kmp_client.app.generated.resources.Res
+import kmp_module.app.generated.resources.Res
 import org.jetbrains.compose.resources.ExperimentalResourceApi
 
 object AirportsManager {
