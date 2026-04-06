@@ -21,20 +21,20 @@ reviews:
   collapse_walkthrough: true
 
   path_instructions:
-    - path: "go_client/**/*.go"
+    - path: "go_module/**/*.go"
       instructions: >
         This is a VPN client written in Go with platform-specific build tags
         (android, ios, linux, windows, darwin). Pay attention to error handling,
         resource cleanup (defer), goroutine leaks, and security implications.
         Files in *_exports/ directories are gomobile/CGo bindings.
 
-    - path: "kmp_client/app/**/*.kt"
+    - path: "kmp_module/app/**/*.kt"
       instructions: >
         Kotlin Multiplatform project using Compose Multiplatform for UI.
         Check for proper ViewModel usage, coroutine scope management,
         and Koin dependency injection patterns.
 
-    - path: "kmp_client/iosApp/**/*.swift"
+    - path: "swift_module/**/*.swift"
       instructions: >
         Swift code for the iOS app. Focus on memory management,
         proper KMP framework interop, and PacketTunnelProvider correctness.
@@ -90,7 +90,7 @@ reviews:
         ubuntu-latest, as the latter silently upgrades and may change
         pre-installed tool versions.
 
-    - path: "kmp_client/**/build.gradle.kts"
+    - path: "kmp_module/**/build.gradle.kts"
       instructions: >
         Gradle build files must preserve F-Droid reproducible build compliance.
         Check the following:
@@ -113,7 +113,7 @@ reviews:
         9) Warn if R8/ProGuard minification is enabled without verifying
            deterministic output across builds.
 
-    - path: "go_client/**"
+    - path: "go_module/**"
       instructions: >
         In addition to code quality, check reproducible build compliance for
         Go native libraries:
@@ -142,7 +142,7 @@ reviews:
         5) pip install / gem install without pinned versions or lockfile.
         6) mktemp used in paths that end up in build artifacts.
 
-    - path: "kmp_client/**/Fastfile"
+    - path: "kmp_module/**/Fastfile"
       instructions: >
         Fastlane lanes that participate in CI builds (build_android,
         build_ios, build_desktop, build_kotlin_multiplatform) must preserve
@@ -158,7 +158,7 @@ reviews:
         4) Version bumping lanes must use deterministic inputs only
            (CI variables, git tags), not wall-clock time.
 
-    - path: "go_client/go.mod"
+    - path: "go_module/go.mod"
       instructions: >
         Go module file pins dependency versions. Check for:
 
@@ -171,14 +171,14 @@ reviews:
         4) Replace directives must point to stable local paths or pinned
            versions, not to remote @latest references.
 
-    - path: "go_client/go.sum"
+    - path: "go_module/go.sum"
       instructions: >
         go.sum contains cryptographic hashes of all dependencies and
         ensures supply-chain integrity. Warn if entries are removed
         without corresponding go.mod changes. Bulk replacement of
         go.sum should be justified (e.g. Go version bump).
 
-    - path: "kmp_client/**/libs.versions.toml"
+    - path: "kmp_module/**/libs.versions.toml"
       instructions: >
         Version catalog for Kotlin/Android dependencies. Check for:
 

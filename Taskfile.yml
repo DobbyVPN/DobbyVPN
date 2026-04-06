@@ -55,13 +55,13 @@ tasks:
       - task: lint:kotlin
 
   lint:go:
-    desc: "Run golangci-lint for go_client"
+    desc: "Run golangci-lint for go_module"
     cmds:
       - task: lint:go:client
 
   lint:go:client:
-    desc: "Lint go_client (Go)"
-    dir: "{{.ROOT_DIR}}/go_client"
+    desc: "Lint go_module (Go)"
+    dir: "{{.ROOT_DIR}}/go_module"
     cmds:
       - cmd: golangci-lint run $(go list ./... | grep -v '_exports$')
         platforms: [linux, darwin]
@@ -72,7 +72,7 @@ tasks:
 
   lint:kotlin:
     desc: "Run detekt for Kotlin Multiplatform"
-    dir: "{{.ROOT_DIR}}/kmp_client"
+    dir: "{{.ROOT_DIR}}/kmp_module"
     cmds:
       - cmd: ./gradlew detekt
         platforms: [linux, darwin]
@@ -82,7 +82,7 @@ tasks:
   lint:swift:
     desc: "Run SwiftLint for iOS (macOS only)"
     platforms: [darwin]
-    dir: "{{.ROOT_DIR}}/kmp_client/iosApp"
+    dir: "{{.ROOT_DIR}}/swift_module"
     cmds:
       - swiftlint lint --config .swiftlint.yml
 
@@ -113,23 +113,23 @@ tasks:
       - task: report:go:client
 
   report:go:client:
-    desc: "Generate golangci-lint reports for go_client"
-    dir: "{{.ROOT_DIR}}/go_client"
+    desc: "Generate golangci-lint reports for go_module"
+    dir: "{{.ROOT_DIR}}/go_module"
     cmds:
-      - cmd: golangci-lint run $(go list ./... | grep -v '_exports$') --output.text.path="" --output.checkstyle.path="{{.REPORTS_DIR}}/go/go_client-checkstyle.xml" || true
+      - cmd: golangci-lint run $(go list ./... | grep -v '_exports$') --output.text.path="" --output.checkstyle.path="{{.REPORTS_DIR}}/go/go_module-checkstyle.xml" || true
         platforms: [linux, darwin]
-      - cmd: golangci-lint run $(go list ./... | grep -v '_exports$') --output.text.path="" --output.json.path="{{.REPORTS_DIR}}/go/go_client-report.json" || true
+      - cmd: golangci-lint run $(go list ./... | grep -v '_exports$') --output.text.path="" --output.json.path="{{.REPORTS_DIR}}/go/go_module-report.json" || true
         platforms: [linux, darwin]
-      - cmd: 'powershell -Command "$pkgs = go list ./... | Where-Object {$_ -notmatch ''_exports$''}; golangci-lint run $pkgs --output.text.path=\"\" --output.checkstyle.path=\"{{.REPORTS_DIR}}/go/go_client-checkstyle.xml\""'
+      - cmd: 'powershell -Command "$pkgs = go list ./... | Where-Object {$_ -notmatch ''_exports$''}; golangci-lint run $pkgs --output.text.path=\"\" --output.checkstyle.path=\"{{.REPORTS_DIR}}/go/go_module-checkstyle.xml\""'
         platforms: [windows]
         ignore_error: true
-      - cmd: 'powershell -Command "$pkgs = go list ./... | Where-Object {$_ -notmatch ''_exports$''}; golangci-lint run $pkgs --output.text.path=\"\" --output.json.path=\"{{.REPORTS_DIR}}/go/go_client-report.json\""'
+      - cmd: 'powershell -Command "$pkgs = go list ./... | Where-Object {$_ -notmatch ''_exports$''}; golangci-lint run $pkgs --output.text.path=\"\" --output.json.path=\"{{.REPORTS_DIR}}/go/go_module-report.json\""'
         platforms: [windows]
         ignore_error: true
 
   report:kotlin:
     desc: "detekt reports (HTML + XML + SARIF)"
-    dir: "{{.ROOT_DIR}}/kmp_client"
+    dir: "{{.ROOT_DIR}}/kmp_module"
     cmds:
       - cmd: ./gradlew detekt || true
         platforms: [linux, darwin]
@@ -143,7 +143,7 @@ tasks:
   report:swift:
     desc: "SwiftLint report (checkstyle XML)"
     platforms: [darwin]
-    dir: "{{.ROOT_DIR}}/kmp_client/iosApp"
+    dir: "{{.ROOT_DIR}}/swift_module"
     cmds:
       - swiftlint lint --config .swiftlint.yml --reporter checkstyle > "{{.REPORTS_DIR}}/swift/swiftlint-checkstyle.xml" || true
       - swiftlint lint --config .swiftlint.yml --reporter json > "{{.REPORTS_DIR}}/swift/swiftlint-report.json" || true
@@ -157,7 +157,7 @@ tasks:
           echo "  LINT REPORTS GENERATED"
           echo "========================================="
           echo ""
-          echo "Go (go_client): {{.REPORTS_DIR}}/go/go_client-checkstyle.xml"
+          echo "Go (go_module): {{.REPORTS_DIR}}/go/go_module-checkstyle.xml"
           echo "Kotlin (detekt): {{.REPORTS_DIR}}/kotlin/detekt.html"
           echo "Swift:          {{.REPORTS_DIR}}/swift/swiftlint-checkstyle.xml"
           echo ""
@@ -171,7 +171,7 @@ tasks:
           echo   LINT REPORTS GENERATED
           echo =========================================
           echo.
-          echo Go (go_client):  {{.REPORTS_DIR}}\go\go_client-checkstyle.xml
+          echo Go (go_module):  {{.REPORTS_DIR}}\go\go_module-checkstyle.xml
           echo Kotlin (detekt): {{.REPORTS_DIR}}\kotlin\detekt.html
           echo.
         platforms: [windows]
