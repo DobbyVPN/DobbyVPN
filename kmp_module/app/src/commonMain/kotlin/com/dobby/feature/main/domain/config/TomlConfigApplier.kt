@@ -1,13 +1,7 @@
 package com.dobby.feature.main.domain.config
 
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.main.domain.DobbyConfigsRepository
-import com.dobby.feature.main.domain.DobbyConfigsRepositoryCloak
-import com.dobby.feature.main.domain.DobbyConfigsRepositoryOutline
-import com.dobby.feature.main.domain.DobbyConfigsRepositoryVpn
-import com.dobby.feature.main.domain.TomlConfigs
-import com.dobby.feature.main.domain.clearCloakConfig
-import com.dobby.feature.main.domain.clearOutlineConfig
+import com.dobby.feature.main.domain.*
 import net.peanuuutz.tomlkt.Toml
 import net.peanuuutz.tomlkt.decodeFromString
 
@@ -15,11 +9,13 @@ class TomlConfigApplier(
     private val vpnRepo: DobbyConfigsRepositoryVpn,
     private val outlineRepo: DobbyConfigsRepositoryOutline,
     private val cloakRepo: DobbyConfigsRepositoryCloak,
+    private val awgRepo: DobbyConfigsRepositoryAwg,
     private val mainRepo: DobbyConfigsRepository,
     private val logger: Logger,
 ) {
     private val outlineApplier = OutlineTomlApplier(vpnRepo, outlineRepo, cloakRepo, logger)
     private val cloakApplier = CloakTomlApplier(cloakRepo, logger)
+    private val awgApplier = AmneziaWGTomlApplier(vpnRepo, awgRepo, logger)
 
     fun apply(connectionConfig: String): Boolean {
         logger.log("Start parseToml()")
@@ -30,22 +26,38 @@ class TomlConfigApplier(
         }
 
         val root = Toml.decodeFromString<TomlConfigs>(connectionConfig)
-        val outline = root.Outline
 
-        if (outline == null) {
-            logger.log("Outline config not detected, turning off")
-            disableOutlineAndCloak()
-            logger.log("Finish parseToml()")
-            return false
+        if (root.AmneziaWG != null) {
+            return applyAmenziaWG(root.AmneziaWG)
+        } else if (root.Outline != null) {
+            return applyOutline(root.Outline, root)
+        } else {
+            return applyNone()
         }
+    }
 
-        val outlineResult = outlineApplier.apply(outline) ?: run {
-            disableOutlineAndCloak()
+    private fun applyNone(): Boolean {
+        logger.log("VPN config not detected, turning off")
+        mainRepo.clearVpnConfig()
+        logger.log("Finish parseToml()")
+
+        return false
+    }
+
+    private fun applyOutline(
+        config: OutlineConfig,
+        root: TomlConfigs
+    ): Boolean {
+        logger.log("Outline config detected")
+
+        val outlineResult = outlineApplier.apply(config) ?: run {
+            outlineRepo.clearOutlineConfig()
+            cloakRepo.clearCloakConfig()
             logger.log("Finish parseToml()")
             return false
         }
         val (cloakEnabled, _) = outlineResult
-        cloakApplier.apply(outline, cloakEnabled)
+        cloakApplier.apply(config, cloakEnabled)
 
         val exclude = root.ExcludeIPs
 
@@ -61,8 +73,11 @@ class TomlConfigApplier(
         return true
     }
 
-    private fun disableOutlineAndCloak() {
-        outlineRepo.clearOutlineConfig()
-        cloakRepo.clearCloakConfig()
+    private fun applyAmenziaWG(config: AmneziaWGConfig): Boolean {
+        logger.log("AmneziaWG config detected")
+        awgApplier.apply(config)
+        logger.log("Finish parseToml()")
+
+        return true
     }
 }
