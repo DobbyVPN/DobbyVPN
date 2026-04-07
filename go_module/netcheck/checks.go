@@ -79,7 +79,13 @@ func (app *NetCheckApp) runWebhost() error {
 
 			return InterruptedError
 		case msg1, ok := <-out.Out:
-			log.Infof("[NETCHECK] IpInfo : %s:%d %s %s %s", msg1.Out.IpInfo.Ip, msg1.Out.IpInfo.Asn, msg1.Out.IpInfo.Subnet, msg1.Out.IpInfo.Org, msg1.Out.IpInfo.CountryIso)
+			if !ok {
+				log.Infof("[NETCHECK] WEBHOST check completed")
+
+				return nil
+			}
+
+			log.Infof("[NETCHECK] IpInfo : %s asn=%d %s \"%s\" %s", msg1.Out.IpInfo.Ip, msg1.Out.IpInfo.Asn, msg1.Out.IpInfo.Subnet, msg1.Out.IpInfo.Org, msg1.Out.IpInfo.CountryIso)
 			log.Infof("[NETCHECK] Port   : %d", msg1.Out.Port)
 			log.Infof("[NETCHECK] TlsV   : %d", msg1.Out.TlsV)
 			log.Infof("[NETCHECK] Sni    : %s", msg1.Out.Sni)
@@ -98,12 +104,6 @@ func (app *NetCheckApp) runWebhost() error {
 			}
 
 			log.Infof("[NETCHECK] ===============")
-
-			if !ok {
-				log.Infof("[NETCHECK] WEBHOST check completed")
-
-				return nil
-			}
 		}
 	}
 }

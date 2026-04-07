@@ -6,6 +6,7 @@ import com.dobby.feature.logging.domain.CopyLogsInteractor
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.ui.LogsUiState
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,6 +31,16 @@ class LogsViewModel(
                             .takeLast(LogsRepository.UI_TAIL_LINES)
                     )
                 }
+            }
+        }
+
+        viewModelScope.launch {
+            while (true) {
+                _uiState.update {
+                    LogsUiState(logsRepository.readUILogs())
+                }
+
+                delay(2000L) // 2 seconds
             }
         }
     }

@@ -61,7 +61,7 @@ fun NetCheckScreen(
                     tagText = when (uiNetCheckState.netCheckStatus) {
                         NetCheckStatus.ON -> "Status: connected"
                         NetCheckStatus.OFF -> "Status: disconnected"
-                        NetCheckStatus.FAILED -> "Status: error"
+                        NetCheckStatus.FAILED -> "Status: error ${uiNetCheckState.description}"
                     },
                     color = when (uiNetCheckState.netCheckStatus) {
                         NetCheckStatus.ON -> 0xFFDCFCE7

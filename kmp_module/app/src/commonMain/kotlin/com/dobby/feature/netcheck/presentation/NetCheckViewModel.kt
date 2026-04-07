@@ -23,6 +23,7 @@ class NetCheckViewModel(
                 netCheckConfig = netCheckRepository.getConfig(),
                 netCheckConfigPath = netCheckRepository.getConfigPath(),
                 netCheckStatus = NetCheckStatus.OFF,
+                description = ""
             )
         }
     }
@@ -35,6 +36,7 @@ class NetCheckViewModel(
                 netCheckConfig = config,
                 netCheckConfigPath = it.netCheckConfigPath,
                 netCheckStatus = NetCheckStatus.OFF,
+                description = ""
             )
         }
     }
@@ -55,6 +57,7 @@ class NetCheckViewModel(
                     netCheckConfig = it.netCheckConfig,
                     netCheckConfigPath = it.netCheckConfigPath,
                     netCheckStatus = NetCheckStatus.ON,
+                    description = ""
                 )
             }
         } else {
@@ -63,6 +66,7 @@ class NetCheckViewModel(
                     netCheckConfig = it.netCheckConfig,
                     netCheckConfigPath = it.netCheckConfigPath,
                     netCheckStatus = NetCheckStatus.FAILED,
+                    description = error
                 )
             }
         }
@@ -76,6 +80,7 @@ class NetCheckViewModel(
                 netCheckConfig = netCheckRepository.getConfig(),
                 netCheckConfigPath = netCheckRepository.getConfigPath(),
                 netCheckStatus = NetCheckStatus.OFF,
+                description = ""
             )
         }
     }
