@@ -2,9 +2,8 @@ package netcheck
 
 import (
 	"context"
-	"flag"
 	"fmt"
-	"log"
+	"go_module/log"
 	"sync"
 	"time"
 
@@ -16,26 +15,37 @@ var app *NetCheckApp = nil
 var appMu sync.Mutex
 
 func (app *NetCheckApp) netCheckInternal() {
-	log.Printf("[NETCHECK] Net check: start\n")
+	log.Infof("[NETCHECK] Net check: start")
 
-	app.runWhoami()
-	app.runCidrWhitelist()
-	app.runWebhost()
+	var err error
 
-	log.Printf("[NETCHECK] Net check: completed\n")
+	if err = app.runWhoami(); err != nil {
+		log.Infof("[NETCHECK] [ERROR] Error running whoami, interrupting netcheck: %v", err)
+		return
+	}
+	if err = app.runCidrWhitelist(); err != nil {
+		log.Infof("[NETCHECK] [ERROR] Error running cidrwhitelist, interrupting netcheck: %v", err)
+		return
+	}
+	if err = app.runWebhost(); err != nil {
+		log.Infof("[NETCHECK] [ERROR] Error running webhost, interrupting netcheck: %v", err)
+		return
+	}
+
+	log.Infof("[NETCHECK] Net check: completed")
 
 	appMu.Lock()
-	defer appMu.Unlock()
 	app = nil
+	appMu.Unlock()
 }
 
 func NetCheck(configPath string) error {
-	log.Printf("[NETCHECK] Loading config\n")
+	log.Infof("[NETCHECK] Loading config")
 	if err := config.Load(configPath); err != nil {
 		return fmt.Errorf("Error loading config: %v", err)
 	}
 
-	log.Printf("[NETCHECK] Geolite update\n")
+	log.Infof("[NETCHECK] Geolite update")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	if err := updater.GeoliteUpdate(ctx); err != nil {
 		cancel()
@@ -57,34 +67,11 @@ func NetCheck(configPath string) error {
 }
 
 func CancelNetCheck() {
-	log.Printf("[NETCHECK] Cancel netcheck\n")
+	log.Infof("[NETCHECK] Cancel netcheck")
 	app.interrupt <- true
 	app.cancel()
 
 	appMu.Lock()
 	defer appMu.Unlock()
 	app = nil
-}
-
-func main() {
-	cfgPath := flag.String("cfg", "dpi-checkers/ru/dpi-ch/config/default.yaml", ".yaml config path")
-	flag.Parse()
-
-	var err error
-
-	if err = NetCheck(*cfgPath); err != nil {
-		log.Printf("Error running netcheck: %v", err)
-	}
-
-	time.Sleep(time.Second * 2)
-
-	if err = NetCheck(*cfgPath); err != nil {
-		log.Printf("Error running netcheck: %v", err)
-	}
-
-	time.Sleep(time.Second * 2)
-
-	CancelNetCheck()
-
-	time.Sleep(time.Second * 2)
 }

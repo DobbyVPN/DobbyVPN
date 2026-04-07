@@ -2,7 +2,9 @@ package netcheck
 
 import (
 	"context"
-	"log"
+	"errors"
+	"fmt"
+	"go_module/log"
 
 	"github.com/hyperion-cs/dpi-checkers/ru/dpi-ch/checkers"
 )
@@ -13,6 +15,10 @@ type NetCheckApp struct {
 	interrupt chan bool
 }
 
+var InterruptedError error = errors.New("Check interrupted")
+var NoInternetConnectionError error = errors.New("No internet connection")
+var UserUnderWhitelistsError error = errors.New("User under whitelists")
+
 func NewNetCheckApp() *NetCheckApp {
 	ctx, cancel := context.WithCancel(context.Background())
 	interrupt := make(chan bool, 1)
@@ -20,72 +26,83 @@ func NewNetCheckApp() *NetCheckApp {
 	return &NetCheckApp{ctx: ctx, cancel: cancel, interrupt: interrupt}
 }
 
-func (app *NetCheckApp) runWhoami() {
+func (app *NetCheckApp) runWhoami() error {
 	result, err := checkers.Whoami()
 
-	log.Printf("[NETCHECK] === WHOAMI ===\n")
+	log.Infof("[NETCHECK] === WHOAMI ===")
 	if err != nil {
-		log.Printf("[NETCHECK] Failed run whoami test: %v\n", err)
+		return fmt.Errorf("Error running whoami check: %v", err)
 	} else {
-		log.Printf("[NETCHECK] IP		: %s:\n", result.Ip)
-		log.Printf("[NETCHECK] Subnet	: %s:\n", result.Subnet)
-		log.Printf("[NETCHECK] Asn		: %s\n", result.Asn)
-		log.Printf("[NETCHECK] Org		: %s\n", result.Org)
-		log.Printf("[NETCHECK] Location	: %s:\n", result.Location)
+		log.Infof("[NETCHECK] IP      : %s", result.Ip)
+		log.Infof("[NETCHECK] Subnet  : %s", result.Subnet)
+		log.Infof("[NETCHECK] Asn     : %s", result.Asn)
+		log.Infof("[NETCHECK] Org     : %s", result.Org)
+		log.Infof("[NETCHECK] Location: %s", result.Location)
+
+		return nil
 	}
 }
 
-func (app *NetCheckApp) runCidrWhitelist() {
+func (app *NetCheckApp) runCidrWhitelist() error {
 	err := checkers.CidrWhitelist()
 
-	log.Printf("[NETCHECK] === CIDRWHITELIST ===\n")
+	log.Infof("[NETCHECK] === CIDRWHITELIST ===")
 	if err != nil {
 		switch err {
 		case checkers.ErrCidrWhitelistDetected:
-			log.Printf("[NETCHECK] You are under whitelist!\n")
+			log.Infof("[NETCHECK] You are under whitelist!")
+
+			return UserUnderWhitelistsError
 		case checkers.ErrCidrWhitelistNoInetAccess:
-			log.Printf("[NETCHECK] You have no internet connection!\n")
+			log.Infof("[NETCHECK] You have no internet connection!")
+
+			return NoInternetConnectionError
 		default:
-			log.Printf("[NETCHECK] [ERROR] Error running test: %v\n", err)
+			return fmt.Errorf("Error running cidr whitelist check: %v", err)
 		}
 	} else {
-		log.Printf("[NETCHECK] You are NOT under whitelist!")
+		log.Infof("[NETCHECK] You are NOT under whitelist!")
+
+		return nil
 	}
 }
 
-func (app *NetCheckApp) runWebhost() {
+func (app *NetCheckApp) runWebhost() error {
 	runnerOpt := checkers.WebhostGochanRunnerOpt{Ctx: app.ctx, Mode: checkers.WebHostModePopular}
 	out := checkers.WebhostGochanRunner(runnerOpt)
 
-	log.Printf("[NETCHECK] === WEBHOST ===\n")
+	log.Infof("[NETCHECK] === WEBHOST ===")
 	for {
 		select {
 		case <-app.interrupt:
-			log.Printf("[NETCHECK] WEBHOST check interrupted\n")
+			log.Infof("[NETCHECK] WEBHOST check interrupted")
 
-			return
+			return InterruptedError
 		case msg1, ok := <-out.Out:
-			log.Printf("[NETCHECK] IpInfo	: %s:%d %s %s %s\n", msg1.Out.IpInfo.Ip, msg1.Out.IpInfo.Asn, msg1.Out.IpInfo.Subnet, msg1.Out.IpInfo.Org, msg1.Out.IpInfo.CountryIso)
-			log.Printf("[NETCHECK] Port		: %d\n", msg1.Out.Port)
-			log.Printf("[NETCHECK] TlsV		: %d\n", msg1.Out.TlsV)
-			log.Printf("[NETCHECK] Sni		: %s\n", msg1.Out.Sni)
-			log.Printf("[NETCHECK] Host		: %s\n", msg1.Out.Host)
+			log.Infof("[NETCHECK] IpInfo : %s:%d %s %s %s", msg1.Out.IpInfo.Ip, msg1.Out.IpInfo.Asn, msg1.Out.IpInfo.Subnet, msg1.Out.IpInfo.Org, msg1.Out.IpInfo.CountryIso)
+			log.Infof("[NETCHECK] Port   : %d", msg1.Out.Port)
+			log.Infof("[NETCHECK] TlsV   : %d", msg1.Out.TlsV)
+			log.Infof("[NETCHECK] Sni    : %s", msg1.Out.Sni)
+			log.Infof("[NETCHECK] Host   : %s", msg1.Out.Host)
+
 			if msg1.Out.Alive != nil {
-				log.Printf("[NETCHECK] Alive	: %v\n", msg1.Out.Alive)
+				log.Infof("[NETCHECK] Alive  : %v", msg1.Out.Alive)
 			} else {
-				log.Printf("[NETCHECK] Alive	: OK\n")
+				log.Infof("[NETCHECK] Alive  : OK")
 			}
+
 			if msg1.Out.Tcp1620 != nil {
-				log.Printf("[NETCHECK] Tcp1620	: %v\n", msg1.Out.Tcp1620)
+				log.Infof("[NETCHECK] Tcp1620: %v", msg1.Out.Tcp1620)
 			} else {
-				log.Printf("[NETCHECK] Tcp1620	: OK\n")
+				log.Infof("[NETCHECK] Tcp1620: OK")
 			}
-			log.Printf("[NETCHECK] ===============\n")
+
+			log.Infof("[NETCHECK] ===============")
 
 			if !ok {
-				log.Printf("[NETCHECK] WEBHOST check completed\n")
+				log.Infof("[NETCHECK] WEBHOST check completed")
 
-				return
+				return nil
 			}
 		}
 	}
