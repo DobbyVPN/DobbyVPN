@@ -13,7 +13,7 @@ interface VPNLibrary : Library {
     fun GetOutlineLastError(): String?
 
     // Cloak
-    fun StartCloakClient(localHost: String, localPort: String, config: String)
+    fun StartCloakClient(localHost: String, localPort: String, config: String, udp: Boolean)
     fun StopCloakClient()
 
     // Awg
@@ -124,7 +124,7 @@ class VPNLibraryLoader(
     fun startCloak(localHost: String, localPort: String, config: String, udp: Boolean) {
         try {
             logger.log("Run localHost: $localHost; localPort: $localPort; udp: $udp")
-            INSTANCE.StartCloakClient(localHost, localPort, config)
+            INSTANCE.StartCloakClient(localHost, localPort, config, udp)
             logger.log("startCloak called successfully.")
         } catch (e: UnsatisfiedLinkError) {
             logger.log("Failed to call startCloak: ${e.message}")
