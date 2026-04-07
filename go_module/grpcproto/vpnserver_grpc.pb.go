@@ -31,6 +31,8 @@ const (
 	Vpn_InitLogger_FullMethodName          = "/grpcproto.Vpn/InitLogger"
 	Vpn_SetGeoRoutingConf_FullMethodName   = "/grpcproto.Vpn/SetGeoRoutingConf"
 	Vpn_ClearGeoRoutingConf_FullMethodName = "/grpcproto.Vpn/ClearGeoRoutingConf"
+	Vpn_NetCheck_FullMethodName            = "/grpcproto.Vpn/NetCheck"
+	Vpn_CancelNetCheck_FullMethodName      = "/grpcproto.Vpn/CancelNetCheck"
 )
 
 // VpnClient is the client API for Vpn service.
@@ -55,6 +57,9 @@ type VpnClient interface {
 	// georouting.go
 	SetGeoRoutingConf(ctx context.Context, in *SetGeoRoutingConfRequest, opts ...grpc.CallOption) (*Empty, error)
 	ClearGeoRoutingConf(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
+	// netcheck.go
+	NetCheck(ctx context.Context, in *NetCheckRequest, opts ...grpc.CallOption) (*NetCheckResponse, error)
+	CancelNetCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 }
 
 type vpnClient struct {
@@ -185,6 +190,26 @@ func (c *vpnClient) ClearGeoRoutingConf(ctx context.Context, in *Empty, opts ...
 	return out, nil
 }
 
+func (c *vpnClient) NetCheck(ctx context.Context, in *NetCheckRequest, opts ...grpc.CallOption) (*NetCheckResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NetCheckResponse)
+	err := c.cc.Invoke(ctx, Vpn_NetCheck_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vpnClient) CancelNetCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, Vpn_CancelNetCheck_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VpnServer is the server API for Vpn service.
 // All implementations must embed UnimplementedVpnServer
 // for forward compatibility.
@@ -207,6 +232,9 @@ type VpnServer interface {
 	// georouting.go
 	SetGeoRoutingConf(context.Context, *SetGeoRoutingConfRequest) (*Empty, error)
 	ClearGeoRoutingConf(context.Context, *Empty) (*Empty, error)
+	// netcheck.go
+	NetCheck(context.Context, *NetCheckRequest) (*NetCheckResponse, error)
+	CancelNetCheck(context.Context, *Empty) (*Empty, error)
 	mustEmbedUnimplementedVpnServer()
 }
 
@@ -252,6 +280,12 @@ func (UnimplementedVpnServer) SetGeoRoutingConf(context.Context, *SetGeoRoutingC
 }
 func (UnimplementedVpnServer) ClearGeoRoutingConf(context.Context, *Empty) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ClearGeoRoutingConf not implemented")
+}
+func (UnimplementedVpnServer) NetCheck(context.Context, *NetCheckRequest) (*NetCheckResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method NetCheck not implemented")
+}
+func (UnimplementedVpnServer) CancelNetCheck(context.Context, *Empty) (*Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CancelNetCheck not implemented")
 }
 func (UnimplementedVpnServer) mustEmbedUnimplementedVpnServer() {}
 func (UnimplementedVpnServer) testEmbeddedByValue()             {}
@@ -490,6 +524,42 @@ func _Vpn_ClearGeoRoutingConf_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Vpn_NetCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NetCheckRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).NetCheck(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_NetCheck_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).NetCheck(ctx, req.(*NetCheckRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_CancelNetCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).CancelNetCheck(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_CancelNetCheck_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).CancelNetCheck(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Vpn_ServiceDesc is the grpc.ServiceDesc for Vpn service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -544,6 +614,14 @@ var Vpn_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ClearGeoRoutingConf",
 			Handler:    _Vpn_ClearGeoRoutingConf_Handler,
+		},
+		{
+			MethodName: "NetCheck",
+			Handler:    _Vpn_NetCheck_Handler,
+		},
+		{
+			MethodName: "CancelNetCheck",
+			Handler:    _Vpn_CancelNetCheck_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

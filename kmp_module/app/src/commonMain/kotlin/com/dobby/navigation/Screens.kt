@@ -6,6 +6,9 @@ import kotlinx.serialization.Serializable
 data object MainScreen
 
 @Serializable
+data object NetCheckScreen
+
+@Serializable
 data object SettingsScreen
 
 @Serializable

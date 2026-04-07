@@ -5,6 +5,7 @@ import interop.cloak.CloakGrpcLibrary
 import interop.georouting.GeoroutingGrpcLibrary
 import interop.healthcheck.HealthCheckGrpcLibrary
 import interop.logger.LoggerGrpcLibrary
+import interop.netcheck.NetCheckGrpcLibrary
 import interop.outline.OutlineGrpcLibrary
 import io.grpc.ManagedChannelBuilder
 import java.io.Closeable
@@ -25,6 +26,7 @@ object GrpcVpnLibrary: Closeable {
     val healthCheckGrpcLibrary = HealthCheckGrpcLibrary(channel)
     val loggerGrpcLibrary = LoggerGrpcLibrary(channel)
     val georoutingGrpcLibrary = GeoroutingGrpcLibrary(channel)
+    val netCheckGrpcLibrary = NetCheckGrpcLibrary(channel)
 
     override fun close() {
         this.channel.shutdown().awaitTermination(TERMINATION_TIMEOUT, TimeUnit.SECONDS)
