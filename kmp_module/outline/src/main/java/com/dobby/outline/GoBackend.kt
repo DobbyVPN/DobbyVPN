@@ -8,7 +8,7 @@ class OutlineGo {
     companion object {
         init {
             Log.d(TAG, "Start loading libraries")
-            System.loadLibrary("outline_jni")
+//            System.loadLibrary("outline_jni")
             System.loadLibrary("outline")
             Log.d(TAG, "Libraries loaded successfully")
         }
@@ -71,5 +71,23 @@ class OutlineGo {
 
         @JvmStatic
         external fun clearGeoRoutingConf()
+
+        @JvmStatic
+        external fun awgTurnOn(ifname: String, tunFd: Int, settings: String): Int
+
+        @JvmStatic
+        external fun awgTurnOff(handle: Int)
+
+        @JvmStatic
+        external fun awgGetSocketV4(handle: Int): Int
+
+        @JvmStatic
+        external fun awgGetSocketV6(handle: Int): Int
+
+        @JvmStatic
+        external fun awgGetConfig(handle: Int): String
+
+        @JvmStatic
+        external fun awgVersion(): String
     }
 }

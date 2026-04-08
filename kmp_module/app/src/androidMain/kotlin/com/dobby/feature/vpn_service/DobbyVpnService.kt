@@ -129,6 +129,7 @@ class DobbyVpnService : VpnService() {
         when (dobbyConfigsRepository.getVpnInterface()) {
             VpnInterface.CLOAK_OUTLINE -> startCloakOutline(intent)
             VpnInterface.AMNEZIA_WG -> startAwg()
+            VpnInterface.NONE -> startNone()
         }
         return START_STICKY
     }
@@ -185,6 +186,10 @@ class DobbyVpnService : VpnService() {
             logger.log("Stopping AmneziaWG")
             tunnelManager.updateState(null, TunnelState.DOWN)
         }
+    }
+
+    private fun startNone() {
+        logger.log("No VPN can be started")
     }
 
     private suspend fun stopCloakClient() {
