@@ -1,12 +1,14 @@
+//go:build android
+
 package main
 
 import (
-    "C"
+	"C"
 	"go_module/cloak"
 )
 
 //export StartCloakClient
-func StartCloakClient(localHostC  *C.char, localPortC  *C.char, configC  *C.char, udp bool) {
+func StartCloakClient(localHostC *C.char, localPortC *C.char, configC *C.char, udp bool) {
 	localHost := C.GoString(localHostC)
 	localPort := C.GoString(localPortC)
 	config := C.GoString(configC)

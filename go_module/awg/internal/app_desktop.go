@@ -1,3 +1,5 @@
+//go:build !(android || ios)
+
 package internal
 
 import (
@@ -18,7 +20,10 @@ func NewApp(tun, conf string) (*App, error) {
 		return nil, fmt.Errorf("Failed to read awg-quick config: %s", err)
 	}
 
-	tunnelData := tunnel.CreateTunnelData(tun, awgqconfig)
+	tunnelData := &tunnel.TunnelData{
+		InterfaceName:   tun,
+		InterfaceConfig: awgqconfig,
+	}
 	app := &App{
 		TunnelData: tunnelData,
 	}

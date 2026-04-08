@@ -1,8 +1,10 @@
 package com.dobby.awg
 
+import com.dobby.outline.OutlineGo
+
 class GoBackendWrapper {
     companion object {
-        private val backend = GoBackend()
+        private val backend = OutlineGo
 
         fun awgTurnOn(ifname: String, tunFd: Int, settings: String): Int = backend.awgTurnOn(ifname, tunFd, settings)
 
@@ -15,7 +17,5 @@ class GoBackendWrapper {
         fun awgGetConfig(handle: Int): String = backend.awgGetConfig(handle)
 
         fun awgVersion(): String = backend.awgVersion()
-
-        fun awgDumpLog(): String = backend.awgDumpLog()
     }
 }

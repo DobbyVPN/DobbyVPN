@@ -1,4 +1,4 @@
-//go:build linux && !android
+//go:build android
 
 package tunnel
 
@@ -20,8 +20,9 @@ import (
 type TunnelData struct {
 	InterfaceName   string
 	InterfaceConfig *config.Config
+	InterfaceFD     int
+	Device          *device.Device
 	logger          *device.Logger
-	dev             *device.Device
 	uapi            net.Listener
 	errs            chan error
 }
@@ -47,7 +48,7 @@ const (
 func (a *TunnelData) Run() error {
 	var err error
 
-	log.Infof("[AWG] Running awg tunnel (linux)")
+	log.Infof("[AWG] Running awg tunnel (android)")
 	a.errs = make(chan error, 1)
 
 	log.Infof("[AWG] DeduplicateNetworkEntries")
@@ -61,14 +62,16 @@ func (a *TunnelData) Run() error {
 	log.Infof("[AWG] [UAPI] %s", uapiConf)
 
 	log.Infof("[AWG] Create awg TUN device")
-	tdev, err := tun.CreateTUN(a.InterfaceName, device.DefaultMTU)
+	tdev, name, err := tun.CreateUnmonitoredTUNFromFD(a.InterfaceFD)
 	if err != nil {
 		return fmt.Errorf("Failed to create TUN device: %s", err)
 	}
 
+	log.Infof("[AWG] Attachking to the interface %s", name)
+
 	log.Infof("[AWG] Creating interface instance")
 	bind := conn.NewDefaultBind()
-	a.dev = device.NewDevice(tdev, bind, &device.Logger{log.Infof, log.Infof})
+	a.Device = device.NewDevice(tdev, bind, &device.Logger{log.Infof, log.Infof})
 
 	log.Infof("[AWG] Setting interface configuration")
 	fileUAPI, err := ipc.UAPIOpen(a.InterfaceName)
@@ -82,13 +85,16 @@ func (a *TunnelData) Run() error {
 	a.uapi = uapi
 
 	log.Infof("[AWG] Seting up UAPI config")
-	err = a.dev.IpcSet(uapiConf)
+	err = a.Device.IpcSet(uapiConf)
 	if err != nil {
 		return fmt.Errorf("IPC set error: %v", err)
 	}
 
+	log.Infof("[AWG] Disable some roaming for broken mobile semantics")
+	a.Device.DisableSomeRoamingForBrokenMobileSemantics()
+
 	log.Infof("[AWG] Bringing peers up")
-	err = a.dev.Up()
+	err = a.Device.Up()
 	if err != nil {
 		return fmt.Errorf("Bringing peers up error: %v", err)
 	}
@@ -114,7 +120,7 @@ func (a *TunnelData) Run() error {
 	go a.ipcAcceptLoop()
 
 	log.Infof("[AWG] Tunnel loop")
-	go a.tunnelLoop()
+	a.tunnelLoop()
 
 	return nil
 }
@@ -125,8 +131,8 @@ func (a *TunnelData) Stop() {
 	if a.uapi != nil {
 		a.uapi.Close()
 	}
-	if a.dev != nil {
-		a.dev.Close()
+	if a.Device != nil {
+		a.Device.Close()
 	}
 }
 
@@ -141,7 +147,7 @@ func (a *TunnelData) ipcAcceptLoop() {
 			log.Infof("[AWG] [ERROR] Got IPC error, stopping IPC loop")
 			return
 		}
-		go a.dev.IpcHandle(c)
+		go a.Device.IpcHandle(c)
 	}
 }
 
@@ -154,7 +160,7 @@ func (a *TunnelData) tunnelLoop() {
 	case err := <-a.errs:
 		log.Infof("[AWG] [ERROR] Got error, stopping tunnel loop: %s", err)
 		return
-	case <-a.dev.Wait():
+	case <-a.Device.Wait():
 		log.Infof("[AWG] [WARNING] Device wait call, stopping tunnel loop")
 		return
 	}
