@@ -14,6 +14,6 @@ actual fun provideNetCheckConfigPath(): Path {
     if (!appDir.exists()) {
         appDir.mkdirs()
     }
-    val logFile = File(appDir, "net_check_config.txt")
+    val logFile = File(appDir, "net_check_config.yaml")
     return logFile.absolutePath.toPath()
 }
