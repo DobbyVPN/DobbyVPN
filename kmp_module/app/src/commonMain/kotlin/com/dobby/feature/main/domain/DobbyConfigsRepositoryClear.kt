@@ -20,7 +20,10 @@ fun DobbyConfigsRepositoryAwg.clearAwgConfig() {
     setAwgConfig("")
 }
 
-fun DobbyConfigsRepository.clearOutlineAndCloakConfig() {
+fun DobbyConfigsRepository.clearVpnConfig() {
+    setVpnInterface(VpnInterface.NONE)
+
     clearOutlineConfig()
     clearCloakConfig()
+    clearAwgConfig()
 }

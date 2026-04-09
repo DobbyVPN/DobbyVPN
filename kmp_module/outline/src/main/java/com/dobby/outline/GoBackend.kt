@@ -1,8 +1,6 @@
 package com.dobby.outline
 
 import android.util.Log
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 class OutlineGo {
     companion object {
@@ -17,18 +15,15 @@ class OutlineGo {
 
         /**
          * Initializes the device with the provided Shadowsocks config.
-         * @throws IllegalStateException if libraries are not loaded
          */
         @JvmStatic
-        @Throws(IllegalStateException::class)
-        external fun newOutlineClient(config: String, fd: Int): Unit
+        external fun newOutlineClient(config: String, fd: Int)
 
         /**
          * Connects to the Outline server.
          * @return 0 on success, -1 on error (use getLastError() for details)
          */
         @JvmStatic
-        @Throws(IllegalStateException::class)
         external fun outlineConnect(): Int
 
         /**
@@ -39,28 +34,23 @@ class OutlineGo {
         external fun getLastError(): String?
 
         @JvmStatic
-        @Throws(IllegalStateException::class)
-        external fun outlineDisconnect(): Unit
+        external fun outlineDisconnect()
 
         @JvmStatic
-        @Throws(IllegalStateException::class)
         external fun startCloakClient(
             localHost: String,
             localPort: String,
             config: String,
             udp: Boolean
-        ): Unit
+        )
 
         @JvmStatic
-        @Throws(IllegalStateException::class)
-        external fun stopCloakClient(): Unit
+        external fun stopCloakClient()
 
         @JvmStatic
-        @Throws(IllegalStateException::class)
-        external fun initLogger(path: String): Unit
+        external fun initLogger(path: String)
 
         @JvmStatic
-        @Throws(IllegalStateException::class)
         external fun checkServerAlive(address: String, port: Int): Int
 
         @JvmStatic
@@ -71,5 +61,23 @@ class OutlineGo {
 
         @JvmStatic
         external fun clearGeoRoutingConf()
+
+        @JvmStatic
+        external fun awgTurnOn(ifname: String, tunFd: Int, settings: String): Int
+
+        @JvmStatic
+        external fun awgTurnOff()
+
+        @JvmStatic
+        external fun awgGetSocketV4(): Int
+
+        @JvmStatic
+        external fun awgGetSocketV6(): Int
+
+        @JvmStatic
+        external fun awgGetConfig(): String?
+
+        @JvmStatic
+        external fun awgVersion(): String?
     }
 }
