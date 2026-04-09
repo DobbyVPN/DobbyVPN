@@ -9,7 +9,7 @@ class NetCheckManagerImpl(
     private val loggerLibrary: LoggerLibrary,
     private val netCheckLibrary: NetCheckLibrary,
 ) : NetCheckManager {
-    override fun start(configPath: String): String {
+    override fun run(configPath: String): String {
         val path = provideLogFilePath().toString()
         loggerLibrary.InitLogger(path)
         return netCheckLibrary.NetCheck(configPath)
