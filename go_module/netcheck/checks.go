@@ -27,9 +27,9 @@ func NewNetCheckApp() *NetCheckApp {
 }
 
 func (app *NetCheckApp) runWhoami() error {
+	log.Infof("[NETCHECK] === WHOAMI ===")
 	result, err := checkers.Whoami()
 
-	log.Infof("[NETCHECK] === WHOAMI ===")
 	if err != nil {
 		return fmt.Errorf("Error running whoami check: %v", err)
 	} else {
