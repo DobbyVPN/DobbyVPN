@@ -8,7 +8,8 @@ class AwgManagerImpl(
     private val context: Context,
 ): AwgManager {
 
-    override fun getAwgVersion() = GoBackendWrapper.awgVersion()
+    override fun getAwgVersion() = GoBackendWrapper.awgVersion() ?: "undefined"
+
     override fun onAwgConnect() {
         DobbyVpnService
             .createIntent(context)

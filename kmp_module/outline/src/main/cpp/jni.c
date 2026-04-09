@@ -9,6 +9,23 @@
 #include <string.h>
 #include "liboutline.h"
 
+extern int AwgTurnOn(char* interfaceName, int tunFd, char* settings);
+extern void AwgTurnOff(void);
+extern int AwgGetSocketV4(void);
+extern int AwgGetSocketV6(void);
+extern char* AwgGetConfig(void);
+extern char* AwgVersion(void);
+extern void StartCloakClient(char* localHostC, char* localPortC, char* configC, GoUint8 udp);
+extern void StopCloakClient(void);
+extern void SetGeoRoutingConf(char* cidrsC);
+extern void ClearGeoRoutingConf(void);
+extern int CheckServerAlive(char* addressC, int port);
+extern void InitLogger(char* path);
+extern char* GetLastError(void);
+extern void NewOutlineClient(char* config, int fd);
+extern int OutlineConnect(void);
+extern void OutlineDisconnect(void);
+
 #define EXPORT __attribute__((visibility("default")))
 
 static JavaVM *g_vm = NULL;
@@ -159,4 +176,58 @@ JNIEXPORT void JNICALL
 Java_com_dobby_outline_OutlineGo_clearGeoRoutingConf(JNIEnv *env, jclass clazz) {
     // Call Go-exported function to check server availability
     ClearGeoRoutingConf();
+}
+
+JNIEXPORT jint JNICALL
+Java_com_dobby_outline_OutlineGo_awgTurnOn(JNIEnv *env, jclass c, jstring ifname, jint tun_fd, jstring settings)
+{
+	const char *ifname_str = (*env)->GetStringUTFChars(env, ifname, NULL);
+	const char *settings_str = (*env)->GetStringUTFChars(env, settings, NULL);
+	size_t settings_len = (*env)->GetStringUTFLength(env, settings);
+	int ret = AwgTurnOn(ifname_str, tun_fd, settings_str);
+	(*env)->ReleaseStringUTFChars(env, ifname, ifname_str);
+	(*env)->ReleaseStringUTFChars(env, settings, settings_str);
+	return ret;
+}
+
+JNIEXPORT void JNICALL
+Java_com_dobby_outline_OutlineGo_awgTurnOff(JNIEnv *env, jclass c)
+{
+	AwgTurnOff();
+}
+
+JNIEXPORT jint JNICALL
+Java_com_dobby_outline_OutlineGo_awgGetSocketV4(JNIEnv *env, jclass c)
+{
+	return AwgGetSocketV4();
+}
+
+JNIEXPORT jint JNICALL
+Java_com_dobby_outline_OutlineGo_awgGetSocketV6(JNIEnv *env, jclass c)
+{
+	return AwgGetSocketV6();
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_dobby_outline_OutlineGo_awgGetConfig(JNIEnv *env, jclass c)
+{
+	jstring ret;
+	char *config = AwgGetConfig();
+	if (!config)
+		return NULL;
+	ret = (*env)->NewStringUTF(env, config);
+	free(config);
+	return ret;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_dobby_outline_OutlineGo_awgVersion(JNIEnv *env, jclass c)
+{
+	jstring ret;
+	char *version = AwgVersion();
+	if (!version)
+		return NULL;
+	ret = (*env)->NewStringUTF(env, version);
+	free(version);
+	return ret;
 }

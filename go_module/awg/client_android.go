@@ -30,8 +30,8 @@ func (a *AwgClient) Refresh() error {
 	return a.App.Run()
 }
 
-func NewAwgClient(interfaceName, interfaceConfig string, interfaceFd int32) (*AwgClient, error) {
-	app, err := internal.NewApp(interfaceName, interfaceConfig, int(interfaceFd))
+func NewAwgClient(interfaceName, interfaceConfig string, interfaceFd int) (*AwgClient, error) {
+	app, err := internal.NewApp(interfaceName, interfaceConfig, interfaceFd)
 	if err != nil {
 		return nil, err
 	}

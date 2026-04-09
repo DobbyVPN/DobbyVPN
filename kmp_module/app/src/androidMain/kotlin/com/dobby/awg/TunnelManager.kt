@@ -45,7 +45,7 @@ class TunnelManager(private val service: VpnService, private val logger: Logger)
             }
 
             // Build config
-            val goConfig = config.toAwgUserspaceString()
+            val goConfig = config.toAwgQuickString()
 
             // Create the vpn tunnel with android API
             val builder: Builder = service.Builder()
@@ -108,8 +108,8 @@ class TunnelManager(private val service: VpnService, private val logger: Logger)
 
             tunnelData = TunnelData(tunnelName, config, TunnelState.UP, currentTunnelHandle)
 
-            service.protect(GoBackendWrapper.awgGetSocketV4(currentTunnelHandle))
-            service.protect(GoBackendWrapper.awgGetSocketV6(currentTunnelHandle))
+            service.protect(GoBackendWrapper.awgGetSocketV4())
+            service.protect(GoBackendWrapper.awgGetSocketV6())
         } else {
             if (tunnelData.currentTunnelHandle == -1) {
                 logger.log("[$tunnelName] Failed: tunnel is off")
@@ -117,7 +117,7 @@ class TunnelManager(private val service: VpnService, private val logger: Logger)
                 return
             }
 
-            GoBackendWrapper.awgTurnOff(tunnelData.currentTunnelHandle)
+            GoBackendWrapper.awgTurnOff()
             tunnelData = TunnelData(tunnelName, null, TunnelState.DOWN, -1)
         }
     }
