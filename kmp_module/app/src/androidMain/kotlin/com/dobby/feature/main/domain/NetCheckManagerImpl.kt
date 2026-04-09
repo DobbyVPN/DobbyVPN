@@ -6,10 +6,10 @@ import com.dobby.outline.OutlineGo
 
 class NetCheckManagerImpl: NetCheckManager {
     override fun start(configPath: String): String {
-        return OutlineGo.netCheck(provideNetCheckConfigPath().toString())
+        return OutlineGo.netCheck(provideNetCheckConfigPath().toString()) ?: ""
     }
 
     override fun cancel() {
-        OutlineGo.cancelNetCheck(provideNetCheckConfigPath().toString())
+        OutlineGo.cancelNetCheck()
     }
 }

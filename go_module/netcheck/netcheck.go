@@ -56,8 +56,10 @@ func NetCheck(configPath string) error {
 	defer appMu.Unlock()
 
 	if app == nil {
+		log.Infof("[NETCHECK] Creating new app")
 		app = NewNetCheckApp()
 
+		log.Infof("[NETCHECK] Running app")
 		go app.netCheckInternal()
 
 		return nil
@@ -67,11 +69,16 @@ func NetCheck(configPath string) error {
 }
 
 func CancelNetCheck() {
-	log.Infof("[NETCHECK] Cancel netcheck")
-	app.interrupt <- true
-	app.cancel()
-
 	appMu.Lock()
 	defer appMu.Unlock()
+	if app != nil {
+		log.Infof("[NETCHECK] Cancel netcheck")
+		go func() {
+			app.interrupt <- true
+			app.cancel()
+		}()
+	} else {
+		log.Infof("[NETCHECK] No need to cancel netcheck")
+	}
 	app = nil
 }
