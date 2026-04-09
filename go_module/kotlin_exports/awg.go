@@ -19,7 +19,7 @@ import (
 var awgClient *awg.AwgClient
 
 //export AwgTurnOn
-func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
+func AwgTurnOn(interfaceName *C.char, tunFd C.int, settings *C.char) C.int {
 	log.Infof("Starting awg")
 
 	if awgClient != nil {
@@ -34,7 +34,7 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 
 	log.Infof("Create new awgClient")
 
-	_awgClient, err := awg.NewAwgClient(interfaceName, settings, tunFd)
+	_awgClient, err := awg.NewAwgClient(C.GoString(interfaceName), C.GoString(settings), int(tunFd))
 	if err != nil {
 		log.Infof("Failed to create awgClient: %v", err)
 		return -1
@@ -53,7 +53,7 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 }
 
 //export AwgTurnOff
-func AwgTurnOff(tunnelHandle int32) {
+func AwgTurnOff() {
 	log.Infof("Stopping awg")
 
 	if awgClient != nil {
@@ -70,7 +70,7 @@ func AwgTurnOff(tunnelHandle int32) {
 }
 
 //export AwgGetSocketV4
-func AwgGetSocketV4(tunnelHandle int32) int32 {
+func AwgGetSocketV4() C.int {
 	if awgClient == nil {
 		return -1
 	}
@@ -82,11 +82,11 @@ func AwgGetSocketV4(tunnelHandle int32) int32 {
 	if err != nil {
 		return -1
 	}
-	return int32(fd)
+	return (C.int)(fd)
 }
 
 //export AwgGetSocketV6
-func AwgGetSocketV6(tunnelHandle int32) int32 {
+func AwgGetSocketV6() C.int {
 	if awgClient == nil {
 		return -1
 	}
@@ -98,31 +98,31 @@ func AwgGetSocketV6(tunnelHandle int32) int32 {
 	if err != nil {
 		return -1
 	}
-	return int32(fd)
+	return (C.int)(fd)
 }
 
 //export AwgGetConfig
-func AwgGetConfig(tunnelHandle int32) string {
+func AwgGetConfig() *C.char {
 	// return awg.AwgGetConfig(tunnelHandle)
-	return ""
+	return C.CString("")
 }
 
 //export AwgVersion
-func AwgVersion() string {
+func AwgVersion() *C.char {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
-		return "unknown"
+		return C.CString("unknown")
 	}
 	for _, dep := range info.Deps {
 		if dep.Path == "github.com/amnezia-vpn/amneziawg-go" {
 			parts := strings.Split(dep.Version, "-")
 			if len(parts) == 3 && len(parts[2]) == 12 {
-				return parts[2][:7]
+				return C.CString(parts[2][:7])
 			}
-			return dep.Version
+			return C.CString(dep.Version)
 		}
 	}
-	return "unknown"
+	return C.CString("unknown")
 }
 
 /*
