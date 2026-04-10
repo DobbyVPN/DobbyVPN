@@ -1,6 +1,7 @@
 package com.dobby.feature.main.domain
 
 import kotlinx.serialization.Serializable
+import net.peanuuutz.tomlkt.TomlElement
 
 @Serializable
 data class OutlineConfig(
@@ -53,8 +54,29 @@ data class ExcludeIPsConfig(
 )
 
 @Serializable
+data class XrayClientConfig(
+    val version: TomlElement? = null,
+    val log: TomlElement? = null,
+    val api: TomlElement? = null,
+    val dns: TomlElement? = null,
+    val routing: TomlElement? = null,
+    val policy: TomlElement? = null,
+    val inbounds: TomlElement? = null,
+    val outbounds: TomlElement? = null,
+    val transport: TomlElement? = null,
+    val stats: TomlElement? = null,
+    val reverse: TomlElement? = null,
+    val fakedns: TomlElement? = null,
+    val metrics: TomlElement? = null,
+    val observatory: TomlElement? = null,
+    val burstObservatory: TomlElement? = null,
+)
+
+
+@Serializable
 data class TomlConfigs(
     val Description: String? = null,
     val Outline: OutlineConfig? = null,
-    val ExcludeIPs: ExcludeIPsConfig? = null
+    val Xray: XrayClientConfig? = null,
+    val ExcludeIPs: ExcludeIPsConfig? = null,
 )

@@ -71,5 +71,28 @@ class OutlineGo {
 
         @JvmStatic
         external fun clearGeoRoutingConf()
+
+        /**
+         * Creates a new Xray client with the provided config and TUN file descriptor.
+         * @throws IllegalStateException if libraries are not loaded
+         */
+        @JvmStatic
+        @Throws(IllegalStateException::class)
+        external fun newXrayClient(config: String, tunFd: Int): Unit
+
+        /**
+         * Connects the Xray client.
+         * @return 0 on success, -1 on error
+         */
+        @JvmStatic
+        @Throws(IllegalStateException::class)
+        external fun xrayConnect(): Int
+
+        /**
+         * Disconnects the Xray client.
+         */
+        @JvmStatic
+        @Throws(IllegalStateException::class)
+        external fun xrayDisconnect(): Unit
     }
 }

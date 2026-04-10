@@ -147,6 +147,29 @@ Java_com_dobby_outline_OutlineGo_checkServerAlive(JNIEnv *env, jclass clazz,
 }
 
 JNIEXPORT void JNICALL
+Java_com_dobby_outline_OutlineGo_newXrayClient(JNIEnv *env, jclass clazz, jstring jConfig, jint jFd)
+{
+    const char *config_str = (*env)->GetStringUTFChars(env, jConfig, NULL);
+    // Go Export: NewXrayClient(config, fd)
+    NewXrayClient((char*)config_str, jFd);
+    (*env)->ReleaseStringUTFChars(env, jConfig, config_str);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_dobby_outline_OutlineGo_xrayConnect(JNIEnv *env, jclass clazz)
+{
+    // Go Export: XrayConnect() returns 0 on success, -1 on error
+    return XrayConnect();
+}
+
+JNIEXPORT void JNICALL
+Java_com_dobby_outline_OutlineGo_xrayDisconnect(JNIEnv *env, jclass clazz)
+{
+    // Call Go-exported function to disconnect Xray
+    XrayDisconnect();
+}
+
+JNIEXPORT void JNICALL
 Java_com_dobby_outline_OutlineGo_setGeoRoutingConf(JNIEnv *env, jclass clazz, jstring cidrs_c) {
     const char *cidrsС = (*env)->GetStringUTFChars(env, cidrs_c, NULL);
     // Call Go-exported function to check server availability

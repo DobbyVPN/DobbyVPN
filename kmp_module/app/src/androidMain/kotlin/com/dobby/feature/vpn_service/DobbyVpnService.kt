@@ -30,6 +30,7 @@ import android.net.NetworkCapabilities
 import android.system.Os
 import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
+import com.dobby.feature.vpn_service.domain.xray.XrayInteractor
 import com.dobby.outline.OutlineGo
 import java.io.File
 import java.io.FileInputStream
@@ -58,6 +59,8 @@ class DobbyVpnService : VpnService() {
     private val vpnInterfaceFactory: DobbyVpnInterfaceFactory by inject()
     private val cloakConnectInteractor: CloakConnectionInteractor by inject()
     private val outlineInteractor: OutlineInteractor by inject ()
+
+    private val xrayInteractor: XrayInteractor by inject()
     private val dobbyConfigsRepository: DobbyConfigsRepository by inject()
     val connectionState: ConnectionStateRepository by inject()
     private val tunnelManager = TunnelManager(this, logger)
@@ -129,6 +132,7 @@ class DobbyVpnService : VpnService() {
         when (dobbyConfigsRepository.getVpnInterface()) {
             VpnInterface.CLOAK_OUTLINE -> startCloakOutline(intent)
             VpnInterface.AMNEZIA_WG -> startAwg()
+            VpnInterface.XRAY -> startXray()
         }
         return START_STICKY
     }
@@ -187,6 +191,16 @@ class DobbyVpnService : VpnService() {
         }
     }
 
+    private fun startXray() {
+        serviceScope.launch {
+            startStopMutex.withLock {
+                if (dobbyConfigsRepository.getIsXrayEnabled()) {
+                    xrayInteractor.startXray(instance)
+                }
+            }
+        }
+    }
+
     private suspend fun stopCloakClient() {
         runCatching {
             logger.log("Stopping Cloak client (if running)...")
@@ -197,6 +211,7 @@ class DobbyVpnService : VpnService() {
     }
 
     fun teardownVpn() {
+        // TODO add xray disconnect
         val fdBefore = runCatching { vpnInterface?.fd }.getOrNull()
         logger.log("[svc:$serviceId] teardownVpn(): begin fd=$fdBefore")
         runCatching {

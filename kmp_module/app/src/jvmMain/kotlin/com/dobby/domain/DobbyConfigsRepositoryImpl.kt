@@ -133,6 +133,27 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("isAmneziaWGEnabled", isAmneziaWGEnabled.toString())
     }
 
+    override fun getXrayConfig(): String {
+        return prefs.get("xrayConfig", "")
+    }
+
+    override fun setXrayConfig(newConfig: String) {
+        prefs.put("xrayConfig", newConfig)
+    }
+
+    override fun getIsXrayEnabled(): Boolean {
+        return prefs.get("isXrayEnabled", "false").equals("true")
+    }
+
+    override fun setIsXrayEnabled(isXrayEnabled: Boolean) {
+        if (isXrayEnabled) {
+            setVpnInterface(VpnInterface.XRAY) // TODO (find other place for this command?)
+        } else {
+            setVpnInterface(VpnInterface.DEFAULT_VALUE)
+        }
+        prefs.put("isXrayEnabled", isXrayEnabled.toString())
+    }
+
     override fun couldStart(): Boolean {
         return vpnLibrary.couldStart()
     }
