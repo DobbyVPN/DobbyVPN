@@ -40,6 +40,10 @@ func (a *NetCheckApp) netCheckInternal() {
 		log.Infof("[NETCHECK] [ERROR] Error running cidrwhitelist, interrupting netcheck: %v", err)
 		return
 	}
+	if err := a.runDns(); err != nil {
+		log.Infof("[NETCHECK] [ERROR] Error running dns, interrupting netcheck: %v", err)
+		return
+	}
 	if err := a.runWebhost(); err != nil {
 		log.Infof("[NETCHECK] [ERROR] Error running webhost, interrupting netcheck: %v", err)
 		return

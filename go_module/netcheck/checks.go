@@ -107,3 +107,97 @@ func (app *NetCheckApp) runWebhost() error {
 		}
 	}
 }
+
+type DnsCheckTable struct {
+	provider    string
+	plainResult string
+	dohResult   string
+}
+
+func (app *NetCheckApp) runDns() error {
+	leak := checkers.DnsLeakGochan(app.ctx)
+	providerPlain := checkers.DnsPlainGochan(app.ctx)
+	providerDoh := checkers.DnsDohGochan(app.ctx)
+	result := make(map[string]DnsCheckTable)
+
+	defer func() {
+		log.Infof("[NETCHECK] Collected data")
+
+		log.Infof("[NETCHECK] | %-15v | %-10v | %-10v |", "Provider", "Plain", "DoH")
+		for _, row := range result {
+			log.Infof("[NETCHECK] | %-15v | %-10v | %-10v |", row.provider, row.plainResult, row.dohResult)
+		}
+	}()
+
+	for {
+		select {
+		case <-app.interrupt:
+			log.Infof("[NETCHECK] WEBHOST check interrupted")
+
+			return InterruptedError
+		case v, ok := <-providerPlain:
+			if !ok {
+				providerPlain = nil
+
+				if providerPlain == nil && leak == nil && providerDoh == nil {
+					return nil
+				} else {
+					continue
+				}
+			}
+
+			var verdict string
+			if v.Verdict == nil {
+				verdict = "OK"
+			} else {
+				verdict = v.Verdict.Error()
+			}
+
+			log.Infof("[NETCHECK] Plain: %v - %v", v.Provider, verdict)
+
+			if _, ok := result[v.Provider]; !ok {
+				result[v.Provider] = DnsCheckTable{provider: v.Provider, plainResult: "N/A", dohResult: "N/A"}
+			}
+
+			value, _ := result[v.Provider]
+			result[v.Provider] = DnsCheckTable{provider: v.Provider, plainResult: verdict, dohResult: value.dohResult}
+		case v, ok := <-providerDoh:
+			if !ok {
+				providerDoh = nil
+
+				if providerPlain == nil && leak == nil && providerDoh == nil {
+					return nil
+				} else {
+					continue
+				}
+			}
+
+			var verdict string
+			if v.Verdict == nil {
+				verdict = "OK"
+			} else {
+				verdict = v.Verdict.Error()
+			}
+
+			log.Infof("[NETCHECK] Doh  : %v - %v", v.Provider, verdict)
+
+			if _, ok := result[v.Provider]; !ok {
+				result[v.Provider] = DnsCheckTable{provider: v.Provider, plainResult: "N/A", dohResult: "N/A"}
+			}
+
+			value, _ := result[v.Provider]
+			result[v.Provider] = DnsCheckTable{provider: v.Provider, plainResult: value.plainResult, dohResult: verdict}
+		case v, ok := <-leak:
+			if !ok {
+				leak = nil
+
+				if providerPlain == nil && leak == nil && providerDoh == nil {
+					return nil
+				} else {
+					continue
+				}
+			}
+			log.Infof("[NETCHECK] Leak : %v - %v", v.Items, v.Err)
+		}
+	}
+}
