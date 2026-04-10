@@ -14,51 +14,44 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: outline-debug.aar
-          path: kmp_client/libs
+          path: kmp_module/libs
 
       - name: Download So
         uses: actions/download-artifact@v4
         with:
           name: liboutline.so
-          path: kmp_client/outline/src/main/jniLibs/arm64-v8a
+          path: kmp_module/outline/src/main/jniLibs/arm64-v8a
 
       - name: Download .h
         uses: actions/download-artifact@v4
         with:
           name: liboutline.h
-          path: kmp_client/outline/src/main/cpp/include/arm64-v8a
+          path: kmp_module/outline/src/main/cpp/include/arm64-v8a
 
       - name: Download Windows lib
         uses: actions/download-artifact@v4
         with:
           name: lib_windows
-          path: kmp_client/libs
-          
+          path: kmp_module/libs
+
       - name: Download Wintun DLL
         run: |
-          # Download the official Wintun zip
           curl -L -o wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
-
-          # Verify integrity (SHA256 from official release)
-          echo "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51  wintun.zip" | sha256sum -c -          
-          
-          # Unzip the specific AMD64 dll directly to the target folder
-          unzip -j wintun.zip wintun/bin/amd64/wintun.dll -d kmp_client/libs/
-          
-          # Clean up
+          echo "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51  wintun.zip" | sha256sum -c -
+          unzip -j wintun.zip wintun/bin/amd64/wintun.dll -d kmp_module/libs/
           rm wintun.zip
 
       - name: Download Linux lib
         uses: actions/download-artifact@v4
         with:
           name: lib_ubuntu
-          path: kmp_client/libs
+          path: kmp_module/libs
 
       - name: Download macOS lib
         uses: actions/download-artifact@v4
         with:
           name: lib_macos
-          path: kmp_client/libs
+          path: kmp_module/libs
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -82,10 +75,11 @@ jobs:
           key: >
             ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
 
+      - name: Bundle Install
+        run: bundle install
+
       - name: Build desktop via Fastlane
-        working-directory: kmp_client
         run: |
-          bundle install
           bundle exec fastlane android build_desktop
         env:
           APP_MAJOR_VERSION: ${{ vars.MAJOR }}
@@ -100,19 +94,21 @@ jobs:
           OAUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           command: make site
-          extra_flags: "--passphrase=\"${{ secrets.CONVEYOR_PASSPHRASE }}\" -f kmp_client/conveyor.conf"
+          extra_flags: "--passphrase=\"${{ secrets.CONVEYOR_PASSPHRASE }}\" -f kmp_module/conveyor.conf"
           signing_key: ${{ secrets.CONVEYOR_SIGNING_KEY }}
           agree_to_license: 1
 
       - name: Find files
         id: find_deb
         run: |
-          echo "DEB_FILE=$(find ./output -name '*.deb' -type f)" >> $GITHUB_ENV
-          echo "TARGZ_FILE=$(find ./output -name '*.tar.gz' -type f)" >> $GITHUB_ENV
-          echo "MAC_AARCH64_FILE=$(find ./output -name '*-mac-aarch64.zip' -type f)" >> $GITHUB_ENV
-          echo "MAC_AMD64_FILE=$(find ./output -name '*-mac-amd64.zip' -type f)" >> $GITHUB_ENV
-          echo "MSIX_FILE=$(find ./output -name '*.msix' -type f)" >> $GITHUB_ENV
-          echo "WIN_ZIP_FILE=$(find ./output -name '*-windows-amd64.zip' -type f)" >> $GITHUB_ENV
+          {
+            echo "DEB_FILE=$(find ./output -name '*.deb' -type f)"
+            echo "TARGZ_FILE=$(find ./output -name '*.tar.gz' -type f)"
+            echo "MAC_AARCH64_FILE=$(find ./output -name '*-mac-aarch64.zip' -type f)"
+            echo "MAC_AMD64_FILE=$(find ./output -name '*-mac-amd64.zip' -type f)"
+            echo "MSIX_FILE=$(find ./output -name '*.msix' -type f)"
+            echo "WIN_ZIP_FILE=$(find ./output -name '*-windows-amd64.zip' -type f)"
+          } >> "$GITHUB_ENV"
 
       - name: Upload Debian
         uses: actions/upload-artifact@v4

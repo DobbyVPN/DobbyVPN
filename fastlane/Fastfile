@@ -1,0 +1,214 @@
+default_platform(:android)
+
+FULL_VERSION    = "#{ENV['APP_MAJOR_VERSION']}.#{ENV['APP_MINOR_VERSION']}.#{ENV['APP_MAINTENANCE_VERSION']}"
+VERSION_CODE    = ENV['APP_MAJOR_VERSION'].to_i * 1_000_000 +
+                  ENV['APP_MINOR_VERSION'].to_i * 1_000 +
+                  ENV['APP_MAINTENANCE_VERSION'].to_i
+COMMIT          = ENV["GITHUB_SHA"]
+REPO            = ENV["GITHUB_REPOSITORY"]
+COMMIT_LINK     = "https://github.com/#{REPO}/tree/#{COMMIT}"
+
+platform :android do
+  desc "Build Android APK"
+  lane :build_android do
+
+    gradle(
+      task: "assembleRelease",
+      project_dir: "kmp_module",
+      properties: {
+        "projectRepositoryCommit" => COMMIT,
+        "projectRepositoryCommitLink" => COMMIT_LINK,
+        "android.injected.version.code" => VERSION_CODE,
+        "android.injected.version.name" => FULL_VERSION,
+      }
+    )
+
+    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} DobbyVPN-v#{FULL_VERSION}-unsign.apk"
+  end
+
+  desc "Build and sign Android APK"
+  lane :build_android_and_signing do
+
+    tmp = Dir.mktmpdir
+    keystore_path = File.join(tmp, "keystore.jks")
+    File.write(keystore_path, Base64.decode64(ENV['KEYSTORE_FILE']))
+
+    gradle(
+      task: "assembleRelease",
+      project_dir: "kmp_module",
+      properties: {
+        "projectRepositoryCommit" => COMMIT,
+        "projectRepositoryCommitLink" => COMMIT_LINK,
+        "android.injected.signing.store.file" => keystore_path,
+        "android.injected.version.code" => VERSION_CODE,
+        "android.injected.version.name" => FULL_VERSION,
+        "android.injected.signing.store.password" => ENV["KEYSTORE_PASSWORD"],
+        "android.injected.signing.key.alias" => ENV["KEY_ALIAS"],
+        "android.injected.signing.key.password" => ENV["KEY_PASSWORD"],
+      }
+    )
+
+    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} DobbyVPN-v#{FULL_VERSION}-sign.apk"
+  end
+
+  desc "Build Desktop artifacts"
+  lane :build_desktop do
+    gradle(
+      task: "build",
+      project_dir: "kmp_module",
+      properties: {
+        "projectRepositoryCommit" => COMMIT,
+        "projectRepositoryCommitLink" => COMMIT_LINK,
+        "android.injected.version.code" => VERSION_CODE,
+        "android.injected.version.name" => FULL_VERSION,
+      }
+    )
+
+    gradle(
+      task: "dependencies",
+      project_dir: "kmp_module",
+      flags: "--no-daemon -q",
+      properties: {
+        "projectRepositoryCommit" => COMMIT,
+        "projectRepositoryCommitLink" => COMMIT_LINK,
+        "android.injected.version.code" => VERSION_CODE,
+        "android.injected.version.name" => FULL_VERSION,
+      }
+    )
+
+    gradle(
+      task: "printConveyorConfig",
+      project_dir: "kmp_module",
+      flags: "--no-daemon -q",
+      properties: {
+        "projectRepositoryCommit" => COMMIT,
+        "projectRepositoryCommitLink" => COMMIT_LINK,
+        "android.injected.version.code" => VERSION_CODE,
+        "android.injected.version.name" => FULL_VERSION,
+      }
+    )
+  end
+end
+
+
+platform :ios do
+  PROJECT    = File.expand_path("../swift_module/iosApp.xcodeproj", __dir__)
+  SCHEME     = "iosApp"
+  EXPORT_DIR = File.expand_path("../swift_module/build/ipa", __dir__)
+  ARCHIVE    = File.expand_path("../swift_module/build/archive.xcarchive", __dir__)
+
+  IPA_NAME   = "DobbyVPN.ipa"
+  TEAM_ID    = "F6CHJX72K5"
+  BUNDLE_ID  = "vpn.dobby.app"
+  BUNDLE_ID_TUNNEL = "vpn.dobby.app.tunnel"
+
+  build_number = ENV['GITHUB_RUN_NUMBER']
+
+  desc "Bump CFBundleVersion and CFBundleShortVersionString"
+  lane :bump_build_and_version do
+    increment_build_number(
+      build_number: build_number,
+      xcodeproj: PROJECT
+    )
+
+    increment_version_number(
+      version_number: FULL_VERSION,
+      xcodeproj: PROJECT
+    )
+  end
+
+  desc "Build Kotlin Multiplatform"
+  lane :build_kotlin_multiplatform do
+    gradle(
+      task: "linkReleaseFrameworkIosArm64",
+      project_dir: "kmp_module",
+      properties: {
+        "projectRepositoryCommit" => COMMIT,
+        "projectRepositoryCommitLink" => COMMIT_LINK,
+        "android.injected.version.code" => VERSION_CODE,
+        "android.injected.version.name" => FULL_VERSION,
+      }
+    )
+  end
+
+  desc "Prepare signing"
+  lane :prepare_signing do
+    keychain_name = "build.keychain-db"
+    keychain_password = ENV['KEYCHAIN_PASSWORD']
+
+    tmp = Dir.mktmpdir
+    cert_path = File.join(tmp, "cert.p12")
+    profile1  = File.join(tmp, "profile1.mobileprovision")
+    profile2  = File.join(tmp, "profile2.mobileprovision")
+
+    File.write(cert_path, Base64.decode64(ENV['CERT_P12_BASE64']))
+    File.write(profile1,  Base64.decode64(ENV['PROVISION_DOBBY_BASE64']))
+    File.write(profile2,  Base64.decode64(ENV['PROVISION_DOBBY_TUNNEL_BASE64']))
+
+    create_keychain(
+      name: keychain_name,
+      password: keychain_password,
+      default_keychain: true,
+      unlock: true,
+      timeout: 3600
+    )
+
+    import_certificate(
+      certificate_path: cert_path,
+      certificate_password: ENV['CERT_P12_PASSWORD'],
+      keychain_name: keychain_name,
+      keychain_password: keychain_password
+    )
+
+    sh("security set-key-partition-list -S apple-tool:,apple: -s -k #{keychain_password} ~/Library/Keychains/#{keychain_name}")
+
+    install_provisioning_profile(path: profile1)
+    install_provisioning_profile(path: profile2)
+  end
+
+  desc "Build IPA"
+  lane :build_ios do
+    export_options = {
+      method: "app-store",
+      signingStyle: "manual",
+      provisioningProfiles: {
+        BUNDLE_ID => "DobbyVPNAppStore",
+        BUNDLE_ID_TUNNEL => "DobbyVPNTunnelAppStore"
+      },
+      teamID: TEAM_ID
+    }
+
+    gym(
+      project: PROJECT,
+      scheme: SCHEME,
+      configuration: "Release",
+      sdk: "iphoneos",
+      clean: true,
+      archive_path: ARCHIVE,
+      export_method: "app-store",
+      export_options: export_options,
+      output_directory: EXPORT_DIR,
+      output_name: IPA_NAME
+    )
+  end
+
+  desc "Upload to TestFlight"
+  lane :upload_testflight do
+    api_key = app_store_connect_api_key(
+      key_id: ENV['APP_STORE_KEY_ID'],
+      issuer_id: ENV['APP_STORE_ISSUER_ID'],
+      key_content: ENV['APP_STORE_API_KEY'],
+      duration: 1200
+    )
+
+    upload_to_testflight(
+      ipa: "#{EXPORT_DIR}/#{IPA_NAME}",
+      api_key: api_key,
+      skip_waiting_for_build_processing: false,
+      notify_external_testers: true,
+      distribute_external: true,
+      groups: [ENV['APP_TESTFLIGHT_EXTERNAL_GROUP']],
+      changelog: "Add Version #{FULL_VERSION}"
+    )
+  end
+end
