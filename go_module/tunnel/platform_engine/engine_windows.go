@@ -4,6 +4,7 @@ package platform_engine
 
 import (
 	"fmt"
+	"go_module/common"
 	"net"
 	"strings"
 	"time"
@@ -60,7 +61,9 @@ func startPlatformEngine(cfg interface{}) error {
 
 	prevDNS, prevDHCP = getCurrentDNS(ifName)
 
-	if err := setInterfaceAddress(ifName, "10.0.85.2"); err != nil {
+	tunCfg := common.GetNetworkConfig()
+
+	if err := setInterfaceAddress(ifName, tunCfg.TunDevice); err != nil {
 		engine.Stop()
 		return err
 	}
