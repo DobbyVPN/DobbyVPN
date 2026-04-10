@@ -166,7 +166,7 @@ jobs:
           path: kmp_module/libs/outline-debug.aar
 
   build_ios_lib:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -211,14 +211,14 @@ jobs:
 
 
   build_ios_app_lib:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
 
-      - name: Select Xcode 16.1
-        run: sudo xcode-select -s /Applications/Xcode_16.1.app
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
