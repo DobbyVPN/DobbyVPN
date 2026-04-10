@@ -31,6 +31,10 @@ service Vpn {
   // georouting.go
   rpc SetGeoRoutingConf (SetGeoRoutingConfRequest)  returns (Empty);
   rpc ClearGeoRoutingConf (Empty)                   returns (Empty);
+
+  // netcheck.go
+  rpc NetCheck (NetCheckRequest)                    returns (NetCheckResponse);
+  rpc CancelNetCheck (Empty)                        returns (Empty);
 }
 
 message StartAwgRequest {
@@ -76,6 +80,14 @@ message InitLoggerRequest {
 
 message SetGeoRoutingConfRequest {
   string cidrs = 1;
+}
+
+message NetCheckRequest {
+  string configPath = 1;
+}
+
+message NetCheckResponse {
+  string error = 1;
 }
 
 message Empty {

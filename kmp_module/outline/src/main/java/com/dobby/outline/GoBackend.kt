@@ -71,5 +71,11 @@ class OutlineGo {
 
         @JvmStatic
         external fun clearGeoRoutingConf()
+
+        @JvmStatic
+        external fun netCheck(configPath: String): String?
+
+        @JvmStatic
+        external fun cancelNetCheck()
     }
 }

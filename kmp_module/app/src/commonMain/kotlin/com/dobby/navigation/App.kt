@@ -37,12 +37,15 @@ import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.logging.presentation.SettingsViewModel
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.feature.main.ui.DobbySocksScreen
+import com.dobby.feature.main.ui.NetCheckScreen
+import com.dobby.feature.netcheck.presentation.NetCheckViewModel
 import com.dobby.util.koinViewModel
 
 @Composable
 fun App(modifier: Modifier = Modifier) {
     val mainViewModel: MainViewModel = koinViewModel()
     val logsViewModel: LogsViewModel = koinViewModel()
+    val netCheckViewModel: NetCheckViewModel = koinViewModel()
     val settingsViewModel: SettingsViewModel = koinViewModel()
     val authenticationSettingsViewModel: AuthenticationSettingsViewModel = koinViewModel()
     val tryEnableHideConfigsStatus by authenticationSettingsViewModel.tryEnableHideConfigsStatus.collectAsState()
@@ -80,6 +83,16 @@ fun App(modifier: Modifier = Modifier) {
                             )
                         } else {
                             DobbySocksScreen(mainViewModel = mainViewModel, logsViewModel = logsViewModel)
+                        }
+                    }
+                    composable<NetCheckScreen> {
+                        if (authState == HideConfigsManager.AuthStatus.NONE) {
+                            AuthenticationScreen(
+                                screen = MainScreen,
+                                navController = navController
+                            )
+                        } else {
+                            NetCheckScreen(logsViewModel, netCheckViewModel)
                         }
                     }
                     composable<SettingsScreen> {
@@ -122,8 +135,8 @@ private fun BottomBar(
     navController: NavHostController
 ) {
     var selectedItem by remember { mutableIntStateOf(0) }
-    val items = listOf("Connection", "Settings")
-    val screens = listOf(MainScreen, SettingsScreen)
+    val items = listOf("Connection", "Net Check", "Settings")
+    val screens = listOf(MainScreen, NetCheckScreen, SettingsScreen)
     val selectedIcons =
         listOf(Icons.Filled.Home, Icons.Filled.Favorite, Icons.Default.Settings)
 

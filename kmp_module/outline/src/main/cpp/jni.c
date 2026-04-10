@@ -160,3 +160,17 @@ Java_com_dobby_outline_OutlineGo_clearGeoRoutingConf(JNIEnv *env, jclass clazz) 
     // Call Go-exported function to check server availability
     ClearGeoRoutingConf();
 }
+
+JNIEXPORT void JNICALL
+Java_com_dobby_outline_OutlineGo_netCheck(JNIEnv *env, jclass clazz, jstring jConfigPath) {
+    const char *configPathC = (*env)->GetStringUTFChars(env, jConfigPath, NULL);
+    // Call Go-exported function to check server availability
+    NetCheck(configPathC);
+    // Release UTF-8 string obtained from Java
+    (*env)->ReleaseStringUTFChars(env, jConfigPath, configPathC);
+}
+
+JNIEXPORT void JNICALL
+Java_com_dobby_outline_OutlineGo_cancelNetCheck(JNIEnv *env, jclass clazz) {
+    CancelNetCheck();
+}
