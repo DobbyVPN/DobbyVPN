@@ -10,7 +10,7 @@ class RestartableLoggerGrpcLibrary(private val logger: Logger) : LoggerLibrary {
         try {
             GrpcVpnLibrary.loggerGrpcLibrary.InitLogger(path)
         } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to StartAwg: $e")
+            logger.log("[ERROR] Failed to init service logger: $e")
         }
     }
 }

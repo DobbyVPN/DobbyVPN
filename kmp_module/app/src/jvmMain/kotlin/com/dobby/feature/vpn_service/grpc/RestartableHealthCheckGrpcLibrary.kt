@@ -10,7 +10,7 @@ class RestartableHealthCheckGrpcLibrary(private val logger: Logger) : HealthChec
         return try {
             GrpcVpnLibrary.healthCheckGrpcLibrary.CouldStart()
         } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to StartAwg: $e")
+            logger.log("[ERROR] Failed to check if we could start: $e")
 
             false
         }
@@ -20,7 +20,7 @@ class RestartableHealthCheckGrpcLibrary(private val logger: Logger) : HealthChec
         return try {
             GrpcVpnLibrary.healthCheckGrpcLibrary.CheckServerAlive(address, port)
         } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to StartAwg: $e")
+            logger.log("[ERROR] Failed to check if server is alive: $e")
 
             -1
         }

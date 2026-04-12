@@ -10,7 +10,7 @@ class RestartableOutlineGrpcLibrary(private val logger: Logger) : OutlineLibrary
         try {
             return GrpcVpnLibrary.outlineGrpcLibrary.GetOutlineLastError()
         } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to StartAwg: $e")
+            logger.log("[ERROR] Failed to get last Outline error: $e")
 
             return ""
         }
@@ -20,7 +20,7 @@ class RestartableOutlineGrpcLibrary(private val logger: Logger) : OutlineLibrary
         try {
             return GrpcVpnLibrary.outlineGrpcLibrary.StartOutline(key)
         } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to StartAwg: $e")
+            logger.log("[ERROR] Failed to start Outline: $e")
 
             return -1
         }
@@ -30,7 +30,7 @@ class RestartableOutlineGrpcLibrary(private val logger: Logger) : OutlineLibrary
         try {
             GrpcVpnLibrary.outlineGrpcLibrary.StopOutline()
         } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to StartAwg: $e")
+            logger.log("[ERROR] Failed to stop Outline: $e")
         }
     }
 }
