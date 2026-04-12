@@ -43,32 +43,40 @@ func (conf *Config) ToWgQuick() string {
 		output.WriteString(fmt.Sprintf("S4 = %d\n", conf.Interface.TransportPacketJunkSize))
 	}
 
-	if conf.Interface.InitPacketMagicHeader > 0 {
-		output.WriteString(fmt.Sprintf("H1 = %d\n", conf.Interface.InitPacketMagicHeader))
+	if conf.Interface.InitPacketMagicHeader.IsLeft && conf.Interface.InitPacketMagicHeader.Left > 0 {
+		output.WriteString(fmt.Sprintf("H1 = %d\n", conf.Interface.InitPacketMagicHeader.Left))
 	}
 
-	if conf.Interface.ResponsePacketMagicHeader > 0 {
-		output.WriteString(fmt.Sprintf("H2 = %d\n", conf.Interface.ResponsePacketMagicHeader))
+	if conf.Interface.ResponsePacketMagicHeader.IsLeft && conf.Interface.ResponsePacketMagicHeader.Left > 0 {
+		output.WriteString(fmt.Sprintf("H2 = %d\n", conf.Interface.ResponsePacketMagicHeader.Left))
 	}
 
-	if conf.Interface.UnderloadPacketMagicHeader > 0 {
-		output.WriteString(fmt.Sprintf("H3 = %d\n", conf.Interface.UnderloadPacketMagicHeader))
+	if conf.Interface.UnderloadPacketMagicHeader.IsLeft && conf.Interface.UnderloadPacketMagicHeader.Left > 0 {
+		output.WriteString(fmt.Sprintf("H3 = %d\n", conf.Interface.UnderloadPacketMagicHeader.Left))
 	}
 
-	if conf.Interface.TransportPacketMagicHeader > 0 {
-		output.WriteString(fmt.Sprintf("H4 = %d\n", conf.Interface.TransportPacketMagicHeader))
+	if conf.Interface.TransportPacketMagicHeader.IsLeft && conf.Interface.TransportPacketMagicHeader.Left > 0 {
+		output.WriteString(fmt.Sprintf("H4 = %d\n", conf.Interface.TransportPacketMagicHeader.Left))
+	}
+
+	if !conf.Interface.InitPacketMagicHeader.IsLeft && conf.Interface.InitPacketMagicHeader.Right.First > 0 && conf.Interface.InitPacketMagicHeader.Right.Second > conf.Interface.InitPacketMagicHeader.Right.First {
+		output.WriteString(fmt.Sprintf("H1 = %d-%d\n", conf.Interface.InitPacketMagicHeader.Right.First, conf.Interface.InitPacketMagicHeader.Right.Second))
+	}
+
+	if !conf.Interface.ResponsePacketMagicHeader.IsLeft && conf.Interface.ResponsePacketMagicHeader.Right.First > 0 && conf.Interface.ResponsePacketMagicHeader.Right.Second > conf.Interface.ResponsePacketMagicHeader.Right.First {
+		output.WriteString(fmt.Sprintf("H2 = %d-%d\n", conf.Interface.ResponsePacketMagicHeader.Right.First, conf.Interface.ResponsePacketMagicHeader.Right.Second))
+	}
+
+	if !conf.Interface.UnderloadPacketMagicHeader.IsLeft && conf.Interface.UnderloadPacketMagicHeader.Right.First > 0 && conf.Interface.UnderloadPacketMagicHeader.Right.Second > conf.Interface.UnderloadPacketMagicHeader.Right.First {
+		output.WriteString(fmt.Sprintf("H3 = %d-%d\n", conf.Interface.UnderloadPacketMagicHeader.Right.First, conf.Interface.UnderloadPacketMagicHeader.Right.Second))
+	}
+
+	if !conf.Interface.TransportPacketMagicHeader.IsLeft && conf.Interface.TransportPacketMagicHeader.Right.First > 0 && conf.Interface.TransportPacketMagicHeader.Right.Second > conf.Interface.TransportPacketMagicHeader.Right.First {
+		output.WriteString(fmt.Sprintf("H4 = %d-%d\n", conf.Interface.TransportPacketMagicHeader.Right.First, conf.Interface.TransportPacketMagicHeader.Right.Second))
 	}
 
 	for key, value := range conf.Interface.IPackets {
 		output.WriteString(fmt.Sprintf("%s = %s\n", strings.ToUpper(key), value))
-	}
-
-	for key, value := range conf.Interface.JPackets {
-		output.WriteString(fmt.Sprintf("%s = %s\n", strings.ToUpper(key), value))
-	}
-
-	if conf.Interface.ITime > 0 {
-		output.WriteString(fmt.Sprintf("Itime = %d\n", conf.Interface.ITime))
 	}
 
 	if len(conf.Interface.Addresses) > 0 {
@@ -173,32 +181,40 @@ func (conf *Config) ToUAPI() (uapi string, dnsErr error) {
 		output.WriteString(fmt.Sprintf("s4=%d\n", conf.Interface.TransportPacketJunkSize))
 	}
 
-	if conf.Interface.InitPacketMagicHeader > 0 {
-		output.WriteString(fmt.Sprintf("h1=%d\n", conf.Interface.InitPacketMagicHeader))
+	if conf.Interface.InitPacketMagicHeader.IsLeft && conf.Interface.InitPacketMagicHeader.Left > 0 {
+		output.WriteString(fmt.Sprintf("h1=%d\n", conf.Interface.InitPacketMagicHeader.Left))
 	}
 
-	if conf.Interface.ResponsePacketMagicHeader > 0 {
-		output.WriteString(fmt.Sprintf("h2=%d\n", conf.Interface.ResponsePacketMagicHeader))
+	if conf.Interface.ResponsePacketMagicHeader.IsLeft && conf.Interface.ResponsePacketMagicHeader.Left > 0 {
+		output.WriteString(fmt.Sprintf("h2=%d\n", conf.Interface.ResponsePacketMagicHeader.Left))
 	}
 
-	if conf.Interface.UnderloadPacketMagicHeader > 0 {
-		output.WriteString(fmt.Sprintf("h3=%d\n", conf.Interface.UnderloadPacketMagicHeader))
+	if conf.Interface.UnderloadPacketMagicHeader.IsLeft && conf.Interface.UnderloadPacketMagicHeader.Left > 0 {
+		output.WriteString(fmt.Sprintf("h3=%d\n", conf.Interface.UnderloadPacketMagicHeader.Left))
 	}
 
-	if conf.Interface.TransportPacketMagicHeader > 0 {
-		output.WriteString(fmt.Sprintf("h4=%d\n", conf.Interface.TransportPacketMagicHeader))
+	if conf.Interface.TransportPacketMagicHeader.IsLeft && conf.Interface.TransportPacketMagicHeader.Left > 0 {
+		output.WriteString(fmt.Sprintf("h4=%d\n", conf.Interface.TransportPacketMagicHeader.Left))
+	}
+
+	if !conf.Interface.InitPacketMagicHeader.IsLeft && conf.Interface.InitPacketMagicHeader.Right.First > 0 && conf.Interface.InitPacketMagicHeader.Right.Second > conf.Interface.InitPacketMagicHeader.Right.First {
+		output.WriteString(fmt.Sprintf("h1=%d-%d\n", conf.Interface.InitPacketMagicHeader.Right.First, conf.Interface.InitPacketMagicHeader.Right.Second))
+	}
+
+	if !conf.Interface.ResponsePacketMagicHeader.IsLeft && conf.Interface.ResponsePacketMagicHeader.Right.First > 0 && conf.Interface.ResponsePacketMagicHeader.Right.Second > conf.Interface.ResponsePacketMagicHeader.Right.First {
+		output.WriteString(fmt.Sprintf("h2=%d-%d\n", conf.Interface.ResponsePacketMagicHeader.Right.First, conf.Interface.ResponsePacketMagicHeader.Right.Second))
+	}
+
+	if !conf.Interface.UnderloadPacketMagicHeader.IsLeft && conf.Interface.UnderloadPacketMagicHeader.Right.First > 0 && conf.Interface.UnderloadPacketMagicHeader.Right.Second > conf.Interface.UnderloadPacketMagicHeader.Right.First {
+		output.WriteString(fmt.Sprintf("h3=%d-%d\n", conf.Interface.UnderloadPacketMagicHeader.Right.First, conf.Interface.UnderloadPacketMagicHeader.Right.Second))
+	}
+
+	if !conf.Interface.TransportPacketMagicHeader.IsLeft && conf.Interface.TransportPacketMagicHeader.Right.First > 0 && conf.Interface.TransportPacketMagicHeader.Right.Second > conf.Interface.TransportPacketMagicHeader.Right.First {
+		output.WriteString(fmt.Sprintf("h4=%d-%d\n", conf.Interface.TransportPacketMagicHeader.Right.First, conf.Interface.TransportPacketMagicHeader.Right.Second))
 	}
 
 	for key, value := range conf.Interface.IPackets {
 		output.WriteString(fmt.Sprintf("%s=%s\n", key, value))
-	}
-
-	for key, value := range conf.Interface.JPackets {
-		output.WriteString(fmt.Sprintf("%s=%s\n", key, value))
-	}
-
-	if conf.Interface.ITime > 0 {
-		output.WriteString(fmt.Sprintf("itime=%d\n", conf.Interface.ITime))
 	}
 
 	if len(conf.Peers) > 0 {

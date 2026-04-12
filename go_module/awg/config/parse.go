@@ -150,6 +150,44 @@ func parseUint32(value, name string) (uint32, error) {
 	}
 	return uint32(m), nil
 }
+func parseHString(value, name string) (HString, error) {
+	splitResult := strings.Split(value, "-")
+
+	if len(splitResult) == 1 {
+		m, err := strconv.ParseInt(splitResult[0], 10, 64)
+		if err != nil {
+			return HString{}, err
+		}
+		if m < 0 || m > math.MaxUint32 {
+			return HString{}, fmt.Errorf("Invalid %s", name)
+		}
+		return Either[uint32, Pair[uint32, uint32]]{
+			Left:   uint32(m),
+			IsLeft: true,
+		}, nil
+	} else if len(splitResult) == 2 {
+		minRange, err := strconv.ParseInt(splitResult[0], 10, 64)
+		if err != nil {
+			return HString{}, err
+		}
+		maxRange, err := strconv.ParseInt(splitResult[1], 10, 64)
+		if err != nil {
+			return HString{}, err
+		}
+		if minRange < 0 || maxRange > math.MaxUint32 || maxRange <= minRange {
+			return HString{}, fmt.Errorf("Invalid %s", name)
+		}
+		return Either[uint32, Pair[uint32, uint32]]{
+			Right: Pair[uint32, uint32]{
+				First:  uint32(minRange),
+				Second: uint32(maxRange),
+			},
+			IsLeft: false,
+		}, nil
+	} else {
+		return HString{}, fmt.Errorf("Invalid %s", name)
+	}
+}
 
 func parsePersistentKeepalive(s string) (uint16, error) {
 	if s == "off" {
@@ -341,25 +379,25 @@ func FromWgQuick(s string, name string) (*Config, error) {
 				}
 				conf.Interface.TransportPacketJunkSize = transportJunkSize
 			case "h1":
-				initPacketMagicHeader, err := parseUint32(val, "initPacketMagicHeader")
+				initPacketMagicHeader, err := parseHString(val, "initPacketMagicHeader")
 				if err != nil {
 					return nil, err
 				}
 				conf.Interface.InitPacketMagicHeader = initPacketMagicHeader
 			case "h2":
-				responsePacketMagicHeader, err := parseUint32(val, "responsePacketMagicHeader")
+				responsePacketMagicHeader, err := parseHString(val, "responsePacketMagicHeader")
 				if err != nil {
 					return nil, err
 				}
 				conf.Interface.ResponsePacketMagicHeader = responsePacketMagicHeader
 			case "h3":
-				underloadPacketMagicHeader, err := parseUint32(val, "underloadPacketMagicHeader")
+				underloadPacketMagicHeader, err := parseHString(val, "underloadPacketMagicHeader")
 				if err != nil {
 					return nil, err
 				}
 				conf.Interface.UnderloadPacketMagicHeader = underloadPacketMagicHeader
 			case "h4":
-				transportPacketMagicHeader, err := parseUint32(val, "transportPacketMagicHeader")
+				transportPacketMagicHeader, err := parseHString(val, "transportPacketMagicHeader")
 				if err != nil {
 					return nil, err
 				}
@@ -372,23 +410,6 @@ func FromWgQuick(s string, name string) (*Config, error) {
 					conf.Interface.IPackets = make(map[string]string)
 				}
 				conf.Interface.IPackets[key] = val
-			case "j1", "j2", "j3":
-				if len(val) == 0 {
-					continue
-				}
-				if conf.Interface.JPackets == nil {
-					conf.Interface.JPackets = make(map[string]string)
-				}
-				conf.Interface.JPackets[key] = val
-			case "itime":
-				if len(val) == 0 {
-					continue
-				}
-				itime, err := parseUint32(val, "itime")
-				if err != nil {
-					return nil, fmt.Errorf("itime parse uint32: %w", err)
-				}
-				conf.Interface.ITime = itime
 			case "mtu":
 				m, err := parseMTU(val)
 				if err != nil {
@@ -535,8 +556,6 @@ func FromUAPI(reader io.Reader, existingConfig *Config) (*Config, error) {
 			UnderloadPacketMagicHeader: existingConfig.Interface.UnderloadPacketMagicHeader,
 			TransportPacketMagicHeader: existingConfig.Interface.TransportPacketMagicHeader,
 			IPackets:                   existingConfig.Interface.IPackets,
-			JPackets:                   existingConfig.Interface.JPackets,
-			ITime:                      existingConfig.Interface.ITime,
 		},
 	}
 	var peer *Peer
@@ -621,25 +640,25 @@ func FromUAPI(reader io.Reader, existingConfig *Config) (*Config, error) {
 				}
 				conf.Interface.ResponsePacketJunkSize = responsePacketJunkSize
 			case "h1":
-				initPacketMagicHeader, err := parseUint32(val, "initPacketMagicHeader")
+				initPacketMagicHeader, err := parseHString(val, "initPacketMagicHeader")
 				if err != nil {
 					return nil, err
 				}
 				conf.Interface.InitPacketMagicHeader = initPacketMagicHeader
 			case "h2":
-				responsePacketMagicHeader, err := parseUint32(val, "responsePacketMagicHeader")
+				responsePacketMagicHeader, err := parseHString(val, "responsePacketMagicHeader")
 				if err != nil {
 					return nil, err
 				}
 				conf.Interface.ResponsePacketMagicHeader = responsePacketMagicHeader
 			case "h3":
-				underloadPacketMagicHeader, err := parseUint32(val, "underloadPacketMagicHeader")
+				underloadPacketMagicHeader, err := parseHString(val, "underloadPacketMagicHeader")
 				if err != nil {
 					return nil, err
 				}
 				conf.Interface.UnderloadPacketMagicHeader = underloadPacketMagicHeader
 			case "h4":
-				transportPacketMagicHeader, err := parseUint32(val, "transportPacketMagicHeader")
+				transportPacketMagicHeader, err := parseHString(val, "transportPacketMagicHeader")
 				if err != nil {
 					return nil, err
 				}
@@ -652,24 +671,6 @@ func FromUAPI(reader io.Reader, existingConfig *Config) (*Config, error) {
 					conf.Interface.IPackets = make(map[string]string)
 				}
 				conf.Interface.IPackets[key] = val
-			case "j1", "j2", "j3":
-				if len(val) == 0 {
-					return nil, fmt.Errorf("cannot parse empty %s junk value: %s", key, val)
-				}
-				if conf.Interface.JPackets == nil {
-					conf.Interface.JPackets = make(map[string]string)
-				}
-				conf.Interface.JPackets[key] = val
-			case "itime":
-				if len(val) == 0 {
-					return nil, fmt.Errorf("cannot parse empty itime value")
-				}
-
-				itime, err := parseUint32(val, "itime")
-				if err != nil {
-					return nil, fmt.Errorf("itime parse uint32: %w", err)
-				}
-				conf.Interface.ITime = itime
 			case "fwmark":
 				// Ignored for now.
 
