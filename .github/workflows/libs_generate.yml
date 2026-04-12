@@ -60,6 +60,7 @@ jobs:
         working-directory: go_module
         run: |
           go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
+          chmod +x ubuntu_grpcvpnserver
         env:
           CGO_ENABLED: '1'
           GOOS: 'linux'
@@ -72,6 +73,7 @@ jobs:
         working-directory: go_module
         run: |
           go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports/
+          chmod +x macos_grpcvpnserver
         env:
           CGO_ENABLED: '1'
           GOOS: 'darwin'
