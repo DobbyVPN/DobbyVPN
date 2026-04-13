@@ -180,6 +180,18 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun getAwgTomlConfig(): String {
+        return (prefs.getString("awgTomlConfig", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getAwgTomlConfig, size = ${it.length}")
+        }
+    }
+
+    override fun setAwgTomlConfig(newConfig: String) {
+        prefs.edit().putString("awgTomlConfig", newConfig).apply().also {
+            AndroidLog("DOBBY_TAG", "setAwgTomlConfig, size = ${newConfig.length}")
+        }
+    }
+
     override fun getIsAmneziaWGEnabled(): Boolean {
         return prefs.getBoolean("isAmneziaWGEnabled", false).also {
             AndroidLog("DOBBY_TAG", "getIsAmneziaWGEnabled = $it")

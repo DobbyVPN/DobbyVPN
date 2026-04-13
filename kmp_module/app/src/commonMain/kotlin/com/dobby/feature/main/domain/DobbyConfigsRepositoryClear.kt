@@ -18,6 +18,7 @@ fun DobbyConfigsRepositoryCloak.clearCloakConfig() {
 fun DobbyConfigsRepositoryAwg.clearAwgConfig() {
     setIsAmneziaWGEnabled(false)
     setAwgConfig("")
+    setAwgTomlConfig("")
 }
 
 fun DobbyConfigsRepository.clearVpnConfig() {

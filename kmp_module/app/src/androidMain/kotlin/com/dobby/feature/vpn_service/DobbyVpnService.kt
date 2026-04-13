@@ -28,9 +28,12 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.system.Os
+import com.dobby.feature.main.domain.AmneziaWGConfig
 import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
 import com.dobby.outline.OutlineGo
+import kotlinx.serialization.decodeFromString
+import net.peanuuutz.tomlkt.Toml
 import java.io.File
 import java.io.FileInputStream
 import java.util.UUID
@@ -57,7 +60,7 @@ class DobbyVpnService : VpnService() {
     private val geoRouting: GeoRouting by inject()
     private val vpnInterfaceFactory: DobbyVpnInterfaceFactory by inject()
     private val cloakConnectInteractor: CloakConnectionInteractor by inject()
-    private val outlineInteractor: OutlineInteractor by inject ()
+    private val outlineInteractor: OutlineInteractor by inject()
     private val dobbyConfigsRepository: DobbyConfigsRepository by inject()
     val connectionState: ConnectionStateRepository by inject()
     private val tunnelManager = TunnelManager(this, logger)
@@ -123,7 +126,13 @@ class DobbyVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        logger.log("[svc:$serviceId] onStartCommand(startId=$startId flags=$flags intentFromUi=${intent?.getBooleanExtra(IS_FROM_UI, false)}) vpnInterface=${vpnInterface?.fd}")
+        logger.log(
+            "[svc:$serviceId] onStartCommand(startId=$startId flags=$flags intentFromUi=${
+                intent?.getBooleanExtra(
+                    IS_FROM_UI, false
+                )
+            }) vpnInterface=${vpnInterface?.fd}"
+        )
         teardownVpn()
         geoRouting.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
         when (dobbyConfigsRepository.getVpnInterface()) {
@@ -175,13 +184,19 @@ class DobbyVpnService : VpnService() {
     private fun startAwg() {
         if (dobbyConfigsRepository.getIsAmneziaWGEnabled()) {
             logger.log("Starting AmneziaWG")
-            val stringConfig = dobbyConfigsRepository.getAwgConfig()
+            dobbyConfigsRepository.getAwgConfig()
+            val tomlConfigString = dobbyConfigsRepository.getAwgTomlConfig()
+            val tomlConfig = if (tomlConfigString.isBlank()) {
+                null
+            } else {
+                Toml.decodeFromString<AmneziaWGConfig>(tomlConfigString)
+            }
             val state = if (dobbyConfigsRepository.getIsAmneziaWGEnabled()) {
                 TunnelState.UP
             } else {
                 TunnelState.DOWN
             }
-            tunnelManager.updateState(stringConfig, state)
+            tunnelManager.updateState(tomlConfig, state)
         } else {
             logger.log("Stopping AmneziaWG")
             tunnelManager.updateState(null, TunnelState.DOWN)
@@ -244,12 +259,11 @@ class DobbyVpnService : VpnService() {
         vpnInterface = null
         logger.log("[svc:$serviceId] teardownVpn(): end fd=$fdBefore")
     }
+
     fun setupVpn() {
         logger.log("[svc:$serviceId] setupVpn(): begin")
         vpnInterface = runCatching {
-            vpnInterfaceFactory
-                .create(context = this@DobbyVpnService, vpnService = this@DobbyVpnService)
-                .establish()
+            vpnInterfaceFactory.create(context = this@DobbyVpnService, vpnService = this@DobbyVpnService).establish()
         }.onFailure { e ->
             logger.log("[svc:$serviceId] setupVpn(): establish FAILED: ${e.message}")
         }.getOrNull()

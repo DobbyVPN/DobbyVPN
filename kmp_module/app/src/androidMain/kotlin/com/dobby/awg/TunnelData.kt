@@ -1,10 +1,10 @@
 package com.dobby.awg
 
-import com.dobby.awg.config.Config
+import com.dobby.feature.main.domain.AmneziaWGConfig
 
 data class TunnelData(
     val name: String,
-    val config: Config?,
+    val config: AmneziaWGConfig?,
     val state: TunnelState,
     val currentTunnelHandle: Int
 )
