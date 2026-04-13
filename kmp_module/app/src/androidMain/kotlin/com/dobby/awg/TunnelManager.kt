@@ -4,9 +4,8 @@ import android.net.VpnService
 import android.net.VpnService.Builder
 import android.os.Build
 import android.system.OsConstants
-import com.dobby.awg.config.BadConfigException
-import com.dobby.awg.config.Config
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.main.domain.AmneziaWGConfig
 
 class TunnelManager(private val service: VpnService, private val logger: Logger) {
 
@@ -14,19 +13,11 @@ class TunnelManager(private val service: VpnService, private val logger: Logger)
     var tunnelData: TunnelData =
         TunnelData(tunnelName, null, TunnelState.DOWN, -1)
 
-    fun updateState(stringConfig: String?, state: TunnelState) {
-        val config = if (stringConfig != null) {
-            try {
-                Config.parse(stringConfig.byteInputStream())
-            } catch (e: BadConfigException) {
-                logger.log("[$tunnelName] Failed: bad config: ${e.message}")
+    private val IP_REGEX = """^(((?!25?[6-9])[12]\\d|[1-9])?\\d\\.?\\b){4}\$""".toRegex()
 
-                return
-            }
-        } else null
-
+    fun updateState(tomlConfig: AmneziaWGConfig?, state: TunnelState) {
         if (state == TunnelState.UP) {
-            if (config == null) {
+            if (tomlConfig == null) {
                 logger.log("[$tunnelName] Failed: Empty config")
 
                 return
@@ -45,7 +36,7 @@ class TunnelManager(private val service: VpnService, private val logger: Logger)
             }
 
             // Build config
-            val goConfig = config.toAwgQuickString()
+            val goConfig = tomlConfig.toAwgQuick()
 
             // Create the vpn tunnel with android API
             val builder: Builder = service.Builder()
@@ -53,40 +44,53 @@ class TunnelManager(private val service: VpnService, private val logger: Logger)
             logger.log("[$tunnelName] New VPN service session")
             builder.setSession(tunnelName)
 
-            for (addr in config.intface.addresses) {
-                logger.log("[$tunnelName] Add address ${addr.address} ${addr.mask}")
-                builder.addAddress(addr.address, addr.mask)
+            for (addr in tomlConfig.Interface.Address.split(",")) {
+                val (address, mask) = addr.trim().split("/", limit = 2)
+                val maskInt = mask.toIntOrNull()
+
+                if (maskInt != null) {
+                    logger.log("[$tunnelName] Add address $address $mask")
+                    builder.addAddress(address, maskInt)
+                }
             }
 
-            for (addr in config.intface.dnsServers) {
-                logger.log("[$tunnelName] Add dns $addr")
-                builder.addDnsServer(addr)
+            if (tomlConfig.Interface.DNS != null && IP_REGEX.matches(tomlConfig.Interface.DNS)) {
+                logger.log("[$tunnelName] Add dns ${tomlConfig.Interface.DNS}")
+                builder.addDnsServer(tomlConfig.Interface.DNS)
             }
 
-            for (dnsSearchDomain in config.intface.dnsSearchDomains) {
-                logger.log("[$tunnelName] Add dns search domain $dnsSearchDomain")
-                builder.addSearchDomain(dnsSearchDomain)
+            if (tomlConfig.Interface.DNS != null && !IP_REGEX.matches(tomlConfig.Interface.DNS)) {
+                logger.log("[$tunnelName] Add dns search domain ${tomlConfig.Interface.DNS}")
+                builder.addSearchDomain(tomlConfig.Interface.DNS)
             }
 
             var sawDefaultRoute = false
-            for (peer in config.peers) {
-                for (addr in peer.allowedIps) {
-                    if (addr.mask == 0)
+            for (peer in tomlConfig.Peer) {
+                for (addr in peer.AllowedIPs.split(",")) {
+                    val (address, m) = addr.trim().split('/')
+                    val mask = m.toIntOrNull()
+
+                    if (mask == null) {
+                        logger.log("[$tunnelName] Skip route $addr")
+                        continue
+                    }
+
+                    if (mask == 0)
                         sawDefaultRoute = true
 
-                    logger.log("[$tunnelName] Add route ${addr.address} ${addr.mask}")
-                    builder.addRoute(addr.address, addr.mask)
+                    logger.log("[$tunnelName] Add route $address $mask")
+                    builder.addRoute(address, mask)
                 }
             }
 
             // "Kill-switch" semantics
-            if (!(sawDefaultRoute && config.peers.size == 1)) {
+            if (!(sawDefaultRoute && tomlConfig.Peer.size == 1)) {
                 builder.allowFamily(OsConstants.AF_INET)
                 builder.allowFamily(OsConstants.AF_INET6)
             }
 
-            logger.log("[$tunnelName] Set MTU ${config.intface.mtu.orElse(1280)}")
-            builder.setMtu(config.intface.mtu.orElse(1280))
+            logger.log("[$tunnelName] Set MTU ${tomlConfig.Interface.MTU ?: 1280}")
+            builder.setMtu(tomlConfig.Interface.MTU?.toInt() ?: 1280)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
                 builder.setMetered(false)
@@ -95,8 +99,13 @@ class TunnelManager(private val service: VpnService, private val logger: Logger)
 
             val currentTunnelHandle: Int
             builder.establish().use { tun ->
-                currentTunnelHandle =
-                    GoBackendWrapper.awgTurnOn(tunnelName, tun!!.detachFd(), goConfig)
+                if (tun == null) {
+                    logger.log("[$tunnelName] Error establishing tunnel")
+
+                    return
+                }
+
+                currentTunnelHandle = GoBackendWrapper.awgTurnOn(tunnelName, tun.detachFd(), goConfig)
                 logger.log("[$tunnelName] Got tunnel handle $currentTunnelHandle")
             }
 
@@ -106,7 +115,7 @@ class TunnelManager(private val service: VpnService, private val logger: Logger)
                 return
             }
 
-            tunnelData = TunnelData(tunnelName, config, TunnelState.UP, currentTunnelHandle)
+            tunnelData = TunnelData(tunnelName, tomlConfig, TunnelState.UP, currentTunnelHandle)
 
             service.protect(GoBackendWrapper.awgGetSocketV4())
             service.protect(GoBackendWrapper.awgGetSocketV6())
