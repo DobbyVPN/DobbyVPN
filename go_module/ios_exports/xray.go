@@ -1,9 +1,14 @@
 package cloak_outline
 
 import (
+<<<<<<< HEAD
 	"go_module/log"
-	"go_module/xray"
+=======
 	"sync"
+
+	log "go_module/log"
+>>>>>>> 4364bc5c (Add xray ios part)
+	"go_module/xray"
 )
 
 var xrayClient *xray.XrayClient
@@ -44,7 +49,7 @@ func XrayDisconnect() {
 }
 
 // NewXrayClient creates a new xray client with the given config and file descriptor.
-func NewXrayClient(config string, fd int) {
+func NewXrayClient(config string) {
 	defer guard("NewXrayClient")()
 	log.Infof("NewXrayClient() called")
 
@@ -56,7 +61,17 @@ func NewXrayClient(config string, fd int) {
 		xrayClient = nil
 	}
 
-	log.Infof("Creating Xray client with FD=%d", fd)
+
+	log.Infof("Start fd search")
+
+	fd := GetTunnelFileDescriptor()
+	if fd < 0 {
+		log.Infof("NewOutlineClient(): utun fd not found")
+		return
+	}
+
+	log.Infof("Fd was found, fd = %d", fd)
+	log.Infof("Config length=%d", len(config))
 
 	// Calls the mobile client logic (client_mobile.go)
 	xrayClient = xray.NewXrayClient(config, fd)

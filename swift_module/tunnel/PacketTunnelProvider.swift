@@ -12,7 +12,9 @@ import Network
 class PacketTunnelProvider: NEPacketTunnelProvider {
     private let launchId = UUID().uuidString
     private let tunnelId = String(UUID().uuidString.prefix(8))
+    private let tunnelMTU = 1200
 
+    private let xrayInteractor: XRayInteractor = XRayInteractor()
     private let outlineInteractor: OutlineInteractor = OutlineInteractor()
     private let cloakInteractor: CloakInteractor = CloakInteractor()
 
@@ -20,91 +22,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
 
     private var pathMonitor: Network.NWPathMonitor?
-    private var lastPathSignature: String?
-    private var loadSampler: DispatchSourceTimer?
-    private let memoryHighWaterLock = NSLock()
-    private var memoryHighWaterMarkMB = 0.0
-    private var tunnelStartedAt = Date()
+    private var lastPathFingerprint: String?
+    private var packetFlowBridge: PacketFlowBridge?
 
-    private struct MemorySnapshot {
-        let physFootprintMB: Double
-        let residentMB: Double
-        let virtualMB: Double
-        let compressedMB: Double
-        let highWaterMB: Double
-    }
-
-    private struct FileDescriptorSnapshot {
-        let open: Int
-        let sockets: Int
-        let streamSockets: Int
-        let datagramSockets: Int
-        let otherSockets: Int
-        let scannedLimit: Int
-        let truncated: Bool
-    }
-
-    private struct RUsageSnapshot {
-        let userCpuMs: Int64
-        let systemCpuMs: Int64
-        let maxRssKB: Int64
-        let voluntaryContextSwitches: Int64
-        let involuntaryContextSwitches: Int64
-    }
-
-    private func fixedCString<T>(_ value: inout T) -> String {
-        withUnsafePointer(to: &value) { pointer in
-            pointer.withMemoryRebound(to: CChar.self, capacity: MemoryLayout<T>.size) { cString in
-                String(cString: cString)
-            }
-        }
-    }
-
-    private func logSystemInfo(osVersionString: String) {
-        let processInfo = ProcessInfo.processInfo
-        var sysname = "unknown"
-        var release = "unknown"
-        var version = "unknown"
-        var machine = "unknown"
-
-        var uts = utsname()
-        if uname(&uts) == 0 {
-            var utsSysname = uts.sysname
-            var utsRelease = uts.release
-            var utsVersion = uts.version
-            var utsMachine = uts.machine
-            sysname = fixedCString(&utsSysname)
-            release = fixedCString(&utsRelease)
-            version = fixedCString(&utsVersion)
-            machine = fixedCString(&utsMachine)
-        }
-
-        let physicalMemoryMB = processInfo.physicalMemory / 1024 / 1024
-        logs.writeLog(
-            log: "[tunnel:\(tunnelId)] OS platform=iOS osVersion=\(osVersionString) " +
-                "osDescription=\(processInfo.operatingSystemVersionString) " +
-                "process=\(processInfo.processName) kernel=\(sysname) " +
-                "kernelRelease=\(release) kernelVersion=\(version) " +
-                "machine=\(machine) physicalMemoryMB=\(physicalMemoryMB)"
-        )
+    deinit {
+        logs.writeLog(log: "[tunnel:\(tunnelId)] deinit")
     }
 
     func reportMemoryUsageMB() -> Double {
-        guard let snapshot = memorySnapshot() else {
-            logs.writeLog(log: "[Memory] unable to get info")
-            return 0.0
-        }
-        logs.writeLog(
-            log: "[Memory] VPN use: \(formatMB(snapshot.physFootprintMB)) MB " +
-                "residentMB=\(formatMB(snapshot.residentMB)) " +
-                "virtualMB=\(formatMB(snapshot.virtualMB)) " +
-                "compressedMB=\(formatMB(snapshot.compressedMB)) " +
-                "highWaterMB=\(formatMB(snapshot.highWaterMB))"
-        )
-        return snapshot.physFootprintMB
-    }
-
-    private func memorySnapshot() -> MemorySnapshot? {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<natural_t>.stride)
 
@@ -115,214 +40,287 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         if result == KERN_SUCCESS {
-            let usedMB = bytesToMB(info.phys_footprint)
-            let highWater = memoryHighWaterLock.withLock { () -> Double in
-                if usedMB > memoryHighWaterMarkMB { memoryHighWaterMarkMB = usedMB }
-                return memoryHighWaterMarkMB
-            }
-            return MemorySnapshot(
-                physFootprintMB: usedMB,
-                residentMB: bytesToMB(info.resident_size),
-                virtualMB: bytesToMB(info.virtual_size),
-                compressedMB: bytesToMB(info.compressed),
-                highWaterMB: highWater
-            )
+            let usedBytes = info.phys_footprint
+            let usedMB = Double(usedBytes) / 1024.0 / 1024.0
+            logs.writeLog(log: "[Memory] VPN use: \(String(format: "%.2f", usedMB)) MB")
+            return usedMB
         }
-        return nil
+        logs.writeLog(log: "[Memory] unable to get info")
+        return 0.0
     }
 
     func logInterfaces() {
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
-        getifaddrs(&ifaddrPtr)
+        guard getifaddrs(&ifaddrPtr) == 0, ifaddrPtr != nil else {
+            logs.writeLog(log: "[DEBUG][Interfaces] getifaddrs failed")
+            return
+        }
+        defer { freeifaddrs(ifaddrPtr) }
+
+        var interfaces: [String: [String]] = [:]
         var ptr = ifaddrPtr
         while ptr != nil {
-            if let name = ptr?.pointee.ifa_name {
-                let s = String(cString: name)
-                if s.starts(with: "utun") {
-                    logs.writeLog(log: "Active interface: \(s)")
+            guard let rawName = ptr?.pointee.ifa_name,
+                  let addr = ptr?.pointee.ifa_addr else {
+                ptr = ptr?.pointee.ifa_next
+                continue
+            }
+            let name = String(cString: rawName)
+            if name.starts(with: "utun") {
+                let family = Int32(addr.pointee.sa_family)
+                var values = interfaces[name] ?? []
+                if family == AF_INET {
+                    var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                    var ip = addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                        $0.pointee.sin_addr
+                    }
+                    if inet_ntop(AF_INET, &ip, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil {
+                        values.append("ipv4=\(String(cString: buffer))")
+                    }
+                } else if family == AF_INET6 {
+                    values.append("ipv6")
+                } else {
+                    values.append("family=\(family)")
                 }
+                interfaces[name] = values
             }
             ptr = ptr?.pointee.ifa_next
         }
-        freeifaddrs(ifaddrPtr)
-    }
 
-    func logInterfacesDetailed(label: String) {
-        logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: \(label) ==========")
-        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else {
-            logs.writeLog(log: "[DEBUG][Interfaces] getifaddrs failed errno=\(errno)")
-            logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: END_\(label) ==========")
+        if interfaces.isEmpty {
+            logs.writeLog(log: "[DEBUG][Interfaces] no utun interfaces visible")
             return
         }
-        defer {
-            freeifaddrs(ifaddrPtr)
-            logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: END_\(label) ==========")
-        }
 
-        var ptr: UnsafeMutablePointer<ifaddrs>? = first
-        var count = 0
-        while let current = ptr {
-            count += 1
-            let name = String(cString: current.pointee.ifa_name)
-            let flags = current.pointee.ifa_flags
-            let family = current.pointee.ifa_addr?.pointee.sa_family
-            let familyDescription = family.map { String($0) } ?? "nil"
-            let address = addressDescription(current.pointee.ifa_addr)
-            logs.writeLog(
-                log: "[DEBUG][Interfaces] \(label) name=\(name) family=\(familyDescription) " +
-                    "flags=0x\(String(flags, radix: 16)) address=\(address)"
-            )
-            ptr = current.pointee.ifa_next
+        for name in interfaces.keys.sorted() {
+            let details = (interfaces[name] ?? []).joined(separator: ",")
+            logs.writeLog(log: "[DEBUG][Interfaces] active \(name) \(details)")
         }
-        if count == 0 {
-            logs.writeLog(log: "[DEBUG][Interfaces] \(label) no interfaces visible")
-        }
-    }
-
-    private func addressDescription(_ addr: UnsafePointer<sockaddr>?) -> String {
-        guard let addr else { return "nil" }
-        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-        let length: socklen_t
-        switch Int32(addr.pointee.sa_family) {
-        case AF_INET:
-            length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        case AF_INET6:
-            length = socklen_t(MemoryLayout<sockaddr_in6>.size)
-        default:
-            return "family=\(addr.pointee.sa_family)"
-        }
-        if getnameinfo(addr, length, &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
-            return String(cString: host)
-        }
-        return "family=\(addr.pointee.sa_family) getnameinfoErr=\(errno)"
     }
 
     override func startTunnel(options: [String : NSObject]?) async throws {
-        tunnelStartedAt = Date()
-        memoryHighWaterLock.withLock { memoryHighWaterMarkMB = 0 }
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
+        var startupStage = "entered"
+        let optionKeys = options?.keys.sorted().joined(separator: ",") ?? "(none)"
+
+        // iOS 26 research: Log iOS version
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let osVersionString = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
-        let optionKeys = options?.keys.sorted().joined(separator: ",") ?? "(none)"
-        logSystemInfo(osVersionString: osVersionString)
         logs.writeLog(log: "[iOS26-RESEARCH] iOS version: \(osVersionString)")
+
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
-        logInterfacesDetailed(label: "BEFORE_VPN_TUNNEL")
 
-        // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
-        await teardownForStop(reason: "pre-start cleanup")
-
-        startPathLogging()
-        logInitialNetworkPath(timeout: 1.0)
-        startLoadSampler()
-
-        let cloakConfig = configsRepository.getCloakConfig()
-        // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
-        // DNS resolution at tunnel start can hang in offline/captive-portal cases, so we do it with a hard timeout.
-        var excludedRoutes: [NEIPv4Route] = []
-        if let hostOrIp = extractIP(from: configsRepository.getServerPortOutline()) {
-            let trimmed = hostOrIp.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
-               let route = makeExcludedRoute(host: ip) {
-                excludedRoutes.append(route)
-                if ip == trimmed {
-                    logs.writeLog(log: "Excluded route for Outline host: \(maskStr(value: ip))/32")
-                } else {
-                    logs.writeLog(log: "Excluded route for Outline host resolved: \(maskStr(value: trimmed)) → \(maskStr(value: ip))/32")
-                }
-            } else {
-                logs.writeLog(log: "Excluded route for Outline host skipped (can't resolve to IPv4): \(trimmed)")
-            }
-        }
-        if let remoteHost = extractRemoteHost(from: cloakConfig) {
-            let trimmed = remoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
-               let route = makeExcludedRoute(host: ip) {
-                excludedRoutes.append(route)
-                if ip == trimmed {
-                    logs.writeLog(log: "Excluded route for Cloak RemoteHost: \(maskStr(value: ip))/32")
-                } else {
-                    logs.writeLog(log: "Excluded route for Cloak RemoteHost resolved: \(maskStr(value: trimmed)) → \(maskStr(value: ip))/32")
-                }
-            } else {
-                logs.writeLog(log: "Excluded route for Cloak RemoteHost skipped (can't resolve to IPv4): \(maskStr(value: trimmed))")
-            }
-        }
-        if !excludedRoutes.isEmpty {
-            let list = excludedRoutes.map { "\($0.destinationAddress)/\($0.destinationSubnetMask)" }.joined(separator: ", ")
-            logs.writeLog(log: "Excluded IPv4 routes: \(list)")
-        } else {
-            logs.writeLog(log: "Excluded IPv4 routes: (none)")
-        }
-
-        let remoteAddress = "254.1.1.1"
-        let localAddress = "198.18.0.1"
-        let subnetMask = "255.255.0.0"
-        let dnsServers = ["1.1.1.1", "8.8.8.8"]
-
-        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
-        settings.mtu = 1200
-        settings.ipv4Settings = NEIPv4Settings(
-            addresses: [localAddress],
-            subnetMasks: [subnetMask]
-        )
-        settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
-        settings.ipv4Settings?.excludedRoutes = excludedRoutes
-        settings.ipv6Settings = nil
-        settings.dnsSettings = NEDNSSettings(servers: dnsServers)
-        settings.dnsSettings?.matchDomains = [""]
-
-        logs.writeLog(log: "Settings are ready:")
-        logs.writeLog(log: "[tunnel:\(tunnelId)] settings mtu=\(settings.mtu?.stringValue ?? "nil") ipv4=\(localAddress)/\(subnetMask) remote=\(remoteAddress) dns=\(dnsServers.joined(separator: ",")) excludedRoutes=\(excludedRoutes.count)")
-        do {
-            try await self.setTunnelNetworkSettings(settings)
-        } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings failed: \(error.localizedDescription)")
-            throw error
-        }
-        logs.writeLog(log: "Tunnel settings applied")
-
+        // iOS 26 research: Log network interfaces BEFORE tunnel starts
+        logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: BEFORE_VPN_TUNNEL ==========")
         logInterfaces()
-        logInterfacesDetailed(label: "AFTER_VPN_TUNNEL")
+        logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: END_BEFORE_VPN_TUNNEL ==========")
 
-        let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
-        logs.writeLog(log: "Start go logger init path = \(path)")
-        Cloak_outlineInitLogger(path)
-        logs.writeLog(log: "Finish go logger init")
-        Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
         do {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline begin")
-            try outlineInteractor.startOutline()
-            logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline success")
+            // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
+            startupStage = "pre-start cleanup"
+            await teardownForStop(reason: "pre-start cleanup")
+
+            startupStage = "path monitor"
+            startPathLogging()
+
+            // iOS 26+ diagnostic: capture network state at tunnel start
+            captureNetworkStateAtStartup(logs: logs, tunnelId: tunnelId)
+
+            startupStage = "go logger init"
+            let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
+            logs.writeLog(log: "Start go logger init path = \(path)")
+            Cloak_outlineInitLogger(path)
+            logs.writeLog(log: "Finish go logger init")
+
+            startupStage = "geo routing config"
+            let geoRoutingConf = configsRepository.getGeoRoutingConf()
+            logs.writeLog(log: "[DEBUG][Routing] applying geo routing config length=\(geoRoutingConf.count)")
+            Cloak_outlineSetGeoRoutingConf(geoRoutingConf)
+
+            startupStage = "route exclusions"
+            let cloakConfig = configsRepository.getCloakConfig()
+            // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
+            // DNS resolution at tunnel start can hang in offline/captive-portal cases, so we do it with a hard timeout.
+            var excludedRoutes: [NEIPv4Route] = []
+            if let hostOrIp = extractIP(from: configsRepository.getServerPort()) {
+                let trimmed = hostOrIp.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
+                   let route = makeExcludedRoute(host: ip) {
+                    excludedRoutes.append(route)
+                    if ip == trimmed {
+                        logs.writeLog(log: "Excluded route for Outline host: \(maskStr(value: ip))/32")
+                    } else {
+                        logs.writeLog(
+                            log: "Excluded route for Outline host resolved: " +
+                                "\(maskStr(value: trimmed)) → \(maskStr(value: ip))/32"
+                        )
+                    }
+                } else {
+                    logs.writeLog(log: "Excluded route for Outline host skipped (can't resolve to IPv4): \(maskStr(value: trimmed))")
+                }
+            }
+            if let remoteHost = extractRemoteHost(from: cloakConfig) {
+                let trimmed = remoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
+                   let route = makeExcludedRoute(host: ip) {
+                    excludedRoutes.append(route)
+                    if ip == trimmed {
+                        logs.writeLog(log: "Excluded route for Cloak RemoteHost: \(maskStr(value: ip))/32")
+                    } else {
+                        logs.writeLog(
+                            log: "Excluded route for Cloak RemoteHost resolved: " +
+                                "\(maskStr(value: trimmed)) → \(maskStr(value: ip))/32"
+                        )
+                    }
+                } else {
+                    logs.writeLog(log: "Excluded route for Cloak RemoteHost skipped (can't resolve to IPv4): \(maskStr(value: trimmed))")
+                }
+            }
+            if !excludedRoutes.isEmpty {
+                let list = excludedRoutes.map { "\($0.destinationAddress)/\($0.destinationSubnetMask)" }.joined(separator: ", ")
+                logs.writeLog(log: "Excluded IPv4 routes: \(list)")
+            } else {
+                logs.writeLog(log: "Excluded IPv4 routes: (none)")
+            }
+
+            // Determine which protocol to use early - needed for Cloak startup
+            let vpnInterface = configsRepository.getVpnInterface()
+
+            // Cloak must bind/connect before the full-tunnel route is installed; otherwise
+            // iOS can route the upstream bootstrap traffic into a tunnel that is not ready yet.
+            // Only start Cloak for cloakOutline protocol.
+            if vpnInterface == .cloakOutline {
+                startupStage = "cloak startup"
+                logs.writeLog(log: "[tunnel:\(tunnelId)] starting Cloak phase")
+                try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPort())
+            }
+
+            startupStage = "network settings build"
+            let remoteAddress = "254.1.1.1"
+            let localAddress = "198.18.0.1"
+            let subnetMask = "255.255.0.0"
+            let dnsServers = ["1.1.1.1", "8.8.8.8"]
+
+            let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
+            settings.mtu = NSNumber(value: tunnelMTU)
+            settings.ipv4Settings = NEIPv4Settings(
+                addresses: [localAddress],
+                subnetMasks: [subnetMask]
+            )
+            settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
+            settings.ipv4Settings?.excludedRoutes = excludedRoutes
+            settings.ipv6Settings = nil
+            settings.dnsSettings = NEDNSSettings(servers: dnsServers)
+            settings.dnsSettings?.matchDomains = [""]
+
+            logNetworkSettings(
+                localAddress: localAddress,
+                remoteAddress: remoteAddress,
+                subnetMask: subnetMask,
+                mtu: tunnelMTU,
+                dnsServers: dnsServers,
+                excludedRoutes: excludedRoutes
+            )
+            startupStage = "setTunnelNetworkSettings"
+            let settingsStart = Date()
+            logs.writeLog(log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings begin")
+            try await self.setTunnelNetworkSettings(settings)
+            logs.writeLog(
+                log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings applied in \(elapsedMs(since: settingsStart))ms"
+            )
+
+            // iOS 26 research: Log network interfaces AFTER tunnel starts
+            logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: AFTER_VPN_TUNNEL ==========")
+            logInterfaces()
+            logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: END_AFTER_VPN_TUNNEL ==========")
+
+            startupStage = "packetFlow bridge"
+            let bridgeTunnelId = tunnelId
+            let bridgeLogs = logs
+            logs.writeLog(log: "[tunnel:\(tunnelId)] creating PacketFlowBridge mtu=\(tunnelMTU)")
+            let bridge = try PacketFlowBridge(
+                packetFlow: packetFlow,
+                mtu: tunnelMTU,
+                tunnelId: tunnelId,
+                log: { message in
+                    bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] \(message)")
+                }
+            )
+            packetFlowBridge = bridge
+            bridge.start()
+
+            startupStage = "protocol startup"
+            logs.writeLog(log: "[tunnel:\(tunnelId)] starting VPN protocol phase tunnelFD=\(bridge.tunnelFileDescriptor) mtu=\(tunnelMTU)")
+
+            switch vpnInterface {
+            case .cloakOutline:
+                try outlineInteractor.startOutline(
+                    tunnelFileDescriptor: bridge.tunnelFileDescriptor,
+                    mtu: tunnelMTU,
+                    nativeClientCreated: {
+                        bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] native Outline client created; releasing bridge fd to Go")
+                        bridge.releaseTunnelFileDescriptor()
+                    }
+                )
+            case .xray:
+                try xrayInteractor.startXRay(
+                    tunnelFileDescriptor: bridge.tunnelFileDescriptor,
+                    mtu: tunnelMTU
+                )
+            case .amneziaWg:
+                logs.writeLog(log: "[tunnel:\(tunnelId)] AmneziaWG not yet implemented on iOS")
+                throw NSError(
+                    domain: "PacketTunnelProvider",
+                    code: -4,
+                    userInfo: [NSLocalizedDescriptionKey: "AmneziaWG not yet implemented on iOS"]
+                )
+            default:
+                logs.writeLog(log: "[tunnel:\(tunnelId)] No VPN interface selected")
+                throw NSError(
+                    domain: "PacketTunnelProvider",
+                    code: -4,
+                    userInfo: [NSLocalizedDescriptionKey: "No VPN interface selected"]
+                )
+            }
+
+            logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
+
+            logs.writeLog(log: "startTunnel: all packet loops started")
         } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline failed: \(error.localizedDescription)")
-            await teardownForStop(reason: "startOutline failure")
+            let nsError = error as NSError
+            logs.writeLog(
+                log: "[tunnel:\(tunnelId)] startTunnel failed: " +
+                    "stage=\(startupStage) \(nsError.domain) code=\(nsError.code) desc=\(error.localizedDescription)"
+            )
+            await teardownForStop(reason: "startTunnel failure")
             throw error
         }
-        logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
-        do {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak begin")
-            try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
-            logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak success")
-        } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak failed: \(error.localizedDescription)")
-            await teardownForStop(reason: "startCloak failure")
-            throw error
-        }
-
-        logs.writeLog(log: "startTunnel: all packet loops started")
-        logInterfacesDetailed(label: "AFTER_PROTOCOL_STARTUP")
-        logResourceSnapshot(label: "AFTER_PROTOCOL_STARTUP")
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel reason=\(reason.rawValue) (\(reason))")
         configsRepository.setIsUserInitStop(isUserInitStop: true)
-        logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel clearing geo routing config")
         Cloak_outlineClearGeoRoutingConf()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel geo routing clear returned")
+
+        // Stop the active protocol based on the VPN interface
+        let vpnInterface = configsRepository.getVpnInterface()
+        switch vpnInterface {
+        case .cloakOutline:
+            do {
+                try outlineInteractor.stopOutline()
+            } catch {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] stopOutline error: \(error.localizedDescription)")
+            }
+            cloakInteractor.stopCloak()
+        case .xray:
+            xrayInteractor.stopXRay()
+        case .amneziaWg:
+            logs.writeLog(log: "[tunnel:\(tunnelId)] AmneziaWG stop not yet implemented on iOS")
+        default:
+            logs.writeLog(log: "[tunnel:\(tunnelId)] No VPN interface to stop")
+        }
+
         Task {
             await teardownForStop(reason: "stopTunnel(\(reason))")
             logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel teardown complete; calling completionHandler")
@@ -350,18 +348,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
-        logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage bytes=\(messageData.count)")
         if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory")
-            let response = "Memory:\(reportMemoryUsageMB())".data(using: .utf8)
-            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory responseBytes=\(response?.count ?? -1)")
-            completionHandler?(response)
+            completionHandler?("Memory:\(reportMemoryUsageMB())".data(using: .utf8))
+        } else if let msg = String(data: messageData, encoding: .utf8), msg == "getOutlineStatus" {
+            let status = outlineInteractor.outlineStatus()
+            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getOutlineStatus \(status)")
+            completionHandler?("OutlineStatus:\(status)".data(using: .utf8))
         } else {
-            if let msg = String(data: messageData, encoding: .utf8) {
-                logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage unknown='\(msg)' echo bytes=\(messageData.count)")
-            } else {
-                logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage nonUtf8 echo bytes=\(messageData.count)")
-            }
+            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage echo bytes=\(messageData.count)")
             completionHandler?(messageData)
         }
     }
@@ -374,26 +369,139 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
-            let status = path.status
-            let ifaces = path.availableInterfaces.map { "\($0.name)[\(self.interfaceTypeKey($0.type))]" }.joined(separator: ",")
+
+            // iOS 26+ diagnostic: capture all path properties
+            let supportsIPV4 = path.supportsIPv4
+            let supportsIPV6 = path.supportsIPv6
+
+            // iOS 26 research: Log detailed interface info with interface name and type
+            let ifaces = path.availableInterfaces.map { iface -> String in
+                let interfaceType: String
+                switch iface.type {
+                case .wifi:
+                    interfaceType = "WiFi"
+                case .cellular:
+                    interfaceType = "Cellular"
+                case .wiredEthernet:
+                    interfaceType = "Ethernet"
+                case .other:
+                    interfaceType = "OTHER (VPN_TUNNEL)"
+                case .loopback:
+                    interfaceType = "Loopback"
+                @unknown default:
+                    interfaceType = "Unknown"
+                }
+                return "\(iface.name)[\(interfaceType)]"
+            }.joined(separator: ", ")
+
             let expensive = path.isExpensive
             let constrained = path.isConstrained
-            let signature = "status=\(status) ifaces=[\(ifaces)] expensive=\(expensive) constrained=\(constrained) supportsIPv4=\(path.supportsIPv4) supportsIPv6=\(path.supportsIPv6)"
-            if self.lastPathSignature != signature {
-                let previous = self.lastPathSignature ?? "(none)"
-                self.lastPathSignature = signature
-                if previous != "(none)" {
-                    self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] NETWORK_CHANGED: \(previous) -> \(signature)")
+            let status = path.status
+
+            // iOS 26+ detection of problematic scenarios - now with FULL detail
+            // Format: [TIMESTAMP] PHASE: interfaces=... expensive=... constrained=...
+            let timestamp = ISO8601DateFormatter().string(from: Date())
+            var pathDesc = "[\(timestamp)] PHASE=DETECT status=\(status) ifaces=[\(ifaces)]"
+            pathDesc += " expensive=\(expensive) constrained=\(constrained)"
+            pathDesc += " supportsIPv4=\(supportsIPV4) supportsIPv6=\(supportsIPV6)"
+
+            if #available(iOS 26.0, *) {
+                if expensive {
+                    pathDesc += " [EXPENSIVE_NETWORK]"
                 }
-                self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] PATH_UPDATE \(signature)")
-                if expensive && constrained {
-                    self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] WARNING: path is both expensive and constrained")
+                if constrained {
+                    pathDesc += " [CONSTRAINED]"
                 }
-                if status == .unsatisfied {
-                    self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] WARNING: path is unsatisfied")
+                switch status {
+                case .satisfied:
+                    pathDesc += " [CONNECTED]"
+                case .unsatisfied:
+                    pathDesc += " [DISCONNECTED]"
+                case .requiresConnection:
+                    pathDesc += " [NEEDS_CONNECTION]"
+                @unknown default:
+                    pathDesc += " [UNKNOWN_STATUS]"
                 }
+            }
+
+            // iOS 26 research: Create fingerprint with more detail (include interface names)
+            let interfaceNames = path.availableInterfaces.map { $0.name }.sorted().joined(separator: "|")
+            let fingerprint = "status=\(path.status)|ifaces=\(interfaceNames)|expensive=\(expensive)|constrained=\(constrained)"
+
+            if self.lastPathFingerprint != fingerprint {
+                let previousFingerprint = self.lastPathFingerprint ?? "(none)"
+                self.lastPathFingerprint = fingerprint
+
+                // iOS 26 research: Log with clear transition marker
+                if previousFingerprint != "(none)" {
+                    self.logs.writeLog(
+                        log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] NETWORK_CHANGED: \(previousFingerprint) -> \(fingerprint)"
+                    )
+                }
+
+                self.logs.writeLog(
+                    log: "[tunnel:\(self.tunnelId)] PATH_UPDATE: " + pathDesc
+                )
+
+                // iOS 26: Log warning for problematic network conditions
+                if constrained && expensive {
+                    self.logs.writeLog(
+                        log: "[tunnel:\(self.tunnelId)] WARNING: Network is BOTH expensive AND constrained - expect connection issues!"
+                    )
+                }
+
+                // Log each interface with full details
                 for iface in path.availableInterfaces {
-                    self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] INTERFACE name=\(iface.name) type=\(self.interfaceTypeKey(iface.type)) raw=\(iface.type)")
+                    let interfaceType: String
+                    switch iface.type {
+                    case .wifi:
+                        interfaceType = "WiFi"
+                    case .cellular:
+                        interfaceType = "Cellular"
+                    case .wiredEthernet:
+                        interfaceType = "Ethernet"
+                    case .other:
+                        interfaceType = "OTHER_VPN_TUNNEL"
+                    case .loopback:
+                        interfaceType = "Loopback"
+                    @unknown default:
+                        interfaceType = "Unknown"
+                    }
+
+                    // iOS 26 research: This is the KEY log - shows exactly which interface is which
+                    self.logs.writeLog(
+                        log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] INTERFACE: name=\(iface.name) type=\(interfaceType) (raw=\(iface.type))"
+                    )
+                }
+
+                // iOS 26 research: Detect when "other" interface appears
+                let hasOtherInterface = path.availableInterfaces.contains { $0.type == .other }
+                if hasOtherInterface {
+                    self.logs.writeLog(
+                        log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] *** VPN TUNNEL INTERFACE DETECTED *** This is the utunX interface created by the VPN!"
+                    )
+                }
+
+                // iOS 26: Log active connection counts - if UDP connections drop, that's a problem
+                self.logs.writeLog(
+                    log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] ROUTE_CHECK: Active interfaces: \(path.availableInterfaces.map { $0.name }.joined(separator: ", "))"
+                )
+
+                // CRITICAL: Log when WiFi->Cellular transition happens (this is when tunnel issues start)
+                let wasUsingWiFi = previousFingerprint.contains("wifi")
+                let isNowUsingWiFi = ifaces.contains("wifi")
+                let isNowUsingCellular = ifaces.contains("cellular")
+
+                if wasUsingWiFi && isNowUsingCellular && !isNowUsingWiFi {
+                    self.logs.writeLog(
+                        log: "[tunnel:\(self.tunnelId)] CRITICAL: Network transitioned WiFi -> Cellular! Tunnel instability expected!"
+                    )
+                    // iOS 26: Signal the need for a potential health check or engine refresh
+                    // We don't restart automatically here to avoid flapping, but we log it for the app to see.
+                } else if !wasUsingWiFi && isNowUsingWiFi {
+                     self.logs.writeLog(
+                        log: "[tunnel:\(self.tunnelId)] INFO: Network transitioned back to WiFi."
+                    )
                 }
             }
         }
@@ -402,265 +510,72 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] NWPathMonitor started")
     }
 
-    private func logInitialNetworkPath(timeout: TimeInterval) {
+    /// Capture network state at tunnel startup for diagnostic purposes
+    private func captureNetworkStateAtStartup(logs: LogsRepository, tunnelId: String) {
+        // Note: This is a best-effort capture; the monitor may not have populated yet
         let monitor = Network.NWPathMonitor()
-        let q = DispatchQueue(label: "vpn.dobby.app.tunnel.startup-path.\(tunnelId)")
-        let semaphore = DispatchSemaphore(value: 0)
-        let lock = NSLock()
+        let q = DispatchQueue(label: "vpn.dobby.app.tunnel.startup-path")
         var captured = false
 
-        monitor.pathUpdateHandler = { [weak self] path in
-            guard let self else { return }
-            lock.lock()
-            if captured {
-                lock.unlock()
-                self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] STARTUP_NETWORK: duplicate path update ignored")
-                return
-            }
+        monitor.pathUpdateHandler = { path in
+            guard !captured else { return }
             captured = true
-            lock.unlock()
 
-            let ifaces = path.availableInterfaces.map { "\($0.name):\(self.interfaceTypeKey($0.type))" }.joined(separator: ",")
-            self.logs.writeLog(
-                log: "[tunnel:\(self.tunnelId)] STARTUP_NETWORK status=\(path.status) ifaces=[\(ifaces)] " +
-                    "expensive=\(path.isExpensive) constrained=\(path.isConstrained) " +
-                    "supportsIPv4=\(path.supportsIPv4) supportsIPv6=\(path.supportsIPv6)"
-            )
-            semaphore.signal()
+            // Capture interface details
+            var ifaceDetails: [String] = []
+            for iface in path.availableInterfaces {
+                let detail = "\(iface.name):\(iface.type) cellular=\(iface.type == .cellular) wifi=\(iface.type == .wifi)"
+                ifaceDetails.append(detail)
+            }
+            let ifacesStr = ifaceDetails.joined(separator: ", ")
+
+            let expensive = path.isExpensive
+            let constrained = path.isConstrained
+            let status = path.status
+            let supportsIPv4 = path.supportsIPv4
+            let supportsIPv6 = path.supportsIPv6
+
+            // Log all network state
+            let log = "[tunnel:\(tunnelId)] STARTUP_NETWORK: status=\(status) ifaces=[\(ifacesStr)] " +
+                      "expensive=\(expensive) constrained=\(constrained) " +
+                      "ipv4=\(supportsIPv4) ipv6=\(supportsIPv6)"
+            logs.writeLog(log: log)
+
+            // iOS 26-specific warnings
+            if expensive && constrained {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_WARNING: Cellular with BOTH expensive AND constrained=true - expect instability!")
+            }
+            if path.status == .unsatisfied {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_ERROR: Network path unsatisfied at tunnel start!")
+            }
         }
 
-        logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_NETWORK: starting temporary NWPathMonitor timeoutMs=\(Int(timeout * 1000))")
         monitor.start(queue: q)
-        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_WARNING: timed out waiting for initial network path")
-        } else {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_NETWORK: initial path captured")
+
+        // Give it a moment to capture, then stop
+        q.asyncAfter(deadline: .now() + 1.0) {
+            monitor.cancel()
         }
-        monitor.cancel()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_NETWORK: temporary NWPathMonitor cancelled")
-    }
-
-    private func interfaceTypeKey(_ type: Network.NWInterface.InterfaceType) -> String {
-        switch type {
-        case .wifi:
-            return "wifi"
-        case .cellular:
-            return "cellular"
-        case .wiredEthernet:
-            return "ethernet"
-        case .loopback:
-            return "loopback"
-        case .other:
-            return "other"
-        @unknown default:
-            return "unknown"
-        }
-    }
-
-    private func logResourceSnapshot(label: String) {
-        let uptimeMs = elapsedMs(since: tunnelStartedAt)
-        let path = lastPathSignature ?? "(none)"
-        logs.writeLog(
-            log: "[tunnel:\(tunnelId)] RESOURCE \(label) uptimeMs=\(uptimeMs) " +
-                "\(loadSnapshotDetails()) " +
-                "path=\(path) interfaces={\(dobbyInterfaceSummary())}"
-        )
-    }
-
-    private func startLoadSampler() {
-        stopLoadSampler(reason: "restart")
-
-        let queue = DispatchQueue(label: "vpn.dobby.app.tunnel.load.\(tunnelId)", qos: .utility)
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 1.0, repeating: 1.0, leeway: .milliseconds(100))
-        timer.setEventHandler { [weak self] in
-            self?.logResourceSnapshot(label: "PERIODIC")
-        }
-        loadSampler = timer
-        timer.resume()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] LOAD_SAMPLER started intervalMs=1000")
-    }
-
-    private func stopLoadSampler(reason: String) {
-        guard let timer = loadSampler else { return }
-        loadSampler = nil
-        timer.setEventHandler {}
-        timer.cancel()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] LOAD_SAMPLER stopped reason=\(reason)")
-    }
-
-    private func loadSnapshotDetails() -> String {
-        let memoryDetails: String
-        if let memory = memorySnapshot() {
-            memoryDetails = "memoryMB=\(formatMB(memory.physFootprintMB)) " +
-                "residentMB=\(formatMB(memory.residentMB)) " +
-                "virtualMB=\(formatMB(memory.virtualMB)) " +
-                "compressedMB=\(formatMB(memory.compressedMB)) " +
-                "memoryHighWaterMB=\(formatMB(memory.highWaterMB))"
-        } else {
-            memoryDetails = "memoryMB=unavailable"
-        }
-
-        let fds = fileDescriptorSnapshot()
-        let fdDetails = "openFDs=\(fds.open) sockets=\(fds.sockets) " +
-            "streamSockets=\(fds.streamSockets) datagramSockets=\(fds.datagramSockets) " +
-            "otherSockets=\(fds.otherSockets) fdScanLimit=\(fds.scannedLimit) fdScanTruncated=\(fds.truncated)"
-
-        let usageDetails: String
-        if let usage = rusageSnapshot() {
-            usageDetails = "cpuUserMs=\(usage.userCpuMs) cpuSystemMs=\(usage.systemCpuMs) " +
-                "maxRssKB=\(usage.maxRssKB) ctxSwitchVoluntary=\(usage.voluntaryContextSwitches) " +
-                "ctxSwitchInvoluntary=\(usage.involuntaryContextSwitches)"
-        } else {
-            usageDetails = "rusage=unavailable"
-        }
-
-        return "\(memoryDetails) threads=\(threadCount()) \(fdDetails) \(usageDetails)"
-    }
-
-    private func fileDescriptorSnapshot() -> FileDescriptorSnapshot {
-        let reportedLimit = max(0, Int(getdtablesize()))
-        let scanLimit = min(reportedLimit, 4096)
-        var open = 0
-        var sockets = 0
-        var streamSockets = 0
-        var datagramSockets = 0
-        var otherSockets = 0
-
-        for fd in 0..<scanLimit {
-            if fcntl(Int32(fd), F_GETFD) == -1 {
-                continue
-            }
-
-            open += 1
-            var socketType: Int32 = 0
-            var socketTypeLength = socklen_t(MemoryLayout<Int32>.size)
-            if getsockopt(Int32(fd), SOL_SOCKET, SO_TYPE, &socketType, &socketTypeLength) == 0 {
-                sockets += 1
-                switch socketType {
-                case SOCK_STREAM:
-                    streamSockets += 1
-                case SOCK_DGRAM:
-                    datagramSockets += 1
-                default:
-                    otherSockets += 1
-                }
-            }
-        }
-
-        return FileDescriptorSnapshot(
-            open: open,
-            sockets: sockets,
-            streamSockets: streamSockets,
-            datagramSockets: datagramSockets,
-            otherSockets: otherSockets,
-            scannedLimit: scanLimit,
-            truncated: reportedLimit > scanLimit
-        )
-    }
-
-    private func threadCount() -> Int {
-        var threads: thread_act_array_t?
-        var count = mach_msg_type_number_t(0)
-        let result = task_threads(mach_task_self_, &threads, &count)
-        guard result == KERN_SUCCESS, let threads else {
-            return -1
-        }
-
-        let size = vm_size_t(Int(count) * MemoryLayout<thread_t>.stride)
-        vm_deallocate(mach_task_self_, vm_address_t(UInt(bitPattern: threads)), size)
-        return Int(count)
-    }
-
-    private func rusageSnapshot() -> RUsageSnapshot? {
-        var usage = rusage()
-        guard getrusage(RUSAGE_SELF, &usage) == 0 else {
-            return nil
-        }
-        return RUsageSnapshot(
-            userCpuMs: timevalToMs(usage.ru_utime),
-            systemCpuMs: timevalToMs(usage.ru_stime),
-            maxRssKB: Int64(usage.ru_maxrss),
-            voluntaryContextSwitches: Int64(usage.ru_nvcsw),
-            involuntaryContextSwitches: Int64(usage.ru_nivcsw)
-        )
-    }
-
-    private func timevalToMs(_ value: timeval) -> Int64 {
-        Int64(value.tv_sec) * 1000 + Int64(value.tv_usec) / 1000
-    }
-
-    private func bytesToMB<T: BinaryInteger>(_ bytes: T) -> Double {
-        Double(UInt64(bytes)) / 1024.0 / 1024.0
-    }
-
-    private func formatMB(_ value: Double) -> String {
-        String(format: "%.2f", value)
-    }
-
-    private func dobbyInterfaceSummary() -> String {
-        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else {
-            return "scanFailed errno=\(errno)"
-        }
-        defer { freeifaddrs(ifaddrPtr) }
-
-        var dobbyMatches: [String] = []
-        var vpnInterfaces: [String] = []
-        var ptr: UnsafeMutablePointer<ifaddrs>? = first
-        while let current = ptr {
-            let rawName = String(cString: current.pointee.ifa_name)
-            let lowerName = rawName.lowercased()
-            let address = addressDescription(current.pointee.ifa_addr)
-            let flags = current.pointee.ifa_flags
-            let detail = "\(rawName)(\(address),flags=0x\(String(flags, radix: 16)))"
-
-            if isVPNInterfaceName(lowerName) {
-                vpnInterfaces.append(detail)
-            }
-            if address == "198.18.0.1" {
-                dobbyMatches.append(detail)
-            }
-            ptr = current.pointee.ifa_next
-        }
-
-        let vpnPrefix = Array(vpnInterfaces.prefix(10)).joined(separator: ",")
-        let vpnSuffix = vpnInterfaces.count > 10 ? ",truncated=\(vpnInterfaces.count - 10)" : ""
-        let dobby = dobbyMatches.isEmpty ? "none" : dobbyMatches.joined(separator: ",")
-        let vpn = vpnInterfaces.isEmpty ? "none" : "\(vpnPrefix)\(vpnSuffix)"
-        return "dobbyIPv4=\(dobby) vpnInterfaces=\(vpn)"
-    }
-
-    private func isVPNInterfaceName(_ lowerName: String) -> Bool {
-        lowerName.contains("utun") ||
-            lowerName.contains("tun") ||
-            lowerName.contains("tap") ||
-            lowerName.contains("ppp") ||
-            lowerName.contains("ipsec")
     }
 
     @MainActor
     private func teardownForStop(reason: String) async {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
-        logResourceSnapshot(label: "TEARDOWN_BEGIN reason=\(reason)")
-        stopLoadSampler(reason: reason)
+
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping PacketFlowBridge")
+        packetFlowBridge?.stop()
+        packetFlowBridge = nil
 
         do {
-            try cloakInteractor.stopCloak()
-        } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop cloak: \(error.localizedDescription)")
-        }
-
-        do {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping Outline")
             try outlineInteractor.stopOutline()
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] outline stopped")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] Outline stopped")
         } catch {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop outline: \(error.localizedDescription)")
         }
 
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] clearing geo routing config")
-        Cloak_outlineClearGeoRoutingConf()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] geo routing clear returned")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping Cloak")
+        cloakInteractor.stopCloak()
 
         do {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] clearing tunnel network settings")
@@ -670,55 +585,55 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] failed to clear tunnel network settings: \(error.localizedDescription)")
         }
 
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping NWPathMonitor")
         pathMonitor?.cancel()
         pathMonitor = nil
-        lastPathSignature = nil
+        lastPathFingerprint = nil
 
-        logResourceSnapshot(label: "TEARDOWN_END reason=\(reason)")
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason))")
+    }
+
+    private func logNetworkSettings(
+        localAddress: String,
+        remoteAddress: String,
+        subnetMask: String,
+        mtu: Int,
+        dnsServers: [String],
+        excludedRoutes: [NEIPv4Route]
+    ) {
+        let excluded = excludedRoutes
+            .map { "\($0.destinationAddress)/\($0.destinationSubnetMask)" }
+            .joined(separator: ",")
+        logs.writeLog(
+            log: "[DEBUG][tunnel:\(tunnelId)] network settings " +
+            "local=\(localAddress) remote=\(remoteAddress) mask=\(subnetMask) mtu=\(mtu) " +
+            "dns=\(dnsServers.joined(separator: ",")) included=default " +
+            "excluded=\(excluded.isEmpty ? "(none)" : excluded) ipv6=disabled"
+        )
+    }
+
+    private func elapsedMs(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
     }
 
     /// Extracts the host/IP part from a string like "ip:port" or "[ipv6]:port".
     func extractIP(from serverPort: String) -> String? {
         let host = OutlineInteractor.extractHost(from: serverPort).trimmingCharacters(in: .whitespacesAndNewlines)
-        if host.isEmpty {
-            logs.writeLog(log: "[DEBUG][Routing] Outline host extraction skipped: serverPort empty")
-            return nil
-        }
-        logs.writeLog(log: "[DEBUG][Routing] Outline host extracted host=\(maskStr(value: host))")
-        return host
+        return host.isEmpty ? nil : host
     }
 
     /// Extracts `RemoteHost` from Cloak JSON
     func extractRemoteHost(from cloakConfig: String) -> String? {
-        guard !cloakConfig.isEmpty else {
-            logs.writeLog(log: "[DEBUG][Routing] Cloak RemoteHost extraction skipped: config empty")
+        guard
+            !cloakConfig.isEmpty,
+            let data = cloakConfig.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let remoteHost = json["RemoteHost"] as? String,
+            !remoteHost.isEmpty
+        else {
             return nil
         }
-        guard let data = cloakConfig.data(using: .utf8) else {
-            logs.writeLog(log: "[DEBUG][Routing] Cloak RemoteHost extraction failed: config is not UTF-8")
-            return nil
-        }
-        do {
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                logs.writeLog(log: "[DEBUG][Routing] Cloak RemoteHost extraction failed: JSON root is not object")
-                return nil
-            }
-            guard let remoteHost = json["RemoteHost"] as? String else {
-                logs.writeLog(log: "[DEBUG][Routing] Cloak RemoteHost extraction skipped: RemoteHost key missing")
-                return nil
-            }
-            let trimmed = remoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                logs.writeLog(log: "[DEBUG][Routing] Cloak RemoteHost extraction skipped: RemoteHost empty")
-                return nil
-            }
-            logs.writeLog(log: "[DEBUG][Routing] Cloak RemoteHost extracted host=\(maskStr(value: trimmed))")
-            return trimmed
-        } catch {
-            logs.writeLog(log: "[DEBUG][Routing] Cloak RemoteHost extraction failed: \(error.localizedDescription)")
-            return nil
-        }
+        return remoteHost
     }
 
     /// Converts host/IP into an excluded /32 route
@@ -740,6 +655,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if isValidIPv4(trimmed) { return trimmed }
+
         let start = Date()
         logs.writeLog(log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: trimmed))")
 
@@ -758,7 +674,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         guard rc == 0, let first = res else {
             logs.writeLog(
                 log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: trimmed)) failed " +
-                    "rc=\(rc) error=\(String(cString: gai_strerror(rc))) elapsed=\(elapsedMs(since: start))ms"
+                "rc=\(rc) error=\(String(cString: gai_strerror(rc))) elapsed=\(elapsedMs(since: start))ms"
             )
             return nil
         }
@@ -767,37 +683,40 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         var addr = first.pointee.ai_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
         var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
         let ptr = inet_ntop(AF_INET, &addr, &buffer, socklen_t(INET_ADDRSTRLEN))
-        guard ptr != nil else {
-            let ntopErrno = errno
-            logs.writeLog(
-                log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: trimmed)) inet_ntop failed " +
-                    "errno=\(ntopErrno) \(String(cString: strerror(ntopErrno))) elapsed=\(elapsedMs(since: start))ms"
-            )
-            return nil
-        }
+        guard ptr != nil else { return nil }
         let value = String(cString: buffer)
         logs.writeLog(
             log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: trimmed)) ok " +
-                "ip=\(maskStr(value: value)) elapsed=\(elapsedMs(since: start))ms"
+            "ip=\(maskStr(value: value)) elapsed=\(elapsedMs(since: start))ms"
         )
         return value
     }
 
-    private func elapsedMs(since start: Date) -> Int {
-        Int(Date().timeIntervalSince(start) * 1000)
-    }
-
     private func resolveIPv4IfNeededWithTimeout(_ host: String, timeout: TimeInterval) -> String? {
-        var result: String?
-        let sema = DispatchSemaphore(value: 0)
+        let group = DispatchGroup()
+        group.enter()
+        let lock = NSLock()
+        var result: String? = nil
+
         DispatchQueue.global(qos: .userInitiated).async {
-            result = self.resolveIPv4IfNeeded(host)
-            sema.signal()
+            let ip = self.resolveIPv4IfNeeded(host)
+            lock.lock()
+            result = ip
+            lock.unlock()
+            group.leave()
         }
-        if sema.wait(timeout: .now() + timeout) == .timedOut {
-            logs.writeLog(log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: host)) timed out after \(Int(timeout * 1000))ms")
+
+        let wait = group.wait(timeout: .now() + timeout)
+        if wait == .timedOut {
+            logs.writeLog(
+                log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: host)) " +
+                "timed out after \(Int(timeout * 1000))ms"
+            )
             return nil
         }
-        return result
+        lock.lock()
+        let value = result
+        lock.unlock()
+        return value
     }
 }
