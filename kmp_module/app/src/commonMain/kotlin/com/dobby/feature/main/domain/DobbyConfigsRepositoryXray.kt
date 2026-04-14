@@ -8,4 +8,7 @@ interface DobbyConfigsRepositoryXray {
     fun getIsXrayEnabled(): Boolean
 
     fun setIsXrayEnabled(isXrayEnabled: Boolean)
+
+    fun setServerPort(newConfig: String)
+    fun getServerPort(): String
 }

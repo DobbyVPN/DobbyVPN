@@ -4,7 +4,6 @@ import android.content.SharedPreferences
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import android.util.Log.i as AndroidLog
-import com.dobby.outline.OutlineGo
 import androidx.core.content.edit
 
 internal class DobbyConfigsRepositoryImpl(
@@ -84,9 +83,9 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
-    override fun setServerPortOutline(newConfig: String) {
-        prefs.edit().putString("ServerPortOutlineKey", newConfig).apply().also {
-            AndroidLog("DOBBY_TAG", "setServerPortOutline, size = ${newConfig.length}")
+    override fun setServerPort(newConfig: String) {
+        prefs.edit().putString("ServerPortKey", newConfig).apply().also {
+            AndroidLog("DOBBY_TAG", "setServerPort, size = ${newConfig.length}")
         }
     }
 
@@ -96,9 +95,9 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
-    override fun getServerPortOutline(): String {
-        return (prefs.getString("ServerPortOutlineKey", "") ?: "").also {
-            AndroidLog("DOBBY_TAG", "getServerPortOutline, size = ${it.length}")
+    override fun getServerPort(): String {
+        return (prefs.getString("ServerPortKey", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getServerPort, size = ${it.length}")
         }
     }
 

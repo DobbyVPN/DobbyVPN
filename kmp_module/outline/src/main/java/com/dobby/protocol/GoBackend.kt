@@ -1,10 +1,8 @@
-package com.dobby.outline
+package com.dobby.protocol
 
 import android.util.Log
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
-class OutlineGo {
+class ProtocolGo {
     companion object {
         init {
             Log.d(TAG, "Start loading libraries")
@@ -13,7 +11,7 @@ class OutlineGo {
             Log.d(TAG, "Libraries loaded successfully")
         }
 
-        private const val TAG = "OutlineGo"
+        private const val TAG = "ProtocolGo"
 
         /**
          * Initializes the device with the provided Shadowsocks config.
@@ -73,26 +71,27 @@ class OutlineGo {
         external fun clearGeoRoutingConf()
 
         /**
-         * Creates a new Xray client with the provided config and TUN file descriptor.
+         * Creates a new Vpn client with the provided config and TUN file descriptor.
+         * The protocol is chosen by provided protocol string (xray, outline)
          * @throws IllegalStateException if libraries are not loaded
          */
         @JvmStatic
         @Throws(IllegalStateException::class)
-        external fun newXrayClient(config: String, tunFd: Int): Unit
+        external fun newVpnClient(config: String, protocol: String, tunFd: Int): Unit
 
         /**
-         * Connects the Xray client.
+         * Connects the Vpn client.
          * @return 0 on success, -1 on error
          */
         @JvmStatic
         @Throws(IllegalStateException::class)
-        external fun xrayConnect(): Int
+        external fun vpnConnect(): Int
 
         /**
-         * Disconnects the Xray client.
+         * Disconnects the Vpn client.
          */
         @JvmStatic
         @Throws(IllegalStateException::class)
-        external fun xrayDisconnect(): Unit
+        external fun vpnDisconnect(): Unit
     }
 }

@@ -61,16 +61,16 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("cloakLocalPort", port.toString())
     }
 
-    override fun setServerPortOutline(newConfig: String) {
-        prefs.put("ServerPortOutlineKey", newConfig)
+    override fun setServerPort(newConfig: String) {
+        prefs.put("ServerPortKey", newConfig)
     }
 
     override fun setMethodPasswordOutline(newConfig: String) {
         prefs.put("MethodPasswordOutlineKey", newConfig)
     }
 
-    override fun getServerPortOutline(): String {
-        return prefs.get("ServerPortOutlineKey", "")
+    override fun getServerPort(): String {
+        return prefs.get("ServerPortKey", "")
     }
 
     override fun getMethodPasswordOutline(): String {

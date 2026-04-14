@@ -43,7 +43,7 @@ class TomlConfigApplier(
         if (xray != null) {
             logger.log("Xray config detected")
             // Ensure other configs are disabled
-            disableOutlineAndCloak()
+            disableAll()
 
             val xrayResult = xrayApplier.apply(xray)
             logger.log("Finish parseToml() -> Xray applied: $xrayResult")
@@ -54,10 +54,10 @@ class TomlConfigApplier(
         if (outline != null) {
             logger.log("Outline config detected")
             // Ensure Xray is disabled
-            disableXray()
+            disableAll()
 
             val outlineResult = outlineApplier.apply(outline) ?: run {
-                disableOutlineAndCloak()
+                disableAll()
                 logger.log("Finish parseToml()")
                 return false
             }
@@ -79,12 +79,9 @@ class TomlConfigApplier(
         return true
     }
 
-    private fun disableOutlineAndCloak() {
+    private fun disableAll() {
         outlineRepo.clearOutlineConfig()
         cloakRepo.clearCloakConfig()
-    }
-
-    private fun disableXray() {
         xrayRepo.clearXrayConfig()
     }
 }

@@ -14,7 +14,6 @@ class XrayInteractor(
         val serviceId = dobbyVpnService?.serviceId ?: "unknown"
         logger.log("[svc:$serviceId] startXray(): begin")
 
-        // 1. Получаем конфигурацию Xray
         val xrayConfig = dobbyConfigsRepository.getXrayConfig()
         if (xrayConfig.isEmpty()) {
             logger.log("[svc:$serviceId] startXray(): Xray config is empty, cannot start")
@@ -23,10 +22,8 @@ class XrayInteractor(
             return
         }
 
-        // 2. Поднимаем VPN интерфейс (Android VpnService)
         dobbyVpnService?.setupVpn()
 
-        // 3. Дублируем файловый дескриптор, чтобы передать его в Go (tun2socks / Xray)
         val dupPfd = dobbyVpnService?.vpnInterface?.dup()
         val tunFd = dupPfd?.detachFd() ?: -1
         dobbyVpnService?.goTunFd = if (tunFd != -1) tunFd else null
@@ -41,10 +38,8 @@ class XrayInteractor(
 
         logger.log("[svc:$serviceId] startXray(): initializing Xray with tunFd=$tunFd")
 
-        // 4. Передаем конфиг и дескриптор в XrayLibFacade
         val connected = xrayLibFacade.init(xrayConfig, tunFd)
 
-        // 5. Обрабатываем результат
         if (!connected) {
             logger.log("[svc:$serviceId] startXray(): connection FAILED, stopping VPN service")
             dobbyVpnService?.connectionState?.tryUpdateStatus(false)
@@ -63,7 +58,6 @@ class XrayInteractor(
 
         xrayLibFacade.disconnect()
 
-        // Обновляем состояние приложения
         dobbyVpnService?.connectionState?.updateStatus(false)
     }
 }

@@ -3,6 +3,7 @@ package cloak_outline
 import (
 	log "go_module/log"
 	"go_module/xray"
+	"os"
 	"sync"
 )
 
@@ -58,8 +59,15 @@ func NewXrayClient(config string, fd int) {
 
 	log.Infof("Creating Xray client with FD=%d", fd)
 
-	// Calls the mobile client logic (client_mobile.go)
-	xrayClient = xray.NewXrayClient(config, fd)
+	tunFile := os.NewFile(uintptr(fd), "utun")
+
+	var err error
+	xrayClient, err = xray.NewXrayClient(config, tunFile)
+	if err != nil {
+		log.Errorf("Failed to create xray client: %v", err)
+		xrayClient = nil
+		return
+	}
 	log.Infof("NewXrayClient() finished")
 }
 

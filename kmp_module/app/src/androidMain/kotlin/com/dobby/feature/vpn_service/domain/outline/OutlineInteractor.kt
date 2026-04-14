@@ -87,7 +87,7 @@ class OutlineInteractor(
         }
 
         val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
-        val serverPort = dobbyConfigsRepository.getServerPortOutline()
+        val serverPort = dobbyConfigsRepository.getServerPort()
         val prefix = dobbyConfigsRepository.getPrefixOutline()
         val websocketEnabled = dobbyConfigsRepository.getIsWebsocketEnabled()
         val tcpPath = dobbyConfigsRepository.getTcpPathOutline()

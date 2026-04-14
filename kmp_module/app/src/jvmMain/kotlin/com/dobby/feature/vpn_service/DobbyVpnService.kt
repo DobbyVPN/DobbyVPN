@@ -108,7 +108,7 @@ internal class DobbyVpnService(
     private fun startCloakOutline() {
         logger.log("Start startCloakOutline")
         val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
-        val serverPort = dobbyConfigsRepository.getServerPortOutline()
+        val serverPort = dobbyConfigsRepository.getServerPort()
         val prefix = dobbyConfigsRepository.getPrefixOutline()
         val websocketEnabled = dobbyConfigsRepository.getIsWebsocketEnabled()
         val tcpPath = dobbyConfigsRepository.getTcpPathOutline()
@@ -186,8 +186,17 @@ internal class DobbyVpnService(
             logger.log("Xray config is empty, cannot start")
             return
         }
-        runBlocking { connectionState.updateVpnStarted(isStarted = true) }
-        vpnLibrary.startXray(config)
+        runBlocking {
+            val connected = vpnLibrary.startXray(config)
+            if (connected) {
+                logger.log("Xray connection established successfully")
+                connectionState.updateVpnStarted(isStarted = true)
+            } else {
+                logger.log("Xray connection FAILED: ${vpnLibrary.lastVpnError}")
+                connectionState.updateVpnStarted(isStarted = false)
+            }
+            connectionState.updateVpnStarted(isStarted = true)
+        }
     }
 
     private fun stopXray() {

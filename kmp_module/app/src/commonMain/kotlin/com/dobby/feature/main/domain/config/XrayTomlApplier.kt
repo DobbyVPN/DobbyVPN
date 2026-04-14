@@ -42,8 +42,63 @@ internal class XrayTomlApplier(
         xrayRepo.setXrayConfig(xrayJsonString)
         xrayRepo.setIsXrayEnabled(true)
 
+        extractAndSetServerPort(config.outbounds)
+
         logger.log("Xray config applied successfully.")
         return true
+    }
+
+    private fun extractAndSetServerPort(outboundsElement: TomlElement) {
+        // Ensure outbounds is an array
+        val outbounds = outboundsElement as? TomlArray ?: return
+
+        for (outbound in outbounds) {
+            val table = outbound as? TomlTable ?: continue
+            val protocol = (table["protocol"] as? TomlLiteral)?.content ?: continue
+
+            // Skip internal Xray routing protocols
+            if (protocol in listOf("freedom", "blackhole", "dns")) continue
+
+            val settings = table["settings"] as? TomlTable ?: continue
+            var address: String? = null
+            var port: String? = null
+
+            when (protocol) {
+                "vless", "vmess", "vlite" -> {
+                    val vnext = settings["vnext"] as? TomlArray
+                    val firstServer = vnext?.firstOrNull() as? TomlTable
+                    address = (firstServer?.get("address") as? TomlLiteral)?.content
+                    port = (firstServer?.get("port") as? TomlLiteral)?.content
+                }
+                "trojan", "shadowsocks", "socks", "http", "mtproto" -> {
+                    val servers = settings["servers"] as? TomlArray
+                    val firstServer = servers?.firstOrNull() as? TomlTable
+                    address = (firstServer?.get("address") as? TomlLiteral)?.content
+                    port = (firstServer?.get("port") as? TomlLiteral)?.content
+                }
+                "wireguard" -> {
+                    val peers = settings["peers"] as? TomlArray
+                    val firstPeer = peers?.firstOrNull() as? TomlTable
+                    val endpoint = (firstPeer?.get("endpoint") as? TomlLiteral)?.content
+                    if (endpoint != null) {
+                        // Wireguard endpoint is already formatted as "IP:Port"
+                        xrayRepo.setServerPort(endpoint)
+                        logger.log("Extracted Xray Server Port (wireguard): $endpoint")
+                        return
+                    }
+                }
+            }
+
+            // If we successfully grabbed both, save and exit loop
+            if (address != null && port != null) {
+                val ipPort = "$address:$port"
+                xrayRepo.setServerPort(ipPort)
+                logger.log("Extracted Xray Server Port ($protocol): $ipPort")
+                return
+            }
+        }
+
+        logger.log("Could not extract an external Xray Server IP:Port from outbounds.")
     }
 
     private fun buildXrayJson(config: XrayClientConfig): String {

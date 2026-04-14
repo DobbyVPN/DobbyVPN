@@ -20,9 +20,10 @@ interface VPNLibrary : Library {
     fun StartAwg(key: String)
     fun StopAwg()
 
-    // Xray
-    fun StartXray(config: String)
-    fun StopXray()
+    // Vpn (protocols = ["xray", "outline"])
+    fun StartVpn(config: String, protocol: String): Int
+    fun StopVpn()
+    fun GetVpnLastError(): String?
 
     // Healthcheck
     fun CouldStart(): Boolean
@@ -80,6 +81,9 @@ class VPNLibraryLoader(
     }
 
     var lastOutlineError: String? = null
+        private set
+
+    var lastVpnError: String? = null
         private set
 
     /**
@@ -180,16 +184,25 @@ class VPNLibraryLoader(
     }
 
     fun startXray(config: String): Boolean {
+        lastVpnError = null
         try {
             logger.log("Run config: ${maskStr(config)}")
-            INSTANCE.StartXray(config)
-            logger.log("StartXray called successfully.")
-            return true
+            val result = INSTANCE.StartVpn(config, "xray")
+            if (result == 0) {
+                logger.log("Xray connected successfully.")
+                return true
+            } else {
+                lastVpnError = INSTANCE.GetVpnLastError() ?: "Unknown error"
+                logger.log("Xray connection FAILED: $lastVpnError")
+                return false
+            }
         } catch (e: UnsatisfiedLinkError) {
+            lastVpnError = "Library error: ${e.message}"
             logger.log("Failed to call StartXray: ${e.message}")
             e.printStackTrace()
             return false
         } catch (e: Exception) {
+            lastVpnError = "Exception: ${e.message}"
             logger.log("An error occurred while calling StartXray: ${e.message}")
             e.printStackTrace()
             return false
@@ -198,7 +211,7 @@ class VPNLibraryLoader(
 
     fun stopXray(): Boolean {
         try {
-            INSTANCE.StopXray()
+            INSTANCE.StopVpn()
             logger.log("StopXray called successfully.")
             return true
         } catch (e: UnsatisfiedLinkError) {

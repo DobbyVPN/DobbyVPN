@@ -3,7 +3,7 @@ package com.dobby.feature.main.domain
 fun DobbyConfigsRepositoryOutline.clearOutlineConfig() {
     setIsOutlineEnabled(false)
     setMethodPasswordOutline("")
-    setServerPortOutline("")
+    setServerPort("")
     setPrefixOutline("")
     setIsWebsocketEnabled(false)
     setTcpPathOutline("")

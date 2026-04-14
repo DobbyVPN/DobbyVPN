@@ -252,7 +252,7 @@ class MainViewModel(
     }
 
     private fun updateServerTargetFromConfig(): Boolean {
-        val serverPortOutline = configsRepository.getServerPortOutline()
+        val serverPortOutline = configsRepository.getServerPort()
         val parsed = parseHostPort(serverPortOutline)
         return if (parsed == null) {
             logger.log("Failed to parse server address/port from Outline config: ${maskStr(serverPortOutline)}")

@@ -31,7 +31,7 @@ import android.system.Os
 import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
 import com.dobby.feature.vpn_service.domain.xray.XrayInteractor
-import com.dobby.outline.OutlineGo
+import com.dobby.protocol.ProtocolGo
 import java.io.File
 import java.io.FileInputStream
 import java.util.UUID
@@ -122,7 +122,7 @@ class DobbyVpnService : VpnService() {
             }
         }
 
-        OutlineGo.registerVpnService(this)
+        ProtocolGo.registerVpnService(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -211,11 +211,16 @@ class DobbyVpnService : VpnService() {
     }
 
     fun teardownVpn() {
-        // TODO add xray disconnect
         val fdBefore = runCatching { vpnInterface?.fd }.getOrNull()
         logger.log("[svc:$serviceId] teardownVpn(): begin fd=$fdBefore")
         runCatching {
-            outlineInteractor.stopOutline();
+            runBlocking {
+                when (dobbyConfigsRepository.getVpnInterface()) {
+                    VpnInterface.CLOAK_OUTLINE -> outlineInteractor.stopOutline()
+                    VpnInterface.AMNEZIA_WG -> {} // TODO add stop AWG
+                    VpnInterface.XRAY -> xrayInteractor.stopXray(instance)
+                }
+            }
         }.onFailure { e ->
             logger.log("[svc:$serviceId] onDestroy(): failed to disconnect Outline: ${e.message}")
         }
