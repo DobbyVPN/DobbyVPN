@@ -1,6 +1,7 @@
 package cloak_outline
 
 import (
+	"os"
 	"sync"
 
 	"go_module/core"
@@ -65,6 +66,7 @@ func NewXrayClient(config string) {
 		log.Infof("NewOutlineClient(): utun fd not found")
 		return
 	}
+	tunFile := os.NewFile(uintptr(fd), "utun")
 
 	log.Infof("Fd was found, fd = %d", fd)
 	log.Infof("Config length=%d", len(config))
@@ -75,7 +77,7 @@ func NewXrayClient(config string) {
 		log.Errorf("Failed to create xray device: %v", err)
 		return
 	}
-	xrayClient = core.NewClient(device, fd)
+	xrayClient = core.NewClient(device, tunFile)
 	log.Infof("NewXrayClient() finished")
 }
 
