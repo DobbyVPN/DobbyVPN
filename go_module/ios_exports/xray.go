@@ -2,8 +2,14 @@ package cloak_outline
 
 import (
 <<<<<<< HEAD
+<<<<<<< HEAD
 	"go_module/log"
 =======
+=======
+	log "go_module/log"
+	"go_module/xray"
+	"os"
+>>>>>>> ad8d9c92 (make core module in go_module that unifies work with protocols, fix HeathCheck on desktop)
 	"sync"
 
 	log "go_module/log"
@@ -73,8 +79,15 @@ func NewXrayClient(config string) {
 	log.Infof("Fd was found, fd = %d", fd)
 	log.Infof("Config length=%d", len(config))
 
-	// Calls the mobile client logic (client_mobile.go)
-	xrayClient = xray.NewXrayClient(config, fd)
+	tunFile := os.NewFile(uintptr(fd), "utun")
+
+	var err error
+	xrayClient, err = xray.NewXrayClient(config, tunFile)
+	if err != nil {
+		log.Errorf("Failed to create xray client: %v", err)
+		xrayClient = nil
+		return
+	}
 	log.Infof("NewXrayClient() finished")
 }
 

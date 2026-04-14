@@ -12,55 +12,54 @@ import (
 	"go_module/log"
 	"go_module/outline"
 	"os"
-	"runtime/debug"
-	"sync"
 )
 
 var client *outline.OutlineClient
-var lastError string
-var errorMu sync.Mutex
 
-//export GetLastError
-func GetLastError() *C.char {
-	errorMu.Lock()
-	defer errorMu.Unlock()
-	if lastError == "" {
-		return nil
-	}
-	return C.CString(lastError)
-}
+// var lastError string
+// var errorMu sync.Mutex
 
-func clearLastError() {
-	errorMu.Lock()
-	defer errorMu.Unlock()
-	lastError = ""
-}
+// //export GetLastError
+// func GetLastError() *C.char {
+// 	errorMu.Lock()
+// 	defer errorMu.Unlock()
+// 	if lastError == "" {
+// 		return nil
+// 	}
+// 	return C.CString(lastError)
+// }
 
-func setLastError(err string) {
-	errorMu.Lock()
-	defer errorMu.Unlock()
-	lastError = err
-	log.Infof("Error set: %s", err)
-}
+// func clearLastError() {
+// 	errorMu.Lock()
+// 	defer errorMu.Unlock()
+// 	lastError = ""
+// }
 
-func guardExport(fnName string) func() {
-	return func() {
-		if r := recover(); r != nil {
-			msg := "panic in " + fnName + ": " + unsafeToString(r)
-			setLastError(msg)
-			log.Infof("%s\n%s", msg, string(debug.Stack()))
-		}
-	}
-}
+// func setLastError(err string) {
+// 	errorMu.Lock()
+// 	defer errorMu.Unlock()
+// 	lastError = err
+// 	log.Infof("Error set: %s", err)
+// }
 
-func unsafeToString(v any) string {
-	switch t := v.(type) {
-	case string:
-		return t
-	default:
-		return "non-string panic"
-	}
-}
+// func guardExport(fnName string) func() {
+// 	return func() {
+// 		if r := recover(); r != nil {
+// 			msg := "panic in " + fnName + ": " + unsafeToString(r)
+// 			setLastError(msg)
+// 			log.Infof("%s\n%s", msg, string(debug.Stack()))
+// 		}
+// 	}
+// }
+
+// func unsafeToString(v any) string {
+// 	switch t := v.(type) {
+// 	case string:
+// 		return t
+// 	default:
+// 		return "non-string panic"
+// 	}
+// }
 
 //export NewOutlineClient
 func NewOutlineClient(config *C.char, fd C.int) {

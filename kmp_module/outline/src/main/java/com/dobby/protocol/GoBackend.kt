@@ -1,8 +1,8 @@
-package com.dobby.outline
+package com.dobby.protocol
 
 import android.util.Log
 
-class OutlineGo {
+class ProtocolGo {
     companion object {
         init {
             Log.d(TAG, "Start loading libraries")
@@ -11,7 +11,7 @@ class OutlineGo {
             Log.d(TAG, "Libraries loaded successfully")
         }
 
-        private const val TAG = "OutlineGo"
+        private const val TAG = "ProtocolGo"
 
         /**
          * Initializes the device with the provided Shadowsocks config.
@@ -62,6 +62,7 @@ class OutlineGo {
         @JvmStatic
         external fun clearGeoRoutingConf()
 
+<<<<<<< HEAD:kmp_module/outline/src/main/java/com/dobby/outline/GoBackend.kt
         @JvmStatic
         external fun awgTurnOn(ifname: String, tunFd: Int, settings: String): Int
 
@@ -79,5 +80,30 @@ class OutlineGo {
 
         @JvmStatic
         external fun awgVersion(): String?
+=======
+        /**
+         * Creates a new Vpn client with the provided config and TUN file descriptor.
+         * The protocol is chosen by provided protocol string (xray, outline)
+         * @throws IllegalStateException if libraries are not loaded
+         */
+        @JvmStatic
+        @Throws(IllegalStateException::class)
+        external fun newVpnClient(config: String, protocol: String, tunFd: Int): Unit
+
+        /**
+         * Connects the Vpn client.
+         * @return 0 on success, -1 on error
+         */
+        @JvmStatic
+        @Throws(IllegalStateException::class)
+        external fun vpnConnect(): Int
+
+        /**
+         * Disconnects the Vpn client.
+         */
+        @JvmStatic
+        @Throws(IllegalStateException::class)
+        external fun vpnDisconnect(): Unit
+>>>>>>> ad8d9c92 (make core module in go_module that unifies work with protocols, fix HeathCheck on desktop):kmp_module/outline/src/main/java/com/dobby/protocol/GoBackend.kt
     }
 }
