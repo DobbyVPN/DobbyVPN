@@ -3,6 +3,7 @@ package cloak_outline
 import (
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 	"go_module/log"
 =======
 =======
@@ -10,6 +11,9 @@ import (
 	"go_module/xray"
 	"os"
 >>>>>>> ad8d9c92 (make core module in go_module that unifies work with protocols, fix HeathCheck on desktop)
+=======
+	"os"
+>>>>>>> 45894f1a (fix ios fd int to os.File)
 	"sync"
 
 	log "go_module/log"
@@ -75,6 +79,7 @@ func NewXrayClient(config string) {
 		log.Infof("NewOutlineClient(): utun fd not found")
 		return
 	}
+	tunFile := os.NewFile(uintptr(fd), "utun")
 
 	log.Infof("Fd was found, fd = %d", fd)
 	log.Infof("Config length=%d", len(config))
@@ -88,6 +93,10 @@ func NewXrayClient(config string) {
 		xrayClient = nil
 		return
 	}
+<<<<<<< HEAD
+=======
+	xrayClient = core.NewClient(device, tunFile)
+>>>>>>> 45894f1a (fix ios fd int to os.File)
 	log.Infof("NewXrayClient() finished")
 }
 
