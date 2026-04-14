@@ -95,10 +95,6 @@ public class VpnManagerImpl: VpnManager {
             return
         }
         let status = manager.connection.status
-        if status == .connecting || status == .disconnecting || status == .reasserting {
-            self.logs.writeLog(log: "[start] Skip: connection is transitioning (\(status.rawValue))")
-            return
-        }
         if status == .connected {
             self.logs.writeLog(log: "[start] Skip: already connected")
             return

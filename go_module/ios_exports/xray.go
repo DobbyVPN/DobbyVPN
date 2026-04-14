@@ -1,13 +1,14 @@
 package cloak_outline
 
 import (
+	"sync"
+
+	"go_module/core"
 	log "go_module/log"
 	"go_module/xray"
-	"os"
-	"sync"
 )
 
-var xrayClient *xray.XrayClient
+var xrayClient *core.CoreClient
 var xrayMu sync.Mutex
 
 // XrayConnect connects the xray client. Returns error if connection fails.
@@ -45,7 +46,7 @@ func XrayDisconnect() {
 }
 
 // NewXrayClient creates a new xray client with the given config and file descriptor.
-func NewXrayClient(config string, fd int) {
+func NewXrayClient(config string) {
 	defer guard("NewXrayClient")()
 	log.Infof("NewXrayClient() called")
 
@@ -57,17 +58,24 @@ func NewXrayClient(config string, fd int) {
 		xrayClient = nil
 	}
 
-	log.Infof("Creating Xray client with FD=%d", fd)
+	log.Infof("Start fd search")
 
-	tunFile := os.NewFile(uintptr(fd), "utun")
-
-	var err error
-	xrayClient, err = xray.NewXrayClient(config, tunFile)
-	if err != nil {
-		log.Errorf("Failed to create xray client: %v", err)
-		xrayClient = nil
+	fd := GetTunnelFileDescriptor()
+	if fd < 0 {
+		log.Infof("NewOutlineClient(): utun fd not found")
 		return
 	}
+
+	log.Infof("Fd was found, fd = %d", fd)
+	log.Infof("Config length=%d", len(config))
+
+	// Calls the mobile client logic (client_mobile.go)
+	device, err := xray.NewXrayDevice(config)
+	if err != nil {
+		log.Errorf("Failed to create xray device: %v", err)
+		return
+	}
+	xrayClient = core.NewClient(device, fd)
 	log.Infof("NewXrayClient() finished")
 }
 

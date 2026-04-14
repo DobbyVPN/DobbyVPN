@@ -36,7 +36,7 @@ EXPORT int go_protect_socket(int fd) {
 }
 
 JNIEXPORT void JNICALL
-Java_com_dobby_outline_ProtocolGo_registerVpnService(JNIEnv *env, jclass clazz, jobject vpn_service) {
+Java_com_dobby_protocol_ProtocolGo_registerVpnService(JNIEnv *env, jclass clazz, jobject vpn_service) {
     // 1. Очищаем старую ссылку, если она была (защита от утечек при перезапуске)
     if (g_vpn_service_obj != NULL) {
         (*env)->DeleteGlobalRef(env, g_vpn_service_obj);
@@ -66,7 +66,7 @@ Java_com_dobby_outline_ProtocolGo_registerVpnService(JNIEnv *env, jclass clazz, 
 }
 
 JNIEXPORT void JNICALL
-Java_com_dobby_outline_ProtocolGo_newOutlineClient(JNIEnv *env, jclass clazz, jstring jConfig, jint fd)
+Java_com_dobby_protocol_ProtocolGo_newOutlineClient(JNIEnv *env, jclass clazz, jstring jConfig, jint fd)
 {
 const char *config_str = (*env)->GetStringUTFChars(env, jConfig, NULL);
 // Go Export
@@ -75,14 +75,14 @@ NewOutlineClient((char*)config_str, fd);
 }
 
 JNIEXPORT jint JNICALL
-Java_com_dobby_outline_ProtocolGo_outlineConnect(JNIEnv *env, jclass clazz)
+Java_com_dobby_protocol_ProtocolGo_outlineConnect(JNIEnv *env, jclass clazz)
 {
     // Go Export, returns 0 on success, -1 on error
     return OutlineConnect();
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_dobby_outline_ProtocolGo_getLastError(JNIEnv *env, jclass clazz)
+Java_com_dobby_protocol_ProtocolGo_getLastError(JNIEnv *env, jclass clazz)
 {
     char* err = GetVpnLastError();
     if (err == NULL) {
@@ -94,14 +94,14 @@ Java_com_dobby_outline_ProtocolGo_getLastError(JNIEnv *env, jclass clazz)
 }
 
 JNIEXPORT void JNICALL
-Java_com_dobby_outline_ProtocolGo_outlineDisconnect(JNIEnv *env, jclass clazz)
+Java_com_dobby_protocol_ProtocolGo_outlineDisconnect(JNIEnv *env, jclass clazz)
 {
     // Call Go-exported function to close the connection
     OutlineDisconnect();
 }
 
 JNIEXPORT void JNICALL
-Java_com_dobby_outline_ProtocolGo_startCloakClient(JNIEnv *env, jclass clazz,
+Java_com_dobby_protocol_ProtocolGo_startCloakClient(JNIEnv *env, jclass clazz,
                                                    jstring jLocalHost, jstring jLocalPort,
                                                    jstring jConf, jboolean udp)
 {
@@ -117,14 +117,14 @@ Java_com_dobby_outline_ProtocolGo_startCloakClient(JNIEnv *env, jclass clazz,
 }
 
 JNIEXPORT void JNICALL
-Java_com_dobby_outline_ProtocolGo_stopCloakClient(JNIEnv *env, jclass clazz)
+Java_com_dobby_protocol_ProtocolGo_stopCloakClient(JNIEnv *env, jclass clazz)
 {
     // Call Go-exported function to stop the Cloak client
     StopCloakClient();
 }
 
 JNIEXPORT void JNICALL
-Java_com_dobby_outline_ProtocolGo_initLogger(JNIEnv *env, jclass clazz,
+Java_com_dobby_protocol_ProtocolGo_initLogger(JNIEnv *env, jclass clazz,
                                              jstring jPath)
 {
     const char *path = (*env)->GetStringUTFChars(env, jPath, NULL);
@@ -135,7 +135,7 @@ Java_com_dobby_outline_ProtocolGo_initLogger(JNIEnv *env, jclass clazz,
 }
 
 JNIEXPORT jint JNICALL
-Java_com_dobby_outline_ProtocolGo_checkServerAlive(JNIEnv *env, jclass clazz,
+Java_com_dobby_protocol_ProtocolGo_checkServerAlive(JNIEnv *env, jclass clazz,
                                                    jstring jAddress, jint jPort)
 {
     const char *address = (*env)->GetStringUTFChars(env, jAddress, NULL);
@@ -147,7 +147,7 @@ Java_com_dobby_outline_ProtocolGo_checkServerAlive(JNIEnv *env, jclass clazz,
 }
 
 JNIEXPORT void JNICALL
-Java_com_dobby_outline_ProtocolGo_newVpnClient(JNIEnv *env, jclass clazz, jstring jConfig, jstring jProtocol, jint jFd)
+Java_com_dobby_protocol_ProtocolGo_newVpnClient(JNIEnv *env, jclass clazz, jstring jConfig, jstring jProtocol, jint jFd)
 {
     const char *config_str = (*env)->GetStringUTFChars(env, jConfig, NULL);
     const char *protocol_str = (*env)->GetStringUTFChars(env, jProtocol, NULL);
@@ -158,21 +158,21 @@ Java_com_dobby_outline_ProtocolGo_newVpnClient(JNIEnv *env, jclass clazz, jstrin
 }
 
 JNIEXPORT jint JNICALL
-Java_com_dobby_outline_ProtocolGo_vpnConnect(JNIEnv *env, jclass clazz)
+Java_com_dobby_protocol_ProtocolGo_vpnConnect(JNIEnv *env, jclass clazz)
 {
     // Go Export: VpnConnect() returns 0 on success, -1 on error
     return VpnConnect();
 }
 
 JNIEXPORT void JNICALL
-Java_com_dobby_outline_ProtocolGo_vpnDisconnect(JNIEnv *env, jclass clazz)
+Java_com_dobby_protocol_ProtocolGo_vpnDisconnect(JNIEnv *env, jclass clazz)
 {
     // Call Go-exported function to disconnect Vpn
     VpnDisconnect();
 }
 
 JNIEXPORT void JNICALL
-Java_com_dobby_outline_ProtocolGo_setGeoRoutingConf(JNIEnv *env, jclass clazz, jstring cidrs_c) {
+Java_com_dobby_protocol_ProtocolGo_setGeoRoutingConf(JNIEnv *env, jclass clazz, jstring cidrs_c) {
     const char *cidrsС = (*env)->GetStringUTFChars(env, cidrs_c, NULL);
     // Call Go-exported function to check server availability
     SetGeoRoutingConf(cidrsС);
@@ -181,7 +181,7 @@ Java_com_dobby_outline_ProtocolGo_setGeoRoutingConf(JNIEnv *env, jclass clazz, j
 }
 
 JNIEXPORT void JNICALL
-Java_com_dobby_outline_ProtocolGo_clearGeoRoutingConf(JNIEnv *env, jclass clazz) {
+Java_com_dobby_protocol_ProtocolGo_clearGeoRoutingConf(JNIEnv *env, jclass clazz) {
     // Call Go-exported function to check server availability
     ClearGeoRoutingConf();
 }

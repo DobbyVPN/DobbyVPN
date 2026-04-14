@@ -9,8 +9,15 @@ import Network
 
 public final class OutlineInteractor {
     private var logs = NativeModuleHolder.logsRepository
+    private var outlineStarted: Bool = false
 
     func startOutline() throws {
+        logs.writeLog(log: "startOutline: entering")
+        
+        if !configsRepository.getIsOutlineEnabled(){
+            logs.writeLog(log: "Outline: is disabled")
+            return
+        }
         
         let methodPassword = configsRepository.getMethodPasswordOutline()
         let serverPort = configsRepository.getServerPortOutline()
@@ -23,6 +30,7 @@ public final class OutlineInteractor {
         // Validate config early (prevents passing empty config into native layer).
         if methodPassword.isEmpty || serverPort.isEmpty {
             logs.writeLog(log: "[startTunnel] Empty Outline config (methodPassword/serverPort) → abort")
+            outlineStarted = false
             throw NSError(
                 domain: "PacketTunnelProvider",
                 code: -2,
@@ -47,22 +55,29 @@ public final class OutlineInteractor {
 
         Cloak_outlineNewOutlineClient(config, &err)
         if let error = err {
+            outlineStarted = false
             throw error
         }
 
         Cloak_outlineOutlineConnect(&err)
         if let error = err {
+            outlineStarted = false
             throw error
         }
+        outlineStarted = true
     }
 
-    func stopOutline() throws {
+    func stopOutline() {
+        if !outlineStarted{
+            return
+        }
+        
         var err: NSError?
-
         Cloak_outlineOutlineDisconnect(&err)
         if let error = err {
-            throw error
+            logs.writeLog(log: "Stop Outline get error \(error)")
         }
+        outlineStarted = false
     }
     
     func buildOutlineConfig(

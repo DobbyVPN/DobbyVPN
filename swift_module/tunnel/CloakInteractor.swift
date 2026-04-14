@@ -15,37 +15,39 @@ public final class CloakInteractor {
         let localPort = String(configsRepository.getCloakLocalPort())
         logs.writeLog(log: "startCloakOutline: entering")
         
-        if configsRepository.getIsCloakEnabled() {
-            let cloakConfig = configsRepository.getCloakConfig()
-            if cloakConfig.isEmpty {
-                let host = OutlineInteractor.extractHost(from: outlineServerPort).lowercased()
-                let cloakRequired = (host == "127.0.0.1" || host == "localhost")
-                logs.writeLog(log: "startCloakOutline: enabled but config empty (required=\(cloakRequired), host=\(host))")
-                if cloakRequired {
-                    throw NSError(
-                        domain: "PacketTunnelProvider",
-                        code: -3,
-                        userInfo: [NSLocalizedDescriptionKey: "Cloak enabled but config is empty"]
-                    )
-                }
-                return
-            }
-            logs.writeLog(log: "startCloakOutline: starting cloak")
-            Cloak_outlineStartCloakClient("127.0.0.1", localPort, cloakConfig, false)
-            cloakStarted = true
-            logs.writeLog(log: "startCloakOutline: started")
-        } else {
+        if !configsRepository.getIsCloakEnabled() {
             logs.writeLog(log: "startCloakOutline: cloak disabled")
+            return
         }
+        let cloakConfig = configsRepository.getCloakConfig()
+        if cloakConfig.isEmpty {
+            let host = OutlineInteractor.extractHost(from: outlineServerPort).lowercased()
+            let cloakRequired = (host == "127.0.0.1" || host == "localhost")
+            logs.writeLog(log: "startCloakOutline: enabled but config empty (required=\(cloakRequired), host=\(host))")
+            if cloakRequired {
+                throw NSError(
+                    domain: "PacketTunnelProvider",
+                    code: -3,
+                    userInfo: [NSLocalizedDescriptionKey: "Cloak enabled but config is empty"]
+                )
+            }
+            return
+        }
+        logs.writeLog(log: "startCloakOutline: starting cloak")
+        Cloak_outlineStartCloakClient("127.0.0.1", localPort, cloakConfig, false)
+        cloakStarted = true
+        logs.writeLog(log: "startCloakOutline: started")
     }
 
-    func stopCloak() throws {
-        if cloakStarted {
-            var err: NSError?
-            Cloak_outlineOutlineDisconnect(&err)
-            if let error = err {
-                throw error
-            }
+    func stopCloak() {
+        if !cloakStarted {
+            return
         }
+        var err: NSError?
+        Cloak_outlineOutlineDisconnect(&err)
+        if let error = err {
+            logs.writeLog(log: "Stop Cloak get error \(error)")
+        }
+        cloakStarted = false
     }
 }

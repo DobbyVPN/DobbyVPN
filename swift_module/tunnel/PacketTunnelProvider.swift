@@ -15,6 +15,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let launchId = UUID().uuidString
     private let tunnelId = String(UUID().uuidString.prefix(8))
 
+    private let xrayInteractor: XRayInteractor = XRayInteractor()
     private let outlineInteractor: OutlineInteractor = OutlineInteractor()
     private let cloakInteractor: CloakInteractor = CloakInteractor()
 
@@ -140,6 +141,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         try outlineInteractor.startOutline()
         logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
         try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
+        try xrayInteractor.startXRay()
 
         logs.writeLog(log: "startTunnel: all packet loops started")
     }
@@ -148,6 +150,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel reason=\(reason.rawValue) (\(reason))")
         configsRepository.setIsUserInitStop(isUserInitStop: true)
         Cloak_outlineClearGeoRoutingConf()
+        outlineInteractor.stopOutline()
+        cloakInteractor.stopCloak()
+        xrayInteractor.stopXRay()
         Task {
             await teardownForStop(reason: "stopTunnel(\(reason))")
             completionHandler()
