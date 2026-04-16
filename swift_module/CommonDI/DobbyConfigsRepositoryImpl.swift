@@ -10,7 +10,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let isCloakEnabledKey = "isCloakEnabledKey"
     private let cloakLocalPortKey = "cloakLocalPortKey"
     private let methodPasswordOutlineKey = "MethodPasswordOutlineKey"
-    private let serverPortOutlineKey = "ServerPortOutlineKey"
+    private let serverPortKey = "ServerPortKey"
     private let isOutlineEnabledKey = "isOutlineEnabledKey"
     private let connectionURLKey = "connectionURLKey"
     private let connectionConfigKey = "connectionConfigKey"
