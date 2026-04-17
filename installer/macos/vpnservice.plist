@@ -19,8 +19,8 @@
     <string>/Applications/Dobby VPN.app/Contents/Resources/</string>
 
     <key>StandardOutPath</key>
-    <string>ServiceStdoutPath</string>
+    <string>/tmp/dobbyvpn_service.stdout</string>
     <key>StandardErrorPath</key>
-    <string>ServiceStderrPath</string>
+    <string>/tmp/dobbyvpn_service.stderr</string>
 </dict>
 </plist>

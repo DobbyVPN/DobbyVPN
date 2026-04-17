@@ -12,13 +12,15 @@ cd bin/aarch64/
 
 echo [+] Making Scripts/ folder
 mkdir Scripts
-cp ../../postinstall.sh Scripts/
+cp ../../postinstall.sh Scripts/postinstall
+chmod +x Scripts/postinstall
 
 echo [+] Inserting vpnservice.plist file
 cp ../../vpnservice.plist "Dobby Vpn.app/Contents/Resources/"
 
 echo [+] Inserting macos_grpcvpnserver file
 cp ../../macos_grpcvpnserver "Dobby Vpn.app/Contents/Resources/"
+chmod +x "Dobby Vpn.app/Contents/Resources/macos_grpcvpnserver"
 
 echo [+] Making Payload/ folder
 mkdir Payload
@@ -42,13 +44,15 @@ cd bin/amd64/
 
 echo [+] Making Scripts/ folder
 mkdir Scripts
-cp ../../postinstall.sh Scripts/
+cp ../../postinstall.sh Scripts/postinstall
+chmod +x Scripts/postinstall
 
 echo [+] Inserting vpnservice.plist file
 cp ../../vpnservice.plist "Dobby Vpn.app/Contents/Resources/"
 
 echo [+] Inserting macos_grpcvpnserver file
 cp ../../macos_grpcvpnserver "Dobby Vpn.app/Contents/Resources/"
+chmod +x "Dobby Vpn.app/Contents/Resources/macos_grpcvpnserver"
 
 echo [+] Making Payload/ folder
 mkdir Payload
