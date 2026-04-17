@@ -32,9 +32,7 @@ func signalInit(initResult chan<- error, err error) {
 }
 
 func (app App) Run(ctx context.Context, initResult chan<- error) error {
-
-	tunGateway := "10.0.85.1"
-	tunDeviceIP := "10.0.85.2"
+	cfg := common.GetNetworkConfig()
 
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
@@ -104,7 +102,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		return err
 	}
 
-	tunInterface, err := routing.WaitForInterfaceByIP(tunDeviceIP, 5*time.Second)
+	tunInterface, err := routing.WaitForInterfaceByIP(cfg.TunDevice, 5*time.Second)
 	if err != nil {
 		tunnel.StopEngine()
 		signalInit(initResult, err)
@@ -117,8 +115,8 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		gatewayIP.String(),
 		tunInterface.Name,
 		netInterface.Name,
-		tunGateway,
-		tunDeviceIP,
+		cfg.TunGateway,
+		cfg.TunDevice,
 	); err != nil {
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 		tunnel.StopEngine()
@@ -137,7 +135,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	defer func() {
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
 		log.Infof("[Routing] Cleaning up routes for %s...", serverIP.String())
-		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name, tunGateway)
+		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name, cfg.TunGateway)
 		log.Infof("[Routing] Routes cleaned up")
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 

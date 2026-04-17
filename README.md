@@ -3,6 +3,8 @@
 Yet another VPN client. Currently wraps around OutlineSDK & cloak.
 XRay & AWG are in progress.
 
+DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
+
 Consume 'subscription' / 'dynamic keys' - YAML via HTTPS in one of the following formats:
 
 **Clean ShadowSocks** (best performance)

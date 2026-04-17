@@ -21,14 +21,16 @@ type OutlineClient struct {
 }
 
 func NewClient(transportConfig string) *OutlineClient {
+	cfg := common.GetNetworkConfig()
+
 	c := &OutlineClient{
 		app: &internal.App{
 			TransportConfig: &transportConfig,
 			RoutingConfig: &internal.RoutingConfig{
 				TunDeviceName:        "outline233",
-				TunDeviceIP:          "10.0.85.2",
+				TunDeviceIP:          cfg.TunDevice,
 				TunDeviceMTU:         1500,
-				TunGatewayCIDR:       "10.0.85.1/32",
+				TunGatewayCIDR:       cfg.TunGateway + "/32",
 				RoutingTableID:       233,
 				RoutingTablePriority: 23333,
 				DNSServerIP:          "9.9.9.9",
