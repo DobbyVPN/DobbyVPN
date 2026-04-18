@@ -53,13 +53,13 @@ public final class OutlineInteractor {
         
         var err: NSError?
 
-        Cloak_outlineNewOutlineClient(config, &err)
+        Cloak_outlineNewVpnClient(config, "outline", &err)
         if let error = err {
             outlineStarted = false
             throw error
         }
 
-        Cloak_outlineOutlineConnect(&err)
+        Cloak_outlineVpnConnect(&err)
         if let error = err {
             outlineStarted = false
             throw error
@@ -73,7 +73,7 @@ public final class OutlineInteractor {
         }
         
         var err: NSError?
-        Cloak_outlineOutlineDisconnect(&err)
+        Cloak_outlineVpnDisconnect(&err)
         if let error = err {
             logs.writeLog(log: "Stop Outline get error \(error)")
         }

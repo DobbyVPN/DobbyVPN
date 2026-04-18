@@ -31,13 +31,13 @@ public final class XRayInteractor {
         
         var err: NSError?
 
-        Cloak_outlineNewXrayClient(xrayConfig)
+        Cloak_outlineNewVpnClient(xrayConfig, "xray", &err)
         if let error = err {
             xrayStarted = false
             throw error
         }
 
-        Cloak_outlineXrayConnect(&err)
+        Cloak_outlineVpnConnect(&err)
         if let error = err {
             xrayStarted = false
             throw error
@@ -49,7 +49,11 @@ public final class XRayInteractor {
         if !xrayStarted {
             return
         }
-        Cloak_outlineXrayDisconnect()
+        var err: NSError?
+        Cloak_outlineVpnDisconnect(&err)
+        if let error = err {
+            logs.writeLog(log: "Stop Xray get error \(error)")
+        }
         xrayStarted = false
     }
 }
