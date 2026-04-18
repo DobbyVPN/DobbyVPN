@@ -14,6 +14,7 @@ class ProtocolGo {
         private const val TAG = "ProtocolGo"
 
         /**
+<<<<<<< HEAD
          * Initializes the device with the provided Shadowsocks config.
          */
         @JvmStatic
@@ -27,6 +28,8 @@ class ProtocolGo {
         external fun outlineConnect(): Int
 
         /**
+=======
+>>>>>>> 327dcb95 (unify vpn export for xray and outline)
          * Returns the last error from Go code.
          * @return error string or null if there is no error
          */
@@ -34,9 +37,13 @@ class ProtocolGo {
         external fun getLastError(): String?
 
         @JvmStatic
+<<<<<<< HEAD
         external fun outlineDisconnect()
 
         @JvmStatic
+=======
+        @Throws(IllegalStateException::class)
+>>>>>>> 327dcb95 (unify vpn export for xray and outline)
         external fun startCloakClient(
             localHost: String,
             localPort: String,

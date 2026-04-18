@@ -82,6 +82,7 @@ Java_com_dobby_outline_ProtocolGo_registerVpnService(JNIEnv *env, jclass clazz, 
     (*env)->DeleteLocalRef(env, vpn_cls);
 }
 
+<<<<<<< HEAD
 JNIEXPORT void JNICALL
 Java_com_dobby_outline_ProtocolGo_newOutlineClient(JNIEnv *env, jclass clazz, jstring jConfig, jint fd)
 {
@@ -98,6 +99,8 @@ Java_com_dobby_outline_ProtocolGo_outlineConnect(JNIEnv *env, jclass clazz)
     return OutlineConnect();
 }
 
+=======
+>>>>>>> 327dcb95 (unify vpn export for xray and outline)
 JNIEXPORT jstring JNICALL
 Java_com_dobby_outline_ProtocolGo_getLastError(JNIEnv *env, jclass clazz)
 {
@@ -111,6 +114,7 @@ Java_com_dobby_outline_ProtocolGo_getLastError(JNIEnv *env, jclass clazz)
 }
 
 JNIEXPORT void JNICALL
+<<<<<<< HEAD
 Java_com_dobby_outline_ProtocolGo_outlineDisconnect(JNIEnv *env, jclass clazz)
 {
     // Call Go-exported function to close the connection
@@ -119,6 +123,9 @@ Java_com_dobby_outline_ProtocolGo_outlineDisconnect(JNIEnv *env, jclass clazz)
 
 JNIEXPORT void JNICALL
 Java_com_dobby_outline_ProtocolGo_startCloakClient(JNIEnv *env, jclass clazz,
+=======
+Java_com_dobby_protocol_ProtocolGo_startCloakClient(JNIEnv *env, jclass clazz,
+>>>>>>> 327dcb95 (unify vpn export for xray and outline)
                                                    jstring jLocalHost, jstring jLocalPort,
                                                    jstring jConf, jboolean udp)
 {

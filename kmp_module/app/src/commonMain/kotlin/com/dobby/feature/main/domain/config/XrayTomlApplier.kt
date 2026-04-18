@@ -87,6 +87,10 @@ internal class XrayTomlApplier(
                         return
                     }
                 }
+                else -> {
+                    logger.log("unsupported protocol")
+                    return
+                }
             }
 
             // If we successfully grabbed both, save and exit loop

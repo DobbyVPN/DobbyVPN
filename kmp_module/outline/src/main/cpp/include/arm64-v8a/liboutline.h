@@ -39,13 +39,6 @@ extern const char *_GoStringPtr(_GoString_ s);
 
 
 
-#line 3 "outline.go"
-
-#include <stdlib.h>
-#include <string.h>
-
-#line 1 "cgo-generated-wrapper"
-
 
 /* End of preamble from import "C" comments.  */
 
@@ -122,9 +115,6 @@ extern void SetGeoRoutingConf(char* cidrsC);
 extern void ClearGeoRoutingConf(void);
 extern int CheckServerAlive(char* addressC, int port);
 extern void InitLogger(char* path);
-extern void NewOutlineClient(char* config, int fd);
-extern int OutlineConnect(void);
-extern void OutlineDisconnect(void);
 
 #ifdef __cplusplus
 }

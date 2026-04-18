@@ -7,6 +7,7 @@ import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.IS_FROM_UI
 import com.dobby.feature.vpn_service.OutlineLibFacade
 import com.dobby.feature.vpn_service.domain.cloak.ConnectResult
+import com.dobby.feature.vpn_service.domain.descriptor.FDManager
 
 import java.util.Base64
 
@@ -70,14 +71,16 @@ private fun buildOutlineUrl(
 class OutlineInteractor(
     private val logger: Logger,
     private val dobbyConfigsRepository: DobbyConfigsRepository,
-    private val outlineLibFacade: OutlineLibFacade
+    private val outlineLibFacade: OutlineLibFacade,
+    private val fdManager: FDManager,
 ) {
 
     suspend fun startOutline(intent: Intent?, dobbyVpnService: DobbyVpnService?) {
-        logger.log("[svc:${dobbyVpnService?.serviceId}] startCloakOutline(): lock acquired vpnInterface=${dobbyVpnService?.vpnInterface?.fd}")
+        val serviceId = dobbyVpnService?.serviceId ?: "unknown"
+        logger.log("[svc:$serviceId] startCloakOutline(): lock acquired vpnInterface=${dobbyVpnService?.vpnInterface?.fd}")
         val isServiceStartedFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) ?: false
         val shouldTurnOutlineOn = dobbyConfigsRepository.getIsOutlineEnabled()
-        logger.log("[svc:${dobbyVpnService?.serviceId}] startCloakOutline(): fromUi=$isServiceStartedFromUi shouldTurnOutlineOn=$shouldTurnOutlineOn")
+        logger.log("[svc:$serviceId] startCloakOutline(): fromUi=$isServiceStartedFromUi shouldTurnOutlineOn=$shouldTurnOutlineOn")
 
         if (!shouldTurnOutlineOn && isServiceStartedFromUi) {
             logger.log("Start disconnecting Outline")
@@ -116,19 +119,10 @@ class OutlineInteractor(
 
         dobbyVpnService?.setupVpn()
 
-        val dupPfd = dobbyVpnService?.vpnInterface?.dup()
-        val tunFd = dupPfd?.detachFd() ?: -1
-        dobbyVpnService?.goTunFd = if (tunFd != -1) tunFd else null
+        val tunFd = fdManager.GetTunFd(serviceId, dobbyVpnService)
+        if (tunFd < 0) return
 
-        if (tunFd < 0) {
-            logger.log("[svc:${dobbyVpnService?.serviceId}] startCloakOutline(): failed to create VPN interface")
-            dobbyVpnService?.connectionState?.tryUpdateStatus(false)
-            dobbyVpnService?.teardownVpn()
-            dobbyVpnService?.stopSelf()
-            return
-        }
-
-        logger.log("[svc:${dobbyVpnService?.serviceId}] startCloakOutline(): initializing Outline with tunFd=$tunFd")
+        logger.log("[svc:$serviceId] startCloakOutline(): initializing Outline with tunFd=$tunFd")
 
         val connected = outlineLibFacade.init(outlineUrl, tunFd)
         if (!connected) {
@@ -143,7 +137,7 @@ class OutlineInteractor(
             logger.log("WebSocket transport connected successfully")
         }
         dobbyVpnService?.connectionState?.updateStatus(true)
-        logger.log("[svc:${dobbyVpnService?.serviceId}] startCloakOutline(): completed (status=true) vpnInterface=${dobbyVpnService?.vpnInterface?.fd}")
+        logger.log("[svc:$serviceId] startCloakOutline(): completed (status=true) vpnInterface=${dobbyVpnService?.vpnInterface?.fd}")
     }
 
     fun stopOutline() {
