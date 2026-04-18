@@ -9,9 +9,9 @@ internal class OutlineLibFacadeImpl : OutlineLibFacade {
 
     override fun init(apiKey: String, tunFd: Int): Boolean {
         Log.d(TAG, "init() called with apiKey length=${apiKey.length}, starts with: ${apiKey.take(30)}...")
-        ProtocolGo.newOutlineClient(apiKey, tunFd)
+        ProtocolGo.newVpnClient(apiKey, "outline", tunFd)
         Log.d(TAG, "Connecting Outline...")
-        val result = ProtocolGo.outlineConnect()
+        val result = ProtocolGo.vpnConnect()
         return if (result == 0) {
             Log.d(TAG, "Connect finished successfully")
             true
@@ -24,7 +24,7 @@ internal class OutlineLibFacadeImpl : OutlineLibFacade {
 
     override fun disconnect() {
         Log.d(TAG, "disconnect() called")
-        ProtocolGo.outlineDisconnect()
+        ProtocolGo.vpnDisconnect()
         Log.d(TAG, "disconnect() finished")
     }
 }

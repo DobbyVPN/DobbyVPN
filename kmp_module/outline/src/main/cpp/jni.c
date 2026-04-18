@@ -65,22 +65,6 @@ Java_com_dobby_protocol_ProtocolGo_registerVpnService(JNIEnv *env, jclass clazz,
     (*env)->DeleteLocalRef(env, vpn_cls);
 }
 
-JNIEXPORT void JNICALL
-Java_com_dobby_protocol_ProtocolGo_newOutlineClient(JNIEnv *env, jclass clazz, jstring jConfig, jint fd)
-{
-const char *config_str = (*env)->GetStringUTFChars(env, jConfig, NULL);
-// Go Export
-NewOutlineClient((char*)config_str, fd);
-(*env)->ReleaseStringUTFChars(env, jConfig, config_str);
-}
-
-JNIEXPORT jint JNICALL
-Java_com_dobby_protocol_ProtocolGo_outlineConnect(JNIEnv *env, jclass clazz)
-{
-    // Go Export, returns 0 on success, -1 on error
-    return OutlineConnect();
-}
-
 JNIEXPORT jstring JNICALL
 Java_com_dobby_protocol_ProtocolGo_getLastError(JNIEnv *env, jclass clazz)
 {
@@ -91,13 +75,6 @@ Java_com_dobby_protocol_ProtocolGo_getLastError(JNIEnv *env, jclass clazz)
     jstring result = (*env)->NewStringUTF(env, err);
     free(err); // free memory allocated by C.CString
     return result;
-}
-
-JNIEXPORT void JNICALL
-Java_com_dobby_protocol_ProtocolGo_outlineDisconnect(JNIEnv *env, jclass clazz)
-{
-    // Call Go-exported function to close the connection
-    OutlineDisconnect();
 }
 
 JNIEXPORT void JNICALL

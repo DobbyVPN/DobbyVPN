@@ -14,31 +14,11 @@ class ProtocolGo {
         private const val TAG = "ProtocolGo"
 
         /**
-         * Initializes the device with the provided Shadowsocks config.
-         * @throws IllegalStateException if libraries are not loaded
-         */
-        @JvmStatic
-        @Throws(IllegalStateException::class)
-        external fun newOutlineClient(config: String, fd: Int): Unit
-
-        /**
-         * Connects to the Outline server.
-         * @return 0 on success, -1 on error (use getLastError() for details)
-         */
-        @JvmStatic
-        @Throws(IllegalStateException::class)
-        external fun outlineConnect(): Int
-
-        /**
          * Returns the last error from Go code.
          * @return error string or null if there is no error
          */
         @JvmStatic
         external fun getLastError(): String?
-
-        @JvmStatic
-        @Throws(IllegalStateException::class)
-        external fun outlineDisconnect(): Unit
 
         @JvmStatic
         @Throws(IllegalStateException::class)

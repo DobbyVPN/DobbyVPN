@@ -1,4 +1,4 @@
-package internal
+package outline
 
 import (
 	"context"
@@ -24,6 +24,7 @@ type OutlineDevice struct {
 	streamDialer transport.StreamDialer
 	packetDialer transport.PacketDialer
 	useCloak     bool
+	ctx          context.Context
 }
 
 func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
@@ -54,30 +55,35 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 		streamDialer: sd,
 		packetDialer: pd,
 		useCloak:     useCloak,
+		ctx:          ctx,
 	}
 
+	return od, nil
+}
+
+func (d *OutlineDevice) Open(routingTableID int, uplinkIface string) error {
 	server := socks5.NewServer(
-		socks5.WithDial(od.handleDial),
+		socks5.WithDial(d.handleDial),
 	)
 
 	lc := net.ListenConfig{}
 
-	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	listener, err := lc.Listen(d.ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	od.listener = listener
-	od.proxyAddr = listener.Addr().String()
+	d.listener = listener
+	d.proxyAddr = listener.Addr().String()
 
 	go func() {
-		log.Infof("SOCKS5 started on %s", od.proxyAddr)
+		log.Infof("SOCKS5 started on %s", d.proxyAddr)
 		if err := server.Serve(listener); err != nil {
 			log.Infof("SOCKS5 stopped: %v", err)
 		}
 	}()
 
-	return od, nil
+	return nil
 }
 
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {

@@ -7,11 +7,6 @@ import com.sun.jna.*
 import java.io.File
 
 interface VPNLibrary : Library {
-    // Outline
-    fun StartOutline(key: String): Int
-    fun StopOutline()
-    fun GetOutlineLastError(): String?
-
     // Cloak
     fun StartCloakClient(localHost: String, localPort: String, config: String, udp: Boolean)
     fun StopCloakClient()
@@ -94,12 +89,12 @@ class VPNLibraryLoader(
         lastOutlineError = null
         try {
             logger.log("Run key: ${maskStr(key)}")
-            val result = INSTANCE.StartOutline(key)
+            val result = INSTANCE.StartVpn(key, "outline")
             if (result == 0) {
                 logger.log("Outline connected successfully.")
                 return true
             } else {
-                lastOutlineError = INSTANCE.GetOutlineLastError() ?: "Unknown error"
+                lastOutlineError = INSTANCE.GetVpnLastError() ?: "Unknown error"
                 logger.log("Outline connection FAILED: $lastOutlineError")
                 return false
             }
@@ -118,7 +113,7 @@ class VPNLibraryLoader(
 
     fun stopOutline() {
         try {
-            INSTANCE.StopOutline()
+            INSTANCE.StopVpn()
             logger.log("StopOutline called successfully.")
         } catch (e: UnsatisfiedLinkError) {
             logger.log("Failed to call StopOutline: ${e.message}")
@@ -160,12 +155,12 @@ class VPNLibraryLoader(
         try {
             logger.log("Run key: ${maskStr(key)}")
             INSTANCE.StartAwg(key)
-            logger.log("NewOutlineClient called successfully.")
+            logger.log("NewAwgClient called successfully.")
         } catch (e: UnsatisfiedLinkError) {
-            logger.log("Failed to call NewOutlineClient: ${e.message}")
+            logger.log("Failed to call NewAwgClient: ${e.message}")
             e.printStackTrace()
         } catch (e: Exception) {
-            logger.log("An error occurred while calling NewOutlineClient: ${e.message}")
+            logger.log("An error occurred while calling NewAwgClient: ${e.message}")
             e.printStackTrace()
         }
     }
@@ -173,12 +168,12 @@ class VPNLibraryLoader(
     fun stopAwg() {
         try {
             INSTANCE.StopAwg()
-            logger.log("StopOutline called successfully.")
+            logger.log("StopAwg called successfully.")
         } catch (e: UnsatisfiedLinkError) {
-            logger.log("Failed to call StopOutline: ${e.message}")
+            logger.log("Failed to call StopAwg: ${e.message}")
             e.printStackTrace()
         } catch (e: Exception) {
-            logger.log("An error occurred while calling StopOutline: ${e.message}")
+            logger.log("An error occurred while calling StopAwg: ${e.message}")
             e.printStackTrace()
         }
     }

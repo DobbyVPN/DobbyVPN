@@ -22,14 +22,16 @@ type CoreClient struct {
 }
 
 func NewClient(device pkg.ProtocolDevice) *CoreClient {
+	cfg := common.GetNetworkConfig()
+
 	c := &CoreClient{
 		app: &internal.App{
 			ProtocolDevice: device,
 			RoutingConfig: &internal.RoutingConfig{
 				TunDeviceName:        "dobby233",
-				TunDeviceIP:          "10.0.85.2",
+				TunDeviceIP:          cfg.TunDevice,
 				TunDeviceMTU:         1500,
-				TunGatewayCIDR:       "10.0.85.1/32",
+				TunGatewayCIDR:       cfg.TunGateway + "/32",
 				RoutingTableID:       233,
 				RoutingTablePriority: 23333,
 				DNSServerIP:          "9.9.9.9",

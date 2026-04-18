@@ -2,8 +2,11 @@ package cloak_outline
 
 import (
 	"fmt"
+	"go_module/core"
+	"go_module/core/pkg"
 	"go_module/log"
 	"go_module/outline"
+	"go_module/xray"
 	"os"
 	"runtime/debug"
 
@@ -12,7 +15,7 @@ import (
 
 const utunControlName = "com.apple.net.utun_control"
 
-var client *outline.OutlineClient
+var client *core.CoreClient
 
 func guardExport(fnName string) func() {
 	return func() {
@@ -32,13 +35,13 @@ func unsafeToString(v any) string {
 	}
 }
 
-func NewOutlineClient(transportConfig string) (err error) {
-	defer guardExport("NewOutlineClient")()
-	log.Infof("NewOutlineClient() called")
+func NewVpnClient(transportConfig string, protocol string) (err error) {
+	defer guardExport("NewVpnClient")()
+	log.Infof("NewVpnClient() called")
 
 	if client != nil {
-		if err := OutlineDisconnect(); err != nil {
-			return fmt.Errorf("NewOutlineClient(): disconnect failed: %w", err)
+		if err := VpnDisconnect(); err != nil {
+			return fmt.Errorf("NewVpnClient(): disconnect failed: %w", err)
 		}
 	}
 
@@ -46,7 +49,7 @@ func NewOutlineClient(transportConfig string) (err error) {
 
 	fd := GetTunnelFileDescriptor()
 	if fd < 0 {
-		return fmt.Errorf("NewOutlineClient(): utun fd not found")
+		return fmt.Errorf("NewVpnClient(): utun fd not found")
 	}
 
 	log.Infof("Fd was found, fd = %d", fd)
@@ -54,32 +57,45 @@ func NewOutlineClient(transportConfig string) (err error) {
 
 	tunFile := os.NewFile(uintptr(fd), "utun")
 
-	client = outline.NewClient(transportConfig, tunFile)
+	var device pkg.ProtocolDevice
 
-	log.Infof("NewOutlineClient() finished")
+	// Factory: Create the protocol-specific device
+	switch protocol {
+	case "xray":
+		device, err = xray.NewXrayDevice(transportConfig)
+	case "outline":
+		device, err = outline.NewOutlineDevice(transportConfig)
+	default:
+		log.Infof("NewVpnClient() failed: unsupported protocol")
+		return fmt.Errorf("unsupported protocol: " + protocol)
+	}
+
+	client = core.NewClient(device, tunFile)
+
+	log.Infof("NewVpnClient() finished")
 	return nil
 }
 
-func OutlineConnect() error {
-	defer guardExport("OutlineConnect")()
-	log.Infof("OutlineConnect() called")
+func VpnConnect() error {
+	defer guardExport("VpnConnect")()
+	log.Infof("VpnConnect() called")
 
 	if client == nil {
-		return fmt.Errorf("OutlineConnect(): client is nil")
+		return fmt.Errorf("VpnConnect(): client is nil")
 	}
 
 	if err := client.Connect(); err != nil {
-		log.Infof("OutlineConnect() failed: %v", err)
-		return fmt.Errorf("OutlineConnect(): %w", err)
+		log.Infof("VpnConnect() failed: %v", err)
+		return fmt.Errorf("VpnConnect(): %w", err)
 	}
 
-	log.Infof("OutlineConnect() finished successfully")
+	log.Infof("VpnConnect() finished successfully")
 	return nil
 }
 
-func OutlineDisconnect() error {
-	defer guardExport("OutlineDisconnect")()
-	log.Infof("OutlineDisconnect() called")
+func VpnDisconnect() error {
+	defer guardExport("VpnDisconnect")()
+	log.Infof("VpnDisconnect() called")
 
 	if client == nil {
 		return nil
@@ -88,7 +104,7 @@ func OutlineDisconnect() error {
 	client.Disconnect()
 	client = nil
 
-	log.Infof("OutlineDisconnect() finished")
+	log.Infof("VpnDisconnect() finished")
 	return nil
 }
 

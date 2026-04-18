@@ -5,6 +5,7 @@ import (
 	"go_module/core"
 	"go_module/core/pkg"
 	"go_module/log"
+	"go_module/outline"
 	"go_module/xray"
 	"strings"
 	"sync"
@@ -63,8 +64,8 @@ func StartVpn(config *C.char, protocol *C.char) C.int {
 	switch str_protocol {
 	case "xray":
 		device, err = xray.NewXrayDevice(str_config)
-	// case "outline": TODO
-	// 	device, err = outline.NewOutlineDevice(goConfig)
+	case "outline":
+		device, err = outline.NewOutlineDevice(str_config)
 	default:
 		setVpnLastError("unsupported protocol: " + str_protocol)
 		log.Infof("NewVpnClient() failed: unsupported protocol")

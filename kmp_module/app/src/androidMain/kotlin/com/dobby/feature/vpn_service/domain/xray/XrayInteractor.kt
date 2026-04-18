@@ -3,11 +3,13 @@ package com.dobby.feature.vpn_service.domain.xray
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.vpn_service.DobbyVpnService
+import com.dobby.feature.vpn_service.domain.descriptor.FDManager
 
 class XrayInteractor(
     private val xrayLibFacade: com.dobby.feature.vpn_service.XrayLibFacade,
     private val dobbyConfigsRepository: DobbyConfigsRepository,
-    private val logger: Logger
+    private val logger: Logger,
+    private val fdManager: FDManager,
 ) {
 
     suspend fun startXray(dobbyVpnService: DobbyVpnService?) {
@@ -24,17 +26,8 @@ class XrayInteractor(
 
         dobbyVpnService?.setupVpn()
 
-        val dupPfd = dobbyVpnService?.vpnInterface?.dup()
-        val tunFd = dupPfd?.detachFd() ?: -1
-        dobbyVpnService?.goTunFd = if (tunFd != -1) tunFd else null
-
-        if (tunFd < 0) {
-            logger.log("[svc:$serviceId] startXray(): failed to create VPN interface")
-            dobbyVpnService?.connectionState?.tryUpdateStatus(false)
-            dobbyVpnService?.teardownVpn()
-            dobbyVpnService?.stopSelf()
-            return
-        }
+        val tunFd = fdManager.GetTunFd(serviceId, dobbyVpnService)
+        if (tunFd < 0) return
 
         logger.log("[svc:$serviceId] startXray(): initializing Xray with tunFd=$tunFd")
 
