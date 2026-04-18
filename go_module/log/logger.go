@@ -9,7 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"go_module/telemetry"
+
 	"github.com/sirupsen/logrus"
+	"go.opentelemetry.io/contrib/bridges/otelslog"
+	"go.opentelemetry.io/otel"
 )
 
 var (
@@ -97,15 +101,40 @@ func (h *logrusToSlogHook) Fire(e *logrus.Entry) error {
 }
 
 type Logger struct {
-	file   *os.File
-	logger *slog.Logger
-	buffer []string
+	ctx      context.Context
+	file     *os.File
+	logger   *slog.Logger
+	buffer   []string
+	shutdown func(context.Context) error
 }
 
+const name = "https://github.com/DobbyVPN/DobbyVPN/go_module/log"
+
 var (
-	lg     = &Logger{buffer: []string{}}
 	initMu sync.Mutex
+	lg     = NewLogger()
+	tracer = otel.Tracer(name)
+	meter  = otel.Meter(name)
+	logger = otelslog.NewLogger(name)
 )
+
+func NewLogger() *Logger {
+	// Set up OpenTelemetry.
+	ctx := context.Background()
+	otelShutdown, err := telemetry.SetupOTelSDK(ctx)
+	if err != nil {
+		return &Logger{ctx: ctx, buffer: []string{"[ERROR] Failed to start telemetry"}}
+	} else {
+		return &Logger{ctx: ctx, buffer: []string{}, shutdown: otelShutdown}
+	}
+}
+
+func Shutdown() {
+	err := lg.shutdown(context.Background())
+	if err != nil {
+		fmt.Errorf("Failed shutdown logger: %v", err)
+	}
+}
 
 func MaskStr(input string) string {
 	runes := []rune(input)
@@ -161,7 +190,12 @@ func (logger *Logger) lgInfof(format string, args ...any) {
 	logger.logger.Info(fmt.Sprintf(format, args...))
 }
 
+// export OTEL_EXPORTER_OTLP_HEADERS="Content-Type=application/json"
+// export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 func Infof(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	logger.InfoContext(lg.ctx, msg)
+
 	if lg.logger == nil {
 		lg.bufInfof(format, args...)
 	} else {
