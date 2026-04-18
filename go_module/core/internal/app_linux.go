@@ -14,8 +14,8 @@ import (
 	"github.com/jackpal/gateway"
 
 	"go_module/common"
+	coreCommon "go_module/core/common"
 	"go_module/log"
-	outlineCommon "go_module/outline/common"
 	"go_module/routing"
 	"go_module/tunnel"
 )
@@ -69,15 +69,15 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		log.Infof("[Linux][Step 4] Installing early route → %s via %s dev %s",
 			serverIP, gatewayIP, uplinkIface)
 
-		common.Client.MarkInCriticalSection(outlineCommon.Name)
+		common.Client.MarkInCriticalSection(coreCommon.Name)
 		if err = routing.AddProxyRoute(serverIP.String(), gatewayIP.String(), uplinkIface); err != nil {
-			common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 			err = fmt.Errorf("failed to add early route: %w", err)
 			log.Infof("[Linux][Step 4][ERROR] %v", err)
 			signalInit(initResult, err)
 			return err
 		}
-		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
 		log.Infof("[Linux][Step 4][OK] Early route installed")
 	} else {
@@ -91,20 +91,20 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		app.RoutingConfig.RoutingTablePriority,
 	)
 
-	common.Client.MarkInCriticalSection(outlineCommon.Name)
+	common.Client.MarkInCriticalSection(coreCommon.Name)
 	if err = routing.SetupMarkedRouting(
 		app.RoutingConfig.RoutingTableID,
 		app.RoutingConfig.RoutingTablePriority,
 		uplinkIface,
 		gatewayIP.String(),
 	); err != nil {
-		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		err = fmt.Errorf("failed to setup marked routing: %w", err)
 		log.Infof("[Linux][Step 5][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
-	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
 	log.Infof("[Linux][Step 5][OK] Policy routing configured")
 
@@ -146,11 +146,11 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		closeOnce.Do(func() {
 			log.Infof("[Linux][Lifecycle] Shutting down...")
 
-			common.Client.MarkInCriticalSection(outlineCommon.Name)
+			common.Client.MarkInCriticalSection(coreCommon.Name)
 			if err = routing.StopRouting(serverIP.String(), gatewayIP.String(), uplinkIface); err != nil {
 				log.Infof("[Linux][StopRouting][ERROR] %v", err)
 			}
-			common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
 			if err = routing.CleanupMarkedRouting(
 				app.RoutingConfig.RoutingTableID,
@@ -210,15 +210,15 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	// 10. routing switch
 	log.Infof("[Linux][Step 10] Switching default route → TUN (%s)", app.RoutingConfig.TunDeviceName)
 
-	common.Client.MarkInCriticalSection(outlineCommon.Name)
+	common.Client.MarkInCriticalSection(coreCommon.Name)
 	if err = routing.StartRouting(serverIP.String(), gatewayIP.String(), uplinkIface, app.RoutingConfig.TunDeviceName); err != nil {
-		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		err = fmt.Errorf("failed to configure routing: %w", err)
 		log.Infof("[Linux][Step 10][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
-	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
 	log.Infof("[Linux][Step 10][OK] Default route switched to VPN")
 

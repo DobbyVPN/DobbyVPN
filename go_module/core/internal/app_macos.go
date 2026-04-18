@@ -12,7 +12,7 @@ import (
 	"sync"
 
 	"go_module/common"
-	outlineCommon "go_module/outline/common"
+	coreCommon "go_module/core/common"
 	"go_module/routing"
 	"go_module/tunnel"
 
@@ -48,14 +48,14 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	if serverIP.String() != "127.0.0.1" {
 		log.Infof("[Routing] Adding direct route for VPN server %s via gateway %s (bypass VPN)", serverIP.String(), gatewayIP.String())
-		common.Client.MarkInCriticalSection(outlineCommon.Name)
+		common.Client.MarkInCriticalSection(coreCommon.Name)
 		if err := routing.AddProxyRoute(serverIP.String(), gatewayIP.String()); err != nil {
-			common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 			err = fmt.Errorf("failed to add early route for server: %w", err)
 			signalInit(initResult, err)
 			return err
 		}
-		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		log.Infof("[Routing] Direct route for VPN server installed")
 	} else {
 		log.Infof("[Routing] Skipping direct route for localhost (Cloak mode)")
@@ -90,11 +90,11 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	}()
 
 	defer func() {
-		common.Client.MarkInCriticalSection(outlineCommon.Name)
+		common.Client.MarkInCriticalSection(coreCommon.Name)
 		log.Infof("[Routing] Restoring system routing (removing VPN routes)...")
 		routing.StopRouting(serverIP.String(), gatewayIP.String())
 		log.Infof("[Routing] System default route restored via %s", gatewayIP.String())
-		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 	}()
 
 	log.Infof("[Tunnel] Starting tun2socks engine (darwin/utun mode)...")
@@ -113,11 +113,11 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("[Tunnel] tun2socks started, interface: %s", tunName)
 
-	common.Client.MarkInCriticalSection(outlineCommon.Name)
+	common.Client.MarkInCriticalSection(coreCommon.Name)
 
 	log.Infof("[Routing] Switching default route to TUN interface (%s)", tunName)
 	if err := routing.StartRouting(serverIP.String(), gatewayIP.String(), tunName); err != nil {
-		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		err = fmt.Errorf("failed to configure routing: %w", err)
 		signalInit(initResult, err)
 		return err
@@ -149,7 +149,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		}
 	}()
 
-	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
+	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
 	log.Infof("[Lifecycle] VPN initialization completed successfully")
 

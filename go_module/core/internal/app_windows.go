@@ -77,7 +77,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	// SOCKS protocol device
 	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, netInterface.Name)
 	if err != nil {
-		err = fmt.Errorf("failed to create OutlineDevice: %w", err)
+		err = fmt.Errorf("failed to create CoreDevice: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
@@ -149,7 +149,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	<-ctx.Done()
 
 	log.Infof("[Tunnel] Context cancelled, shutting down...")
-	log.Infof("Outline/app: received interrupt signal, terminating...")
+	log.Infof("Core/app: received interrupt signal, terminating...")
 
 	return nil
 }
