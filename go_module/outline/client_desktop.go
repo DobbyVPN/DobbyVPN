@@ -57,6 +57,17 @@ func (c *OutlineClient) Connect() error {
 	initResult := make(chan error, 1)
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err := fmt.Errorf("outline crashed: %v", r)
+				log.Infof("outline goroutine recovered from panic: %v", err)
+				select {
+				case initResult <- err:
+				default:
+				}
+				common.Client.MarkInactive(outlineCommon.Name)
+			}
+		}()
 		err := c.app.Run(ctx, initResult)
 		if err != nil {
 			log.Infof("connect outline failed: %v", err)
