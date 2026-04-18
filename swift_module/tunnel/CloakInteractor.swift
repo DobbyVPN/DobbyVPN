@@ -44,7 +44,7 @@ public final class CloakInteractor {
             return
         }
         var err: NSError?
-        Cloak_outlineOutlineDisconnect(&err)
+        Cloak_outlineVpnDisconnect(&err)
         if let error = err {
             logs.writeLog(log: "Stop Cloak get error \(error)")
         }
