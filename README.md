@@ -15,6 +15,11 @@ Server = "1.1.1.1" # IP or DNS name for the server
 Port = 443 # ShadowSocks port
 Password = "Qwerty123" # user's 'secret' from the Outline's config - NOT the part in 'ss://' config
 DisguisePrefix = "POST " # one - for TCP & UDP for now; for options - see ref. # 1 below
+
+[ExcludeIPs]
+IPs = [
+  "200.200.200.200/32" # IP adress or subnet that we want to exlude from vpn-routing
+]
 ```
 
 **ShadowSocks via WebSocket** (caddy -> outline-ss-server) 
@@ -26,6 +31,11 @@ Server = "www.myserver.com" # DNS name of the server
 Password = "Qwerty123" # user's 'secret' from the Outline's config
 WebSocketPath = "/WS_Ooth5OoCoo7reDah5oich1gai0che2ugh8pho" # listeners.path (one for both TCP & UDP for now) 
 DisguisePrefix = "POST " # for options see ref. # 1 below
+
+[ExcludeIPs]
+IPs = [
+  "200.200.200.200/32" # IP adress or subnet that we want to exlude from vpn-routing
+]
 ```
 
 **ShadowSocks over cloak** (caddy -> cloak -> outline-ss-server)
@@ -41,6 +51,11 @@ EncryptionMethod = "plain" # plain / aes-256-gcm aka aes-gcm / aes-128-gcm /  ch
 UID = "hi8WIXyln+amtgfQeT11zQ=="
 PublicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo="
 CDNWsUrlPath = "/JmJWXlmVXByXicD7DGrdMWV1btwHv0ARK0Yjoaig"
+
+[ExcludeIPs]
+IPs = [
+  "200.200.200.200/32" # IP adress or subnet that we want to exlude from vpn-routing
+]
 ```
 
 Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nicely expressed Issues accordingly.
