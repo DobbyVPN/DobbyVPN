@@ -13,7 +13,7 @@ import (
 
 // GenerateXrayConfig overwrites user's inbounds with a local SOCKS5 inbound
 // (TCP+UDP) for use by tun2socks.
-func GenerateXrayConfig(vlessConfigStr string, socksListen string, socksPort int, routingTableID int, uplinkIface string) (*core.Config, error) {
+func GenerateXrayConfig(vlessConfigStr string, socksListen string, socksPort int, routingTableID int, uplinkIface string, user string, pass string) (*core.Config, error) {
 
 	var userConfig map[string]interface{}
 	if err := json.Unmarshal([]byte(vlessConfigStr), &userConfig); err != nil {
@@ -35,9 +35,15 @@ func GenerateXrayConfig(vlessConfigStr string, socksListen string, socksPort int
 		"listen":   socksListen,
 		"port":     socksPort,
 		"settings": map[string]interface{}{
-			"auth": "noauth",
-			"udp":  true,
-			"ip":   socksListen,
+			"auth": "password",
+			"accounts": []map[string]string{
+				{
+					"user": user,
+					"pass": pass,
+				},
+			},
+			"udp": true,
+			"ip":  socksListen,
 		},
 		"sniffing": map[string]interface{}{
 			"enabled":      true,

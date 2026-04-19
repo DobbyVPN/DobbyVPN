@@ -14,6 +14,7 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
 	socks5 "github.com/things-go/go-socks5"
 
+	"go_module/auth"
 	"go_module/log"
 )
 
@@ -25,6 +26,8 @@ type OutlineDevice struct {
 	packetDialer transport.PacketDialer
 	useCloak     bool
 	ctx          context.Context
+	socksUser    string
+	socksPass    string
 }
 
 func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
@@ -50,12 +53,17 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 
 	log.Infof("outline client: cloak mode = %v", useCloak)
 
+	socksUser := auth.GenerateRandomAuth()
+	socksPass := auth.GenerateRandomAuth()
+
 	od := &OutlineDevice{
 		svrIP:        ip,
 		streamDialer: sd,
 		packetDialer: pd,
 		useCloak:     useCloak,
 		ctx:          ctx,
+		socksUser:    socksUser,
+		socksPass:    socksPass,
 	}
 
 	return od, nil
@@ -64,6 +72,9 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 func (d *OutlineDevice) Open(routingTableID int, uplinkIface string) error {
 	server := socks5.NewServer(
 		socks5.WithDial(d.handleDial),
+		socks5.WithCredential(socks5.StaticCredentials{
+			d.socksUser: d.socksPass,
+		}),
 	)
 
 	lc := net.ListenConfig{}
@@ -74,7 +85,7 @@ func (d *OutlineDevice) Open(routingTableID int, uplinkIface string) error {
 	}
 
 	d.listener = listener
-	d.proxyAddr = listener.Addr().String()
+	d.proxyAddr = fmt.Sprintf("%s:%s@%s", d.socksUser, d.socksPass, listener.Addr().String())
 
 	go func() {
 		log.Infof("SOCKS5 started on %s", d.proxyAddr)

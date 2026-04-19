@@ -47,31 +47,10 @@ CDNWsUrlPath = "/JmJWXlmVXByXicD7DGrdMWV1btwHv0ARK0Yjoaig"
 ```toml
 [Xray] # Implementation library
 log = { loglevel = "info" } # Providing DobbyVPN and xray's log level
-inbounds = null # Warning: Inbound field will be ignered due to custom tunneling settings
+# Warning: Inbound field will be modified due to custom tunneling settings
 outbounds = [
-{   tag = "proxy", 
-    protocol = "vless", 
-    settings = { 
-    vnext = [
-        {address = "www.myserver.com", 
-        port = 443, 
-        users = [{id = "hi8WIXyln+amtgfQeT11zQ==", flow = "xtls-rprx-vision", encryption = "none"}]
-        }]
-    }, 
-    streamSettings = {
-        network = "tcp",
-        security = "reality", 
-        realitySettings = {
-            fingerprint = "randomized", 
-            serverName = "secretSNI.com", 
-            publicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo=",
-            shortId = "a1b2c3d4", 
-            spiderX = "/"
-            }
-    }
-},
+{ tag = "proxy", protocol = "vless", settings = { vnext = [{address = "www.myserver.com", port = 443, users = [{id = "hi8WIXyln+amtgfQeT11zQ==", flow = "xtls-rprx-vision", encryption = "none"}]}]}, streamSettings = {network = "tcp",security = "reality", realitySettings = {show= false, fingerprint = "randomized", serverName = "secretSNI.com", publicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo=", shortId = "a1b2c3d4", spiderX = "/"}}},
 {tag = "direct", protocol = "freedom"}]
-
 ```
 
 Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nicely expressed Issues accordingly.

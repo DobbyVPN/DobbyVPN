@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 
+	"go_module/auth"
 	log "go_module/log"
 	"go_module/xray/internal"
 
@@ -16,6 +17,8 @@ type XrayDevice struct {
 	proxyAddr    string
 	svrIP        net.IP
 	svrPort      int
+	socksUser    string
+	socksPass    string
 }
 
 func NewXrayDevice(vlessConfig string) (*XrayDevice, error) {
@@ -38,12 +41,17 @@ func NewXrayDevice(vlessConfig string) (*XrayDevice, error) {
 	port := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()
 
+	socksUser := auth.GenerateRandomAuth()
+	socksPass := auth.GenerateRandomAuth()
+
 	d := &XrayDevice{
 		xrayInstance: nil,
 		vlessConfig:  vlessConfig,
-		proxyAddr:    fmt.Sprintf("127.0.0.1:%d", port),
+		proxyAddr:    fmt.Sprintf("%s:%s@127.0.0.1:%d", socksUser, socksPass, port),
 		svrIP:        ip.To4(),
 		svrPort:      port,
+		socksUser:    socksUser,
+		socksPass:    socksPass,
 	}
 
 	log.Infof("[Xray] SOCKS bridge started at %s (serverIP=%s)", d.proxyAddr, d.svrIP.String())
@@ -51,7 +59,7 @@ func NewXrayDevice(vlessConfig string) (*XrayDevice, error) {
 }
 
 func (d *XrayDevice) Open(routingTableID int, uplinkIface string) error {
-	xrayConfig, err := internal.GenerateXrayConfig(d.vlessConfig, "127.0.0.1", d.svrPort, routingTableID, uplinkIface)
+	xrayConfig, err := internal.GenerateXrayConfig(d.vlessConfig, "127.0.0.1", d.svrPort, routingTableID, uplinkIface, d.socksUser, d.socksPass)
 	if err != nil {
 		return fmt.Errorf("failed to generate xray config: %w", err)
 	}
