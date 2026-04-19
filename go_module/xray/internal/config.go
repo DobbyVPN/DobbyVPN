@@ -4,30 +4,46 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"runtime"
 
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
 )
 
-// GenerateXrayConfig creates a config with a TUN inbound
-// tunName: Can be an interface name (Desktop) or "fd:123" (Mobile)
-func GenerateXrayConfig(tunName string, vlessConfigStr string) (*core.Config, error) {
+// GenerateXrayConfig overwrites user's inbounds with a local SOCKS5 inbound
+// (TCP+UDP) for use by tun2socks.
+func GenerateXrayConfig(vlessConfigStr string, socksListen string, socksPort int, routingTableID int, uplinkIface string, user string, pass string) (*core.Config, error) {
 
-	// 1. Unmarshal user config
 	var userConfig map[string]interface{}
 	if err := json.Unmarshal([]byte(vlessConfigStr), &userConfig); err != nil {
 		return nil, fmt.Errorf("invalid user config: %w", err)
 	}
 
-	// 2. Define the TUN Inbound
-	// Note: Platform specifics (like MTU) should be consistent.
-	tunInbound := map[string]interface{}{
-		"tag":      "tun-in",
-		"protocol": "tun",
+	if socksListen == "" {
+		socksListen = "127.0.0.1"
+	}
+	if socksPort <= 0 || socksPort > 65535 {
+		return nil, fmt.Errorf("invalid socksPort=%d", socksPort)
+	}
+
+	delete(userConfig, "routing")
+
+	socksInbound := map[string]interface{}{
+		"tag":      "socks-in",
+		"protocol": "socks",
+		"listen":   socksListen,
+		"port":     socksPort,
 		"settings": map[string]interface{}{
-			"name": tunName, // "wintun", "tun0", or "fd:123"
-			"mtu":  1500,
+			"auth": "password",
+			"accounts": []map[string]string{
+				{
+					"user": user,
+					"pass": pass,
+				},
+			},
+			"udp": true,
+			"ip":  socksListen,
 		},
 		"sniffing": map[string]interface{}{
 			"enabled":      true,
@@ -35,10 +51,37 @@ func GenerateXrayConfig(tunName string, vlessConfigStr string) (*core.Config, er
 		},
 	}
 
-	// 3. Replace Inbounds
-	userConfig["inbounds"] = []interface{}{tunInbound}
+	userConfig["inbounds"] = []interface{}{socksInbound}
 
-	// 4. Decode and Build
+	if outbounds, ok := userConfig["outbounds"].([]interface{}); ok && len(outbounds) > 0 {
+		if firstOut, ok := outbounds[0].(map[string]interface{}); ok {
+
+			// Ensure streamSettings exists
+			if _, hasStream := firstOut["streamSettings"]; !hasStream {
+				firstOut["streamSettings"] = map[string]interface{}{}
+			}
+			streamSettings := firstOut["streamSettings"].(map[string]interface{})
+
+			// Ensure sockopt exists
+			if _, hasSockopt := streamSettings["sockopt"]; !hasSockopt {
+				streamSettings["sockopt"] = map[string]interface{}{}
+			}
+			sockopt := streamSettings["sockopt"].(map[string]interface{})
+
+			// Apply OS-specific Xray socket protections
+			switch runtime.GOOS {
+			case "linux", "android":
+				// Linux/Android use SO_MARK (matches routingTableID)
+				sockopt["mark"] = routingTableID
+			case "windows", "darwin":
+				// Windows/macOS bind directly to the physical uplink interface
+				if uplinkIface != "" {
+					sockopt["interface"] = uplinkIface
+				}
+			}
+		}
+	}
+
 	finalJson, err := json.Marshal(userConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal config: %w", err)
