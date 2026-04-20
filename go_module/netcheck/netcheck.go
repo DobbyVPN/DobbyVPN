@@ -14,6 +14,7 @@ const HASH_POSTFIX = ".hash"
 
 var app *NetCheckApp = nil
 var appMu sync.Mutex
+var netcheckLogger log.ISubLogger = log.GetLogger().NewSubLogger("NCH")
 
 func (a *NetCheckApp) netCheckInternal() {
 	defer func() {
@@ -22,50 +23,50 @@ func (a *NetCheckApp) netCheckInternal() {
 		appMu.Unlock()
 	}()
 
-	log.Infof("[NETCHECK] Geolite update")
+	netcheckLogger.Debug("Geolite update", make(map[string]string))
 	ctx, cancel := context.WithCancel(a.ctx)
 	if err := updater.GeoliteUpdate(ctx); err != nil {
 		cancel()
-		log.Infof("[NETCHECK] [ERROR] Error run GeoliteUpdate: %v", err)
+		netcheckLogger.Error("Error run GeoliteUpdate", map[string]string{"err": err.Error()})
 		return
 	}
 
-	log.Infof("[NETCHECK] Net check: start")
+	netcheckLogger.Debug("Net check: start", make(map[string]string))
 
 	if err := a.runWhoami(); err != nil {
-		log.Infof("[NETCHECK] [ERROR] Error running whoami, interrupting netcheck: %v", err)
+		netcheckLogger.Error("Error running whoami, interrupting netcheck", map[string]string{"err": err.Error()})
 		return
 	}
 	if err := a.runCidrWhitelist(); err != nil {
-		log.Infof("[NETCHECK] [ERROR] Error running cidrwhitelist, interrupting netcheck: %v", err)
+		netcheckLogger.Error("Error running cidrwhitelist, interrupting netcheck", map[string]string{"err": err.Error()})
 		return
 	}
 	if err := a.runDns(); err != nil {
-		log.Infof("[NETCHECK] [ERROR] Error running dns, interrupting netcheck: %v", err)
+		netcheckLogger.Error("Error running dns, interrupting netcheck", map[string]string{"err": err.Error()})
 		return
 	}
 	if err := a.runWebhost(); err != nil {
-		log.Infof("[NETCHECK] [ERROR] Error running webhost, interrupting netcheck: %v", err)
+		netcheckLogger.Error("Error running webhost, interrupting netcheck", map[string]string{"err": err.Error()})
 		return
 	}
 
-	log.Infof("[NETCHECK] Net check: completed")
+	netcheckLogger.Debug("Net check: completed", make(map[string]string))
 }
 
 func NetCheck(configPath string) error {
-	log.Infof("[NETCHECK] Loading config")
+	netcheckLogger.Debug("Loading config", make(map[string]string))
 	if err := config.Load(configPath); err != nil {
-		return fmt.Errorf("Error loading config: %v", err)
+		netcheckLogger.Error("Error loading config", map[string]string{"err": err.Error()})
 	}
 
 	appMu.Lock()
 	defer appMu.Unlock()
 
 	if app == nil {
-		log.Infof("[NETCHECK] Creating new app")
+		netcheckLogger.Debug("Creating new app", make(map[string]string))
 		app = NewNetCheckApp()
 
-		log.Infof("[NETCHECK] Running app")
+		netcheckLogger.Debug("Running app", make(map[string]string))
 		go app.netCheckInternal()
 
 		return nil
@@ -78,11 +79,11 @@ func CancelNetCheck() {
 	appMu.Lock()
 	defer appMu.Unlock()
 	if app != nil {
-		log.Infof("[NETCHECK] Cancel netcheck")
+		netcheckLogger.Debug("Cancel netcheck", make(map[string]string))
 		app.interrupt <- true
 		app.cancel()
 		app = nil
 	} else {
-		log.Infof("[NETCHECK] No need to cancel netcheck")
+		netcheckLogger.Debug("No need to cancel netcheck", make(map[string]string))
 	}
 }

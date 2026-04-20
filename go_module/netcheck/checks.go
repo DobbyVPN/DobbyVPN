@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go_module/log"
+	"strconv"
 
 	"github.com/hyperion-cs/dpi-checkers/ru/dpi-ch/checkers"
 )
 
 type NetCheckApp struct {
+	whoami    checkers.WhoamiResult
 	ctx       context.Context
 	cancel    context.CancelFunc
 	interrupt chan bool
@@ -27,83 +28,83 @@ func NewNetCheckApp() *NetCheckApp {
 }
 
 func (app *NetCheckApp) runWhoami() error {
-	log.Infof("[NETCHECK] === WHOAMI ===")
+	netcheckLogger.Debug("Running WHOAMI check", make(map[string]string))
 	result, err := checkers.Whoami()
 
 	if err != nil {
 		return fmt.Errorf("Error running whoami check: %v", err)
 	} else {
-		log.Infof("[NETCHECK] IP      : %s", result.Ip)
-		log.Infof("[NETCHECK] Subnet  : %s", result.Subnet)
-		log.Infof("[NETCHECK] Asn     : %s", result.Asn)
-		log.Infof("[NETCHECK] Org     : %s", result.Org)
-		log.Infof("[NETCHECK] Location: %s", result.Location)
-
+		app.whoami = result
 		return nil
 	}
 }
 
 func (app *NetCheckApp) runCidrWhitelist() error {
+	netcheckLogger.Debug("Running CIDRWHITELIST check", make(map[string]string))
+	logger := netcheckLogger.NewSubLogger("CIDR")
+
 	err := checkers.CidrWhitelist()
 
-	log.Infof("[NETCHECK] === CIDRWHITELIST ===")
 	if err != nil {
 		switch err {
 		case checkers.ErrCidrWhitelistDetected:
-			log.Infof("[NETCHECK] You are under whitelist!")
+			logger.Debug("User under whitelist", make(map[string]string))
 
 			return UserUnderWhitelistsError
 		case checkers.ErrCidrWhitelistNoInetAccess:
-			log.Infof("[NETCHECK] You have no internet connection!")
+			logger.Debug("User have no internet connection", make(map[string]string))
 
 			return NoInternetConnectionError
 		default:
+			logger.Debug("Undefined error ocurred", make(map[string]string))
+
 			return fmt.Errorf("Error running cidr whitelist check: %v", err)
 		}
 	} else {
-		log.Infof("[NETCHECK] You are NOT under whitelist!")
+		logger.Debug("User NOT under any whitelist", make(map[string]string))
 
 		return nil
 	}
 }
 
 func (app *NetCheckApp) runWebhost() error {
+	netcheckLogger.Debug("Running WEBHOST check", make(map[string]string))
+	logger := netcheckLogger.NewSubLogger("WEBH")
+
 	runnerOpt := checkers.WebhostGochanRunnerOpt{Ctx: app.ctx, Mode: checkers.WebHostModePopular}
 	out := checkers.WebhostGochanRunner(runnerOpt)
 
-	log.Infof("[NETCHECK] === WEBHOST ===")
 	for {
 		select {
 		case <-app.interrupt:
-			log.Infof("[NETCHECK] WEBHOST check interrupted")
+			logger.Debug("Interrupting", make(map[string]string))
 
 			return InterruptedError
 		case msg1, ok := <-out.Out:
 			if !ok {
-				log.Infof("[NETCHECK] WEBHOST check completed")
+				logger.Debug("Completed", make(map[string]string))
 
 				return nil
 			}
 
-			log.Infof("[NETCHECK] IpInfo : %s asn=%d %s \"%s\" %s", msg1.Out.IpInfo.Ip, msg1.Out.IpInfo.Asn, msg1.Out.IpInfo.Subnet, msg1.Out.IpInfo.Org, msg1.Out.IpInfo.CountryIso)
-			log.Infof("[NETCHECK] Port   : %d", msg1.Out.Port)
-			log.Infof("[NETCHECK] TlsV   : %d", msg1.Out.TlsV)
-			log.Infof("[NETCHECK] Sni    : %s", msg1.Out.Sni)
-			log.Infof("[NETCHECK] Host   : %s", msg1.Out.Host)
-
-			if msg1.Out.Alive != nil {
-				log.Infof("[NETCHECK] Alive  : %v", msg1.Out.Alive)
-			} else {
-				log.Infof("[NETCHECK] Alive  : OK")
-			}
-
-			if msg1.Out.Tcp1620 != nil {
-				log.Infof("[NETCHECK] Tcp1620: %v", msg1.Out.Tcp1620)
-			} else {
-				log.Infof("[NETCHECK] Tcp1620: OK")
-			}
-
-			log.Infof("[NETCHECK] ===============")
+			logger.Info("Webhost check results:", map[string]string{
+				"Whoami_Ip":       app.whoami.Ip,
+				"Whoami_Subnet":   app.whoami.Subnet,
+				"Whoami_Asn":      app.whoami.Asn,
+				"Whoami_Org":      app.whoami.Org,
+				"Whoami_Location": app.whoami.Location,
+				"Host_Ip":         fmt.Sprintf("%v", msg1.Out.IpInfo.Ip),
+				"Host_Asn":        fmt.Sprintf("%v", msg1.Out.IpInfo.Asn),
+				"Host_Subnet":     fmt.Sprintf("%v", msg1.Out.IpInfo.Subnet),
+				"Host_Org":        fmt.Sprintf("%v", msg1.Out.IpInfo.Org),
+				"Host_CountryIso": fmt.Sprintf("%v", msg1.Out.IpInfo.CountryIso),
+				"Host_Port":       fmt.Sprintf("%v", msg1.Out.Port),
+				"Host_TlsV":       fmt.Sprintf("%v", msg1.Out.TlsV),
+				"Host_Sni":        fmt.Sprintf("%v", msg1.Out.Sni),
+				"Host_Host":       fmt.Sprintf("%v", msg1.Out.Host),
+				"Result_Alive":    fmt.Sprintf("%v", msg1.Out.Alive),
+				"Result_Tcp1620":  fmt.Sprintf("%v", msg1.Out.Tcp1620),
+			})
 		}
 	}
 }
@@ -115,24 +116,38 @@ type DnsCheckTable struct {
 }
 
 func (app *NetCheckApp) runDns() error {
+	netcheckLogger.Debug("Running DNS check", make(map[string]string))
+	logger := netcheckLogger.NewSubLogger("DNS")
+
 	leak := checkers.DnsLeakGochan(app.ctx)
 	providerPlain := checkers.DnsPlainGochan(app.ctx)
 	providerDoh := checkers.DnsDohGochan(app.ctx)
 	result := make(map[string]DnsCheckTable)
 
 	defer func() {
-		log.Infof("[NETCHECK] Collected data")
+		logger.Debug("Collected data", make(map[string]string))
 
-		log.Infof("[NETCHECK] | %-15v | %-10v | %-10v |", "Provider", "Plain", "DoH")
-		for _, row := range result {
-			log.Infof("[NETCHECK] | %-15v | %-10v | %-10v |", row.provider, row.plainResult, row.dohResult)
+		args := make(map[string]string, len(result)*3+5)
+
+		for index, row := range result {
+			args[fmt.Sprintf("Result_%s_provider", index)] = row.provider
+			args[fmt.Sprintf("Result_%s_plain", index)] = row.plainResult
+			args[fmt.Sprintf("Result_%s_doh", index)] = row.dohResult
 		}
+
+		args["Whoami_Ip"] = app.whoami.Ip
+		args["Whoami_Subnet"] = app.whoami.Subnet
+		args["Whoami_Asn"] = app.whoami.Asn
+		args["Whoami_Org"] = app.whoami.Org
+		args["Whoami_Location"] = app.whoami.Location
+
+		logger.Info("Dns result", args)
 	}()
 
 	for {
 		select {
 		case <-app.interrupt:
-			log.Infof("[NETCHECK] WEBHOST check interrupted")
+			logger.Debug("Check interrupted", make(map[string]string))
 
 			return InterruptedError
 		case v, ok := <-providerPlain:
@@ -153,7 +168,7 @@ func (app *NetCheckApp) runDns() error {
 				verdict = v.Verdict.Error()
 			}
 
-			log.Infof("[NETCHECK] Plain: %v - %v", v.Provider, verdict)
+			logger.Debug("Plain step", map[string]string{"Provider": v.Provider, "verdict": verdict})
 
 			if _, ok := result[v.Provider]; !ok {
 				result[v.Provider] = DnsCheckTable{provider: v.Provider, plainResult: "N/A", dohResult: "N/A"}
@@ -179,7 +194,7 @@ func (app *NetCheckApp) runDns() error {
 				verdict = v.Verdict.Error()
 			}
 
-			log.Infof("[NETCHECK] Doh  : %v - %v", v.Provider, verdict)
+			logger.Debug("Doh step", map[string]string{"Provider": v.Provider, "verdict": verdict})
 
 			if _, ok := result[v.Provider]; !ok {
 				result[v.Provider] = DnsCheckTable{provider: v.Provider, plainResult: "N/A", dohResult: "N/A"}
@@ -197,7 +212,8 @@ func (app *NetCheckApp) runDns() error {
 					continue
 				}
 			}
-			log.Infof("[NETCHECK] Leak : %v - %v", v.Items, v.Err)
+
+			logger.Debug("Leak step", map[string]string{"Items_count": strconv.Itoa(len(v.Items)), "Err": v.Err.Error()})
 		}
 	}
 }
