@@ -148,6 +148,27 @@ func SetPath(path string) error {
 	return nil
 }
 
+func SetStdOut() error {
+	if lg.logger != nil {
+		return nil
+	}
+
+	initMu.Lock()
+	defer initMu.Unlock()
+
+	if lg.logger != nil {
+		return nil
+	}
+
+	lg.file = os.Stdout
+	lg.logger = slog.New(&simpleHandler{file: lg.file})
+	lg.dumpBuffer()
+
+	logrus.AddHook(&logrusToSlogHook{})
+
+	return nil
+}
+
 func GetLogger() ISubLogger {
 	return root
 }

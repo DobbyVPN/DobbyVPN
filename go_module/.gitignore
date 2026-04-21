@@ -5,3 +5,6 @@ ubuntu_grpcvpnserver
 macos_grpcvpnserver
 liboutline.so
 MyLibrary.xcframework
+*.toml
+dobby
+dobby.exe
