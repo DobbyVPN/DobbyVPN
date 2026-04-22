@@ -5,7 +5,6 @@ package internal
 import (
 	"fmt"
 
-	"go_module/awg/config"
 	"go_module/awg/tunnel"
 )
 
@@ -15,14 +14,14 @@ type App struct {
 
 // NewApp creates a new App using a tunnel name and its config
 func NewApp(tun, conf string, tunFd int) (*App, error) {
-	awgqconfig, err := config.FromWgQuickWithUnknownEncoding(conf, tun)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to read awg-quick config: %s", err)
-	}
+	// awgqconfig, err := config.FromWgQuickWithUnknownEncoding(conf, tun)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("Failed to read awg-quick config: %s", err)
+	// }
 
 	tunnelData := &tunnel.TunnelData{
 		InterfaceName:   tun,
-		InterfaceConfig: awgqconfig,
+		InterfaceConfig: conf,
 		InterfaceFD:     tunFd,
 	}
 	app := &App{

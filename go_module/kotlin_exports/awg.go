@@ -1,139 +1,18 @@
-//go:build android
+/* SPDX-License-Identifier: Apache-2.0
+ *
+ * Copyright © 2017-2022 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+ */
 
-package main
-
-/*
-#include <stdlib.h>
-#include <string.h>
-*/
-import "C"
-import (
-	"go_module/awg"
-	"go_module/log"
-	"runtime/debug"
-	"strings"
-
-	"github.com/amnezia-vpn/amneziawg-go/conn"
-)
-
-var awgClient *awg.AwgClient
-
-//export AwgTurnOn
-func AwgTurnOn(interfaceName *C.char, tunFd C.int, settings *C.char) C.int {
-	log.Infof("Starting awg")
-
-	if awgClient != nil {
-		log.Infof("Disconnect existing awgClient")
-
-		err := awgClient.Disconnect()
-		if err != nil {
-			log.Infof("Failed to disconnect existing awgClient: %v", err)
-			return -1
-		}
-	}
-
-	log.Infof("Create new awgClient")
-
-	_awgClient, err := awg.NewAwgClient(C.GoString(interfaceName), C.GoString(settings), int(tunFd))
-	if err != nil {
-		log.Infof("Failed to create awgClient: %v", err)
-		return -1
-	}
-	awgClient = _awgClient
-
-	log.Infof("Connect awgClient")
-	err = awgClient.Connect()
-	if err != nil {
-		log.Infof("Failed to connect awgClient: %v", err)
-
-		return -1
-	}
-
-	return 0
-}
-
-//export AwgTurnOff
-func AwgTurnOff() {
-	log.Infof("Stopping awg")
-
-	if awgClient != nil {
-		log.Infof("Disconnect awgClient")
-
-		err := awgClient.Disconnect()
-		if err != nil {
-			log.Infof("Failed to disconnect awgClient: %v", err)
-		}
-		awgClient = nil
-	} else {
-		log.Infof("awgClient is null")
-	}
-}
-
-//export AwgGetSocketV4
-func AwgGetSocketV4() C.int {
-	if awgClient == nil {
-		return -1
-	}
-	bind, _ := awgClient.App.TunnelData.Device.Bind().(conn.PeekLookAtSocketFd)
-	if bind == nil {
-		return -1
-	}
-	fd, err := bind.PeekLookAtSocketFd4()
-	if err != nil {
-		return -1
-	}
-	return (C.int)(fd)
-}
-
-//export AwgGetSocketV6
-func AwgGetSocketV6() C.int {
-	if awgClient == nil {
-		return -1
-	}
-	bind, _ := awgClient.App.TunnelData.Device.Bind().(conn.PeekLookAtSocketFd)
-	if bind == nil {
-		return -1
-	}
-	fd, err := bind.PeekLookAtSocketFd6()
-	if err != nil {
-		return -1
-	}
-	return (C.int)(fd)
-}
-
-//export AwgGetConfig
-func AwgGetConfig() *C.char {
-	// return awg.AwgGetConfig(tunnelHandle)
-	return C.CString("")
-}
-
-//export AwgVersion
-func AwgVersion() *C.char {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return C.CString("unknown")
-	}
-	for _, dep := range info.Deps {
-		if dep.Path == "github.com/amnezia-vpn/amneziawg-go" {
-			parts := strings.Split(dep.Version, "-")
-			if len(parts) == 3 && len(parts[2]) == 12 {
-				return C.CString(parts[2][:7])
-			}
-			return C.CString(dep.Version)
-		}
-	}
-	return C.CString("unknown")
-}
-
-/*
 package main
 
 // #cgo LDFLAGS: -llog
 // #include <android/log.h>
+// extern int go_protect_socket(int fd);
 import "C"
 
 import (
 	"fmt"
+	"go_module/tunnel/protected_dialer"
 	"math"
 	"net"
 	"os"
@@ -147,6 +26,7 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/device"
 	"github.com/amnezia-vpn/amneziawg-go/ipc"
 	"github.com/amnezia-vpn/amneziawg-go/tun"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 )
 
@@ -179,11 +59,17 @@ var tunnelHandles map[int32]TunnelHandle
 var logDump []string
 
 func (l AndroidLogger) Printf(format string, args ...interface{}) {
-    C.__android_log_write(l.level, l.tag, cstring(fmt.Sprintf(format, args...)))
+	C.__android_log_write(l.level, l.tag, cstring(fmt.Sprintf(format, args...)))
 	logDump = append(logDump, fmt.Sprintf(format, args...))
 }
 
 func init() {
+	logrus.StandardLogger().ExitFunc = func(int) {}
+
+	protected_dialer.MakeSocketProtected = func(fd uintptr) {
+		C.go_protect_socket(C.int(fd))
+	}
+
 	tunnelHandles = make(map[int32]TunnelHandle)
 	logDump = nil
 	signals := make(chan os.Signal)
@@ -363,7 +249,3 @@ func awgDumpLog() *C.char {
 
 	return C.CString(log)
 }
-
-func main() {}
-
-*/

@@ -9,8 +9,7 @@ import (
 )
 
 //export CheckServerAlive
-func CheckServerAlive(addressC *C.char, port C.int) C.int {
-	address := C.GoString(addressC)
+func CheckServerAlive(address string, port int32) C.int {
 	res := healthcheck.CheckServerAlive(address, int(port))
 	log.Infof("[HC] Health check result: %v", res)
 	if res == nil {

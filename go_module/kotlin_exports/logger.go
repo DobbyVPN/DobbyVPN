@@ -8,6 +8,6 @@ import (
 )
 
 //export InitLogger
-func InitLogger(path *C.char) {
-	log.SetPath(C.GoString(path))
+func InitLogger(path string) {
+	log.SetPath(path)
 }

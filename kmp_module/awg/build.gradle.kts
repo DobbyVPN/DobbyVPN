@@ -1,33 +1,31 @@
-// @file:Suppress("UnstableApiUsage")
-
-import org.gradle.api.tasks.Copy
+@file:Suppress("UnstableApiUsage")
 
 plugins {
-    id("com.android.library")
-    kotlin("android")
+    alias(libs.plugins.android.library)
+    alias(libs.plugins.kotlin.android)
 }
 
-val pkg = "com.dobby.outline"
+
+val pkg: String = "com.dobby.awg"
+val cmakeAndroidPackageName: String = providers.environmentVariable("ANDROID_PACKAGE_NAME").getOrElse(pkg)
+val goBinaryPath: String? = providers.gradleProperty("goBinaryPath").orNull
 
 android {
     namespace = pkg
-    compileSdk = 35
+    compileSdk = 34
 
     defaultConfig {
         minSdk = 24
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
-
-        // Указываем ABI, для которых есть готовые .so
         ndk {
-            abiFilters += listOf("arm64-v8a" /*, "armeabi-v7a" если понадобится */)
+            // Limit native builds to a single ABI to avoid unnecessary variants
+            abiFilters += listOf("arm64-v8a")
         }
     }
 
     buildTypes {
-        debug {
-            // Обычные debug-настройки
-        }
         release {
             isMinifyEnabled = false
             proguardFiles(
@@ -36,12 +34,12 @@ android {
             )
         }
     }
-
-    // Подключаем CMake один раз, путь+версия
-    externalNativeBuild {
-        cmake {
-            path("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+    buildTypes {
+        all {
+        }
+        release {
+        }
+        debug {
         }
     }
 
@@ -53,9 +51,9 @@ android {
     }
 
     lint {
-        disable += listOf("LongLogTag", "NewApi")
+        disable += "LongLogTag"
+        disable += "NewApi"
     }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -63,26 +61,13 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-
-    val outputDir = rootProject.layout.projectDirectory.dir("libs")
-    val copyOutlineAar = tasks.register<Copy>("copyOutlineAar") {
-        from(layout.buildDirectory.dir("outputs/aar")) {
-            include("outline-debug.aar", "outline-release.aar")
-        }
-
-        into(outputDir)
-    }
-
-    afterEvaluate {
-        tasks.named("build").configure { finalizedBy(copyOutlineAar) }
-    }
 }
 
 dependencies {
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
-
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

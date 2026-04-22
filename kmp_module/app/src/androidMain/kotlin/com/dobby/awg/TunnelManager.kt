@@ -4,6 +4,7 @@ import android.net.VpnService
 import android.net.VpnService.Builder
 import android.os.Build
 import android.system.OsConstants
+import com.dobby.awg.config.Config
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.AmneziaWGConfig
 
@@ -36,7 +37,13 @@ class TunnelManager(private val service: VpnService, private val logger: Logger)
             }
 
             // Build config
-            val goConfig = tomlConfig.toAwgQuick()
+            val goConfig = try {
+                Config.parse(tomlConfig.toAwgQuick().byteInputStream()).toAwgUserspaceString()
+            } catch (e: Exception) {
+                logger.log("[$tunnelName] Failed to convert to IPC: $e")
+
+                return
+            }
 
             // Create the vpn tunnel with android API
             val builder: Builder = service.Builder()
@@ -117,8 +124,8 @@ class TunnelManager(private val service: VpnService, private val logger: Logger)
 
             tunnelData = TunnelData(tunnelName, tomlConfig, TunnelState.UP, currentTunnelHandle)
 
-            service.protect(GoBackendWrapper.awgGetSocketV4())
-            service.protect(GoBackendWrapper.awgGetSocketV6())
+            service.protect(GoBackendWrapper.awgGetSocketV4(currentTunnelHandle))
+            service.protect(GoBackendWrapper.awgGetSocketV6(currentTunnelHandle))
         } else {
             if (tunnelData.currentTunnelHandle == -1) {
                 logger.log("[$tunnelName] Failed: tunnel is off")
@@ -126,7 +133,7 @@ class TunnelManager(private val service: VpnService, private val logger: Logger)
                 return
             }
 
-            GoBackendWrapper.awgTurnOff()
+            GoBackendWrapper.awgTurnOff(this.tunnelData.currentTunnelHandle)
             tunnelData = TunnelData(tunnelName, null, TunnelState.DOWN, -1)
         }
     }
