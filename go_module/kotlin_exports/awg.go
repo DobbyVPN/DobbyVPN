@@ -5,63 +5,28 @@
 
 package main
 
-// #cgo LDFLAGS: -llog
-// #include <android/log.h>
 // extern int go_protect_socket(int fd);
 import "C"
 
 import (
-	"fmt"
+	"go_module/log"
 	"go_module/tunnel/protected_dialer"
 	"math"
-	"net"
-	"os"
-	"os/signal"
-	"runtime"
 	"runtime/debug"
 	"strings"
-	"unsafe"
 
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/device"
-	"github.com/amnezia-vpn/amneziawg-go/ipc"
 	"github.com/amnezia-vpn/amneziawg-go/tun"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 )
 
-type AndroidLogger struct {
-	level C.int
-	tag   *C.char
-}
-
-type AndroidLogLine struct {
-	level   C.int
-	tag     *C.char
-	message *string
-}
-
 type TunnelHandle struct {
 	device *device.Device
-	uapi   net.Listener
-}
-
-func cstring(s string) *C.char {
-	b, err := unix.BytePtrFromString(s)
-	if err != nil {
-		b := [1]C.char{}
-		return &b[0]
-	}
-	return (*C.char)(unsafe.Pointer(b))
 }
 
 var tunnelHandles map[int32]TunnelHandle
-var logDump []string
-
-func (l AndroidLogger) Printf(format string, args ...interface{}) {
-	C.__android_log_write(l.level, l.tag, cstring(fmt.Sprintf(format, args...)))
-	logDump = append(logDump, fmt.Sprintf(format, args...))
-}
 
 func init() {
 	logrus.StandardLogger().ExitFunc = func(int) {}
@@ -71,31 +36,13 @@ func init() {
 	}
 
 	tunnelHandles = make(map[int32]TunnelHandle)
-	logDump = nil
-	signals := make(chan os.Signal)
-	signal.Notify(signals, unix.SIGUSR2)
-	go func() {
-		buf := make([]byte, os.Getpagesize())
-		for {
-			select {
-			case <-signals:
-				n := runtime.Stack(buf, true)
-				if n == len(buf) {
-					n--
-				}
-				buf[n] = 0
-				C.__android_log_write(C.ANDROID_LOG_ERROR, cstring("AmneziaWG/Stacktrace"), (*C.char)(unsafe.Pointer(&buf[0])))
-			}
-		}
-	}()
 }
 
 //export awgTurnOn
 func awgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
-	tag := cstring("AmneziaWG/" + interfaceName)
 	logger := &device.Logger{
-		Verbosef: AndroidLogger{level: C.ANDROID_LOG_DEBUG, tag: tag}.Printf,
-		Errorf:   AndroidLogger{level: C.ANDROID_LOG_ERROR, tag: tag}.Printf,
+		Verbosef: log.Infof,
+		Errorf:   log.Infof,
 	}
 
 	tun, name, err := tun.CreateUnmonitoredTUNFromFD(int(tunFd))
@@ -116,33 +63,9 @@ func awgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	}
 	device.DisableSomeRoamingForBrokenMobileSemantics()
 
-	var uapi net.Listener
-
-	uapiFile, err := ipc.UAPIOpen(name)
-	if err != nil {
-		logger.Errorf("UAPIOpen: %v", err)
-	} else {
-		uapi, err = ipc.UAPIListen(name, uapiFile)
-		if err != nil {
-			uapiFile.Close()
-			logger.Errorf("UAPIListen: %v", err)
-		} else {
-			go func() {
-				for {
-					conn, err := uapi.Accept()
-					if err != nil {
-						return
-					}
-					go device.IpcHandle(conn)
-				}
-			}()
-		}
-	}
-
 	err = device.Up()
 	if err != nil {
 		logger.Errorf("Unable to bring up device: %v", err)
-		uapiFile.Close()
 		device.Close()
 		return -1
 	}
@@ -156,11 +79,10 @@ func awgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	}
 	if i == math.MaxInt32 {
 		logger.Errorf("Unable to find empty handle")
-		uapiFile.Close()
 		device.Close()
 		return -1
 	}
-	tunnelHandles[i] = TunnelHandle{device: device, uapi: uapi}
+	tunnelHandles[i] = TunnelHandle{device: device}
 	return i
 }
 
@@ -171,9 +93,6 @@ func awgTurnOff(tunnelHandle int32) {
 		return
 	}
 	delete(tunnelHandles, tunnelHandle)
-	if handle.uapi != nil {
-		handle.uapi.Close()
-	}
 	handle.device.Close()
 }
 
@@ -244,8 +163,5 @@ func awgVersion() *C.char {
 
 //export awgDumpLog
 func awgDumpLog() *C.char {
-	var log = strings.Join(logDump, "\n")
-	logDump = nil
-
-	return C.CString(log)
+	return C.CString("")
 }
