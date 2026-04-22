@@ -7,15 +7,16 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/cbeuw/Cloak/internal/client"
-	"github.com/cbeuw/Cloak/internal/common"
-	mux "github.com/cbeuw/Cloak/internal/multiplex"
-	"github.com/sirupsen/logrus"
 	"go_module/log"
 	"net"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cbeuw/Cloak/internal/client"
+	"github.com/cbeuw/Cloak/internal/common"
+	mux "github.com/cbeuw/Cloak/internal/multiplex"
+	"github.com/sirupsen/logrus"
 )
 
 var errListenerClosed = errors.New("listener closed")
@@ -252,4 +253,8 @@ func (c *CkClient) Refresh() error {
 	}
 
 	return c.Connect()
+}
+
+func (c *CkClient) HealthCheck() error {
+	return nil
 }

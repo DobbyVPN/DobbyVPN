@@ -16,13 +16,28 @@ class RestartableHealthCheckGrpcLibrary(private val logger: Logger) : HealthChec
         }
     }
 
-    override fun CheckServerAlive(address: String, port: Int): Int {
+    override fun GetConnectionState(): Int {
         return try {
-            GrpcVpnLibrary.healthCheckGrpcLibrary.CheckServerAlive(address, port)
+            GrpcVpnLibrary.healthCheckGrpcLibrary.GetConnectionState()
         } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to check if server is alive: $e")
+            logger.log("[ERROR] Failed to get vpn connection state: $e")
+            0
+        }
+    }
 
-            -1
+    override fun StartHealthCheck() {
+        return try {
+            GrpcVpnLibrary.healthCheckGrpcLibrary.StartHealthCheck()
+        } catch (e: VpnServiceStatusException) {
+            logger.log("[ERROR] Failed to start health check: $e")
+        }
+    }
+
+    override fun StopHealthCheck() {
+        return try {
+            GrpcVpnLibrary.healthCheckGrpcLibrary.StopHealthCheck()
+        } catch (e: VpnServiceStatusException) {
+            logger.log("[ERROR] Failed to stop health check: $e")
         }
     }
 }

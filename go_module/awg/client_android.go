@@ -4,18 +4,19 @@ package awg
 
 import (
 	"fmt"
+	"go_module/common"
+	_ "go_module/log"
+	"math"
+	"net"
+	"runtime/debug"
+	"strings"
+
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/device"
 	"github.com/amnezia-vpn/amneziawg-go/ipc"
 	"github.com/amnezia-vpn/amneziawg-go/tun"
 	log "github.com/sirupsen/logrus"
-	"go_module/common"
-	_ "go_module/log"
 	"golang.org/x/sys/unix"
-	"math"
-	"net"
-	"runtime/debug"
-	"strings"
 )
 
 const Name = "awg"
@@ -46,6 +47,10 @@ func (c *AwgClient) Refresh() error {
 		return err
 	} // TODO: handle error with more detail
 	return c.Connect()
+}
+
+func (c *AwgClient) HealthCheck() error {
+	return nil
 }
 
 type TunnelHandle struct {

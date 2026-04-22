@@ -5,7 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dobby.feature.diagnostic.domain.HealthCheck
-import com.dobby.feature.diagnostic.domain.HealthCheckManager
+import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.AwgManager
@@ -23,8 +23,9 @@ import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import com.dobby.vpn.BuildConfig
+import korlibs.time.seconds
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 
 val httpClient = HttpClient()
 
@@ -35,7 +36,7 @@ class MainViewModel(
     private val vpnManager: VpnManager,
     private val awgManager: AwgManager,
     private val logger: Logger,
-    healthCheck: HealthCheck,
+    private val healthCheck: HealthCheck,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
@@ -60,10 +61,6 @@ class MainViewModel(
     )
         private set
     //endregion
-    private val healthCheckManager: HealthCheckManager = HealthCheckManager(healthCheck, this, configsRepository, logger)
-    private var serverAddress: String? = null
-    private var serverPort: Int? = null
-
     init {
         viewModelScope.launch {
             _uiState.emit(
@@ -73,10 +70,13 @@ class MainViewModel(
             )
         }
         viewModelScope.launch {
-            connectionStateRepository.statusFlow.collect { isConnected ->
-                logger.log("Update connection state: $isConnected")
-                val newState = _uiState.value.copy(isConnected = isConnected)
+            while (true) {
+                val connectionState = healthCheck.GetConnectionState()
+                logger.log("Update connection state: $connectionState")
+                val newState = _uiState.value.copy(connectionState = connectionState)
                 _uiState.emit(newState)
+                connectionStateRepository.updateStatus(connectionState)
+                delay(5.seconds.millisecondsLong)
             }
         }
         viewModelScope.launch {
@@ -121,7 +121,7 @@ class MainViewModel(
                     if (!ok) {
                         logger.log("Config is invalid or failed to apply → abort start (no HC/VPN)")
                         connectionStateRepository.updateVpnStarted(false)
-                        connectionStateRepository.updateStatus(false)
+                        connectionStateRepository.updateStatus(VpnConnectionState.DISCONNECTED)
                         return@launch
                     }
                 } catch (e: Exception) {
@@ -140,8 +140,7 @@ class MainViewModel(
                 true -> {
                     logger.log("Stopping VPN service due to active connection")
                     connectionStateRepository.updateVpnStarted(false)
-                    connectionStateRepository.updateStatus(false)
-                    healthCheckManager.stopHealthCheck()
+                    connectionStateRepository.updateStatus(VpnConnectionState.DISCONNECTED)
                     stopVpnService()
                 }
                 false -> {
@@ -184,7 +183,6 @@ class MainViewModel(
             return false
         }
 
-        updateServerTargetFromConfig()
         return true
     }
 
@@ -210,7 +208,7 @@ class MainViewModel(
         }
     }
 
-    private suspend fun startVpn(isPermissionGranted: Boolean) {
+    private fun startVpn(isPermissionGranted: Boolean) {
         if (isPermissionGranted) {
             logger.log("Permission granted — starting VPN service")
             startVpnService()
@@ -221,66 +219,19 @@ class MainViewModel(
         }
     }
 
-    suspend fun startVpnService() {
+    fun startVpnService() {
         logger.log("Starting VPN service...")
-        val address = serverAddress
-        val port = serverPort
-        if (address == null || port == null) {
-            if (!updateServerTargetFromConfig()) {
-                logger.log("Server address/port is not set → skipping health check start")
-                vpnManager.start()
-                return
-            }
-        }
-        withContext(Dispatchers.Default) {
-            healthCheckManager.startHealthCheck(serverAddress!!, serverPort!!)
-        }
         vpnManager.start()
+        healthCheck.StartHealthCheck()
     }
 
-    fun stopVpnService(stoppedByHealthCheck: Boolean = false) {
+    fun stopVpnService() {
         logger.log("Stopping VPN service...")
+        healthCheck.StartHealthCheck()
         vpnManager.stop()
-        if (!stoppedByHealthCheck) {
-            configsRepository.clearOutlineAndCloakConfig()
-            connectionStateRepository.tryUpdateStatus(false)
-        }
+        configsRepository.clearOutlineAndCloakConfig()
+        connectionStateRepository.tryUpdateStatus(VpnConnectionState.DISCONNECTED)
         logger.log("VPN service stopped successfully, state reset to disconnected")
-    }
-
-    private fun updateServerTargetFromConfig(): Boolean {
-        val serverPortOutline = configsRepository.getServerPortOutline()
-        val parsed = parseHostPort(serverPortOutline)
-        return if (parsed == null) {
-            logger.log("Failed to parse server address/port from Outline config: ${maskStr(serverPortOutline)}")
-            serverAddress = null
-            serverPort = null
-            false
-        } else {
-            serverAddress = parsed.first
-            serverPort = parsed.second
-            logger.log("Server target resolved: ${maskStr(serverAddress ?: "")}:$serverPort")
-            true
-        }
-    }
-
-    private fun parseHostPort(hostPortMaybeWithQuery: String): Pair<String, Int>? {
-        val hostPort = hostPortMaybeWithQuery.substringBefore("?").trim()
-        if (hostPort.isBlank()) return null
-
-        return if (hostPort.startsWith("[")) {
-            val host = hostPort.substringAfter("[").substringBefore("]")
-            val portStr = hostPort.substringAfter("]:", "")
-            val port = portStr.toIntOrNull() ?: return null
-            host to port
-        } else {
-            val lastColon = hostPort.lastIndexOf(':')
-            if (lastColon <= 0) return null
-            val host = hostPort.substring(0, lastColon)
-            val portStr = hostPort.substring(lastColon + 1)
-            val port = portStr.toIntOrNull() ?: return null
-            host to port
-        }
     }
     //endregion
 }

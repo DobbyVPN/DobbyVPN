@@ -29,6 +29,10 @@ func (a *AwgClient) Refresh() error {
 	return a.app.Run()
 }
 
+func (a *AwgClient) HealthCheck() error {
+	return nil
+}
+
 func NewAwgClient(config string) (*AwgClient, error) {
 	app, err := internal.NewApp(config)
 	if err != nil {

@@ -6,6 +6,7 @@ type vpnClientInterface interface {
 	Connect() error
 	Disconnect() error
 	Refresh() error
+	HealthCheck() error
 }
 
 type vpnClientWithState struct {
@@ -76,6 +77,15 @@ func (c *CommonClient) Refresh(clientName string) error {
 	defer c.mu.Unlock()
 	if client, ok := c.vpnClients[clientName]; ok && client.connected && !client.inCriticalSection {
 		return client.Refresh()
+	}
+	return nil
+}
+
+func (c *CommonClient) HealthCheck(clientName string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if client, ok := c.vpnClients[clientName]; ok && client.connected && !client.inCriticalSection {
+		return client.HealthCheck()
 	}
 	return nil
 }

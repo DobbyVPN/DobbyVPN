@@ -1,8 +1,8 @@
 package interop.healthcheck
 
 import com.dobby.grpcproto.VpnGrpcKt
-import com.dobby.grpcproto.checkServerAliveRequest
 import com.dobby.grpcproto.empty
+import interop.exceptions.VpnServiceInternalException
 import interop.exceptions.VpnServiceStatusException
 import io.grpc.ManagedChannel
 import io.grpc.StatusException
@@ -23,17 +23,30 @@ open class HealthCheckGrpcLibrary(channel: ManagedChannel) : HealthCheckLibrary 
         }
     }
 
-    override fun CheckServerAlive(address: String, port: Int): Int {
+    override fun GetConnectionState(): Int {
         return runBlocking {
-            val request = checkServerAliveRequest {
-                this.address = address
-                this.port = port
-            }
-
             try {
-                val response = stub.checkServerAlive(request)
+                stub.getConnectionState(empty {}).connectionState
+            } catch (e: StatusException) {
+                throw VpnServiceStatusException(e)
+            }
+        }
+    }
 
-                response.result
+    override fun StartHealthCheck() {
+        return runBlocking {
+            try {
+                stub.startHealthCheck(empty {})
+            } catch (e: StatusException) {
+                throw VpnServiceStatusException(e)
+            }
+        }
+    }
+
+    override fun StopHealthCheck() {
+        return runBlocking {
+            try {
+                stub.stopHealthCheck(empty {})
             } catch (e: StatusException) {
                 throw VpnServiceStatusException(e)
             }
