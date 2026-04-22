@@ -63,13 +63,13 @@ func unsafeToString(v any) string {
 }
 
 //export NewOutlineClient
-func NewOutlineClient(config *C.char, fd C.int) {
+func NewOutlineClient(config string, fd int32) {
 	defer guardExport("NewOutlineClient")()
 	log.Infof("NewOutlineClient() called")
 
 	OutlineDisconnect()
 
-	goConfig := C.GoString(config)
+	goConfig := config
 	goFD := int(fd)
 
 	log.Infof("Config length=%d", len(goConfig))

@@ -6,8 +6,8 @@ import "C"
 import "go_module/tunnel"
 
 //export SetGeoRoutingConf
-func SetGeoRoutingConf(cidrsC *C.char) {
-	tunnel.SetGeoRoutingConf(C.GoString(cidrsC))
+func SetGeoRoutingConf(cidrs string) {
+	tunnel.SetGeoRoutingConf(cidrs)
 }
 
 //export ClearGeoRoutingConf

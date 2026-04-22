@@ -1,21 +1,21 @@
 package com.dobby.awg
 
-import com.dobby.outline.OutlineGo
-
 class GoBackendWrapper {
     companion object {
-        private val backend = OutlineGo
+        private val backend = GoBackend()
 
         fun awgTurnOn(ifname: String, tunFd: Int, settings: String): Int = backend.awgTurnOn(ifname, tunFd, settings)
 
-        fun awgTurnOff() = backend.awgTurnOff()
+        fun awgTurnOff(handle: Int) = backend.awgTurnOff(handle)
 
-        fun awgGetSocketV4(): Int = backend.awgGetSocketV4()
+        fun awgGetSocketV4(handle: Int): Int = backend.awgGetSocketV4(handle)
 
-        fun awgGetSocketV6(): Int = backend.awgGetSocketV6()
+        fun awgGetSocketV6(handle: Int): Int = backend.awgGetSocketV6(handle)
 
-        fun awgGetConfig(): String? = backend.awgGetConfig()
+        fun awgGetConfig(handle: Int): String = backend.awgGetConfig(handle)
 
         fun awgVersion(): String? = backend.awgVersion()
+
+        fun InitLogger(path: String) = backend.initLogger(path)
     }
 }
