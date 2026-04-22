@@ -12,10 +12,6 @@ class GoBackendWrapper {
 
         fun awgGetSocketV6(handle: Int): Int = backend.awgGetSocketV6(handle)
 
-        fun awgGetConfig(handle: Int): String = backend.awgGetConfig(handle)
-
-        fun awgVersion(): String? = backend.awgVersion()
-
         fun InitLogger(path: String) = backend.initLogger(path)
     }
 }

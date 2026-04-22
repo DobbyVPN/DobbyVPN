@@ -12,8 +12,6 @@ import (
 	"go_module/log"
 	"go_module/tunnel/protected_dialer"
 	"math"
-	"runtime/debug"
-	"strings"
 
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/device"
@@ -38,8 +36,8 @@ func init() {
 	tunnelHandles = make(map[int32]TunnelHandle)
 }
 
-//export awgTurnOn
-func awgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
+//export AwgTurnOn
+func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	logger := &device.Logger{
 		Verbosef: log.Infof,
 		Errorf:   log.Infof,
@@ -86,8 +84,8 @@ func awgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	return i
 }
 
-//export awgTurnOff
-func awgTurnOff(tunnelHandle int32) {
+//export AwgTurnOff
+func AwgTurnOff(tunnelHandle int32) {
 	handle, ok := tunnelHandles[tunnelHandle]
 	if !ok {
 		return
@@ -96,8 +94,8 @@ func awgTurnOff(tunnelHandle int32) {
 	handle.device.Close()
 }
 
-//export awgGetSocketV4
-func awgGetSocketV4(tunnelHandle int32) int32 {
+//export AwgGetSocketV4
+func AwgGetSocketV4(tunnelHandle int32) int32 {
 	handle, ok := tunnelHandles[tunnelHandle]
 	if !ok {
 		return -1
@@ -113,8 +111,8 @@ func awgGetSocketV4(tunnelHandle int32) int32 {
 	return int32(fd)
 }
 
-//export awgGetSocketV6
-func awgGetSocketV6(tunnelHandle int32) int32 {
+//export AwgGetSocketV6
+func AwgGetSocketV6(tunnelHandle int32) int32 {
 	handle, ok := tunnelHandles[tunnelHandle]
 	if !ok {
 		return -1
@@ -128,40 +126,4 @@ func awgGetSocketV6(tunnelHandle int32) int32 {
 		return -1
 	}
 	return int32(fd)
-}
-
-//export awgGetConfig
-func awgGetConfig(tunnelHandle int32) *C.char {
-	handle, ok := tunnelHandles[tunnelHandle]
-	if !ok {
-		return nil
-	}
-	settings, err := handle.device.IpcGet()
-	if err != nil {
-		return nil
-	}
-	return C.CString(settings)
-}
-
-//export awgVersion
-func awgVersion() *C.char {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return C.CString("unknown")
-	}
-	for _, dep := range info.Deps {
-		if dep.Path == "github.com/amnezia-vpn/amneziawg-go" {
-			parts := strings.Split(dep.Version, "-")
-			if len(parts) == 3 && len(parts[2]) == 12 {
-				return C.CString(parts[2][:7])
-			}
-			return C.CString(dep.Version)
-		}
-	}
-	return C.CString("unknown")
-}
-
-//export awgDumpLog
-func awgDumpLog() *C.char {
-	return C.CString("")
 }

@@ -9,12 +9,6 @@ class GoBackend {
 
     external fun awgGetSocketV6(handle: Int): Int
 
-    external fun awgGetConfig(handle: Int): String
-
-    external fun awgVersion(): String
-
-    external fun awgDumpLog(): String
-
     external fun startCloakClient(localHost: String, localPort: String, config: String, udp: Int): Unit
 
     external fun stopCloakClient(): Unit
