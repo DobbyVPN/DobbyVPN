@@ -68,7 +68,7 @@ class HealthCheckManager(
                 }
 
                 if (configsRepository.getIsUserInitStop()) {
-                    logger.log("[HC] Stop condition: getIsUserInitStop() == true → exiting loop")
+                    logger.log("[HC] Stop condition: getIsUserInitStop() == true → exiting health check loop")
                     return@launch
                 }
 

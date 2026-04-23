@@ -648,16 +648,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         stopLoadSampler(reason: reason)
 
         do {
-            try cloakInteractor.stopCloak()
+            try outlineInteractor.stopOutline()
         } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop cloak: \(error.localizedDescription)")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop outline: \(error.localizedDescription)")
         }
 
         do {
-            try outlineInteractor.stopOutline()
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] outline stopped")
+            try cloakInteractor.stopCloak()
         } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop outline: \(error.localizedDescription)")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop cloak: \(error.localizedDescription)")
         }
 
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] clearing geo routing config")
