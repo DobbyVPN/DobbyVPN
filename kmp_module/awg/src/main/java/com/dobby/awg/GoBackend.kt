@@ -3,11 +3,11 @@ package com.dobby.awg
 class GoBackend {
     external fun awgTurnOn(ifname: String, tunFd: Int, settings: String): Int
 
-    external fun awgTurnOff(handle: Int)
+    external fun awgTurnOff()
 
-    external fun awgGetSocketV4(handle: Int): Int
+    external fun awgGetSocketV4(): Int
 
-    external fun awgGetSocketV6(handle: Int): Int
+    external fun awgGetSocketV6(): Int
 
     external fun startCloakClient(localHost: String, localPort: String, config: String, udp: Int): Unit
 

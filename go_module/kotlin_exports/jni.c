@@ -14,9 +14,9 @@ extern void NewOutlineClient(struct go_string config, int fd);
 extern int OutlineConnect();
 extern void OutlineDisconnect();
 extern int AwgTurnOn(struct go_string ifname, int tun_fd, struct go_string settings);
-extern void AwgTurnOff(int handle);
-extern int AwgGetSocketV4(int handle);
-extern int AwgGetSocketV6(int handle);
+extern void AwgTurnOff();
+extern int AwgGetSocketV4();
+extern int AwgGetSocketV6();
 
 #define EXPORT __attribute__((visibility("default")))
 
@@ -63,19 +63,19 @@ JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_awgTurnOn(JNIEnv *env, jclas
 	return ret;
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_awgTurnOff(JNIEnv *env, jclass c, jint handle)
+JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_awgTurnOff(JNIEnv *env, jclass c)
 {
-	AwgTurnOff(handle);
+	AwgTurnOff();
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_awgGetSocketV4(JNIEnv *env, jclass c, jint handle)
+JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_awgGetSocketV4(JNIEnv *env, jclass c)
 {
-	return AwgGetSocketV4(handle);
+	return AwgGetSocketV4();
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_awgGetSocketV6(JNIEnv *env, jclass c, jint handle)
+JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_awgGetSocketV6(JNIEnv *env, jclass c)
 {
-	return AwgGetSocketV6(handle);
+	return AwgGetSocketV6();
 }
 
 JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_startCloakClient(JNIEnv *env, jclass c, jstring jLocalHost, jstring jLocalPort, jstring jConfig, jint udp)
