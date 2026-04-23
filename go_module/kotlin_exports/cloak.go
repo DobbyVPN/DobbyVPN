@@ -8,8 +8,8 @@ import (
 )
 
 //export StartCloakClient
-func StartCloakClient(localHost string, localPort string, config string, udp int32) {
-	cloak.StartCloakClient(localHost, localPort, config, udp != 0)
+func StartCloakClient(localHost string, localPort string, config string, udp bool) {
+	cloak.StartCloakClient(localHost, localPort, config, udp)
 }
 
 //export StopCloakClient

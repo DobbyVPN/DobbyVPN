@@ -1,7 +1,7 @@
 package com.dobby.feature.vpn_service.domain.awg
 
 import android.content.Intent
-import com.dobby.awg.GoBackendWrapper
+import com.dobby.GoBackendWrapper
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.AmneziaWGConfig
 import com.dobby.feature.main.domain.DobbyConfigsRepository
