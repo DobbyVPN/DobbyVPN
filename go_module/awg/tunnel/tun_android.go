@@ -5,12 +5,9 @@ package tunnel
 import (
 	"fmt"
 	"go_module/log"
-	"math"
-	"net"
 
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/device"
-	"github.com/amnezia-vpn/amneziawg-go/ipc"
 	"github.com/amnezia-vpn/amneziawg-go/tun"
 	"golang.org/x/sys/unix"
 )
@@ -19,24 +16,7 @@ type TunnelData struct {
 	InterfaceName   string
 	InterfaceConfig string
 	InterfaceFD     int
-	Device          *device.Device
-	logger          *device.Logger
-	uapi            net.Listener
-	errs            chan error
-}
-
-type TunnelHandle struct {
-	device *device.Device
-	uapi   net.Listener
-}
-
-var tunnelHandles map[int32]TunnelHandle = make(map[int32]TunnelHandle)
-
-func CreateTunnelData(tun string, conf string) *TunnelData {
-	return &TunnelData{
-		InterfaceName:   tun,
-		InterfaceConfig: conf,
-	}
+	device          *device.Device
 }
 
 func (a *TunnelData) Run() error {
@@ -48,68 +28,56 @@ func (a *TunnelData) Run() error {
 	tun, name, err := tun.CreateUnmonitoredTUNFromFD(a.InterfaceFD)
 	if err != nil {
 		unix.Close(a.InterfaceFD)
-		logger.Errorf("CreateUnmonitoredTUNFromFD: %v", err)
-		return fmt.Errorf("error")
+		return fmt.Errorf("Failed create unmonitored TUN from FD: %v", err)
 	}
 
 	logger.Verbosef("Attaching to interface %v", name)
-	device := device.NewDevice(tun, conn.NewStdNetBind(), logger)
+	a.device = device.NewDevice(tun, conn.NewStdNetBind(), logger)
 
-	err = device.IpcSet(a.InterfaceConfig)
+	err = a.device.IpcSet(a.InterfaceConfig)
 	if err != nil {
 		unix.Close(a.InterfaceFD)
-		logger.Errorf("IpcSet: %v", err)
-		return fmt.Errorf("error")
+		return fmt.Errorf("Failed to set IPC config: %v", err)
 	}
-	device.DisableSomeRoamingForBrokenMobileSemantics()
+	a.device.DisableSomeRoamingForBrokenMobileSemantics()
 
-	var uapi net.Listener
-
-	uapiFile, err := ipc.UAPIOpen(name)
+	err = a.device.Up()
 	if err != nil {
-		logger.Errorf("UAPIOpen: %v", err)
-	} else {
-		uapi, err = ipc.UAPIListen(name, uapiFile)
-		if err != nil {
-			uapiFile.Close()
-			logger.Errorf("UAPIListen: %v", err)
-		} else {
-			go func() {
-				for {
-					conn, err := uapi.Accept()
-					if err != nil {
-						return
-					}
-					go device.IpcHandle(conn)
-				}
-			}()
-		}
+		a.device.Close()
+		return fmt.Errorf("Failed to bring peers up: %v", err)
 	}
 
-	err = device.Up()
-	if err != nil {
-		logger.Errorf("Unable to bring up device: %v", err)
-		uapiFile.Close()
-		device.Close()
-		return fmt.Errorf("error")
-	}
 	logger.Verbosef("Device started")
 
-	var i int32
-	for i = 0; i < math.MaxInt32; i++ {
-		if _, exists := tunnelHandles[i]; !exists {
-			break
-		}
-	}
-	if i == math.MaxInt32 {
-		logger.Errorf("Unable to find empty handle")
-		uapiFile.Close()
-		device.Close()
-		return fmt.Errorf("error")
-	}
-	tunnelHandles[i] = TunnelHandle{device: device, uapi: uapi}
 	return nil
 }
 
 func (a *TunnelData) Stop() {
+	if a.device != nil {
+		a.device.Close()
+	}
+}
+
+func (a *TunnelData) GetSocketV4() int {
+	bind, _ := a.device.Bind().(conn.PeekLookAtSocketFd)
+	if bind == nil {
+		return -1
+	}
+	fd, err := bind.PeekLookAtSocketFd4()
+	if err != nil {
+		return -1
+	}
+	return fd
+}
+
+func (a *TunnelData) GetSocketV6() int {
+	bind, _ := a.device.Bind().(conn.PeekLookAtSocketFd)
+	if bind == nil {
+		return -1
+	}
+	fd, err := bind.PeekLookAtSocketFd6()
+	if err != nil {
+		return -1
+	}
+	return fd
 }
