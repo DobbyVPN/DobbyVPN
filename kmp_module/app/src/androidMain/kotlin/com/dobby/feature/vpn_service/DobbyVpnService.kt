@@ -94,7 +94,11 @@ class DobbyVpnService : VpnService() {
                         if (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) add("ETH")
                         if (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) add("VPN")
                     }.joinToString("|")
-                    logger.log("[svc:$serviceId] net:onCapabilitiesChanged net=$network transports=$transports internet=$hasInternet validated=$validated")
+                    logger.log(
+                        "[svc:$serviceId] net:onCapabilitiesChanged " +
+                            "net=$network transports=$transports " +
+                            "internet=$hasInternet validated=$validated"
+                    )
                 }
             }
             defaultNetworkCallback = cb
@@ -124,7 +128,10 @@ class DobbyVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val intentFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) == true
-        logger.log("[svc:$serviceId] onStartCommand(startId=$startId flags=$flags intentFromUi=$intentFromUi) vpnInterface=${vpnInterface?.fd}")
+        logger.log(
+            "[svc:$serviceId] onStartCommand(startId=$startId flags=$flags " +
+                "intentFromUi=$intentFromUi) vpnInterface=${vpnInterface?.fd}"
+        )
 
         serviceScope.launch {
             startStopMutex.withLock {

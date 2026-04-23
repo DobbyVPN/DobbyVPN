@@ -113,7 +113,10 @@ class HealthCheckManager(
 
                     if (nextDelay == null) {
                         consecutiveFailuresCount++
-                        logger.log("[HC] Not connected → consecutiveFailuresCount=$consecutiveFailuresCount/$consecutiveFailuresBeforeTurnOff")
+                        logger.log(
+                            "[HC] Not connected → " +
+                                "consecutiveFailuresCount=$consecutiveFailuresCount/$consecutiveFailuresBeforeTurnOff"
+                        )
 
                         if (consecutiveFailuresCount >= consecutiveFailuresBeforeTurnOff) {
                             logger.log("[HC] Failure threshold reached → turning off VPN & stopping health check")

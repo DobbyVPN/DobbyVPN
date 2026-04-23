@@ -87,7 +87,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     if ip == trimmed {
                         logs.writeLog(log: "Excluded route for Outline host: \(maskStr(value: ip))/32")
                     } else {
-                        logs.writeLog(log: "Excluded route for Outline host resolved: \(maskStr(value: trimmed)) → \(maskStr(value: ip))/32")
+                        logs.writeLog(
+                            log: "Excluded route for Outline host resolved: " +
+                                "\(maskStr(value: trimmed)) → \(maskStr(value: ip))/32"
+                        )
                     }
                 } else {
                     logs.writeLog(log: "Excluded route for Outline host skipped (can't resolve to IPv4): \(trimmed)")
@@ -101,7 +104,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     if ip == trimmed {
                         logs.writeLog(log: "Excluded route for Cloak RemoteHost: \(maskStr(value: ip))/32")
                     } else {
-                        logs.writeLog(log: "Excluded route for Cloak RemoteHost resolved: \(maskStr(value: trimmed)) → \(maskStr(value: ip))/32")
+                        logs.writeLog(
+                            log: "Excluded route for Cloak RemoteHost resolved: " +
+                                "\(maskStr(value: trimmed)) → \(maskStr(value: ip))/32"
+                        )
                     }
                 } else {
                     logs.writeLog(log: "Excluded route for Cloak RemoteHost skipped (can't resolve to IPv4): \(maskStr(value: trimmed))")
@@ -149,7 +155,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(log: "startTunnel: all packet loops started")
         } catch {
             let nsError = error as NSError
-            logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel failed: \(nsError.domain) code=\(nsError.code) desc=\(error.localizedDescription)")
+            logs.writeLog(
+                log: "[tunnel:\(tunnelId)] startTunnel failed: " +
+                    "\(nsError.domain) code=\(nsError.code) desc=\(error.localizedDescription)"
+            )
             throw error
         }
     }
@@ -204,7 +213,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 let ifaces = path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",")
                 let expensive = path.isExpensive
                 let constrained = path.isConstrained
-                self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] pathUpdate status=\(status) ifaces=[\(ifaces)] expensive=\(expensive) constrained=\(constrained)")
+                self.logs.writeLog(
+                    log: "[tunnel:\(self.tunnelId)] pathUpdate " +
+                        "status=\(status) ifaces=[\(ifaces)] " +
+                        "expensive=\(expensive) constrained=\(constrained)"
+                )
             }
         }
 
