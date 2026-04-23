@@ -1,7 +1,4 @@
-/* SPDX-License-Identifier: Apache-2.0
- *
- * Copyright © 2017-2022 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
- */
+//go:build android
 
 package main
 
@@ -9,22 +6,12 @@ package main
 import "C"
 
 import (
+	"go_module/awg"
 	"go_module/log"
 	"go_module/tunnel/protected_dialer"
-	"math"
 
-	"github.com/amnezia-vpn/amneziawg-go/conn"
-	"github.com/amnezia-vpn/amneziawg-go/device"
-	"github.com/amnezia-vpn/amneziawg-go/tun"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
 )
-
-type TunnelHandle struct {
-	device *device.Device
-}
-
-var tunnelHandles map[int32]TunnelHandle
 
 func init() {
 	logrus.StandardLogger().ExitFunc = func(int) {}
@@ -32,98 +19,75 @@ func init() {
 	protected_dialer.MakeSocketProtected = func(fd uintptr) {
 		C.go_protect_socket(C.int(fd))
 	}
-
-	tunnelHandles = make(map[int32]TunnelHandle)
 }
+
+var awgClient *awg.AwgClient
 
 //export AwgTurnOn
 func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
-	logger := &device.Logger{
-		Verbosef: log.Infof,
-		Errorf:   log.Infof,
-	}
+	log.Infof("Create awg client")
 
-	tun, name, err := tun.CreateUnmonitoredTUNFromFD(int(tunFd))
-	if err != nil {
-		unix.Close(int(tunFd))
-		logger.Errorf("CreateUnmonitoredTUNFromFD: %v", err)
-		return -1
-	}
-
-	logger.Verbosef("Attaching to interface %v", name)
-	device := device.NewDevice(tun, conn.NewStdNetBind(), logger)
-
-	err = device.IpcSet(settings)
-	if err != nil {
-		unix.Close(int(tunFd))
-		logger.Errorf("IpcSet: %v", err)
-		return -1
-	}
-	device.DisableSomeRoamingForBrokenMobileSemantics()
-
-	err = device.Up()
-	if err != nil {
-		logger.Errorf("Unable to bring up device: %v", err)
-		device.Close()
-		return -1
-	}
-	logger.Verbosef("Device started")
-
-	var i int32
-	for i = 0; i < math.MaxInt32; i++ {
-		if _, exists := tunnelHandles[i]; !exists {
-			break
+	if awgClient != nil {
+		log.Infof("Disconnecting previous client")
+		err := awgClient.Disconnect()
+		if err != nil {
+			log.Infof("[WARNING] Failed to disconnect previous client")
 		}
 	}
-	if i == math.MaxInt32 {
-		logger.Errorf("Unable to find empty handle")
-		device.Close()
+
+	log.Infof("Config length=%d", len(settings))
+
+	client, err := awg.NewAwgClient(interfaceName, settings, int(tunFd))
+	if err != nil {
+		log.Infof("Failed to create awg client: %v", err)
 		return -1
 	}
-	tunnelHandles[i] = TunnelHandle{device: device}
-	return i
+
+	awgClient = client
+
+	log.Infof("Created awg client")
+
+	log.Infof("Connecting awg client")
+	err = awgClient.Connect()
+	if err != nil {
+		log.Infof("Failed to connect awg client: %v", err)
+		return -1
+	}
+
+	log.Infof("Connected awg client")
+	return 0
 }
 
 //export AwgTurnOff
 func AwgTurnOff(tunnelHandle int32) {
-	handle, ok := tunnelHandles[tunnelHandle]
-	if !ok {
+	if awgClient == nil {
+		log.Infof("Awg client is null")
 		return
 	}
-	delete(tunnelHandles, tunnelHandle)
-	handle.device.Close()
+
+	log.Infof("Disconnecting awg client")
+	err := awgClient.Disconnect()
+	if err != nil {
+		log.Infof("Failed to disconnect awg client: %v", err)
+	}
 }
 
 //export AwgGetSocketV4
 func AwgGetSocketV4(tunnelHandle int32) int32 {
-	handle, ok := tunnelHandles[tunnelHandle]
-	if !ok {
+	if awgClient == nil {
+		log.Infof("Awg client is null")
 		return -1
 	}
-	bind, _ := handle.device.Bind().(conn.PeekLookAtSocketFd)
-	if bind == nil {
-		return -1
-	}
-	fd, err := bind.PeekLookAtSocketFd4()
-	if err != nil {
-		return -1
-	}
-	return int32(fd)
+
+	return int32(awgClient.App.TunnelData.GetSocketV4())
 }
 
 //export AwgGetSocketV6
 func AwgGetSocketV6(tunnelHandle int32) int32 {
-	handle, ok := tunnelHandles[tunnelHandle]
-	if !ok {
+	if awgClient == nil {
+		log.Infof("Awg client is null")
 		return -1
 	}
-	bind, _ := handle.device.Bind().(conn.PeekLookAtSocketFd)
-	if bind == nil {
-		return -1
-	}
-	fd, err := bind.PeekLookAtSocketFd6()
-	if err != nil {
-		return -1
-	}
-	return int32(fd)
+
+	return int32(awgClient.App.TunnelData.GetSocketV6())
 }
