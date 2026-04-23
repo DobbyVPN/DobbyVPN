@@ -1,9 +1,10 @@
 #include <jni.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 
 struct go_string { const char *str; long n; };
-extern void StartCloakClient(struct go_string localHost, struct go_string localPort, struct go_string config, int udp);
+extern void StartCloakClient(struct go_string localHost, struct go_string localPort, struct go_string config, bool udp);
 extern void StopCloakClient();
 extern void SetGeoRoutingConf(struct go_string cidrs);
 extern void ClearGeoRoutingConf();
@@ -45,6 +46,35 @@ EXPORT int go_protect_socket(int fd) {
     return 0;
 }
 
+JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_registerVpnService(JNIEnv *env, jclass clazz, jobject vpn_service) {
+    // 1. Очищаем старую ссылку, если она была (защита от утечек при перезапуске)
+    if (g_vpn_service_obj != NULL) {
+        (*env)->DeleteGlobalRef(env, g_vpn_service_obj);
+    }
+
+    // 2. Создаем глобальную ссылку на переданный объект
+    g_vpn_service_obj = (*env)->NewGlobalRef(env, vpn_service);
+
+    // 3. Ищем КЛАСС VpnService напрямую в системе
+    jclass vpn_cls = (*env)->FindClass(env, "android/net/VpnService");
+    if (vpn_cls == NULL) {
+        // Если класс не найден (теоретически невозможно на Android)
+        return;
+    }
+
+    // 4. Ищем метод protect в найденном КЛАССЕ VpnService
+    // Сигнатура "(I)Z" — принимает int, возвращает boolean
+    g_protect_mid = (*env)->GetMethodID(env, vpn_cls, "protect", "(I)Z");
+
+    if (g_protect_mid == NULL) {
+        // Ошибка: метод не найден в классе VpnService
+        // Проверь, что твой объект в Kotlin действительно наследует VpnService
+    }
+
+    // Освобождаем локальную ссылку на класс (GlobalRef для объекта остается!)
+    (*env)->DeleteLocalRef(env, vpn_cls);
+}
+
 JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_awgTurnOn(JNIEnv *env, jclass c, jstring ifname, jint tun_fd, jstring settings)
 {
 	const char *ifname_str = (*env)->GetStringUTFChars(env, ifname, 0);
@@ -78,7 +108,7 @@ JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_awgGetSocketV6(JNIEnv *env, 
 	return AwgGetSocketV6();
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_startCloakClient(JNIEnv *env, jclass c, jstring jLocalHost, jstring jLocalPort, jstring jConfig, jint udp)
+JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_startCloakClient(JNIEnv *env, jclass c, jstring jLocalHost, jstring jLocalPort, jstring jConfig, jboolean udp)
 {
     const char *localHost_str = (*env)->GetStringUTFChars(env, jLocalHost, NULL);
 	size_t localHost_len = (*env)->GetStringUTFLength(env, jLocalHost);

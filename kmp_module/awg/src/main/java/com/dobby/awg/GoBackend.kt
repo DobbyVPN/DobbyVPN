@@ -9,7 +9,7 @@ class GoBackend {
 
     external fun awgGetSocketV6(): Int
 
-    external fun startCloakClient(localHost: String, localPort: String, config: String, udp: Int): Unit
+    external fun startCloakClient(localHost: String, localPort: String, config: String, udp: Boolean): Unit
 
     external fun stopCloakClient(): Unit
 
@@ -28,6 +28,8 @@ class GoBackend {
     external fun outlineConnect(): Int
 
     external fun outlineDisconnect(): Unit
+
+    external fun registerVpnService(service: android.net.VpnService): Unit
 
     companion object {
         init {

@@ -29,7 +29,7 @@ import android.system.Os
 import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
 import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
-import com.dobby.outline.OutlineGo
+import com.dobby.GoBackendWrapper
 import java.io.File
 import java.io.FileInputStream
 import java.util.UUID
@@ -117,7 +117,7 @@ class DobbyVpnService : VpnService() {
             }
         }
 
-        OutlineGo.registerVpnService(this)
+        GoBackendWrapper.registerVpnService(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
