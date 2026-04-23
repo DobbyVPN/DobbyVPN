@@ -70,6 +70,7 @@ func AwgTurnOff() {
 	if err != nil {
 		log.Infof("Failed to disconnect awg client: %v", err)
 	}
+	awgClient = nil
 }
 
 //export AwgGetSocketV4

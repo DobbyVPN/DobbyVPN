@@ -1,19 +1,21 @@
-package com.dobby.feature.vpn_service
+package com.dobby.feature.vpn_service.domain.outline
 
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
-import android.net.VpnService.Builder
+import android.net.VpnService
 import android.os.Build
 import android.util.Log
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.vpn_service.DobbyVpnService
+import com.dobby.feature.vpn_service.VpnInterfaceFactory
 import com.dobby.feature.vpn_service.common.reservedBypassSubnets
 
-class DobbyVpnInterfaceFactory(
+class OutlineVpnInterfaceFactory(
     private val logger: Logger
-) {
+) : VpnInterfaceFactory {
 
-    fun create(context: Context, vpnService: DobbyVpnService): Builder {
+    override fun create(context: Context, vpnService: DobbyVpnService): VpnService.Builder {
         logger.log("Creating VPN Interface")
         val builder = vpnService.Builder()
             .setSession("Outline")
