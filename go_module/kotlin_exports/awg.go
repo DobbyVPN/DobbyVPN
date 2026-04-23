@@ -59,7 +59,7 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 }
 
 //export AwgTurnOff
-func AwgTurnOff(tunnelHandle int32) {
+func AwgTurnOff() {
 	if awgClient == nil {
 		log.Infof("Awg client is null")
 		return
@@ -73,7 +73,7 @@ func AwgTurnOff(tunnelHandle int32) {
 }
 
 //export AwgGetSocketV4
-func AwgGetSocketV4(tunnelHandle int32) int32 {
+func AwgGetSocketV4() int32 {
 	if awgClient == nil {
 		log.Infof("Awg client is null")
 		return -1
@@ -83,7 +83,7 @@ func AwgGetSocketV4(tunnelHandle int32) int32 {
 }
 
 //export AwgGetSocketV6
-func AwgGetSocketV6(tunnelHandle int32) int32 {
+func AwgGetSocketV6() int32 {
 	if awgClient == nil {
 		log.Infof("Awg client is null")
 		return -1

@@ -124,8 +124,8 @@ class TunnelManager(private val service: VpnService, private val logger: Logger)
 
             tunnelData = TunnelData(tunnelName, tomlConfig, TunnelState.UP, currentTunnelHandle)
 
-            service.protect(GoBackendWrapper.awgGetSocketV4(currentTunnelHandle))
-            service.protect(GoBackendWrapper.awgGetSocketV6(currentTunnelHandle))
+            service.protect(GoBackendWrapper.awgGetSocketV4())
+            service.protect(GoBackendWrapper.awgGetSocketV6())
         } else {
             if (tunnelData.currentTunnelHandle == -1) {
                 logger.log("[$tunnelName] Failed: tunnel is off")
@@ -133,7 +133,7 @@ class TunnelManager(private val service: VpnService, private val logger: Logger)
                 return
             }
 
-            GoBackendWrapper.awgTurnOff(this.tunnelData.currentTunnelHandle)
+            GoBackendWrapper.awgTurnOff()
             tunnelData = TunnelData(tunnelName, null, TunnelState.DOWN, -1)
         }
     }
