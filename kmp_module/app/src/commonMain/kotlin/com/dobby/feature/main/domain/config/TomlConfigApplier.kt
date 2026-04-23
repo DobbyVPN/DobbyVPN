@@ -55,7 +55,6 @@ class TomlConfigApplier(
             mainRepo.setGeoRoutingConf(cidrsString)
         } else {
             logger.log("ExcludeIPs not found or empty → clearing routing")
-            mainRepo.setGeoRoutingConf("")
         }
 
         logger.log("Finish parseToml()")
@@ -65,6 +64,5 @@ class TomlConfigApplier(
     private fun disableOutlineAndCloak() {
         outlineRepo.clearOutlineConfig()
         cloakRepo.clearCloakConfig()
-        mainRepo.setGeoRoutingConf("")
     }
 }

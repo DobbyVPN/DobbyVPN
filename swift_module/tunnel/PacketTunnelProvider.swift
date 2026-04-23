@@ -24,10 +24,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var pathMonitor: Network.NWPathMonitor?
     private var lastPathStatus: Network.NWPath.Status?
 
-    deinit {
-        logs.writeLog(log: "[tunnel:\(tunnelId)] deinit")
-    }
-
     func reportMemoryUsageMB() -> Double {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<natural_t>.stride)
@@ -69,98 +65,83 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId)")
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
 
-        do {
-            // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
-            await teardownForStop(reason: "pre-start cleanup")
+        // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
+        await teardownForStop(reason: "pre-start cleanup")
 
-            startPathLogging()
+        startPathLogging()
 
-            let cloakConfig = configsRepository.getCloakConfig()
-            // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
-            // DNS resolution at tunnel start can hang in offline/captive-portal cases, so we do it with a hard timeout.
-            var excludedRoutes: [NEIPv4Route] = []
-            if let hostOrIp = extractIP(from: configsRepository.getServerPortOutline()) {
-                let trimmed = hostOrIp.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
-                   let route = makeExcludedRoute(host: ip) {
-                    excludedRoutes.append(route)
-                    if ip == trimmed {
-                        logs.writeLog(log: "Excluded route for Outline host: \(maskStr(value: ip))/32")
-                    } else {
-                        logs.writeLog(
-                            log: "Excluded route for Outline host resolved: " +
-                                "\(maskStr(value: trimmed)) → \(maskStr(value: ip))/32"
-                        )
-                    }
+        let cloakConfig = configsRepository.getCloakConfig()
+        // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
+        // DNS resolution at tunnel start can hang in offline/captive-portal cases, so we do it with a hard timeout.
+        var excludedRoutes: [NEIPv4Route] = []
+        if let hostOrIp = extractIP(from: configsRepository.getServerPortOutline()) {
+            let trimmed = hostOrIp.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
+               let route = makeExcludedRoute(host: ip) {
+                excludedRoutes.append(route)
+                if ip == trimmed {
+                    logs.writeLog(log: "Excluded route for Outline host: \(maskStr(value: ip))/32")
                 } else {
-                    logs.writeLog(log: "Excluded route for Outline host skipped (can't resolve to IPv4): \(trimmed)")
+                    logs.writeLog(log: "Excluded route for Outline host resolved: \(maskStr(value: trimmed)) → \(maskStr(value: ip))/32")
                 }
-            }
-            if let remoteHost = extractRemoteHost(from: cloakConfig) {
-                let trimmed = remoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
-                   let route = makeExcludedRoute(host: ip) {
-                    excludedRoutes.append(route)
-                    if ip == trimmed {
-                        logs.writeLog(log: "Excluded route for Cloak RemoteHost: \(maskStr(value: ip))/32")
-                    } else {
-                        logs.writeLog(
-                            log: "Excluded route for Cloak RemoteHost resolved: " +
-                                "\(maskStr(value: trimmed)) → \(maskStr(value: ip))/32"
-                        )
-                    }
-                } else {
-                    logs.writeLog(log: "Excluded route for Cloak RemoteHost skipped (can't resolve to IPv4): \(maskStr(value: trimmed))")
-                }
-            }
-            if !excludedRoutes.isEmpty {
-                let list = excludedRoutes.map { "\($0.destinationAddress)/\($0.destinationSubnetMask)" }.joined(separator: ", ")
-                logs.writeLog(log: "Excluded IPv4 routes: \(list)")
             } else {
-                logs.writeLog(log: "Excluded IPv4 routes: (none)")
+                logs.writeLog(log: "Excluded route for Outline host skipped (can't resolve to IPv4): \(trimmed)")
             }
-
-            let remoteAddress = "254.1.1.1"
-            let localAddress = "198.18.0.1"
-            let subnetMask = "255.255.0.0"
-            let dnsServers = ["1.1.1.1", "8.8.8.8"]
-
-            let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
-            settings.mtu = 1200
-            settings.ipv4Settings = NEIPv4Settings(
-                addresses: [localAddress],
-                subnetMasks: [subnetMask]
-            )
-            settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
-            settings.ipv4Settings?.excludedRoutes = excludedRoutes
-            settings.ipv6Settings = nil
-            settings.dnsSettings = NEDNSSettings(servers: dnsServers)
-            settings.dnsSettings?.matchDomains = [""]
-
-            logs.writeLog(log: "Settings are ready:")
-            try await self.setTunnelNetworkSettings(settings)
-            logs.writeLog(log: "Tunnel settings applied")
-
-            logInterfaces()
-
-            let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
-            logs.writeLog(log: "Start go logger init path = \(path)")
-            Cloak_outlineInitLogger(path)
-            logs.writeLog(log: "Finish go logger init")
-            Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
-            try outlineInteractor.startOutline()
-            logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
-            try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
-
-            logs.writeLog(log: "startTunnel: all packet loops started")
-        } catch {
-            let nsError = error as NSError
-            logs.writeLog(
-                log: "[tunnel:\(tunnelId)] startTunnel failed: " +
-                    "\(nsError.domain) code=\(nsError.code) desc=\(error.localizedDescription)"
-            )
-            throw error
         }
+        if let remoteHost = extractRemoteHost(from: cloakConfig) {
+            let trimmed = remoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
+               let route = makeExcludedRoute(host: ip) {
+                excludedRoutes.append(route)
+                if ip == trimmed {
+                    logs.writeLog(log: "Excluded route for Cloak RemoteHost: \(maskStr(value: ip))/32")
+                } else {
+                    logs.writeLog(log: "Excluded route for Cloak RemoteHost resolved: \(maskStr(value: trimmed)) → \(maskStr(value: ip))/32")
+                }
+            } else {
+                logs.writeLog(log: "Excluded route for Cloak RemoteHost skipped (can't resolve to IPv4): \(maskStr(value: trimmed))")
+            }
+        }
+        if !excludedRoutes.isEmpty {
+            let list = excludedRoutes.map { "\($0.destinationAddress)/\($0.destinationSubnetMask)" }.joined(separator: ", ")
+            logs.writeLog(log: "Excluded IPv4 routes: \(list)")
+        } else {
+            logs.writeLog(log: "Excluded IPv4 routes: (none)")
+        }
+
+        let remoteAddress = "254.1.1.1"
+        let localAddress = "198.18.0.1"
+        let subnetMask = "255.255.0.0"
+        let dnsServers = ["1.1.1.1", "8.8.8.8"]
+
+        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
+        settings.mtu = 1200
+        settings.ipv4Settings = NEIPv4Settings(
+            addresses: [localAddress],
+            subnetMasks: [subnetMask]
+        )
+        settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
+        settings.ipv4Settings?.excludedRoutes = excludedRoutes
+        settings.ipv6Settings = nil
+        settings.dnsSettings = NEDNSSettings(servers: dnsServers)
+        settings.dnsSettings?.matchDomains = [""]
+
+        logs.writeLog(log: "Settings are ready:")
+        try await self.setTunnelNetworkSettings(settings)
+        logs.writeLog(log: "Tunnel settings applied")
+
+        logInterfaces()
+
+        let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
+        logs.writeLog(log: "Start go logger init path = \(path)")
+        Cloak_outlineInitLogger(path)
+        logs.writeLog(log: "Finish go logger init")
+        Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
+        try outlineInteractor.startOutline()
+        logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
+        try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
+
+        logs.writeLog(log: "startTunnel: all packet loops started")
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
@@ -171,24 +152,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             await teardownForStop(reason: "stopTunnel(\(reason))")
             completionHandler()
         }
-    }
-
-    override func cancelTunnelWithError(_ error: Error?) {
-        if let error {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] cancelTunnelWithError: \(error.localizedDescription)")
-        } else {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] cancelTunnelWithError: nil")
-        }
-        super.cancelTunnelWithError(error)
-    }
-
-    override func sleep(completionHandler: @escaping () -> Void) {
-        logs.writeLog(log: "[tunnel:\(tunnelId)] sleep()")
-        completionHandler()
-    }
-
-    override func wake() {
-        logs.writeLog(log: "[tunnel:\(tunnelId)] wake()")
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
@@ -213,11 +176,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 let ifaces = path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",")
                 let expensive = path.isExpensive
                 let constrained = path.isConstrained
-                self.logs.writeLog(
-                    log: "[tunnel:\(self.tunnelId)] pathUpdate " +
-                        "status=\(status) ifaces=[\(ifaces)] " +
-                        "expensive=\(expensive) constrained=\(constrained)"
-                )
+                self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] pathUpdate status=\(status) ifaces=[\(ifaces)] expensive=\(expensive) constrained=\(constrained)")
             }
         }
 
@@ -227,15 +186,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     @MainActor
     private func teardownForStop(reason: String) async {
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason)")
 
         do {
-            try outlineInteractor.stopOutline()
+            try cloakInteractor.stopCloak()
         } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop outline: \(error.localizedDescription)")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop cloak: \(error.localizedDescription)")
         }
-
-        cloakInteractor.stopCloak()
 
         do {
             try await self.setTunnelNetworkSettings(nil)
@@ -251,10 +208,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason))")
     }
 
-    /// Extracts the host/IP part from a string like "ip:port" or "[ipv6]:port".
+    /// Extracts the host/IP part from a string like "ip:port"
     func extractIP(from serverPort: String) -> String? {
-        let host = OutlineInteractor.extractHost(from: serverPort).trimmingCharacters(in: .whitespacesAndNewlines)
-        return host.isEmpty ? nil : host
+        guard !serverPort.isEmpty else { return nil }
+        return serverPort.split(separator: ":").first.map(String.init)
     }
 
     /// Extracts `RemoteHost` from Cloak JSON
