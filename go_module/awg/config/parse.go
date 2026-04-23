@@ -1,16 +1,13 @@
 package config
 
 import (
-	"bufio"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"math"
 	"net"
 	"strconv"
 	"strings"
-	"time"
 
 	"golang.org/x/text/encoding/unicode"
 )
@@ -318,12 +315,6 @@ func FromWgQuick(s string, name string) (*Config, error) {
 				}
 				conf.Interface.PrivateKey = *k
 				sawPrivateKey = true
-			case "listenport":
-				p, err := parsePort(val)
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.ListenPort = p
 			case "jc":
 				junkPacketCount, err := parseUint16(val, "junkPacketCount")
 				if err != nil {
@@ -441,20 +432,6 @@ func FromWgQuick(s string, name string) (*Config, error) {
 						conf.Interface.DNS = append(conf.Interface.DNS, a)
 					}
 				}
-			case "preup":
-				conf.Interface.PreUp = val
-			case "postup":
-				conf.Interface.PostUp = val
-			case "predown":
-				conf.Interface.PreDown = val
-			case "postdown":
-				conf.Interface.PostDown = val
-			case "table":
-				tableOff, err := parseTableOff(val)
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.TableOff = tableOff
 			default:
 				return nil, fmt.Errorf("Invalid key for [Interface] section")
 			}
@@ -530,219 +507,4 @@ func FromWgQuickWithUnknownEncoding(s string, name string) (*Config, error) {
 		}
 	}
 	return nil, firstErr
-}
-
-func FromUAPI(reader io.Reader, existingConfig *Config) (*Config, error) {
-	parserState := inInterfaceSection
-	conf := Config{
-		Name: existingConfig.Name,
-		Interface: Interface{
-			Addresses:                  existingConfig.Interface.Addresses,
-			DNS:                        existingConfig.Interface.DNS,
-			DNSSearch:                  existingConfig.Interface.DNSSearch,
-			MTU:                        existingConfig.Interface.MTU,
-			PreUp:                      existingConfig.Interface.PreUp,
-			PostUp:                     existingConfig.Interface.PostUp,
-			PreDown:                    existingConfig.Interface.PreDown,
-			PostDown:                   existingConfig.Interface.PostDown,
-			TableOff:                   existingConfig.Interface.TableOff,
-			JunkPacketCount:            existingConfig.Interface.JunkPacketCount,
-			JunkPacketMinSize:          existingConfig.Interface.JunkPacketMinSize,
-			JunkPacketMaxSize:          existingConfig.Interface.JunkPacketMaxSize,
-			InitPacketJunkSize:         existingConfig.Interface.InitPacketJunkSize,
-			ResponsePacketJunkSize:     existingConfig.Interface.ResponsePacketJunkSize,
-			InitPacketMagicHeader:      existingConfig.Interface.InitPacketMagicHeader,
-			ResponsePacketMagicHeader:  existingConfig.Interface.ResponsePacketMagicHeader,
-			UnderloadPacketMagicHeader: existingConfig.Interface.UnderloadPacketMagicHeader,
-			TransportPacketMagicHeader: existingConfig.Interface.TransportPacketMagicHeader,
-			IPackets:                   existingConfig.Interface.IPackets,
-		},
-	}
-	var peer *Peer
-	lineReader := bufio.NewReader(reader)
-	for {
-		line, err := lineReader.ReadString('\n')
-		if err != nil {
-			return nil, err
-		}
-		line = line[:len(line)-1]
-		if len(line) == 0 {
-			break
-		}
-		equals := strings.IndexByte(line, '=')
-		if equals < 0 {
-			return nil, fmt.Errorf("Config key is missing an equals separator")
-		}
-		key, val := line[:equals], line[equals+1:]
-		if len(val) == 0 {
-			return nil, fmt.Errorf("Key must have a value")
-		}
-		switch key {
-		case "public_key":
-			conf.MaybeAddPeer(peer)
-			peer = &Peer{}
-			parserState = inPeerSection
-		case "errno":
-			if val == "0" {
-				continue
-			} else {
-				return nil, fmt.Errorf("Error in getting configuration")
-			}
-		}
-		if parserState == inInterfaceSection {
-			switch key {
-			case "private_key":
-				k, err := parseKeyHex(val)
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.PrivateKey = *k
-			case "listen_port":
-				p, err := parsePort(val)
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.ListenPort = p
-			case "jc":
-				junkPacketCount, err := parseUint16(val, "junkPacketCount")
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.JunkPacketCount = junkPacketCount
-			case "jmin":
-				junkPacketMinSize, err := parseUint16(val, "junkPacketMinSize")
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.JunkPacketMinSize = junkPacketMinSize
-			case "jmax":
-				junkPacketMaxSize, err := parseUint16(val, "junkPacketMaxSize")
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.JunkPacketMaxSize = junkPacketMaxSize
-			case "s1":
-				initPacketJunkSize, err := parseUint16(
-					val,
-					"initPacketJunkSize",
-				)
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.InitPacketJunkSize = initPacketJunkSize
-			case "s2":
-				responsePacketJunkSize, err := parseUint16(
-					val,
-					"responsePacketJunkSize",
-				)
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.ResponsePacketJunkSize = responsePacketJunkSize
-			case "h1":
-				initPacketMagicHeader, err := parseHString(val, "initPacketMagicHeader")
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.InitPacketMagicHeader = initPacketMagicHeader
-			case "h2":
-				responsePacketMagicHeader, err := parseHString(val, "responsePacketMagicHeader")
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.ResponsePacketMagicHeader = responsePacketMagicHeader
-			case "h3":
-				underloadPacketMagicHeader, err := parseHString(val, "underloadPacketMagicHeader")
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.UnderloadPacketMagicHeader = underloadPacketMagicHeader
-			case "h4":
-				transportPacketMagicHeader, err := parseHString(val, "transportPacketMagicHeader")
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.TransportPacketMagicHeader = transportPacketMagicHeader
-			case "i1", "i2", "i3", "i4", "i5":
-				if len(val) == 0 {
-					return nil, fmt.Errorf("cannot parse empty %s junk value: %s", key, val)
-				}
-				if conf.Interface.IPackets == nil {
-					conf.Interface.IPackets = make(map[string]string)
-				}
-				conf.Interface.IPackets[key] = val
-			case "fwmark":
-				// Ignored for now.
-
-			default:
-				return nil, fmt.Errorf("Invalid key for interface section")
-			}
-		} else if parserState == inPeerSection {
-			switch key {
-			case "public_key":
-				k, err := parseKeyHex(val)
-				if err != nil {
-					return nil, err
-				}
-				peer.PublicKey = *k
-			case "preshared_key":
-				k, err := parseKeyHex(val)
-				if err != nil {
-					return nil, err
-				}
-				peer.PresharedKey = *k
-			case "protocol_version":
-				if val != "1" {
-					return nil, fmt.Errorf("Protocol version must be 1")
-				}
-			case "allowed_ip":
-				a, err := parseIPCidr(val)
-				if err != nil {
-					return nil, err
-				}
-				peer.AllowedIPs = append(peer.AllowedIPs, *a)
-			case "persistent_keepalive_interval":
-				p, err := parsePersistentKeepalive(val)
-				if err != nil {
-					return nil, err
-				}
-				peer.PersistentKeepalive = p
-			case "endpoint":
-				e, err := parseEndpoint(val)
-				if err != nil {
-					return nil, err
-				}
-				peer.Endpoint = *e
-			case "tx_bytes":
-				b, err := parseBytesOrStamp(val)
-				if err != nil {
-					return nil, err
-				}
-				peer.TxBytes = Bytes(b)
-			case "rx_bytes":
-				b, err := parseBytesOrStamp(val)
-				if err != nil {
-					return nil, err
-				}
-				peer.RxBytes = Bytes(b)
-			case "last_handshake_time_sec":
-				t, err := parseBytesOrStamp(val)
-				if err != nil {
-					return nil, err
-				}
-				peer.LastHandshakeTime += HandshakeTime(time.Duration(t) * time.Second)
-			case "last_handshake_time_nsec":
-				t, err := parseBytesOrStamp(val)
-				if err != nil {
-					return nil, err
-				}
-				peer.LastHandshakeTime += HandshakeTime(time.Duration(t) * time.Nanosecond)
-			default:
-				return nil, fmt.Errorf("Invalid key for peer section")
-			}
-		}
-	}
-	conf.MaybeAddPeer(peer)
-
-	return &conf, nil
 }
