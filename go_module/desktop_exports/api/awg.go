@@ -8,46 +8,49 @@ import (
 var awgClient *awg.AwgClient
 
 func StartAwg(tunnel, config string) {
-	log.Infof("Starting awg")
+	log.SimpleDebugf(ApiCategory, "Starting awg")
 
 	if awgClient != nil {
-		log.Infof("Disconnect existing awgClient")
+		log.SimpleDebugf(ApiCategory, "Disconnect existing awgClient")
 
 		err := awgClient.Disconnect()
 		if err != nil {
-			log.Infof("Failed to disconnect existing awgClient: %v", err)
+			log.SimpleErrorf(ApiCategory, "Failed to disconnect existing awgClient: %v", err)
 			return
 		}
 	}
 
-	log.Infof("Create new awgClient")
+	log.SimpleDebugf(ApiCategory, "Create new awgClient")
 
 	_awgClient, err := awg.NewAwgClient(config)
 	if err != nil {
-		log.Infof("Failed to create awgClient: %v", err)
+		log.SimpleErrorf(ApiCategory, "Failed to create awgClient: %v", err)
 		return
 	}
 	awgClient = _awgClient
 
-	log.Infof("Connect awgClient")
+	log.SimpleDebugf(ApiCategory, "Connect awgClient")
 	err = awgClient.Connect()
 	if err != nil {
-		log.Infof("Failed to connect awgClient: %v", err)
+		log.SimpleErrorf(ApiCategory, "Failed to connect awgClient: %v", err)
 	}
+	log.SimpleInfof(ApiCategory, "AmneziaWG client connected successfully")
 }
 
 func StopAwg() {
-	log.Infof("Stopping awg")
+	log.SimpleDebugf(ApiCategory, "Stopping awg")
 
 	if awgClient != nil {
-		log.Infof("Disconnect awgClient")
+		log.SimpleDebugf(ApiCategory, "Disconnect awgClient")
 
 		err := awgClient.Disconnect()
 		if err != nil {
-			log.Infof("Failed to disconnect awgClient: %v", err)
+			log.SimpleErrorf(ApiCategory, "Failed to disconnect awgClient: %v", err)
 		}
 		awgClient = nil
 	} else {
-		log.Infof("awgClient is null")
+		log.SimpleDebugf(ApiCategory, "awgClient is null")
 	}
+
+	log.SimpleInfof(ApiCategory, "AmneziaWG client disconnected successfully")
 }

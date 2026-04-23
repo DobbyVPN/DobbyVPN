@@ -24,39 +24,39 @@ func setOutlineLastError(err string) {
 	defer outlineErrorMu.Unlock()
 	outlineLastError = err
 	if err != "" {
-		log.Infof("Outline error set: %s", err)
+		log.SimpleErrorf(ApiCategory, "Outline error set: %s", err)
 	}
 }
 
 func StartOutline(key string) int32 {
-	log.Infof("StartOutline")
+	log.SimpleDebugf(ApiCategory, "StartOutline")
 	setOutlineLastError("")
 	str_key := key
 
-	log.Infof("Make lock")
+	log.SimpleDebugf(ApiCategory, "Make lock")
 	outlineMu.Lock()
 	defer outlineMu.Unlock()
-	log.Infof("locked")
+	log.SimpleDebugf(ApiCategory, "locked")
 
 	if outlineClient != nil {
-		log.Infof("Disconnect existing outline client")
+		log.SimpleDebugf(ApiCategory, "Disconnect existing outline client")
 		err := outlineClient.Disconnect()
 		if err != nil {
-			log.Infof("Failed to disconnect existing outline client: %v", err)
+			log.SimpleErrorf(ApiCategory, "Failed to disconnect existing outline client: %v", err)
 			setOutlineLastError(err.Error())
 			return -1
 		}
 	}
 
 	outlineClient = outline.NewClient(str_key)
-	log.Infof("Connect outline client")
+	log.SimpleDebugf(ApiCategory, "Connect outline client")
 	err := outlineClient.Connect()
 	if err != nil {
-		log.Infof("Failed to connect outline client: %v", err)
+		log.SimpleErrorf(ApiCategory, "Failed to connect outline client: %v", err)
 		setOutlineLastError(err.Error())
 		return -1
 	}
-	log.Infof("Outline client connected successfully")
+	log.SimpleInfof(ApiCategory, "Outline client connected successfully")
 	return 0
 }
 
@@ -64,11 +64,12 @@ func StopOutline() {
 	outlineMu.Lock()
 	defer outlineMu.Unlock()
 	if outlineClient != nil {
-		log.Infof("Disconnect outline client")
+		log.SimpleDebugf(ApiCategory, "Disconnect outline client")
 		err := outlineClient.Disconnect()
 		if err != nil {
-			log.Infof("Failed to disconnect outline client: %v", err)
+			log.SimpleErrorf(ApiCategory, "Failed to disconnect outline client: %v", err)
 		}
 		outlineClient = nil
 	}
+	log.SimpleInfof(ApiCategory, "Outline client disconnected successfully")
 }
