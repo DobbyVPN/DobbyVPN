@@ -68,8 +68,7 @@ class HealthCheckManager(
                 var nextDelay: Duration? = null
 
                 if (configsRepository.getIsUserInitStop()) {
-                    logger.log("[HC] Stop condition: getIsUserInitStop() == true")
-                    turnOffVpn()
+                    logger.log("[HC] Stop condition: getIsUserInitStop() == true → exiting health check loop")
                     return@launch
                 }
 

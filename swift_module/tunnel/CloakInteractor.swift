@@ -41,11 +41,8 @@ public final class CloakInteractor {
 
     func stopCloak() throws {
         if cloakStarted {
-            var err: NSError?
-            Cloak_outlineOutlineDisconnect(&err)
-            if let error = err {
-                throw error
-            }
+            Cloak_outlineStopCloakClient()
+            cloakStarted = false
         }
     }
 }

@@ -70,6 +70,7 @@ class CloakConnectionInteractor(
                 if (result.isSuccess) {
                     ConnectResult.Success
                 } else {
+                    isConnected.set(false)
                     ConnectResult.Error(result.exceptionOrNull()!!)
                 }
             } else {

@@ -186,7 +186,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     @MainActor
     private func teardownForStop(reason: String) async {
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason)")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
+
+        do {
+            try outlineInteractor.stopOutline()
+        } catch {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop outline: \(error.localizedDescription)")
+        }
 
         do {
             try cloakInteractor.stopCloak()
