@@ -37,13 +37,7 @@ class TunnelManager(private val service: VpnService, private val logger: Logger)
             }
 
             // Build config
-            val goConfig = try {
-                Config.parse(tomlConfig.toAwgQuick().byteInputStream()).toAwgUserspaceString()
-            } catch (e: Exception) {
-                logger.log("[$tunnelName] Failed to convert to IPC: $e")
-
-                return
-            }
+            val goConfig = tomlConfig.toAwgQuick()
 
             // Create the vpn tunnel with android API
             val builder: Builder = service.Builder()
