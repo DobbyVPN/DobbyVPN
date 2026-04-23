@@ -7,6 +7,7 @@ replace github.com/cbeuw/Cloak => ./modules/Cloak
 replace github.com/xjasonlyu/tun2socks/v2/log => ./go_module/log
 
 require (
+	github.com/0hr/utun-macos v0.0.0-20230627061006-a536603c04a2
 	github.com/Jigsaw-Code/outline-sdk v0.0.20
 	github.com/Jigsaw-Code/outline-sdk/x v0.0.8
 	github.com/amnezia-vpn/amneziawg-go v0.2.16

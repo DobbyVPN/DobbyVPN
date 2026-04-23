@@ -1,3 +1,5 @@
+github.com/0hr/utun-macos v0.0.0-20230627061006-a536603c04a2 h1:cWZjAo0+9QGptFtf6cQeAc/nEaQRWjMoyPnq9vZG2n4=
+github.com/0hr/utun-macos v0.0.0-20230627061006-a536603c04a2/go.mod h1:Rl83gZgJcQmSXCbh8eAuUiNmi43qoHVtQMhClNaPC1Q=
 github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c h1:pxW6RcqyfI9/kWtOwnv/G+AzdKuy2ZrqINhenH4HyNs=
 github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/Jigsaw-Code/outline-sdk v0.0.20 h1:4ep7MK9lFmcyPIRIbn4xrP1VKdJNsqR6+iJEOHDKnNg=
