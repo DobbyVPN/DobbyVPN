@@ -1,4 +1,6 @@
-package com.dobby.awg
+package com.dobby.backend
+
+import android.net.VpnService
 
 class GoBackend {
     external fun awgTurnOn(ifname: String, tunFd: Int, settings: String): Int
@@ -29,11 +31,11 @@ class GoBackend {
 
     external fun outlineDisconnect(): Unit
 
-    external fun registerVpnService(service: android.net.VpnService): Unit
+    external fun registerVpnService(service: VpnService): Unit
 
     companion object {
         init {
-            System.loadLibrary("wg-go")
+            System.loadLibrary("backend")
         }
     }
 }

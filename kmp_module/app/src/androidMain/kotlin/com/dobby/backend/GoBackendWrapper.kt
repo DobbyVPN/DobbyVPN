@@ -1,6 +1,4 @@
-package com.dobby
-
-import com.dobby.awg.GoBackend
+package com.dobby.backend
 
 object GoBackendWrapper {
     private val backend = GoBackend()

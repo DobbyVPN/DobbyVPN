@@ -5,10 +5,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
-
-val pkg: String = "com.dobby.awg"
-val cmakeAndroidPackageName: String = providers.environmentVariable("ANDROID_PACKAGE_NAME").getOrElse(pkg)
-val goBinaryPath: String? = providers.gradleProperty("goBinaryPath").orNull
+val pkg: String = "com.dobby.backend"
 
 android {
     namespace = pkg
@@ -24,7 +21,6 @@ android {
             abiFilters += listOf("arm64-v8a")
         }
     }
-
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -34,22 +30,11 @@ android {
             )
         }
     }
-    buildTypes {
-        all {
-        }
-        release {
-        }
-        debug {
-        }
-    }
-
-    // Говорим Gradle, где искать готовые .so
     sourceSets {
         getByName("main") {
             jniLibs.srcDir("src/main/jniLibs")
         }
     }
-
     lint {
         disable += "LongLogTag"
         disable += "NewApi"
@@ -64,7 +49,6 @@ android {
 }
 
 dependencies {
-
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
