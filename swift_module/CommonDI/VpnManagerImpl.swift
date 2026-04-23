@@ -236,11 +236,6 @@ public class VpnManagerImpl: VpnManager {
             return outlineServer
         }
 
-        let connectionUrl = configsRepository.getConnectionURL().trimmingCharacters(in: .whitespacesAndNewlines)
-        if !connectionUrl.isEmpty {
-            return connectionUrl
-        }
-
         return Self.dobbyName
     }
 
