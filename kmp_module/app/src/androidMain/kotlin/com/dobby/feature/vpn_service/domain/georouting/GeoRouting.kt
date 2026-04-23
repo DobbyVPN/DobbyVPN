@@ -1,7 +1,7 @@
 package com.dobby.feature.vpn_service.domain.georouting
 
 import com.dobby.feature.logging.Logger
-import com.dobby.GoBackendWrapper
+import com.dobby.backend.GoBackendWrapper
 import kotlin.math.min
 
 class GeoRouting(

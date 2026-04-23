@@ -1,7 +1,7 @@
 package com.dobby.feature.vpn_service.domain.cloak
 
 import com.dobby.feature.vpn_service.CloakLibFacade
-import com.dobby.GoBackendWrapper
+import com.dobby.backend.GoBackendWrapper
 
 class CloakLibFacadeImpl : CloakLibFacade {
 

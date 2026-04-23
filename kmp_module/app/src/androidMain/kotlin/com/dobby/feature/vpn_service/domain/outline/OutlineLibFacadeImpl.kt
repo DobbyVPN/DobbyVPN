@@ -2,7 +2,7 @@ package com.dobby.feature.vpn_service.domain.outline
 
 import android.util.Log
 import com.dobby.feature.vpn_service.OutlineLibFacade
-import com.dobby.GoBackendWrapper
+import com.dobby.backend.GoBackendWrapper
 
 internal class OutlineLibFacadeImpl : OutlineLibFacade {
     private val TAG = "OutlineLibFacade"

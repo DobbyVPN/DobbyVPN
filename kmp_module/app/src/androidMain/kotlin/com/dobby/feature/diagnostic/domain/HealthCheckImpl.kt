@@ -6,7 +6,7 @@ import com.dobby.feature.vpn_service.DobbyVpnService
 import java.net.*
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import com.dobby.GoBackendWrapper
+import com.dobby.backend.GoBackendWrapper
 import kotlin.concurrent.thread
 
 class HealthCheckImpl(

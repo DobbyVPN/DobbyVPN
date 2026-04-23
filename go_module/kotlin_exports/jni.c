@@ -46,7 +46,7 @@ EXPORT int go_protect_socket(int fd) {
     return 0;
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_registerVpnService(JNIEnv *env, jclass clazz, jobject vpn_service) {
+JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_registerVpnService(JNIEnv *env, jclass clazz, jobject vpn_service) {
     // 1. Очищаем старую ссылку, если она была (защита от утечек при перезапуске)
     if (g_vpn_service_obj != NULL) {
         (*env)->DeleteGlobalRef(env, g_vpn_service_obj);
@@ -75,7 +75,7 @@ JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_registerVpnService(JNIEnv *e
     (*env)->DeleteLocalRef(env, vpn_cls);
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_awgTurnOn(JNIEnv *env, jclass c, jstring ifname, jint tun_fd, jstring settings)
+JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_awgTurnOn(JNIEnv *env, jclass c, jstring ifname, jint tun_fd, jstring settings)
 {
 	const char *ifname_str = (*env)->GetStringUTFChars(env, ifname, 0);
 	size_t ifname_len = (*env)->GetStringUTFLength(env, ifname);
@@ -93,22 +93,22 @@ JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_awgTurnOn(JNIEnv *env, jclas
 	return ret;
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_awgTurnOff(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_awgTurnOff(JNIEnv *env, jclass c)
 {
 	AwgTurnOff();
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_awgGetSocketV4(JNIEnv *env, jclass c)
+JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_awgGetSocketV4(JNIEnv *env, jclass c)
 {
 	return AwgGetSocketV4();
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_awgGetSocketV6(JNIEnv *env, jclass c)
+JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_awgGetSocketV6(JNIEnv *env, jclass c)
 {
 	return AwgGetSocketV6();
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_startCloakClient(JNIEnv *env, jclass c, jstring jLocalHost, jstring jLocalPort, jstring jConfig, jboolean udp)
+JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_startCloakClient(JNIEnv *env, jclass c, jstring jLocalHost, jstring jLocalPort, jstring jConfig, jboolean udp)
 {
     const char *localHost_str = (*env)->GetStringUTFChars(env, jLocalHost, NULL);
 	size_t localHost_len = (*env)->GetStringUTFLength(env, jLocalHost);
@@ -134,12 +134,12 @@ JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_startCloakClient(JNIEnv *env
     (*env)->ReleaseStringUTFChars(env, jConfig, config_str);
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_stopCloakClient(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_stopCloakClient(JNIEnv *env, jclass c)
 {
     StopCloakClient();
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_setGeoRoutingConf(JNIEnv *env, jclass c, jstring jCidrs)
+JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_setGeoRoutingConf(JNIEnv *env, jclass c, jstring jCidrs)
 {
 	const char *cidrs_str = (*env)->GetStringUTFChars(env, jCidrs, NULL);
 	size_t cidrs_len = (*env)->GetStringUTFLength(env, jCidrs);
@@ -151,12 +151,12 @@ JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_setGeoRoutingConf(JNIEnv *en
     (*env)->ReleaseStringUTFChars(env, jCidrs, cidrs_str);
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_clearGeoRoutingConf(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_clearGeoRoutingConf(JNIEnv *env, jclass c)
 {
     ClearGeoRoutingConf();
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_checkServerAlive(JNIEnv *env, jclass c, jstring jAddress, jint jPort)
+JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_checkServerAlive(JNIEnv *env, jclass c, jstring jAddress, jint jPort)
 {
 	const char *address_str = (*env)->GetStringUTFChars(env, jAddress, NULL);
 	size_t address_len = (*env)->GetStringUTFLength(env, jAddress);
@@ -169,7 +169,7 @@ JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_checkServerAlive(JNIEnv *env
 	return result;
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_initLogger(JNIEnv *env, jclass c, jstring jPath)
+JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_initLogger(JNIEnv *env, jclass c, jstring jPath)
 {
     const char *path_str = (*env)->GetStringUTFChars(env, jPath, NULL);
 	size_t path_len = (*env)->GetStringUTFLength(env, jPath);
@@ -180,7 +180,7 @@ JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_initLogger(JNIEnv *env, jcla
     (*env)->ReleaseStringUTFChars(env, jPath, path_str);
 }
 
-JNIEXPORT jstring JNICALL Java_com_dobby_awg_GoBackend_getLastError(JNIEnv *env, jclass c)
+JNIEXPORT jstring JNICALL Java_com_dobby_backend_GoBackend_getLastError(JNIEnv *env, jclass c)
 {
     char *result = GetLastError();
 	jstring ret;
@@ -191,7 +191,7 @@ JNIEXPORT jstring JNICALL Java_com_dobby_awg_GoBackend_getLastError(JNIEnv *env,
 	return ret;
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_newOutlineClient(JNIEnv *env, jclass c, jstring jConfig, jint jFd)
+JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_newOutlineClient(JNIEnv *env, jclass c, jstring jConfig, jint jFd)
 {
     const char *config_str = (*env)->GetStringUTFChars(env, jConfig, NULL);
 	size_t config_len = (*env)->GetStringUTFLength(env, jConfig);
@@ -202,12 +202,12 @@ JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_newOutlineClient(JNIEnv *env
     (*env)->ReleaseStringUTFChars(env, jConfig, config_str);
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_awg_GoBackend_outlineConnect(JNIEnv *env, jclass c)
+JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_outlineConnect(JNIEnv *env, jclass c)
 {
     return OutlineConnect();
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_awg_GoBackend_outlineDisconnect(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_outlineDisconnect(JNIEnv *env, jclass c)
 {
     OutlineDisconnect();
 }

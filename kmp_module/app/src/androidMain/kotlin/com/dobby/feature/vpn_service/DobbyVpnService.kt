@@ -29,7 +29,7 @@ import android.system.Os
 import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
 import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
-import com.dobby.GoBackendWrapper
+import com.dobby.backend.GoBackendWrapper
 import java.io.File
 import java.io.FileInputStream
 import java.util.UUID
