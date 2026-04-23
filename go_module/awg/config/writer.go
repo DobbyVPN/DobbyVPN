@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"go_module/awg/config/fwmark"
 	"strings"
 )
 
@@ -147,6 +148,10 @@ func (conf *Config) ToWgQuick() string {
 func (conf *Config) ToUAPI() (uapi string, dnsErr error) {
 	var output strings.Builder
 	output.WriteString(fmt.Sprintf("private_key=%s\n", conf.Interface.PrivateKey.HexString()))
+
+	if fwmark.FirewallMarkRequired {
+		output.WriteString(fmt.Sprintf("fwmark=%d\n", 51820))
+	}
 
 	if conf.Interface.ListenPort > 0 {
 		output.WriteString(fmt.Sprintf("listen_port=%d\n", conf.Interface.ListenPort))
