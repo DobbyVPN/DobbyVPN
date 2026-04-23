@@ -39,7 +39,7 @@ public final class CloakInteractor {
         }
     }
 
-    func stopCloak() throws {
+    func stopCloak() {
         if cloakStarted {
             Cloak_outlineStopCloakClient()
             cloakStarted = false

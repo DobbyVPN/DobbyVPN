@@ -222,11 +222,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop outline: \(error.localizedDescription)")
         }
 
-        do {
-            try cloakInteractor.stopCloak()
-        } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop cloak: \(error.localizedDescription)")
-        }
+        cloakInteractor.stopCloak()
 
         do {
             try await self.setTunnelNetworkSettings(nil)
