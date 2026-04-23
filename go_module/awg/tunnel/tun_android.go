@@ -4,6 +4,7 @@ package tunnel
 
 import (
 	"fmt"
+	"go_module/awg/config"
 	"go_module/log"
 
 	"github.com/amnezia-vpn/amneziawg-go/conn"
@@ -14,7 +15,7 @@ import (
 
 type TunnelData struct {
 	InterfaceName   string
-	InterfaceConfig string
+	InterfaceConfig *config.Config
 	InterfaceFD     int
 	device          *device.Device
 }
@@ -34,7 +35,13 @@ func (a *TunnelData) Run() error {
 	logger.Verbosef("Attaching to interface %v", name)
 	a.device = device.NewDevice(tun, conn.NewStdNetBind(), logger)
 
-	err = a.device.IpcSet(a.InterfaceConfig)
+	uapiConfig, err := a.InterfaceConfig.ToUAPI()
+	if err != nil {
+		unix.Close(a.InterfaceFD)
+		return fmt.Errorf("Failed get IPC config: %v", err)
+	}
+
+	err = a.device.IpcSet(uapiConfig)
 	if err != nil {
 		unix.Close(a.InterfaceFD)
 		return fmt.Errorf("Failed to set IPC config: %v", err)
