@@ -21,51 +21,67 @@ type TunnelData struct {
 }
 
 func (a *TunnelData) Run() error {
-	logger := &device.Logger{
-		Verbosef: log.Infof,
-		Errorf:   log.Infof,
-	}
+	log.Infof("[AWG] Running awg tunnel (android)")
 
-	tun, name, err := tun.CreateUnmonitoredTUNFromFD(a.InterfaceFD)
-	if err != nil {
-		unix.Close(a.InterfaceFD)
-		return fmt.Errorf("Failed create unmonitored TUN from FD: %v", err)
-	}
-
-	logger.Verbosef("Attaching to interface %v", name)
-	a.device = device.NewDevice(tun, conn.NewStdNetBind(), logger)
-
+	log.Infof("[AWG] Converting interface config to the UAPI config")
 	uapiConfig, err := a.InterfaceConfig.ToUAPI()
 	if err != nil {
 		unix.Close(a.InterfaceFD)
 		return fmt.Errorf("Failed get IPC config: %v", err)
 	}
 
+	log.Infof("[AWG] Create awg TUN device")
+	tun, name, err := tun.CreateUnmonitoredTUNFromFD(a.InterfaceFD)
+	if err != nil {
+		unix.Close(a.InterfaceFD)
+		return fmt.Errorf("Failed create unmonitored TUN from FD: %v", err)
+	}
+
+	log.Infof("[AWG] Creating interface instance %s", name)
+	bind := conn.NewStdNetBind()
+	logger := &device.Logger{
+		Verbosef: func(format string, args ...any) {
+			log.Infof(fmt.Sprintf("[TUN] %s", format), args...)
+		},
+		Errorf: func(format string, args ...any) {
+			log.Infof(fmt.Sprintf("[TUN] [ERROR] %s", format), args...)
+		},
+	}
+	a.device = device.NewDevice(tun, bind, logger)
+
+	log.Infof("[AWG] Seting up UAPI config")
 	err = a.device.IpcSet(uapiConfig)
 	if err != nil {
 		unix.Close(a.InterfaceFD)
 		return fmt.Errorf("Failed to set IPC config: %v", err)
 	}
+
+	log.Infof("[AWG] Disable some roaming for broken mobile semantics")
 	a.device.DisableSomeRoamingForBrokenMobileSemantics()
 
+	log.Infof("[AWG] Bringing peers up")
 	err = a.device.Up()
 	if err != nil {
 		a.device.Close()
 		return fmt.Errorf("Failed to bring peers up: %v", err)
 	}
 
-	logger.Verbosef("Device started")
+	log.Infof("[AWG] Device started")
 
 	return nil
 }
 
 func (a *TunnelData) Stop() {
+	log.Infof("[AWG] Shutting down")
+
 	if a.device != nil {
 		a.device.Close()
 	}
 }
 
 func (a *TunnelData) GetSocketV4() int {
+	log.Infof("[AWG] GetSocketV4")
+
 	bind, _ := a.device.Bind().(conn.PeekLookAtSocketFd)
 	if bind == nil {
 		return -1
@@ -78,6 +94,8 @@ func (a *TunnelData) GetSocketV4() int {
 }
 
 func (a *TunnelData) GetSocketV6() int {
+	log.Infof("[AWG] GetSocketV6")
+
 	bind, _ := a.device.Bind().(conn.PeekLookAtSocketFd)
 	if bind == nil {
 		return -1
