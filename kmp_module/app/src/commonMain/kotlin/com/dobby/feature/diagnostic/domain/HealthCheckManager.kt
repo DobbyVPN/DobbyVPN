@@ -72,6 +72,14 @@ class HealthCheckManager(
                     return@launch
                 }
 
+                if (mainViewModel.connectionStateRepository.vpnTransitioningFlow.value) {
+                    logger.log("[HC] VPN is transitioning → skipping checks for this tick")
+                    nextDelay = getHealthCheckDelay()
+                    logger.log("[HC] Next tick in $nextDelay")
+                    delay(nextDelay)
+                    continue
+                }
+
                 val connected = try {
                     val result = isConnected()
                     logger.log("[HC] isConnected() result = $result")

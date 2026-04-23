@@ -28,12 +28,13 @@ public class VpnManagerImpl: VpnManager {
         self.connectionRepository = connectionRepository
         getOrCreateManager { [weak self] manager, _ in
             guard let self else { return }
-            if manager?.connection.status == .connected {
-                self.state = manager?.connection.status ?? .invalid
+            let status = manager?.connection.status ?? .invalid
+            self.state = status
+            self.updateTransitionState(for: status)
+            if status == .connected {
                 connectionRepository.tryUpdateVpnStarted(isStarted: true)
                 self.vpnManager = manager
             } else {
-                self.state = manager?.connection.status ?? .invalid
                 connectionRepository.tryUpdateVpnStarted(isStarted: false)
             }
         }
@@ -54,6 +55,7 @@ public class VpnManagerImpl: VpnManager {
             let previous = self.state
             self.state = connection.status
             self.logs.writeLog(log: "[NEVPNStatusDidChange] \(self.statusName(previous))(\(previous.rawValue)) -> \(self.statusName(connection.status))(\(connection.status.rawValue))")
+            self.updateTransitionState(for: connection.status)
 
             switch connection.status {
             case .connected:
@@ -103,18 +105,20 @@ public class VpnManagerImpl: VpnManager {
         self.logs.writeLog(log: "[start] manager loaded status=\(statusName(status)) raw=\(status.rawValue)")
         if status == .connecting || status == .disconnecting || status == .reasserting {
             self.logs.writeLog(log: "[start] Skip: connection is transitioning (\(status.rawValue))")
+            self.updateTransitionState(for: status)
             return
         }
         if status == .connected {
             self.logs.writeLog(log: "[start] Skip: already connected")
             return
         }
+        self.vpnManager = manager
+        self.vpnManager?.isEnabled = true
+        self.applyProtocolDefaults(manager: manager)
         if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
             let address = proto.serverAddress ?? "nil"
             self.logs.writeLog(log: "VPN Manager serverAddress = \(address)")
         }
-        self.vpnManager = manager
-        self.vpnManager?.isEnabled = true
         manager.saveToPreferences { saveError in
             if let saveError = saveError {
                 self.logs.writeLog(log: "Failed to save VPN configuration: \(saveError)")
@@ -139,6 +143,7 @@ public class VpnManagerImpl: VpnManager {
             return
         }
         self.logs.writeLog(log: "[stop] stopVPNTunnel requested status=\(statusName(manager.connection.status)) raw=\(manager.connection.status.rawValue)")
+        connectionRepository.tryUpdateVpnTransitioning(isTransitioning: true)
         manager.connection.stopVPNTunnel()
         self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")
     }
@@ -172,7 +177,7 @@ public class VpnManagerImpl: VpnManager {
 
         let proto = NETunnelProviderProtocol()
         proto.providerBundleIdentifier = Self.dobbyBundleIdentifier
-        proto.serverAddress = "159.69.19.209:443"
+        proto.serverAddress = currentServerAddress()
         proto.providerConfiguration = [:]
         proto.includeAllNetworks = true
         proto.excludeLocalNetworks = true
@@ -192,6 +197,7 @@ public class VpnManagerImpl: VpnManager {
     private func applyProtocolDefaults(manager: NETunnelProviderManager) {
         guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else { return }
         proto.providerBundleIdentifier = Self.dobbyBundleIdentifier
+        proto.serverAddress = currentServerAddress()
         proto.includeAllNetworks = true
         proto.excludeLocalNetworks = true
         if #available(iOS 16.4, *) {
@@ -222,6 +228,25 @@ public class VpnManagerImpl: VpnManager {
         @unknown default:
             return "unknown"
         }
+    }
+
+    private func currentServerAddress() -> String {
+        let outlineServer = configsRepository.getServerPortOutline().trimmingCharacters(in: .whitespacesAndNewlines)
+        if !outlineServer.isEmpty {
+            return outlineServer
+        }
+
+        let connectionUrl = configsRepository.getConnectionURL().trimmingCharacters(in: .whitespacesAndNewlines)
+        if !connectionUrl.isEmpty {
+            return connectionUrl
+        }
+
+        return Self.dobbyName
+    }
+
+    private func updateTransitionState(for status: NEVPNStatus) {
+        let isTransitioning = status == .connecting || status == .disconnecting || status == .reasserting
+        connectionRepository.tryUpdateVpnTransitioning(isTransitioning: isTransitioning)
     }
 
 //    static func startSentry() {
