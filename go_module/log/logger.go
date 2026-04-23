@@ -9,7 +9,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/contrib/bridges/otelslog"
@@ -101,9 +100,12 @@ func (h *logrusToSlogHook) Fire(e *logrus.Entry) error {
 }
 
 type Logger struct {
-	file   *os.File
-	logger *slog.Logger
-	buffer []string
+	file     *os.File
+	logger   *slog.Logger
+	debugBuf []string
+	infoBuf  []string
+	warnBuf  []string
+	errorBuf []string
 }
 
 type TelemetryLogger struct {
@@ -112,7 +114,7 @@ type TelemetryLogger struct {
 }
 
 var (
-	lg     = &Logger{buffer: []string{}}
+	lg     = &Logger{debugBuf: []string{}, infoBuf: []string{}, warnBuf: []string{}, errorBuf: []string{}}
 	tlg    = NewTelemetryLogger()
 	initMu sync.Mutex
 )
@@ -142,8 +144,17 @@ func MaskStr(input string) string {
 }
 
 func (logger *Logger) dumpBuffer() {
-	for _, message := range logger.buffer {
+	for _, message := range logger.debugBuf {
+		logger.logger.Debug(message)
+	}
+	for _, message := range logger.infoBuf {
 		logger.logger.Info(message)
+	}
+	for _, message := range logger.warnBuf {
+		logger.logger.Warn(message)
+	}
+	for _, message := range logger.errorBuf {
+		logger.logger.Error(message)
 	}
 }
 
@@ -185,9 +196,9 @@ var (
 func Infof(format string, args ...any) {
 	message := fmt.Sprintf(format, args...)
 	if lg.logger == nil {
-		lg.buffer = append(lg.buffer, message)
+		lg.debugBuf = append(lg.debugBuf, message)
 	} else {
-		lg.logger.Info(message)
+		lg.logger.Debug(message)
 	}
 	otelLogger.DebugContext(tlg.ctx, message)
 }
@@ -215,105 +226,111 @@ func flattenArgs(arguments map[string]any) []any {
 	return all
 }
 
-func log(level, categoryMessage string, arguments map[string]any) {
-	levelMessage := fmt.Sprintf("[%s] %s", level, categoryMessage)
-	stdoutMessage := prepareLog(levelMessage, arguments)
+func _debug(categoryMessage string, arguments map[string]any) {
+	stdoutMessage := prepareLog(categoryMessage, arguments)
 	if lg.logger == nil {
-		lg.buffer = append(lg.buffer, stdoutMessage)
+		lg.debugBuf = append(lg.debugBuf, stdoutMessage)
+	} else {
+		lg.logger.Debug(stdoutMessage)
+	}
+}
+
+func _info(categoryMessage string, arguments map[string]any) {
+	stdoutMessage := prepareLog(categoryMessage, arguments)
+	if lg.logger == nil {
+		lg.infoBuf = append(lg.infoBuf, stdoutMessage)
 	} else {
 		lg.logger.Info(stdoutMessage)
 	}
 }
 
+func _warn(categoryMessage string, arguments map[string]any) {
+	stdoutMessage := prepareLog(categoryMessage, arguments)
+	if lg.logger == nil {
+		lg.warnBuf = append(lg.warnBuf, stdoutMessage)
+	} else {
+		lg.logger.Warn(stdoutMessage)
+	}
+}
+
+func _error(categoryMessage string, arguments map[string]any) {
+	stdoutMessage := prepareLog(categoryMessage, arguments)
+	if lg.logger == nil {
+		lg.errorBuf = append(lg.errorBuf, stdoutMessage)
+	} else {
+		lg.logger.Error(stdoutMessage)
+	}
+}
+
 func Info(category string, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	log("INFO", categoryMessage, arguments)
+	_info(categoryMessage, arguments)
 	otelLogger.InfoContext(tlg.ctx, categoryMessage, flattenArgs(arguments)...)
 }
 
 func Debug(category string, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	log("DEBUG", categoryMessage, arguments)
+	_debug(categoryMessage, arguments)
 	otelLogger.DebugContext(tlg.ctx, categoryMessage, flattenArgs(arguments)...)
 }
 
 func Warn(category string, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	log("WARN", categoryMessage, arguments)
+	_warn(categoryMessage, arguments)
 	otelLogger.WarnContext(tlg.ctx, categoryMessage, flattenArgs(arguments)...)
 }
 
 func Error(category string, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	log("ERROR", categoryMessage, arguments)
+	_error(categoryMessage, arguments)
 	otelLogger.ErrorContext(tlg.ctx, categoryMessage, flattenArgs(arguments)...)
 }
 
 func SimpleInfo(category string, message string) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	log("INFO", categoryMessage, make(map[string]any))
+	_info(categoryMessage, make(map[string]any))
 	otelLogger.InfoContext(tlg.ctx, categoryMessage)
 }
 
 func SimpleDebug(category string, message string) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	log("DEBUG", categoryMessage, make(map[string]any))
+	_debug(categoryMessage, make(map[string]any))
 	otelLogger.DebugContext(tlg.ctx, categoryMessage)
 }
 
 func SimpleWarn(category string, message string) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	log("WARN", categoryMessage, make(map[string]any))
+	_warn(categoryMessage, make(map[string]any))
 	otelLogger.WarnContext(tlg.ctx, categoryMessage)
 }
 
 func SimpleError(category string, message string) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	log("ERROR", categoryMessage, make(map[string]any))
+	_error(categoryMessage, make(map[string]any))
 	otelLogger.ErrorContext(tlg.ctx, categoryMessage)
 }
 
 func SimpleInfof(category string, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
-	levelMessage := fmt.Sprintf("[INFO] %s", categoryMessage)
-	if lg.logger == nil {
-		lg.buffer = append(lg.buffer, levelMessage)
-	} else {
-		lg.logger.Info(levelMessage)
-	}
+	_info(categoryMessage, make(map[string]any))
 	otelLogger.InfoContext(tlg.ctx, categoryMessage)
 }
 
 func SimpleDebugf(category string, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
-	levelMessage := fmt.Sprintf("[DEBUG] %s", categoryMessage)
-	if lg.logger == nil {
-		lg.buffer = append(lg.buffer, levelMessage)
-	} else {
-		lg.logger.Debug(levelMessage)
-	}
+	_debug(categoryMessage, make(map[string]any))
 	otelLogger.DebugContext(tlg.ctx, categoryMessage)
 }
 
 func SimpleWarnf(category string, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
-	levelMessage := fmt.Sprintf("[WARN] %s", categoryMessage)
-	if lg.logger == nil {
-		lg.buffer = append(lg.buffer, levelMessage)
-	} else {
-		lg.logger.Warn(levelMessage)
-	}
+	_warn(categoryMessage, make(map[string]any))
 	otelLogger.WarnContext(tlg.ctx, categoryMessage)
 }
 
 func SimpleErrorf(category string, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
-	levelMessage := fmt.Sprintf("[ERROR] %s", categoryMessage)
-	if lg.logger == nil {
-		lg.buffer = append(lg.buffer, levelMessage)
-	} else {
-		lg.logger.Error(levelMessage)
-	}
+	_error(categoryMessage, make(map[string]any))
 	otelLogger.ErrorContext(tlg.ctx, categoryMessage)
 }
 
@@ -326,15 +343,12 @@ func (h *simpleHandler) Enabled(_ context.Context, _ slog.Level) bool {
 }
 
 func (h *simpleHandler) Handle(_ context.Context, r slog.Record) error {
-	t := time.Now().Format("2006-01-02 15:04:05")
-
-	msg := maskMessage(r.Message)
-
 	_, err := fmt.Fprintf(
 		h.file,
-		"[%s] \"%s\" [from go]\n",
-		t,
-		msg,
+		"[%s] [%s] \"%s\" [from go]\n",
+		r.Time.Format("2006-01-02 15:04:05"),
+		r.Level.String(),
+		maskMessage(r.Message),
 	)
 
 	return err
