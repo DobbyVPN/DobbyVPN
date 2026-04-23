@@ -69,6 +69,7 @@ class HealthCheckManager(
 
                 if (configsRepository.getIsUserInitStop()) {
                     logger.log("[HC] Stop condition: getIsUserInitStop() == true → exiting health check loop")
+                    resetHealthCheckState()
                     return@launch
                 }
 
@@ -97,6 +98,7 @@ class HealthCheckManager(
                 val vpnStarted = mainViewModel.connectionStateRepository.vpnStartedFlow.value
                 if (!vpnStarted) {
                     logger.log("[HC] vpnStarted=false → exiting health check loop")
+                    resetHealthCheckState()
                     return@launch
                 }
 
@@ -134,11 +136,24 @@ class HealthCheckManager(
         healthJob?.cancel()
         healthJob = null
 
-        lastVpnStartMark = null
-        lastFullConnectionSucceed = false
+        resetHealthCheckState()
 
         logger.log("[HC] State reset after stop")
     }
+
+    private fun resetHealthCheckState() {
+        consecutiveFailuresCount = 0
+        lastVpnStartMark = null
+        lastFullConnectionSucceed = false
+    }
+
+    suspend fun turnOffVpn() {
+        mainViewModel.connectionStateRepository.updateStatus(false)
+        mainViewModel.connectionStateRepository.updateVpnStarted(false)
+        stopHealthCheck()
+        mainViewModel.stopVpnService()
+    }
+
 
     private fun isConnected(): Boolean {
         var result = false

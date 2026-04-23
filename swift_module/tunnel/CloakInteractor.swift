@@ -48,7 +48,7 @@ public final class CloakInteractor {
         }
     }
 
-    func stopCloak() throws {
+    func stopCloak() {
         if cloakStarted {
             let start = Date()
             logs.writeLog(log: "stopCloak: stopping Cloak client")
