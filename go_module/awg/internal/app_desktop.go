@@ -17,7 +17,7 @@ type App struct {
 func NewApp(tun, conf string) (*App, error) {
 	awgqconfig, err := config.FromWgQuickWithUnknownEncoding(conf, tun)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to read awg-quick config: %w", err)
+		return nil, fmt.Errorf("failed to read awg-quick config: %w", err)
 	}
 
 	tunnelData := &tunnel.TunnelData{
@@ -34,7 +34,7 @@ func NewApp(tun, conf string) (*App, error) {
 func (a *App) Run() error {
 	err := a.TunnelData.Run()
 	if err != nil {
-		return fmt.Errorf("Failed to run runnel: %s", err)
+		return fmt.Errorf("failed to run runnel: %w", err)
 	}
 
 	return nil

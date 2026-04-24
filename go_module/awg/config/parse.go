@@ -34,7 +34,6 @@ func (e *ParseError) Error() string {
 
 func parseIPCidr(s string) (*IPCidr, error) {
 	var addrStr, cidrStr string
-	var cidr int
 
 	i := strings.IndexByte(s, '/')
 	if i < 0 {
@@ -59,14 +58,16 @@ func parseIPCidr(s string) (*IPCidr, error) {
 		if cidr > 32 && maybeV4 != nil {
 			return nil, fmt.Errorf("invalid network prefix length")
 		}
+		return &IPCidr{addr, uint8(cidr)}, nil
 	} else {
+		var cidr uint8
 		if maybeV4 != nil {
 			cidr = 32
 		} else {
 			cidr = 128
 		}
+		return &IPCidr{addr, cidr}, nil
 	}
-	return &IPCidr{addr, uint8(cidr)}, nil
 }
 
 func parseEndpoint(s string) (*Endpoint, error) {

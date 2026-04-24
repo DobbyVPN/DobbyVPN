@@ -73,16 +73,19 @@ func newNaturalSortString(s string) (t naturalSortString) {
 }
 
 func (f1 naturalSortToken) Cmp(f2 naturalSortToken) int {
-	if f1.maybeString == "" {
+	switch f1.maybeString {
+	case "":
 		if f2.maybeString != "" || f1.maybeNumber < f2.maybeNumber {
 			return -1
 		} else if f1.maybeNumber > f2.maybeNumber {
 			return 1
 		}
-	} else if f2.maybeString == "" || f1.maybeString > f2.maybeString {
-		return 1
-	} else if f1.maybeString < f2.maybeString {
-		return -1
+	default:
+		if f2.maybeString == "" || f1.maybeString > f2.maybeString {
+			return 1
+		} else if f1.maybeString < f2.maybeString {
+			return -1
+		}
 	}
 	return 0
 }
