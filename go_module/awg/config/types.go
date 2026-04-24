@@ -7,6 +7,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/curve25519"
 )
 
 const KeyLength = 32
@@ -99,6 +101,12 @@ func (k *Key) HexString() string {
 func (k *Key) IsZero() bool {
 	var zeros Key
 	return subtle.ConstantTimeCompare(zeros[:], k[:]) == 1
+}
+
+func (k *Key) Public() *Key {
+	var p [KeyLength]byte
+	curve25519.ScalarBaseMult(&p, (*[KeyLength]byte)(k))
+	return (*Key)(&p)
 }
 
 type Endpoint struct {
