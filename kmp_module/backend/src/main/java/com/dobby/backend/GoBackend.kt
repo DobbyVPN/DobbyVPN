@@ -3,14 +3,6 @@ package com.dobby.backend
 import android.net.VpnService
 
 class GoBackend {
-    external fun awgTurnOn(ifname: String, tunFd: Int, settings: String): Int
-
-    external fun awgTurnOff()
-
-    external fun awgGetSocketV4(): Int
-
-    external fun awgGetSocketV6(): Int
-
     external fun startCloakClient(localHost: String, localPort: String, config: String, udp: Boolean): Unit
 
     external fun stopCloakClient(): Unit

@@ -75,7 +75,7 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_registerVpnService(JNIEn
     (*env)->DeleteLocalRef(env, vpn_cls);
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_awgTurnOn(JNIEnv *env, jclass c, jstring ifname, jint tun_fd, jstring settings)
+JNIEXPORT jint JNICALL Java_com_dobby_backend_AwgBackend_awgTurnOn(JNIEnv *env, jclass c, jstring ifname, jint tun_fd, jstring settings)
 {
 	const char *ifname_str = (*env)->GetStringUTFChars(env, ifname, 0);
 	size_t ifname_len = (*env)->GetStringUTFLength(env, ifname);
@@ -93,17 +93,17 @@ JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_awgTurnOn(JNIEnv *env, j
 	return ret;
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_awgTurnOff(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_AwgBackend_awgTurnOff(JNIEnv *env, jclass c)
 {
 	AwgTurnOff();
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_awgGetSocketV4(JNIEnv *env, jclass c)
+JNIEXPORT jint JNICALL Java_com_dobby_backend_AwgBackend_awgGetSocketV4(JNIEnv *env, jclass c)
 {
 	return AwgGetSocketV4();
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_awgGetSocketV6(JNIEnv *env, jclass c)
+JNIEXPORT jint JNICALL Java_com_dobby_backend_AwgBackend_awgGetSocketV6(JNIEnv *env, jclass c)
 {
 	return AwgGetSocketV6();
 }
