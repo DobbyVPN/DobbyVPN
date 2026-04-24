@@ -153,7 +153,7 @@ jobs:
       - name: Copy libs arm64 .so
         run: |
           mkdir -p kmp_module/backend/src/main/jniLibs/arm64-v8a
-          cp libbackend.so kmp_module/backend/src/main/jniLibs/arm64-v8a/libbackend.so
+          cp go_module/libbackend.so kmp_module/backend/src/main/jniLibs/arm64-v8a/libbackend.so
 
       - name: Upload .so
         uses: actions/upload-artifact@v4
