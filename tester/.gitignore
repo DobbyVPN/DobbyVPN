@@ -1,0 +1,8 @@
+# VPN log files:
+vpnserver-output-*.log
+
+# Tester config files
+config.json
+
+# Tester executable
+tester

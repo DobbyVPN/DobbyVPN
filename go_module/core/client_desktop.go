@@ -58,9 +58,20 @@ func (c *CoreClient) Connect() error {
 	initResult := make(chan error, 1)
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err := fmt.Errorf("core client crashed: %v", r)
+				log.Infof("core goroutine recovered from panic: %v", err)
+				select {
+				case initResult <- err:
+				default:
+				}
+				common.Client.MarkInactive(coreCommon.Name)
+			}
+		}()
 		err := c.app.Run(ctx, initResult)
 		if err != nil {
-			log.Infof("connect outline failed: %v", err)
+			log.Infof("connect core client failed: %v", err)
 			common.Client.MarkInactive(coreCommon.Name)
 		}
 	}()
@@ -71,15 +82,15 @@ func (c *CoreClient) Connect() error {
 		if err != nil {
 			c.cancel()
 			c.cancel = nil
-			return fmt.Errorf("failed to initialize outline connection: %w", err)
+			return fmt.Errorf("failed to initialize core client connection: %w", err)
 		}
-		log.Infof("Outline connection initialized successfully")
+		log.Infof("Core client connection initialized successfully")
 		common.Client.MarkActive(coreCommon.Name)
 		return nil
 	case <-time.After(30 * time.Second):
 		c.cancel()
 		c.cancel = nil
-		return fmt.Errorf("timeout waiting for outline connection initialization")
+		return fmt.Errorf("timeout waiting for core client connection initialization")
 	}
 }
 

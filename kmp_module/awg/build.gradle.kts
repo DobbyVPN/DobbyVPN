@@ -47,6 +47,8 @@ android {
                     targets("libwg-go.so")
                     arguments("-DGRADLE_USER_HOME=${project.gradle.gradleUserHomeDir}")
                     goBinaryPath?.let { arguments("-DGO_BINARY=$it") }
+                    arguments("-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384")
+                    arguments("-DCMAKE_EXE_LINKER_FLAGS=-Wl,-z,max-page-size=16384")
                 }
             }
         }

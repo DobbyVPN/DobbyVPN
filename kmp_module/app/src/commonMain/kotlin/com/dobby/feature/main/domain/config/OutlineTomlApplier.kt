@@ -4,11 +4,14 @@ import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryCloak
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryOutline
+import com.dobby.feature.main.domain.DobbyConfigsRepositoryVpn
 import com.dobby.feature.main.domain.OutlineConfig
+import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.main.domain.clearCloakConfig
 import com.dobby.feature.main.domain.clearOutlineConfig
 
 internal class OutlineTomlApplier(
+    private val vpnRepo: DobbyConfigsRepositoryVpn,
     private val outlineRepo: DobbyConfigsRepositoryOutline,
     private val cloakRepo: DobbyConfigsRepositoryCloak,
     private val logger: Logger,
@@ -22,6 +25,7 @@ internal class OutlineTomlApplier(
     fun apply(outline: OutlineConfig): Pair<Boolean, Boolean>? {
         logger.log("Detected [Outline] config, applying Outline parameters")
         outlineRepo.setIsOutlineEnabled(true)
+        vpnRepo.setVpnInterface(VpnInterface.CLOAK_OUTLINE)
 
         val method = outline.Method?.trim().orEmpty().ifEmpty { DEFAULT_METHOD }
         val password = outline.Password?.trim().orEmpty()

@@ -1,4 +1,4 @@
-package main
+package api
 
 import "C"
 import (
@@ -7,7 +7,6 @@ import (
 	"go_module/log"
 	"go_module/outline"
 	"go_module/xray"
-	"strings"
 	"sync"
 )
 
@@ -18,13 +17,11 @@ var vpnLastError string
 var vpnErrorMu sync.Mutex
 
 //export GetVpnLastError
-func GetVpnLastError() *C.char {
+func GetVpnLastError() string {
 	vpnErrorMu.Lock()
 	defer vpnErrorMu.Unlock()
-	if vpnLastError == "" {
-		return nil
-	}
-	return C.CString(vpnLastError)
+
+	return vpnLastError
 }
 
 func setVpnLastError(err string) {
@@ -37,11 +34,9 @@ func setVpnLastError(err string) {
 }
 
 //export StartVpn
-func StartVpn(config *C.char, protocol *C.char) C.int {
+func StartVpn(config, protocol string) int32 {
 	log.Infof("StartVpn")
 	setVpnLastError("")
-	str_config := C.GoString(config)
-	str_protocol := strings.ToLower(C.GoString(protocol))
 
 	log.Infof("Make lock")
 	vpnMu.Lock()
@@ -61,19 +56,19 @@ func StartVpn(config *C.char, protocol *C.char) C.int {
 	var device pkg.ProtocolDevice
 	var err error
 
-	switch str_protocol {
+	switch protocol {
 	case "xray":
-		device, err = xray.NewXrayDevice(str_config)
+		device, err = xray.NewXrayDevice(config)
 	case "outline":
-		device, err = outline.NewOutlineDevice(str_config)
+		device, err = outline.NewOutlineDevice(config)
 	default:
-		setVpnLastError("unsupported protocol: " + str_protocol)
+		setVpnLastError("unsupported protocol: " + protocol)
 		log.Infof("NewVpnClient() failed: unsupported protocol")
 		return -1
 	}
 
 	if err != nil {
-		log.Infof("Failed to create device for %s protocol: %v", str_protocol, err)
+		log.Infof("Failed to create device for %s protocol: %v", protocol, err)
 		setVpnLastError(err.Error())
 		return -1
 	}

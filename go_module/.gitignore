@@ -1,1 +1,7 @@
 /modules/Cloak/internal/
+
+windows_grpcvpnserver.exe
+ubuntu_grpcvpnserver
+macos_grpcvpnserver
+liboutline.so
+MyLibrary.xcframework

@@ -4,13 +4,10 @@ interface DobbyConfigsRepository :
     DobbyConfigsRepositoryOutline,
     DobbyConfigsRepositoryCloak,
     DobbyConfigsRepositoryAwg,
-    DobbyConfigsRepositoryXray {
+    DobbyConfigsRepositoryXray,
+    DobbyConfigsRepositoryVpn {
 
     // region global configs
-
-    fun getVpnInterface(): VpnInterface
-
-    fun setVpnInterface(vpnInterface: VpnInterface)
 
     fun getConnectionURL(): String
 
