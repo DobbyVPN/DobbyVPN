@@ -1,6 +1,7 @@
 package com.dobby.feature.vpn_service.domain.awg
 
 import android.content.Intent
+import com.dobby.backend.AwgBackendWrapper
 import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.AmneziaWGConfig
@@ -66,15 +67,15 @@ class AmneziaWGInteractor(
 
         logger.log("[svc:${dobbyVpnService?.serviceId}] startAwg(): initializing AmneziaWG with tunFd=$tunFd")
 
-        val connected = GoBackendWrapper.awgTurnOn("awg0", tunFd, tomlConfig.toAwgQuick())
+        val connected = AwgBackendWrapper.awgTurnOn("awg0", tunFd, tomlConfig.toAwgQuick())
         if (connected != 0) {
             logger.log("AmneziaWG connection FAILED, stopping VPN service")
             return startupFailure(dobbyVpnService)
         }
         logger.log("AmneziaWG connected successfully")
 
-        dobbyVpnService?.protect(GoBackendWrapper.awgGetSocketV4())
-        dobbyVpnService?.protect(GoBackendWrapper.awgGetSocketV6())
+        dobbyVpnService?.protect(AwgBackendWrapper.awgGetSocketV4())
+        dobbyVpnService?.protect(AwgBackendWrapper.awgGetSocketV6())
         logger.log("AmneziaWG peers protect")
 
         dobbyVpnService?.connectionState?.updateStatus(true)
@@ -83,7 +84,7 @@ class AmneziaWGInteractor(
 
     fun stopAwg() {
         logger.log("[svc:...] stopAwg()")
-        GoBackendWrapper.awgTurnOff()
+        AwgBackendWrapper.awgTurnOff()
         logger.log("[svc:...] stopAwg(): completed")
     }
 }

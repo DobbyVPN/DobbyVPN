@@ -3,14 +3,6 @@ package com.dobby.backend
 object GoBackendWrapper {
     private val backend = GoBackend()
 
-    val awgTurnOn = backend::awgTurnOn
-
-    val awgTurnOff = backend::awgTurnOff
-
-    val awgGetSocketV4 = backend::awgGetSocketV4
-
-    val awgGetSocketV6 = backend::awgGetSocketV6
-
     val startCloakClient = backend::startCloakClient
 
     val stopCloakClient = backend::stopCloakClient
