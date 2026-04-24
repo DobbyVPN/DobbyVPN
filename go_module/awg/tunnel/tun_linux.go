@@ -20,29 +20,17 @@ import (
 type TunnelData struct {
 	InterfaceName   string
 	InterfaceConfig *config.Config
-	logger          *device.Logger
 	dev             *device.Device
 	uapi            net.Listener
 	errs            chan error
 }
 
-func CreateTunnelData(tun string, conf *config.Config) *TunnelData {
+func CreateTunnelData(tunnelName string, tunnelConfig *config.Config) *TunnelData {
 	return &TunnelData{
-		InterfaceName:   tun,
-		InterfaceConfig: conf,
+		InterfaceName:   tunnelName,
+		InterfaceConfig: tunnelConfig,
 	}
 }
-
-const (
-	ExitSetupSuccess = 0
-	ExitSetupFailed  = 1
-)
-
-const (
-	ENV_WG_TUN_FD             = "WG_TUN_FD"
-	ENV_WG_UAPI_FD            = "WG_UAPI_FD"
-	ENV_WG_PROCESS_FOREGROUND = "WG_PROCESS_FOREGROUND"
-)
 
 func (a *TunnelData) Run() error {
 	var err error
@@ -68,46 +56,50 @@ func (a *TunnelData) Run() error {
 
 	log.Infof("[AWG] Creating interface instance")
 	bind := conn.NewDefaultBind()
-	a.dev = device.NewDevice(tdev, bind, &device.Logger{log.Infof, log.Infof})
+	logger := &device.Logger{
+		Verbosef: log.Infof,
+		Errorf:   log.Infof,
+	}
+	a.dev = device.NewDevice(tdev, bind, logger)
 
 	log.Infof("[AWG] Setting interface configuration")
 	fileUAPI, err := ipc.UAPIOpen(a.InterfaceName)
 	if err != nil {
-		return fmt.Errorf("Failed to open UAPI file: %s", err)
+		return fmt.Errorf("Failed to open UAPI file: %w", err)
 	}
 	uapi, err := ipc.UAPIListen(a.InterfaceName, fileUAPI)
 	if err != nil {
-		return fmt.Errorf("UAPI listen error: %v", err)
+		return fmt.Errorf("UAPI listen error: %w", err)
 	}
 	a.uapi = uapi
 
 	log.Infof("[AWG] Seting up UAPI config")
 	err = a.dev.IpcSet(uapiConf)
 	if err != nil {
-		return fmt.Errorf("IPC set error: %v", err)
+		return fmt.Errorf("IPC set error: %w", err)
 	}
 
 	log.Infof("[AWG] Bringing peers up")
 	err = a.dev.Up()
 	if err != nil {
-		return fmt.Errorf("Bringing peers up error: %v", err)
+		return fmt.Errorf("Bringing peers up error: %w", err)
 	}
 
 	log.Infof("[AWG] Setting up linux subnet")
 
 	log.Infof("[AWG] Setting up %s interface", a.InterfaceName)
-	if err = a.setUpInterface(); err != nil {
-		return err
+	if err := a.setUpInterface(); err != nil {
+		return fmt.Errorf("Failed set up interface: %w", err)
 	}
 
 	log.Infof("[AWG] Adding all addresses")
-	if err = a.addAddresses(); err != nil {
-		return err
+	if err := a.addAddresses(); err != nil {
+		return fmt.Errorf("Failed add addresses: %w", err)
 	}
 
 	log.Infof("[AWG] Adding all routes")
-	if err = a.addRoutes(); err != nil {
-		return err
+	if err := a.addRoutes(); err != nil {
+		return fmt.Errorf("Failed add routes: %w", err)
 	}
 
 	log.Infof("[AWG] IPC accept loop")
@@ -123,7 +115,10 @@ func (a *TunnelData) Stop() {
 	log.Infof("[AWG] Shutting down")
 
 	if a.uapi != nil {
-		a.uapi.Close()
+		err := a.uapi.Close()
+		if err != nil {
+			log.Infof("[AWG] Failed closing UAPI: %v", err)
+		}
 	}
 	if a.dev != nil {
 		a.dev.Close()
@@ -185,17 +180,17 @@ func (a *TunnelData) addAddress(address string) error {
 	// sudo ip -4 address add <address> dev <interfaceName>
 	link, err := netlink.LinkByName(a.InterfaceName)
 	if err != nil {
-		return fmt.Errorf("Error finding ip link %s: %s", a.InterfaceName, err)
+		return fmt.Errorf("Error finding ip link %s: %w", a.InterfaceName, err)
 	}
 
 	addr, err := netlink.ParseAddr(address)
 	if err != nil {
-		return fmt.Errorf("Error parsing address %s: %s", address, err)
+		return fmt.Errorf("Error parsing address %s: %w", address, err)
 	}
 
 	err = netlink.AddrAdd(link, addr)
 	if err != nil {
-		return fmt.Errorf("Error adding address %s, %s: %s", link, addr, err)
+		return fmt.Errorf("Error adding address %s, %s: %w", link, addr, err)
 	}
 
 	return nil
@@ -203,8 +198,8 @@ func (a *TunnelData) addAddress(address string) error {
 
 func (a *TunnelData) addRoutes() error {
 	for _, peer := range a.InterfaceConfig.Peers {
-		for _, allowed_ip := range peer.AllowedIPs {
-			if err := a.addRoute(allowed_ip.String()); err != nil {
+		for _, allowedIp := range peer.AllowedIPs {
+			if err := a.addRoute(allowedIp.String()); err != nil {
 				return err
 			}
 		}
@@ -222,7 +217,7 @@ func (a *TunnelData) addRoute(address string) error {
 	ruleNot.Mark = 51820
 	ruleNot.Table = 51820
 	if err := netlink.RuleAdd(ruleNot); err != nil {
-		return fmt.Errorf("Error adding rule 'sudo ip rule add not fwmark <table> table <table>': %s", err)
+		return fmt.Errorf("Error adding rule 'sudo ip rule add not fwmark <table> table <table>': %w", err)
 	}
 
 	// sudo ip rule add table main suppress_prefixlength 0
@@ -230,29 +225,29 @@ func (a *TunnelData) addRoute(address string) error {
 	ruleAdd.Table = unix.RT_TABLE_MAIN
 	ruleAdd.SuppressPrefixlen = 0
 	if err := netlink.RuleAdd(ruleAdd); err != nil {
-		return fmt.Errorf("Error adding rule 'sudo ip rule add table main suppress_prefixlength 0': %s", err)
+		return fmt.Errorf("Error adding rule 'sudo ip rule add table main suppress_prefixlength 0': %w", err)
 	}
 
 	// sudo ip route add <address> dev <interfaceName> table <table>
 	link, err := netlink.LinkByName(a.InterfaceName)
 	if err != nil {
-		return fmt.Errorf("Error finding net link %s: %s", a.InterfaceName, err)
+		return fmt.Errorf("Error finding net link %s: %w", a.InterfaceName, err)
 	}
 
 	_, dst, err := net.ParseCIDR(address)
 	if err != nil {
-		return fmt.Errorf("Error parsing CIDR %s: %s", address, err)
+		return fmt.Errorf("Error parsing CIDR %s: %w", address, err)
 	}
 
 	route := netlink.Route{LinkIndex: link.Attrs().Index, Dst: dst, Table: 51820}
 
 	if err := netlink.RouteAdd(&route); err != nil {
-		return fmt.Errorf("Error adding rule 'routeAdd': %s", err)
+		return fmt.Errorf("Error adding rule 'routeAdd': %w", err)
 	}
 
 	// sudo sysctl -q net.ipv4.conf.all.src_valid_mark=1
 	if err := sysctl.Set("net.ipv4.conf.all.src_valid_mark", "1"); err != nil {
-		return fmt.Errorf("Error setting sysctl value 'sudo sysctl -q net.ipv4.conf.all.src_valid_mark=1': %s", err)
+		return fmt.Errorf("Error setting sysctl value 'sudo sysctl -q net.ipv4.conf.all.src_valid_mark=1': %w", err)
 	}
 
 	return nil

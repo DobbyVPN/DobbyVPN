@@ -43,9 +43,9 @@ func (conf *Config) IntersectsWith(other *Config) bool {
 	return false
 }
 
-func (c *Config) MaybeAddPeer(p *Peer) {
+func (conf *Config) MaybeAddPeer(p *Peer) {
 	if p != nil {
-		c.Peers = append(c.Peers, *p)
+		conf.Peers = append(conf.Peers, *p)
 	}
 }
 

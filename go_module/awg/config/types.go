@@ -122,5 +122,5 @@ func (e *Endpoint) String() string {
 }
 
 func (e *Endpoint) IsEmpty() bool {
-	return len(e.Host) == 0
+	return e.Host == ""
 }

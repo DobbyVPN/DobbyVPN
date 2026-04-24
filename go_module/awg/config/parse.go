@@ -2,7 +2,6 @@ package config
 
 import (
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"math"
 	"net"
@@ -33,7 +32,7 @@ func (e *ParseError) Error() string {
 	return fmt.Sprintf("%s: %q", e.why, e.offender)
 }
 
-func parseIPCidr(s string) (ipcidr *IPCidr, err error) {
+func parseIPCidr(s string) (*IPCidr, error) {
 	var addrStr, cidrStr string
 	var cidr int
 
@@ -44,23 +43,21 @@ func parseIPCidr(s string) (ipcidr *IPCidr, err error) {
 		addrStr, cidrStr = s[:i], s[i+1:]
 	}
 
-	err = fmt.Errorf("Invalid IP address")
 	addr := net.ParseIP(addrStr)
 	if addr == nil {
-		return
+		return nil, fmt.Errorf("invalid IP address")
 	}
 	maybeV4 := addr.To4()
 	if maybeV4 != nil {
 		addr = maybeV4
 	}
-	if len(cidrStr) > 0 {
-		err = fmt.Errorf("Invalid network prefix length")
-		cidr, err = strconv.Atoi(cidrStr)
+	if cidrStr != "" {
+		cidr, err := strconv.Atoi(cidrStr)
 		if err != nil || cidr < 0 || cidr > 128 {
-			return
+			return nil, err
 		}
 		if cidr > 32 && maybeV4 != nil {
-			return
+			return nil, fmt.Errorf("invalid network prefix length")
 		}
 	} else {
 		if maybeV4 != nil {
@@ -75,11 +72,11 @@ func parseIPCidr(s string) (ipcidr *IPCidr, err error) {
 func parseEndpoint(s string) (*Endpoint, error) {
 	i := strings.LastIndexByte(s, ':')
 	if i < 0 {
-		return nil, fmt.Errorf("Missing port from endpoint")
+		return nil, fmt.Errorf("missing port from endpoint")
 	}
 	host, portStr := s[:i], s[i+1:]
-	if len(host) < 1 {
-		return nil, fmt.Errorf("Invalid endpoint host")
+	if host == "" {
+		return nil, fmt.Errorf("invalid endpoint host")
 	}
 	port, err := parsePort(portStr)
 	if err != nil {
@@ -87,7 +84,7 @@ func parseEndpoint(s string) (*Endpoint, error) {
 	}
 	hostColon := strings.IndexByte(host, ':')
 	if host[0] == '[' || host[len(host)-1] == ']' || hostColon > 0 {
-		err := fmt.Errorf("Brackets must contain an IPv6 address")
+		err := fmt.Errorf("brackets must contain an IPv6 address")
 		if len(host) > 3 && host[0] == '[' && host[len(host)-1] == ']' && hostColon > 0 {
 			end := len(host) - 1
 			if i := strings.LastIndexByte(host, '%'); i > 1 {
@@ -102,7 +99,7 @@ func parseEndpoint(s string) (*Endpoint, error) {
 		}
 		host = host[1 : len(host)-1]
 	}
-	return &Endpoint{host, uint16(port)}, nil
+	return &Endpoint{host, port}, nil
 }
 
 func parseMTU(s string) (uint16, error) {
@@ -111,7 +108,7 @@ func parseMTU(s string) (uint16, error) {
 		return 0, err
 	}
 	if m < 576 || m > 65535 {
-		return 0, fmt.Errorf("Invalid MTU")
+		return 0, fmt.Errorf("invalid MTU")
 	}
 	return uint16(m), nil
 }
@@ -122,7 +119,7 @@ func parsePort(s string) (uint16, error) {
 		return 0, err
 	}
 	if m < 0 || m > 65535 {
-		return 0, fmt.Errorf("Invalid port")
+		return 0, fmt.Errorf("invalid port")
 	}
 	return uint16(m), nil
 }
@@ -133,20 +130,11 @@ func parseUint16(value, name string) (uint16, error) {
 		return 0, err
 	}
 	if m < 0 || m > math.MaxUint16 {
-		return 0, fmt.Errorf("Invalid %s", name)
+		return 0, fmt.Errorf("invalid %s", name)
 	}
 	return uint16(m), nil
 }
-func parseUint32(value, name string) (uint32, error) {
-	m, err := strconv.ParseInt(value, 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	if m < 0 || m > math.MaxUint32 {
-		return 0, fmt.Errorf("Invalid %s", name)
-	}
-	return uint32(m), nil
-}
+
 func parseHString(value, name string) (HString, error) {
 	splitResult := strings.Split(value, "-")
 
@@ -156,7 +144,7 @@ func parseHString(value, name string) (HString, error) {
 			return HString{}, err
 		}
 		if m < 0 || m > math.MaxUint32 {
-			return HString{}, fmt.Errorf("Invalid %s", name)
+			return HString{}, fmt.Errorf("invalid %s", name)
 		}
 		return Either[uint32, Pair[uint32, uint32]]{
 			Left:   uint32(m),
@@ -172,7 +160,7 @@ func parseHString(value, name string) (HString, error) {
 			return HString{}, err
 		}
 		if minRange < 0 || maxRange > math.MaxUint32 || maxRange <= minRange {
-			return HString{}, fmt.Errorf("Invalid %s", name)
+			return HString{}, fmt.Errorf("invalid %s", name)
 		}
 		return Either[uint32, Pair[uint32, uint32]]{
 			Right: Pair[uint32, uint32]{
@@ -181,9 +169,8 @@ func parseHString(value, name string) (HString, error) {
 			},
 			IsLeft: false,
 		}, nil
-	} else {
-		return HString{}, fmt.Errorf("Invalid %s", name)
 	}
+	return HString{}, fmt.Errorf("invalid %s", name)
 }
 
 func parsePersistentKeepalive(s string) (uint16, error) {
@@ -195,61 +182,30 @@ func parsePersistentKeepalive(s string) (uint16, error) {
 		return 0, err
 	}
 	if m < 0 || m > 65535 {
-		return 0, fmt.Errorf("Invalid persistent keepalive")
+		return 0, fmt.Errorf("invalid persistent keepalive")
 	}
 	return uint16(m), nil
-}
-
-func parseTableOff(s string) (bool, error) {
-	if s == "off" {
-		return true, nil
-	} else if s == "auto" || s == "main" {
-		return false, nil
-	}
-	_, err := strconv.ParseUint(s, 10, 32)
-	return false, err
 }
 
 func parseKeyBase64(s string) (*Key, error) {
 	k, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
-		return nil, fmt.Errorf("Invalid key: %v", err)
+		return nil, fmt.Errorf("invalid key: %w", err)
 	}
 	if len(k) != KeyLength {
-		return nil, fmt.Errorf("Keys must decode to exactly 32 bytes")
+		return nil, fmt.Errorf("keys must decode to exactly 32 bytes")
 	}
 	var key Key
 	copy(key[:], k)
 	return &key, nil
-}
-
-func parseKeyHex(s string) (*Key, error) {
-	k, err := hex.DecodeString(s)
-	if err != nil {
-		return nil, fmt.Errorf("Invalid key: %v", err)
-	}
-	if len(k) != KeyLength {
-		return nil, fmt.Errorf("Keys must decode to exactly 32 bytes")
-	}
-	var key Key
-	copy(key[:], k)
-	return &key, nil
-}
-
-func parseBytesOrStamp(s string) (uint64, error) {
-	b, err := strconv.ParseUint(s, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("Number must be a number between 0 and 2^64-1: %v", err)
-	}
-	return b, nil
 }
 
 func splitList(s string) ([]string, error) {
 	var out []string
 	for _, split := range strings.Split(s, ",") {
 		trim := strings.TrimSpace(split)
-		if len(trim) == 0 {
-			return nil, fmt.Errorf("Two commas in a row")
+		if trim == "" {
+			return nil, fmt.Errorf("two commas in a row")
 		}
 		out = append(out, trim)
 	}
@@ -266,7 +222,7 @@ const (
 
 func FromWgQuick(s string, name string) (*Config, error) {
 	if !TunnelNameIsValid(name) {
-		return nil, fmt.Errorf("Tunnel name is not valid")
+		return nil, fmt.Errorf("tunnel name is not valid")
 	}
 	lines := strings.Split(s, "\n")
 	parserState := notInASection
@@ -281,7 +237,7 @@ func FromWgQuick(s string, name string) (*Config, error) {
 		}
 		line = strings.TrimSpace(line)
 		lineLower := strings.ToLower(line)
-		if len(line) == 0 {
+		if line == "" {
 			continue
 		}
 		if lineLower == "[interface]" {
@@ -296,15 +252,15 @@ func FromWgQuick(s string, name string) (*Config, error) {
 			continue
 		}
 		if parserState == notInASection {
-			return nil, fmt.Errorf("Line must occur in a section")
+			return nil, fmt.Errorf("line must occur in a section")
 		}
 		equals := strings.IndexByte(line, '=')
 		if equals < 0 {
-			return nil, fmt.Errorf("Config key is missing an equals separator")
+			return nil, fmt.Errorf("config key is missing an equals separator")
 		}
 		key, val := strings.TrimSpace(lineLower[:equals]), strings.TrimSpace(line[equals+1:])
-		if _, ok := _specialHandshakeTags[key]; !ok && len(val) == 0 {
-			return nil, fmt.Errorf("Key must have a value")
+		if _, ok := _specialHandshakeTags[key]; !ok && val == "" {
+			return nil, fmt.Errorf("key must have a value")
 		}
 		if parserState == inInterfaceSection {
 			switch key {
@@ -394,7 +350,7 @@ func FromWgQuick(s string, name string) (*Config, error) {
 				}
 				conf.Interface.TransportPacketMagicHeader = transportPacketMagicHeader
 			case "i1", "i2", "i3", "i4", "i5":
-				if len(val) == 0 {
+				if val == "" {
 					continue
 				}
 				if conf.Interface.IPackets == nil {
@@ -433,7 +389,7 @@ func FromWgQuick(s string, name string) (*Config, error) {
 					}
 				}
 			default:
-				return nil, fmt.Errorf("Invalid key for [Interface] section")
+				return nil, fmt.Errorf("invalid key for [Interface] section")
 			}
 		} else if parserState == inPeerSection {
 			switch key {
@@ -474,25 +430,25 @@ func FromWgQuick(s string, name string) (*Config, error) {
 				}
 				peer.Endpoint = *e
 			default:
-				return nil, fmt.Errorf("Invalid key for [Peer] section")
+				return nil, fmt.Errorf("invalid key for [Peer] section")
 			}
 		}
 	}
 	conf.MaybeAddPeer(peer)
 
 	if !sawPrivateKey {
-		return nil, fmt.Errorf("An interface must have a private key [none specified]")
+		return nil, fmt.Errorf("an interface must have a private key [none specified]")
 	}
 	for _, p := range conf.Peers {
 		if p.PublicKey.IsZero() {
-			return nil, fmt.Errorf("All peers must have public keys [none specified]")
+			return nil, fmt.Errorf("all peers must have public keys [none specified]")
 		}
 	}
 
 	return &conf, nil
 }
 
-func FromWgQuickWithUnknownEncoding(s string, name string) (*Config, error) {
+func FromWgQuickWithUnknownEncoding(s, name string) (*Config, error) {
 	c, firstErr := FromWgQuick(s, name)
 	if firstErr == nil {
 		return c, nil

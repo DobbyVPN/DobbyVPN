@@ -23,7 +23,7 @@ func init() {
 }
 
 func isReserved(name string) bool {
-	if len(name) == 0 {
+	if name == "" {
 		return false
 	}
 	for _, reserved := range reservedNames {
@@ -73,13 +73,13 @@ func newNaturalSortString(s string) (t naturalSortString) {
 }
 
 func (f1 naturalSortToken) Cmp(f2 naturalSortToken) int {
-	if len(f1.maybeString) == 0 {
-		if len(f2.maybeString) > 0 || f1.maybeNumber < f2.maybeNumber {
+	if f1.maybeString == "" {
+		if f2.maybeString != "" || f1.maybeNumber < f2.maybeNumber {
 			return -1
 		} else if f1.maybeNumber > f2.maybeNumber {
 			return 1
 		}
-	} else if len(f2.maybeString) == 0 || f1.maybeString > f2.maybeString {
+	} else if f2.maybeString == "" || f1.maybeString > f2.maybeString {
 		return 1
 	} else if f1.maybeString < f2.maybeString {
 		return -1
