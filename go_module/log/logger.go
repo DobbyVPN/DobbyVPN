@@ -191,17 +191,6 @@ var (
 	otelLogger = otelslog.NewLogger(name)
 )
 
-// Legacy:
-func Infof(format string, args ...any) {
-	message := fmt.Sprintf(format, args...)
-	if lg.logger == nil {
-		lg.debugBuf = append(lg.debugBuf, message)
-	} else {
-		lg.logger.Debug(message)
-	}
-	otelLogger.DebugContext(tlg.ctx, message)
-}
-
 // New logging
 func prepareLog(message string, arguments map[string]any) string {
 	var msg bytes.Buffer
@@ -285,49 +274,25 @@ func Error(category, message string, arguments map[string]any) {
 	otelLogger.ErrorContext(tlg.ctx, categoryMessage, flattenArgs(arguments)...)
 }
 
-func SimpleInfo(category, message string) {
-	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	_info(categoryMessage, make(map[string]any))
-	otelLogger.InfoContext(tlg.ctx, categoryMessage)
-}
-
-func SimpleDebug(category, message string) {
-	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	_debug(categoryMessage, make(map[string]any))
-	otelLogger.DebugContext(tlg.ctx, categoryMessage)
-}
-
-func SimpleWarn(category, message string) {
-	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	_warn(categoryMessage, make(map[string]any))
-	otelLogger.WarnContext(tlg.ctx, categoryMessage)
-}
-
-func SimpleError(category, message string) {
-	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	_error(categoryMessage, make(map[string]any))
-	otelLogger.ErrorContext(tlg.ctx, categoryMessage)
-}
-
-func SimpleInfof(category string, format string, args ...any) {
+func Infof(category string, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_info(categoryMessage, make(map[string]any))
 	otelLogger.InfoContext(tlg.ctx, categoryMessage)
 }
 
-func SimpleDebugf(category string, format string, args ...any) {
+func Debugf(category string, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_debug(categoryMessage, make(map[string]any))
 	otelLogger.DebugContext(tlg.ctx, categoryMessage)
 }
 
-func SimpleWarnf(category string, format string, args ...any) {
+func Warnf(category string, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_warn(categoryMessage, make(map[string]any))
 	otelLogger.WarnContext(tlg.ctx, categoryMessage)
 }
 
-func SimpleErrorf(category string, format string, args ...any) {
+func Errorf(category string, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_error(categoryMessage, make(map[string]any))
 	otelLogger.ErrorContext(tlg.ctx, categoryMessage)

@@ -8,8 +8,9 @@ import (
 
 	"go_module/routing"
 
-	"github.com/jackpal/gateway"
 	"go_module/log"
+
+	"github.com/jackpal/gateway"
 )
 
 func StartRoutingCloak(proxyIP string) error {
@@ -20,7 +21,7 @@ func StartRoutingCloak(proxyIP string) error {
 	addSpecificRoute2 := fmt.Sprintf("sudo route add -net %s/32 %s", proxyIP, gatewayIP.String())
 
 	if _, err := routing.ExecuteCommand(addSpecificRoute2); err != nil {
-		log.Infof("failed to add specific route: %w", err)
+		log.SimpleWarnf(Category, "failed to add specific route: %v", err)
 	}
 
 	return nil
@@ -33,7 +34,7 @@ func StopRoutingCloak(proxyIP string) error {
 	}
 	removeSpecificRoute := fmt.Sprintf("sudo route delete -net %s/32 %s", proxyIP, gatewayIP.String())
 	if _, err := routing.ExecuteCommand(removeSpecificRoute); err != nil {
-		log.Infof("failed to remove specific route: %w", err)
+		log.SimpleWarnf(Category, "failed to remove specific route: %v", err)
 	}
 
 	return nil

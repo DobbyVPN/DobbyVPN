@@ -6,14 +6,14 @@ import (
 )
 
 func StartCloakClient(localHost, localPort, config string, udp bool) {
-	log.SimpleDebugf(ApiCategory, "StartCloakClient")
+	log.Debugf(Category, "StartCloakClient")
 	cloak.StartCloakClient(
 		localHost,
 		localPort,
 		config,
 		bool(udp),
 	)
-	log.SimpleDebugf(ApiCategory, "end StartCloakClient")
+	log.Debugf(Category, "end StartCloakClient")
 }
 
 func StopCloakClient() {

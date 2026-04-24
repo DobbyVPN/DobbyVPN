@@ -10,7 +10,7 @@ import (
 )
 
 func (c *Server) InitLogger(_ context.Context, in *grpcproto.InitLoggerRequest) (*grpcproto.Empty, error) {
-	log.Infof("InitLogger")
+	log.Debugf(Category, "InitLogger")
 	go api.InitLogger(in.Path)
 	return &grpcproto.Empty{}, nil
 }

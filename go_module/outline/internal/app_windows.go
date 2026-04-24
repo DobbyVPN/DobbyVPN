@@ -14,9 +14,10 @@ import (
 	"go_module/routing"
 	"go_module/tunnel"
 
-	"github.com/jackpal/gateway"
 	"go_module/log"
 	outlineCommon "go_module/outline/common"
+
+	"github.com/jackpal/gateway"
 )
 
 // signalInit sends the initialization result to the channel (if provided) exactly once.
@@ -49,7 +50,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	netInterface, err := routing.GetNetworkInterfaceByIP(interfaceName)
 	if err != nil {
 		err = fmt.Errorf("failed to get network interface by IP %s: %w", interfaceName, err)
-		log.Infof("[Routing] %v", err)
+		log.SimpleErrorf(Category, "[Routing] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
@@ -62,13 +63,13 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	// protect route to VPN server
 	if serverIP.String() != "127.0.0.1" {
-		log.Infof("[Routing] Adding early route for server %s via %s", serverIP.String(), gatewayIP.String())
+		log.SimpleDebugf(Category, "[Routing] Adding early route for server %s via %s", serverIP.String(), gatewayIP.String())
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
 		routing.AddOrUpdateProxyRoute(serverIP.String(), gatewayIP.String(), netInterface.Name)
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
-		log.Infof("[Routing] Early server route added successfully")
+		log.SimpleDebugf(Category, "[Routing] Early server route added successfully")
 	} else {
-		log.Infof("[Routing] Skipping early route for localhost (Cloak mode)")
+		log.SimpleDebugf(Category, "[Routing] Skipping early route for localhost (Cloak mode)")
 	}
 
 	// SOCKS (Outline)
@@ -80,9 +81,9 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	}
 	defer ss.Close()
 
-	log.Infof("[Windows] Starting tun2socks in wintun mode")
-	log.Infof("[Windows] Uplink interface: %s", netInterface.Name)
-	log.Infof("[Windows] Proxy addr: %s", ss.GetProxyAddr())
+	log.SimpleDebugf(Category, "[Windows] Starting tun2socks in wintun mode")
+	log.SimpleDebugf(Category, "[Windows] Uplink interface: %s", netInterface.Name)
+	log.SimpleDebugf(Category, "[Windows] Proxy addr: %s", ss.GetProxyAddr())
 
 	idx, err := protected_dialer.GetDefaultInterfaceIndex()
 	if err != nil {
@@ -98,7 +99,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		UplinkIface: netInterface.Name,
 	})
 	if err != nil {
-		log.Infof("Can't start tun2socks: %v", err)
+		log.SimpleErrorf(Category, "Can't start tun2socks: %v", err)
 		return err
 	}
 
@@ -121,32 +122,32 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 		tunnel.StopEngine()
 		err = fmt.Errorf("failed to configure routing: %w", err)
-		log.Infof("[Routing] %v", err)
+		log.SimpleErrorf(Category, "[Routing] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
 	common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 
-	log.Infof("[Routing] Routing successfully configured")
+	log.SimpleInfof(Category, "[Routing] Routing successfully configured")
 
 	// Signal successful initialization - connection is ready
 	signalInit(initResult, nil)
 
 	defer func() {
 		common.Client.MarkInCriticalSection(outlineCommon.Name)
-		log.Infof("[Routing] Cleaning up routes for %s...", serverIP.String())
+		log.SimpleDebugf(Category, "[Routing] Cleaning up routes for %s...", serverIP.String())
 		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name, cfg.TunGateway)
-		log.Infof("[Routing] Routes cleaned up")
+		log.SimpleDebugf(Category, "[Routing] Routes cleaned up")
 		common.Client.MarkOutOffCriticalSection(outlineCommon.Name)
 
-		log.Infof("[Tunnel] Stopping tun2socks engine")
+		log.SimpleDebugf(Category, "[Tunnel] Stopping tun2socks engine")
 		tunnel.StopEngine()
 	}()
 
 	<-ctx.Done()
 
-	log.Infof("[Tunnel] Context cancelled, shutting down...")
-	log.Infof("Outline/app: received interrupt signal, terminating...")
+	log.SimpleDebugf(Category, "[Tunnel] Context cancelled, shutting down...")
+	log.SimpleDebugf(Category, "Outline/app: received interrupt signal, terminating...")
 
 	return nil
 }

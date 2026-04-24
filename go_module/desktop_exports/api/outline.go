@@ -24,39 +24,39 @@ func setOutlineLastError(err string) {
 	defer outlineErrorMu.Unlock()
 	outlineLastError = err
 	if err != "" {
-		log.SimpleErrorf(ApiCategory, "Outline error set: %s", err)
+		log.Errorf(Category, "Outline error set: %s", err)
 	}
 }
 
 func StartOutline(key string) int32 {
-	log.SimpleDebugf(ApiCategory, "StartOutline")
+	log.Debugf(Category, "StartOutline")
 	setOutlineLastError("")
 	str_key := key
 
-	log.SimpleDebugf(ApiCategory, "Make lock")
+	log.Debugf(Category, "Make lock")
 	outlineMu.Lock()
 	defer outlineMu.Unlock()
-	log.SimpleDebugf(ApiCategory, "locked")
+	log.Debugf(Category, "locked")
 
 	if outlineClient != nil {
-		log.SimpleDebugf(ApiCategory, "Disconnect existing outline client")
+		log.Debugf(Category, "Disconnect existing outline client")
 		err := outlineClient.Disconnect()
 		if err != nil {
-			log.SimpleErrorf(ApiCategory, "Failed to disconnect existing outline client: %v", err)
+			log.Errorf(Category, "Failed to disconnect existing outline client: %v", err)
 			setOutlineLastError(err.Error())
 			return -1
 		}
 	}
 
 	outlineClient = outline.NewClient(str_key)
-	log.SimpleDebugf(ApiCategory, "Connect outline client")
+	log.Debugf(Category, "Connect outline client")
 	err := outlineClient.Connect()
 	if err != nil {
-		log.SimpleErrorf(ApiCategory, "Failed to connect outline client: %v", err)
+		log.Errorf(Category, "Failed to connect outline client: %v", err)
 		setOutlineLastError(err.Error())
 		return -1
 	}
-	log.SimpleInfof(ApiCategory, "Outline client connected successfully")
+	log.Infof(Category, "Outline client connected successfully")
 	return 0
 }
 
@@ -64,12 +64,12 @@ func StopOutline() {
 	outlineMu.Lock()
 	defer outlineMu.Unlock()
 	if outlineClient != nil {
-		log.SimpleDebugf(ApiCategory, "Disconnect outline client")
+		log.Debugf(Category, "Disconnect outline client")
 		err := outlineClient.Disconnect()
 		if err != nil {
-			log.SimpleErrorf(ApiCategory, "Failed to disconnect outline client: %v", err)
+			log.Errorf(Category, "Failed to disconnect outline client: %v", err)
 		}
 		outlineClient = nil
 	}
-	log.SimpleInfof(ApiCategory, "Outline client disconnected successfully")
+	log.Infof(Category, "Outline client disconnected successfully")
 }

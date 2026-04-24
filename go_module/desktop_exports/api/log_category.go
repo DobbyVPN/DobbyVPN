@@ -1,3 +1,3 @@
 package api
 
-const ApiCategory = "API"
+const Category = "API"

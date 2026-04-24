@@ -47,7 +47,7 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 
 	useCloak := ip.IsLoopback()
 
-	log.Infof("outline client: cloak mode = %v", useCloak)
+	log.Debugf(Category, "outline client: cloak mode = %v", useCloak)
 
 	od := &OutlineDevice{
 		svrIP:        ip,
@@ -71,9 +71,9 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 	od.proxyAddr = listener.Addr().String()
 
 	go func() {
-		log.Infof("SOCKS5 started on %s", od.proxyAddr)
+		log.Debugf(Category, "SOCKS5 started on %s", od.proxyAddr)
 		if err := server.Serve(listener); err != nil {
-			log.Infof("SOCKS5 stopped: %v", err)
+			log.Warnf(Category, "SOCKS5 stopped: %v", err)
 		}
 	}()
 
@@ -81,8 +81,7 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 }
 
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
-
-	log.Infof("[SOCKS5] dial %s %s", network, addr)
+	log.Debugf(Category, "[SOCKS5] dial %s %s", network, addr)
 
 	host, portStr, _ := net.SplitHostPort(addr)
 	port, _ := strconv.Atoi(portStr)
@@ -92,11 +91,11 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	case "tcp":
 		conn, err := d.streamDialer.DialStream(ctx, addr)
 		if err != nil {
-			log.Infof("[SOCKS5 TCP ERROR] %v", err)
+			log.Errorf(Category, "[SOCKS5 TCP ERROR] %v", err)
 			return nil, err
 		}
 
-		log.Infof("[SOCKS5 TCP OK] %s", addr)
+		log.Debugf(Category, "[SOCKS5 TCP OK] %s", addr)
 		return conn, nil
 
 	case "udp":
@@ -104,18 +103,18 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		// DNS fallback for Cloak
 		if d.useCloak && port == 53 {
 
-			log.Infof("[SOCKS5 DNS] returning truncated DNS (cloak mode)")
+			log.Debugf(Category, "[SOCKS5 DNS] returning truncated DNS (cloak mode)")
 
 			return newTruncatedDNSConn(host, port), nil
 		}
 
 		conn, err := d.packetDialer.DialPacket(ctx, addr)
 		if err != nil {
-			log.Infof("[SOCKS5 UDP ERROR] %v", err)
+			log.Errorf(Category, "[SOCKS5 UDP ERROR] %v", err)
 			return nil, err
 		}
 
-		log.Infof("[SOCKS5 UDP OK] %s", addr)
+		log.Debugf(Category, "[SOCKS5 UDP OK] %s", addr)
 		return conn, nil
 	}
 
@@ -173,18 +172,18 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 
 	host := extractTLSSNIHost(transportConfig)
 	if host != "" {
-		log.Infof("outline client: detected WSS config, using TLS SNI host: %s", host)
+		log.Debugf(Category, "outline client: detected WSS config, using TLS SNI host: %s", host)
 	} else {
 		var err error
 		host, err = extractSSHost(transportConfig)
 		if err != nil {
 			return nil, err
 		}
-		log.Infof("outline client: using ss:// host: %s", host)
+		log.Debugf(Category, "outline client: using ss:// host: %s", host)
 	}
 
 	if host == "127.0.0.1" || host == "localhost" {
-		log.Infof("outline client: localhost detected, skipping IP resolution")
+		log.Debugf(Category, "outline client: localhost detected, skipping IP resolution")
 		return net.ParseIP("127.0.0.1").To4(), nil
 	}
 
@@ -198,7 +197,7 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 
 	for _, ip := range ipList {
 		if v4 := ip.IP.To4(); v4 != nil {
-			log.Infof("outline client: resolved %s -> %s", host, v4.String())
+			log.Debugf(Category, "outline client: resolved %s -> %s", host, v4.String())
 			return v4, nil
 		}
 	}

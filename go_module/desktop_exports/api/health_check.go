@@ -7,13 +7,13 @@ import (
 )
 
 func CouldStart() bool {
-	log.SimpleDebugf(ApiCategory, "Call CouldStart: %v", common.Client.CouldStart())
+	log.Debugf(Category, "Call CouldStart: %v", common.Client.CouldStart())
 	return common.Client.CouldStart()
 }
 
 func CheckServerAlive(address string, port int) int32 {
 	res := healthcheck.CheckServerAlive(address, port)
-	log.SimpleDebugf(ApiCategory, "Health check result: %v", res)
+	log.Debugf(Category, "Health check result: %v", res)
 	if res == nil {
 		return 0
 	}
