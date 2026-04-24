@@ -125,9 +125,8 @@ func NewTelemetryLogger() *TelemetryLogger {
 	otelShutdown, err := telemetry.SetupOTelSDK(ctx)
 	if err != nil {
 		return &TelemetryLogger{ctx: ctx}
-	} else {
-		return &TelemetryLogger{ctx: ctx, shutdown: otelShutdown}
 	}
+	return &TelemetryLogger{ctx: ctx, shutdown: otelShutdown}
 }
 
 func MaskStr(input string) string {
@@ -187,8 +186,8 @@ func SetPath(path string) error {
 const name = "https://github.com/DobbyVPN/DobbyVPN/go_module/log"
 
 var (
-	otelTracer = otel.Tracer(name)
-	otelMeter  = otel.Meter(name)
+	_          = otel.Tracer(name)
+	_          = otel.Meter(name)
 	otelLogger = otelslog.NewLogger(name)
 )
 
@@ -209,7 +208,7 @@ func prepareLog(message string, arguments map[string]any) string {
 	msg.WriteString(message)
 
 	for key, value := range arguments {
-		msg.WriteString(fmt.Sprintf(" \"%s\"=\"%v\"", key, value))
+		msg.WriteString(fmt.Sprintf(" %q=\"%v\"", key, value))
 	}
 
 	return msg.String()
@@ -262,49 +261,49 @@ func _error(categoryMessage string, arguments map[string]any) {
 	}
 }
 
-func Info(category string, message string, arguments map[string]any) {
+func Info(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_info(categoryMessage, arguments)
 	otelLogger.InfoContext(tlg.ctx, categoryMessage, flattenArgs(arguments)...)
 }
 
-func Debug(category string, message string, arguments map[string]any) {
+func Debug(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_debug(categoryMessage, arguments)
 	otelLogger.DebugContext(tlg.ctx, categoryMessage, flattenArgs(arguments)...)
 }
 
-func Warn(category string, message string, arguments map[string]any) {
+func Warn(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_warn(categoryMessage, arguments)
 	otelLogger.WarnContext(tlg.ctx, categoryMessage, flattenArgs(arguments)...)
 }
 
-func Error(category string, message string, arguments map[string]any) {
+func Error(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_error(categoryMessage, arguments)
 	otelLogger.ErrorContext(tlg.ctx, categoryMessage, flattenArgs(arguments)...)
 }
 
-func SimpleInfo(category string, message string) {
+func SimpleInfo(category, message string) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_info(categoryMessage, make(map[string]any))
 	otelLogger.InfoContext(tlg.ctx, categoryMessage)
 }
 
-func SimpleDebug(category string, message string) {
+func SimpleDebug(category, message string) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_debug(categoryMessage, make(map[string]any))
 	otelLogger.DebugContext(tlg.ctx, categoryMessage)
 }
 
-func SimpleWarn(category string, message string) {
+func SimpleWarn(category, message string) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_warn(categoryMessage, make(map[string]any))
 	otelLogger.WarnContext(tlg.ctx, categoryMessage)
 }
 
-func SimpleError(category string, message string) {
+func SimpleError(category, message string) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_error(categoryMessage, make(map[string]any))
 	otelLogger.ErrorContext(tlg.ctx, categoryMessage)
@@ -345,7 +344,7 @@ func (h *simpleHandler) Enabled(_ context.Context, _ slog.Level) bool {
 func (h *simpleHandler) Handle(_ context.Context, r slog.Record) error {
 	_, err := fmt.Fprintf(
 		h.file,
-		"[%s] [%s] \"%s\" [from go]\n",
+		"[%s] [%s] %q [from go]\n",
 		r.Time.Format("2006-01-02 15:04:05"),
 		r.Level.String(),
 		maskMessage(r.Message),
