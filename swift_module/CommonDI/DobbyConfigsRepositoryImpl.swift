@@ -134,27 +134,27 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     }
     
-    override fun getAwgConfig(): String {
+    override func getAwgConfig() -> String {
         return userDefaults.string(forKey: awgConfigKey) ?? ""
     }
 
-    override fun setAwgConfig(newConfig: String) {
+    override func setAwgConfig(newConfig: String) {
         userDefaults.set(newConfig, forKey: awgConfigKey)
     }
 
-    override fun getAwgTomlConfig(): String {
+    override func getAwgTomlConfig() -> String {
         return userDefaults.string(forKey: awgTomlConfigKey) ?? ""
     }
 
-    override fun setAwgTomlConfig(newConfig: String) {
+    override func setAwgTomlConfig(newConfig: String) {
         userDefaults.set(newConfig, forKey: awgTomlConfigKey)
     }
 
-    override fun getIsAmneziaWGEnabled(): Boolean {
+    override func getIsAmneziaWGEnabled() -> Boolean {
         return userDefaults.bool(forKey: isAmneziaWGEnabledKey)
     }
 
-    override fun setIsAmneziaWGEnabled(enabled: Boolean) {
+    override func setIsAmneziaWGEnabled(enabled: Boolean) {
         userDefaults.set(enabled, forKey: isAmneziaWGEnabledKey)
     }
 
