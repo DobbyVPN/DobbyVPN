@@ -1,9 +1,9 @@
 import app
 
-class LoggerManagerImpl: LoggerManager {
-    func initLogger() {
+public class LoggerManagerImpl: LoggerManager {
+    public func initLogger() {
     }
 
-    func initTelemetry(endpoint: String) {
+    public func initTelemetry(endpoint: String) {
     }
 }
