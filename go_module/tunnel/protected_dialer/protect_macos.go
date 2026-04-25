@@ -28,7 +28,7 @@ func isReachableViaInterface(iface net.Interface, gw net.IP) bool {
 		}
 
 		if ipnet.Contains(gw) {
-			log.SimpleDebugf(Category, "[Darwin-Protect][Detect] iface=%s contains gateway %s (cidr=%s)", iface.Name, gw.String(), ipnet.String())
+			log.Debugf(Category, "[Darwin-Protect][Detect] iface=%s contains gateway %s (cidr=%s)", iface.Name, gw.String(), ipnet.String())
 			return true
 		}
 	}
@@ -37,7 +37,7 @@ func isReachableViaInterface(iface net.Interface, gw net.IP) bool {
 }
 
 func GetDefaultInterfaceNameDarwin(gatewayIP net.IP) (string, int, error) {
-	log.SimpleDebugf(Category, "[Darwin-Protect][Detect] Gateway detected: %s", gatewayIP.String())
+	log.Debugf(Category, "[Darwin-Protect][Detect] Gateway detected: %s", gatewayIP.String())
 
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -46,18 +46,18 @@ func GetDefaultInterfaceNameDarwin(gatewayIP net.IP) (string, int, error) {
 
 	for _, iface := range ifaces {
 
-		log.SimpleDebugf(Category, "[Darwin-Protect][Detect] Checking iface=%s flags=%v", iface.Name, iface.Flags)
+		log.Debugf(Category, "[Darwin-Protect][Detect] Checking iface=%s flags=%v", iface.Name, iface.Flags)
 
 		if iface.Flags&net.FlagUp == 0 {
-			log.SimpleDebugf(Category, "[Darwin-Protect][Detect] skip %s: down", iface.Name)
+			log.Debugf(Category, "[Darwin-Protect][Detect] skip %s: down", iface.Name)
 			continue
 		}
 		if iface.Flags&net.FlagLoopback != 0 {
-			log.SimpleDebugf(Category, "[Darwin-Protect][Detect] skip %s: loopback", iface.Name)
+			log.Debugf(Category, "[Darwin-Protect][Detect] skip %s: loopback", iface.Name)
 			continue
 		}
 		if len(iface.HardwareAddr) == 0 {
-			log.SimpleDebugf(Category, "[Darwin-Protect][Detect] skip %s: no MAC", iface.Name)
+			log.Debugf(Category, "[Darwin-Protect][Detect] skip %s: no MAC", iface.Name)
 			continue
 		}
 
@@ -66,12 +66,12 @@ func GetDefaultInterfaceNameDarwin(gatewayIP net.IP) (string, int, error) {
 			strings.HasPrefix(iface.Name, "llw") ||
 			strings.HasPrefix(iface.Name, "bridge") ||
 			strings.HasPrefix(iface.Name, "lo") {
-			log.SimpleDebugf(Category, "[Darwin-Protect][Detect] skip %s: virtual/unsupported", iface.Name)
+			log.Debugf(Category, "[Darwin-Protect][Detect] skip %s: virtual/unsupported", iface.Name)
 			continue
 		}
 
 		if isReachableViaInterface(iface, gatewayIP) {
-			log.SimpleDebugf(Category, "[Darwin-Protect][Detect] SELECTED iface=%s index=%d (gateway reachable)", iface.Name, iface.Index)
+			log.Debugf(Category, "[Darwin-Protect][Detect] SELECTED iface=%s index=%d (gateway reachable)", iface.Name, iface.Index)
 			return iface.Name, iface.Index, nil
 		}
 	}

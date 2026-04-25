@@ -25,16 +25,16 @@ func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", service.serverPort))
 	if err != nil {
-		log.SimpleErrorf(Category, "failed to listen: %v", err)
+		log.Errorf(Category, "failed to listen: %v", err)
 	}
 	grpcServer := grpc.NewServer()
 
 	grpcproto.RegisterVpnServer(grpcServer, &proto.Server{})
 
 	go func() {
-		log.SimpleInfof(Category, "server listening at %v", lis.Addr())
+		log.Infof(Category, "server listening at %v", lis.Addr())
 		if err := grpcServer.Serve(lis); err != nil {
-			log.SimpleErrorf(Category, "failed to serve: %v", err)
+			log.Errorf(Category, "failed to serve: %v", err)
 		}
 	}()
 
@@ -45,7 +45,7 @@ loop:
 			grpcServer.GracefulStop()
 			break loop
 		default:
-			log.SimpleWarnf(Category, "Unexpected service control request #%d", c)
+			log.Warnf(Category, "Unexpected service control request #%d", c)
 		}
 	}
 
@@ -67,7 +67,7 @@ func run(port int) error {
 
 	grpcproto.RegisterVpnServer(s, &proto.Server{})
 
-	log.SimpleInfof(Category, "server listening at %v", lis.Addr())
+	log.Infof(Category, "server listening at %v", lis.Addr())
 	if err := s.Serve(lis); err != nil {
 		return fmt.Errorf("failed to serve: %v", err)
 	}
@@ -76,7 +76,7 @@ func run(port int) error {
 }
 
 func (c *Executor) Execute(port int, mode string) {
-	log.SimpleInfof(Category, "Executing with mode: %v", mode)
+	log.Infof(Category, "Executing with mode: %v", mode)
 
 	switch mode {
 	case "normal":
@@ -84,6 +84,6 @@ func (c *Executor) Execute(port int, mode string) {
 	case "service":
 		runService(port)
 	default:
-		log.SimpleErrorf(Category, "Invalid run mode")
+		log.Errorf(Category, "Invalid run mode")
 	}
 }

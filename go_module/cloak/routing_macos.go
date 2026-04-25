@@ -21,7 +21,7 @@ func StartRoutingCloak(proxyIP string) error {
 	addSpecificRoute2 := fmt.Sprintf("sudo route add -net %s/32 %s", proxyIP, gatewayIP.String())
 
 	if _, err := routing.ExecuteCommand(addSpecificRoute2); err != nil {
-		log.SimpleWarnf(Category, "failed to add specific route: %v", err)
+		log.Warnf(Category, "failed to add specific route: %v", err)
 	}
 
 	return nil
@@ -34,7 +34,7 @@ func StopRoutingCloak(proxyIP string) error {
 	}
 	removeSpecificRoute := fmt.Sprintf("sudo route delete -net %s/32 %s", proxyIP, gatewayIP.String())
 	if _, err := routing.ExecuteCommand(removeSpecificRoute); err != nil {
-		log.SimpleWarnf(Category, "failed to remove specific route: %v", err)
+		log.Warnf(Category, "failed to remove specific route: %v", err)
 	}
 
 	return nil

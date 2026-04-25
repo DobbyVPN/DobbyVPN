@@ -34,7 +34,7 @@ func GetDefaultInterfaceIndex() (int, error) {
 
 func SetDefaultInterfaceIndex(idx int) {
 	defaultInterfaceIndex = idx
-	log.SimpleDebugf(Category, "[Windows-Protect] ifindex=%d", idx)
+	log.Debugf(Category, "[Windows-Protect] ifindex=%d", idx)
 }
 
 type windowsProtector struct{}

@@ -49,32 +49,32 @@ func ExecuteCommand(command string) (string, error) {
 	if err != nil {
 		return string(output), fmt.Errorf("command execution failed: %w, output: %s", err, output)
 	}
-	log.SimpleDebugf(Category, "Command executed: %s, output: %s", log.MaskStr(command), output)
+	log.Debugf(Category, "Command executed: %s, output: %s", log.MaskStr(command), output)
 	return string(output), nil
 }
 
 func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, InterfaceName string, TunGateway string, TunDeviceIP string) error {
-	log.SimpleDebugf(Category, "Starting routing configuration for Windows...")
-	log.SimpleDebugf(Category, "Proxy IP: %s, Tun Device Name: %s, Tun Gateway: %s, Tun Device IP: %s, Gateway IP: %s, Interface Name: %s",
+	log.Debugf(Category, "Starting routing configuration for Windows...")
+	log.Debugf(Category, "Proxy IP: %s, Tun Device Name: %s, Tun Gateway: %s, Tun Device IP: %s, Gateway IP: %s, Interface Name: %s",
 		proxyIP, TunDeviceName, TunGateway, TunDeviceIP, GatewayIP, InterfaceName)
-	log.SimpleDebugf(Category, "Setting up IP rule...")
+	log.Debugf(Category, "Setting up IP rule...")
 	AddOrUpdateProxyRoute(proxyIP, GatewayIP, InterfaceName)
-	log.SimpleDebugf(Category, "Added IP proxy rules via table")
+	log.Debugf(Category, "Added IP proxy rules via table")
 	addOrUpdateReservedSubnetBypass(GatewayIP, InterfaceName)
-	log.SimpleDebugf(Category, "Added IP reserved rules via table")
+	log.Debugf(Category, "Added IP reserved rules via table")
 	addIpv4TunRedirect(TunGateway, TunDeviceName)
-	log.SimpleDebugf(Category, "Added default IPv4 redirect routes via TUN")
+	log.Debugf(Category, "Added default IPv4 redirect routes via TUN")
 
-	log.SimpleInfof(Category, "Routing configuration completed successfully.")
+	log.Infof(Category, "Routing configuration completed successfully.")
 	return nil
 }
 
 func StopRouting(proxyIp string, TunDeviceName string, GatewayIP string, InterfaceName string, TunGateway string) {
-	log.SimpleDebugf(Category, "Cleaning up routing table and rules...")
+	log.Debugf(Category, "Cleaning up routing table and rules...")
 	deleteProxyRoute(proxyIp, GatewayIP, InterfaceName)
 	removeReservedSubnetBypass()
 	stopRoutingIpv4(TunDeviceName)
-	log.SimpleInfof(Category, "Cleaned up routing table and rules.")
+	log.Infof(Category, "Cleaned up routing table and rules.")
 }
 
 func AddOrUpdateProxyRoute(proxyIp string, gatewayIp string, interfaceName string) {
@@ -88,7 +88,7 @@ func AddOrUpdateProxyRoute(proxyIp string, gatewayIp string, interfaceName strin
 			proxyIp, gatewayIp, interfaceName)
 		_, err = ExecuteCommand(addCommand)
 		if err != nil {
-			log.SimpleWarnf(Category, "Failed to add or update proxy route for IP %s: %v\n", proxyIp, err)
+			log.Warnf(Category, "Failed to add or update proxy route for IP %s: %v\n", proxyIp, err)
 		}
 	}
 }
@@ -97,7 +97,7 @@ func deleteProxyRoute(proxyIp string, GatewayIP string, InterfaceName string) {
 	command := fmt.Sprintf("netsh interface ipv4 delete route %s/32 \"%s\" %s", proxyIp, InterfaceName, GatewayIP)
 	_, err := ExecuteCommand(command)
 	if err != nil {
-		log.SimpleWarnf(Category, "Failed to delete proxy route for IP %s: %v\n", proxyIp, err)
+		log.Warnf(Category, "Failed to delete proxy route for IP %s: %v\n", proxyIp, err)
 	}
 }
 
@@ -113,7 +113,7 @@ func addOrUpdateReservedSubnetBypass(gatewayIp string, interfaceName string) {
 				subnet, gatewayIp, interfaceName)
 			_, err = ExecuteCommand(addCommand)
 			if err != nil {
-				log.SimpleWarnf(Category, "Failed to add or update route for subnet %s: %v\n", subnet, err)
+				log.Warnf(Category, "Failed to add or update route for subnet %s: %v\n", subnet, err)
 			}
 		}
 	}
@@ -124,7 +124,7 @@ func removeReservedSubnetBypass() {
 		command := fmt.Sprintf("route delete %s", subnet)
 		_, err := ExecuteCommand(command)
 		if err != nil {
-			log.SimpleWarnf(Category, "Failed to delete route for subnet %s: %v\n", subnet, err)
+			log.Warnf(Category, "Failed to delete route for subnet %s: %v\n", subnet, err)
 		}
 	}
 }
@@ -139,7 +139,7 @@ func addIpv4TunRedirect(tunGatewayIP string, tunDeviceName string) {
 				subnet, tunGatewayIP, tunDeviceName)
 			_, err = ExecuteCommand(setCommand)
 			if err != nil {
-				log.SimpleWarnf(Category, "Failed to add or set route for subnet %s: %v", subnet, err)
+				log.Warnf(Category, "Failed to add or set route for subnet %s: %v", subnet, err)
 			}
 		}
 	}
@@ -154,7 +154,7 @@ func stopRoutingIpv4(tunDeviceName string) {
 			fallbackCmd := fmt.Sprintf("route delete %s", subnet)
 			_, err = ExecuteCommand(fallbackCmd)
 			if err != nil {
-				log.SimpleWarnf(Category, "Failed to delete route for subnet %s: %v\n", subnet, err)
+				log.Warnf(Category, "Failed to delete route for subnet %s: %v\n", subnet, err)
 			}
 		}
 	}
