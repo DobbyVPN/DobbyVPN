@@ -150,11 +150,11 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         userDefaults.set(newConfig, forKey: awgTomlConfigKey)
     }
 
-    public func getIsAmneziaWGEnabled() -> Boolean {
+    public func getIsAmneziaWGEnabled() -> Bool {
         return userDefaults.bool(forKey: isAmneziaWGEnabledKey)
     }
 
-    public func setIsAmneziaWGEnabled(enabled: Boolean) {
+    public func setIsAmneziaWGEnabled(enabled: Bool) {
         userDefaults.set(enabled, forKey: isAmneziaWGEnabledKey)
     }
 
