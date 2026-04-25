@@ -154,8 +154,8 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         return userDefaults.bool(forKey: isAmneziaWGEnabledKey)
     }
 
-    public func setIsAmneziaWGEnabled(enabled: Bool) {
-        userDefaults.set(enabled, forKey: isAmneziaWGEnabledKey)
+    public func setIsAmneziaWGEnabled(isAmneziaWGEnabled: Bool) {
+        userDefaults.set(isAmneziaWGEnabled, forKey: isAmneziaWGEnabledKey)
     }
 
     public func getVpnInterface() -> VpnInterface {
