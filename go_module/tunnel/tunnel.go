@@ -65,7 +65,12 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 		return err
 	}
 
-	currentDialer := tunnel.T().Dialer()
+	t := tunnel.T()
+	if t == nil {
+		return fmt.Errorf("tunnel not initialized after engine start")
+	}
+
+	currentDialer := t.Dialer()
 	vpnOutbound, ok := currentDialer.(proxy.Proxy)
 	if !ok {
 		log.Infof("[Engine] Current dialer is not a proxy")
@@ -81,11 +86,7 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 		direct: directOutbound,
 	}
 
-	if tunnel.T() == nil {
-		log.Infof("[Engine] tunnel.T() return nil")
-	}
-
-	tunnel.T().SetDialer(wrapper)
+	t.SetDialer(wrapper)
 	isRunning = true
 	return nil
 }

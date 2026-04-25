@@ -26,6 +26,11 @@ jobs:
           name: macos_grpcvpnserver
           path: installer/macos/
 
+      - name: Add permissions to macos service executable
+        working-directory: installer/macos/
+        run: |
+          chmod +x macos_grpcvpnserver
+
       - name: Download Windows built application
         uses: actions/download-artifact@v4
         with:
@@ -57,7 +62,7 @@ jobs:
       - name: Build Windows installer - Install WiX
         if: matrix.os == 'windows'
         working-directory: installer/windows
-        run: dotnet tool install --global wix
+        run: dotnet tool install --global wix --version 6.0.0
         
       - name: Build Windows installer
         if: matrix.os == 'windows'

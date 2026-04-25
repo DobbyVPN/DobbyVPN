@@ -25,6 +25,5 @@ kmp_module/
 ├── grpcprotos/ --- Library to generate automatic code for gRPC client
 ├── grpcstub/ --- Library-wrapper for gRPC client
 ├── iosApp/
-├── outline/ --- Library to import Outline tunnel golang code
-└── tap-device/
+└── outline/ --- Library to import Outline tunnel golang code
 ```

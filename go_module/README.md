@@ -72,11 +72,6 @@ rpc StartOutline (StartOutlineRequest)  returns (StartOutlineResponse);
 rpc StopOutline (Empty)                 returns (Empty);
 
 // health_check.go
-rpc StartHealthCheck (StartHealthCheckRequest)    returns (Empty);
-rpc StopHealthCheck (Empty)                       returns (Empty);
-rpc Status (Empty)                                returns (StatusResponce);
-rpc TcpPing (TcpPingRequest)                      returns (TcpPingResponce);
-rpc UrlTest (UrlTestRequest)                      returns (UrlTestResponce);
 rpc CouldStart (Empty)                            returns (CouldStartResponce);
 rpc CheckServerAlive (CheckServerAliveRequest)    returns (CheckServerAliveResponce);
 
@@ -86,6 +81,10 @@ rpc StopCloakClient (Empty)                       returns (Empty);
 
 // logger.go
 rpc InitLogger (InitLoggerRequest)                returns (Empty);
+
+// georouting.go
+rpc SetGeoRoutingConf (SetGeoRoutingConfRequest)  returns (Empty);
+rpc ClearGeoRoutingConf (Empty)                   returns (Empty);
 ```
 
 Or this can be found in the [vpnserver.proto](./vpnserver.proto) file, that defines RPC API for the desktop library.
@@ -95,3 +94,7 @@ Using this file should be generated required files in the [vpnserver/](./vpnserv
 ```bash
 protoc --go_out=../ --go-grpc_out=../ ./grpcproto/vpnserver.proto
 ```
+
+## Additional documentation
+
+* [How to manage services on different platforms](./SERVICES.md)

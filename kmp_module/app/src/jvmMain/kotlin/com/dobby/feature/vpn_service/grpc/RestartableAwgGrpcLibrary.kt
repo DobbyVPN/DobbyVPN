@@ -10,7 +10,7 @@ class RestartableAwgGrpcLibrary(private val logger: Logger) : AwgLibrary {
         try {
             GrpcVpnLibrary.awgGrpcLibrary.StartAwg(key, config)
         } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to StartAwg: $e")
+            logger.log("[ERROR] Failed to start AmneziaWG: $e")
         }
     }
 
@@ -18,7 +18,7 @@ class RestartableAwgGrpcLibrary(private val logger: Logger) : AwgLibrary {
         try {
             GrpcVpnLibrary.awgGrpcLibrary.StopAwg()
         } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to StopAwg: $e")
+            logger.log("[ERROR] Failed to stop AmneziaWG: $e")
         }
     }
 }

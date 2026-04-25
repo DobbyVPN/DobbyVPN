@@ -1,6 +1,6 @@
 # gRPC server tester
 
-This tester checks gRPC server via runnin different usage scenarios.
+This tester checks gRPC server via running different usage scenarios.
 
 ## Prepare
 

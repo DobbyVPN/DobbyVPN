@@ -14,19 +14,24 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: windows_grpcvpnserver.exe
-          path: kmp_client/services
+          path: kmp_module/services
 
       - name: Download Linux gRPC vpn service
         uses: actions/download-artifact@v4
         with:
           name: ubuntu_grpcvpnserver
-          path: kmp_client/services
+          path: kmp_module/services
+
+      - name: Add permissions to ubuntu service executable
+        working-directory: kmp_module/services
+        run: |
+          chmod +x ubuntu_grpcvpnserver
 
       - name: Download macOS gRPC vpn service
         uses: actions/download-artifact@v4
         with:
           name: macos_grpcvpnserver
-          path: kmp_client/services
+          path: kmp_module/services
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4

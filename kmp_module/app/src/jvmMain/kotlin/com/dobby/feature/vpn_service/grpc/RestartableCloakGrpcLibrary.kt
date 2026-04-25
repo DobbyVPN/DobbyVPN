@@ -15,7 +15,7 @@ class RestartableCloakGrpcLibrary(private val logger: Logger) : CloakLibrary {
         try {
             GrpcVpnLibrary.cloakGrpcLibrary.StartCloakClient(localHost, localPort, config, udp)
         } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to StartAwg: $e")
+            logger.log("[ERROR] Failed to start Cloak client: $e")
         }
     }
 
@@ -23,7 +23,7 @@ class RestartableCloakGrpcLibrary(private val logger: Logger) : CloakLibrary {
         try {
             GrpcVpnLibrary.cloakGrpcLibrary.StopCloakClient()
         } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to StartAwg: $e")
+            logger.log("[ERROR] Failed to stop Cloak client: $e")
         }
     }
 }
