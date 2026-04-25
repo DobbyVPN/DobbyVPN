@@ -159,11 +159,14 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     }
 
     public func getVpnInterface() -> VpnInterface {
-        return VpnInterface.valueOf(userDefaults.string(forKey: vpnInterfaceKey) ?? "")
+        // TODO: Rewrite code below with swift code
+        // return VpnInterface.valueOf(userDefaults.string(forKey: vpnInterfaceKey) ?? "")
+        return VpnInterface.cloakOutline
     }
 
     public func setVpnInterface(vpnInterface: VpnInterface) {
-        userDefaults.set(vpnInterface.toString(), forKey: vpnInterfaceKey)
+        // TODO: Rewrite code below with swift code
+        // userDefaults.set(vpnInterface.toString(), forKey: vpnInterfaceKey)
     }
 
     public func couldStart() -> Bool {
