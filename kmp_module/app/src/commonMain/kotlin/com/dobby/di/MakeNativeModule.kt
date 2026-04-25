@@ -12,6 +12,7 @@ import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryAwg
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryCloak
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryOutline
+import com.dobby.feature.main.domain.LoggerManager
 import org.koin.core.module.Module
 import org.koin.core.scope.Scope
 import org.koin.dsl.module
@@ -27,12 +28,14 @@ fun makeNativeModule(
     connectionStateRepository: NativeInjectionFactory<ConnectionStateRepository>,
     vpnManager: NativeInjectionFactory<VpnManager>,
     awgManager: NativeInjectionFactory<AwgManager>,
+    loggerManager: NativeInjectionFactory<LoggerManager>,
     authenticationManager: NativeInjectionFactory<AuthenticationManager>,
     healthCheck: NativeInjectionFactory<HealthCheck>,
 ): Module {
     return module {
         factory { vpnManager() }
         factory { awgManager() }
+        factory { loggerManager() }
         single { copyLogsInteractor() }
         single { logEventsChannel() }
         single { logsRepository() }

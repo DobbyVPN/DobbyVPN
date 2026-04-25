@@ -191,11 +191,13 @@ func SetTelemetry(endpoint string) error {
 	}
 
 	tlg, err := NewTelemetryLogger(endpoint)
-	if err == nil {
-		lg.tlogger = tlg
+	if err != nil {
+		Warnf("OTEL", "Failed to create new telemetry logger: %v", err)
+		return fmt.Errorf("failed to create new telemetry logger: %w", err)
 	}
+	lg.tlogger = tlg
 
-	return err
+	return nil
 }
 
 const name = "https://github.com/DobbyVPN/DobbyVPN/go_module/log"

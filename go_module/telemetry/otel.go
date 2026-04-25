@@ -107,7 +107,8 @@ func newMeterProvider() (*metric.MeterProvider, error) {
 func newLoggerProvider(ctx context.Context, endpoint string) (*log.LoggerProvider, error) {
 	logExporter, err := otlploghttp.New(
 		ctx,
-		otlploghttp.WithEndpointURL(endpoint),
+		otlploghttp.WithEndpoint(endpoint),
+		otlploghttp.WithInsecure(),
 		otlploghttp.WithTimeout(30*time.Second),
 		otlploghttp.WithRetry(
 			otlploghttp.RetryConfig{
