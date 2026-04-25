@@ -6,13 +6,13 @@ import (
 )
 
 func NetCheck(configPath string) error {
-	log.Infof("NetCheck")
+	log.Debugf(Category, "NetCheck")
 
 	return netcheck.NetCheck(configPath)
 }
 
 func CancelNetCheck() {
-	log.Infof("CancelNetCheck")
+	log.Debugf(Category, "CancelNetCheck")
 
 	netcheck.CancelNetCheck()
 }

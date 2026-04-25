@@ -1,8 +1,7 @@
 package com.dobby.feature.netcheck.ui
 
 data class NetCheckUiState(
-    val netCheckConfig: String = "",
-    val netCheckConfigPath: String = "",
+    val tomlConfig: String = "",
     val netCheckStatus: NetCheckStatus = NetCheckStatus.OFF,
     val description: String = ""
 )

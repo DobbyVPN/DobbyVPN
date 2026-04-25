@@ -59,3 +59,9 @@ data class TomlConfigs(
     val ExcludeIPs: ExcludeIPsConfig? = null,
     val Telemetry: String? = null
 )
+
+@Serializable
+data class NetCheckTomlConfigs(
+    val ConfigValue: String,
+    val Telemetry: String? = null,
+)

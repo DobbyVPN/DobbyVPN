@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Server) NetCheck(_ context.Context, in *grpcproto.NetCheckRequest) (*grpcproto.NetCheckResponse, error) {
-	log.Infof("NetCheck")
+	log.Debugf(Category, "NetCheck")
 	err := api.NetCheck(in.GetConfigPath())
 	if err != nil {
 		return &grpcproto.NetCheckResponse{Error: fmt.Sprintf("NetCheck error: %v", err)}, nil
@@ -21,7 +21,7 @@ func (s *Server) NetCheck(_ context.Context, in *grpcproto.NetCheckRequest) (*gr
 }
 
 func (s *Server) CancelNetCheck(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
-	log.Infof("CancelNetCheck")
+	log.Debugf(Category, "CancelNetCheck")
 	api.CancelNetCheck()
 	return &grpcproto.Empty{}, nil
 }

@@ -1,6 +1,9 @@
 package com.dobby.feature.netcheck.presentation
 
 import androidx.lifecycle.ViewModel
+import com.dobby.feature.logging.Logger
+import com.dobby.feature.main.domain.LoggerManager
+import com.dobby.feature.main.domain.NetCheckTomlConfigs
 import com.dobby.feature.netcheck.domain.NetCheckRepository
 import com.dobby.feature.netcheck.ui.NetCheckStatus
 import com.dobby.feature.netcheck.ui.NetCheckUiState
@@ -8,10 +11,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.serialization.decodeFromString
+import net.peanuuutz.tomlkt.Toml
 
 class NetCheckViewModel(
-    private val netCheckRepository: NetCheckRepository,
+    private val logger: Logger,
     private val netCheckManager: NetCheckManager,
+    private val loggerManager: LoggerManager,
+    private val netCheckRepository: NetCheckRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(NetCheckUiState())
@@ -20,21 +27,17 @@ class NetCheckViewModel(
     init {
         _uiState.update {
             NetCheckUiState(
-                netCheckConfig = netCheckRepository.getConfig(),
-                netCheckConfigPath = netCheckRepository.getConfigPath(),
+                tomlConfig = "",
                 netCheckStatus = NetCheckStatus.OFF,
                 description = ""
             )
         }
     }
 
-    fun updateConfig(config: String) {
-        netCheckRepository.setConfig(config)
-
+    fun update(tomlConfig: String) {
         _uiState.update {
             NetCheckUiState(
-                netCheckConfig = config,
-                netCheckConfigPath = it.netCheckConfigPath,
+                tomlConfig = tomlConfig,
                 netCheckStatus = NetCheckStatus.OFF,
                 description = ""
             )
@@ -49,13 +52,35 @@ class NetCheckViewModel(
     }
 
     private fun turnOn() {
-        val error = netCheckManager.start(_uiState.value.netCheckConfigPath)
+        logger.log("Got congih: length=${_uiState.value.tomlConfig.length}, parsing")
+        val tomlConfig = try {
+            Toml.decodeFromString<NetCheckTomlConfigs>(_uiState.value.tomlConfig)
+        } catch (e: Exception) {
+            _uiState.update {
+                NetCheckUiState(
+                    tomlConfig = it.tomlConfig,
+                    netCheckStatus = NetCheckStatus.FAILED,
+                    description = "Failed to parse TOML config: $e"
+                )
+            }
+
+            return
+        }
+
+        if (tomlConfig.Telemetry != null) {
+            logger.log("Found telemetry host: initializing telemetry")
+            loggerManager.initTelemetry(tomlConfig.Telemetry)
+        }
+
+        netCheckRepository.setConfig(tomlConfig.ConfigValue)
+
+        logger.log("Starting network check")
+        val error = netCheckManager.start(netCheckRepository.getConfigPath())
 
         if (error == "") {
             _uiState.update {
                 NetCheckUiState(
-                    netCheckConfig = it.netCheckConfig,
-                    netCheckConfigPath = it.netCheckConfigPath,
+                    tomlConfig = it.tomlConfig,
                     netCheckStatus = NetCheckStatus.ON,
                     description = ""
                 )
@@ -63,8 +88,7 @@ class NetCheckViewModel(
         } else {
             _uiState.update {
                 NetCheckUiState(
-                    netCheckConfig = it.netCheckConfig,
-                    netCheckConfigPath = it.netCheckConfigPath,
+                    tomlConfig = it.tomlConfig,
                     netCheckStatus = NetCheckStatus.FAILED,
                     description = error
                 )
@@ -77,8 +101,7 @@ class NetCheckViewModel(
 
         _uiState.update {
             NetCheckUiState(
-                netCheckConfig = netCheckRepository.getConfig(),
-                netCheckConfigPath = netCheckRepository.getConfigPath(),
+                tomlConfig = it.tomlConfig,
                 netCheckStatus = NetCheckStatus.OFF,
                 description = ""
             )

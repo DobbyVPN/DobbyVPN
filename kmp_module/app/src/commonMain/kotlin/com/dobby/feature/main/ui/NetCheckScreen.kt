@@ -14,11 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dobby.feature.logging.presentation.LogsViewModel
@@ -60,8 +56,8 @@ fun NetCheckScreen(
                 Spacer(modifier = Modifier.weight(1f))
                 TagChip(
                     tagText = when (uiNetCheckState.netCheckStatus) {
-                        NetCheckStatus.ON -> "Status: connected"
-                        NetCheckStatus.OFF -> "Status: disconnected"
+                        NetCheckStatus.ON -> "Status: testing"
+                        NetCheckStatus.OFF -> "Status: not testing"
                         NetCheckStatus.FAILED -> "Status: error ${uiNetCheckState.description}"
                     },
                     color = when (uiNetCheckState.netCheckStatus) {
@@ -76,8 +72,8 @@ fun NetCheckScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             TextField(
-                value = uiNetCheckState.netCheckConfig,
-                onValueChange = netCheckViewModel::updateConfig,
+                value = uiNetCheckState.tomlConfig,
+                onValueChange = netCheckViewModel::update,
                 label = { Text("Net Check") },
                 singleLine = false,
                 minLines = 9,
@@ -135,31 +131,7 @@ fun NetCheckScreen(
         ) {
             LazyColumn(state = listState) {
                 items(uiLogState.logMessages) { message ->
-                    Text(
-                        buildAnnotatedString {
-                            withStyle(
-                                style = SpanStyle(
-                                    fontWeight = FontWeight.W700,
-                                )
-                            ) {
-                                append("> ")
-                            }
-
-                            withStyle(
-                                style = SpanStyle(
-                                    fontWeight = FontWeight.W400,
-                                )
-                            ) {
-                                append(message)
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 0.dp, horizontal = 4.dp),
-                        fontSize = 14.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = Color.Black
-                    )
+                    LogMessageScreen(message)
                 }
             }
         }
