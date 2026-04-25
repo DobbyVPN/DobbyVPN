@@ -99,8 +99,15 @@ func (h *logrusToSlogHook) Fire(e *logrus.Entry) error {
 	return nil
 }
 
+type TelemetryLogger struct {
+	ctx      context.Context
+	shutdown func(context.Context) error
+	endpoint string
+}
+
 type Logger struct {
 	file     *os.File
+	tlogger  *TelemetryLogger
 	logger   *slog.Logger
 	debugBuf []string
 	infoBuf  []string
@@ -108,25 +115,19 @@ type Logger struct {
 	errorBuf []string
 }
 
-type TelemetryLogger struct {
-	ctx      context.Context
-	shutdown func(context.Context) error
-}
-
 var (
 	lg     = &Logger{debugBuf: []string{}, infoBuf: []string{}, warnBuf: []string{}, errorBuf: []string{}}
-	tlg    = NewTelemetryLogger()
 	initMu sync.Mutex
 )
 
-func NewTelemetryLogger() *TelemetryLogger {
+func NewTelemetryLogger(endpoint string) (*TelemetryLogger, error) {
 	// Set up OpenTelemetry.
 	ctx := context.Background()
-	otelShutdown, err := telemetry.SetupOTelSDK(ctx)
+	otelShutdown, err := telemetry.SetupOTelSDK(ctx, endpoint)
 	if err != nil {
-		return &TelemetryLogger{ctx: ctx}
+		return nil, fmt.Errorf("failed create otlp logger: %w", err)
 	}
-	return &TelemetryLogger{ctx: ctx, shutdown: otelShutdown}
+	return &TelemetryLogger{ctx: ctx, shutdown: otelShutdown, endpoint: endpoint}, nil
 }
 
 func MaskStr(input string) string {
@@ -158,10 +159,6 @@ func (logger *Logger) dumpBuffer() {
 }
 
 func SetPath(path string) error {
-	if lg.logger != nil {
-		return nil
-	}
-
 	initMu.Lock()
 	defer initMu.Unlock()
 
@@ -181,6 +178,24 @@ func SetPath(path string) error {
 	logrus.AddHook(&logrusToSlogHook{})
 
 	return nil
+}
+
+func SetTelemetry(endpoint string) error {
+	if lg.tlogger != nil {
+		if lg.tlogger.endpoint == endpoint {
+			return nil
+		}
+
+		lg.tlogger.shutdown(lg.tlogger.ctx)
+		lg.tlogger = nil
+	}
+
+	tlg, err := NewTelemetryLogger(endpoint)
+	if err == nil {
+		lg.tlogger = tlg
+	}
+
+	return err
 }
 
 const name = "https://github.com/DobbyVPN/DobbyVPN/go_module/log"
@@ -253,49 +268,81 @@ func _error(categoryMessage string, arguments map[string]any) {
 func Info(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_info(categoryMessage, arguments)
-	otelLogger.InfoContext(tlg.ctx, categoryMessage, flattenArgs(arguments)...)
+	if lg.tlogger != nil {
+		otelLogger.InfoContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
+	} else {
+		// TODO
+	}
 }
 
 func Debug(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_debug(categoryMessage, arguments)
-	otelLogger.DebugContext(tlg.ctx, categoryMessage, flattenArgs(arguments)...)
+	if lg.tlogger != nil {
+		otelLogger.DebugContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
+	} else {
+		// TODO
+	}
 }
 
 func Warn(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_warn(categoryMessage, arguments)
-	otelLogger.WarnContext(tlg.ctx, categoryMessage, flattenArgs(arguments)...)
+	if lg.tlogger != nil {
+		otelLogger.WarnContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
+	} else {
+		// TODO
+	}
 }
 
 func Error(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_error(categoryMessage, arguments)
-	otelLogger.ErrorContext(tlg.ctx, categoryMessage, flattenArgs(arguments)...)
+	if lg.tlogger != nil {
+		otelLogger.ErrorContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
+	} else {
+		// TODO
+	}
 }
 
 func Infof(category string, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_info(categoryMessage, make(map[string]any))
-	otelLogger.InfoContext(tlg.ctx, categoryMessage)
+	if lg.tlogger != nil {
+		otelLogger.InfoContext(lg.tlogger.ctx, categoryMessage)
+	} else {
+		// TODO
+	}
 }
 
 func Debugf(category string, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_debug(categoryMessage, make(map[string]any))
-	otelLogger.DebugContext(tlg.ctx, categoryMessage)
+	if lg.tlogger != nil {
+		otelLogger.DebugContext(lg.tlogger.ctx, categoryMessage)
+	} else {
+		// TODO
+	}
 }
 
 func Warnf(category string, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_warn(categoryMessage, make(map[string]any))
-	otelLogger.WarnContext(tlg.ctx, categoryMessage)
+	if lg.tlogger != nil {
+		otelLogger.WarnContext(lg.tlogger.ctx, categoryMessage)
+	} else {
+		// TODO
+	}
 }
 
 func Errorf(category string, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_error(categoryMessage, make(map[string]any))
-	otelLogger.ErrorContext(tlg.ctx, categoryMessage)
+	if lg.tlogger != nil {
+		otelLogger.ErrorContext(lg.tlogger.ctx, categoryMessage)
+	} else {
+		// TODO
+	}
 }
 
 type simpleHandler struct {

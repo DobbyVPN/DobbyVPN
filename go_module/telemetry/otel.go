@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
@@ -17,7 +18,7 @@ import (
 
 // setupOTelSDK bootstraps the OpenTelemetry pipeline.
 // If it does not return an error, make sure to call shutdown for proper cleanup.
-func SetupOTelSDK(ctx context.Context) (func(context.Context) error, error) {
+func SetupOTelSDK(ctx context.Context, endpoint string) (func(context.Context) error, error) {
 	var shutdownFuncs []func(context.Context) error
 	var err error
 
@@ -61,7 +62,7 @@ func SetupOTelSDK(ctx context.Context) (func(context.Context) error, error) {
 	otel.SetMeterProvider(meterProvider)
 
 	// Set up logger provider.
-	loggerProvider, err := newLoggerProvider(ctx)
+	loggerProvider, err := newLoggerProvider(ctx, endpoint)
 	if err != nil {
 		handleErr(err)
 		return shutdown, err
@@ -103,8 +104,20 @@ func newMeterProvider() (*metric.MeterProvider, error) {
 	return meterProvider, nil
 }
 
-func newLoggerProvider(ctx context.Context) (*log.LoggerProvider, error) {
-	logExporter, err := otlploghttp.New(ctx)
+func newLoggerProvider(ctx context.Context, endpoint string) (*log.LoggerProvider, error) {
+	logExporter, err := otlploghttp.New(
+		ctx,
+		otlploghttp.WithEndpointURL(endpoint),
+		otlploghttp.WithTimeout(30*time.Second),
+		otlploghttp.WithRetry(
+			otlploghttp.RetryConfig{
+				Enabled:         true,
+				InitialInterval: 500 * time.Millisecond,
+				MaxInterval:     5 * time.Second,
+				MaxElapsedTime:  time.Minute,
+			},
+		),
+	)
 	if err != nil {
 		return nil, err
 	}

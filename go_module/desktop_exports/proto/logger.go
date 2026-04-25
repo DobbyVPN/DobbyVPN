@@ -14,3 +14,9 @@ func (c *Server) InitLogger(_ context.Context, in *grpcproto.InitLoggerRequest) 
 	go api.InitLogger(in.Path)
 	return &grpcproto.Empty{}, nil
 }
+
+func (c *Server) InitTelemetry(_ context.Context, in *grpcproto.InitTelemetryRequest) (*grpcproto.Empty, error) {
+	log.Debugf(Category, "InitTelemetry")
+	go api.InitTelemetry(in.Endpoint)
+	return &grpcproto.Empty{}, nil
+}
