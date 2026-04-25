@@ -29,6 +29,7 @@ const (
 	Vpn_StartCloakClient_FullMethodName    = "/grpcproto.Vpn/StartCloakClient"
 	Vpn_StopCloakClient_FullMethodName     = "/grpcproto.Vpn/StopCloakClient"
 	Vpn_InitLogger_FullMethodName          = "/grpcproto.Vpn/InitLogger"
+	Vpn_InitTelemetry_FullMethodName       = "/grpcproto.Vpn/InitTelemetry"
 	Vpn_SetGeoRoutingConf_FullMethodName   = "/grpcproto.Vpn/SetGeoRoutingConf"
 	Vpn_ClearGeoRoutingConf_FullMethodName = "/grpcproto.Vpn/ClearGeoRoutingConf"
 	Vpn_NetCheck_FullMethodName            = "/grpcproto.Vpn/NetCheck"
@@ -54,6 +55,7 @@ type VpnClient interface {
 	StopCloakClient(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	// logger.go
 	InitLogger(ctx context.Context, in *InitLoggerRequest, opts ...grpc.CallOption) (*Empty, error)
+	InitTelemetry(ctx context.Context, in *InitTelemetryRequest, opts ...grpc.CallOption) (*Empty, error)
 	// georouting.go
 	SetGeoRoutingConf(ctx context.Context, in *SetGeoRoutingConfRequest, opts ...grpc.CallOption) (*Empty, error)
 	ClearGeoRoutingConf(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
@@ -170,6 +172,16 @@ func (c *vpnClient) InitLogger(ctx context.Context, in *InitLoggerRequest, opts 
 	return out, nil
 }
 
+func (c *vpnClient) InitTelemetry(ctx context.Context, in *InitTelemetryRequest, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, Vpn_InitTelemetry_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *vpnClient) SetGeoRoutingConf(ctx context.Context, in *SetGeoRoutingConfRequest, opts ...grpc.CallOption) (*Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
@@ -229,6 +241,7 @@ type VpnServer interface {
 	StopCloakClient(context.Context, *Empty) (*Empty, error)
 	// logger.go
 	InitLogger(context.Context, *InitLoggerRequest) (*Empty, error)
+	InitTelemetry(context.Context, *InitTelemetryRequest) (*Empty, error)
 	// georouting.go
 	SetGeoRoutingConf(context.Context, *SetGeoRoutingConfRequest) (*Empty, error)
 	ClearGeoRoutingConf(context.Context, *Empty) (*Empty, error)
@@ -274,6 +287,9 @@ func (UnimplementedVpnServer) StopCloakClient(context.Context, *Empty) (*Empty, 
 }
 func (UnimplementedVpnServer) InitLogger(context.Context, *InitLoggerRequest) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InitLogger not implemented")
+}
+func (UnimplementedVpnServer) InitTelemetry(context.Context, *InitTelemetryRequest) (*Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method InitTelemetry not implemented")
 }
 func (UnimplementedVpnServer) SetGeoRoutingConf(context.Context, *SetGeoRoutingConfRequest) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetGeoRoutingConf not implemented")
@@ -488,6 +504,24 @@ func _Vpn_InitLogger_Handler(srv interface{}, ctx context.Context, dec func(inte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Vpn_InitTelemetry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InitTelemetryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).InitTelemetry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_InitTelemetry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).InitTelemetry(ctx, req.(*InitTelemetryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Vpn_SetGeoRoutingConf_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetGeoRoutingConfRequest)
 	if err := dec(in); err != nil {
@@ -606,6 +640,10 @@ var Vpn_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "InitLogger",
 			Handler:    _Vpn_InitLogger_Handler,
+		},
+		{
+			MethodName: "InitTelemetry",
+			Handler:    _Vpn_InitTelemetry_Handler,
 		},
 		{
 			MethodName: "SetGeoRoutingConf",

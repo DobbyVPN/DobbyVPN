@@ -10,7 +10,7 @@ class RestartableGeoroutingGrpcLibrary(private val logger: Logger) : GeoroutingL
         try {
             GrpcVpnLibrary.georoutingGrpcLibrary.SetGeoRoutingConf(cidrs)
         } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to SetGeoRoutingConf: $e")
+            logger.log("[ERROR] Failed to set geo routing config: $e")
         }
     }
 
@@ -18,7 +18,7 @@ class RestartableGeoroutingGrpcLibrary(private val logger: Logger) : GeoroutingL
         try {
             GrpcVpnLibrary.georoutingGrpcLibrary.ClearGeoRoutingConf()
         } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to ClearGeoRoutingConf: $e")
+            logger.log("[ERROR] Failed to clear geo routing config: $e")
         }
     }
 }

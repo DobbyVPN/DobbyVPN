@@ -40,7 +40,7 @@ class LogsViewModel(
                     LogsUiState(logsRepository.readUILogs())
                 }
 
-                delay(2000L) // 2 seconds
+                delay(500L) // 0.5 second
             }
         }
     }

@@ -4,13 +4,15 @@ package platform_engine
 
 import (
 	"fmt"
+	"go_module/common"
 	"net"
 	"strings"
 	"time"
 
-	"github.com/xjasonlyu/tun2socks/v2/engine"
 	"go_module/log"
 	"go_module/routing"
+
+	"github.com/xjasonlyu/tun2socks/v2/engine"
 )
 
 var (
@@ -22,13 +24,13 @@ var (
 func execAndLog(cmd string, context string) error {
 	out, err := routing.ExecuteCommand(cmd)
 	if err != nil {
-		log.Infof("[Engine][Windows][ERROR] %s: %v | output=%s",
+		log.Errorf(Category, "[Engine][Windows][ERROR] %s: %v | output=%s",
 			context, err, out,
 		)
 		return err
 	}
 
-	log.Infof("[Engine][Windows][OK] %s: %s", context, out)
+	log.Debugf(Category, "[Engine][Windows][OK] %s: %s", context, out)
 	return nil
 }
 
@@ -37,7 +39,7 @@ func startPlatformEngine(cfg interface{}) error {
 	proxyAddr := c.ProxyAddr
 	uplinkIface := c.UplinkIface
 
-	log.Infof("[Engine][Windows] proxy=%s iface=%s", proxyAddr, uplinkIface)
+	log.Debugf(Category, "[Engine][Windows] proxy=%s iface=%s", proxyAddr, uplinkIface)
 
 	key := &engine.Key{
 		Proxy:     fmt.Sprintf("socks5://%s", proxyAddr),
@@ -60,7 +62,9 @@ func startPlatformEngine(cfg interface{}) error {
 
 	prevDNS, prevDHCP = getCurrentDNS(ifName)
 
-	if err := setInterfaceAddress(ifName, "10.0.85.2"); err != nil {
+	tunCfg := common.GetNetworkConfig()
+
+	if err := setInterfaceAddress(ifName, tunCfg.TunDevice); err != nil {
 		engine.Stop()
 		return err
 	}
@@ -77,7 +81,7 @@ func stopPlatformEngine() {
 		return
 	}
 
-	log.Infof("[Engine][Windows] Restoring DNS. DHCP=%v DNS=%v", prevDHCP, prevDNS)
+	log.Debugf(Category, "[Engine][Windows] Restoring DNS. DHCP=%v DNS=%v", prevDHCP, prevDNS)
 
 	if prevDHCP {
 		cmd := fmt.Sprintf(
@@ -148,7 +152,7 @@ func getCurrentDNS(name string) ([]string, bool) {
 
 	out, err := routing.ExecuteCommand(cmd)
 	if err != nil {
-		log.Infof("[Engine][Windows] Failed to get DNS: %v", err)
+		log.Errorf(Category, "[Engine][Windows] Failed to get DNS: %v", err)
 		return nil, true
 	}
 
@@ -170,7 +174,7 @@ func getCurrentDNS(name string) ([]string, bool) {
 		}
 	}
 
-	log.Infof("[Engine][Windows] Current DNS: DHCP=%v DNS=%v", isDHCP, dns)
+	log.Debugf(Category, "[Engine][Windows] Current DNS: DHCP=%v DNS=%v", isDHCP, dns)
 
 	return dns, isDHCP
 }

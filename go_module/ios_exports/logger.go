@@ -7,6 +7,6 @@ import (
 func InitLogger(path string) {
 	defer guard("InitLogger")()
 	if err := log.SetPath(path); err != nil {
-		log.Infof("[ios_exports] InitLogger failed: %v", err)
+		log.Errorf(Category, "InitLogger failed: %v", err)
 	}
 }

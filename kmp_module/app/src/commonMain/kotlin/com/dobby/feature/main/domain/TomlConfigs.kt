@@ -56,5 +56,6 @@ data class ExcludeIPsConfig(
 data class TomlConfigs(
     val Description: String? = null,
     val Outline: OutlineConfig? = null,
-    val ExcludeIPs: ExcludeIPsConfig? = null
+    val ExcludeIPs: ExcludeIPsConfig? = null,
+    val Telemetry: String? = null
 )

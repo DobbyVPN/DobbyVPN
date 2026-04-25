@@ -18,7 +18,7 @@ func guardExport(fnName string) func() {
 	return func() {
 		if r := recover(); r != nil {
 			msg := "panic in " + fnName + ": " + unsafeToString(r)
-			log.Infof("%s\n%s", msg, string(debug.Stack()))
+			log.Debugf(Category, "%s\n%s", msg, string(debug.Stack()))
 		}
 	}
 }
@@ -34,7 +34,7 @@ func unsafeToString(v any) string {
 
 func NewOutlineClient(transportConfig string) (err error) {
 	defer guardExport("NewOutlineClient")()
-	log.Infof("NewOutlineClient() called")
+	log.Debugf(Category, "NewOutlineClient() called")
 
 	if client != nil {
 		if err := OutlineDisconnect(); err != nil {
@@ -42,44 +42,44 @@ func NewOutlineClient(transportConfig string) (err error) {
 		}
 	}
 
-	log.Infof("Start fd search")
+	log.Debugf(Category, "Start fd search")
 
 	fd := GetTunnelFileDescriptor()
 	if fd < 0 {
 		return fmt.Errorf("NewOutlineClient(): utun fd not found")
 	}
 
-	log.Infof("Fd was found, fd = %d", fd)
-	log.Infof("Config length=%d", len(transportConfig))
+	log.Debugf(Category, "Fd was found, fd = %d", fd)
+	log.Debugf(Category, "Config length=%d", len(transportConfig))
 
 	tunFile := os.NewFile(uintptr(fd), "utun")
 
 	client = outline.NewClient(transportConfig, tunFile)
 
-	log.Infof("NewOutlineClient() finished")
+	log.Infof(Category, "NewOutlineClient() finished")
 	return nil
 }
 
 func OutlineConnect() error {
 	defer guardExport("OutlineConnect")()
-	log.Infof("OutlineConnect() called")
+	log.Debugf(Category, "OutlineConnect() called")
 
 	if client == nil {
 		return fmt.Errorf("OutlineConnect(): client is nil")
 	}
 
 	if err := client.Connect(); err != nil {
-		log.Infof("OutlineConnect() failed: %v", err)
+		log.Errorf(Category, "OutlineConnect() failed: %v", err)
 		return fmt.Errorf("OutlineConnect(): %w", err)
 	}
 
-	log.Infof("OutlineConnect() finished successfully")
+	log.Infof(Category, "OutlineConnect() finished successfully")
 	return nil
 }
 
 func OutlineDisconnect() error {
 	defer guardExport("OutlineDisconnect")()
-	log.Infof("OutlineDisconnect() called")
+	log.Debugf(Category, "OutlineDisconnect() called")
 
 	if client == nil {
 		return nil
@@ -88,7 +88,7 @@ func OutlineDisconnect() error {
 	client.Disconnect()
 	client = nil
 
-	log.Infof("OutlineDisconnect() finished")
+	log.Infof(Category, "OutlineDisconnect() finished")
 	return nil
 }
 

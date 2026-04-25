@@ -8,8 +8,9 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/xjasonlyu/tun2socks/v2/engine"
 	"go_module/log"
+
+	"github.com/xjasonlyu/tun2socks/v2/engine"
 )
 
 var LastIface string
@@ -21,7 +22,7 @@ func startPlatformEngine(cfg interface{}) error {
 	deviceName := "utun233"
 	LastIface = deviceName
 
-	log.Infof("[Engine][Darwin] proxy=%s device=%s", proxyAddr, deviceName)
+	log.Debugf(Category, "[Engine][Darwin] proxy=%s device=%s", proxyAddr, deviceName)
 
 	key := &engine.Key{
 		Proxy:    fmt.Sprintf("socks5://%s", proxyAddr),

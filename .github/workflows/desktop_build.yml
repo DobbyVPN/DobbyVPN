@@ -40,6 +40,11 @@ jobs:
           name: ubuntu_grpcvpnserver
           path: kmp_module/services
 
+      - name: Add permissions to ubuntu service executable
+        working-directory: kmp_module/services
+        run: |
+          chmod +x ubuntu_grpcvpnserver
+
       - name: Download macOS gRPC vpn service
         uses: actions/download-artifact@v4
         with:
