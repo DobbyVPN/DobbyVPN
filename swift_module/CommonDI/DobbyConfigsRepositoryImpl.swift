@@ -44,8 +44,8 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         return userDefaults.string(forKey: telemetryEndpointKey) ?? ""
     }
 
-    public func setConnectionConfig(telemetryEndpoint: String) {
-        userDefaults.set(telemetryEndpoint, forKey: telemetryEndpointKey)
+    public func setTelemetryEndpoint(endpoint: String) {
+        userDefaults.set(endpoint, forKey: telemetryEndpointKey)
     }
 
     public func getCloakConfig() -> String {

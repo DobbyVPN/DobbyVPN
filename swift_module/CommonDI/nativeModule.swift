@@ -41,6 +41,9 @@ public class NativeModuleHolder {
         awgManager: { _ in
             return AwgManagerImpl()
         },
+        loggerManager: { _ in
+            return LoggerManagerImpl()
+        },
         authenticationManager: { _ in
             return AuthenticationManagerImpl()
         },
