@@ -96,11 +96,15 @@ func (h *logrusToSlogHook) Fire(e *logrus.Entry) error {
 	return nil
 }
 
+type Logger struct {
+	file   *os.File
+	logger *slog.Logger
+	buffer []string
+}
+
 var (
+	lg     = &Logger{buffer: []string{}}
 	initMu sync.Mutex
-	tel    = NewTelemetryLogger()
-	lg     = NewLogger()
-	root   = &RootLogger{stdoutLogger: lg, telemetryLogger: tel}
 )
 
 func MaskStr(input string) string {
@@ -148,34 +152,21 @@ func SetPath(path string) error {
 	return nil
 }
 
-func SetStdOut() error {
-	if lg.logger != nil {
-		return nil
-	}
-
-	initMu.Lock()
-	defer initMu.Unlock()
-
-	if lg.logger != nil {
-		return nil
-	}
-
-	lg.file = os.Stdout
-	lg.logger = slog.New(&simpleHandler{file: lg.file})
-	lg.dumpBuffer()
-
-	logrus.AddHook(&logrusToSlogHook{})
-
-	return nil
+func (logger *Logger) bufInfof(format string, args ...any) {
+	message := fmt.Sprintf(format, args...)
+	logger.buffer = append(logger.buffer, message)
 }
 
-func GetLogger() ISubLogger {
-	return root
+func (logger *Logger) lgInfof(format string, args ...any) {
+	logger.logger.Info(fmt.Sprintf(format, args...))
 }
 
 func Infof(format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
-	root.Debug(msg, map[string]string{})
+	if lg.logger == nil {
+		lg.bufInfof(format, args...)
+	} else {
+		lg.lgInfof(format, args...)
+	}
 }
 
 type simpleHandler struct {
