@@ -28,6 +28,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.system.Os
+import com.dobby.feature.logging.domain.initTelemetry
 import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
 import com.dobby.outline.OutlineGo
@@ -125,6 +126,9 @@ class DobbyVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         logger.log("[svc:$serviceId] onStartCommand(startId=$startId flags=$flags intentFromUi=${intent?.getBooleanExtra(IS_FROM_UI, false)}) vpnInterface=${vpnInterface?.fd}")
         teardownVpn()
+        if (dobbyConfigsRepository.getTelemetryEndpoint().isNotBlank()) {
+            initTelemetry(dobbyConfigsRepository.getTelemetryEndpoint())
+        }
         geoRouting.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
         when (dobbyConfigsRepository.getVpnInterface()) {
             VpnInterface.CLOAK_OUTLINE -> startCloakOutline(intent)

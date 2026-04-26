@@ -9,3 +9,8 @@ import (
 func InitLogger(path *C.char) {
 	log.SetPath(C.GoString(path))
 }
+
+//export InitTelemetry
+func InitTelemetry(endpoint *C.char) {
+	log.SetTelemetry(C.GoString(endpoint))
+}

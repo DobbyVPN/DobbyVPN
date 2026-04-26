@@ -7,7 +7,6 @@ import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.AwgManagerImpl
 import com.dobby.feature.main.domain.ConnectionStateRepository
-import com.dobby.feature.main.domain.LoggerManagerImpl
 import com.dobby.feature.main.domain.VpnManagerImpl
 import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.grpc.RestartableAwgGrpcLibrary
@@ -37,7 +36,6 @@ val jvmMainModule = makeNativeModule(
     connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(get()) },
     awgManager = { AwgManagerImpl(get()) },
-    loggerManager = { LoggerManagerImpl(get(), get()) },
     authenticationManager = { AuthenticationManagerImpl() },
     healthCheck = {
         HealthCheckImpl(
@@ -61,6 +59,7 @@ val jvmVpnModule = module {
             awgLibrary = get(),
             outlineLibrary = get(),
             cloakLibrary = get(),
+            loggerLibrary = get(),
             georoutingLibrary = get(),
             connectionState = get()
         )

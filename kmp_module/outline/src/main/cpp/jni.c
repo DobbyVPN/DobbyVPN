@@ -134,6 +134,17 @@ Java_com_dobby_outline_OutlineGo_initLogger(JNIEnv *env, jclass clazz,
     (*env)->ReleaseStringUTFChars(env, jPath, path);
 }
 
+JNIEXPORT void JNICALL
+Java_com_dobby_outline_OutlineGo_initTelemetry(JNIEnv *env, jclass clazz,
+                                               jstring jEndpoint)
+{
+    const char *endpoint = (*env)->GetStringUTFChars(env, jEndpoint, NULL);
+    // Call Go-exported function to initialize the logger
+    InitTelemetry(endpoint);
+    // Release UTF-8 string obtained from Java
+    (*env)->ReleaseStringUTFChars(env, jEndpoint, endpoint);
+}
+
 JNIEXPORT jint JNICALL
 Java_com_dobby_outline_OutlineGo_checkServerAlive(JNIEnv *env, jclass clazz,
                                                   jstring jAddress, jint jPort)
