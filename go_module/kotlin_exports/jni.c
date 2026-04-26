@@ -2,22 +2,31 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stddef.h>
 
-struct go_string { const char *str; long n; };
-extern void StartCloakClient(struct go_string localHost, struct go_string localPort, struct go_string config, bool udp);
-extern void StopCloakClient();
-extern void SetGeoRoutingConf(struct go_string cidrs);
-extern void ClearGeoRoutingConf();
-extern int CheckServerAlive(struct go_string address, int port);
-extern void InitLogger(struct go_string path);
-extern char *GetLastError();
-extern void NewOutlineClient(struct go_string config, int fd);
-extern int OutlineConnect();
-extern void OutlineDisconnect();
-extern int AwgTurnOn(struct go_string ifname, int tun_fd, struct go_string settings);
-extern void AwgTurnOff();
-extern int AwgGetSocketV4();
-extern int AwgGetSocketV6();
+
+typedef unsigned char GoUint8;
+typedef int GoInt32;
+
+typedef struct { const char *p; ptrdiff_t n; } _GoString_;
+extern size_t _GoStringLen(_GoString_ s);
+extern const char *_GoStringPtr(_GoString_ s);
+typedef _GoString_ GoString;
+
+extern GoInt32 AwgTurnOn(GoString interfaceName, GoInt32 tunFd, GoString settings);
+extern void AwgTurnOff(void);
+extern GoInt32 AwgGetSocketV4(void);
+extern GoInt32 AwgGetSocketV6(void);
+extern void StartCloakClient(GoString localHost, GoString localPort, GoString config, GoUint8 udp);
+extern void StopCloakClient(void);
+extern void SetGeoRoutingConf(GoString cidrs);
+extern void ClearGeoRoutingConf(void);
+extern GoInt32 CheckServerAlive(GoString address, GoInt32 port);
+extern void InitLogger(GoString path);
+extern char* GetLastError(void);
+extern void NewOutlineClient(GoString config, GoInt32 fd);
+extern GoInt32 OutlineConnect(void);
+extern void OutlineDisconnect(void);
 
 #define EXPORT __attribute__((visibility("default")))
 
@@ -81,11 +90,11 @@ JNIEXPORT jint JNICALL Java_com_dobby_backend_AwgBackend_awgTurnOn(JNIEnv *env, 
 	size_t ifname_len = (*env)->GetStringUTFLength(env, ifname);
 	const char *settings_str = (*env)->GetStringUTFChars(env, settings, 0);
 	size_t settings_len = (*env)->GetStringUTFLength(env, settings);
-	int ret = AwgTurnOn((struct go_string){
-		.str = ifname_str,
+	int ret = AwgTurnOn((GoString) {
+		.p = ifname_str,
 		.n = ifname_len
-	}, tun_fd, (struct go_string){
-		.str = settings_str,
+	}, tun_fd, (GoString) {
+		.p = settings_str,
 		.n = settings_len
 	});
 	(*env)->ReleaseStringUTFChars(env, ifname, ifname_str);
@@ -110,22 +119,22 @@ JNIEXPORT jint JNICALL Java_com_dobby_backend_AwgBackend_awgGetSocketV6(JNIEnv *
 
 JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_startCloakClient(JNIEnv *env, jclass c, jstring jLocalHost, jstring jLocalPort, jstring jConfig, jboolean udp)
 {
-    const char *localHost_str = (*env)->GetStringUTFChars(env, jLocalHost, NULL);
+    const char *localHost_str = (*env)->GetStringUTFChars(env, jLocalHost, 0);
 	size_t localHost_len = (*env)->GetStringUTFLength(env, jLocalHost);
-    const char *localPort_str = (*env)->GetStringUTFChars(env, jLocalPort, NULL);
+    const char *localPort_str = (*env)->GetStringUTFChars(env, jLocalPort, 0);
 	size_t localPort_len = (*env)->GetStringUTFLength(env, jLocalPort);
-    const char *config_str = (*env)->GetStringUTFChars(env, jConfig, NULL);
+    const char *config_str = (*env)->GetStringUTFChars(env, jConfig, 0);
 	size_t config_len = (*env)->GetStringUTFLength(env, jConfig);
-    StartCloakClient((struct go_string){
-		.str = localHost_str,
+    StartCloakClient((GoString) {
+		.p = localHost_str,
 		.n = localHost_len
 	},
-	(struct go_string){
-		.str = localPort_str,
+	(GoString) {
+		.p = localPort_str,
 		.n = localPort_len
 	},
-	(struct go_string){
-		.str = config_str,
+	(GoString) {
+		.p = config_str,
 		.n = config_len
 	}, udp);
 
@@ -141,10 +150,10 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_stopCloakClient(JNIEnv *
 
 JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_setGeoRoutingConf(JNIEnv *env, jclass c, jstring jCidrs)
 {
-	const char *cidrs_str = (*env)->GetStringUTFChars(env, jCidrs, NULL);
+	const char *cidrs_str = (*env)->GetStringUTFChars(env, jCidrs, 0);
 	size_t cidrs_len = (*env)->GetStringUTFLength(env, jCidrs);
-    SetGeoRoutingConf((struct go_string){
-		.str = cidrs_str,
+    SetGeoRoutingConf((GoString) {
+		.p = cidrs_str,
 		.n = cidrs_len
 	});
 
@@ -158,10 +167,10 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_clearGeoRoutingConf(JNIE
 
 JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_checkServerAlive(JNIEnv *env, jclass c, jstring jAddress, jint jPort)
 {
-	const char *address_str = (*env)->GetStringUTFChars(env, jAddress, NULL);
+	const char *address_str = (*env)->GetStringUTFChars(env, jAddress, 0);
 	size_t address_len = (*env)->GetStringUTFLength(env, jAddress);
-    int result = CheckServerAlive((struct go_string){
-		.str = address_str,
+    int result = CheckServerAlive((GoString) {
+		.p = address_str,
 		.n = address_len
 	}, jPort);
 
@@ -171,10 +180,10 @@ JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_checkServerAlive(JNIEnv 
 
 JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_initLogger(JNIEnv *env, jclass c, jstring jPath)
 {
-    const char *path_str = (*env)->GetStringUTFChars(env, jPath, NULL);
+    const char *path_str = (*env)->GetStringUTFChars(env, jPath, 0);
 	size_t path_len = (*env)->GetStringUTFLength(env, jPath);
-    InitLogger((struct go_string){
-		.str = path_str,
+    InitLogger((GoString) {
+		.p = path_str,
 		.n = path_len
 	});
     (*env)->ReleaseStringUTFChars(env, jPath, path_str);
@@ -182,8 +191,8 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_initLogger(JNIEnv *env, 
 
 JNIEXPORT jstring JNICALL Java_com_dobby_backend_GoBackend_getLastError(JNIEnv *env, jclass c)
 {
-    char *result = GetLastError();
 	jstring ret;
+    char *result = GetLastError();
 	if (!result)
 		return NULL;
 	ret = (*env)->NewStringUTF(env, result);
@@ -193,10 +202,10 @@ JNIEXPORT jstring JNICALL Java_com_dobby_backend_GoBackend_getLastError(JNIEnv *
 
 JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_newOutlineClient(JNIEnv *env, jclass c, jstring jConfig, jint jFd)
 {
-    const char *config_str = (*env)->GetStringUTFChars(env, jConfig, NULL);
+    const char *config_str = (*env)->GetStringUTFChars(env, jConfig, 0);
 	size_t config_len = (*env)->GetStringUTFLength(env, jConfig);
-    NewOutlineClient((struct go_string){
-		.str = config_str,
+    NewOutlineClient((GoString) {
+		.p = config_str,
 		.n = config_len
 	}, jFd);
     (*env)->ReleaseStringUTFChars(env, jConfig, config_str);

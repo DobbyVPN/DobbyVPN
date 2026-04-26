@@ -6,11 +6,12 @@ import "C"
 import (
 	"go_module/healthcheck"
 	"go_module/log"
+	"strings"
 )
 
 //export CheckServerAlive
-func CheckServerAlive(address string, port int32) C.int {
-	res := healthcheck.CheckServerAlive(address, int(port))
+func CheckServerAlive(address string, port int32) int32 {
+	res := healthcheck.CheckServerAlive(strings.Clone(address), int(port))
 	log.Infof("[HC] Health check result: %v", res)
 	if res == nil {
 		return 0

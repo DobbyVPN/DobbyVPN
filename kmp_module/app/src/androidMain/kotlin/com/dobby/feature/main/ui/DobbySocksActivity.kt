@@ -33,7 +33,6 @@ class DobbySocksActivity : FragmentActivity() {
         initLocationProvider(this)
 
         initVpnPermissionLauncher()
-        initBasePermissions()
         lifecycleScope.launch {
             permissionEventsChannel.checkPermissionsEvents.collect {
                 checkVpnPermissionAndStart()
@@ -48,18 +47,6 @@ class DobbySocksActivity : FragmentActivity() {
                 App()
             }
         }
-    }
-
-    private fun initBasePermissions() {
-        ActivityCompat.requestPermissions(
-            this,
-            arrayOf(
-                Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                Manifest.permission.INTERNET,
-                Manifest.permission.ACCESS_NETWORK_STATE,
-            ),
-            1
-        )
     }
 
     override fun onResume() {

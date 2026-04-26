@@ -9,6 +9,7 @@ import (
 	"go_module/awg"
 	"go_module/log"
 	"go_module/tunnel/protected_dialer"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 )
@@ -37,7 +38,7 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 
 	log.Infof("Config length=%d", len(settings))
 
-	client, err := awg.NewAwgClient(interfaceName, settings, int(tunFd))
+	client, err := awg.NewAwgClient(strings.Clone(interfaceName), strings.Clone(settings), int(tunFd))
 	if err != nil {
 		log.Infof("Failed to create awg client: %v", err)
 		return -1

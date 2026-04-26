@@ -6,10 +6,11 @@ import (
 	"C"
 	"go_module/cloak"
 )
+import "strings"
 
 //export StartCloakClient
 func StartCloakClient(localHost string, localPort string, config string, udp bool) {
-	cloak.StartCloakClient(localHost, localPort, config, udp)
+	cloak.StartCloakClient(strings.Clone(localHost), strings.Clone(localPort), strings.Clone(config), udp)
 }
 
 //export StopCloakClient
