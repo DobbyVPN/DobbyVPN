@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,260 +18,170 @@ import (
 	"go_module/tunnel/protected_dialer"
 )
 
+const (
+	maxActiveTCPConns = 150
+	maxActiveUDPConns = 150
+	udpIdleTimeout    = 15 * time.Second
+)
+
 var (
 	mu        sync.Mutex
 	isRunning bool
-	statsStop chan struct{}
 )
-
-const (
-	maxActiveTCPConnections   = 256
-	maxActiveUDPAssociations  = 256
-	udpAssociationIdleTimeout = 10 * time.Second
-)
-
-type DobbyProxy struct {
-	vpn     proxy.Proxy
-	direct  proxy.Proxy
-	tcpSlot flowSlot
-	udpSlot flowSlot
-
-	activeTCP atomic.Int64
-	activeUDP atomic.Int64
-	peakTCP   atomic.Int64
-	peakUDP   atomic.Int64
-
-	tcpDialAttempt atomic.Uint64
-	tcpLimitErr    atomic.Uint64
-	udpDialAttempt atomic.Uint64
-	udpLimitErr    atomic.Uint64
-	udpIdleTimeout atomic.Uint64
-}
 
 type trackedConn struct {
 	net.Conn
-	route      string
-	dest       string
-	started    time.Time
-	release    func() int64
-	once       sync.Once
-	writeMu    sync.Mutex
-	lastWrite  time.Time
-	rttSamples []time.Duration
-}
-
-func (c *trackedConn) Write(b []byte) (int, error) {
-	c.writeMu.Lock()
-	c.lastWrite = time.Now()
-	c.writeMu.Unlock()
-	return c.Conn.Write(b)
-}
-
-func (c *trackedConn) Read(b []byte) (int, error) {
-	n, err := c.Conn.Read(b)
-	if n > 0 {
-		c.writeMu.Lock()
-		lw := c.lastWrite
-		c.writeMu.Unlock()
-		if !lw.IsZero() {
-			rtt := time.Since(lw)
-			c.writeMu.Lock()
-			c.lastWrite = time.Time{}
-			c.rttSamples = append(c.rttSamples, rtt)
-			c.writeMu.Unlock()
-		}
-	}
-	return n, err
+	counter *atomic.Int64
+	once    sync.Once
 }
 
 func (c *trackedConn) Close() error {
-	var err error
 	c.once.Do(func() {
-		active := c.release()
-		c.writeMu.Lock()
-		samples := c.rttSamples
-		c.writeMu.Unlock()
-		rttInfo := ""
-		if len(samples) > 0 {
-			var sum time.Duration
-			min, max := samples[0], samples[0]
-			for _, s := range samples {
-				sum += s
-				if s < min {
-					min = s
-				}
-				if s > max {
-					max = s
-				}
-			}
-			avg := sum / time.Duration(len(samples))
-			rttInfo = fmt.Sprintf(" rtt(app): samples=%d min=%s avg=%s max=%s", len(samples), min, avg, max)
+		active := c.counter.Add(-1)
+		if active%10 == 0 {
+			log.Infof("[Router] TCP closed: activeTCP=%d/%d", active, maxActiveTCPConns)
 		}
-		log.Infof("[Router] TCP closed route=%s dest=%s lifetime=%s activeTCP=%d%s", c.route, c.dest, time.Since(c.started), active, rttInfo)
-		err = c.Conn.Close()
 	})
-	return err
+	return c.Conn.Close()
 }
 
 type trackedPacketConn struct {
 	net.PacketConn
-	route   string
-	dest    string
-	started time.Time
-	release func() int64
-	once    sync.Once
+	counter      *atomic.Int64
+	once         sync.Once
+	lastActivity atomic.Int64
+	done         chan struct{}
+}
+
+func newTrackedPacketConn(conn net.PacketConn, counter *atomic.Int64) *trackedPacketConn {
+	c := &trackedPacketConn{
+		PacketConn: conn,
+		counter:    counter,
+		done:       make(chan struct{}),
+	}
+	c.lastActivity.Store(time.Now().UnixNano())
+	go func() {
+		ticker := time.NewTicker(udpIdleTimeout)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-c.done:
+				return
+			case <-ticker.C:
+				if time.Since(time.Unix(0, c.lastActivity.Load())) >= udpIdleTimeout {
+					if err := c.Close(); err != nil {
+						log.Errorf("failed to close connection: %v", err)
+					}
+					return
+				}
+			}
+		}
+	}()
+	return c
+}
+
+func (c *trackedPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, addr, err := c.PacketConn.ReadFrom(b)
+	if err == nil {
+		c.lastActivity.Store(time.Now().UnixNano())
+	}
+	return n, addr, err
+}
+
+func (c *trackedPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	c.lastActivity.Store(time.Now().UnixNano())
+	return c.PacketConn.WriteTo(b, addr)
 }
 
 func (c *trackedPacketConn) Close() error {
 	var err error
 	c.once.Do(func() {
-		active := c.release()
-		log.Infof("[Router] UDP closed route=%s dest=%s lifetime=%s activeUDP=%d", c.route, c.dest, time.Since(c.started), active)
+		close(c.done)
+		active := c.counter.Add(-1)
+		log.Infof("[Router] UDP closed (idle): activeUDP=%d/%d", active, maxActiveUDPConns)
 		err = c.PacketConn.Close()
 	})
 	return err
 }
 
-type idlePacketConn struct {
-	net.PacketConn
-	timeout       time.Duration
-	timer         *time.Timer
-	route         string
-	dest          string
-	onIdleTimeout func() uint64
-	mu            sync.Mutex
-	lastTouch     time.Time
-	closed        bool
-}
-
-func newIdlePacketConn(conn net.PacketConn, timeout time.Duration, route, dest string, onIdleTimeout func() uint64) *idlePacketConn {
-	c := &idlePacketConn{
-		PacketConn:    conn,
-		timeout:       timeout,
-		route:         route,
-		dest:          dest,
-		onIdleTimeout: onIdleTimeout,
-	}
-	c.timer = time.AfterFunc(timeout, c.closeAfterIdleTimeout)
-	return c
-}
-
-func (c *idlePacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
-	n, addr, err := c.PacketConn.ReadFrom(b)
-	if n > 0 {
-		c.touch()
-	}
-	return n, addr, err
-}
-
-func (c *idlePacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
-	n, err := c.PacketConn.WriteTo(b, addr)
-	if n > 0 {
-		c.touch()
-	}
-	return n, err
-}
-
-func (c *idlePacketConn) Close() error {
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return nil
-	}
-	c.closed = true
-	c.timer.Stop()
-	c.mu.Unlock()
-	return c.PacketConn.Close()
-}
-
-func (c *idlePacketConn) closeAfterIdleTimeout() {
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return
-	}
-	c.closed = true
-	c.mu.Unlock()
-
-	var count uint64
-	if c.onIdleTimeout != nil {
-		count = c.onIdleTimeout()
-	}
-	log.Infof("[Router] UDP idle timeout route=%s dest=%s timeout=%s count=%d", c.route, c.dest, c.timeout, count)
-	_ = c.PacketConn.Close()
-}
-
-func (c *idlePacketConn) touch() {
-	now := time.Now()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.closed && now.Sub(c.lastTouch) > time.Second {
-		c.lastTouch = now
-		c.timer.Reset(c.timeout)
-	}
+type DobbyProxy struct {
+	vpn       proxy.Proxy
+	direct    proxy.Proxy
+	activeTCP atomic.Int64
+	activeUDP atomic.Int64
 }
 
 func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
-	start := time.Now()
-	dest := metadata.DestinationAddress()
-	attempt := p.tcpDialAttempt.Add(1)
-	route, px := "VPN", p.vpn
-	if IsBypass(metadata) {
-		route, px = "DIRECT", p.direct
-	}
-	log.Infof("[Router] TCP dial attempt=%d route=%s dstIP=%s dest=%s proto=%s stats={%s}", attempt, route, metadata.DstIP, dest, metadata.Network, p.flowStats())
-	return p.dialTCPRoute(ctx, metadata, route, px, attempt, dest, start)
-}
+	// iOS 26 diagnostic: log connection attempt details
+	destAddr := metadata.DestinationAddress()
+	log.Infof("[Router] TCP dial attempt to %s proto=%s", destAddr, metadata.Network)
 
-func (p *DobbyProxy) dialTCPRoute(ctx context.Context, metadata *M.Metadata, route string, px proxy.Proxy, attempt uint64, dest string, start time.Time) (net.Conn, error) {
-	active, release, err := p.tcpSlot.reserve(&p.activeTCP)
+	if IsBypass(metadata) {
+		conn, err := p.direct.DialContext(ctx, metadata)
+		if err != nil {
+			log.Infof("[Router] BYPASS TCP dial error %s: %v", metadata.DestinationAddress(), err)
+			return nil, err
+		}
+		log.Infof("[DEBUG][Router] BYPASS TCP dial OK %s local=%s remote=%s", metadata.DestinationAddress(), conn.LocalAddr(), conn.RemoteAddr())
+		return conn, nil
+	}
+
+	// Increment first, then check — prevents TOCTOU race where multiple goroutines
+	// all pass the Load() check before any of them reaches Add(1).
+	active := p.activeTCP.Add(1)
+	if active > maxActiveTCPConns {
+		p.activeTCP.Add(-1)
+		log.Infof("[Router] TCP dropped (activeTCP=%d): %s", active-1, metadata.DestinationAddress())
+		return nil, fmt.Errorf("too many active TCP connections")
+	}
+
+	conn, err := p.vpn.DialContext(ctx, metadata)
 	if err != nil {
-		p.tcpLimitErr.Add(1)
-		log.Infof("[Router] %s TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
+		p.activeTCP.Add(-1)
+		// iOS 26: log more detail on proxy errors
+		log.Infof("[Router] PROXY TCP dial error %s: %v", metadata.DestinationAddress(), err)
 		return nil, err
 	}
-	conn, err := px.DialContext(ctx, metadata)
-	if err != nil {
-		release()
-		log.Infof("[Router] %s TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
-		return nil, err
+
+	if active%10 == 0 {
+		log.Infof("[Router] pool: activeTCP=%d/%d activeUDP=%d/%d", active, maxActiveTCPConns, p.activeUDP.Load(), maxActiveUDPConns)
 	}
-	updatePeakInt64(&p.peakTCP, active)
-	log.Infof("[Router] %s TCP dial OK attempt=%d dest=%s elapsed=%s local=%s remote=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), p.flowStats())
-	return &trackedConn{Conn: conn, release: release, route: route, dest: dest, started: time.Now()}, nil
+	return &trackedConn{Conn: conn, counter: &p.activeTCP}, nil
 }
 
 func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
-	start := time.Now()
-	dest := metadata.DestinationAddress()
-	attempt := p.udpDialAttempt.Add(1)
-	route, px := "VPN", proxy.Proxy(p.vpn)
 	if IsBypass(metadata) {
-		route, px = "DIRECT", p.direct
+		conn, err := p.direct.DialUDP(metadata)
+		if err != nil {
+			log.Infof("[Router] BYPASS UDP dial error %s: %v", metadata.DestinationAddress(), err)
+			return nil, err
+		}
+		log.Infof("[DEBUG][Router] BYPASS UDP dial OK %s local=%s", metadata.DestinationAddress(), conn.LocalAddr())
+		return conn, nil
 	}
-	log.Infof("[Router] UDP dial attempt=%d route=%s dstIP=%s dest=%s proto=%s stats={%s}", attempt, route, metadata.DstIP, dest, metadata.Network, p.flowStats())
-	return p.dialUDPRoute(metadata, route, px, attempt, dest, start)
-}
 
-func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.Proxy, attempt uint64, dest string, start time.Time) (net.PacketConn, error) {
-	active, release, err := p.udpSlot.reserve(&p.activeUDP)
+	// iOS 26 diagnostic: log UDP connection details
+	destAddr := metadata.DestinationAddress()
+	log.Infof("[Router] UDP dial attempt to %s proto=%s", destAddr, metadata.Network)
+
+	active := p.activeUDP.Add(1)
+	if active > maxActiveUDPConns {
+		p.activeUDP.Add(-1)
+		log.Infof("[Router] UDP dropped (activeUDP=%d): %s", active-1, metadata.DestinationAddress())
+		return nil, fmt.Errorf("too many active UDP connections")
+	}
+
+	conn, err := p.vpn.DialUDP(metadata)
 	if err != nil {
-		p.udpLimitErr.Add(1)
-		log.Infof("[Router] %s UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
+		p.activeUDP.Add(-1)
+		log.Infof("[Router] PROXY UDP dial error %s: %v", metadata.DestinationAddress(), err)
 		return nil, err
 	}
-	conn, err := px.DialUDP(metadata)
-	if err != nil {
-		release()
-		log.Infof("[Router] %s UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
-		return nil, err
+
+	if active%10 == 0 {
+		log.Infof("[Router] pool: activeTCP=%d/%d activeUDP=%d/%d", p.activeTCP.Load(), maxActiveTCPConns, active, maxActiveUDPConns)
 	}
-	updatePeakInt64(&p.peakUDP, active)
-	log.Infof("[Router] %s UDP dial OK attempt=%d dest=%s elapsed=%s local=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), p.flowStats())
-	tracked := &trackedPacketConn{PacketConn: conn, release: release, route: route, dest: dest, started: time.Now()}
-	return newIdlePacketConn(tracked, udpAssociationIdleTimeout, route, dest, func() uint64 {
-		return p.udpIdleTimeout.Add(1)
-	}), nil
+	return newTrackedPacketConn(conn, &p.activeUDP), nil
 }
 
 func (p *DobbyProxy) Addr() string {
@@ -281,6 +190,13 @@ func (p *DobbyProxy) Addr() string {
 
 func (p *DobbyProxy) Proto() proto.Proto {
 	return p.vpn.Proto()
+}
+
+func stopLocked() {
+	log.Infof("[Engine] stopping tun2socks engine")
+	platform_engine.EngineStop()
+	isRunning = false
+	log.Infof("[Engine] tun2socks engine stopped")
 }
 
 func StartEngine(cfg platform_engine.EngineConfig) error {
@@ -292,7 +208,8 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 		stopLocked()
 	}
 
-	log.Infof("[Engine] StartEngine config proxy=%s fd=%d uplinkIface=%s", cfg.ProxyAddr, cfg.FD, cfg.UplinkIface)
+	log.Infof("[Engine] StartEngine config proxy=%s fd=%d mtu=%d uplinkIface=%s", cfg.ProxyAddr, cfg.FD, cfg.MTU, cfg.UplinkIface)
+	log.Infof("[Engine] StartEngine: calling StartPlatformEngine")
 	err := platform_engine.StartPlatformEngine(cfg)
 	if err != nil {
 		log.Infof("[Engine] StartPlatformEngine failed: %v", err)
@@ -302,7 +219,7 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 
 	t := tunnel.T()
 	if t == nil {
-		log.Infof("[Engine] tunnel.T() is nil after engine start")
+		log.Infof("[Engine] tunnel.T() is nil after engine start — tun2socks did not initialise")
 		return fmt.Errorf("tunnel not initialized after engine start")
 	}
 
@@ -313,32 +230,20 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 		return fmt.Errorf("current dialer is not a proxy")
 	}
 	log.Infof("[Engine] vpn outbound proxy type=%T addr=%s", vpnOutbound, vpnOutbound.Addr())
-	log.Infof("[Engine] DobbyProxy limits tcp=%d udp=%d idleTimeout=%s", maxActiveTCPConnections, maxActiveUDPAssociations, udpAssociationIdleTimeout)
+
+	directOutbound := &protected_dialer.ProtectedDirectProxy{
+		Proxy: proxy.NewDirect(),
+	}
 
 	wrapper := &DobbyProxy{
-		vpn:     vpnOutbound,
-		direct:  &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect()},
-		tcpSlot: flowSlot{maxTotal: maxActiveTCPConnections},
-		udpSlot: flowSlot{maxTotal: maxActiveUDPAssociations},
+		vpn:    vpnOutbound,
+		direct: directOutbound,
 	}
 
 	t.SetDialer(wrapper)
-	log.Infof("[Engine] DobbyProxy installed")
-	statsStop = make(chan struct{})
-	go wrapper.logStatsLoop(statsStop)
+	log.Infof("[Engine] DobbyProxy installed (maxTCP=%d maxUDP=%d)", maxActiveTCPConns, maxActiveUDPConns)
 	isRunning = true
 	return nil
-}
-
-func stopLocked() {
-	log.Infof("[Engine] stopping tun2socks engine")
-	if statsStop != nil {
-		close(statsStop)
-		statsStop = nil
-	}
-	platform_engine.EngineStop()
-	isRunning = false
-	log.Infof("[Engine] tun2socks engine stopped")
 }
 
 func StopEngine() {
@@ -351,81 +256,4 @@ func StopEngine() {
 	}
 
 	stopLocked()
-}
-
-func (p *DobbyProxy) flowStats() string {
-	return fmt.Sprintf(
-		"activeTCP=%d peakTCP=%d activeUDP=%d peakUDP=%d tcpAttempt=%d udpAttempt=%d tcpLimitErr=%d udpLimitErr=%d udpIdleTimeout=%d limits=tcp:%d,udp:%d",
-		p.activeTCP.Load(),
-		p.peakTCP.Load(),
-		p.activeUDP.Load(),
-		p.peakUDP.Load(),
-		p.tcpDialAttempt.Load(),
-		p.udpDialAttempt.Load(),
-		p.tcpLimitErr.Load(),
-		p.udpLimitErr.Load(),
-		p.udpIdleTimeout.Load(),
-		maxActiveTCPConnections,
-		maxActiveUDPAssociations,
-	)
-}
-
-func (p *DobbyProxy) logStatsLoop(stop <-chan struct{}) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	log.Infof("[Router STATS] started interval=1s flow={%s} runtime={%s}", p.flowStats(), goRuntimeStats())
-	for {
-		select {
-		case <-ticker.C:
-			log.Infof("[Router STATS] flow={%s} runtime={%s}", p.flowStats(), goRuntimeStats())
-		case <-stop:
-			log.Infof("[Router STATS] stopped flow={%s} runtime={%s}", p.flowStats(), goRuntimeStats())
-			return
-		}
-	}
-}
-
-func goRuntimeStats() string {
-	var mem runtime.MemStats
-	runtime.ReadMemStats(&mem)
-
-	return fmt.Sprintf(
-		"goroutines=%d heapAllocMB=%.2f heapInuseMB=%.2f stackInuseMB=%.2f sysMB=%.2f nextGCMB=%.2f numGC=%d pauseTotalMs=%d gcCPUFraction=%.4f",
-		runtime.NumGoroutine(),
-		bytesToMiB(mem.HeapAlloc),
-		bytesToMiB(mem.HeapInuse),
-		bytesToMiB(mem.StackInuse),
-		bytesToMiB(mem.Sys),
-		bytesToMiB(mem.NextGC),
-		mem.NumGC,
-		mem.PauseTotalNs/uint64(time.Millisecond),
-		mem.GCCPUFraction,
-	)
-}
-
-func bytesToMiB(bytes uint64) float64 {
-	return float64(bytes) / 1024.0 / 1024.0
-}
-
-func updatePeakInt64(peak *atomic.Int64, current int64) {
-	for {
-		old := peak.Load()
-		if current <= old || peak.CompareAndSwap(old, current) {
-			return
-		}
-	}
-}
-
-type flowSlot struct {
-	maxTotal int64
-}
-
-func (s *flowSlot) reserve(active *atomic.Int64) (cur int64, release func() int64, err error) {
-	cur = active.Add(1)
-	if cur > s.maxTotal {
-		active.Add(-1)
-		return cur - 1, nil, fmt.Errorf("flow limit reached active=%d max=%d", cur-1, s.maxTotal)
-	}
-	return cur, func() int64 { return active.Add(-1) }, nil
 }
