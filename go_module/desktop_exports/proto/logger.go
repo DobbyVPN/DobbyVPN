@@ -11,6 +11,6 @@ import (
 
 func (c *Server) InitLogger(_ context.Context, in *grpcproto.InitLoggerRequest) (*grpcproto.Empty, error) {
 	log.Infof("InitLogger")
-	go api.InitLogger(in.Path)
+	api.InitLogger(in.Path)
 	return &grpcproto.Empty{}, nil
 }

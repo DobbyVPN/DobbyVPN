@@ -35,6 +35,11 @@ func setVpnLastError(err string) {
 
 //export StartVpn
 func StartVpn(config, protocol string) int32 {
+	if !log.IsInitialized() {
+		log.Errorf("Logger is not initialized")
+		setVpnLastError("Logger is not initialized. Call InitLogger first.")
+		return -1
+	}
 	log.Infof("StartVpn")
 	setVpnLastError("")
 
