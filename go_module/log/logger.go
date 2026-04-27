@@ -272,8 +272,6 @@ func Info(category, message string, arguments map[string]any) {
 	_info(categoryMessage, arguments)
 	if lg.tlogger != nil {
 		otelLogger.InfoContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
-	} else {
-		// TODO
 	}
 }
 
@@ -282,8 +280,6 @@ func Debug(category, message string, arguments map[string]any) {
 	_debug(categoryMessage, arguments)
 	if lg.tlogger != nil {
 		otelLogger.DebugContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
-	} else {
-		// TODO
 	}
 }
 
@@ -292,8 +288,6 @@ func Warn(category, message string, arguments map[string]any) {
 	_warn(categoryMessage, arguments)
 	if lg.tlogger != nil {
 		otelLogger.WarnContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
-	} else {
-		// TODO
 	}
 }
 
@@ -302,8 +296,6 @@ func Error(category, message string, arguments map[string]any) {
 	_error(categoryMessage, arguments)
 	if lg.tlogger != nil {
 		otelLogger.ErrorContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
-	} else {
-		// TODO
 	}
 }
 
@@ -312,8 +304,6 @@ func Infof(category string, format string, args ...any) {
 	_info(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
 		otelLogger.InfoContext(lg.tlogger.ctx, categoryMessage)
-	} else {
-		// TODO
 	}
 }
 
@@ -322,8 +312,6 @@ func Debugf(category string, format string, args ...any) {
 	_debug(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
 		otelLogger.DebugContext(lg.tlogger.ctx, categoryMessage)
-	} else {
-		// TODO
 	}
 }
 
@@ -332,8 +320,6 @@ func Warnf(category string, format string, args ...any) {
 	_warn(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
 		otelLogger.WarnContext(lg.tlogger.ctx, categoryMessage)
-	} else {
-		// TODO
 	}
 }
 
@@ -342,8 +328,6 @@ func Errorf(category string, format string, args ...any) {
 	_error(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
 		otelLogger.ErrorContext(lg.tlogger.ctx, categoryMessage)
-	} else {
-		// TODO
 	}
 }
 
