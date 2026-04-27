@@ -32,7 +32,7 @@ func run(port int) error {
 
 	grpcproto.RegisterVpnServer(s, &proto.Server{})
 
-	log.Infof("server listening at %v", lis.Addr())
+	log.Infof(Category, "server listening at %v", lis.Addr())
 	if err := s.Serve(lis); err != nil {
 		return fmt.Errorf("failed to serve: %v", err)
 	}
@@ -45,6 +45,6 @@ func (c *Executor) Execute(port int, mode string) {
 	case "normal":
 		run(port)
 	default:
-		log.Infof("[ERROR] Invalid run mode")
+		log.Errorf(Category, "Invalid run mode")
 	}
 }

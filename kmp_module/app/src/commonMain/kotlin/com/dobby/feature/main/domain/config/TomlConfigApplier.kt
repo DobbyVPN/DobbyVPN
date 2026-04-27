@@ -30,6 +30,11 @@ class TomlConfigApplier(
         }
 
         val root = Toml.decodeFromString<TomlConfigs>(connectionConfig)
+
+        if (root.Telemetry != null) {
+            mainRepo.setTelemetryEndpoint(root.Telemetry)
+        }
+
         val outline = root.Outline
 
         if (outline == null) {

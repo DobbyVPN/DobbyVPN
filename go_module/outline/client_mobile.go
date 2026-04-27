@@ -10,10 +10,11 @@ import (
 	"go_module/outline/internal"
 	"go_module/tunnel"
 	"go_module/tunnel/platform_engine"
-	"golang.org/x/sys/unix"
 	"io"
 	"net"
 	"os"
+
+	"golang.org/x/sys/unix"
 )
 
 type OutlineClient struct {
@@ -27,7 +28,7 @@ func NewClient(transportConfig string, tun io.ReadWriteCloser) *OutlineClient {
 		config: transportConfig,
 		tun:    tun,
 	}
-	log.Infof("outline client created (tun2socks version)")
+	log.Infof(Category, "outline client created (tun2socks version)")
 	common.Client.SetVpnClient(outlineCommon.Name, c)
 	return c
 }
@@ -35,16 +36,16 @@ func NewClient(transportConfig string, tun io.ReadWriteCloser) *OutlineClient {
 func (c *OutlineClient) Connect() error {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Infof("RECOVERED from fail in Connect: %v", r)
+			log.Warnf(Category, "RECOVERED from fail in Connect: %v", r)
 		}
 	}()
 	od, err := internal.NewOutlineDevice(c.config)
 	if err != nil {
-		log.Infof("failed to create outline device: %v\n", err)
+		log.Errorf(Category, "failed to create outline device: %v\n", err)
 		return err
 	}
 
-	log.Infof("outline device (SOCKS5 bridge) created")
+	log.Debugf(Category, "outline device (SOCKS5 bridge) created")
 	c.device = od
 
 	var fd int
@@ -52,26 +53,26 @@ func (c *OutlineClient) Connect() error {
 		fd = int(f.Fd())
 		err := unix.SetNonblock(fd, true)
 		if err != nil {
-			log.Infof("Set unix.SetNonblock error: %v", err)
+			log.Warnf(Category, "Set unix.SetNonblock error: %v", err)
 		}
 	} else {
-		log.Infof("failed to get FD from tun: not an *os.File")
+		log.Errorf(Category, "failed to get FD from tun: not an *os.File")
 		return fmt.Errorf("invalid tun device type")
 	}
 
-	log.Infof("starting tun2socks engine with proxy %s", od.GetProxyAddr())
+	log.Debugf(Category, "starting tun2socks engine with proxy %s", od.GetProxyAddr())
 	err = tunnel.StartEngine(platform_engine.EngineConfig{
 		ProxyAddr:   od.GetProxyAddr(),
 		FD:          fd,
 		UplinkIface: "",
 	})
 	if err != nil {
-		log.Infof("Can't start tun2socks: %v", err)
+		log.Errorf(Category, "Can't start tun2socks: %v", err)
 		return err
 	}
 
 	common.Client.MarkActive(outlineCommon.Name)
-	log.Infof("outline client connected successfully via tun2socks")
+	log.Infof(Category, "outline client connected successfully via tun2socks")
 	return nil
 }
 
@@ -80,12 +81,12 @@ func (c *OutlineClient) Disconnect() error {
 
 	if c.device != nil {
 		if err := c.device.Close(); err != nil {
-			log.Infof("failed to close outline device: %v\n", err)
+			log.Warnf(Category, "failed to close outline device: %v\n", err)
 		}
 		c.device = nil
 	}
 
-	log.Infof("outline client disconnected")
+	log.Infof(Category, "outline client disconnected")
 	common.Client.MarkInactive(outlineCommon.Name)
 	return nil
 }

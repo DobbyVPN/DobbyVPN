@@ -16,6 +16,10 @@ interface DobbyConfigsRepository :
 
     fun setConnectionConfig(connectionConfig: String)
 
+    fun getTelemetryEndpoint(): String
+
+    fun setTelemetryEndpoint(endpoint: String)
+
     // endregion
 
     fun couldStart(): Boolean

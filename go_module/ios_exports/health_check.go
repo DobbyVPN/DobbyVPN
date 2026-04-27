@@ -18,7 +18,7 @@ func UrlTest(url string, standard int) (int32, error) {
 func CheckServerAlive(address string, port int) int32 {
 	defer guard("CheckServerAlive")()
 	res := healthcheck.CheckServerAlive(address, port)
-	log.Infof("Health check result: %v", res)
+	log.Debugf(Category, "Health check result: %v", res)
 	if res == nil {
 		return 0
 	}

@@ -11,7 +11,7 @@ import (
 func guard(fn string) func() {
 	return func() {
 		if r := recover(); r != nil {
-			log.Infof("[ios_exports] panic in %s: %v\n%s", fn, r, string(debug.Stack()))
+			log.Debugf(Category, "panic in %s: %v\n%s", fn, r, string(debug.Stack()))
 		}
 	}
 }

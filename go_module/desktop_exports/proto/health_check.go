@@ -10,14 +10,14 @@ import (
 )
 
 func (s *Server) CouldStart(_ context.Context, in *grpcproto.Empty) (*grpcproto.CouldStartResponce, error) {
-	log.Infof("CouldStart")
+	log.Debugf(Category, "CouldStart")
 	result := api.CouldStart()
-	log.Infof("CouldStart: %v", result)
+	log.Debugf(Category, "CouldStart: %v", result)
 	return &grpcproto.CouldStartResponce{Result: result}, nil
 }
 
 func (s *Server) CheckServerAlive(_ context.Context, in *grpcproto.CheckServerAliveRequest) (*grpcproto.CheckServerAliveResponce, error) {
-	log.Infof("CheckServerAlive")
+	log.Debugf(Category, "CheckServerAlive")
 	result := api.CheckServerAlive(in.GetAddress(), int(in.GetPort()))
 	return &grpcproto.CheckServerAliveResponce{Result: result}, nil
 }

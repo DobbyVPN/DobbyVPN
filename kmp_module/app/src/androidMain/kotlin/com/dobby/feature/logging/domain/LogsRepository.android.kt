@@ -20,3 +20,7 @@ actual fun provideLogFilePath(): Path {
 fun initLogger() {
     OutlineGo.initLogger(provideLogFilePath().toString())
 }
+
+fun initTelemetry(endpoint: String) {
+    OutlineGo.initTelemetry(endpoint)
+}

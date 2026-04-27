@@ -5,9 +5,10 @@ package protected_dialer
 import (
 	"syscall"
 
-	"github.com/jackpal/gateway"
 	"go_module/log"
 	"go_module/routing"
+
+	"github.com/jackpal/gateway"
 )
 
 var defaultInterfaceIndex int
@@ -33,7 +34,7 @@ func GetDefaultInterfaceIndex() (int, error) {
 
 func SetDefaultInterfaceIndex(idx int) {
 	defaultInterfaceIndex = idx
-	log.Infof("[Windows-Protect] ifindex=%d", idx)
+	log.Debugf(Category, "[Windows-Protect] ifindex=%d", idx)
 }
 
 type windowsProtector struct{}

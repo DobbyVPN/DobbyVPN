@@ -53,7 +53,7 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 	realNet := normalizeTCP(address)
 
 	if isLoopback(address) {
-		log.Infof("[Protect] TCP BYPASS loopback: %s", address)
+		log.Debugf(Category, "[Protect] TCP BYPASS loopback: %s", address)
 		var d net.Dialer
 		return d.DialContext(ctx, realNet, address)
 	}
@@ -70,7 +70,7 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 
 	conn, err := d.DialContext(ctx, realNet, address)
 	if err != nil {
-		log.Infof("[Protect] TCP dial error: %v", err)
+		log.Errorf(Category, "[Protect] TCP dial error: %v", err)
 		return nil, err
 	}
 
@@ -81,7 +81,7 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 	realNet := normalizeUDP(address)
 
 	if isLoopback(address) {
-		log.Infof("[Protect] UDP BYPASS loopback: %s", address)
+		log.Debugf(Category, "[Protect] UDP BYPASS loopback: %s", address)
 
 		lc := net.ListenConfig{}
 
