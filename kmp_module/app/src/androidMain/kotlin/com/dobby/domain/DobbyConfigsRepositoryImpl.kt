@@ -232,6 +232,18 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun getNetCheckConfig(): String {
+        return (prefs.getString("netCheckConfig", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "netCheckConfig, len(netCheckConfig) = ${it.length}")
+        }
+    }
+
+    override fun setNetCheckConfig(config: String) {
+        prefs.edit { putString("netCheckConfig", config) }.also {
+            AndroidLog("DOBBY_TAG", "netCheckConfig = ${config.take(10)}...")
+        }
+    }
+
     companion object {
         const val DEFAULT_AWG_CONFIG = """[Interface]
 PrivateKey = <...>

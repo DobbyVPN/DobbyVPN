@@ -21,6 +21,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let isUserInitStopKey = "isUserInitStopKey"
     private let geoRoutingConfKey = "geoRoutingConfKey"
     private let telemetryEndpointKey = "telemetryEndpointKey"
+    private let netCheckConfigKey = "netCheckConfigKey"
 
     public func getConnectionURL() -> String {
         return userDefaults.string(forKey: connectionURLKey) ?? ""
@@ -176,5 +177,13 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setGeoRoutingConf(geoRoutingConf: String) {
         userDefaults.set(geoRoutingConf, forKey: geoRoutingConfKey)
+    }
+
+    public func getNetCheckConfig() -> String {
+        return userDefaults.string(forKey: netCheckConfigKey) ?? ""
+    }
+
+    public func setNetCheckConfig(config: String) {
+        userDefaults.set(config, forKey: netCheckConfigKey)
     }
 }

@@ -4,7 +4,8 @@ interface DobbyConfigsRepository :
     DobbyConfigsRepositoryOutline,
     DobbyConfigsRepositoryCloak,
     DobbyConfigsRepositoryAwg,
-    DobbyConfigsRepositoryVpn {
+    DobbyConfigsRepositoryVpn,
+    DobbyConfigsRepositoryNetCheck {
 
     // region global configs
 

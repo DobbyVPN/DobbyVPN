@@ -3,6 +3,8 @@ package com.dobby.feature.netcheck.presentation
 import androidx.lifecycle.ViewModel
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.provideLogFilePath
+import com.dobby.feature.main.domain.DobbyConfigsRepository
+import com.dobby.feature.main.domain.DobbyConfigsRepositoryNetCheck
 import com.dobby.feature.main.domain.NetCheckTomlConfigs
 import com.dobby.feature.netcheck.domain.NetCheckRepository
 import com.dobby.feature.netcheck.ui.NetCheckStatus
@@ -16,6 +18,7 @@ import net.peanuuutz.tomlkt.Toml
 
 class NetCheckViewModel(
     private val logger: Logger,
+    private val configsRepository: DobbyConfigsRepository,
     private val netCheckManager: NetCheckManager,
     private val netCheckRepository: NetCheckRepository,
 ) : ViewModel() {
@@ -25,8 +28,8 @@ class NetCheckViewModel(
 
     init {
         _uiState.update {
-            NetCheckUiState(
-                tomlConfig = "",
+            it.copy(
+                tomlConfig = configsRepository.getNetCheckConfig(),
                 netCheckStatus = NetCheckStatus.OFF,
                 description = ""
             )
@@ -35,12 +38,13 @@ class NetCheckViewModel(
 
     fun update(tomlConfig: String) {
         _uiState.update {
-            NetCheckUiState(
+            it.copy(
                 tomlConfig = tomlConfig,
                 netCheckStatus = NetCheckStatus.OFF,
                 description = ""
             )
         }
+        configsRepository.setNetCheckConfig(tomlConfig)
     }
 
     fun onButtonClicked() {
@@ -51,13 +55,12 @@ class NetCheckViewModel(
     }
 
     private fun turnOn() {
-        logger.log("Got congih: length=${_uiState.value.tomlConfig.length}, parsing")
+        logger.log("Got congih: length=${configsRepository.getNetCheckConfig().length}, parsing")
         val tomlConfig = try {
-            Toml.decodeFromString<NetCheckTomlConfigs>(_uiState.value.tomlConfig)
+            Toml.decodeFromString<NetCheckTomlConfigs>(configsRepository.getNetCheckConfig())
         } catch (e: Exception) {
             _uiState.update {
-                NetCheckUiState(
-                    tomlConfig = it.tomlConfig,
+                it.copy(
                     netCheckStatus = NetCheckStatus.FAILED,
                     description = "Failed to parse TOML config: $e"
                 )
@@ -73,16 +76,14 @@ class NetCheckViewModel(
 
         if (error == "") {
             _uiState.update {
-                NetCheckUiState(
-                    tomlConfig = it.tomlConfig,
+                it.copy(
                     netCheckStatus = NetCheckStatus.ON,
                     description = ""
                 )
             }
         } else {
             _uiState.update {
-                NetCheckUiState(
-                    tomlConfig = it.tomlConfig,
+                it.copy(
                     netCheckStatus = NetCheckStatus.FAILED,
                     description = error
                 )
@@ -94,8 +95,7 @@ class NetCheckViewModel(
         netCheckManager.cancel()
 
         _uiState.update {
-            NetCheckUiState(
-                tomlConfig = it.tomlConfig,
+            it.copy(
                 netCheckStatus = NetCheckStatus.OFF,
                 description = ""
             )

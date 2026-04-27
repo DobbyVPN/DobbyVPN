@@ -161,6 +161,14 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("geoRoutingConf", geoRoutingConf)
     }
 
+    override fun getNetCheckConfig(): String {
+        return prefs.get("netCheckConfig", "")
+    }
+
+    override fun setNetCheckConfig(config: String) {
+        prefs.put("netCheckConfig", config)
+    }
+
     companion object {
         const val DEFAULT_AWG_CONFIG = """[Interface]
 PrivateKey = <...>
