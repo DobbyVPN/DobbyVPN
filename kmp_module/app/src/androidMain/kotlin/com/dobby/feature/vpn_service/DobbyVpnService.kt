@@ -70,9 +70,6 @@ class DobbyVpnService : VpnService() {
         super.onCreate()
         instance = this
         logger.log("[svc:$serviceId] onCreate()")
-        logger.log("Start go logger init with file = ${provideLogFilePath().toString()}")
-        initLogger()
-        logger.log("Finish go logger init")
 
         // Logs-only: track network transitions to correlate with crashes / restarts.
         runCatching {
@@ -126,6 +123,9 @@ class DobbyVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         logger.log("[svc:$serviceId] onStartCommand(startId=$startId flags=$flags intentFromUi=${intent?.getBooleanExtra(IS_FROM_UI, false)}) vpnInterface=${vpnInterface?.fd}")
         teardownVpn()
+        logger.log("Start go logger init with file = ${provideLogFilePath()}")
+        initLogger()
+        logger.log("Finish go logger init")
         if (dobbyConfigsRepository.getTelemetryEndpoint().isNotBlank()) {
             initTelemetry(dobbyConfigsRepository.getTelemetryEndpoint())
         }
