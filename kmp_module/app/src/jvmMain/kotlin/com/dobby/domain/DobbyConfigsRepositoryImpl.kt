@@ -5,7 +5,7 @@ import com.dobby.feature.main.domain.VpnInterface
 import interop.healthcheck.HealthCheckLibrary
 import java.util.prefs.Preferences
 
-internal class DobbyConfigsRepositoryImpl(
+class DobbyConfigsRepositoryImpl(
     private val prefs: Preferences = Preferences.userRoot(),
     private val healthCheckLibrary: HealthCheckLibrary,
 ) : DobbyConfigsRepository {

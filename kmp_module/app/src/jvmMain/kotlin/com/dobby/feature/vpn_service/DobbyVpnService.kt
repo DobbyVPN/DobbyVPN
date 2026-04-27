@@ -67,7 +67,7 @@ private fun buildOutlineUrl(
     }
 }
 
-internal class DobbyVpnService(
+class DobbyVpnService(
     private val dobbyConfigsRepository: DobbyConfigsRepository,
     private val logger: Logger,
     private val awgLibrary: AwgLibrary,

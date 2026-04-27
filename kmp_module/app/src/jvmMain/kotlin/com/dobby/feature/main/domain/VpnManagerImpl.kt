@@ -2,7 +2,7 @@ package com.dobby.feature.main.domain
 
 import com.dobby.feature.vpn_service.DobbyVpnService
 
-internal class VpnManagerImpl(
+class VpnManagerImpl(
     private val dobbyVpnService: DobbyVpnService,
 ) : VpnManager {
 
