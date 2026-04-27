@@ -46,30 +46,37 @@ const (
 func (a *TunnelData) Run() error {
 	var err error
 
-	log.Infof("[AWG] Running awg tunnel (darwin)")
+	log.Debugf(Category, "Running awg tunnel (darwin)")
 	a.errs = make(chan error, 1)
 
-	log.Infof("[AWG] DeduplicateNetworkEntries")
+	log.Debugf(Category, "DeduplicateNetworkEntries")
 	a.InterfaceConfig.DeduplicateNetworkEntries()
 
-	log.Infof("[AWG] Converting interface config to the UAPI config")
+	log.Debugf(Category, "Converting interface config to the UAPI config")
 	uapiConf, err := a.InterfaceConfig.ToUAPI()
 	if err != nil {
 		return fmt.Errorf("Failed to convert config to UAPI: %s", err)
 	}
-	log.Infof("[AWG] [UAPI] %s", uapiConf)
 
-	log.Infof("[AWG] Create awg TUN device")
+	log.Debugf(Category, "Create awg TUN device")
 	tdev, err := tun.CreateTUN(a.InterfaceName, device.DefaultMTU)
 	if err != nil {
 		return fmt.Errorf("Failed to create TUN device: %s", err)
 	}
 
-	log.Infof("[AWG] Creating interface instance")
+	log.Debugf(Category, "Creating interface instance")
 	bind := conn.NewDefaultBind()
-	a.dev = device.NewDevice(tdev, bind, &device.Logger{log.Infof, log.Infof})
+	logger := &device.Logger{
+		Verbosef: func(format string, args ...any) {
+			log.Debugf("TUN", format, args...)
+		},
+		Errorf: func(format string, args ...any) {
+			log.Debugf("TUN", format, args...)
+		},
+	}
+	a.dev = device.NewDevice(tdev, bind, logger)
 
-	log.Infof("[AWG] Setting interface configuration")
+	log.Debugf(Category, "Setting interface configuration")
 	fileUAPI, err := ipc.UAPIOpen(a.InterfaceName)
 	if err != nil {
 		return fmt.Errorf("Failed to open UAPI file: %s", err)
@@ -80,46 +87,48 @@ func (a *TunnelData) Run() error {
 	}
 	a.uapi = uapi
 
-	log.Infof("[AWG] Seting up UAPI config")
+	log.Debugf(Category, "Seting up UAPI config")
 	err = a.dev.IpcSet(uapiConf)
 	if err != nil {
 		return fmt.Errorf("IPC set error: %v", err)
 	}
 
-	log.Infof("[AWG] Bringing peers up")
+	log.Debugf(Category, "Bringing peers up")
 	err = a.dev.Up()
 	if err != nil {
 		return fmt.Errorf("Bringing peers up error: %v", err)
 	}
 
-	log.Infof("[AWG] Setting up linux subnet")
+	log.Debugf(Category, "Setting up linux subnet")
 
-	log.Infof("[AWG] Setting up %s interface", a.InterfaceName)
+	log.Debugf(Category, "Setting up %s interface", a.InterfaceName)
 	if err = a.setUpInterface(); err != nil {
 		return err
 	}
 
-	log.Infof("[AWG] Adding all addresses")
+	log.Debugf(Category, "Adding all addresses")
 	if err = a.addAddresses(); err != nil {
 		return err
 	}
 
-	log.Infof("[AWG] Adding all routes")
+	log.Debugf(Category, "Adding all routes")
 	if err = a.addRoutes(); err != nil {
 		return err
 	}
 
-	log.Infof("[AWG] IPC accept loop")
+	log.Debugf(Category, "IPC accept loop")
 	go a.ipcAcceptLoop()
 
-	log.Infof("[AWG] Tunnel loop")
+	log.Debugf(Category, "Tunnel loop")
 	go a.tunnelLoop()
+
+	log.Infof(Category, "Device started")
 
 	return nil
 }
 
 func (a *TunnelData) Stop() {
-	log.Infof("[AWG] Shutting down")
+	log.Debugf(Category, "Shutting down")
 
 	if a.uapi != nil {
 		a.uapi.Close()
@@ -130,14 +139,14 @@ func (a *TunnelData) Stop() {
 }
 
 func (a *TunnelData) ipcAcceptLoop() {
-	log.Infof("[AWG] Running IPC accept loop")
+	log.Debugf(Category, "Running IPC accept loop")
 
 	for {
 		c, err := a.uapi.Accept()
 		if err != nil {
 			a.errs <- err
 
-			log.Infof("[AWG] [ERROR] Got IPC error, stopping IPC loop")
+			log.Debugf(Category, "[ERROR] Got IPC error, stopping IPC loop")
 			return
 		}
 		go a.dev.IpcHandle(c)
@@ -145,22 +154,22 @@ func (a *TunnelData) ipcAcceptLoop() {
 }
 
 func (a *TunnelData) tunnelLoop() {
-	log.Infof("[AWG] Running tunnel loop")
+	log.Debugf(Category, "Running tunnel loop")
 
 	defer a.Stop()
 
 	select {
 	case err := <-a.errs:
-		log.Infof("[AWG] [ERROR] Got error, stopping tunnel loop: %s", err)
+		log.Errorf(Category, "Got error, stopping tunnel loop: %s", err)
 		return
 	case <-a.dev.Wait():
-		log.Infof("[AWG] [WARNING] Device wait call, stopping tunnel loop")
+		log.Warnf(Category, "Device wait call, stopping tunnel loop")
 		return
 	}
 }
 
 func (a *TunnelData) setUpInterface() error {
-	log.Infof("Setting up interface")
+	log.Debugf(Category, "Setting up interface")
 	cmd := exec.Command("ifconfig", a.InterfaceName, "up")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -180,7 +189,7 @@ func (a *TunnelData) addAddresses() error {
 }
 
 func (a *TunnelData) addAddress(address string) error {
-	log.Infof("Adding address %s", address)
+	log.Debugf(Category, "Adding address %s", address)
 	cmd := exec.Command("ifconfig", a.InterfaceName, "inet", address, "alias")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -202,7 +211,7 @@ func (a *TunnelData) addRoutes() error {
 }
 
 func (a *TunnelData) addRoute(address string) error {
-	log.Infof("Adding routing to %s", address)
+	log.Debugf(Category, "Adding routing to %s", address)
 
 	if strings.HasSuffix(address, "/0") {
 		cmd := exec.Command("route", "-q", "-n", "add", "-inet", "0.0.0.0/1", "-interface", a.InterfaceName)
