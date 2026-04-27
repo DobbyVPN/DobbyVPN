@@ -28,19 +28,19 @@ type DobbyProxy struct {
 
 func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (proxyConn net.Conn, err error) {
 	if IsBypass(metadata) {
-		log.Infof("[Router] Using DIRECT for %s", metadata.DstIP)
+// 		log.Infof("[Router] Using DIRECT for %s", metadata.DstIP)
 		return p.direct.DialContext(ctx, metadata)
 	}
-	log.Infof("[Router] Using VPN for %s", metadata.DstIP)
+// 	log.Infof("[Router] Using VPN for %s", metadata.DstIP)
 	return p.vpn.DialContext(ctx, metadata)
 }
 
 func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	if IsBypass(metadata) {
-		log.Infof("[Router] Using UDP DIRECT for %s", metadata.DstIP)
+// 		log.Infof("[Router] Using UDP DIRECT for %s", metadata.DstIP)
 		return p.direct.DialUDP(metadata)
 	}
-	log.Infof("[Router] Using UDP VPN for %s", metadata.DstIP)
+// 	log.Infof("[Router] Using UDP VPN for %s", metadata.DstIP)
 	return p.vpn.DialUDP(metadata)
 }
 
