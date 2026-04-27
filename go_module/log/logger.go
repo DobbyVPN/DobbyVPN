@@ -299,7 +299,7 @@ func Error(category, message string, arguments map[string]any) {
 	}
 }
 
-func Infof(category string, format string, args ...any) {
+func Infof(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_info(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
@@ -307,7 +307,7 @@ func Infof(category string, format string, args ...any) {
 	}
 }
 
-func Debugf(category string, format string, args ...any) {
+func Debugf(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_debug(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
@@ -315,7 +315,7 @@ func Debugf(category string, format string, args ...any) {
 	}
 }
 
-func Warnf(category string, format string, args ...any) {
+func Warnf(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_warn(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
@@ -323,7 +323,7 @@ func Warnf(category string, format string, args ...any) {
 	}
 }
 
-func Errorf(category string, format string, args ...any) {
+func Errorf(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_error(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
