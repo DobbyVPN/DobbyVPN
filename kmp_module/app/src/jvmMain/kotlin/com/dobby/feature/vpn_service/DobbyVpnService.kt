@@ -73,17 +73,37 @@ internal class DobbyVpnService(
     private val awgLibrary: AwgLibrary,
     private val outlineLibrary: OutlineLibrary,
     private val cloakLibrary: CloakLibrary,
+    private val loggerLibrary: LoggerLibrary,
     private val georoutingLibrary: GeoroutingLibrary,
     private val connectionState: ConnectionStateRepository
 ) {
     private val startStopLock = Any()
     private var runningInterface: VpnInterface? = null
 
+    fun enableTunnelLogging() {
+        val logFilePath = provideLogFilePath()
+        logger.log("Init tunnel logging to the path: $logFilePath")
+        loggerLibrary.InitLogger(logFilePath.toString())
+    }
+
+    fun enableTunnelTelemetry() {
+        val endpoint = dobbyConfigsRepository.getTelemetryEndpoint()
+        logger.log("Init tunnel telemetry to the endpoint: $endpoint")
+        if (endpoint.isNotBlank()) {
+            loggerLibrary.InitTelemetry(endpoint)
+        } else {
+            logger.log("No telemetry endpoint provided")
+        }
+    }
+
     fun startService() {
         synchronized(startStopLock) {
             if (runningInterface != null) {
                 stopCurrentLocked()
             }
+
+            enableTunnelLogging()
+            enableTunnelTelemetry()
 
             val iface = dobbyConfigsRepository.getVpnInterface()
             georoutingLibrary.SetGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())

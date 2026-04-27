@@ -272,8 +272,6 @@ func Info(category, message string, arguments map[string]any) {
 	_info(categoryMessage, arguments)
 	if lg.tlogger != nil {
 		otelLogger.InfoContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
-	} else {
-		// TODO
 	}
 }
 
@@ -282,8 +280,6 @@ func Debug(category, message string, arguments map[string]any) {
 	_debug(categoryMessage, arguments)
 	if lg.tlogger != nil {
 		otelLogger.DebugContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
-	} else {
-		// TODO
 	}
 }
 
@@ -292,8 +288,6 @@ func Warn(category, message string, arguments map[string]any) {
 	_warn(categoryMessage, arguments)
 	if lg.tlogger != nil {
 		otelLogger.WarnContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
-	} else {
-		// TODO
 	}
 }
 
@@ -302,48 +296,38 @@ func Error(category, message string, arguments map[string]any) {
 	_error(categoryMessage, arguments)
 	if lg.tlogger != nil {
 		otelLogger.ErrorContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
-	} else {
-		// TODO
 	}
 }
 
-func Infof(category string, format string, args ...any) {
+func Infof(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_info(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
 		otelLogger.InfoContext(lg.tlogger.ctx, categoryMessage)
-	} else {
-		// TODO
 	}
 }
 
-func Debugf(category string, format string, args ...any) {
+func Debugf(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_debug(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
 		otelLogger.DebugContext(lg.tlogger.ctx, categoryMessage)
-	} else {
-		// TODO
 	}
 }
 
-func Warnf(category string, format string, args ...any) {
+func Warnf(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_warn(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
 		otelLogger.WarnContext(lg.tlogger.ctx, categoryMessage)
-	} else {
-		// TODO
 	}
 }
 
-func Errorf(category string, format string, args ...any) {
+func Errorf(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_error(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
 		otelLogger.ErrorContext(lg.tlogger.ctx, categoryMessage)
-	} else {
-		// TODO
 	}
 }
 

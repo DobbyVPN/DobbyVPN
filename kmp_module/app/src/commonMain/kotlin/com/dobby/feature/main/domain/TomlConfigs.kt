@@ -54,10 +54,10 @@ data class ExcludeIPsConfig(
 
 @Serializable
 data class TomlConfigs(
+    val Telemetry: String? = null,
     val Description: String? = null,
     val Outline: OutlineConfig? = null,
-    val ExcludeIPs: ExcludeIPsConfig? = null,
-    val Telemetry: String? = null
+    val ExcludeIPs: ExcludeIPsConfig? = null
 )
 
 @Serializable

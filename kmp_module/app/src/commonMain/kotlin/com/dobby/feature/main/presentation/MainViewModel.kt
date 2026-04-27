@@ -12,7 +12,6 @@ import com.dobby.feature.main.domain.AwgManager
 import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
-import com.dobby.feature.main.domain.LoggerManager
 import com.dobby.feature.main.domain.clearOutlineAndCloakConfig
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.ui.MainUiState
@@ -35,7 +34,6 @@ class MainViewModel(
     private val permissionEventsChannel: PermissionEventsChannel,
     private val vpnManager: VpnManager,
     private val awgManager: AwgManager,
-    private val loggerManager: LoggerManager,
     private val logger: Logger,
     healthCheck: HealthCheck,
 ) : ViewModel() {
@@ -92,9 +90,6 @@ class MainViewModel(
             permissionEventsChannel
                 .permissionsGrantedEvents
                 .collect { isPermissionGranted -> startVpn(isPermissionGranted) }
-        }
-        viewModelScope.launch {
-            loggerManager.initLogger()
         }
     }
 
@@ -187,11 +182,6 @@ class MainViewModel(
         if (!applied) {
             logger.log("Config not applied (invalid/unsupported) → will not start VPN/HC")
             return false
-        }
-
-        val endpoint = configsRepository.getTelemetryEndpoint()
-        if (endpoint.isNotBlank()) {
-            loggerManager.initTelemetry(endpoint)
         }
 
         updateServerTargetFromConfig()

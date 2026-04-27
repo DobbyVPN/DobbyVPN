@@ -2,7 +2,7 @@ package com.dobby.feature.netcheck.presentation
 
 import androidx.lifecycle.ViewModel
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.main.domain.LoggerManager
+import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.main.domain.NetCheckTomlConfigs
 import com.dobby.feature.netcheck.domain.NetCheckRepository
 import com.dobby.feature.netcheck.ui.NetCheckStatus
@@ -17,7 +17,6 @@ import net.peanuuutz.tomlkt.Toml
 class NetCheckViewModel(
     private val logger: Logger,
     private val netCheckManager: NetCheckManager,
-    private val loggerManager: LoggerManager,
     private val netCheckRepository: NetCheckRepository,
 ) : ViewModel() {
 
@@ -65,11 +64,6 @@ class NetCheckViewModel(
             }
 
             return
-        }
-
-        if (tomlConfig.Telemetry != null) {
-            logger.log("Found telemetry host: initializing telemetry")
-            loggerManager.initTelemetry(tomlConfig.Telemetry)
         }
 
         netCheckRepository.setConfig(tomlConfig.ConfigValue)

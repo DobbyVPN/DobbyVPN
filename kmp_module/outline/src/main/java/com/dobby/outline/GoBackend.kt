@@ -73,6 +73,9 @@ class OutlineGo {
         external fun clearGeoRoutingConf()
 
         @JvmStatic
+        external fun initTelemetry(endpoint: String)
+
+        @JvmStatic
         external fun netCheck(configPath: String): String?
 
         @JvmStatic
