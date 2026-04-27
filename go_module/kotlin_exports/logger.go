@@ -1,13 +1,16 @@
+//go:build android
+
 package main
 
 import "C"
 import (
 	"go_module/log"
+	"strings"
 )
 
 //export InitLogger
-func InitLogger(path *C.char) {
-	log.SetPath(C.GoString(path))
+func InitLogger(path string) {
+	log.SetPath(strings.Clone(path))
 }
 
 //export InitTelemetry

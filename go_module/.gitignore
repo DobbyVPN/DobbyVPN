@@ -1,9 +1,11 @@
 /modules/Cloak/internal/
 
+# Backend executables/libraries
 windows_grpcvpnserver.exe
 ubuntu_grpcvpnserver
 macos_grpcvpnserver
-liboutline.so
+libbackend.so
+libbackend.h
 MyLibrary.xcframework
 
 # NetCheck Geolite data

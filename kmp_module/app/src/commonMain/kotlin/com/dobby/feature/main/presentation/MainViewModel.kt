@@ -1,18 +1,15 @@
 package com.dobby.feature.main.presentation
 
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dobby.feature.diagnostic.domain.HealthCheck
 import com.dobby.feature.diagnostic.domain.HealthCheckManager
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.maskStr
-import com.dobby.feature.main.domain.AwgManager
 import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
-import com.dobby.feature.main.domain.clearOutlineAndCloakConfig
+import com.dobby.feature.main.domain.clearVpnConfig
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.ui.MainUiState
 import com.dobby.feature.main.domain.config.TomlConfigApplier
@@ -33,33 +30,21 @@ class MainViewModel(
     val connectionStateRepository: ConnectionStateRepository,
     private val permissionEventsChannel: PermissionEventsChannel,
     private val vpnManager: VpnManager,
-    private val awgManager: AwgManager,
     private val logger: Logger,
     healthCheck: HealthCheck,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
-    //endregion
 
     private val tomlConfigApplier = TomlConfigApplier(
         vpnRepo = configsRepository,
         outlineRepo = configsRepository,
         cloakRepo = configsRepository,
         mainRepo = configsRepository,
+        awgRepo = configsRepository,
         logger = logger
     )
 
-    //region AmneziaWG states
-    val awgVersion: String = awgManager.getAwgVersion()
-
-    var awgConfigState: MutableState<String> = mutableStateOf(configsRepository.getAwgConfig())
-        private set
-
-    var awgConnectionState: MutableState<AwgConnectionState> = mutableStateOf(
-        if (configsRepository.getIsAmneziaWGEnabled()) AwgConnectionState.ON else AwgConnectionState.OFF
-    )
-        private set
-    //endregion
     private val healthCheckManager: HealthCheckManager = HealthCheckManager(healthCheck, this, configsRepository, logger)
     private var serverAddress: String? = null
     private var serverPort: Int? = null
@@ -101,7 +86,6 @@ class MainViewModel(
         }
     }
 
-    //region Cloak functions
     fun onConnectionButtonClicked(
         connectionUrl: String
     ) {
@@ -175,7 +159,7 @@ class MainViewModel(
         val applied = runCatching { tomlConfigApplier.apply(connectionConfig) }
             .onFailure { e ->
                 logger.log("Error during parsing TOML: ${e.message}")
-                configsRepository.clearOutlineAndCloakConfig()
+                configsRepository.clearVpnConfig()
             }
             .getOrDefault(false)
 
@@ -242,7 +226,7 @@ class MainViewModel(
         logger.log("Stopping VPN service...")
         vpnManager.stop()
         if (!stoppedByHealthCheck) {
-            configsRepository.clearOutlineAndCloakConfig()
+            configsRepository.clearVpnConfig()
             connectionStateRepository.tryUpdateStatus(false)
         }
         logger.log("VPN service stopped successfully, state reset to disconnected")
@@ -282,5 +266,4 @@ class MainViewModel(
             host to port
         }
     }
-    //endregion
 }

@@ -133,6 +133,14 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("awgConfig", newConfig)
     }
 
+    override fun getAwgTomlConfig(): String {
+        return prefs.get("awgTomlConfig", "")
+    }
+
+    override fun setAwgTomlConfig(newConfig: String) {
+        prefs.put("awgTomlConfig", newConfig)
+    }
+
     override fun getIsAmneziaWGEnabled(): Boolean {
         return prefs.get("isAmneziaWGEnabled", "false").equals("true")
     }

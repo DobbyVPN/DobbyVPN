@@ -4,7 +4,6 @@ import android.content.SharedPreferences
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import android.util.Log.i as AndroidLog
-import com.dobby.outline.OutlineGo
 import androidx.core.content.edit
 
 internal class DobbyConfigsRepositoryImpl(
@@ -189,6 +188,18 @@ internal class DobbyConfigsRepositoryImpl(
     override fun setAwgConfig(newConfig: String) {
         prefs.edit().putString("awgConfig", newConfig).apply().also {
             AndroidLog("DOBBY_TAG", "setAwgConfig, size = ${newConfig.length}")
+        }
+    }
+
+    override fun getAwgTomlConfig(): String {
+        return (prefs.getString("awgTomlConfig", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getAwgTomlConfig, size = ${it.length}")
+        }
+    }
+
+    override fun setAwgTomlConfig(newConfig: String) {
+        prefs.edit().putString("awgTomlConfig", newConfig).apply().also {
+            AndroidLog("DOBBY_TAG", "setAwgTomlConfig, size = ${newConfig.length}")
         }
     }
 

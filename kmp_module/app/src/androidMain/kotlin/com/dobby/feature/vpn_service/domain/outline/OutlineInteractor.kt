@@ -1,4 +1,4 @@
-package com.dobby.feature.vpn_service.domain.outline;
+package com.dobby.feature.vpn_service.domain.outline
 
 import android.content.Intent
 import com.dobby.feature.logging.Logger
@@ -6,9 +6,7 @@ import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.IS_FROM_UI
 import com.dobby.feature.vpn_service.OutlineLibFacade
-import com.dobby.feature.vpn_service.domain.cloak.ConnectResult
-
-import java.util.Base64
+import java.util.*
 
 private fun extractHostFromHostPort(hostPortMaybeWithQuery: String): String {
     val hostPort = hostPortMaybeWithQuery.substringBefore("?").trim()
@@ -70,8 +68,9 @@ private fun buildOutlineUrl(
 class OutlineInteractor(
     private val logger: Logger,
     private val dobbyConfigsRepository: DobbyConfigsRepository,
-    private val outlineLibFacade: OutlineLibFacade
+    private val outlineLibFacade: OutlineLibFacade,
 ) {
+    private val interfaceFactory = OutlineVpnInterfaceFactory(logger)
 
     suspend fun startOutline(intent: Intent?, dobbyVpnService: DobbyVpnService?) {
         logger.log("[svc:${dobbyVpnService?.serviceId}] startCloakOutline(): lock acquired vpnInterface=${dobbyVpnService?.vpnInterface?.fd}")
@@ -114,11 +113,22 @@ class OutlineInteractor(
         logger.log("Outline URL built (prefix=${prefix.isNotEmpty()}, ws=$websocketEnabled, tcpPath=${tcpPath.isNotEmpty()}, udpPath=${udpPath.isNotEmpty()})")
         logger.log("Outline URL: $outlineUrl")
 
-        dobbyVpnService?.setupVpn()
+        dobbyVpnService?.run {
+            logger.log("[svc:$${serviceId}] setupVpn(): begin")
+            vpnInterface = runCatching {
+                interfaceFactory.create(context=this, vpnService=this).establish()
+            }.onFailure { e ->
+                logger.log("[svc:$${serviceId}] setupVpn(): establish FAILED: ${e.message}")
+            }.getOrNull()
+
+        }
 
         val dupPfd = dobbyVpnService?.vpnInterface?.dup()
         val tunFd = dupPfd?.detachFd() ?: -1
-        dobbyVpnService?.goTunFd = if (tunFd != -1) tunFd else null
+
+        dobbyVpnService?.run {
+            goTunFd = if (tunFd != -1) tunFd else null
+        }
 
         if (tunFd < 0) {
             logger.log("[svc:${dobbyVpnService?.serviceId}] startCloakOutline(): failed to create VPN interface")
