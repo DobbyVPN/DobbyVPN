@@ -9,7 +9,7 @@ import "fmt"
 
 //export NetCheck
 func NetCheck(configPath *C.char) *C.char {
-	log.Infof("NetCheck")
+	log.Infof(Category, "NetCheck")
 	err := netcheck.NetCheck(C.GoString(configPath))
 	if err != nil {
 		return C.CString(fmt.Sprintf("NetCheck error: %v", err))

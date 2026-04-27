@@ -39,7 +39,7 @@ val androidMainModule = makeNativeModule(
     awgManager = { AwgManagerImpl(androidContext()) },
     authenticationManager = { AuthenticationManagerImpl(androidContext())},
     healthCheck = { HealthCheckImpl(get()) },
-    netCheckManager = { NetCheckManagerImpl() },
+    netCheckManager = { NetCheckManagerImpl(get(), get()) },
     netCheckRepository = { NetCheckRepository() },
 )
 
