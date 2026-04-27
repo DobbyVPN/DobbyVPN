@@ -37,7 +37,16 @@ func setVpnLastError(err string) {
 }
 
 //export StartVpn
+<<<<<<< HEAD:go_module/desktop_exports/dobby_vpn.go
 func StartVpn(config *C.char, protocol *C.char) C.int {
+=======
+func StartVpn(config, protocol string) int32 {
+	if !log.IsInitialized() {
+		log.Errorf("Logger is not initialized")
+		setVpnLastError("Logger is not initialized. Call InitLogger first.")
+		return -1
+	}
+>>>>>>> c31f1510 (add error handling for desktop grpc):go_module/desktop_exports/api/protocols.go
 	log.Infof("StartVpn")
 	setVpnLastError("")
 	str_config := C.GoString(config)
