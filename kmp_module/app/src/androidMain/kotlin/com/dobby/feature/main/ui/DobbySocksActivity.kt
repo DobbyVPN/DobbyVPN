@@ -1,5 +1,6 @@
 package com.dobby.feature.main.ui
 
+import android.Manifest
 import android.content.Intent
 import android.net.VpnService
 import android.os.Bundle
@@ -8,6 +9,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
+import androidx.core.app.ActivityCompat
 import androidx.lifecycle.lifecycleScope
 import com.dobby.common.ui.theme.CkClientTheme
 import com.dobby.feature.authentication.domain.HideConfigsManager

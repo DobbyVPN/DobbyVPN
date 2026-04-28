@@ -1,15 +1,7 @@
 package com.dobby.feature.main.domain.config
 
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.main.domain.DobbyConfigsRepository
-import com.dobby.feature.main.domain.DobbyConfigsRepositoryCloak
-import com.dobby.feature.main.domain.DobbyConfigsRepositoryOutline
-import com.dobby.feature.main.domain.DobbyConfigsRepositoryXray
-import com.dobby.feature.main.domain.DobbyConfigsRepositoryVpn
-import com.dobby.feature.main.domain.TomlConfigs
-import com.dobby.feature.main.domain.clearCloakConfig
-import com.dobby.feature.main.domain.clearOutlineConfig
-import com.dobby.feature.main.domain.clearXrayConfig
+import com.dobby.feature.main.domain.*
 import net.peanuuutz.tomlkt.Toml
 import net.peanuuutz.tomlkt.decodeFromString
 
@@ -17,12 +9,14 @@ class TomlConfigApplier(
     private val vpnRepo: DobbyConfigsRepositoryVpn,
     private val outlineRepo: DobbyConfigsRepositoryOutline,
     private val cloakRepo: DobbyConfigsRepositoryCloak,
+    private val awgRepo: DobbyConfigsRepositoryAwg,
     private val xrayRepo: DobbyConfigsRepositoryXray,
     private val mainRepo: DobbyConfigsRepository,
     private val logger: Logger,
 ) {
     private val outlineApplier = OutlineTomlApplier(vpnRepo, outlineRepo, cloakRepo, logger)
     private val cloakApplier = CloakTomlApplier(cloakRepo, logger)
+    private val awgApplier = AmneziaWGTomlApplier(vpnRepo, awgRepo, logger)
     private val xrayApplier = XrayTomlApplier(xrayRepo, logger)
 
     fun apply(connectionConfig: String): Boolean {
@@ -43,29 +37,55 @@ class TomlConfigApplier(
         // 1. Check for Xray Config
         val xray = root.Xray
         if (xray != null) {
-            logger.log("Xray config detected")
-            // Ensure other configs are disabled
-            disableAll()
-
-            val xrayResult = xrayApplier.apply(xray)
-            logger.log("Finish parseToml() -> Xray applied: $xrayResult")
+            return applyXray(xray)
         }
 
         // 2. Check for Outline Config
         val outline = root.Outline
         if (outline != null) {
-            logger.log("Outline config detected")
-            // Ensure Xray is disabled
-            disableAll()
-
-            val outlineResult = outlineApplier.apply(outline) ?: run {
-                disableAll()
-                logger.log("Finish parseToml()")
-                return false
-            }
-            val (cloakEnabled, _) = outlineResult
-            cloakApplier.apply(outline, cloakEnabled)
+            return applyOutline(outline, root)
         }
+
+        // 3. Check for AWG Config
+        val awg = root.AmneziaWG
+        if (awg != null) {
+            return applyAmenziaWG(awg)
+        }
+
+        logger.log("Unsupported config")
+        return false
+    }
+
+    private fun applyNone(): Boolean {
+        logger.log("VPN config not detected, turning off")
+        mainRepo.clearVpnConfig()
+        logger.log("Finish parseToml()")
+
+        return false
+    }
+
+    private fun applyXray(config: XrayClientConfig): Boolean {
+        logger.log("Xray config detected")
+        xrayApplier.apply(config)
+        logger.log("Finish parseToml()")
+
+        return true
+    }
+
+    private fun applyOutline(
+        config: OutlineConfig,
+        root: TomlConfigs
+    ): Boolean {
+        logger.log("Outline config detected")
+
+        val outlineResult = outlineApplier.apply(config) ?: run {
+            outlineRepo.clearOutlineConfig()
+            cloakRepo.clearCloakConfig()
+            logger.log("Finish parseToml()")
+            return false
+        }
+        val (cloakEnabled, _) = outlineResult
+        cloakApplier.apply(config, cloakEnabled)
 
         val exclude = root.ExcludeIPs
 
@@ -81,9 +101,11 @@ class TomlConfigApplier(
         return true
     }
 
-    private fun disableAll() {
-        outlineRepo.clearOutlineConfig()
-        cloakRepo.clearCloakConfig()
-        xrayRepo.clearXrayConfig()
+    private fun applyAmenziaWG(config: AmneziaWGConfig): Boolean {
+        logger.log("AmneziaWG config detected")
+        awgApplier.apply(config)
+        logger.log("Finish parseToml()")
+
+        return true
     }
 }

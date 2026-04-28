@@ -2,7 +2,7 @@ package com.dobby.feature.vpn_service.domain.xray
 
 import android.util.Log
 import com.dobby.feature.vpn_service.XrayLibFacade
-import com.dobby.protocol.ProtocolGo
+import com.dobby.backend.GoBackendWrapper
 
 internal class XrayLibFacadeImpl : XrayLibFacade {
 
@@ -11,9 +11,9 @@ internal class XrayLibFacadeImpl : XrayLibFacade {
     override fun init(config: String, tunFd: Int): Boolean {
         Log.d(TAG, "init() called with config length=${config.length}, tunFd=$tunFd")
         try {
-            ProtocolGo.newVpnClient(config, "xray", tunFd)
+            GoBackendWrapper.newVpnClient(config, "xray", tunFd)
             Log.d(TAG, "Connecting Xray...")
-            val result = ProtocolGo.vpnConnect()
+            val result = GoBackendWrapper.vpnConnect()
             return if (result == 0) {
                 Log.d(TAG, "XrayConnect finished successfully")
                 true
@@ -30,7 +30,7 @@ internal class XrayLibFacadeImpl : XrayLibFacade {
     override fun disconnect() {
         Log.d(TAG, "disconnect() called")
         try {
-            ProtocolGo.vpnDisconnect()
+            GoBackendWrapper.vpnDisconnect()
             Log.d(TAG, "disconnect() finished")
         } catch (e: Exception) {
             Log.e(TAG, "Xray disconnect failed", e)

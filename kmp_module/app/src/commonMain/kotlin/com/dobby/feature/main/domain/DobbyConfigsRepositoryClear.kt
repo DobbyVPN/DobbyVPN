@@ -18,6 +18,7 @@ fun DobbyConfigsRepositoryCloak.clearCloakConfig() {
 fun DobbyConfigsRepositoryAwg.clearAwgConfig() {
     setIsAmneziaWGEnabled(false)
     setAwgConfig("")
+    setAwgTomlConfig("")
 }
 
 fun DobbyConfigsRepositoryXray.clearXrayConfig() {
@@ -25,7 +26,9 @@ fun DobbyConfigsRepositoryXray.clearXrayConfig() {
     setXrayConfig("")
 }
 
-fun DobbyConfigsRepository.clearAllConfigs() {
+
+fun DobbyConfigsRepository.clearVpnConfig() {
+    setVpnInterface(VpnInterface.NONE)
     clearOutlineConfig()
     clearCloakConfig()
     clearXrayConfig()

@@ -102,6 +102,7 @@ internal class DobbyVpnService(
                 VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
                 VpnInterface.AMNEZIA_WG -> startAwg()
                 VpnInterface.XRAY -> startXray()
+                VpnInterface.NONE -> startNone()
             }
             runningInterface = iface
         }
@@ -118,7 +119,8 @@ internal class DobbyVpnService(
             VpnInterface.CLOAK_OUTLINE -> stopCloakOutline()
             VpnInterface.AMNEZIA_WG -> stopAwg()
             VpnInterface.XRAY -> stopXray()
-            null -> return
+            VpnInterface.NONE -> stopNone()
+            null -> stopNone()
         }
         georoutingLibrary.ClearGeoRoutingConf()
         runningInterface = null
@@ -185,9 +187,13 @@ internal class DobbyVpnService(
         }
     }
 
+    private fun startNone() {
+        logger.log("[WARNING] There is no VPN, that can be started")
+    }
+
     private fun startAwg() {
         val apiKey = dobbyConfigsRepository.getAwgConfig()
-        logger.log("startAwg with key: $apiKey")
+        logger.log("startAwg")
         runBlocking { connectionState.updateVpnStarted(isStarted = true) }
         awgLibrary.StartAwg("awg0", apiKey)
     }
@@ -221,6 +227,10 @@ internal class DobbyVpnService(
         logger.log("stopXray")
         xrayLibrary.StopXray()
         runBlocking { connectionState.updateVpnStarted(isStarted = false) }
+    }
+
+    private fun stopNone() {
+        logger.log("[WARNING] There is no VPN, that should be stopped")
     }
 
 }

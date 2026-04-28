@@ -30,7 +30,7 @@ func (a *AwgClient) Refresh() error {
 }
 
 func NewAwgClient(config string) (*AwgClient, error) {
-	app, err := internal.NewApp(config)
+	app, err := internal.NewApp("awg0", config)
 	if err != nil {
 		return nil, err
 	}

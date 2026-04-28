@@ -10,12 +10,14 @@ require (
 	github.com/Jigsaw-Code/outline-sdk v0.0.20
 	github.com/Jigsaw-Code/outline-sdk/x v0.0.8
 	github.com/amnezia-vpn/amneziawg-go v0.2.16
+	github.com/amnezia-vpn/amneziawg-windows v0.1.8
 	github.com/cbeuw/Cloak v0.0.0-00010101000000-000000000000
 	github.com/cbeuw/connutil v0.0.0-20200411215123-966bfaa51ee3
 	github.com/gorilla/mux v1.8.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackpal/gateway v1.1.1
 	github.com/juju/ratelimit v1.0.2
+	github.com/lorenzosaino/go-sysctl v0.3.1
 	github.com/matsuridayo/libneko v0.0.0-20240702024904-1c47a3af7199
 	github.com/refraction-networking/utls v1.8.1
 	github.com/sirupsen/logrus v1.9.3
@@ -36,7 +38,7 @@ require (
 
 require (
 	github.com/ajg/form v1.5.1 // indirect
-	github.com/andybalholm/brotli v1.1.1 // indirect
+	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/cloudflare/circl v1.6.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgryski/go-metro v0.0.0-20200812162917-85c65e2d0165 // indirect
@@ -50,7 +52,7 @@ require (
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/schema v1.4.1 // indirect
-	github.com/klauspost/compress v1.17.11 // indirect
+	github.com/klauspost/compress v1.18.1 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
 	github.com/miekg/dns v1.1.68 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
@@ -74,7 +76,7 @@ require (
 	golang.org/x/mod v0.30.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/text v0.32.0 // indirect
+	golang.org/x/text v0.32.0
 	golang.org/x/time v0.12.0 // indirect
 	golang.org/x/tools v0.39.0 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb // indirect
@@ -83,4 +85,12 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gvisor.dev/gvisor v0.0.0-20250523182742-eede7a881b20 // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
+)
+
+require (
+	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c // indirect
+	golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678 // indirect
+	golang.org/x/lint v0.0.0-20210508222113-6edffad5e616 // indirect
+	golang.org/x/tools/go/expect v0.1.1-deprecated // indirect
+	honnef.co/go/tools v0.5.1 // indirect
 )

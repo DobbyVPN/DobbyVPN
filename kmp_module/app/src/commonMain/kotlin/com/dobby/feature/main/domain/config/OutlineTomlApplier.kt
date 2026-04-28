@@ -24,8 +24,9 @@ internal class OutlineTomlApplier(
 
     fun apply(outline: OutlineConfig): Pair<Boolean, Boolean>? {
         logger.log("Detected [Outline] config, applying Outline parameters")
-        outlineRepo.setIsOutlineEnabled(true)
+
         vpnRepo.setVpnInterface(VpnInterface.CLOAK_OUTLINE)
+        outlineRepo.setIsOutlineEnabled(true)
 
         val method = outline.Method?.trim().orEmpty().ifEmpty { DEFAULT_METHOD }
         val password = outline.Password?.trim().orEmpty()

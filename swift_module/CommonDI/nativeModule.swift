@@ -38,9 +38,6 @@ public class NativeModuleHolder {
         vpnManager: { _ in
             return VpnManagerImpl(connectionRepository: connectionStateRepository)
         },
-        awgManager: { _ in
-            return AwgManagerImpl()
-        },
         authenticationManager: { _ in
             return AuthenticationManagerImpl()
         },

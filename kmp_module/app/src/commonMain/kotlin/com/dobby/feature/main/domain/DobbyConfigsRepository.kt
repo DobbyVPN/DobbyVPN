@@ -33,7 +33,8 @@ interface DobbyConfigsRepository :
 enum class VpnInterface {
     CLOAK_OUTLINE,
     AMNEZIA_WG,
-    XRAY;
+    XRAY,
+    NONE;
 
     companion object {
         val DEFAULT_VALUE = CLOAK_OUTLINE

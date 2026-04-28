@@ -1,3 +1,5 @@
+//go:build android
+
 package main
 
 /*
@@ -9,7 +11,6 @@ import "C"
 import (
 	"os"
 	"runtime/debug"
-	"strings"
 	"sync"
 
 	"go_module/core"
@@ -74,39 +75,35 @@ func unsafeToString(v any) string {
 // ==========================================
 
 //export NewVpnClient
-func NewVpnClient(config *C.char, protocol *C.char, fd C.int) {
+func NewVpnClient(config string, protocol string, fd int32) {
 	defer guardExport("NewVpnClient")()
 	log.Infof("NewVpnClient() called")
 
 	// Ensure any zombie connection is completely cleaned up
 	VpnDisconnect()
 
-	goConfig := C.GoString(config)
-	goProtocol := strings.ToLower(C.GoString(protocol))
-	goFD := int(fd)
+	log.Infof("Config length=%d, protocol=%s", config, protocol)
 
-	log.Infof("Config length=%d, protocol=%s", len(goConfig), goProtocol)
-
-	tunFile := os.NewFile(uintptr(goFD), "tun")
+	tunFile := os.NewFile(uintptr(fd), "tun")
 
 	var device pkg.ProtocolDevice
 	var err error
 
 	// Factory: Create the protocol-specific device
-	switch goProtocol {
+	switch protocol {
 	case "xray":
-		device, err = xray.NewXrayDevice(goConfig)
+		device, err = xray.NewXrayDevice(config)
 	case "outline":
-		device, err = outline.NewOutlineDevice(goConfig)
+		device, err = outline.NewOutlineDevice(config)
 	default:
-		setLastError("unsupported protocol: " + goProtocol)
+		setLastError("unsupported protocol: " + protocol)
 		log.Infof("NewVpnClient() failed: unsupported protocol")
 		return
 	}
 
 	if err != nil {
 		setLastError(err.Error())
-		log.Infof("NewVpnClient() failed to create %s device: %v", goProtocol, err)
+		log.Infof("NewVpnClient() failed to create %s device: %v", protocol, err)
 		return
 	}
 
@@ -117,7 +114,7 @@ func NewVpnClient(config *C.char, protocol *C.char, fd C.int) {
 }
 
 //export VpnConnect
-func VpnConnect() C.int {
+func VpnConnect() int32 {
 	defer guardExport("VpnConnect")()
 	log.Infof("VpnConnect() called")
 
@@ -152,8 +149,6 @@ func VpnDisconnect() {
 
 	_ = vpnClient.Disconnect()
 
-	// FIX: Annihilate the client pointer to prevent Xray zombie processes
 	vpnClient = nil
-
 	log.Infof("VpnDisconnect() finished")
 }
