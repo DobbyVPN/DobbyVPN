@@ -76,7 +76,7 @@ func NewOutlineClient(config string, fd int32) {
 	tunFile := os.NewFile(uintptr(goFD), "tun")
 
 	client = outline.NewClient(goConfig, tunFile)
-	log.Infof("outline client created (tun2socks version)")
+	log.Infof(Category, "outline client created (tun2socks version)")
 
 	common.Client.SetVpnClient(outlineCommon.Name, client)
 

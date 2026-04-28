@@ -1,10 +1,10 @@
 package com.dobby.feature.main.domain
 
+import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.netcheck.domain.provideNetCheckConfigPath
 import com.dobby.feature.netcheck.presentation.NetCheckManager
-import com.dobby.outline.OutlineGo
 
 class NetCheckManagerImpl(
     private val logger: Logger,
@@ -13,14 +13,14 @@ class NetCheckManagerImpl(
     fun enableTunnelLogging() {
         val logFilePath = provideLogFilePath()
         logger.log("Init tunnel logging to the path: $logFilePath")
-        OutlineGo.initLogger(logFilePath.toString())
+        GoBackendWrapper.initLogger(logFilePath.toString())
     }
 
     fun enableTunnelTelemetry() {
         val endpoint = configsRepository.getTelemetryEndpoint()
         logger.log("Init tunnel telemetry to the endpoint: $endpoint")
         if (endpoint.isNotBlank()) {
-            OutlineGo.initTelemetry(endpoint)
+            GoBackendWrapper.initTelemetry(endpoint)
         } else {
             logger.log("No telemetry endpoint provided")
         }
@@ -29,10 +29,10 @@ class NetCheckManagerImpl(
     override fun start(configPath: String): String {
         enableTunnelLogging()
         enableTunnelTelemetry()
-        return OutlineGo.netCheck(provideNetCheckConfigPath().toString()) ?: ""
+        return GoBackendWrapper.netCheck(provideNetCheckConfigPath().toString()) ?: ""
     }
 
     override fun cancel() {
-        OutlineGo.cancelNetCheck()
+        GoBackendWrapper.cancelNetCheck()
     }
 }

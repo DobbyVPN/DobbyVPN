@@ -27,6 +27,10 @@ class GoBackend {
 
     external fun registerVpnService(service: VpnService): Unit
 
+    external fun netCheck(configPath: String): String?
+
+    external fun cancelNetCheck(): Unit
+
     companion object {
         init {
             System.loadLibrary("backend")

@@ -32,6 +32,7 @@ extern const char *_GoStringPtr(_GoString_ s);
 
 
 
+
 /* End of preamble from import "C" comments.  */
 
 
@@ -101,6 +102,9 @@ extern void SetGeoRoutingConf(GoString cidrs);
 extern void ClearGeoRoutingConf(void);
 extern GoInt32 CheckServerAlive(GoString address, GoInt32 port);
 extern void InitLogger(GoString path);
+extern void InitTelemetry(GoString endpoint);
+extern char* NetCheck(GoString configPath);
+extern void CancelNetCheck(void);
 extern char* GetLastError(void);
 extern void NewOutlineClient(GoString config, GoInt32 fd);
 extern GoInt32 OutlineConnect(void);

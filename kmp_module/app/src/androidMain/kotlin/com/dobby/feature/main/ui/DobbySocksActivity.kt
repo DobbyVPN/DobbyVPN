@@ -10,7 +10,6 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.core.app.ActivityCompat
 import androidx.fragment.app.FragmentActivity
-import androidx.core.app.ActivityCompat
 import androidx.lifecycle.lifecycleScope
 import com.dobby.common.ui.theme.CkClientTheme
 import com.dobby.feature.authentication.domain.HideConfigsManager

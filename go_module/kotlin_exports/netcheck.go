@@ -1,16 +1,15 @@
 package main
 
+import "C"
 import (
-	"C"
-	"go_module/log"
+	"fmt"
 	"go_module/netcheck"
+	"strings"
 )
-import "fmt"
 
 //export NetCheck
-func NetCheck(configPath *C.char) *C.char {
-	log.Infof(Category, "NetCheck")
-	err := netcheck.NetCheck(C.GoString(configPath))
+func NetCheck(configPath string) *C.char {
+	err := netcheck.NetCheck(strings.Clone(configPath))
 	if err != nil {
 		return C.CString(fmt.Sprintf("NetCheck error: %v", err))
 	} else {

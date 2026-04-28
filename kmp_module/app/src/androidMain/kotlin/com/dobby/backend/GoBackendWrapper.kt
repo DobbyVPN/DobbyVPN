@@ -26,4 +26,8 @@ object GoBackendWrapper {
     val outlineDisconnect = backend::outlineDisconnect
 
     val registerVpnService = backend::registerVpnService
+
+    val netCheck = backend::netCheck
+
+    val cancelNetCheck = backend::cancelNetCheck
 }

@@ -23,9 +23,13 @@ extern void SetGeoRoutingConf(GoString cidrs);
 extern void ClearGeoRoutingConf(void);
 extern GoInt32 CheckServerAlive(GoString address, GoInt32 port);
 extern void InitLogger(GoString path);
+extern void InitTelemetry(GoString endpoint);
+extern char* NetCheck(GoString configPath);
+extern void CancelNetCheck(void);
 extern char* GetLastError(void);
 extern void NewOutlineClient(GoString config, GoInt32 fd);
 extern GoInt32 OutlineConnect(void);
+extern void OutlineDisconnect(void);
 extern void OutlineDisconnect(void);
 
 #define EXPORT __attribute__((visibility("default")))
@@ -189,6 +193,17 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_initLogger(JNIEnv *env, 
     (*env)->ReleaseStringUTFChars(env, jPath, path_str);
 }
 
+JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_initTelemetry(JNIEnv *env, jclass c, jstring jEndpoint)
+{
+    const char *endpoint_str = (*env)->GetStringUTFChars(env, jEndpoint, 0);
+	size_t endpoint_len = (*env)->GetStringUTFLength(env, jEndpoint);
+    InitTelemetry((GoString) {
+		.p = endpoint_str,
+		.n = endpoint_len
+	});
+    (*env)->ReleaseStringUTFChars(env, jEndpoint, endpoint_str);
+}
+
 JNIEXPORT jstring JNICALL Java_com_dobby_backend_GoBackend_getLastError(JNIEnv *env, jclass c)
 {
 	jstring ret;
@@ -219,4 +234,27 @@ JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_outlineConnect(JNIEnv *e
 JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_outlineDisconnect(JNIEnv *env, jclass c)
 {
     OutlineDisconnect();
+}
+
+JNIEXPORT jstring JNICALL Java_com_dobby_backend_GoBackend_netCheck(JNIEnv *env, jclass c, jstring jConfigPath)
+{
+	jstring ret;
+	const char *config_path_str = (*env)->GetStringUTFChars(env, jConfigPath, 0);
+	size_t config_path_len = (*env)->GetStringUTFLength(env, jConfigPath);
+    char *netCheckError = NetCheck((GoString) {
+		.p = config_path_str,
+		.n = config_path_len
+	});
+    (*env)->ReleaseStringUTFChars(env, jConfigPath, config_path_str);
+	if (!netCheckError)
+		return NULL;
+	ret = (*env)->NewStringUTF(env, netCheckError);
+	free(netCheckError);
+	return ret;
+
+}
+
+JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_cancelNetCheck(JNIEnv *env, jclass c)
+{
+    CancelNetCheck();
 }
