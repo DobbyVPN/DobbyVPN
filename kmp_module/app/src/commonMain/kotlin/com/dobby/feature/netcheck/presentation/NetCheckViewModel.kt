@@ -69,6 +69,9 @@ class NetCheckViewModel(
             return
         }
 
+        if (tomlConfig.Telemetry?.isNotBlank() == true) {
+            configsRepository.setTelemetryEndpoint(tomlConfig.Telemetry)
+        }
         netCheckRepository.setConfig(tomlConfig.ConfigValue)
 
         logger.log("Starting network check")
