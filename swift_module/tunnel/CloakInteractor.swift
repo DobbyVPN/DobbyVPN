@@ -48,7 +48,7 @@ public final class CloakInteractor {
         }
     }
 
-    func stopCloak() {
+    func stopCloak() throws {
         if cloakStarted {
             let start = Date()
             logs.writeLog(log: "stopCloak: stopping Cloak client")
@@ -57,6 +57,12 @@ public final class CloakInteractor {
             logs.writeLog(log: "stopCloak: Cloak client stopped elapsedMs=\(elapsedMs(since: start))")
         } else {
             logs.writeLog(log: "[DEBUG] stopCloak: skipped cloakStarted=false")
+        }
+
+        var err: NSError?
+        Cloak_outlineOutlineDisconnect(&err)
+        if let error = err {
+            throw error
         }
         cloakStarted = false
     }

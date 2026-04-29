@@ -143,6 +143,9 @@ func StopCloakClient() {
 
 	log.Infof("Client disconnected")
 
+	// Explicitly reclaim memory: the Cloak session, TLS connections, stream buffers,
+	// and sync.Pool entries would otherwise stay in the Go heap until the next GC cycle.
+	// On iOS Network Extensions (~50 MB limit) this matters a lot.
 	runtime.GC()
 	debug.FreeOSMemory()
 	log.Infof("StopCloakClient: memory released")
