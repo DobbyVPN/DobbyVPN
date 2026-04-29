@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
@@ -16,6 +17,11 @@ import (
 	"go_module/tunnel/protected_dialer"
 )
 
+const (
+	maxConcurrentVPNDials = 30
+	dialQueueTimeout      = 20 * time.Second
+)
+
 var (
 	mu        sync.Mutex
 	isRunning bool
@@ -24,23 +30,33 @@ var (
 type DobbyProxy struct {
 	vpn    proxy.Proxy
 	direct proxy.Proxy
+	tcpSem chan struct{}
 }
 
-func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (proxyConn net.Conn, err error) {
+func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
 	if IsBypass(metadata) {
-// 		log.Infof("[Router] Using DIRECT for %s", metadata.DstIP)
 		return p.direct.DialContext(ctx, metadata)
 	}
-// 	log.Infof("[Router] Using VPN for %s", metadata.DstIP)
+
+	timer := time.NewTimer(dialQueueTimeout)
+	defer timer.Stop()
+	select {
+	case p.tcpSem <- struct{}{}:
+		defer func() { <-p.tcpSem }()
+	case <-timer.C:
+		log.Infof("[Router] TCP dropped (queue full): %s", metadata.DestinationAddress())
+		return nil, fmt.Errorf("dial queue timeout for %s", metadata.DestinationAddress())
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
 	return p.vpn.DialContext(ctx, metadata)
 }
 
 func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	if IsBypass(metadata) {
-// 		log.Infof("[Router] Using UDP DIRECT for %s", metadata.DstIP)
 		return p.direct.DialUDP(metadata)
 	}
-// 	log.Infof("[Router] Using UDP VPN for %s", metadata.DstIP)
 	return p.vpn.DialUDP(metadata)
 }
 
@@ -84,6 +100,7 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 	wrapper := &DobbyProxy{
 		vpn:    vpnOutbound,
 		direct: directOutbound,
+		tcpSem: make(chan struct{}, maxConcurrentVPNDials),
 	}
 
 	t.SetDialer(wrapper)
