@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"time"
+	"sync/atomic"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	maxConcurrentVPNDials = 30
-	dialQueueTimeout      = 20 * time.Second
+	maxActiveTCPConns = 75
+	maxActiveUDPConns = 75
 )
 
 var (
@@ -27,10 +27,33 @@ var (
 	isRunning bool
 )
 
+type trackedConn struct {
+	net.Conn
+	counter *atomic.Int64
+	once    sync.Once
+}
+
+func (c *trackedConn) Close() error {
+	c.once.Do(func() { c.counter.Add(-1) })
+	return c.Conn.Close()
+}
+
+type trackedPacketConn struct {
+	net.PacketConn
+	counter *atomic.Int64
+	once    sync.Once
+}
+
+func (c *trackedPacketConn) Close() error {
+	c.once.Do(func() { c.counter.Add(-1) })
+	return c.PacketConn.Close()
+}
+
 type DobbyProxy struct {
-	vpn    proxy.Proxy
-	direct proxy.Proxy
-	tcpSem chan struct{}
+	vpn       proxy.Proxy
+	direct    proxy.Proxy
+	activeTCP atomic.Int64
+	activeUDP atomic.Int64
 }
 
 func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
@@ -38,26 +61,37 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 		return p.direct.DialContext(ctx, metadata)
 	}
 
-	timer := time.NewTimer(dialQueueTimeout)
-	defer timer.Stop()
-	select {
-	case p.tcpSem <- struct{}{}:
-		defer func() { <-p.tcpSem }()
-	case <-timer.C:
-		log.Infof("[Router] TCP dropped (queue full): %s", metadata.DestinationAddress())
-		return nil, fmt.Errorf("dial queue timeout for %s", metadata.DestinationAddress())
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	if active := p.activeTCP.Load(); active >= maxActiveTCPConns {
+		log.Infof("[Router] TCP dropped (activeTCP=%d): %s", active, metadata.DestinationAddress())
+		return nil, fmt.Errorf("too many active TCP connections")
 	}
 
-	return p.vpn.DialContext(ctx, metadata)
+	conn, err := p.vpn.DialContext(ctx, metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	p.activeTCP.Add(1)
+	return &trackedConn{Conn: conn, counter: &p.activeTCP}, nil
 }
 
 func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	if IsBypass(metadata) {
 		return p.direct.DialUDP(metadata)
 	}
-	return p.vpn.DialUDP(metadata)
+
+	if active := p.activeUDP.Load(); active >= maxActiveUDPConns {
+		log.Infof("[Router] UDP dropped (activeUDP=%d): %s", active, metadata.DestinationAddress())
+		return nil, fmt.Errorf("too many active UDP connections")
+	}
+
+	conn, err := p.vpn.DialUDP(metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	p.activeUDP.Add(1)
+	return &trackedPacketConn{PacketConn: conn, counter: &p.activeUDP}, nil
 }
 
 func (p *DobbyProxy) Addr() string {
@@ -100,7 +134,6 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 	wrapper := &DobbyProxy{
 		vpn:    vpnOutbound,
 		direct: directOutbound,
-		tcpSem: make(chan struct{}, maxConcurrentVPNDials),
 	}
 
 	t.SetDialer(wrapper)
