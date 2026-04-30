@@ -51,22 +51,20 @@ func parseIPCidr(s string) (*IPCidr, error) {
 		addr = maybeV4
 	}
 	if cidrStr != "" {
-		cidr, err := strconv.Atoi(cidrStr)
-		if err != nil || cidr < 0 || cidr > 128 {
+		cidr, err := strconv.ParseUint(cidrStr, 0, 8)
+		if err != nil {
 			return nil, err
-		}
-		if cidr > 32 && maybeV4 != nil {
+		} else if cidr > 128 {
+			return nil, fmt.Errorf("cidr > 128")
+		} else if cidr > 32 && maybeV4 != nil {
 			return nil, fmt.Errorf("invalid network prefix length")
 		}
 		return &IPCidr{addr, uint8(cidr)}, nil
 	} else {
-		var cidr uint8
 		if maybeV4 != nil {
-			cidr = 32
-		} else {
-			cidr = 128
+			return &IPCidr{addr, 32}, nil
 		}
-		return &IPCidr{addr, cidr}, nil
+		return &IPCidr{addr, 128}, nil
 	}
 }
 
@@ -75,30 +73,17 @@ func parseEndpoint(s string) (*Endpoint, error) {
 	if i < 0 {
 		return nil, fmt.Errorf("missing port from endpoint")
 	}
-	host, portStr := s[:i], s[i+1:]
-	if host == "" {
+	hostStr, portStr := s[:i], s[i+1:]
+	if hostStr == "" {
 		return nil, fmt.Errorf("invalid endpoint host")
 	}
 	port, err := parsePort(portStr)
 	if err != nil {
 		return nil, err
 	}
-	hostColon := strings.IndexByte(host, ':')
-	if host[0] == '[' || host[len(host)-1] == ']' || hostColon > 0 {
-		err := fmt.Errorf("brackets must contain an IPv6 address")
-		if len(host) > 3 && host[0] == '[' && host[len(host)-1] == ']' && hostColon > 0 {
-			end := len(host) - 1
-			if i := strings.LastIndexByte(host, '%'); i > 1 {
-				end = i
-			}
-			maybeV6 := net.ParseIP(host[1:end])
-			if maybeV6 == nil || len(maybeV6) != net.IPv6len {
-				return nil, err
-			}
-		} else {
-			return nil, err
-		}
-		host = host[1 : len(host)-1]
+	host, err := parseHost(hostStr)
+	if err != nil {
+		return nil, err
 	}
 	return &Endpoint{host, port}, nil
 }
@@ -125,6 +110,29 @@ func parsePort(s string) (uint16, error) {
 	return uint16(m), nil
 }
 
+func parseHost(host string) (string, error) {
+	hostColon := strings.IndexByte(host, ':')
+	if host[0] != '[' && host[len(host)-1] != ']' && hostColon <= 0 {
+		return host, nil
+	} else {
+		if len(host) > 3 && host[0] == '[' && host[len(host)-1] == ']' && hostColon > 0 {
+			end := len(host) - 1
+			if i := strings.LastIndexByte(host, '%'); i > 1 {
+				end = i
+			}
+			maybeV6 := net.ParseIP(host[1:end])
+			if maybeV6 == nil || len(maybeV6) != net.IPv6len {
+				return "", fmt.Errorf("brackets must contain an IPv6 address")
+			} else {
+				host = host[1 : len(host)-1]
+				return host, nil
+			}
+		} else {
+			return "", fmt.Errorf("brackets must contain an IPv6 address")
+		}
+	}
+}
+
 func parseUint16(value, name string) (uint16, error) {
 	m, err := strconv.Atoi(value)
 	if err != nil {
@@ -136,42 +144,51 @@ func parseUint16(value, name string) (uint16, error) {
 	return uint16(m), nil
 }
 
+func parseHStringSingle(name string, valueStr string) (HString, error) {
+	m, err := strconv.ParseInt(valueStr, 10, 64)
+	if err != nil {
+		return HString{}, err
+	}
+	if m < 0 || m > math.MaxUint32 {
+		return HString{}, fmt.Errorf("invalid %s", name)
+	}
+	return Either[uint32, Pair[uint32, uint32]]{
+		Left:   uint32(m),
+		IsLeft: true,
+	}, nil
+}
+
+func parseHStringRange(name, minRangeStr, maxRangeStr string) (HString, error) {
+	minRange, err := strconv.ParseInt(minRangeStr, 10, 64)
+	if err != nil {
+		return HString{}, err
+	}
+	maxRange, err := strconv.ParseInt(maxRangeStr, 10, 64)
+	if err != nil {
+		return HString{}, err
+	}
+	if minRange < 0 || maxRange > math.MaxUint32 || maxRange <= minRange {
+		return HString{}, fmt.Errorf("invalid %s", name)
+	}
+	return Either[uint32, Pair[uint32, uint32]]{
+		Right: Pair[uint32, uint32]{
+			First:  uint32(minRange),
+			Second: uint32(maxRange),
+		},
+		IsLeft: false,
+	}, nil
+}
+
 func parseHString(value, name string) (HString, error) {
 	splitResult := strings.Split(value, "-")
 
 	if len(splitResult) == 1 {
-		m, err := strconv.ParseInt(splitResult[0], 10, 64)
-		if err != nil {
-			return HString{}, err
-		}
-		if m < 0 || m > math.MaxUint32 {
-			return HString{}, fmt.Errorf("invalid %s", name)
-		}
-		return Either[uint32, Pair[uint32, uint32]]{
-			Left:   uint32(m),
-			IsLeft: true,
-		}, nil
+		return parseHStringSingle(name, splitResult[0])
 	} else if len(splitResult) == 2 {
-		minRange, err := strconv.ParseInt(splitResult[0], 10, 64)
-		if err != nil {
-			return HString{}, err
-		}
-		maxRange, err := strconv.ParseInt(splitResult[1], 10, 64)
-		if err != nil {
-			return HString{}, err
-		}
-		if minRange < 0 || maxRange > math.MaxUint32 || maxRange <= minRange {
-			return HString{}, fmt.Errorf("invalid %s", name)
-		}
-		return Either[uint32, Pair[uint32, uint32]]{
-			Right: Pair[uint32, uint32]{
-				First:  uint32(minRange),
-				Second: uint32(maxRange),
-			},
-			IsLeft: false,
-		}, nil
+		return parseHStringRange(name, splitResult[0], splitResult[1])
+	} else {
+		return HString{}, fmt.Errorf("invalid %s", name)
 	}
-	return HString{}, fmt.Errorf("invalid %s", name)
 }
 
 func parsePersistentKeepalive(s string) (uint16, error) {
