@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
@@ -16,32 +17,81 @@ import (
 	"go_module/tunnel/protected_dialer"
 )
 
+const (
+	maxActiveTCPConns = 70
+	maxActiveUDPConns = 70
+)
+
 var (
 	mu        sync.Mutex
 	isRunning bool
 )
 
-type DobbyProxy struct {
-	vpn    proxy.Proxy
-	direct proxy.Proxy
+type trackedConn struct {
+	net.Conn
+	counter *atomic.Int64
+	once    sync.Once
 }
 
-func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (proxyConn net.Conn, err error) {
+func (c *trackedConn) Close() error {
+	c.once.Do(func() { c.counter.Add(-1) })
+	return c.Conn.Close()
+}
+
+type trackedPacketConn struct {
+	net.PacketConn
+	counter *atomic.Int64
+	once    sync.Once
+}
+
+func (c *trackedPacketConn) Close() error {
+	c.once.Do(func() { c.counter.Add(-1) })
+	return c.PacketConn.Close()
+}
+
+type DobbyProxy struct {
+	vpn       proxy.Proxy
+	direct    proxy.Proxy
+	activeTCP atomic.Int64
+	activeUDP atomic.Int64
+}
+
+func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
 	if IsBypass(metadata) {
-		log.Infof("[Router] Using DIRECT for %s", metadata.DstIP)
 		return p.direct.DialContext(ctx, metadata)
 	}
-	log.Infof("[Router] Using VPN for %s", metadata.DstIP)
-	return p.vpn.DialContext(ctx, metadata)
+
+	if active := p.activeTCP.Load(); active >= maxActiveTCPConns {
+		log.Infof("[Router] TCP dropped (activeTCP=%d): %s", active, metadata.DestinationAddress())
+		return nil, fmt.Errorf("too many active TCP connections")
+	}
+
+	conn, err := p.vpn.DialContext(ctx, metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	p.activeTCP.Add(1)
+	return &trackedConn{Conn: conn, counter: &p.activeTCP}, nil
 }
 
 func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	if IsBypass(metadata) {
-		log.Infof("[Router] Using UDP DIRECT for %s", metadata.DstIP)
 		return p.direct.DialUDP(metadata)
 	}
-	log.Infof("[Router] Using UDP VPN for %s", metadata.DstIP)
-	return p.vpn.DialUDP(metadata)
+
+	if active := p.activeUDP.Load(); active >= maxActiveUDPConns {
+		log.Infof("[Router] UDP dropped (activeUDP=%d): %s", active, metadata.DestinationAddress())
+		return nil, fmt.Errorf("too many active UDP connections")
+	}
+
+	conn, err := p.vpn.DialUDP(metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	p.activeUDP.Add(1)
+	return &trackedPacketConn{PacketConn: conn, counter: &p.activeUDP}, nil
 }
 
 func (p *DobbyProxy) Addr() string {

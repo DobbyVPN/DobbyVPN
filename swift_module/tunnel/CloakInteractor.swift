@@ -39,14 +39,17 @@ public final class CloakInteractor {
         logs.writeLog(log: "startCloakOutline: started")
     }
 
-    func stopCloak() {
-        if !cloakStarted {
-            return
+    func stopCloak() throws {
+        if cloakStarted {
+            Cloak_outlineStopCloakClient()
+            cloakStarted = false
+            logs.writeLog(log: "stopCloak: CloakClient stopped")
         }
+
         var err: NSError?
-        Cloak_outlineVpnDisconnect(&err)
+        Cloak_outlineOutlineDisconnect(&err)
         if let error = err {
-            logs.writeLog(log: "Stop Cloak get error \(error)")
+            throw error
         }
         cloakStarted = false
     }
