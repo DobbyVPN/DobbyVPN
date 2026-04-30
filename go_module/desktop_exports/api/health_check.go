@@ -15,6 +15,10 @@ func GetConnectionState() int32 {
 	return int32(healthcheck.GetConnectionState())
 }
 
+func InitHealthCheck() {
+	healthcheck.InitHealthCheck()
+}
+
 func StartHealthCheck() {
 	healthcheck.StartHealthCheck()
 }

@@ -38,6 +38,7 @@ var (
 // Connection checks
 var (
 	connectionChecks []ConnectionCheck = []ConnectionCheck{
+		connectionCheck,
 		activeClientsCheck,
 		func() error {
 			return vpnInterfacesCheck([]string{"tun", "tap", "ppp", "ipsec", "wg", "awg", "tun0", "outline233"})
@@ -66,6 +67,7 @@ func GetConnectionState() ConnectionState {
 }
 
 func InitHealthCheck() {
+	log.Infof("[HC] Called InitHealthCheck")
 	// Telemetry initiation etc...
 }
 
@@ -89,10 +91,12 @@ func StopHealthCheck() {
 }
 
 func innerHealthCheck() {
+	switchState(Connecting)
 	for {
 		select {
 		case <-stopHealthCheckChannel:
 			log.Infof("[HC] Health check stopped")
+			switchState(Disconnected)
 			return
 		case <-time.After(delayTimeout):
 			healthCheckStep()
@@ -112,12 +116,6 @@ func switchState(newState ConnectionState) {
 
 func healthCheckStep() {
 	log.Infof("[HC] Health check step")
-
-	if err := connectionCheck(); err != nil {
-		log.Infof("[HC] Failed connection check")
-		switchState(Disconnected)
-		return
-	}
 
 	for _, check := range connectionChecks {
 		if err := check(); err != nil {

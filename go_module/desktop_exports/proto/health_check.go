@@ -35,6 +35,14 @@ func (s *Server) StartHealthCheck(_ context.Context, in *grpcproto.Empty) (*grpc
 	return &grpcproto.Empty{}, nil
 }
 
+func (s *Server) InitHealthCheck(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
+	log.Infof("[GRPC] InitHealthCheck")
+	api.InitHealthCheck()
+	log.Infof("[GRPC] InitHealthCheck completed")
+
+	return &grpcproto.Empty{}, nil
+}
+
 func (s *Server) StopHealthCheck(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
 	log.Infof("[GRPC] StopHealthCheck")
 	api.StopHealthCheck()

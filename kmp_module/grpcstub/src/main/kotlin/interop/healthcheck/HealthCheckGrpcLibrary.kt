@@ -33,6 +33,16 @@ open class HealthCheckGrpcLibrary(channel: ManagedChannel) : HealthCheckLibrary 
         }
     }
 
+    override fun InitHealthCheck() {
+        return runBlocking {
+            try {
+                stub.initHealthCheck(empty {})
+            } catch (e: StatusException) {
+                throw VpnServiceStatusException(e)
+            }
+        }
+    }
+
     override fun StartHealthCheck() {
         return runBlocking {
             try {

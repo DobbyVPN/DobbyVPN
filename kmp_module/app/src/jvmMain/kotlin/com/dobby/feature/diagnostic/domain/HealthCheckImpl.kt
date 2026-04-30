@@ -2,11 +2,6 @@ package com.dobby.feature.diagnostic.domain
 
 import com.dobby.feature.logging.Logger
 import interop.healthcheck.HealthCheckLibrary
-import java.net.*
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
-import kotlin.system.measureTimeMillis
 
 class HealthCheckImpl(
     private val logger: Logger,
@@ -22,6 +17,10 @@ class HealthCheckImpl(
                 VpnConnectionState.DISCONNECTED
             }
         }
+
+    override fun InitHealthCheck() {
+        healthCheckLibrary.InitHealthCheck()
+    }
 
     override fun StartHealthCheck() {
         healthCheckLibrary.StartHealthCheck()

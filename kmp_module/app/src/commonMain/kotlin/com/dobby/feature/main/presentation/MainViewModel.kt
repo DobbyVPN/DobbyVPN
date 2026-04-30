@@ -24,8 +24,12 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import com.dobby.vpn.BuildConfig
 import korlibs.time.seconds
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlin.concurrent.Volatile
+import kotlin.concurrent.atomics.AtomicBoolean
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
 val httpClient = HttpClient()
 
@@ -38,6 +42,8 @@ class MainViewModel(
     private val logger: Logger,
     private val healthCheck: HealthCheck,
 ) : ViewModel() {
+    @Volatile
+    var connectionDetectorAtomic: Boolean = true
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
     //endregion
@@ -70,14 +76,11 @@ class MainViewModel(
             )
         }
         viewModelScope.launch {
-            while (true) {
-                val connectionState = healthCheck.GetConnectionState()
-                logger.log("Update connection state: $connectionState")
-                val newState = _uiState.value.copy(connectionState = connectionState)
-                _uiState.emit(newState)
-                connectionStateRepository.updateStatus(connectionState)
-                delay(5.seconds.millisecondsLong)
-            }
+            val connectionState = healthCheck.GetConnectionState()
+            logger.log("Init connection state: $connectionState")
+            val newState = _uiState.value.copy(connectionState = connectionState)
+            _uiState.emit(newState)
+            connectionStateRepository.updateStatus(connectionState)
         }
         viewModelScope.launch {
             connectionStateRepository.vpnStartedFlow.collect { isStarted ->
@@ -219,18 +222,52 @@ class MainViewModel(
         }
     }
 
+    fun stopConnectionStateDetector() {
+        connectionDetectorAtomic = false
+    }
+
+    fun initConnectionStateDetector() {
+        connectionDetectorAtomic = true
+        viewModelScope.launch {
+            logger.log("Connection state detector: start")
+            while (connectionDetectorAtomic) {
+                val connectionState = healthCheck.GetConnectionState()
+                val newState = _uiState.value.copy(connectionState = connectionState)
+                _uiState.emit(newState)
+                connectionStateRepository.updateStatus(connectionState)
+                delay(150L)
+            }
+            logger.log("Connection state detector: awaiting disconnection")
+            while (true) {
+                val connectionState = healthCheck.GetConnectionState()
+                if (connectionState != VpnConnectionState.DISCONNECTED) {
+                    logger.log("Closing healthcheck...")
+                } else {
+                    val newState = _uiState.value.copy(connectionState = connectionState)
+                    _uiState.emit(newState)
+                    connectionStateRepository.updateStatus(connectionState)
+                    break
+                }
+                delay(150L)
+            }
+            logger.log("Connection state detector: finished")
+        }
+    }
+
     fun startVpnService() {
         logger.log("Starting VPN service...")
+        healthCheck.InitHealthCheck()
         vpnManager.start()
         healthCheck.StartHealthCheck()
+        initConnectionStateDetector()
     }
 
     fun stopVpnService() {
         logger.log("Stopping VPN service...")
-        healthCheck.StartHealthCheck()
         vpnManager.stop()
+        healthCheck.StopHealthCheck()
         configsRepository.clearOutlineAndCloakConfig()
-        connectionStateRepository.tryUpdateStatus(VpnConnectionState.DISCONNECTED)
+        stopConnectionStateDetector()
         logger.log("VPN service stopped successfully, state reset to disconnected")
     }
     //endregion

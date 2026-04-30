@@ -26,6 +26,7 @@ const (
 	Vpn_StopOutline_FullMethodName         = "/grpcproto.Vpn/StopOutline"
 	Vpn_CouldStart_FullMethodName          = "/grpcproto.Vpn/CouldStart"
 	Vpn_GetConnectionState_FullMethodName  = "/grpcproto.Vpn/GetConnectionState"
+	Vpn_InitHealthCheck_FullMethodName     = "/grpcproto.Vpn/InitHealthCheck"
 	Vpn_StartHealthCheck_FullMethodName    = "/grpcproto.Vpn/StartHealthCheck"
 	Vpn_StopHealthCheck_FullMethodName     = "/grpcproto.Vpn/StopHealthCheck"
 	Vpn_StartCloakClient_FullMethodName    = "/grpcproto.Vpn/StartCloakClient"
@@ -49,6 +50,7 @@ type VpnClient interface {
 	// health_check.go
 	CouldStart(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*CouldStartResponce, error)
 	GetConnectionState(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetConnectionStateResponce, error)
+	InitHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	StartHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	StopHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	// cloak.go
@@ -139,6 +141,16 @@ func (c *vpnClient) GetConnectionState(ctx context.Context, in *Empty, opts ...g
 	return out, nil
 }
 
+func (c *vpnClient) InitHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, Vpn_InitHealthCheck_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *vpnClient) StartHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
@@ -223,6 +235,7 @@ type VpnServer interface {
 	// health_check.go
 	CouldStart(context.Context, *Empty) (*CouldStartResponce, error)
 	GetConnectionState(context.Context, *Empty) (*GetConnectionStateResponce, error)
+	InitHealthCheck(context.Context, *Empty) (*Empty, error)
 	StartHealthCheck(context.Context, *Empty) (*Empty, error)
 	StopHealthCheck(context.Context, *Empty) (*Empty, error)
 	// cloak.go
@@ -263,6 +276,9 @@ func (UnimplementedVpnServer) CouldStart(context.Context, *Empty) (*CouldStartRe
 }
 func (UnimplementedVpnServer) GetConnectionState(context.Context, *Empty) (*GetConnectionStateResponce, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetConnectionState not implemented")
+}
+func (UnimplementedVpnServer) InitHealthCheck(context.Context, *Empty) (*Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method InitHealthCheck not implemented")
 }
 func (UnimplementedVpnServer) StartHealthCheck(context.Context, *Empty) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StartHealthCheck not implemented")
@@ -432,6 +448,24 @@ func _Vpn_GetConnectionState_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Vpn_InitHealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).InitHealthCheck(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_InitHealthCheck_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).InitHealthCheck(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Vpn_StartHealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Empty)
 	if err := dec(in); err != nil {
@@ -592,6 +626,10 @@ var Vpn_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetConnectionState",
 			Handler:    _Vpn_GetConnectionState_Handler,
+		},
+		{
+			MethodName: "InitHealthCheck",
+			Handler:    _Vpn_InitHealthCheck_Handler,
 		},
 		{
 			MethodName: "StartHealthCheck",

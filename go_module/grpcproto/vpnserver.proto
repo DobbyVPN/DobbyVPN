@@ -17,6 +17,7 @@ service Vpn {
   // health_check.go
   rpc CouldStart (Empty)              returns (CouldStartResponce);
   rpc GetConnectionState (Empty)      returns (GetConnectionStateResponce);
+  rpc InitHealthCheck (Empty)         returns (Empty);
   rpc StartHealthCheck (Empty)        returns (Empty);
   rpc StopHealthCheck (Empty)         returns (Empty);
   
