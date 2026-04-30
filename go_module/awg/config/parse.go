@@ -12,15 +12,15 @@ import (
 )
 
 var _specialHandshakeTags = map[string]struct{}{
-	"i1":    struct{}{},
-	"i2":    struct{}{},
-	"i3":    struct{}{},
-	"i4":    struct{}{},
-	"i5":    struct{}{},
-	"j1":    struct{}{},
-	"j2":    struct{}{},
-	"j3":    struct{}{},
-	"itime": struct{}{},
+	"i1":    {},
+	"i2":    {},
+	"i3":    {},
+	"i4":    {},
+	"i5":    {},
+	"j1":    {},
+	"j2":    {},
+	"j3":    {},
+	"itime": {},
 }
 
 type ParseError struct {
@@ -50,21 +50,28 @@ func parseIPCidr(s string) (*IPCidr, error) {
 	if maybeV4 != nil {
 		addr = maybeV4
 	}
-	if cidrStr != "" {
+	switch cidrStr {
+	case "":
+		switch maybeV4 {
+		case nil:
+			return &IPCidr{addr, 128}, nil
+		default:
+			return &IPCidr{addr, 32}, nil
+		}
+	default:
 		cidr, err := strconv.ParseUint(cidrStr, 0, 8)
 		if err != nil {
 			return nil, err
-		} else if cidr > 128 {
+		}
+
+		switch true {
+		case cidr > 128:
 			return nil, fmt.Errorf("cidr > 128")
-		} else if cidr > 32 && maybeV4 != nil {
+		case cidr > 32 && maybeV4 != nil:
 			return nil, fmt.Errorf("invalid network prefix length")
+		default:
+			return &IPCidr{addr, uint8(cidr)}, nil
 		}
-		return &IPCidr{addr, uint8(cidr)}, nil
-	} else {
-		if maybeV4 != nil {
-			return &IPCidr{addr, 32}, nil
-		}
-		return &IPCidr{addr, 128}, nil
 	}
 }
 
@@ -110,26 +117,29 @@ func parsePort(s string) (uint16, error) {
 	return uint16(m), nil
 }
 
+func parseIpv6Host(host string) (string, error) {
+	hostColon := strings.IndexByte(host, ':')
+	if len(host) > 3 && host[0] == '[' && host[len(host)-1] == ']' && hostColon > 0 {
+		end := len(host) - 1
+		if i := strings.LastIndexByte(host, '%'); i > 1 {
+			end = i
+		}
+		maybeV6 := net.ParseIP(host[1:end])
+		if maybeV6 == nil || len(maybeV6) != net.IPv6len {
+			return "", fmt.Errorf("brackets must contain an IPv6 address")
+		}
+		host = host[1 : len(host)-1]
+		return host, nil
+	}
+	return "", fmt.Errorf("brackets must contain an IPv6 address")
+}
+
 func parseHost(host string) (string, error) {
 	hostColon := strings.IndexByte(host, ':')
 	if host[0] != '[' && host[len(host)-1] != ']' && hostColon <= 0 {
 		return host, nil
 	} else {
-		if len(host) > 3 && host[0] == '[' && host[len(host)-1] == ']' && hostColon > 0 {
-			end := len(host) - 1
-			if i := strings.LastIndexByte(host, '%'); i > 1 {
-				end = i
-			}
-			maybeV6 := net.ParseIP(host[1:end])
-			if maybeV6 == nil || len(maybeV6) != net.IPv6len {
-				return "", fmt.Errorf("brackets must contain an IPv6 address")
-			} else {
-				host = host[1 : len(host)-1]
-				return host, nil
-			}
-		} else {
-			return "", fmt.Errorf("brackets must contain an IPv6 address")
-		}
+		return parseIpv6Host(host)
 	}
 }
 
@@ -144,7 +154,7 @@ func parseUint16(value, name string) (uint16, error) {
 	return uint16(m), nil
 }
 
-func parseHStringSingle(name string, valueStr string) (HString, error) {
+func parseHStringSingle(name, valueStr string) (HString, error) {
 	m, err := strconv.ParseInt(valueStr, 10, 64)
 	if err != nil {
 		return HString{}, err
@@ -182,11 +192,12 @@ func parseHStringRange(name, minRangeStr, maxRangeStr string) (HString, error) {
 func parseHString(value, name string) (HString, error) {
 	splitResult := strings.Split(value, "-")
 
-	if len(splitResult) == 1 {
+	switch len(splitResult) {
+	case 1:
 		return parseHStringSingle(name, splitResult[0])
-	} else if len(splitResult) == 2 {
+	case 2:
 		return parseHStringRange(name, splitResult[0], splitResult[1])
-	} else {
+	default:
 		return HString{}, fmt.Errorf("invalid %s", name)
 	}
 }
@@ -245,139 +256,208 @@ type WgParserContext struct {
 	sawPrivateKey bool
 }
 
-func (ctx *WgParserContext) applyInterfaceLine(key, val, line string) error {
-	switch key {
-	case "privatekey":
-		k, err := parseKeyBase64(val)
-		if err != nil {
-			return err
+func (ctx *WgParserContext) applyPrivateKey(val string) error {
+	k, err := parseKeyBase64(val)
+	if err != nil {
+		return err
+	}
+	ctx.conf.Interface.PrivateKey = *k
+	ctx.sawPrivateKey = true
+	return nil
+}
+
+func (ctx *WgParserContext) applyJc(val string) error {
+	junkPacketCount, err := parseUint16(val, "junkPacketCount")
+	if err != nil {
+		return err
+	}
+	ctx.conf.Interface.JunkPacketCount = junkPacketCount
+	return nil
+}
+
+func (ctx *WgParserContext) applyJmin(val string) error {
+	junkPacketMinSize, err := parseUint16(val, "junkPacketMinSize")
+	if err != nil {
+		return err
+	}
+	ctx.conf.Interface.JunkPacketMinSize = junkPacketMinSize
+	return nil
+}
+
+func (ctx *WgParserContext) applyJmax(val string) error {
+
+	junkPacketMaxSize, err := parseUint16(val, "junkPacketMaxSize")
+	if err != nil {
+		return err
+	}
+	ctx.conf.Interface.JunkPacketMaxSize = junkPacketMaxSize
+	return nil
+}
+
+func (ctx *WgParserContext) applyS1(val string) error {
+	initPacketJunkSize, err := parseUint16(val, "initPacketJunkSize")
+	if err != nil {
+		return err
+	}
+	ctx.conf.Interface.InitPacketJunkSize = initPacketJunkSize
+	return nil
+}
+
+func (ctx *WgParserContext) applyS2(val string) error {
+
+	responsePacketJunkSize, err := parseUint16(val, "responsePacketJunkSize")
+	if err != nil {
+		return err
+	}
+	ctx.conf.Interface.ResponsePacketJunkSize = responsePacketJunkSize
+	return nil
+}
+
+func (ctx *WgParserContext) applyS3(val string) error {
+	cookieReplyJunkSize, err := parseUint16(val, "cookieReplyPacketJunkSize")
+	if err != nil {
+		return err
+	}
+	ctx.conf.Interface.CookieReplyPacketJunkSize = cookieReplyJunkSize
+	return nil
+}
+
+func (ctx *WgParserContext) applyS4(val string) error {
+	transportJunkSize, err := parseUint16(val, "transportPacketJunkSize")
+	if err != nil {
+		return err
+	}
+	ctx.conf.Interface.TransportPacketJunkSize = transportJunkSize
+	return nil
+}
+
+func (ctx *WgParserContext) applyH1(val string) error {
+	initPacketMagicHeader, err := parseHString(val, "initPacketMagicHeader")
+	if err != nil {
+		return err
+	}
+	ctx.conf.Interface.InitPacketMagicHeader = initPacketMagicHeader
+	return nil
+}
+
+func (ctx *WgParserContext) applyH2(val string) error {
+	responsePacketMagicHeader, err := parseHString(val, "responsePacketMagicHeader")
+	if err != nil {
+		return err
+	}
+	ctx.conf.Interface.ResponsePacketMagicHeader = responsePacketMagicHeader
+	return nil
+}
+
+func (ctx *WgParserContext) applyH3(val string) error {
+	underloadPacketMagicHeader, err := parseHString(val, "underloadPacketMagicHeader")
+	if err != nil {
+		return err
+	}
+	ctx.conf.Interface.UnderloadPacketMagicHeader = underloadPacketMagicHeader
+	return nil
+}
+
+func (ctx *WgParserContext) applyH4(val string) error {
+	transportPacketMagicHeader, err := parseHString(val, "transportPacketMagicHeader")
+	if err != nil {
+		return err
+	}
+	ctx.conf.Interface.TransportPacketMagicHeader = transportPacketMagicHeader
+	return nil
+}
+
+func (ctx *WgParserContext) applyI(key, val string) error {
+	if val == "" {
+		return nil
+	}
+	if ctx.conf.Interface.IPackets == nil {
+		ctx.conf.Interface.IPackets = make(map[string]string)
+	}
+	ctx.conf.Interface.IPackets[key] = val
+	return nil
+}
+
+func (ctx *WgParserContext) applyMtu(val string) error {
+	m, err := parseMTU(val)
+	if err != nil {
+		return err
+	}
+	ctx.conf.Interface.MTU = m
+	return nil
+}
+
+func (ctx *WgParserContext) applyDns(val string) error {
+	addresses, err := splitList(val)
+	if err != nil {
+		return err
+	}
+	for _, address := range addresses {
+		a := net.ParseIP(address)
+		if a == nil {
+			ctx.conf.Interface.DNSSearch = append(ctx.conf.Interface.DNSSearch, address)
+		} else {
+			ctx.conf.Interface.DNS = append(ctx.conf.Interface.DNS, a)
 		}
-		ctx.conf.Interface.PrivateKey = *k
-		ctx.sawPrivateKey = true
-	case "jc":
-		junkPacketCount, err := parseUint16(val, "junkPacketCount")
-		if err != nil {
-			return err
-		}
-		ctx.conf.Interface.JunkPacketCount = junkPacketCount
-	case "jmin":
-		junkPacketMinSize, err := parseUint16(val, "junkPacketMinSize")
-		if err != nil {
-			return err
-		}
-		ctx.conf.Interface.JunkPacketMinSize = junkPacketMinSize
-	case "jmax":
-		junkPacketMaxSize, err := parseUint16(val, "junkPacketMaxSize")
-		if err != nil {
-			return err
-		}
-		ctx.conf.Interface.JunkPacketMaxSize = junkPacketMaxSize
-	case "s1":
-		initPacketJunkSize, err := parseUint16(
-			val,
-			"initPacketJunkSize",
-		)
-		if err != nil {
-			return err
-		}
-		ctx.conf.Interface.InitPacketJunkSize = initPacketJunkSize
-	case "s2":
-		responsePacketJunkSize, err := parseUint16(
-			val,
-			"responsePacketJunkSize",
-		)
-		if err != nil {
-			return err
-		}
-		ctx.conf.Interface.ResponsePacketJunkSize = responsePacketJunkSize
-	case "s3":
-		cookieReplyJunkSize, err := parseUint16(
-			val,
-			"cookieReplyPacketJunkSize",
-		)
-		if err != nil {
-			return err
-		}
-		ctx.conf.Interface.CookieReplyPacketJunkSize = cookieReplyJunkSize
-	case "s4":
-		transportJunkSize, err := parseUint16(
-			val,
-			"transportPacketJunkSize",
-		)
-		if err != nil {
-			return err
-		}
-		ctx.conf.Interface.TransportPacketJunkSize = transportJunkSize
-	case "h1":
-		initPacketMagicHeader, err := parseHString(val, "initPacketMagicHeader")
-		if err != nil {
-			return err
-		}
-		ctx.conf.Interface.InitPacketMagicHeader = initPacketMagicHeader
-	case "h2":
-		responsePacketMagicHeader, err := parseHString(val, "responsePacketMagicHeader")
-		if err != nil {
-			return err
-		}
-		ctx.conf.Interface.ResponsePacketMagicHeader = responsePacketMagicHeader
-	case "h3":
-		underloadPacketMagicHeader, err := parseHString(val, "underloadPacketMagicHeader")
-		if err != nil {
-			return err
-		}
-		ctx.conf.Interface.UnderloadPacketMagicHeader = underloadPacketMagicHeader
-	case "h4":
-		transportPacketMagicHeader, err := parseHString(val, "transportPacketMagicHeader")
-		if err != nil {
-			return err
-		}
-		ctx.conf.Interface.TransportPacketMagicHeader = transportPacketMagicHeader
-	case "i1", "i2", "i3", "i4", "i5":
-		if val == "" {
-			return nil
-		}
-		if ctx.conf.Interface.IPackets == nil {
-			ctx.conf.Interface.IPackets = make(map[string]string)
-		}
-		ctx.conf.Interface.IPackets[key] = val
-	case "mtu":
-		m, err := parseMTU(val)
-		if err != nil {
-			return err
-		}
-		ctx.conf.Interface.MTU = m
-	case "address":
-		addresses, err := splitList(val)
-		if err != nil {
-			return err
-		}
-		for _, address := range addresses {
-			a, err := parseIPCidr(address)
-			if err != nil {
-				return err
-			}
-			ctx.conf.Interface.Addresses = append(ctx.conf.Interface.Addresses, *a)
-		}
-	case "dns":
-		addresses, err := splitList(val)
-		if err != nil {
-			return err
-		}
-		for _, address := range addresses {
-			a := net.ParseIP(address)
-			if a == nil {
-				ctx.conf.Interface.DNSSearch = append(ctx.conf.Interface.DNSSearch, address)
-			} else {
-				ctx.conf.Interface.DNS = append(ctx.conf.Interface.DNS, a)
-			}
-		}
-	default:
-		return fmt.Errorf("invalid key for [Interface] section")
 	}
 	return nil
 }
 
-func (ctx *WgParserContext) applyPeerLine(key, val, line string) error {
+func (ctx *WgParserContext) applyAddress(val string) error {
+	addresses, err := splitList(val)
+	if err != nil {
+		return err
+	}
+	for _, address := range addresses {
+		a, err := parseIPCidr(address)
+		if err != nil {
+			return err
+		}
+		ctx.conf.Interface.Addresses = append(ctx.conf.Interface.Addresses, *a)
+	}
+	return nil
+}
+
+func (ctx *WgParserContext) applyInterfaceLine(key, val string) error {
+	switch key {
+	case "privatekey":
+		return ctx.applyPrivateKey(val)
+	case "jc":
+		return ctx.applyJc(val)
+	case "jmin":
+		return ctx.applyJmin(val)
+	case "jmax":
+		return ctx.applyJmax(val)
+	case "s1":
+		return ctx.applyS1(val)
+	case "s2":
+		return ctx.applyS2(val)
+	case "s3":
+		return ctx.applyS3(val)
+	case "s4":
+		return ctx.applyS4(val)
+	case "h1":
+		return ctx.applyH1(val)
+	case "h2":
+		return ctx.applyH2(val)
+	case "h3":
+		return ctx.applyH3(val)
+	case "h4":
+		return ctx.applyH4(val)
+	case "i1", "i2", "i3", "i4", "i5":
+		return ctx.applyI(key, val)
+	case "mtu":
+		return ctx.applyMtu(val)
+	case "address":
+		return ctx.applyAddress(val)
+	case "dns":
+		return ctx.applyDns(val)
+	default:
+		return fmt.Errorf("invalid key for [Interface] section")
+	}
+}
+
+func (ctx *WgParserContext) applyPeerLine(key, val string) error {
 	switch key {
 	case "publickey":
 		k, err := parseKeyBase64(val)
@@ -421,7 +501,7 @@ func (ctx *WgParserContext) applyPeerLine(key, val, line string) error {
 	return nil
 }
 
-func FromWgQuick(s string, name string) (*Config, error) {
+func FromWgQuick(s, name string) (*Config, error) {
 	if !TunnelNameIsValid(name) {
 		return nil, fmt.Errorf("tunnel name is not valid")
 	}
@@ -465,19 +545,17 @@ func FromWgQuick(s string, name string) (*Config, error) {
 			return nil, fmt.Errorf("key must have a value")
 		}
 		if ctx.parserState == inInterfaceSection {
-			err := ctx.applyInterfaceLine(key, val, line)
+			err := ctx.applyInterfaceLine(key, val)
 			if err != nil {
 				return nil, err
-			} else {
-				continue
 			}
+			continue
 		} else if ctx.parserState == inPeerSection {
-			err := ctx.applyPeerLine(key, val, line)
+			err := ctx.applyPeerLine(key, val)
 			if err != nil {
 				return nil, err
-			} else {
-				continue
 			}
+			continue
 		}
 	}
 	ctx.conf.MaybeAddPeer(ctx.peer)

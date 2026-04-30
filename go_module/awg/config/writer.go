@@ -58,7 +58,9 @@ func (conf *Config) toUAPIHeaders(output *strings.Builder) {
 	if conf.Interface.TransportPacketMagicHeader.IsLeft && conf.Interface.TransportPacketMagicHeader.Left > 0 {
 		fmt.Fprintf(output, "h4=%d\n", conf.Interface.TransportPacketMagicHeader.Left)
 	}
+}
 
+func (conf *Config) toUAPIHeadersRanges(output *strings.Builder) {
 	if !conf.Interface.InitPacketMagicHeader.IsLeft && conf.Interface.InitPacketMagicHeader.Right.First > 0 && conf.Interface.InitPacketMagicHeader.Right.Second > conf.Interface.InitPacketMagicHeader.Right.First {
 		fmt.Fprintf(output, "h1=%d-%d\n", conf.Interface.InitPacketMagicHeader.Right.First, conf.Interface.InitPacketMagicHeader.Right.Second)
 	}
@@ -113,6 +115,7 @@ func (conf *Config) ToUAPI() (uapi string, dnsErr error) {
 	conf.toUAPIFwMark(&output)
 	conf.toUAPIJunk(&output)
 	conf.toUAPIHeaders(&output)
+	conf.toUAPIHeadersRanges(&output)
 	conf.toUAPIIPackets(&output)
 
 	if len(conf.Peers) > 0 {
