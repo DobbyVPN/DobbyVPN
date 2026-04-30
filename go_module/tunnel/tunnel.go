@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	maxActiveTCPConns = 75
-	maxActiveUDPConns = 75
+	maxActiveTCPConns = 70
+	maxActiveUDPConns = 70
 )
 
 var (
