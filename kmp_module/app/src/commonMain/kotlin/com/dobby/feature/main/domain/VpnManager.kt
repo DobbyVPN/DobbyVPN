@@ -6,7 +6,7 @@ interface VpnManager {
      *
      * @return true if start succeeded, false otherwise
      */
-    fun start(): Boolean
+    fun start()
 
     fun stop()
 }

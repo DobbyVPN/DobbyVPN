@@ -3,7 +3,6 @@ package com.dobby.feature.vpn_service.domain.cloak
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.vpn_service.CloakLibFacade
-import com.dobby.feature.vpn_service.DobbyVpnService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
@@ -16,8 +15,7 @@ class CloakConnectionInteractor(
     private val isConnected = AtomicBoolean(false)
     private val wasPreviouslyConnected = AtomicBoolean(false)
 
-
-    suspend fun startCloak(dobbyVpnService: DobbyVpnService?) {
+    suspend fun startCloak(): Boolean {
         // If Cloak is enabled, start it BEFORE Outline tries to connect to 127.0.0.1:LocalPort.
         if (dobbyConfigsRepository.getIsCloakEnabled()) {
             val cloakConfig = dobbyConfigsRepository.getCloakConfig()
@@ -32,19 +30,14 @@ class CloakConnectionInteractor(
                 logger.log("Cloak connection result is $cloakResult")
                 if (cloakResult is ConnectResult.Error || cloakResult is ConnectResult.ValidationError) {
                     logger.log("Cloak failed to start, stopping VPN service")
-                    dobbyVpnService?.connectionState?.tryUpdateStatus(false)
-                    dobbyVpnService?.teardownVpn()
-                    dobbyVpnService?.stopSelf()
-                    return
+                    return false
                 }
             } else {
                 logger.log("Cloak is turn on in config, but no config for it was found. Stopping VPN service")
-                dobbyVpnService?.connectionState?.tryUpdateStatus(false)
-                dobbyVpnService?.teardownVpn()
-                dobbyVpnService?.stopSelf()
-                return
+                return false
             }
         }
+        return true
     }
 
     fun stopCloak() {

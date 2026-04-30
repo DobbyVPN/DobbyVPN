@@ -60,8 +60,16 @@ class OutlineGo {
         external fun initLogger(path: String): Unit
 
         @JvmStatic
-        @Throws(IllegalStateException::class)
-        external fun checkServerAlive(address: String, port: Int): Int
+        external fun getConnectionState(): Int
+
+        @JvmStatic
+        external fun initHealthCheck(): Unit
+
+        @JvmStatic
+        external fun startHealthCheck(): Unit
+
+        @JvmStatic
+        external fun stopHealthCheck(): Unit
 
         @JvmStatic
         external fun registerVpnService(service: android.net.VpnService)

@@ -135,15 +135,27 @@ Java_com_dobby_outline_OutlineGo_initLogger(JNIEnv *env, jclass clazz,
 }
 
 JNIEXPORT jint JNICALL
-Java_com_dobby_outline_OutlineGo_checkServerAlive(JNIEnv *env, jclass clazz,
-                                                  jstring jAddress, jint jPort)
+Java_com_dobby_outline_OutlineGo_getConnectionState(JNIEnv *env, jclass clazz)
 {
-    const char *address = (*env)->GetStringUTFChars(env, jAddress, NULL);
-    // Call Go-exported function to check server availability
-    jint res = CheckServerAlive(address, jPort);
-    // Release UTF-8 string obtained from Java
-    (*env)->ReleaseStringUTFChars(env, jAddress, address);
-    return res;
+    return GetConnectionState();
+}
+
+JNIEXPORT void JNICALL
+Java_com_dobby_outline_OutlineGo_initHealthCheck(JNIEnv *env, jclass clazz)
+{
+    InitHealthCheck();
+}
+
+JNIEXPORT void JNICALL
+Java_com_dobby_outline_OutlineGo_startHealthCheck(JNIEnv *env, jclass clazz)
+{
+    StartHealthCheck();
+}
+
+JNIEXPORT void JNICALL
+Java_com_dobby_outline_OutlineGo_stopHealthCheck(JNIEnv *env, jclass clazz)
+{
+    StopHealthCheck();
 }
 
 JNIEXPORT void JNICALL

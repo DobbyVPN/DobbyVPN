@@ -10,10 +10,11 @@ import (
 	"go_module/outline/internal"
 	"go_module/tunnel"
 	"go_module/tunnel/platform_engine"
-	"golang.org/x/sys/unix"
 	"io"
 	"net"
 	"os"
+
+	"golang.org/x/sys/unix"
 )
 
 type OutlineClient struct {
@@ -91,6 +92,10 @@ func (c *OutlineClient) Disconnect() error {
 }
 
 func (c *OutlineClient) Refresh() error {
+	return nil
+}
+
+func (c *OutlineClient) HealthCheck() error {
 	return nil
 }
 

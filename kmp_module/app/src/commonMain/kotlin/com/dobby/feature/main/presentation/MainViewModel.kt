@@ -126,7 +126,7 @@ class MainViewModel(
                         logger.log("Finish setConfig()")
                     }
 
-                    logger.log("Update vpnStarted state: VpnState = ${connectionStateRepository.vpnStartedFlow.value}")
+                    logger.log("Update vpnStarted state: VpnState = ${connectionStateRepository.serviceStartedFlow.value}")
                     logger.log("VPN is currently disconnected")
                     if (isPermissionCheckNeeded) {
                         logger.log("Permission check required, triggering permission dialog")
@@ -193,7 +193,7 @@ class MainViewModel(
         }
     }
 
-    private fun startVpn(isPermissionGranted: Boolean) {
+    private suspend fun startVpn(isPermissionGranted: Boolean) {
         if (isPermissionGranted) {
             logger.log("Permission granted — starting VPN service")
             startVpnService()
@@ -236,15 +236,17 @@ class MainViewModel(
         }
     }
 
-    private fun startVpnService() {
+    private suspend fun startVpnService() {
         logger.log("Starting VPN service...")
         healthCheck.InitHealthCheck()
-        val connected = vpnManager.start()
-        if (connected) {
-            healthCheck.StartHealthCheck()
-            startConnectionStateDetector()
-        } else {
-            stopVpnService()
+        vpnManager.start()
+        connectionStateRepository.serviceStartedFlow.collect { connected ->
+            if (connected) {
+                healthCheck.StartHealthCheck()
+                startConnectionStateDetector()
+            } else {
+                stopVpnService()
+            }
         }
     }
 
