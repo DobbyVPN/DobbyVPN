@@ -13,7 +13,8 @@ func (conf *Config) IntersectsWith(other *Config) bool {
 	}
 	allRoutes := make(map[hashableIPCidr]bool, len(conf.Interface.Addresses)*2+len(conf.Peers)*3)
 	for _, a := range conf.Interface.Addresses {
-		allRoutes[hashableIPCidr{string(a.IP), byte(len(a.IP) * 8)}] = true
+		ipBits := uint8(len(a.IP) * 8)
+		allRoutes[hashableIPCidr{string(a.IP), ipBits}] = true
 		a.MaskSelf()
 		allRoutes[hashableIPCidr{string(a.IP), a.Cidr}] = true
 	}
@@ -24,7 +25,8 @@ func (conf *Config) IntersectsWith(other *Config) bool {
 		}
 	}
 	for _, a := range other.Interface.Addresses {
-		if allRoutes[hashableIPCidr{string(a.IP), byte(len(a.IP) * 8)}] {
+		ipBits := uint8(len(a.IP) * 8)
+		if allRoutes[hashableIPCidr{string(a.IP), ipBits}] {
 			return true
 		}
 		a.MaskSelf()

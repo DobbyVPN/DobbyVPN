@@ -170,9 +170,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         // TODO: Rewrite code below with swift code
         // userDefaults.set(vpnInterface.toString(), forKey: vpnInterfaceKey)
     }
-    public func setAwgConfig(newConfig: String) {}
-
-    public func setIsAmneziaWGEnabled(isAmneziaWGEnabled: Bool) {}
 
     public func getXrayConfig() -> String {
         return userDefaults.string(forKey: xrayConfigKey) ?? ""
@@ -191,8 +188,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         userDefaults.set(isXrayEnabled, forKey: isXrayEnabledKey)
 
     }
-
-    public func setVpnInterface(vpnInterface: VpnInterface) {}
 
     public func couldStart() -> Bool {
         return true

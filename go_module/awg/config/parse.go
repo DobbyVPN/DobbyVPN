@@ -12,15 +12,15 @@ import (
 )
 
 var _specialHandshakeTags = map[string]struct{}{
-	"i1":    struct{}{},
-	"i2":    struct{}{},
-	"i3":    struct{}{},
-	"i4":    struct{}{},
-	"i5":    struct{}{},
-	"j1":    struct{}{},
-	"j2":    struct{}{},
-	"j3":    struct{}{},
-	"itime": struct{}{},
+	"i1":    {},
+	"i2":    {},
+	"i3":    {},
+	"i4":    {},
+	"i5":    {},
+	"j1":    {},
+	"j2":    {},
+	"j3":    {},
+	"itime": {},
 }
 
 type ParseError struct {
@@ -59,15 +59,14 @@ func parseIPCidr(s string) (*IPCidr, error) {
 			return nil, fmt.Errorf("invalid network prefix length")
 		}
 		return &IPCidr{addr, uint8(cidr)}, nil
-	} else {
-		var cidr uint8
-		if maybeV4 != nil {
-			cidr = 32
-		} else {
-			cidr = 128
-		}
-		return &IPCidr{addr, cidr}, nil
 	}
+	var cidr uint8
+	if maybeV4 != nil {
+		cidr = 32
+	} else {
+		cidr = 128
+	}
+	return &IPCidr{addr, cidr}, nil
 }
 
 func parseEndpoint(s string) (*Endpoint, error) {
@@ -140,27 +139,25 @@ func parseHString(value, name string) (HString, error) {
 	splitResult := strings.Split(value, "-")
 
 	if len(splitResult) == 1 {
-		m, err := strconv.ParseInt(splitResult[0], 10, 64)
+		m, err := strconv.ParseUint(splitResult[0], 10, 32)
 		if err != nil {
 			return HString{}, err
-		}
-		if m < 0 || m > math.MaxUint32 {
-			return HString{}, fmt.Errorf("invalid %s", name)
 		}
 		return Either[uint32, Pair[uint32, uint32]]{
 			Left:   uint32(m),
 			IsLeft: true,
 		}, nil
-	} else if len(splitResult) == 2 {
-		minRange, err := strconv.ParseInt(splitResult[0], 10, 64)
+	}
+	if len(splitResult) == 2 {
+		minRange, err := strconv.ParseUint(splitResult[0], 10, 32)
 		if err != nil {
 			return HString{}, err
 		}
-		maxRange, err := strconv.ParseInt(splitResult[1], 10, 64)
+		maxRange, err := strconv.ParseUint(splitResult[1], 10, 32)
 		if err != nil {
 			return HString{}, err
 		}
-		if minRange < 0 || maxRange > math.MaxUint32 || maxRange <= minRange {
+		if maxRange <= minRange {
 			return HString{}, fmt.Errorf("invalid %s", name)
 		}
 		return Either[uint32, Pair[uint32, uint32]]{
@@ -221,6 +218,188 @@ const (
 	notInASection
 )
 
+func parseInterfaceField(conf *Config, key, val string) error {
+	switch key {
+	case "privatekey":
+		k, err := parseKeyBase64(val)
+		if err != nil {
+			return err
+		}
+		conf.Interface.PrivateKey = *k
+		return nil
+	case "jc":
+		junkPacketCount, err := parseUint16(val, "junkPacketCount")
+		if err != nil {
+			return err
+		}
+		conf.Interface.JunkPacketCount = junkPacketCount
+		return nil
+	case "jmin":
+		junkPacketMinSize, err := parseUint16(val, "junkPacketMinSize")
+		if err != nil {
+			return err
+		}
+		conf.Interface.JunkPacketMinSize = junkPacketMinSize
+		return nil
+	case "jmax":
+		junkPacketMaxSize, err := parseUint16(val, "junkPacketMaxSize")
+		if err != nil {
+			return err
+		}
+		conf.Interface.JunkPacketMaxSize = junkPacketMaxSize
+		return nil
+	case "s1":
+		initPacketJunkSize, err := parseUint16(val, "initPacketJunkSize")
+		if err != nil {
+			return err
+		}
+		conf.Interface.InitPacketJunkSize = initPacketJunkSize
+		return nil
+	case "s2":
+		responsePacketJunkSize, err := parseUint16(val, "responsePacketJunkSize")
+		if err != nil {
+			return err
+		}
+		conf.Interface.ResponsePacketJunkSize = responsePacketJunkSize
+		return nil
+	case "s3":
+		cookieReplyJunkSize, err := parseUint16(val, "cookieReplyPacketJunkSize")
+		if err != nil {
+			return err
+		}
+		conf.Interface.CookieReplyPacketJunkSize = cookieReplyJunkSize
+		return nil
+	case "s4":
+		transportJunkSize, err := parseUint16(val, "transportPacketJunkSize")
+		if err != nil {
+			return err
+		}
+		conf.Interface.TransportPacketJunkSize = transportJunkSize
+		return nil
+	case "h1":
+		initPacketMagicHeader, err := parseHString(val, "initPacketMagicHeader")
+		if err != nil {
+			return err
+		}
+		conf.Interface.InitPacketMagicHeader = initPacketMagicHeader
+		return nil
+	case "h2":
+		responsePacketMagicHeader, err := parseHString(val, "responsePacketMagicHeader")
+		if err != nil {
+			return err
+		}
+		conf.Interface.ResponsePacketMagicHeader = responsePacketMagicHeader
+		return nil
+	case "h3":
+		underloadPacketMagicHeader, err := parseHString(val, "underloadPacketMagicHeader")
+		if err != nil {
+			return err
+		}
+		conf.Interface.UnderloadPacketMagicHeader = underloadPacketMagicHeader
+		return nil
+	case "h4":
+		transportPacketMagicHeader, err := parseHString(val, "transportPacketMagicHeader")
+		if err != nil {
+			return err
+		}
+		conf.Interface.TransportPacketMagicHeader = transportPacketMagicHeader
+		return nil
+	case "i1", "i2", "i3", "i4", "i5":
+		if val == "" {
+			return nil
+		}
+		if conf.Interface.IPackets == nil {
+			conf.Interface.IPackets = make(map[string]string)
+		}
+		conf.Interface.IPackets[key] = val
+		return nil
+	case "mtu":
+		m, err := parseMTU(val)
+		if err != nil {
+			return err
+		}
+		conf.Interface.MTU = m
+		return nil
+	case "address":
+		addresses, err := splitList(val)
+		if err != nil {
+			return err
+		}
+		for _, address := range addresses {
+			a, err := parseIPCidr(address)
+			if err != nil {
+				return err
+			}
+			conf.Interface.Addresses = append(conf.Interface.Addresses, *a)
+		}
+		return nil
+	case "dns":
+		addresses, err := splitList(val)
+		if err != nil {
+			return err
+		}
+		for _, address := range addresses {
+			a := net.ParseIP(address)
+			if a == nil {
+				conf.Interface.DNSSearch = append(conf.Interface.DNSSearch, address)
+			} else {
+				conf.Interface.DNS = append(conf.Interface.DNS, a)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid key for [Interface] section")
+	}
+}
+
+func parsePeerField(peer *Peer, key, val string) error {
+	switch key {
+	case "publickey":
+		k, err := parseKeyBase64(val)
+		if err != nil {
+			return err
+		}
+		peer.PublicKey = *k
+		return nil
+	case "presharedkey":
+		k, err := parseKeyBase64(val)
+		if err != nil {
+			return err
+		}
+		peer.PresharedKey = *k
+		return nil
+	case "allowedips":
+		addresses, err := splitList(val)
+		if err != nil {
+			return err
+		}
+		for _, address := range addresses {
+			a, err := parseIPCidr(address)
+			if err != nil {
+				return err
+			}
+			peer.AllowedIPs = append(peer.AllowedIPs, *a)
+		}
+		return nil
+	case "persistentkeepalive":
+		p, err := parsePersistentKeepalive(val)
+		if err != nil {
+			return err
+		}
+		peer.PersistentKeepalive = p
+		return nil
+	case "endpoint":
+		e, err := parseEndpoint(val)
+		if err != nil {
+			return err
+		}
+		peer.Endpoint = *e
+		return nil
+	default:
+		return fmt.Errorf("invalid key for [Peer] section")
+	}
+}
+
 func FromWgQuick(s string, name string) (*Config, error) {
 	if !TunnelNameIsValid(name) {
 		return nil, fmt.Errorf("tunnel name is not valid")
@@ -264,174 +443,15 @@ func FromWgQuick(s string, name string) (*Config, error) {
 			return nil, fmt.Errorf("key must have a value")
 		}
 		if parserState == inInterfaceSection {
-			switch key {
-			case "privatekey":
-				k, err := parseKeyBase64(val)
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.PrivateKey = *k
+			if err := parseInterfaceField(&conf, key, val); err != nil {
+				return nil, err
+			}
+			if key == "privatekey" {
 				sawPrivateKey = true
-			case "jc":
-				junkPacketCount, err := parseUint16(val, "junkPacketCount")
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.JunkPacketCount = junkPacketCount
-			case "jmin":
-				junkPacketMinSize, err := parseUint16(val, "junkPacketMinSize")
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.JunkPacketMinSize = junkPacketMinSize
-			case "jmax":
-				junkPacketMaxSize, err := parseUint16(val, "junkPacketMaxSize")
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.JunkPacketMaxSize = junkPacketMaxSize
-			case "s1":
-				initPacketJunkSize, err := parseUint16(
-					val,
-					"initPacketJunkSize",
-				)
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.InitPacketJunkSize = initPacketJunkSize
-			case "s2":
-				responsePacketJunkSize, err := parseUint16(
-					val,
-					"responsePacketJunkSize",
-				)
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.ResponsePacketJunkSize = responsePacketJunkSize
-			case "s3":
-				cookieReplyJunkSize, err := parseUint16(
-					val,
-					"cookieReplyPacketJunkSize",
-				)
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.CookieReplyPacketJunkSize = cookieReplyJunkSize
-			case "s4":
-				transportJunkSize, err := parseUint16(
-					val,
-					"transportPacketJunkSize",
-				)
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.TransportPacketJunkSize = transportJunkSize
-			case "h1":
-				initPacketMagicHeader, err := parseHString(val, "initPacketMagicHeader")
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.InitPacketMagicHeader = initPacketMagicHeader
-			case "h2":
-				responsePacketMagicHeader, err := parseHString(val, "responsePacketMagicHeader")
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.ResponsePacketMagicHeader = responsePacketMagicHeader
-			case "h3":
-				underloadPacketMagicHeader, err := parseHString(val, "underloadPacketMagicHeader")
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.UnderloadPacketMagicHeader = underloadPacketMagicHeader
-			case "h4":
-				transportPacketMagicHeader, err := parseHString(val, "transportPacketMagicHeader")
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.TransportPacketMagicHeader = transportPacketMagicHeader
-			case "i1", "i2", "i3", "i4", "i5":
-				if val == "" {
-					continue
-				}
-				if conf.Interface.IPackets == nil {
-					conf.Interface.IPackets = make(map[string]string)
-				}
-				conf.Interface.IPackets[key] = val
-			case "mtu":
-				m, err := parseMTU(val)
-				if err != nil {
-					return nil, err
-				}
-				conf.Interface.MTU = m
-			case "address":
-				addresses, err := splitList(val)
-				if err != nil {
-					return nil, err
-				}
-				for _, address := range addresses {
-					a, err := parseIPCidr(address)
-					if err != nil {
-						return nil, err
-					}
-					conf.Interface.Addresses = append(conf.Interface.Addresses, *a)
-				}
-			case "dns":
-				addresses, err := splitList(val)
-				if err != nil {
-					return nil, err
-				}
-				for _, address := range addresses {
-					a := net.ParseIP(address)
-					if a == nil {
-						conf.Interface.DNSSearch = append(conf.Interface.DNSSearch, address)
-					} else {
-						conf.Interface.DNS = append(conf.Interface.DNS, a)
-					}
-				}
-			default:
-				return nil, fmt.Errorf("invalid key for [Interface] section")
 			}
 		} else if parserState == inPeerSection {
-			switch key {
-			case "publickey":
-				k, err := parseKeyBase64(val)
-				if err != nil {
-					return nil, err
-				}
-				peer.PublicKey = *k
-			case "presharedkey":
-				k, err := parseKeyBase64(val)
-				if err != nil {
-					return nil, err
-				}
-				peer.PresharedKey = *k
-			case "allowedips":
-				addresses, err := splitList(val)
-				if err != nil {
-					return nil, err
-				}
-				for _, address := range addresses {
-					a, err := parseIPCidr(address)
-					if err != nil {
-						return nil, err
-					}
-					peer.AllowedIPs = append(peer.AllowedIPs, *a)
-				}
-			case "persistentkeepalive":
-				p, err := parsePersistentKeepalive(val)
-				if err != nil {
-					return nil, err
-				}
-				peer.PersistentKeepalive = p
-			case "endpoint":
-				e, err := parseEndpoint(val)
-				if err != nil {
-					return nil, err
-				}
-				peer.Endpoint = *e
-			default:
-				return nil, fmt.Errorf("invalid key for [Peer] section")
+			if err := parsePeerField(peer, key, val); err != nil {
+				return nil, err
 			}
 		}
 	}
