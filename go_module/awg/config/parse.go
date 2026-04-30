@@ -64,7 +64,7 @@ func parseIPCidr(s string) (*IPCidr, error) {
 			return nil, err
 		}
 
-		switch true {
+		switch {
 		case cidr > 128:
 			return nil, fmt.Errorf("cidr > 128")
 		case cidr > 32 && maybeV4 != nil:
@@ -138,9 +138,8 @@ func parseHost(host string) (string, error) {
 	hostColon := strings.IndexByte(host, ':')
 	if host[0] != '[' && host[len(host)-1] != ']' && hostColon <= 0 {
 		return host, nil
-	} else {
-		return parseIpv6Host(host)
 	}
+	return parseIpv6Host(host)
 }
 
 func parseUint16(value, name string) (uint16, error) {
@@ -182,8 +181,8 @@ func parseHStringRange(name, minRangeStr, maxRangeStr string) (HString, error) {
 	}
 	return Either[uint32, Pair[uint32, uint32]]{
 		Right: Pair[uint32, uint32]{
-			First:  uint32(minRange),
-			Second: uint32(maxRange),
+			First:  uint32(minRange), // #nosec G115
+			Second: uint32(maxRange), // #nosec G115
 		},
 		IsLeft: false,
 	}, nil
@@ -378,7 +377,7 @@ func (ctx *WgParserContext) applyI(key, val string) error {
 	return nil
 }
 
-func (ctx *WgParserContext) applyMtu(val string) error {
+func (ctx *WgParserContext) applyMTU(val string) error {
 	m, err := parseMTU(val)
 	if err != nil {
 		return err
@@ -387,7 +386,7 @@ func (ctx *WgParserContext) applyMtu(val string) error {
 	return nil
 }
 
-func (ctx *WgParserContext) applyDns(val string) error {
+func (ctx *WgParserContext) applyDNS(val string) error {
 	addresses, err := splitList(val)
 	if err != nil {
 		return err
@@ -447,11 +446,11 @@ func (ctx *WgParserContext) applyInterfaceLine(key, val string) error {
 	case "i1", "i2", "i3", "i4", "i5":
 		return ctx.applyI(key, val)
 	case "mtu":
-		return ctx.applyMtu(val)
+		return ctx.applyMTU(val)
 	case "address":
 		return ctx.applyAddress(val)
 	case "dns":
-		return ctx.applyDns(val)
+		return ctx.applyDNS(val)
 	default:
 		return fmt.Errorf("invalid key for [Interface] section")
 	}
