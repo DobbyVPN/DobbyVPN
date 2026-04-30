@@ -100,7 +100,13 @@ fun DobbySocksScreen(
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(if (uiMainState.isVpnStarted) "Stop" else "Start")
+                Text(
+                    when (uiMainState.connectionState) {
+                        VpnConnectionState.DISCONNECTED -> "Start"
+                        VpnConnectionState.CONNECTING -> "Stop"
+                        VpnConnectionState.CONNECTED -> "Stop"
+                    }
+                )
             }
         }
 

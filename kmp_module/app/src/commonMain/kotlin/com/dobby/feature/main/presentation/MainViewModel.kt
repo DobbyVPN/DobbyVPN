@@ -23,13 +23,9 @@ import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import com.dobby.vpn.BuildConfig
-import korlibs.time.seconds
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlin.concurrent.Volatile
-import kotlin.concurrent.atomics.AtomicBoolean
-import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
 val httpClient = HttpClient()
 
@@ -81,12 +77,8 @@ class MainViewModel(
             val newState = _uiState.value.copy(connectionState = connectionState)
             _uiState.emit(newState)
             connectionStateRepository.updateStatus(connectionState)
-        }
-        viewModelScope.launch {
-            connectionStateRepository.vpnStartedFlow.collect { isStarted ->
-                logger.log("Update vpn started state: $isStarted")
-                val newState = _uiState.value.copy(isVpnStarted = isStarted)
-                _uiState.emit(newState)
+            if (connectionState != VpnConnectionState.DISCONNECTED) {
+                startConnectionStateDetector()
             }
         }
         viewModelScope.launch {
@@ -117,37 +109,23 @@ class MainViewModel(
 
         viewModelScope.launch(Dispatchers.Default) {
             logger.log("Proceeding with setConfig for the provided URL...")
-            if (!connectionStateRepository.vpnStartedFlow.value) {
-                try {
-                    logger.log("We get config by ${maskStr(connectionUrl)}")
-                    val ok = setConfig(connectionUrl)
-                    if (!ok) {
-                        logger.log("Config is invalid or failed to apply → abort start (no HC/VPN)")
-                        connectionStateRepository.updateVpnStarted(false)
-                        connectionStateRepository.updateStatus(VpnConnectionState.DISCONNECTED)
+            when (connectionStateRepository.statusFlow.value) {
+                VpnConnectionState.DISCONNECTED -> {
+                    try {
+                        logger.log("We get config by ${maskStr(connectionUrl)}")
+                        val ok = setConfig(connectionUrl)
+                        if (!ok) {
+                            logger.log("Config is invalid or failed to apply → abort start (no HC/VPN)")
+                            connectionStateRepository.updateStatus(VpnConnectionState.DISCONNECTED)
+                            return@launch
+                        }
+                    } catch (e: Exception) {
+                        logger.log("Error during setConfig: ${e.message}")
                         return@launch
+                    } finally {
+                        logger.log("Finish setConfig()")
                     }
-                } catch (e: Exception) {
-                    logger.log("Error during setConfig: ${e.message}")
-                    return@launch
-                } finally {
-                    logger.log("Finish setConfig()")
-                }
-            }
 
-            val currentState = connectionStateRepository.vpnStartedFlow.value
-            logger.log("Current vpnStarted state: $currentState")
-            configsRepository.setIsUserInitStop(currentState)
-
-            when (currentState) {
-                true -> {
-                    logger.log("Stopping VPN service due to active connection")
-                    connectionStateRepository.updateVpnStarted(false)
-                    connectionStateRepository.updateStatus(VpnConnectionState.DISCONNECTED)
-                    stopVpnService()
-                }
-                false -> {
-                    connectionStateRepository.updateVpnStarted(true)
                     logger.log("Update vpnStarted state: VpnState = ${connectionStateRepository.vpnStartedFlow.value}")
                     logger.log("VPN is currently disconnected")
                     if (isPermissionCheckNeeded) {
@@ -157,6 +135,10 @@ class MainViewModel(
                         logger.log("Permission check is NOT required, starting VPN service directly")
                         startVpnService()
                     }
+                }
+                VpnConnectionState.CONNECTING, VpnConnectionState.CONNECTED -> {
+                    logger.log("Stopping VPN service due to active connection")
+                    stopVpnService()
                 }
             }
         }
@@ -217,7 +199,7 @@ class MainViewModel(
             startVpnService()
         } else {
             logger.log("Permission denied — skipping VPN start")
-            connectionStateRepository.tryUpdateVpnStarted(false)
+            connectionStateRepository.tryUpdateStatus(VpnConnectionState.DISCONNECTED)
             // TODO: show Toast/snackbar
         }
     }
@@ -226,7 +208,7 @@ class MainViewModel(
         connectionDetectorAtomic = false
     }
 
-    fun initConnectionStateDetector() {
+    fun startConnectionStateDetector() {
         connectionDetectorAtomic = true
         viewModelScope.launch {
             logger.log("Connection state detector: start")
@@ -235,7 +217,7 @@ class MainViewModel(
                 val newState = _uiState.value.copy(connectionState = connectionState)
                 _uiState.emit(newState)
                 connectionStateRepository.updateStatus(connectionState)
-                delay(150L)
+                delay(1000L)
             }
             logger.log("Connection state detector: awaiting disconnection")
             while (true) {
@@ -254,20 +236,24 @@ class MainViewModel(
         }
     }
 
-    fun startVpnService() {
+    private fun startVpnService() {
         logger.log("Starting VPN service...")
         healthCheck.InitHealthCheck()
-        vpnManager.start()
-        healthCheck.StartHealthCheck()
-        initConnectionStateDetector()
+        val connected = vpnManager.start()
+        if (connected) {
+            healthCheck.StartHealthCheck()
+            startConnectionStateDetector()
+        } else {
+            stopVpnService()
+        }
     }
 
-    fun stopVpnService() {
+    private fun stopVpnService() {
         logger.log("Stopping VPN service...")
         vpnManager.stop()
         healthCheck.StopHealthCheck()
-        configsRepository.clearOutlineAndCloakConfig()
         stopConnectionStateDetector()
+        configsRepository.clearOutlineAndCloakConfig()
         logger.log("VPN service stopped successfully, state reset to disconnected")
     }
     //endregion

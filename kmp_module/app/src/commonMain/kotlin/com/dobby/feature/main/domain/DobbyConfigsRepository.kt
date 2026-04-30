@@ -20,10 +20,6 @@ interface DobbyConfigsRepository :
 
     fun couldStart(): Boolean
 
-    fun getIsUserInitStop(): Boolean
-
-    fun setIsUserInitStop(isUserInitStop: Boolean)
-
     fun getGeoRoutingConf(): String
 
     fun setGeoRoutingConf(geoRoutingConf: String)

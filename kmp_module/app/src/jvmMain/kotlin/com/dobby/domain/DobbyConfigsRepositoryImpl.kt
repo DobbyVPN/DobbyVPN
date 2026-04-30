@@ -137,14 +137,6 @@ internal class DobbyConfigsRepositoryImpl(
         return healthCheckLibrary.CouldStart()
     }
 
-    override fun getIsUserInitStop(): Boolean {
-        return prefs.get("isUserInitStop", "true").equals("true")
-    }
-
-    override fun setIsUserInitStop(isUserInitStop: Boolean) {
-        prefs.put("isUserInitStop", isUserInitStop.toString())
-    }
-
     override fun getGeoRoutingConf(): String {
         return prefs.get("geoRoutingConf", "")
     }

@@ -17,8 +17,8 @@ const (
 
 // Healthcheck management
 var (
-	stopHealthCheckChannel = make(chan bool, 1)
-	healthCheckStarted     = false
+	stopHealthCheckChannel chan bool
+	healthCheckStarted     bool = false
 	healthCheckStartedMu   sync.Mutex
 )
 
@@ -87,16 +87,29 @@ func StartHealthCheck() {
 func StopHealthCheck() {
 	log.Infof("[HC] Called StopHealthCheck")
 
-	stopHealthCheckChannel <- true
+	healthCheckStartedMu.Lock()
+	if healthCheckStarted {
+		stopHealthCheckChannel <- true
+	}
+	healthCheckStartedMu.Unlock()
 }
 
 func innerHealthCheck() {
+	log.Infof("[HC] Health check started")
+	healthCheckStartedMu.Lock()
+	healthCheckStarted = true
+	stopHealthCheckChannel = make(chan bool, 1)
+	healthCheckStartedMu.Unlock()
+
 	switchState(Connecting)
 	for {
 		select {
 		case <-stopHealthCheckChannel:
 			log.Infof("[HC] Health check stopped")
 			switchState(Disconnected)
+			healthCheckStartedMu.Lock()
+			healthCheckStarted = false
+			healthCheckStartedMu.Unlock()
 			return
 		case <-time.After(delayTimeout):
 			healthCheckStep()

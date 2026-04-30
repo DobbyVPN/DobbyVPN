@@ -6,8 +6,8 @@ internal class VpnManagerImpl(
     private val dobbyVpnService: DobbyVpnService,
 ) : VpnManager {
 
-    override fun start() {
-        dobbyVpnService.startService()
+    override fun start(): Boolean {
+        return dobbyVpnService.startService()
     }
 
     override fun stop() {

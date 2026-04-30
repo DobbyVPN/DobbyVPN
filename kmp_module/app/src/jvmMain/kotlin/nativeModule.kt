@@ -60,8 +60,7 @@ val jvmVpnModule = module {
             outlineLibrary = get(),
             cloakLibrary = get(),
             loggerLibrary = get(),
-            georoutingLibrary = get(),
-            connectionState = get()
+            georoutingLibrary = get()
         )
     }
 }
