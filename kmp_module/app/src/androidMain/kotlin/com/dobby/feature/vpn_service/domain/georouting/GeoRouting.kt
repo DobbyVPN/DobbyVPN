@@ -1,7 +1,7 @@
 package com.dobby.feature.vpn_service.domain.georouting
 
 import com.dobby.feature.logging.Logger
-import com.dobby.outline.OutlineGo
+import com.dobby.backend.GoBackendWrapper
 import kotlin.math.min
 
 class GeoRouting(
@@ -10,11 +10,11 @@ class GeoRouting(
 
     fun setGeoRoutingConf(paths: String) {
         logger.log("[GeoRouting][setGeoRoutingConf] paths = ${paths.take(min(paths.length, 100))}")
-        OutlineGo.setGeoRoutingConf(paths)
+        GoBackendWrapper.setGeoRoutingConf(paths)
     }
 
     fun clearGeoRoutingConf() {
         logger.log("[GeoRouting][clearGeoRoutingConf] clear georouting config")
-        OutlineGo.clearGeoRoutingConf()
+        GoBackendWrapper.clearGeoRoutingConf()
     }
 }

@@ -5,6 +5,10 @@ interface DobbyConfigsRepositoryAwg {
 
     fun setAwgConfig(newConfig: String)
 
+    fun getAwgTomlConfig(): String
+
+    fun setAwgTomlConfig(newConfig: String)
+
     fun getIsAmneziaWGEnabled(): Boolean
 
     fun setIsAmneziaWGEnabled(isAmneziaWGEnabled: Boolean)
