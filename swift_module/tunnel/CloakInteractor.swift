@@ -14,7 +14,7 @@ public final class CloakInteractor {
     func startCloak(outlineServerPort: String) throws {
         let localPort = String(configsRepository.getCloakLocalPort())
         logs.writeLog(log: "startCloakOutline: entering")
-        
+
         if configsRepository.getIsCloakEnabled() {
             let cloakConfig = configsRepository.getCloakConfig()
             if cloakConfig.isEmpty {
@@ -49,6 +49,7 @@ public final class CloakInteractor {
         var err: NSError?
         Cloak_outlineOutlineDisconnect(&err)
         if let error = err {
+            logs.writeLog(log: "stopOutline error: " + error.localizedDescription)
             throw error
     }
 }
