@@ -68,10 +68,10 @@ func pingHostCheck(host string) error {
 
 	log.Infof("[HC] Sending GET request to %s", host)
 	resp, err := client.Get(host)
+	defer resp.Body.Close()
 	if err != nil {
 		return fmt.Errorf("failed request: %w", err)
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		return fmt.Errorf("invalid status code: %d", resp.StatusCode)
