@@ -184,8 +184,9 @@ internal class DobbyVpnService(
         }
     }
 
-    private fun startNone() {
+    private fun startNone(): Boolean {
         logger.log("[WARNING] There is no VPN, that can be started")
+        return false
     }
 
     private fun startAwg(): Boolean {

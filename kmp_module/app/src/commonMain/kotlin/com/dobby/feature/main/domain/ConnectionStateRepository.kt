@@ -8,8 +8,7 @@ class ConnectionStateRepository {
     private val _statusFlow = MutableStateFlow(VpnConnectionState.DISCONNECTED)
     val statusFlow = _statusFlow.asStateFlow()
 
-    private val _serviceStartedFlow = MutableStateFlow(false)
-    val serviceStartedFlow = _serviceStartedFlow.asStateFlow()
+    val serviceStartedFlow = ServiceStarted()
 
     suspend fun updateStatus(connectionState: VpnConnectionState) {
         _statusFlow.emit(connectionState)
@@ -20,10 +19,35 @@ class ConnectionStateRepository {
     }
 
     suspend fun updateServiceStarted(isStarted: Boolean) {
-        _serviceStartedFlow.emit(isStarted)
+        serviceStartedFlow.emit(isStarted)
     }
 
     fun tryUpdateServiceStarted(isStarted: Boolean) {
-        _serviceStartedFlow.tryEmit(isStarted)
+        serviceStartedFlow.emit(isStarted)
     }
+}
+
+class ServiceStarted {
+    private var value: Boolean? = null
+    private var callback: ((Boolean) -> Unit)? = null
+
+    fun prepare() {
+        value = null
+        callback = null
+    }
+
+    fun emit(started: Boolean) {
+        val currentCallback = callback
+        currentCallback?.invoke(started)
+        value = started
+    }
+
+    fun collect(function: (Boolean) -> Unit) {
+        val currentValue = value
+        if (currentValue != null) {
+            function.invoke(currentValue)
+        }
+        callback = function
+    }
+
 }

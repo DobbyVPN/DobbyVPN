@@ -21,7 +21,11 @@ extern void StartCloakClient(GoString localHost, GoString localPort, GoString co
 extern void StopCloakClient(void);
 extern void SetGeoRoutingConf(GoString cidrs);
 extern void ClearGeoRoutingConf(void);
-extern GoInt32 CheckServerAlive(GoString address, GoInt32 port);
+// extern GoInt32 CheckServerAlive(GoString address, GoInt32 port);
+extern GoInt32 GetConnectionState();
+extern void InitHealthCheck();
+extern void StartHealthCheck();
+extern void StopHealthCheck();
 extern void InitLogger(GoString path);
 extern char* GetLastError(void);
 extern void NewOutlineClient(GoString config, GoInt32 fd);
@@ -165,17 +169,37 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GeoRoutingBackend_clearGeoRoutingC
     ClearGeoRoutingConf();
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_backend_HealthCheckBackend_checkServerAlive(JNIEnv *env, jclass c, jstring jAddress, jint jPort)
-{
-	const char *address_str = (*env)->GetStringUTFChars(env, jAddress, 0);
-	size_t address_len = (*env)->GetStringUTFLength(env, jAddress);
-    int result = CheckServerAlive((GoString) {
-		.p = address_str,
-		.n = address_len
-	}, jPort);
+// JNIEXPORT jint JNICALL Java_com_dobby_backend_HealthCheckBackend_checkServerAlive(JNIEnv *env, jclass c, jstring jAddress, jint jPort)
+// {
+// 	const char *address_str = (*env)->GetStringUTFChars(env, jAddress, 0);
+// 	size_t address_len = (*env)->GetStringUTFLength(env, jAddress);
+//     int result = CheckServerAlive((GoString) {
+// 		.p = address_str,
+// 		.n = address_len
+// 	}, jPort);
 
-    (*env)->ReleaseStringUTFChars(env, jAddress, address_str);
-	return result;
+//     (*env)->ReleaseStringUTFChars(env, jAddress, address_str);
+// 	return result;
+// }
+
+JNIEXPORT jint JNICALL Java_com_dobby_backend_HealthCheckBackend_getConnectionState(JNIEnv *env, jclass c)
+{
+	return GetConnectionState();
+}
+
+JNIEXPORT void JNICALL Java_com_dobby_backend_HealthCheckBackend_initHealthCheck(JNIEnv *env, jclass c)
+{
+	InitHealthCheck();
+}
+
+JNIEXPORT void JNICALL Java_com_dobby_backend_HealthCheckBackend_startHealthCheck(JNIEnv *env, jclass c)
+{
+	StartHealthCheck();
+}
+
+JNIEXPORT void JNICALL Java_com_dobby_backend_HealthCheckBackend_stopHealthCheck(JNIEnv *env, jclass c)
+{
+	StopHealthCheck();
 }
 
 JNIEXPORT void JNICALL Java_com_dobby_backend_LoggerBackend_initLogger(JNIEnv *env, jclass c, jstring jPath)

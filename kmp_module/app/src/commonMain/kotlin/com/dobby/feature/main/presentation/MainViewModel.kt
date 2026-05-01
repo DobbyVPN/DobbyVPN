@@ -48,10 +48,6 @@ class MainViewModel(
         logger = logger
     )
 
-    private val healthCheckManager: HealthCheckManager = HealthCheckManager(healthCheck, this, configsRepository, logger)
-    private var serverAddress: String? = null
-    private var serverPort: Int? = null
-
     init {
         viewModelScope.launch {
             _uiState.emit(
@@ -114,7 +110,6 @@ class MainViewModel(
                         logger.log("Finish setConfig()")
                     }
 
-                    logger.log("Update vpnStarted state: VpnState = ${connectionStateRepository.serviceStartedFlow.value}")
                     logger.log("VPN is currently disconnected")
                     if (isPermissionCheckNeeded) {
                         logger.log("Permission check required, triggering permission dialog")
@@ -226,11 +221,18 @@ class MainViewModel(
 
     private suspend fun startVpnService() {
         logger.log("Starting VPN service...")
+        logger.log("Init health check")
         healthCheck.InitHealthCheck()
+        logger.log("Start tunnel service")
+        connectionStateRepository.serviceStartedFlow.prepare()
         vpnManager.start()
+        logger.log("Await service started result")
         connectionStateRepository.serviceStartedFlow.collect { connected ->
+            logger.log("Got service started result: $connected")
             if (connected) {
+                logger.log("Start health check")
                 healthCheck.StartHealthCheck()
+                logger.log("Start connection detector")
                 startConnectionStateDetector()
             } else {
                 stopVpnService()
@@ -240,10 +242,12 @@ class MainViewModel(
 
     private fun stopVpnService() {
         logger.log("Stopping VPN service...")
+        logger.log("Stop tunnel service")
         vpnManager.stop()
+        logger.log("Stop health check")
         healthCheck.StopHealthCheck()
+        logger.log("Stop connection detector")
         stopConnectionStateDetector()
-        configsRepository.clearOutlineAndCloakConfig()
         logger.log("VPN service stopped successfully, state reset to disconnected")
     }
     //endregion

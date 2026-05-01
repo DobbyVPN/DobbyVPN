@@ -8,9 +8,6 @@ import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.system.Os
-import com.dobby.awg.TunnelManager
-import com.dobby.awg.TunnelState
-import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -29,6 +26,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.koin.android.ext.android.inject
 import com.dobby.backend.GoBackendWrapper
+import com.dobby.feature.vpn_service.domain.cloak.DisconnectResult
 import java.io.File
 import java.io.FileInputStream
 import java.util.*
@@ -58,7 +56,6 @@ class DobbyVpnService : VpnService() {
     private val awgInteractor: AmneziaWGInteractor by inject()
     private val dobbyConfigsRepository: DobbyConfigsRepository by inject()
     private val connectionState: ConnectionStateRepository by inject()
-    private val tunnelManager = TunnelManager(this, logger)
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val startStopMutex = Mutex()
@@ -106,7 +103,7 @@ class DobbyVpnService : VpnService() {
             logger.log("[svc:$serviceId] net:registerDefaultNetworkCallback FAILED: ${e.message}")
         }
 
-        OutlineGo.registerVpnService(this)
+        GoBackendWrapper.registerVpnService(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -191,39 +188,35 @@ class DobbyVpnService : VpnService() {
         }
     }
 
-    private fun startAwg() {
-        if (dobbyConfigsRepository.getIsAmneziaWGEnabled()) {
-            logger.log("Starting AmneziaWG")
-            val stringConfig = dobbyConfigsRepository.getAwgConfig()
-            val state = if (dobbyConfigsRepository.getIsAmneziaWGEnabled()) {
-                TunnelState.UP
-            } else {
-                TunnelState.DOWN
-            }
-            tunnelManager.updateState(stringConfig, state)
-        } else {
-            logger.log("Stopping AmneziaWG")
-            tunnelManager.updateState(null, TunnelState.DOWN)
-        }
+    private fun startAwg(intent: Intent?) {
+        serviceScope.launch {
+            startStopMutex.withLock {
+                if (!awgInteractor.startAwg(intent, instance)) {
+                    connectionState.updateServiceStarted(false)
+                    teardownVpn()
+                    stopSelf()
+                    return@launch
+                }
 
-        connectionState.tryUpdateServiceStarted(true)
+                connectionState.updateServiceStarted(true)
+            }
+        }
     }
 
-    private suspend fun stopCloakClient() {
-        runCatching {
-            logger.log("Stopping Cloak client (if running)...")
-            cloakConnectInteractor.disconnect()
-        }.onFailure { e ->
-            logger.log("Failed to stop Cloak client: ${e.message}")
-        }
+    private fun startNone() {
+        connectionState.tryUpdateServiceStarted(false)
     }
 
     fun teardownVpn() {
         val interfaceToClose = vpnInterface
         val targetGoTunFd = goTunFd
         val fdBefore = runCatching { interfaceToClose?.fd }.getOrNull()
-        tunnelManager.updateState(null, TunnelState.DOWN)
         logger.log("[svc:$serviceId] teardownVpn(): begin fd=$fdBefore")
+        runCatching {
+            awgInteractor.stopAwg()
+        }.onFailure { e ->
+            logger.log("[svc:$serviceId] onDestroy(): failed to disconnect AmneziaWG: ${e.message}")
+        }
         runCatching {
             outlineInteractor.stopOutline()
         }.onFailure { e ->
@@ -231,7 +224,12 @@ class DobbyVpnService : VpnService() {
         }
         runCatching {
             runBlocking {
-                stopCloakClient()
+                this@runCatching.runCatching {
+                    logger.log("Stopping Cloak client (if running)...")
+                    cloakConnectInteractor.disconnect()
+                }.onFailure<DisconnectResult> { e ->
+                    logger.log("Failed to stop Cloak client: ${e.message}")
+                }
             }
         }.onFailure { e ->
             logger.log("[svc:$serviceId] onDestroy(): failed to stop Cloak: ${e.message}")

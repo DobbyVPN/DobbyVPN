@@ -12,7 +12,7 @@ import kotlin.concurrent.thread
 
 class HealthCheckImpl : HealthCheck {
     override fun GetConnectionState(): VpnConnectionState {
-        return when (OutlineGo.getConnectionState()) {
+        return when (HealthCheckBackendWrapper.getConnectionState()) {
             0 -> VpnConnectionState.DISCONNECTED
             1 -> VpnConnectionState.CONNECTING
             2 -> VpnConnectionState.CONNECTED
@@ -21,14 +21,14 @@ class HealthCheckImpl : HealthCheck {
     }
 
     override fun InitHealthCheck() {
-        OutlineGo.initHealthCheck()
+        HealthCheckBackendWrapper.initHealthCheck()
     }
 
     override fun StartHealthCheck() {
-        OutlineGo.startHealthCheck()
+        HealthCheckBackendWrapper.startHealthCheck()
     }
 
     override fun StopHealthCheck() {
-        OutlineGo.stopHealthCheck()
+        HealthCheckBackendWrapper.stopHealthCheck()
     }
 }

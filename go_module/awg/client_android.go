@@ -3,20 +3,9 @@
 package awg
 
 import (
-	"fmt"
+	"go_module/awg/internal"
 	"go_module/common"
 	_ "go_module/log"
-	"math"
-	"net"
-	"runtime/debug"
-	"strings"
-
-	"github.com/amnezia-vpn/amneziawg-go/conn"
-	"github.com/amnezia-vpn/amneziawg-go/device"
-	"github.com/amnezia-vpn/amneziawg-go/ipc"
-	"github.com/amnezia-vpn/amneziawg-go/tun"
-	log "github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
 )
 
 const Name = "awg"
