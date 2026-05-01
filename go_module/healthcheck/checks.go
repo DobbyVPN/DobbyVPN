@@ -62,16 +62,15 @@ func pingHostCheck(host string) error {
 	log.Infof("[HC] Check: ping hosts %s", host)
 
 	log.Infof("[HC] With timeout = %v", pingTimeout)
-	client := &http.Client{
-		Timeout: pingTimeout,
-	}
 
 	log.Infof("[HC] Sending GET request to %s", host)
-	req, err := http.NewRequest("GET", host, http.NoBody)
+	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", host, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("failed request init: %w", err)
 	}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed request send: %w", err)
 	}
