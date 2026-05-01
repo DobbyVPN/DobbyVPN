@@ -75,6 +75,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
             startPathLogging()
 
+            let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
+            logs.writeLog(log: "Start go logger init path = \(path)")
+            Cloak_outlineInitLogger(path)
+            logs.writeLog(log: "Finish go logger init")
+            Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
+
             let cloakConfig = configsRepository.getCloakConfig()
             // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
             // DNS resolution at tunnel start can hang in offline/captive-portal cases, so we do it with a hard timeout.
@@ -120,6 +126,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 logs.writeLog(log: "Excluded IPv4 routes: (none)")
             }
 
+            // Cloak must bind/connect before the full-tunnel route is installed; otherwise
+            // iOS can route the upstream bootstrap traffic into a tunnel that is not ready yet.
+            try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
+
             let remoteAddress = "254.1.1.1"
             let localAddress = "198.18.0.1"
             let subnetMask = "255.255.0.0"
@@ -143,14 +153,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
             logInterfaces()
 
-            let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
-            logs.writeLog(log: "Start go logger init path = \(path)")
-            Cloak_outlineInitLogger(path)
-            logs.writeLog(log: "Finish go logger init")
-            Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
             try outlineInteractor.startOutline()
             logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
-            try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
 
             logs.writeLog(log: "startTunnel: all packet loops started")
         } catch {
