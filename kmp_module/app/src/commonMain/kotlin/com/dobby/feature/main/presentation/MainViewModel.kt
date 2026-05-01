@@ -23,19 +23,21 @@ import com.dobby.vpn.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlin.concurrent.Volatile
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 val httpClient = HttpClient()
 
 class MainViewModel(
-    val configsRepository: DobbyConfigsRepository,
-    val connectionStateRepository: ConnectionStateRepository,
+    private val configsRepository: DobbyConfigsRepository,
+    private val connectionStateRepository: ConnectionStateRepository,
     private val permissionEventsChannel: PermissionEventsChannel,
     private val vpnManager: VpnManager,
     private val logger: Logger,
     private val healthCheck: HealthCheck,
 ) : ViewModel() {
     @Volatile
-    var connectionDetectorAtomic: Boolean = true
+    private var connectionDetectorAtomic: Boolean = true
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
 
@@ -49,6 +51,7 @@ class MainViewModel(
     )
 
     init {
+        // Load initial UI state from configs repository
         viewModelScope.launch {
             _uiState.emit(
                 MainUiState(
@@ -56,6 +59,7 @@ class MainViewModel(
                 )
             )
         }
+        // Load initial UI state from go backend
         viewModelScope.launch {
             val connectionState = healthCheck.GetConnectionState()
             logger.log("Init connection state: $connectionState")
@@ -66,6 +70,7 @@ class MainViewModel(
                 startConnectionStateDetector()
             }
         }
+        // Launch utility threads
         viewModelScope.launch {
             permissionEventsChannel
                 .permissionsGrantedEvents
@@ -187,10 +192,18 @@ class MainViewModel(
         }
     }
 
+    /**
+     * Stops connection state detector
+     */
     fun stopConnectionStateDetector() {
         connectionDetectorAtomic = false
     }
 
+    /**
+     * Starts connection state detector thread,
+     * that runs only when health check is being run,
+     * and repeatedly loads VPN connection state
+     */
     fun startConnectionStateDetector() {
         connectionDetectorAtomic = true
         viewModelScope.launch {
@@ -200,7 +213,7 @@ class MainViewModel(
                 val newState = _uiState.value.copy(connectionState = connectionState)
                 _uiState.emit(newState)
                 connectionStateRepository.updateStatus(connectionState)
-                delay(1000L)
+                delay(1.seconds)
             }
             logger.log("Connection state detector: awaiting disconnection")
             while (true) {
@@ -213,7 +226,7 @@ class MainViewModel(
                     connectionStateRepository.updateStatus(connectionState)
                     break
                 }
-                delay(150L)
+                delay(150.milliseconds)
             }
             logger.log("Connection state detector: finished")
         }

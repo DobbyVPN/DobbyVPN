@@ -28,6 +28,15 @@ class ConnectionStateRepository {
     }
 }
 
+/**
+ * A helper class for more explicit passing of the
+ * VPN service launch result from the service itself to [com.dobby.feature.main.presentation.MainViewModel].
+ *
+ * **Expected usage**:
+ *
+ * [ServiceStarted.prepare] -> [VpnManager.start] -> [ServiceStarted.awaitResult] ->
+ * what will block coroutine scope until we receive the result from the VPN service.
+ */
 class ServiceStarted {
     private val value = MutableStateFlow<Boolean?>(null)
 
