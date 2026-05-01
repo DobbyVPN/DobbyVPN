@@ -2,6 +2,7 @@ package com.dobby.feature.main.domain
 
 import android.content.Context
 import com.dobby.feature.vpn_service.DobbyVpnService
+import org.koin.android.scope.destroyServiceScope
 
 class VpnManagerImpl(
     private val context: Context,
@@ -13,9 +14,5 @@ class VpnManagerImpl(
             .let(context::startService)
     }
 
-    override fun stop() {
-        DobbyVpnService
-            .createIntent(context)
-            .let(context::stopService)
-    }
+    override fun stop() = Unit
 }

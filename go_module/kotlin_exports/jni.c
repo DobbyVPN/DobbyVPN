@@ -169,19 +169,6 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GeoRoutingBackend_clearGeoRoutingC
     ClearGeoRoutingConf();
 }
 
-// JNIEXPORT jint JNICALL Java_com_dobby_backend_HealthCheckBackend_checkServerAlive(JNIEnv *env, jclass c, jstring jAddress, jint jPort)
-// {
-// 	const char *address_str = (*env)->GetStringUTFChars(env, jAddress, 0);
-// 	size_t address_len = (*env)->GetStringUTFLength(env, jAddress);
-//     int result = CheckServerAlive((GoString) {
-// 		.p = address_str,
-// 		.n = address_len
-// 	}, jPort);
-
-//     (*env)->ReleaseStringUTFChars(env, jAddress, address_str);
-// 	return result;
-// }
-
 JNIEXPORT jint JNICALL Java_com_dobby_backend_HealthCheckBackend_getConnectionState(JNIEnv *env, jclass c)
 {
 	return GetConnectionState();

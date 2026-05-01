@@ -40,9 +40,9 @@ var (
 	connectionChecks []ConnectionCheck = []ConnectionCheck{
 		connectionCheck,
 		activeClientsCheck,
-		func() error {
-			return vpnInterfacesCheck([]string{"tun", "tap", "ppp", "ipsec", "wg", "awg", "awg0", "tun0", "outline233"})
-		},
+		// func() error {
+		// 	return vpnInterfacesCheck([]string{"tun", "tap", "ppp", "ipsec", "wg", "awg", "awg0", "tun0", "outline233"})
+		// },
 		func() error {
 			return dnsResolveCheck("google.com")
 		},
