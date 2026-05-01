@@ -2,7 +2,6 @@ package interop.healthcheck
 
 import com.dobby.grpcproto.VpnGrpcKt
 import com.dobby.grpcproto.empty
-import interop.exceptions.VpnServiceInternalException
 import interop.exceptions.VpnServiceStatusException
 import io.grpc.ManagedChannel
 import io.grpc.StatusException
