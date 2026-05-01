@@ -51,5 +51,6 @@ public final class CloakInteractor {
         if let error = err {
             logs.writeLog(log: "stopOutline error: " + error.localizedDescription)
             throw error
+        }
     }
 }
