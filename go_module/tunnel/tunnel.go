@@ -71,7 +71,9 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 		return nil, err
 	}
 
-	p.activeTCP.Add(1)
+	if active := p.activeTCP.Add(1); active%10 == 0 {
+		log.Infof("[Router] pool: activeTCP=%d/%d activeUDP=%d/%d", active, maxActiveTCPConns, p.activeUDP.Load(), maxActiveUDPConns)
+	}
 	return &trackedConn{Conn: conn, counter: &p.activeTCP}, nil
 }
 
@@ -90,7 +92,9 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 		return nil, err
 	}
 
-	p.activeUDP.Add(1)
+	if active := p.activeUDP.Add(1); active%10 == 0 {
+		log.Infof("[Router] pool: activeTCP=%d/%d activeUDP=%d/%d", p.activeTCP.Load(), maxActiveTCPConns, active, maxActiveUDPConns)
+	}
 	return &trackedPacketConn{PacketConn: conn, counter: &p.activeUDP}, nil
 }
 
