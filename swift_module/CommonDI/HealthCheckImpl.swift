@@ -420,9 +420,6 @@ public final class HealthCheckImpl: HealthCheck {
             }
             semaphore.signal()
         }
-        if #available(iOS 15.0, *) {
-            task.assumesHTTP3Capable = false
-        }
         task.resume()
 
         let wait = semaphore.wait(timeout: .now() + timeout)
