@@ -35,7 +35,19 @@ public final class HealthCheckImpl: HealthCheck {
             self.isVPNInterfaceExists()
         }
 
-        let result = vpnOk && networkOk
+        let heartbeatOk = runWithRetry(name: "XPC heartbeat check", attempts: 1) {
+            let mem = self.isTunnelAliveViaXPC()
+            self.currentMemmoryUsageMb = mem
+            return mem >= 0
+        }
+
+        if currentMemmoryUsageMb >= 0 {
+            logs.writeLog(log: "[HC] Memory usage: \(currentMemmoryUsageMb)MB")
+        } else {
+            logs.writeLog(log: "[HC] Memory usage: unknown (can't get XPC memory)")
+        }
+
+        let result = vpnOk && networkOk && heartbeatOk
         logs.writeLog(log: "End shortConnectionCheckUp => \(result)")
         return result
     }
@@ -86,28 +98,12 @@ public final class HealthCheckImpl: HealthCheck {
             logs.writeLog(log: "[HC] Group OK: Short health check group")
         }
 
-        var result = failedGroups.count <= 1
+        let result = failedGroups.count <= 1
         if !result {
             logs.writeLog(
                 log: "[HC] Too many failed groups (\(failedGroups.count)): " +
                      failedGroups.joined(separator: ", ")
             )
-        }
-
-        let heartbeatOk = runWithRetry(name: "XPC heartbeat check", attempts: 1) {
-            let mem = self.isTunnelAliveViaXPC()
-            self.currentMemmoryUsageMb = mem
-            return mem >= 0
-        }
-
-        if !heartbeatOk {
-            result = false
-        }
-
-        if currentMemmoryUsageMb >= 0 {
-            logs.writeLog(log: "[HC] Memory usage: \(currentMemmoryUsageMb)MB")
-        } else {
-            logs.writeLog(log: "[HC] Memory usage: unknown (can't get XPC memory)")
         }
 
         logs.writeLog(log: "[HC] RESULT = \(result)")
