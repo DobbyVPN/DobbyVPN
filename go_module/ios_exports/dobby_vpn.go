@@ -7,13 +7,8 @@ import (
 	"go_module/log"
 	"go_module/outline"
 	"go_module/xray"
-	"os"
 	"runtime/debug"
-
-	"golang.org/x/sys/unix"
 )
-
-const utunControlName = "com.apple.net.utun_control"
 
 var client *core.CoreClient
 
@@ -35,9 +30,9 @@ func unsafeToString(v any) string {
 	}
 }
 
-func NewVpnClient(transportConfig string, protocol string) (err error) {
+func NewVpnClient(transportConfig string, protocol string, tunnelFD int, mtu int) (err error) {
 	defer guardExport("NewVpnClient")()
-	log.Infof("NewVpnClient() called")
+	log.Infof("NewVpnClient() called protocol=%s fd=%d mtu=%d", protocol, tunnelFD, mtu)
 
 	if client != nil {
 		if err := VpnDisconnect(); err != nil {
@@ -45,17 +40,12 @@ func NewVpnClient(transportConfig string, protocol string) (err error) {
 		}
 	}
 
-	log.Infof("Start fd search")
-
-	fd := GetTunnelFileDescriptor()
-	if fd < 0 {
-		return fmt.Errorf("NewVpnClient(): utun fd not found")
+	if tunnelFD < 0 {
+		return fmt.Errorf("NewVpnClient(): invalid tunnel fd %d", tunnelFD)
 	}
 
-	log.Infof("Fd was found, fd = %d", fd)
+	log.Infof("Using tunnel fd=%d mtu=%d", tunnelFD, mtu)
 	log.Infof("Config length=%d", len(transportConfig))
-
-	tunFile := os.NewFile(uintptr(fd), "utun")
 
 	var device pkg.ProtocolDevice
 
@@ -64,13 +54,20 @@ func NewVpnClient(transportConfig string, protocol string) (err error) {
 	case "xray":
 		device, err = xray.NewXrayDevice(transportConfig)
 	case "outline":
-		device, err = outline.NewOutlineDevice(transportConfig)
+		device, err = outline.NewOutlineDeviceWithOptions(transportConfig, outline.DeviceOptions{
+			PreferTCPDNSForWebSocket: true,
+		})
 	default:
 		log.Infof("NewVpnClient() failed: unsupported protocol")
 		return fmt.Errorf("unsupported protocol: " + protocol)
 	}
 
-	client = core.NewClient(device, tunFile)
+	if err != nil {
+		log.Infof("NewVpnClient() failed to create device: %v", err)
+		return fmt.Errorf("failed to create %s device: %w", protocol, err)
+	}
+
+	client = core.NewClient(device, tunnelFD, mtu)
 
 	log.Infof("NewVpnClient() finished")
 	return nil
@@ -108,31 +105,14 @@ func VpnDisconnect() error {
 	return nil
 }
 
-func GetTunnelFileDescriptor() int {
-	ctlInfo := &unix.CtlInfo{}
-	copy(ctlInfo.Name[:], utunControlName)
+func VpnStatus() (string, error) {
+	defer guardExport("VpnStatus")()
 
-	for fd := 0; fd < 1024; fd++ {
-		addr, err := unix.Getpeername(fd)
-		if err != nil {
-			continue
-		}
-
-		addrCTL, ok := addr.(*unix.SockaddrCtl)
-		if !ok {
-			continue
-		}
-
-		if ctlInfo.Id == 0 {
-			if err := unix.IoctlCtlInfo(fd, ctlInfo); err != nil {
-				continue
-			}
-		}
-
-		if addrCTL.ID == ctlInfo.Id {
-			return fd
-		}
+	if client == nil {
+		return "client=false engineStarted=false fd=-1 deviceNil=true reason=client_nil", nil
 	}
 
-	return -1
+	status := client.Status()
+	log.Infof("VpnStatus: %s", status)
+	return status, nil
 }

@@ -2,9 +2,10 @@ package protected_dialer
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"strings"
 	"syscall"
-	"time"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
@@ -50,63 +51,88 @@ func listenAddr(network string) string {
 	return "0.0.0.0:0"
 }
 
+func protectSocket(fd uintptr, realNet, destination string) error {
+	if protector == nil {
+		// iOS 26: Log warning if protector is nil - this could explain connectivity issues
+		log.Infof("[Protect] WARNING: no socket protector registered - traffic may bypass VPN!")
+		return fmt.Errorf("no socket protector registered")
+	}
+
+	if err := protector.Protect(fd, realNet); err != nil {
+		// iOS 26: Log detailed error - socket protection failure may cause network issues
+		log.Infof("[Protect] ERROR: %s fd=%d destination=%s protect_failed: %v - may cause iOS network issues", realNet, fd, destination, err)
+		return err
+	}
+
+	// iOS 26: Log detailed success with more context
+	log.Infof("[Protect] %s fd=%d destination=%s protect_ok", realNet, fd, destination)
+	return nil
+}
+
+// NewProtectedDialer returns a net.Dialer that protects its sockets.
+func NewProtectedDialer(destination string) *net.Dialer {
+	return &net.Dialer{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var protectErr error
+			controlErr := c.Control(func(fd uintptr) {
+				protectErr = protectSocket(fd, network, destination)
+			})
+			if controlErr != nil {
+				return controlErr
+			}
+			return protectErr
+		},
+	}
+}
+
+// NewProtectedListenConfig returns a net.ListenConfig that protects its sockets.
+func NewProtectedListenConfig(destination string) *net.ListenConfig {
+	return &net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var protectErr error
+			controlErr := c.Control(func(fd uintptr) {
+				protectErr = protectSocket(fd, network, destination)
+			})
+			if controlErr != nil {
+				return controlErr
+			}
+			return protectErr
+		},
+	}
+}
+
 func DialContextWithProtect(ctx context.Context, network, address string) (net.Conn, error) {
 	realNet := normalizeTCP(address)
-	start := time.Now()
-	if deadline, ok := ctx.Deadline(); ok {
-		log.Infof("[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s protector=%T", network, realNet, address, deadline.Format(time.RFC3339Nano), protector)
-	} else {
-		log.Infof("[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none) protector=%T", network, realNet, address, protector)
-	}
 
 	if isLoopback(address) {
 		log.Infof("[Protect] TCP BYPASS loopback: %s", address)
 		var d net.Dialer
-		conn, err := d.DialContext(ctx, realNet, address)
-		if err != nil {
-			log.Infof("[Protect] TCP BYPASS loopback failed network=%s dest=%s elapsed=%s err=%v", realNet, address, time.Since(start), err)
-			return nil, err
-		}
-		log.Infof("[Protect] TCP BYPASS loopback OK network=%s dest=%s elapsed=%s local=%s remote=%s", realNet, address, time.Since(start), conn.LocalAddr(), conn.RemoteAddr())
-		return conn, nil
+		return d.DialContext(ctx, realNet, address)
 	}
 
-	d := &net.Dialer{
-		Control: func(network, address string, c syscall.RawConn) error {
-			err := c.Control(func(fd uintptr) {
-				if protector == nil {
-					log.Infof("[Protect] WARNING: no socket protector registered network=%s fd=%d destination=%s", realNet, fd, address)
-					return
-				}
-				log.Infof("[Protect] protect_begin network=%s fd=%d destination=%s protector=%T", realNet, fd, address, protector)
-				protector.Protect(fd, realNet)
-				log.Infof("[Protect] protect_end network=%s fd=%d destination=%s protector=%T", realNet, fd, address, protector)
-			})
-			if err != nil {
-				log.Infof("[Protect] TCP control error network=%s dest=%s err=%v", realNet, address, err)
-			}
-			return err
-		},
-	}
-
+	d := NewProtectedDialer(address)
 	conn, err := d.DialContext(ctx, realNet, address)
 	if err != nil {
-		log.Infof("[Protect] TCP dial FAILED dest=%s elapsed=%s err=%v", address, time.Since(start), err)
+		// iOS 26: Log detailed connection failure
+		log.Infof("[Protect] TCP dial FAILED: dest=%s err=%v", address, err)
 		return nil, err
 	}
 
-	log.Infof("[Protect] TCP dial OK dest=%s elapsed=%s local=%s remote=%s", address, time.Since(start), conn.LocalAddr(), conn.RemoteAddr())
+	// iOS 26 research: Log LOCAL address - key diagnostic info!
+	// If local addr starts with 192.168.x.x or 10.x.x.x, it's going via WiFi (BAD)
+	// If local addr starts with 198.18.x.x, it's going via VPN tunnel (GOOD)
+	localAddr := conn.LocalAddr().String()
+	log.Infof("[Protect] TCP dial OK: dest=%s local=%s remote=%s", address, localAddr, conn.RemoteAddr())
+	
+	// iOS 26 research: Warn if connection is NOT going through tunnel
+	if !strings.HasPrefix(localAddr, "198.18.") {
+		log.Infof("[Protect] *** CRITICAL *** Outbound TCP connection NOT using VPN tunnel! local=%s - THIS IS THE PROBLEM ON iOS 26", localAddr)
+	}
 	return conn, nil
 }
 
 func DialUDPWithProtect(ctx context.Context, network, address string) (net.PacketConn, error) {
 	realNet := normalizeUDP(address)
-	start := time.Now()
-	if deadline, ok := ctx.Deadline(); ok {
-		log.Infof("[Protect] UDP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s protector=%T", network, realNet, address, deadline.Format(time.RFC3339Nano), protector)
-	} else {
-		log.Infof("[Protect] UDP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none) protector=%T", network, realNet, address, protector)
-	}
 
 	if isLoopback(address) {
 		log.Infof("[Protect] UDP BYPASS loopback: %s", address)
@@ -115,65 +141,52 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 
 		pc, err := lc.ListenPacket(ctx, realNet, listenAddr(realNet))
 		if err != nil {
-			log.Infof("[Protect] UDP BYPASS loopback listen error network=%s destination=%s elapsed=%s err=%v", realNet, address, time.Since(start), err)
+			log.Infof("[Protect] UDP BYPASS loopback listen error network=%s destination=%s: %v", realNet, address, err)
 			return nil, err
 		}
 
 		udpAddr, err := net.ResolveUDPAddr(realNet, address)
 		if err != nil {
-			if closeErr := pc.Close(); closeErr != nil {
-				log.Infof("[Protect] UDP BYPASS loopback close after resolve error failed network=%s destination=%s closeErr=%v", realNet, address, closeErr)
-			}
-			log.Infof("[Protect] UDP BYPASS loopback resolve error network=%s destination=%s elapsed=%s err=%v", realNet, address, time.Since(start), err)
+			_ = pc.Close()
+			log.Infof("[Protect] UDP BYPASS loopback resolve error network=%s destination=%s: %v", realNet, address, err)
 			return nil, err
 		}
 
-		log.Infof("[Protect] UDP BYPASS loopback OK network=%s destination=%s elapsed=%s local=%s remote=%s", realNet, address, time.Since(start), pc.LocalAddr(), udpAddr)
+		log.Infof("[DEBUG][Protect] UDP BYPASS loopback ready network=%s destination=%s local=%s remote=%s", realNet, address, pc.LocalAddr(), udpAddr)
 		return &connectedUDPConn{
 			PacketConn: pc,
 			remoteAddr: udpAddr,
 		}, nil
 	}
 
-	lc := net.ListenConfig{
-		Control: func(network, address string, c syscall.RawConn) error {
-			err := c.Control(func(fd uintptr) {
-				if protector == nil {
-					log.Infof("[Protect] WARNING: no socket protector registered network=%s fd=%d destination=%s", realNet, fd, address)
-					return
-				}
-				log.Infof("[Protect] protect_begin network=%s fd=%d destination=%s protector=%T", realNet, fd, address, protector)
-				protector.Protect(fd, realNet)
-				log.Infof("[Protect] protect_end network=%s fd=%d destination=%s protector=%T", realNet, fd, address, protector)
-			})
-			if err != nil {
-				log.Infof("[Protect] UDP control error network=%s dest=%s err=%v", realNet, address, err)
-			}
-			return err
-		},
-	}
-
+	lc := NewProtectedListenConfig(address)
 	pc, err := lc.ListenPacket(ctx, realNet, listenAddr(realNet))
 	if err != nil {
-		log.Infof("[Protect] UDP listen error network=%s destination=%s elapsed=%s err=%v", realNet, address, time.Since(start), err)
+		log.Infof("[Protect] UDP listen error network=%s destination=%s: %v", realNet, address, err)
 		return nil, err
 	}
 
 	udpAddr, err := net.ResolveUDPAddr(realNet, address)
 	if err != nil {
-		if closeErr := pc.Close(); closeErr != nil {
-			log.Infof("[Protect] UDP close after resolve error failed network=%s destination=%s closeErr=%v", realNet, address, closeErr)
-		}
-		log.Infof("[Protect] UDP resolve error network=%s destination=%s elapsed=%s err=%v", realNet, address, time.Since(start), err)
+		_ = pc.Close()
+		log.Infof("[Protect] UDP resolve error network=%s destination=%s: %v", realNet, address, err)
 		return nil, err
 	}
 
-	log.Infof("[Protect] UDP dial OK network=%s destination=%s elapsed=%s local=%s remote=%s", realNet, address, time.Since(start), pc.LocalAddr(), udpAddr)
+	// iOS 26 research: Log UDP local address - key diagnostic info!
+	localAddr := pc.LocalAddr().String()
+	log.Infof("[DEBUG][Protect] UDP dial ready network=%s destination=%s local=%s remote=%s", realNet, address, localAddr, udpAddr)
+	
+	// iOS 26 research: Warn if UDP connection is NOT going through tunnel
+	if !strings.HasPrefix(localAddr, "198.18.") {
+		log.Infof("[Protect] *** CRITICAL *** Outbound UDP connection NOT using VPN tunnel! local=%s - THIS IS THE PROBLEM ON iOS 26", localAddr)
+	}
 	return &connectedUDPConn{
 		PacketConn: pc,
 		remoteAddr: udpAddr,
 	}, nil
 }
+
 
 type connectedUDPConn struct {
 	net.PacketConn

@@ -8,17 +8,24 @@ extern int go_protect_socket(int fd);
 */
 import "C"
 import (
+	"fmt"
 	"go_module/log"
 	"syscall"
 )
 
 func protector(network string, address string, c syscall.RawConn) error {
-	return c.Control(func(fd uintptr) {
+	var protectErr error
+	controlErr := c.Control(func(fd uintptr) {
 		res := C.go_protect_socket(C.int(fd))
 		if res != 1 {
-			log.Infof("Protect failed: go_protect_socket(fd=%d) returned %d for %s %s", fd, res, network, address)
+			protectErr = fmt.Errorf("go_protect_socket(fd=%d) returned %d", fd, res)
+			log.Infof("Protect failed: %v for %s %s", protectErr, network, address)
 		} else {
 			log.Infof("Protect success: fd=%d", fd)
 		}
 	})
+	if controlErr != nil {
+		return controlErr
+	}
+	return protectErr
 }

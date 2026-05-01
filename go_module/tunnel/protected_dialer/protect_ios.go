@@ -1,9 +1,6 @@
 package protected_dialer
 
 import (
-	"fmt"
-	"net"
-	"strings"
 	"syscall"
 
 	"go_module/log"
@@ -11,31 +8,32 @@ import (
 
 const SO_NO_TC_NETPOLICY = 0x1101
 
+// iOS 26 research: Try additional socket options
+// IP_BOUND_IF may help bind to specific interface on iOS 26
+const IP_BOUND_IF = 25
+
 type iosProtector struct{}
 
-func (i *iosProtector) Protect(fd uintptr, network string) {
+func (i *iosProtector) Protect(fd uintptr, network string) error {
+	// iOS 26: Try SO_NO_TC_NETPOLICY first (original approach)
 	err := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, SO_NO_TC_NETPOLICY, 1)
 	if err != nil {
-		log.Infof("[iOS-Protect] SO_NO_TC_NETPOLICY failed fd=%d network=%s err=%v interfaces=[%s]", fd, network, err, describeInterfacesForLog())
-		return
+		log.Infof("[iOS-Protect] SO_NO_TC_NETPOLICY failed: %v", err)
 	}
-	log.Infof("[iOS-Protect] SO_NO_TC_NETPOLICY success fd=%d network=%s interfaces=[%s]", fd, network, describeInterfacesForLog())
-}
-
-func describeInterfacesForLog() string {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return fmt.Sprintf("scan_error=%v", err)
+	
+	// iOS 26 research: Try IP_BOUND_IF to bind to default interface
+	// This might help with routing issues on iOS 26
+	// Note: This may not work on all iOS versions, but let's try
+	boundIfErr := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, IP_BOUND_IF, 0)
+	if boundIfErr != nil {
+		// Not fatal - just log for research
+		log.Infof("[iOS-Protect] IP_BOUND_IF not available: %v (this is normal on some iOS versions)", boundIfErr)
 	}
-
-	parts := make([]string, 0, len(interfaces))
-	for _, iface := range interfaces {
-		parts = append(parts, fmt.Sprintf("%s(index=%d flags=%s mtu=%d)", iface.Name, iface.Index, iface.Flags.String(), iface.MTU))
-	}
-	return strings.Join(parts, ";")
+	
+	return nil
 }
 
 func init() {
 	protector = &iosProtector{}
-	log.Infof("[iOS-Protect] Initialized with SO_NO_TC_NETPOLICY diagnostics")
+	log.Infof("[iOS-Protect] Initialized with iOS 26 research options (SO_NO_TC_NETPOLICY + IP_BOUND_IF research)")
 }
