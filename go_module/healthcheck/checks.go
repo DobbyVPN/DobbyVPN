@@ -8,14 +8,12 @@ import (
 	"go_module/log"
 	"net"
 	"net/http"
-	"slices"
 )
 
 // Check errors
 var (
 	ConnectionCheckError   = errors.New("connection check error")
 	ClientHealthCheckError = errors.New("client health check error")
-	VpnInterfaceCheckError = errors.New("vpn interface check error")
 )
 
 func connectionCheck() error {
@@ -43,41 +41,6 @@ func activeClientsCheck() error {
 	}
 
 	return nil
-}
-
-func vpnInterfacesCheck(expectedIfaces []string) error {
-	log.Infof("[HC] Check: vpn interfaces")
-
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return fmt.Errorf("Failed fetch local interfaces: %v", err)
-	}
-
-	var foundIface string = ""
-	for _, iface := range ifaces {
-		log.Infof("[HC] Checking VPN interface %s", iface.Name)
-		if slices.Contains(expectedIfaces, iface.Name) {
-			log.Infof("[HC] Found VPN interface %s", iface.Name)
-			foundIface = iface.Name
-			break
-		}
-	}
-
-	if foundIface != "" {
-		return nil
-	} else {
-		log.Infof("[HC] There is no expected net interface")
-
-		csMu.Lock()
-		defer csMu.Unlock()
-
-		if connectionState != Connecting {
-			log.Infof("[HC] connectionState => Connecting")
-			connectionState = Connecting
-		}
-
-		return VpnInterfaceCheckError
-	}
 }
 
 func dnsResolveCheck(host string) error {

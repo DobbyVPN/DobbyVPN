@@ -1,6 +1,7 @@
 package healthcheck
 
 import (
+	"go_module/healthcheck/interfacecheck"
 	"go_module/log"
 	"sync"
 	"time"
@@ -24,9 +25,10 @@ var (
 
 // Default variables
 var (
-	dnsTimeout   = 1 * time.Second
-	pingTimeout  = 1 * time.Second
-	delayTimeout = 1 * time.Second
+	dnsTimeout             = 1 * time.Second
+	pingTimeout            = 1 * time.Second
+	delayTimeoutConnecting = 1 * time.Second
+	delayTimeoutConnected  = 5 * time.Second
 )
 
 // Connection state
@@ -40,9 +42,9 @@ var (
 	connectionChecks []ConnectionCheck = []ConnectionCheck{
 		connectionCheck,
 		activeClientsCheck,
-		// func() error {
-		// 	return vpnInterfacesCheck([]string{"tun", "tap", "ppp", "ipsec", "wg", "awg", "awg0", "tun0", "outline233"})
-		// },
+		func() error {
+			return interfacecheck.VpnInterfacesCheck([]string{"tun", "tap", "ppp", "ipsec", "wg", "awg", "awg0", "tun0", "outline233", "utun0"})
+		},
 		func() error {
 			return dnsResolveCheck("google.com")
 		},
@@ -103,6 +105,16 @@ func innerHealthCheck() {
 
 	switchState(Connecting)
 	for {
+		var delayTimeout time.Duration
+
+		csMu.Lock()
+		if connectionState == Connecting {
+			delayTimeout = delayTimeoutConnecting
+		} else {
+			delayTimeout = delayTimeoutConnected
+		}
+		csMu.Unlock()
+
 		select {
 		case <-stopHealthCheckChannel:
 			log.Infof("[HC] Health check stopped")

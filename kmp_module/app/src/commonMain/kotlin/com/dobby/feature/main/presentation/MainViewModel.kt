@@ -227,16 +227,15 @@ class MainViewModel(
         connectionStateRepository.serviceStartedFlow.prepare()
         vpnManager.start()
         logger.log("Await service started result")
-        connectionStateRepository.serviceStartedFlow.collect { connected ->
-            logger.log("Got service started result: $connected")
-            if (connected) {
-                logger.log("Start health check")
-                healthCheck.StartHealthCheck()
-                logger.log("Start connection detector")
-                startConnectionStateDetector()
-            } else {
-                stopVpnService()
-            }
+        val connected = connectionStateRepository.serviceStartedFlow.awaitResult()
+        logger.log("Got service started result: $connected")
+        if (connected) {
+            logger.log("Start health check")
+            healthCheck.StartHealthCheck()
+            logger.log("Start connection detector")
+            startConnectionStateDetector()
+        } else {
+            stopVpnService()
         }
     }
 
