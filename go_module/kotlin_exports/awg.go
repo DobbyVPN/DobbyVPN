@@ -1,38 +1,95 @@
+//go:build android
+
 package main
 
-/*
-#include <stdlib.h>
-#include <string.h>
-*/
+// extern int go_protect_socket(int fd);
 import "C"
-import "go_module/awg"
+
+import (
+	"go_module/awg"
+	"go_module/log"
+	"go_module/tunnel/protected_dialer"
+	"strings"
+
+	"github.com/sirupsen/logrus"
+)
+
+func init() {
+	logrus.StandardLogger().ExitFunc = func(int) {}
+
+	protected_dialer.MakeSocketProtected = func(fd uintptr) {
+		C.go_protect_socket(C.int(fd))
+	}
+}
+
+var awgClient *awg.AwgClient
 
 //export AwgTurnOn
 func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
-	return awg.AwgTurnOn(interfaceName, tunFd, settings)
+	log.Infof("Create awg client")
+
+	if awgClient != nil {
+		log.Infof("Disconnecting previous client")
+		err := awgClient.Disconnect()
+		if err != nil {
+			log.Infof("[WARNING] Failed to disconnect previous client")
+		}
+	}
+
+	log.Infof("Config length=%d", len(settings))
+
+	client, err := awg.NewAwgClient(strings.Clone(interfaceName), strings.Clone(settings), int(tunFd))
+	if err != nil {
+		log.Infof("Failed to create awg client: %v", err)
+		return -1
+	}
+
+	awgClient = client
+
+	log.Infof("Created awg client")
+
+	log.Infof("Connecting awg client")
+	err = awgClient.Connect()
+	if err != nil {
+		log.Infof("Failed to connect awg client: %v", err)
+		return -1
+	}
+
+	log.Infof("Connected awg client")
+	return 0
 }
 
 //export AwgTurnOff
-func AwgTurnOff(tunnelHandle int32) {
-	awg.AwgTurnOff(tunnelHandle)
+func AwgTurnOff() {
+	if awgClient == nil {
+		log.Infof("Awg client is null")
+		return
+	}
+
+	log.Infof("Disconnecting awg client")
+	err := awgClient.Disconnect()
+	if err != nil {
+		log.Infof("Failed to disconnect awg client: %v", err)
+	}
+	awgClient = nil
 }
 
 //export AwgGetSocketV4
-func AwgGetSocketV4(tunnelHandle int32) int32 {
-	return awg.AwgGetSocketV4(tunnelHandle)
+func AwgGetSocketV4() int32 {
+	if awgClient == nil {
+		log.Infof("Awg client is null")
+		return -1
+	}
+
+	return int32(awgClient.App.TunnelData.GetSocketV4())
 }
 
 //export AwgGetSocketV6
-func AwgGetSocketV6(tunnelHandle int32) int32 {
-	return awg.AwgGetSocketV6(tunnelHandle)
-}
+func AwgGetSocketV6() int32 {
+	if awgClient == nil {
+		log.Infof("Awg client is null")
+		return -1
+	}
 
-//export AwgGetConfig
-func AwgGetConfig(tunnelHandle int32) string {
-	return awg.AwgGetConfig(tunnelHandle)
-}
-
-//export AwgVersion
-func AwgVersion() string {
-	return awg.AwgVersion()
+	return int32(awgClient.App.TunnelData.GetSocketV6())
 }

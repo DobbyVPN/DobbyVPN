@@ -1,16 +1,17 @@
+//go:build android
+
 package main
 
-/*
-#include <stdlib.h>
-#include <string.h>
-*/
 import "C"
 
 import (
+	"go_module/common"
 	"go_module/log"
 	"go_module/outline"
+	outlineCommon "go_module/outline/common"
 	"os"
 	"runtime/debug"
+	"strings"
 	"sync"
 )
 
@@ -61,26 +62,29 @@ func unsafeToString(v any) string {
 }
 
 //export NewOutlineClient
-func NewOutlineClient(config *C.char, fd C.int) {
+func NewOutlineClient(config string, fd int32) {
 	defer guardExport("NewOutlineClient")()
 	log.Infof("NewOutlineClient() called")
 
 	OutlineDisconnect()
 
-	goConfig := C.GoString(config)
+	goConfig := strings.Clone(config)
 	goFD := int(fd)
 
-	log.Infof("Config length=%d", len(goConfig))
+	log.Infof("Config %s", goConfig)
 
 	tunFile := os.NewFile(uintptr(goFD), "tun")
 
 	client = outline.NewClient(goConfig, tunFile)
+	log.Infof("outline client created (tun2socks version)")
+
+	common.Client.SetVpnClient(outlineCommon.Name, client)
 
 	log.Infof("NewOutlineClient() finished")
 }
 
 //export OutlineConnect
-func OutlineConnect() C.int {
+func OutlineConnect() int32 {
 	defer guardExport("OutlineConnect")()
 	log.Infof("OutlineConnect() called")
 

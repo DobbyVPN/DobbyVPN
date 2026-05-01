@@ -20,6 +20,10 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let udpPathOutlineKey = "UdpPathOutlineKey"
     private let isUserInitStopKey = "isUserInitStopKey"
     private let geoRoutingConfKey = "geoRoutingConfKey"
+    private let awgConfigKey = "awgConfigKey"
+    private let awgTomlConfigKey = "awgTomlConfigKey"
+    private let isAmneziaWGEnabledKey = "isAmneziaWGEnabledKey"
+    private let vpnInterfaceKey = "vpnInterfaceKey"
 
     public func getConnectionURL() -> String {
         return userDefaults.string(forKey: connectionURLKey) ?? ""
@@ -129,24 +133,41 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         userDefaults.set(udpPath, forKey: udpPathOutlineKey)
 
     }
-
+    
     public func getAwgConfig() -> String {
-        return ""
+        return userDefaults.string(forKey: awgConfigKey) ?? ""
+    }
+
+    public func setAwgConfig(newConfig: String) {
+        userDefaults.set(newConfig, forKey: awgConfigKey)
+    }
+
+    public func getAwgTomlConfig() -> String {
+        return userDefaults.string(forKey: awgTomlConfigKey) ?? ""
+    }
+
+    public func setAwgTomlConfig(newConfig: String) {
+        userDefaults.set(newConfig, forKey: awgTomlConfigKey)
     }
 
     public func getIsAmneziaWGEnabled() -> Bool {
-        return false
+        return userDefaults.bool(forKey: isAmneziaWGEnabledKey)
+    }
+
+    public func setIsAmneziaWGEnabled(isAmneziaWGEnabled: Bool) {
+        userDefaults.set(isAmneziaWGEnabled, forKey: isAmneziaWGEnabledKey)
     }
 
     public func getVpnInterface() -> VpnInterface {
+        // TODO: Rewrite code below with swift code
+        // return VpnInterface.valueOf(userDefaults.string(forKey: vpnInterfaceKey) ?? "")
         return VpnInterface.cloakOutline
     }
 
-    public func setAwgConfig(newConfig: String) {}
-
-    public func setIsAmneziaWGEnabled(isAmneziaWGEnabled: Bool) {}
-
-    public func setVpnInterface(vpnInterface: VpnInterface) {}
+    public func setVpnInterface(vpnInterface: VpnInterface) {
+        // TODO: Rewrite code below with swift code
+        // userDefaults.set(vpnInterface.toString(), forKey: vpnInterfaceKey)
+    }
 
     public func couldStart() -> Bool {
         return true

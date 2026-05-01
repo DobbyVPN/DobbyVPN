@@ -22,7 +22,7 @@ public final class OutlineInteractor {
 
         // Validate config early (prevents passing empty config into native layer).
         if methodPassword.isEmpty || serverPort.isEmpty {
-            logs.writeLog(log: "[startTunnel] Empty Outline config (methodPassword/serverPort) → abort")
+            logs.writeLog(log: "[startTunnel] Empty Outline config: methodPassword.isEmpty=\(methodPassword.isEmpty) serverPort.isEmpty=\(serverPort.isEmpty) → abort")
             throw NSError(
                 domain: "PacketTunnelProvider",
                 code: -2,
