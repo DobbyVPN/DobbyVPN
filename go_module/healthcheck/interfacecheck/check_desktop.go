@@ -10,17 +10,17 @@ import (
 	"slices"
 )
 
-var VpnInterfaceCheckError = errors.New("vpn interface check error")
+var ErrVpnInterfaceCheck = errors.New("vpn interface check error")
 
 func VpnInterfacesCheck(expectedIfaces []string) error {
 	log.Infof("[HC] Check: vpn interfaces")
 
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return fmt.Errorf("Failed fetch local interfaces: %v", err)
+		return fmt.Errorf("failed fetch local interfaces: %w", err)
 	}
 
-	var foundIface string = ""
+	foundIface := ""
 	for _, iface := range ifaces {
 		log.Infof("[HC] Checking VPN interface %s", iface.Name)
 		if slices.Contains(expectedIfaces, iface.Name) {
@@ -32,9 +32,7 @@ func VpnInterfacesCheck(expectedIfaces []string) error {
 
 	if foundIface != "" {
 		return nil
-	} else {
-		log.Infof("[HC] There is no expected net interface")
-
-		return VpnInterfaceCheckError
 	}
+	log.Infof("[HC] There is no expected net interface")
+	return ErrVpnInterfaceCheck
 }

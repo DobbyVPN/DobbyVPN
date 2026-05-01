@@ -12,8 +12,8 @@ import (
 
 // Check errors
 var (
-	ConnectionCheckError   = errors.New("connection check error")
-	ClientHealthCheckError = errors.New("client health check error")
+	ErrConnectionCheck   = errors.New("connection check error")
+	ErrClientHealthCheck = errors.New("client health check error")
 )
 
 func connectionCheck() error {
@@ -23,7 +23,7 @@ func connectionCheck() error {
 	if len(activeClients) == 0 {
 		log.Infof("[HC] No vpn clients turned on")
 
-		return ConnectionCheckError
+		return ErrConnectionCheck
 	}
 
 	return nil
@@ -36,7 +36,7 @@ func activeClientsCheck() error {
 	for _, clientName := range activeClients {
 		err := common.Client.HealthCheck(clientName)
 		if err != nil {
-			return ClientHealthCheckError
+			return ErrClientHealthCheck
 		}
 	}
 
@@ -69,11 +69,12 @@ func pingHostCheck(host string) error {
 	log.Infof("[HC] Sending GET request to %s", host)
 	resp, err := client.Get(host)
 	if err != nil {
-		return fmt.Errorf("Failed request: %v", err)
+		return fmt.Errorf("failed request: %w", err)
 	}
+	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return fmt.Errorf("Invalid status code: %d", resp.StatusCode)
+		return fmt.Errorf("invalid status code: %d", resp.StatusCode)
 	}
 
 	return nil
