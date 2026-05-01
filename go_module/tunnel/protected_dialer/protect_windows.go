@@ -38,21 +38,22 @@ func SetDefaultInterfaceIndex(idx int) {
 
 type windowsProtector struct{}
 
-func (w *windowsProtector) Protect(fd uintptr, network string) {
+func (w *windowsProtector) Protect(fd uintptr, network string) error {
 	if defaultInterfaceIndex == 0 {
-		return
+		return nil
 	}
 
 	switch network {
 	case "tcp4", "udp4":
 		const IP_UNICAST_IF = 31
 		idx := htonl(uint32(defaultInterfaceIndex))
-		_ = syscall.SetsockoptInt(syscall.Handle(fd), syscall.IPPROTO_IP, IP_UNICAST_IF, int(idx))
+		return syscall.SetsockoptInt(syscall.Handle(fd), syscall.IPPROTO_IP, IP_UNICAST_IF, int(idx))
 
 	case "tcp6", "udp6":
 		const IPV6_UNICAST_IF = 31
-		_ = syscall.SetsockoptInt(syscall.Handle(fd), syscall.IPPROTO_IPV6, IPV6_UNICAST_IF, defaultInterfaceIndex)
+		return syscall.SetsockoptInt(syscall.Handle(fd), syscall.IPPROTO_IPV6, IPV6_UNICAST_IF, defaultInterfaceIndex)
 	}
+	return nil
 }
 
 func htonl(i uint32) uint32 {

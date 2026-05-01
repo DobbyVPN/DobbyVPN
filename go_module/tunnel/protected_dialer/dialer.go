@@ -2,6 +2,7 @@ package protected_dialer
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"syscall"
 
@@ -49,6 +50,18 @@ func listenAddr(network string) string {
 	return "0.0.0.0:0"
 }
 
+func protectSocket(fd uintptr, realNet string, destination string) error {
+	if protector == nil {
+		return fmt.Errorf("no socket protector registered")
+	}
+	if err := protector.Protect(fd, realNet); err != nil {
+		log.Infof("[Protect] %s fd=%d destination=%s failed: %v", realNet, fd, destination, err)
+		return err
+	}
+	log.Infof("[Protect] %s fd=%d destination=%s OK", realNet, fd, destination)
+	return nil
+}
+
 func DialContextWithProtect(ctx context.Context, network, address string) (net.Conn, error) {
 	realNet := normalizeTCP(address)
 
@@ -59,12 +72,15 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 	}
 
 	d := &net.Dialer{
-		Control: func(network, address string, c syscall.RawConn) error {
-			return c.Control(func(fd uintptr) {
-				if protector != nil {
-					protector.Protect(fd, realNet)
-				}
+		Control: func(_, _ string, c syscall.RawConn) error {
+			var protectErr error
+			controlErr := c.Control(func(fd uintptr) {
+				protectErr = protectSocket(fd, realNet, address)
 			})
+			if controlErr != nil {
+				return controlErr
+			}
+			return protectErr
 		},
 	}
 
@@ -103,12 +119,15 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 	}
 
 	lc := net.ListenConfig{
-		Control: func(network, address string, c syscall.RawConn) error {
-			return c.Control(func(fd uintptr) {
-				if protector != nil {
-					protector.Protect(fd, realNet)
-				}
+		Control: func(_, _ string, c syscall.RawConn) error {
+			var protectErr error
+			controlErr := c.Control(func(fd uintptr) {
+				protectErr = protectSocket(fd, realNet, address)
 			})
+			if controlErr != nil {
+				return controlErr
+			}
+			return protectErr
 		},
 	}
 

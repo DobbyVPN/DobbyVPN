@@ -4,13 +4,8 @@ import (
 	"fmt"
 	"go_module/log"
 	"go_module/outline"
-	"os"
 	"runtime/debug"
-
-	"golang.org/x/sys/unix"
 )
-
-const utunControlName = "com.apple.net.utun_control"
 
 var client *outline.OutlineClient
 
@@ -32,7 +27,7 @@ func unsafeToString(v any) string {
 	}
 }
 
-func NewOutlineClient(transportConfig string) (err error) {
+func NewOutlineClient(transportConfig string, tunnelFD int, mtu int) (err error) {
 	defer guardExport("NewOutlineClient")()
 	log.Infof("NewOutlineClient() called")
 
@@ -42,19 +37,14 @@ func NewOutlineClient(transportConfig string) (err error) {
 		}
 	}
 
-	log.Infof("Start fd search")
-
-	fd := GetTunnelFileDescriptor()
-	if fd < 0 {
-		return fmt.Errorf("NewOutlineClient(): utun fd not found")
+	if tunnelFD < 0 {
+		return fmt.Errorf("NewOutlineClient(): invalid tunnel fd %d", tunnelFD)
 	}
 
-	log.Infof("Fd was found, fd = %d", fd)
+	log.Infof("Using tunnel fd=%d mtu=%d", tunnelFD, mtu)
 	log.Infof("Config length=%d", len(transportConfig))
 
-	tunFile := os.NewFile(uintptr(fd), "utun")
-
-	client = outline.NewClient(transportConfig, tunFile)
+	client = outline.NewClientWithFD(transportConfig, tunnelFD, mtu)
 
 	log.Infof("NewOutlineClient() finished")
 	return nil
@@ -90,33 +80,4 @@ func OutlineDisconnect() error {
 
 	log.Infof("OutlineDisconnect() finished")
 	return nil
-}
-
-func GetTunnelFileDescriptor() int {
-	ctlInfo := &unix.CtlInfo{}
-	copy(ctlInfo.Name[:], utunControlName)
-
-	for fd := 0; fd < 1024; fd++ {
-		addr, err := unix.Getpeername(fd)
-		if err != nil {
-			continue
-		}
-
-		addrCTL, ok := addr.(*unix.SockaddrCtl)
-		if !ok {
-			continue
-		}
-
-		if ctlInfo.Id == 0 {
-			if err := unix.IoctlCtlInfo(fd, ctlInfo); err != nil {
-				continue
-			}
-		}
-
-		if addrCTL.ID == ctlInfo.Id {
-			return fd
-		}
-	}
-
-	return -1
 }

@@ -17,15 +17,35 @@ import (
 )
 
 type OutlineClient struct {
-	device *internal.OutlineDevice
-	tun    io.ReadWriteCloser
-	config string
+	device        *internal.OutlineDevice
+	tunFD         int
+	engineStarted bool
+	config        string
+	mtu           int
 }
 
 func NewClient(transportConfig string, tun io.ReadWriteCloser) *OutlineClient {
+	return NewClientWithMTU(transportConfig, tun, 0)
+}
+
+func NewClientWithMTU(transportConfig string, tun io.ReadWriteCloser, mtu int) *OutlineClient {
+	fd := -1
+	if f, ok := tun.(*os.File); ok {
+		fd = int(f.Fd())
+	} else {
+		log.Infof("failed to get FD from tun: not an *os.File")
+	}
+	return NewClientWithFD(transportConfig, fd, mtu)
+}
+
+func NewClientWithFD(transportConfig string, fd int, mtu int) *OutlineClient {
+	if mtu <= 0 {
+		mtu = 1200
+	}
 	c := &OutlineClient{
 		config: transportConfig,
-		tun:    tun,
+		tunFD:  fd,
+		mtu:    mtu,
 	}
 	log.Infof("outline client created (tun2socks version)")
 	common.Client.SetVpnClient(outlineCommon.Name, c)
@@ -47,16 +67,13 @@ func (c *OutlineClient) Connect() error {
 	log.Infof("outline device (SOCKS5 bridge) created")
 	c.device = od
 
-	var fd int
-	if f, ok := c.tun.(*os.File); ok {
-		fd = int(f.Fd())
-		err := unix.SetNonblock(fd, true)
-		if err != nil {
-			log.Infof("Set unix.SetNonblock error: %v", err)
-		}
-	} else {
-		log.Infof("failed to get FD from tun: not an *os.File")
-		return fmt.Errorf("invalid tun device type")
+	fd := c.tunFD
+	if fd < 0 {
+		return fmt.Errorf("invalid tun fd")
+	}
+	err = unix.SetNonblock(fd, true)
+	if err != nil {
+		log.Infof("Set unix.SetNonblock error: %v", err)
 	}
 
 	log.Infof("starting tun2socks engine with proxy %s", od.GetProxyAddr())
@@ -64,11 +81,13 @@ func (c *OutlineClient) Connect() error {
 		ProxyAddr:   od.GetProxyAddr(),
 		FD:          fd,
 		UplinkIface: "",
+		MTU:         c.mtu,
 	})
 	if err != nil {
 		log.Infof("Can't start tun2socks: %v", err)
 		return err
 	}
+	c.engineStarted = true
 
 	common.Client.MarkActive(outlineCommon.Name)
 	log.Infof("outline client connected successfully via tun2socks")
@@ -77,6 +96,13 @@ func (c *OutlineClient) Connect() error {
 
 func (c *OutlineClient) Disconnect() error {
 	tunnel.StopEngine()
+	if !c.engineStarted && c.tunFD >= 0 {
+		if err := unix.Close(c.tunFD); err != nil {
+			log.Infof("failed to close unused tun fd: %v\n", err)
+		}
+	}
+	c.engineStarted = false
+	c.tunFD = -1
 
 	if c.device != nil {
 		if err := c.device.Close(); err != nil {

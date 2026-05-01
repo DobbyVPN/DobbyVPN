@@ -85,17 +85,18 @@ func SetDefaultInterface(idx int) {
 
 type macosProtector struct{}
 
-func (m *macosProtector) Protect(fd uintptr, network string) {
+func (m *macosProtector) Protect(fd uintptr, network string) error {
 	if defaultInterfaceIndex == 0 {
-		return
+		return nil
 	}
 
 	switch network {
 	case "tcp4", "udp4":
-		_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, IP_BOUND_IF, defaultInterfaceIndex)
+		return syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, IP_BOUND_IF, defaultInterfaceIndex)
 	case "tcp6", "udp6":
-		_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, IPV6_BOUND_IF, defaultInterfaceIndex)
+		return syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, IPV6_BOUND_IF, defaultInterfaceIndex)
 	}
+	return nil
 }
 
 func init() {

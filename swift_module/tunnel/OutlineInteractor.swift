@@ -10,7 +10,11 @@ import Network
 public final class OutlineInteractor {
     private var logs = NativeModuleHolder.logsRepository
 
-    func startOutline() throws {
+    func startOutline(
+        tunnelFileDescriptor: Int32,
+        mtu: Int,
+        nativeClientCreated: () -> Void
+    ) throws {
         
         let methodPassword = configsRepository.getMethodPasswordOutline()
         let serverPort = configsRepository.getServerPortOutline()
@@ -45,10 +49,11 @@ public final class OutlineInteractor {
         
         var err: NSError?
 
-        Cloak_outlineNewOutlineClient(config, &err)
+        Cloak_outlineNewOutlineClient(config, Int(tunnelFileDescriptor), mtu, &err)
         if let error = err {
             throw error
         }
+        nativeClientCreated()
 
         Cloak_outlineOutlineConnect(&err)
         if let error = err {

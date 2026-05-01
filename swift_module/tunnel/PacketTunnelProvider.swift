@@ -14,6 +14,7 @@ import Network
 class PacketTunnelProvider: NEPacketTunnelProvider {
     private let launchId = UUID().uuidString
     private let tunnelId = String(UUID().uuidString.prefix(8))
+    private let tunnelMTU = 1200
 
     private let outlineInteractor: OutlineInteractor = OutlineInteractor()
     private let cloakInteractor: CloakInteractor = CloakInteractor()
@@ -23,6 +24,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var pathMonitor: Network.NWPathMonitor?
     private var lastPathStatus: Network.NWPath.Status?
+    private var packetFlowBridge: PacketFlowBridge?
 
     deinit {
         logs.writeLog(log: "[tunnel:\(tunnelId)] deinit")
@@ -136,7 +138,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let dnsServers = ["1.1.1.1", "8.8.8.8"]
 
             let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
-            settings.mtu = 1200
+            settings.mtu = NSNumber(value: tunnelMTU)
             settings.ipv4Settings = NEIPv4Settings(
                 addresses: [localAddress],
                 subnetMasks: [subnetMask]
@@ -153,7 +155,26 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
             logInterfaces()
 
-            try outlineInteractor.startOutline()
+            let bridgeTunnelId = tunnelId
+            let bridgeLogs = logs
+            let bridge = try PacketFlowBridge(
+                packetFlow: packetFlow,
+                mtu: tunnelMTU,
+                tunnelId: tunnelId,
+                log: { message in
+                    bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] \(message)")
+                }
+            )
+            packetFlowBridge = bridge
+            bridge.start()
+
+            try outlineInteractor.startOutline(
+                tunnelFileDescriptor: bridge.tunnelFileDescriptor,
+                mtu: tunnelMTU,
+                nativeClientCreated: {
+                    bridge.releaseTunnelFileDescriptor()
+                }
+            )
             logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
 
             logs.writeLog(log: "startTunnel: all packet loops started")
@@ -163,6 +184,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 log: "[tunnel:\(tunnelId)] startTunnel failed: " +
                     "\(nsError.domain) code=\(nsError.code) desc=\(error.localizedDescription)"
             )
+            await teardownForStop(reason: "startTunnel failure")
             throw error
         }
     }
@@ -238,6 +260,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         } catch {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop outline: \(error.localizedDescription)")
         }
+
+        packetFlowBridge?.stop()
+        packetFlowBridge = nil
 
         cloakInteractor.stopCloak()
 
