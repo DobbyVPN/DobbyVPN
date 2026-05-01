@@ -667,11 +667,12 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 	}
 
 	resolver := net.Resolver{}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	ipList, err := resolver.LookupIPAddr(ctx, host)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("DNS lookup for %s timed out or failed: %w", host, err)
 	}
 	log.Infof("outline client: DNS returned %d addresses for %s", len(ipList), host)
 
