@@ -9,6 +9,8 @@ import Network
 private final class HttpMetricsDelegate: NSObject, URLSessionDataDelegate {
     private let log: (String) -> Void
     private let url: String
+    // Winning proto of the request (set before completion handler fires, safe to read after semaphore.wait)
+    var winnerProto: String = "?"
 
     init(url: String, log: @escaping (String) -> Void) {
         self.url = url
@@ -25,14 +27,21 @@ private final class HttpMetricsDelegate: NSObject, URLSessionDataDelegate {
                 guard let a, let b else { return "-" }
                 return "\(Int(b.timeIntervalSince(a) * 1000))ms"
             }
+            // responseEndDate != nil → эта транзакция фактически отдала ответ (выиграла гонку h2 vs h3)
+            // responseEndDate == nil → транзакция была прервана (проиграла гонку или таймаут)
+            let won = t.responseEndDate != nil
             let proto = t.networkProtocolName ?? "?"
+            if won {
+                winnerProto = proto
+                log("[HC] [httpPing] proto=\(proto) local=\(t.localAddress ?? "-")")
+            }
             // localAddress показывает через какой интерфейс прошёл трафик:
             // 198.18.0.1 = через VPN-туннель (хорошо)
             // любой другой = трафик обошёл туннель (плохо)
             let local = t.localAddress ?? "-"
             let remote = "\(t.remoteAddress ?? "-"):\(t.remotePort.map { "\($0)" } ?? "-")"
             log(
-                "[HC] [metrics#\(i)] proto=\(proto) reused=\(t.isReusedConnection)" +
+                "[HC] [metrics#\(i)\(won ? "[win]" : "[drop]")] proto=\(proto) reused=\(t.isReusedConnection)" +
                 " local=\(local) remote=\(remote)" +
                 " dns=\(ms(t.domainLookupStartDate, t.domainLookupEndDate))" +
                 " tcp=\(ms(t.connectStartDate, t.connectEndDate))" +
@@ -52,6 +61,7 @@ public final class HealthCheckImpl: HealthCheck {
     private let timeout: TimeInterval = 4.0
 
     public private(set) var currentMemmoryUsageMb = 0.0
+    private var lastMemoryMB: Double = 0
 
     public func shortConnectionCheckUp() -> Bool {
         logs.writeLog(log: "Start shortConnectionCheckUp")
@@ -80,9 +90,12 @@ public final class HealthCheckImpl: HealthCheck {
         }
 
         if currentMemmoryUsageMb >= 0 {
-            logs.writeLog(log: "[HC] Memory usage: \(currentMemmoryUsageMb)MB")
+            let delta = currentMemmoryUsageMb - lastMemoryMB
+            let deltaStr = lastMemoryMB == 0 ? "" : " (\(delta >= 0 ? "+" : "")\(String(format: "%.1f", delta))MB)"
+            logs.writeLog(log: "[HC] Memory: \(String(format: "%.1f", currentMemmoryUsageMb))MB\(deltaStr)")
+            lastMemoryMB = currentMemmoryUsageMb
         } else {
-            logs.writeLog(log: "[HC] Memory usage: unknown (can't get XPC memory)")
+            logs.writeLog(log: "[HC] Memory: unknown (XPC no response)")
         }
 
         let result = vpnOk && networkOk && heartbeatOk
@@ -149,11 +162,6 @@ public final class HealthCheckImpl: HealthCheck {
         let tunnelIPOk = isTunnelIPAssigned()
         logs.writeLog(log: "[HC] [diag] tunnel_ip_assigned=\(tunnelIPOk)")
 
-        // HTTPS без HTTP/3 — если этот тест проходит, а shortCheckUp нет → QUIC-проблема
-        logs.writeLog(log: "[HC] [diag] Running HTTPS without HTTP/3...")
-        let httpsNoQuicOk = httpPingNoQuic(urlString: "https://google.com/gen_204")
-        logs.writeLog(log: "[HC] [diag] https_no_quic=\(httpsNoQuicOk)")
-
         // --- Итог ---
         let result = failedGroups.count <= 1
         if !result {
@@ -174,8 +182,7 @@ public final class HealthCheckImpl: HealthCheck {
             tcpProxy: tcpProxyOk,
             dns: dnsOk,
             tcp443: tcp443Ok,
-            https: httpsOk,
-            httpsNoQuic: httpsNoQuicOk
+            https: httpsOk
         )
 
         return result
@@ -186,27 +193,26 @@ public final class HealthCheckImpl: HealthCheck {
         tcpProxy: Bool,
         dns: Bool,
         tcp443: Bool,
-        https: Bool,
-        httpsNoQuic: Bool
+        https: Bool
     ) {
         let diagnosis: String
-        switch (tunnelIP, tcpProxy, dns, tcp443, https, httpsNoQuic) {
-        case (false, _, _, _, _, _):
+        switch (tunnelIP, tcpProxy, dns, tcp443, https) {
+        case (false, _, _, _, _):
             diagnosis = "СТОРОНА: КЛИЕНТ | ПРИЧИНА: tunnel IP 198.18.0.1 не назначен — туннель не поднялся на уровне OS"
-        case (true, false, _, _, _, _):
+        case (true, false, _, _, _):
             diagnosis = "СТОРОНА: КЛИЕНТ | ПРИЧИНА: TCP через SOCKS5-прокси не работает — tun2socks не форвардит трафик или Go-движок упал"
-        case (true, true, false, _, _, _):
+        case (true, true, false, _, _):
             diagnosis = "СТОРОНА: КЛИЕНТ | ПРИЧИНА: DNS не резолвится — неверные DNS-серверы в туннеле или их трафик не проходит"
-        case (true, true, true, false, _, _):
+        case (true, true, true, false, _):
             diagnosis = "СТОРОНА: СЕРВЕР (вероятно) | ПРИЧИНА: TCP :53 OK, но TCP :443 падает — сервер блокирует HTTPS-порт или промежуточный узел фильтрует"
-        case (true, true, true, true, false, true):
-            diagnosis = "СТОРОНА: КЛИЕНТ | ПРИЧИНА: HTTPS/HTTP2 работает, HTTPS/HTTP3 (QUIC/UDP) нет — tun2socks не проксирует UDP правильно"
-        case (true, true, true, true, false, false):
-            diagnosis = "СТОРОНА: СМЕШАННАЯ | ПРИЧИНА: TCP :443 OK, TLS/HTTP2 и HTTP3 оба падают — скорее всего сервер получает данные но не отдаёт ответ (проверить логи сервера)"
-        case (true, true, true, true, true, _):
+        case (true, true, true, true, false):
+            // Смотри metrics[win] в логах: proto=h3 → QUIC/UDP не работает (Cloak? UDP пул полон?);
+            // proto=h2 с высоким total → сервер медленный или блокирует TLS
+            diagnosis = "СТОРОНА: КЛИЕНТ ИЛИ СЕРВЕР | ПРИЧИНА: TCP :443 OK, но HTTPS падает — смотри [win] в metrics: h3+total=- → UDP не проксируется; h2+total=NNNms → медленный/блокирующий сервер"
+        case (true, true, true, true, true):
             diagnosis = "ВСЁ OK — соединение рабочее"
         default:
-            diagnosis = "НЕОПРЕДЕЛЕНО | Паттерн: tunnel=\(tunnelIP) tcp=\(tcpProxy) dns=\(dns) tcp443=\(tcp443) https=\(https) noQuic=\(httpsNoQuic)"
+            diagnosis = "НЕОПРЕДЕЛЕНО | Паттерн: tunnel=\(tunnelIP) tcp=\(tcpProxy) dns=\(dns) tcp443=\(tcp443) https=\(https)"
         }
         logs.writeLog(log: "[HC] DIAGNOSIS: \(diagnosis)")
     }
@@ -372,61 +378,7 @@ public final class HealthCheckImpl: HealthCheck {
             let elapsed = Int(Date().timeIntervalSince(startTime) * 1000)
             logs.writeLog(log: "[HC] [httpPing] \(urlString) TIMEOUT after \(elapsed)ms")
             task.cancel()
-        }
-        return success
-    }
-
-    // Тот же httpPing, но с отключённым HTTP/3 (QUIC).
-    // Если этот тест проходит, а обычный нет — проблема именно в QUIC-трафике через прокси.
-    private func httpPingNoQuic(urlString: String) -> Bool {
-        guard let url = URL(string: urlString) else { return false }
-
-        let semaphore = DispatchSemaphore(value: 0)
-        var success = false
-        let startTime = Date()
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = timeout
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = timeout
-        config.timeoutIntervalForResource = timeout
-        let delegate = HttpMetricsDelegate(url: urlString + " [noQuic]") { [weak self] msg in
-            self?.logs.writeLog(log: msg)
-        }
-        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-
-        let task = session.dataTask(with: request) { _, response, error in
-            let elapsed = Int(Date().timeIntervalSince(startTime) * 1000)
-            if let error = error {
-                let nsErr = error as NSError
-                self.logs.writeLog(
-                    log: "[HC] [httpNoQuic] \(urlString) ERROR in \(elapsed)ms:" +
-                         " [\(nsErr.domain) \(nsErr.code)] \(nsErr.localizedDescription)"
-                )
-            } else if let http = response as? HTTPURLResponse {
-                let ok = (200..<400).contains(http.statusCode)
-                self.logs.writeLog(
-                    log: "[HC] [httpNoQuic] \(urlString) HTTP \(http.statusCode)" +
-                         " in \(elapsed)ms → \(ok ? "OK" : "FAIL")"
-                )
-                success = ok
-            } else {
-                self.logs.writeLog(
-                    log: "[HC] [httpNoQuic] \(urlString) no HTTP response in \(elapsed)ms"
-                )
-            }
-            semaphore.signal()
-        }
-        task.resume()
-
-        let wait = semaphore.wait(timeout: .now() + timeout)
-        if wait == .timedOut {
-            let elapsed = Int(Date().timeIntervalSince(startTime) * 1000)
-            logs.writeLog(log: "[HC] [httpNoQuic] \(urlString) TIMEOUT after \(elapsed)ms")
-            task.cancel()
+            session.invalidateAndCancel()
         }
         return success
     }

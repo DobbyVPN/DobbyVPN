@@ -45,6 +45,9 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 		return nil, err
 	}
 
+	hasUDPPath := strings.Contains(transportConfig, "udp_path=")
+	log.Infof("outline client: packetDialer type=%T udpPath=%v", pd, hasUDPPath)
+
 	useCloak := ip.IsLoopback()
 
 	log.Infof("outline client: cloak mode = %v", useCloak)
@@ -83,6 +86,7 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
 
 	log.Infof("[SOCKS5] dial %s %s", network, addr)
+	start := time.Now()
 
 	host, portStr, _ := net.SplitHostPort(addr)
 	port, _ := strconv.Atoi(portStr)
@@ -91,31 +95,29 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 
 	case "tcp":
 		conn, err := d.streamDialer.DialStream(ctx, addr)
+		elapsed := time.Since(start).Milliseconds()
 		if err != nil {
-			log.Infof("[SOCKS5 TCP ERROR] %v", err)
+			log.Infof("[SOCKS5 TCP ERROR] %s in %dms: %v", addr, elapsed, err)
 			return nil, err
 		}
-
-		log.Infof("[SOCKS5 TCP OK] %s", addr)
+		log.Infof("[SOCKS5 TCP OK] %s in %dms", addr, elapsed)
 		return conn, nil
 
 	case "udp":
 
 		// DNS fallback for Cloak
 		if d.useCloak && port == 53 {
-
 			log.Infof("[SOCKS5 DNS] returning truncated DNS (cloak mode)")
-
 			return newTruncatedDNSConn(host, port), nil
 		}
 
 		conn, err := d.packetDialer.DialPacket(ctx, addr)
+		elapsed := time.Since(start).Milliseconds()
 		if err != nil {
-			log.Infof("[SOCKS5 UDP ERROR] %v", err)
+			log.Infof("[SOCKS5 UDP ERROR] %s in %dms: %v", addr, elapsed, err)
 			return nil, err
 		}
-
-		log.Infof("[SOCKS5 UDP OK] %s", addr)
+		log.Infof("[SOCKS5 UDP OK] %s in %dms", addr, elapsed)
 		return conn, nil
 	}
 
