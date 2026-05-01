@@ -10,23 +10,23 @@ import (
 const Name = "awg"
 
 type AwgClient struct {
-	app *internal.App
+	App *internal.App
 }
 
 func (a *AwgClient) Connect() error {
 	common.Client.MarkActive(Name)
-	return a.app.Run()
+	return a.App.Run()
 }
 
 func (a *AwgClient) Disconnect() error {
 	common.Client.MarkInactive(Name)
-	a.app.Stop()
+	a.App.Stop()
 	return nil
 }
 
 func (a *AwgClient) Refresh() error {
-	a.app.Stop()
-	return a.app.Run()
+	a.App.Stop()
+	return a.App.Run()
 }
 
 func (a *AwgClient) HealthCheck() error {
@@ -39,7 +39,7 @@ func NewAwgClient(config string) (*AwgClient, error) {
 		return nil, err
 	}
 
-	cl := &AwgClient{app: app}
+	cl := &AwgClient{App: app}
 	common.Client.SetVpnClient(Name, cl)
 	return cl, nil
 }
