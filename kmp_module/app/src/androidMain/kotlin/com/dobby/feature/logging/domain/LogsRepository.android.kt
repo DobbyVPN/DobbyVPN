@@ -4,6 +4,7 @@ import android.content.Context
 import okio.Path
 import okio.Path.Companion.toPath
 import com.dobby.backend.GoBackendWrapper
+import com.dobby.backend.LoggerBackendWrapper
 
 actual val fileSystem = okio.FileSystem.SYSTEM
 
@@ -18,5 +19,5 @@ actual fun provideLogFilePath(): Path {
 }
 
 fun initLogger() {
-    GoBackendWrapper.initLogger(provideLogFilePath().toString())
+    LoggerBackendWrapper.initLogger(provideLogFilePath().toString())
 }

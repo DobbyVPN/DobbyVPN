@@ -2,8 +2,11 @@ package com.dobby.backend
 
 import android.net.VpnService
 
-class GoBackend {
-    external fun registerVpnService(service: VpnService): Unit
+class GeoRoutingBackend {
+
+    external fun setGeoRoutingConf(cidrs: String): Unit
+
+    external fun clearGeoRoutingConf(): Unit
 
     companion object {
         init {

@@ -117,7 +117,7 @@ JNIEXPORT jint JNICALL Java_com_dobby_backend_AwgBackend_awgGetSocketV6(JNIEnv *
 	return AwgGetSocketV6();
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_startCloakClient(JNIEnv *env, jclass c, jstring jLocalHost, jstring jLocalPort, jstring jConfig, jboolean udp)
+JNIEXPORT void JNICALL Java_com_dobby_backend_CloakBackend_startCloakClient(JNIEnv *env, jclass c, jstring jLocalHost, jstring jLocalPort, jstring jConfig, jboolean udp)
 {
     const char *localHost_str = (*env)->GetStringUTFChars(env, jLocalHost, 0);
 	size_t localHost_len = (*env)->GetStringUTFLength(env, jLocalHost);
@@ -143,12 +143,12 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_startCloakClient(JNIEnv 
     (*env)->ReleaseStringUTFChars(env, jConfig, config_str);
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_stopCloakClient(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_CloakBackend_stopCloakClient(JNIEnv *env, jclass c)
 {
     StopCloakClient();
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_setGeoRoutingConf(JNIEnv *env, jclass c, jstring jCidrs)
+JNIEXPORT void JNICALL Java_com_dobby_backend_GeoRoutingBackend_setGeoRoutingConf(JNIEnv *env, jclass c, jstring jCidrs)
 {
 	const char *cidrs_str = (*env)->GetStringUTFChars(env, jCidrs, 0);
 	size_t cidrs_len = (*env)->GetStringUTFLength(env, jCidrs);
@@ -160,12 +160,12 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_setGeoRoutingConf(JNIEnv
     (*env)->ReleaseStringUTFChars(env, jCidrs, cidrs_str);
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_clearGeoRoutingConf(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_GeoRoutingBackend_clearGeoRoutingConf(JNIEnv *env, jclass c)
 {
     ClearGeoRoutingConf();
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_checkServerAlive(JNIEnv *env, jclass c, jstring jAddress, jint jPort)
+JNIEXPORT jint JNICALL Java_com_dobby_backend_HealthCheckBackend_checkServerAlive(JNIEnv *env, jclass c, jstring jAddress, jint jPort)
 {
 	const char *address_str = (*env)->GetStringUTFChars(env, jAddress, 0);
 	size_t address_len = (*env)->GetStringUTFLength(env, jAddress);
@@ -178,7 +178,7 @@ JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_checkServerAlive(JNIEnv 
 	return result;
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_initLogger(JNIEnv *env, jclass c, jstring jPath)
+JNIEXPORT void JNICALL Java_com_dobby_backend_LoggerBackend_initLogger(JNIEnv *env, jclass c, jstring jPath)
 {
     const char *path_str = (*env)->GetStringUTFChars(env, jPath, 0);
 	size_t path_len = (*env)->GetStringUTFLength(env, jPath);
@@ -189,7 +189,7 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_initLogger(JNIEnv *env, 
     (*env)->ReleaseStringUTFChars(env, jPath, path_str);
 }
 
-JNIEXPORT jstring JNICALL Java_com_dobby_backend_GoBackend_getLastError(JNIEnv *env, jclass c)
+JNIEXPORT jstring JNICALL Java_com_dobby_backend_OutlineBackend_getLastError(JNIEnv *env, jclass c)
 {
 	jstring ret;
     char *result = GetLastError();
@@ -200,7 +200,7 @@ JNIEXPORT jstring JNICALL Java_com_dobby_backend_GoBackend_getLastError(JNIEnv *
 	return ret;
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_newOutlineClient(JNIEnv *env, jclass c, jstring jConfig, jint jFd)
+JNIEXPORT void JNICALL Java_com_dobby_backend_OutlineBackend_newOutlineClient(JNIEnv *env, jclass c, jstring jConfig, jint jFd)
 {
     const char *config_str = (*env)->GetStringUTFChars(env, jConfig, 0);
 	size_t config_len = (*env)->GetStringUTFLength(env, jConfig);
@@ -211,12 +211,12 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_newOutlineClient(JNIEnv 
     (*env)->ReleaseStringUTFChars(env, jConfig, config_str);
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_outlineConnect(JNIEnv *env, jclass c)
+JNIEXPORT jint JNICALL Java_com_dobby_backend_OutlineBackend_outlineConnect(JNIEnv *env, jclass c)
 {
     return OutlineConnect();
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_outlineDisconnect(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_OutlineBackend_outlineDisconnect(JNIEnv *env, jclass c)
 {
     OutlineDisconnect();
 }

@@ -1,9 +1,7 @@
 package com.dobby.backend
 
-import android.net.VpnService
-
-class GoBackend {
-    external fun registerVpnService(service: VpnService): Unit
+class HealthCheckBackend {
+    external fun checkServerAlive(address: String, port: Int): Int
 
     companion object {
         init {

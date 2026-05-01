@@ -7,6 +7,7 @@ import java.net.*
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import com.dobby.backend.GoBackendWrapper
+import com.dobby.backend.HealthCheckBackendWrapper
 import kotlin.concurrent.thread
 
 class HealthCheckImpl(
@@ -118,7 +119,7 @@ class HealthCheckImpl(
     }
 
     override fun checkServerAlive(address: String, port: Int): Boolean {
-        return GoBackendWrapper.checkServerAlive(address, port) == 0
+        return HealthCheckBackendWrapper.checkServerAlive(address, port) == 0
     }
 
     override fun getTimeToWakeUp(): Int {
