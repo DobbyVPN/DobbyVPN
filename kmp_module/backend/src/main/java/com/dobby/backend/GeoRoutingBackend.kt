@@ -1,7 +1,5 @@
 package com.dobby.backend
 
-import android.net.VpnService
-
 class GeoRoutingBackend {
 
     external fun setGeoRoutingConf(cidrs: String): Unit
