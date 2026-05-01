@@ -8,6 +8,7 @@ import MyLibrary
 public class VpnManagerImpl: VpnManager {
     private static let launchId = UUID().uuidString
     private var logs = NativeModuleHolder.logsRepository
+    private var stopInitiatedByUser = false
 
     public static var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
     public static var dobbyName = "Dobby_VPN_4"
@@ -59,7 +60,12 @@ public class VpnManagerImpl: VpnManager {
                 self.logs.writeLog(log: "VPN connected")
 
             case .disconnected:
-                self.logs.writeLog(log: "VPN disconnected")
+                if self.stopInitiatedByUser {
+                    self.logs.writeLog(log: "VPN disconnected (user-initiated)")
+                    self.stopInitiatedByUser = false
+                } else {
+                    self.logs.writeLog(log: "VPN disconnected (UNEXPECTED — not user-initiated, possible crash or system kill)")
+                }
 
             case .connecting:
                 self.logs.writeLog(log: "VPN is connecting…")
@@ -71,7 +77,7 @@ public class VpnManagerImpl: VpnManager {
                 self.logs.writeLog(log: "VPN is disconnecting…")
 
             case .invalid:
-                self.logs.writeLog(log: "VPN status is invalid")
+                self.logs.writeLog(log: "VPN status invalid — tunnel extension may have failed to start or config is broken")
 
             @unknown default:
                 self.logs.writeLog(log: "VPN status unknown: \(connection.status.rawValue)")
@@ -140,6 +146,7 @@ public class VpnManagerImpl: VpnManager {
         }
         self.logs.writeLog(log: "[stop] User initiated stopVPNTunnel()")
         connectionRepository.tryUpdateVpnTransitioning(isTransitioning: true)
+        stopInitiatedByUser = true
         manager.connection.stopVPNTunnel()
         self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")
     }
@@ -187,7 +194,10 @@ public class VpnManagerImpl: VpnManager {
     }
 
     private func applyProtocolDefaults(manager: NETunnelProviderManager) {
-        guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else { return }
+        guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else {
+            logs.writeLog(log: "applyProtocolDefaults: SKIP — protocolConfiguration is \(type(of: manager.protocolConfiguration)), expected NETunnelProviderProtocol")
+            return
+        }
         proto.providerBundleIdentifier = Self.dobbyBundleIdentifier
         proto.serverAddress = currentServerAddress()
         proto.includeAllNetworks = true

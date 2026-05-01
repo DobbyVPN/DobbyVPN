@@ -102,30 +102,40 @@ func (p *DobbyProxy) Proto() proto.Proto {
 	return p.vpn.Proto()
 }
 
+func stopLocked() {
+	platform_engine.EngineStop()
+	isRunning = false
+}
+
 func StartEngine(cfg platform_engine.EngineConfig) error {
 	mu.Lock()
 	defer mu.Unlock()
 
 	if isRunning {
-		StopEngine()
+		stopLocked()
 	}
 
+	log.Infof("[Engine] StartEngine: calling StartPlatformEngine")
 	err := platform_engine.StartPlatformEngine(cfg)
 	if err != nil {
+		log.Infof("[Engine] StartPlatformEngine failed: %v", err)
 		return err
 	}
+	log.Infof("[Engine] StartPlatformEngine OK")
 
 	t := tunnel.T()
 	if t == nil {
+		log.Infof("[Engine] tunnel.T() is nil after engine start — tun2socks did not initialise")
 		return fmt.Errorf("tunnel not initialized after engine start")
 	}
 
 	currentDialer := t.Dialer()
 	vpnOutbound, ok := currentDialer.(proxy.Proxy)
 	if !ok {
-		log.Infof("[Engine] Current dialer is not a proxy")
+		log.Infof("[Engine] Current dialer is not a proxy (type=%T)", currentDialer)
 		return fmt.Errorf("current dialer is not a proxy")
 	}
+	log.Infof("[Engine] vpn outbound proxy type=%T addr=%s", vpnOutbound, vpnOutbound.Addr())
 
 	directOutbound := &protected_dialer.ProtectedDirectProxy{
 		Proxy: proxy.NewDirect(),
@@ -137,6 +147,7 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 	}
 
 	t.SetDialer(wrapper)
+	log.Infof("[Engine] DobbyProxy installed (maxTCP=%d maxUDP=%d)", maxActiveTCPConns, maxActiveUDPConns)
 	isRunning = true
 	return nil
 }
@@ -149,6 +160,5 @@ func StopEngine() {
 		return
 	}
 
-	platform_engine.EngineStop()
-	isRunning = false
+	stopLocked()
 }
