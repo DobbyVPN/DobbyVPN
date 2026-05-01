@@ -149,7 +149,8 @@ class DobbyVpnService : VpnService() {
                 geoRouting.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
                 when (dobbyConfigsRepository.getVpnInterface()) {
                     VpnInterface.CLOAK_OUTLINE -> startCloakOutline(intent)
-                    VpnInterface.AMNEZIA_WG -> startAwg()
+                    VpnInterface.AMNEZIA_WG -> startAwg(intent)
+                    VpnInterface.NONE -> startNone()
                 }
             }
         }
