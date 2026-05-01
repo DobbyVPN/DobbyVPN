@@ -198,21 +198,21 @@ public final class HealthCheckImpl: HealthCheck {
         let diagnosis: String
         switch (tunnelIP, tcpProxy, dns, tcp443, https) {
         case (false, _, _, _, _):
-            diagnosis = "СТОРОНА: КЛИЕНТ | ПРИЧИНА: tunnel IP 198.18.0.1 не назначен — туннель не поднялся на уровне OS"
+            diagnosis = "SIDE: CLIENT | REASON: tunnel IP 198.18.0.1 not assigned — tunnel failed to start at OS level"
         case (true, false, _, _, _):
-            diagnosis = "СТОРОНА: КЛИЕНТ | ПРИЧИНА: TCP через SOCKS5-прокси не работает — tun2socks не форвардит трафик или Go-движок упал"
+            diagnosis = "SIDE: CLIENT | REASON: TCP via SOCKS5 proxy not working — tun2socks not forwarding traffic or Go engine crashed"
         case (true, true, false, _, _):
-            diagnosis = "СТОРОНА: КЛИЕНТ | ПРИЧИНА: DNS не резолвится — неверные DNS-серверы в туннеле или их трафик не проходит"
+            diagnosis = "SIDE: CLIENT | REASON: DNS not resolving — wrong DNS servers in tunnel or their traffic is blocked"
         case (true, true, true, false, _):
-            diagnosis = "СТОРОНА: СЕРВЕР (вероятно) | ПРИЧИНА: TCP :53 OK, но TCP :443 падает — сервер блокирует HTTPS-порт или промежуточный узел фильтрует"
+            diagnosis = "SIDE: SERVER (likely) | REASON: TCP :53 OK but TCP :443 failing — server blocks HTTPS port or intermediate node filters it"
         case (true, true, true, true, false):
             // Check metrics[win] in logs: proto=h3+total=- → QUIC/UDP not proxied (no udpPath? pool full?);
             // proto=h2+high total → server is slow or blocking TLS
-            diagnosis = "СТОРОНА: КЛИЕНТ ИЛИ СЕРВЕР | ПРИЧИНА: TCP :443 OK, но HTTPS падает — смотри [win] в metrics: h3+total=- → UDP не проксируется; h2+total=NNNms → медленный/блокирующий сервер"
+            diagnosis = "SIDE: CLIENT OR SERVER | REASON: TCP :443 OK but HTTPS failing — check [win] in metrics: h3+total=- → UDP not proxied; h2+total=NNNms → slow/blocking server"
         case (true, true, true, true, true):
-            diagnosis = "ВСЁ OK — соединение рабочее"
+            diagnosis = "ALL OK — connection is working"
         default:
-            diagnosis = "НЕОПРЕДЕЛЕНО | Паттерн: tunnel=\(tunnelIP) tcp=\(tcpProxy) dns=\(dns) tcp443=\(tcp443) https=\(https)"
+            diagnosis = "UNDEFINED | Pattern: tunnel=\(tunnelIP) tcp=\(tcpProxy) dns=\(dns) tcp443=\(tcp443) https=\(https)"
         }
         logs.writeLog(log: "[HC] DIAGNOSIS: \(diagnosis)")
     }
