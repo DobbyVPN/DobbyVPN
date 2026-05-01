@@ -68,9 +68,17 @@ class HealthCheckManager(
                 var nextDelay: Duration? = null
 
                 if (configsRepository.getIsUserInitStop()) {
-                    logger.log("[HC] Stop condition: getIsUserInitStop() == true")
-                    turnOffVpn()
+                    logger.log("[HC] Stop condition: getIsUserInitStop() == true → exiting health check loop")
+                    resetHealthCheckState()
                     return@launch
+                }
+
+                if (mainViewModel.connectionStateRepository.vpnTransitioningFlow.value) {
+                    logger.log("[HC] VPN is transitioning → skipping checks for this tick")
+                    nextDelay = getHealthCheckDelay()
+                    logger.log("[HC] Next tick in $nextDelay")
+                    delay(nextDelay)
+                    continue
                 }
 
                 val connected = try {
@@ -85,6 +93,7 @@ class HealthCheckManager(
                 var vpnStarted = mainViewModel.connectionStateRepository.vpnStartedFlow.value
                 if (!vpnStarted) {
                     logger.log("[HC] vpnStarted=false → exiting health check loop")
+                    resetHealthCheckState()
                     return@launch
                 }
 
@@ -104,7 +113,10 @@ class HealthCheckManager(
 
                     if (nextDelay == null) {
                         consecutiveFailuresCount++
-                        logger.log("[HC] Not connected → consecutiveFailuresCount=$consecutiveFailuresCount/$consecutiveFailuresBeforeTurnOff")
+                        logger.log(
+                            "[HC] Not connected → " +
+                                "consecutiveFailuresCount=$consecutiveFailuresCount/$consecutiveFailuresBeforeTurnOff"
+                        )
 
                         if (consecutiveFailuresCount >= consecutiveFailuresBeforeTurnOff) {
                             logger.log("[HC] Failure threshold reached → turning off VPN & stopping health check")
@@ -155,12 +167,15 @@ class HealthCheckManager(
         healthJob?.cancel()
         healthJob = null
 
-        consecutiveFailuresCount = 0
-        lastVpnStartMark = null
-
-        lastFullConnectionSucceed = false
+        resetHealthCheckState()
 
         logger.log("[HC] State reset after stop")
+    }
+
+    private fun resetHealthCheckState() {
+        consecutiveFailuresCount = 0
+        lastVpnStartMark = null
+        lastFullConnectionSucceed = false
     }
 
     suspend fun turnOffVpn() {

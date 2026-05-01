@@ -13,8 +13,8 @@ public final class CloakInteractor {
 
     func startCloak(outlineServerPort: String) throws {
         let localPort = String(configsRepository.getCloakLocalPort())
-        logs.writeLog(log: "startCloakOutline: entering")
-        
+        logs.writeLog(log: "startCloakOutline: entering, localPort=\(localPort)")
+
         if configsRepository.getIsCloakEnabled() {
             let cloakConfig = configsRepository.getCloakConfig()
             if cloakConfig.isEmpty {
@@ -30,22 +30,20 @@ public final class CloakInteractor {
                 }
                 return
             }
-            logs.writeLog(log: "startCloakOutline: starting cloak")
+            logs.writeLog(log: "startCloakOutline: starting cloak, config.length=\(cloakConfig.count)")
             Cloak_outlineStartCloakClient("127.0.0.1", localPort, cloakConfig, false)
+            // Cloak_outlineStartCloakClient не возвращает ошибку — если упало, узнаем по отсутствию трафика
             cloakStarted = true
-            logs.writeLog(log: "startCloakOutline: started")
+            logs.writeLog(log: "startCloakOutline: Cloak_outlineStartCloakClient returned (cloakStarted=true)")
         } else {
             logs.writeLog(log: "startCloakOutline: cloak disabled")
         }
     }
 
-    func stopCloak() throws {
+    func stopCloak() {
         if cloakStarted {
-            var err: NSError?
-            Cloak_outlineOutlineDisconnect(&err)
-            if let error = err {
-                throw error
-            }
+            Cloak_outlineStopCloakClient()
+            cloakStarted = false
         }
     }
 }
