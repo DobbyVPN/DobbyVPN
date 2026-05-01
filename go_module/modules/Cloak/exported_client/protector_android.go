@@ -4,7 +4,7 @@
 package exported_client
 
 /*
-extern int go_protect_socket(int fd); // Импортируем функцию из C/JNI слоя
+extern int go_protect_socket(int fd); // Import function from C/JNI layer
 */
 import "C"
 import (

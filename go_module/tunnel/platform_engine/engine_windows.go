@@ -167,7 +167,7 @@ func getCurrentDNS(name string) ([]string, bool) {
 			isDHCP = true
 		}
 
-		// ищем IP
+		// extract IP
 		if ip := net.ParseIP(line); ip != nil {
 			dns = append(dns, ip.String())
 		}
