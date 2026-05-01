@@ -67,7 +67,7 @@ func pingHostCheck(host string) error {
 	}
 
 	log.Infof("[HC] Sending GET request to %s", host)
-	req, err := http.NewRequest("GET", host, nil)
+	req, err := http.NewRequest("GET", host, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("failed request init: %w", err)
 	}
