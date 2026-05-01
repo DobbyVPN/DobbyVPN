@@ -6,9 +6,9 @@ import interop.awg.AwgLibrary
 import interop.exceptions.VpnServiceStatusException
 
 class RestartableAwgGrpcLibrary(private val logger: Logger) : AwgLibrary {
-    override fun StartAwg(key: String, config: String): Int {
+    override fun StartAwg(config: String): Int {
         try {
-            return GrpcVpnLibrary.awgGrpcLibrary.StartAwg(key, config)
+            return GrpcVpnLibrary.awgGrpcLibrary.StartAwg(config)
         } catch (e: VpnServiceStatusException) {
             logger.log("[ERROR] Failed to start AmneziaWG: $e")
             return -1

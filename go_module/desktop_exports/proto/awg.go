@@ -12,8 +12,8 @@ import (
 )
 
 func (s *Server) StartAwg(_ context.Context, in *grpcproto.StartAwgRequest) (*grpcproto.Empty, error) {
-	log.Infof("StartAwg: %v", in.GetTunnel())
-	go api.StartAwg(in.GetTunnel(), in.GetConfig())
+	log.Infof("StartAwg")
+	go api.StartAwg(in.GetConfig())
 	return &grpcproto.Empty{}, nil
 }
 

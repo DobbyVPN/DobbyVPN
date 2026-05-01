@@ -1,4 +1,4 @@
-//go:build !(android || ios || darwin)
+//go:build darwin
 
 package awg
 
@@ -34,7 +34,7 @@ func (a *AwgClient) HealthCheck() error {
 }
 
 func NewAwgClient(config string) (*AwgClient, error) {
-	app, err := internal.NewApp("awg0", config)
+	app, err := internal.NewApp("utun0", config)
 	if err != nil {
 		return nil, err
 	}

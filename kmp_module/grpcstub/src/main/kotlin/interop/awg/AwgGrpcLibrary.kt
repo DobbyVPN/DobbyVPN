@@ -11,10 +11,9 @@ import kotlinx.coroutines.runBlocking
 open class AwgGrpcLibrary(channel: ManagedChannel) : AwgLibrary {
     private val stub = VpnGrpcKt.VpnCoroutineStub(channel)
 
-    override fun StartAwg(key: String, config: String): Int {
+    override fun StartAwg(config: String): Int {
         return runBlocking {
             val request = startAwgRequest {
-                tunnel = key
                 this.config = config
             }
             try {
