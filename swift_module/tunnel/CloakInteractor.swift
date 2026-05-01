@@ -32,7 +32,7 @@ public final class CloakInteractor {
             }
             logs.writeLog(log: "startCloakOutline: starting cloak, config.length=\(cloakConfig.count)")
             Cloak_outlineStartCloakClient("127.0.0.1", localPort, cloakConfig, false)
-            // Cloak_outlineStartCloakClient не возвращает ошибку — если упало, узнаем по отсутствию трафика
+            // Cloak_outlineStartCloakClient does not return an error — failure is detectable only by absent traffic
             cloakStarted = true
             logs.writeLog(log: "startCloakOutline: Cloak_outlineStartCloakClient returned (cloakStarted=true)")
         } else {

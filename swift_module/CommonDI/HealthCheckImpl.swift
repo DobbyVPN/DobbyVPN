@@ -27,17 +27,17 @@ private final class HttpMetricsDelegate: NSObject, URLSessionDataDelegate {
                 guard let a, let b else { return "-" }
                 return "\(Int(b.timeIntervalSince(a) * 1000))ms"
             }
-            // responseEndDate != nil → эта транзакция фактически отдала ответ (выиграла гонку h2 vs h3)
-            // responseEndDate == nil → транзакция была прервана (проиграла гонку или таймаут)
+            // responseEndDate != nil → this transaction actually delivered the response (won the h2 vs h3 race)
+            // responseEndDate == nil → transaction was aborted (lost the race or timed out)
             let won = t.responseEndDate != nil
             let proto = t.networkProtocolName ?? "?"
             if won {
                 winnerProto = proto
                 log("[HC] [httpPing] proto=\(proto) local=\(t.localAddress ?? "-")")
             }
-            // localAddress показывает через какой интерфейс прошёл трафик:
-            // 198.18.0.1 = через VPN-туннель (хорошо)
-            // любой другой = трафик обошёл туннель (плохо)
+            // localAddress shows which interface was used:
+            // 198.18.0.1 = through VPN tunnel (good)
+            // anything else = traffic bypassed the tunnel (bad)
             let local = t.localAddress ?? "-"
             let remote = "\(t.remoteAddress ?? "-"):\(t.remotePort.map { "\($0)" } ?? "-")"
             log(
@@ -106,7 +106,7 @@ public final class HealthCheckImpl: HealthCheck {
     public func fullConnectionCheckUp() -> Bool {
         logs.writeLog(log: "[HC] Start fullConnectionCheckUp")
 
-        // --- Стандартные группы ---
+        // --- Standard check groups ---
         let groups: [(String, [(String, () -> Bool)])] = [
             ("TCP Ping group", [
                 ("Ping 8.8.8.8", { self.pingAddress("8.8.8.8:53", name: "Google") }),
@@ -120,8 +120,8 @@ public final class HealthCheckImpl: HealthCheck {
                 ("Ping google.com (DNS)", { self.pingAddress("google.com:80", name: "GoogleDNS") }),
                 ("Ping one.one.one.one (DNS)", { self.pingAddress("one.one.one.one:80", name: "OnesDNS") })
             ]),
-            // TCP к 443 — проверяет, проходит ли HTTPS-трафик на уровне TCP через прокси.
-            // Если TCP ping :53 ОК, а :443 нет — сервер блокирует 443 или проблема с роутингом.
+            // TCP to 443 — verifies HTTPS traffic flows at TCP level through the proxy.
+            // If TCP ping :53 is OK but :443 fails — server blocks 443 or routing is broken.
             ("TCP :443 group", [
                 ("Ping 8.8.8.8:443", { self.pingAddress("8.8.8.8:443", name: "TCP443-8888") }),
                 ("Ping 1.1.1.1:443", { self.pingAddress("1.1.1.1:443", name: "TCP443-1111") })
@@ -155,14 +155,14 @@ public final class HealthCheckImpl: HealthCheck {
             logs.writeLog(log: "[HC] Group OK: Short health check group")
         }
 
-        // --- Дополнительные диагностические тесты (не влияют на результат) ---
+        // --- Additional diagnostic tests (do not affect the result) ---
         logs.writeLog(log: "[HC] [diag] === Diagnostic checks ===")
 
-        // Проверяем, назначен ли tunnel IP — есть ли туннель вообще на уровне OS
+        // Check if tunnel IP is assigned — confirms the tunnel exists at OS level
         let tunnelIPOk = isTunnelIPAssigned()
         logs.writeLog(log: "[HC] [diag] tunnel_ip_assigned=\(tunnelIPOk)")
 
-        // --- Итог ---
+        // --- Result ---
         let result = failedGroups.count <= 1
         if !result {
             logs.writeLog(
@@ -172,7 +172,7 @@ public final class HealthCheckImpl: HealthCheck {
         }
         logs.writeLog(log: "[HC] RESULT = \(result)")
 
-        // --- DIAGNOSIS — одна строка с готовым ответом ---
+        // --- DIAGNOSIS — single line with actionable verdict ---
         let tcpProxyOk = groupResults["TCP Ping group"] ?? false
         let dnsOk = groupResults["DNS Resolve group"] ?? false
         let tcp443Ok = groupResults["TCP :443 group"] ?? false
@@ -198,21 +198,21 @@ public final class HealthCheckImpl: HealthCheck {
         let diagnosis: String
         switch (tunnelIP, tcpProxy, dns, tcp443, https) {
         case (false, _, _, _, _):
-            diagnosis = "СТОРОНА: КЛИЕНТ | ПРИЧИНА: tunnel IP 198.18.0.1 не назначен — туннель не поднялся на уровне OS"
+            diagnosis = "SIDE: CLIENT | REASON: tunnel IP 198.18.0.1 not assigned — tunnel failed to start at OS level"
         case (true, false, _, _, _):
-            diagnosis = "СТОРОНА: КЛИЕНТ | ПРИЧИНА: TCP через SOCKS5-прокси не работает — tun2socks не форвардит трафик или Go-движок упал"
+            diagnosis = "SIDE: CLIENT | REASON: TCP via SOCKS5 proxy not working — tun2socks not forwarding traffic or Go engine crashed"
         case (true, true, false, _, _):
-            diagnosis = "СТОРОНА: КЛИЕНТ | ПРИЧИНА: DNS не резолвится — неверные DNS-серверы в туннеле или их трафик не проходит"
+            diagnosis = "SIDE: CLIENT | REASON: DNS not resolving — wrong DNS servers in tunnel or their traffic is blocked"
         case (true, true, true, false, _):
-            diagnosis = "СТОРОНА: СЕРВЕР (вероятно) | ПРИЧИНА: TCP :53 OK, но TCP :443 падает — сервер блокирует HTTPS-порт или промежуточный узел фильтрует"
+            diagnosis = "SIDE: SERVER (likely) | REASON: TCP :53 OK but TCP :443 failing — server blocks HTTPS port or intermediate node filters it"
         case (true, true, true, true, false):
-            // Смотри metrics[win] в логах: proto=h3 → QUIC/UDP не работает (Cloak? UDP пул полон?);
-            // proto=h2 с высоким total → сервер медленный или блокирует TLS
-            diagnosis = "СТОРОНА: КЛИЕНТ ИЛИ СЕРВЕР | ПРИЧИНА: TCP :443 OK, но HTTPS падает — смотри [win] в metrics: h3+total=- → UDP не проксируется; h2+total=NNNms → медленный/блокирующий сервер"
+            // Check metrics[win] in logs: proto=h3+total=- → QUIC/UDP not proxied (no udpPath? pool full?);
+            // proto=h2+high total → server is slow or blocking TLS
+            diagnosis = "SIDE: CLIENT OR SERVER | REASON: TCP :443 OK but HTTPS failing — check [win] in metrics: h3+total=- → UDP not proxied; h2+total=NNNms → slow/blocking server"
         case (true, true, true, true, true):
-            diagnosis = "ВСЁ OK — соединение рабочее"
+            diagnosis = "ALL OK — connection is working"
         default:
-            diagnosis = "НЕОПРЕДЕЛЕНО | Паттерн: tunnel=\(tunnelIP) tcp=\(tcpProxy) dns=\(dns) tcp443=\(tcp443) https=\(https)"
+            diagnosis = "UNDEFINED | Pattern: tunnel=\(tunnelIP) tcp=\(tcpProxy) dns=\(dns) tcp443=\(tcp443) https=\(https)"
         }
         logs.writeLog(log: "[HC] DIAGNOSIS: \(diagnosis)")
     }
@@ -383,8 +383,8 @@ public final class HealthCheckImpl: HealthCheck {
         return success
     }
 
-    // Проверяет, назначен ли тунельный IP 198.18.0.1 хотя бы одному интерфейсу.
-    // Если нет — туннель не поднялся на сетевом уровне.
+    // Checks if tunnel IP 198.18.0.1 is assigned to at least one interface.
+    // If not — the tunnel did not come up at OS network level.
     private func isTunnelIPAssigned() -> Bool {
         let tunnelIP = "198.18.0.1"
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?

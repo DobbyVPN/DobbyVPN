@@ -21,7 +21,6 @@ extern void StartCloakClient(GoString localHost, GoString localPort, GoString co
 extern void StopCloakClient(void);
 extern void SetGeoRoutingConf(GoString cidrs);
 extern void ClearGeoRoutingConf(void);
-// extern GoInt32 CheckServerAlive(GoString address, GoInt32 port);
 extern GoInt32 GetConnectionState();
 extern void InitHealthCheck();
 extern void StartHealthCheck();
@@ -60,31 +59,31 @@ EXPORT int go_protect_socket(int fd) {
 }
 
 JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_registerVpnService(JNIEnv *env, jclass clazz, jobject vpn_service) {
-    // 1. Очищаем старую ссылку, если она была (защита от утечек при перезапуске)
+    // 1. Release old reference if present (prevents leaks on restart)
     if (g_vpn_service_obj != NULL) {
         (*env)->DeleteGlobalRef(env, g_vpn_service_obj);
     }
 
-    // 2. Создаем глобальную ссылку на переданный объект
+    // 2. Create global reference to the passed object
     g_vpn_service_obj = (*env)->NewGlobalRef(env, vpn_service);
 
-    // 3. Ищем КЛАСС VpnService напрямую в системе
+    // 3. Find VpnService CLASS directly in the system
     jclass vpn_cls = (*env)->FindClass(env, "android/net/VpnService");
     if (vpn_cls == NULL) {
-        // Если класс не найден (теоретически невозможно на Android)
+        // Should not happen on Android
         return;
     }
 
-    // 4. Ищем метод protect в найденном КЛАССЕ VpnService
-    // Сигнатура "(I)Z" — принимает int, возвращает boolean
+    // 4. Find protect method in the VpnService CLASS
+    // Signature "(I)Z" — takes int, returns boolean
     g_protect_mid = (*env)->GetMethodID(env, vpn_cls, "protect", "(I)Z");
 
     if (g_protect_mid == NULL) {
-        // Ошибка: метод не найден в классе VpnService
-        // Проверь, что твой объект в Kotlin действительно наследует VpnService
+        // Error: protect method not found in VpnService class
+        // Ensure your Kotlin object actually extends VpnService
     }
 
-    // Освобождаем локальную ссылку на класс (GlobalRef для объекта остается!)
+    // Release local class reference (GlobalRef for the object remains)
     (*env)->DeleteLocalRef(env, vpn_cls);
 }
 
