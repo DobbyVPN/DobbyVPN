@@ -63,6 +63,7 @@ public final class HealthCheckImpl: HealthCheck {
 
     public private(set) var currentMemmoryUsageMb = 0.0
     private var lastMemoryMB: Double = 0
+    private var lastOutlineProxyOk = false
     private var checkSequence: Int = 0
     private let checkSequenceLock = NSLock()
 
@@ -93,6 +94,11 @@ public final class HealthCheckImpl: HealthCheck {
             return mem >= 0
         }
 
+        let outlineProxyOk = runWithRetry(name: "Outline local proxy check", attempts: 1) {
+            self.isOutlineProxyAliveViaXPC()
+        }
+        lastOutlineProxyOk = outlineProxyOk
+
         if currentMemmoryUsageMb >= 0 {
             let delta = currentMemmoryUsageMb - lastMemoryMB
             let deltaStr = lastMemoryMB == 0 ? "" : " (\(delta >= 0 ? "+" : "")\(String(format: "%.1f", delta))MB)"
@@ -102,10 +108,10 @@ public final class HealthCheckImpl: HealthCheck {
             logs.writeLog(log: "[HC] Memory: unknown (XPC no response)")
         }
 
-        let result = vpnOk && networkOk && heartbeatOk
+        let result = vpnOk && networkOk && heartbeatOk && outlineProxyOk
         logs.writeLog(
             log: "[HC] End shortConnectionCheckUp id=\(checkId) => \(result) " +
-            "(vpn=\(vpnOk), network=\(networkOk), heartbeat=\(heartbeatOk))"
+            "(vpn=\(vpnOk), network=\(networkOk), heartbeat=\(heartbeatOk), outlineProxy=\(outlineProxyOk))"
         )
         return result
     }
@@ -117,19 +123,20 @@ public final class HealthCheckImpl: HealthCheck {
         // --- Standard check groups ---
         // On iOS, net.Dial based TCP probes can complete against the local
         // virtual TCP stack before the upstream proxy dial has succeeded.
-        // Run DNS/HTTP first; only run TCP probes as diagnostics if required checks fail.
+        // Treat real HTTP and local Outline proxy liveness as required; run
+        // TCP probes only as diagnostics.
         let requiredCheckGroups: [(String, [(String, () -> Bool)])] = [
             ("DNS Resolve group", [
                 ("DNS google.com", { self.resolveDNSWithTimeout(host: "google.com") }),
                 ("DNS one.one.one.one", { self.resolveDNSWithTimeout(host: "one.one.one.one") })
-            ]),
-            ("DNS Ping group", [
-                ("Ping google.com (DNS)", { self.pingAddress("google.com:80", name: "GoogleDNS") }),
-                ("Ping one.one.one.one (DNS)", { self.pingAddress("one.one.one.one:80", name: "OnesDNS") })
             ])
         ]
 
         let diagnosticCheckGroups: [(String, [(String, () -> Bool)])] = [
+            ("Hostname TCP diagnostics", [
+                ("Ping google.com:80", { self.pingAddress("google.com:80", name: "GoogleDNS") }),
+                ("Ping one.one.one.one:80", { self.pingAddress("one.one.one.one:80", name: "OnesDNS") })
+            ]),
             ("TCP Ping diagnostics", [
                 ("Ping 8.8.8.8", { self.pingAddress("8.8.8.8:53", name: "Google") }),
                 ("Ping 1.1.1.1", { self.pingAddress("1.1.1.1:53", name: "OneOneOneOne") })
@@ -185,12 +192,13 @@ public final class HealthCheckImpl: HealthCheck {
         // Check if tunnel IP is assigned — confirms the tunnel exists at OS level
         let tunnelIPOk = isTunnelIPAssigned()
         logs.writeLog(log: "[HC] [diag] tunnel_ip_assigned=\(tunnelIPOk)")
+        logs.writeLog(log: "[HC] [diag] outline_proxy_alive=\(lastOutlineProxyOk)")
 
         // --- Result ---
-        let result = failedGroups.count <= 1
+        let result = failedGroups.isEmpty
         if !result {
             logs.writeLog(
-                log: "[HC] Too many failed groups (\(failedGroups.count)): " +
+                log: "[HC] Required check groups failed (\(failedGroups.count)): " +
                      failedGroups.joined(separator: ", ")
             )
         }
@@ -206,6 +214,7 @@ public final class HealthCheckImpl: HealthCheck {
             tcpProxy: tcpProxyOk,
             dns: dnsOk,
             tcp443: tcp443Ok,
+            outlineProxy: lastOutlineProxyOk,
             https: httpsOk
         )
 
@@ -225,26 +234,29 @@ public final class HealthCheckImpl: HealthCheck {
         tcpProxy: Bool,
         dns: Bool,
         tcp443: Bool,
+        outlineProxy: Bool,
         https: Bool
     ) {
         let diagnosis: String
-        switch (tunnelIP, tcpProxy, dns, tcp443, https) {
-        case (false, _, _, _, _):
+        switch (tunnelIP, tcpProxy, dns, tcp443, outlineProxy, https) {
+        case (false, _, _, _, _, _):
             diagnosis = "SIDE: CLIENT | REASON: tunnel IP 198.18.0.1 not assigned — tunnel failed to start at OS level"
-        case (true, _, false, _, _):
+        case (true, _, _, _, false, _):
+            diagnosis = "SIDE: CLIENT | REASON: local Outline SOCKS5 proxy is unavailable — tun2socks has no working upstream proxy"
+        case (true, _, false, _, _, _):
             diagnosis = "SIDE: CLIENT OR SERVER | REASON: DNS not resolving — DNS-over-tunnel is failing or blocked"
-        case (true, _, true, _, false):
+        case (true, _, true, _, true, false):
             // Check metrics[win] in logs: proto=h3+total=- → QUIC/UDP not proxied (no udpPath? pool full?);
             // proto=h2+high total → server is slow or blocking TLS
-            diagnosis = "SIDE: CLIENT OR SERVER | REASON: TCP :443 OK but HTTPS failing — check [win] in metrics: h3+total=- → UDP not proxied; h2+total=NNNms → slow/blocking server"
-        case (true, false, true, _, _):
+            diagnosis = "SIDE: CLIENT OR SERVER | REASON: Outline proxy is alive but HTTPS checks fail — check [win] metrics for h3/h2 timing and server behavior"
+        case (true, false, true, _, true, _):
             diagnosis = "SIDE: CLIENT | REASON: TCP diagnostic failed after DNS/HTTP checks — possible tun2socks forwarding issue"
-        case (true, true, true, false, _):
+        case (true, true, true, false, true, _):
             diagnosis = "SIDE: SERVER (likely) | REASON: TCP diagnostic to :443 failed — server blocks HTTPS port or intermediate node filters it"
-        case (true, true, true, true, true):
+        case (true, true, true, true, true, true):
             diagnosis = "ALL OK — connection is working"
         default:
-            diagnosis = "UNDEFINED | Pattern: tunnel=\(tunnelIP) tcp=\(tcpProxy) dns=\(dns) tcp443=\(tcp443) https=\(https)"
+            diagnosis = "UNDEFINED | Pattern: tunnel=\(tunnelIP) tcp=\(tcpProxy) dns=\(dns) tcp443=\(tcp443) outlineProxy=\(outlineProxy) https=\(https)"
         }
         logs.writeLog(log: "[HC] DIAGNOSIS: \(diagnosis)")
     }
@@ -528,14 +540,14 @@ public final class HealthCheckImpl: HealthCheck {
         return false
     }
 
-    private func isTunnelAliveViaXPC() -> Double {
-        var memory: Double = -1
+    private func providerMessage(_ message: String, label: String) -> String? {
+        var rawResponse: String?
         let semaphore = DispatchSemaphore(value: 0)
 
         NETunnelProviderManager.loadAllFromPreferences { managers, error in
             if let error = error {
                 self.logs.writeLog(
-                    log: "[HC] [XPC] loadAllFromPreferences error: \(error.localizedDescription)"
+                    log: "[HC] [\(label)] loadAllFromPreferences error: \(error.localizedDescription)"
                 )
                 semaphore.signal()
                 return
@@ -549,32 +561,26 @@ public final class HealthCheckImpl: HealthCheck {
                 let session = manager.connection as? NETunnelProviderSession
             else {
                 self.logs.writeLog(
-                    log: "[HC] [XPC] manager not found (managers count: \(managers?.count ?? -1))"
+                    log: "[HC] [\(label)] manager not found (managers count: \(managers?.count ?? -1))"
                 )
                 semaphore.signal()
                 return
             }
 
             self.logs.writeLog(
-                log: "[HC] [XPC] session status: \(session.status.rawValue)"
+                log: "[HC] [\(label)] session status: \(session.status.rawValue)"
             )
 
             do {
                 try session.sendProviderMessage(
-                    Data("getMemory".utf8)
+                    Data(message.utf8)
                 ) { response in
                     defer { semaphore.signal() }
-                    memory = self.parseMemoryResponse(response)
-                    if memory < 0 {
-                        let raw = response.flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
-                        self.logs.writeLog(
-                            log: "[HC] [XPC] unexpected response: \(raw)"
-                        )
-                    }
+                    rawResponse = response.flatMap { String(data: $0, encoding: .utf8) }
                 }
             } catch {
                 self.logs.writeLog(
-                    log: "[HC] [XPC] sendProviderMessage error: \(error.localizedDescription)"
+                    log: "[HC] [\(label)] sendProviderMessage error: \(error.localizedDescription)"
                 )
                 semaphore.signal()
             }
@@ -582,17 +588,32 @@ public final class HealthCheckImpl: HealthCheck {
 
         let wait = semaphore.wait(timeout: .now() + timeout)
         if wait == .timedOut {
-            logs.writeLog(log: "[HC] [XPC] heartbeat timed out")
+            logs.writeLog(log: "[HC] [\(label)] provider message timed out")
+        }
+        return rawResponse
+    }
+
+    private func isTunnelAliveViaXPC() -> Double {
+        let raw = providerMessage("getMemory", label: "XPC")
+        let memory = parseMemoryResponse(raw)
+        if memory < 0 {
+            logs.writeLog(log: "[HC] [XPC] unexpected response: \(raw ?? "nil")")
         }
         return memory
     }
 
-    private func parseMemoryResponse(_ response: Data?) -> Double {
+    private func isOutlineProxyAliveViaXPC() -> Bool {
+        let raw = providerMessage("getOutlineStatus", label: "Outline")
+        logs.writeLog(log: "[HC] [Outline] status: \(raw ?? "nil")")
+        guard let raw else { return false }
+        return raw.contains("localProxyAlive=true")
+    }
+
+    private func parseMemoryResponse(_ response: String?) -> Double {
         guard let response,
-              let str = String(data: response, encoding: .utf8),
-              str.hasPrefix("Memory:")
+              response.hasPrefix("Memory:")
         else { return -1 }
-        let value = str.replacingOccurrences(of: "Memory:", with: "")
+        let value = response.replacingOccurrences(of: "Memory:", with: "")
         return Double(value) ?? -1
     }
 

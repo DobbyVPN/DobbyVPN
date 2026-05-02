@@ -285,6 +285,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory")
             completionHandler?("Memory:\(reportMemoryUsageMB())".data(using: .utf8))
+        } else if let msg = String(data: messageData, encoding: .utf8), msg == "getOutlineStatus" {
+            let status = outlineInteractor.outlineStatus()
+            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getOutlineStatus \(status)")
+            completionHandler?("OutlineStatus:\(status)".data(using: .utf8))
         } else {
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage echo bytes=\(messageData.count)")
             completionHandler?(messageData)
