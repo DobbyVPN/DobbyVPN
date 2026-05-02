@@ -1,13 +1,13 @@
 package cloak_outline
 
 import (
-    "go_module/cloak"
+	"go_module/cloak"
 )
 
-func StartCloakClient(localHost string, localPort string, config string, udp bool) {
-    cloak.StartCloakClient(localHost, localPort, config, udp)
+func StartCloakClient(localHost string, localPort string, config string, udp bool) error {
+	return cloak.StartCloakClient(localHost, localPort, config, udp)
 }
 
 func StopCloakClient() {
-    cloak.StopCloakClient()
+	cloak.StopCloakClient()
 }

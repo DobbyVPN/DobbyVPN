@@ -14,8 +14,7 @@ func startPlatformEngine(cfg interface{}) error {
 	c := cfg.(EngineConfig)
 	fd := c.FD
 	proxyAddr := c.ProxyAddr
-
-	const mtu = 1200 // must match NEPacketTunnelNetworkSettings.mtu set in Swift
+	mtu := c.EffectiveMTU(1200)
 
 	log.Infof("[Engine] starting tun2socks fd=%d proxy=%s mtu=%d", fd, proxyAddr, mtu)
 

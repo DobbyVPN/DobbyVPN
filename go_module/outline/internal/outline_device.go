@@ -24,9 +24,18 @@ type OutlineDevice struct {
 	streamDialer transport.StreamDialer
 	packetDialer transport.PacketDialer
 	useCloak     bool
+	preferTCPDNS bool
+}
+
+type DeviceOptions struct {
+	PreferTCPDNSForWebSocket bool
 }
 
 func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
+	return NewOutlineDeviceWithOptions(transportConfig, DeviceOptions{})
+}
+
+func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) (*OutlineDevice, error) {
 	ip, err := ResolveServerIPFromConfig(transportConfig)
 	if err != nil {
 		return nil, err
@@ -46,7 +55,19 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 	}
 
 	hasUDPPath := strings.Contains(transportConfig, "udp_path=")
-	log.Infof("outline client: packetDialer type=%T udpPath=%v", pd, hasUDPPath)
+	hasTCPPath := strings.Contains(transportConfig, "tcp_path=")
+	isWebSocket := strings.Contains(transportConfig, "ws:")
+	preferTCPDNS := options.PreferTCPDNSForWebSocket && isWebSocket
+	log.Infof(
+		"outline client: transport summary len=%d websocket=%v tcpPath=%v udpPath=%v preferTCPDNS=%v streamDialer=%T packetDialer=%T",
+		len(transportConfig),
+		isWebSocket,
+		hasTCPPath,
+		hasUDPPath,
+		preferTCPDNS,
+		sd,
+		pd,
+	)
 
 	useCloak := ip.IsLoopback()
 
@@ -57,6 +78,7 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 		streamDialer: sd,
 		packetDialer: pd,
 		useCloak:     useCloak,
+		preferTCPDNS: preferTCPDNS,
 	}
 
 	server := socks5.NewServer(
@@ -101,13 +123,14 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 			return nil, err
 		}
 		log.Infof("[SOCKS5 TCP OK] %s in %dms", addr, elapsed)
+		log.Infof("[DEBUG][SOCKS5 TCP] %s local=%s remote=%s", addr, conn.LocalAddr(), conn.RemoteAddr())
 		return conn, nil
 
 	case "udp":
 
-		// DNS fallback for Cloak
-		if d.useCloak && port == 53 {
-			log.Infof("[SOCKS5 DNS] returning truncated DNS (cloak mode)")
+		// Force DNS-over-TCP fallback when UDP is known to be unreliable for this transport.
+		if port == 53 && (d.useCloak || d.preferTCPDNS) {
+			log.Infof("[SOCKS5 DNS] returning truncated DNS (useCloak=%v preferTCPDNS=%v)", d.useCloak, d.preferTCPDNS)
 			return newTruncatedDNSConn(host, port), nil
 		}
 
@@ -118,6 +141,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 			return nil, err
 		}
 		log.Infof("[SOCKS5 UDP OK] %s in %dms", addr, elapsed)
+		log.Infof("[DEBUG][SOCKS5 UDP] %s local=%s", addr, conn.LocalAddr())
 		return conn, nil
 	}
 
@@ -147,8 +171,14 @@ func (c *truncatedDNSConn) Read(b []byte) (int, error) {
 	// truncated
 	resp[2] |= 0x02
 
+	// Preserve the original question but return no records. The TC bit is the
+	// signal that the resolver should retry the same question over TCP.
 	resp[6] = 0
 	resp[7] = 0
+	resp[8] = 0
+	resp[9] = 0
+	resp[10] = 0
+	resp[11] = 0
 
 	n := copy(b, resp)
 	return n, nil
@@ -198,6 +228,7 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 	if err != nil {
 		return nil, fmt.Errorf("DNS lookup for %s timed out or failed: %w", host, err)
 	}
+	log.Infof("outline client: DNS returned %d addresses for %s", len(ipList), host)
 
 	for _, ip := range ipList {
 		if v4 := ip.IP.To4(); v4 != nil {

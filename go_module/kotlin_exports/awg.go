@@ -17,8 +17,8 @@ import (
 func init() {
 	logrus.StandardLogger().ExitFunc = func(int) {}
 
-	protected_dialer.MakeSocketProtected = func(fd uintptr) {
-		C.go_protect_socket(C.int(fd))
+	protected_dialer.MakeSocketProtected = func(fd uintptr) bool {
+		return C.go_protect_socket(C.int(fd)) == 1
 	}
 }
 

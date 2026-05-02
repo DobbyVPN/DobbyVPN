@@ -31,8 +31,12 @@ public final class CloakInteractor {
                 return
             }
             logs.writeLog(log: "startCloakOutline: starting cloak, config.length=\(cloakConfig.count)")
-            Cloak_outlineStartCloakClient("127.0.0.1", localPort, cloakConfig, false)
-            // Cloak_outlineStartCloakClient does not return an error — failure is detectable only by absent traffic
+            var err: NSError?
+            Cloak_outlineStartCloakClient("127.0.0.1", localPort, cloakConfig, false, &err)
+            if let error = err {
+                logs.writeLog(log: "startCloakOutline: failed to start cloak: \(error.localizedDescription)")
+                throw error
+            }
             cloakStarted = true
             logs.writeLog(log: "startCloakOutline: Cloak_outlineStartCloakClient returned (cloakStarted=true)")
         } else {
@@ -42,8 +46,12 @@ public final class CloakInteractor {
 
     func stopCloak() {
         if cloakStarted {
+            logs.writeLog(log: "stopCloak: stopping Cloak client")
             Cloak_outlineStopCloakClient()
             cloakStarted = false
+            logs.writeLog(log: "stopCloak: Cloak client stopped")
+        } else {
+            logs.writeLog(log: "[DEBUG] stopCloak: skipped, cloakStarted=false")
         }
     }
 }
