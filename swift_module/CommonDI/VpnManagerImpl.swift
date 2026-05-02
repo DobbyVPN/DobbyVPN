@@ -94,6 +94,7 @@ public class VpnManagerImpl: VpnManager {
     public func start() {
         self.logs.writeLog(log: "call start")
         self.logs.writeLog(log: "Routing table without vpn:")
+        self.logs.writeLog(log: "[DEBUG][VPNManager] start requested launchId=\(Self.launchId)")
         getOrCreateManager { manager, _ in
             self.handleStart(manager: manager)
         }
@@ -105,6 +106,7 @@ public class VpnManagerImpl: VpnManager {
             return
         }
         let status = manager.connection.status
+        self.logs.writeLog(log: "[DEBUG][VPNManager] handleStart currentStatus=\(status.rawValue)")
         if status == .connecting || status == .disconnecting || status == .reasserting {
             self.logs.writeLog(log: "[start] Skip: connection is transitioning (\(status.rawValue))")
             self.updateTransitionState(for: status)
@@ -144,7 +146,7 @@ public class VpnManagerImpl: VpnManager {
             self.logs.writeLog(log: "[stop] Skip: vpnManager is nil")
             return
         }
-        self.logs.writeLog(log: "[stop] User initiated stopVPNTunnel()")
+        self.logs.writeLog(log: "[stop] User initiated stopVPNTunnel() currentStatus=\(manager.connection.status.rawValue)")
         connectionRepository.tryUpdateVpnTransitioning(isTransitioning: true)
         stopInitiatedByUser = true
         manager.connection.stopVPNTunnel()
@@ -152,8 +154,15 @@ public class VpnManagerImpl: VpnManager {
     }
 
     private func getOrCreateManager(completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
+        logs.writeLog(log: "[DEBUG][VPNManager] loadAllFromPreferences begin")
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
             guard let self else { return }
+
+            if let error {
+                self.logs.writeLog(log: "[VPNManager] loadAllFromPreferences error: \(error.localizedDescription)")
+            } else {
+                self.logs.writeLog(log: "[DEBUG][VPNManager] loadAllFromPreferences managers=\(managers?.count ?? -1)")
+            }
 
             if let existingManager = managers?.first(where: { $0.localizedDescription == Self.dobbyName }) {
                 vpnManager = existingManager

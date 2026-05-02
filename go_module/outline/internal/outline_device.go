@@ -46,7 +46,17 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 	}
 
 	hasUDPPath := strings.Contains(transportConfig, "udp_path=")
-	log.Infof("outline client: packetDialer type=%T udpPath=%v", pd, hasUDPPath)
+	hasTCPPath := strings.Contains(transportConfig, "tcp_path=")
+	isWebSocket := strings.Contains(transportConfig, "ws:")
+	log.Infof(
+		"outline client: transport summary len=%d websocket=%v tcpPath=%v udpPath=%v streamDialer=%T packetDialer=%T",
+		len(transportConfig),
+		isWebSocket,
+		hasTCPPath,
+		hasUDPPath,
+		sd,
+		pd,
+	)
 
 	useCloak := ip.IsLoopback()
 
@@ -101,6 +111,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 			return nil, err
 		}
 		log.Infof("[SOCKS5 TCP OK] %s in %dms", addr, elapsed)
+		log.Infof("[DEBUG][SOCKS5 TCP] %s local=%s remote=%s", addr, conn.LocalAddr(), conn.RemoteAddr())
 		return conn, nil
 
 	case "udp":
@@ -118,6 +129,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 			return nil, err
 		}
 		log.Infof("[SOCKS5 UDP OK] %s in %dms", addr, elapsed)
+		log.Infof("[DEBUG][SOCKS5 UDP] %s local=%s", addr, conn.LocalAddr())
 		return conn, nil
 	}
 
@@ -198,6 +210,7 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 	if err != nil {
 		return nil, fmt.Errorf("DNS lookup for %s timed out or failed: %w", host, err)
 	}
+	log.Infof("outline client: DNS returned %d addresses for %s", len(ipList), host)
 
 	for _, ip := range ipList {
 		if v4 := ip.IP.To4(); v4 != nil {

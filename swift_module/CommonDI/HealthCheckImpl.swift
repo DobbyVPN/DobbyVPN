@@ -62,9 +62,12 @@ public final class HealthCheckImpl: HealthCheck {
 
     public private(set) var currentMemmoryUsageMb = 0.0
     private var lastMemoryMB: Double = 0
+    private var checkSequence: Int = 0
+    private let checkSequenceLock = NSLock()
 
     public func shortConnectionCheckUp() -> Bool {
-        logs.writeLog(log: "Start shortConnectionCheckUp")
+        let checkId = nextCheckId(prefix: "short")
+        logs.writeLog(log: "[HC] Start shortConnectionCheckUp id=\(checkId)")
 
         let checks: [(String, () -> Bool)] = [
             ("HTTP https://google.com/gen_204", {
@@ -99,12 +102,16 @@ public final class HealthCheckImpl: HealthCheck {
         }
 
         let result = vpnOk && networkOk && heartbeatOk
-        logs.writeLog(log: "End shortConnectionCheckUp => \(result)")
+        logs.writeLog(
+            log: "[HC] End shortConnectionCheckUp id=\(checkId) => \(result) " +
+            "(vpn=\(vpnOk), network=\(networkOk), heartbeat=\(heartbeatOk))"
+        )
         return result
     }
 
     public func fullConnectionCheckUp() -> Bool {
-        logs.writeLog(log: "[HC] Start fullConnectionCheckUp")
+        let checkId = nextCheckId(prefix: "full")
+        logs.writeLog(log: "[HC] Start fullConnectionCheckUp id=\(checkId)")
 
         // --- Standard check groups ---
         let groups: [(String, [(String, () -> Bool)])] = [
@@ -113,8 +120,8 @@ public final class HealthCheckImpl: HealthCheck {
                 ("Ping 1.1.1.1", { self.pingAddress("1.1.1.1:53", name: "OneOneOneOne") })
             ]),
             ("DNS Resolve group", [
-                ("DNS google.com", { self.resolveDNSWithTimeout(host: "google.com") != "Timeout" }),
-                ("DNS one.one.one.one", { self.resolveDNSWithTimeout(host: "one.one.one.one") != "Timeout" })
+                ("DNS google.com", { self.resolveDNSWithTimeout(host: "google.com") }),
+                ("DNS one.one.one.one", { self.resolveDNSWithTimeout(host: "one.one.one.one") })
             ]),
             ("DNS Ping group", [
                 ("Ping google.com (DNS)", { self.pingAddress("google.com:80", name: "GoogleDNS") }),
@@ -170,7 +177,7 @@ public final class HealthCheckImpl: HealthCheck {
                      failedGroups.joined(separator: ", ")
             )
         }
-        logs.writeLog(log: "[HC] RESULT = \(result)")
+        logs.writeLog(log: "[HC] RESULT id=\(checkId) = \(result)")
 
         // --- DIAGNOSIS — single line with actionable verdict ---
         let tcpProxyOk = groupResults["TCP Ping group"] ?? false
@@ -186,6 +193,14 @@ public final class HealthCheckImpl: HealthCheck {
         )
 
         return result
+    }
+
+    private func nextCheckId(prefix: String) -> String {
+        checkSequenceLock.lock()
+        checkSequence += 1
+        let value = checkSequence
+        checkSequenceLock.unlock()
+        return "\(prefix)-\(value)"
     }
 
     private func logDiagnosis(
@@ -266,8 +281,8 @@ public final class HealthCheckImpl: HealthCheck {
         return value
     }
 
-    private func resolveDNSWithTimeout(host: String) -> String? {
-        var result: String?
+    private func resolveDNSWithTimeout(host: String) -> Bool {
+        var result: (ok: Bool, message: String)?
         let group = DispatchGroup()
         group.enter()
 
@@ -278,14 +293,15 @@ public final class HealthCheckImpl: HealthCheck {
 
         let wait = group.wait(timeout: .now() + timeout)
         if wait == .timedOut {
-            logs.writeLog(log: "[HC] [DNS] \(host) → Timeout")
-            return "Timeout"
+            logs.writeLog(log: "[HC] [DNS] \(host) FAILED: timeout after \(Int(timeout * 1000))ms")
+            return false
         }
-        logs.writeLog(log: "[HC] [DNS] \(host) → \(result ?? "nil")")
-        return result
+        let value = result ?? (false, "nil result")
+        logs.writeLog(log: "[HC] [DNS] \(host) \(value.ok ? "OK" : "FAILED"): \(value.message)")
+        return value.ok
     }
 
-    private func resolveDNS(host: String) -> String {
+    private func resolveDNS(host: String) -> (ok: Bool, message: String) {
         var hints = addrinfo(
             ai_flags: AI_PASSIVE,
             ai_family: AF_UNSPEC,
@@ -301,7 +317,7 @@ public final class HealthCheckImpl: HealthCheck {
         let status = getaddrinfo(host, nil, &hints, &infoPointer)
 
         guard status == 0, let first = infoPointer else {
-            return String(cString: gai_strerror(status))
+            return (false, String(cString: gai_strerror(status)))
         }
 
         defer { freeaddrinfo(infoPointer) }
@@ -318,12 +334,12 @@ public final class HealthCheckImpl: HealthCheck {
                 0,
                 NI_NUMERICHOST
             ) == 0 {
-                return String(cString: buffer)
+                return (true, String(cString: buffer))
             }
             ptr = current.pointee.ai_next
         }
 
-        return "Can't resolve DNS"
+        return (false, "Can't resolve DNS")
     }
 
     private func httpPing(urlString: String) -> Bool {
@@ -344,6 +360,10 @@ public final class HealthCheckImpl: HealthCheck {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeout
         config.timeoutIntervalForResource = timeout
+        logs.writeLog(
+            log: "[DEBUG][HC] [httpPing] start url=\(urlString) timeoutMs=\(Int(timeout * 1000)) " +
+            "cachePolicy=reloadIgnoringLocalCacheData"
+        )
         let delegate = HttpMetricsDelegate(url: urlString) { [weak self] msg in
             self?.logs.writeLog(log: msg)
         }
@@ -369,6 +389,7 @@ public final class HealthCheckImpl: HealthCheck {
                     log: "[HC] [httpPing] \(urlString) no HTTP response in \(elapsed)ms"
                 )
             }
+            session.finishTasksAndInvalidate()
             semaphore.signal()
         }
         task.resume()

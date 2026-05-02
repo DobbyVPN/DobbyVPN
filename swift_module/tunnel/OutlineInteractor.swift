@@ -22,7 +22,11 @@ public final class OutlineInteractor {
         let websocketEnabled = configsRepository.getIsWebsocketEnabled()
         let tcpPath = configsRepository.getTcpPathOutline()
         let udpPath = configsRepository.getUdpPathOutline()
-        logs.writeLog(log: "Config snapshot: serverPort.len=\(serverPort.count) methodPassword.len=\(methodPassword.count) ws=\(websocketEnabled) tcpPath.len=\(tcpPath.count) udpPath.len=\(udpPath.count)")
+        logs.writeLog(
+            log: "Config snapshot: serverPort.len=\(serverPort.count) methodPassword.len=\(methodPassword.count) " +
+            "ws=\(websocketEnabled) tcpPath.len=\(tcpPath.count) udpPath.len=\(udpPath.count) " +
+            "tunnelFD=\(tunnelFileDescriptor) mtu=\(mtu)"
+        )
 
         // Validate config early (prevents passing empty config into native layer).
         if methodPassword.isEmpty || serverPort.isEmpty {
@@ -49,25 +53,33 @@ public final class OutlineInteractor {
         
         var err: NSError?
 
+        logs.writeLog(log: "[DEBUG][Outline] calling native NewOutlineClient fd=\(tunnelFileDescriptor) mtu=\(mtu)")
         Cloak_outlineNewOutlineClient(config, Int(tunnelFileDescriptor), mtu, &err)
         if let error = err {
+            logs.writeLog(log: "[Outline] NewOutlineClient failed: \(error.localizedDescription)")
             throw error
         }
         nativeClientCreated()
 
+        logs.writeLog(log: "[DEBUG][Outline] calling native OutlineConnect")
         Cloak_outlineOutlineConnect(&err)
         if let error = err {
+            logs.writeLog(log: "[Outline] OutlineConnect failed: \(error.localizedDescription)")
             throw error
         }
+        logs.writeLog(log: "[Outline] OutlineConnect succeeded")
     }
 
     func stopOutline() throws {
         var err: NSError?
 
+        logs.writeLog(log: "[DEBUG][Outline] calling native OutlineDisconnect")
         Cloak_outlineOutlineDisconnect(&err)
         if let error = err {
+            logs.writeLog(log: "[Outline] OutlineDisconnect failed: \(error.localizedDescription)")
             throw error
         }
+        logs.writeLog(log: "[DEBUG][Outline] OutlineDisconnect returned")
     }
     
     func buildOutlineConfig(

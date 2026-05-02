@@ -90,6 +90,7 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 		return nil, err
 	}
 
+	log.Infof("[DEBUG][Protect] TCP dial OK network=%s destination=%s local=%s remote=%s", realNet, address, conn.LocalAddr(), conn.RemoteAddr())
 	return conn, nil
 }
 
@@ -103,15 +104,18 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 
 		pc, err := lc.ListenPacket(ctx, realNet, listenAddr(realNet))
 		if err != nil {
+			log.Infof("[Protect] UDP BYPASS loopback listen error network=%s destination=%s: %v", realNet, address, err)
 			return nil, err
 		}
 
 		udpAddr, err := net.ResolveUDPAddr(realNet, address)
 		if err != nil {
 			_ = pc.Close()
+			log.Infof("[Protect] UDP BYPASS loopback resolve error network=%s destination=%s: %v", realNet, address, err)
 			return nil, err
 		}
 
+		log.Infof("[DEBUG][Protect] UDP BYPASS loopback ready network=%s destination=%s local=%s remote=%s", realNet, address, pc.LocalAddr(), udpAddr)
 		return &connectedUDPConn{
 			PacketConn: pc,
 			remoteAddr: udpAddr,
@@ -133,15 +137,18 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 
 	pc, err := lc.ListenPacket(ctx, realNet, listenAddr(realNet))
 	if err != nil {
+		log.Infof("[Protect] UDP listen error network=%s destination=%s: %v", realNet, address, err)
 		return nil, err
 	}
 
 	udpAddr, err := net.ResolveUDPAddr(realNet, address)
 	if err != nil {
 		_ = pc.Close()
+		log.Infof("[Protect] UDP resolve error network=%s destination=%s: %v", realNet, address, err)
 		return nil, err
 	}
 
+	log.Infof("[DEBUG][Protect] UDP dial ready network=%s destination=%s local=%s remote=%s", realNet, address, pc.LocalAddr(), udpAddr)
 	return &connectedUDPConn{
 		PacketConn: pc,
 		remoteAddr: udpAddr,

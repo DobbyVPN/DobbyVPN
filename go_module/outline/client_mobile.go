@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"time"
 )
 
 type OutlineClient struct {
@@ -47,12 +48,14 @@ func NewClientWithFD(transportConfig string, fd int, mtu int) *OutlineClient {
 		tunFD:  fd,
 		mtu:    mtu,
 	}
-	log.Infof("outline client created (tun2socks version)")
+	log.Infof("outline client created (tun2socks version) fd=%d mtu=%d configLen=%d", fd, mtu, len(transportConfig))
 	common.Client.SetVpnClient(outlineCommon.Name, c)
 	return c
 }
 
 func (c *OutlineClient) Connect() error {
+	start := time.Now()
+	log.Infof("outline client connect begin fd=%d mtu=%d configLen=%d", c.tunFD, c.mtu, len(c.config))
 	defer func() {
 		if r := recover(); r != nil {
 			log.Infof("RECOVERED from fail in Connect: %v", r)
@@ -74,9 +77,11 @@ func (c *OutlineClient) Connect() error {
 	err = unix.SetNonblock(fd, true)
 	if err != nil {
 		log.Infof("Set unix.SetNonblock error: %v", err)
+	} else {
+		log.Infof("[DEBUG][Outline] tun fd set non-blocking fd=%d", fd)
 	}
 
-	log.Infof("starting tun2socks engine with proxy %s", od.GetProxyAddr())
+	log.Infof("starting tun2socks engine with proxy %s fd=%d mtu=%d", od.GetProxyAddr(), fd, c.mtu)
 	err = tunnel.StartEngine(platform_engine.EngineConfig{
 		ProxyAddr:   od.GetProxyAddr(),
 		FD:          fd,
@@ -90,15 +95,18 @@ func (c *OutlineClient) Connect() error {
 	c.engineStarted = true
 
 	common.Client.MarkActive(outlineCommon.Name)
-	log.Infof("outline client connected successfully via tun2socks")
+	log.Infof("outline client connected successfully via tun2socks in %dms", time.Since(start).Milliseconds())
 	return nil
 }
 
 func (c *OutlineClient) Disconnect() error {
+	log.Infof("outline client disconnect begin engineStarted=%v fd=%d deviceNil=%v", c.engineStarted, c.tunFD, c.device == nil)
 	tunnel.StopEngine()
 	if !c.engineStarted && c.tunFD >= 0 {
 		if err := unix.Close(c.tunFD); err != nil {
 			log.Infof("failed to close unused tun fd: %v\n", err)
+		} else {
+			log.Infof("[DEBUG][Outline] closed unused tun fd=%d", c.tunFD)
 		}
 	}
 	c.engineStarted = false
