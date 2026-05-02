@@ -1,7 +1,7 @@
 import app
 
 public final class HealthCheckImpl: HealthCheck {
-    func GetConnectionState() -> VpnConnectionState {
+    public func GetConnectionState() -> VpnConnectionState {
         let state = Cloak_outlineGetConnectionState()
 
         switch state {
@@ -17,15 +17,15 @@ public final class HealthCheckImpl: HealthCheck {
         }
     }
 
-    func InitHealthCheck() {
+    public func InitHealthCheck() {
         Cloak_outlineInitHealthCheck()
     }
 
-    func StartHealthCheck() {
+    public func StartHealthCheck() {
         Cloak_outlineStartHealthCheck()
     }
 
-    func StopHealthCheck() {
+    public func StopHealthCheck() {
         Cloak_outlineStopHealthCheck()
     }
 }
