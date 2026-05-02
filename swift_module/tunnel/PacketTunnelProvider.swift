@@ -257,7 +257,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         Cloak_outlineClearGeoRoutingConf()
         Task {
             await teardownForStop(reason: "stopTunnel(\(reason))")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel teardown complete; calling completionHandler")
             completionHandler()
+            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel completionHandler returned")
         }
     }
 
