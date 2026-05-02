@@ -1,4 +1,5 @@
 import app
+import MyLibrary
 
 public final class HealthCheckImpl: HealthCheck {
     public func GetConnectionState() -> VpnConnectionState {
