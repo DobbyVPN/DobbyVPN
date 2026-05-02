@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
@@ -18,6 +20,7 @@ import (
 )
 
 type OutlineDevice struct {
+	mu           sync.RWMutex
 	listener     net.Listener
 	proxyAddr    string
 	svrIP        net.IP
@@ -25,6 +28,11 @@ type OutlineDevice struct {
 	packetDialer transport.PacketDialer
 	useCloak     bool
 	preferTCPDNS bool
+	closed       atomic.Bool
+	startedAt    time.Time
+	serveState   string
+	serveErr     string
+	serveGen     int
 }
 
 type DeviceOptions struct {
@@ -79,10 +87,13 @@ func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) 
 		packetDialer: pd,
 		useCloak:     useCloak,
 		preferTCPDNS: preferTCPDNS,
+		startedAt:    time.Now(),
+		serveState:   "created",
 	}
 
 	server := socks5.NewServer(
 		socks5.WithDial(od.handleDial),
+		socks5.WithLogger(socksLogger{}),
 	)
 
 	lc := net.ListenConfig{}
@@ -95,14 +106,113 @@ func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) 
 	od.listener = listener
 	od.proxyAddr = listener.Addr().String()
 
-	go func() {
-		log.Infof("SOCKS5 started on %s", od.proxyAddr)
-		if err := server.Serve(listener); err != nil {
-			log.Infof("SOCKS5 stopped: %v", err)
+	go od.serveLoop(server)
+
+	return od, nil
+}
+
+type socksLogger struct{}
+
+func (socksLogger) Errorf(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	if strings.Contains(msg, "EOF") ||
+		strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "client want to used addr") {
+		return
+	}
+	log.Infof("[SOCKS5 internal] %s", msg)
+}
+
+func (d *OutlineDevice) serveLoop(server *socks5.Server) {
+	for {
+		if d.closed.Load() {
+			d.markServeStopped("closed")
+			return
+		}
+
+		d.mu.RLock()
+		listener := d.listener
+		addr := d.proxyAddr
+		d.mu.RUnlock()
+
+		if listener == nil {
+			d.markServeStopped("listener=nil")
+			return
+		}
+
+		d.markServeRunning()
+		err := d.serveOnce(server, listener)
+		if d.closed.Load() {
+			d.markServeStopped("closed")
+			log.Infof("SOCKS5 stopped on %s: closed", addr)
+			return
+		}
+
+		errText := "nil"
+		if err != nil {
+			errText = err.Error()
+		}
+		d.markServeStopped(errText)
+		log.Infof("SOCKS5 stopped unexpectedly on %s: %s", addr, errText)
+
+		for !d.closed.Load() {
+			time.Sleep(250 * time.Millisecond)
+			if err := d.rebindListener(addr); err != nil {
+				log.Infof("SOCKS5 rebind failed on %s: %v", addr, err)
+				time.Sleep(time.Second)
+				continue
+			}
+			log.Infof("SOCKS5 rebound on %s", addr)
+			break
+		}
+	}
+}
+
+func (d *OutlineDevice) serveOnce(server *socks5.Server, listener net.Listener) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
 		}
 	}()
 
-	return od, nil
+	log.Infof("SOCKS5 started on %s", listener.Addr().String())
+	return server.Serve(listener)
+}
+
+func (d *OutlineDevice) rebindListener(addr string) error {
+	if d.closed.Load() {
+		return net.ErrClosed
+	}
+
+	lc := net.ListenConfig{}
+	listener, err := lc.Listen(context.Background(), "tcp", addr)
+	if err != nil {
+		return err
+	}
+
+	d.mu.Lock()
+	d.listener = listener
+	d.proxyAddr = listener.Addr().String()
+	d.mu.Unlock()
+	return nil
+}
+
+func (d *OutlineDevice) markServeRunning() {
+	d.mu.Lock()
+	d.serveGen++
+	d.serveState = "running"
+	d.serveErr = ""
+	gen := d.serveGen
+	addr := d.proxyAddr
+	d.mu.Unlock()
+	log.Infof("SOCKS5 serve generation %d running on %s", gen, addr)
+}
+
+func (d *OutlineDevice) markServeStopped(reason string) {
+	d.mu.Lock()
+	d.serveState = "stopped"
+	d.serveErr = reason
+	d.mu.Unlock()
 }
 
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -149,21 +259,72 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 }
 
 type truncatedDNSConn struct {
-	req []byte
+	responses chan []byte
+	done      chan struct{}
+	closeOnce sync.Once
+	remote    net.Addr
 }
 
 func newTruncatedDNSConn(host string, port int) net.Conn {
-	return &truncatedDNSConn{}
+	return &truncatedDNSConn{
+		responses: make(chan []byte, 16),
+		done:      make(chan struct{}),
+		remote:    &net.UDPAddr{IP: net.ParseIP(host), Port: port},
+	}
 }
 
 func (c *truncatedDNSConn) Read(b []byte) (int, error) {
+	select {
+	case resp := <-c.responses:
+		n := copy(b, resp)
+		return n, nil
+	case <-c.done:
+		return 0, net.ErrClosed
+	}
+}
 
-	if len(c.req) < 12 {
-		return 0, errors.New("invalid dns packet")
+func (c *truncatedDNSConn) Write(b []byte) (int, error) {
+	select {
+	case <-c.done:
+		return 0, net.ErrClosed
+	default:
 	}
 
-	resp := make([]byte, len(c.req))
-	copy(resp, c.req)
+	resp, err := truncatedDNSResponse(b)
+	if err != nil {
+		log.Infof("[SOCKS5 DNS] invalid DNS packet for TCP fallback: %v", err)
+		return len(b), nil
+	}
+
+	select {
+	case c.responses <- resp:
+	case <-c.done:
+		return 0, net.ErrClosed
+	default:
+		// Keep SOCKS5 UDP associate from blocking forever if a resolver floods
+		// DNS requests faster than the client-side UDP relay can read replies.
+		select {
+		case <-c.responses:
+		default:
+		}
+		select {
+		case c.responses <- resp:
+		case <-c.done:
+			return 0, net.ErrClosed
+		default:
+		}
+	}
+
+	return len(b), nil
+}
+
+func truncatedDNSResponse(req []byte) ([]byte, error) {
+	if len(req) < 12 {
+		return nil, errors.New("invalid dns packet")
+	}
+
+	resp := make([]byte, len(req))
+	copy(resp, req)
 
 	// response
 	resp[2] |= 0x80
@@ -180,19 +341,18 @@ func (c *truncatedDNSConn) Read(b []byte) (int, error) {
 	resp[10] = 0
 	resp[11] = 0
 
-	n := copy(b, resp)
-	return n, nil
+	return resp, nil
 }
 
-func (c *truncatedDNSConn) Write(b []byte) (int, error) {
-	c.req = make([]byte, len(b))
-	copy(c.req, b)
-	return len(b), nil
+func (c *truncatedDNSConn) Close() error {
+	c.closeOnce.Do(func() {
+		close(c.done)
+	})
+	return nil
 }
 
-func (c *truncatedDNSConn) Close() error                       { return nil }
-func (c *truncatedDNSConn) LocalAddr() net.Addr                { return nil }
-func (c *truncatedDNSConn) RemoteAddr() net.Addr               { return nil }
+func (c *truncatedDNSConn) LocalAddr() net.Addr                { return &net.UDPAddr{IP: net.IPv4zero, Port: 0} }
+func (c *truncatedDNSConn) RemoteAddr() net.Addr               { return c.remote }
 func (c *truncatedDNSConn) SetDeadline(t time.Time) error      { return nil }
 func (c *truncatedDNSConn) SetReadDeadline(t time.Time) error  { return nil }
 func (c *truncatedDNSConn) SetWriteDeadline(t time.Time) error { return nil }
@@ -291,12 +451,76 @@ func (d *OutlineDevice) GetServerIP() net.IP {
 }
 
 func (d *OutlineDevice) GetProxyAddr() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	return d.proxyAddr
 }
 
+func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (bool, string) {
+	d.mu.RLock()
+	addr := d.proxyAddr
+	state := d.serveState
+	serveErr := d.serveErr
+	gen := d.serveGen
+	closed := d.closed.Load()
+	startedAt := d.startedAt
+	d.mu.RUnlock()
+
+	if addr == "" {
+		return false, fmt.Sprintf(
+			"localProxyAlive=false proxyAddr= serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d",
+			state,
+			gen,
+			closed,
+			serveErr,
+			time.Since(startedAt).Milliseconds(),
+		)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return false, fmt.Sprintf(
+			"localProxyAlive=false proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q probeErr=%q uptimeMs=%d",
+			addr,
+			state,
+			gen,
+			closed,
+			serveErr,
+			err.Error(),
+			time.Since(startedAt).Milliseconds(),
+		)
+	}
+	_ = conn.Close()
+
+	return true, fmt.Sprintf(
+		"localProxyAlive=true proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d",
+		addr,
+		state,
+		gen,
+		closed,
+		serveErr,
+		time.Since(startedAt).Milliseconds(),
+	)
+}
+
+func (d *OutlineDevice) Status(timeout time.Duration) string {
+	_, status := d.LocalProxyAlive(timeout)
+	return status
+}
+
 func (d *OutlineDevice) Close() error {
-	if d.listener != nil {
-		return d.listener.Close()
+	d.closed.Store(true)
+	d.mu.RLock()
+	listener := d.listener
+	addr := d.proxyAddr
+	d.mu.RUnlock()
+
+	if listener != nil {
+		log.Infof("SOCKS5 close requested on %s", addr)
+		return listener.Close()
 	}
 	return nil
 }
