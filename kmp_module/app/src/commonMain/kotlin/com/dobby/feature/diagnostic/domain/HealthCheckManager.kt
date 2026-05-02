@@ -31,6 +31,7 @@ class HealthCheckManager(
     private var consecutiveFailuresCount: Int = 0
     private var lastVpnStartMark: TimeMark? = null
     private var lastFullConnectionSucceed = false
+    private var healthTickId = 0
 
     suspend fun startHealthCheck(address: String, port: Int) {
         logger.log("[HC] startHealthCheck() called")
@@ -66,15 +67,24 @@ class HealthCheckManager(
 
             while (isActive) {
                 var nextDelay: Duration? = null
+                val tickId = ++healthTickId
+                logger.log(
+                    "[HC] tick#$tickId begin " +
+                        "lastFullConnectionSucceed=$lastFullConnectionSucceed " +
+                        "consecutiveFailuresCount=$consecutiveFailuresCount"
+                )
 
                 if (configsRepository.getIsUserInitStop()) {
-                    logger.log("[HC] Stop condition: getIsUserInitStop() == true → exiting health check loop")
+                    logger.log(
+                        "[HC] tick#$tickId stop condition: " +
+                            "getIsUserInitStop() == true → exiting health check loop"
+                    )
                     resetHealthCheckState()
                     return@launch
                 }
 
                 if (mainViewModel.connectionStateRepository.vpnTransitioningFlow.value) {
-                    logger.log("[HC] VPN is transitioning → skipping checks for this tick")
+                    logger.log("[HC] tick#$tickId VPN is transitioning → skipping checks for this tick")
                     nextDelay = getHealthCheckDelay()
                     logger.log("[HC] Next tick in $nextDelay")
                     delay(nextDelay)
@@ -82,17 +92,22 @@ class HealthCheckManager(
                 }
 
                 val connected = try {
-                    val result = isConnected()
-                    logger.log("[HC] isConnected() result = $result")
+                    val result = isConnected(tickId)
+                    logger.log("[HC] tick#$tickId isConnected() result = $result")
                     result
                 } catch (t: Throwable) {
-                    logger.log("[HC] isConnected() threw exception: ${t.message}")
+                    logger.log("[HC] tick#$tickId isConnected() threw exception: ${t.message}")
                     false
                 }
 
-                var vpnStarted = mainViewModel.connectionStateRepository.vpnStartedFlow.value
+                if (!isActive) {
+                    logger.log("[HC] tick#$tickId result ignored because health job was cancelled")
+                    return@launch
+                }
+
+                val vpnStarted = mainViewModel.connectionStateRepository.vpnStartedFlow.value
                 if (!vpnStarted) {
-                    logger.log("[HC] vpnStarted=false → exiting health check loop")
+                    logger.log("[HC] tick#$tickId vpnStarted=false → exiting health check loop")
                     resetHealthCheckState()
                     return@launch
                 }
@@ -107,7 +122,10 @@ class HealthCheckManager(
                     val sinceStartMs = (lastVpnStartMark?.elapsedNow()?.inWholeMilliseconds)
                         ?: Long.MAX_VALUE
                     if (sinceStartMs < gracePeriodMs) {
-                        logger.log("[HC] Not connected during grace period (${sinceStartMs}ms < ${gracePeriodMs}ms) → ignore")
+                        logger.log(
+                            "[HC] Not connected during grace period " +
+                                "(${sinceStartMs}ms < ${gracePeriodMs}ms) → ignore"
+                        )
                         nextDelay = getHealthCheckDelay()
                     }
 
@@ -176,6 +194,7 @@ class HealthCheckManager(
         consecutiveFailuresCount = 0
         lastVpnStartMark = null
         lastFullConnectionSucceed = false
+        healthTickId = 0
     }
 
     suspend fun turnOffVpn() {
@@ -185,14 +204,17 @@ class HealthCheckManager(
         mainViewModel.stopVpnService()
     }
 
-    private fun isConnected(): Boolean {
+    private fun isConnected(tickId: Int): Boolean {
         var result = false
         if (lastFullConnectionSucceed) {
+            logger.log("[HC] tick#$tickId using shortConnectionCheckUp() first")
             result = healthCheck.shortConnectionCheckUp()
         }
         if (!result) {
+            logger.log("[HC] tick#$tickId using fullConnectionCheckUp()")
             result = healthCheck.fullConnectionCheckUp()
             lastFullConnectionSucceed = result
+            logger.log("[HC] tick#$tickId fullConnectionCheckUp() result=$result")
         }
         return result
     }

@@ -46,8 +46,12 @@ public final class CloakInteractor {
 
     func stopCloak() {
         if cloakStarted {
+            logs.writeLog(log: "stopCloak: stopping Cloak client")
             Cloak_outlineStopCloakClient()
             cloakStarted = false
+            logs.writeLog(log: "stopCloak: Cloak client stopped")
+        } else {
+            logs.writeLog(log: "[DEBUG] stopCloak: skipped, cloakStarted=false")
         }
     }
 }

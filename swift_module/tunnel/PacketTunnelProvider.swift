@@ -23,7 +23,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
 
     private var pathMonitor: Network.NWPathMonitor?
-    private var lastPathStatus: Network.NWPath.Status?
+    private var lastPathFingerprint: String?
     private var packetFlowBridge: PacketFlowBridge?
 
     deinit {
@@ -52,37 +52,79 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     func logInterfaces() {
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
-        getifaddrs(&ifaddrPtr)
+        guard getifaddrs(&ifaddrPtr) == 0, ifaddrPtr != nil else {
+            logs.writeLog(log: "[DEBUG][Interfaces] getifaddrs failed")
+            return
+        }
+        defer { freeifaddrs(ifaddrPtr) }
+
+        var interfaces: [String: [String]] = [:]
         var ptr = ifaddrPtr
         while ptr != nil {
-            if let name = ptr?.pointee.ifa_name {
-                let s = String(cString: name)
-                if s.starts(with: "utun") {
-                    logs.writeLog(log: "Active interface: \(s)")
+            guard let rawName = ptr?.pointee.ifa_name,
+                  let addr = ptr?.pointee.ifa_addr else {
+                ptr = ptr?.pointee.ifa_next
+                continue
+            }
+            let name = String(cString: rawName)
+            if name.starts(with: "utun") {
+                let family = Int32(addr.pointee.sa_family)
+                var values = interfaces[name] ?? []
+                if family == AF_INET {
+                    var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                    var ip = addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                        $0.pointee.sin_addr
+                    }
+                    if inet_ntop(AF_INET, &ip, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil {
+                        values.append("ipv4=\(String(cString: buffer))")
+                    }
+                } else if family == AF_INET6 {
+                    values.append("ipv6")
+                } else {
+                    values.append("family=\(family)")
                 }
+                interfaces[name] = values
             }
             ptr = ptr?.pointee.ifa_next
         }
-        freeifaddrs(ifaddrPtr)
+
+        if interfaces.isEmpty {
+            logs.writeLog(log: "[DEBUG][Interfaces] no utun interfaces visible")
+            return
+        }
+
+        for name in interfaces.keys.sorted() {
+            let details = (interfaces[name] ?? []).joined(separator: ",")
+            logs.writeLog(log: "[DEBUG][Interfaces] active \(name) \(details)")
+        }
     }
 
     override func startTunnel(options: [String : NSObject]?) async throws {
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
-        logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId)")
+        var startupStage = "entered"
+        let optionKeys = options?.keys.sorted().joined(separator: ",") ?? "(none)"
+        logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
 
         do {
             // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
+            startupStage = "pre-start cleanup"
             await teardownForStop(reason: "pre-start cleanup")
 
+            startupStage = "path monitor"
             startPathLogging()
 
+            startupStage = "go logger init"
             let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
             logs.writeLog(log: "Start go logger init path = \(path)")
             Cloak_outlineInitLogger(path)
             logs.writeLog(log: "Finish go logger init")
-            Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
+            startupStage = "geo routing config"
+            let geoRoutingConf = configsRepository.getGeoRoutingConf()
+            logs.writeLog(log: "[DEBUG][Routing] applying geo routing config length=\(geoRoutingConf.count)")
+            Cloak_outlineSetGeoRoutingConf(geoRoutingConf)
 
+            startupStage = "route exclusions"
             let cloakConfig = configsRepository.getCloakConfig()
             // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
             // DNS resolution at tunnel start can hang in offline/captive-portal cases, so we do it with a hard timeout.
@@ -101,7 +143,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         )
                     }
                 } else {
-                    logs.writeLog(log: "Excluded route for Outline host skipped (can't resolve to IPv4): \(trimmed)")
+                    logs.writeLog(log: "Excluded route for Outline host skipped (can't resolve to IPv4): \(maskStr(value: trimmed))")
                 }
             }
             if let remoteHost = extractRemoteHost(from: cloakConfig) {
@@ -130,8 +172,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
             // Cloak must bind/connect before the full-tunnel route is installed; otherwise
             // iOS can route the upstream bootstrap traffic into a tunnel that is not ready yet.
+            startupStage = "cloak startup"
+            logs.writeLog(log: "[tunnel:\(tunnelId)] starting Cloak phase")
             try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
 
+            startupStage = "network settings build"
             let remoteAddress = "254.1.1.1"
             let localAddress = "198.18.0.1"
             let subnetMask = "255.255.0.0"
@@ -149,14 +194,28 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             settings.dnsSettings = NEDNSSettings(servers: dnsServers)
             settings.dnsSettings?.matchDomains = [""]
 
-            logs.writeLog(log: "Settings are ready:")
+            logNetworkSettings(
+                localAddress: localAddress,
+                remoteAddress: remoteAddress,
+                subnetMask: subnetMask,
+                mtu: tunnelMTU,
+                dnsServers: dnsServers,
+                excludedRoutes: excludedRoutes
+            )
+            startupStage = "setTunnelNetworkSettings"
+            let settingsStart = Date()
+            logs.writeLog(log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings begin")
             try await self.setTunnelNetworkSettings(settings)
-            logs.writeLog(log: "Tunnel settings applied")
+            logs.writeLog(
+                log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings applied in \(elapsedMs(since: settingsStart))ms"
+            )
 
             logInterfaces()
 
+            startupStage = "packetFlow bridge"
             let bridgeTunnelId = tunnelId
             let bridgeLogs = logs
+            logs.writeLog(log: "[tunnel:\(tunnelId)] creating PacketFlowBridge mtu=\(tunnelMTU)")
             let bridge = try PacketFlowBridge(
                 packetFlow: packetFlow,
                 mtu: tunnelMTU,
@@ -168,10 +227,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             packetFlowBridge = bridge
             bridge.start()
 
+            startupStage = "outline startup"
+            logs.writeLog(log: "[tunnel:\(tunnelId)] starting Outline phase tunnelFD=\(bridge.tunnelFileDescriptor) mtu=\(tunnelMTU)")
             try outlineInteractor.startOutline(
                 tunnelFileDescriptor: bridge.tunnelFileDescriptor,
                 mtu: tunnelMTU,
                 nativeClientCreated: {
+                    bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] native Outline client created; releasing bridge fd to Go")
                     bridge.releaseTunnelFileDescriptor()
                 }
             )
@@ -182,7 +244,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let nsError = error as NSError
             logs.writeLog(
                 log: "[tunnel:\(tunnelId)] startTunnel failed: " +
-                    "\(nsError.domain) code=\(nsError.code) desc=\(error.localizedDescription)"
+                    "stage=\(startupStage) \(nsError.domain) code=\(nsError.code) desc=\(error.localizedDescription)"
             )
             await teardownForStop(reason: "startTunnel failure")
             throw error
@@ -219,8 +281,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
+            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory")
             completionHandler?("Memory:\(reportMemoryUsageMB())".data(using: .utf8))
         } else {
+            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage echo bytes=\(messageData.count)")
             completionHandler?(messageData)
         }
     }
@@ -233,15 +297,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
-            let status = path.status
-            if self.lastPathStatus != status {
-                self.lastPathStatus = status
-                let ifaces = path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",")
-                let expensive = path.isExpensive
-                let constrained = path.isConstrained
+            let ifaces = path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",")
+            let expensive = path.isExpensive
+            let constrained = path.isConstrained
+            let fingerprint = "status=\(path.status)|ifaces=\(ifaces)|expensive=\(expensive)|constrained=\(constrained)"
+            if self.lastPathFingerprint != fingerprint {
+                self.lastPathFingerprint = fingerprint
                 self.logs.writeLog(
                     log: "[tunnel:\(self.tunnelId)] pathUpdate " +
-                        "status=\(status) ifaces=[\(ifaces)] " +
+                        "status=\(path.status) ifaces=[\(ifaces)] " +
                         "expensive=\(expensive) constrained=\(constrained)"
                 )
             }
@@ -256,28 +320,57 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
 
         do {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping Outline")
             try outlineInteractor.stopOutline()
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] Outline stopped")
         } catch {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop outline: \(error.localizedDescription)")
         }
 
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping PacketFlowBridge")
         packetFlowBridge?.stop()
         packetFlowBridge = nil
 
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping Cloak")
         cloakInteractor.stopCloak()
 
         do {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] clearing tunnel network settings")
             try await self.setTunnelNetworkSettings(nil)
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] cleared tunnel network settings")
         } catch {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] failed to clear tunnel network settings: \(error.localizedDescription)")
         }
 
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping NWPathMonitor")
         pathMonitor?.cancel()
         pathMonitor = nil
-        lastPathStatus = nil
+        lastPathFingerprint = nil
 
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason))")
+    }
+
+    private func logNetworkSettings(
+        localAddress: String,
+        remoteAddress: String,
+        subnetMask: String,
+        mtu: Int,
+        dnsServers: [String],
+        excludedRoutes: [NEIPv4Route]
+    ) {
+        let excluded = excludedRoutes
+            .map { "\($0.destinationAddress)/\($0.destinationSubnetMask)" }
+            .joined(separator: ",")
+        logs.writeLog(
+            log: "[DEBUG][tunnel:\(tunnelId)] network settings " +
+            "local=\(localAddress) remote=\(remoteAddress) mask=\(subnetMask) mtu=\(mtu) " +
+            "dns=\(dnsServers.joined(separator: ",")) included=default " +
+            "excluded=\(excluded.isEmpty ? "(none)" : excluded) ipv6=disabled"
+        )
+    }
+
+    private func elapsedMs(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
     }
 
     /// Extracts the host/IP part from a string like "ip:port" or "[ipv6]:port".
@@ -320,6 +413,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         guard !trimmed.isEmpty else { return nil }
         if isValidIPv4(trimmed) { return trimmed }
 
+        let start = Date()
+        logs.writeLog(log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: trimmed))")
+
         var hints = addrinfo(
             ai_flags: AI_ADDRCONFIG,
             ai_family: AF_INET,
@@ -332,14 +428,25 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         )
         var res: UnsafeMutablePointer<addrinfo>?
         let rc = getaddrinfo(trimmed, nil, &hints, &res)
-        guard rc == 0, let first = res else { return nil }
+        guard rc == 0, let first = res else {
+            logs.writeLog(
+                log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: trimmed)) failed " +
+                "rc=\(rc) error=\(String(cString: gai_strerror(rc))) elapsed=\(elapsedMs(since: start))ms"
+            )
+            return nil
+        }
         defer { freeaddrinfo(res) }
 
         var addr = first.pointee.ai_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
         var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
         let ptr = inet_ntop(AF_INET, &addr, &buffer, socklen_t(INET_ADDRSTRLEN))
         guard ptr != nil else { return nil }
-        return String(cString: buffer)
+        let value = String(cString: buffer)
+        logs.writeLog(
+            log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: trimmed)) ok " +
+            "ip=\(maskStr(value: value)) elapsed=\(elapsedMs(since: start))ms"
+        )
+        return value
     }
 
     private func resolveIPv4IfNeededWithTimeout(_ host: String, timeout: TimeInterval) -> String? {
@@ -358,6 +465,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         let wait = group.wait(timeout: .now() + timeout)
         if wait == .timedOut {
+            logs.writeLog(
+                log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: host)) " +
+                "timed out after \(Int(timeout * 1000))ms"
+            )
             return nil
         }
         lock.lock()

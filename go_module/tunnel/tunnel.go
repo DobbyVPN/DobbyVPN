@@ -111,7 +111,13 @@ type DobbyProxy struct {
 
 func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
 	if IsBypass(metadata) {
-		return p.direct.DialContext(ctx, metadata)
+		conn, err := p.direct.DialContext(ctx, metadata)
+		if err != nil {
+			log.Infof("[Router] BYPASS TCP dial error %s: %v", metadata.DestinationAddress(), err)
+			return nil, err
+		}
+		log.Infof("[DEBUG][Router] BYPASS TCP dial OK %s local=%s remote=%s", metadata.DestinationAddress(), conn.LocalAddr(), conn.RemoteAddr())
+		return conn, nil
 	}
 
 	// Increment first, then check — prevents TOCTOU race where multiple goroutines
@@ -126,6 +132,7 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 	conn, err := p.vpn.DialContext(ctx, metadata)
 	if err != nil {
 		p.activeTCP.Add(-1)
+		log.Infof("[Router] PROXY TCP dial error %s: %v", metadata.DestinationAddress(), err)
 		return nil, err
 	}
 
@@ -137,7 +144,13 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 
 func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	if IsBypass(metadata) {
-		return p.direct.DialUDP(metadata)
+		conn, err := p.direct.DialUDP(metadata)
+		if err != nil {
+			log.Infof("[Router] BYPASS UDP dial error %s: %v", metadata.DestinationAddress(), err)
+			return nil, err
+		}
+		log.Infof("[DEBUG][Router] BYPASS UDP dial OK %s local=%s", metadata.DestinationAddress(), conn.LocalAddr())
+		return conn, nil
 	}
 
 	active := p.activeUDP.Add(1)
@@ -150,6 +163,7 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	conn, err := p.vpn.DialUDP(metadata)
 	if err != nil {
 		p.activeUDP.Add(-1)
+		log.Infof("[Router] PROXY UDP dial error %s: %v", metadata.DestinationAddress(), err)
 		return nil, err
 	}
 
@@ -168,8 +182,10 @@ func (p *DobbyProxy) Proto() proto.Proto {
 }
 
 func stopLocked() {
+	log.Infof("[Engine] stopping tun2socks engine")
 	platform_engine.EngineStop()
 	isRunning = false
+	log.Infof("[Engine] tun2socks engine stopped")
 }
 
 func StartEngine(cfg platform_engine.EngineConfig) error {
@@ -177,9 +193,11 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 	defer mu.Unlock()
 
 	if isRunning {
+		log.Infof("[Engine] StartEngine requested while already running; stopping previous engine first")
 		stopLocked()
 	}
 
+	log.Infof("[Engine] StartEngine config proxy=%s fd=%d mtu=%d uplinkIface=%s", cfg.ProxyAddr, cfg.FD, cfg.MTU, cfg.UplinkIface)
 	log.Infof("[Engine] StartEngine: calling StartPlatformEngine")
 	err := platform_engine.StartPlatformEngine(cfg)
 	if err != nil {
@@ -222,6 +240,7 @@ func StopEngine() {
 	defer mu.Unlock()
 
 	if !isRunning {
+		log.Infof("[Engine] StopEngine skipped: not running")
 		return
 	}
 
