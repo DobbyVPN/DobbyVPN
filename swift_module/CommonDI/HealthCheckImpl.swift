@@ -58,7 +58,7 @@ public final class HealthCheckImpl: HealthCheck {
     public static let shared = HealthCheckImpl()
 
     private let logs = NativeModuleHolder.logsRepository
-    private let timeout: TimeInterval = 4.0
+    private let timeout: TimeInterval = 8.0
     private let tunnelIPAddress = "198.18.0.1"
 
     public private(set) var currentMemmoryUsageMb = 0.0
@@ -115,11 +115,10 @@ public final class HealthCheckImpl: HealthCheck {
         logs.writeLog(log: "[HC] Start fullConnectionCheckUp id=\(checkId)")
 
         // --- Standard check groups ---
-        let groups: [(String, [(String, () -> Bool)])] = [
-            ("TCP Ping group", [
-                ("Ping 8.8.8.8", { self.pingAddress("8.8.8.8:53", name: "Google") }),
-                ("Ping 1.1.1.1", { self.pingAddress("1.1.1.1:53", name: "OneOneOneOne") })
-            ]),
+        // On iOS, net.Dial based TCP probes can complete against the local
+        // virtual TCP stack before the upstream proxy dial has succeeded.
+        // Run DNS/HTTP first; only run TCP probes as diagnostics if required checks fail.
+        let requiredCheckGroups: [(String, [(String, () -> Bool)])] = [
             ("DNS Resolve group", [
                 ("DNS google.com", { self.resolveDNSWithTimeout(host: "google.com") }),
                 ("DNS one.one.one.one", { self.resolveDNSWithTimeout(host: "one.one.one.one") })
@@ -127,10 +126,15 @@ public final class HealthCheckImpl: HealthCheck {
             ("DNS Ping group", [
                 ("Ping google.com (DNS)", { self.pingAddress("google.com:80", name: "GoogleDNS") }),
                 ("Ping one.one.one.one (DNS)", { self.pingAddress("one.one.one.one:80", name: "OnesDNS") })
+            ])
+        ]
+
+        let diagnosticCheckGroups: [(String, [(String, () -> Bool)])] = [
+            ("TCP Ping diagnostics", [
+                ("Ping 8.8.8.8", { self.pingAddress("8.8.8.8:53", name: "Google") }),
+                ("Ping 1.1.1.1", { self.pingAddress("1.1.1.1:53", name: "OneOneOneOne") })
             ]),
-            // TCP to 443 — verifies HTTPS traffic flows at TCP level through the proxy.
-            // If TCP ping :53 is OK but :443 fails — server blocks 443 or routing is broken.
-            ("TCP :443 group", [
+            ("TCP :443 diagnostics", [
                 ("Ping 8.8.8.8:443", { self.pingAddress("8.8.8.8:443", name: "TCP443-8888") }),
                 ("Ping 1.1.1.1:443", { self.pingAddress("1.1.1.1:443", name: "TCP443-1111") })
             ])
@@ -139,7 +143,7 @@ public final class HealthCheckImpl: HealthCheck {
         var failedGroups: [String] = []
         var groupResults: [String: Bool] = [:]
 
-        for (groupName, checks) in groups {
+        for (groupName, checks) in requiredCheckGroups {
             logs.writeLog(log: "[HC] Checking group: \(groupName)")
             let groupOk = checks.contains { name, check in
                 self.runWithRetry(name: name, block: check)
@@ -163,6 +167,18 @@ public final class HealthCheckImpl: HealthCheck {
             logs.writeLog(log: "[HC] Group OK: Short health check group")
         }
 
+        if !failedGroups.isEmpty {
+            logs.writeLog(log: "[HC] Required checks failed → running TCP diagnostic groups")
+            for (groupName, checks) in diagnosticCheckGroups {
+                logs.writeLog(log: "[HC] Checking group: \(groupName)")
+                let groupOk = checks.contains { name, check in
+                    self.runWithRetry(name: name, block: check)
+                }
+                groupResults[groupName] = groupOk
+                logs.writeLog(log: "[HC] Group \(groupOk ? "OK" : "DIAGNOSTIC FAILED"): \(groupName)")
+            }
+        }
+
         // --- Additional diagnostic tests (do not affect the result) ---
         logs.writeLog(log: "[HC] [diag] === Diagnostic checks ===")
 
@@ -181,9 +197,9 @@ public final class HealthCheckImpl: HealthCheck {
         logs.writeLog(log: "[HC] RESULT id=\(checkId) = \(result)")
 
         // --- DIAGNOSIS — single line with actionable verdict ---
-        let tcpProxyOk = groupResults["TCP Ping group"] ?? false
+        let tcpProxyOk = groupResults["TCP Ping diagnostics"] ?? true
         let dnsOk = groupResults["DNS Resolve group"] ?? false
-        let tcp443Ok = groupResults["TCP :443 group"] ?? false
+        let tcp443Ok = groupResults["TCP :443 diagnostics"] ?? true
         let httpsOk = shortOk
         logDiagnosis(
             tunnelIP: tunnelIPOk,
@@ -215,16 +231,16 @@ public final class HealthCheckImpl: HealthCheck {
         switch (tunnelIP, tcpProxy, dns, tcp443, https) {
         case (false, _, _, _, _):
             diagnosis = "SIDE: CLIENT | REASON: tunnel IP 198.18.0.1 not assigned — tunnel failed to start at OS level"
-        case (true, false, _, _, _):
-            diagnosis = "SIDE: CLIENT | REASON: TCP via SOCKS5 proxy not working — tun2socks not forwarding traffic or Go engine crashed"
-        case (true, true, false, _, _):
-            diagnosis = "SIDE: CLIENT | REASON: DNS not resolving — wrong DNS servers in tunnel or their traffic is blocked"
-        case (true, true, true, false, _):
-            diagnosis = "SIDE: SERVER (likely) | REASON: TCP :53 OK but TCP :443 failing — server blocks HTTPS port or intermediate node filters it"
-        case (true, true, true, true, false):
+        case (true, _, false, _, _):
+            diagnosis = "SIDE: CLIENT OR SERVER | REASON: DNS not resolving — DNS-over-tunnel is failing or blocked"
+        case (true, _, true, _, false):
             // Check metrics[win] in logs: proto=h3+total=- → QUIC/UDP not proxied (no udpPath? pool full?);
             // proto=h2+high total → server is slow or blocking TLS
             diagnosis = "SIDE: CLIENT OR SERVER | REASON: TCP :443 OK but HTTPS failing — check [win] in metrics: h3+total=- → UDP not proxied; h2+total=NNNms → slow/blocking server"
+        case (true, false, true, _, _):
+            diagnosis = "SIDE: CLIENT | REASON: TCP diagnostic failed after DNS/HTTP checks — possible tun2socks forwarding issue"
+        case (true, true, true, false, _):
+            diagnosis = "SIDE: SERVER (likely) | REASON: TCP diagnostic to :443 failed — server blocks HTTPS port or intermediate node filters it"
         case (true, true, true, true, true):
             diagnosis = "ALL OK — connection is working"
         default:

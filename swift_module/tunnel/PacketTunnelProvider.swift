@@ -321,6 +321,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func teardownForStop(reason: String) async {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
 
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping PacketFlowBridge")
+        packetFlowBridge?.stop()
+        packetFlowBridge = nil
+
         do {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping Outline")
             try outlineInteractor.stopOutline()
@@ -328,10 +332,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         } catch {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop outline: \(error.localizedDescription)")
         }
-
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping PacketFlowBridge")
-        packetFlowBridge?.stop()
-        packetFlowBridge = nil
 
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping Cloak")
         cloakInteractor.stopCloak()

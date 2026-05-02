@@ -44,7 +44,9 @@ func NewOutlineClient(transportConfig string, tunnelFD int, mtu int) (err error)
 	log.Infof("Using tunnel fd=%d mtu=%d", tunnelFD, mtu)
 	log.Infof("Config length=%d", len(transportConfig))
 
-	client = outline.NewClientWithFD(transportConfig, tunnelFD, mtu)
+	client = outline.NewClientWithFDAndOptions(transportConfig, tunnelFD, mtu, outline.ClientOptions{
+		PreferTCPDNSForWebSocket: true,
+	})
 
 	log.Infof("NewOutlineClient() finished")
 	return nil
