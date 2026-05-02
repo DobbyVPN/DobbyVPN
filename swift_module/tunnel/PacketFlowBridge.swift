@@ -9,6 +9,7 @@ final class PacketFlowBridge {
     private let readQueue: DispatchQueue
     private let lock = NSLock()
     private let utunHeaderLength = 4
+    private let requestedSocketBufferBytes = 1 * 1024 * 1024
 
     private var readSource: DispatchSourceRead?
     private var statsTimer: DispatchSourceTimer?
@@ -63,8 +64,15 @@ final class PacketFlowBridge {
         do {
             try disableSigpipe(swiftFileDescriptor)
             try disableSigpipe(goFileDescriptor)
+            let swiftBuffers = configureSocketBuffers(swiftFileDescriptor, requestedBytes: requestedSocketBufferBytes)
+            let goBuffers = configureSocketBuffers(goFileDescriptor, requestedBytes: requestedSocketBufferBytes)
             try setNonBlocking(swiftFileDescriptor)
             try setNonBlocking(goFileDescriptor)
+            log(
+                "[DEBUG][PacketFlowBridge] socket buffers " +
+                "swiftFD=\(swiftFileDescriptor) snd=\(swiftBuffers.send) rcv=\(swiftBuffers.receive) " +
+                "goFD=\(goFileDescriptor) snd=\(goBuffers.send) rcv=\(goBuffers.receive)"
+            )
         } catch {
             closeIfOpen(&swiftFileDescriptor)
             closeIfOpen(&goFileDescriptor)
@@ -164,12 +172,13 @@ final class PacketFlowBridge {
             }
             return Darwin.write(fd, baseAddress, framedPacket.count)
         }
+        let writeErrno = errno
 
         if written != framedPacket.count {
             recordTunnelToGoDrop()
             logWriteError(
                 "write packet to Go failed packetBytes=\(packet.count) framedBytes=\(framedPacket.count) " +
-                "written=\(written) errno=\(errno) \(errnoDescription())"
+                "written=\(written) errno=\(writeErrno) \(errnoDescription(writeErrno))"
             )
             return
         }
@@ -190,6 +199,7 @@ final class PacketFlowBridge {
                 }
                 return Darwin.read(fd, baseAddress, rawBuffer.count)
             }
+            let readErrno = errno
 
             if readCount > 0 {
                 guard readCount > utunHeaderLength else {
@@ -208,10 +218,10 @@ final class PacketFlowBridge {
                 return
             }
 
-            if errno == EAGAIN || errno == EWOULDBLOCK {
+            if readErrno == EAGAIN || readErrno == EWOULDBLOCK {
                 return
             }
-            logReadError("read packet from Go failed errno=\(errno) \(errnoDescription())")
+            logReadError("read packet from Go failed errno=\(readErrno) \(errnoDescription(readErrno))")
             return
         }
     }
@@ -306,6 +316,8 @@ final class PacketFlowBridge {
         let t2gDrops = tunnelToGoDrops
         let g2tDrops = goToTunnelDrops
         let oversized = oversizedPacketCount
+        let writeErrors = writeErrorCount
+        let readErrors = readErrorCount
         let isActive = running
         lock.unlock()
 
@@ -314,7 +326,8 @@ final class PacketFlowBridge {
             "batches=\(batches) emptyBatches=\(emptyBatches) " +
             "tunnel_to_go=\(t2gPackets)p/\(t2gBytes)B " +
             "go_to_tunnel=\(g2tPackets)p/\(g2tBytes)B " +
-            "drops_tunnel_to_go=\(t2gDrops) drops_go_to_tunnel=\(g2tDrops) oversized=\(oversized)"
+            "drops_tunnel_to_go=\(t2gDrops) drops_go_to_tunnel=\(g2tDrops) " +
+            "oversized=\(oversized) writeErrors=\(writeErrors) readErrors=\(readErrors)"
         )
     }
 
@@ -368,8 +381,8 @@ final class PacketFlowBridge {
         }
     }
 
-    private func errnoDescription() -> String {
-        String(cString: strerror(errno))
+    private func errnoDescription(_ value: Int32) -> String {
+        String(cString: strerror(value))
     }
 
     private func setNonBlocking(_ fd: Int32) throws {
@@ -394,6 +407,52 @@ final class PacketFlowBridge {
         guard result == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
+    }
+
+    private func configureSocketBuffers(_ fd: Int32, requestedBytes: Int) -> (send: Int, receive: Int) {
+        var sendBuffer = Int32(requestedBytes)
+        let sendResult = setsockopt(
+            fd,
+            SOL_SOCKET,
+            SO_SNDBUF,
+            &sendBuffer,
+            socklen_t(MemoryLayout<Int32>.size)
+        )
+        if sendResult != 0 {
+            let setErrno = errno
+            log(
+                "[PacketFlowBridge] failed to set SO_SNDBUF fd=\(fd) " +
+                "requested=\(requestedBytes) errno=\(setErrno) \(errnoDescription(setErrno))"
+            )
+        }
+
+        var receiveBuffer = Int32(requestedBytes)
+        let receiveResult = setsockopt(
+            fd,
+            SOL_SOCKET,
+            SO_RCVBUF,
+            &receiveBuffer,
+            socklen_t(MemoryLayout<Int32>.size)
+        )
+        if receiveResult != 0 {
+            let setErrno = errno
+            log(
+                "[PacketFlowBridge] failed to set SO_RCVBUF fd=\(fd) " +
+                "requested=\(requestedBytes) errno=\(setErrno) \(errnoDescription(setErrno))"
+            )
+        }
+
+        return (
+            send: socketBufferSize(fd: fd, option: SO_SNDBUF),
+            receive: socketBufferSize(fd: fd, option: SO_RCVBUF)
+        )
+    }
+
+    private func socketBufferSize(fd: Int32, option: Int32) -> Int {
+        var value: Int32 = 0
+        var length = socklen_t(MemoryLayout<Int32>.size)
+        let result = getsockopt(fd, SOL_SOCKET, option, &value, &length)
+        return result == 0 ? Int(value) : -1
     }
 
     private func closeIfOpen(_ fd: inout Int32) {

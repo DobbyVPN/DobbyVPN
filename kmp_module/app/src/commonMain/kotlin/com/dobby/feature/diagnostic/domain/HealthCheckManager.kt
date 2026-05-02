@@ -4,10 +4,13 @@ import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.presentation.MainViewModel
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.time.Duration
@@ -95,6 +98,9 @@ class HealthCheckManager(
                     val result = isConnected(tickId)
                     logger.log("[HC] tick#$tickId isConnected() result = $result")
                     result
+                } catch (cancelled: CancellationException) {
+                    logger.log("[HC] tick#$tickId cancelled while health checks were running")
+                    throw cancelled
                 } catch (t: Throwable) {
                     logger.log("[HC] tick#$tickId isConnected() threw exception: ${t.message}")
                     false
@@ -204,15 +210,19 @@ class HealthCheckManager(
         mainViewModel.stopVpnService()
     }
 
-    private fun isConnected(tickId: Int): Boolean {
+    private suspend fun isConnected(tickId: Int): Boolean {
+        currentCoroutineContext().ensureActive()
         var result = false
         if (lastFullConnectionSucceed) {
             logger.log("[HC] tick#$tickId using shortConnectionCheckUp() first")
             result = healthCheck.shortConnectionCheckUp()
+            currentCoroutineContext().ensureActive()
         }
         if (!result) {
+            currentCoroutineContext().ensureActive()
             logger.log("[HC] tick#$tickId using fullConnectionCheckUp()")
             result = healthCheck.fullConnectionCheckUp()
+            currentCoroutineContext().ensureActive()
             lastFullConnectionSucceed = result
             logger.log("[HC] tick#$tickId fullConnectionCheckUp() result=$result")
         }

@@ -59,6 +59,7 @@ public final class HealthCheckImpl: HealthCheck {
 
     private let logs = NativeModuleHolder.logsRepository
     private let timeout: TimeInterval = 4.0
+    private let tunnelIPAddress = "198.18.0.1"
 
     public private(set) var currentMemmoryUsageMb = 0.0
     private var lastMemoryMB: Double = 0
@@ -82,7 +83,7 @@ public final class HealthCheckImpl: HealthCheck {
             self.runWithRetry(name: name, block: check)
         }
 
-        let vpnOk = runWithRetry(name: "VPN Interface Check", attempts: 1) {
+        let vpnOk = runWithRetry(name: "Dobby Tunnel IP Check", attempts: 1) {
             self.isVPNInterfaceExists()
         }
 
@@ -404,12 +405,20 @@ public final class HealthCheckImpl: HealthCheck {
         return success
     }
 
-    // Checks if tunnel IP 198.18.0.1 is assigned to at least one interface.
+    // Checks if Dobby's configured tunnel IP is assigned to at least one interface.
     // If not — the tunnel did not come up at OS network level.
     private func isTunnelIPAssigned() -> Bool {
-        let tunnelIP = "198.18.0.1"
+        if let name = interfaceName(forIPv4: tunnelIPAddress) {
+            logs.writeLog(log: "[HC] [diag] tunnel IP \(tunnelIPAddress) found on \(name)")
+            return true
+        }
+        logs.writeLog(log: "[HC] [diag] tunnel IP \(tunnelIPAddress) NOT found on any interface")
+        return false
+    }
+
+    private func interfaceName(forIPv4 targetIP: String) -> String? {
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else { return false }
+        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else { return nil }
         defer { freeifaddrs(ifaddrPtr) }
 
         var ptr: UnsafeMutablePointer<ifaddrs>? = first
@@ -421,17 +430,14 @@ public final class HealthCheckImpl: HealthCheck {
                 }
                 if inet_ntop(AF_INET, &sa, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil {
                     let ip = String(cString: buffer)
-                    if ip == tunnelIP {
-                        let name = String(cString: addr.pointee.ifa_name)
-                        logs.writeLog(log: "[HC] [diag] tunnel IP \(tunnelIP) found on \(name)")
-                        return true
+                    if ip == targetIP {
+                        return String(cString: addr.pointee.ifa_name)
                     }
                 }
             }
             ptr = addr.pointee.ifa_next
         }
-        logs.writeLog(log: "[HC] [diag] tunnel IP \(tunnelIP) NOT found on any interface")
-        return false
+        return nil
     }
 
     private func pingAddress(_ address: String, name: String) -> Bool {
@@ -495,27 +501,14 @@ public final class HealthCheckImpl: HealthCheck {
     }
 
     private func isVPNInterfaceExists() -> Bool {
-        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddrPtr) == 0, let firstAddr = ifaddrPtr else {
-            logs.writeLog(log: "[HC] [VPNIface] getifaddrs failed")
-            return false
+        if let name = interfaceName(forIPv4: tunnelIPAddress) {
+            logs.writeLog(log: "[HC] [VPNIface] Dobby tunnel IP \(tunnelIPAddress) found on \(name)")
+            return true
         }
-        defer { freeifaddrs(ifaddrPtr) }
-
-        var ptr: UnsafeMutablePointer<ifaddrs>? = firstAddr
-        while let addr = ptr {
-            let name = String(cString: addr.pointee.ifa_name).lowercased()
-            if name.contains("utun")
-                || name.contains("tun")
-                || name.contains("tap")
-                || name.contains("ppp")
-                || name.contains("ipsec") {
-                logs.writeLog(log: "[HC] [VPNIface] found: \(name)")
-                return true
-            }
-            ptr = addr.pointee.ifa_next
-        }
-        logs.writeLog(log: "[HC] [VPNIface] no VPN interface found")
+        logs.writeLog(
+            log: "[HC] [VPNIface] Dobby tunnel IP \(tunnelIPAddress) not found; " +
+                "generic utun interfaces are ignored"
+        )
         return false
     }
 
