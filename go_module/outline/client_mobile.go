@@ -23,6 +23,11 @@ type OutlineClient struct {
 	engineStarted bool
 	config        string
 	mtu           int
+	options       ClientOptions
+}
+
+type ClientOptions struct {
+	PreferTCPDNSForWebSocket bool
 }
 
 func NewClient(transportConfig string, tun io.ReadWriteCloser) *OutlineClient {
@@ -40,15 +45,26 @@ func NewClientWithMTU(transportConfig string, tun io.ReadWriteCloser, mtu int) *
 }
 
 func NewClientWithFD(transportConfig string, fd int, mtu int) *OutlineClient {
+	return NewClientWithFDAndOptions(transportConfig, fd, mtu, ClientOptions{})
+}
+
+func NewClientWithFDAndOptions(transportConfig string, fd int, mtu int, options ClientOptions) *OutlineClient {
 	if mtu <= 0 {
 		mtu = 1200
 	}
 	c := &OutlineClient{
-		config: transportConfig,
-		tunFD:  fd,
-		mtu:    mtu,
+		config:  transportConfig,
+		tunFD:   fd,
+		mtu:     mtu,
+		options: options,
 	}
-	log.Infof("outline client created (tun2socks version) fd=%d mtu=%d configLen=%d", fd, mtu, len(transportConfig))
+	log.Infof(
+		"outline client created (tun2socks version) fd=%d mtu=%d configLen=%d preferTCPDNSForWebSocket=%v",
+		fd,
+		mtu,
+		len(transportConfig),
+		options.PreferTCPDNSForWebSocket,
+	)
 	common.Client.SetVpnClient(outlineCommon.Name, c)
 	return c
 }
@@ -61,7 +77,9 @@ func (c *OutlineClient) Connect() error {
 			log.Infof("RECOVERED from fail in Connect: %v", r)
 		}
 	}()
-	od, err := internal.NewOutlineDevice(c.config)
+	od, err := internal.NewOutlineDeviceWithOptions(c.config, internal.DeviceOptions{
+		PreferTCPDNSForWebSocket: c.options.PreferTCPDNSForWebSocket,
+	})
 	if err != nil {
 		log.Infof("failed to create outline device: %v\n", err)
 		return err
