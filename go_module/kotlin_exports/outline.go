@@ -9,7 +9,6 @@ import "C"
 import (
 	"go_module/log"
 	"go_module/outline"
-	"os"
 	"runtime/debug"
 	"sync"
 )
@@ -72,9 +71,7 @@ func NewOutlineClient(config *C.char, fd C.int) {
 
 	log.Infof("Config length=%d", len(goConfig))
 
-	tunFile := os.NewFile(uintptr(goFD), "tun")
-
-	client = outline.NewClient(goConfig, tunFile)
+	client = outline.NewClientWithFD(goConfig, goFD, 0)
 
 	log.Infof("NewOutlineClient() finished")
 }

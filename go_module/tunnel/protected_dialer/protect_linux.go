@@ -19,17 +19,18 @@ func SetLinuxSocketMark(mark int) {
 
 type linuxProtector struct{}
 
-func (l *linuxProtector) Protect(fdU uintptr, network string) {
+func (l *linuxProtector) Protect(fdU uintptr, network string) error {
 	if linuxSocketMark == 0 {
-		return
+		return nil
 	}
 
 	fd, err := UintptrToInt(fdU)
 	if err != nil {
 		log.Infof("[Linux-Protect] Protect fd err=%v", err)
+		return err
 	}
 
-	_ = syscall.SetsockoptInt(
+	return syscall.SetsockoptInt(
 		fd,
 		syscall.SOL_SOCKET,
 		syscall.SO_MARK,

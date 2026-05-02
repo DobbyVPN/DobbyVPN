@@ -2,6 +2,7 @@ package protected_dialer
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"syscall"
 
@@ -49,6 +50,18 @@ func listenAddr(network string) string {
 	return "0.0.0.0:0"
 }
 
+func protectSocket(fd uintptr, realNet string, destination string) error {
+	if protector == nil {
+		return fmt.Errorf("no socket protector registered")
+	}
+	if err := protector.Protect(fd, realNet); err != nil {
+		log.Infof("[Protect] %s fd=%d destination=%s failed: %v", realNet, fd, destination, err)
+		return err
+	}
+	log.Infof("[Protect] %s fd=%d destination=%s OK", realNet, fd, destination)
+	return nil
+}
+
 func DialContextWithProtect(ctx context.Context, network, address string) (net.Conn, error) {
 	realNet := normalizeTCP(address)
 
@@ -59,12 +72,15 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 	}
 
 	d := &net.Dialer{
-		Control: func(network, address string, c syscall.RawConn) error {
-			return c.Control(func(fd uintptr) {
-				if protector != nil {
-					protector.Protect(fd, realNet)
-				}
+		Control: func(_, _ string, c syscall.RawConn) error {
+			var protectErr error
+			controlErr := c.Control(func(fd uintptr) {
+				protectErr = protectSocket(fd, realNet, address)
 			})
+			if controlErr != nil {
+				return controlErr
+			}
+			return protectErr
 		},
 	}
 
@@ -74,6 +90,7 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 		return nil, err
 	}
 
+	log.Infof("[DEBUG][Protect] TCP dial OK network=%s destination=%s local=%s remote=%s", realNet, address, conn.LocalAddr(), conn.RemoteAddr())
 	return conn, nil
 }
 
@@ -87,15 +104,18 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 
 		pc, err := lc.ListenPacket(ctx, realNet, listenAddr(realNet))
 		if err != nil {
+			log.Infof("[Protect] UDP BYPASS loopback listen error network=%s destination=%s: %v", realNet, address, err)
 			return nil, err
 		}
 
 		udpAddr, err := net.ResolveUDPAddr(realNet, address)
 		if err != nil {
 			_ = pc.Close()
+			log.Infof("[Protect] UDP BYPASS loopback resolve error network=%s destination=%s: %v", realNet, address, err)
 			return nil, err
 		}
 
+		log.Infof("[DEBUG][Protect] UDP BYPASS loopback ready network=%s destination=%s local=%s remote=%s", realNet, address, pc.LocalAddr(), udpAddr)
 		return &connectedUDPConn{
 			PacketConn: pc,
 			remoteAddr: udpAddr,
@@ -103,26 +123,32 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 	}
 
 	lc := net.ListenConfig{
-		Control: func(network, address string, c syscall.RawConn) error {
-			return c.Control(func(fd uintptr) {
-				if protector != nil {
-					protector.Protect(fd, realNet)
-				}
+		Control: func(_, _ string, c syscall.RawConn) error {
+			var protectErr error
+			controlErr := c.Control(func(fd uintptr) {
+				protectErr = protectSocket(fd, realNet, address)
 			})
+			if controlErr != nil {
+				return controlErr
+			}
+			return protectErr
 		},
 	}
 
 	pc, err := lc.ListenPacket(ctx, realNet, listenAddr(realNet))
 	if err != nil {
+		log.Infof("[Protect] UDP listen error network=%s destination=%s: %v", realNet, address, err)
 		return nil, err
 	}
 
 	udpAddr, err := net.ResolveUDPAddr(realNet, address)
 	if err != nil {
 		_ = pc.Close()
+		log.Infof("[Protect] UDP resolve error network=%s destination=%s: %v", realNet, address, err)
 		return nil, err
 	}
 
+	log.Infof("[DEBUG][Protect] UDP dial ready network=%s destination=%s local=%s remote=%s", realNet, address, pc.LocalAddr(), udpAddr)
 	return &connectedUDPConn{
 		PacketConn: pc,
 		remoteAddr: udpAddr,
