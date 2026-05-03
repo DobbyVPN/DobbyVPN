@@ -1,8 +1,9 @@
 package common
 
 import (
+	"crypto/rand"
 	"fmt"
-	"math/rand/v2"
+	"math/big"
 	"net"
 	"sync"
 )
@@ -27,8 +28,9 @@ func GetNetworkConfig() *NetworkConfig {
 
 func generateConfig() *NetworkConfig {
 	for i := 0; i < 20; i++ {
-		x := rand.IntN(254) + 1
-		y := rand.IntN(254) + 1
+		n, _ := rand.Int(rand.Reader, big.NewInt(254))
+		x := n.Int64() + 1
+		y := n.Int64() + 1
 
 		gateway := fmt.Sprintf("10.%d.%d.1", x, y)
 		device := fmt.Sprintf("10.%d.%d.2", x, y)
