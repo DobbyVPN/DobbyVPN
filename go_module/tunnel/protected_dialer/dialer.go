@@ -56,20 +56,48 @@ func protectSocket(fd uintptr, realNet string, destination string) error {
 		log.Infof("[Protect] WARNING: no socket protector registered - traffic may bypass VPN!")
 		return fmt.Errorf("no socket protector registered")
 	}
-	
-	// iOS 26 research: Try additional socket options
-	// SO_NO_TC_NETPOLICY may not be enough on iOS 26
-	// We may need to try other options like IP_BOUND_IF or new iOS 26 options
-	
+
 	if err := protector.Protect(fd, realNet); err != nil {
 		// iOS 26: Log detailed error - socket protection failure may cause network issues
-		log.Infof("[Protect] ERROR: %s fd=%d destination=%s protect_failed: %v -可能导致iOS 26网络问题", realNet, fd, destination, err)
+		log.Infof("[Protect] ERROR: %s fd=%d destination=%s protect_failed: %v - may cause iOS network issues", realNet, fd, destination, err)
 		return err
 	}
-	
+
 	// iOS 26: Log detailed success with more context
 	log.Infof("[Protect] %s fd=%d destination=%s protect_ok", realNet, fd, destination)
 	return nil
+}
+
+// NewProtectedDialer returns a net.Dialer that protects its sockets.
+func NewProtectedDialer(destination string) *net.Dialer {
+	return &net.Dialer{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var protectErr error
+			controlErr := c.Control(func(fd uintptr) {
+				protectErr = protectSocket(fd, network, destination)
+			})
+			if controlErr != nil {
+				return controlErr
+			}
+			return protectErr
+		},
+	}
+}
+
+// NewProtectedListenConfig returns a net.ListenConfig that protects its sockets.
+func NewProtectedListenConfig(destination string) *net.ListenConfig {
+	return &net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var protectErr error
+			controlErr := c.Control(func(fd uintptr) {
+				protectErr = protectSocket(fd, network, destination)
+			})
+			if controlErr != nil {
+				return controlErr
+			}
+			return protectErr
+		},
+	}
 }
 
 func DialContextWithProtect(ctx context.Context, network, address string) (net.Conn, error) {
@@ -81,23 +109,11 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 		return d.DialContext(ctx, realNet, address)
 	}
 
-	d := &net.Dialer{
-		Control: func(_, _ string, c syscall.RawConn) error {
-			var protectErr error
-			controlErr := c.Control(func(fd uintptr) {
-				protectErr = protectSocket(fd, realNet, address)
-			})
-			if controlErr != nil {
-				return controlErr
-			}
-			return protectErr
-		},
-	}
-
+	d := NewProtectedDialer(address)
 	conn, err := d.DialContext(ctx, realNet, address)
 	if err != nil {
 		// iOS 26: Log detailed connection failure
-		log.Infof("[Protect] TCP dial FAILED: dest=%s err=%v - THIS MAY CAUSE ISSUES ON iOS 26", address, err)
+		log.Infof("[Protect] TCP dial FAILED: dest=%s err=%v", address, err)
 		return nil, err
 	}
 
@@ -133,19 +149,7 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 		}, nil
 	}
 
-	lc := net.ListenConfig{
-		Control: func(_, _ string, c syscall.RawConn) error {
-			var protectErr error
-			controlErr := c.Control(func(fd uintptr) {
-				protectErr = protectSocket(fd, realNet, address)
-			})
-			if controlErr != nil {
-				return controlErr
-			}
-			return protectErr
-		},
-	}
-
+	lc := NewProtectedListenConfig(address)
 	pc, err := lc.ListenPacket(ctx, realNet, listenAddr(realNet))
 	if err != nil {
 		log.Infof("[Protect] UDP listen error network=%s destination=%s: %v", realNet, address, err)
@@ -165,6 +169,7 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 		remoteAddr: udpAddr,
 	}, nil
 }
+
 
 type connectedUDPConn struct {
 	net.PacketConn

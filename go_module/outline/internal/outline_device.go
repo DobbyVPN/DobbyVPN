@@ -50,7 +50,13 @@ func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) 
 	}
 
 	ctx := context.Background()
-	providers := configurl.NewDefaultProviders()
+
+	// Use custom providers with protected base dialers to ensure all upstream
+	// connections (SS, WebSocket, etc.) correctly bypass the tunnel on iOS 26.
+	providers := configurl.NewProviderContainer()
+	providers.StreamDialers.BaseInstance = NewProtectedStreamDialer(transportConfig)
+	providers.PacketDialers.BaseInstance = NewProtectedPacketDialer(transportConfig)
+	configurl.RegisterDefaultProviders(providers)
 
 	sd, err := providers.NewStreamDialer(ctx, transportConfig)
 	if err != nil {

@@ -389,6 +389,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     self.logs.writeLog(
                         log: "[tunnel:\(self.tunnelId)] CRITICAL: Network transitioned WiFi -> Cellular! Tunnel instability expected!"
                     )
+                    // iOS 26: Signal the need for a potential health check or engine refresh
+                    // We don't restart automatically here to avoid flapping, but we log it for the app to see.
+                } else if !wasUsingWiFi && isNowUsingWiFi {
+                     self.logs.writeLog(
+                        log: "[tunnel:\(self.tunnelId)] INFO: Network transitioned back to WiFi."
+                    )
                 }
             }
         }
