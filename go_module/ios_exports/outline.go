@@ -83,3 +83,15 @@ func OutlineDisconnect() error {
 	log.Infof("OutlineDisconnect() finished")
 	return nil
 }
+
+func OutlineStatus() (string, error) {
+	defer guardExport("OutlineStatus")()
+
+	if client == nil {
+		return "client=false engineStarted=false fd=-1 deviceNil=true localProxyAlive=false reason=client_nil", nil
+	}
+
+	status := client.Status()
+	log.Infof("OutlineStatus: %s", status)
+	return status, nil
+}

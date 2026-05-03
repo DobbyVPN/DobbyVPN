@@ -144,6 +144,25 @@ func (c *OutlineClient) Disconnect() error {
 	return nil
 }
 
+func (c *OutlineClient) Status() string {
+	if c == nil {
+		return "client=false engineStarted=false fd=-1 deviceNil=true localProxyAlive=false reason=client_nil"
+	}
+	if c.device == nil {
+		return fmt.Sprintf(
+			"client=true engineStarted=%v fd=%d deviceNil=true localProxyAlive=false reason=device_nil",
+			c.engineStarted,
+			c.tunFD,
+		)
+	}
+	return fmt.Sprintf(
+		"client=true engineStarted=%v fd=%d deviceNil=false %s",
+		c.engineStarted,
+		c.tunFD,
+		c.device.Status(750*time.Millisecond),
+	)
+}
+
 func (c *OutlineClient) Refresh() error {
 	return nil
 }

@@ -81,6 +81,17 @@ public final class OutlineInteractor {
         }
         logs.writeLog(log: "[DEBUG][Outline] OutlineDisconnect returned")
     }
+
+    func outlineStatus() -> String {
+        var err: NSError?
+        let status = Cloak_outlineOutlineStatus(&err)
+        if let error = err {
+            let message = "client=true localProxyAlive=false statusError=\(error.localizedDescription)"
+            logs.writeLog(log: "[Outline] OutlineStatus failed: \(error.localizedDescription)")
+            return message
+        }
+        return status
+    }
     
     func buildOutlineConfig(
         methodPassword: String,
