@@ -233,14 +233,6 @@ class HealthCheckManager(
         val mark = lastVpnStartMark ?: return 2.seconds
         val elapsed = mark.elapsedNow()
 
-        if (lastFullConnectionSucceed) {
-            return when {
-                elapsed < 30.seconds -> 5.seconds
-                elapsed < 90.seconds -> 10.seconds
-                else -> 15.seconds
-            }
-        }
-
         return when {
             elapsed < 30.seconds -> 2.seconds
             elapsed < 90.seconds -> 5.seconds
