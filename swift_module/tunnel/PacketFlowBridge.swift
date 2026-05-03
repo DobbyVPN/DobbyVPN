@@ -10,6 +10,8 @@ final class PacketFlowBridge {
     private let lock = NSLock()
     private let utunHeaderLength = 4
     private let requestedSocketBufferBytes = 1 * 1024 * 1024
+    private let maxGoToTunnelBatchPackets = 64
+    private let maxGoToTunnelBatchBytes = 64 * 1024
 
     private var readSource: DispatchSourceRead?
     private var statsTimer: DispatchSourceTimer?
@@ -25,6 +27,8 @@ final class PacketFlowBridge {
     private var tunnelToGoBytes = 0
     private var goToTunnelPackets = 0
     private var goToTunnelBytes = 0
+    private var goToTunnelWriteBatches = 0
+    private var goToTunnelMaxBatchPackets = 0
     private var tunnelToGoDrops = 0
     private var goToTunnelDrops = 0
     private var firstTunnelPacketLogged = false
@@ -192,6 +196,12 @@ final class PacketFlowBridge {
         }
 
         var buffer = [UInt8](repeating: 0, count: max(mtu + utunHeaderLength + 128, 2048))
+        var packets: [Data] = []
+        var protocols: [NSNumber] = []
+        packets.reserveCapacity(maxGoToTunnelBatchPackets)
+        protocols.reserveCapacity(maxGoToTunnelBatchPackets)
+        var batchBytes = 0
+
         while isRunning {
             let readCount = buffer.withUnsafeMutableBytes { rawBuffer -> Int in
                 guard let baseAddress = rawBuffer.baseAddress else {
@@ -208,22 +218,77 @@ final class PacketFlowBridge {
                     continue
                 }
                 let packet = Data(buffer[utunHeaderLength..<readCount])
-                packetFlow.writePackets([packet], withProtocols: [protocolFamily(for: packet)])
-                recordGoToTunnel(packetBytes: packet.count)
+                packets.append(packet)
+                protocols.append(protocolFamily(for: packet))
+                batchBytes += packet.count
+
+                if packets.count >= maxGoToTunnelBatchPackets || batchBytes >= maxGoToTunnelBatchBytes {
+                    flushPacketsToTunnel(
+                        packets: &packets,
+                        protocols: &protocols,
+                        batchBytes: &batchBytes
+                    )
+                }
                 continue
             }
 
             if readCount == 0 {
+                flushPacketsToTunnel(
+                    packets: &packets,
+                    protocols: &protocols,
+                    batchBytes: &batchBytes
+                )
                 logReadError("Go packet fd closed")
                 return
             }
 
             if readErrno == EAGAIN || readErrno == EWOULDBLOCK {
+                flushPacketsToTunnel(
+                    packets: &packets,
+                    protocols: &protocols,
+                    batchBytes: &batchBytes
+                )
                 return
             }
+            flushPacketsToTunnel(
+                packets: &packets,
+                protocols: &protocols,
+                batchBytes: &batchBytes
+            )
             logReadError("read packet from Go failed errno=\(readErrno) \(errnoDescription(readErrno))")
             return
         }
+
+        flushPacketsToTunnel(
+            packets: &packets,
+            protocols: &protocols,
+            batchBytes: &batchBytes
+        )
+    }
+
+    private func flushPacketsToTunnel(
+        packets: inout [Data],
+        protocols: inout [NSNumber],
+        batchBytes: inout Int
+    ) {
+        guard !packets.isEmpty else {
+            return
+        }
+
+        let packetCount = packets.count
+        let byteCount = batchBytes
+        if packetFlow.writePackets(packets, withProtocols: protocols) {
+            recordGoToTunnelBatch(packetCount: packetCount, byteCount: byteCount)
+        } else {
+            recordGoToTunnelDrop(count: packetCount)
+            logReadError(
+                "write packet batch to tunnel failed packets=\(packetCount) bytes=\(byteCount)"
+            )
+        }
+
+        packets.removeAll(keepingCapacity: true)
+        protocols.removeAll(keepingCapacity: true)
+        batchBytes = 0
     }
 
     private func startStatsTimer() {
@@ -269,16 +334,21 @@ final class PacketFlowBridge {
         }
     }
 
-    private func recordGoToTunnel(packetBytes: Int) {
+    private func recordGoToTunnelBatch(packetCount: Int, byteCount: Int) {
         lock.lock()
-        goToTunnelPackets += 1
-        goToTunnelBytes += packetBytes
+        goToTunnelPackets += packetCount
+        goToTunnelBytes += byteCount
+        goToTunnelWriteBatches += 1
+        goToTunnelMaxBatchPackets = max(goToTunnelMaxBatchPackets, packetCount)
         let shouldLogFirst = !firstGoPacketLogged
         firstGoPacketLogged = true
         lock.unlock()
 
         if shouldLogFirst {
-            log("[DEBUG][PacketFlowBridge] first packet go->tunnel bytes=\(packetBytes)")
+            log(
+                "[DEBUG][PacketFlowBridge] first packet batch go->tunnel " +
+                "packets=\(packetCount) bytes=\(byteCount)"
+            )
         }
     }
 
@@ -288,9 +358,9 @@ final class PacketFlowBridge {
         lock.unlock()
     }
 
-    private func recordGoToTunnelDrop() {
+    private func recordGoToTunnelDrop(count: Int = 1) {
         lock.lock()
-        goToTunnelDrops += 1
+        goToTunnelDrops += count
         lock.unlock()
     }
 
@@ -313,6 +383,8 @@ final class PacketFlowBridge {
         let t2gBytes = tunnelToGoBytes
         let g2tPackets = goToTunnelPackets
         let g2tBytes = goToTunnelBytes
+        let g2tBatches = goToTunnelWriteBatches
+        let g2tMaxBatch = goToTunnelMaxBatchPackets
         let t2gDrops = tunnelToGoDrops
         let g2tDrops = goToTunnelDrops
         let oversized = oversizedPacketCount
@@ -326,6 +398,7 @@ final class PacketFlowBridge {
             "batches=\(batches) emptyBatches=\(emptyBatches) " +
             "tunnel_to_go=\(t2gPackets)p/\(t2gBytes)B " +
             "go_to_tunnel=\(g2tPackets)p/\(g2tBytes)B " +
+            "go_to_tunnel_batches=\(g2tBatches) max_batch=\(g2tMaxBatch) " +
             "drops_tunnel_to_go=\(t2gDrops) drops_go_to_tunnel=\(g2tDrops) " +
             "oversized=\(oversized) writeErrors=\(writeErrors) readErrors=\(readErrors)"
         )
