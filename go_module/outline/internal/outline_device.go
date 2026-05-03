@@ -78,7 +78,6 @@ func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) 
 	)
 
 	useCloak := ip.IsLoopback()
-
 	log.Infof("outline client: cloak mode = %v", useCloak)
 
 	od := &OutlineDevice{
