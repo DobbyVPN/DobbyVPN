@@ -14,7 +14,6 @@ require (
 	github.com/cbeuw/Cloak v0.0.0-00010101000000-000000000000
 	github.com/jackpal/gateway v1.1.1
 	github.com/lorenzosaino/go-sysctl v0.3.1
-	github.com/matsuridayo/libneko v0.0.0-20240702024904-1c47a3af7199
 	github.com/sirupsen/logrus v1.9.3
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/things-go/go-socks5 v0.1.0
