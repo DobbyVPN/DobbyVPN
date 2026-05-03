@@ -24,6 +24,8 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let awgTomlConfigKey = "awgTomlConfigKey"
     private let isAmneziaWGEnabledKey = "isAmneziaWGEnabledKey"
     private let vpnInterfaceKey = "vpnInterfaceKey"
+    private let isXrayEnabledKey = "isXrayEnabledKey"
+    private let xrayConfigKey = "xrayConfigKey"
 
     public func getConnectionURL() -> String {
         return userDefaults.string(forKey: connectionURLKey) ?? ""
@@ -31,7 +33,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setConnectionURL(connectionURL: String) {
         userDefaults.set(connectionURL, forKey: connectionURLKey)
-
     }
 
     public func getConnectionConfig() -> String {
@@ -40,7 +41,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setConnectionConfig(connectionConfig: String) {
         userDefaults.set(connectionConfig, forKey: connectionConfigKey)
-
     }
 
     public func getCloakConfig() -> String {
@@ -49,7 +49,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setCloakConfig(newConfig: String) {
         userDefaults.set(newConfig, forKey: cloakConfigKey)
-
     }
 
     public func getIsCloakEnabled() -> Bool {
@@ -58,7 +57,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setIsCloakEnabled(isCloakEnabled: Bool) {
         userDefaults.set(isCloakEnabled, forKey: isCloakEnabledKey)
-
     }
 
     public func getCloakLocalPort() -> Int32 {
@@ -68,7 +66,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setCloakLocalPort(port: Int32) {
         userDefaults.set(Int(port), forKey: cloakLocalPortKey)
-
     }
 
     public func getServerPort() -> String {
@@ -77,7 +74,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setServerPort(newConfig: String) {
         userDefaults.set(newConfig, forKey: serverPortKey)
-
     }
 
     public func getMethodPasswordOutline() -> String {
@@ -86,7 +82,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setMethodPasswordOutline(newConfig: String) {
         userDefaults.set(newConfig, forKey: methodPasswordOutlineKey)
-
     }
 
     public func getIsOutlineEnabled() -> Bool {
@@ -95,7 +90,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setIsOutlineEnabled(isOutlineEnabled: Bool) {
         userDefaults.set(isOutlineEnabled, forKey: isOutlineEnabledKey)
-
     }
 
     public func getPrefixOutline() -> String {
@@ -104,7 +98,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setPrefixOutline(prefix: String) {
         userDefaults.set(prefix, forKey: prefixOutlineKey)
-
     }
 
     public func getTcpPathOutline() -> String {
@@ -113,7 +106,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setTcpPathOutline(tcpPath: String) {
         userDefaults.set(tcpPath, forKey: tcpPathOutlineKey)
-
     }
 
     public func getIsWebsocketEnabled() -> Bool {
@@ -122,7 +114,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setIsWebsocketEnabled(enabled: Bool) {
         userDefaults.set(enabled, forKey: isWebsocketEnabledKey)
-
     }
 
     public func getUdpPathOutline() -> String {
@@ -133,7 +124,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         userDefaults.set(udpPath, forKey: udpPathOutlineKey)
 
     }
-    
+
     public func getAwgConfig() -> String {
         return userDefaults.string(forKey: awgConfigKey) ?? ""
     }
@@ -159,14 +150,38 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     }
 
     public func getVpnInterface() -> VpnInterface {
-        // TODO: Rewrite code below with swift code
-        // return VpnInterface.valueOf(userDefaults.string(forKey: vpnInterfaceKey) ?? "")
-        return VpnInterface.cloakOutline
+        let savedValue = userDefaults.string(forKey: vpnInterfaceKey)
+
+        switch savedValue {
+        case "XRAY":
+            return VpnInterface.xray
+        case "CLOAK_OUTLINE":
+            return VpnInterface.cloakOutline
+        case "AMNEZIA_WG":
+            return VpnInterface.amneziaWg
+        default:
+            return VpnInterface.none
+        }
     }
 
     public func setVpnInterface(vpnInterface: VpnInterface) {
-        // TODO: Rewrite code below with swift code
-        // userDefaults.set(vpnInterface.toString(), forKey: vpnInterfaceKey)
+        userDefaults.set(vpnInterface.name, forKey: vpnInterfaceKey)
+    }
+
+    public func getXrayConfig() -> String {
+        return userDefaults.string(forKey: xrayConfigKey) ?? ""
+    }
+
+    public func setXrayConfig(config: String) {
+        userDefaults.set(config, forKey: xrayConfigKey)
+    }
+
+    public func getIsXrayEnabled() -> Bool {
+        return userDefaults.bool(forKey: isXrayEnabledKey)
+    }
+
+    public func setIsXrayEnabled(isXrayEnabled: Bool) {
+        userDefaults.set(isXrayEnabled, forKey: isXrayEnabledKey)
     }
 
     public func couldStart() -> Bool {
@@ -179,7 +194,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setIsUserInitStop(isUserInitStop: Bool) {
         userDefaults.set(isUserInitStop, forKey: isUserInitStopKey)
-
     }
 
     public func getGeoRoutingConf() -> String {
