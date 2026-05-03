@@ -9,10 +9,17 @@ class VpnManagerImpl(
 ): VpnManager {
 
     override fun start() {
-        DobbyVpnService
-            .createIntent(context)
-            .let(context::startService)
+        val service = DobbyVpnService.instance
+        if (service != null) {
+            service.startService()
+        } else {
+            DobbyVpnService
+                .createIntent(context)
+                .let(context::startService)
+        }
     }
 
-    override fun stop() = Unit
+    override fun stop() {
+        DobbyVpnService.instance?.stopService()
+    }
 }

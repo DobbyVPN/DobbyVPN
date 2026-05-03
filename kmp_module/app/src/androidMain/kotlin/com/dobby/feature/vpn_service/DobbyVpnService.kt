@@ -31,17 +31,13 @@ import java.io.File
 import java.io.FileInputStream
 import java.util.*
 
-const val IS_FROM_UI = "isLaunchedFromUi"
-
 class DobbyVpnService : VpnService() {
     companion object {
         @Volatile
         var instance: DobbyVpnService? = null
 
         fun createIntent(context: Context): Intent {
-            return Intent(context, DobbyVpnService::class.java).apply {
-                putExtra(IS_FROM_UI, true)
-            }
+            return Intent(context, DobbyVpnService::class.java)
         }
     }
 
@@ -107,21 +103,23 @@ class DobbyVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val intentFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) == true
         logger.log(
-            "[svc:$serviceId] onStartCommand(startId=$startId flags=$flags " +
-                "intentFromUi=$intentFromUi) vpnInterface=${vpnInterface?.fd}"
+            "[svc:$serviceId] onStartCommand(startId=$startId flags=$flags) vpnInterface=${vpnInterface?.fd}"
+        )
+
+        startService()
+
+        return START_NOT_STICKY
+    }
+
+    fun startService() {
+        logger.log(
+            "[svc:$serviceId] startService() vpnInterface=${vpnInterface?.fd}"
         )
 
         serviceScope.launch {
             startStopMutex.withLock {
                 val hasActiveTunnel = vpnInterface != null || goTunFd != null
-
-                if (!intentFromUi && !hasActiveTunnel) {
-                    logger.log("[svc:$serviceId] onStartCommand(): ignoring implicit restart without active tunnel")
-                    stopSelf(startId)
-                    return@withLock
-                }
 
                 if (hasActiveTunnel) {
                     logger.log("[svc:$serviceId] onStartCommand(): existing tunnel detected → teardown before start")
@@ -130,13 +128,19 @@ class DobbyVpnService : VpnService() {
 
                 geoRouting.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
                 when (dobbyConfigsRepository.getVpnInterface()) {
-                    VpnInterface.CLOAK_OUTLINE -> startCloakOutline(intent)
-                    VpnInterface.AMNEZIA_WG -> startAwg(intent)
+                    VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
+                    VpnInterface.AMNEZIA_WG -> startAwg()
                     VpnInterface.NONE -> startNone()
                 }
             }
         }
-        return START_NOT_STICKY
+    }
+
+    fun stopService() {
+        logger.log(
+            "[svc:$serviceId] stopService() vpnInterface=${vpnInterface?.fd}"
+        )
+        teardownVpn()
     }
 
     override fun onDestroy() {
@@ -165,7 +169,7 @@ class DobbyVpnService : VpnService() {
         logger.log("[svc:$serviceId] onDestroy() end")
     }
 
-    private fun startCloakOutline(intent: Intent?) {
+    private fun startCloakOutline() {
         serviceScope.launch {
             startStopMutex.withLock {
                 if (dobbyConfigsRepository.getIsCloakEnabled()) {
@@ -176,7 +180,7 @@ class DobbyVpnService : VpnService() {
                         return@launch
                     }
                 }
-                if (!outlineInteractor.startOutline(intent, instance)) {
+                if (!outlineInteractor.startOutline(instance)) {
                     connectionState.updateServiceStarted(false)
                     teardownVpn()
                     stopSelf()
@@ -188,10 +192,10 @@ class DobbyVpnService : VpnService() {
         }
     }
 
-    private fun startAwg(intent: Intent?) {
+    private fun startAwg() {
         serviceScope.launch {
             startStopMutex.withLock {
-                if (!awgInteractor.startAwg(intent, instance)) {
+                if (!awgInteractor.startAwg(instance)) {
                     connectionState.updateServiceStarted(false)
                     teardownVpn()
                     stopSelf()
@@ -258,6 +262,8 @@ class DobbyVpnService : VpnService() {
         runCatching {
             interfaceToClose?.close()
         }
+        vpnInterface = null
+        goTunFd = null
         logger.log("[svc:$serviceId] teardownVpn(): end fd=$fdBefore")
     }
 }

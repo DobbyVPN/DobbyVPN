@@ -1,12 +1,10 @@
 package com.dobby.feature.vpn_service.domain.awg
 
-import android.content.Intent
 import com.dobby.backend.AwgBackendWrapper
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.AmneziaWGConfig
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.vpn_service.DobbyVpnService
-import com.dobby.feature.vpn_service.IS_FROM_UI
 import kotlinx.serialization.decodeFromString
 import net.peanuuutz.tomlkt.Toml
 
@@ -15,13 +13,12 @@ class AmneziaWGInteractor(
     private val dobbyConfigsRepository: DobbyConfigsRepository,
 ) {
 
-    suspend fun startAwg(intent: Intent?, dobbyVpnService: DobbyVpnService?): Boolean {
+    suspend fun startAwg(dobbyVpnService: DobbyVpnService?): Boolean {
         logger.log("[svc:${dobbyVpnService?.serviceId}] startAwg(): lock acquired vpnInterface=${dobbyVpnService?.vpnInterface?.fd}")
-        val isServiceStartedFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) ?: false
         val shouldTurnOn = dobbyConfigsRepository.getIsAmneziaWGEnabled()
-        logger.log("[svc:${dobbyVpnService?.serviceId}] startAwg(): fromUi=$isServiceStartedFromUi shouldTurnOutlineOn=$shouldTurnOn")
+        logger.log("[svc:${dobbyVpnService?.serviceId}] startAwg(): shouldTurnOutlineOn=$shouldTurnOn")
 
-        if (!shouldTurnOn && isServiceStartedFromUi) {
+        if (!shouldTurnOn) {
             logger.log("Start disconnecting AmneziaWG")
             return false
         }
