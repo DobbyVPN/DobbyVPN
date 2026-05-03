@@ -7,6 +7,12 @@ plugins {
     application
 }
 
+kotlin {
+    kotlin {
+        jvmToolchain(17)
+    }
+}
+
 dependencies {
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.content.negotiation)

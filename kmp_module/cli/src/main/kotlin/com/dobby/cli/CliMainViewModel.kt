@@ -79,50 +79,56 @@ class CliMainViewModel(
 
         runBlocking {
             launch(Dispatchers.Default) {
-                logger.log("Proceeding with setConfig for the provided URL...")
-                if (!connectionStateRepository.vpnStartedFlow.value) {
-                    try {
-                        logger.log("We get config by ${maskStr(connectionUrl)}")
-                        val ok = setConfig(connectionUrl)
-                        if (!ok) {
-                            logger.log("Config is invalid or failed to apply → abort start (no HC/VPN)")
-                            connectionStateRepository.updateVpnStarted(false)
-                            connectionStateRepository.updateStatus(false)
-                            return@launch
-                        }
-                    } catch (e: Exception) {
-                        logger.log("Error during setConfig: ${e.message}")
-                        return@launch
-                    } finally {
-                        logger.log("Finish setConfig()")
-                    }
-                }
-
+                prepareConfig(connectionUrl)
                 val currentState = connectionStateRepository.vpnStartedFlow.value
                 logger.log("Current vpnStarted state: $currentState")
                 configsRepository.setIsUserInitStop(currentState)
-
                 when (currentState) {
-                    true -> {
-                        logger.log("Stopping VPN service due to active connection")
-                        connectionStateRepository.updateVpnStarted(false)
-                        connectionStateRepository.updateStatus(false)
-                        healthCheckManager.stopHealthCheck()
-                        stopVpnService()
-                    }
-                    false -> {
-                        connectionStateRepository.updateVpnStarted(true)
-                        logger.log("Update vpnStarted state: VpnState = ${connectionStateRepository.vpnStartedFlow.value}")
-                        logger.log("VPN is currently disconnected")
-                        if (isPermissionCheckNeeded) {
-                            logger.log("Permission check required, triggering permission dialog")
-                            permissionEventsChannel.checkPermissions()
-                        } else {
-                            logger.log("Permission check is NOT required, starting VPN service directly")
-                            startVpnService()
-                        }
-                    }
+                    true -> connect()
+                    false -> disconnect()
                 }
+            }
+        }
+    }
+
+    suspend fun connect() {
+        connectionStateRepository.updateVpnStarted(true)
+        logger.log("Update vpnStarted state: VpnState = ${connectionStateRepository.vpnStartedFlow.value}")
+        logger.log("VPN is currently disconnected")
+        if (isPermissionCheckNeeded) {
+            logger.log("Permission check required, triggering permission dialog")
+            permissionEventsChannel.checkPermissions()
+        } else {
+            logger.log("Permission check is NOT required, starting VPN service directly")
+            startVpnService()
+        }
+    }
+
+    suspend fun disconnect() {
+        logger.log("Stopping VPN service due to active connection")
+        connectionStateRepository.updateVpnStarted(false)
+        connectionStateRepository.updateStatus(false)
+        healthCheckManager.stopHealthCheck()
+        stopVpnService()
+    }
+
+    suspend fun prepareConfig(connectionUrl: String) {
+        logger.log("Proceeding with setConfig for the provided URL...")
+        if (!connectionStateRepository.vpnStartedFlow.value) {
+            try {
+                logger.log("We get config by ${maskStr(connectionUrl)}")
+                val ok = setConfig(connectionUrl)
+                if (!ok) {
+                    logger.log("Config is invalid or failed to apply → abort start (no HC/VPN)")
+                    connectionStateRepository.updateVpnStarted(false)
+                    connectionStateRepository.updateStatus(false)
+                    return
+                }
+            } catch (e: Exception) {
+                logger.log("Error during setConfig: ${e.message}")
+                return
+            } finally {
+                logger.log("Finish setConfig()")
             }
         }
     }

@@ -16,8 +16,9 @@ Arguments:
                   Must be one of:
                     connect      Establish a connection
                     disconnect   Terminate an existing connection
+                    logs         Lock terminal and print logs in infinite loop
 
-  <config_path>   Required. Path to configuration file.
+  <config_path>   Required if action = connect. Path to configuration file.
 
 Options:
   --help          Show this help message and exit
@@ -25,6 +26,7 @@ Options:
 Examples:
   program_name connect /path/to/config.toml
   program_name disconnect /path/to/config.toml
+  program_name logs
   program_name --help
 
 Errors:
@@ -37,7 +39,7 @@ Errors:
 
 fun main(args: Array<String>) {
     println(args.joinToString(", "))
-    if (args.size > 1) {
+    if (args.isNotEmpty()) {
         val cliClient = CliClient()
         when (args[0]) {
             "--help" -> printHelp(0)
@@ -50,8 +52,16 @@ fun main(args: Array<String>) {
             }
 
             "disconnect" -> {
-                if (args.size == 2) {
-                    cliClient.disconnect(args[1])
+                if (args.size == 1) {
+                    cliClient.disconnect()
+                } else {
+                    printHelp(1)
+                }
+            }
+
+            "logs" -> {
+                if (args.size == 1) {
+                    cliClient.logs()
                 } else {
                     printHelp(1)
                 }

@@ -111,11 +111,8 @@ class DobbyVpnService(
     }
 
     private fun stopCurrentLocked() {
-        when (runningInterface) {
-            VpnInterface.CLOAK_OUTLINE -> stopCloakOutline()
-            VpnInterface.AMNEZIA_WG -> stopAwg()
-            null -> return
-        }
+        stopCloakOutline()
+        stopAwg()
         georoutingLibrary.ClearGeoRoutingConf()
         runningInterface = null
     }
