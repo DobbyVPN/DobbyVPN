@@ -17,7 +17,7 @@ class GoBackend {
 
     external fun getLastError(): String?
 
-    external fun newVpnClient(config: String, protocol: String, fd: Int): Unit
+    external fun newVpnClient(config: String, protocol: String, fd: Int, mtu: Int): Unit
 
     external fun vpnConnect(): Int
 

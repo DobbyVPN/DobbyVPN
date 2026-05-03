@@ -75,16 +75,14 @@ func unsafeToString(v any) string {
 // ==========================================
 
 //export NewVpnClient
-func NewVpnClient(config string, protocol string, fd int32) {
+func NewVpnClient(config string, protocol string, fd int32, mtu int32) {
 	defer guardExport("NewVpnClient")()
-	log.Infof("NewVpnClient() called")
+	log.Infof("NewVpnClient() called protocol=%s fd=%d mtu=%d", protocol, fd, mtu)
 
 	// Ensure any zombie connection is completely cleaned up
 	VpnDisconnect()
 
-	log.Infof("Config length=%d, protocol=%s", config, protocol)
-
-	tunFile := os.NewFile(uintptr(fd), "tun")
+	log.Infof("Config length=%d", len(config))
 
 	var device pkg.ProtocolDevice
 	var err error
@@ -94,7 +92,9 @@ func NewVpnClient(config string, protocol string, fd int32) {
 	case "xray":
 		device, err = xray.NewXrayDevice(config)
 	case "outline":
-		device, err = outline.NewOutlineDevice(config)
+		device, err = outline.NewOutlineDeviceWithOptions(config, outline.DeviceOptions{
+			PreferTCPDNSForWebSocket: true,
+		})
 	default:
 		setLastError("unsupported protocol: " + protocol)
 		log.Infof("NewVpnClient() failed: unsupported protocol")
@@ -108,7 +108,7 @@ func NewVpnClient(config string, protocol string, fd int32) {
 	}
 
 	// Inject the protocol device into the universal mobile client
-	vpnClient = core.NewClient(device, tunFile)
+	vpnClient = core.NewClient(device, int(fd), int(mtu))
 
 	log.Infof("NewVpnClient() finished successfully")
 }

@@ -9,7 +9,9 @@ internal class OutlineLibFacadeImpl : OutlineLibFacade {
 
     override fun init(apiKey: String, tunFd: Int): Boolean {
         Log.d(TAG, "init() called with apiKey length=${apiKey.length}, starts with: ${apiKey.take(30)}...")
-        GoBackendWrapper.newVpnClient(apiKey, "outline", tunFd)
+        // MTU 1200 is the default used in iOS and matches core.NewClient default
+        val mtu = 1200
+        GoBackendWrapper.newVpnClient(apiKey, "outline", tunFd, mtu)
         Log.d(TAG, "Connecting Outline...")
         val result = GoBackendWrapper.vpnConnect()
         return if (result == 0) {

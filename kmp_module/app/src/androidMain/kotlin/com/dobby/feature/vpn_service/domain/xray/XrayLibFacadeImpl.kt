@@ -11,7 +11,9 @@ internal class XrayLibFacadeImpl : XrayLibFacade {
     override fun init(config: String, tunFd: Int): Boolean {
         Log.d(TAG, "init() called with config length=${config.length}, tunFd=$tunFd")
         try {
-            GoBackendWrapper.newVpnClient(config, "xray", tunFd)
+            // MTU 1200 is the default used in iOS and matches core.NewClient default
+            val mtu = 1200
+            GoBackendWrapper.newVpnClient(config, "xray", tunFd, mtu)
             Log.d(TAG, "Connecting Xray...")
             val result = GoBackendWrapper.vpnConnect()
             return if (result == 0) {
