@@ -46,7 +46,7 @@ val jvmMainModule = makeNativeModule(
             healthCheckLibrary = get()
         )
     },
-    netCheckManager = { NetCheckManagerImpl(netCheckLibrary = get(), loggerLibrary = get()) },
+    netCheckManager = { NetCheckManagerImpl(get(), get(), get()) },
     netCheckRepository = { NetCheckRepository() }
 )
 

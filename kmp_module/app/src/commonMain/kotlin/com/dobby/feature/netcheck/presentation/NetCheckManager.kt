@@ -1,6 +1,6 @@
 package com.dobby.feature.netcheck.presentation
 
 interface NetCheckManager {
-    fun start(configPath: String): String
+    fun start(): String
     fun cancel()
 }

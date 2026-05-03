@@ -185,3 +185,9 @@ data class TomlConfigs(
     val AmneziaWG: AmneziaWGConfig? = null,
     val ExcludeIPs: ExcludeIPsConfig? = null
 )
+
+@Serializable
+data class NetCheckTomlConfigs(
+    val ConfigValue: String,
+    val Telemetry: String? = null,
+)

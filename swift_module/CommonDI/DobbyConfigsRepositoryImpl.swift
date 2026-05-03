@@ -20,14 +20,12 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let udpPathOutlineKey = "UdpPathOutlineKey"
     private let isUserInitStopKey = "isUserInitStopKey"
     private let geoRoutingConfKey = "geoRoutingConfKey"
-<<<<<<< HEAD
     private let awgConfigKey = "awgConfigKey"
     private let awgTomlConfigKey = "awgTomlConfigKey"
     private let isAmneziaWGEnabledKey = "isAmneziaWGEnabledKey"
     private let vpnInterfaceKey = "vpnInterfaceKey"
-=======
     private let telemetryEndpointKey = "telemetryEndpointKey"
->>>>>>> category-logging
+    private let netCheckConfigKey = "netCheckConfigKey"
 
     public func getConnectionURL() -> String {
         return userDefaults.string(forKey: connectionURLKey) ?? ""
@@ -53,6 +51,14 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setTelemetryEndpoint(endpoint: String) {
         userDefaults.set(endpoint, forKey: telemetryEndpointKey)
+    }
+    
+    public func getNetCheckConfig() -> String {
+        return userDefaults.string(forKey: netCheckConfigKey) ?? ""
+    }
+
+    public func setNetCheckConfig(config: String) {
+        userDefaults.set(config, forKey: netCheckConfigKey)
     }
 
     public func getCloakConfig() -> String {

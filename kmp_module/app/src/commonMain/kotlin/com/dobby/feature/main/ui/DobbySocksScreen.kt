@@ -145,74 +145,7 @@ fun DobbySocksScreen(
         ) {
             LazyColumn(state = listState) {
                 items(uiLogState.logMessages) { message ->
-                    val logMessage = LogMessage.parse(message)
-
-                    Text(
-                        buildAnnotatedString {
-                            withStyle(
-                                style = SpanStyle(
-                                    fontWeight = FontWeight.Bold,
-                                )
-                            ) {
-                                append("> ")
-                            }
-
-                            if (logMessage.time.isNotBlank()) {
-                                withStyle(
-                                    style = SpanStyle(
-                                        fontWeight = FontWeight.ExtraLight,
-                                    )
-                                ) {
-                                    append("[${logMessage.time}] ")
-                                }
-                            }
-
-                            withStyle(
-                                style = SpanStyle(
-                                    fontWeight = FontWeight.Bold,
-                                )
-                            ) {
-                                append("[${logMessage.level.name}] ")
-                            }
-
-                            withStyle(
-                                style = SpanStyle(
-                                    fontWeight = FontWeight.Bold,
-                                )
-                            ) {
-                                append("[${logMessage.category}] ")
-                            }
-
-                            withStyle(
-                                style = SpanStyle(
-                                    fontWeight = FontWeight.Normal,
-                                )
-                            ) {
-                                append(logMessage.message)
-                            }
-
-                            if (logMessage.isBackend) {
-                                withStyle(
-                                    style = SpanStyle(
-                                        fontWeight = FontWeight.Light,
-                                    )
-                                ) {
-                                    append(" [from go]")
-                                }
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 0.dp, horizontal = 4.dp),
-                        fontSize = 14.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = when (logMessage.level) {
-                            LogMessageLevel.DEBUG -> Color(0xFF999999)
-                            LogMessageLevel.INFO -> Color(0xFF000000)
-                            LogMessageLevel.WARN -> Color(0xFFCCCC00)
-                            LogMessageLevel.ERROR -> Color(0xFFFF0000)
-                        }
-                    )
+                    LogMessageScreen(message)
                 }
             }
         }

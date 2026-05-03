@@ -5,8 +5,9 @@ import com.dobby.feature.netcheck.presentation.NetCheckManager
 import com.dobby.outline.OutlineGo
 
 class NetCheckManagerImpl: NetCheckManager {
-    override fun start(configPath: String): String {
-        return OutlineGo.netCheck(provideNetCheckConfigPath().toString()) ?: ""
+    override fun start(): String {
+        val configPath = provideNetCheckConfigPath().toString()
+        return OutlineGo.netCheck(configPath) ?: ""
     }
 
     override fun cancel() {
