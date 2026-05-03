@@ -110,6 +110,10 @@ type DobbyProxy struct {
 }
 
 func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
+	// iOS 26 diagnostic: log connection attempt details
+	destAddr := metadata.DestinationAddress()
+	log.Infof("[Router] TCP dial attempt to %s proto=%s", destAddr, metadata.Network)
+
 	if IsBypass(metadata) {
 		conn, err := p.direct.DialContext(ctx, metadata)
 		if err != nil {
@@ -132,6 +136,7 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 	conn, err := p.vpn.DialContext(ctx, metadata)
 	if err != nil {
 		p.activeTCP.Add(-1)
+		// iOS 26: log more detail on proxy errors
 		log.Infof("[Router] PROXY TCP dial error %s: %v", metadata.DestinationAddress(), err)
 		return nil, err
 	}
@@ -152,6 +157,10 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 		log.Infof("[DEBUG][Router] BYPASS UDP dial OK %s local=%s", metadata.DestinationAddress(), conn.LocalAddr())
 		return conn, nil
 	}
+
+	// iOS 26 diagnostic: log UDP connection details
+	destAddr := metadata.DestinationAddress()
+	log.Infof("[Router] UDP dial attempt to %s proto=%s", destAddr, metadata.Network)
 
 	active := p.activeUDP.Add(1)
 	if active > maxActiveUDPConns {
