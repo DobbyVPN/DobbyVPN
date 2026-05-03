@@ -1,9 +1,9 @@
 package com.dobby.backend
 
-class LoggerBackend {
-    external fun initLogger(path: String): Unit
+class NetCheckBackend {
+    external fun netCheck(configPath: String): String?
 
-    external fun initTelemetry(endpoint: String): Unit
+    external fun cancelNetCheck(): Unit
 
     companion object {
         init {

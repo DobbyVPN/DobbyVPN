@@ -1,16 +1,26 @@
 package com.dobby.feature.main.domain
 
+import com.dobby.backend.LoggerBackendWrapper
+import com.dobby.backend.NetCheckBackendWrapper
+import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.netcheck.domain.provideNetCheckConfigPath
 import com.dobby.feature.netcheck.presentation.NetCheckManager
-import com.dobby.outline.OutlineGo
 
-class NetCheckManagerImpl: NetCheckManager {
+class NetCheckManagerImpl(
+    private val configsRepository: DobbyConfigsRepository
+): NetCheckManager {
     override fun start(): String {
+        val path = provideLogFilePath().toString()
+        LoggerBackendWrapper.initLogger(path)
+        val endpoint = configsRepository.getTelemetryEndpoint()
+        if (endpoint.isNotBlank()) {
+            LoggerBackendWrapper.initTelemetry(endpoint)
+        }
         val configPath = provideNetCheckConfigPath().toString()
-        return OutlineGo.netCheck(configPath) ?: ""
+        return NetCheckBackendWrapper.netCheck(configPath) ?: ""
     }
 
     override fun cancel() {
-        OutlineGo.cancelNetCheck()
+        NetCheckBackendWrapper.cancelNetCheck()
     }
 }

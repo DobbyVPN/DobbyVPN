@@ -26,6 +26,9 @@ extern void InitHealthCheck();
 extern void StartHealthCheck();
 extern void StopHealthCheck();
 extern void InitLogger(GoString path);
+extern void InitTelemetry(GoString endpoint);
+extern char* NetCheck(GoString configPath);
+extern void CancelNetCheck();
 extern char* GetLastError(void);
 extern void NewOutlineClient(GoString config, GoInt32 fd);
 extern GoInt32 OutlineConnect(void);
@@ -197,6 +200,39 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_LoggerBackend_initLogger(JNIEnv *e
 		.n = path_len
 	});
     (*env)->ReleaseStringUTFChars(env, jPath, path_str);
+}
+
+JNIEXPORT void JNICALL Java_com_dobby_backend_LoggerBackend_initTelemetry(JNIEnv *env, jclass c, jstring jEndpoint)
+{
+    const char *endpoint_str = (*env)->GetStringUTFChars(env, jEndpoint, 0);
+	size_t endpoint_len = (*env)->GetStringUTFLength(env, jEndpoint);
+    InitTelemetry((GoString) {
+		.p = endpoint_str,
+		.n = endpoint_len
+	});
+    (*env)->ReleaseStringUTFChars(env, jEndpoint, endpoint_str);
+}
+
+JNIEXPORT jstring JNICALL Java_com_dobby_backend_NetCheckBackend_netCheck(JNIEnv *env, jclass c, jstring jConfigPath)
+{
+	jstring ret;
+    const char *config_path_str = (*env)->GetStringUTFChars(env, jConfigPath, 0);
+	size_t config_path_len = (*env)->GetStringUTFLength(env, jConfigPath);
+    char *result = NetCheck((GoString) {
+		.p = config_path_str,
+		.n = config_path_len
+	});
+    (*env)->ReleaseStringUTFChars(env, jConfigPath, config_path_str);
+	if (!result)
+		return NULL;
+	ret = (*env)->NewStringUTF(env, result);
+	free(result);
+	return ret;
+}
+
+JNIEXPORT void JNICALL Java_com_dobby_backend_NetCheckBackend_cancelNetCheck(JNIEnv *env, jclass c)
+{
+    CancelNetCheck();
 }
 
 JNIEXPORT jstring JNICALL Java_com_dobby_backend_OutlineBackend_getLastError(JNIEnv *env, jclass c)

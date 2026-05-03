@@ -7,7 +7,6 @@ import (
 	"go_module/healthcheck"
 )
 
-<<<<<<< HEAD
 //export GetConnectionState
 func GetConnectionState() C.int {
 	switch healthcheck.GetConnectionState() {
@@ -18,14 +17,6 @@ func GetConnectionState() C.int {
 	case healthcheck.Connected:
 		return 2
 	default:
-=======
-//export CheckServerAlive
-func CheckServerAlive(addressC *C.char, port C.int) C.int {
-	address := C.GoString(addressC)
-	res := healthcheck.CheckServerAlive(address, int(port))
-	log.Debugf(Category, "Health check result: %v", res)
-	if res == nil {
->>>>>>> category-logging
 		return 0
 	}
 }

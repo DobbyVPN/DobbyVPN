@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-	"gvisor.dev/gvisor/pkg/log"
 )
 
 type OutlineClient struct {

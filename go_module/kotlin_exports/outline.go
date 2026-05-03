@@ -68,11 +68,7 @@ func NewOutlineClient(config string, fd int32) {
 	goConfig := strings.Clone(config)
 	goFD := int(fd)
 
-<<<<<<< HEAD
-	log.Infof("Config %s", goConfig)
-=======
 	log.Debugf(Category, "Config length=%d", len(goConfig))
->>>>>>> category-logging
 
 	client = outline.NewClientWithFD(goConfig, goFD, 0)
 

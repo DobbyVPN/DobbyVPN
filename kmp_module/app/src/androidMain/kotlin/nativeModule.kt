@@ -37,7 +37,7 @@ val androidMainModule = makeNativeModule(
     vpnManager = { VpnManagerImpl(androidContext()) },
     authenticationManager = { AuthenticationManagerImpl(androidContext())},
     healthCheck = { HealthCheckImpl() },
-    netCheckManager = { NetCheckManagerImpl() },
+    netCheckManager = { NetCheckManagerImpl(get()) },
     netCheckRepository = { NetCheckRepository() },
 )
 
