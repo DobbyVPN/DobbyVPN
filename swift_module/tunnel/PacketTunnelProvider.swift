@@ -308,14 +308,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             guard let self else { return }
             
             // iOS 26+ diagnostic: capture all path properties
+            let supportsIPV4 = path.supportsIPv4
+            let supportsIPV6 = path.supportsIPv6
             let ifaces = path.availableInterfaces.map { iface -> String in
-                let name = iface.name
-                let type = iface.type
-                let typeStr = "\(type)"
-                let supportsIPV4 = path.supportsIPv4
-                let supportsIPV6 = path.supportsIPv6
-                let isCellular = iface.type == .cellular
-                return "\(name):\(typeStr) ipv4=\(supportsIPV4) ipv6=\(supportsIPV6)"
+                return "\(iface.name):\(iface.type) ipv4=\(supportsIPV4) ipv6=\(supportsIPV6)"
             }.joined(separator: ",")
             
             let expensive = path.isExpensive
@@ -346,27 +342,28 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             
             let fingerprint = "status=\(path.status)|ifaces=\(ifaces)|expensive=\(expensive)|constrained=\(constrained)"
             if self.lastPathFingerprint != fingerprint {
+                let previousFingerprint = self.lastPathFingerprint
                 self.lastPathFingerprint = fingerprint
                 self.logs.writeLog(
                     log: "[tunnel:\(self.tunnelId)] PATH_UPDATE: " + pathDesc
                 )
-                
+
                 // iOS 26: Log warning for problematic network conditions
                 if constrained && expensive {
                     self.logs.writeLog(
                         log: "[tunnel:\(self.tunnelId)] WARNING: Network is BOTH expensive AND constrained - expect connection issues!"
                     )
                 }
-                
+
                 // Log each interface's capability
                 for iface in path.availableInterfaces {
                     self.logs.writeLog(
                         log: "[tunnel:\(self.tunnelId)] Interface: \(iface.name) type=\(iface.type) isCellular=\(iface.type == .cellular)"
                     )
                 }
-                
+
                 // CRITICAL: Log when WiFi->Cellular transition happens (this is when tunnel issues start)
-                let wasUsingWiFi = self.lastPathFingerprint?.contains("wifi") == true
+                let wasUsingWiFi = previousFingerprint?.contains("wifi") == true
                 let isNowUsingWiFi = ifaces.contains("wifi")
                 let isNowUsingCellular = ifaces.contains("cellular")
                 
@@ -383,7 +380,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     
     /// Capture network state at tunnel startup for diagnostic purposes
-    private func captureNetworkStateAtStartup(logs: Any, tunnelId: String) {
+    private func captureNetworkStateAtStartup(logs: AppLogsRepository, tunnelId: String) {
         // Note: This is a best-effort capture; the monitor may not have populated yet
         let monitor = Network.NWPathMonitor()
         let q = DispatchQueue(label: "vpn.dobby.app.tunnel.startup-path")
