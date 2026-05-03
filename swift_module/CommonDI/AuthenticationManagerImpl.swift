@@ -41,8 +41,6 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
     }
 
     func requireLocationService(endingFunc: @escaping (KotlinBoolean) -> Void) {
-        let locationManager = CLLocationManager()
-
         func isLocationEnabled() -> Bool {
             return CLLocationManager.locationServicesEnabled()
         }
@@ -90,7 +88,11 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
         })
 
         // Get the top-most view controller to present the alert
-        if let rootVC = UIApplication.shared.windows.first?.rootViewController {
+        let windowScene = UIApplication.shared.connectedScenes
+            .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene
+        let window = windowScene?.windows.first(where: { $0.isKeyWindow })
+
+        if let rootVC = window?.rootViewController {
             rootVC.present(alert, animated: true)
         } else {
             endingFunc(KotlinBoolean(value: false))
