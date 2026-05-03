@@ -17,11 +17,11 @@ class GoBackend {
 
     external fun getLastError(): String?
 
-    external fun newOutlineClient(config: String, fd: Int): Unit
+    external fun newVpnClient(config: String, protocol: String, fd: Int, mtu: Int): Unit
 
-    external fun outlineConnect(): Int
+    external fun vpnConnect(): Int
 
-    external fun outlineDisconnect(): Unit
+    external fun vpnDisconnect(): Unit
 
     external fun registerVpnService(service: VpnService): Unit
 
