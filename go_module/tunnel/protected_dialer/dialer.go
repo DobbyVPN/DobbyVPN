@@ -50,7 +50,7 @@ func listenAddr(network string) string {
 	return "0.0.0.0:0"
 }
 
-func protectSocket(fd uintptr, realNet string, destination string) error {
+func protectSocket(fd uintptr, realNet, destination string) error {
 	if protector == nil {
 		return fmt.Errorf("no socket protector registered")
 	}

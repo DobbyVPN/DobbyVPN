@@ -400,7 +400,7 @@ func parsePeerField(peer *Peer, key, val string) error {
 	}
 }
 
-func FromWgQuick(s string, name string) (*Config, error) {
+func FromWgQuick(s, name string) (*Config, error) {
 	if !TunnelNameIsValid(name) {
 		return nil, fmt.Errorf("tunnel name is not valid")
 	}
@@ -442,14 +442,15 @@ func FromWgQuick(s string, name string) (*Config, error) {
 		if _, ok := _specialHandshakeTags[key]; !ok && val == "" {
 			return nil, fmt.Errorf("key must have a value")
 		}
-		if parserState == inInterfaceSection {
+		switch parserState {
+		case inInterfaceSection:
 			if err := parseInterfaceField(&conf, key, val); err != nil {
 				return nil, err
 			}
 			if key == "privatekey" {
 				sawPrivateKey = true
 			}
-		} else if parserState == inPeerSection {
+		case inPeerSection:
 			if err := parsePeerField(peer, key, val); err != nil {
 				return nil, err
 			}

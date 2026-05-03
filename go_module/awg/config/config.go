@@ -13,6 +13,7 @@ func (conf *Config) IntersectsWith(other *Config) bool {
 	}
 	allRoutes := make(map[hashableIPCidr]bool, len(conf.Interface.Addresses)*2+len(conf.Peers)*3)
 	for _, a := range conf.Interface.Addresses {
+		//nolint:gosec // length of net.IP is max 16, 16*8 = 128 which safely fits in uint8
 		ipBits := uint8(len(a.IP) * 8)
 		allRoutes[hashableIPCidr{string(a.IP), ipBits}] = true
 		a.MaskSelf()

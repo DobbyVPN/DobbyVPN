@@ -2,10 +2,9 @@ package common
 
 import (
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"sync"
-	"time"
 )
 
 type NetworkConfig struct {
@@ -27,11 +26,9 @@ func GetNetworkConfig() *NetworkConfig {
 }
 
 func generateConfig() *NetworkConfig {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-
 	for i := 0; i < 20; i++ {
-		x := r.Intn(254) + 1
-		y := r.Intn(254) + 1
+		x := rand.IntN(254) + 1
+		y := rand.IntN(254) + 1
 
 		gateway := fmt.Sprintf("10.%d.%d.1", x, y)
 		device := fmt.Sprintf("10.%d.%d.2", x, y)

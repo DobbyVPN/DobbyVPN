@@ -16,6 +16,7 @@ import (
 func ExecuteCommand(command string) (string, error) {
 	log.Infof("[Routing][Exec] → %s", log.MaskStr(command))
 
+	//nolint:gosec // ExecuteCommand runs trusted, internally formatted network commands
 	cmd := exec.Command("bash", "-c", command)
 	output, err := cmd.CombinedOutput()
 	outStr := string(output)

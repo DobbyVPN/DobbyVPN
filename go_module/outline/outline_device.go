@@ -473,7 +473,7 @@ func (d *OutlineDevice) GetProxyAddr() string {
 	return d.proxyAddr
 }
 
-func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (bool, string) {
+func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, status string) {
 	d.mu.RLock()
 	addr := d.proxyAddr
 	state := d.serveState
