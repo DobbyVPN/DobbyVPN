@@ -64,7 +64,7 @@ kotlin {
             implementation(libs.koin.android)
             implementation(libs.koin.androidx.compose)
 
-            implementation(project(":outline"))
+            implementation(project(":backend"))
 
             implementation(libs.okhttp)
             implementation(libs.ktor.client.okhttp)
@@ -224,7 +224,7 @@ buildConfig {
 
 dependencies {
     implementation(project(":grpcstub"))
-    implementation(project(":awg"))
+    implementation(project(":backend"))
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 }

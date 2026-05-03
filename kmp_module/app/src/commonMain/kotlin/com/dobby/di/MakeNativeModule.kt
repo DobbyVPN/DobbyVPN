@@ -1,3 +1,5 @@
+package com.dobby.di
+
 import com.dobby.feature.diagnostic.domain.HealthCheck
 import com.dobby.feature.diagnostic.domain.IpRepository
 import com.dobby.feature.logging.domain.CopyLogsInteractor
@@ -5,13 +7,14 @@ import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.authentication.domain.AuthenticationManager
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogEventsChannel
-import com.dobby.feature.main.domain.AwgManager
 import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryAwg
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryCloak
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryOutline
+import com.dobby.feature.netcheck.domain.NetCheckRepository
+import com.dobby.feature.netcheck.presentation.NetCheckManager
 import org.koin.core.module.Module
 import org.koin.core.scope.Scope
 import org.koin.dsl.module
@@ -26,16 +29,18 @@ fun makeNativeModule(
     configsRepository: NativeInjectionFactory<DobbyConfigsRepository>,
     connectionStateRepository: NativeInjectionFactory<ConnectionStateRepository>,
     vpnManager: NativeInjectionFactory<VpnManager>,
-    awgManager: NativeInjectionFactory<AwgManager>,
     authenticationManager: NativeInjectionFactory<AuthenticationManager>,
     healthCheck: NativeInjectionFactory<HealthCheck>,
+    netCheckManager: NativeInjectionFactory<NetCheckManager>,
+    netCheckRepository: NativeInjectionFactory<NetCheckRepository>,
 ): Module {
     return module {
         factory { vpnManager() }
-        factory { awgManager() }
+        factory { netCheckManager() }
         single { copyLogsInteractor() }
         single { logEventsChannel() }
         single { logsRepository() }
+        single { netCheckRepository() }
         single { Logger(get()) }
         single { ipRepository() }
         single { connectionStateRepository() }

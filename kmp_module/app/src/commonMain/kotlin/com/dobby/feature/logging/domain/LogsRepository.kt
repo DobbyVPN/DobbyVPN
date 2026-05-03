@@ -38,7 +38,7 @@ class LogsRepository(
     private val logEventsChannel: LogEventsChannel
 ) {
     companion object {
-        const val UI_TAIL_LINES: Int = 50
+        const val UI_TAIL_LINES: Int = 200
 
         const val EXPORT_TAIL_LINES: Int = -1
     }

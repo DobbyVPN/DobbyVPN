@@ -214,7 +214,7 @@ func prepareLog(message string, arguments map[string]any) string {
 	msg.WriteString(message)
 
 	for key, value := range arguments {
-		msg.WriteString(fmt.Sprintf(" %q=\"%v\"", key, value))
+		msg.WriteString(fmt.Sprintf(" '%s'='%v'", key, value))
 	}
 
 	return msg.String()

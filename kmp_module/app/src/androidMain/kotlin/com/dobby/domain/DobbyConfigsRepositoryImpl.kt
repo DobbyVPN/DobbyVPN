@@ -4,7 +4,6 @@ import android.content.SharedPreferences
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import android.util.Log.i as AndroidLog
-import com.dobby.outline.OutlineGo
 import androidx.core.content.edit
 
 internal class DobbyConfigsRepositoryImpl(
@@ -192,6 +191,18 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun getAwgTomlConfig(): String {
+        return (prefs.getString("awgTomlConfig", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getAwgTomlConfig, size = ${it.length}")
+        }
+    }
+
+    override fun setAwgTomlConfig(newConfig: String) {
+        prefs.edit().putString("awgTomlConfig", newConfig).apply().also {
+            AndroidLog("DOBBY_TAG", "setAwgTomlConfig, size = ${newConfig.length}")
+        }
+    }
+
     override fun getIsAmneziaWGEnabled(): Boolean {
         return prefs.getBoolean("isAmneziaWGEnabled", false).also {
             AndroidLog("DOBBY_TAG", "getIsAmneziaWGEnabled = $it")
@@ -229,6 +240,18 @@ internal class DobbyConfigsRepositoryImpl(
     override fun setGeoRoutingConf(geoRoutingConf: String) {
         prefs.edit { putString("geoRoutingConf", geoRoutingConf) }.also {
             AndroidLog("DOBBY_TAG", "geoRoutingConf = $geoRoutingConf")
+        }
+    }
+
+    override fun getNetCheckConfig(): String {
+        return (prefs.getString("netCheckConfig", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "netCheckConfig, len(netCheckConfig) = ${it.length}")
+        }
+    }
+
+    override fun setNetCheckConfig(config: String) {
+        prefs.edit { putString("netCheckConfig", config) }.also {
+            AndroidLog("DOBBY_TAG", "netCheckConfig = ${config.take(10)}...")
         }
     }
 
