@@ -4,10 +4,13 @@ import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.presentation.MainViewModel
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.time.Duration
@@ -31,6 +34,7 @@ class HealthCheckManager(
     private var consecutiveFailuresCount: Int = 0
     private var lastVpnStartMark: TimeMark? = null
     private var lastFullConnectionSucceed = false
+    private var healthTickId = 0
 
     suspend fun startHealthCheck(address: String, port: Int) {
         logger.log("[HC] startHealthCheck() called")
@@ -66,25 +70,51 @@ class HealthCheckManager(
 
             while (isActive) {
                 var nextDelay: Duration? = null
+                val tickId = ++healthTickId
+                logger.log(
+                    "[HC] tick#$tickId begin " +
+                        "lastFullConnectionSucceed=$lastFullConnectionSucceed " +
+                        "consecutiveFailuresCount=$consecutiveFailuresCount"
+                )
 
                 if (configsRepository.getIsUserInitStop()) {
-                    logger.log("[HC] Stop condition: getIsUserInitStop() == true")
-                    turnOffVpn()
+                    logger.log(
+                        "[HC] tick#$tickId stop condition: " +
+                            "getIsUserInitStop() == true → exiting health check loop"
+                    )
+                    resetHealthCheckState()
                     return@launch
                 }
 
+                if (mainViewModel.connectionStateRepository.vpnTransitioningFlow.value) {
+                    logger.log("[HC] tick#$tickId VPN is transitioning → skipping checks for this tick")
+                    nextDelay = getHealthCheckDelay()
+                    logger.log("[HC] Next tick in $nextDelay")
+                    delay(nextDelay)
+                    continue
+                }
+
                 val connected = try {
-                    val result = isConnected()
-                    logger.log("[HC] isConnected() result = $result")
+                    val result = isConnected(tickId)
+                    logger.log("[HC] tick#$tickId isConnected() result = $result")
                     result
+                } catch (cancelled: CancellationException) {
+                    logger.log("[HC] tick#$tickId cancelled while health checks were running")
+                    throw cancelled
                 } catch (t: Throwable) {
-                    logger.log("[HC] isConnected() threw exception: ${t.message}")
+                    logger.log("[HC] tick#$tickId isConnected() threw exception: ${t.message}")
                     false
                 }
 
-                var vpnStarted = mainViewModel.connectionStateRepository.vpnStartedFlow.value
+                if (!isActive) {
+                    logger.log("[HC] tick#$tickId result ignored because health job was cancelled")
+                    return@launch
+                }
+
+                val vpnStarted = mainViewModel.connectionStateRepository.vpnStartedFlow.value
                 if (!vpnStarted) {
-                    logger.log("[HC] vpnStarted=false → exiting health check loop")
+                    logger.log("[HC] tick#$tickId vpnStarted=false → exiting health check loop")
+                    resetHealthCheckState()
                     return@launch
                 }
 
@@ -98,13 +128,19 @@ class HealthCheckManager(
                     val sinceStartMs = (lastVpnStartMark?.elapsedNow()?.inWholeMilliseconds)
                         ?: Long.MAX_VALUE
                     if (sinceStartMs < gracePeriodMs) {
-                        logger.log("[HC] Not connected during grace period (${sinceStartMs}ms < ${gracePeriodMs}ms) → ignore")
+                        logger.log(
+                            "[HC] Not connected during grace period " +
+                                "(${sinceStartMs}ms < ${gracePeriodMs}ms) → ignore"
+                        )
                         nextDelay = getHealthCheckDelay()
                     }
 
                     if (nextDelay == null) {
                         consecutiveFailuresCount++
-                        logger.log("[HC] Not connected → consecutiveFailuresCount=$consecutiveFailuresCount/$consecutiveFailuresBeforeTurnOff")
+                        logger.log(
+                            "[HC] Not connected → " +
+                                "consecutiveFailuresCount=$consecutiveFailuresCount/$consecutiveFailuresBeforeTurnOff"
+                        )
 
                         if (consecutiveFailuresCount >= consecutiveFailuresBeforeTurnOff) {
                             logger.log("[HC] Failure threshold reached → turning off VPN & stopping health check")
@@ -155,12 +191,16 @@ class HealthCheckManager(
         healthJob?.cancel()
         healthJob = null
 
-        consecutiveFailuresCount = 0
-        lastVpnStartMark = null
-
-        lastFullConnectionSucceed = false
+        resetHealthCheckState()
 
         logger.log("[HC] State reset after stop")
+    }
+
+    private fun resetHealthCheckState() {
+        consecutiveFailuresCount = 0
+        lastVpnStartMark = null
+        lastFullConnectionSucceed = false
+        healthTickId = 0
     }
 
     suspend fun turnOffVpn() {
@@ -170,14 +210,21 @@ class HealthCheckManager(
         mainViewModel.stopVpnService()
     }
 
-    private fun isConnected(): Boolean {
+    private suspend fun isConnected(tickId: Int): Boolean {
+        currentCoroutineContext().ensureActive()
         var result = false
         if (lastFullConnectionSucceed) {
+            logger.log("[HC] tick#$tickId using shortConnectionCheckUp() first")
             result = healthCheck.shortConnectionCheckUp()
+            currentCoroutineContext().ensureActive()
         }
         if (!result) {
+            currentCoroutineContext().ensureActive()
+            logger.log("[HC] tick#$tickId using fullConnectionCheckUp()")
             result = healthCheck.fullConnectionCheckUp()
+            currentCoroutineContext().ensureActive()
             lastFullConnectionSucceed = result
+            logger.log("[HC] tick#$tickId fullConnectionCheckUp() result=$result")
         }
         return result
     }
@@ -185,6 +232,14 @@ class HealthCheckManager(
     private fun getHealthCheckDelay(): Duration {
         val mark = lastVpnStartMark ?: return 2.seconds
         val elapsed = mark.elapsedNow()
+
+        if (lastFullConnectionSucceed) {
+            return when {
+                elapsed < 30.seconds -> 5.seconds
+                elapsed < 90.seconds -> 10.seconds
+                else -> 15.seconds
+            }
+        }
 
         return when {
             elapsed < 30.seconds -> 2.seconds

@@ -11,33 +11,34 @@ public final class OutlineInteractor {
     private var logs = NativeModuleHolder.logsRepository
     private var outlineStarted: Bool = false
 
-    func startOutline() throws {
-        logs.writeLog(log: "startOutline: entering")
-        
-        if !configsRepository.getIsOutlineEnabled(){
-            logs.writeLog(log: "Outline: is disabled")
-            return
-        }
-        
+    func startOutline(
+        tunnelFileDescriptor: Int32,
+        mtu: Int,
+        nativeClientCreated: () -> Void
+    ) throws {
+
         let methodPassword = configsRepository.getMethodPasswordOutline()
         let serverPort = configsRepository.getServerPort()
         let prefix = configsRepository.getPrefixOutline()
         let websocketEnabled = configsRepository.getIsWebsocketEnabled()
         let tcpPath = configsRepository.getTcpPathOutline()
         let udpPath = configsRepository.getUdpPathOutline()
-        logs.writeLog(log: "Config snapshot: serverPort.len=\(serverPort.count) methodPassword.len=\(methodPassword.count) ws=\(websocketEnabled) tcpPath.len=\(tcpPath.count) udpPath.len=\(udpPath.count)")
+        logs.writeLog(
+            log: "Config snapshot: serverPort.len=\(serverPort.count) methodPassword.len=\(methodPassword.count) " +
+            "ws=\(websocketEnabled) tcpPath.len=\(tcpPath.count) udpPath.len=\(udpPath.count) " +
+            "tunnelFD=\(tunnelFileDescriptor) mtu=\(mtu)"
+        )
 
         // Validate config early (prevents passing empty config into native layer).
         if methodPassword.isEmpty || serverPort.isEmpty {
-            logs.writeLog(log: "[startTunnel] Empty Outline config (methodPassword/serverPort) → abort")
-            outlineStarted = false
+            logs.writeLog(log: "[startTunnel] Empty Outline config: methodPassword.isEmpty=\(methodPassword.isEmpty) serverPort.isEmpty=\(serverPort.isEmpty) → abort")
             throw NSError(
                 domain: "PacketTunnelProvider",
                 code: -2,
                 userInfo: [NSLocalizedDescriptionKey: "Empty Outline configuration"]
             )
         }
-        
+
         let config = buildOutlineConfig(
             methodPassword: methodPassword,
             serverPort: serverPort,
@@ -50,36 +51,49 @@ public final class OutlineInteractor {
         if websocketEnabled {
             logs.writeLog(log: "WebSocket transport requested (wss)")
         }
-        
+
         var err: NSError?
 
-        Cloak_outlineNewVpnClient(config, "outline", &err)
+        logs.writeLog(log: "[DEBUG][Outline] calling native NewVpnClient protocol=outline fd=\(tunnelFileDescriptor) mtu=\(mtu)")
+        Cloak_outlineNewVpnClient(config, "outline", Int(tunnelFileDescriptor), mtu, &err)
         if let error = err {
-            outlineStarted = false
+            logs.writeLog(log: "[Outline] NewVpnClient failed: \(error.localizedDescription)")
             throw error
         }
+        nativeClientCreated()
 
+        logs.writeLog(log: "[DEBUG][Outline] calling native VpnConnect")
         Cloak_outlineVpnConnect(&err)
         if let error = err {
-            outlineStarted = false
+            logs.writeLog(log: "[Outline] VpnConnect failed: \(error.localizedDescription)")
             throw error
         }
-        outlineStarted = true
+        logs.writeLog(log: "[Outline] VpnConnect succeeded")
     }
 
-    func stopOutline() {
-        if !outlineStarted{
-            return
-        }
-        
+    func stopOutline() throws {
         var err: NSError?
+
+        logs.writeLog(log: "[DEBUG][Outline] calling native VpnDisconnect")
         Cloak_outlineVpnDisconnect(&err)
         if let error = err {
-            logs.writeLog(log: "Stop Outline get error \(error)")
+            logs.writeLog(log: "[Outline] VpnDisconnect failed: \(error.localizedDescription)")
+            throw error
         }
-        outlineStarted = false
+        logs.writeLog(log: "[DEBUG][Outline] VpnDisconnect returned")
     }
-    
+
+    func outlineStatus() -> String {
+        var err: NSError?
+        let status = Cloak_outlineVpnStatus(&err)
+        if let error = err {
+            let message = "client=true localProxyAlive=false statusError=\(error.localizedDescription)"
+            logs.writeLog(log: "[Outline] VpnStatus failed: \(error.localizedDescription)")
+            return message
+        }
+        return status
+    }
+
     func buildOutlineConfig(
         methodPassword: String,
         serverPort: String,
@@ -125,7 +139,7 @@ public final class OutlineInteractor {
             // Domain-related routing should be configured via TLS SNI (tls:sni=...).
             if !tcpPath.isEmpty { wsParams.append("tcp_path=\(tcpPath)") }
             if !udpPath.isEmpty { wsParams.append("udp_path=\(udpPath)") }
-            
+
             let wsParamsStr = wsParams.joined(separator: "&")
             // Use tls:sni|ws: for WebSocket-over-TLS (wss://) via SNI
             let tlsPrefix = "tls:sni=\(effectiveHost)"
@@ -138,7 +152,7 @@ public final class OutlineInteractor {
             return ssUrl
         }
     }
-    
+
     public static func extractHost(from hostPortMaybeWithQuery: String) -> String {
         let hostPort = hostPortMaybeWithQuery.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? hostPortMaybeWithQuery
         let trimmed = hostPort.trimmingCharacters(in: .whitespacesAndNewlines)

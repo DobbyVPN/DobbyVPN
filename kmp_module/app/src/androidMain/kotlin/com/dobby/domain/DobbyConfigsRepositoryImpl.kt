@@ -24,13 +24,13 @@ internal class DobbyConfigsRepositoryImpl(
     }
 
     override fun getConnectionURL(): String {
-        return (prefs.getString("сonnectionURL", "") ?: "").also {
+        return (prefs.getString("connectionURL", "") ?: "").also {
             AndroidLog("DOBBY_TAG", "getConnectionURL, url = ${it}")
         }
     }
 
     override fun setConnectionURL(connectionURL: String) {
-        prefs.edit().putString("сonnectionURL", connectionURL).apply().also {
+        prefs.edit().putString("connectionURL", connectionURL).apply().also {
             AndroidLog("DOBBY_TAG", "setConnectionURL, url = ${connectionURL}")
         }
     }
@@ -48,13 +48,13 @@ internal class DobbyConfigsRepositoryImpl(
     }
 
     override fun getConnectionConfig(): String {
-        return (prefs.getString("сonnectionConfig", "") ?: "").also {
+        return (prefs.getString("connectionConfig", "") ?: "").also {
             AndroidLog("DOBBY_TAG", "getConnectionConfig, config = ${it}")
         }
     }
 
     override fun setConnectionConfig(connectionConfig: String) {
-        prefs.edit().putString("сonnectionConfig", connectionConfig).apply().also {
+        prefs.edit().putString("connectionConfig", connectionConfig).apply().also {
             AndroidLog("DOBBY_TAG", "setConnectionConfig, config = ${connectionConfig}")
         }
     }

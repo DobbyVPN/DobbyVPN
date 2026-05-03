@@ -8,6 +8,7 @@ import MyLibrary
 public class VpnManagerImpl: VpnManager {
     private static let launchId = UUID().uuidString
     private var logs = NativeModuleHolder.logsRepository
+    private var stopInitiatedByUser = false
 
     public static var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
     public static var dobbyName = "Dobby_VPN_4"
@@ -28,12 +29,13 @@ public class VpnManagerImpl: VpnManager {
         self.connectionRepository = connectionRepository
         getOrCreateManager { [weak self] manager, _ in
             guard let self else { return }
-            if manager?.connection.status == .connected {
-                self.state = manager?.connection.status ?? .invalid
+            let status = manager?.connection.status ?? .invalid
+            self.state = status
+            self.updateTransitionState(for: status)
+            if status == .connected {
                 connectionRepository.tryUpdateVpnStarted(isStarted: true)
                 self.vpnManager = manager
             } else {
-                self.state = manager?.connection.status ?? .invalid
                 connectionRepository.tryUpdateVpnStarted(isStarted: false)
             }
         }
@@ -50,12 +52,20 @@ public class VpnManagerImpl: VpnManager {
                 return
             }
 
+            self.state = connection.status
+            self.updateTransitionState(for: connection.status)
+
             switch connection.status {
             case .connected:
                 self.logs.writeLog(log: "VPN connected")
 
             case .disconnected:
-                self.logs.writeLog(log: "VPN disconnected")
+                if self.stopInitiatedByUser {
+                    self.logs.writeLog(log: "VPN disconnected (user-initiated)")
+                    self.stopInitiatedByUser = false
+                } else {
+                    self.logs.writeLog(log: "VPN disconnected (UNEXPECTED — not user-initiated, possible crash or system kill)")
+                }
 
             case .connecting:
                 self.logs.writeLog(log: "VPN is connecting…")
@@ -67,7 +77,7 @@ public class VpnManagerImpl: VpnManager {
                 self.logs.writeLog(log: "VPN is disconnecting…")
 
             case .invalid:
-                self.logs.writeLog(log: "VPN status is invalid")
+                self.logs.writeLog(log: "VPN status invalid — tunnel extension may have failed to start or config is broken")
 
             @unknown default:
                 self.logs.writeLog(log: "VPN status unknown: \(connection.status.rawValue)")
@@ -84,6 +94,7 @@ public class VpnManagerImpl: VpnManager {
     public func start() {
         self.logs.writeLog(log: "call start")
         self.logs.writeLog(log: "Routing table without vpn:")
+        self.logs.writeLog(log: "[DEBUG][VPNManager] start requested launchId=\(Self.launchId)")
         getOrCreateManager { manager, _ in
             self.handleStart(manager: manager)
         }
@@ -95,16 +106,23 @@ public class VpnManagerImpl: VpnManager {
             return
         }
         let status = manager.connection.status
+        self.logs.writeLog(log: "[DEBUG][VPNManager] handleStart currentStatus=\(status.rawValue)")
+        if status == .connecting || status == .disconnecting || status == .reasserting {
+            self.logs.writeLog(log: "[start] Skip: connection is transitioning (\(status.rawValue))")
+            self.updateTransitionState(for: status)
+            return
+        }
         if status == .connected {
             self.logs.writeLog(log: "[start] Skip: already connected")
             return
         }
+        self.vpnManager = manager
+        self.vpnManager?.isEnabled = true
+        self.applyProtocolDefaults(manager: manager)
         if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
             let address = proto.serverAddress ?? "nil"
             self.logs.writeLog(log: "VPN Manager serverAddress = \(address)")
         }
-        self.vpnManager = manager
-        self.vpnManager?.isEnabled = true
         manager.saveToPreferences { saveError in
             if let saveError = saveError {
                 self.logs.writeLog(log: "Failed to save VPN configuration: \(saveError)")
@@ -128,14 +146,23 @@ public class VpnManagerImpl: VpnManager {
             self.logs.writeLog(log: "[stop] Skip: vpnManager is nil")
             return
         }
-        self.logs.writeLog(log: "[stop] User initiated stopVPNTunnel()")
+        self.logs.writeLog(log: "[stop] User initiated stopVPNTunnel() currentStatus=\(manager.connection.status.rawValue)")
+        connectionRepository.tryUpdateVpnTransitioning(isTransitioning: true)
+        stopInitiatedByUser = true
         manager.connection.stopVPNTunnel()
         self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")
     }
 
     private func getOrCreateManager(completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
+        logs.writeLog(log: "[DEBUG][VPNManager] loadAllFromPreferences begin")
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
             guard let self else { return }
+
+            if let error {
+                self.logs.writeLog(log: "[VPNManager] loadAllFromPreferences error: \(error.localizedDescription)")
+            } else {
+                self.logs.writeLog(log: "[DEBUG][VPNManager] loadAllFromPreferences managers=\(managers?.count ?? -1)")
+            }
 
             if let existingManager = managers?.first(where: { $0.localizedDescription == Self.dobbyName }) {
                 vpnManager = existingManager
@@ -158,7 +185,7 @@ public class VpnManagerImpl: VpnManager {
 
         let proto = NETunnelProviderProtocol()
         proto.providerBundleIdentifier = Self.dobbyBundleIdentifier
-        proto.serverAddress = "159.69.19.209:443"
+        proto.serverAddress = currentServerAddress()
         proto.providerConfiguration = [:]
         proto.includeAllNetworks = true
         proto.excludeLocalNetworks = true
@@ -176,8 +203,12 @@ public class VpnManagerImpl: VpnManager {
     }
 
     private func applyProtocolDefaults(manager: NETunnelProviderManager) {
-        guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else { return }
+        guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else {
+            logs.writeLog(log: "applyProtocolDefaults: SKIP — protocolConfiguration is \(type(of: manager.protocolConfiguration)), expected NETunnelProviderProtocol")
+            return
+        }
         proto.providerBundleIdentifier = Self.dobbyBundleIdentifier
+        proto.serverAddress = currentServerAddress()
         proto.includeAllNetworks = true
         proto.excludeLocalNetworks = true
         if #available(iOS 16.4, *) {
@@ -189,6 +220,20 @@ public class VpnManagerImpl: VpnManager {
             proto.excludeDeviceCommunication = false
         }
         manager.protocolConfiguration = proto
+    }
+
+    private func currentServerAddress() -> String {
+        let outlineServer = configsRepository.getServerPortOutline().trimmingCharacters(in: .whitespacesAndNewlines)
+        if !outlineServer.isEmpty {
+            return outlineServer
+        }
+
+        return Self.dobbyName
+    }
+
+    private func updateTransitionState(for status: NEVPNStatus) {
+        let isTransitioning = status == .connecting || status == .disconnecting || status == .reasserting
+        connectionRepository.tryUpdateVpnTransitioning(isTransitioning: isTransitioning)
     }
 
 //    static func startSentry() {

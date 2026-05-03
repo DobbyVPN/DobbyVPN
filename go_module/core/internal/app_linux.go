@@ -204,7 +204,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Infof("[Linux][Step 9][OK] tun2socks started — waiting for readiness...")
 
-	// FIX: предотвращаем blackhole
+	// FIX: prevent blackhole routing during tun2socks startup
 	time.Sleep(300 * time.Millisecond)
 
 	// 10. routing switch

@@ -25,4 +25,3 @@ func (s *Server) StopXray(_ context.Context, in *grpcproto.Empty) (*grpcproto.Em
 	go api.StopVpn()
 	return &grpcproto.Empty{}, nil
 }
-

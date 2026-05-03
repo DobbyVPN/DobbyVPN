@@ -232,7 +232,7 @@ class MainViewModel(
             configsRepository.clearVpnConfig()
             connectionStateRepository.tryUpdateStatus(false)
         }
-        logger.log("VPN service stopped successfully, state reset to disconnected")
+        logger.log("VPN stop requested; local state reset to disconnected while OS tunnel tears down")
     }
 
     private fun updateServerTargetFromConfig(): Boolean {
