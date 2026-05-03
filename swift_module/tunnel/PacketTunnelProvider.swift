@@ -14,7 +14,10 @@ import Network
 class PacketTunnelProvider: NEPacketTunnelProvider {
     private let launchId = UUID().uuidString
     private let tunnelId = String(UUID().uuidString.prefix(8))
-    private let tunnelMTU = 1200
+    // iOS 26 fix: Use smaller MTU to reduce UDP fragmentation
+    // 1024 provides better reliability on iOS 26 where UDP packets can get
+    // fragmented/reordered due to new network stack behavior
+    private let tunnelMTU = 1024
 
     private let outlineInteractor: OutlineInteractor = OutlineInteractor()
     private let cloakInteractor: CloakInteractor = CloakInteractor()
