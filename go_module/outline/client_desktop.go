@@ -60,7 +60,7 @@ func (c *OutlineClient) Connect() error {
 		defer func() {
 			if r := recover(); r != nil {
 				err := fmt.Errorf("outline crashed: %v", r)
-				log.Infof("outline goroutine recovered from panic: %v", err)
+				log.Warnf(Category, "outline goroutine recovered from panic: %v", err)
 				select {
 				case initResult <- err:
 				default:
@@ -70,7 +70,7 @@ func (c *OutlineClient) Connect() error {
 		}()
 		err := c.app.Run(ctx, initResult)
 		if err != nil {
-			log.Infof("connect outline failed: %v", err)
+			log.Warnf(Category, "connect outline failed: %v", err)
 			common.Client.MarkInactive(outlineCommon.Name)
 		}
 	}()
@@ -83,7 +83,7 @@ func (c *OutlineClient) Connect() error {
 			c.cancel = nil
 			return fmt.Errorf("failed to initialize outline connection: %w", err)
 		}
-		log.Infof("Outline connection initialized successfully")
+		log.Infof(Category, "Outline connection initialized successfully")
 		common.Client.MarkActive(outlineCommon.Name)
 		return nil
 	case <-time.After(30 * time.Second):
@@ -94,19 +94,19 @@ func (c *OutlineClient) Connect() error {
 }
 
 func (c *OutlineClient) Disconnect() error {
-	log.Infof("Disconnect: try to lock c.mu")
+	log.Debugf(Category, "Disconnect: try to lock c.mu")
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	log.Infof("Disconnect: locked c.mu")
+	log.Debugf(Category, "Disconnect: locked c.mu")
 
 	if c.cancel != nil {
-		log.Infof("Disconnect: c.cancel != nil")
+		log.Debugf(Category, "Disconnect: c.cancel != nil")
 		c.cancel()
 		c.cancel = nil
 	}
-	log.Infof("Disconnect: common.Client.MarkInactive")
+	log.Debugf(Category, "Disconnect: common.Client.MarkInactive")
 	common.Client.MarkInactive(outlineCommon.Name)
-	log.Infof("Disconnect: MarkedInactive")
+	log.Infof(Category, "Disconnect: MarkedInactive")
 	return nil
 }
 

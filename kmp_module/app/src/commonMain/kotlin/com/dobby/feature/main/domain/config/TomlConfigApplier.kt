@@ -27,6 +27,10 @@ class TomlConfigApplier(
 
         val root = Toml.decodeFromString<TomlConfigs>(connectionConfig)
 
+        if (root.Telemetry != null) {
+            mainRepo.setTelemetryEndpoint(root.Telemetry)
+        }
+
         if (root.AmneziaWG != null) {
             return applyAmenziaWG(root.AmneziaWG)
         } else if (root.Outline != null) {

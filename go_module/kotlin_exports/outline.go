@@ -36,7 +36,7 @@ func setLastError(err string) {
 	errorMu.Lock()
 	defer errorMu.Unlock()
 	lastError = err
-	log.Infof("Error set: %s", err)
+	log.Debugf(Category, "Error set: %s", err)
 }
 
 func guardExport(fnName string) func() {
@@ -44,7 +44,7 @@ func guardExport(fnName string) func() {
 		if r := recover(); r != nil {
 			msg := "panic in " + fnName + ": " + unsafeToString(r)
 			setLastError(msg)
-			log.Infof("%s\n%s", msg, string(debug.Stack()))
+			log.Warnf(Category, "%s\n%s", msg, string(debug.Stack()))
 		}
 	}
 }
@@ -61,56 +61,60 @@ func unsafeToString(v any) string {
 //export NewOutlineClient
 func NewOutlineClient(config string, fd int32) {
 	defer guardExport("NewOutlineClient")()
-	log.Infof("NewOutlineClient() called")
+	log.Debugf(Category, "NewOutlineClient() called")
 
 	OutlineDisconnect()
 
 	goConfig := strings.Clone(config)
 	goFD := int(fd)
 
+<<<<<<< HEAD
 	log.Infof("Config %s", goConfig)
+=======
+	log.Debugf(Category, "Config length=%d", len(goConfig))
+>>>>>>> category-logging
 
 	client = outline.NewClientWithFD(goConfig, goFD, 0)
 
-	log.Infof("NewOutlineClient() finished")
+	log.Infof(Category, "NewOutlineClient() finished")
 }
 
 //export OutlineConnect
 func OutlineConnect() int32 {
 	defer guardExport("OutlineConnect")()
-	log.Infof("OutlineConnect() called")
+	log.Debugf(Category, "OutlineConnect() called")
 
 	clearLastError()
 
 	if client == nil {
 		setLastError("client is nil")
-		log.Infof("OutlineConnect() failed: client is nil")
+		log.Errorf(Category, "OutlineConnect() failed: client is nil")
 		return -1
 	}
 
 	err := client.Connect()
 	if err != nil {
 		setLastError(err.Error())
-		log.Infof("OutlineConnect() failed: %v", err)
+		log.Errorf(Category, "OutlineConnect() failed: %v", err)
 		return -1
 	}
 
-	log.Infof("OutlineConnect() finished successfully")
+	log.Infof(Category, "OutlineConnect() finished successfully")
 	return 0
 }
 
 //export OutlineDisconnect
 func OutlineDisconnect() {
 	defer guardExport("OutlineDisconnect")()
-	log.Infof("OutlineDisconnect() called")
+	log.Debugf(Category, "OutlineDisconnect() called")
 
 	if client == nil {
-		log.Infof("OutlineDisconnect(): client is nil")
+		log.Errorf(Category, "OutlineDisconnect(): client is nil")
 		return
 	}
 
 	client.Disconnect()
 	client = nil
 
-	log.Infof("OutlineDisconnect() finished")
+	log.Infof(Category, "OutlineDisconnect() finished")
 }

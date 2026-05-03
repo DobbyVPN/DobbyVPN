@@ -179,6 +179,7 @@ data class ExcludeIPsConfig(
 
 @Serializable
 data class TomlConfigs(
+    val Telemetry: String? = null,
     val Description: String? = null,
     val Outline: OutlineConfig? = null,
     val AmneziaWG: AmneziaWGConfig? = null,

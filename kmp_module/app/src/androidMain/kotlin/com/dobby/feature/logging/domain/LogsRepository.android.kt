@@ -21,3 +21,8 @@ actual fun provideLogFilePath(): Path {
 fun initLogger() {
     LoggerBackendWrapper.initLogger(provideLogFilePath().toString())
 }
+
+
+fun initTelemetry(endpoint: String) {
+    LoggerBackendWrapper.initTelemetry(endpoint)
+}

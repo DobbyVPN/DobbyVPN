@@ -19,9 +19,9 @@ func protector(network string, address string, c syscall.RawConn) error {
 		res := C.go_protect_socket(C.int(fd))
 		if res != 1 {
 			protectErr = fmt.Errorf("go_protect_socket(fd=%d) returned %d", fd, res)
-			log.Infof("Protect failed: %v for %s %s", protectErr, network, address)
+			log.Errorf(Category, "Protect failed: %v for %s %s", protectErr, network, address)
 		} else {
-			log.Infof("Protect success: fd=%d", fd)
+			log.Infof(Category, "Protect success: fd=%d", fd)
 		}
 	})
 	if controlErr != nil {

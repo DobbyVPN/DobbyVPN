@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -25,6 +26,7 @@ import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.util.koinViewModel
 import org.jetbrains.compose.ui.tooling.preview.Preview
+import kotlin.math.log
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
@@ -143,29 +145,73 @@ fun DobbySocksScreen(
         ) {
             LazyColumn(state = listState) {
                 items(uiLogState.logMessages) { message ->
+                    val logMessage = LogMessage.parse(message)
+
                     Text(
                         buildAnnotatedString {
                             withStyle(
                                 style = SpanStyle(
-                                    fontWeight = FontWeight.W700,
+                                    fontWeight = FontWeight.Bold,
                                 )
                             ) {
                                 append("> ")
                             }
 
+                            if (logMessage.time.isNotBlank()) {
+                                withStyle(
+                                    style = SpanStyle(
+                                        fontWeight = FontWeight.ExtraLight,
+                                    )
+                                ) {
+                                    append("[${logMessage.time}] ")
+                                }
+                            }
+
                             withStyle(
                                 style = SpanStyle(
-                                    fontWeight = FontWeight.W400,
+                                    fontWeight = FontWeight.Bold,
                                 )
                             ) {
-                                append(message)
+                                append("[${logMessage.level.name}] ")
+                            }
+
+                            withStyle(
+                                style = SpanStyle(
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            ) {
+                                append("[${logMessage.category}] ")
+                            }
+
+                            withStyle(
+                                style = SpanStyle(
+                                    fontWeight = FontWeight.Normal,
+                                )
+                            ) {
+                                append(logMessage.message)
+                            }
+
+                            if (logMessage.isBackend) {
+                                withStyle(
+                                    style = SpanStyle(
+                                        fontWeight = FontWeight.Light,
+                                    )
+                                ) {
+                                    append(" [from go]")
+                                }
                             }
                         },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 0.dp, horizontal = 4.dp),
                         fontSize = 14.sp,
-                        color = Color.Black
+                        fontFamily = FontFamily.Monospace,
+                        color = when (logMessage.level) {
+                            LogMessageLevel.DEBUG -> Color(0xFF999999)
+                            LogMessageLevel.INFO -> Color(0xFF000000)
+                            LogMessageLevel.WARN -> Color(0xFFCCCC00)
+                            LogMessageLevel.ERROR -> Color(0xFFFF0000)
+                        }
                     )
                 }
             }

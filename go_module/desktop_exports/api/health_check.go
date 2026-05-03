@@ -9,7 +9,7 @@ import (
 )
 
 func CouldStart() bool {
-	log.Infof("Call CouldStart: %v", common.Client.CouldStart())
+	log.Debugf(Category, "Call CouldStart: %v", common.Client.CouldStart())
 	return common.Client.CouldStart()
 }
 

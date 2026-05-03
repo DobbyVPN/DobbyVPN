@@ -53,15 +53,15 @@ func listenAddr(network string) string {
 func protectSocket(fd uintptr, realNet string, destination string) error {
 	if protector == nil {
 		// iOS 26: Log warning if protector is nil - this could explain connectivity issues
-		log.Infof("[Protect] WARNING: no socket protector registered - traffic may bypass VPN!")
+		log.Debugf(Category, "[Protect] WARNING: no socket protector registered - traffic may bypass VPN!")
 		return fmt.Errorf("no socket protector registered")
 	}
 	if err := protector.Protect(fd, realNet); err != nil {
 		// iOS 26: Log detailed error - socket protection failure may cause network issues
-		log.Infof("[Protect] ERROR: %s fd=%d destination=%s failed: %v - THIS MAY CAUSE CONNECTIVITY ISSUES ON iOS 26", realNet, fd, destination, err)
+		log.Debugf(Category, "[Protect] ERROR: %s fd=%d destination=%s failed: %v - THIS MAY CAUSE CONNECTIVITY ISSUES ON iOS 26", realNet, fd, destination, err)
 		return err
 	}
-	log.Infof("[Protect] %s fd=%d destination=%s OK", realNet, fd, destination)
+	log.Debugf(Category, "[Protect] %s fd=%d destination=%s OK", realNet, fd, destination)
 	return nil
 }
 
@@ -69,7 +69,7 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 	realNet := normalizeTCP(address)
 
 	if isLoopback(address) {
-		log.Infof("[Protect] TCP BYPASS loopback: %s", address)
+		log.Debugf(Category, "[Protect] TCP BYPASS loopback: %s", address)
 		var d net.Dialer
 		return d.DialContext(ctx, realNet, address)
 	}
@@ -89,11 +89,11 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 
 	conn, err := d.DialContext(ctx, realNet, address)
 	if err != nil {
-		log.Infof("[Protect] TCP dial error: %v", err)
+		log.Errorf(Category, "[Protect] TCP dial error: %v", err)
 		return nil, err
 	}
 
-	log.Infof("[DEBUG][Protect] TCP dial OK network=%s destination=%s local=%s remote=%s", realNet, address, conn.LocalAddr(), conn.RemoteAddr())
+	log.Debugf(Category, "[DEBUG][Protect] TCP dial OK network=%s destination=%s local=%s remote=%s", realNet, address, conn.LocalAddr(), conn.RemoteAddr())
 	return conn, nil
 }
 
@@ -101,24 +101,24 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 	realNet := normalizeUDP(address)
 
 	if isLoopback(address) {
-		log.Infof("[Protect] UDP BYPASS loopback: %s", address)
+		log.Debugf(Category, "[Protect] UDP BYPASS loopback: %s", address)
 
 		lc := net.ListenConfig{}
 
 		pc, err := lc.ListenPacket(ctx, realNet, listenAddr(realNet))
 		if err != nil {
-			log.Infof("[Protect] UDP BYPASS loopback listen error network=%s destination=%s: %v", realNet, address, err)
+			log.Debugf(Category, "[Protect] UDP BYPASS loopback listen error network=%s destination=%s: %v", realNet, address, err)
 			return nil, err
 		}
 
 		udpAddr, err := net.ResolveUDPAddr(realNet, address)
 		if err != nil {
 			_ = pc.Close()
-			log.Infof("[Protect] UDP BYPASS loopback resolve error network=%s destination=%s: %v", realNet, address, err)
+			log.Debugf(Category, "[Protect] UDP BYPASS loopback resolve error network=%s destination=%s: %v", realNet, address, err)
 			return nil, err
 		}
 
-		log.Infof("[DEBUG][Protect] UDP BYPASS loopback ready network=%s destination=%s local=%s remote=%s", realNet, address, pc.LocalAddr(), udpAddr)
+		log.Debugf(Category, "[DEBUG][Protect] UDP BYPASS loopback ready network=%s destination=%s local=%s remote=%s", realNet, address, pc.LocalAddr(), udpAddr)
 		return &connectedUDPConn{
 			PacketConn: pc,
 			remoteAddr: udpAddr,
@@ -140,18 +140,18 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 
 	pc, err := lc.ListenPacket(ctx, realNet, listenAddr(realNet))
 	if err != nil {
-		log.Infof("[Protect] UDP listen error network=%s destination=%s: %v", realNet, address, err)
+		log.Debugf(Category, "[Protect] UDP listen error network=%s destination=%s: %v", realNet, address, err)
 		return nil, err
 	}
 
 	udpAddr, err := net.ResolveUDPAddr(realNet, address)
 	if err != nil {
 		_ = pc.Close()
-		log.Infof("[Protect] UDP resolve error network=%s destination=%s: %v", realNet, address, err)
+		log.Debugf(Category, "[Protect] UDP resolve error network=%s destination=%s: %v", realNet, address, err)
 		return nil, err
 	}
 
-	log.Infof("[DEBUG][Protect] UDP dial ready network=%s destination=%s local=%s remote=%s", realNet, address, pc.LocalAddr(), udpAddr)
+	log.Debugf(Category, "[DEBUG][Protect] UDP dial ready network=%s destination=%s local=%s remote=%s", realNet, address, pc.LocalAddr(), udpAddr)
 	return &connectedUDPConn{
 		PacketConn: pc,
 		remoteAddr: udpAddr,

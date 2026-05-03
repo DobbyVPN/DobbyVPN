@@ -13,4 +13,12 @@ class RestartableLoggerGrpcLibrary(private val logger: Logger) : LoggerLibrary {
             logger.log("[ERROR] Failed to init service logger: $e")
         }
     }
+
+    override fun InitTelemetry(endpoint: String) {
+        try {
+            GrpcVpnLibrary.loggerGrpcLibrary.InitTelemetry(endpoint)
+        } catch (e: VpnServiceStatusException) {
+            logger.log("[ERROR] Failed to init telemetry with endpoint $endpoint: $e")
+        }
+    }
 }

@@ -13,7 +13,7 @@ import (
 var ErrVpnInterfaceCheck = errors.New("vpn interface check error")
 
 func VpnInterfacesCheck(expectedIfaces []string) error {
-	log.Infof("[HC] Check: vpn interfaces")
+	log.Debugf(Category, "Check: vpn interfaces")
 
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -22,9 +22,9 @@ func VpnInterfacesCheck(expectedIfaces []string) error {
 
 	foundIface := ""
 	for _, iface := range ifaces {
-		log.Infof("[HC] Checking VPN interface %s", iface.Name)
+		log.Debugf(Category, "Checking VPN interface %s", iface.Name)
 		if slices.Contains(expectedIfaces, iface.Name) {
-			log.Infof("[HC] Found VPN interface %s", iface.Name)
+			log.Debugf(Category, "Found VPN interface %s", iface.Name)
 			foundIface = iface.Name
 			break
 		}
@@ -33,6 +33,6 @@ func VpnInterfacesCheck(expectedIfaces []string) error {
 	if foundIface != "" {
 		return nil
 	}
-	log.Infof("[HC] There is no expected net interface")
+	log.Debugf(Category, "There is no expected net interface")
 	return ErrVpnInterfaceCheck
 }

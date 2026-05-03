@@ -59,6 +59,18 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun getTelemetryEndpoint(): String {
+        return (prefs.getString("telemetryEndpoint", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getTelemetryEndpoint, config = $it")
+        }
+    }
+
+    override fun setTelemetryEndpoint(endpoint: String) {
+        prefs.edit().putString("telemetryEndpoint", endpoint).apply().also {
+            AndroidLog("DOBBY_TAG", "setTelemetryEndpoint, endpoint = $endpoint")
+        }
+    }
+
     override fun getIsCloakEnabled(): Boolean {
         return prefs.getBoolean("isCloakEnabled", false).also {
             AndroidLog("DOBBY_TAG", "getIsCloakEnabled: $it")

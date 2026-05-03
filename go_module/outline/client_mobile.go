@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"gvisor.dev/gvisor/pkg/log"
 )
 
 type OutlineClient struct {
@@ -41,7 +42,7 @@ func NewClientWithMTU(transportConfig string, tun io.ReadWriteCloser, mtu int) *
 	if f, ok := tun.(*os.File); ok {
 		fd = int(f.Fd())
 	} else {
-		log.Infof("failed to get FD from tun: not an *os.File")
+		log.Warnf(Category, "failed to get FD from tun: not an *os.File")
 	}
 	return NewClientWithFD(transportConfig, fd, mtu)
 }
@@ -61,6 +62,7 @@ func NewClientWithFDAndOptions(transportConfig string, fd int, mtu int, options 
 		options: options,
 	}
 	log.Infof(
+		Category,
 		"outline client created (tun2socks version) fd=%d mtu=%d configLen=%d preferTCPDNSForWebSocket=%v",
 		fd,
 		mtu,
@@ -73,21 +75,21 @@ func NewClientWithFDAndOptions(transportConfig string, fd int, mtu int, options 
 
 func (c *OutlineClient) Connect() error {
 	start := time.Now()
-	log.Infof("outline client connect begin fd=%d mtu=%d configLen=%d", c.tunFD, c.mtu, len(c.config))
+	log.Debugf(Category, "outline client connect begin fd=%d mtu=%d configLen=%d", c.tunFD, c.mtu, len(c.config))
 	defer func() {
 		if r := recover(); r != nil {
-			log.Infof("RECOVERED from fail in Connect: %v", r)
+			log.Warnf(Category, "RECOVERED from fail in Connect: %v", r)
 		}
 	}()
 	od, err := internal.NewOutlineDeviceWithOptions(c.config, internal.DeviceOptions{
 		PreferTCPDNSForWebSocket: c.options.PreferTCPDNSForWebSocket,
 	})
 	if err != nil {
-		log.Infof("failed to create outline device: %v\n", err)
+		log.Errorf(Category, "failed to create outline device: %v\n", err)
 		return err
 	}
 
-	log.Infof("outline device (SOCKS5 bridge) created")
+	log.Debugf(Category, "outline device (SOCKS5 bridge) created")
 	c.device = od
 
 	fd := c.tunFD
@@ -96,12 +98,12 @@ func (c *OutlineClient) Connect() error {
 	}
 	err = unix.SetNonblock(fd, true)
 	if err != nil {
-		log.Infof("Set unix.SetNonblock error: %v", err)
+		log.Warnf(Category, "Set unix.SetNonblock error: %v", err)
 	} else {
-		log.Infof("[DEBUG][Outline] tun fd set non-blocking fd=%d", fd)
+		log.Debugf(Category, "[DEBUG][Outline] tun fd set non-blocking fd=%d", fd)
 	}
 
-	log.Infof("starting tun2socks engine with proxy %s fd=%d mtu=%d", od.GetProxyAddr(), fd, c.mtu)
+	log.Debugf(Category, "starting tun2socks engine with proxy %s fd=%d mtu=%d", od.GetProxyAddr(), fd, c.mtu)
 	err = tunnel.StartEngine(platform_engine.EngineConfig{
 		ProxyAddr:   od.GetProxyAddr(),
 		FD:          fd,
@@ -109,24 +111,24 @@ func (c *OutlineClient) Connect() error {
 		MTU:         c.mtu,
 	})
 	if err != nil {
-		log.Infof("Can't start tun2socks: %v", err)
+		log.Errorf(Category, "Can't start tun2socks: %v", err)
 		return err
 	}
 	c.engineStarted = true
 
 	common.Client.MarkActive(outlineCommon.Name)
-	log.Infof("outline client connected successfully via tun2socks in %dms", time.Since(start).Milliseconds())
+	log.Infof(Category, "outline client connected successfully via tun2socks in %dms", time.Since(start).Milliseconds())
 	return nil
 }
 
 func (c *OutlineClient) Disconnect() error {
-	log.Infof("outline client disconnect begin engineStarted=%v fd=%d deviceNil=%v", c.engineStarted, c.tunFD, c.device == nil)
+	log.Debugf(Category, "outline client disconnect begin engineStarted=%v fd=%d deviceNil=%v", c.engineStarted, c.tunFD, c.device == nil)
 	tunnel.StopEngine()
 	if !c.engineStarted && c.tunFD >= 0 {
 		if err := unix.Close(c.tunFD); err != nil {
-			log.Infof("failed to close unused tun fd: %v\n", err)
+			log.Warnf(Category, "failed to close unused tun fd: %v\n", err)
 		} else {
-			log.Infof("[DEBUG][Outline] closed unused tun fd=%d", c.tunFD)
+			log.Debugf(Category, "[DEBUG][Outline] closed unused tun fd=%d", c.tunFD)
 		}
 	}
 	c.engineStarted = false
@@ -134,12 +136,12 @@ func (c *OutlineClient) Disconnect() error {
 
 	if c.device != nil {
 		if err := c.device.Close(); err != nil {
-			log.Infof("failed to close outline device: %v\n", err)
+			log.Warnf(Category, "failed to close outline device: %v\n", err)
 		}
 		c.device = nil
 	}
 
-	log.Infof("outline client disconnected")
+	log.Infof(Category, "outline client disconnected")
 	common.Client.MarkInactive(outlineCommon.Name)
 	return nil
 }

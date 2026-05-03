@@ -16,7 +16,7 @@ func startPlatformEngine(cfg interface{}) error {
 	proxyAddr := c.ProxyAddr
 	mtu := c.EffectiveMTU(1200)
 
-	log.Infof("[Engine] starting tun2socks fd=%d proxy=%s mtu=%d", fd, proxyAddr, mtu)
+	log.Debugf(Category, "[Engine] starting tun2socks fd=%d proxy=%s mtu=%d", fd, proxyAddr, mtu)
 
 	key := &engine.Key{
 		Proxy:    fmt.Sprintf("socks5://%s", proxyAddr),
@@ -28,7 +28,7 @@ func startPlatformEngine(cfg interface{}) error {
 	engine.Insert(key)
 	engine.Start()
 	// engine.Start() is non-blocking: it spawns goroutines and returns immediately.
-	log.Infof("[Engine] engine.Start() returned (goroutines running)")
+	log.Debugf(Category, "[Engine] engine.Start() returned (goroutines running)")
 	return nil
 }
 

@@ -12,17 +12,17 @@ import (
 )
 
 func (s *Server) CouldStart(_ context.Context, in *grpcproto.Empty) (*grpcproto.CouldStartResponce, error) {
-	log.Infof("[GRPC] CouldStart")
+	log.Debugf(Category, "[GRPC] CouldStart")
 	result := api.CouldStart()
-	log.Infof("[GRPC] CouldStart result: %v", result)
+	log.Debugf(Category, "[GRPC] CouldStart result: %v", result)
 
 	return &grpcproto.CouldStartResponce{Result: result}, nil
 }
 
 func (s *Server) GetConnectionState(_ context.Context, in *grpcproto.Empty) (*grpcproto.GetConnectionStateResponce, error) {
-	log.Infof("[GRPC] GetConnectionState")
+	log.Debugf(Category, "[GRPC] GetConnectionState")
 	result := api.GetConnectionState()
-	log.Infof("[GRPC] GetConnectionState result: %v", result)
+	log.Debugf(Category, "[GRPC] GetConnectionState result: %v", result)
 
 	return &grpcproto.GetConnectionStateResponce{
 		ConnectionState: result,
@@ -30,25 +30,25 @@ func (s *Server) GetConnectionState(_ context.Context, in *grpcproto.Empty) (*gr
 }
 
 func (s *Server) StartHealthCheck(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
-	log.Infof("[GRPC] StartHealthCheck")
+	log.Debugf(Category, "[GRPC] StartHealthCheck")
 	api.StartHealthCheck()
-	log.Infof("[GRPC] StartHealthCheck completed")
+	log.Debugf(Category, "[GRPC] StartHealthCheck completed")
 
 	return &grpcproto.Empty{}, nil
 }
 
 func (s *Server) InitHealthCheck(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
-	log.Infof("[GRPC] InitHealthCheck")
+	log.Debugf(Category, "[GRPC] InitHealthCheck")
 	api.InitHealthCheck()
-	log.Infof("[GRPC] InitHealthCheck completed")
+	log.Debugf(Category, "[GRPC] InitHealthCheck completed")
 
 	return &grpcproto.Empty{}, nil
 }
 
 func (s *Server) StopHealthCheck(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
-	log.Infof("[GRPC] StopHealthCheck")
+	log.Debugf(Category, "[GRPC] StopHealthCheck")
 	api.StopHealthCheck()
-	log.Infof("[GRPC] StopHealthCheck completed")
+	log.Debugf(Category, "[GRPC] StopHealthCheck completed")
 
 	return &grpcproto.Empty{}, nil
 }

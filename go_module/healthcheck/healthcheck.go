@@ -61,7 +61,7 @@ var (
 )
 
 func GetConnectionState() ConnectionState {
-	log.Infof("[HC] Called GetConnectionState")
+	log.Debugf(Category, "Called GetConnectionState")
 
 	csMu.Lock()
 	defer csMu.Unlock()
@@ -69,25 +69,25 @@ func GetConnectionState() ConnectionState {
 }
 
 func InitHealthCheck() {
-	log.Infof("[HC] Called InitHealthCheck")
+	log.Debugf(Category, "Called InitHealthCheck")
 	// Telemetry initiation etc...
 }
 
 func StartHealthCheck() {
-	log.Infof("[HC] Called StartHealthCheck")
+	log.Debugf(Category, "Called StartHealthCheck")
 	healthCheckStartedMu.Lock()
 	defer healthCheckStartedMu.Unlock()
 
 	if healthCheckStarted {
-		log.Infof("[HC] Health check already running")
+		log.Debugf(Category, "Health check already running")
 	} else {
-		log.Infof("[HC] Starting healtch check")
+		log.Debugf(Category, "Starting healtch check")
 		go innerHealthCheck()
 	}
 }
 
 func StopHealthCheck() {
-	log.Infof("[HC] Called StopHealthCheck")
+	log.Debugf(Category, "Called StopHealthCheck")
 
 	healthCheckStartedMu.Lock()
 	if healthCheckStarted {
@@ -97,7 +97,7 @@ func StopHealthCheck() {
 }
 
 func innerHealthCheck() {
-	log.Infof("[HC] Health check started")
+	log.Debugf(Category, "Health check started")
 	healthCheckStartedMu.Lock()
 	healthCheckStarted = true
 	stopHealthCheckChannel = make(chan bool, 1)
@@ -117,7 +117,7 @@ func innerHealthCheck() {
 
 		select {
 		case <-stopHealthCheckChannel:
-			log.Infof("[HC] Health check stopped")
+			log.Debugf(Category, "Health check stopped")
 			switchState(Disconnected)
 			healthCheckStartedMu.Lock()
 			healthCheckStarted = false
@@ -134,22 +134,22 @@ func switchState(newState ConnectionState) {
 	defer csMu.Unlock()
 
 	if connectionState != newState {
-		log.Infof("[HC] Switching connection state to %v", newState)
+		log.Debugf(Category, "Switching connection state to %v", newState)
 		connectionState = newState
 	}
 }
 
 func healthCheckStep() {
-	log.Infof("[HC] Health check step")
+	log.Debugf(Category, "Health check step")
 
 	for _, check := range connectionChecks {
 		if err := check(); err != nil {
-			log.Infof("[HC] Failed check: %v", err)
+			log.Debugf(Category, "Failed check: %v", err)
 			switchState(Connecting)
 			return
 		}
 	}
 
-	log.Infof("[HC] Health check succeed")
+	log.Debugf(Category, "Health check succeed")
 	switchState(Connected)
 }

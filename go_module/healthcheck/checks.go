@@ -17,11 +17,11 @@ var (
 )
 
 func connectionCheck() error {
-	log.Infof("[HC] Check: connection check")
+	log.Debugf(Category, "Check: connection check")
 	activeClients := common.Client.GetClientNames(true)
 
 	if len(activeClients) == 0 {
-		log.Infof("[HC] No vpn clients turned on")
+		log.Debugf(Category, "No vpn clients turned on")
 
 		return ErrConnectionCheck
 	}
@@ -30,7 +30,7 @@ func connectionCheck() error {
 }
 
 func activeClientsCheck() error {
-	log.Infof("[HC] Check: clients health checks")
+	log.Debugf(Category, "Check: clients health checks")
 	activeClients := common.Client.GetClientNames(true)
 
 	for _, clientName := range activeClients {
@@ -44,9 +44,9 @@ func activeClientsCheck() error {
 }
 
 func dnsResolveCheck(host string) error {
-	log.Infof("[HC] Check: dns resolution check %s", host)
+	log.Debugf(Category, "Check: dns resolution check %s", host)
 
-	log.Infof("[HC] With timeout = %v", dnsTimeout)
+	log.Debugf(Category, "With timeout = %v", dnsTimeout)
 	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
 	defer cancel()
 
@@ -59,11 +59,11 @@ func dnsResolveCheck(host string) error {
 }
 
 func pingHostCheck(host string) error {
-	log.Infof("[HC] Check: ping hosts %s", host)
+	log.Debugf(Category, "Check: ping hosts %s", host)
 
-	log.Infof("[HC] With timeout = %v", pingTimeout)
+	log.Debugf(Category, "With timeout = %v", pingTimeout)
 
-	log.Infof("[HC] Sending GET request to %s", host)
+	log.Debugf(Category, "Sending GET request to %s", host)
 	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", host, http.NoBody)

@@ -18,6 +18,19 @@ import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.vpn_service.domain.cloak.CloakConnectionInteractor
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.runBlocking
+import org.koin.android.ext.android.inject
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import android.os.Debug
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.system.Os
+import com.dobby.feature.logging.domain.initTelemetry
 import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
 import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
@@ -116,6 +129,10 @@ class DobbyVpnService : VpnService() {
         logger.log(
             "[svc:$serviceId] startService() vpnInterface=${vpnInterface?.fd}"
         )
+
+        if (dobbyConfigsRepository.getTelemetryEndpoint().isNotBlank()) {
+            initTelemetry(dobbyConfigsRepository.getTelemetryEndpoint())
+        }
 
         serviceScope.launch {
             startStopMutex.withLock {

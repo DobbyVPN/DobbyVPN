@@ -27,6 +27,7 @@ service Vpn {
 
   // logger.go
   rpc InitLogger (InitLoggerRequest)                returns (Empty);
+  rpc InitTelemetry (InitTelemetryRequest)          returns (Empty);
 
   // georouting.go
   rpc SetGeoRoutingConf (SetGeoRoutingConfRequest)  returns (Empty);
@@ -66,6 +67,10 @@ message StartCloakClientRequest {
 
 message InitLoggerRequest {
   string path = 1;
+}
+
+message InitTelemetryRequest {
+  string endpoint = 1;
 }
 
 message SetGeoRoutingConfRequest {
