@@ -380,7 +380,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     
     /// Capture network state at tunnel startup for diagnostic purposes
-    private func captureNetworkStateAtStartup(logs: AppLogsRepository, tunnelId: String) {
+    private func captureNetworkStateAtStartup(logs: LogsRepository, tunnelId: String) {
         // Note: This is a best-effort capture; the monitor may not have populated yet
         let monitor = Network.NWPathMonitor()
         let q = DispatchQueue(label: "vpn.dobby.app.tunnel.startup-path")
