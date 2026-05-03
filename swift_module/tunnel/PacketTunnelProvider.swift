@@ -234,6 +234,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             bridge.start()
 
             startupStage = "outline startup"
+            
+            // iOS 26 research: Log Outline server connection details
+            let outlineServer = configsRepository.getServerPortOutline()
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] Outline server: \(maskStr(value: outlineServer))")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] Tunnel settings: local=\(localAddress) remote=\(remoteAddress) mtu=\(tunnelMTU)")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] DNS servers: \(dnsServers)")
+            
             logs.writeLog(log: "[tunnel:\(tunnelId)] starting Outline phase tunnelFD=\(bridge.tunnelFileDescriptor) mtu=\(tunnelMTU)")
             try outlineInteractor.startOutline(
                 tunnelFileDescriptor: bridge.tunnelFileDescriptor,
@@ -362,6 +369,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 for iface in path.availableInterfaces {
                     self.logs.writeLog(
                         log: "[tunnel:\(self.tunnelId)] Interface: \(iface.name) type=\(iface.type) isCellular=\(iface.type == .cellular)"
+                    )
+                }
+                
+                // iOS 26 research: Detect when "other" interface appears
+                let hasOtherInterface = path.availableInterfaces.contains { $0.type == .other }
+                if hasOtherInterface {
+                    self.logs.writeLog(
+                        log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] CRITICAL: 'other' interface detected! This is new in iOS 26 and may cause routing issues. Logged for research."
                     )
                 }
 

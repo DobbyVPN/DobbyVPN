@@ -217,7 +217,8 @@ func (d *OutlineDevice) markServeStopped(reason string) {
 
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
 
-	log.Infof("[SOCKS5] dial %s %s", network, addr)
+	// iOS 26 research: Log detailed connection attempt to track which path is used
+	log.Infof("[SOCKS5] dial %s %s (research: tracking connection path for iOS 26)", network, addr)
 	start := time.Now()
 
 	host, portStr, _ := net.SplitHostPort(addr)

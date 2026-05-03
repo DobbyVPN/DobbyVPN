@@ -56,12 +56,19 @@ func protectSocket(fd uintptr, realNet string, destination string) error {
 		log.Infof("[Protect] WARNING: no socket protector registered - traffic may bypass VPN!")
 		return fmt.Errorf("no socket protector registered")
 	}
+	
+	// iOS 26 research: Try additional socket options
+	// SO_NO_TC_NETPOLICY may not be enough on iOS 26
+	// We may need to try other options like IP_BOUND_IF or new iOS 26 options
+	
 	if err := protector.Protect(fd, realNet); err != nil {
 		// iOS 26: Log detailed error - socket protection failure may cause network issues
-		log.Infof("[Protect] ERROR: %s fd=%d destination=%s failed: %v - THIS MAY CAUSE CONNECTIVITY ISSUES ON iOS 26", realNet, fd, destination, err)
+		log.Infof("[Protect] ERROR: %s fd=%d destination=%s protect_failed: %v -可能导致iOS 26网络问题", realNet, fd, destination, err)
 		return err
 	}
-	log.Infof("[Protect] %s fd=%d destination=%s OK", realNet, fd, destination)
+	
+	// iOS 26: Log detailed success with more context
+	log.Infof("[Protect] %s fd=%d destination=%s protect_ok", realNet, fd, destination)
 	return nil
 }
 
@@ -89,11 +96,12 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 
 	conn, err := d.DialContext(ctx, realNet, address)
 	if err != nil {
-		log.Infof("[Protect] TCP dial error: %v", err)
+		// iOS 26: Log detailed connection failure
+		log.Infof("[Protect] TCP dial FAILED: dest=%s err=%v - THIS MAY CAUSE ISSUES ON iOS 26", address, err)
 		return nil, err
 	}
 
-	log.Infof("[DEBUG][Protect] TCP dial OK network=%s destination=%s local=%s remote=%s", realNet, address, conn.LocalAddr(), conn.RemoteAddr())
+	log.Infof("[Protect] TCP dial OK: dest=%s local=%s remote=%s", address, conn.LocalAddr(), conn.RemoteAddr())
 	return conn, nil
 }
 
