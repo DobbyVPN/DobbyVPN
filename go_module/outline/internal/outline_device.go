@@ -230,7 +230,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		elapsed := time.Since(start).Milliseconds()
 		if err != nil {
 			log.Infof("[SOCKS5 TCP ERROR] %s in %dms: %v", addr, elapsed, err)
-			return nil, err
+			return nil, fmt.Errorf("StreamDialer failed for %s: %w", addr, err)
 		}
 		log.Infof("[SOCKS5 TCP OK] %s in %dms", addr, elapsed)
 		log.Infof("[DEBUG][SOCKS5 TCP] %s local=%s remote=%s", addr, conn.LocalAddr(), conn.RemoteAddr())
@@ -248,7 +248,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		elapsed := time.Since(start).Milliseconds()
 		if err != nil {
 			log.Infof("[SOCKS5 UDP ERROR] %s in %dms: %v", addr, elapsed, err)
-			return nil, err
+			return nil, fmt.Errorf("PacketDialer failed for %s: %w", addr, err)
 		}
 		log.Infof("[SOCKS5 UDP OK] %s in %dms", addr, elapsed)
 		log.Infof("[DEBUG][SOCKS5 UDP] %s local=%s", addr, conn.LocalAddr())
