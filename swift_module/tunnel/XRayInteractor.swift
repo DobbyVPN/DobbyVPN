@@ -11,7 +11,10 @@ public final class XRayInteractor {
     private var logs = NativeModuleHolder.logsRepository
     private var xrayStarted: Bool = false
 
-    func startXRay() throws {
+    func startXRay(
+        tunnelFileDescriptor: Int32,
+        mtu: Int
+    ) throws {
         if !configsRepository.getIsXrayEnabled() {
             return
         }
@@ -31,7 +34,7 @@ public final class XRayInteractor {
         
         var err: NSError?
 
-        Cloak_outlineNewVpnClient(xrayConfig, "xray", &err)
+        Cloak_outlineNewVpnClient(xrayConfig, "xray", Int(tunnelFileDescriptor), mtu, &err)
         if let error = err {
             xrayStarted = false
             throw error

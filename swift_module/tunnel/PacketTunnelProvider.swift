@@ -245,7 +245,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     }
                 )
             case .XRAY:
-                try xrayInteractor.startXRay()
+                try xrayInteractor.startXRay(
+                    tunnelFileDescriptor: bridge.tunnelFileDescriptor,
+                    mtu: tunnelMTU
+                )
             default:
                 logs.writeLog(log: "[tunnel:\(tunnelId)] unsupported VPN interface: \(vpnInterface)")
                 throw NSError(
