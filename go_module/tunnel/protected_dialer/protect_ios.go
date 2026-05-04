@@ -1,6 +1,10 @@
 package protected_dialer
 
-import "syscall"
+import (
+	"syscall"
+
+	"go_module/log"
+)
 
 const SO_NO_TC_NETPOLICY = 0x1101
 
