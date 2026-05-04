@@ -2,34 +2,39 @@ package internal
 
 import (
 	"context"
+	"fmt"
 	"net"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"go_module/tunnel/protected_dialer"
 )
 
-// ProtectedStreamDialer is a transport.StreamDialer that uses protected_dialer.
-type ProtectedStreamDialer struct {
-	destination string
-}
+type ProtectedStreamDialer struct{}
 
 func NewProtectedStreamDialer(destination string) *ProtectedStreamDialer {
-	return &ProtectedStreamDialer{destination: destination}
+	return &ProtectedStreamDialer{}
 }
 
-func (d *ProtectedStreamDialer) DialStream(ctx context.Context, address string) (net.Conn, error) {
-	return protected_dialer.DialContextWithProtect(ctx, "tcp", address)
+func (d *ProtectedStreamDialer) DialStream(ctx context.Context, address string) (transport.StreamConn, error) {
+	conn, err := protected_dialer.DialContextWithProtect(ctx, "tcp", address)
+	if err != nil {
+		return nil, err
+	}
+	sc, ok := conn.(transport.StreamConn)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("protected TCP conn does not implement transport.StreamConn")
+	}
+	return sc, nil
 }
 
-// ProtectedPacketDialer is a transport.PacketDialer that uses protected_dialer.
-type ProtectedPacketDialer struct {
-	destination string
-}
+type ProtectedPacketDialer struct{}
 
 func NewProtectedPacketDialer(destination string) *ProtectedPacketDialer {
-	return &ProtectedPacketDialer{destination: destination}
+	return &ProtectedPacketDialer{}
 }
 
-func (d *ProtectedPacketDialer) DialPacket(ctx context.Context, address string) (net.PacketConn, error) {
-	return protected_dialer.DialUDPWithProtect(ctx, "udp", address)
+func (d *ProtectedPacketDialer) DialPacket(ctx context.Context, address string) (net.Conn, error) {
+	dialer := protected_dialer.NewProtectedDialer(address)
+	return dialer.DialContext(ctx, "udp", address)
 }
