@@ -8,7 +8,6 @@ import Foundation
 import Darwin
 import SystemConfiguration
 import Network
-import os.log
 
 
 
@@ -108,11 +107,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         var startupStage = "entered"
         let optionKeys = options?.keys.sorted().joined(separator: ",") ?? "(none)"
         
-        // iOS 26 research: Log iOS version and device info
+        // iOS 26 research: Log iOS version
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let osVersionString = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
-        logs.writeLog(log: "[iOS26-RESEARCH] iOS version: \(osVersionString) (\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion))")
-        logs.writeLog(log: "[iOS26-RESEARCH] Device: \(UIDevice.current.name) model=\(UIDevice.current.model)")
+        logs.writeLog(log: "[iOS26-RESEARCH] iOS version: \(osVersionString)")
         
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
