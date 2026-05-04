@@ -445,7 +445,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 )
 
                 // CRITICAL: Log when WiFi->Cellular transition happens (this is when tunnel issues start)
-                let wasUsingWiFi = previousFingerprint?.contains("wifi") == true
+                let wasUsingWiFi = previousFingerprint.contains("wifi")
                 let isNowUsingWiFi = ifaces.contains("wifi")
                 let isNowUsingCellular = ifaces.contains("cellular")
                 
