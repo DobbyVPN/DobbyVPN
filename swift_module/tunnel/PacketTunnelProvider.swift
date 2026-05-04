@@ -465,8 +465,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     interfaceType = "Loopback"
                 case .other:
                     interfaceType = "OTHER (VPN_TUNNEL)"
-                case .loopback:
-                    interfaceType = "Loopback"
                 @unknown default:
                     interfaceType = "Unknown"
                 }
@@ -546,8 +544,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         interfaceType = "Loopback"
                     case .other:
                         interfaceType = "OTHER_VPN_TUNNEL"
-                    case .loopback:
-                        interfaceType = "Loopback"
                     @unknown default:
                         interfaceType = "Unknown"
                     }
