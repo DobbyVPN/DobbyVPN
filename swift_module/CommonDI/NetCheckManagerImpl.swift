@@ -6,7 +6,7 @@ public class NetCheckManagerImpl: NetCheckManager {
 
     public func startNetCheck() -> String {
         var err: NSError?
-        Cloak_outlineNetCheck(netCheckPath, &err)
+        Cloak_outlineNetCheck(configPath: netCheckPath.normalized().description(), &err)
         if let error = err {
             return "failed to start netcheck: \(error.localizedDescription)"
         } else {
