@@ -7,6 +7,9 @@ import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.*
 import com.dobby.feature.main.presentation.MainViewModel
+import com.dobby.feature.netcheck.NetCheckManagerImpl
+import com.dobby.feature.netcheck.domain.NetCheckRepository
+import com.dobby.feature.netcheck.presentation.NetCheckViewModel
 import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.grpc.*
 import kotlinx.coroutines.launch
@@ -22,6 +25,7 @@ class CliClient(private val configPath: String) {
     private val logger: Logger
     private val logEventsChannel: LogEventsChannel = LogEventsChannel()
     private val mainViewModel: MainViewModel
+    private val netCheckViewModel: NetCheckViewModel
 
     init {
         val logsRepository = LogsRepository(logEventsChannel = logEventsChannel)
@@ -33,6 +37,7 @@ class CliClient(private val configPath: String) {
         val cloakLibrary = RestartableCloakGrpcLibrary(logger)
         val loggerLibrary = RestartableLoggerGrpcLibrary(logger)
         val georoutingLibrary = RestartableGeoroutingGrpcLibrary(logger)
+        val netCheckLibrary = RestartableNetCheckGrpcLibrary(logger)
 
         configsRepository = DobbyConfigsRepositoryImpl(healthCheckLibrary = healthCheckLibrary)
         connectionStateRepository = ConnectionStateRepository()
@@ -55,6 +60,9 @@ class CliClient(private val configPath: String) {
             logger = logger,
             healthCheck = HealthCheckImpl(logger, healthCheckLibrary),
         )
+        val netCheckManager = NetCheckManagerImpl(loggerLibrary, netCheckLibrary, configsRepository)
+        val netCheckRepository = NetCheckRepository()
+        netCheckViewModel = NetCheckViewModel(logger, configsRepository, netCheckRepository, netCheckManager)
     }
 
     fun runClient() {
@@ -81,6 +89,11 @@ class CliClient(private val configPath: String) {
                         "vpn" -> {
                             println("Got vpn command")
                             mainViewModel.onConnectionButtonClicked(config)
+                        }
+                        "netcheck" -> {
+                            println("Got netcheck command")
+                            netCheckViewModel.update(config)
+                            netCheckViewModel.onButtonClicked()
                         }
                         "quit", null -> {
                             println("Got interruption command")
