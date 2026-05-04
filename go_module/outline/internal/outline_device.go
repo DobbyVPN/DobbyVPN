@@ -20,23 +20,29 @@ import (
 )
 
 type OutlineDevice struct {
-	mu           sync.RWMutex
-	listener     net.Listener
-	proxyAddr    string
-	svrIP        net.IP
-	streamDialer transport.StreamDialer
-	packetDialer transport.PacketDialer
-	useCloak     bool
-	preferTCPDNS bool
-	closed       atomic.Bool
-	startedAt    time.Time
-	serveState   string
-	serveErr     string
-	serveGen     int
+	mu             sync.RWMutex
+	listener       net.Listener
+	proxyAddr      string
+	svrIP          net.IP
+	streamDialer   transport.StreamDialer
+	packetDialer   transport.PacketDialer
+	useCloak       bool
+	preferTCPDNS   bool
+	disableNonDNSUDP bool
+	closed         atomic.Bool
+	startedAt      time.Time
+	serveState     string
+	serveErr       string
+	serveGen       int
 }
 
 type DeviceOptions struct {
 	PreferTCPDNSForWebSocket bool
+	// DisableNonDNSUDP rejects non-DNS UDP dials immediately.
+	// Use this when the transport is WebSocket without a dedicated UDP path:
+	// Shadowsocks AEAD UDP over WebSocket fails AEAD decryption under concurrency,
+	// causing QUIC retry storms. Refusing UDP makes iOS/apps fall back to TCP instantly.
+	DisableNonDNSUDP bool
 }
 
 func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
@@ -84,17 +90,17 @@ func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) 
 	)
 
 	useCloak := ip.IsLoopback()
-
 	log.Infof("outline client: cloak mode = %v", useCloak)
 
 	od := &OutlineDevice{
-		svrIP:        ip,
-		streamDialer: sd,
-		packetDialer: pd,
-		useCloak:     useCloak,
-		preferTCPDNS: preferTCPDNS,
-		startedAt:    time.Now(),
-		serveState:   "created",
+		svrIP:            ip,
+		streamDialer:     sd,
+		packetDialer:     pd,
+		useCloak:         useCloak,
+		preferTCPDNS:     preferTCPDNS,
+		disableNonDNSUDP: options.DisableNonDNSUDP,
+		startedAt:        time.Now(),
+		serveState:       "created",
 	}
 
 	server := socks5.NewServer(
@@ -222,7 +228,6 @@ func (d *OutlineDevice) markServeStopped(reason string) {
 }
 
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
-
 	// iOS 26 research: Log detailed connection attempt to track which path is used
 	log.Infof("[SOCKS5] dial %s %s (research: tracking connection path for iOS 26)", network, addr)
 	start := time.Now()
@@ -237,7 +242,8 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		elapsed := time.Since(start).Milliseconds()
 		if err != nil {
 			log.Infof("[SOCKS5 TCP ERROR] %s in %dms: %v", addr, elapsed, err)
-			return nil, fmt.Errorf("StreamDialer failed for %s: %w", addr, err)
+
+			return nil, fmt.Errorf("[DEBUG][SOCKS5 TCP] StreamDialer failed for %s: %w", addr, err)
 		}
 		log.Infof("[SOCKS5 TCP OK] %s in %dms", addr, elapsed)
 		log.Infof("[DEBUG][SOCKS5 TCP] %s local=%s remote=%s", addr, conn.LocalAddr(), conn.RemoteAddr())
@@ -251,11 +257,20 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 			return newTruncatedDNSConn(host, port), nil
 		}
 
+		// When using WebSocket transport without a dedicated UDP path, Shadowsocks AEAD UDP
+		// frames are multiplexed over the TCP WebSocket stream. Under concurrency this produces
+		// chacha20poly1305 AEAD failures on every response, causing QUIC retry storms.
+		// Reject non-DNS UDP immediately so the OS falls back to TCP without burning ~1s per attempt.
+		if d.disableNonDNSUDP && port != 53 {
+			log.Infof("[SOCKS5 UDP] rejected (disableNonDNSUDP) addr=%s", addr)
+			return nil, fmt.Errorf("non-DNS UDP disabled for this transport")
+		}
+
 		conn, err := d.packetDialer.DialPacket(ctx, addr)
 		elapsed := time.Since(start).Milliseconds()
 		if err != nil {
 			log.Infof("[SOCKS5 UDP ERROR] %s in %dms: %v", addr, elapsed, err)
-			return nil, fmt.Errorf("PacketDialer failed for %s: %w", addr, err)
+			return nil, fmt.Errorf("[DEBUG][SOCKS5 UDP] PacketDialer failed for %s: %w", addr, err)
 		}
 		log.Infof("[SOCKS5 UDP OK] %s in %dms", addr, elapsed)
 		log.Infof("[DEBUG][SOCKS5 UDP] %s local=%s", addr, conn.LocalAddr())

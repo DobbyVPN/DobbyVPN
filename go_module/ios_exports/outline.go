@@ -46,6 +46,7 @@ func NewOutlineClient(transportConfig string, tunnelFD int, mtu int) (err error)
 
 	client = outline.NewClientWithFDAndOptions(transportConfig, tunnelFD, mtu, outline.ClientOptions{
 		PreferTCPDNSForWebSocket: true,
+		DisableNonDNSUDP:         true,
 	})
 
 	log.Infof("NewOutlineClient() finished")
