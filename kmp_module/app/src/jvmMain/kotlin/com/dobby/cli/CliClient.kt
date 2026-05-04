@@ -5,26 +5,23 @@ import com.dobby.feature.diagnostic.domain.HealthCheckImpl
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
-import com.dobby.feature.logging.domain.maskStr
-import com.dobby.feature.main.domain.ConnectionStateRepository
-import com.dobby.feature.main.domain.DobbyConfigsRepository
-import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.main.domain.VpnManagerImpl
+import com.dobby.feature.main.domain.*
+import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.grpc.*
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.system.exitProcess
 
-class CliClient {
+class CliClient(private val configPath: String) {
     private val connectionStateRepository: ConnectionStateRepository
     private val configsRepository: DobbyConfigsRepository
     private val logger: Logger
     private val logEventsChannel: LogEventsChannel = LogEventsChannel()
-    private val mainViewModel: CliMainViewModel
+    private val mainViewModel: MainViewModel
 
     init {
         val logsRepository = LogsRepository(logEventsChannel = logEventsChannel)
@@ -52,17 +49,18 @@ class CliClient {
             connectionState = connectionState,
         )
         val vpnManager = VpnManagerImpl(dobbyVpnService)
-        mainViewModel = CliMainViewModel(
+        mainViewModel = MainViewModel(
             configsRepository = configsRepository,
             connectionStateRepository = connectionStateRepository,
             permissionEventsChannel = permissionEventsChannel,
             vpnManager = vpnManager,
             logger = logger,
             healthCheck = HealthCheckImpl(logger, healthCheckLibrary),
+            awgManager = AwgManagerImpl(dobbyVpnService),
         )
     }
 
-    fun connect(configPath: String) {
+    fun runClient() {
         val path = Path.of(configPath)
         println("Reading config")
         val config = try {
@@ -72,43 +70,34 @@ class CliClient {
             return
         }
 
-        println("Connecting")
-
-        logger.log("The connection button was clicked with URL: ${maskStr(config)}")
-
-        if (!configsRepository.couldStart()) {
-            logger.log("We couldn't do this operation, configsRepository.couldStart() returned FALSE")
-            return
-        }
-
         runBlocking {
-            launch(Dispatchers.Default) {
-                mainViewModel.prepareConfig(config)
-                configsRepository.setIsUserInitStop(false)
-                mainViewModel.connect()
+            val logJob = launch {
+                logEventsChannel.logEvents.collect { line ->
+                    println(line)
+                }
             }
-        }
 
-        logs()
-    }
-
-    fun disconnect() {
-        runBlocking {
-            launch(Dispatchers.Default) {
-                configsRepository.setIsUserInitStop(true)
-                mainViewModel.disconnect()
+            launch {
+                while (true) {
+                    val line = readlnOrNull()
+                    when (line) {
+                        "vpn" -> {
+                            println("Got vpn command")
+                            mainViewModel.onConnectionButtonClicked(config)
+                        }
+                        "quit", null -> {
+                            println("Got interruption command")
+                            logJob.cancel()
+                            exitProcess(0)
+                        }
+                        else -> {
+                            println("Got invalid command command")
+                        }
+                    }
+                }
             }
-        }
 
-        logs()
-    }
 
-    fun logs() {
-        println("Running log print")
-        runBlocking {
-            logEventsChannel.logEvents.collect { line ->
-                println(line)
-            }
         }
     }
 }

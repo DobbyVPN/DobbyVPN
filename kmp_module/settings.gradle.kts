@@ -25,5 +25,3 @@ include(":grpcstub")
 include(":outline")
 include(":awg")
 include(":app")
-
-include(":cli")
