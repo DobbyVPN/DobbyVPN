@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.util.koinViewModel
@@ -58,8 +59,16 @@ fun DobbySocksScreen(
             ) {
                 Spacer(modifier = Modifier.weight(1f))
                 TagChip(
-                    tagText = if (uiMainState.isConnected) "Status: connected" else "Status: disconnected",
-                    color = if (uiMainState.isConnected) 0xFFDCFCE7 else 0xFFFEE2E2
+                    tagText = when (uiMainState.connectionState) {
+                        VpnConnectionState.DISCONNECTED -> "Status: disconnected"
+                        VpnConnectionState.CONNECTING -> "Status: connecting..."
+                        VpnConnectionState.CONNECTED -> "Status: connected"
+                    },
+                    color = when (uiMainState.connectionState) {
+                        VpnConnectionState.DISCONNECTED -> 0xFFFEE2E2
+                        VpnConnectionState.CONNECTING -> 0xFFFEFEDC
+                        VpnConnectionState.CONNECTED -> 0xFFDCFCE7
+                    },
                 )
                 Spacer(modifier = Modifier.weight(1f))
             }
@@ -91,7 +100,13 @@ fun DobbySocksScreen(
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(if (uiMainState.isVpnStarted) "Stop" else "Start")
+                Text(
+                    when (uiMainState.connectionState) {
+                        VpnConnectionState.DISCONNECTED -> "Start"
+                        VpnConnectionState.CONNECTING -> "Stop"
+                        VpnConnectionState.CONNECTED -> "Stop"
+                    }
+                )
             }
         }
 

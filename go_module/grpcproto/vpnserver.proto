@@ -15,8 +15,11 @@ service Vpn {
   rpc StopOutline (Empty)                 returns (Empty);
   
   // health_check.go
-  rpc CouldStart (Empty)                            returns (CouldStartResponce);
-  rpc CheckServerAlive (CheckServerAliveRequest)    returns (CheckServerAliveResponce);
+  rpc CouldStart (Empty)              returns (CouldStartResponce);
+  rpc GetConnectionState (Empty)      returns (GetConnectionStateResponce);
+  rpc InitHealthCheck (Empty)         returns (Empty);
+  rpc StartHealthCheck (Empty)        returns (Empty);
+  rpc StopHealthCheck (Empty)         returns (Empty);
   
   // cloak.go
   rpc StartCloakClient (StartCloakClientRequest)    returns (Empty);
@@ -31,8 +34,7 @@ service Vpn {
 }
 
 message StartAwgRequest {
-  string tunnel = 1;
-  string config = 2;
+  string config = 1;
 }
 
 message GetOutlineLastErrorResponse {
@@ -51,13 +53,8 @@ message CouldStartResponce {
   bool result = 1;
 }
 
-message CheckServerAliveRequest {
-  string address = 1;
-  int32 port = 2;
-}
-
-message CheckServerAliveResponce {
-  int32 result = 1;
+message GetConnectionStateResponce {
+  int32 connectionState = 1;
 }
 
 message StartCloakClientRequest {

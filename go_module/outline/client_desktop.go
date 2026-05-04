@@ -114,3 +114,7 @@ func (c *OutlineClient) Refresh() error {
 	_ = c.Disconnect()
 	return c.Connect()
 }
+
+func (c *OutlineClient) HealthCheck() error {
+	return nil
+}

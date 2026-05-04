@@ -1,27 +1,60 @@
+//go:build ios
+
 package cloak_outline
 
-import "go_module/awg"
+import (
+	"fmt"
+	"go_module/awg"
+	"go_module/log"
+	"strings"
+)
 
-func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
-	return awg.AwgTurnOn(interfaceName, tunFd, settings)
+var awgClient *awg.AwgClient
+
+func AwgTurnOn(interfaceName string, tunFd int32, settings string) error {
+	log.Infof("Create awg client")
+
+	if awgClient != nil {
+		log.Infof("Disconnecting previous client")
+		err := awgClient.Disconnect()
+		if err != nil {
+			log.Infof("[WARNING] Failed to disconnect previous client")
+		}
+	}
+
+	log.Infof("Config length=%d", len(settings))
+
+	client, err := awg.NewAwgClient(strings.Clone(interfaceName), strings.Clone(settings), int(tunFd))
+	if err != nil {
+		log.Infof("Failed to create awg client: %v", err)
+		return fmt.Errorf("failed to create awg client: %v", err)
+	}
+
+	awgClient = client
+
+	log.Infof("Created awg client")
+
+	log.Infof("Connecting awg client")
+	err = awgClient.Connect()
+	if err != nil {
+		log.Infof("Failed to connect awg client: %v", err)
+		return fmt.Errorf("failed to connect awg client: %v", err)
+	}
+
+	log.Infof("Connected awg client")
+	return nil
 }
 
-func AwgTurnOff(tunnelHandle int32) {
-	awg.AwgTurnOff(tunnelHandle)
-}
+func AwgTurnOff() {
+	if awgClient == nil {
+		log.Infof("Awg client is null")
+		return
+	}
 
-func AwgGetSocketV4(tunnelHandle int32) int32 {
-	return awg.AwgGetSocketV4(tunnelHandle)
-}
-
-func AwgGetSocketV6(tunnelHandle int32) int32 {
-	return awg.AwgGetSocketV6(tunnelHandle)
-}
-
-func AwgGetConfig(tunnelHandle int32) string {
-	return awg.AwgGetConfig(tunnelHandle)
-}
-
-func AwgVersion() string {
-	return awg.AwgVersion()
+	log.Infof("Disconnecting awg client")
+	err := awgClient.Disconnect()
+	if err != nil {
+		log.Infof("Failed to disconnect awg client: %v", err)
+	}
+	awgClient = nil
 }

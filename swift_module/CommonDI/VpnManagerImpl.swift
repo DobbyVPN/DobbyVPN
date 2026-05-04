@@ -31,12 +31,8 @@ public class VpnManagerImpl: VpnManager {
             guard let self else { return }
             let status = manager?.connection.status ?? .invalid
             self.state = status
-            self.updateTransitionState(for: status)
             if status == .connected {
-                connectionRepository.tryUpdateVpnStarted(isStarted: true)
                 self.vpnManager = manager
-            } else {
-                connectionRepository.tryUpdateVpnStarted(isStarted: false)
             }
         }
 
@@ -53,7 +49,6 @@ public class VpnManagerImpl: VpnManager {
             }
 
             self.state = connection.status
-            self.updateTransitionState(for: connection.status)
 
             switch connection.status {
             case .connected:
@@ -103,17 +98,19 @@ public class VpnManagerImpl: VpnManager {
     private func handleStart(manager: NETunnelProviderManager?) {
         guard let manager = manager else {
             self.logs.writeLog(log: "Created VPNManager is nil")
+            connectionStateRepository.tryUpdateServiceStarted(isStarted: false)
             return
         }
         let status = manager.connection.status
         self.logs.writeLog(log: "[DEBUG][VPNManager] handleStart currentStatus=\(status.rawValue)")
         if status == .connecting || status == .disconnecting || status == .reasserting {
             self.logs.writeLog(log: "[start] Skip: connection is transitioning (\(status.rawValue))")
-            self.updateTransitionState(for: status)
+            connectionStateRepository.tryUpdateServiceStarted(isStarted: false)
             return
         }
         if status == .connected {
             self.logs.writeLog(log: "[start] Skip: already connected")
+            connectionStateRepository.tryUpdateServiceStarted(isStarted: false)
             return
         }
         self.vpnManager = manager
@@ -126,6 +123,7 @@ public class VpnManagerImpl: VpnManager {
         manager.saveToPreferences { saveError in
             if let saveError = saveError {
                 self.logs.writeLog(log: "Failed to save VPN configuration: \(saveError)")
+                connectionStateRepository.tryUpdateServiceStarted(isStarted: false)
             } else {
                 self.logs.writeLog(log: "VPN configuration saved successfully!")
                 do {
@@ -133,8 +131,10 @@ public class VpnManagerImpl: VpnManager {
                     self.logs.writeLog(log: "starting tunnel \(manager.connection.status)")
                     try manager.connection.startVPNTunnel()
                     self.logs.writeLog(log: "Tunnel was started! manager.connection.status = \(manager.connection.status)")
+                    connectionStateRepository.tryUpdateServiceStarted(isStarted: true)
                 } catch {
                     self.logs.writeLog(log: "Error starting VPNTunnel \(error)")
+                    connectionStateRepository.tryUpdateServiceStarted(isStarted: false)
                 }
             }
         }
@@ -147,7 +147,6 @@ public class VpnManagerImpl: VpnManager {
             return
         }
         self.logs.writeLog(log: "[stop] User initiated stopVPNTunnel() currentStatus=\(manager.connection.status.rawValue)")
-        connectionRepository.tryUpdateVpnTransitioning(isTransitioning: true)
         stopInitiatedByUser = true
         manager.connection.stopVPNTunnel()
         self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")
@@ -229,11 +228,6 @@ public class VpnManagerImpl: VpnManager {
         }
 
         return Self.dobbyName
-    }
-
-    private func updateTransitionState(for status: NEVPNStatus) {
-        let isTransitioning = status == .connecting || status == .disconnecting || status == .reasserting
-        connectionRepository.tryUpdateVpnTransitioning(isTransitioning: isTransitioning)
     }
 
 //    static func startSentry() {

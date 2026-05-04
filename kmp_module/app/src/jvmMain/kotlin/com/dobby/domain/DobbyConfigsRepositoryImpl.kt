@@ -125,6 +125,14 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("awgConfig", newConfig)
     }
 
+    override fun getAwgTomlConfig(): String {
+        return prefs.get("awgTomlConfig", "")
+    }
+
+    override fun setAwgTomlConfig(newConfig: String) {
+        prefs.put("awgTomlConfig", newConfig)
+    }
+
     override fun getIsAmneziaWGEnabled(): Boolean {
         return prefs.get("isAmneziaWGEnabled", "false").equals("true")
     }
@@ -135,14 +143,6 @@ internal class DobbyConfigsRepositoryImpl(
 
     override fun couldStart(): Boolean {
         return healthCheckLibrary.CouldStart()
-    }
-
-    override fun getIsUserInitStop(): Boolean {
-        return prefs.get("isUserInitStop", "true").equals("true")
-    }
-
-    override fun setIsUserInitStop(isUserInitStop: Boolean) {
-        prefs.put("isUserInitStop", isUserInitStop.toString())
     }
 
     override fun getGeoRoutingConf(): String {

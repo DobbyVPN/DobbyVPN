@@ -1,3 +1,5 @@
+//go:build !(android || ios)
+
 package api
 
 import (
@@ -7,7 +9,7 @@ import (
 
 var awgClient *awg.AwgClient
 
-func StartAwg(tunnel, config string) {
+func StartAwg(config string) {
 	log.Infof("Starting awg")
 
 	if awgClient != nil {

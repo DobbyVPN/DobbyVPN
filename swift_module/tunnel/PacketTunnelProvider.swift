@@ -16,8 +16,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let tunnelId = String(UUID().uuidString.prefix(8))
     private let tunnelMTU = 1200
 
+    private let awgInteractor: AwgInteractor = AwgInteractor()
     private let outlineInteractor: OutlineInteractor = OutlineInteractor()
     private let cloakInteractor: CloakInteractor = CloakInteractor()
+    private let awgInteractor: AwgInteractor = AwgInteractor()
 
     private var logs = NativeModuleHolder.logsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
@@ -103,15 +105,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
         var startupStage = "entered"
         let optionKeys = options?.keys.sorted().joined(separator: ",") ?? "(none)"
-        
+
         // iOS 26 research: Log iOS version
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let osVersionString = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         logs.writeLog(log: "[iOS26-RESEARCH] iOS version: \(osVersionString)")
-        
+
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
-        
+
         // iOS 26 research: Log network interfaces BEFORE tunnel starts
         logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: BEFORE_VPN_TUNNEL ==========")
         logInterfaces()
@@ -124,7 +126,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
             startupStage = "path monitor"
             startPathLogging()
-            
+
             // iOS 26+ diagnostic: capture network state at tunnel start
             captureNetworkStateAtStartup(logs: logs, tunnelId: tunnelId)
 
@@ -184,74 +186,139 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 logs.writeLog(log: "Excluded IPv4 routes: (none)")
             }
 
-            // Cloak must bind/connect before the full-tunnel route is installed; otherwise
-            // iOS can route the upstream bootstrap traffic into a tunnel that is not ready yet.
-            startupStage = "cloak startup"
-            logs.writeLog(log: "[tunnel:\(tunnelId)] starting Cloak phase")
-            try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
+            if configsRepository.getVpnInterface() == VpnInterface.amneziaWg {
+                startupStage = "network settings build"
+                let remoteAddress = "254.1.1.1"
+                let localAddress = "10.9.9.2"
+                let subnetMask = "255.255.255.255"
+                let dnsServers = ["1.1.1.1", "8.8.8.8"]
 
-            startupStage = "network settings build"
-            let remoteAddress = "254.1.1.1"
-            let localAddress = "198.18.0.1"
-            let subnetMask = "255.255.0.0"
-            let dnsServers = ["1.1.1.1", "8.8.8.8"]
+                let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
+                settings.mtu = NSNumber(value: tunnelMTU)
+                settings.ipv4Settings = NEIPv4Settings(
+                    addresses: [localAddress],
+                    subnetMasks: [subnetMask]
+                )
+                settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
+                settings.ipv4Settings?.excludedRoutes = excludedRoutes
+                settings.ipv6Settings = nil
+                settings.dnsSettings = NEDNSSettings(servers: dnsServers)
+                settings.dnsSettings?.matchDomains = [""]
 
-            let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
-            settings.mtu = NSNumber(value: tunnelMTU)
-            settings.ipv4Settings = NEIPv4Settings(
-                addresses: [localAddress],
-                subnetMasks: [subnetMask]
-            )
-            settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
-            settings.ipv4Settings?.excludedRoutes = excludedRoutes
-            settings.ipv6Settings = nil
-            settings.dnsSettings = NEDNSSettings(servers: dnsServers)
-            settings.dnsSettings?.matchDomains = [""]
+                logNetworkSettings(
+                    localAddress: localAddress,
+                    remoteAddress: remoteAddress,
+                    subnetMask: subnetMask,
+                    mtu: tunnelMTU,
+                    dnsServers: dnsServers,
+                    excludedRoutes: excludedRoutes
+                )
+                startupStage = "setTunnelNetworkSettings"
+                let settingsStart = Date()
+                logs.writeLog(log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings begin")
+                try await self.setTunnelNetworkSettings(settings)
+                logs.writeLog(
+                    log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings applied in \(elapsedMs(since: settingsStart))ms"
+                )
 
-            logNetworkSettings(
-                localAddress: localAddress,
-                remoteAddress: remoteAddress,
-                subnetMask: subnetMask,
-                mtu: tunnelMTU,
-                dnsServers: dnsServers,
-                excludedRoutes: excludedRoutes
-            )
-            startupStage = "setTunnelNetworkSettings"
-            let settingsStart = Date()
-            logs.writeLog(log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings begin")
-            try await self.setTunnelNetworkSettings(settings)
-            logs.writeLog(
-                log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings applied in \(elapsedMs(since: settingsStart))ms"
-            )
+                logInterfaces()
+
+                startupStage = "packetFlow bridge"
+                let bridgeTunnelId = tunnelId
+                let bridgeLogs = logs
+                logs.writeLog(log: "[tunnel:\(tunnelId)] creating PacketFlowBridge mtu=\(tunnelMTU)")
+                let bridge = try PacketFlowBridge(
+                    packetFlow: packetFlow,
+                    mtu: tunnelMTU,
+                    tunnelId: tunnelId,
+                    log: { message in
+                        bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] \(message)")
+                    }
+                )
+                packetFlowBridge = bridge
+                bridge.start()
+
+                startupStage = "amneziawg startup"
+                logs.writeLog(log: "[tunnel:\(tunnelId)] starting AmneziaWG phase tunnelFD=\(bridge.tunnelFileDescriptor) mtu=\(tunnelMTU)")
+                try awgInteractor.startAwg(
+                    tunnelFileDescriptor: bridge.tunnelFileDescriptor,
+                    nativeClientCreated: {
+                        bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] native AmneziaWG client created; releasing bridge fd to Go")
+                        bridge.releaseTunnelFileDescriptor()
+                    }
+                )
+                logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
+
+                logs.writeLog(log: "startTunnel: all packet loops started")
+            } else {
+                // Cloak must bind/connect before the full-tunnel route is installed; otherwise
+                // iOS can route the upstream bootstrap traffic into a tunnel that is not ready yet.
+                startupStage = "cloak startup"
+                logs.writeLog(log: "[tunnel:\(tunnelId)] starting Cloak phase")
+                try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
+
+                startupStage = "network settings build"
+                let remoteAddress = "254.1.1.1"
+                let localAddress = "198.18.0.1"
+                let subnetMask = "255.255.0.0"
+                let dnsServers = ["1.1.1.1", "8.8.8.8"]
+
+                let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
+                settings.mtu = NSNumber(value: tunnelMTU)
+                settings.ipv4Settings = NEIPv4Settings(
+                    addresses: [localAddress],
+                    subnetMasks: [subnetMask]
+                )
+                settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
+                settings.ipv4Settings?.excludedRoutes = excludedRoutes
+                settings.ipv6Settings = nil
+                settings.dnsSettings = NEDNSSettings(servers: dnsServers)
+                settings.dnsSettings?.matchDomains = [""]
+
+                logNetworkSettings(
+                    localAddress: localAddress,
+                    remoteAddress: remoteAddress,
+                    subnetMask: subnetMask,
+                    mtu: tunnelMTU,
+                    dnsServers: dnsServers,
+                    excludedRoutes: excludedRoutes
+                )
+                startupStage = "setTunnelNetworkSettings"
+                let settingsStart = Date()
+                logs.writeLog(log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings begin")
+                try await self.setTunnelNetworkSettings(settings)
+                logs.writeLog(
+                    log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings applied in \(elapsedMs(since: settingsStart))ms"
+                )
 
             // iOS 26 research: Log network interfaces AFTER tunnel starts
             logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: AFTER_VPN_TUNNEL ==========")
             logInterfaces()
             logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: END_AFTER_VPN_TUNNEL ==========")
 
-            startupStage = "packetFlow bridge"
-            let bridgeTunnelId = tunnelId
-            let bridgeLogs = logs
-            logs.writeLog(log: "[tunnel:\(tunnelId)] creating PacketFlowBridge mtu=\(tunnelMTU)")
-            let bridge = try PacketFlowBridge(
-                packetFlow: packetFlow,
-                mtu: tunnelMTU,
-                tunnelId: tunnelId,
-                log: { message in
-                    bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] \(message)")
-                }
-            )
-            packetFlowBridge = bridge
-            bridge.start()
+                startupStage = "packetFlow bridge"
+                let bridgeTunnelId = tunnelId
+                let bridgeLogs = logs
+                logs.writeLog(log: "[tunnel:\(tunnelId)] creating PacketFlowBridge mtu=\(tunnelMTU)")
+                let bridge = try PacketFlowBridge(
+                    packetFlow: packetFlow,
+                    mtu: tunnelMTU,
+                    tunnelId: tunnelId,
+                    log: { message in
+                        bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] \(message)")
+                    }
+                )
+                packetFlowBridge = bridge
+                bridge.start()
 
             startupStage = "outline startup"
-            
+
             // iOS 26 research: Log Outline server connection details
             let outlineServer = configsRepository.getServerPortOutline()
             logs.writeLog(log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] Outline server: \(maskStr(value: outlineServer))")
             logs.writeLog(log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] Tunnel settings: local=\(localAddress) remote=\(remoteAddress) mtu=\(tunnelMTU)")
             logs.writeLog(log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] DNS servers: \(dnsServers)")
-            
+
             logs.writeLog(log: "[tunnel:\(tunnelId)] starting Outline phase tunnelFD=\(bridge.tunnelFileDescriptor) mtu=\(tunnelMTU)")
             try outlineInteractor.startOutline(
                 tunnelFileDescriptor: bridge.tunnelFileDescriptor,
@@ -263,7 +330,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             )
             logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
 
-            logs.writeLog(log: "startTunnel: all packet loops started")
+                logs.writeLog(log: "startTunnel: all packet loops started")
+            }
         } catch {
             let nsError = error as NSError
             logs.writeLog(
@@ -327,11 +395,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
-            
+
             // iOS 26+ diagnostic: capture all path properties
             let supportsIPV4 = path.supportsIPv4
             let supportsIPV6 = path.supportsIPv6
-            
+
             // iOS 26 research: Log detailed interface info with interface name and type
             let ifaces = path.availableInterfaces.map { iface -> String in
                 let interfaceType: String
@@ -349,18 +417,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 }
                 return "\(iface.name)[\(interfaceType)]"
             }.joined(separator: ", ")
-            
+
             let expensive = path.isExpensive
             let constrained = path.isConstrained
             let status = path.status
-            
+
             // iOS 26+ detection of problematic scenarios - now with FULL detail
             // Format: [TIMESTAMP] PHASE: interfaces=... expensive=... constrained=...
             let timestamp = ISO8601DateFormatter().string(from: Date())
             var pathDesc = "[\(timestamp)] PHASE=DETECT status=\(status) ifaces=[\(ifaces)]"
             pathDesc += " expensive=\(expensive) constrained=\(constrained)"
             pathDesc += " supportsIPv4=\(supportsIPV4) supportsIPv6=\(supportsIPV6)"
-            
+
             if #available(iOS 26.0, *) {
                 if expensive {
                     pathDesc += " [EXPENSIVE_NETWORK]"
@@ -379,22 +447,22 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     pathDesc += " [UNKNOWN_STATUS]"
                 }
             }
-            
+
             // iOS 26 research: Create fingerprint with more detail (include interface names)
             let interfaceNames = path.availableInterfaces.map { $0.name }.sorted().joined(separator: "|")
             let fingerprint = "status=\(path.status)|ifaces=\(interfaceNames)|expensive=\(expensive)|constrained=\(constrained)"
-            
+
             if self.lastPathFingerprint != fingerprint {
                 let previousFingerprint = self.lastPathFingerprint ?? "(none)"
                 self.lastPathFingerprint = fingerprint
-                
+
                 // iOS 26 research: Log with clear transition marker
                 if previousFingerprint != "(none)" {
                     self.logs.writeLog(
                         log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] NETWORK_CHANGED: \(previousFingerprint) -> \(fingerprint)"
                     )
                 }
-                
+
                 self.logs.writeLog(
                     log: "[tunnel:\(self.tunnelId)] PATH_UPDATE: " + pathDesc
                 )
@@ -421,13 +489,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     @unknown default:
                         interfaceType = "Unknown"
                     }
-                    
+
                     // iOS 26 research: This is the KEY log - shows exactly which interface is which
                     self.logs.writeLog(
                         log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] INTERFACE: name=\(iface.name) type=\(interfaceType) (raw=\(iface.type))"
                     )
                 }
-                
+
                 // iOS 26 research: Detect when "other" interface appears
                 let hasOtherInterface = path.availableInterfaces.contains { $0.type == .other }
                 if hasOtherInterface {
@@ -435,7 +503,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] *** VPN TUNNEL INTERFACE DETECTED *** This is the utunX interface created by the VPN!"
                     )
                 }
-                
+
                 // iOS 26: Log active connection counts - if UDP connections drop, that's a problem
                 self.logs.writeLog(
                     log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] ROUTE_CHECK: Active interfaces: \(path.availableInterfaces.map { $0.name }.joined(separator: ", "))"
@@ -445,7 +513,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 let wasUsingWiFi = previousFingerprint.contains("wifi")
                 let isNowUsingWiFi = ifaces.contains("wifi")
                 let isNowUsingCellular = ifaces.contains("cellular")
-                
+
                 if wasUsingWiFi && isNowUsingCellular && !isNowUsingWiFi {
                     self.logs.writeLog(
                         log: "[tunnel:\(self.tunnelId)] CRITICAL: Network transitioned WiFi -> Cellular! Tunnel instability expected!"
@@ -463,18 +531,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         monitor.start(queue: q)
         logs.writeLog(log: "[tunnel:\(tunnelId)] NWPathMonitor started")
     }
-    
+
     /// Capture network state at tunnel startup for diagnostic purposes
     private func captureNetworkStateAtStartup(logs: LogsRepository, tunnelId: String) {
         // Note: This is a best-effort capture; the monitor may not have populated yet
         let monitor = Network.NWPathMonitor()
         let q = DispatchQueue(label: "vpn.dobby.app.tunnel.startup-path")
         var captured = false
-        
+
         monitor.pathUpdateHandler = { path in
             guard !captured else { return }
             captured = true
-            
+
             // Capture interface details
             var ifaceDetails: [String] = []
             for iface in path.availableInterfaces {
@@ -482,19 +550,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 ifaceDetails.append(detail)
             }
             let ifacesStr = ifaceDetails.joined(separator: ", ")
-            
+
             let expensive = path.isExpensive
             let constrained = path.isConstrained
             let status = path.status
             let supportsIPv4 = path.supportsIPv4
             let supportsIPv6 = path.supportsIPv6
-            
+
             // Log all network state
             let log = "[tunnel:\(tunnelId)] STARTUP_NETWORK: status=\(status) ifaces=[\(ifacesStr)] " +
                       "expensive=\(expensive) constrained=\(constrained) " +
                       "ipv4=\(supportsIPv4) ipv6=\(supportsIPv6)"
             logs.writeLog(log: log)
-            
+
             // iOS 26-specific warnings
             if expensive && constrained {
                 logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_WARNING: Cellular with BOTH expensive AND constrained=true - expect instability!")
@@ -503,9 +571,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_ERROR: Network path unsatisfied at tunnel start!")
             }
         }
-        
+
         monitor.start(queue: q)
-        
+
         // Give it a moment to capture, then stop
         q.asyncAfter(deadline: .now() + 1.0) {
             monitor.cancel()
@@ -519,6 +587,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping PacketFlowBridge")
         packetFlowBridge?.stop()
         packetFlowBridge = nil
+
+        do {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping AmneziaWG")
+            try awgInteractor.stopAmneziaWG()
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] AmneziaWG stopped")
+        } catch {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop outline: \(error.localizedDescription)")
+        }
 
         do {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping Outline")

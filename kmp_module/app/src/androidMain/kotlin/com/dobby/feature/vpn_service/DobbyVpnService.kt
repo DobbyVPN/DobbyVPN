@@ -2,13 +2,15 @@ package com.dobby.feature.vpn_service
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import android.system.Os
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import com.dobby.awg.TunnelManager
-import com.dobby.awg.TunnelState
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.initLogger
 import com.dobby.feature.logging.domain.provideLogFilePath
@@ -16,26 +18,18 @@ import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.vpn_service.domain.cloak.CloakConnectionInteractor
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.drop
-import kotlinx.coroutines.runBlocking
-import org.koin.android.ext.android.inject
+import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
+import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
+import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
+import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import android.os.Debug
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.system.Os
-import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
-import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
-import com.dobby.outline.OutlineGo
+import org.koin.android.ext.android.inject
+import com.dobby.backend.GoBackendWrapper
+import com.dobby.feature.vpn_service.domain.cloak.DisconnectResult
 import java.io.File
 import java.io.FileInputStream
-import java.util.UUID
-
-const val IS_FROM_UI = "isLaunchedFromUi"
+import java.util.*
 
 class DobbyVpnService : VpnService() {
     companion object {
@@ -43,9 +37,7 @@ class DobbyVpnService : VpnService() {
         var instance: DobbyVpnService? = null
 
         fun createIntent(context: Context): Intent {
-            return Intent(context, DobbyVpnService::class.java).apply {
-                putExtra(IS_FROM_UI, true)
-            }
+            return Intent(context, DobbyVpnService::class.java)
         }
     }
 
@@ -55,12 +47,11 @@ class DobbyVpnService : VpnService() {
     private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private val logger: Logger by inject()
     private val geoRouting: GeoRouting by inject()
-    private val vpnInterfaceFactory: DobbyVpnInterfaceFactory by inject()
     private val cloakConnectInteractor: CloakConnectionInteractor by inject()
-    private val outlineInteractor: OutlineInteractor by inject ()
+    private val outlineInteractor: OutlineInteractor by inject()
+    private val awgInteractor: AmneziaWGInteractor by inject()
     private val dobbyConfigsRepository: DobbyConfigsRepository by inject()
-    val connectionState: ConnectionStateRepository by inject()
-    private val tunnelManager = TunnelManager(this, logger)
+    private val connectionState: ConnectionStateRepository by inject()
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val startStopMutex = Mutex()
@@ -108,40 +99,27 @@ class DobbyVpnService : VpnService() {
             logger.log("[svc:$serviceId] net:registerDefaultNetworkCallback FAILED: ${e.message}")
         }
 
-        serviceScope.launch {
-            connectionState.statusFlow.drop(1).collect { isConnected ->
-                logger.log("[svc:$serviceId] statusFlow update: isConnected=$isConnected")
-                if (!isConnected) {
-                    startStopMutex.withLock {
-                        logger.log("[svc:$serviceId] statusFlow requested stop → begin teardown")
-                        stopCloakClient()
-                        teardownVpn()
-                        stopSelf()
-                        logger.log("[svc:$serviceId] statusFlow requested stop → stopSelf() called")
-                    }
-                }
-            }
-        }
-
-        OutlineGo.registerVpnService(this)
+        GoBackendWrapper.registerVpnService(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val intentFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) == true
         logger.log(
-            "[svc:$serviceId] onStartCommand(startId=$startId flags=$flags " +
-                "intentFromUi=$intentFromUi) vpnInterface=${vpnInterface?.fd}"
+            "[svc:$serviceId] onStartCommand(startId=$startId flags=$flags) vpnInterface=${vpnInterface?.fd}"
+        )
+
+        startService()
+
+        return START_NOT_STICKY
+    }
+
+    fun startService() {
+        logger.log(
+            "[svc:$serviceId] startService() vpnInterface=${vpnInterface?.fd}"
         )
 
         serviceScope.launch {
             startStopMutex.withLock {
                 val hasActiveTunnel = vpnInterface != null || goTunFd != null
-
-                if (!intentFromUi && !hasActiveTunnel) {
-                    logger.log("[svc:$serviceId] onStartCommand(): ignoring implicit restart without active tunnel")
-                    stopSelf(startId)
-                    return@withLock
-                }
 
                 if (hasActiveTunnel) {
                     logger.log("[svc:$serviceId] onStartCommand(): existing tunnel detected → teardown before start")
@@ -150,12 +128,19 @@ class DobbyVpnService : VpnService() {
 
                 geoRouting.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
                 when (dobbyConfigsRepository.getVpnInterface()) {
-                    VpnInterface.CLOAK_OUTLINE -> startCloakOutline(intent)
+                    VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
                     VpnInterface.AMNEZIA_WG -> startAwg()
+                    VpnInterface.NONE -> startNone()
                 }
             }
         }
-        return START_NOT_STICKY
+    }
+
+    fun stopService() {
+        logger.log(
+            "[svc:$serviceId] stopService() vpnInterface=${vpnInterface?.fd}"
+        )
+        teardownVpn()
     }
 
     override fun onDestroy() {
@@ -178,71 +163,77 @@ class DobbyVpnService : VpnService() {
         }.onFailure { e ->
             logger.log("[svc:$serviceId] net:unregisterNetworkCallback FAILED: ${e.message}")
         }
-        tunnelManager.updateState(null, TunnelState.DOWN)
+        serviceScope.cancel()
         instance = null
         super.onDestroy()
         logger.log("[svc:$serviceId] onDestroy() end")
     }
 
-    fun getMemoryUsageMB(): Double {
-        val memInfo = Debug.MemoryInfo()
-        Debug.getMemoryInfo(memInfo)
+    private fun startCloakOutline() {
+        serviceScope.launch {
+            startStopMutex.withLock {
+                if (dobbyConfigsRepository.getIsCloakEnabled()) {
+                    if (!cloakConnectInteractor.startCloak()) {
+                        connectionState.updateServiceStarted(false)
+                        teardownVpn()
+                        stopSelf()
+                        return@launch
+                    }
+                }
+                if (!outlineInteractor.startOutline(instance)) {
+                    connectionState.updateServiceStarted(false)
+                    teardownVpn()
+                    stopSelf()
+                    return@launch
+                }
 
-        return memInfo.totalPss / 1024.0
-    }
-
-    private suspend fun startCloakOutline(intent: Intent?) {
-        val cloakStarted = cloakConnectInteractor.startCloak()
-        if (!cloakStarted) {
-            logger.log("[svc:$serviceId] startCloakOutline(): Cloak failed → teardown")
-            connectionState.tryUpdateStatus(false)
-            teardownVpn()
-            stopSelf()
-            return
+                connectionState.updateServiceStarted(true)
+            }
         }
-        outlineInteractor.startOutline(intent, instance)
     }
 
     private fun startAwg() {
-        if (dobbyConfigsRepository.getIsAmneziaWGEnabled()) {
-            logger.log("Starting AmneziaWG")
-            val stringConfig = dobbyConfigsRepository.getAwgConfig()
-            val state = if (dobbyConfigsRepository.getIsAmneziaWGEnabled()) {
-                TunnelState.UP
-            } else {
-                TunnelState.DOWN
+        serviceScope.launch {
+            startStopMutex.withLock {
+                if (!awgInteractor.startAwg(instance)) {
+                    connectionState.updateServiceStarted(false)
+                    teardownVpn()
+                    stopSelf()
+                    return@launch
+                }
+
+                connectionState.updateServiceStarted(true)
             }
-            tunnelManager.updateState(stringConfig, state)
-        } else {
-            logger.log("Stopping AmneziaWG")
-            tunnelManager.updateState(null, TunnelState.DOWN)
         }
     }
 
-    private suspend fun stopCloakClient() {
-        runCatching {
-            logger.log("Stopping Cloak client (if running)...")
-            cloakConnectInteractor.disconnect()
-        }.onFailure { e ->
-            logger.log("Failed to stop Cloak client: ${e.message}")
-        }
+    private fun startNone() {
+        connectionState.tryUpdateServiceStarted(false)
     }
 
     fun teardownVpn() {
         val interfaceToClose = vpnInterface
         val targetGoTunFd = goTunFd
         val fdBefore = runCatching { interfaceToClose?.fd }.getOrNull()
-        vpnInterface = null
-        goTunFd = null
         logger.log("[svc:$serviceId] teardownVpn(): begin fd=$fdBefore")
         runCatching {
-            outlineInteractor.stopOutline();
+            awgInteractor.stopAwg()
+        }.onFailure { e ->
+            logger.log("[svc:$serviceId] onDestroy(): failed to disconnect AmneziaWG: ${e.message}")
+        }
+        runCatching {
+            outlineInteractor.stopOutline()
         }.onFailure { e ->
             logger.log("[svc:$serviceId] onDestroy(): failed to disconnect Outline: ${e.message}")
         }
         runCatching {
             runBlocking {
-                stopCloakClient()
+                this@runCatching.runCatching {
+                    logger.log("Stopping Cloak client (if running)...")
+                    cloakConnectInteractor.disconnect()
+                }.onFailure<DisconnectResult> { e ->
+                    logger.log("Failed to stop Cloak client: ${e.message}")
+                }
             }
         }.onFailure { e ->
             logger.log("[svc:$serviceId] onDestroy(): failed to stop Cloak: ${e.message}")
@@ -271,16 +262,8 @@ class DobbyVpnService : VpnService() {
         runCatching {
             interfaceToClose?.close()
         }
+        vpnInterface = null
+        goTunFd = null
         logger.log("[svc:$serviceId] teardownVpn(): end fd=$fdBefore")
-    }
-    fun setupVpn() {
-        logger.log("[svc:$serviceId] setupVpn(): begin")
-        vpnInterface = runCatching {
-            vpnInterfaceFactory
-                .create(context = this@DobbyVpnService, vpnService = this@DobbyVpnService)
-                .establish()
-        }.onFailure { e ->
-            logger.log("[svc:$serviceId] setupVpn(): establish FAILED: ${e.message}")
-        }.getOrNull()
     }
 }

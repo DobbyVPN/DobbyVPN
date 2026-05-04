@@ -3,6 +3,7 @@
 package awg
 
 import (
+	"go_module/awg/dinterface"
 	"go_module/awg/internal"
 	"go_module/common"
 )
@@ -29,8 +30,12 @@ func (a *AwgClient) Refresh() error {
 	return a.app.Run()
 }
 
+func (a *AwgClient) HealthCheck() error {
+	return nil
+}
+
 func NewAwgClient(config string) (*AwgClient, error) {
-	app, err := internal.NewApp(config)
+	app, err := internal.NewApp(dinterface.InterfaceName, config)
 	if err != nil {
 		return nil, err
 	}

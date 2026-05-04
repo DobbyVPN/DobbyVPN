@@ -1,11 +1,10 @@
 package com.dobby.domain
 
 import android.content.SharedPreferences
+import androidx.core.content.edit
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import android.util.Log.i as AndroidLog
-import com.dobby.outline.OutlineGo
-import androidx.core.content.edit
 
 internal class DobbyConfigsRepositoryImpl(
     private val prefs: SharedPreferences
@@ -180,6 +179,18 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun getAwgTomlConfig(): String {
+        return (prefs.getString("awgTomlConfig", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getAwgTomlConfig, size = ${it.length}")
+        }
+    }
+
+    override fun setAwgTomlConfig(newConfig: String) {
+        prefs.edit().putString("awgTomlConfig", newConfig).apply().also {
+            AndroidLog("DOBBY_TAG", "setAwgTomlConfig, size = ${newConfig.length}")
+        }
+    }
+
     override fun getIsAmneziaWGEnabled(): Boolean {
         return prefs.getBoolean("isAmneziaWGEnabled", false).also {
             AndroidLog("DOBBY_TAG", "getIsAmneziaWGEnabled = $it")
@@ -194,18 +205,6 @@ internal class DobbyConfigsRepositoryImpl(
 
     override fun couldStart(): Boolean {
         return true
-    }
-
-    override fun getIsUserInitStop(): Boolean {
-        return prefs.getBoolean("isUserInitStop", true).also {
-            AndroidLog("DOBBY_TAG", "getIsUserInitStop = $it")
-        }
-    }
-
-    override fun setIsUserInitStop(isUserInitStop: Boolean) {
-        prefs.edit().putBoolean("isUserInitStop", isUserInitStop).apply().also {
-            AndroidLog("DOBBY_TAG", "setIsUserInitStop = $isUserInitStop")
-        }
     }
 
     override fun getGeoRoutingConf(): String {

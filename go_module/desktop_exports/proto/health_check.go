@@ -1,3 +1,5 @@
+//go:build !(android || ios)
+
 package proto
 
 import (
@@ -10,14 +12,43 @@ import (
 )
 
 func (s *Server) CouldStart(_ context.Context, in *grpcproto.Empty) (*grpcproto.CouldStartResponce, error) {
-	log.Infof("CouldStart")
+	log.Infof("[GRPC] CouldStart")
 	result := api.CouldStart()
-	log.Infof("CouldStart: %v", result)
+	log.Infof("[GRPC] CouldStart result: %v", result)
+
 	return &grpcproto.CouldStartResponce{Result: result}, nil
 }
 
-func (s *Server) CheckServerAlive(_ context.Context, in *grpcproto.CheckServerAliveRequest) (*grpcproto.CheckServerAliveResponce, error) {
-	log.Infof("CheckServerAlive")
-	result := api.CheckServerAlive(in.GetAddress(), int(in.GetPort()))
-	return &grpcproto.CheckServerAliveResponce{Result: result}, nil
+func (s *Server) GetConnectionState(_ context.Context, in *grpcproto.Empty) (*grpcproto.GetConnectionStateResponce, error) {
+	log.Infof("[GRPC] GetConnectionState")
+	result := api.GetConnectionState()
+	log.Infof("[GRPC] GetConnectionState result: %v", result)
+
+	return &grpcproto.GetConnectionStateResponce{
+		ConnectionState: result,
+	}, nil
+}
+
+func (s *Server) StartHealthCheck(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
+	log.Infof("[GRPC] StartHealthCheck")
+	api.StartHealthCheck()
+	log.Infof("[GRPC] StartHealthCheck completed")
+
+	return &grpcproto.Empty{}, nil
+}
+
+func (s *Server) InitHealthCheck(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
+	log.Infof("[GRPC] InitHealthCheck")
+	api.InitHealthCheck()
+	log.Infof("[GRPC] InitHealthCheck completed")
+
+	return &grpcproto.Empty{}, nil
+}
+
+func (s *Server) StopHealthCheck(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
+	log.Infof("[GRPC] StopHealthCheck")
+	api.StopHealthCheck()
+	log.Infof("[GRPC] StopHealthCheck completed")
+
+	return &grpcproto.Empty{}, nil
 }
