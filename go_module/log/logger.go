@@ -183,10 +183,13 @@ func SetPath(path string) error {
 func SetTelemetry(endpoint string) error {
 	if lg.tlogger != nil {
 		if lg.tlogger.endpoint == endpoint {
+			Debugf("LOG", "Telemetry is already set up")
 			return nil
 		}
 
-		lg.tlogger.shutdown(lg.tlogger.ctx)
+		if err := lg.tlogger.shutdown(lg.tlogger.ctx); err != nil {
+			Warnf("LOG", "Telemetry shutdown error: %v", err)
+		}
 		lg.tlogger = nil
 	}
 
@@ -214,7 +217,7 @@ func prepareLog(message string, arguments map[string]any) string {
 	msg.WriteString(message)
 
 	for key, value := range arguments {
-		msg.WriteString(fmt.Sprintf(" %q=\"%v\"", key, value))
+		fmt.Fprintf(&msg, " %q=\"%v\"", key, value)
 	}
 
 	return msg.String()
