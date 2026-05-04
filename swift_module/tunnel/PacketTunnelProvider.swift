@@ -172,11 +172,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 logs.writeLog(log: "Excluded IPv4 routes: (none)")
             }
 
+            // Determine which protocol to use early - needed for Cloak startup
+            let vpnInterface = configsRepository.getVpnInterface()
+
             // Cloak must bind/connect before the full-tunnel route is installed; otherwise
             // iOS can route the upstream bootstrap traffic into a tunnel that is not ready yet.
-            startupStage = "cloak startup"
-            logs.writeLog(log: "[tunnel:\(tunnelId)] starting Cloak phase")
-            try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
+            // Only start Cloak for cloakOutline protocol.
+            if vpnInterface == .cloakOutline {
+                startupStage = "cloak startup"
+                logs.writeLog(log: "[tunnel:\(tunnelId)] starting Cloak phase")
+                try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
+            }
 
             startupStage = "network settings build"
             let remoteAddress = "254.1.1.1"
@@ -232,10 +238,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             startupStage = "protocol startup"
             logs.writeLog(log: "[tunnel:\(tunnelId)] starting VPN protocol phase tunnelFD=\(bridge.tunnelFileDescriptor) mtu=\(tunnelMTU)")
 
-            // Determine which protocol to use
-            let vpnInterface = configsRepository.getVpnInterface()
             switch vpnInterface {
-            case .CLOAK_OUTLINE:
+            case .cloakOutline:
                 try outlineInteractor.startOutline(
                     tunnelFileDescriptor: bridge.tunnelFileDescriptor,
                     mtu: tunnelMTU,
@@ -244,17 +248,24 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         bridge.releaseTunnelFileDescriptor()
                     }
                 )
-            case .XRAY:
+            case .xray:
                 try xrayInteractor.startXRay(
                     tunnelFileDescriptor: bridge.tunnelFileDescriptor,
                     mtu: tunnelMTU
                 )
-            default:
-                logs.writeLog(log: "[tunnel:\(tunnelId)] unsupported VPN interface: \(vpnInterface)")
+            case .amneziaWg:
+                logs.writeLog(log: "[tunnel:\(tunnelId)] AmneziaWG not yet implemented on iOS")
                 throw NSError(
                     domain: "PacketTunnelProvider",
                     code: -4,
-                    userInfo: [NSLocalizedDescriptionKey: "Unsupported VPN interface"]
+                    userInfo: [NSLocalizedDescriptionKey: "AmneziaWG not yet implemented on iOS"]
+                )
+            case .none:
+                logs.writeLog(log: "[tunnel:\(tunnelId)] No VPN interface selected")
+                throw NSError(
+                    domain: "PacketTunnelProvider",
+                    code: -4,
+                    userInfo: [NSLocalizedDescriptionKey: "No VPN interface selected"]
                 )
             }
 
@@ -276,13 +287,25 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel reason=\(reason.rawValue) (\(reason))")
         configsRepository.setIsUserInitStop(isUserInitStop: true)
         Cloak_outlineClearGeoRoutingConf()
-        do {
-            try outlineInteractor.stopOutline()
-        } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] stopOutline error: \(error.localizedDescription)")
+
+        // Stop the active protocol based on the VPN interface
+        let vpnInterface = configsRepository.getVpnInterface()
+        switch vpnInterface {
+        case .cloakOutline:
+            do {
+                try outlineInteractor.stopOutline()
+            } catch {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] stopOutline error: \(error.localizedDescription)")
+            }
+            cloakInteractor.stopCloak()
+        case .xray:
+            xrayInteractor.stopXRay()
+        case .amneziaWg:
+            logs.writeLog(log: "[tunnel:\(tunnelId)] AmneziaWG stop not yet implemented on iOS")
+        case .none:
+            logs.writeLog(log: "[tunnel:\(tunnelId)] No VPN interface to stop")
         }
-        cloakInteractor.stopCloak()
-        xrayInteractor.stopXRay()
+
         Task {
             await teardownForStop(reason: "stopTunnel(\(reason))")
             logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel teardown complete; calling completionHandler")

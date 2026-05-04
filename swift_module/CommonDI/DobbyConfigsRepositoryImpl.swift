@@ -151,14 +151,16 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func getVpnInterface() -> VpnInterface {
         let savedValue = userDefaults.string(forKey: vpnInterfaceKey)
-        
+
         switch savedValue {
         case "XRAY":
             return VpnInterface.xray
         case "CLOAK_OUTLINE":
             return VpnInterface.cloakOutline
+        case "AMNEZIA_WG":
+            return VpnInterface.amneziaWg
         default:
-            return VpnInterface.none 
+            return VpnInterface.none
         }
     }
 
