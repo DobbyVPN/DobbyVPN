@@ -17,6 +17,7 @@ import (
 	socks5 "github.com/things-go/go-socks5"
 
 	"go_module/auth"
+	"go_module/core/pkg"
 	"go_module/log"
 )
 
@@ -60,7 +61,13 @@ func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) 
 	}
 
 	ctx := context.Background()
-	providers := configurl.NewDefaultProviders()
+
+	// Use custom providers with protected base dialers to ensure all upstream
+	// connections (SS, WebSocket, etc.) correctly bypass the tunnel on iOS 26.
+	providers := configurl.NewProviderContainer()
+	providers.StreamDialers.BaseInstance = pkg.NewProtectedStreamDialer(transportConfig)
+	providers.PacketDialers.BaseInstance = pkg.NewProtectedPacketDialer(transportConfig)
+	configurl.RegisterDefaultProviders(providers)
 
 	sd, err := providers.NewStreamDialer(ctx, transportConfig)
 	if err != nil {
@@ -240,7 +247,6 @@ func (d *OutlineDevice) markServeStopped(reason string) {
 }
 
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
-
 	log.Infof("[SOCKS5] dial %s %s", network, addr)
 	start := time.Now()
 

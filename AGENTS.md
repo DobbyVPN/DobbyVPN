@@ -45,6 +45,40 @@ If gomobile/iOS artifacts cannot be rebuilt in the current environment, state th
 - Make iOS upstream socket bypass/protection deterministic and observable.
 - Align iOS `NEPacketTunnelNetworkSettings.mtu` with the Go tun2socks engine MTU instead of hardcoding divergent values.
 
+## Session handoff notes
+
+### 2026-05-03/04 - iOS 26 VPN connectivity diagnosis
+
+**Summary**: Investigating VPN connection failures on iOS 26 where:
+- Cellular: completely fails
+- WiFi: starts but becomes unstable with chacha20poly1305 auth failures
+
+**Root cause investigation**: The issue is NOT about cellular/expensive/constrained flags. The problem occurs even with cellular disabled. The "other" interface (utun5) appears at VPN startup regardless of cellular.
+
+**Files touched**:
+- `swift_module/tunnel/PacketTunnelProvider.swift` - Added iOS 26 research logging
+- `go_module/tunnel/protected_dialer/protect_ios.go` - Added IP_BOUND_IF research
+- `go_module/tunnel/protected_dialer/dialer.go` - Added outbound connection local address logging
+- `go_module/outline/internal/outline_device.go` - Enhanced error messages
+
+**Key diagnostic added**: 
+- `[Protect] *** CRITICAL *** Outbound TCP connection NOT using VPN tunnel! local=192.168.x.x`
+- This will show if iOS 26 is bypassing the tunnel for outbound connections
+
+**Validation**: Code compiles, branch pushed successfully
+
+**Next steps**:
+1. Rebuild iOS app with new logging
+2. Test on iOS 26 with WiFi (no cellular)
+3. Look for CRITICAL message in logs - if local=192.168.x.x, that confirms tunnel bypass
+4. If bypass confirmed, need to find iOS 26 socket protection alternative to SO_NO_TC_NETPOLICY
+
+**Remaining risks**:
+- Root cause not yet confirmed - pending new test logs
+- May need to research iOS 26-specific socket options or Network.framework
+
+---
+
 ## PR Expectations
 
 When preparing a PR:
