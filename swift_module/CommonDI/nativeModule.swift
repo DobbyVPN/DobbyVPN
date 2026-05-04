@@ -11,10 +11,13 @@ class SentryLogsRepositoryImpl : SentryLogsRepository {
 
 public class NativeModuleHolder {
     private static let path = LogsRepository_iosKt.provideLogFilePath()
+    private static let netCheckPath = NetCheckRepository_iosKt.provideNetCheckConfigPath()
     private static let chan = LogEventsChannel()
     public static let logsRepository = LogsRepository
         .init(logFilePath: path, logEventsChannel: chan)
         .setSentryLogger(_sentryLogger: SentryLogsRepositoryImpl())
+    public static let netCheckRepository = NetCheckRepository
+        .init(configPath: netCheckPath)
     
     public static let shared: Koin_coreModule = MakeNativeModuleKt.makeNativeModule(
         copyLogsInteractor: { _ in
@@ -43,6 +46,12 @@ public class NativeModuleHolder {
         },
         healthCheck: { _ in
             return HealthCheckImpl()
+        },
+        netCheckManager { _ in
+            return NetCheckManagerImpl()
+        },
+        netCheckRepository { _ in
+            return netCheckRepository
         }
     )
     

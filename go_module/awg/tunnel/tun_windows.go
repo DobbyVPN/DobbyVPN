@@ -101,7 +101,15 @@ func (a *TunnelData) Run() error {
 
 	log.Debugf(Category, "Creating interface instance")
 	bind := conn.NewDefaultBind()
-	a.dev = device.NewDevice(wintun, bind, &device.Logger{log.Infof, log.Infof})
+	logger := &device.Logger{
+		Verbosef: func(format string, args ...any) {
+			log.Debugf("TUN", format, args...)
+		},
+		Errorf: func(format string, args ...any) {
+			log.Errorf("TUN", format, args...)
+		},
+	}
+	a.dev = device.NewDevice(wintun, bind, logger)
 
 	log.Debugf(Category, "Setting interface configuration")
 	uapi, err := ipc.UAPIListen(a.InterfaceName)
