@@ -62,6 +62,11 @@ public final class OutlineInteractor {
         nativeClientCreated()
 
         logs.writeLog(log: "[DEBUG][Outline] calling native OutlineConnect")
+        
+        // iOS 26 research: Log before connect with key details
+        let host = OutlineInteractor.extractHost(from: serverPort)
+        logs.writeLog(log: "[iOS26-RESEARCH] Connecting to Outline server: host=\(host)")
+        
         Cloak_outlineOutlineConnect(&err)
         if let error = err {
             logs.writeLog(log: "[Outline] OutlineConnect failed: \(error.localizedDescription)")
