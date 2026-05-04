@@ -2,11 +2,10 @@ import app
 import MyLibrary
 
 public class NetCheckManagerImpl: NetCheckManager {
-    private static let netCheckPath = NetCheckRepository_iosKt.provideNetCheckConfigPath()
-
     public func startNetCheck() -> String {
+        let configPath = NetCheckRepository_iosKt.provideNetCheckConfigPath().normalized().description()
         var err: NSError?
-        Cloak_outlineNetCheck(configPath: netCheckPath.normalized().description(), &err)
+        Cloak_outlineNetCheck(configPath: configPath, &err)
         if let error = err {
             return "failed to start netcheck: \(error.localizedDescription)"
         } else {
