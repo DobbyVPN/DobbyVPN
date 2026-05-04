@@ -9,6 +9,10 @@ import Darwin
 import SystemConfiguration
 import Network
 
+// C function to convert interface name to index (for Go socket binding)
+@_silgen_name("if_nametoindex")
+func if_nametoindex(_: UnsafePointer<CChar>) -> CUnsignedInt
+
 
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
@@ -319,6 +323,56 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    /// Get the default (primary) interface index for socket binding.
+    /// Returns 0 if no valid interface is found.
+    private func getDefaultInterfaceIndex(from path: Network.NWPath) -> Int {
+        // Find the non-VPN interface (type != .other)
+        let physicalInterfaces = path.availableInterfaces.filter { $0.type != .other }
+        
+        // Prefer WiFi, then cellular, then any other physical interface
+        let preferredInterface = physicalInterfaces.first { $0.type == .wifi }
+            ?? physicalInterfaces.first { $0.type == .cellular }
+            ?? physicalInterfaces.first
+        
+        guard let iface = preferredInterface else {
+            return 0
+        }
+        
+        // Convert interface name to index
+        let index = Int(if_nametoindex(iface.name))
+        return index
+    }
+    
+    /// Update the default interface index in Go for socket protection.
+    /// Call this whenever the network path changes.
+    private func updateDefaultInterfaceIndex(for path: Network.NWPath) {
+        let index = getDefaultInterfaceIndex(from: path)
+        
+        if index > 0 {
+            // Get interface name for logging
+            let physicalInterfaces = path.availableInterfaces.filter { $0.type != .other }
+            let ifaceName = physicalInterfaces.first { $0.type == .wifi }?.name
+                ?? physicalInterfaces.first { $0.type == .cellular }?.name
+                ?? physicalInterfaces.first?.name
+                ?? "unknown"
+            
+            let ifaceType = physicalInterfaces.first { $0.type == .wifi } != nil ? "WiFi"
+                : physicalInterfaces.first { $0.type == .cellular } != nil ? "Cellular"
+                : "Other"
+            
+            // Call Go function to set the interface index
+            app.Cloak_outlineSetDefaultInterfaceIndex(index)
+            
+            logs.writeLog(
+                log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] Set default interface index: \(index) (\(ifaceName)/\(ifaceType))"
+            )
+        } else {
+            logs.writeLog(
+                log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] WARNING: Could not determine default interface index!"
+            )
+        }
+    }
+
     private func startPathLogging() {
         // Logs-only: helps correlate "Wi‑Fi off/on" with tunnel lifecycle and health-check decisions.
         let monitor = Network.NWPathMonitor()
@@ -327,6 +381,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
+            
+            // iOS 26+: Update the interface index in Go for socket protection
+            self.updateDefaultInterfaceIndex(for: path)
             
             // iOS 26+ diagnostic: capture all path properties
             let supportsIPV4 = path.supportsIPv4
@@ -494,6 +551,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                       "expensive=\(expensive) constrained=\(constrained) " +
                       "ipv4=\(supportsIPv4) ipv6=\(supportsIPv6)"
             logs.writeLog(log: log)
+            
+            // iOS 26+: Set initial interface index from startup path
+            let ifaceIndex = self.getDefaultInterfaceIndex(from: path)
+            if ifaceIndex > 0 {
+                app.Cloak_outlineSetDefaultInterfaceIndex(ifaceIndex)
+                logs.writeLog(log: "[tunnel:\(self.tunnelId)] STARTUP: Set initial interface index: \(ifaceIndex)")
+            }
             
             // iOS 26-specific warnings
             if expensive && constrained {

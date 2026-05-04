@@ -1,6 +1,7 @@
 package protected_dialer
 
 import (
+	"sync"
 	"syscall"
 
 	"go_module/log"
@@ -8,26 +9,81 @@ import (
 
 const SO_NO_TC_NETPOLICY = 0x1101
 
-// iOS 26 research: Try additional socket options
-// IP_BOUND_IF may help bind to specific interface on iOS 26
+// IP_BOUND_IF binds the socket to a specific interface by index
+// This is the key option for iOS 26+ socket protection
 const IP_BOUND_IF = 25
+const IPV6_BOUND_IF = 125
+
+// defaultInterfaceIndex stores the current default interface index.
+// On iOS, this is updated by Swift code via Network.NWPathMonitor.
+var defaultInterfaceIndex int
+var defaultInterfaceMu sync.RWMutex
+
+// SetDefaultInterfaceForIOS sets the default interface index from Swift.
+// Called when the network path changes (WiFi <-> Cellular transition).
+func SetDefaultInterfaceForIOS(index int) {
+	defaultInterfaceMu.Lock()
+	oldIndex := defaultInterfaceIndex
+	defaultInterfaceIndex = index
+	defaultInterfaceMu.Unlock()
+	
+	if oldIndex != index {
+		log.Infof("[iOS-Protect] Default interface index changed: %d -> %d", oldIndex, index)
+	}
+}
+
+// GetDefaultInterfaceForIOS returns the current default interface index.
+func GetDefaultInterfaceForIOS() int {
+	defaultInterfaceMu.RLock()
+	defer defaultInterfaceMu.RUnlock()
+	return defaultInterfaceIndex
+}
 
 type iosProtector struct{}
 
 func (i *iosProtector) Protect(fd uintptr, network string) error {
-	// iOS 26: Try SO_NO_TC_NETPOLICY first (original approach)
-	err := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, SO_NO_TC_NETPOLICY, 1)
-	if err != nil {
-		log.Infof("[iOS-Protect] SO_NO_TC_NETPOLICY failed: %v", err)
+	// iOS 26+: Try SO_NO_TC_NETPOLICY first (legacy approach for older iOS versions)
+	// On iOS 26+, this typically fails with "invalid argument" but doesn't hurt to try.
+	if err := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, SO_NO_TC_NETPOLICY, 1); err != nil {
+		log.Infof("[iOS-Protect] SO_NO_TC_NETPOLICY failed (expected on iOS 26+): %v", err)
 	}
 	
-	// iOS 26 research: Try IP_BOUND_IF to bind to default interface
-	// This might help with routing issues on iOS 26
-	// Note: This may not work on all iOS versions, but let's try
-	boundIfErr := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, IP_BOUND_IF, 0)
-	if boundIfErr != nil {
-		// Not fatal - just log for research
-		log.Infof("[iOS-Protect] IP_BOUND_IF not available: %v (this is normal on some iOS versions)", boundIfErr)
+	// iOS 26+: Use IP_BOUND_IF with the actual interface index.
+	// This is the primary method for socket protection on iOS 26+.
+	// The interface index is provided by Swift via NWPathMonitor.
+	defaultInterfaceMu.RLock()
+	ifaceIndex := defaultInterfaceIndex
+	defaultInterfaceMu.RUnlock()
+	
+	if ifaceIndex > 0 {
+		// Bind the socket to the default physical interface (WiFi/Cellular)
+		// This ensures encrypted VPN traffic goes outside the VPN tunnel.
+		switch network {
+		case "tcp4", "udp4":
+			if err := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, IP_BOUND_IF, ifaceIndex); err != nil {
+				log.Infof("[iOS-Protect] IP_BOUND_IF (IPv4) failed for fd=%d iface=%d: %v", fd, ifaceIndex, err)
+				return err
+			}
+			log.Infof("[iOS-Protect] IP_BOUND_IF (IPv4) success: fd=%d bound to interface %d", fd, ifaceIndex)
+		case "tcp6", "udp6":
+			if err := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, IPV6_BOUND_IF, ifaceIndex); err != nil {
+				log.Infof("[iOS-Protect] IP_BOUND_IF (IPv6) failed for fd=%d iface=%d: %v", fd, ifaceIndex, err)
+				return err
+			}
+			log.Infof("[iOS-Protect] IP_BOUND_IF (IPv6) success: fd=%d bound to interface %d", fd, ifaceIndex)
+		default:
+			// For unknown network types, try IPv4
+			if err := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, IP_BOUND_IF, ifaceIndex); err != nil {
+				log.Infof("[iOS-Protect] IP_BOUND_IF (fallback) failed for fd=%d iface=%d network=%s: %v", fd, ifaceIndex, network, err)
+				return err
+			}
+		}
+	} else {
+		// No interface index set - this will likely fail on iOS 26+
+		// Log a warning that Swift needs to provide the interface index
+		log.Infof("[iOS-Protect] WARNING: No default interface index set (ifaceIndex=%d). " +
+			"VPN traffic may not bypass tunnel correctly on iOS 26+. " +
+			"Ensure Swift calls SetDefaultInterfaceIndex() with valid interface index from NWPathMonitor.", ifaceIndex)
 	}
 	
 	return nil
@@ -35,5 +91,5 @@ func (i *iosProtector) Protect(fd uintptr, network string) error {
 
 func init() {
 	protector = &iosProtector{}
-	log.Infof("[iOS-Protect] Initialized with iOS 26 research options (SO_NO_TC_NETPOLICY + IP_BOUND_IF research)")
+	log.Infof("[iOS-Protect] Initialized with iOS 26+ support (SO_NO_TC_NETPOLICY + IP_BOUND_IF with dynamic interface)")
 }
