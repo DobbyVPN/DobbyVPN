@@ -20,20 +20,20 @@ import (
 )
 
 type OutlineDevice struct {
-	mu             sync.RWMutex
-	listener       net.Listener
-	proxyAddr      string
-	svrIP          net.IP
-	streamDialer   transport.StreamDialer
-	packetDialer   transport.PacketDialer
-	useCloak       bool
-	preferTCPDNS   bool
+	mu               sync.RWMutex
+	listener         net.Listener
+	proxyAddr        string
+	svrIP            net.IP
+	streamDialer     transport.StreamDialer
+	packetDialer     transport.PacketDialer
+	useCloak         bool
+	preferTCPDNS     bool
 	disableNonDNSUDP bool
-	closed         atomic.Bool
-	startedAt      time.Time
-	serveState     string
-	serveErr       string
-	serveGen       int
+	closed           atomic.Bool
+	startedAt        time.Time
+	serveState       string
+	serveErr         string
+	serveGen         int
 }
 
 type DeviceOptions struct {
@@ -263,7 +263,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		// chacha20poly1305 AEAD failures on every response, causing QUIC retry storms.
 		// Reject non-DNS UDP immediately so the OS falls back to TCP without burning ~1s per attempt.
 		if d.disableNonDNSUDP && port != 53 {
-			log.Infof("[SOCKS5 UDP] rejected (disableNonDNSUDP) addr=%s", addr)
+			log.Debugf(Category, "[SOCKS5 UDP] rejected (disableNonDNSUDP) addr=%s", addr)
 			return nil, fmt.Errorf("non-DNS UDP disabled for this transport")
 		}
 

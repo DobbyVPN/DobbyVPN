@@ -18,15 +18,15 @@ func protector(network string, address string, c syscall.RawConn) error {
 	controlErr := c.Control(func(fd uintptr) {
 		protectErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, SO_NO_TC_NETPOLICY, 1)
 		if protectErr != nil {
-			log.Infof("Cloak protect failed: fd=%d network=%s address=%s err=%v", fd, network, address, protectErr)
+			log.Debugf(Category, "Cloak protect failed: fd=%d network=%s address=%s err=%v", fd, network, address, protectErr)
 		} else {
-			log.Infof("Cloak protect (SO_NO_TC_NETPOLICY) success: fd=%d network=%s address=%s", fd, network, address)
+			log.Debugf(Category, "Cloak protect (SO_NO_TC_NETPOLICY) success: fd=%d network=%s address=%s", fd, network, address)
 		}
 
 		// iOS 26 research: Try IP_BOUND_IF as well
 		boundIfErr := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, IP_BOUND_IF, 0)
 		if boundIfErr != nil {
-			log.Infof("Cloak IP_BOUND_IF skipped: fd=%d err=%v", fd, boundIfErr)
+			log.Debugf(Category, "Cloak IP_BOUND_IF skipped: fd=%d err=%v", fd, boundIfErr)
 		}
 	})
 	if controlErr != nil {
