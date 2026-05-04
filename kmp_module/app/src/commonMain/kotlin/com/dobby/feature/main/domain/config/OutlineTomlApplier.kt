@@ -24,8 +24,9 @@ internal class OutlineTomlApplier(
 
     fun apply(outline: OutlineConfig): Pair<Boolean, Boolean>? {
         logger.log("Detected [Outline] config, applying Outline parameters")
-        outlineRepo.setIsOutlineEnabled(true)
+
         vpnRepo.setVpnInterface(VpnInterface.CLOAK_OUTLINE)
+        outlineRepo.setIsOutlineEnabled(true)
 
         val method = outline.Method?.trim().orEmpty().ifEmpty { DEFAULT_METHOD }
         val password = outline.Password?.trim().orEmpty()
@@ -44,7 +45,7 @@ internal class OutlineTomlApplier(
         // Decide where Outline connects (direct or via local Cloak).
         if (cloakEnabled) {
             cloakRepo.setCloakLocalPort(DEFAULT_CLOAK_LOCAL_PORT)
-            outlineRepo.setServerPortOutline("127.0.0.1:$DEFAULT_CLOAK_LOCAL_PORT")
+            outlineRepo.setServerPort("127.0.0.1:$DEFAULT_CLOAK_LOCAL_PORT")
             logger.log("Cloak enabled: Outline will connect to local endpoint 127.0.0.1:$DEFAULT_CLOAK_LOCAL_PORT (ignoring Outline.Server/Port)")
         } else {
             val server = outline.Server?.trim().orEmpty()
@@ -61,7 +62,7 @@ internal class OutlineTomlApplier(
                 cloakRepo.clearCloakConfig()
                 return null
             }
-            outlineRepo.setServerPortOutline("${server}:${port}")
+            outlineRepo.setServerPort("${server}:${port}")
             // Ensure Cloak is cleared when not used.
             cloakRepo.clearCloakConfig()
         }
@@ -89,7 +90,7 @@ internal class OutlineTomlApplier(
 
         logger.log("Outline disguisePrefix: ${disguisePrefix.ifEmpty { "(none)" }}")
         logger.log("Outline websocket: $websocketEnabled, webSocketPath: ${outline.WebSocketPath ?: "(none)"}")
-        logger.log("Outline method, password, and server: ${method}:${maskStr(password)}@${maskStr(outlineRepo.getServerPortOutline())}")
+        logger.log("Outline method, password, and server: ${method}:${maskStr(password)}@${maskStr(outlineRepo.getServerPort())}")
 
         return cloakEnabled to websocketEnabled
     }

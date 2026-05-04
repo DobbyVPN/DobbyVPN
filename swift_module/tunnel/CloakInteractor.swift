@@ -41,6 +41,7 @@ public final class CloakInteractor {
             logs.writeLog(log: "startCloakOutline: Cloak_outlineStartCloakClient returned (cloakStarted=true)")
         } else {
             logs.writeLog(log: "startCloakOutline: cloak disabled")
+            return
         }
     }
 
@@ -53,5 +54,6 @@ public final class CloakInteractor {
         } else {
             logs.writeLog(log: "[DEBUG] stopCloak: skipped, cloakStarted=false")
         }
+        cloakStarted = false
     }
 }

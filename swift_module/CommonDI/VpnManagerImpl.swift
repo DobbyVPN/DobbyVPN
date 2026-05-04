@@ -223,7 +223,7 @@ public class VpnManagerImpl: VpnManager {
     }
 
     private func currentServerAddress() -> String {
-        let outlineServer = configsRepository.getServerPortOutline().trimmingCharacters(in: .whitespacesAndNewlines)
+        let outlineServer = configsRepository.getServerPort().trimmingCharacters(in: .whitespacesAndNewlines)
         if !outlineServer.isEmpty {
             return outlineServer
         }

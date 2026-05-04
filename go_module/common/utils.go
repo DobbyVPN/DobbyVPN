@@ -1,11 +1,11 @@
 package common
 
 import (
+	"crypto/rand"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"net"
 	"sync"
-	"time"
 )
 
 type NetworkConfig struct {
@@ -27,11 +27,10 @@ func GetNetworkConfig() *NetworkConfig {
 }
 
 func generateConfig() *NetworkConfig {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-
 	for i := 0; i < 20; i++ {
-		x := r.Intn(254) + 1
-		y := r.Intn(254) + 1
+		n, _ := rand.Int(rand.Reader, big.NewInt(254))
+		x := n.Int64() + 1
+		y := n.Int64() + 1
 
 		gateway := fmt.Sprintf("10.%d.%d.1", x, y)
 		device := fmt.Sprintf("10.%d.%d.2", x, y)
