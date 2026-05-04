@@ -114,6 +114,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
             startupStage = "path monitor"
             startPathLogging()
+            
+            // iOS 26+ diagnostic: capture network state at tunnel start
+            captureNetworkStateAtStartup(logs: logs, tunnelId: tunnelId)
 
             startupStage = "go logger init"
             let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
@@ -354,22 +357,125 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
-            let ifaces = path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",")
+            
+            // iOS 26+ diagnostic: capture all path properties
+            let supportsIPV4 = path.supportsIPv4
+            let supportsIPV6 = path.supportsIPv6
+            let ifaces = path.availableInterfaces.map { iface -> String in
+                return "\(iface.name):\(iface.type) ipv4=\(supportsIPV4) ipv6=\(supportsIPV6)"
+            }.joined(separator: ",")
+            
             let expensive = path.isExpensive
             let constrained = path.isConstrained
+            let status = path.status
+            
+            // iOS 26+ detection of problematic scenarios
+            var pathDesc = "status=\(status) ifaces=[\(ifaces)] expensive=\(expensive) constrained=\(constrained)"
+            
+            if #available(iOS 26.0, *) {
+                if expensive {
+                    pathDesc += " [EXPENSIVE_NETWORK]"
+                }
+                if constrained {
+                    pathDesc += " [CONSTRAINED - data saver/low data mode or carrier restriction]"
+                }
+                switch status {
+                case .satisfied:
+                    pathDesc += " [OK]"
+                case .unsatisfied:
+                    pathDesc += " [LOST]"
+                case .requiresConnection:
+                    pathDesc += " [NEEDS_CONNECT]"
+                @unknown default:
+                    pathDesc += " [UNKNOWN]"
+                }
+            }
+            
             let fingerprint = "status=\(path.status)|ifaces=\(ifaces)|expensive=\(expensive)|constrained=\(constrained)"
             if self.lastPathFingerprint != fingerprint {
+                let previousFingerprint = self.lastPathFingerprint
                 self.lastPathFingerprint = fingerprint
                 self.logs.writeLog(
-                    log: "[tunnel:\(self.tunnelId)] pathUpdate " +
-                        "status=\(path.status) ifaces=[\(ifaces)] " +
-                        "expensive=\(expensive) constrained=\(constrained)"
+                    log: "[tunnel:\(self.tunnelId)] PATH_UPDATE: " + pathDesc
                 )
+
+                // iOS 26: Log warning for problematic network conditions
+                if constrained && expensive {
+                    self.logs.writeLog(
+                        log: "[tunnel:\(self.tunnelId)] WARNING: Network is BOTH expensive AND constrained - expect connection issues!"
+                    )
+                }
+
+                // Log each interface's capability
+                for iface in path.availableInterfaces {
+                    self.logs.writeLog(
+                        log: "[tunnel:\(self.tunnelId)] Interface: \(iface.name) type=\(iface.type) isCellular=\(iface.type == .cellular)"
+                    )
+                }
+
+                // CRITICAL: Log when WiFi->Cellular transition happens (this is when tunnel issues start)
+                let wasUsingWiFi = previousFingerprint?.contains("wifi") == true
+                let isNowUsingWiFi = ifaces.contains("wifi")
+                let isNowUsingCellular = ifaces.contains("cellular")
+                
+                if wasUsingWiFi && isNowUsingCellular && !isNowUsingWiFi {
+                    self.logs.writeLog(
+                        log: "[tunnel:\(self.tunnelId)] CRITICAL: Network transitioned WiFi -> Cellular! Tunnel instability expected!"
+                    )
+                }
             }
         }
 
         monitor.start(queue: q)
         logs.writeLog(log: "[tunnel:\(tunnelId)] NWPathMonitor started")
+    }
+    
+    /// Capture network state at tunnel startup for diagnostic purposes
+    private func captureNetworkStateAtStartup(logs: LogsRepository, tunnelId: String) {
+        // Note: This is a best-effort capture; the monitor may not have populated yet
+        let monitor = Network.NWPathMonitor()
+        let q = DispatchQueue(label: "vpn.dobby.app.tunnel.startup-path")
+        var captured = false
+        
+        monitor.pathUpdateHandler = { path in
+            guard !captured else { return }
+            captured = true
+            
+            // Capture interface details
+            var ifaceDetails: [String] = []
+            for iface in path.availableInterfaces {
+                let detail = "\(iface.name):\(iface.type) cellular=\(iface.type == .cellular) wifi=\(iface.type == .wifi)"
+                ifaceDetails.append(detail)
+            }
+            let ifacesStr = ifaceDetails.joined(separator: ", ")
+            
+            let expensive = path.isExpensive
+            let constrained = path.isConstrained
+            let status = path.status
+            let supportsIPv4 = path.supportsIPv4
+            let supportsIPv6 = path.supportsIPv6
+            
+            // Log all network state
+            let log = "[tunnel:\(tunnelId)] STARTUP_NETWORK: status=\(status) ifaces=[\(ifacesStr)] " +
+                      "expensive=\(expensive) constrained=\(constrained) " +
+                      "ipv4=\(supportsIPv4) ipv6=\(supportsIPv6)"
+            logs.writeLog(log: log)
+            
+            // iOS 26-specific warnings
+            if expensive && constrained {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_WARNING: Cellular with BOTH expensive AND constrained=true - expect instability!")
+            }
+            if path.status == .unsatisfied {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_ERROR: Network path unsatisfied at tunnel start!")
+            }
+        }
+        
+        monitor.start(queue: q)
+        
+        // Give it a moment to capture, then stop
+        q.asyncAfter(deadline: .now() + 1.0) {
+            monitor.cancel()
+        }
     }
 
     @MainActor

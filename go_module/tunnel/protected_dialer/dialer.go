@@ -52,10 +52,13 @@ func listenAddr(network string) string {
 
 func protectSocket(fd uintptr, realNet, destination string) error {
 	if protector == nil {
+		// iOS 26: Log warning if protector is nil - this could explain connectivity issues
+		log.Infof("[Protect] WARNING: no socket protector registered - traffic may bypass VPN!")
 		return fmt.Errorf("no socket protector registered")
 	}
 	if err := protector.Protect(fd, realNet); err != nil {
-		log.Infof("[Protect] %s fd=%d destination=%s failed: %v", realNet, fd, destination, err)
+		// iOS 26: Log detailed error - socket protection failure may cause network issues
+		log.Infof("[Protect] ERROR: %s fd=%d destination=%s failed: %v - THIS MAY CAUSE CONNECTIVITY ISSUES ON iOS 26", realNet, fd, destination, err)
 		return err
 	}
 	log.Infof("[Protect] %s fd=%d destination=%s OK", realNet, fd, destination)

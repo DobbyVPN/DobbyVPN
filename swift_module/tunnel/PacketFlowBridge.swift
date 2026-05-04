@@ -10,8 +10,8 @@ final class PacketFlowBridge {
     private let lock = NSLock()
     private let utunHeaderLength = 4
     private let requestedSocketBufferBytes = 1 * 1024 * 1024
-    private let maxGoToTunnelBatchPackets = 64
-    private let maxGoToTunnelBatchBytes = 64 * 1024
+    private let maxBatchPackets = 64
+    private let maxBatchBytes = 64 * 1024
 
     private var readSource: DispatchSourceRead?
     private var statsTimer: DispatchSourceTimer?
@@ -196,10 +196,10 @@ final class PacketFlowBridge {
         }
 
         var buffer = [UInt8](repeating: 0, count: max(mtu + utunHeaderLength + 128, 2048))
-        var packets: [Data] = []
-        var protocols: [NSNumber] = []
-        packets.reserveCapacity(maxGoToTunnelBatchPackets)
-        protocols.reserveCapacity(maxGoToTunnelBatchPackets)
+        var batchPackets: [Data] = []
+        var batchProtocols: [NSNumber] = []
+        batchPackets.reserveCapacity(maxBatchPackets)
+        batchProtocols.reserveCapacity(maxBatchPackets)
         var batchBytes = 0
 
         while isRunning {
@@ -218,74 +218,43 @@ final class PacketFlowBridge {
                     continue
                 }
                 let packet = Data(buffer[utunHeaderLength..<readCount])
-                packets.append(packet)
-                protocols.append(protocolFamily(for: packet))
+                batchPackets.append(packet)
+                batchProtocols.append(protocolFamily(for: packet))
                 batchBytes += packet.count
 
-                if packets.count >= maxGoToTunnelBatchPackets || batchBytes >= maxGoToTunnelBatchBytes {
-                    flushPacketsToTunnel(
-                        packets: &packets,
-                        protocols: &protocols,
-                        batchBytes: &batchBytes
-                    )
+                if batchPackets.count >= maxBatchPackets || batchBytes >= maxBatchBytes {
+                    flushBatchToTunnel(&batchPackets, &batchProtocols, &batchBytes)
                 }
                 continue
             }
 
+            flushBatchToTunnel(&batchPackets, &batchProtocols, &batchBytes)
+
             if readCount == 0 {
-                flushPacketsToTunnel(
-                    packets: &packets,
-                    protocols: &protocols,
-                    batchBytes: &batchBytes
-                )
                 logReadError("Go packet fd closed")
                 return
             }
 
             if readErrno == EAGAIN || readErrno == EWOULDBLOCK {
-                flushPacketsToTunnel(
-                    packets: &packets,
-                    protocols: &protocols,
-                    batchBytes: &batchBytes
-                )
                 return
             }
-            flushPacketsToTunnel(
-                packets: &packets,
-                protocols: &protocols,
-                batchBytes: &batchBytes
-            )
             logReadError("read packet from Go failed errno=\(readErrno) \(errnoDescription(readErrno))")
             return
         }
 
-        flushPacketsToTunnel(
-            packets: &packets,
-            protocols: &protocols,
-            batchBytes: &batchBytes
-        )
+        flushBatchToTunnel(&batchPackets, &batchProtocols, &batchBytes)
     }
 
-    private func flushPacketsToTunnel(
-        packets: inout [Data],
-        protocols: inout [NSNumber],
-        batchBytes: inout Int
+    private func flushBatchToTunnel(
+        _ packets: inout [Data],
+        _ protocols: inout [NSNumber],
+        _ batchBytes: inout Int
     ) {
-        guard !packets.isEmpty else {
-            return
-        }
-
-        let packetCount = packets.count
-        let byteCount = batchBytes
-        if packetFlow.writePackets(packets, withProtocols: protocols) {
-            recordGoToTunnelBatch(packetCount: packetCount, byteCount: byteCount)
-        } else {
-            recordGoToTunnelDrop(count: packetCount)
-            logReadError(
-                "write packet batch to tunnel failed packets=\(packetCount) bytes=\(byteCount)"
-            )
-        }
-
+        guard !packets.isEmpty else { return }
+        let count = packets.count
+        let bytes = batchBytes
+        packetFlow.writePackets(packets, withProtocols: protocols)
+        recordGoToTunnelBatch(packetCount: count, byteCount: bytes)
         packets.removeAll(keepingCapacity: true)
         protocols.removeAll(keepingCapacity: true)
         batchBytes = 0
@@ -345,10 +314,7 @@ final class PacketFlowBridge {
         lock.unlock()
 
         if shouldLogFirst {
-            log(
-                "[DEBUG][PacketFlowBridge] first packet batch go->tunnel " +
-                "packets=\(packetCount) bytes=\(byteCount)"
-            )
+            log("[DEBUG][PacketFlowBridge] first batch go->tunnel packets=\(packetCount) bytes=\(byteCount)")
         }
     }
 
@@ -358,9 +324,9 @@ final class PacketFlowBridge {
         lock.unlock()
     }
 
-    private func recordGoToTunnelDrop(count: Int = 1) {
+    private func recordGoToTunnelDrop() {
         lock.lock()
-        goToTunnelDrops += count
+        goToTunnelDrops += 1
         lock.unlock()
     }
 
