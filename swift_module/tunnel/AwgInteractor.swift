@@ -34,7 +34,7 @@ public final class AwgInteractor {
         nativeClientCreated()
 
         logs.writeLog(log: "[DEBUG][AmneziaWG] calling native AmneziaWGConnect")
-        Cloak_outlineAwgTurnOn(interfaceName: "utun0", tunFd: Int(tunnelFileDescriptor), settings: config, &err)
+        Cloak_outlineAwgTurnOn("utun0", Int(tunnelFileDescriptor), config, &err)
         if let error = err {
             logs.writeLog(log: "[AmneziaWG] AmneziaWGConnect failed: \(error.localizedDescription)")
             throw error

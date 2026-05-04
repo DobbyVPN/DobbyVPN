@@ -16,7 +16,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let tunnelId = String(UUID().uuidString.prefix(8))
     private let tunnelMTU = 1200
 
-    private let awgInteractor: AwgInteractor = AwgInteractor()
     private let outlineInteractor: OutlineInteractor = OutlineInteractor()
     private let cloakInteractor: CloakInteractor = CloakInteractor()
     private let awgInteractor: AwgInteractor = AwgInteractor()
