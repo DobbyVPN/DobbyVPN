@@ -7,13 +7,13 @@ The VPN app fails to work on iOS 26 (iOS 26.3.1) but works on iOS 18 and Android
 From the logs, the critical issue is:
 ```
 [iOS-Protect] SO_NO_TC_NETPOLICY failed: invalid argument
-[Protect] *** CRITICAL *** Outbound TCP connection NOT using VPN tunnel! local=10.171.9.1:55307
+[Protect] TCP dial OK: dest=mirror.example.com:443 local=10.171.9.1:55307 remote=x.x.x.x:443
 ```
 
 1. **Deprecated Socket Option**: `SO_NO_TC_NETPOLICY` (socket option `0x1101`) no longer works on iOS 26
 2. **IP_BOUND_IF with index 0**: Using `IP_BOUND_IF` with index `0` doesn't bind to any interface
 3. **Missing Interface Index**: The code needs the actual physical interface index (WiFi/Cellular) to bind sockets correctly
-4. **Routing Loop**: Without socket protection, the VPN's encrypted traffic goes through the physical interface (10.x.x.x) instead of tunnel interface (198.18.x.x), causing failed connections
+4. **Routing Loop Risk**: The VPN's encrypted upstream traffic must stay on the physical interface (`10.x.x.x`, `192.168.x.x`, etc.). If a protected upstream socket uses the tunnel address (`198.18.x.x`), traffic can loop back into tun2socks.
 
 ## Solution
 
@@ -56,8 +56,8 @@ Exports two functions to Swift:
 - Modified `startPathLogging()`:
   - Calls `updateDefaultInterfaceIndex()` at the start of every path update
 
-- Modified `captureNetworkStateAtStartup()`:
-  - Sets initial interface index on tunnel startup
+- Added synchronous startup interface detection:
+  - Sets initial interface index before Cloak/Outline opens protected sockets
 
 ## How It Works
 
@@ -85,7 +85,7 @@ Exports two functions to Swift:
 1. Regenerate iOS bindings (if using gomobile):
    ```bash
    cd go_module
-   gomobile bind -target=ios -o ../ios/Mobile.xcframework .
+   GO111MODULE=on gomobile bind -target=ios -o MyLibrary.xcframework ./ios_exports
    ```
 
 2. Build the iOS app as usual
@@ -98,10 +98,10 @@ Expected log entries after fix:
 ```
 [tunnel:XXXX] [iOS26-RESEARCH] Set default interface index: 15 (pdp_ip0/Cellular)
 [iOS-Protect] IP_BOUND_IF (IPv4) success: fd=20 bound to interface 15
-[Protect] TCP dial OK: dest=mirror.example.com:443 local=198.18.0.1:XXXXX remote=x.x.x.x:443
+[Protect] TCP dial OK: dest=mirror.example.com:443 local=10.171.9.1:XXXXX remote=x.x.x.x:443
 ```
 
-The key indicator of success is seeing `local=198.18.0.1` (tunnel address) instead of `local=10.x.x.x` (cellular address).
+For protected upstream sockets, the key indicator of success is a physical-interface local address (`10.x.x.x`, `192.168.x.x`, etc.), not `198.18.0.1`. App traffic and health checks inside the VPN should still show the tunnel address (`198.18.0.1`).
 
 ## Compatibility
 
