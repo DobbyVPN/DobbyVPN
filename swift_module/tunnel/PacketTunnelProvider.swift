@@ -20,6 +20,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let tunnelId = String(UUID().uuidString.prefix(8))
     private let tunnelMTU = 1200
 
+    private let xrayInteractor: XRayInteractor = XRayInteractor()
     private let outlineInteractor: OutlineInteractor = OutlineInteractor()
     private let cloakInteractor: CloakInteractor = CloakInteractor()
 
@@ -107,15 +108,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
         var startupStage = "entered"
         let optionKeys = options?.keys.sorted().joined(separator: ",") ?? "(none)"
-        
+
         // iOS 26 research: Log iOS version
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let osVersionString = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         logs.writeLog(log: "[iOS26-RESEARCH] iOS version: \(osVersionString)")
-        
+
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
-        
+
         // iOS 26 research: Log network interfaces BEFORE tunnel starts
         logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: BEFORE_VPN_TUNNEL ==========")
         logInterfaces()
@@ -137,7 +138,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             
             // iOS 26+: set the physical interface index before any protected sockets are opened.
             setInitialDefaultInterfaceIndexForStartup(timeout: 1.0)
-
             startupStage = "geo routing config"
             let geoRoutingConf = configsRepository.getGeoRoutingConf()
             logs.writeLog(log: "[DEBUG][Routing] applying geo routing config length=\(geoRoutingConf.count)")
@@ -148,7 +148,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
             // DNS resolution at tunnel start can hang in offline/captive-portal cases, so we do it with a hard timeout.
             var excludedRoutes: [NEIPv4Route] = []
-            if let hostOrIp = extractIP(from: configsRepository.getServerPortOutline()) {
+            if let hostOrIp = extractIP(from: configsRepository.getServerPort()) {
                 let trimmed = hostOrIp.trimmingCharacters(in: .whitespacesAndNewlines)
                 if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
                    let route = makeExcludedRoute(host: ip) {
@@ -189,11 +189,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 logs.writeLog(log: "Excluded IPv4 routes: (none)")
             }
 
+            // Determine which protocol to use early - needed for Cloak startup
+            let vpnInterface = configsRepository.getVpnInterface()
+
             // Cloak must bind/connect before the full-tunnel route is installed; otherwise
             // iOS can route the upstream bootstrap traffic into a tunnel that is not ready yet.
-            startupStage = "cloak startup"
-            logs.writeLog(log: "[tunnel:\(tunnelId)] starting Cloak phase")
-            try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
+            // Only start Cloak for cloakOutline protocol.
+            if vpnInterface == .cloakOutline {
+                startupStage = "cloak startup"
+                logs.writeLog(log: "[tunnel:\(tunnelId)] starting Cloak phase")
+                try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPort())
+            }
 
             startupStage = "network settings build"
             let remoteAddress = "254.1.1.1"
@@ -249,23 +255,40 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             packetFlowBridge = bridge
             bridge.start()
 
-            startupStage = "outline startup"
-            
-            // iOS 26 research: Log Outline server connection details
-            let outlineServer = configsRepository.getServerPortOutline()
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] Outline server: \(maskStr(value: outlineServer))")
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] Tunnel settings: local=\(localAddress) remote=\(remoteAddress) mtu=\(tunnelMTU)")
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] DNS servers: \(dnsServers)")
-            
-            logs.writeLog(log: "[tunnel:\(tunnelId)] starting Outline phase tunnelFD=\(bridge.tunnelFileDescriptor) mtu=\(tunnelMTU)")
-            try outlineInteractor.startOutline(
-                tunnelFileDescriptor: bridge.tunnelFileDescriptor,
-                mtu: tunnelMTU,
-                nativeClientCreated: {
-                    bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] native Outline client created; releasing bridge fd to Go")
-                    bridge.releaseTunnelFileDescriptor()
-                }
-            )
+            startupStage = "protocol startup"
+            logs.writeLog(log: "[tunnel:\(tunnelId)] starting VPN protocol phase tunnelFD=\(bridge.tunnelFileDescriptor) mtu=\(tunnelMTU)")
+
+            switch vpnInterface {
+            case .cloakOutline:
+                try outlineInteractor.startOutline(
+                    tunnelFileDescriptor: bridge.tunnelFileDescriptor,
+                    mtu: tunnelMTU,
+                    nativeClientCreated: {
+                        bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] native Outline client created; releasing bridge fd to Go")
+                        bridge.releaseTunnelFileDescriptor()
+                    }
+                )
+            case .xray:
+                try xrayInteractor.startXRay(
+                    tunnelFileDescriptor: bridge.tunnelFileDescriptor,
+                    mtu: tunnelMTU
+                )
+            case .amneziaWg:
+                logs.writeLog(log: "[tunnel:\(tunnelId)] AmneziaWG not yet implemented on iOS")
+                throw NSError(
+                    domain: "PacketTunnelProvider",
+                    code: -4,
+                    userInfo: [NSLocalizedDescriptionKey: "AmneziaWG not yet implemented on iOS"]
+                )
+            default:
+                logs.writeLog(log: "[tunnel:\(tunnelId)] No VPN interface selected")
+                throw NSError(
+                    domain: "PacketTunnelProvider",
+                    code: -4,
+                    userInfo: [NSLocalizedDescriptionKey: "No VPN interface selected"]
+                )
+            }
+
             logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
 
             logs.writeLog(log: "startTunnel: all packet loops started")
@@ -284,6 +307,25 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel reason=\(reason.rawValue) (\(reason))")
         configsRepository.setIsUserInitStop(isUserInitStop: true)
         Cloak_outlineClearGeoRoutingConf()
+
+        // Stop the active protocol based on the VPN interface
+        let vpnInterface = configsRepository.getVpnInterface()
+        switch vpnInterface {
+        case .cloakOutline:
+            do {
+                try outlineInteractor.stopOutline()
+            } catch {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] stopOutline error: \(error.localizedDescription)")
+            }
+            cloakInteractor.stopCloak()
+        case .xray:
+            xrayInteractor.stopXRay()
+        case .amneziaWg:
+            logs.writeLog(log: "[tunnel:\(tunnelId)] AmneziaWG stop not yet implemented on iOS")
+        default:
+            logs.writeLog(log: "[tunnel:\(tunnelId)] No VPN interface to stop")
+        }
+
         Task {
             await teardownForStop(reason: "stopTunnel(\(reason))")
             logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel teardown complete; calling completionHandler")
@@ -402,14 +444,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
-            
             // iOS 26+: Update the interface index in Go for socket protection
             self.updateDefaultInterfaceIndex(for: path)
-            
+       
             // iOS 26+ diagnostic: capture all path properties
             let supportsIPV4 = path.supportsIPv4
             let supportsIPV6 = path.supportsIPv6
-            
+
             // iOS 26 research: Log detailed interface info with interface name and type
             let ifaces = path.availableInterfaces.map { iface -> String in
                 let interfaceType: String
@@ -424,23 +465,25 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     interfaceType = "Loopback"
                 case .other:
                     interfaceType = "OTHER (VPN_TUNNEL)"
+                case .loopback:
+                    interfaceType = "Loopback"
                 @unknown default:
                     interfaceType = "Unknown"
                 }
                 return "\(iface.name)[\(interfaceType)]"
             }.joined(separator: ", ")
-            
+
             let expensive = path.isExpensive
             let constrained = path.isConstrained
             let status = path.status
-            
+
             // iOS 26+ detection of problematic scenarios - now with FULL detail
             // Format: [TIMESTAMP] PHASE: interfaces=... expensive=... constrained=...
             let timestamp = ISO8601DateFormatter().string(from: Date())
             var pathDesc = "[\(timestamp)] PHASE=DETECT status=\(status) ifaces=[\(ifaces)]"
             pathDesc += " expensive=\(expensive) constrained=\(constrained)"
             pathDesc += " supportsIPv4=\(supportsIPV4) supportsIPv6=\(supportsIPV6)"
-            
+
             if #available(iOS 26.0, *) {
                 if expensive {
                     pathDesc += " [EXPENSIVE_NETWORK]"
@@ -459,7 +502,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     pathDesc += " [UNKNOWN_STATUS]"
                 }
             }
-            
+
             // iOS 26 research: Create fingerprint with more detail (include interface names)
             let interfaceDescriptors = path.availableInterfaces
                 .map { "\($0.name):\(self.interfaceTypeKey($0.type))" }
@@ -470,14 +513,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             if self.lastPathFingerprint != fingerprint {
                 let previousFingerprint = self.lastPathFingerprint ?? "(none)"
                 self.lastPathFingerprint = fingerprint
-                
+
                 // iOS 26 research: Log with clear transition marker
                 if previousFingerprint != "(none)" {
                     self.logs.writeLog(
                         log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] NETWORK_CHANGED: \(previousFingerprint) -> \(fingerprint)"
                     )
                 }
-                
+
                 self.logs.writeLog(
                     log: "[tunnel:\(self.tunnelId)] PATH_UPDATE: " + pathDesc
                 )
@@ -503,16 +546,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         interfaceType = "Loopback"
                     case .other:
                         interfaceType = "OTHER_VPN_TUNNEL"
+                    case .loopback:
+                        interfaceType = "Loopback"
                     @unknown default:
                         interfaceType = "Unknown"
                     }
-                    
+
                     // iOS 26 research: This is the KEY log - shows exactly which interface is which
                     self.logs.writeLog(
                         log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] INTERFACE: name=\(iface.name) type=\(interfaceType) (raw=\(iface.type))"
                     )
                 }
-                
+
                 // iOS 26 research: Detect when "other" interface appears
                 let hasOtherInterface = path.availableInterfaces.contains { $0.type == .other }
                 if hasOtherInterface {
@@ -520,7 +565,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] *** VPN TUNNEL INTERFACE DETECTED *** This is the utunX interface created by the VPN!"
                     )
                 }
-                
+
                 // iOS 26: Log active connection counts - if UDP connections drop, that's a problem
                 self.logs.writeLog(
                     log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] ROUTE_CHECK: Active interfaces: \(path.availableInterfaces.map { $0.name }.joined(separator: ", "))"
@@ -574,17 +619,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 ifaceDetails.append(detail)
             }
             let ifacesStr = ifaceDetails.joined(separator: ", ")
-            
+
             let expensive = path.isExpensive
             let constrained = path.isConstrained
             let status = path.status
             let supportsIPv4 = path.supportsIPv4
             let supportsIPv6 = path.supportsIPv6
-            
+
             // Log all network state
             let log = "[tunnel:\(self.tunnelId)] STARTUP_NETWORK: status=\(status) ifaces=[\(ifacesStr)] " +
                       "expensive=\(expensive) constrained=\(constrained) " +
                       "ipv4=\(supportsIPv4) ipv6=\(supportsIPv6)"
+
             self.logs.writeLog(log: log)
 
             // iOS 26+: Set initial interface index from startup path

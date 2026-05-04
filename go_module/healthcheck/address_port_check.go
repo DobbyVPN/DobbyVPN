@@ -2,14 +2,14 @@ package healthcheck
 
 import (
 	"errors"
-	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
 
 func CheckServerAlive(address string, port int) error {
-	target := fmt.Sprintf("%s:%d", address, port)
+	target := net.JoinHostPort(address, strconv.Itoa(port))
 
 	d := net.Dialer{
 		Timeout:   1 * time.Second,

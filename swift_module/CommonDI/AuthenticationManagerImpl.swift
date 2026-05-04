@@ -41,8 +41,6 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
     }
 
     func requireLocationService(endingFunc: @escaping (KotlinBoolean) -> Void) {
-        let locationManager = CLLocationManager()
-
         func isLocationEnabled() -> Bool {
             return CLLocationManager.locationServicesEnabled()
         }
@@ -66,20 +64,24 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
                 endingFunc(KotlinBoolean(value: false))
                 return
             }
-            
-            var observer: NSObjectProtocol?
-            observer = NotificationCenter.default.addObserver(
+
+            final class ObserverBox {
+                var observer: NSObjectProtocol?
+            }
+            let observerBox = ObserverBox()
+
+            observerBox.observer = NotificationCenter.default.addObserver(
                 forName: UIApplication.didBecomeActiveNotification,
                 object: nil,
                 queue: .main
             ) { _ in
-                if let obs = observer { NotificationCenter.default.removeObserver(obs) }
+                if let obs = observerBox.observer { NotificationCenter.default.removeObserver(obs) }
                 endingFunc(KotlinBoolean(value: isLocationEnabled()))
             }
 
             UIApplication.shared.open(url) { success in
                 if !success {
-                    if let obs = observer { NotificationCenter.default.removeObserver(obs) }
+                    if let obs = observerBox.observer { NotificationCenter.default.removeObserver(obs) }
                     endingFunc(KotlinBoolean(value: false))
                 }
             }
@@ -90,7 +92,11 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
         })
 
         // Get the top-most view controller to present the alert
-        if let rootVC = UIApplication.shared.windows.first?.rootViewController {
+        let windowScene = UIApplication.shared.connectedScenes
+            .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene
+        let window = windowScene?.windows.first(where: { $0.isKeyWindow })
+
+        if let rootVC = window?.rootViewController {
             rootVC.present(alert, animated: true)
         } else {
             endingFunc(KotlinBoolean(value: false))

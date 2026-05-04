@@ -51,7 +51,7 @@ func listenAddr(network string) string {
 	return "0.0.0.0:0"
 }
 
-func protectSocket(fd uintptr, realNet string, destination string) error {
+func protectSocket(fd uintptr, realNet, destination string) error {
 	if protector == nil {
 		// iOS 26: Log warning if protector is nil - this could explain connectivity issues
 		log.Infof("[Protect] WARNING: no socket protector registered - traffic may bypass VPN!")

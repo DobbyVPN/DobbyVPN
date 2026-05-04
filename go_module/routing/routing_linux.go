@@ -4,6 +4,7 @@
 package routing
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -15,8 +16,8 @@ import (
 
 func ExecuteCommand(command string) (string, error) {
 	log.Infof("[Routing][Exec] → %s", log.MaskStr(command))
-
-	cmd := exec.Command("bash", "-c", command)
+	// ExecuteCommand runs trusted, internally formatted network commands
+	cmd := exec.CommandContext(context.Background(), "bash", "-c", command) //#nosec G204
 	output, err := cmd.CombinedOutput()
 	outStr := string(output)
 
