@@ -58,6 +58,38 @@ IPs = [
 ]
 ```
 
+**AmneziaWG**
+```toml
+[AmneziaWG.Interface]
+PrivateKey = "client_private_key="
+Address = "10.9.9.1/32"
+DNS = "8.8.8.8"
+MTU = 1420
+
+Jc = 1
+Jmin = 2
+Jmax = 3
+S1 = 44
+S2 = 55
+S3 = 66
+S4 = 2
+H1 = "294806672"
+H2 = "294806673-407362713"
+H3 = "407362714-411387705"
+H4 = "411387706-429496729"
+I1 = "..."
+I2 = "..."
+I3 = "..."
+I4 = "..."
+I5 = "..."
+
+[[AmneziaWG.Peer]]
+AllowedIPs = "0.0.0.0/0"
+Endpoint = "..."
+PersistentKeepalive = 60
+PublicKey = "server_public_key="
+```
+
 Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nicely expressed Issues accordingly.
 
 Windows and MacOS apps require manual intervention to be installed for now - notarization is a work in progress.
