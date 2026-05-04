@@ -15,9 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enhanced PATH_UPDATE with timestamps and NETWORK_CHANGED events
 - iOS socket protection research: IP_BOUND_IF option attempt
 
-### Changed
-- MTU reduced from 1200 to 1024 for better iOS 26 reliability
-
 ### Fixed
 - Improved error messages for StreamDialer and PacketDialer failures
 
