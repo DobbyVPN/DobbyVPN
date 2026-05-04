@@ -94,6 +94,12 @@ public final class HealthCheckImpl: HealthCheck {
             return mem >= 0
         }
 
+        let serverAliveProtected = runWithRetry(name: "Server reachability (protected)", attempts: 1) {
+            let serverPort = DobbyConfigsRepositoryImpl.shared.getServerPortOutline()
+            if serverPort.isEmpty { return true }
+            return self.pingAddressProtected(serverPort, name: "UpstreamServer")
+        }
+
         let outlineProxyOk = runWithRetry(name: "Outline local proxy check", attempts: 1) {
             self.isOutlineProxyAliveViaXPC()
         }
@@ -108,10 +114,11 @@ public final class HealthCheckImpl: HealthCheck {
             logs.writeLog(log: "[HC] Memory: unknown (XPC no response)")
         }
 
-        let result = vpnOk && networkOk && heartbeatOk && outlineProxyOk
+        let result = vpnOk && networkOk && heartbeatOk && outlineProxyOk && serverAliveProtected
         logs.writeLog(
             log: "[HC] End shortConnectionCheckUp id=\(checkId) => \(result) " +
-            "(vpn=\(vpnOk), network=\(networkOk), heartbeat=\(heartbeatOk), outlineProxy=\(outlineProxyOk))"
+            "(vpn=\(vpnOk), network=\(networkOk), heartbeat=\(heartbeatOk), " +
+            "outlineProxy=\(outlineProxyOk), serverAlive=\(serverAliveProtected))"
         )
         return result
     }
@@ -479,7 +486,18 @@ public final class HealthCheckImpl: HealthCheck {
         }
     }
 
-    private func tcpPingWithTimeout(address: String) -> Result<Int32, Error> {
+    private func pingAddressProtected(_ address: String, name: String) -> Bool {
+        switch tcpPingWithTimeout(address: address, protected: true) {
+        case .success(let ms):
+            logs.writeLog(log: "[HC] [ping-protected \(name)] \(ms) ms")
+            return true
+        case .failure(let error):
+            logs.writeLog(log: "[HC] [ping-protected \(name)] error: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func tcpPingWithTimeout(address: String, protected: Bool = false) -> Result<Int32, Error> {
         // The Go ping helper might block longer than desired; enforce a hard wall-clock timeout.
         let semaphore = DispatchSemaphore(value: 0)
         var result: Result<Int32, Error> = .failure(
@@ -491,7 +509,7 @@ public final class HealthCheckImpl: HealthCheck {
         )
 
         DispatchQueue.global(qos: .userInitiated).async {
-            result = self.tcpPing(address: address)
+            result = self.tcpPing(address: address, protected: protected)
             semaphore.signal()
         }
 
@@ -508,10 +526,15 @@ public final class HealthCheckImpl: HealthCheck {
         return result
     }
 
-    private func tcpPing(address: String) -> Result<Int32, Error> {
+    private func tcpPing(address: String, protected: Bool = false) -> Result<Int32, Error> {
         var ret: Int32 = 0
         var err: NSError?
-        let success = Cloak_outlineTcpPing(address, &ret, &err)
+        let success: Bool
+        if protected {
+            success = Cloak_outlineProtectedTcpPing(address, &ret, &err)
+        } else {
+            success = Cloak_outlineTcpPing(address, &ret, &err)
+        }
 
         if success {
             return .success(ret)
@@ -533,9 +556,24 @@ public final class HealthCheckImpl: HealthCheck {
             logs.writeLog(log: "[HC] [VPNIface] Dobby tunnel IP \(tunnelIPAddress) found on \(name)")
             return true
         }
+        
+        // iOS 26 fallback: Check for any utun interface if IP check fails
+        // This helps identify if the tunnel is at least partially up
+        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else { return false }
+        defer { freeifaddrs(ifaddrPtr) }
+
+        var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        while let addr = ptr {
+            let name = String(cString: addr.pointee.ifa_name)
+            if name.starts(with: "utun") {
+                 logs.writeLog(log: "[HC] [VPNIface] Found utun interface \(name) but it doesn't have IP \(tunnelIPAddress)")
+            }
+            ptr = addr.pointee.ifa_next
+        }
+
         logs.writeLog(
-            log: "[HC] [VPNIface] Dobby tunnel IP \(tunnelIPAddress) not found; " +
-                "generic utun interfaces are ignored"
+            log: "[HC] [VPNIface] Dobby tunnel IP \(tunnelIPAddress) not found on any interface"
         )
         return false
     }

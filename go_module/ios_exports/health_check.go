@@ -10,6 +10,12 @@ func TcpPing(address string) (int32, error) {
 	return healthcheck.TCPPing(address)
 }
 
+func ProtectedTcpPing(address string) (int32, error) {
+	defer guard("ProtectedTcpPing")()
+	return healthcheck.ProtectedTCPPing(address)
+}
+
+
 func UrlTest(url string, standard int) (int32, error) {
 	defer guard("UrlTest")()
 	return healthcheck.URLTest(url, standard)

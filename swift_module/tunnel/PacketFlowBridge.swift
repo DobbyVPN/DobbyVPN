@@ -111,6 +111,8 @@ final class PacketFlowBridge {
         source.resume()
         startStatsTimer()
         readPacketsFromTunnel()
+        // iOS 26 research: Log when packet flow starts - track if packets flow correctly
+        log("[iOS26-RESEARCH] PacketFlowBridge started: mtu=\(mtu) - monitoring for packet flow issues")
         log("[PacketFlowBridge] started mtu=\(mtu) swiftFD=\(sourceFD) goFD=\(tunnelFileDescriptor)")
     }
 

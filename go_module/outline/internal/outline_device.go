@@ -56,7 +56,13 @@ func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) 
 	}
 
 	ctx := context.Background()
-	providers := configurl.NewDefaultProviders()
+
+	// Use custom providers with protected base dialers to ensure all upstream
+	// connections (SS, WebSocket, etc.) correctly bypass the tunnel on iOS 26.
+	providers := configurl.NewProviderContainer()
+	providers.StreamDialers.BaseInstance = NewProtectedStreamDialer(transportConfig)
+	providers.PacketDialers.BaseInstance = NewProtectedPacketDialer(transportConfig)
+	configurl.RegisterDefaultProviders(providers)
 
 	sd, err := providers.NewStreamDialer(ctx, transportConfig)
 	if err != nil {
@@ -222,7 +228,8 @@ func (d *OutlineDevice) markServeStopped(reason string) {
 }
 
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
-	log.Infof("[SOCKS5] dial %s %s", network, addr)
+	// iOS 26 research: Log detailed connection attempt to track which path is used
+	log.Infof("[SOCKS5] dial %s %s (research: tracking connection path for iOS 26)", network, addr)
 	start := time.Now()
 
 	host, portStr, _ := net.SplitHostPort(addr)
@@ -235,6 +242,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		elapsed := time.Since(start).Milliseconds()
 		if err != nil {
 			log.Infof("[SOCKS5 TCP ERROR] %s in %dms: %v", addr, elapsed, err)
+
 			return nil, fmt.Errorf("[DEBUG][SOCKS5 TCP] StreamDialer failed for %s: %w", addr, err)
 		}
 		log.Infof("[SOCKS5 TCP OK] %s in %dms", addr, elapsed)
