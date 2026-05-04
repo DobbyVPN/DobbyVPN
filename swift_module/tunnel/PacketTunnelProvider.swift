@@ -16,8 +16,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let tunnelId = String(UUID().uuidString.prefix(8))
     private let tunnelMTU = 1200
 
+    private let awgInteractor: AwgInteractor = AwgInteractor()
     private let outlineInteractor: OutlineInteractor = OutlineInteractor()
     private let cloakInteractor: CloakInteractor = CloakInteractor()
+    private let awgInteractor: AwgInteractor = AwgInteractor()
 
     private var logs = NativeModuleHolder.logsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
@@ -173,76 +175,142 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 logs.writeLog(log: "Excluded IPv4 routes: (none)")
             }
 
-            // Cloak must bind/connect before the full-tunnel route is installed; otherwise
-            // iOS can route the upstream bootstrap traffic into a tunnel that is not ready yet.
-            startupStage = "cloak startup"
-            logs.writeLog(log: "[tunnel:\(tunnelId)] starting Cloak phase")
-            try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
+            if configsRepository.getVpnInterface() == VpnInterface.amneziaWg {
+                startupStage = "network settings build"
+                let remoteAddress = "254.1.1.1"
+                let localAddress = "10.9.9.2"
+                let subnetMask = "255.255.255.255"
+                let dnsServers = ["1.1.1.1", "8.8.8.8"]
 
-            startupStage = "network settings build"
-            let remoteAddress = "254.1.1.1"
-            let localAddress = "198.18.0.1"
-            let subnetMask = "255.255.0.0"
-            let dnsServers = ["1.1.1.1", "8.8.8.8"]
+                let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
+                settings.mtu = NSNumber(value: tunnelMTU)
+                settings.ipv4Settings = NEIPv4Settings(
+                    addresses: [localAddress],
+                    subnetMasks: [subnetMask]
+                )
+                settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
+                settings.ipv4Settings?.excludedRoutes = excludedRoutes
+                settings.ipv6Settings = nil
+                settings.dnsSettings = NEDNSSettings(servers: dnsServers)
+                settings.dnsSettings?.matchDomains = [""]
 
-            let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
-            settings.mtu = NSNumber(value: tunnelMTU)
-            settings.ipv4Settings = NEIPv4Settings(
-                addresses: [localAddress],
-                subnetMasks: [subnetMask]
-            )
-            settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
-            settings.ipv4Settings?.excludedRoutes = excludedRoutes
-            settings.ipv6Settings = nil
-            settings.dnsSettings = NEDNSSettings(servers: dnsServers)
-            settings.dnsSettings?.matchDomains = [""]
+                logNetworkSettings(
+                    localAddress: localAddress,
+                    remoteAddress: remoteAddress,
+                    subnetMask: subnetMask,
+                    mtu: tunnelMTU,
+                    dnsServers: dnsServers,
+                    excludedRoutes: excludedRoutes
+                )
+                startupStage = "setTunnelNetworkSettings"
+                let settingsStart = Date()
+                logs.writeLog(log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings begin")
+                try await self.setTunnelNetworkSettings(settings)
+                logs.writeLog(
+                    log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings applied in \(elapsedMs(since: settingsStart))ms"
+                )
 
-            logNetworkSettings(
-                localAddress: localAddress,
-                remoteAddress: remoteAddress,
-                subnetMask: subnetMask,
-                mtu: tunnelMTU,
-                dnsServers: dnsServers,
-                excludedRoutes: excludedRoutes
-            )
-            startupStage = "setTunnelNetworkSettings"
-            let settingsStart = Date()
-            logs.writeLog(log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings begin")
-            try await self.setTunnelNetworkSettings(settings)
-            logs.writeLog(
-                log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings applied in \(elapsedMs(since: settingsStart))ms"
-            )
+                logInterfaces()
 
-            logInterfaces()
+                startupStage = "packetFlow bridge"
+                let bridgeTunnelId = tunnelId
+                let bridgeLogs = logs
+                logs.writeLog(log: "[tunnel:\(tunnelId)] creating PacketFlowBridge mtu=\(tunnelMTU)")
+                let bridge = try PacketFlowBridge(
+                    packetFlow: packetFlow,
+                    mtu: tunnelMTU,
+                    tunnelId: tunnelId,
+                    log: { message in
+                        bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] \(message)")
+                    }
+                )
+                packetFlowBridge = bridge
+                bridge.start()
 
-            startupStage = "packetFlow bridge"
-            let bridgeTunnelId = tunnelId
-            let bridgeLogs = logs
-            logs.writeLog(log: "[tunnel:\(tunnelId)] creating PacketFlowBridge mtu=\(tunnelMTU)")
-            let bridge = try PacketFlowBridge(
-                packetFlow: packetFlow,
-                mtu: tunnelMTU,
-                tunnelId: tunnelId,
-                log: { message in
-                    bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] \(message)")
-                }
-            )
-            packetFlowBridge = bridge
-            bridge.start()
+                startupStage = "amneziawg startup"
+                logs.writeLog(log: "[tunnel:\(tunnelId)] starting AmneziaWG phase tunnelFD=\(bridge.tunnelFileDescriptor) mtu=\(tunnelMTU)")
+                try awgInteractor.startAwg(
+                    tunnelFileDescriptor: bridge.tunnelFileDescriptor,
+                    nativeClientCreated: {
+                        bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] native AmneziaWG client created; releasing bridge fd to Go")
+                        bridge.releaseTunnelFileDescriptor()
+                    }
+                )
+                logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
 
-            startupStage = "outline startup"
-            logs.writeLog(log: "[tunnel:\(tunnelId)] starting Outline phase tunnelFD=\(bridge.tunnelFileDescriptor) mtu=\(tunnelMTU)")
-            try outlineInteractor.startOutline(
-                tunnelFileDescriptor: bridge.tunnelFileDescriptor,
-                mtu: tunnelMTU,
-                nativeClientCreated: {
-                    bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] native Outline client created; releasing bridge fd to Go")
-                    bridge.releaseTunnelFileDescriptor()
-                }
-            )
-            logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
+                logs.writeLog(log: "startTunnel: all packet loops started")
+            } else {
+                // Cloak must bind/connect before the full-tunnel route is installed; otherwise
+                // iOS can route the upstream bootstrap traffic into a tunnel that is not ready yet.
+                startupStage = "cloak startup"
+                logs.writeLog(log: "[tunnel:\(tunnelId)] starting Cloak phase")
+                try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
 
-            logs.writeLog(log: "startTunnel: all packet loops started")
+                startupStage = "network settings build"
+                let remoteAddress = "254.1.1.1"
+                let localAddress = "198.18.0.1"
+                let subnetMask = "255.255.0.0"
+                let dnsServers = ["1.1.1.1", "8.8.8.8"]
+
+                let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
+                settings.mtu = NSNumber(value: tunnelMTU)
+                settings.ipv4Settings = NEIPv4Settings(
+                    addresses: [localAddress],
+                    subnetMasks: [subnetMask]
+                )
+                settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
+                settings.ipv4Settings?.excludedRoutes = excludedRoutes
+                settings.ipv6Settings = nil
+                settings.dnsSettings = NEDNSSettings(servers: dnsServers)
+                settings.dnsSettings?.matchDomains = [""]
+
+                logNetworkSettings(
+                    localAddress: localAddress,
+                    remoteAddress: remoteAddress,
+                    subnetMask: subnetMask,
+                    mtu: tunnelMTU,
+                    dnsServers: dnsServers,
+                    excludedRoutes: excludedRoutes
+                )
+                startupStage = "setTunnelNetworkSettings"
+                let settingsStart = Date()
+                logs.writeLog(log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings begin")
+                try await self.setTunnelNetworkSettings(settings)
+                logs.writeLog(
+                    log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings applied in \(elapsedMs(since: settingsStart))ms"
+                )
+
+                logInterfaces()
+
+                startupStage = "packetFlow bridge"
+                let bridgeTunnelId = tunnelId
+                let bridgeLogs = logs
+                logs.writeLog(log: "[tunnel:\(tunnelId)] creating PacketFlowBridge mtu=\(tunnelMTU)")
+                let bridge = try PacketFlowBridge(
+                    packetFlow: packetFlow,
+                    mtu: tunnelMTU,
+                    tunnelId: tunnelId,
+                    log: { message in
+                        bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] \(message)")
+                    }
+                )
+                packetFlowBridge = bridge
+                bridge.start()
+
+                startupStage = "outline startup"
+                logs.writeLog(log: "[tunnel:\(tunnelId)] starting Outline phase tunnelFD=\(bridge.tunnelFileDescriptor) mtu=\(tunnelMTU)")
+                try outlineInteractor.startOutline(
+                    tunnelFileDescriptor: bridge.tunnelFileDescriptor,
+                    mtu: tunnelMTU,
+                    nativeClientCreated: {
+                        bridgeLogs.writeLog(log: "[tunnel:\(bridgeTunnelId)] native Outline client created; releasing bridge fd to Go")
+                        bridge.releaseTunnelFileDescriptor()
+                    }
+                )
+                logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
+
+                logs.writeLog(log: "startTunnel: all packet loops started")
+            }
         } catch {
             let nsError = error as NSError
             logs.writeLog(
@@ -434,6 +502,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping PacketFlowBridge")
         packetFlowBridge?.stop()
         packetFlowBridge = nil
+
+        do {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping AmneziaWG")
+            try awgInteractor.stopAmneziaWG()
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] AmneziaWG stopped")
+        } catch {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop outline: \(error.localizedDescription)")
+        }
 
         do {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] stopping Outline")

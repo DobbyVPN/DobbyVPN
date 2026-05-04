@@ -1,6 +1,9 @@
+//go:build ios
+
 package cloak_outline
 
 import (
+	"fmt"
 	"go_module/awg"
 	"go_module/log"
 	"strings"
@@ -8,7 +11,7 @@ import (
 
 var awgClient *awg.AwgClient
 
-func AwgTurnOn(settings string) int32 {
+func AwgTurnOn(interfaceName string, tunFd int32, settings string) error {
 	log.Infof("Create awg client")
 
 	if awgClient != nil {
@@ -21,10 +24,10 @@ func AwgTurnOn(settings string) int32 {
 
 	log.Infof("Config length=%d", len(settings))
 
-	client, err := awg.NewAwgClient(strings.Clone(settings))
+	client, err := awg.NewAwgClient(strings.Clone(interfaceName), strings.Clone(settings), int(tunFd))
 	if err != nil {
 		log.Infof("Failed to create awg client: %v", err)
-		return -1
+		return fmt.Errorf("failed to create awg client: %v", err)
 	}
 
 	awgClient = client
@@ -35,11 +38,11 @@ func AwgTurnOn(settings string) int32 {
 	err = awgClient.Connect()
 	if err != nil {
 		log.Infof("Failed to connect awg client: %v", err)
-		return -1
+		return fmt.Errorf("failed to connect awg client: %v", err)
 	}
 
 	log.Infof("Connected awg client")
-	return 0
+	return nil
 }
 
 func AwgTurnOff() {

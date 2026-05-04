@@ -20,6 +20,14 @@ type TunnelData struct {
 	device          *device.Device
 }
 
+func CreateTunnelData(tun string, conf *config.Config, fd int) *TunnelData {
+	return &TunnelData{
+		InterfaceName:   tun,
+		InterfaceConfig: conf,
+		InterfaceFD:     fd,
+	}
+}
+
 func (a *TunnelData) Run() error {
 	log.Infof("[AWG] Running awg tunnel (android)")
 

@@ -1,8 +1,9 @@
-//go:build !(android || darwin)
+//go:build !(android || ios)
 
 package awg
 
 import (
+	"go_module/awg/dinterface"
 	"go_module/awg/internal"
 	"go_module/common"
 )
@@ -34,7 +35,7 @@ func (a *AwgClient) HealthCheck() error {
 }
 
 func NewAwgClient(config string) (*AwgClient, error) {
-	app, err := internal.NewApp("awg0", config)
+	app, err := internal.NewApp(dinterface.InterfaceName, config)
 	if err != nil {
 		return nil, err
 	}
