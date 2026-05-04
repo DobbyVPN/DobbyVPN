@@ -118,15 +118,13 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 		return nil, err
 	}
 
-	// iOS 26 research: Log LOCAL address - key diagnostic info!
-	// If local addr starts with 192.168.x.x or 10.x.x.x, it's going via WiFi (BAD)
-	// If local addr starts with 198.18.x.x, it's going via VPN tunnel (GOOD)
+	// Protected upstream sockets must bypass the packet tunnel. If they use the
+	// tunnel address, Outline/Cloak traffic can loop back into tun2socks.
 	localAddr := conn.LocalAddr().String()
 	log.Infof("[Protect] TCP dial OK: dest=%s local=%s remote=%s", address, localAddr, conn.RemoteAddr())
-	
-	// iOS 26 research: Warn if connection is NOT going through tunnel
-	if !strings.HasPrefix(localAddr, "198.18.") {
-		log.Infof("[Protect] *** CRITICAL *** Outbound TCP connection NOT using VPN tunnel! local=%s - THIS IS THE PROBLEM ON iOS 26", localAddr)
+
+	if strings.HasPrefix(localAddr, "198.18.") {
+		log.Infof("[Protect] *** CRITICAL *** Protected upstream TCP connection is using VPN tunnel address local=%s - routing loop risk", localAddr)
 	}
 	return conn, nil
 }
@@ -173,20 +171,17 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 		return nil, err
 	}
 
-	// iOS 26 research: Log UDP local address - key diagnostic info!
 	localAddr := pc.LocalAddr().String()
 	log.Infof("[DEBUG][Protect] UDP dial ready network=%s destination=%s local=%s remote=%s", realNet, address, localAddr, udpAddr)
-	
-	// iOS 26 research: Warn if UDP connection is NOT going through tunnel
-	if !strings.HasPrefix(localAddr, "198.18.") {
-		log.Infof("[Protect] *** CRITICAL *** Outbound UDP connection NOT using VPN tunnel! local=%s - THIS IS THE PROBLEM ON iOS 26", localAddr)
+
+	if strings.HasPrefix(localAddr, "198.18.") {
+		log.Infof("[Protect] *** CRITICAL *** Protected upstream UDP socket is using VPN tunnel address local=%s - routing loop risk", localAddr)
 	}
 	return &connectedUDPConn{
 		PacketConn: pc,
 		remoteAddr: udpAddr,
 	}, nil
 }
-
 
 type connectedUDPConn struct {
 	net.PacketConn

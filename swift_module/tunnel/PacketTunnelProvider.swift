@@ -9,6 +9,10 @@ import Darwin
 import SystemConfiguration
 import Network
 
+// C function to convert interface name to index (for Go socket binding)
+@_silgen_name("if_nametoindex")
+func if_nametoindex(_: UnsafePointer<CChar>) -> CUnsignedInt
+
 
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
@@ -119,22 +123,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: END_BEFORE_VPN_TUNNEL ==========")
 
         do {
-            // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
-            startupStage = "pre-start cleanup"
-            await teardownForStop(reason: "pre-start cleanup")
-
-            startupStage = "path monitor"
-            startPathLogging()
-
-            // iOS 26+ diagnostic: capture network state at tunnel start
-            captureNetworkStateAtStartup(logs: logs, tunnelId: tunnelId)
-
             startupStage = "go logger init"
             let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
             logs.writeLog(log: "Start go logger init path = \(path)")
             Cloak_outlineInitLogger(path)
             logs.writeLog(log: "Finish go logger init")
 
+            // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
+            startupStage = "pre-start cleanup"
+            await teardownForStop(reason: "pre-start cleanup")
+
+            startupStage = "path monitor"
+            startPathLogging()
+            
+            // iOS 26+: set the physical interface index before any protected sockets are opened.
+            setInitialDefaultInterfaceIndexForStartup(timeout: 1.0)
             startupStage = "geo routing config"
             let geoRoutingConf = configsRepository.getGeoRoutingConf()
             logs.writeLog(log: "[DEBUG][Routing] applying geo routing config length=\(geoRoutingConf.count)")
@@ -363,6 +366,76 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    /// Get the default (primary) interface index for socket binding.
+    /// Returns 0 if no valid interface is found.
+    private func getDefaultInterfaceIndex(from path: Network.NWPath) -> Int {
+        // Find the non-VPN, non-loopback interface.
+        let physicalInterfaces = path.availableInterfaces.filter { $0.type != .other && $0.type != .loopback }
+        
+        // Prefer WiFi, then cellular, then any other physical interface
+        let preferredInterface = physicalInterfaces.first { $0.type == .wifi }
+            ?? physicalInterfaces.first { $0.type == .cellular }
+            ?? physicalInterfaces.first { $0.type == .wiredEthernet }
+            ?? physicalInterfaces.first
+        
+        guard let iface = preferredInterface else {
+            return 0
+        }
+        
+        // Convert interface name to index
+        let index = iface.name.withCString { Int(if_nametoindex($0)) }
+        return index
+    }
+    
+    /// Update the default interface index in Go for socket protection.
+    /// Call this whenever the network path changes.
+    private func updateDefaultInterfaceIndex(for path: Network.NWPath) {
+        let index = getDefaultInterfaceIndex(from: path)
+        
+        if index > 0 {
+            // Get interface name for logging
+            let physicalInterfaces = path.availableInterfaces.filter { $0.type != .other && $0.type != .loopback }
+            let ifaceName = physicalInterfaces.first { $0.type == .wifi }?.name
+                ?? physicalInterfaces.first { $0.type == .cellular }?.name
+                ?? physicalInterfaces.first { $0.type == .wiredEthernet }?.name
+                ?? physicalInterfaces.first?.name
+                ?? "unknown"
+            
+            let ifaceType = physicalInterfaces.first { $0.type == .wifi } != nil ? "WiFi"
+                : physicalInterfaces.first { $0.type == .cellular } != nil ? "Cellular"
+                : physicalInterfaces.first { $0.type == .wiredEthernet } != nil ? "Ethernet"
+                : "Other"
+            
+            // Call Go function to set the interface index
+            Cloak_outlineSetDefaultInterfaceIndex(index)
+            
+            logs.writeLog(
+                log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] Set default interface index: \(index) (\(ifaceName)/\(ifaceType))"
+            )
+        } else {
+            logs.writeLog(
+                log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] WARNING: Could not determine default interface index!"
+            )
+        }
+    }
+
+    private func interfaceTypeKey(_ type: Network.NWInterface.InterfaceType) -> String {
+        switch type {
+        case .wifi:
+            return "wifi"
+        case .cellular:
+            return "cellular"
+        case .wiredEthernet:
+            return "ethernet"
+        case .loopback:
+            return "loopback"
+        case .other:
+            return "other"
+        @unknown default:
+            return "unknown"
+        }
+    }
+
     private func startPathLogging() {
         // Logs-only: helps correlate "Wi‑Fi off/on" with tunnel lifecycle and health-check decisions.
         let monitor = Network.NWPathMonitor()
@@ -371,7 +444,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
-
+            // iOS 26+: Update the interface index in Go for socket protection
+            self.updateDefaultInterfaceIndex(for: path)
+       
             // iOS 26+ diagnostic: capture all path properties
             let supportsIPV4 = path.supportsIPv4
             let supportsIPV6 = path.supportsIPv6
@@ -386,10 +461,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     interfaceType = "Cellular"
                 case .wiredEthernet:
                     interfaceType = "Ethernet"
-                case .other:
-                    interfaceType = "OTHER (VPN_TUNNEL)"
                 case .loopback:
                     interfaceType = "Loopback"
+                case .other:
+                    interfaceType = "OTHER (VPN_TUNNEL)"
                 @unknown default:
                     interfaceType = "Unknown"
                 }
@@ -427,9 +502,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
 
             // iOS 26 research: Create fingerprint with more detail (include interface names)
-            let interfaceNames = path.availableInterfaces.map { $0.name }.sorted().joined(separator: "|")
-            let fingerprint = "status=\(path.status)|ifaces=\(interfaceNames)|expensive=\(expensive)|constrained=\(constrained)"
-
+            let interfaceDescriptors = path.availableInterfaces
+                .map { "\($0.name):\(self.interfaceTypeKey($0.type))" }
+                .sorted()
+                .joined(separator: "|")
+            let fingerprint = "status=\(path.status)|ifaces=\(interfaceDescriptors)|expensive=\(expensive)|constrained=\(constrained)"
+            
             if self.lastPathFingerprint != fingerprint {
                 let previousFingerprint = self.lastPathFingerprint ?? "(none)"
                 self.lastPathFingerprint = fingerprint
@@ -462,10 +540,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         interfaceType = "Cellular"
                     case .wiredEthernet:
                         interfaceType = "Ethernet"
-                    case .other:
-                        interfaceType = "OTHER_VPN_TUNNEL"
                     case .loopback:
                         interfaceType = "Loopback"
+                    case .other:
+                        interfaceType = "OTHER_VPN_TUNNEL"
                     @unknown default:
                         interfaceType = "Unknown"
                     }
@@ -490,10 +568,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 )
 
                 // CRITICAL: Log when WiFi->Cellular transition happens (this is when tunnel issues start)
-                let wasUsingWiFi = previousFingerprint.contains("wifi")
-                let isNowUsingWiFi = ifaces.contains("wifi")
-                let isNowUsingCellular = ifaces.contains("cellular")
-
+                let currentTypes = Set(path.availableInterfaces.map { self.interfaceTypeKey($0.type) })
+                let wasUsingWiFi = previousFingerprint.contains(":wifi")
+                let isNowUsingWiFi = currentTypes.contains("wifi")
+                let isNowUsingCellular = currentTypes.contains("cellular")
+                
                 if wasUsingWiFi && isNowUsingCellular && !isNowUsingWiFi {
                     self.logs.writeLog(
                         log: "[tunnel:\(self.tunnelId)] CRITICAL: Network transitioned WiFi -> Cellular! Tunnel instability expected!"
@@ -511,17 +590,23 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         monitor.start(queue: q)
         logs.writeLog(log: "[tunnel:\(tunnelId)] NWPathMonitor started")
     }
-
-    /// Capture network state at tunnel startup for diagnostic purposes
-    private func captureNetworkStateAtStartup(logs: LogsRepository, tunnelId: String) {
-        // Note: This is a best-effort capture; the monitor may not have populated yet
+    
+    /// Capture startup path and synchronously publish the physical interface index to Go.
+    private func setInitialDefaultInterfaceIndexForStartup(timeout: TimeInterval) {
         let monitor = Network.NWPathMonitor()
         let q = DispatchQueue(label: "vpn.dobby.app.tunnel.startup-path")
+        let semaphore = DispatchSemaphore(value: 0)
+        let lock = NSLock()
         var captured = false
 
         monitor.pathUpdateHandler = { path in
-            guard !captured else { return }
+            lock.lock()
+            if captured {
+                lock.unlock()
+                return
+            }
             captured = true
+            lock.unlock()
 
             // Capture interface details
             var ifaceDetails: [String] = []
@@ -538,26 +623,39 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let supportsIPv6 = path.supportsIPv6
 
             // Log all network state
-            let log = "[tunnel:\(tunnelId)] STARTUP_NETWORK: status=\(status) ifaces=[\(ifacesStr)] " +
+            let log = "[tunnel:\(self.tunnelId)] STARTUP_NETWORK: status=\(status) ifaces=[\(ifacesStr)] " +
                       "expensive=\(expensive) constrained=\(constrained) " +
                       "ipv4=\(supportsIPv4) ipv6=\(supportsIPv6)"
-            logs.writeLog(log: log)
+
+            self.logs.writeLog(log: log)
+
+            // iOS 26+: Set initial interface index from startup path
+            let ifaceIndex = self.getDefaultInterfaceIndex(from: path)
+            if ifaceIndex > 0 {
+                Cloak_outlineSetDefaultInterfaceIndex(ifaceIndex)
+                self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] STARTUP: Set initial interface index: \(ifaceIndex)")
+            } else {
+                self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] STARTUP_WARNING: Could not determine initial interface index")
+            }
 
             // iOS 26-specific warnings
             if expensive && constrained {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_WARNING: Cellular with BOTH expensive AND constrained=true - expect instability!")
+                self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] STARTUP_WARNING: Cellular with BOTH expensive AND constrained=true - expect instability!")
             }
             if path.status == .unsatisfied {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_ERROR: Network path unsatisfied at tunnel start!")
+                self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] STARTUP_ERROR: Network path unsatisfied at tunnel start!")
             }
+
+            semaphore.signal()
         }
 
         monitor.start(queue: q)
 
-        // Give it a moment to capture, then stop
-        q.asyncAfter(deadline: .now() + 1.0) {
-            monitor.cancel()
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_WARNING: Timed out waiting for initial network path")
         }
+
+        monitor.cancel()
     }
 
     @MainActor
