@@ -66,7 +66,7 @@ private fun buildOutlineUrl(
     }
 }
 
-internal class DobbyVpnService(
+class DobbyVpnService(
     private val dobbyConfigsRepository: DobbyConfigsRepository,
     private val logger: Logger,
     private val awgLibrary: AwgLibrary,
@@ -119,12 +119,9 @@ internal class DobbyVpnService(
     }
 
     private fun stopCurrentLocked() {
-        val runningInterface = dobbyConfigsRepository.getVpnInterface()
-        when (runningInterface) {
-            VpnInterface.CLOAK_OUTLINE -> stopCloakOutline()
-            VpnInterface.AMNEZIA_WG -> stopAwg()
-            VpnInterface.NONE -> stopNone()
-        }
+        stopCloakOutline()
+        stopAwg()
+        stopNone()
         georoutingLibrary.ClearGeoRoutingConf()
         dobbyConfigsRepository.setVpnInterface(VpnInterface.NONE)
     }
