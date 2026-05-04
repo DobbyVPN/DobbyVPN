@@ -47,10 +47,10 @@ public class NativeModuleHolder {
         healthCheck: { _ in
             return HealthCheckImpl()
         },
-        netCheckManager { _ in
+        netCheckManager: { _ in
             return NetCheckManagerImpl()
         },
-        netCheckRepository { _ in
+        netCheckRepository: { _ in
             return netCheckRepository
         }
     )

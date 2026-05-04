@@ -1,7 +1,7 @@
 import app
 import MyLibrary
 
-public final class NetCheckManagerImpl: NetCheckManager {
+public class NetCheckManagerImpl: NetCheckManager {
     public func start() -> String {
         return Cloak_outlineNetCheck()
     }
