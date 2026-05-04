@@ -277,7 +277,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     code: -4,
                     userInfo: [NSLocalizedDescriptionKey: "AmneziaWG not yet implemented on iOS"]
                 )
-            case .none:
+            default:
                 logs.writeLog(log: "[tunnel:\(tunnelId)] No VPN interface selected")
                 throw NSError(
                     domain: "PacketTunnelProvider",
@@ -319,7 +319,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             xrayInteractor.stopXRay()
         case .amneziaWg:
             logs.writeLog(log: "[tunnel:\(tunnelId)] AmneziaWG stop not yet implemented on iOS")
-        case .none:
+        default:
             logs.writeLog(log: "[tunnel:\(tunnelId)] No VPN interface to stop")
         }
 
