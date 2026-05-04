@@ -95,7 +95,7 @@ public final class HealthCheckImpl: HealthCheck {
         }
 
         let serverAliveProtected = runWithRetry(name: "Server reachability (protected)", attempts: 1) {
-            let serverPort = DobbyConfigsRepositoryImpl.shared.getServerPortOutline()
+            let serverPort = DobbyConfigsRepositoryImpl.shared.getServerPort()
             if serverPort.isEmpty { return true }
             return self.pingAddressProtected(serverPort, name: "UpstreamServer")
         }
@@ -556,7 +556,7 @@ public final class HealthCheckImpl: HealthCheck {
             logs.writeLog(log: "[HC] [VPNIface] Dobby tunnel IP \(tunnelIPAddress) found on \(name)")
             return true
         }
-        
+
         // iOS 26 fallback: Check for any utun interface if IP check fails
         // This helps identify if the tunnel is at least partially up
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?

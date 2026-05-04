@@ -64,20 +64,24 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
                 endingFunc(KotlinBoolean(value: false))
                 return
             }
-            
-            var observer: NSObjectProtocol?
-            observer = NotificationCenter.default.addObserver(
+
+            final class ObserverBox {
+                var observer: NSObjectProtocol?
+            }
+            let observerBox = ObserverBox()
+
+            observerBox.observer = NotificationCenter.default.addObserver(
                 forName: UIApplication.didBecomeActiveNotification,
                 object: nil,
                 queue: .main
             ) { _ in
-                if let obs = observer { NotificationCenter.default.removeObserver(obs) }
+                if let obs = observerBox.observer { NotificationCenter.default.removeObserver(obs) }
                 endingFunc(KotlinBoolean(value: isLocationEnabled()))
             }
 
             UIApplication.shared.open(url) { success in
                 if !success {
-                    if let obs = observer { NotificationCenter.default.removeObserver(obs) }
+                    if let obs = observerBox.observer { NotificationCenter.default.removeObserver(obs) }
                     endingFunc(KotlinBoolean(value: false))
                 }
             }
