@@ -8,6 +8,7 @@ import Foundation
 import Darwin
 import SystemConfiguration
 import Network
+import os.log
 
 
 
@@ -106,8 +107,20 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
         var startupStage = "entered"
         let optionKeys = options?.keys.sorted().joined(separator: ",") ?? "(none)"
+        
+        // iOS 26 research: Log iOS version and device info
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersion
+        let osVersionString = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
+        logs.writeLog(log: "[iOS26-RESEARCH] iOS version: \(osVersionString) (\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion))")
+        logs.writeLog(log: "[iOS26-RESEARCH] Device: \(UIDevice.current.name) model=\(UIDevice.current.model)")
+        
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
+        
+        // iOS 26 research: Log network interfaces BEFORE tunnel starts
+        logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: BEFORE_VPN_TUNNEL ==========")
+        logInterfaces()
+        logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: END_BEFORE_VPN_TUNNEL ==========")
 
         do {
             // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
@@ -216,7 +229,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings applied in \(elapsedMs(since: settingsStart))ms"
             )
 
+            // iOS 26 research: Log network interfaces AFTER tunnel starts
+            logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: AFTER_VPN_TUNNEL ==========")
             logInterfaces()
+            logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: END_AFTER_VPN_TUNNEL ==========")
 
             startupStage = "packetFlow bridge"
             let bridgeTunnelId = tunnelId
@@ -320,40 +336,70 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             // iOS 26+ diagnostic: capture all path properties
             let supportsIPV4 = path.supportsIPv4
             let supportsIPV6 = path.supportsIPv6
+            
+            // iOS 26 research: Log detailed interface info with interface name and type
             let ifaces = path.availableInterfaces.map { iface -> String in
-                return "\(iface.name):\(iface.type) ipv4=\(supportsIPV4) ipv6=\(supportsIPV6)"
-            }.joined(separator: ",")
+                let interfaceType: String
+                switch iface.type {
+                case .wifi:
+                    interfaceType = "WiFi"
+                case .cellular:
+                    interfaceType = "Cellular"
+                case .wiredEthernet:
+                    interfaceType = "Ethernet"
+                case .other:
+                    interfaceType = "OTHER (VPN_TUNNEL)"
+                @unknown default:
+                    interfaceType = "Unknown"
+                }
+                return "\(iface.name)[\(interfaceType)]"
+            }.joined(separator: ", ")
             
             let expensive = path.isExpensive
             let constrained = path.isConstrained
             let status = path.status
             
-            // iOS 26+ detection of problematic scenarios
-            var pathDesc = "status=\(status) ifaces=[\(ifaces)] expensive=\(expensive) constrained=\(constrained)"
+            // iOS 26+ detection of problematic scenarios - now with FULL detail
+            // Format: [TIMESTAMP] PHASE: interfaces=... expensive=... constrained=...
+            let timestamp = ISO8601DateFormatter().string(from: Date())
+            var pathDesc = "[\(timestamp)] PHASE=DETECT status=\(status) ifaces=[\(ifaces)]"
+            pathDesc += " expensive=\(expensive) constrained=\(constrained)"
+            pathDesc += " supportsIPv4=\(supportsIPV4) supportsIPv6=\(supportsIPV6)"
             
             if #available(iOS 26.0, *) {
                 if expensive {
                     pathDesc += " [EXPENSIVE_NETWORK]"
                 }
                 if constrained {
-                    pathDesc += " [CONSTRAINED - data saver/low data mode or carrier restriction]"
+                    pathDesc += " [CONSTRAINED]"
                 }
                 switch status {
                 case .satisfied:
-                    pathDesc += " [OK]"
+                    pathDesc += " [CONNECTED]"
                 case .unsatisfied:
-                    pathDesc += " [LOST]"
+                    pathDesc += " [DISCONNECTED]"
                 case .requiresConnection:
-                    pathDesc += " [NEEDS_CONNECT]"
+                    pathDesc += " [NEEDS_CONNECTION]"
                 @unknown default:
-                    pathDesc += " [UNKNOWN]"
+                    pathDesc += " [UNKNOWN_STATUS]"
                 }
             }
             
-            let fingerprint = "status=\(path.status)|ifaces=\(ifaces)|expensive=\(expensive)|constrained=\(constrained)"
+            // iOS 26 research: Create fingerprint with more detail (include interface names)
+            let interfaceNames = path.availableInterfaces.map { $0.name }.sorted().joined(separator: "|")
+            let fingerprint = "status=\(path.status)|ifaces=\(interfaceNames)|expensive=\(expensive)|constrained=\(constrained)"
+            
             if self.lastPathFingerprint != fingerprint {
-                let previousFingerprint = self.lastPathFingerprint
+                let previousFingerprint = self.lastPathFingerprint ?? "(none)"
                 self.lastPathFingerprint = fingerprint
+                
+                // iOS 26 research: Log with clear transition marker
+                if previousFingerprint != "(none)" {
+                    self.logs.writeLog(
+                        log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] NETWORK_CHANGED: \(previousFingerprint) -> \(fingerprint)"
+                    )
+                }
+                
                 self.logs.writeLog(
                     log: "[tunnel:\(self.tunnelId)] PATH_UPDATE: " + pathDesc
                 )
@@ -365,10 +411,25 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     )
                 }
 
-                // Log each interface's capability
+                // Log each interface with full details
                 for iface in path.availableInterfaces {
+                    let interfaceType: String
+                    switch iface.type {
+                    case .wifi:
+                        interfaceType = "WiFi"
+                    case .cellular:
+                        interfaceType = "Cellular"
+                    case .wiredEthernet:
+                        interfaceType = "Ethernet"
+                    case .other:
+                        interfaceType = "OTHER_VPN_TUNNEL"
+                    @unknown default:
+                        interfaceType = "Unknown"
+                    }
+                    
+                    // iOS 26 research: This is the KEY log - shows exactly which interface is which
                     self.logs.writeLog(
-                        log: "[tunnel:\(self.tunnelId)] Interface: \(iface.name) type=\(iface.type) isCellular=\(iface.type == .cellular)"
+                        log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] INTERFACE: name=\(iface.name) type=\(interfaceType) (raw=\(iface.type))"
                     )
                 }
                 
@@ -376,9 +437,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 let hasOtherInterface = path.availableInterfaces.contains { $0.type == .other }
                 if hasOtherInterface {
                     self.logs.writeLog(
-                        log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] CRITICAL: 'other' interface detected! This is new in iOS 26 and may cause routing issues. Logged for research."
+                        log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] *** VPN TUNNEL INTERFACE DETECTED *** This is the utunX interface created by the VPN!"
                     )
                 }
+                
+                // iOS 26: Log active connection counts - if UDP connections drop, that's a problem
+                self.logs.writeLog(
+                    log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] ROUTE_CHECK: Active interfaces: \(path.availableInterfaces.map { $0.name }.joined(separator: ", "))"
+                )
 
                 // CRITICAL: Log when WiFi->Cellular transition happens (this is when tunnel issues start)
                 let wasUsingWiFi = previousFingerprint?.contains("wifi") == true
