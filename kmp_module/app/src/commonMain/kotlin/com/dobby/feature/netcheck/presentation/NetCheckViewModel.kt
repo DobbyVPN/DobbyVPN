@@ -72,7 +72,7 @@ class NetCheckViewModel(
         netCheckRepository.setConfig(tomlConfig.ConfigValue)
 
         logger.log("Starting network check")
-        val error = netCheckManager.start()
+        val error = netCheckManager.startNetCheck()
 
         if (error == "") {
             _uiState.update {
@@ -92,7 +92,7 @@ class NetCheckViewModel(
     }
 
     private fun turnOff() {
-        netCheckManager.cancel()
+        netCheckManager.cancelNetCheck()
 
         _uiState.update {
             it.copy(

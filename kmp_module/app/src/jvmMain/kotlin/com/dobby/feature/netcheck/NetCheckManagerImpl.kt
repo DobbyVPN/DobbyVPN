@@ -12,7 +12,7 @@ class NetCheckManagerImpl(
     private val netCheckLibrary: NetCheckLibrary,
     private val configsRepository: DobbyConfigsRepository,
 ) : NetCheckManager {
-    override fun start(): String {
+    override fun startNetCheck(): String {
         val path = provideLogFilePath().toString()
         loggerLibrary.InitLogger(path)
         val endpoint = configsRepository.getTelemetryEndpoint()
@@ -23,7 +23,7 @@ class NetCheckManagerImpl(
         return netCheckLibrary.NetCheck(configPath)
     }
 
-    override fun cancel() {
+    override fun cancelNetCheck() {
         netCheckLibrary.CancelNetCheck()
     }
 }

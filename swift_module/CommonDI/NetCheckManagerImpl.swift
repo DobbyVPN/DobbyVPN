@@ -4,7 +4,7 @@ import MyLibrary
 public class NetCheckManagerImpl: NetCheckManager {
     private static let netCheckPath = NetCheckRepository_iosKt.provideNetCheckConfigPath()
 
-    public func start() -> String {
+    public func startNetCheck() -> String {
         var err: NSError?
         Cloak_outlineNetCheck(netCheckPath, &err)
         if let error = err {
@@ -14,7 +14,7 @@ public class NetCheckManagerImpl: NetCheckManager {
         }
     }
 
-    public func cancel() {
+    public func cancelNetCheck() {
         Cloak_outlineCancelNetCheck()
     }
 }
