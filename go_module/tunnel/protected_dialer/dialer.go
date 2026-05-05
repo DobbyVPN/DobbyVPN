@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"syscall"
+	"time"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
@@ -102,12 +103,155 @@ func NewProtectedListenConfig(destination string) *net.ListenConfig {
 	}
 }
 
+type diagnosticProtector interface {
+	Diagnostics() string
+}
+
+func protectionDiagnosticsForLog() string {
+	if protector == nil {
+		return "protector=nil"
+	}
+	if diagnostic, ok := protector.(diagnosticProtector); ok {
+		return diagnostic.Diagnostics()
+	}
+	return fmt.Sprintf("protector=%T diagnostics=unavailable", protector)
+}
+
+func splitAddrHost(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return addr.String()
+	}
+	return host
+}
+
+func destinationPartsForLog(address string) (host string, port string, hostType string) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return address, "", "invalid_hostport"
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.To4() != nil {
+			return host, port, "ipv4"
+		}
+		return host, port, "ipv6"
+	}
+	return host, port, "hostname"
+}
+
+func interfaceNamesForIP(host string) string {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return "ip_parse_failed"
+	}
+
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return fmt.Sprintf("scan_error=%v", err)
+	}
+
+	var matches []string
+	for _, iface := range interfaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			matches = append(matches, fmt.Sprintf("%s(index=%d addr_scan_error=%v)", iface.Name, iface.Index, err))
+			continue
+		}
+		for _, addr := range addrs {
+			var addrIP net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				addrIP = v.IP
+			case *net.IPAddr:
+				addrIP = v.IP
+			default:
+				continue
+			}
+			if addrIP.Equal(ip) {
+				matches = append(matches, fmt.Sprintf("%s(index=%d flags=%s mtu=%d)", iface.Name, iface.Index, iface.Flags.String(), iface.MTU))
+			}
+		}
+	}
+
+	if len(matches) == 0 {
+		return "none"
+	}
+	return strings.Join(matches, ";")
+}
+
+func isTunnelSourceHost(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	ip4 := ip.To4()
+	return ip4 != nil && ip4[0] == 198 && (ip4[1] == 18 || ip4[1] == 19)
+}
+
+func isUnspecifiedSourceHost(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsUnspecified()
+}
+
+func validateProtectedAddrs(kind string, localAddr net.Addr, remoteAddr net.Addr, requestedNetwork string, realNetwork string, address string, started time.Time) error {
+	localHost := splitAddrHost(localAddr)
+	remoteHost := splitAddrHost(remoteAddr)
+	destHost, destPort, hostType := destinationPartsForLog(address)
+	localInterfaces := interfaceNamesForIP(localHost)
+	remoteInterfaces := interfaceNamesForIP(remoteHost)
+	protectionDiagnostics := protectionDiagnosticsForLog()
+	elapsedMs := time.Since(started).Milliseconds()
+
+	verdict := "BYPASS_OK"
+	if isTunnelSourceHost(localHost) {
+		verdict = "BYPASS_FAILED_TUNNEL_SOURCE"
+	} else if isUnspecifiedSourceHost(localHost) {
+		verdict = "BYPASS_SOURCE_UNSPECIFIED"
+	}
+
+	log.Infof(
+		"[Protect] %s effective_bypass verdict=%s requestedNetwork=%s realNetwork=%s dest=%s destHost=%s destPort=%s destHostType=%s resolvedRemote=%s local=%s localHost=%s localInterfaces=[%s] remote=%s remoteHost=%s remoteInterfaces=[%s] elapsedMs=%d protection={%s}",
+		kind,
+		verdict,
+		requestedNetwork,
+		realNetwork,
+		address,
+		destHost,
+		destPort,
+		hostType,
+		remoteHost,
+		localAddr,
+		localHost,
+		localInterfaces,
+		remoteAddr,
+		remoteHost,
+		remoteInterfaces,
+		elapsedMs,
+		protectionDiagnostics,
+	)
+
+	if verdict == "BYPASS_FAILED_TUNNEL_SOURCE" {
+		err := fmt.Errorf("protected %s upstream routed through tunnel source local=%s remote=%s dest=%s", strings.ToLower(kind), localAddr, remoteAddr, address)
+		log.Infof("[Protect] %s effective_bypass hard_fail err=%v", kind, err)
+		return err
+	}
+	return nil
+}
+
+func validateProtectedConn(kind string, conn net.Conn, requestedNetwork string, realNetwork string, address string, started time.Time) error {
+	return validateProtectedAddrs(kind, conn.LocalAddr(), conn.RemoteAddr(), requestedNetwork, realNetwork, address, started)
+}
+
 func DialContextWithProtect(ctx context.Context, network, address string) (net.Conn, error) {
 	realNet := normalizeTCP(address)
+	start := time.Now()
 	if deadline, ok := ctx.Deadline(); ok {
-		log.Infof("[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s", network, realNet, address, deadline.Format("2006-01-02T15:04:05.000Z07:00"))
+		log.Infof("[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s protection={%s}", network, realNet, address, deadline.Format("2006-01-02T15:04:05.000Z07:00"), protectionDiagnosticsForLog())
 	} else {
-		log.Infof("[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none)", network, realNet, address)
+		log.Infof("[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none) protection={%s}", network, realNet, address, protectionDiagnosticsForLog())
 	}
 
 	if isLoopback(address) {
@@ -132,21 +276,62 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 
 	// Protected upstream sockets must bypass the packet tunnel. If they use the
 	// tunnel address, Outline/Cloak traffic can loop back into tun2socks.
-	localAddr := conn.LocalAddr().String()
-	log.Infof("[Protect] TCP dial OK: dest=%s local=%s remote=%s", address, localAddr, conn.RemoteAddr())
+	log.Infof("[Protect] TCP dial OK: dest=%s local=%s remote=%s", address, conn.LocalAddr(), conn.RemoteAddr())
 
-	if strings.HasPrefix(localAddr, "198.18.") {
-		log.Infof("[Protect] *** CRITICAL *** Protected upstream TCP connection is using VPN tunnel address local=%s - routing loop risk", localAddr)
+	if err := validateProtectedConn("TCP", conn, network, realNet, address, start); err != nil {
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Infof("[Protect] TCP close after bypass validation failure failed dest=%s closeErr=%v", address, closeErr)
+		}
+		return nil, err
+	}
+	return conn, nil
+}
+
+func DialPacketWithProtect(ctx context.Context, network, address string) (net.Conn, error) {
+	realNet := normalizeUDP(address)
+	start := time.Now()
+	if deadline, ok := ctx.Deadline(); ok {
+		log.Infof("[Protect] UDP conn dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s protection={%s}", network, realNet, address, deadline.Format("2006-01-02T15:04:05.000Z07:00"), protectionDiagnosticsForLog())
+	} else {
+		log.Infof("[Protect] UDP conn dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none) protection={%s}", network, realNet, address, protectionDiagnosticsForLog())
+	}
+
+	if isLoopback(address) {
+		log.Infof("[Protect] UDP conn BYPASS loopback: %s", address)
+		var d net.Dialer
+		conn, err := d.DialContext(ctx, realNet, address)
+		if err != nil {
+			log.Infof("[Protect] UDP conn BYPASS loopback failed network=%s dest=%s err=%v", realNet, address, err)
+			return nil, err
+		}
+		log.Infof("[Protect] UDP conn BYPASS loopback OK network=%s dest=%s local=%s remote=%s", realNet, address, conn.LocalAddr(), conn.RemoteAddr())
+		return conn, nil
+	}
+
+	d := NewProtectedDialer(address)
+	conn, err := d.DialContext(ctx, realNet, address)
+	if err != nil {
+		log.Infof("[Protect] UDP conn dial FAILED: dest=%s err=%v", address, err)
+		return nil, err
+	}
+	log.Infof("[Protect] UDP conn dial OK: dest=%s local=%s remote=%s", address, conn.LocalAddr(), conn.RemoteAddr())
+
+	if err := validateProtectedConn("UDP", conn, network, realNet, address, start); err != nil {
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Infof("[Protect] UDP conn close after bypass validation failure failed dest=%s closeErr=%v", address, closeErr)
+		}
+		return nil, err
 	}
 	return conn, nil
 }
 
 func DialUDPWithProtect(ctx context.Context, network, address string) (net.PacketConn, error) {
 	realNet := normalizeUDP(address)
+	start := time.Now()
 	if deadline, ok := ctx.Deadline(); ok {
-		log.Infof("[Protect] UDP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s", network, realNet, address, deadline.Format("2006-01-02T15:04:05.000Z07:00"))
+		log.Infof("[Protect] UDP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s protection={%s}", network, realNet, address, deadline.Format("2006-01-02T15:04:05.000Z07:00"), protectionDiagnosticsForLog())
 	} else {
-		log.Infof("[Protect] UDP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none)", network, realNet, address)
+		log.Infof("[Protect] UDP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none) protection={%s}", network, realNet, address, protectionDiagnosticsForLog())
 	}
 
 	if isLoopback(address) {
@@ -195,8 +380,11 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 	localAddr := pc.LocalAddr().String()
 	log.Infof("[DEBUG][Protect] UDP dial ready network=%s destination=%s local=%s remote=%s", realNet, address, localAddr, udpAddr)
 
-	if strings.HasPrefix(localAddr, "198.18.") {
-		log.Infof("[Protect] *** CRITICAL *** Protected upstream UDP socket is using VPN tunnel address local=%s - routing loop risk", localAddr)
+	if err := validateProtectedAddrs("UDP_PACKET", pc.LocalAddr(), udpAddr, network, realNet, address, start); err != nil {
+		if closeErr := pc.Close(); closeErr != nil {
+			log.Infof("[Protect] UDP close after bypass validation failure failed dest=%s closeErr=%v", address, closeErr)
+		}
+		return nil, err
 	}
 	return &connectedUDPConn{
 		PacketConn: pc,

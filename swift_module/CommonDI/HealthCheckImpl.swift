@@ -65,6 +65,9 @@ public final class HealthCheckImpl: HealthCheck {
     public private(set) var currentMemmoryUsageMb = 0.0
     private var lastMemoryMB: Double = 0
     private var lastOutlineProxyOk = false
+    private var lastOutlineStatus = ""
+    private var lastProtectedServerOk = false
+    private var lastProtectedServerAddress = "(none)"
     private var checkSequence: Int = 0
     private let checkSequenceLock = NSLock()
 
@@ -98,11 +101,16 @@ public final class HealthCheckImpl: HealthCheck {
             return mem >= 0
         }
 
+        let serverPort = DobbyConfigsRepositoryImpl.shared.getServerPort()
+        lastProtectedServerAddress = serverPort.isEmpty ? "(none)" : serverPort
         let serverAliveProtected = runWithRetry(name: "Server reachability (protected)", attempts: 1) {
-            let serverPort = DobbyConfigsRepositoryImpl.shared.getServerPort()
-            if serverPort.isEmpty { return true }
+            if serverPort.isEmpty {
+                self.logs.writeLog(log: "[HC] [ping-protected UpstreamServer] skipped: serverPort is empty")
+                return true
+            }
             return self.pingAddressProtected(serverPort, name: "UpstreamServer")
         }
+        lastProtectedServerOk = serverAliveProtected
 
         let outlineProxyOk = runWithRetry(name: "Outline local proxy check", attempts: 1) {
             self.isOutlineProxyAliveViaXPC()
@@ -123,7 +131,8 @@ public final class HealthCheckImpl: HealthCheck {
         logs.writeLog(
             log: "[HC] End shortConnectionCheckUp id=\(checkId) => \(result) " +
             "(vpn=\(vpnOk), network=\(networkOk), heartbeat=\(heartbeatOk), " +
-            "outlineProxy=\(outlineProxyOk), serverAlive=\(serverAliveProtected), " +
+            "outlineProxy=\(outlineProxyOk), upstreamProtected=\(serverAliveProtected), " +
+            "upstreamAddress=\(lastProtectedServerAddress), " +
             "userStopRequested=\(userStopAtEnd))"
         )
         if !result && userStopAtEnd {
@@ -218,6 +227,18 @@ public final class HealthCheckImpl: HealthCheck {
         let tunnelIPOk = isTunnelIPAssigned()
         logs.writeLog(log: "[HC] [diag] tunnel_ip_assigned=\(tunnelIPOk)")
         logs.writeLog(log: "[HC] [diag] outline_proxy_alive=\(lastOutlineProxyOk)")
+        let nonDNSUDPDisabledByConfig = isNonDNSUDPDisabledByConfig()
+        let outlineStatusContainsDisableFlag = lastOutlineStatus.contains("disableNonDNSUDP=true")
+        let websocketConfig = DobbyConfigsRepositoryImpl.shared.getIsWebsocketEnabled()
+        logs.writeLog(
+            log: "[HC] [diag] upstream_bypass_protected=\(lastProtectedServerOk) " +
+                "upstreamAddress=\(lastProtectedServerAddress)"
+        )
+        logs.writeLog(
+            log: "[HC] [diag] routed_non_dns_udp_config disabledByConfig=\(nonDNSUDPDisabledByConfig) " +
+                "outlineStatusContainsDisableFlag=\(outlineStatusContainsDisableFlag) " +
+                "websocketConfig=\(websocketConfig)"
+        )
 
         let udpDNSOk = runWithRetry(name: "Routed UDP DNS diagnostic", attempts: 1, timeoutPerAttempt: 6.0) {
             self.udpDNSProbe()
@@ -230,14 +251,28 @@ public final class HealthCheckImpl: HealthCheck {
         logs.writeLog(log: "[HC] [diag] routed_non_dns_udp=\(nonDNSUDPOk)")
         groupResults["Routed non-DNS UDP group"] = nonDNSUDPOk
         if !nonDNSUDPOk {
+            let reason = nonDNSUDPDisabledByConfig
+                ? "disabledByConfig=true; Speedtest/QUIC UDP is expected to fail until transport UDP is enabled"
+                : "disabledByConfig=false; real UDP path is broken"
             logs.writeLog(
                 log: "[HC] Group FAILED: Routed non-DNS UDP group " +
-                    "(Speedtest/QUIC/real app UDP traffic is not working)"
+                    "(\(reason))"
             )
             failedGroups.append("Routed non-DNS UDP group")
         } else {
             logs.writeLog(log: "[HC] Group OK: Routed non-DNS UDP group")
         }
+
+        let dnsGroupOk = groupResults["DNS Resolve group"] ?? false
+        logs.writeLog(
+            log: "[HC] HEALTH_MATRIX id=\(checkId) " +
+                "tunnelOS=\(tunnelIPOk) dns=\(dnsGroupOk) " +
+                "shortHealth=\(shortOk) outlineProxy=\(lastOutlineProxyOk) " +
+                "upstreamProtected=\(lastProtectedServerOk) upstreamAddress=\(lastProtectedServerAddress) " +
+                "routedUdpDns=\(udpDNSOk) routedNonDnsUdp=\(nonDNSUDPOk) " +
+                "nonDnsUdpDisabledByConfig=\(nonDNSUDPDisabledByConfig) " +
+                "userStopRequested=\(isUserStopRequested())"
+        )
 
         // --- Result ---
         let result = failedGroups.isEmpty
@@ -271,7 +306,8 @@ public final class HealthCheckImpl: HealthCheck {
             tcp443: tcp443Ok,
             outlineProxy: lastOutlineProxyOk,
             https: httpsOk,
-            nonDNSUDP: nonDNSUDPOk
+            nonDNSUDP: nonDNSUDPOk,
+            nonDNSUDPDisabledByConfig: nonDNSUDPDisabledByConfig
         )
 
         return result
@@ -296,30 +332,35 @@ public final class HealthCheckImpl: HealthCheck {
         tcp443: Bool,
         outlineProxy: Bool,
         https: Bool,
-        nonDNSUDP: Bool
+        nonDNSUDP: Bool,
+        nonDNSUDPDisabledByConfig: Bool
     ) {
         let diagnosis: String
-        switch (tunnelIP, tcpProxy, dns, tcp443, outlineProxy, https, nonDNSUDP) {
-        case (false, _, _, _, _, _, _):
-            diagnosis = "SIDE: CLIENT | REASON: tunnel IP 198.18.0.1 not assigned — tunnel failed to start at OS level"
-        case (true, _, _, _, false, _, _):
-            diagnosis = "SIDE: CLIENT | REASON: local Outline SOCKS5 proxy is unavailable — tun2socks has no working upstream proxy"
-        case (true, _, false, _, _, _, _):
-            diagnosis = "SIDE: CLIENT OR SERVER | REASON: DNS not resolving — DNS-over-tunnel is failing or blocked"
-        case (true, _, true, _, true, false, _):
-            // Check metrics[win] in logs: proto=h3+total=- → QUIC/UDP not proxied (no udpPath? pool full?);
-            // proto=h2+high total → server is slow or blocking TLS
-            diagnosis = "SIDE: CLIENT OR SERVER | REASON: Outline proxy is alive but HTTPS checks fail — check [win] metrics for h3/h2 timing and server behavior"
-        case (true, false, true, _, true, _, _):
-            diagnosis = "SIDE: CLIENT | REASON: TCP diagnostic failed after DNS/HTTP checks — possible tun2socks forwarding issue"
-        case (true, true, true, false, true, _, _):
-            diagnosis = "SIDE: SERVER (likely) | REASON: TCP diagnostic to :443 failed — server blocks HTTPS port or intermediate node filters it"
-        case (true, true, true, true, true, true, false):
-            diagnosis = "SIDE: CLIENT OR TRANSPORT | REASON: TCP/DNS/HTTPS passed but routed non-DNS UDP failed — Speedtest/QUIC apps can freeze; check PacketFlowBridge flow stats and Outline dialStats udpNonDNSRejected/udpErr"
-        case (true, true, true, true, true, true, true):
-            diagnosis = "ALL OK — connection is working"
-        default:
-            diagnosis = "UNDEFINED | Pattern: tunnel=\(tunnelIP) tcp=\(tcpProxy) dns=\(dns) tcp443=\(tcp443) outlineProxy=\(outlineProxy) https=\(https) nonDNSUDP=\(nonDNSUDP)"
+        if tunnelIP && tcpProxy && dns && tcp443 && outlineProxy && https && !nonDNSUDP && nonDNSUDPDisabledByConfig {
+            diagnosis = "SIDE: CONFIG/TRANSPORT | REASON: TCP/DNS/HTTPS passed, but non-DNS UDP is disabled by current transport config — Speedtest/QUIC apps will fail by design"
+        } else {
+            switch (tunnelIP, tcpProxy, dns, tcp443, outlineProxy, https, nonDNSUDP) {
+            case (false, _, _, _, _, _, _):
+                diagnosis = "SIDE: CLIENT | REASON: tunnel IP 198.18.0.1 not assigned — tunnel failed to start at OS level"
+            case (true, _, _, _, false, _, _):
+                diagnosis = "SIDE: CLIENT | REASON: local Outline SOCKS5 proxy is unavailable — tun2socks has no working upstream proxy"
+            case (true, _, false, _, _, _, _):
+                diagnosis = "SIDE: CLIENT OR SERVER | REASON: DNS not resolving — DNS-over-tunnel is failing or blocked"
+            case (true, _, true, _, true, false, _):
+                // Check metrics[win] in logs: proto=h3+total=- → QUIC/UDP not proxied (no udpPath? pool full?);
+                // proto=h2+high total → server is slow or blocking TLS
+                diagnosis = "SIDE: CLIENT OR SERVER | REASON: Outline proxy is alive but HTTPS checks fail — check [win] metrics for h3/h2 timing and server behavior"
+            case (true, false, true, _, true, _, _):
+                diagnosis = "SIDE: CLIENT | REASON: TCP diagnostic failed after DNS/HTTP checks — possible tun2socks forwarding issue"
+            case (true, true, true, false, true, _, _):
+                diagnosis = "SIDE: SERVER (likely) | REASON: TCP diagnostic to :443 failed — server blocks HTTPS port or intermediate node filters it"
+            case (true, true, true, true, true, true, false):
+                diagnosis = "SIDE: CLIENT OR TRANSPORT | REASON: TCP/DNS/HTTPS passed but routed non-DNS UDP failed — Speedtest/QUIC apps can freeze; check PacketFlowBridge flow stats and Outline dialStats udpNonDNSRejected/udpErr"
+            case (true, true, true, true, true, true, true):
+                diagnosis = "ALL OK — connection is working"
+            default:
+                diagnosis = "UNDEFINED | Pattern: tunnel=\(tunnelIP) tcp=\(tcpProxy) dns=\(dns) tcp443=\(tcp443) outlineProxy=\(outlineProxy) https=\(https) nonDNSUDP=\(nonDNSUDP)"
+            }
         }
         logs.writeLog(log: "[HC] DIAGNOSIS: \(diagnosis)")
     }
@@ -959,6 +1000,7 @@ public final class HealthCheckImpl: HealthCheck {
 
     private func isOutlineProxyAliveViaXPC() -> Bool {
         let raw = providerMessage("getOutlineStatus", label: "Outline")
+        lastOutlineStatus = raw ?? ""
         logs.writeLog(log: "[HC] [Outline] status: \(raw ?? "nil")")
         guard let raw else { return false }
         if raw.contains("localProxyAlive=true") {
@@ -977,6 +1019,18 @@ public final class HealthCheckImpl: HealthCheck {
             )
         }
         return legacyHealthyStatus
+    }
+
+    private func isNonDNSUDPDisabledByConfig() -> Bool {
+        let outlineStatusFlag = lastOutlineStatus.contains("disableNonDNSUDP=true")
+        let websocketConfig = DobbyConfigsRepositoryImpl.shared.getIsWebsocketEnabled()
+        if !outlineStatusFlag && websocketConfig {
+            logs.writeLog(
+                log: "[HC] [diag] non-DNS UDP disabled inferred from websocketConfig=true; " +
+                    "Outline status did not contain disableNonDNSUDP=true yet"
+            )
+        }
+        return outlineStatusFlag || websocketConfig
     }
 
     private func logTunnelDiagnostics(checkId: String, reason: String) {
