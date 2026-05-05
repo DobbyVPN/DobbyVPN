@@ -94,6 +94,11 @@ public final class HealthCheckImpl: HealthCheck {
             return mem >= 0
         }
 
+        // NOTE: "Server reachability (protected)" is intentionally NOT included in the
+        // required result. When called from the app process (not the tunnel extension),
+        // a protected TCP ping may be captured by the full-tunnel route and end up using
+        // the VPN tunnel address (198.18.x.x) as local, causing a routing loop and a
+        // false failure signal. We run it here only for diagnostic logging purposes.
         let serverAliveProtected = runWithRetry(name: "Server reachability (protected)", attempts: 1) {
             let serverPort = DobbyConfigsRepositoryImpl.shared.getServerPort()
             if serverPort.isEmpty { return true }
@@ -114,11 +119,13 @@ public final class HealthCheckImpl: HealthCheck {
             logs.writeLog(log: "[HC] Memory: unknown (XPC no response)")
         }
 
-        let result = vpnOk && networkOk && heartbeatOk && outlineProxyOk && serverAliveProtected
+        // serverAliveProtected is excluded from the required result — diagnostic only.
+        // See comment above for the reason (app-process protected ping is unreliable under full-tunnel).
+        let result = vpnOk && networkOk && heartbeatOk && outlineProxyOk
         logs.writeLog(
             log: "[HC] End shortConnectionCheckUp id=\(checkId) => \(result) " +
             "(vpn=\(vpnOk), network=\(networkOk), heartbeat=\(heartbeatOk), " +
-            "outlineProxy=\(outlineProxyOk), serverAlive=\(serverAliveProtected))"
+            "outlineProxy=\(outlineProxyOk), serverAlive(diag)=\(serverAliveProtected))"
         )
         return result
     }
@@ -244,22 +251,27 @@ public final class HealthCheckImpl: HealthCheck {
         outlineProxy: Bool,
         https: Bool
     ) {
+        // outlineProxy here reflects the real localProxyAlive value coming from Go via XPC,
+        // now that CoreClient.Status() includes it via ProxyStatusProvider.
+        // serverAliveProtected is no longer part of the required result — it is diagnostic only
+        // because app-process protected pings are unreliable under full-tunnel (see shortConnectionCheckUp).
         let diagnosis: String
         switch (tunnelIP, tcpProxy, dns, tcp443, outlineProxy, https) {
         case (false, _, _, _, _, _):
             diagnosis = "SIDE: CLIENT | REASON: tunnel IP 198.18.0.1 not assigned — tunnel failed to start at OS level"
         case (true, _, _, _, false, _):
-            diagnosis = "SIDE: CLIENT | REASON: local Outline SOCKS5 proxy is unavailable — tun2socks has no working upstream proxy"
+            diagnosis = "SIDE: CLIENT | REASON: local Outline SOCKS5 proxy is not alive — tun2socks has no working upstream proxy; check SOCKS5 serve state and serveErr in logs"
         case (true, _, false, _, _, _):
             diagnosis = "SIDE: CLIENT OR SERVER | REASON: DNS not resolving — DNS-over-tunnel is failing or blocked"
         case (true, _, true, _, true, false):
-            // Check metrics[win] in logs: proto=h3+total=- → QUIC/UDP not proxied (no udpPath? pool full?);
-            // proto=h2+high total → server is slow or blocking TLS
-            diagnosis = "SIDE: CLIENT OR SERVER | REASON: Outline proxy is alive but HTTPS checks fail — check [win] metrics for h3/h2 timing and server behavior"
+            // Check [HC] [metrics#N[win]] in logs:
+            // proto=h3, total=- → QUIC/UDP not proxied (missing udpPath? connection pool full?)
+            // proto=h2, high tcp/tls → server slow or TLS inspection
+            diagnosis = "SIDE: CLIENT OR SERVER | REASON: Outline proxy alive but HTTPS checks fail — inspect [win] metrics for h3/h2 timing and server behavior"
         case (true, false, true, _, true, _):
-            diagnosis = "SIDE: CLIENT | REASON: TCP diagnostic failed after DNS/HTTP checks — possible tun2socks forwarding issue"
+            diagnosis = "SIDE: CLIENT | REASON: TCP diagnostic failed after DNS/HTTP OK — possible tun2socks forwarding issue"
         case (true, true, true, false, true, _):
-            diagnosis = "SIDE: SERVER (likely) | REASON: TCP diagnostic to :443 failed — server blocks HTTPS port or intermediate node filters it"
+            diagnosis = "SIDE: SERVER (likely) | REASON: TCP :443 diagnostic failed — server may block HTTPS or intermediate node filters it"
         case (true, true, true, true, true, true):
             diagnosis = "ALL OK — connection is working"
         default:
@@ -486,13 +498,21 @@ public final class HealthCheckImpl: HealthCheck {
         }
     }
 
+    // pingAddressProtected runs the TCP ping inside the tunnel extension process via XPC.
+    // This ensures the protected socket is bound to the physical interface (IP_BOUND_IF),
+    // rather than being captured by the full-tunnel route when called from the app process.
     private func pingAddressProtected(_ address: String, name: String) -> Bool {
-        switch tcpPingWithTimeout(address: address, protected: true) {
-        case .success(let ms):
+        let raw = providerMessage("pingProtected:\(address)", label: "ping-protected")
+        guard let raw else {
+            logs.writeLog(log: "[HC] [ping-protected \(name)] no response from extension")
+            return false
+        }
+        if raw.hasPrefix("PingProtected:ok:") {
+            let ms = raw.dropFirst("PingProtected:ok:".count)
             logs.writeLog(log: "[HC] [ping-protected \(name)] \(ms) ms")
             return true
-        case .failure(let error):
-            logs.writeLog(log: "[HC] [ping-protected \(name)] error: \(error.localizedDescription)")
+        } else {
+            logs.writeLog(log: "[HC] [ping-protected \(name)] error: \(raw)")
             return false
         }
     }

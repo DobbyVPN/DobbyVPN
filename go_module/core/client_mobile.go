@@ -123,12 +123,20 @@ func (c *CoreClient) Status() string {
 			c.tunFD,
 		)
 	}
-	return fmt.Sprintf(
+	base := fmt.Sprintf(
 		"client=true engineStarted=%v fd=%d deviceNil=false serverIP=%s",
 		c.engineStarted,
 		c.tunFD,
 		c.device.GetServerIP().String(),
 	)
+	// If the device exposes local-proxy liveness, include it so that the
+	// health-check layer (HealthCheckImpl.isOutlineProxyAliveViaXPC) can
+	// detect localProxyAlive=true/false via the XPC provider message.
+	if sp, ok := c.device.(pkg.ProxyStatusProvider); ok {
+		proxyStatus := sp.Status(2 * time.Second)
+		base = base + " " + proxyStatus
+	}
+	return base
 }
 
 func (c *CoreClient) Refresh() error {

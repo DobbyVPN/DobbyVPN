@@ -36,6 +36,19 @@ func NewProtectedPacketDialer(destination string) *ProtectedPacketDialer {
 }
 
 func (d *ProtectedPacketDialer) DialPacket(ctx context.Context, address string) (net.Conn, error) {
-	dialer := protected_dialer.NewProtectedDialer(address)
-	return dialer.DialContext(ctx, "udp", address)
+	// Use DialUDPWithProtect (not NewProtectedDialer.DialContext) so that:
+	// 1. The correct normalizeUDP/listenAddr logic is applied.
+	// 2. The routing-loop guard (198.18.x.x check) is enforced for UDP too.
+	pc, err := protected_dialer.DialUDPWithProtect(ctx, "udp", address)
+	if err != nil {
+		return nil, err
+	}
+	// DialUDPWithProtect returns a net.PacketConn (connectedUDPConn) that also
+	// implements net.Conn via Write/RemoteAddr — cast is safe here.
+	conn, ok := pc.(net.Conn)
+	if !ok {
+		_ = pc.Close()
+		return nil, fmt.Errorf("protected UDP conn does not implement net.Conn")
+	}
+	return conn, nil
 }

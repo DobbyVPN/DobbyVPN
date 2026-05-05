@@ -24,7 +24,15 @@ import (
 type OutlineDevice struct {
 	mu               sync.RWMutex
 	listener         net.Listener
-	proxyAddr        string
+	// listenerAddr is the raw "host:port" of the SOCKS5 listener (e.g. "127.0.0.1:54321").
+	// It is the address used for:
+	//   - probing liveness in LocalProxyAlive() via a plain net.Dial
+	//   - rebinding the listener after an unexpected stop
+	//   - log messages inside serveLoop / markServeRunning
+	listenerAddr string
+	// proxyAuthAddr is the full "user:pass@host:port" string passed to tun2socks as the
+	// upstream SOCKS5 proxy address. It MUST NOT be passed to net.Dial or net.Listen.
+	proxyAuthAddr    string
 	svrIP            net.IP
 	streamDialer     transport.StreamDialer
 	packetDialer     transport.PacketDialer
@@ -135,7 +143,9 @@ func (d *OutlineDevice) Open(routingTableID int, uplinkIface string) error {
 	}
 
 	d.listener = listener
-	d.proxyAddr = fmt.Sprintf("%s:%s@%s", d.socksUser, d.socksPass, listener.Addr().String())
+	d.listenerAddr = listener.Addr().String()
+	d.proxyAuthAddr = fmt.Sprintf("%s:%s@%s", d.socksUser, d.socksPass, d.listenerAddr)
+	log.Infof("SOCKS5 listener started: listenerAddr=%s", d.listenerAddr)
 
 	go d.serveLoop(server)
 
@@ -163,7 +173,7 @@ func (d *OutlineDevice) serveLoop(server *socks5.Server) {
 
 		d.mu.RLock()
 		listener := d.listener
-		addr := d.proxyAddr
+		laddr := d.listenerAddr // raw host:port, safe for logging and rebind
 		d.mu.RUnlock()
 
 		if listener == nil {
@@ -175,7 +185,7 @@ func (d *OutlineDevice) serveLoop(server *socks5.Server) {
 		err := d.serveOnce(server, listener)
 		if d.closed.Load() {
 			d.markServeStopped("closed")
-			log.Infof("SOCKS5 stopped on %s: closed", addr)
+			log.Infof("SOCKS5 stopped on %s: closed", laddr)
 			return
 		}
 
@@ -184,16 +194,17 @@ func (d *OutlineDevice) serveLoop(server *socks5.Server) {
 			errText = err.Error()
 		}
 		d.markServeStopped(errText)
-		log.Infof("SOCKS5 stopped unexpectedly on %s: %s", addr, errText)
+		log.Infof("SOCKS5 stopped unexpectedly on %s: %s", laddr, errText)
 
+		// Rebind to the same host:port (listenerAddr), not the auth string.
 		for !d.closed.Load() {
 			time.Sleep(250 * time.Millisecond)
-			if err := d.rebindListener(addr); err != nil {
-				log.Infof("SOCKS5 rebind failed on %s: %v", addr, err)
+			if err := d.rebindListener(laddr); err != nil {
+				log.Infof("SOCKS5 rebind failed on %s: %v", laddr, err)
 				time.Sleep(time.Second)
 				continue
 			}
-			log.Infof("SOCKS5 rebound on %s", addr)
+			log.Infof("SOCKS5 rebound on %s", laddr)
 			break
 		}
 	}
@@ -210,6 +221,8 @@ func (d *OutlineDevice) serveOnce(server *socks5.Server, listener net.Listener) 
 	return server.Serve(listener)
 }
 
+// rebindListener re-creates the SOCKS5 TCP listener on the same host:port.
+// addr must be the raw "host:port" (listenerAddr), NOT the auth string.
 func (d *OutlineDevice) rebindListener(addr string) error {
 	if d.closed.Load() {
 		return net.ErrClosed
@@ -221,9 +234,13 @@ func (d *OutlineDevice) rebindListener(addr string) error {
 		return err
 	}
 
+	newAddr := listener.Addr().String()
 	d.mu.Lock()
 	d.listener = listener
-	d.proxyAddr = listener.Addr().String()
+	d.listenerAddr = newAddr
+	// proxyAuthAddr credentials remain the same; only the port may shift if the
+	// OS assigned a different port — update the host:port portion accordingly.
+	d.proxyAuthAddr = fmt.Sprintf("%s:%s@%s", d.socksUser, d.socksPass, newAddr)
 	d.mu.Unlock()
 	return nil
 }
@@ -234,9 +251,9 @@ func (d *OutlineDevice) markServeRunning() {
 	d.serveState = "running"
 	d.serveErr = ""
 	gen := d.serveGen
-	addr := d.proxyAddr
+	laddr := d.listenerAddr
 	d.mu.Unlock()
-	log.Infof("SOCKS5 serve generation %d running on %s", gen, addr)
+	log.Infof("SOCKS5 serve generation %d running on %s", gen, laddr)
 }
 
 func (d *OutlineDevice) markServeStopped(reason string) {
@@ -489,15 +506,20 @@ func (d *OutlineDevice) GetServerIP() net.IP {
 	return d.svrIP
 }
 
+// GetProxyAddr returns the full "user:pass@host:port" address for tun2socks.
+// Do NOT use this for net.Dial or net.Listen — use listenerAddr for that.
 func (d *OutlineDevice) GetProxyAddr() string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return d.proxyAddr
+	return d.proxyAuthAddr
 }
 
+// LocalProxyAlive probes the SOCKS5 listener with a plain TCP dial to listenerAddr
+// (NOT proxyAuthAddr — the auth string is not a valid dial target).
 func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, status string) {
 	d.mu.RLock()
-	addr := d.proxyAddr
+	laddr := d.listenerAddr   // raw host:port for net.Dial
+	authAddr := d.proxyAuthAddr // auth string for diagnostics only
 	state := d.serveState
 	serveErr := d.serveErr
 	gen := d.serveGen
@@ -505,9 +527,10 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 	startedAt := d.startedAt
 	d.mu.RUnlock()
 
-	if addr == "" {
+	if laddr == "" {
 		return false, fmt.Sprintf(
-			"localProxyAlive=false proxyAddr= serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d",
+			"localProxyAlive=false listenerAddr= proxyAuthAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d",
+			authAddr,
 			state,
 			gen,
 			closed,
@@ -519,11 +542,13 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	// Probe using the plain host:port — this is what net.Dial expects.
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", laddr)
 	if err != nil {
 		return false, fmt.Sprintf(
-			"localProxyAlive=false proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q probeErr=%q uptimeMs=%d",
-			addr,
+			"localProxyAlive=false listenerAddr=%s proxyAuthAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q probeErr=%q uptimeMs=%d",
+			laddr,
+			authAddr,
 			state,
 			gen,
 			closed,
@@ -535,8 +560,9 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 	_ = conn.Close()
 
 	return true, fmt.Sprintf(
-		"localProxyAlive=true proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d",
-		addr,
+		"localProxyAlive=true listenerAddr=%s proxyAuthAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d",
+		laddr,
+		authAddr,
 		state,
 		gen,
 		closed,
@@ -554,11 +580,11 @@ func (d *OutlineDevice) Close() error {
 	d.closed.Store(true)
 	d.mu.RLock()
 	listener := d.listener
-	addr := d.proxyAddr
+	laddr := d.listenerAddr
 	d.mu.RUnlock()
 
 	if listener != nil {
-		log.Infof("SOCKS5 close requested on %s", addr)
+		log.Infof("SOCKS5 close requested on %s", laddr)
 		return listener.Close()
 	}
 	return nil

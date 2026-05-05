@@ -353,13 +353,39 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
-        if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
+        guard let msg = String(data: messageData, encoding: .utf8) else {
+            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage non-UTF8 bytes=\(messageData.count)")
+            completionHandler?(messageData)
+            return
+        }
+
+        if msg == "getMemory" {
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory")
             completionHandler?("Memory:\(reportMemoryUsageMB())".data(using: .utf8))
-        } else if let msg = String(data: messageData, encoding: .utf8), msg == "getOutlineStatus" {
+
+        } else if msg == "getOutlineStatus" {
             let status = outlineInteractor.outlineStatus()
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getOutlineStatus \(status)")
             completionHandler?("OutlineStatus:\(status)".data(using: .utf8))
+
+        } else if msg.hasPrefix("pingProtected:") {
+            // Execute a protected TCP ping from inside the tunnel extension process.
+            // This is the correct context for "server reachability bypassing the tunnel":
+            // only the extension process participates in the VPN dataplane, so a protected
+            // socket here genuinely bypasses the tunnel via IP_BOUND_IF, while the same
+            // call from the app process is captured by the full-tunnel route.
+            let address = String(msg.dropFirst("pingProtected:".count))
+            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage pingProtected address=\(address)")
+            var err: NSError?
+            let ms = Cloak_outlineProtectedTcpPing(address, &err)
+            if let error = err {
+                logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] pingProtected \(address) FAILED: \(error.localizedDescription)")
+                completionHandler?("PingProtected:error:\(error.localizedDescription)".data(using: .utf8))
+            } else {
+                logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] pingProtected \(address) OK ms=\(ms)")
+                completionHandler?("PingProtected:ok:\(ms)".data(using: .utf8))
+            }
+
         } else {
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage echo bytes=\(messageData.count)")
             completionHandler?(messageData)

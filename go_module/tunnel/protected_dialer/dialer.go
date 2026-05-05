@@ -124,7 +124,13 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 	log.Infof("[Protect] TCP dial OK: dest=%s local=%s remote=%s", address, localAddr, conn.RemoteAddr())
 
 	if strings.HasPrefix(localAddr, "198.18.") {
-		log.Infof("[Protect] *** CRITICAL *** Protected upstream TCP connection is using VPN tunnel address local=%s - routing loop risk", localAddr)
+		// The protected socket still ended up on the VPN tunnel interface.
+		// Returning this connection would cause a routing loop: upstream traffic
+		// would re-enter tun2socks instead of reaching the physical network.
+		// Close the connection and report an error so the caller can retry or fail fast.
+		_ = conn.Close()
+		log.Infof("[Protect] *** ROUTING LOOP *** Protected TCP connection using VPN tunnel address local=%s, closing and returning error", localAddr)
+		return nil, fmt.Errorf("protected TCP dial routed through VPN tunnel (local=%s): routing loop prevented", localAddr)
 	}
 	return conn, nil
 }
@@ -175,7 +181,10 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 	log.Infof("[DEBUG][Protect] UDP dial ready network=%s destination=%s local=%s remote=%s", realNet, address, localAddr, udpAddr)
 
 	if strings.HasPrefix(localAddr, "198.18.") {
-		log.Infof("[Protect] *** CRITICAL *** Protected upstream UDP socket is using VPN tunnel address local=%s - routing loop risk", localAddr)
+		// Same routing loop prevention as in DialContextWithProtect.
+		_ = pc.Close()
+		log.Infof("[Protect] *** ROUTING LOOP *** Protected UDP socket using VPN tunnel address local=%s, closing and returning error", localAddr)
+		return nil, fmt.Errorf("protected UDP dial routed through VPN tunnel (local=%s): routing loop prevented", localAddr)
 	}
 	return &connectedUDPConn{
 		PacketConn: pc,
@@ -186,6 +195,14 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 type connectedUDPConn struct {
 	net.PacketConn
 	remoteAddr net.Addr
+}
+
+// Read satisfies net.Conn by discarding the source address from ReadFrom.
+// This turns the connected UDP packet-conn into a stream-like conn, as expected
+// by callers that treat UDP sessions as net.Conn (e.g. outline-sdk packet dialers).
+func (c *connectedUDPConn) Read(b []byte) (int, error) {
+	n, _, err := c.ReadFrom(b)
+	return n, err
 }
 
 func (c *connectedUDPConn) Write(b []byte) (int, error) {
