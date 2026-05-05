@@ -101,13 +101,14 @@ func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) 
 	// concurrency. For plain Shadowsocks (no WebSocket) UDP works correctly.
 	disableNonDNSUDP := options.DisableNonDNSUDP && isWebSocket
 	log.Infof(
-		"outline client: transport summary len=%d websocket=%v tcpPath=%v udpPath=%v preferTCPDNS=%v disableNonDNSUDP=%v streamDialer=%T packetDialer=%T",
+		"outline client: transport summary len=%d websocket=%v tcpPath=%v udpPath=%v preferTCPDNS=%v disableNonDNSUDP=%v udpPolicy=%s streamDialer=%T packetDialer=%T",
 		len(transportConfig),
 		isWebSocket,
 		hasTCPPath,
 		hasUDPPath,
 		preferTCPDNS,
 		disableNonDNSUDP,
+		udpPolicyForLog(disableNonDNSUDP),
 		sd,
 		pd,
 	)
@@ -326,7 +327,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		// Reject non-DNS UDP immediately so the OS falls back to TCP without burning ~1s per attempt.
 		if d.disableNonDNSUDP && port != 53 {
 			d.udpNonDNSReject.Add(1)
-			log.Infof("[SOCKS5 UDP] rejected (disableNonDNSUDP) addr=%s", addr)
+			log.Infof("[SOCKS5 UDP] rejected disabledByConfig=true addr=%s reason=non-DNS UDP disabled for WebSocket transport; Speedtest/QUIC traffic will fail or fall back to TCP if the app supports fallback", addr)
 			return nil, fmt.Errorf("non-DNS UDP disabled for this transport")
 		}
 
@@ -643,12 +644,13 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 
 func (d *OutlineDevice) runtimeStatus() string {
 	return fmt.Sprintf(
-		"transport(websocket=%v tcpPath=%v udpPath=%v preferTCPDNS=%v disableNonDNSUDP=%v) dialStats(tcpAttempt=%d tcpOK=%d tcpErr=%d udpAttempt=%d udpOK=%d udpErr=%d udpDNSTruncated=%d udpNonDNSRejected=%d unsupported=%d)",
+		"transport(websocket=%v tcpPath=%v udpPath=%v preferTCPDNS=%v disableNonDNSUDP=%v udpPolicy=%s) dialStats(tcpAttempt=%d tcpOK=%d tcpErr=%d udpAttempt=%d udpOK=%d udpErr=%d udpDNSTruncated=%d udpNonDNSRejected=%d unsupported=%d)",
 		d.websocket,
 		d.hasTCPPath,
 		d.hasUDPPath,
 		d.preferTCPDNS,
 		d.disableNonDNSUDP,
+		udpPolicyForLog(d.disableNonDNSUDP),
 		d.tcpDialAttempt.Load(),
 		d.tcpDialOK.Load(),
 		d.tcpDialErr.Load(),
@@ -676,6 +678,13 @@ func outlineUptimeMilliseconds(startedAt time.Time) int64 {
 		return 0
 	}
 	return time.Since(startedAt).Milliseconds()
+}
+
+func udpPolicyForLog(disabled bool) string {
+	if disabled {
+		return "non_dns_udp_disabled_by_config"
+	}
+	return "non_dns_udp_enabled"
 }
 
 func (d *OutlineDevice) Status(timeout time.Duration) string {

@@ -30,6 +30,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var pathMonitor: Network.NWPathMonitor?
     private var lastPathFingerprint: String?
     private var packetFlowBridge: PacketFlowBridge?
+    private var lastRouteDiagnostics = "routeDiagnostics=not_built"
 
     deinit {
         logs.writeLog(log: "[tunnel:\(tunnelId)] deinit")
@@ -188,11 +189,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
             // DNS resolution at tunnel start can hang in offline/captive-portal cases, so we do it with a hard timeout.
             var excludedRoutes: [NEIPv4Route] = []
+            var routeDiagnosticParts: [String] = []
             if let hostOrIp = extractIP(from: configsRepository.getServerPort()) {
                 let trimmed = hostOrIp.trimmingCharacters(in: .whitespacesAndNewlines)
                 if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
                    let route = makeExcludedRoute(host: ip) {
                     excludedRoutes.append(route)
+                    routeDiagnosticParts.append("outlineHost=\(maskStr(value: trimmed)) outlineResolvedIPv4=\(maskStr(value: ip)) outlineExcludedRoute=\(ip)/32")
                     if ip == trimmed {
                         logs.writeLog(log: "Excluded route for Outline host: \(maskStr(value: ip))/32")
                     } else {
@@ -202,14 +205,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         )
                     }
                 } else {
+                    routeDiagnosticParts.append("outlineHost=\(maskStr(value: trimmed)) outlineResolvedIPv4=failed outlineExcludedRoute=none")
                     logs.writeLog(log: "Excluded route for Outline host skipped (can't resolve to IPv4): \(maskStr(value: trimmed))")
                 }
+            } else {
+                routeDiagnosticParts.append("outlineHost=none outlineResolvedIPv4=none outlineExcludedRoute=none")
             }
             if let remoteHost = extractRemoteHost(from: cloakConfig) {
                 let trimmed = remoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
                 if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
                    let route = makeExcludedRoute(host: ip) {
                     excludedRoutes.append(route)
+                    routeDiagnosticParts.append("cloakRemoteHost=\(maskStr(value: trimmed)) cloakResolvedIPv4=\(maskStr(value: ip)) cloakExcludedRoute=\(ip)/32")
                     if ip == trimmed {
                         logs.writeLog(log: "Excluded route for Cloak RemoteHost: \(maskStr(value: ip))/32")
                     } else {
@@ -219,9 +226,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         )
                     }
                 } else {
+                    routeDiagnosticParts.append("cloakRemoteHost=\(maskStr(value: trimmed)) cloakResolvedIPv4=failed cloakExcludedRoute=none")
                     logs.writeLog(log: "Excluded route for Cloak RemoteHost skipped (can't resolve to IPv4): \(maskStr(value: trimmed))")
                 }
+            } else {
+                routeDiagnosticParts.append("cloakRemoteHost=none cloakResolvedIPv4=none cloakExcludedRoute=none")
             }
+            let excludedRouteSummary = excludedRoutes.isEmpty
+                ? "(none)"
+                : excludedRoutes.map { "\($0.destinationAddress)/\($0.destinationSubnetMask)" }.joined(separator: ",")
+            lastRouteDiagnostics = "excludedRoutes=\(excludedRouteSummary) " +
+                routeDiagnosticParts.joined(separator: " ")
             if !excludedRoutes.isEmpty {
                 let list = excludedRoutes.map { "\($0.destinationAddress)/\($0.destinationSubnetMask)" }.joined(separator: ", ")
                 logs.writeLog(log: "Excluded IPv4 routes: \(list)")
@@ -278,6 +293,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(
                 log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings applied in \(elapsedMs(since: settingsStart))ms"
             )
+            logs.writeLog(log: "[tunnel:\(tunnelId)] route exclusion validation after settings: \(lastRouteDiagnostics)")
             logGoProtectionDiagnostics(label: "after setTunnelNetworkSettings")
 
             // iOS 26 research: Log network interfaces AFTER tunnel starts
@@ -448,6 +464,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: END_XPC_TUNNEL_DIAGNOSTICS ==========")
         return "nativeBuildInfo=\(Cloak_outlineNativeBuildInfo()) " +
             "protection={\(protection)} " +
+            "routes={\(lastRouteDiagnostics)} " +
             "outline={\(outlineStatus)} " +
             "bridge={\(bridgeStatus)}"
     }

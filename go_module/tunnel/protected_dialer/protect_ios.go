@@ -65,9 +65,11 @@ func GetConfiguredDefaultInterfaceForIOS() int {
 }
 
 func ProtectionDiagnosticsForIOS() string {
+	configuredIndex := GetConfiguredDefaultInterfaceForIOS()
 	return fmt.Sprintf(
-		"configuredDefaultInterfaceIndex=%d interfaces=[%s]",
-		GetConfiguredDefaultInterfaceForIOS(),
+		"configuredDefaultInterfaceIndex=%d configuredDefaultInterfaceName=%s interfaces=[%s]",
+		configuredIndex,
+		interfaceNameByIndex(configuredIndex),
 		describeInterfacesForLog(),
 	)
 }
@@ -120,7 +122,22 @@ func formatInterfacesForLog(interfaces []net.Interface) string {
 	return strings.Join(parts, ";")
 }
 
+func interfaceNameByIndex(index int) string {
+	if index <= 0 {
+		return "unset"
+	}
+	iface, err := net.InterfaceByIndex(index)
+	if err != nil {
+		return fmt.Sprintf("lookup_error=%v", err)
+	}
+	return iface.Name
+}
+
 type iosProtector struct{}
+
+func (i *iosProtector) Diagnostics() string {
+	return ProtectionDiagnosticsForIOS()
+}
 
 func (i *iosProtector) Protect(fd uintptr, network string) error {
 	// iOS 26+: Try SO_NO_TC_NETPOLICY first (legacy approach for older iOS versions).
@@ -138,7 +155,7 @@ func (i *iosProtector) Protect(fd uintptr, network string) error {
 	ifaceIndex := GetDefaultInterfaceForIOS()
 
 	if ifaceIndex > 0 {
-		log.Infof("[iOS-Protect] Protect binding fd=%d network=%s ifaceIndex=%d", fd, network, ifaceIndex)
+		log.Infof("[iOS-Protect] Protect binding fd=%d network=%s ifaceIndex=%d ifaceName=%s", fd, network, ifaceIndex, interfaceNameByIndex(ifaceIndex))
 		// Bind the socket to the default physical interface (WiFi/Cellular)
 		// This ensures encrypted VPN traffic goes outside the VPN tunnel.
 		switch network {

@@ -54,7 +54,7 @@ func TestLocalProxyAliveUsesListenerAddressWithoutCredentials(t *testing.T) {
 	if strings.Contains(status, "too many colons") {
 		t.Fatalf("status shows credentialed proxy address was dialed: %s", status)
 	}
-	if !strings.Contains(status, "transport(websocket=true tcpPath=true udpPath=true preferTCPDNS=true disableNonDNSUDP=true)") {
+	if !strings.Contains(status, "transport(websocket=true tcpPath=true udpPath=true preferTCPDNS=true disableNonDNSUDP=true udpPolicy=non_dns_udp_disabled_by_config)") {
 		t.Fatalf("status does not include transport flags: %s", status)
 	}
 	if !strings.Contains(status, "dialStats(tcpAttempt=2 tcpOK=1 tcpErr=1 udpAttempt=3 udpOK=0 udpErr=1 udpDNSTruncated=1 udpNonDNSRejected=1 unsupported=0)") {
