@@ -12,4 +12,5 @@ func InitLogger(path string) {
 		return
 	}
 	log.Infof("[ios_exports] InitLogger OK path=%s", path)
+	logNativeBuildInfo("[ios_exports] InitLogger")
 }

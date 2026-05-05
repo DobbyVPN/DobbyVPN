@@ -70,7 +70,10 @@ public final class HealthCheckImpl: HealthCheck {
 
     public func shortConnectionCheckUp() -> Bool {
         let checkId = nextCheckId(prefix: "short")
-        logs.writeLog(log: "[HC] Start shortConnectionCheckUp id=\(checkId)")
+        logs.writeLog(
+            log: "[HC] Start shortConnectionCheckUp id=\(checkId) " +
+                "userStopRequested=\(isUserStopRequested())"
+        )
 
         let checks: [(String, () -> Bool)] = [
             ("HTTP https://google.com/gen_204", {
@@ -116,17 +119,28 @@ public final class HealthCheckImpl: HealthCheck {
         }
 
         let result = vpnOk && networkOk && heartbeatOk && outlineProxyOk && serverAliveProtected
+        let userStopAtEnd = isUserStopRequested()
         logs.writeLog(
             log: "[HC] End shortConnectionCheckUp id=\(checkId) => \(result) " +
             "(vpn=\(vpnOk), network=\(networkOk), heartbeat=\(heartbeatOk), " +
-            "outlineProxy=\(outlineProxyOk), serverAlive=\(serverAliveProtected))"
+            "outlineProxy=\(outlineProxyOk), serverAlive=\(serverAliveProtected), " +
+            "userStopRequested=\(userStopAtEnd))"
         )
+        if !result && userStopAtEnd {
+            logs.writeLog(
+                log: "[HC] id=\(checkId) false result is stop-related; " +
+                    "user stop was requested before the check completed"
+            )
+        }
         return result
     }
 
     public func fullConnectionCheckUp() -> Bool {
         let checkId = nextCheckId(prefix: "full")
-        logs.writeLog(log: "[HC] Start fullConnectionCheckUp id=\(checkId)")
+        logs.writeLog(
+            log: "[HC] Start fullConnectionCheckUp id=\(checkId) " +
+                "userStopRequested=\(isUserStopRequested())"
+        )
 
         // --- Standard check groups ---
         // On iOS, net.Dial based TCP probes can complete against the local
@@ -211,6 +225,12 @@ public final class HealthCheckImpl: HealthCheck {
             )
         }
         logs.writeLog(log: "[HC] RESULT id=\(checkId) = \(result)")
+        if !result && isUserStopRequested() {
+            logs.writeLog(
+                log: "[HC] RESULT id=\(checkId) is stop-related; " +
+                    "user stop was requested before the check completed"
+            )
+        }
 
         // --- DIAGNOSIS — single line with actionable verdict ---
         let tcpProxyOk = groupResults["TCP Ping diagnostics"] ?? true
@@ -235,6 +255,10 @@ public final class HealthCheckImpl: HealthCheck {
         let value = checkSequence
         checkSequenceLock.unlock()
         return "\(prefix)-\(value)"
+    }
+
+    private func isUserStopRequested() -> Bool {
+        DobbyConfigsRepositoryImpl.shared.getIsUserInitStop()
     }
 
     private func logDiagnosis(

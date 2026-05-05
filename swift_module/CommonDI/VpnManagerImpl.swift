@@ -24,6 +24,7 @@ public class VpnManagerImpl: VpnManager {
         logs.writeLog(log: "Start go logger init path = \(path)")
         Cloak_outlineInitLogger(path)
         logs.writeLog(log: "Finish go logger init")
+        logs.writeLog(log: "[Native] Go build info: \(Cloak_outlineNativeBuildInfo())")
 
 //        VpnManagerImpl.startSentry()
         self.connectionRepository = connectionRepository

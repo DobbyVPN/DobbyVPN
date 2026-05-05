@@ -36,6 +36,7 @@ func unsafeToString(v any) string {
 func NewVpnClient(transportConfig string, protocol string, tunnelFD int, mtu int) (err error) {
 	defer guardExportErr("NewVpnClient", &err)()
 	log.Infof("NewVpnClient() called protocol=%s fd=%d mtu=%d", protocol, tunnelFD, mtu)
+	logNativeBuildInfo("NewVpnClient()")
 
 	if client != nil {
 		log.Infof("NewVpnClient(): existing client detected, disconnecting previous client first status=%s", client.Status())
@@ -65,7 +66,7 @@ func NewVpnClient(transportConfig string, protocol string, tunnelFD int, mtu int
 		log.Infof("NewVpnClient(): creating outline device preferTCPDNSForWebSocket=true disableNonDNSUDP=true")
 		device, err = outline.NewOutlineDeviceWithOptions(transportConfig, outline.DeviceOptions{
 			PreferTCPDNSForWebSocket: true,
-			DisableNonDNSUDP:        true,
+			DisableNonDNSUDP:         true,
 		})
 	default:
 		log.Infof("NewVpnClient() failed: unsupported protocol")
