@@ -24,6 +24,7 @@ import (
 type OutlineDevice struct {
 	mu               sync.RWMutex
 	listener         net.Listener
+	listenAddr       string
 	proxyAddr        string
 	svrIP            net.IP
 	streamDialer     transport.StreamDialer
@@ -135,7 +136,9 @@ func (d *OutlineDevice) Open(routingTableID int, uplinkIface string) error {
 	}
 
 	d.listener = listener
-	d.proxyAddr = fmt.Sprintf("%s:%s@%s", d.socksUser, d.socksPass, listener.Addr().String())
+	d.listenAddr = listener.Addr().String()
+	d.proxyAddr = d.authenticatedProxyAddr(d.listenAddr)
+	log.Infof("SOCKS5 listener ready listenAddr=%s proxyAddr=%s", d.listenAddr, d.proxyAddr)
 
 	go d.serveLoop(server)
 
@@ -163,19 +166,23 @@ func (d *OutlineDevice) serveLoop(server *socks5.Server) {
 
 		d.mu.RLock()
 		listener := d.listener
-		addr := d.proxyAddr
+		listenAddr := d.listenAddr
+		proxyAddr := d.proxyAddr
 		d.mu.RUnlock()
 
 		if listener == nil {
 			d.markServeStopped("listener=nil")
 			return
 		}
+		if listenAddr == "" {
+			listenAddr = listener.Addr().String()
+		}
 
 		d.markServeRunning()
 		err := d.serveOnce(server, listener)
 		if d.closed.Load() {
 			d.markServeStopped("closed")
-			log.Infof("SOCKS5 stopped on %s: closed", addr)
+			log.Infof("SOCKS5 stopped on listenAddr=%s proxyAddr=%s: closed", listenAddr, proxyAddr)
 			return
 		}
 
@@ -184,16 +191,16 @@ func (d *OutlineDevice) serveLoop(server *socks5.Server) {
 			errText = err.Error()
 		}
 		d.markServeStopped(errText)
-		log.Infof("SOCKS5 stopped unexpectedly on %s: %s", addr, errText)
+		log.Infof("SOCKS5 stopped unexpectedly on listenAddr=%s proxyAddr=%s: %s", listenAddr, proxyAddr, errText)
 
 		for !d.closed.Load() {
 			time.Sleep(250 * time.Millisecond)
-			if err := d.rebindListener(addr); err != nil {
-				log.Infof("SOCKS5 rebind failed on %s: %v", addr, err)
+			if err := d.rebindListener(listenAddr); err != nil {
+				log.Infof("SOCKS5 rebind failed on listenAddr=%s: %v", listenAddr, err)
 				time.Sleep(time.Second)
 				continue
 			}
-			log.Infof("SOCKS5 rebound on %s", addr)
+			log.Infof("SOCKS5 rebound on listenAddr=%s", listenAddr)
 			break
 		}
 	}
@@ -220,12 +227,18 @@ func (d *OutlineDevice) rebindListener(addr string) error {
 	if err != nil {
 		return err
 	}
+	listenAddr := listener.Addr().String()
 
 	d.mu.Lock()
 	d.listener = listener
-	d.proxyAddr = listener.Addr().String()
+	d.listenAddr = listenAddr
+	d.proxyAddr = d.authenticatedProxyAddr(listenAddr)
 	d.mu.Unlock()
 	return nil
+}
+
+func (d *OutlineDevice) authenticatedProxyAddr(listenAddr string) string {
+	return fmt.Sprintf("%s:%s@%s", d.socksUser, d.socksPass, listenAddr)
 }
 
 func (d *OutlineDevice) markServeRunning() {
@@ -234,9 +247,10 @@ func (d *OutlineDevice) markServeRunning() {
 	d.serveState = "running"
 	d.serveErr = ""
 	gen := d.serveGen
-	addr := d.proxyAddr
+	listenAddr := d.listenAddr
+	proxyAddr := d.proxyAddr
 	d.mu.Unlock()
-	log.Infof("SOCKS5 serve generation %d running on %s", gen, addr)
+	log.Infof("SOCKS5 serve generation %d running on listenAddr=%s proxyAddr=%s", gen, listenAddr, proxyAddr)
 }
 
 func (d *OutlineDevice) markServeStopped(reason string) {
@@ -498,7 +512,8 @@ func (d *OutlineDevice) GetProxyAddr() string {
 func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, status string) {
 	start := time.Now()
 	d.mu.RLock()
-	addr := d.proxyAddr
+	listenAddr := d.listenAddr
+	proxyAddr := d.proxyAddr
 	state := d.serveState
 	serveErr := d.serveErr
 	gen := d.serveGen
@@ -506,10 +521,14 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 	startedAt := d.startedAt
 	d.mu.RUnlock()
 	uptimeMs := outlineUptimeMilliseconds(startedAt)
+	if listenAddr == "" {
+		listenAddr = listenAddressFromProxyAddr(proxyAddr)
+	}
 
 	log.Infof(
-		"outline local proxy health begin addr=%s state=%s gen=%d closed=%v timeoutMs=%d uptimeMs=%d",
-		addr,
+		"outline local proxy health begin listenAddr=%s proxyAddr=%s state=%s gen=%d closed=%v timeoutMs=%d uptimeMs=%d",
+		listenAddr,
+		proxyAddr,
 		state,
 		gen,
 		closed,
@@ -517,9 +536,10 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 		uptimeMs,
 	)
 
-	if addr == "" {
+	if listenAddr == "" {
 		status := fmt.Sprintf(
-			"localProxyAlive=false proxyAddr= serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d",
+			"localProxyAlive=false listenAddr= proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d",
+			proxyAddr,
 			state,
 			gen,
 			closed,
@@ -533,11 +553,12 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", listenAddr)
 	if err != nil {
 		status := fmt.Sprintf(
-			"localProxyAlive=false proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q probeErr=%q uptimeMs=%d",
-			addr,
+			"localProxyAlive=false listenAddr=%s proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q probeErr=%q uptimeMs=%d",
+			listenAddr,
+			proxyAddr,
 			state,
 			gen,
 			closed,
@@ -550,8 +571,9 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 	}
 	if err := conn.Close(); err != nil {
 		status := fmt.Sprintf(
-			"localProxyAlive=false proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q probeCloseErr=%q uptimeMs=%d",
-			addr,
+			"localProxyAlive=true listenAddr=%s proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q probeCloseErr=%q uptimeMs=%d",
+			listenAddr,
+			proxyAddr,
 			state,
 			gen,
 			closed,
@@ -560,12 +582,13 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 			uptimeMs,
 		)
 		log.Infof("outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
-		return false, status
+		return true, status
 	}
 
 	status = fmt.Sprintf(
-		"localProxyAlive=true proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d",
-		addr,
+		"localProxyAlive=true listenAddr=%s proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d",
+		listenAddr,
+		proxyAddr,
 		state,
 		gen,
 		closed,
@@ -574,6 +597,16 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 	)
 	log.Infof("outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
 	return true, status
+}
+
+func listenAddressFromProxyAddr(proxyAddr string) string {
+	if proxyAddr == "" {
+		return ""
+	}
+	if at := strings.LastIndex(proxyAddr, "@"); at >= 0 && at+1 < len(proxyAddr) {
+		return proxyAddr[at+1:]
+	}
+	return proxyAddr
 }
 
 func outlineUptimeMilliseconds(startedAt time.Time) int64 {
@@ -592,11 +625,12 @@ func (d *OutlineDevice) Close() error {
 	d.closed.Store(true)
 	d.mu.RLock()
 	listener := d.listener
-	addr := d.proxyAddr
+	listenAddr := d.listenAddr
+	proxyAddr := d.proxyAddr
 	d.mu.RUnlock()
 
 	if listener != nil {
-		log.Infof("SOCKS5 close requested on %s", addr)
+		log.Infof("SOCKS5 close requested listenAddr=%s proxyAddr=%s", listenAddr, proxyAddr)
 		return listener.Close()
 	}
 	return nil
