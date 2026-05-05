@@ -31,7 +31,9 @@ func SetDefaultInterfaceForIOS(index int) {
 	defaultInterfaceMu.Unlock()
 
 	if oldIndex != index {
-		log.Infof("[iOS-Protect] Default interface index changed: %d -> %d", oldIndex, index)
+		log.Infof("[iOS-Protect] Default interface index changed: %d -> %d interfaces=[%s]", oldIndex, index, describeInterfacesForLog())
+	} else {
+		log.Infof("[iOS-Protect] Default interface index unchanged: %d interfaces=[%s]", index, describeInterfacesForLog())
 	}
 }
 
@@ -41,9 +43,11 @@ func GetDefaultInterfaceForIOS() int {
 	idx := defaultInterfaceIndex
 	defaultInterfaceMu.RUnlock()
 	if idx > 0 {
+		log.Infof("[iOS-Protect] using cached default interface index=%d", idx)
 		return idx
 	}
 
+	log.Infof("[iOS-Protect] default interface index not set; scanning interfaces")
 	idx = detectDefaultInterfaceIndex()
 	if idx > 0 {
 		SetDefaultInterfaceForIOS(idx)
@@ -57,6 +61,7 @@ func detectDefaultInterfaceIndex() int {
 		log.Infof("[iOS-Protect] interface scan failed: %v", err)
 		return 0
 	}
+	log.Infof("[iOS-Protect] interface scan candidates=[%s]", formatInterfacesForLog(interfaces))
 
 	preferredNames := []string{"en0", "pdp_ip0"}
 	for _, name := range preferredNames {
@@ -82,14 +87,33 @@ func detectDefaultInterfaceIndex() int {
 	return 0
 }
 
+func describeInterfacesForLog() string {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return fmt.Sprintf("scan_error=%v", err)
+	}
+	return formatInterfacesForLog(interfaces)
+}
+
+func formatInterfacesForLog(interfaces []net.Interface) string {
+	parts := make([]string, 0, len(interfaces))
+	for _, iface := range interfaces {
+		parts = append(parts, fmt.Sprintf("%s(index=%d flags=%s mtu=%d)", iface.Name, iface.Index, iface.Flags.String(), iface.MTU))
+	}
+	return strings.Join(parts, ";")
+}
+
 type iosProtector struct{}
 
 func (i *iosProtector) Protect(fd uintptr, network string) error {
+	log.Infof("[iOS-Protect] Protect begin fd=%d network=%s", fd, network)
 	// iOS 26+: Try SO_NO_TC_NETPOLICY first (legacy approach for older iOS versions)
 	// On iOS 26+, this typically fails with "invalid argument" but doesn't hurt to try.
 	legacyErr := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, SO_NO_TC_NETPOLICY, 1)
 	if legacyErr != nil {
 		log.Infof("[iOS-Protect] SO_NO_TC_NETPOLICY failed (expected on iOS 26+): %v", legacyErr)
+	} else {
+		log.Infof("[iOS-Protect] SO_NO_TC_NETPOLICY success fd=%d", fd)
 	}
 
 	// iOS 26+: Use IP_BOUND_IF with the actual interface index.
@@ -98,6 +122,7 @@ func (i *iosProtector) Protect(fd uintptr, network string) error {
 	ifaceIndex := GetDefaultInterfaceForIOS()
 
 	if ifaceIndex > 0 {
+		log.Infof("[iOS-Protect] Protect binding fd=%d network=%s ifaceIndex=%d interfaces=[%s]", fd, network, ifaceIndex, describeInterfacesForLog())
 		// Bind the socket to the default physical interface (WiFi/Cellular)
 		// This ensures encrypted VPN traffic goes outside the VPN tunnel.
 		switch network {
@@ -128,18 +153,20 @@ func (i *iosProtector) Protect(fd uintptr, network string) error {
 				}
 				return nil
 			}
+			log.Infof("[iOS-Protect] IP_BOUND_IF (fallback IPv4) success: fd=%d bound to interface %d network=%s", fd, ifaceIndex, network)
 		}
 	} else {
 		// No interface index set - this will likely fail on iOS 26+
 		// Log a warning that Swift needs to provide the interface index
-		log.Infof("[iOS-Protect] WARNING: No default interface index set (ifaceIndex=%d). " +
-			"VPN traffic may not bypass tunnel correctly on iOS 26+. " +
+		log.Infof("[iOS-Protect] WARNING: No default interface index set (ifaceIndex=%d). "+
+			"VPN traffic may not bypass tunnel correctly on iOS 26+. "+
 			"Ensure Swift calls SetDefaultInterfaceIndex() with valid interface index from NWPathMonitor.", ifaceIndex)
 		if legacyErr != nil {
 			return fmt.Errorf("no default interface index set and SO_NO_TC_NETPOLICY failed: %w", legacyErr)
 		}
 	}
 
+	log.Infof("[iOS-Protect] Protect finished fd=%d network=%s ifaceIndex=%d legacyErr=%v", fd, network, ifaceIndex, legacyErr)
 	return nil
 }
 
