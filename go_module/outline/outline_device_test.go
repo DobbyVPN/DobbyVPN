@@ -24,13 +24,25 @@ func TestLocalProxyAliveUsesListenerAddressWithoutCredentials(t *testing.T) {
 	}()
 
 	device := &OutlineDevice{
-		listener:   listener,
-		listenAddr: listener.Addr().String(),
-		proxyAddr:  "user:pass@" + listener.Addr().String(),
-		startedAt:  time.Now(),
-		serveState: "running",
-		serveGen:   1,
+		listener:         listener,
+		listenAddr:       listener.Addr().String(),
+		proxyAddr:        "user:pass@" + listener.Addr().String(),
+		websocket:        true,
+		hasTCPPath:       true,
+		hasUDPPath:       true,
+		preferTCPDNS:     true,
+		disableNonDNSUDP: true,
+		startedAt:        time.Now(),
+		serveState:       "running",
+		serveGen:         1,
 	}
+	device.tcpDialAttempt.Add(2)
+	device.tcpDialOK.Add(1)
+	device.tcpDialErr.Add(1)
+	device.udpDialAttempt.Add(3)
+	device.udpDialErr.Add(1)
+	device.udpDNSTruncated.Add(1)
+	device.udpNonDNSReject.Add(1)
 
 	alive, status := device.LocalProxyAlive(500 * time.Millisecond)
 	if !alive {
@@ -41,6 +53,12 @@ func TestLocalProxyAliveUsesListenerAddressWithoutCredentials(t *testing.T) {
 	}
 	if strings.Contains(status, "too many colons") {
 		t.Fatalf("status shows credentialed proxy address was dialed: %s", status)
+	}
+	if !strings.Contains(status, "transport(websocket=true tcpPath=true udpPath=true preferTCPDNS=true disableNonDNSUDP=true)") {
+		t.Fatalf("status does not include transport flags: %s", status)
+	}
+	if !strings.Contains(status, "dialStats(tcpAttempt=2 tcpOK=1 tcpErr=1 udpAttempt=3 udpOK=0 udpErr=1 udpDNSTruncated=1 udpNonDNSRejected=1 unsupported=0)") {
+		t.Fatalf("status does not include dial counters: %s", status)
 	}
 
 	select {

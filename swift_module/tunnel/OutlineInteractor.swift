@@ -18,6 +18,7 @@ public final class OutlineInteractor {
     ) throws {
         let start = Date()
         logs.writeLog(log: "[Outline] startOutline begin fd=\(tunnelFileDescriptor) mtu=\(mtu)")
+        logs.writeLog(log: "[Outline] native build info: \(Cloak_outlineNativeBuildInfo())")
 
         let methodPassword = configsRepository.getMethodPasswordOutline()
         let serverPort = configsRepository.getServerPort()

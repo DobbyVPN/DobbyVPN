@@ -78,32 +78,51 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 continue
             }
             let name = String(cString: rawName)
-            if name.starts(with: "utun") {
-                let family = Int32(addr.pointee.sa_family)
-                var values = interfaces[name] ?? []
-                if family == AF_INET {
-                    var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-                    var ip = addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
-                        $0.pointee.sin_addr
-                    }
-                    if inet_ntop(AF_INET, &ip, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil {
-                        values.append("ipv4=\(String(cString: buffer))")
-                    } else {
-                        let ntopErrno = errno
-                        values.append("ipv4_ntop_error=\(ntopErrno):\(String(cString: strerror(ntopErrno)))")
-                    }
-                } else if family == AF_INET6 {
-                    values.append("ipv6")
-                } else {
-                    values.append("family=\(family)")
+            let family = Int32(addr.pointee.sa_family)
+            var values = interfaces[name] ?? []
+            if values.isEmpty {
+                let index = Int(if_nametoindex(name))
+                let flags = ptr?.pointee.ifa_flags ?? 0
+                values.append("index=\(index)")
+                values.append("flags=0x\(String(flags, radix: 16))")
+                if name.starts(with: "utun") {
+                    values.append("vpnTunnel=true")
                 }
-                interfaces[name] = values
+                if name == "en0" || name.starts(with: "pdp_ip") || name.starts(with: "en") {
+                    values.append("physicalCandidate=true")
+                }
             }
+            if family == AF_INET {
+                var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                var ip = addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                    $0.pointee.sin_addr
+                }
+                if inet_ntop(AF_INET, &ip, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil {
+                    values.append("ipv4=\(String(cString: buffer))")
+                } else {
+                    let ntopErrno = errno
+                    values.append("ipv4_ntop_error=\(ntopErrno):\(String(cString: strerror(ntopErrno)))")
+                }
+            } else if family == AF_INET6 {
+                var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+                var ip = addr.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) {
+                    $0.pointee.sin6_addr
+                }
+                if inet_ntop(AF_INET6, &ip, &buffer, socklen_t(INET6_ADDRSTRLEN)) != nil {
+                    values.append("ipv6=\(String(cString: buffer))")
+                } else {
+                    let ntopErrno = errno
+                    values.append("ipv6_ntop_error=\(ntopErrno):\(String(cString: strerror(ntopErrno)))")
+                }
+            } else {
+                values.append("family=\(family)")
+            }
+            interfaces[name] = values
             ptr = ptr?.pointee.ifa_next
         }
 
         if interfaces.isEmpty {
-            logs.writeLog(log: "[DEBUG][Interfaces] no utun interfaces visible")
+            logs.writeLog(log: "[DEBUG][Interfaces] no interfaces visible")
             return
         }
 
@@ -141,6 +160,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(log: "Start go logger init path = \(path)")
             Cloak_outlineInitLogger(path)
             logs.writeLog(log: "Finish go logger init")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [Native] Go build info: \(Cloak_outlineNativeBuildInfo())")
+            logGoProtectionDiagnostics(label: "after logger init")
 
             // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
             enterStage("pre-start cleanup")
@@ -154,6 +175,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             // iOS 26+: set the physical interface index before any protected sockets are opened.
             enterStage("initial interface detection")
             setInitialDefaultInterfaceIndexForStartup(timeout: 1.0)
+            logGoProtectionDiagnostics(label: "after initial interface detection")
             logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel stage complete: initial interface detection")
             enterStage("geo routing config")
             let geoRoutingConf = configsRepository.getGeoRoutingConf()
@@ -256,6 +278,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(
                 log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings applied in \(elapsedMs(since: settingsStart))ms"
             )
+            logGoProtectionDiagnostics(label: "after setTunnelNetworkSettings")
 
             // iOS 26 research: Log network interfaces AFTER tunnel starts
             logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: AFTER_VPN_TUNNEL ==========")
@@ -313,6 +336,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
 
             logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
+            logGoProtectionDiagnostics(label: "after protocol startup")
+            logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: AFTER_PROTOCOL_STARTUP ==========")
+            logInterfaces()
+            logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: END_AFTER_PROTOCOL_STARTUP ==========")
 
             logs.writeLog(log: "startTunnel: all packet loops started")
         } catch {
@@ -396,6 +423,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let response = "OutlineStatus:\(status)".data(using: .utf8)
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getOutlineStatus responseBytes=\(response?.count ?? -1)")
             completionHandler?(response)
+        } else if let msg = String(data: messageData, encoding: .utf8), msg == "getTunnelDiagnostics" {
+            let diagnostics = tunnelDiagnosticsSnapshot()
+            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getTunnelDiagnostics \(diagnostics)")
+            let response = "TunnelDiagnostics:\(diagnostics)".data(using: .utf8)
+            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getTunnelDiagnostics responseBytes=\(response?.count ?? -1)")
+            completionHandler?(response)
         } else {
             if String(data: messageData, encoding: .utf8) == nil {
                 logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage nonUtf8 echo bytes=\(messageData.count)")
@@ -404,6 +437,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             completionHandler?(messageData)
         }
+    }
+
+    private func tunnelDiagnosticsSnapshot() -> String {
+        let outlineStatus = outlineInteractor.outlineStatus()
+        let bridgeStatus = packetFlowBridge?.diagnosticsSnapshot() ?? "packetFlowBridge=nil"
+        let protection = Cloak_outlineProtectionDiagnostics()
+        logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: XPC_TUNNEL_DIAGNOSTICS ==========")
+        logInterfaces()
+        logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: END_XPC_TUNNEL_DIAGNOSTICS ==========")
+        return "nativeBuildInfo=\(Cloak_outlineNativeBuildInfo()) " +
+            "protection={\(protection)} " +
+            "outline={\(outlineStatus)} " +
+            "bridge={\(bridgeStatus)}"
     }
 
     /// Get the default (primary) interface index for socket binding.
@@ -468,10 +514,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             
             // Call Go function to set the interface index
             Cloak_outlineSetDefaultInterfaceIndex(index)
+            let goIndex = Cloak_outlineGetDefaultInterfaceIndex()
+            let diagnostics = Cloak_outlineProtectionDiagnostics()
             
             logs.writeLog(
-                log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] Set default interface index: \(index) (\(ifaceName)/\(ifaceType))"
+                log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] Set default interface index: " +
+                    "\(index) (\(ifaceName)/\(ifaceType)) goIndex=\(goIndex) diagnostics=\(diagnostics)"
             )
+            if goIndex != index {
+                logs.writeLog(
+                    log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] ERROR: Go default interface index mismatch " +
+                        "swiftSet=\(index) goReturned=\(goIndex)"
+                )
+            }
         } else {
             logs.writeLog(
                 log: "[tunnel:\(tunnelId)] [iOS26-RESEARCH] WARNING: Could not determine default interface index! " +
@@ -695,7 +750,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let ifaceIndex = self.getDefaultInterfaceIndex(from: path)
             if ifaceIndex > 0 {
                 Cloak_outlineSetDefaultInterfaceIndex(ifaceIndex)
-                self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] STARTUP: Set initial interface index returned: \(ifaceIndex)")
+                let goIndex = Cloak_outlineGetDefaultInterfaceIndex()
+                let diagnostics = Cloak_outlineProtectionDiagnostics()
+                self.logs.writeLog(
+                    log: "[tunnel:\(self.tunnelId)] STARTUP: Set initial interface index " +
+                        "swiftSet=\(ifaceIndex) goIndex=\(goIndex) diagnostics=\(diagnostics)"
+                )
+                if goIndex != ifaceIndex {
+                    self.logs.writeLog(
+                        log: "[tunnel:\(self.tunnelId)] STARTUP_ERROR: Go default interface index mismatch " +
+                            "swiftSet=\(ifaceIndex) goReturned=\(goIndex)"
+                    )
+                }
             } else {
                 self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] STARTUP_WARNING: Could not determine initial interface index")
             }
@@ -761,6 +827,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         lastPathFingerprint = nil
 
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason))")
+    }
+
+    private func logGoProtectionDiagnostics(label: String) {
+        logs.writeLog(
+            log: "[tunnel:\(tunnelId)] [iOS-Protect] \(label): " +
+                "\(Cloak_outlineProtectionDiagnostics())"
+        )
     }
 
     private func logNetworkSettings(
