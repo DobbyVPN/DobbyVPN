@@ -496,6 +496,7 @@ func (d *OutlineDevice) GetProxyAddr() string {
 }
 
 func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, status string) {
+	start := time.Now()
 	d.mu.RLock()
 	addr := d.proxyAddr
 	state := d.serveState
@@ -504,16 +505,29 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 	closed := d.closed.Load()
 	startedAt := d.startedAt
 	d.mu.RUnlock()
+	uptimeMs := outlineUptimeMilliseconds(startedAt)
+
+	log.Infof(
+		"outline local proxy health begin addr=%s state=%s gen=%d closed=%v timeoutMs=%d uptimeMs=%d",
+		addr,
+		state,
+		gen,
+		closed,
+		timeout.Milliseconds(),
+		uptimeMs,
+	)
 
 	if addr == "" {
-		return false, fmt.Sprintf(
+		status := fmt.Sprintf(
 			"localProxyAlive=false proxyAddr= serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d",
 			state,
 			gen,
 			closed,
 			serveErr,
-			time.Since(startedAt).Milliseconds(),
+			uptimeMs,
 		)
+		log.Infof("outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
+		return false, status
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -521,7 +535,7 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 
 	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return false, fmt.Sprintf(
+		status := fmt.Sprintf(
 			"localProxyAlive=false proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q probeErr=%q uptimeMs=%d",
 			addr,
 			state,
@@ -529,20 +543,44 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 			closed,
 			serveErr,
 			err.Error(),
-			time.Since(startedAt).Milliseconds(),
+			uptimeMs,
 		)
+		log.Infof("outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
+		return false, status
 	}
-	_ = conn.Close()
+	if err := conn.Close(); err != nil {
+		status := fmt.Sprintf(
+			"localProxyAlive=false proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q probeCloseErr=%q uptimeMs=%d",
+			addr,
+			state,
+			gen,
+			closed,
+			serveErr,
+			err.Error(),
+			uptimeMs,
+		)
+		log.Infof("outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
+		return false, status
+	}
 
-	return true, fmt.Sprintf(
+	status = fmt.Sprintf(
 		"localProxyAlive=true proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d",
 		addr,
 		state,
 		gen,
 		closed,
 		serveErr,
-		time.Since(startedAt).Milliseconds(),
+		uptimeMs,
 	)
+	log.Infof("outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
+	return true, status
+}
+
+func outlineUptimeMilliseconds(startedAt time.Time) int64 {
+	if startedAt.IsZero() {
+		return 0
+	}
+	return time.Since(startedAt).Milliseconds()
 }
 
 func (d *OutlineDevice) Status(timeout time.Duration) string {

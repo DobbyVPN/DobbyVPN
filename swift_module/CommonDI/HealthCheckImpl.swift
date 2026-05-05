@@ -3,6 +3,7 @@ import MyLibrary
 import os
 import app
 import Foundation
+import Darwin
 import SystemConfiguration
 import Network
 
@@ -276,6 +277,7 @@ public final class HealthCheckImpl: HealthCheck {
     ) -> Bool {
         for attempt in 1...attempts {
             logs.writeLog(log: "[HC] \(name) attempt \(attempt)")
+            let attemptStart = Date()
             let ok: Bool
             if let timeoutPerAttempt {
                 ok = runWithTimeout(timeout: timeoutPerAttempt, block: block)
@@ -284,8 +286,14 @@ public final class HealthCheckImpl: HealthCheck {
             }
 
             if ok {
+                logs.writeLog(
+                    log: "[HC] \(name) attempt \(attempt) OK in \(elapsedMs(since: attemptStart))ms"
+                )
                 return true
             }
+            logs.writeLog(
+                log: "[HC] \(name) attempt \(attempt) FAILED in \(elapsedMs(since: attemptStart))ms"
+            )
         }
         logs.writeLog(log: "[HC] \(name) FAILED after \(attempts) attempts")
         return false
@@ -309,6 +317,7 @@ public final class HealthCheckImpl: HealthCheck {
 
         let wait = semaphore.wait(timeout: .now() + timeout)
         if wait == .timedOut {
+            logs.writeLog(log: "[HC] runWithTimeout timed out after \(Int(timeout * 1000))ms")
             return false
         }
         lock.lock()
@@ -321,6 +330,7 @@ public final class HealthCheckImpl: HealthCheck {
         var result: (ok: Bool, message: String)?
         let group = DispatchGroup()
         group.enter()
+        logs.writeLog(log: "[HC] [DNS] \(host) begin timeoutMs=\(Int(timeout * 1000))")
 
         DispatchQueue.global(qos: .userInitiated).async {
             result = self.resolveDNS(host: host)
@@ -338,6 +348,7 @@ public final class HealthCheckImpl: HealthCheck {
     }
 
     private func resolveDNS(host: String) -> (ok: Bool, message: String) {
+        let start = Date()
         var hints = addrinfo(
             ai_flags: AI_PASSIVE,
             ai_family: AF_UNSPEC,
@@ -353,7 +364,7 @@ public final class HealthCheckImpl: HealthCheck {
         let status = getaddrinfo(host, nil, &hints, &infoPointer)
 
         guard status == 0, let first = infoPointer else {
-            return (false, String(cString: gai_strerror(status)))
+            return (false, "\(String(cString: gai_strerror(status))) elapsedMs=\(elapsedMs(since: start))")
         }
 
         defer { freeaddrinfo(infoPointer) }
@@ -370,12 +381,12 @@ public final class HealthCheckImpl: HealthCheck {
                 0,
                 NI_NUMERICHOST
             ) == 0 {
-                return (true, String(cString: buffer))
+                return (true, "\(String(cString: buffer)) elapsedMs=\(elapsedMs(since: start))")
             }
             ptr = current.pointee.ai_next
         }
 
-        return (false, "Can't resolve DNS")
+        return (false, "Can't resolve DNS elapsedMs=\(elapsedMs(since: start))")
     }
 
     private func httpPing(urlString: String) -> Bool {
@@ -453,10 +464,19 @@ public final class HealthCheckImpl: HealthCheck {
 
     private func interfaceName(forIPv4 targetIP: String) -> String? {
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else { return nil }
+        let rc = getifaddrs(&ifaddrPtr)
+        guard rc == 0, let first = ifaddrPtr else {
+            let getErrno = errno
+            logs.writeLog(
+                log: "[HC] [Interfaces] getifaddrs failed rc=\(rc) errno=\(getErrno) " +
+                    "\(String(cString: strerror(getErrno)))"
+            )
+            return nil
+        }
         defer { freeifaddrs(ifaddrPtr) }
 
         var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        var ipv4Interfaces: [String] = []
         while let addr = ptr {
             if addr.pointee.ifa_addr?.pointee.sa_family == UInt8(AF_INET) {
                 var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
@@ -465,13 +485,23 @@ public final class HealthCheckImpl: HealthCheck {
                 }
                 if inet_ntop(AF_INET, &sa, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil {
                     let ip = String(cString: buffer)
+                    let name = String(cString: addr.pointee.ifa_name)
+                    ipv4Interfaces.append("\(name)=\(ip)")
                     if ip == targetIP {
-                        return String(cString: addr.pointee.ifa_name)
+                        logs.writeLog(log: "[HC] [Interfaces] target \(targetIP) matched \(name); ipv4=[\(ipv4Interfaces.joined(separator: ","))]")
+                        return name
                     }
+                } else {
+                    let ntopErrno = errno
+                    logs.writeLog(
+                        log: "[HC] [Interfaces] inet_ntop failed errno=\(ntopErrno) " +
+                            "\(String(cString: strerror(ntopErrno)))"
+                    )
                 }
             }
             ptr = addr.pointee.ifa_next
         }
+        logs.writeLog(log: "[HC] [Interfaces] target \(targetIP) not found; ipv4=[\(ipv4Interfaces.joined(separator: ","))]")
         return nil
     }
 
@@ -500,6 +530,10 @@ public final class HealthCheckImpl: HealthCheck {
     private func tcpPingWithTimeout(address: String, protected: Bool = false) -> Result<Int32, Error> {
         // The Go ping helper might block longer than desired; enforce a hard wall-clock timeout.
         let semaphore = DispatchSemaphore(value: 0)
+        let start = Date()
+        logs.writeLog(
+            log: "[HC] [tcpPing] begin address=\(address) protected=\(protected) timeoutMs=\(Int(timeout * 1000))"
+        )
         var result: Result<Int32, Error> = .failure(
             NSError(
                 domain: "CloakTcpPing",
@@ -515,6 +549,10 @@ public final class HealthCheckImpl: HealthCheck {
 
         let wait = semaphore.wait(timeout: .now() + timeout)
         if wait == .timedOut {
+            logs.writeLog(
+                log: "[HC] [tcpPing] timeout address=\(address) protected=\(protected) " +
+                    "elapsedMs=\(elapsedMs(since: start))"
+            )
             return .failure(
                 NSError(
                     domain: "CloakTcpPing",
@@ -523,6 +561,10 @@ public final class HealthCheckImpl: HealthCheck {
                 )
             )
         }
+        logs.writeLog(
+            log: "[HC] [tcpPing] completed address=\(address) protected=\(protected) " +
+                "elapsedMs=\(elapsedMs(since: start))"
+        )
         return result
     }
 
@@ -530,11 +572,16 @@ public final class HealthCheckImpl: HealthCheck {
         var ret: Int32 = 0
         var err: NSError?
         let success: Bool
+        logs.writeLog(log: "[HC] [tcpPingNative] calling protected=\(protected) address=\(address)")
         if protected {
             success = Cloak_outlineProtectedTcpPing(address, &ret, &err)
         } else {
             success = Cloak_outlineTcpPing(address, &ret, &err)
         }
+        logs.writeLog(
+            log: "[HC] [tcpPingNative] returned success=\(success) ret=\(ret) " +
+                "err=\(err?.localizedDescription ?? "nil") protected=\(protected) address=\(address)"
+        )
 
         if success {
             return .success(ret)
@@ -560,20 +607,30 @@ public final class HealthCheckImpl: HealthCheck {
         // iOS 26 fallback: Check for any utun interface if IP check fails
         // This helps identify if the tunnel is at least partially up
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else { return false }
+        let rc = getifaddrs(&ifaddrPtr)
+        guard rc == 0, let first = ifaddrPtr else {
+            let getErrno = errno
+            logs.writeLog(
+                log: "[HC] [VPNIface] getifaddrs failed rc=\(rc) errno=\(getErrno) " +
+                    "\(String(cString: strerror(getErrno)))"
+            )
+            return false
+        }
         defer { freeifaddrs(ifaddrPtr) }
 
         var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        var utunNames: [String] = []
         while let addr = ptr {
             let name = String(cString: addr.pointee.ifa_name)
             if name.starts(with: "utun") {
+                 utunNames.append(name)
                  logs.writeLog(log: "[HC] [VPNIface] Found utun interface \(name) but it doesn't have IP \(tunnelIPAddress)")
             }
             ptr = addr.pointee.ifa_next
         }
 
         logs.writeLog(
-            log: "[HC] [VPNIface] Dobby tunnel IP \(tunnelIPAddress) not found on any interface"
+            log: "[HC] [VPNIface] Dobby tunnel IP \(tunnelIPAddress) not found on any interface; utuns=[\(utunNames.joined(separator: ","))]"
         )
         return false
     }
@@ -581,6 +638,10 @@ public final class HealthCheckImpl: HealthCheck {
     private func providerMessage(_ message: String, label: String) -> String? {
         var rawResponse: String?
         let semaphore = DispatchSemaphore(value: 0)
+        let start = Date()
+        logs.writeLog(
+            log: "[HC] [\(label)] provider message begin message=\(message) timeoutMs=\(Int(timeout * 1000))"
+        )
 
         NETunnelProviderManager.loadAllFromPreferences { managers, error in
             if let error = error {
@@ -590,6 +651,7 @@ public final class HealthCheckImpl: HealthCheck {
                 semaphore.signal()
                 return
             }
+            self.logs.writeLog(log: "[HC] [\(label)] loadAllFromPreferences managers=\(managers?.count ?? -1)")
             guard
                 let manager = managers?.first(where: {
                     $0.localizedDescription == VpnManagerImpl.dobbyName &&
@@ -615,6 +677,10 @@ public final class HealthCheckImpl: HealthCheck {
                 ) { response in
                     defer { semaphore.signal() }
                     rawResponse = response.flatMap { String(data: $0, encoding: .utf8) }
+                    self.logs.writeLog(
+                        log: "[HC] [\(label)] provider response bytes=\(response?.count ?? -1) " +
+                            "decoded=\(rawResponse ?? "nil")"
+                    )
                 }
             } catch {
                 self.logs.writeLog(
@@ -626,7 +692,9 @@ public final class HealthCheckImpl: HealthCheck {
 
         let wait = semaphore.wait(timeout: .now() + timeout)
         if wait == .timedOut {
-            logs.writeLog(log: "[HC] [\(label)] provider message timed out")
+            logs.writeLog(log: "[HC] [\(label)] provider message timed out elapsedMs=\(elapsedMs(since: start))")
+        } else {
+            logs.writeLog(log: "[HC] [\(label)] provider message finished elapsedMs=\(elapsedMs(since: start))")
         }
         return rawResponse
     }
@@ -644,15 +712,37 @@ public final class HealthCheckImpl: HealthCheck {
         let raw = providerMessage("getOutlineStatus", label: "Outline")
         logs.writeLog(log: "[HC] [Outline] status: \(raw ?? "nil")")
         guard let raw else { return false }
-        return raw.contains("localProxyAlive=true")
+        if raw.contains("localProxyAlive=true") {
+            return true
+        }
+        if raw.contains("localProxyAlive=false") {
+            return false
+        }
+
+        let legacyHealthyStatus = raw.contains("client=true")
+            && raw.contains("engineStarted=true")
+            && raw.contains("deviceNil=false")
+        if legacyHealthyStatus {
+            logs.writeLog(
+                log: "[HC] [Outline] native status lacks localProxyAlive; accepting healthy legacy engine status"
+            )
+        }
+        return legacyHealthyStatus
     }
 
     private func parseMemoryResponse(_ response: String?) -> Double {
         guard let response,
               response.hasPrefix("Memory:")
-        else { return -1 }
+        else {
+            logs.writeLog(log: "[HC] [XPC] parseMemoryResponse invalid response=\(response ?? "nil")")
+            return -1
+        }
         let value = response.replacingOccurrences(of: "Memory:", with: "")
-        return Double(value) ?? -1
+        guard let parsed = Double(value) else {
+            logs.writeLog(log: "[HC] [XPC] parseMemoryResponse failed value=\(value)")
+            return -1
+        }
+        return parsed
     }
 
     public func getTimeToWakeUp() -> Int32 {
@@ -661,5 +751,9 @@ public final class HealthCheckImpl: HealthCheck {
 
     public func checkServerAlive(address: String, port: Int32) -> Bool {
         return pingAddress("\(address):\(port)", name: "ServerAlive")
+    }
+
+    private func elapsedMs(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
     }
 }

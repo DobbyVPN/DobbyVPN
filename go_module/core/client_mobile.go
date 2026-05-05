@@ -90,6 +90,7 @@ func (c *CoreClient) Connect() error {
 func (c *CoreClient) Disconnect() error {
 	log.Infof("core client disconnect begin engineStarted=%v fd=%d deviceNil=%v", c.engineStarted, c.tunFD, c.device == nil)
 	tunnel.StopEngine()
+	log.Infof("core client disconnect: tun2socks engine stop requested")
 	if !c.engineStarted && c.tunFD >= 0 {
 		if err := unix.Close(c.tunFD); err != nil {
 			log.Infof("failed to close unused tun fd: %v\n", err)
@@ -101,6 +102,7 @@ func (c *CoreClient) Disconnect() error {
 	c.tunFD = -1
 
 	if c.device != nil {
+		log.Infof("core client disconnect: closing protocol device serverIP=%s", c.device.GetServerIP())
 		if err := c.device.Close(); err != nil {
 			log.Infof("failed to close protocol device: %v\n", err)
 		}
@@ -123,12 +125,20 @@ func (c *CoreClient) Status() string {
 			c.tunFD,
 		)
 	}
-	return fmt.Sprintf(
+	status := fmt.Sprintf(
 		"client=true engineStarted=%v fd=%d deviceNil=false serverIP=%s",
 		c.engineStarted,
 		c.tunFD,
 		c.device.GetServerIP().String(),
 	)
+	if statusProvider, ok := c.device.(pkg.StatusProvider); ok {
+		deviceStatus := statusProvider.Status(500 * time.Millisecond)
+		log.Infof("core client status: protocol device status=%s", deviceStatus)
+		status = fmt.Sprintf("%s %s", status, deviceStatus)
+	} else {
+		log.Infof("core client status: protocol device does not implement status provider type=%T", c.device)
+	}
+	return status
 }
 
 func (c *CoreClient) Refresh() error {
