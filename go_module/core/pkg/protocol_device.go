@@ -1,6 +1,9 @@
 package pkg
 
-import "net"
+import (
+	"net"
+	"time"
+)
 
 // ProtocolDevice represents any VPN protocol implementation (Xray, Outline, etc.)
 // that provides a local SOCKS5 bridge for tun2socks.
@@ -16,4 +19,10 @@ type ProtocolDevice interface {
 
 	// Close shuts down the engine and releases bound ports.
 	Close() error
+}
+
+// StatusProvider is implemented by protocol devices that can report runtime
+// health details without changing the base ProtocolDevice contract.
+type StatusProvider interface {
+	Status(timeout time.Duration) string
 }

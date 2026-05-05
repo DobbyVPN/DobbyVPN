@@ -12,6 +12,8 @@ final class PacketFlowBridge {
     private let requestedSocketBufferBytes = 1 * 1024 * 1024
     private let maxBatchPackets = 64
     private let maxBatchBytes = 64 * 1024
+    private let maxPacketClassificationSamples = 25
+    private let maxPacketFlowSummaryItems = 12
 
     private var readSource: DispatchSourceRead?
     private var statsTimer: DispatchSourceTimer?
@@ -33,6 +35,8 @@ final class PacketFlowBridge {
     private var goToTunnelDrops = 0
     private var firstTunnelPacketLogged = false
     private var firstGoPacketLogged = false
+    private var tunnelToGoClassification = PacketClassStats()
+    private var goToTunnelClassification = PacketClassStats()
 
     var tunnelFileDescriptor: Int32 {
         lock.lock()
@@ -45,6 +49,10 @@ final class PacketFlowBridge {
         let releasedFD = goFileDescriptor
         goFileDescriptor = -1
         lock.unlock()
+        if releasedFD < 0 {
+            log("[PacketFlowBridge] Go fd ownership release requested but fd was already released")
+            return
+        }
         log("[DEBUG][PacketFlowBridge] Go fd ownership released fd=\(releasedFD)")
     }
 
@@ -59,6 +67,11 @@ final class PacketFlowBridge {
             socketpair(AF_UNIX, SOCK_DGRAM, 0, buffer.baseAddress)
         }
         guard rc == 0 else {
+            let socketErrno = errno
+            log(
+                "[PacketFlowBridge] socketpair failed errno=\(socketErrno) " +
+                "\(errnoDescription(socketErrno))"
+            )
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
 
@@ -78,6 +91,10 @@ final class PacketFlowBridge {
                 "goFD=\(goFileDescriptor) snd=\(goBuffers.send) rcv=\(goBuffers.receive)"
             )
         } catch {
+            log(
+                "[PacketFlowBridge] socket setup failed swiftFD=\(swiftFileDescriptor) " +
+                "goFD=\(goFileDescriptor) error=\(error.localizedDescription)"
+            )
             closeIfOpen(&swiftFileDescriptor)
             closeIfOpen(&goFileDescriptor)
             throw error
@@ -88,8 +105,12 @@ final class PacketFlowBridge {
 
     func start() {
         lock.lock()
-        guard !running, swiftFileDescriptor >= 0, goFileDescriptor >= 0 else {
+        if running || swiftFileDescriptor < 0 || goFileDescriptor < 0 {
+            let isActive = running
+            let swiftFD = swiftFileDescriptor
+            let goFD = goFileDescriptor
             lock.unlock()
+            log("[PacketFlowBridge] start skipped running=\(isActive) swiftFD=\(swiftFD) goFD=\(goFD)")
             return
         }
         running = true
@@ -100,8 +121,18 @@ final class PacketFlowBridge {
         source.setEventHandler { [weak self] in
             self?.drainPacketsFromGo()
         }
+        let closeLog = log
         source.setCancelHandler {
-            close(sourceFD)
+            let rc = Darwin.close(sourceFD)
+            if rc == 0 {
+                closeLog("[PacketFlowBridge] read source cancel closed swiftFD=\(sourceFD)")
+            } else {
+                let closeErrno = errno
+                closeLog(
+                    "[PacketFlowBridge] read source cancel close failed swiftFD=\(sourceFD) " +
+                    "errno=\(closeErrno) \(String(cString: strerror(closeErrno)))"
+                )
+            }
         }
 
         lock.lock()
@@ -118,8 +149,9 @@ final class PacketFlowBridge {
 
     func stop() {
         lock.lock()
-        guard running || swiftFileDescriptor >= 0 || goFileDescriptor >= 0 else {
+        if !running && swiftFileDescriptor < 0 && goFileDescriptor < 0 {
             lock.unlock()
+            log("[PacketFlowBridge] stop skipped; already stopped")
             return
         }
         running = false
@@ -138,10 +170,10 @@ final class PacketFlowBridge {
         timer?.cancel()
         source?.cancel()
         if shouldCloseSwiftFD, swiftFD >= 0 {
-            close(swiftFD)
+            closeFD(swiftFD, label: "swiftFD")
         }
         if unreleasedGoFD >= 0 {
-            close(unreleasedGoFD)
+            closeFD(unreleasedGoFD, label: "unreleasedGoFD")
         }
         log("[PacketFlowBridge] stopped")
     }
@@ -164,6 +196,8 @@ final class PacketFlowBridge {
     private func writePacketToGo(_ packet: Data) {
         let fd = currentSwiftFileDescriptor()
         guard fd >= 0 else {
+            recordTunnelToGoDrop()
+            logWriteError("write packet to Go skipped because swift fd is closed packetBytes=\(packet.count)")
             return
         }
 
@@ -174,6 +208,7 @@ final class PacketFlowBridge {
         let framedPacket = utunFramedPacket(packet)
         let written = framedPacket.withUnsafeBytes { rawBuffer -> Int in
             guard let baseAddress = rawBuffer.baseAddress else {
+                logWriteError("write packet to Go failed: empty raw buffer packetBytes=\(packet.count)")
                 return -1
             }
             return Darwin.write(fd, baseAddress, framedPacket.count)
@@ -188,7 +223,7 @@ final class PacketFlowBridge {
             )
             return
         }
-        recordTunnelToGo(packetBytes: packet.count)
+        recordTunnelToGo(packet: packet)
     }
 
     private func drainPacketsFromGo() {
@@ -256,7 +291,11 @@ final class PacketFlowBridge {
         let count = packets.count
         let bytes = batchBytes
         packetFlow.writePackets(packets, withProtocols: protocols)
-        recordGoToTunnelBatch(packetCount: count, byteCount: bytes)
+        log(
+            "[DEBUG][PacketFlowBridge] wrote batch go->tunnel packets=\(count) bytes=\(bytes) " +
+            "protocols=\(protocols.count)"
+        )
+        recordGoToTunnelBatch(packetCount: count, byteCount: bytes, packets: packets)
         packets.removeAll(keepingCapacity: true)
         protocols.removeAll(keepingCapacity: true)
         batchBytes = 0
@@ -292,31 +331,56 @@ final class PacketFlowBridge {
         }
     }
 
-    private func recordTunnelToGo(packetBytes: Int) {
+    private func recordTunnelToGo(packet: Data) {
+        let classification = classifyPacket(packet)
         lock.lock()
         tunnelToGoPackets += 1
-        tunnelToGoBytes += packetBytes
+        tunnelToGoBytes += packet.count
+        let sample = tunnelToGoClassification.record(
+            classification,
+            sampleLimit: maxPacketClassificationSamples
+        )
         let shouldLogFirst = !firstTunnelPacketLogged
         firstTunnelPacketLogged = true
         lock.unlock()
 
         if shouldLogFirst {
-            log("[DEBUG][PacketFlowBridge] first packet tunnel->go bytes=\(packetBytes)")
+            log("[DEBUG][PacketFlowBridge] first packet tunnel->go \(classification.sampleDescription)")
+        }
+        if let sample {
+            log("[DEBUG][PacketFlowBridge] sample tunnel->go \(sample)")
         }
     }
 
-    private func recordGoToTunnelBatch(packetCount: Int, byteCount: Int) {
+    private func recordGoToTunnelBatch(packetCount: Int, byteCount: Int, packets: [Data]) {
+        let classifications = packets.map { classifyPacket($0) }
         lock.lock()
         goToTunnelPackets += packetCount
         goToTunnelBytes += byteCount
         goToTunnelWriteBatches += 1
         goToTunnelMaxBatchPackets = max(goToTunnelMaxBatchPackets, packetCount)
+        var samples: [String] = []
+        for classification in classifications {
+            if let sample = goToTunnelClassification.record(
+                classification,
+                sampleLimit: maxPacketClassificationSamples
+            ) {
+                samples.append(sample)
+            }
+        }
         let shouldLogFirst = !firstGoPacketLogged
         firstGoPacketLogged = true
         lock.unlock()
 
         if shouldLogFirst {
-            log("[DEBUG][PacketFlowBridge] first batch go->tunnel packets=\(packetCount) bytes=\(byteCount)")
+            let firstPacket = classifications.first?.sampleDescription ?? "no_packet_classification"
+            log(
+                "[DEBUG][PacketFlowBridge] first batch go->tunnel packets=\(packetCount) " +
+                "bytes=\(byteCount) first=\(firstPacket)"
+            )
+        }
+        for sample in samples {
+            log("[DEBUG][PacketFlowBridge] sample go->tunnel \(sample)")
         }
     }
 
@@ -359,6 +423,8 @@ final class PacketFlowBridge {
         let writeErrors = writeErrorCount
         let readErrors = readErrorCount
         let isActive = running
+        let tunnelToGoClassSummary = tunnelToGoClassification.summary(maxItems: maxPacketFlowSummaryItems)
+        let goToTunnelClassSummary = goToTunnelClassification.summary(maxItems: maxPacketFlowSummaryItems)
         lock.unlock()
 
         log(
@@ -370,6 +436,369 @@ final class PacketFlowBridge {
             "drops_tunnel_to_go=\(t2gDrops) drops_go_to_tunnel=\(g2tDrops) " +
             "oversized=\(oversized) writeErrors=\(writeErrors) readErrors=\(readErrors)"
         )
+        log("[PacketFlowBridge][classify] tunnel_to_go \(tunnelToGoClassSummary)")
+        log("[PacketFlowBridge][classify] go_to_tunnel \(goToTunnelClassSummary)")
+    }
+
+    private struct PacketClassification {
+        let family: String
+        let transport: String
+        let source: String
+        let destination: String
+        let sourcePort: Int?
+        let destinationPort: Int?
+        let byteCount: Int
+        let parseError: String?
+
+        var isDNS: Bool {
+            sourcePort == 53 || destinationPort == 53
+        }
+
+        var flowKey: String {
+            "\(transport) \(endpoint(source, sourcePort))->\(endpoint(destination, destinationPort))"
+        }
+
+        var sampleKey: String {
+            if let parseError {
+                return "\(family)/\(transport) parseError=\(parseError) bytes=\(byteCount)"
+            }
+            return "\(family)/\(transport) \(endpoint(source, sourcePort))->\(endpoint(destination, destinationPort))"
+        }
+
+        var sampleDescription: String {
+            var parts = [
+                "family=\(family)",
+                "transport=\(transport)",
+                "src=\(endpoint(source, sourcePort))",
+                "dst=\(endpoint(destination, destinationPort))",
+                "bytes=\(byteCount)"
+            ]
+            if isDNS {
+                parts.append("dns=true")
+            }
+            if let parseError {
+                parts.append("parseError=\(parseError)")
+            }
+            return parts.joined(separator: " ")
+        }
+
+        private func endpoint(_ ip: String, _ port: Int?) -> String {
+            guard let port else { return ip }
+            return "\(ip):\(port)"
+        }
+    }
+
+    private struct PacketClassStats {
+        var packets = 0
+        var bytes = 0
+        var parseErrors = 0
+        var dnsPackets = 0
+        var dnsBytes = 0
+        var familyPackets: [String: Int] = [:]
+        var familyBytes: [String: Int] = [:]
+        var transportPackets: [String: Int] = [:]
+        var transportBytes: [String: Int] = [:]
+        var flowPackets: [String: Int] = [:]
+        var flowBytes: [String: Int] = [:]
+        var samples: [String] = []
+        var sampleKeys = Set<String>()
+
+        mutating func record(_ packet: PacketClassification, sampleLimit: Int) -> String? {
+            packets += 1
+            bytes += packet.byteCount
+            familyPackets[packet.family, default: 0] += 1
+            familyBytes[packet.family, default: 0] += packet.byteCount
+            transportPackets[packet.transport, default: 0] += 1
+            transportBytes[packet.transport, default: 0] += packet.byteCount
+            flowPackets[packet.flowKey, default: 0] += 1
+            flowBytes[packet.flowKey, default: 0] += packet.byteCount
+
+            if packet.isDNS {
+                dnsPackets += 1
+                dnsBytes += packet.byteCount
+            }
+            if packet.parseError != nil {
+                parseErrors += 1
+            }
+
+            guard samples.count < sampleLimit, !sampleKeys.contains(packet.sampleKey) else {
+                return nil
+            }
+            sampleKeys.insert(packet.sampleKey)
+            let sample = packet.sampleDescription
+            samples.append(sample)
+            return sample
+        }
+
+        func summary(maxItems: Int) -> String {
+            "packets=\(packets) bytes=\(bytes) " +
+            "families={\(breakdown(familyPackets, familyBytes, maxItems: maxItems))} " +
+            "transports={\(breakdown(transportPackets, transportBytes, maxItems: maxItems))} " +
+            "dns=\(dnsPackets)p/\(dnsBytes)B parseErrors=\(parseErrors) " +
+            "topFlows={\(breakdown(flowPackets, flowBytes, maxItems: maxItems))} " +
+            "samples=[\(samples.joined(separator: "; "))]"
+        }
+
+        private func breakdown(_ packets: [String: Int], _ bytes: [String: Int], maxItems: Int) -> String {
+            guard !packets.isEmpty else { return "none" }
+            return packets
+                .sorted { lhs, rhs in
+                    if lhs.value == rhs.value {
+                        return lhs.key < rhs.key
+                    }
+                    return lhs.value > rhs.value
+                }
+                .prefix(maxItems)
+                .map { key, count in
+                    "\(key)=\(count)p/\(bytes[key] ?? 0)B"
+                }
+                .joined(separator: ",")
+        }
+    }
+
+    private func classifyPacket(_ packet: Data) -> PacketClassification {
+        packet.withUnsafeBytes { rawBuffer in
+            let bytes = rawBuffer.bindMemory(to: UInt8.self)
+            guard let base = bytes.baseAddress, bytes.count > 0 else {
+                return PacketClassification(
+                    family: "unknown",
+                    transport: "unknown",
+                    source: "-",
+                    destination: "-",
+                    sourcePort: nil,
+                    destinationPort: nil,
+                    byteCount: packet.count,
+                    parseError: "empty_packet"
+                )
+            }
+
+            let version = base[0] >> 4
+            switch version {
+            case 4:
+                return classifyIPv4(base: base, count: bytes.count, byteCount: packet.count)
+            case 6:
+                return classifyIPv6(base: base, count: bytes.count, byteCount: packet.count)
+            default:
+                return PacketClassification(
+                    family: "unknown_v\(version)",
+                    transport: "unknown",
+                    source: "-",
+                    destination: "-",
+                    sourcePort: nil,
+                    destinationPort: nil,
+                    byteCount: packet.count,
+                    parseError: "unsupported_ip_version_\(version)"
+                )
+            }
+        }
+    }
+
+    private func classifyIPv4(
+        base: UnsafePointer<UInt8>,
+        count: Int,
+        byteCount: Int
+    ) -> PacketClassification {
+        guard count >= 20 else {
+            return malformedPacket(family: "ipv4", byteCount: byteCount, reason: "short_ipv4_header_\(count)")
+        }
+
+        let headerLength = Int(base[0] & 0x0F) * 4
+        guard headerLength >= 20, count >= headerLength else {
+            return malformedPacket(
+                family: "ipv4",
+                byteCount: byteCount,
+                reason: "invalid_ipv4_header_length_\(headerLength)_count_\(count)"
+            )
+        }
+
+        let protocolNumber = base[9]
+        let source = ipv4String(base.advanced(by: 12))
+        let destination = ipv4String(base.advanced(by: 16))
+        let transport = classifyTransport(
+            base: base,
+            count: count,
+            offset: headerLength,
+            protocolNumber: protocolNumber,
+            family: "ipv4",
+            byteCount: byteCount,
+            source: source,
+            destination: destination
+        )
+        return transport
+    }
+
+    private func classifyIPv6(
+        base: UnsafePointer<UInt8>,
+        count: Int,
+        byteCount: Int
+    ) -> PacketClassification {
+        guard count >= 40 else {
+            return malformedPacket(family: "ipv6", byteCount: byteCount, reason: "short_ipv6_header_\(count)")
+        }
+
+        let source = ipv6String(base.advanced(by: 8))
+        let destination = ipv6String(base.advanced(by: 24))
+        let transportLocation = ipv6TransportLocation(base: base, count: count)
+        if let parseError = transportLocation.parseError {
+            return PacketClassification(
+                family: "ipv6",
+                transport: "proto\(transportLocation.protocolNumber)",
+                source: source,
+                destination: destination,
+                sourcePort: nil,
+                destinationPort: nil,
+                byteCount: byteCount,
+                parseError: parseError
+            )
+        }
+
+        return classifyTransport(
+            base: base,
+            count: count,
+            offset: transportLocation.offset,
+            protocolNumber: transportLocation.protocolNumber,
+            family: "ipv6",
+            byteCount: byteCount,
+            source: source,
+            destination: destination
+        )
+    }
+
+    private func ipv6TransportLocation(
+        base: UnsafePointer<UInt8>,
+        count: Int
+    ) -> (protocolNumber: UInt8, offset: Int, parseError: String?) {
+        var protocolNumber = base[6]
+        var offset = 40
+        var extensionCount = 0
+
+        while isIPv6ExtensionHeader(protocolNumber) {
+            extensionCount += 1
+            if extensionCount > 8 {
+                return (protocolNumber, offset, "too_many_ipv6_extension_headers")
+            }
+            guard count >= offset + 2 else {
+                return (protocolNumber, offset, "short_ipv6_extension_header_offset_\(offset)")
+            }
+
+            let nextHeader = base[offset]
+            let headerLength: Int
+            switch protocolNumber {
+            case 0, 43, 60:
+                headerLength = (Int(base[offset + 1]) + 1) * 8
+            case 44:
+                headerLength = 8
+            case 51:
+                headerLength = (Int(base[offset + 1]) + 2) * 4
+            default:
+                headerLength = 0
+            }
+
+            guard headerLength > 0, count >= offset + headerLength else {
+                return (protocolNumber, offset, "invalid_ipv6_extension_length_\(headerLength)_offset_\(offset)")
+            }
+            offset += headerLength
+            protocolNumber = nextHeader
+        }
+
+        return (protocolNumber, offset, nil)
+    }
+
+    private func isIPv6ExtensionHeader(_ protocolNumber: UInt8) -> Bool {
+        switch protocolNumber {
+        case 0, 43, 44, 51, 60:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func classifyTransport(
+        base: UnsafePointer<UInt8>,
+        count: Int,
+        offset: Int,
+        protocolNumber: UInt8,
+        family: String,
+        byteCount: Int,
+        source: String,
+        destination: String
+    ) -> PacketClassification {
+        let transport = transportName(protocolNumber)
+        var sourcePort: Int?
+        var destinationPort: Int?
+        var parseError: String?
+
+        if protocolNumber == 6 || protocolNumber == 17 {
+            if count >= offset + 4 {
+                sourcePort = readUInt16(base.advanced(by: offset))
+                destinationPort = readUInt16(base.advanced(by: offset + 2))
+            } else {
+                parseError = "short_\(transport)_header_offset_\(offset)_count_\(count)"
+            }
+        }
+
+        return PacketClassification(
+            family: family,
+            transport: transport,
+            source: source,
+            destination: destination,
+            sourcePort: sourcePort,
+            destinationPort: destinationPort,
+            byteCount: byteCount,
+            parseError: parseError
+        )
+    }
+
+    private func transportName(_ protocolNumber: UInt8) -> String {
+        switch protocolNumber {
+        case 6:
+            return "tcp"
+        case 17:
+            return "udp"
+        case 1:
+            return "icmp"
+        case 58:
+            return "icmpv6"
+        default:
+            return "proto\(protocolNumber)"
+        }
+    }
+
+    private func malformedPacket(family: String, byteCount: Int, reason: String) -> PacketClassification {
+        PacketClassification(
+            family: family,
+            transport: "malformed",
+            source: "-",
+            destination: "-",
+            sourcePort: nil,
+            destinationPort: nil,
+            byteCount: byteCount,
+            parseError: reason
+        )
+    }
+
+    private func readUInt16(_ pointer: UnsafePointer<UInt8>) -> Int {
+        (Int(pointer[0]) << 8) | Int(pointer[1])
+    }
+
+    private func ipv4String(_ pointer: UnsafePointer<UInt8>) -> String {
+        var address = in_addr()
+        memcpy(&address, pointer, MemoryLayout<in_addr>.size)
+        var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        guard inet_ntop(AF_INET, &address, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil else {
+            return "ipv4_ntop_error"
+        }
+        return String(cString: buffer)
+    }
+
+    private func ipv6String(_ pointer: UnsafePointer<UInt8>) -> String {
+        var address = in6_addr()
+        memcpy(&address, pointer, MemoryLayout<in6_addr>.size)
+        var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+        guard inet_ntop(AF_INET6, &address, &buffer, socklen_t(INET6_ADDRSTRLEN)) != nil else {
+            return "ipv6_ntop_error"
+        }
+        return String(cString: buffer)
     }
 
     private var isRunning: Bool {
@@ -429,11 +858,16 @@ final class PacketFlowBridge {
     private func setNonBlocking(_ fd: Int32) throws {
         let flags = fcntl(fd, F_GETFL, 0)
         guard flags >= 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            let flagErrno = errno
+            log("[PacketFlowBridge] fcntl(F_GETFL) failed fd=\(fd) errno=\(flagErrno) \(errnoDescription(flagErrno))")
+            throw POSIXError(POSIXErrorCode(rawValue: flagErrno) ?? .EIO)
         }
         guard fcntl(fd, F_SETFL, flags | O_NONBLOCK) >= 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            let setErrno = errno
+            log("[PacketFlowBridge] fcntl(F_SETFL O_NONBLOCK) failed fd=\(fd) errno=\(setErrno) \(errnoDescription(setErrno))")
+            throw POSIXError(POSIXErrorCode(rawValue: setErrno) ?? .EIO)
         }
+        log("[DEBUG][PacketFlowBridge] set non-blocking fd=\(fd) oldFlags=\(flags) newFlags=\(flags | O_NONBLOCK)")
     }
 
     private func disableSigpipe(_ fd: Int32) throws {
@@ -446,8 +880,11 @@ final class PacketFlowBridge {
             socklen_t(MemoryLayout<Int32>.size)
         )
         guard result == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            let sigpipeErrno = errno
+            log("[PacketFlowBridge] setsockopt(SO_NOSIGPIPE) failed fd=\(fd) errno=\(sigpipeErrno) \(errnoDescription(sigpipeErrno))")
+            throw POSIXError(POSIXErrorCode(rawValue: sigpipeErrno) ?? .EIO)
         }
+        log("[DEBUG][PacketFlowBridge] disabled SIGPIPE fd=\(fd)")
     }
 
     private func configureSocketBuffers(_ fd: Int32, requestedBytes: Int) -> (send: Int, receive: Int) {
@@ -493,13 +930,31 @@ final class PacketFlowBridge {
         var value: Int32 = 0
         var length = socklen_t(MemoryLayout<Int32>.size)
         let result = getsockopt(fd, SOL_SOCKET, option, &value, &length)
-        return result == 0 ? Int(value) : -1
+        if result != 0 {
+            let getErrno = errno
+            log("[PacketFlowBridge] getsockopt option=\(option) failed fd=\(fd) errno=\(getErrno) \(errnoDescription(getErrno))")
+            return -1
+        }
+        return Int(value)
     }
 
     private func closeIfOpen(_ fd: inout Int32) {
         if fd >= 0 {
-            close(fd)
+            closeFD(fd, label: "fd")
             fd = -1
+        }
+    }
+
+    private func closeFD(_ fd: Int32, label: String) {
+        let rc = Darwin.close(fd)
+        if rc == 0 {
+            log("[DEBUG][PacketFlowBridge] close OK \(label)=\(fd)")
+        } else {
+            let closeErrno = errno
+            log(
+                "[PacketFlowBridge] close failed \(label)=\(fd) " +
+                "errno=\(closeErrno) \(errnoDescription(closeErrno))"
+            )
         }
     }
 }

@@ -54,10 +54,11 @@ func listenAddr(network string) string {
 func protectSocket(fd uintptr, realNet, destination string) error {
 	if protector == nil {
 		// iOS 26: Log warning if protector is nil - this could explain connectivity issues
-		log.Infof("[Protect] WARNING: no socket protector registered - traffic may bypass VPN!")
+		log.Infof("[Protect] WARNING: no socket protector registered network=%s destination=%s fd=%d - traffic may bypass VPN!", realNet, destination, fd)
 		return fmt.Errorf("no socket protector registered")
 	}
 
+	log.Infof("[Protect] protect_begin network=%s fd=%d destination=%s", realNet, fd, destination)
 	if err := protector.Protect(fd, realNet); err != nil {
 		// iOS 26: Log detailed error - socket protection failure may cause network issues
 		log.Infof("[Protect] ERROR: %s fd=%d destination=%s protect_failed: %v - may cause iOS network issues", realNet, fd, destination, err)
@@ -103,11 +104,22 @@ func NewProtectedListenConfig(destination string) *net.ListenConfig {
 
 func DialContextWithProtect(ctx context.Context, network, address string) (net.Conn, error) {
 	realNet := normalizeTCP(address)
+	if deadline, ok := ctx.Deadline(); ok {
+		log.Infof("[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s", network, realNet, address, deadline.Format("2006-01-02T15:04:05.000Z07:00"))
+	} else {
+		log.Infof("[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none)", network, realNet, address)
+	}
 
 	if isLoopback(address) {
 		log.Infof("[Protect] TCP BYPASS loopback: %s", address)
 		var d net.Dialer
-		return d.DialContext(ctx, realNet, address)
+		conn, err := d.DialContext(ctx, realNet, address)
+		if err != nil {
+			log.Infof("[Protect] TCP BYPASS loopback failed network=%s dest=%s err=%v", realNet, address, err)
+			return nil, err
+		}
+		log.Infof("[Protect] TCP BYPASS loopback OK network=%s dest=%s local=%s remote=%s", realNet, address, conn.LocalAddr(), conn.RemoteAddr())
+		return conn, nil
 	}
 
 	d := NewProtectedDialer(address)
@@ -131,6 +143,11 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 
 func DialUDPWithProtect(ctx context.Context, network, address string) (net.PacketConn, error) {
 	realNet := normalizeUDP(address)
+	if deadline, ok := ctx.Deadline(); ok {
+		log.Infof("[Protect] UDP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s", network, realNet, address, deadline.Format("2006-01-02T15:04:05.000Z07:00"))
+	} else {
+		log.Infof("[Protect] UDP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none)", network, realNet, address)
+	}
 
 	if isLoopback(address) {
 		log.Infof("[Protect] UDP BYPASS loopback: %s", address)
@@ -145,7 +162,9 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 
 		udpAddr, err := net.ResolveUDPAddr(realNet, address)
 		if err != nil {
-			_ = pc.Close()
+			if closeErr := pc.Close(); closeErr != nil {
+				log.Infof("[Protect] UDP BYPASS loopback close after resolve error failed network=%s destination=%s closeErr=%v", realNet, address, closeErr)
+			}
 			log.Infof("[Protect] UDP BYPASS loopback resolve error network=%s destination=%s: %v", realNet, address, err)
 			return nil, err
 		}
@@ -166,7 +185,9 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 
 	udpAddr, err := net.ResolveUDPAddr(realNet, address)
 	if err != nil {
-		_ = pc.Close()
+		if closeErr := pc.Close(); closeErr != nil {
+			log.Infof("[Protect] UDP close after resolve error failed network=%s destination=%s closeErr=%v", realNet, address, closeErr)
+		}
 		log.Infof("[Protect] UDP resolve error network=%s destination=%s: %v", realNet, address, err)
 		return nil, err
 	}
