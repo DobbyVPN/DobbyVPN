@@ -81,7 +81,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let family = Int32(addr.pointee.sa_family)
             var values = interfaces[name] ?? []
             if values.isEmpty {
-                let index = Int(if_nametoindex(rawName))
+                let index = Int(if_nametoindex(name))
                 let flags = ptr?.pointee.ifa_flags ?? 0
                 values.append("index=\(index)")
                 values.append("flags=0x\(String(flags, radix: 16))")
