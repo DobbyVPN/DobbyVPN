@@ -33,6 +33,9 @@ final class PacketFlowBridge {
     private var goToTunnelMaxBatchPackets = 0
     private var tunnelToGoDrops = 0
     private var goToTunnelDrops = 0
+    private var lastTunnelToGoPacketAt: Date?
+    private var lastGoToTunnelPacketAt: Date?
+    private var previousStatsSnapshot: TrafficSnapshot?
     private var firstTunnelPacketLogged = false
     private var firstGoPacketLogged = false
     private var tunnelToGoClassification = PacketClassStats()
@@ -176,6 +179,47 @@ final class PacketFlowBridge {
             closeFD(unreleasedGoFD, label: "unreleasedGoFD")
         }
         log("[PacketFlowBridge] stopped")
+    }
+
+    func diagnosticsSnapshot() -> String {
+        let now = Date()
+        lock.lock()
+        let snapshot = TrafficSnapshot(
+            tunnelToGoPackets: tunnelToGoPackets,
+            tunnelToGoBytes: tunnelToGoBytes,
+            goToTunnelPackets: goToTunnelPackets,
+            goToTunnelBytes: goToTunnelBytes,
+            tunnelToGoDrops: tunnelToGoDrops,
+            goToTunnelDrops: goToTunnelDrops,
+            writeErrors: writeErrorCount,
+            readErrors: readErrorCount
+        )
+        let isActive = running
+        let swiftFD = swiftFileDescriptor
+        let goFD = goFileDescriptor
+        let batches = tunnelReadBatches
+        let emptyBatches = tunnelReadEmptyBatches
+        let g2tBatches = goToTunnelWriteBatches
+        let g2tMaxBatch = goToTunnelMaxBatchPackets
+        let oversized = oversizedPacketCount
+        let lastTunnelToGo = lastTunnelToGoPacketAt
+        let lastGoToTunnel = lastGoToTunnelPacketAt
+        let tunnelToGoClassSummary = tunnelToGoClassification.summary(maxItems: maxPacketFlowSummaryItems)
+        let goToTunnelClassSummary = goToTunnelClassification.summary(maxItems: maxPacketFlowSummaryItems)
+        lock.unlock()
+
+        return "running=\(isActive) swiftFD=\(swiftFD) goFD=\(goFD) mtu=\(mtu) " +
+            "batches=\(batches) emptyBatches=\(emptyBatches) " +
+            "tunnel_to_go=\(snapshot.tunnelToGoPackets)p/\(snapshot.tunnelToGoBytes)B " +
+            "go_to_tunnel=\(snapshot.goToTunnelPackets)p/\(snapshot.goToTunnelBytes)B " +
+            "go_to_tunnel_batches=\(g2tBatches) max_batch=\(g2tMaxBatch) " +
+            "drops_tunnel_to_go=\(snapshot.tunnelToGoDrops) drops_go_to_tunnel=\(snapshot.goToTunnelDrops) " +
+            "oversized=\(oversized) writeErrors=\(snapshot.writeErrors) readErrors=\(snapshot.readErrors) " +
+            "lastPacketAge(tunnel_to_go=\(ageDescription(lastTunnelToGo, now: now))," +
+            "go_to_tunnel=\(ageDescription(lastGoToTunnel, now: now))) " +
+            "diagnosis=\(flowDiagnosis(running: isActive, snapshot: snapshot)) " +
+            "classify_tunnel_to_go=[\(tunnelToGoClassSummary)] " +
+            "classify_go_to_tunnel=[\(goToTunnelClassSummary)]"
     }
 
     private func readPacketsFromTunnel() {
@@ -336,6 +380,7 @@ final class PacketFlowBridge {
         lock.lock()
         tunnelToGoPackets += 1
         tunnelToGoBytes += packet.count
+        lastTunnelToGoPacketAt = Date()
         let sample = tunnelToGoClassification.record(
             classification,
             sampleLimit: maxPacketClassificationSamples
@@ -357,6 +402,7 @@ final class PacketFlowBridge {
         lock.lock()
         goToTunnelPackets += packetCount
         goToTunnelBytes += byteCount
+        lastGoToTunnelPacketAt = Date()
         goToTunnelWriteBatches += 1
         goToTunnelMaxBatchPackets = max(goToTunnelMaxBatchPackets, packetCount)
         var samples: [String] = []
@@ -408,6 +454,7 @@ final class PacketFlowBridge {
     }
 
     private func logStats(reason: String) {
+        let now = Date()
         lock.lock()
         let batches = tunnelReadBatches
         let emptyBatches = tunnelReadEmptyBatches
@@ -423,8 +470,22 @@ final class PacketFlowBridge {
         let writeErrors = writeErrorCount
         let readErrors = readErrorCount
         let isActive = running
+        let lastTunnelToGo = lastTunnelToGoPacketAt
+        let lastGoToTunnel = lastGoToTunnelPacketAt
         let tunnelToGoClassSummary = tunnelToGoClassification.summary(maxItems: maxPacketFlowSummaryItems)
         let goToTunnelClassSummary = goToTunnelClassification.summary(maxItems: maxPacketFlowSummaryItems)
+        let snapshot = TrafficSnapshot(
+            tunnelToGoPackets: t2gPackets,
+            tunnelToGoBytes: t2gBytes,
+            goToTunnelPackets: g2tPackets,
+            goToTunnelBytes: g2tBytes,
+            tunnelToGoDrops: t2gDrops,
+            goToTunnelDrops: g2tDrops,
+            writeErrors: writeErrors,
+            readErrors: readErrors
+        )
+        let previousSnapshot = previousStatsSnapshot
+        previousStatsSnapshot = snapshot
         lock.unlock()
 
         log(
@@ -432,12 +493,65 @@ final class PacketFlowBridge {
             "batches=\(batches) emptyBatches=\(emptyBatches) " +
             "tunnel_to_go=\(t2gPackets)p/\(t2gBytes)B " +
             "go_to_tunnel=\(g2tPackets)p/\(g2tBytes)B " +
+            "delta=\(snapshot.deltaDescription(from: previousSnapshot)) " +
+            "lastPacketAge(tunnel_to_go=\(ageDescription(lastTunnelToGo, now: now))," +
+            "go_to_tunnel=\(ageDescription(lastGoToTunnel, now: now))) " +
             "go_to_tunnel_batches=\(g2tBatches) max_batch=\(g2tMaxBatch) " +
             "drops_tunnel_to_go=\(t2gDrops) drops_go_to_tunnel=\(g2tDrops) " +
-            "oversized=\(oversized) writeErrors=\(writeErrors) readErrors=\(readErrors)"
+            "oversized=\(oversized) writeErrors=\(writeErrors) readErrors=\(readErrors) " +
+            "diagnosis=\(flowDiagnosis(running: isActive, snapshot: snapshot))"
         )
         log("[PacketFlowBridge][classify] tunnel_to_go \(tunnelToGoClassSummary)")
         log("[PacketFlowBridge][classify] go_to_tunnel \(goToTunnelClassSummary)")
+    }
+
+    private struct TrafficSnapshot {
+        let tunnelToGoPackets: Int
+        let tunnelToGoBytes: Int
+        let goToTunnelPackets: Int
+        let goToTunnelBytes: Int
+        let tunnelToGoDrops: Int
+        let goToTunnelDrops: Int
+        let writeErrors: Int
+        let readErrors: Int
+
+        func deltaDescription(from previous: TrafficSnapshot?) -> String {
+            guard let previous else {
+                return "first"
+            }
+            return "tunnel_to_go=+\(tunnelToGoPackets - previous.tunnelToGoPackets)p/" +
+                "+\(tunnelToGoBytes - previous.tunnelToGoBytes)B " +
+                "go_to_tunnel=+\(goToTunnelPackets - previous.goToTunnelPackets)p/" +
+                "+\(goToTunnelBytes - previous.goToTunnelBytes)B " +
+                "drops=+\(tunnelToGoDrops - previous.tunnelToGoDrops)/" +
+                "+\(goToTunnelDrops - previous.goToTunnelDrops) " +
+                "errors=+\(writeErrors - previous.writeErrors)/+\(readErrors - previous.readErrors)"
+        }
+    }
+
+    private func ageDescription(_ date: Date?, now: Date) -> String {
+        guard let date else { return "never" }
+        return "\(Int(now.timeIntervalSince(date) * 1000))ms"
+    }
+
+    private func flowDiagnosis(running: Bool, snapshot: TrafficSnapshot) -> String {
+        var flags: [String] = []
+        if running && snapshot.tunnelToGoPackets == 0 && snapshot.goToTunnelPackets == 0 {
+            flags.append("NO_TRAFFIC_YET")
+        }
+        if snapshot.tunnelToGoPackets > 0 && snapshot.goToTunnelPackets == 0 {
+            flags.append("ONE_WAY_APP_TO_GO")
+        }
+        if snapshot.goToTunnelPackets > 0 && snapshot.tunnelToGoPackets == 0 {
+            flags.append("ONE_WAY_GO_TO_APP")
+        }
+        if snapshot.tunnelToGoDrops > 0 || snapshot.goToTunnelDrops > 0 {
+            flags.append("DROPS_PRESENT")
+        }
+        if snapshot.writeErrors > 0 || snapshot.readErrors > 0 {
+            flags.append("SOCKET_ERRORS_PRESENT")
+        }
+        return flags.isEmpty ? "OK_OR_IDLE" : flags.joined(separator: ",")
     }
 
     private struct PacketClassification {

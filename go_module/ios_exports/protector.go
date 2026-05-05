@@ -26,3 +26,13 @@ func GetDefaultInterfaceIndex() (index int) {
 	log.Infof("[iOS-Protect] GetDefaultInterfaceIndex returned index=%d", index)
 	return index
 }
+
+// ProtectionDiagnostics returns the current Go-side socket protection state.
+// Swift logs this at every critical tunnel stage so stale native artifacts and
+// interface-index propagation failures are visible in the device log.
+func ProtectionDiagnostics() (diagnostics string) {
+	defer guard("ProtectionDiagnostics")()
+	diagnostics = protected_dialer.ProtectionDiagnosticsForIOS()
+	log.Infof("[iOS-Protect] ProtectionDiagnostics returned %s", diagnostics)
+	return diagnostics
+}

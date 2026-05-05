@@ -132,6 +132,9 @@ public final class HealthCheckImpl: HealthCheck {
                     "user stop was requested before the check completed"
             )
         }
+        if !result && !userStopAtEnd {
+            logTunnelDiagnostics(checkId: checkId, reason: "shortConnectionCheckUp=false")
+        }
         return result
     }
 
@@ -216,6 +219,26 @@ public final class HealthCheckImpl: HealthCheck {
         logs.writeLog(log: "[HC] [diag] tunnel_ip_assigned=\(tunnelIPOk)")
         logs.writeLog(log: "[HC] [diag] outline_proxy_alive=\(lastOutlineProxyOk)")
 
+        let udpDNSOk = runWithRetry(name: "Routed UDP DNS diagnostic", attempts: 1, timeoutPerAttempt: 6.0) {
+            self.udpDNSProbe()
+        }
+        logs.writeLog(log: "[HC] [diag] routed_udp_dns=\(udpDNSOk)")
+
+        let nonDNSUDPOk = runWithRetry(name: "Routed non-DNS UDP diagnostic", attempts: 1, timeoutPerAttempt: 6.0) {
+            self.udpSTUNProbe()
+        }
+        logs.writeLog(log: "[HC] [diag] routed_non_dns_udp=\(nonDNSUDPOk)")
+        groupResults["Routed non-DNS UDP group"] = nonDNSUDPOk
+        if !nonDNSUDPOk {
+            logs.writeLog(
+                log: "[HC] Group FAILED: Routed non-DNS UDP group " +
+                    "(Speedtest/QUIC/real app UDP traffic is not working)"
+            )
+            failedGroups.append("Routed non-DNS UDP group")
+        } else {
+            logs.writeLog(log: "[HC] Group OK: Routed non-DNS UDP group")
+        }
+
         // --- Result ---
         let result = failedGroups.isEmpty
         if !result {
@@ -225,11 +248,15 @@ public final class HealthCheckImpl: HealthCheck {
             )
         }
         logs.writeLog(log: "[HC] RESULT id=\(checkId) = \(result)")
-        if !result && isUserStopRequested() {
+        let userStopAtResult = isUserStopRequested()
+        if !result && userStopAtResult {
             logs.writeLog(
                 log: "[HC] RESULT id=\(checkId) is stop-related; " +
                     "user stop was requested before the check completed"
             )
+        }
+        if !result && !userStopAtResult {
+            logTunnelDiagnostics(checkId: checkId, reason: "fullConnectionCheckUp=false")
         }
 
         // --- DIAGNOSIS — single line with actionable verdict ---
@@ -243,7 +270,8 @@ public final class HealthCheckImpl: HealthCheck {
             dns: dnsOk,
             tcp443: tcp443Ok,
             outlineProxy: lastOutlineProxyOk,
-            https: httpsOk
+            https: httpsOk,
+            nonDNSUDP: nonDNSUDPOk
         )
 
         return result
@@ -267,28 +295,31 @@ public final class HealthCheckImpl: HealthCheck {
         dns: Bool,
         tcp443: Bool,
         outlineProxy: Bool,
-        https: Bool
+        https: Bool,
+        nonDNSUDP: Bool
     ) {
         let diagnosis: String
-        switch (tunnelIP, tcpProxy, dns, tcp443, outlineProxy, https) {
-        case (false, _, _, _, _, _):
+        switch (tunnelIP, tcpProxy, dns, tcp443, outlineProxy, https, nonDNSUDP) {
+        case (false, _, _, _, _, _, _):
             diagnosis = "SIDE: CLIENT | REASON: tunnel IP 198.18.0.1 not assigned — tunnel failed to start at OS level"
-        case (true, _, _, _, false, _):
+        case (true, _, _, _, false, _, _):
             diagnosis = "SIDE: CLIENT | REASON: local Outline SOCKS5 proxy is unavailable — tun2socks has no working upstream proxy"
-        case (true, _, false, _, _, _):
+        case (true, _, false, _, _, _, _):
             diagnosis = "SIDE: CLIENT OR SERVER | REASON: DNS not resolving — DNS-over-tunnel is failing or blocked"
-        case (true, _, true, _, true, false):
+        case (true, _, true, _, true, false, _):
             // Check metrics[win] in logs: proto=h3+total=- → QUIC/UDP not proxied (no udpPath? pool full?);
             // proto=h2+high total → server is slow or blocking TLS
             diagnosis = "SIDE: CLIENT OR SERVER | REASON: Outline proxy is alive but HTTPS checks fail — check [win] metrics for h3/h2 timing and server behavior"
-        case (true, false, true, _, true, _):
+        case (true, false, true, _, true, _, _):
             diagnosis = "SIDE: CLIENT | REASON: TCP diagnostic failed after DNS/HTTP checks — possible tun2socks forwarding issue"
-        case (true, true, true, false, true, _):
+        case (true, true, true, false, true, _, _):
             diagnosis = "SIDE: SERVER (likely) | REASON: TCP diagnostic to :443 failed — server blocks HTTPS port or intermediate node filters it"
-        case (true, true, true, true, true, true):
+        case (true, true, true, true, true, true, false):
+            diagnosis = "SIDE: CLIENT OR TRANSPORT | REASON: TCP/DNS/HTTPS passed but routed non-DNS UDP failed — Speedtest/QUIC apps can freeze; check PacketFlowBridge flow stats and Outline dialStats udpNonDNSRejected/udpErr"
+        case (true, true, true, true, true, true, true):
             diagnosis = "ALL OK — connection is working"
         default:
-            diagnosis = "UNDEFINED | Pattern: tunnel=\(tunnelIP) tcp=\(tcpProxy) dns=\(dns) tcp443=\(tcp443) outlineProxy=\(outlineProxy) https=\(https)"
+            diagnosis = "UNDEFINED | Pattern: tunnel=\(tunnelIP) tcp=\(tcpProxy) dns=\(dns) tcp443=\(tcp443) outlineProxy=\(outlineProxy) https=\(https) nonDNSUDP=\(nonDNSUDP)"
         }
         logs.writeLog(log: "[HC] DIAGNOSIS: \(diagnosis)")
     }
@@ -473,6 +504,200 @@ public final class HealthCheckImpl: HealthCheck {
             session.invalidateAndCancel()
         }
         return success
+    }
+
+    private func udpDNSProbe() -> Bool {
+        let query = dnsQueryPayload(id: 0xD0BB, host: "example.com")
+        return routedUDPProbe(
+            name: "udp-dns",
+            host: "1.1.1.1",
+            port: 53,
+            payload: query,
+            timeoutSeconds: 6.0
+        ) { response in
+            let bytes = [UInt8](response)
+            return bytes.count >= 12 &&
+                bytes[0] == 0xD0 &&
+                bytes[1] == 0xBB &&
+                (bytes[2] & 0x80) != 0
+        }
+    }
+
+    private func udpSTUNProbe() -> Bool {
+        let request = stunBindingRequestPayload()
+        return routedUDPProbe(
+            name: "udp-stun-non-dns",
+            host: "stun.l.google.com",
+            port: 19302,
+            payload: request,
+            timeoutSeconds: 6.0
+        ) { response in
+            let bytes = [UInt8](response)
+            guard bytes.count >= 20 else { return false }
+            let hasMagicCookie = bytes[4] == 0x21 &&
+                bytes[5] == 0x12 &&
+                bytes[6] == 0xA4 &&
+                bytes[7] == 0x42
+            let transactionMatches = Array(bytes[8..<20]) == Array([UInt8](request)[8..<20])
+            return hasMagicCookie && transactionMatches
+        }
+    }
+
+    private func routedUDPProbe(
+        name: String,
+        host: String,
+        port: UInt16,
+        payload: Data,
+        timeoutSeconds: TimeInterval,
+        validate: @escaping (Data) -> Bool
+    ) -> Bool {
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
+            logs.writeLog(log: "[HC] [udpProbe \(name)] invalid port=\(port)")
+            return false
+        }
+
+        let start = Date()
+        let endpoint = "\(host):\(port)"
+        let queue = DispatchQueue(label: "vpn.dobby.app.health.udp.\(name)")
+        let connection = NWConnection(
+            host: NWEndpoint.Host(host),
+            port: nwPort,
+            using: .udp
+        )
+        let semaphore = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var completed = false
+        var success = false
+        var finishReason = "not_finished"
+        var lastState = "created"
+
+        func finish(ok: Bool, reason: String) {
+            lock.lock()
+            if completed {
+                lock.unlock()
+                return
+            }
+            completed = true
+            success = ok
+            finishReason = reason
+            lock.unlock()
+            semaphore.signal()
+        }
+
+        logs.writeLog(
+            log: "[HC] [udpProbe \(name)] begin endpoint=\(endpoint) " +
+                "payloadBytes=\(payload.count) timeoutMs=\(Int(timeoutSeconds * 1000))"
+        )
+
+        connection.stateUpdateHandler = { [weak self] state in
+            let stateText = "\(state)"
+            lock.lock()
+            lastState = stateText
+            lock.unlock()
+            self?.logs.writeLog(log: "[HC] [udpProbe \(name)] state=\(stateText) endpoint=\(endpoint)")
+
+            switch state {
+            case .failed(let error):
+                finish(ok: false, reason: "state_failed=\(error.localizedDescription)")
+            case .cancelled:
+                lock.lock()
+                let wasCompleted = completed
+                lock.unlock()
+                if !wasCompleted {
+                    finish(ok: false, reason: "state_cancelled")
+                }
+            default:
+                break
+            }
+        }
+
+        connection.start(queue: queue)
+        connection.receiveMessage { [weak self] data, _, isComplete, error in
+            if let error {
+                self?.logs.writeLog(
+                    log: "[HC] [udpProbe \(name)] receive error endpoint=\(endpoint) " +
+                        "error=\(error.localizedDescription)"
+                )
+                finish(ok: false, reason: "receive_error=\(error.localizedDescription)")
+                return
+            }
+            guard let data, !data.isEmpty else {
+                self?.logs.writeLog(
+                    log: "[HC] [udpProbe \(name)] receive empty endpoint=\(endpoint) " +
+                        "isComplete=\(isComplete)"
+                )
+                finish(ok: false, reason: "empty_response")
+                return
+            }
+            let valid = validate(data)
+            self?.logs.writeLog(
+                log: "[HC] [udpProbe \(name)] receive response endpoint=\(endpoint) " +
+                    "bytes=\(data.count) isComplete=\(isComplete) valid=\(valid)"
+            )
+            finish(ok: valid, reason: valid ? "valid_response_bytes=\(data.count)" : "invalid_response_bytes=\(data.count)")
+        }
+        connection.send(content: payload, completion: .contentProcessed { [weak self] error in
+            if let error {
+                self?.logs.writeLog(
+                    log: "[HC] [udpProbe \(name)] send failed endpoint=\(endpoint) " +
+                        "error=\(error.localizedDescription)"
+                )
+                finish(ok: false, reason: "send_error=\(error.localizedDescription)")
+                return
+            }
+            self?.logs.writeLog(log: "[HC] [udpProbe \(name)] send ok endpoint=\(endpoint)")
+        })
+
+        let wait = semaphore.wait(timeout: .now() + timeoutSeconds)
+        if wait == .timedOut {
+            lock.lock()
+            let stateAtTimeout = lastState
+            lock.unlock()
+            logs.writeLog(
+                log: "[HC] [udpProbe \(name)] TIMEOUT endpoint=\(endpoint) " +
+                    "elapsedMs=\(elapsedMs(since: start)) lastState=\(stateAtTimeout)"
+            )
+            connection.cancel()
+            return false
+        }
+
+        connection.cancel()
+        logs.writeLog(
+            log: "[HC] [udpProbe \(name)] end endpoint=\(endpoint) " +
+                "success=\(success) reason=\(finishReason) elapsedMs=\(elapsedMs(since: start))"
+        )
+        return success
+    }
+
+    private func dnsQueryPayload(id: UInt16, host: String) -> Data {
+        var bytes: [UInt8] = [
+            UInt8(id >> 8),
+            UInt8(id & 0xFF),
+            0x01, 0x00,
+            0x00, 0x01,
+            0x00, 0x00,
+            0x00, 0x00,
+            0x00, 0x00
+        ]
+        for label in host.split(separator: ".") {
+            let labelBytes = [UInt8](label.utf8)
+            bytes.append(UInt8(labelBytes.count))
+            bytes.append(contentsOf: labelBytes)
+        }
+        bytes.append(0x00)
+        bytes.append(contentsOf: [0x00, 0x01, 0x00, 0x01])
+        return Data(bytes)
+    }
+
+    private func stunBindingRequestPayload() -> Data {
+        Data([
+            0x00, 0x01,
+            0x00, 0x00,
+            0x21, 0x12, 0xA4, 0x42,
+            0x44, 0x4F, 0x42, 0x42,
+            0x59, 0x56, 0x50, 0x4E,
+            0x49, 0x4F, 0x53, 0x32
+        ])
     }
 
     // Checks if Dobby's configured tunnel IP is assigned to at least one interface.
@@ -752,6 +977,12 @@ public final class HealthCheckImpl: HealthCheck {
             )
         }
         return legacyHealthyStatus
+    }
+
+    private func logTunnelDiagnostics(checkId: String, reason: String) {
+        logs.writeLog(log: "[HC] [diag] requesting tunnel diagnostics id=\(checkId) reason=\(reason)")
+        let raw = providerMessage("getTunnelDiagnostics", label: "TunnelDiagnostics")
+        logs.writeLog(log: "[HC] [diag] tunnel diagnostics id=\(checkId): \(raw ?? "nil")")
     }
 
     private func parseMemoryResponse(_ response: String?) -> Double {

@@ -54,6 +54,24 @@ func GetDefaultInterfaceForIOS() int {
 	return idx
 }
 
+// GetConfiguredDefaultInterfaceForIOS returns the last interface index supplied by Swift.
+// Unlike GetDefaultInterfaceForIOS, it does not perform fallback detection; this is useful
+// for diagnostics that must distinguish "Swift never supplied an index" from "Go guessed one".
+func GetConfiguredDefaultInterfaceForIOS() int {
+	defaultInterfaceMu.RLock()
+	idx := defaultInterfaceIndex
+	defaultInterfaceMu.RUnlock()
+	return idx
+}
+
+func ProtectionDiagnosticsForIOS() string {
+	return fmt.Sprintf(
+		"configuredDefaultInterfaceIndex=%d interfaces=[%s]",
+		GetConfiguredDefaultInterfaceForIOS(),
+		describeInterfacesForLog(),
+	)
+}
+
 func detectDefaultInterfaceIndex() int {
 	interfaces, err := net.Interfaces()
 	if err != nil {
@@ -108,6 +126,11 @@ func (i *iosProtector) Protect(fd uintptr, network string) error {
 	// iOS 26+: Try SO_NO_TC_NETPOLICY first (legacy approach for older iOS versions).
 	// On iOS 26+, this fails with "invalid argument" — expected and handled below.
 	legacyErr := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, SO_NO_TC_NETPOLICY, 1)
+	if legacyErr != nil {
+		log.Infof("[iOS-Protect] SO_NO_TC_NETPOLICY failed fd=%d network=%s err=%v", fd, network, legacyErr)
+	} else {
+		log.Infof("[iOS-Protect] SO_NO_TC_NETPOLICY success fd=%d network=%s", fd, network)
+	}
 
 	// iOS 26+: Use IP_BOUND_IF with the actual interface index.
 	// This is the primary method for socket protection on iOS 26+.
@@ -128,6 +151,9 @@ func (i *iosProtector) Protect(fd uintptr, network string) error {
 				return nil
 			}
 			log.Infof("[iOS-Protect] IP_BOUND_IF (IPv4) success: fd=%d bound to interface %d", fd, ifaceIndex)
+			if err := verifyBoundInterface(fd, syscall.IPPROTO_IP, IP_BOUND_IF, ifaceIndex, "IP_BOUND_IF", network); err != nil {
+				return err
+			}
 		case "tcp6", "udp6":
 			if err := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, IPV6_BOUND_IF, ifaceIndex); err != nil {
 				log.Infof("[iOS-Protect] IP_BOUND_IF (IPv6) failed for fd=%d iface=%d: %v", fd, ifaceIndex, err)
@@ -137,6 +163,9 @@ func (i *iosProtector) Protect(fd uintptr, network string) error {
 				return nil
 			}
 			log.Infof("[iOS-Protect] IP_BOUND_IF (IPv6) success: fd=%d bound to interface %d", fd, ifaceIndex)
+			if err := verifyBoundInterface(fd, syscall.IPPROTO_IPV6, IPV6_BOUND_IF, ifaceIndex, "IPV6_BOUND_IF", network); err != nil {
+				return err
+			}
 		default:
 			// For unknown network types, try IPv4
 			if err := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, IP_BOUND_IF, ifaceIndex); err != nil {
@@ -147,6 +176,9 @@ func (i *iosProtector) Protect(fd uintptr, network string) error {
 				return nil
 			}
 			log.Infof("[iOS-Protect] IP_BOUND_IF (fallback IPv4) success: fd=%d bound to interface %d network=%s", fd, ifaceIndex, network)
+			if err := verifyBoundInterface(fd, syscall.IPPROTO_IP, IP_BOUND_IF, ifaceIndex, "IP_BOUND_IF fallback", network); err != nil {
+				return err
+			}
 		}
 	} else {
 		// No interface index set - log with full interface list to aid debugging
@@ -157,6 +189,21 @@ func (i *iosProtector) Protect(fd uintptr, network string) error {
 		}
 	}
 
+	return nil
+}
+
+func verifyBoundInterface(fd uintptr, level int, option int, expected int, label string, network string) error {
+	actual, err := syscall.GetsockoptInt(int(fd), level, option)
+	if err != nil {
+		log.Infof("[iOS-Protect] %s verify skipped fd=%d network=%s expectedIface=%d getErr=%v", label, fd, network, expected, err)
+		return nil
+	}
+	if actual != expected {
+		err := fmt.Errorf("%s verification mismatch fd=%d network=%s expectedIface=%d actualIface=%d", label, fd, network, expected, actual)
+		log.Infof("[iOS-Protect] %v", err)
+		return err
+	}
+	log.Infof("[iOS-Protect] %s verify OK fd=%d network=%s iface=%d", label, fd, network, actual)
 	return nil
 }
 
