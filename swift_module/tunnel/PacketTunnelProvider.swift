@@ -375,6 +375,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func wake() {
         logs.writeLog(log: "[tunnel:\(tunnelId)] wake()")
+        if let monitor = pathMonitor {
+            updateDefaultInterfaceIndex(for: monitor.currentPath)
+        }
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {

@@ -84,13 +84,18 @@ func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) 
 	hasTCPPath := strings.Contains(transportConfig, "tcp_path=")
 	isWebSocket := strings.Contains(transportConfig, "ws:")
 	preferTCPDNS := options.PreferTCPDNSForWebSocket && isWebSocket
+	// Only disable non-DNS UDP when WebSocket is in use: multiplexing Shadowsocks AEAD UDP
+	// frames over a shared WebSocket stream causes chacha20poly1305 decryption failures under
+	// concurrency. For plain Shadowsocks (no WebSocket) UDP works correctly.
+	disableNonDNSUDP := options.DisableNonDNSUDP && isWebSocket
 	log.Infof(
-		"outline client: transport summary len=%d websocket=%v tcpPath=%v udpPath=%v preferTCPDNS=%v streamDialer=%T packetDialer=%T",
+		"outline client: transport summary len=%d websocket=%v tcpPath=%v udpPath=%v preferTCPDNS=%v disableNonDNSUDP=%v streamDialer=%T packetDialer=%T",
 		len(transportConfig),
 		isWebSocket,
 		hasTCPPath,
 		hasUDPPath,
 		preferTCPDNS,
+		disableNonDNSUDP,
 		sd,
 		pd,
 	)
@@ -108,7 +113,7 @@ func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) 
 		packetDialer:     pd,
 		useCloak:         useCloak,
 		preferTCPDNS:     preferTCPDNS,
-		disableNonDNSUDP: options.DisableNonDNSUDP,
+		disableNonDNSUDP: disableNonDNSUDP,
 		startedAt:        time.Now(),
 		serveState:       "created",
 		ctx:              ctx,

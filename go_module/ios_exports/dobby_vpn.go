@@ -62,9 +62,10 @@ func NewVpnClient(transportConfig string, protocol string, tunnelFD int, mtu int
 		log.Infof("NewVpnClient(): creating xray device")
 		device, err = xray.NewXrayDevice(transportConfig)
 	case "outline":
-		log.Infof("NewVpnClient(): creating outline device preferTCPDNSForWebSocket=true")
+		log.Infof("NewVpnClient(): creating outline device preferTCPDNSForWebSocket=true disableNonDNSUDP=true")
 		device, err = outline.NewOutlineDeviceWithOptions(transportConfig, outline.DeviceOptions{
 			PreferTCPDNSForWebSocket: true,
+			DisableNonDNSUDP:        true,
 		})
 	default:
 		log.Infof("NewVpnClient() failed: unsupported protocol")
