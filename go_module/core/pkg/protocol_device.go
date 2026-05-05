@@ -11,8 +11,10 @@ type ProtocolDevice interface {
 	// Open starts the protocol engine.
 	Open(routingTableID int, uplinkIface string) error
 
-	// GetProxyAddr returns the local address (e.g., "127.0.0.1:1080")
-	// where tun2socks should forward device traffic.
+	// GetProxyAddr returns the SOCKS5 proxy endpoint where tun2socks should
+	// forward device traffic. It may include credentials, e.g.
+	// "user:pass@127.0.0.1:1080", so it must not be used as a raw net.Dial
+	// or net.Listen target.
 	GetProxyAddr() string
 
 	GetServerIP() net.IP
