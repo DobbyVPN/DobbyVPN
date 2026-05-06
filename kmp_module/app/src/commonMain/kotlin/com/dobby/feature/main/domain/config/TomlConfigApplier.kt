@@ -56,14 +56,6 @@ class TomlConfigApplier(
         return false
     }
 
-    private fun applyNone(): Boolean {
-        logger.log("VPN config not detected, turning off")
-        mainRepo.clearVpnConfig()
-        logger.log("Finish parseToml()")
-
-        return false
-    }
-
     private fun applyXray(config: XrayClientConfig): Boolean {
         logger.log("Xray config detected")
         xrayApplier.apply(config)

@@ -1,10 +1,9 @@
 package com.dobby.feature.logging.domain
 
 import android.content.Context
+import com.dobby.backend.LoggerBackendWrapper
 import okio.Path
 import okio.Path.Companion.toPath
-import com.dobby.backend.GoBackendWrapper
-import com.dobby.backend.LoggerBackendWrapper
 
 actual val fileSystem = okio.FileSystem.SYSTEM
 

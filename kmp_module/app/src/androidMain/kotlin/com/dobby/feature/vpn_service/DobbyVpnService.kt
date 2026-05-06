@@ -9,9 +9,6 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.system.Os
 import com.dobby.backend.GoBackendWrapper
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.initLogger
 import com.dobby.feature.logging.domain.initTelemetry
@@ -19,18 +16,17 @@ import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
+import com.dobby.feature.main.domain.clearVpnConfig
 import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
 import com.dobby.feature.vpn_service.domain.cloak.CloakConnectionInteractor
 import com.dobby.feature.vpn_service.domain.cloak.DisconnectResult
 import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
-import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
+import com.dobby.feature.vpn_service.domain.xray.XrayInteractor
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.koin.android.ext.android.inject
-import com.dobby.backend.GoBackendWrapper
-import com.dobby.feature.vpn_service.domain.xray.XrayInteractor
 import java.io.File
 import java.io.FileInputStream
 import java.util.*
@@ -138,8 +134,8 @@ class DobbyVpnService : VpnService() {
                 geoRouting.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
                 when (dobbyConfigsRepository.getVpnInterface()) {
                     VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
-                    VpnInterface.AMNEZIA_WG -> startAwg(intent)
-                    VpnInterface.XRAY -> startXray(intent)
+                    VpnInterface.AMNEZIA_WG -> startAwg()
+                    VpnInterface.XRAY -> startXray()
                     VpnInterface.NONE -> startNone()
                 }
             }
@@ -217,11 +213,18 @@ class DobbyVpnService : VpnService() {
         }
     }
 
-    private fun startXray(intent: Intent?) {
+    private fun startXray() {
         serviceScope.launch {
             startStopMutex.withLock {
                 if (dobbyConfigsRepository.getIsXrayEnabled()) {
-                    xrayInteractor.startXray(intent, instance)
+                    if (!xrayInteractor.startXray(instance)) {
+                        connectionState.updateServiceStarted(false)
+                        teardownVpn()
+                        stopSelf()
+                        return@launch
+                    }
+
+                    connectionState.updateServiceStarted(true)
                 }
             }
         }
@@ -293,6 +296,7 @@ class DobbyVpnService : VpnService() {
         }
         vpnInterface = null
         goTunFd = null
+        dobbyConfigsRepository.clearVpnConfig()
         logger.log("[svc:$serviceId] teardownVpn(): end fd=$fdBefore")
     }
 }

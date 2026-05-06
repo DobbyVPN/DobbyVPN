@@ -145,6 +145,10 @@ func (c *CoreClient) Refresh() error {
 	return nil
 }
 
+func (c *CoreClient) HealthCheck() error {
+	return nil
+}
+
 func (c *CoreClient) GetServerIP() net.IP {
 	return c.device.GetServerIP()
 }

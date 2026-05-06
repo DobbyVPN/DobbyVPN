@@ -12,8 +12,7 @@ class AmneziaWGInteractor(
     private val logger: Logger,
     private val dobbyConfigsRepository: DobbyConfigsRepository,
 ) {
-
-    suspend fun startAwg(dobbyVpnService: DobbyVpnService?): Boolean {
+    fun startAwg(dobbyVpnService: DobbyVpnService?): Boolean {
         logger.log("[svc:${dobbyVpnService?.serviceId}] startAwg(): lock acquired vpnInterface=${dobbyVpnService?.vpnInterface?.fd}")
         val shouldTurnOn = dobbyConfigsRepository.getIsAmneziaWGEnabled()
         logger.log("[svc:${dobbyVpnService?.serviceId}] startAwg(): shouldTurnOutlineOn=$shouldTurnOn")

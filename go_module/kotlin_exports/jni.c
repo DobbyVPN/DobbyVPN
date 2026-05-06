@@ -235,7 +235,7 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_NetCheckBackend_cancelNetCheck(JNI
     CancelNetCheck();
 }
 
-JNIEXPORT jstring JNICALL Java_com_dobby_backend_OutlineBackend_getLastError(JNIEnv *env, jclass c)
+JNIEXPORT jstring JNICALL Java_com_dobby_backend_VpnBackend_getLastError(JNIEnv *env, jclass c)
 {
 	jstring ret;
     char *result = GetVpnLastError();
@@ -246,7 +246,7 @@ JNIEXPORT jstring JNICALL Java_com_dobby_backend_OutlineBackend_getLastError(JNI
 	return ret;
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_newVpnClient(JNIEnv *env, jclass c, jstring jConfig, jstring jProtocol, jint jFd)
+JNIEXPORT void JNICALL Java_com_dobby_backend_VpnBackend_newVpnClient(JNIEnv *env, jclass c, jstring jConfig, jstring jProtocol, jint jFd)
 {
     const char *config_str = (*env)->GetStringUTFChars(env, jConfig, 0);
     const char *protocol_str = (*env)->GetStringUTFChars(env, jProtocol, 0);
@@ -263,12 +263,12 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_newVpnClient(JNIEnv *env
     (*env)->ReleaseStringUTFChars(env, jProtocol, protocol_str);
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_vpnConnect(JNIEnv *env, jclass c)
+JNIEXPORT jint JNICALL Java_com_dobby_backend_VpnBackend_vpnConnect(JNIEnv *env, jclass c)
 {
     return VpnConnect();
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_vpnDisconnect(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_VpnBackend_vpnDisconnect(JNIEnv *env, jclass c)
 {
     VpnDisconnect();
 }
