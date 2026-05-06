@@ -232,7 +232,7 @@ class MainViewModel(
         }
     }
 
-    private suspend fun startVpnService() {
+    suspend fun startVpnService() {
         logger.log("Starting VPN service...")
         logger.log("Init health check")
         healthCheck.InitHealthCheck()
@@ -252,7 +252,7 @@ class MainViewModel(
         }
     }
 
-    private fun stopVpnService() {
+    fun stopVpnService() {
         logger.log("Stopping VPN service...")
         logger.log("Stop tunnel service")
         vpnManager.stop()

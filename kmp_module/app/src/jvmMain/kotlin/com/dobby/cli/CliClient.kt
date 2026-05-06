@@ -5,30 +5,25 @@ import com.dobby.feature.diagnostic.domain.HealthCheckImpl
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
-import com.dobby.feature.main.domain.*
+import com.dobby.feature.main.domain.ConnectionStateRepository
+import com.dobby.feature.main.domain.DobbyConfigsRepository
+import com.dobby.feature.main.domain.PermissionEventsChannel
+import com.dobby.feature.main.domain.VpnManagerImpl
 import com.dobby.feature.main.presentation.MainViewModel
-import com.dobby.feature.netcheck.NetCheckManagerImpl
-import com.dobby.feature.netcheck.domain.NetCheckRepository
-import com.dobby.feature.netcheck.presentation.NetCheckViewModel
 import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.grpc.*
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import java.io.IOException
-import java.nio.file.Files
-import java.nio.file.Path
-import kotlin.system.exitProcess
 
-class CliClient(private val configPath: String) {
+class CliClient {
+    private val logsRepository: LogsRepository
     private val connectionStateRepository: ConnectionStateRepository
     private val configsRepository: DobbyConfigsRepository
     private val logger: Logger
     private val logEventsChannel: LogEventsChannel = LogEventsChannel()
     private val mainViewModel: MainViewModel
-    private val netCheckViewModel: NetCheckViewModel
 
     init {
-        val logsRepository = LogsRepository(logEventsChannel = logEventsChannel)
+        logsRepository = LogsRepository(logEventsChannel = logEventsChannel)
         logger = Logger(logsRepository)
 
         val healthCheckLibrary = RestartableHealthCheckGrpcLibrary(logger)
@@ -37,7 +32,6 @@ class CliClient(private val configPath: String) {
         val cloakLibrary = RestartableCloakGrpcLibrary(logger)
         val loggerLibrary = RestartableLoggerGrpcLibrary(logger)
         val georoutingLibrary = RestartableGeoroutingGrpcLibrary(logger)
-        val netCheckLibrary = RestartableNetCheckGrpcLibrary(logger)
 
         configsRepository = DobbyConfigsRepositoryImpl(healthCheckLibrary = healthCheckLibrary)
         connectionStateRepository = ConnectionStateRepository()
@@ -60,54 +54,62 @@ class CliClient(private val configPath: String) {
             logger = logger,
             healthCheck = HealthCheckImpl(logger, healthCheckLibrary),
         )
-        val netCheckManager = NetCheckManagerImpl(loggerLibrary, netCheckLibrary, configsRepository)
-        val netCheckRepository = NetCheckRepository()
-        netCheckViewModel = NetCheckViewModel(logger, configsRepository, netCheckRepository, netCheckManager)
     }
 
-    fun runClient() {
-        val path = Path.of(configPath)
-        println("Reading config")
-        val config = try {
-            String(Files.readAllBytes(path))
-        } catch (e: IOException) {
-            println("Failed to read config: $e")
-            return
+    fun logs(options: List<String>): ExitCode =
+        if (options.isEmpty()) {
+            // Print logs
+            logsRepository.readUILogs().forEach {
+                println(it)
+            }
+            ExitCode.OK
+        } else if (options.size == 2 && options[0] == "-n") {
+            val count = options[1].toIntOrNull()
+            if (count == null || count <= 0) {
+                ExitCode.INVALID_ARGS
+            } else {
+                logsRepository.readLogs(count).forEach {
+                    println(it)
+                }
+                ExitCode.OK
+            }
+        } else if (options.size == 1 && options[0] == "clear") {
+            // Clear logs
+            logsRepository.clearLogs()
+            ExitCode.OK
+        } else {
+            ExitCode.INVALID_ARGS
         }
 
-        runBlocking {
-            val logJob = launch {
-                logEventsChannel.logEvents.collect { line ->
-                    println(line)
-                }
-            }
-
-            launch {
-                while (true) {
-                    val line = readlnOrNull()
-                    when (line) {
-                        "vpn" -> {
-                            println("Got vpn command")
-                            mainViewModel.onConnectionButtonClicked(config)
-                        }
-                        "netcheck" -> {
-                            println("Got netcheck command")
-                            netCheckViewModel.update(config)
-                            netCheckViewModel.onButtonClicked()
-                        }
-                        "quit", null -> {
-                            println("Got interruption command")
-                            logJob.cancel()
-                            exitProcess(0)
-                        }
-                        else -> {
-                            println("Got invalid command command")
-                        }
-                    }
-                }
-            }
-
-
+    fun connect(options: List<String>): ExitCode =
+        if (options.isEmpty()) {
+            // connect with healthcheck
+            ExitCode.OK
+        } else if (options.size == 1 && options[0] == "--skip-healthcheck") {
+            // connect without healthcheck
+            ExitCode.OK
+        } else {
+            ExitCode.INVALID_ARGS
         }
-    }
+
+    fun disconnect(options: List<String>): ExitCode =
+        if (options.isNotEmpty()) {
+            ExitCode.INVALID_ARGS
+        } else {
+            runBlocking {
+                mainViewModel.stopVpnService()
+            }
+            ExitCode.OK
+        }
+
+    fun status(options: List<String>): ExitCode =
+        if (options.isEmpty()) {
+            // Print status
+            ExitCode.OK
+        } else if (options.size == 1 && options[0] == "--json") {
+            // Print json status
+            ExitCode.OK
+        } else {
+            ExitCode.INVALID_ARGS
+        }
 }

@@ -9,7 +9,6 @@ import okio.FileSystem
 import okio.Path
 import okio.buffer
 import okio.use
-import org.koin.compose.koinInject
 
 expect val fileSystem: FileSystem
 expect fun provideLogFilePath(): Path
@@ -89,7 +88,7 @@ class LogsRepository(
 
     fun readUILogs(): List<String> = readLogs(UI_TAIL_LINES)
 
-    private fun readLogs(limit: Int): List<String> {
+    fun readLogs(limit: Int): List<String> {
         if (!fileSystem.exists(logFilePath)) return emptyList()
 
         return runCatching {
