@@ -1,6 +1,6 @@
 module go_module
 
-go 1.25.1
+go 1.24.2
 
 replace github.com/cbeuw/Cloak => ./modules/Cloak
 
