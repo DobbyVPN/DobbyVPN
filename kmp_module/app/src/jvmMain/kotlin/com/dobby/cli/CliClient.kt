@@ -95,20 +95,12 @@ class CliClient {
         while (time < initialTime + 15.seconds) {
             time = DateTime.now()
             when (healthCheckLibrary.GetConnectionState()) {
-                0 -> {
-                    System.err.println("Invalid connection state")
-                    return false
-                }
-                1 -> delay(200.milliseconds)
+                0, 1 -> delay(200.milliseconds)
                 2 -> return true
-                else -> {
-                    System.err.println("Failed to get connection state")
-                    return false
-                }
+                else -> return false
             }
         }
 
-        System.err.println("Not passed healthcheck")
         return false
     }
 
@@ -132,14 +124,12 @@ class CliClient {
 
         val okConfig = runBlocking { mainViewModel.setConfig(connectionUrl) }
         if (!okConfig) {
-            System.err.println("Failed parse config")
-            return ExitCode.PROGRAM_FAILED
+            return ExitCode.CONFIG_FORMAT_ERROR
         }
 
         val okVpn = runBlocking { mainViewModel.startVpnService() }
         if (!okVpn) {
-            System.err.println("Failed start vpn service")
-            return ExitCode.PROGRAM_FAILED
+            return ExitCode.TUNNEL_START_ERROR
         }
 
         if (skipHealthCheck) {
@@ -148,7 +138,7 @@ class CliClient {
 
         val okHC = runBlocking { awaitHealthCheck() }
         if (!okHC) {
-            return ExitCode.PROGRAM_FAILED
+            return ExitCode.HEALTHCHECK_CONFIG_ERROR
         }
 
         return ExitCode.OK
@@ -170,10 +160,7 @@ class CliClient {
                 0 -> println("Disconnected")
                 1 -> println("Connecting")
                 2 -> println("Connected")
-                else -> {
-                    System.err.println("Failed to get connection state")
-                    return ExitCode.PROGRAM_FAILED
-                }
+                else -> return ExitCode.PROGRAM_FAILED
             }
             ExitCode.OK
         } else if (options.size == 1 && options[0] == "--json") {
@@ -182,10 +169,7 @@ class CliClient {
                 0 -> println("{ \"code\": 0, \"state\": \"Disconnected\" }")
                 1 -> println("{ \"code\": 1, \"state\": \"Connecting\" }")
                 2 -> println("{ \"code\": 2, \"state\": \"Connected\" }")
-                else -> {
-                    System.err.println("Failed to get connection state")
-                    return ExitCode.PROGRAM_FAILED
-                }
+                else -> return ExitCode.PROGRAM_FAILED
             }
             ExitCode.OK
         } else {

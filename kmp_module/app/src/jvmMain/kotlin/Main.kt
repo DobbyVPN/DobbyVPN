@@ -7,6 +7,12 @@ import com.dobby.navigation.App
 import com.dobby.ui.theme.DesktopClientTheme
 import kotlin.system.exitProcess
 
+fun properExit(exitCode: ExitCode) {
+    if (exitCode != ExitCode.OK)
+        System.err.println(exitCode.description)
+    exitProcess(exitCode.value)
+}
+
 fun printHelp(exitCode: ExitCode) {
     println("""
 dobby - CLI tool for managing connections, logs, and status
@@ -60,7 +66,7 @@ COMMANDS:
                 If not provided, output is printed in human-readable format
 """.trimIndent())
 
-    exitProcess(exitCode.value)
+    properExit(exitCode)
 }
 
 fun main(args: Array<String>)  {
@@ -71,19 +77,19 @@ fun main(args: Array<String>)  {
             "--help" -> printHelp(ExitCode.OK)
             "logs" -> {
                 val exitCode = cliClient.logs(options)
-                exitProcess(exitCode.value)
+                properExit(exitCode)
             }
             "connect" -> {
                 val exitCode = cliClient.connect(options)
-                exitProcess(exitCode.value)
+                properExit(exitCode)
             }
             "disconnect" -> {
                 val exitCode = cliClient.disconnect(options)
-                exitProcess(exitCode.value)
+                properExit(exitCode)
             }
             "status" -> {
                 val exitCode = cliClient.status(options)
-                exitProcess(exitCode.value)
+                properExit(exitCode)
             }
             else -> printHelp(ExitCode.INVALID_ARGS)
         }
