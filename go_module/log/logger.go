@@ -344,21 +344,6 @@ func Errorf(category, format string, args ...any) {
 	}
 }
 
-func Warnf(format string, args ...any) {
-	if lg.logger == nil {
-		lg.bufInfof(format, args...)
-	} else {
-		lg.logger.Warn(fmt.Sprintf(format, args...))
-	}
-}
-
-func Errorf(format string, args ...any) {
-	if lg.logger == nil {
-		return
-	}
-	lg.logger.Error(fmt.Sprintf(format, args...))
-}
-
 type simpleHandler struct {
 	file *os.File
 }

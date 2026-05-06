@@ -70,7 +70,7 @@ func newTrackedPacketConn(conn net.PacketConn, counter *atomic.Int64) *trackedPa
 			case <-ticker.C:
 				if time.Since(time.Unix(0, c.lastActivity.Load())) >= udpIdleTimeout {
 					if err := c.Close(); err != nil {
-						log.Errorf("failed to close connection: %v", err)
+						log.Errorf(Category, "failed to close connection: %v", err)
 					}
 					return
 				}
