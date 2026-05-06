@@ -180,9 +180,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel stage complete: initial interface detection")
             enterStage("geo routing config")
             let geoRoutingConf = configsRepository.getGeoRoutingConf()
-            logs.writeLog(log: "[DEBUG][Routing] applying geo routing config length=\(geoRoutingConf.count)")
-            Cloak_outlineSetGeoRoutingConf(geoRoutingConf)
-            logs.writeLog(log: "[DEBUG][Routing] geo routing config applied")
+            let configuredBypassCIDRs = geoRoutingConf
+                .split(whereSeparator: { $0.isWhitespace })
+                .map(String.init)
+            var engineBypassCIDRs = configuredBypassCIDRs
+            logs.writeLog(
+                log: "[DEBUG][Routing] loaded geo routing config " +
+                    "length=\(geoRoutingConf.count) cidrCount=\(configuredBypassCIDRs.count)"
+            )
+            logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel stage complete: geo routing config load")
 
             enterStage("route exclusions")
             let cloakConfig = configsRepository.getCloakConfig()
@@ -195,6 +201,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
                    let route = makeExcludedRoute(host: ip) {
                     excludedRoutes.append(route)
+                    engineBypassCIDRs.append("\(ip)/32")
                     routeDiagnosticParts.append("outlineHost=\(maskStr(value: trimmed)) outlineResolvedIPv4=\(maskStr(value: ip)) outlineExcludedRoute=\(ip)/32")
                     if ip == trimmed {
                         logs.writeLog(log: "Excluded route for Outline host: \(maskStr(value: ip))/32")
@@ -216,6 +223,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
                    let route = makeExcludedRoute(host: ip) {
                     excludedRoutes.append(route)
+                    engineBypassCIDRs.append("\(ip)/32")
                     routeDiagnosticParts.append("cloakRemoteHost=\(maskStr(value: trimmed)) cloakResolvedIPv4=\(maskStr(value: ip)) cloakExcludedRoute=\(ip)/32")
                     if ip == trimmed {
                         logs.writeLog(log: "Excluded route for Cloak RemoteHost: \(maskStr(value: ip))/32")
@@ -235,8 +243,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let excludedRouteSummary = excludedRoutes.isEmpty
                 ? "(none)"
                 : excludedRoutes.map { "\($0.destinationAddress)/\($0.destinationSubnetMask)" }.joined(separator: ",")
+            var seenEngineBypassCIDRs = Set<String>()
+            engineBypassCIDRs = engineBypassCIDRs.filter { seenEngineBypassCIDRs.insert($0).inserted }
+            let engineBypassSummary = engineBypassCIDRs.isEmpty
+                ? "(none)"
+                : engineBypassCIDRs.joined(separator: ",")
             lastRouteDiagnostics = "excludedRoutes=\(excludedRouteSummary) " +
-                routeDiagnosticParts.joined(separator: " ")
+                routeDiagnosticParts.joined(separator: " ") +
+                " engineBypassCIDRs=\(engineBypassSummary)"
             if !excludedRoutes.isEmpty {
                 let list = excludedRoutes.map { "\($0.destinationAddress)/\($0.destinationSubnetMask)" }.joined(separator: ", ")
                 logs.writeLog(log: "Excluded IPv4 routes: \(list)")
@@ -244,6 +258,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 logs.writeLog(log: "Excluded IPv4 routes: (none)")
             }
             logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel stage complete: route exclusions count=\(excludedRoutes.count)")
+            enterStage("engine bypass routing config")
+            let mergedEngineBypassConf = engineBypassCIDRs.joined(separator: " ")
+            logs.writeLog(
+                log: "[DEBUG][Routing] applying engine bypass routing " +
+                    "configuredCount=\(configuredBypassCIDRs.count) " +
+                    "totalCount=\(engineBypassCIDRs.count) cidrs=\(engineBypassSummary)"
+            )
+            Cloak_outlineSetGeoRoutingConf(mergedEngineBypassConf)
+            logs.writeLog(log: "[DEBUG][Routing] engine bypass routing config applied")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel stage complete: engine bypass routing config")
 
             // Determine which protocol to use early - needed for Cloak startup
             let vpnInterface = configsRepository.getVpnInterface()

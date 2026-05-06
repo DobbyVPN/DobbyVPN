@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 
@@ -41,24 +42,18 @@ func IsBypass(metadata *M.Metadata) bool {
 	return false
 }
 
-func mustCIDR(s string) {
-	_, ipnet, err := net.ParseCIDR(s)
-	if err != nil {
-		addBypassHost(s)
-	} else {
-		defaultBypassCIDRs = append(defaultBypassCIDRs, ipnet)
-	}
-}
-
 func SetGeoRoutingConf(cidrs string) {
+	paths := strings.Fields(cidrs)
+	resolvedRoutes := make([]*net.IPNet, 0, len(paths))
+
+	for _, entry := range paths {
+		resolvedRoutes = append(resolvedRoutes, bypassCIDRsForEntry(entry)...)
+	}
+
 	routesMu.Lock()
 	defer routesMu.Unlock()
 
-	paths := strings.Fields(cidrs)
-
-	for _, cidr := range paths {
-		mustCIDR(cidr)
-	}
+	defaultBypassCIDRs = resolvedRoutes
 
 	log.Infof("[Routing] Set defaultBypassCIDRs: %v", defaultBypassCIDRs)
 }
@@ -71,15 +66,36 @@ func ClearGeoRoutingConf() {
 	log.Infof("[Routing] Cleared defaultBypassCIDRs")
 }
 
+func bypassCIDRsForEntry(entry string) []*net.IPNet {
+	_, ipnet, err := net.ParseCIDR(entry)
+	if err == nil {
+		log.Infof("[Bypass] added %s", ipnet.String())
+		return []*net.IPNet{ipnet}
+	}
+
+	cidrs := resolveHostToCIDRs(entry)
+	if len(cidrs) == 0 {
+		log.Infof("[Bypass] no IPs resolved for %s", entry)
+		return nil
+	}
+	for _, c := range cidrs {
+		log.Infof("[Bypass] added %s for host %s", c.String(), entry)
+	}
+	return cidrs
+}
+
 func resolveHostToCIDRs(host string) []*net.IPNet {
 	resolver := net.Resolver{}
 
-	ctx := context.Background()
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	ips, err := resolver.LookupIPAddr(ctx, host)
 	if err != nil {
-		log.Infof("[Bypass] resolve failed for %s: %v", host, err)
+		log.Infof("[Bypass] resolve failed for %s elapsedMs=%d err=%v", host, time.Since(start).Milliseconds(), err)
 		return nil
 	}
+	log.Infof("[Bypass] resolve OK host=%s count=%d elapsedMs=%d", host, len(ips), time.Since(start).Milliseconds())
 
 	var result []*net.IPNet
 	for _, ip := range ips {
@@ -92,21 +108,4 @@ func resolveHostToCIDRs(host string) []*net.IPNet {
 		result = append(result, n)
 	}
 	return result
-}
-
-func addBypassHost(host string) {
-	cidrs := resolveHostToCIDRs(host)
-	if len(cidrs) == 0 {
-		log.Infof("[Bypass] no IPs resolved for %s", host)
-		return
-	}
-
-	routesMu.Lock()
-	defer routesMu.Unlock()
-
-	defaultBypassCIDRs = append(defaultBypassCIDRs, cidrs...)
-
-	for _, c := range cidrs {
-		log.Infof("[Bypass] added %s for host %s", c.String(), host)
-	}
 }
