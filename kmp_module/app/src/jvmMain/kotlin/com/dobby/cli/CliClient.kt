@@ -33,6 +33,7 @@ class CliClient {
         healthCheckLibrary = RestartableHealthCheckGrpcLibrary(logger)
         val awgLibrary = RestartableAwgGrpcLibrary(logger)
         val outlineLibrary = RestartableOutlineGrpcLibrary(logger)
+        val xrayLibrary = RestartableXrayGrpcLibrary(logger)
         val cloakLibrary = RestartableCloakGrpcLibrary(logger)
         val loggerLibrary = RestartableLoggerGrpcLibrary(logger)
         val georoutingLibrary = RestartableGeoroutingGrpcLibrary(logger)
@@ -45,6 +46,7 @@ class CliClient {
             logger = logger,
             awgLibrary = awgLibrary,
             outlineLibrary = outlineLibrary,
+            xrayLibrary = xrayLibrary,
             cloakLibrary = cloakLibrary,
             loggerLibrary = loggerLibrary,
             georoutingLibrary = georoutingLibrary,

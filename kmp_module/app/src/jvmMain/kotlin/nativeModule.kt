@@ -18,6 +18,7 @@ import com.dobby.feature.vpn_service.grpc.RestartableHealthCheckGrpcLibrary
 import com.dobby.feature.vpn_service.grpc.RestartableLoggerGrpcLibrary
 import com.dobby.feature.vpn_service.grpc.RestartableNetCheckGrpcLibrary
 import com.dobby.feature.vpn_service.grpc.RestartableOutlineGrpcLibrary
+import com.dobby.feature.vpn_service.grpc.RestartableXrayGrpcLibrary
 import interop.awg.AwgLibrary
 import interop.cloak.CloakLibrary
 import interop.georouting.GeoroutingLibrary
