@@ -115,3 +115,7 @@ func (c *CoreClient) Refresh() error {
 	_ = c.Disconnect()
 	return c.Connect()
 }
+
+func (c *CoreClient) HealthCheck() error {
+	return nil
+}
