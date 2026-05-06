@@ -68,7 +68,7 @@ fun main(args: Array<String>)  {
         val cliClient = CliClient()
         val options = args.slice(1..args.lastIndex)
         when (args[0]) {
-            "--help" -> printHelp(ExitCode.INVALID_ARGS)
+            "--help" -> printHelp(ExitCode.OK)
             "logs" -> {
                 val exitCode = cliClient.logs(options)
                 exitProcess(exitCode.value)
