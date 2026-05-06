@@ -2,6 +2,7 @@ package com.dobby.feature.main.domain
 
 import com.dobby.feature.logging.domain.maskStr
 import kotlinx.serialization.Serializable
+import net.peanuuutz.tomlkt.TomlElement
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -178,11 +179,32 @@ data class ExcludeIPsConfig(
 )
 
 @Serializable
+data class XrayClientConfig(
+    val version: TomlElement? = null,
+    val log: TomlElement? = null,
+    val api: TomlElement? = null,
+    val dns: TomlElement? = null,
+    val routing: TomlElement? = null,
+    val policy: TomlElement? = null,
+    val inbounds: TomlElement? = null,
+    val outbounds: TomlElement? = null,
+    val transport: TomlElement? = null,
+    val stats: TomlElement? = null,
+    val reverse: TomlElement? = null,
+    val fakedns: TomlElement? = null,
+    val metrics: TomlElement? = null,
+    val observatory: TomlElement? = null,
+    val burstObservatory: TomlElement? = null,
+)
+
+
+@Serializable
 data class TomlConfigs(
     val Telemetry: String? = null,
     val Description: String? = null,
     val Outline: OutlineConfig? = null,
     val AmneziaWG: AmneziaWGConfig? = null,
+    val Xray: XrayClientConfig? = null,
     val ExcludeIPs: ExcludeIPsConfig? = null
 )
 

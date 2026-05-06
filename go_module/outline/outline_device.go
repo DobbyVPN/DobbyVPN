@@ -1,4 +1,4 @@
-package internal
+package outline
 
 import (
 	"context"
@@ -16,16 +16,22 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
 	socks5 "github.com/things-go/go-socks5"
 
+	"go_module/auth"
+	"go_module/core/pkg"
 	"go_module/log"
 )
 
 type OutlineDevice struct {
 	mu               sync.RWMutex
 	listener         net.Listener
+	listenAddr       string
 	proxyAddr        string
 	svrIP            net.IP
 	streamDialer     transport.StreamDialer
 	packetDialer     transport.PacketDialer
+	websocket        bool
+	hasTCPPath       bool
+	hasUDPPath       bool
 	useCloak         bool
 	preferTCPDNS     bool
 	disableNonDNSUDP bool
@@ -34,14 +40,26 @@ type OutlineDevice struct {
 	serveState       string
 	serveErr         string
 	serveGen         int
+	ctx              context.Context
+	socksUser        string
+	socksPass        string
+	tcpDialAttempt   atomic.Uint64
+	tcpDialOK        atomic.Uint64
+	tcpDialErr       atomic.Uint64
+	udpDialAttempt   atomic.Uint64
+	udpDialOK        atomic.Uint64
+	udpDialErr       atomic.Uint64
+	udpDNSTruncated  atomic.Uint64
+	udpNonDNSReject  atomic.Uint64
+	unsupportedDial  atomic.Uint64
 }
 
 type DeviceOptions struct {
 	PreferTCPDNSForWebSocket bool
 	// DisableNonDNSUDP rejects non-DNS UDP dials immediately.
-	// Use this when the transport is WebSocket without a dedicated UDP path:
-	// Shadowsocks AEAD UDP over WebSocket fails AEAD decryption under concurrency,
-	// causing QUIC retry storms. Refusing UDP makes iOS/apps fall back to TCP instantly.
+	// Use this when the transport is WebSocket: current iOS 26 logs show
+	// Shadowsocks AEAD UDP over WebSocket failing decryption under concurrency
+	// even when udp_path is configured. Refusing UDP makes apps fall back to TCP.
 	DisableNonDNSUDP bool
 }
 
@@ -60,8 +78,8 @@ func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) 
 	// Use custom providers with protected base dialers to ensure all upstream
 	// connections (SS, WebSocket, etc.) correctly bypass the tunnel on iOS 26.
 	providers := configurl.NewProviderContainer()
-	providers.StreamDialers.BaseInstance = NewProtectedStreamDialer(transportConfig)
-	providers.PacketDialers.BaseInstance = NewProtectedPacketDialer(transportConfig)
+	providers.StreamDialers.BaseInstance = pkg.NewProtectedStreamDialer(transportConfig)
+	providers.PacketDialers.BaseInstance = pkg.NewProtectedPacketDialer(transportConfig)
 	configurl.RegisterDefaultProviders(providers)
 
 	sd, err := providers.NewStreamDialer(ctx, transportConfig)
@@ -78,50 +96,74 @@ func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) 
 	hasTCPPath := strings.Contains(transportConfig, "tcp_path=")
 	isWebSocket := strings.Contains(transportConfig, "ws:")
 	preferTCPDNS := options.PreferTCPDNSForWebSocket && isWebSocket
-	log.Debugf(
-		Category,
-		"outline client: transport summary len=%d websocket=%v tcpPath=%v udpPath=%v preferTCPDNS=%v streamDialer=%T packetDialer=%T",
+	// Only disable non-DNS UDP when WebSocket is in use: multiplexing Shadowsocks AEAD UDP
+	// frames over a shared WebSocket stream causes chacha20poly1305 decryption failures under
+	// concurrency. For plain Shadowsocks (no WebSocket) UDP works correctly.
+	disableNonDNSUDP := options.DisableNonDNSUDP && isWebSocket
+	log.Infof(
+		"outline client: transport summary len=%d websocket=%v tcpPath=%v udpPath=%v preferTCPDNS=%v disableNonDNSUDP=%v udpPolicy=%s streamDialer=%T packetDialer=%T",
 		len(transportConfig),
 		isWebSocket,
 		hasTCPPath,
 		hasUDPPath,
 		preferTCPDNS,
+		disableNonDNSUDP,
+		udpPolicyForLog(disableNonDNSUDP),
 		sd,
 		pd,
 	)
 
 	useCloak := ip.IsLoopback()
-	log.Debugf(Category, "outline client: cloak mode = %v", useCloak)
+
+	log.Infof("outline client: cloak mode = %v", useCloak)
+
+	socksUser := auth.GenerateRandomAuth()
+	socksPass := auth.GenerateRandomAuth()
 
 	od := &OutlineDevice{
 		svrIP:            ip,
 		streamDialer:     sd,
 		packetDialer:     pd,
+		websocket:        isWebSocket,
+		hasTCPPath:       hasTCPPath,
+		hasUDPPath:       hasUDPPath,
 		useCloak:         useCloak,
 		preferTCPDNS:     preferTCPDNS,
-		disableNonDNSUDP: options.DisableNonDNSUDP,
+		disableNonDNSUDP: disableNonDNSUDP,
 		startedAt:        time.Now(),
 		serveState:       "created",
+		ctx:              ctx,
+		socksUser:        socksUser,
+		socksPass:        socksPass,
 	}
 
+	return od, nil
+}
+
+func (d *OutlineDevice) Open(routingTableID int, uplinkIface string) error {
 	server := socks5.NewServer(
-		socks5.WithDial(od.handleDial),
+		socks5.WithDial(d.handleDial),
+		socks5.WithCredential(socks5.StaticCredentials{
+			d.socksUser: d.socksPass,
+		}),
 		socks5.WithLogger(socksLogger{}),
 	)
 
 	lc := net.ListenConfig{}
 
-	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	listener, err := lc.Listen(d.ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	od.listener = listener
-	od.proxyAddr = listener.Addr().String()
+	d.listener = listener
+	d.listenAddr = listener.Addr().String()
+	d.proxyAddr = d.authenticatedProxyAddr(d.listenAddr)
+	log.Infof("SOCKS5 listener ready listenAddr=%s proxyAddr=%s", d.listenAddr, d.proxyAddr)
 
-	go od.serveLoop(server)
+	go d.serveLoop(server)
 
-	return od, nil
+	return nil
 }
 
 type socksLogger struct{}
@@ -133,7 +175,7 @@ func (socksLogger) Errorf(format string, args ...interface{}) {
 		strings.Contains(msg, "client want to used addr") {
 		return
 	}
-	log.Debugf(Category, "[SOCKS5 internal] %s", msg)
+	log.Infof("[SOCKS5 internal] %s", msg)
 }
 
 func (d *OutlineDevice) serveLoop(server *socks5.Server) {
@@ -145,19 +187,23 @@ func (d *OutlineDevice) serveLoop(server *socks5.Server) {
 
 		d.mu.RLock()
 		listener := d.listener
-		addr := d.proxyAddr
+		listenAddr := d.listenAddr
+		proxyAddr := d.proxyAddr
 		d.mu.RUnlock()
 
 		if listener == nil {
 			d.markServeStopped("listener=nil")
 			return
 		}
+		if listenAddr == "" {
+			listenAddr = listener.Addr().String()
+		}
 
 		d.markServeRunning()
 		err := d.serveOnce(server, listener)
 		if d.closed.Load() {
 			d.markServeStopped("closed")
-			log.Debugf(Category, "SOCKS5 stopped on %s: closed", addr)
+			log.Infof("SOCKS5 stopped on listenAddr=%s proxyAddr=%s: closed", listenAddr, proxyAddr)
 			return
 		}
 
@@ -166,16 +212,16 @@ func (d *OutlineDevice) serveLoop(server *socks5.Server) {
 			errText = err.Error()
 		}
 		d.markServeStopped(errText)
-		log.Debugf(Category, "SOCKS5 stopped unexpectedly on %s: %s", addr, errText)
+		log.Infof("SOCKS5 stopped unexpectedly on listenAddr=%s proxyAddr=%s: %s", listenAddr, proxyAddr, errText)
 
 		for !d.closed.Load() {
 			time.Sleep(250 * time.Millisecond)
-			if err := d.rebindListener(addr); err != nil {
-				log.Debugf(Category, "SOCKS5 rebind failed on %s: %v", addr, err)
+			if err := d.rebindListener(listenAddr); err != nil {
+				log.Infof("SOCKS5 rebind failed on listenAddr=%s: %v", listenAddr, err)
 				time.Sleep(time.Second)
 				continue
 			}
-			log.Debugf(Category, "SOCKS5 rebound on %s", addr)
+			log.Infof("SOCKS5 rebound on listenAddr=%s", listenAddr)
 			break
 		}
 	}
@@ -188,7 +234,7 @@ func (d *OutlineDevice) serveOnce(server *socks5.Server, listener net.Listener) 
 		}
 	}()
 
-	log.Debugf(Category, "SOCKS5 started on %s", listener.Addr().String())
+	log.Infof("SOCKS5 started on %s", listener.Addr().String())
 	return server.Serve(listener)
 }
 
@@ -202,12 +248,18 @@ func (d *OutlineDevice) rebindListener(addr string) error {
 	if err != nil {
 		return err
 	}
+	listenAddr := listener.Addr().String()
 
 	d.mu.Lock()
 	d.listener = listener
-	d.proxyAddr = listener.Addr().String()
+	d.listenAddr = listenAddr
+	d.proxyAddr = d.authenticatedProxyAddr(listenAddr)
 	d.mu.Unlock()
 	return nil
+}
+
+func (d *OutlineDevice) authenticatedProxyAddr(listenAddr string) string {
+	return fmt.Sprintf("%s:%s@%s", d.socksUser, d.socksPass, listenAddr)
 }
 
 func (d *OutlineDevice) markServeRunning() {
@@ -216,9 +268,10 @@ func (d *OutlineDevice) markServeRunning() {
 	d.serveState = "running"
 	d.serveErr = ""
 	gen := d.serveGen
-	addr := d.proxyAddr
+	listenAddr := d.listenAddr
+	proxyAddr := d.proxyAddr
 	d.mu.Unlock()
-	log.Debugf(Category, "SOCKS5 serve generation %d running on %s", gen, addr)
+	log.Infof("SOCKS5 serve generation %d running on listenAddr=%s proxyAddr=%s", gen, listenAddr, proxyAddr)
 }
 
 func (d *OutlineDevice) markServeStopped(reason string) {
@@ -229,8 +282,15 @@ func (d *OutlineDevice) markServeStopped(reason string) {
 }
 
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
-	// iOS 26 research: Log detailed connection attempt to track which path is used
-	log.Debugf(Category, "[SOCKS5] dial %s %s (research: tracking connection path for iOS 26)", network, addr)
+	log.Infof(
+		"[SOCKS5] dial network=%s addr=%s websocket=%v preferTCPDNS=%v disableNonDNSUDP=%v useCloak=%v",
+		network,
+		addr,
+		d.websocket,
+		d.preferTCPDNS,
+		d.disableNonDNSUDP,
+		d.useCloak,
+	)
 	start := time.Now()
 
 	host, portStr, _ := net.SplitHostPort(addr)
@@ -239,45 +299,52 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	switch network {
 
 	case "tcp":
+		d.tcpDialAttempt.Add(1)
 		conn, err := d.streamDialer.DialStream(ctx, addr)
 		elapsed := time.Since(start).Milliseconds()
 		if err != nil {
-			log.Debugf(Category, "[SOCKS5 TCP ERROR] %s in %dms: %v", addr, elapsed, err)
-
-			return nil, fmt.Errorf("[DEBUG][SOCKS5 TCP] StreamDialer failed for %s: %w", addr, err)
+			d.tcpDialErr.Add(1)
+			log.Infof("[SOCKS5 TCP ERROR] %s in %dms: %v", addr, elapsed, err)
+			return nil, err
 		}
-		log.Debugf(Category, "[SOCKS5 TCP OK] %s in %dms", addr, elapsed)
-		log.Debugf(Category, "[DEBUG][SOCKS5 TCP] %s local=%s remote=%s", addr, conn.LocalAddr(), conn.RemoteAddr())
+		d.tcpDialOK.Add(1)
+		log.Infof("[SOCKS5 TCP OK] %s in %dms", addr, elapsed)
+		log.Infof("[DEBUG][SOCKS5 TCP] %s local=%s remote=%s", addr, conn.LocalAddr(), conn.RemoteAddr())
 		return conn, nil
 
 	case "udp":
+		d.udpDialAttempt.Add(1)
 
 		// Force DNS-over-TCP fallback when UDP is known to be unreliable for this transport.
 		if port == 53 && (d.useCloak || d.preferTCPDNS) {
-			log.Debugf(Category, "[SOCKS5 DNS] returning truncated DNS (useCloak=%v preferTCPDNS=%v)", d.useCloak, d.preferTCPDNS)
+			d.udpDNSTruncated.Add(1)
+			log.Infof("[SOCKS5 DNS] returning truncated DNS (useCloak=%v preferTCPDNS=%v)", d.useCloak, d.preferTCPDNS)
 			return newTruncatedDNSConn(host, port), nil
 		}
 
-		// When using WebSocket transport without a dedicated UDP path, Shadowsocks AEAD UDP
-		// frames are multiplexed over the TCP WebSocket stream. Under concurrency this produces
-		// chacha20poly1305 AEAD failures on every response, causing QUIC retry storms.
+		// WebSocket UDP is unreliable in current iOS 26 logs: under concurrency it produces
+		// chacha20poly1305 AEAD failures and websocket handshakes start failing.
 		// Reject non-DNS UDP immediately so the OS falls back to TCP without burning ~1s per attempt.
 		if d.disableNonDNSUDP && port != 53 {
-			log.Debugf(Category, "[SOCKS5 UDP] rejected (disableNonDNSUDP) addr=%s", addr)
+			d.udpNonDNSReject.Add(1)
+			log.Infof("[SOCKS5 UDP] rejected disabledByConfig=true addr=%s reason=non-DNS UDP disabled for WebSocket transport; Speedtest/QUIC traffic will fail or fall back to TCP if the app supports fallback", addr)
 			return nil, fmt.Errorf("non-DNS UDP disabled for this transport")
 		}
 
 		conn, err := d.packetDialer.DialPacket(ctx, addr)
 		elapsed := time.Since(start).Milliseconds()
 		if err != nil {
-			log.Debugf(Category, "[SOCKS5 UDP ERROR] %s in %dms: %v", addr, elapsed, err)
-			return nil, fmt.Errorf("[DEBUG][SOCKS5 UDP] PacketDialer failed for %s: %w", addr, err)
+			d.udpDialErr.Add(1)
+			log.Infof("[SOCKS5 UDP ERROR] %s in %dms: %v", addr, elapsed, err)
+			return nil, err
 		}
-		log.Debugf(Category, "[SOCKS5 UDP OK] %s in %dms", addr, elapsed)
-		log.Debugf(Category, "[DEBUG][SOCKS5 UDP] %s local=%s", addr, conn.LocalAddr())
+		d.udpDialOK.Add(1)
+		log.Infof("[SOCKS5 UDP OK] %s in %dms", addr, elapsed)
+		log.Infof("[DEBUG][SOCKS5 UDP] %s local=%s", addr, conn.LocalAddr())
 		return conn, nil
 	}
 
+	d.unsupportedDial.Add(1)
 	return nil, fmt.Errorf("unsupported network %s", network)
 }
 
@@ -315,7 +382,7 @@ func (c *truncatedDNSConn) Write(b []byte) (int, error) {
 
 	resp, err := truncatedDNSResponse(b)
 	if err != nil {
-		log.Debugf(Category, "[SOCKS5 DNS] invalid DNS packet for TCP fallback: %v", err)
+		log.Infof("[SOCKS5 DNS] invalid DNS packet for TCP fallback: %v", err)
 		return len(b), nil
 	}
 
@@ -388,18 +455,18 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 
 	host := extractTLSSNIHost(transportConfig)
 	if host != "" {
-		log.Debugf(Category, "outline client: detected WSS config, using TLS SNI host: %s", host)
+		log.Infof("outline client: detected WSS config, using TLS SNI host: %s", host)
 	} else {
 		var err error
 		host, err = extractSSHost(transportConfig)
 		if err != nil {
 			return nil, err
 		}
-		log.Debugf(Category, "outline client: using ss:// host: %s", host)
+		log.Infof("outline client: using ss:// host: %s", host)
 	}
 
 	if host == "127.0.0.1" || host == "localhost" {
-		log.Debugf(Category, "outline client: localhost detected, skipping IP resolution")
+		log.Infof("outline client: localhost detected, skipping IP resolution")
 		return net.ParseIP("127.0.0.1").To4(), nil
 	}
 
@@ -411,11 +478,11 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 	if err != nil {
 		return nil, fmt.Errorf("DNS lookup for %s timed out or failed: %w", host, err)
 	}
-	log.Debugf(Category, "outline client: DNS returned %d addresses for %s", len(ipList), host)
+	log.Infof("outline client: DNS returned %d addresses for %s", len(ipList), host)
 
 	for _, ip := range ipList {
 		if v4 := ip.IP.To4(); v4 != nil {
-			log.Debugf(Category, "outline client: resolved %s -> %s", host, v4.String())
+			log.Infof("outline client: resolved %s -> %s", host, v4.String())
 			return v4, nil
 		}
 	}
@@ -479,54 +546,145 @@ func (d *OutlineDevice) GetProxyAddr() string {
 	return d.proxyAddr
 }
 
-func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (bool, string) {
+func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, status string) {
+	start := time.Now()
 	d.mu.RLock()
-	addr := d.proxyAddr
+	listenAddr := d.listenAddr
+	proxyAddr := d.proxyAddr
 	state := d.serveState
 	serveErr := d.serveErr
 	gen := d.serveGen
 	closed := d.closed.Load()
 	startedAt := d.startedAt
 	d.mu.RUnlock()
+	uptimeMs := outlineUptimeMilliseconds(startedAt)
+	runtimeStatus := d.runtimeStatus()
+	if listenAddr == "" {
+		listenAddr = listenAddressFromProxyAddr(proxyAddr)
+	}
 
-	if addr == "" {
-		return false, fmt.Sprintf(
-			"localProxyAlive=false proxyAddr= serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d",
+	log.Infof(
+		"outline local proxy health begin listenAddr=%s proxyAddr=%s state=%s gen=%d closed=%v timeoutMs=%d uptimeMs=%d %s",
+		listenAddr,
+		proxyAddr,
+		state,
+		gen,
+		closed,
+		timeout.Milliseconds(),
+		uptimeMs,
+		runtimeStatus,
+	)
+
+	if listenAddr == "" {
+		status := fmt.Sprintf(
+			"localProxyAlive=false listenAddr= proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d %s",
+			proxyAddr,
 			state,
 			gen,
 			closed,
 			serveErr,
-			time.Since(startedAt).Milliseconds(),
+			uptimeMs,
+			runtimeStatus,
 		)
+		log.Infof("outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
+		return false, status
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", listenAddr)
 	if err != nil {
-		return false, fmt.Sprintf(
-			"localProxyAlive=false proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q probeErr=%q uptimeMs=%d",
-			addr,
+		status := fmt.Sprintf(
+			"localProxyAlive=false listenAddr=%s proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q probeErr=%q uptimeMs=%d %s",
+			listenAddr,
+			proxyAddr,
 			state,
 			gen,
 			closed,
 			serveErr,
 			err.Error(),
-			time.Since(startedAt).Milliseconds(),
+			uptimeMs,
+			runtimeStatus,
 		)
+		log.Infof("outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
+		return false, status
 	}
-	_ = conn.Close()
+	if err := conn.Close(); err != nil {
+		status := fmt.Sprintf(
+			"localProxyAlive=true listenAddr=%s proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q probeCloseErr=%q uptimeMs=%d %s",
+			listenAddr,
+			proxyAddr,
+			state,
+			gen,
+			closed,
+			serveErr,
+			err.Error(),
+			uptimeMs,
+			runtimeStatus,
+		)
+		log.Infof("outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
+		return true, status
+	}
 
-	return true, fmt.Sprintf(
-		"localProxyAlive=true proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d",
-		addr,
+	status = fmt.Sprintf(
+		"localProxyAlive=true listenAddr=%s proxyAddr=%s serveState=%s serveGen=%d closed=%v serveErr=%q uptimeMs=%d %s",
+		listenAddr,
+		proxyAddr,
 		state,
 		gen,
 		closed,
 		serveErr,
-		time.Since(startedAt).Milliseconds(),
+		uptimeMs,
+		runtimeStatus,
 	)
+	log.Infof("outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
+	return true, status
+}
+
+func (d *OutlineDevice) runtimeStatus() string {
+	return fmt.Sprintf(
+		"transport(websocket=%v tcpPath=%v udpPath=%v preferTCPDNS=%v disableNonDNSUDP=%v udpPolicy=%s) dialStats(tcpAttempt=%d tcpOK=%d tcpErr=%d udpAttempt=%d udpOK=%d udpErr=%d udpDNSTruncated=%d udpNonDNSRejected=%d unsupported=%d)",
+		d.websocket,
+		d.hasTCPPath,
+		d.hasUDPPath,
+		d.preferTCPDNS,
+		d.disableNonDNSUDP,
+		udpPolicyForLog(d.disableNonDNSUDP),
+		d.tcpDialAttempt.Load(),
+		d.tcpDialOK.Load(),
+		d.tcpDialErr.Load(),
+		d.udpDialAttempt.Load(),
+		d.udpDialOK.Load(),
+		d.udpDialErr.Load(),
+		d.udpDNSTruncated.Load(),
+		d.udpNonDNSReject.Load(),
+		d.unsupportedDial.Load(),
+	)
+}
+
+func listenAddressFromProxyAddr(proxyAddr string) string {
+	if proxyAddr == "" {
+		return ""
+	}
+	if at := strings.LastIndex(proxyAddr, "@"); at >= 0 && at+1 < len(proxyAddr) {
+		return proxyAddr[at+1:]
+	}
+	return proxyAddr
+}
+
+func outlineUptimeMilliseconds(startedAt time.Time) int64 {
+	if startedAt.IsZero() {
+		return 0
+	}
+	return time.Since(startedAt).Milliseconds()
+}
+
+func udpPolicyForLog(disabled bool) string {
+	if disabled {
+		return "non_dns_udp_disabled_by_config"
+	}
+	return "non_dns_udp_enabled"
 }
 
 func (d *OutlineDevice) Status(timeout time.Duration) string {
@@ -538,11 +696,12 @@ func (d *OutlineDevice) Close() error {
 	d.closed.Store(true)
 	d.mu.RLock()
 	listener := d.listener
-	addr := d.proxyAddr
+	listenAddr := d.listenAddr
+	proxyAddr := d.proxyAddr
 	d.mu.RUnlock()
 
 	if listener != nil {
-		log.Debugf(Category, "SOCKS5 close requested on %s", addr)
+		log.Infof("SOCKS5 close requested listenAddr=%s proxyAddr=%s", listenAddr, proxyAddr)
 		return listener.Close()
 	}
 	return nil

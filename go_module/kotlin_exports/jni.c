@@ -29,10 +29,10 @@ extern void InitLogger(GoString path);
 extern void InitTelemetry(GoString endpoint);
 extern char* NetCheck(GoString configPath);
 extern void CancelNetCheck();
-extern char* GetLastError(void);
-extern void NewOutlineClient(GoString config, GoInt32 fd);
-extern GoInt32 OutlineConnect(void);
-extern void OutlineDisconnect(void);
+extern char* GetVpnLastError(void);
+extern void NewVpnClient(GoString config, GoString protocol, GoInt32 fd);
+extern GoInt32 VpnConnect(void);
+extern void VpnDisconnect(void);
 
 #define EXPORT __attribute__((visibility("default")))
 
@@ -238,7 +238,7 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_NetCheckBackend_cancelNetCheck(JNI
 JNIEXPORT jstring JNICALL Java_com_dobby_backend_OutlineBackend_getLastError(JNIEnv *env, jclass c)
 {
 	jstring ret;
-    char *result = GetLastError();
+    char *result = GetVpnLastError();
 	if (!result)
 		return NULL;
 	ret = (*env)->NewStringUTF(env, result);
@@ -246,23 +246,29 @@ JNIEXPORT jstring JNICALL Java_com_dobby_backend_OutlineBackend_getLastError(JNI
 	return ret;
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_OutlineBackend_newOutlineClient(JNIEnv *env, jclass c, jstring jConfig, jint jFd)
+JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_newVpnClient(JNIEnv *env, jclass c, jstring jConfig, jstring jProtocol, jint jFd)
 {
     const char *config_str = (*env)->GetStringUTFChars(env, jConfig, 0);
-	size_t config_len = (*env)->GetStringUTFLength(env, jConfig);
-    NewOutlineClient((GoString) {
-		.p = config_str,
-		.n = config_len
-	}, jFd);
+    const char *protocol_str = (*env)->GetStringUTFChars(env, jProtocol, 0);
+
+    size_t config_len = (*env)->GetStringUTFLength(env, jConfig);
+    const GoString go_config = (GoString) {	.p = config_str, .n = config_len };
+
+    size_t protocol_len = (*env)->GetStringUTFLength(env, jProtocol);
+    const GoString go_protocol = (GoString) { .p = protocol_str, .n = protocol_len };
+
+    NewVpnClient(go_config, go_protocol, jFd);
+
     (*env)->ReleaseStringUTFChars(env, jConfig, config_str);
+    (*env)->ReleaseStringUTFChars(env, jProtocol, protocol_str);
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_backend_OutlineBackend_outlineConnect(JNIEnv *env, jclass c)
+JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_vpnConnect(JNIEnv *env, jclass c)
 {
-    return OutlineConnect();
+    return VpnConnect();
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_OutlineBackend_outlineDisconnect(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_vpnDisconnect(JNIEnv *env, jclass c)
 {
-    OutlineDisconnect();
+    VpnDisconnect();
 }

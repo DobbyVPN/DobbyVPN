@@ -10,6 +10,7 @@ import interop.cloak.CloakLibrary
 import interop.georouting.GeoroutingLibrary
 import interop.logger.LoggerLibrary
 import interop.outline.OutlineLibrary
+import interop.xray.XrayLibrary
 import kotlinx.coroutines.runBlocking
 import java.util.*
 
@@ -71,6 +72,7 @@ class DobbyVpnService(
     private val logger: Logger,
     private val awgLibrary: AwgLibrary,
     private val outlineLibrary: OutlineLibrary,
+    private val xrayLibrary: XrayLibrary,
     private val cloakLibrary: CloakLibrary,
     private val loggerLibrary: LoggerLibrary,
     private val georoutingLibrary: GeoroutingLibrary
@@ -105,6 +107,7 @@ class DobbyVpnService(
             val started = when (runningInterface) {
                 VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
                 VpnInterface.AMNEZIA_WG -> startAwg()
+                VpnInterface.XRAY -> startXray()
                 VpnInterface.NONE -> startNone()
             }
 
@@ -120,6 +123,7 @@ class DobbyVpnService(
 
     private fun stopCurrentLocked() {
         stopCloakOutline()
+        stopXray()
         stopAwg()
         stopNone()
         georoutingLibrary.ClearGeoRoutingConf()
@@ -129,7 +133,7 @@ class DobbyVpnService(
     private fun startCloakOutline(): Boolean {
         logger.log("Start startCloakOutline")
         val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
-        val serverPort = dobbyConfigsRepository.getServerPortOutline()
+        val serverPort = dobbyConfigsRepository.getServerPort()
         val prefix = dobbyConfigsRepository.getPrefixOutline()
         val websocketEnabled = dobbyConfigsRepository.getIsWebsocketEnabled()
         val tcpPath = dobbyConfigsRepository.getTcpPathOutline()
@@ -201,6 +205,31 @@ class DobbyVpnService(
     private fun stopAwg() {
         logger.log("stopAwg")
         awgLibrary.StopAwg()
+    }
+
+    private fun startXray() {
+        val config = dobbyConfigsRepository.getXrayConfig()
+        logger.log("startXray with config length: ${config.length}")
+        if (config.isEmpty()) {
+            logger.log("Xray config is empty, cannot start")
+            return
+        }
+        runBlocking {
+            val result = xrayLibrary.StartXray(config)
+            if (result == 0) {
+                logger.log("Xray connection established successfully")
+                connectionState.updateVpnStarted(isStarted = true)
+            } else {
+                logger.log("Xray connection FAILED: ${xrayLibrary.GetXrayLastError()}")
+                connectionState.updateVpnStarted(isStarted = false)
+            }
+        }
+    }
+
+    private fun stopXray() {
+        logger.log("stopXray")
+        xrayLibrary.StopXray()
+        runBlocking { connectionState.updateVpnStarted(isStarted = false) }
     }
 
     private fun stopNone() {

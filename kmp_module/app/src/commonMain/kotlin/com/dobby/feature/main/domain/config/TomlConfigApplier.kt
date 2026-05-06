@@ -10,12 +10,14 @@ class TomlConfigApplier(
     private val outlineRepo: DobbyConfigsRepositoryOutline,
     private val cloakRepo: DobbyConfigsRepositoryCloak,
     private val awgRepo: DobbyConfigsRepositoryAwg,
+    private val xrayRepo: DobbyConfigsRepositoryXray,
     private val mainRepo: DobbyConfigsRepository,
     private val logger: Logger,
 ) {
     private val outlineApplier = OutlineTomlApplier(vpnRepo, outlineRepo, cloakRepo, logger)
     private val cloakApplier = CloakTomlApplier(cloakRepo, logger)
     private val awgApplier = AmneziaWGTomlApplier(vpnRepo, awgRepo, logger)
+    private val xrayApplier = XrayTomlApplier(xrayRepo, logger)
 
     fun apply(connectionConfig: String): Boolean {
         logger.log("Start parseToml()")
@@ -25,19 +27,33 @@ class TomlConfigApplier(
             return false
         }
 
-        val root = Toml.decodeFromString<TomlConfigs>(connectionConfig)
-
-        if (root.Telemetry != null) {
-            mainRepo.setTelemetryEndpoint(root.Telemetry)
+        val root = try {
+            Toml.decodeFromString<TomlConfigs>(connectionConfig)
+        } catch (e: Exception) {
+            logger.log("Failed to parse TOML: ${e.message}")
+            return false
         }
 
-        if (root.AmneziaWG != null) {
-            return applyAmenziaWG(root.AmneziaWG)
-        } else if (root.Outline != null) {
-            return applyOutline(root.Outline, root)
-        } else {
-            return applyNone()
+        // 1. Check for Xray Config
+        val xray = root.Xray
+        if (xray != null) {
+            return applyXray(xray)
         }
+
+        // 2. Check for Outline Config
+        val outline = root.Outline
+        if (outline != null) {
+            return applyOutline(outline, root)
+        }
+
+        // 3. Check for AWG Config
+        val awg = root.AmneziaWG
+        if (awg != null) {
+            return applyAmenziaWG(awg)
+        }
+
+        logger.log("Unsupported config")
+        return false
     }
 
     private fun applyNone(): Boolean {
@@ -46,6 +62,14 @@ class TomlConfigApplier(
         logger.log("Finish parseToml()")
 
         return false
+    }
+
+    private fun applyXray(config: XrayClientConfig): Boolean {
+        logger.log("Xray config detected")
+        xrayApplier.apply(config)
+        logger.log("Finish parseToml()")
+
+        return true
     }
 
     private fun applyOutline(
@@ -84,11 +108,5 @@ class TomlConfigApplier(
         logger.log("Finish parseToml()")
 
         return true
-    }
-
-    private fun disableOutlineAndCloak() {
-        outlineRepo.clearOutlineConfig()
-        cloakRepo.clearCloakConfig()
-        mainRepo.setGeoRoutingConf("")
     }
 }

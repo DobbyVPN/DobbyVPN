@@ -158,6 +158,12 @@ func (logger *Logger) dumpBuffer() {
 	}
 }
 
+func IsInitialized() bool {
+	initMu.Lock()
+	defer initMu.Unlock()
+	return lg.logger != nil
+}
+
 func SetPath(path string) error {
 	initMu.Lock()
 	defer initMu.Unlock()
@@ -168,6 +174,10 @@ func SetPath(path string) error {
 
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644) //nolint:gosec // G302: logs should be readable
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Cannot open log file %s: %v\n", path, err)
+		fmt.Fprintf(os.Stderr, "Falling back to stderr logging\n")
+		lg.dumpBuffer()
+		logrus.AddHook(&logrusToSlogHook{})
 		return fmt.Errorf("cannot open log file: %w", err)
 	}
 
@@ -332,6 +342,21 @@ func Errorf(category, format string, args ...any) {
 	if lg.tlogger != nil {
 		otelLogger.ErrorContext(lg.tlogger.ctx, categoryMessage)
 	}
+}
+
+func Warnf(format string, args ...any) {
+	if lg.logger == nil {
+		lg.bufInfof(format, args...)
+	} else {
+		lg.logger.Warn(fmt.Sprintf(format, args...))
+	}
+}
+
+func Errorf(format string, args ...any) {
+	if lg.logger == nil {
+		return
+	}
+	lg.logger.Error(fmt.Sprintf(format, args...))
 }
 
 type simpleHandler struct {

@@ -69,16 +69,16 @@ class DobbyConfigsRepositoryImpl(
         prefs.put("cloakLocalPort", port.toString())
     }
 
-    override fun setServerPortOutline(newConfig: String) {
-        prefs.put("ServerPortOutlineKey", newConfig)
+    override fun setServerPort(newConfig: String) {
+        prefs.put("ServerPortKey", newConfig)
     }
 
     override fun setMethodPasswordOutline(newConfig: String) {
         prefs.put("MethodPasswordOutlineKey", newConfig)
     }
 
-    override fun getServerPortOutline(): String {
-        return prefs.get("ServerPortOutlineKey", "")
+    override fun getServerPort(): String {
+        return prefs.get("ServerPortKey", "")
     }
 
     override fun getMethodPasswordOutline(): String {
@@ -147,6 +147,27 @@ class DobbyConfigsRepositoryImpl(
 
     override fun setIsAmneziaWGEnabled(isAmneziaWGEnabled: Boolean) {
         prefs.put("isAmneziaWGEnabled", isAmneziaWGEnabled.toString())
+    }
+
+    override fun getXrayConfig(): String {
+        return prefs.get("xrayConfig", "")
+    }
+
+    override fun setXrayConfig(newConfig: String) {
+        prefs.put("xrayConfig", newConfig)
+    }
+
+    override fun getIsXrayEnabled(): Boolean {
+        return prefs.get("isXrayEnabled", "false").equals("true")
+    }
+
+    override fun setIsXrayEnabled(isXrayEnabled: Boolean) {
+        if (isXrayEnabled) {
+            setVpnInterface(VpnInterface.XRAY) // TODO (find other place for this command?)
+        } else {
+            setVpnInterface(VpnInterface.DEFAULT_VALUE)
+        }
+        prefs.put("isXrayEnabled", isXrayEnabled.toString())
     }
 
     override fun couldStart(): Boolean {

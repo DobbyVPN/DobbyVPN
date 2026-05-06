@@ -24,6 +24,7 @@ public class VpnManagerImpl: VpnManager {
         logs.writeLog(log: "Start go logger init path = \(path)")
         Cloak_outlineInitLogger(path)
         logs.writeLog(log: "Finish go logger init")
+        logs.writeLog(log: "[Native] Go build info: \(Cloak_outlineNativeBuildInfo())")
 
 //        VpnManagerImpl.startSentry()
         self.connectionRepository = connectionRepository
@@ -186,19 +187,26 @@ public class VpnManagerImpl: VpnManager {
         proto.providerBundleIdentifier = Self.dobbyBundleIdentifier
         proto.serverAddress = currentServerAddress()
         proto.providerConfiguration = [:]
-        proto.includeAllNetworks = true
+        applyRoutingDefaults(proto: proto)
+        newVpnManager.protocolConfiguration = proto
+        newVpnManager.isEnabled = true
+        return newVpnManager
+    }
+
+    private func applyRoutingDefaults(proto: NETunnelProviderProtocol) {
+        // iOS 26: includeAllNetworks can scope protected upstream sockets back
+        // into the packet tunnel. Use explicit included/excluded routes from
+        // NEPacketTunnelNetworkSettings and enforce them instead.
+        proto.includeAllNetworks = false
         proto.excludeLocalNetworks = true
         if #available(iOS 16.4, *) {
             proto.excludeCellularServices = false
             proto.excludeAPNs = false
         }
-        proto.enforceRoutes = false
+        proto.enforceRoutes = true
         if #available(iOS 17.4, *) {
             proto.excludeDeviceCommunication = false
         }
-        newVpnManager.protocolConfiguration = proto
-        newVpnManager.isEnabled = true
-        return newVpnManager
     }
 
     private func applyProtocolDefaults(manager: NETunnelProviderManager) {
@@ -208,21 +216,17 @@ public class VpnManagerImpl: VpnManager {
         }
         proto.providerBundleIdentifier = Self.dobbyBundleIdentifier
         proto.serverAddress = currentServerAddress()
-        proto.includeAllNetworks = true
-        proto.excludeLocalNetworks = true
-        if #available(iOS 16.4, *) {
-            proto.excludeCellularServices = false
-            proto.excludeAPNs = false
-        }
-        proto.enforceRoutes = false
-        if #available(iOS 17.4, *) {
-            proto.excludeDeviceCommunication = false
-        }
+        applyRoutingDefaults(proto: proto)
         manager.protocolConfiguration = proto
+        logs.writeLog(
+            log: "applyProtocolDefaults: routing includeAllNetworks=\(proto.includeAllNetworks) " +
+                "enforceRoutes=\(proto.enforceRoutes) excludeLocalNetworks=\(proto.excludeLocalNetworks) " +
+                "serverAddress=\(proto.serverAddress ?? "nil")"
+        )
     }
 
     private func currentServerAddress() -> String {
-        let outlineServer = configsRepository.getServerPortOutline().trimmingCharacters(in: .whitespacesAndNewlines)
+        let outlineServer = configsRepository.getServerPort().trimmingCharacters(in: .whitespacesAndNewlines)
         if !outlineServer.isEmpty {
             return outlineServer
         }

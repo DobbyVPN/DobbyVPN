@@ -14,9 +14,11 @@
 
 package internal
 
+import "go_module/core/pkg"
+
 type App struct {
-	TransportConfig *string
-	RoutingConfig   *RoutingConfig
+	ProtocolDevice pkg.ProtocolDevice
+	RoutingConfig  *RoutingConfig
 }
 
 type RoutingConfig struct {

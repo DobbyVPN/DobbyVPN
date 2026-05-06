@@ -3,7 +3,7 @@ package com.dobby.feature.main.domain
 fun DobbyConfigsRepositoryOutline.clearOutlineConfig() {
     setIsOutlineEnabled(false)
     setMethodPasswordOutline("")
-    setServerPortOutline("")
+    setServerPort("")
     setPrefixOutline("")
     setIsWebsocketEnabled(false)
     setTcpPathOutline("")
@@ -21,10 +21,16 @@ fun DobbyConfigsRepositoryAwg.clearAwgConfig() {
     setAwgTomlConfig("")
 }
 
+fun DobbyConfigsRepositoryXray.clearXrayConfig() {
+    setIsXrayEnabled(false)
+    setXrayConfig("")
+}
+
+
 fun DobbyConfigsRepository.clearVpnConfig() {
     setVpnInterface(VpnInterface.NONE)
-
     clearOutlineConfig()
     clearCloakConfig()
+    clearXrayConfig()
     clearAwgConfig()
 }

@@ -6,21 +6,22 @@ import com.dobby.feature.diagnostic.domain.HealthCheck
 import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.maskStr
-import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
-import com.dobby.feature.main.domain.clearVpnConfig
 import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.main.ui.MainUiState
+import com.dobby.feature.main.domain.VpnManager
+import com.dobby.feature.main.domain.clearVpnConfig
 import com.dobby.feature.main.domain.config.TomlConfigApplier
+import com.dobby.feature.main.ui.MainUiState
+import com.dobby.vpn.BuildConfig
+import io.ktor.client.HttpClient
+import io.ktor.client.request.get
+import io.ktor.client.request.headers
+import io.ktor.client.statement.bodyAsText
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import io.ktor.client.*
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
-import com.dobby.vpn.BuildConfig
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlin.concurrent.Volatile
 import kotlin.time.Duration.Companion.milliseconds
@@ -40,6 +41,7 @@ class MainViewModel(
     private var connectionDetectorAtomic: Boolean = true
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
+    //endregion
 
     private val tomlConfigApplier = TomlConfigApplier(
         vpnRepo = configsRepository,
@@ -47,6 +49,7 @@ class MainViewModel(
         cloakRepo = configsRepository,
         mainRepo = configsRepository,
         awgRepo = configsRepository,
+        xrayRepo = configsRepository,
         logger = logger
     )
 

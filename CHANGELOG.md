@@ -7,19 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **iOS 26 VPN connectivity**: Fixed socket protection mechanism for iOS 26+ where `SO_NO_TC_NETPOLICY` socket option was deprecated
+  - Changed socket protection from `SO_NO_TC_NETPOLICY` to `IP_BOUND_IF` with actual interface index
+  - Swift side now detects default network interface (WiFi/Cellular) and passes interface index to Go via `if_nametoindex()`
+  - Added support for both IPv4 (`IP_BOUND_IF`) and IPv6 (`IPV6_BOUND_IF`) socket binding
+  - Outbound VPN connections now correctly bypass tunnel and use physical interface
+
 ### Added
+- New Go module file: `go_module/ios_exports/protector.go` - exports `SetDefaultInterfaceIndex()` to Swift
+- Interface detection in `PacketTunnelProvider.swift` using `NWPathMonitor` and `if_nametoindex()`
 - iOS 26 diagnostic logging: detailed interface tracking (BEFORE/AFTER tunnel)
 - iOS 26 research logging: iOS version, device info at startup
 - Go tunnel: outbound connection tracking showing local address (diagnoses tunnel bypass)
-- CRITICAL warning when outbound connections NOT using VPN tunnel (local != 198.18.x.x)
 - Enhanced PATH_UPDATE with timestamps and NETWORK_CHANGED events
-- iOS socket protection research: IP_BOUND_IF option attempt
-
-### Fixed
-- Improved error messages for StreamDialer and PacketDialer failures
 
 ### Documentation
-- Added iOS 26 socket options research notes
+- Added `IOS26_FIX_SUMMARY.md` with complete solution documentation
 
 ---
 

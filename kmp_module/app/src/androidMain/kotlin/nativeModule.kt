@@ -15,11 +15,16 @@ import com.dobby.feature.netcheck.domain.NetCheckRepository
 import com.dobby.feature.vpn_service.CloakLibFacade
 import com.dobby.feature.vpn_service.OutlineLibFacade
 import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
+import com.dobby.feature.vpn_service.XrayLibFacade
+import com.dobby.feature.vpn_service.domain.xray.XrayLibFacadeImpl
+
 import com.dobby.feature.vpn_service.domain.cloak.CloakConnectionInteractor
 import com.dobby.feature.vpn_service.domain.cloak.CloakLibFacadeImpl
+import com.dobby.feature.vpn_service.domain.descriptor.FDManager
 import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
 import com.dobby.feature.vpn_service.domain.outline.OutlineLibFacadeImpl
+import com.dobby.feature.vpn_service.domain.xray.XrayInteractor
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
@@ -45,8 +50,12 @@ val androidVpnModule = module {
     single { Logger(get()) }
     factory<CloakLibFacade> { CloakLibFacadeImpl() }
     factory<OutlineLibFacade> { OutlineLibFacadeImpl() }
+    factory<XrayLibFacade> { XrayLibFacadeImpl() }
     single<CloakConnectionInteractor> { CloakConnectionInteractor(get(), get(), get()) }
-    single<OutlineInteractor> { OutlineInteractor(get(), get(), get()) }
+    single<OutlineInteractor> { OutlineInteractor(get(), get(), get(), get()) }
     single<AmneziaWGInteractor> { AmneziaWGInteractor(get(), get()) }
+    single<OutlineInteractor> { OutlineInteractor(get(), get(), get(), get()) }
+    single<XrayInteractor> { XrayInteractor(get(), get(), get(), get()) }
     single<GeoRouting> { GeoRouting( get() ) }
+    single<FDManager> { FDManager( get() ) }
 }

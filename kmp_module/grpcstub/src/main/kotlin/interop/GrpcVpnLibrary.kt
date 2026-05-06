@@ -7,6 +7,7 @@ import interop.healthcheck.HealthCheckGrpcLibrary
 import interop.logger.LoggerGrpcLibrary
 import interop.netcheck.NetCheckGrpcLibrary
 import interop.outline.OutlineGrpcLibrary
+import interop.xray.XrayGrpcLibrary
 import io.grpc.ManagedChannelBuilder
 import java.io.Closeable
 import java.util.concurrent.TimeUnit
@@ -22,6 +23,7 @@ object GrpcVpnLibrary: Closeable {
 
     val awgGrpcLibrary = AwgGrpcLibrary(channel)
     val outlineGrpcLibrary = OutlineGrpcLibrary(channel)
+    val xrayGrpcLibrary = XrayGrpcLibrary(channel)
     val cloakGrpcLibrary = CloakGrpcLibrary(channel)
     val healthCheckGrpcLibrary = HealthCheckGrpcLibrary(channel)
     val loggerGrpcLibrary = LoggerGrpcLibrary(channel)

@@ -18,7 +18,8 @@ func init() {
 	logrus.StandardLogger().ExitFunc = func(int) {}
 
 	protected_dialer.MakeSocketProtected = func(fd uintptr) bool {
-		return C.go_protect_socket(C.int(fd)) == 1
+		res := C.go_protect_socket(C.int(fd))
+		return res == 1
 	}
 }
 
@@ -26,50 +27,50 @@ var awgClient *awg.AwgClient
 
 //export AwgTurnOn
 func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
-	log.Debugf(Category, "Create awg client")
+	log.Infof("Create awg client")
 
 	if awgClient != nil {
-		log.Debugf(Category, "Disconnecting previous client")
+		log.Infof("Disconnecting previous client")
 		err := awgClient.Disconnect()
 		if err != nil {
-			log.Debugf(Category, "[WARNING] Failed to disconnect previous client")
+			log.Infof("[WARNING] Failed to disconnect previous client")
 		}
 	}
 
-	log.Debugf(Category, "Config length=%d", len(settings))
+	log.Infof("Config length=%d", len(settings))
 
 	client, err := awg.NewAwgClient(strings.Clone(interfaceName), strings.Clone(settings), int(tunFd))
 	if err != nil {
-		log.Debugf(Category, "Failed to create awg client: %v", err)
+		log.Infof("Failed to create awg client: %v", err)
 		return -1
 	}
 
 	awgClient = client
 
-	log.Debugf(Category, "Created awg client")
+	log.Infof("Created awg client")
 
-	log.Debugf(Category, "Connecting awg client")
+	log.Infof("Connecting awg client")
 	err = awgClient.Connect()
 	if err != nil {
-		log.Debugf(Category, "Failed to connect awg client: %v", err)
+		log.Infof("Failed to connect awg client: %v", err)
 		return -1
 	}
 
-	log.Debugf(Category, "Connected awg client")
+	log.Infof("Connected awg client")
 	return 0
 }
 
 //export AwgTurnOff
 func AwgTurnOff() {
 	if awgClient == nil {
-		log.Debugf(Category, "Awg client is null")
+		log.Infof("Awg client is null")
 		return
 	}
 
-	log.Debugf(Category, "Disconnecting awg client")
+	log.Infof("Disconnecting awg client")
 	err := awgClient.Disconnect()
 	if err != nil {
-		log.Debugf(Category, "Failed to disconnect awg client: %v", err)
+		log.Infof("Failed to disconnect awg client: %v", err)
 	}
 	awgClient = nil
 }
@@ -77,7 +78,7 @@ func AwgTurnOff() {
 //export AwgGetSocketV4
 func AwgGetSocketV4() int32 {
 	if awgClient == nil {
-		log.Debugf(Category, "Awg client is null")
+		log.Infof("Awg client is null")
 		return -1
 	}
 
@@ -87,7 +88,7 @@ func AwgGetSocketV4() int32 {
 //export AwgGetSocketV6
 func AwgGetSocketV6() int32 {
 	if awgClient == nil {
-		log.Debugf(Category, "Awg client is null")
+		log.Infof("Awg client is null")
 		return -1
 	}
 

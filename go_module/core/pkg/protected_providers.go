@@ -1,12 +1,13 @@
-package internal
+package pkg
 
 import (
 	"context"
 	"fmt"
 	"net"
 
-	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"go_module/tunnel/protected_dialer"
+
+	"github.com/Jigsaw-Code/outline-sdk/transport"
 )
 
 type ProtectedStreamDialer struct{}
@@ -35,6 +36,5 @@ func NewProtectedPacketDialer(destination string) *ProtectedPacketDialer {
 }
 
 func (d *ProtectedPacketDialer) DialPacket(ctx context.Context, address string) (net.Conn, error) {
-	dialer := protected_dialer.NewProtectedDialer(address)
-	return dialer.DialContext(ctx, "udp", address)
+	return protected_dialer.DialPacketWithProtect(ctx, "udp", address)
 }

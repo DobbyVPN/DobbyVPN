@@ -25,6 +25,7 @@ import interop.healthcheck.HealthCheckLibrary
 import interop.logger.LoggerLibrary
 import interop.netcheck.NetCheckLibrary
 import interop.outline.OutlineLibrary
+import interop.xray.XrayLibrary
 import org.koin.dsl.module
 
 val jvmMainModule = makeNativeModule(
@@ -53,6 +54,7 @@ val jvmMainModule = makeNativeModule(
 val jvmVpnModule = module {
     single<AwgLibrary> { RestartableAwgGrpcLibrary(get()) }
     single<OutlineLibrary> { RestartableOutlineGrpcLibrary(get()) }
+    single<XrayLibrary> { RestartableXrayGrpcLibrary(get()) }
     single<CloakLibrary> { RestartableCloakGrpcLibrary(get()) }
     single<HealthCheckLibrary> { RestartableHealthCheckGrpcLibrary(get()) }
     single<LoggerLibrary> { RestartableLoggerGrpcLibrary(get()) }
@@ -64,6 +66,7 @@ val jvmVpnModule = module {
             logger = get(),
             awgLibrary = get(),
             outlineLibrary = get(),
+            xrayLibrary = get(),
             cloakLibrary = get(),
             loggerLibrary = get(),
             georoutingLibrary = get()

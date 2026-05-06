@@ -4,6 +4,7 @@ interface DobbyConfigsRepository :
     DobbyConfigsRepositoryOutline,
     DobbyConfigsRepositoryCloak,
     DobbyConfigsRepositoryAwg,
+    DobbyConfigsRepositoryXray,
     DobbyConfigsRepositoryVpn,
     DobbyConfigsRepositoryNetCheck {
 
@@ -33,6 +34,7 @@ interface DobbyConfigsRepository :
 enum class VpnInterface {
     CLOAK_OUTLINE,
     AMNEZIA_WG,
+    XRAY,
     NONE;
 
     companion object {

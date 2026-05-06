@@ -9,6 +9,9 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.system.Os
 import com.dobby.backend.GoBackendWrapper
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.initLogger
 import com.dobby.feature.logging.domain.initTelemetry
@@ -20,11 +23,14 @@ import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
 import com.dobby.feature.vpn_service.domain.cloak.CloakConnectionInteractor
 import com.dobby.feature.vpn_service.domain.cloak.DisconnectResult
 import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
+import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.koin.android.ext.android.inject
+import com.dobby.backend.GoBackendWrapper
+import com.dobby.feature.vpn_service.domain.xray.XrayInteractor
 import java.io.File
 import java.io.FileInputStream
 import java.util.*
@@ -48,6 +54,7 @@ class DobbyVpnService : VpnService() {
     private val cloakConnectInteractor: CloakConnectionInteractor by inject()
     private val outlineInteractor: OutlineInteractor by inject()
     private val awgInteractor: AmneziaWGInteractor by inject()
+    private val xrayInteractor: XrayInteractor by inject()
     private val dobbyConfigsRepository: DobbyConfigsRepository by inject()
     private val connectionState: ConnectionStateRepository by inject()
 
@@ -131,7 +138,8 @@ class DobbyVpnService : VpnService() {
                 geoRouting.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
                 when (dobbyConfigsRepository.getVpnInterface()) {
                     VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
-                    VpnInterface.AMNEZIA_WG -> startAwg()
+                    VpnInterface.AMNEZIA_WG -> startAwg(intent)
+                    VpnInterface.XRAY -> startXray(intent)
                     VpnInterface.NONE -> startNone()
                 }
             }
@@ -209,6 +217,16 @@ class DobbyVpnService : VpnService() {
         }
     }
 
+    private fun startXray(intent: Intent?) {
+        serviceScope.launch {
+            startStopMutex.withLock {
+                if (dobbyConfigsRepository.getIsXrayEnabled()) {
+                    xrayInteractor.startXray(intent, instance)
+                }
+            }
+        }
+    }
+
     private fun startNone() {
         connectionState.tryUpdateServiceStarted(false)
     }
@@ -218,16 +236,24 @@ class DobbyVpnService : VpnService() {
         val targetGoTunFd = goTunFd
         val fdBefore = runCatching { interfaceToClose?.fd }.getOrNull()
         logger.log("[svc:$serviceId] teardownVpn(): begin fd=$fdBefore")
-        runCatching {
-            awgInteractor.stopAwg()
-        }.onFailure { e ->
-            logger.log("[svc:$serviceId] onDestroy(): failed to disconnect AmneziaWG: ${e.message}")
+
+        if (dobbyConfigsRepository.getVpnInterface() == VpnInterface.NONE) {
+            logger.log("Vpn interface is NONE, skipping protocol teardown")
+        } else {
+            runCatching {
+                runBlocking {
+                    when (dobbyConfigsRepository.getVpnInterface()) {
+                        VpnInterface.CLOAK_OUTLINE -> outlineInteractor.stopOutline()
+                        VpnInterface.AMNEZIA_WG -> awgInteractor.stopAwg()
+                        VpnInterface.XRAY -> xrayInteractor.stopXray(instance)
+                        VpnInterface.NONE -> {}
+                    }
+                }
+            }.onFailure { e ->
+                logger.log("[svc:$serviceId] teardownVpn(): failed to disconnect protocol: ${e.message}")
+            }
         }
-        runCatching {
-            outlineInteractor.stopOutline()
-        }.onFailure { e ->
-            logger.log("[svc:$serviceId] onDestroy(): failed to disconnect Outline: ${e.message}")
-        }
+
         runCatching {
             runBlocking {
                 this@runCatching.runCatching {
@@ -238,8 +264,9 @@ class DobbyVpnService : VpnService() {
                 }
             }
         }.onFailure { e ->
-            logger.log("[svc:$serviceId] onDestroy(): failed to stop Cloak: ${e.message}")
+            logger.log("[svc:$serviceId] teardownVpn(): failed to stop Cloak: ${e.message}")
         }
+
         targetGoTunFd?.let { targetFd ->
             logger.log("[svc:$serviceId] teardownVpn(): safely terminating goTunFd=$targetFd")
             try {

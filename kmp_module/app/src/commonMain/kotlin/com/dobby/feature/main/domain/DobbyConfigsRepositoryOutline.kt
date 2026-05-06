@@ -1,11 +1,11 @@
 package com.dobby.feature.main.domain
 
 interface DobbyConfigsRepositoryOutline {
-    fun setServerPortOutline(newConfig: String)
+    fun setServerPort(newConfig: String)
 
     fun setMethodPasswordOutline(newConfig: String)
 
-    fun getServerPortOutline(): String
+    fun getServerPort(): String
 
     fun getMethodPasswordOutline(): String
 
