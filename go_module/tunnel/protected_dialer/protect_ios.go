@@ -31,9 +31,9 @@ func SetDefaultInterfaceForIOS(index int) {
 	defaultInterfaceMu.Unlock()
 
 	if oldIndex != index {
-		log.Infof("[iOS-Protect] Default interface index changed: %d -> %d interfaces=[%s]", oldIndex, index, describeInterfacesForLog())
+		log.Debugf(Category, "Default interface index changed: %d -> %d interfaces=[%s]", oldIndex, index, describeInterfacesForLog())
 	} else {
-		log.Infof("[iOS-Protect] Default interface index unchanged: %d", index)
+		log.Debugf(Category, "Default interface index unchanged: %d", index)
 	}
 }
 
@@ -46,7 +46,7 @@ func GetDefaultInterfaceForIOS() int {
 		return idx
 	}
 
-	log.Infof("[iOS-Protect] default interface index not set; scanning interfaces")
+	log.Debugf(Category, "default interface index not set; scanning interfaces")
 	idx = detectDefaultInterfaceIndex()
 	if idx > 0 {
 		SetDefaultInterfaceForIOS(idx)
@@ -77,16 +77,16 @@ func ProtectionDiagnosticsForIOS() string {
 func detectDefaultInterfaceIndex() int {
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		log.Infof("[iOS-Protect] interface scan failed: %v", err)
+		log.Debugf(Category, "interface scan failed: %v", err)
 		return 0
 	}
-	log.Infof("[iOS-Protect] interface scan candidates=[%s]", formatInterfacesForLog(interfaces))
+	log.Debugf(Category, "interface scan candidates=[%s]", formatInterfacesForLog(interfaces))
 
 	preferredNames := []string{"en0", "pdp_ip0"}
 	for _, name := range preferredNames {
 		for _, iface := range interfaces {
 			if iface.Name == name && iface.Flags&net.FlagUp != 0 {
-				log.Infof("[iOS-Protect] detected default interface fallback: %s index=%d", iface.Name, iface.Index)
+				log.Debugf(Category, "detected default interface fallback: %s index=%d", iface.Name, iface.Index)
 				return iface.Index
 			}
 		}
@@ -99,7 +99,7 @@ func detectDefaultInterfaceIndex() int {
 		if strings.HasPrefix(iface.Name, "utun") || strings.HasPrefix(iface.Name, "lo") {
 			continue
 		}
-		log.Infof("[iOS-Protect] detected default interface fallback: %s index=%d", iface.Name, iface.Index)
+		log.Debugf(Category, "detected default interface fallback: %s index=%d", iface.Name, iface.Index)
 		return iface.Index
 	}
 
@@ -144,9 +144,9 @@ func (i *iosProtector) Protect(fd uintptr, network string) error {
 	// On iOS 26+, this fails with "invalid argument" — expected and handled below.
 	legacyErr := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, SO_NO_TC_NETPOLICY, 1)
 	if legacyErr != nil {
-		log.Infof("[iOS-Protect] SO_NO_TC_NETPOLICY failed fd=%d network=%s err=%v", fd, network, legacyErr)
+		log.Debugf(Category, "SO_NO_TC_NETPOLICY failed fd=%d network=%s err=%v", fd, network, legacyErr)
 	} else {
-		log.Infof("[iOS-Protect] SO_NO_TC_NETPOLICY success fd=%d network=%s", fd, network)
+		log.Debugf(Category, "SO_NO_TC_NETPOLICY success fd=%d network=%s", fd, network)
 	}
 
 	// iOS 26+: Use IP_BOUND_IF with the actual interface index.
@@ -155,51 +155,51 @@ func (i *iosProtector) Protect(fd uintptr, network string) error {
 	ifaceIndex := GetDefaultInterfaceForIOS()
 
 	if ifaceIndex > 0 {
-		log.Infof("[iOS-Protect] Protect binding fd=%d network=%s ifaceIndex=%d ifaceName=%s", fd, network, ifaceIndex, interfaceNameByIndex(ifaceIndex))
+		log.Debugf(Category, "Protect binding fd=%d network=%s ifaceIndex=%d ifaceName=%s", fd, network, ifaceIndex, interfaceNameByIndex(ifaceIndex))
 		// Bind the socket to the default physical interface (WiFi/Cellular)
 		// This ensures encrypted VPN traffic goes outside the VPN tunnel.
 		switch network {
 		case "tcp4", "udp4":
 			if err := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, IP_BOUND_IF, ifaceIndex); err != nil {
-				log.Infof("[iOS-Protect] IP_BOUND_IF (IPv4) failed for fd=%d iface=%d: %v", fd, ifaceIndex, err)
+				log.Debugf(Category, "IP_BOUND_IF (IPv4) failed for fd=%d iface=%d: %v", fd, ifaceIndex, err)
 				if legacyErr != nil {
 					return err
 				}
 				return nil
 			}
-			log.Infof("[iOS-Protect] IP_BOUND_IF (IPv4) success: fd=%d bound to interface %d", fd, ifaceIndex)
+			log.Debugf(Category, "IP_BOUND_IF (IPv4) success: fd=%d bound to interface %d", fd, ifaceIndex)
 			if err := verifyBoundInterface(fd, syscall.IPPROTO_IP, IP_BOUND_IF, ifaceIndex, "IP_BOUND_IF", network); err != nil {
 				return err
 			}
 		case "tcp6", "udp6":
 			if err := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, IPV6_BOUND_IF, ifaceIndex); err != nil {
-				log.Infof("[iOS-Protect] IP_BOUND_IF (IPv6) failed for fd=%d iface=%d: %v", fd, ifaceIndex, err)
+				log.Debugf(Category, "IP_BOUND_IF (IPv6) failed for fd=%d iface=%d: %v", fd, ifaceIndex, err)
 				if legacyErr != nil {
 					return err
 				}
 				return nil
 			}
-			log.Infof("[iOS-Protect] IP_BOUND_IF (IPv6) success: fd=%d bound to interface %d", fd, ifaceIndex)
+			log.Debugf(Category, "IP_BOUND_IF (IPv6) success: fd=%d bound to interface %d", fd, ifaceIndex)
 			if err := verifyBoundInterface(fd, syscall.IPPROTO_IPV6, IPV6_BOUND_IF, ifaceIndex, "IPV6_BOUND_IF", network); err != nil {
 				return err
 			}
 		default:
 			// For unknown network types, try IPv4
 			if err := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, IP_BOUND_IF, ifaceIndex); err != nil {
-				log.Infof("[iOS-Protect] IP_BOUND_IF (fallback) failed for fd=%d iface=%d network=%s: %v", fd, ifaceIndex, network, err)
+				log.Debugf(Category, "IP_BOUND_IF (fallback) failed for fd=%d iface=%d network=%s: %v", fd, ifaceIndex, network, err)
 				if legacyErr != nil {
 					return err
 				}
 				return nil
 			}
-			log.Infof("[iOS-Protect] IP_BOUND_IF (fallback IPv4) success: fd=%d bound to interface %d network=%s", fd, ifaceIndex, network)
+			log.Debugf(Category, "IP_BOUND_IF (fallback IPv4) success: fd=%d bound to interface %d network=%s", fd, ifaceIndex, network)
 			if err := verifyBoundInterface(fd, syscall.IPPROTO_IP, IP_BOUND_IF, ifaceIndex, "IP_BOUND_IF fallback", network); err != nil {
 				return err
 			}
 		}
 	} else {
 		// No interface index set - log with full interface list to aid debugging
-		log.Infof("[iOS-Protect] WARNING: No default interface index set (ifaceIndex=%d) interfaces=[%s]. "+
+		log.Debugf(Category, "WARNING: No default interface index set (ifaceIndex=%d) interfaces=[%s]. "+
 			"VPN traffic may not bypass tunnel correctly on iOS 26+.", ifaceIndex, describeInterfacesForLog())
 		if legacyErr != nil {
 			return fmt.Errorf("no default interface index set and SO_NO_TC_NETPOLICY failed: %w", legacyErr)
@@ -212,19 +212,19 @@ func (i *iosProtector) Protect(fd uintptr, network string) error {
 func verifyBoundInterface(fd uintptr, level int, option int, expected int, label string, network string) error {
 	actual, err := syscall.GetsockoptInt(int(fd), level, option)
 	if err != nil {
-		log.Infof("[iOS-Protect] %s verify skipped fd=%d network=%s expectedIface=%d getErr=%v", label, fd, network, expected, err)
+		log.Debugf(Category, "%s verify skipped fd=%d network=%s expectedIface=%d getErr=%v", label, fd, network, expected, err)
 		return nil
 	}
 	if actual != expected {
 		err := fmt.Errorf("%s verification mismatch fd=%d network=%s expectedIface=%d actualIface=%d", label, fd, network, expected, actual)
-		log.Infof("[iOS-Protect] %v", err)
+		log.Debugf(Category, "%v", err)
 		return err
 	}
-	log.Infof("[iOS-Protect] %s verify OK fd=%d network=%s iface=%d", label, fd, network, actual)
+	log.Debugf(Category, "%s verify OK fd=%d network=%s iface=%d", label, fd, network, actual)
 	return nil
 }
 
 func init() {
 	protector = &iosProtector{}
-	log.Infof("[iOS-Protect] Initialized with iOS 26+ support (SO_NO_TC_NETPOLICY + IP_BOUND_IF with dynamic interface)")
+	log.Debugf(Category, "Initialized with iOS 26+ support (SO_NO_TC_NETPOLICY + IP_BOUND_IF with dynamic interface)")
 }

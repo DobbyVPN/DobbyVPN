@@ -34,5 +34,5 @@ func NativeBuildInfo() string {
 }
 
 func logNativeBuildInfo(context string) {
-	log.Infof("%s nativeBuildInfo=%s", context, NativeBuildInfo())
+	log.Debugf(Category, "%s nativeBuildInfo=%s", context, NativeBuildInfo())
 }

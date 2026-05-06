@@ -34,11 +34,11 @@ func IsBypass(metadata *M.Metadata) bool {
 
 	for _, route := range defaultBypassCIDRs {
 		if route.Contains(stdIP) {
-			log.Infof("[Router] BYPASS hit for IP: %s", stdIP)
+			log.Debugf(Category, "[Router] BYPASS hit for IP: %s", stdIP)
 			return true
 		}
 	}
-	log.Infof("[Router] PROXY route for IP: %s", stdIP)
+	log.Debugf(Category, "[Router] PROXY route for IP: %s", stdIP)
 	return false
 }
 
@@ -55,7 +55,7 @@ func SetGeoRoutingConf(cidrs string) {
 
 	defaultBypassCIDRs = resolvedRoutes
 
-	log.Infof("[Routing] Set defaultBypassCIDRs: %v", defaultBypassCIDRs)
+	log.Debugf(Category, "[Routing] Set defaultBypassCIDRs: %v", defaultBypassCIDRs)
 }
 
 func ClearGeoRoutingConf() {
@@ -63,23 +63,23 @@ func ClearGeoRoutingConf() {
 	defer routesMu.Unlock()
 
 	defaultBypassCIDRs = nil
-	log.Infof("[Routing] Cleared defaultBypassCIDRs")
+	log.Debugf(Category, "[Routing] Cleared defaultBypassCIDRs")
 }
 
 func bypassCIDRsForEntry(entry string) []*net.IPNet {
 	_, ipnet, err := net.ParseCIDR(entry)
 	if err == nil {
-		log.Infof("[Bypass] added %s", ipnet.String())
+		log.Debugf(Category, "[Bypass] added %s", ipnet.String())
 		return []*net.IPNet{ipnet}
 	}
 
 	cidrs := resolveHostToCIDRs(entry)
 	if len(cidrs) == 0 {
-		log.Infof("[Bypass] no IPs resolved for %s", entry)
+		log.Debugf(Category, "[Bypass] no IPs resolved for %s", entry)
 		return nil
 	}
 	for _, c := range cidrs {
-		log.Infof("[Bypass] added %s for host %s", c.String(), entry)
+		log.Debugf(Category, "[Bypass] added %s for host %s", c.String(), entry)
 	}
 	return cidrs
 }
@@ -92,10 +92,10 @@ func resolveHostToCIDRs(host string) []*net.IPNet {
 	defer cancel()
 	ips, err := resolver.LookupIPAddr(ctx, host)
 	if err != nil {
-		log.Infof("[Bypass] resolve failed for %s elapsedMs=%d err=%v", host, time.Since(start).Milliseconds(), err)
+		log.Debugf(Category, "[Bypass] resolve failed for %s elapsedMs=%d err=%v", host, time.Since(start).Milliseconds(), err)
 		return nil
 	}
-	log.Infof("[Bypass] resolve OK host=%s count=%d elapsedMs=%d", host, len(ips), time.Since(start).Milliseconds())
+	log.Debugf(Category, "[Bypass] resolve OK host=%s count=%d elapsedMs=%d", host, len(ips), time.Since(start).Milliseconds())
 
 	var result []*net.IPNet
 	for _, ip := range ips {

@@ -50,7 +50,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	netInterface, err := routing.GetNetworkInterfaceByIP(interfaceName)
 	if err != nil {
 		err = fmt.Errorf("failed to get network interface by IP %s: %w", interfaceName, err)
-		log.Infof("[Routing] %v", err)
+		log.Debugf(Category, "[Routing] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
@@ -61,17 +61,17 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		signalInit(initResult, err)
 		return err
 	}
-	log.Infof("[Routing] Server IP resolved: %s", serverIP.String())
+	log.Debugf(Category, "[Routing] Server IP resolved: %s", serverIP.String())
 
 	// protect route to VPN server
 	if serverIP.String() != "127.0.0.1" {
-		log.Infof("[Routing] Adding early route for server %s via %s", serverIP.String(), gatewayIP.String())
+		log.Debugf(Category, "[Routing] Adding early route for server %s via %s", serverIP.String(), gatewayIP.String())
 		common.Client.MarkInCriticalSection(coreCommon.Name)
 		routing.AddOrUpdateProxyRoute(serverIP.String(), gatewayIP.String(), netInterface.Name)
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		log.Infof("[Routing] Early server route added successfully")
+		log.Debugf(Category, "[Routing] Early server route added successfully")
 	} else {
-		log.Infof("[Routing] Skipping early route for localhost (Cloak mode)")
+		log.Debugf(Category, "[Routing] Skipping early route for localhost (Cloak mode)")
 	}
 
 	// SOCKS protocol device
@@ -83,9 +83,9 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	}
 	defer app.ProtocolDevice.Close()
 
-	log.Infof("[Windows] Starting tun2socks in wintun mode")
-	log.Infof("[Windows] Uplink interface: %s", netInterface.Name)
-	log.Infof("[Windows] Proxy addr: %s", app.ProtocolDevice.GetProxyAddr())
+	log.Debugf(Category, "[Windows] Starting tun2socks in wintun mode")
+	log.Debugf(Category, "[Windows] Uplink interface: %s", netInterface.Name)
+	log.Debugf(Category, "[Windows] Proxy addr: %s", app.ProtocolDevice.GetProxyAddr())
 
 	idx, err := protected_dialer.GetDefaultInterfaceIndex()
 	if err != nil {
@@ -101,7 +101,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		UplinkIface: netInterface.Name,
 	})
 	if err != nil {
-		log.Infof("Can't start tun2socks: %v", err)
+		log.Debugf(Category, "Can't start tun2socks: %v", err)
 		return err
 	}
 
@@ -124,32 +124,32 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		tunnel.StopEngine()
 		err = fmt.Errorf("failed to configure routing: %w", err)
-		log.Infof("[Routing] %v", err)
+		log.Debugf(Category, "[Routing] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
 	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
-	log.Infof("[Routing] Routing successfully configured")
+	log.Debugf(Category, "[Routing] Routing successfully configured")
 
 	// Signal successful initialization - connection is ready
 	signalInit(initResult, nil)
 
 	defer func() {
 		common.Client.MarkInCriticalSection(coreCommon.Name)
-		log.Infof("[Routing] Cleaning up routes for %s...", serverIP.String())
+		log.Debugf(Category, "[Routing] Cleaning up routes for %s...", serverIP.String())
 		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name, cfg.TunGateway)
-		log.Infof("[Routing] Routes cleaned up")
+		log.Debugf(Category, "[Routing] Routes cleaned up")
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
-		log.Infof("[Tunnel] Stopping tun2socks engine")
+		log.Debugf(Category, "[Tunnel] Stopping tun2socks engine")
 		tunnel.StopEngine()
 	}()
 
 	<-ctx.Done()
 
-	log.Infof("[Tunnel] Context cancelled, shutting down...")
-	log.Infof("Core/app: received interrupt signal, terminating...")
+	log.Debugf(Category, "[Tunnel] Context cancelled, shutting down...")
+	log.Debugf(Category, "Core/app: received interrupt signal, terminating...")
 
 	return nil
 }

@@ -37,17 +37,17 @@ func NewClient(device pkg.ProtocolDevice, tunFD int, mtu int) *CoreClient {
 		tunFD:  tunFD,
 		mtu:    mtu,
 	}
-	log.Infof("core mobile client created (tun2socks version) fd=%d mtu=%d", tunFD, mtu)
+	log.Debugf(Category, "core mobile client created (tun2socks version) fd=%d mtu=%d", tunFD, mtu)
 	common.Client.SetVpnClient(coreCommon.Name, c)
 	return c
 }
 
 func (c *CoreClient) Connect() error {
 	start := time.Now()
-	log.Infof("core client connect begin fd=%d mtu=%d", c.tunFD, c.mtu)
+	log.Debugf(Category, "core client connect begin fd=%d mtu=%d", c.tunFD, c.mtu)
 	defer func() {
 		if r := recover(); r != nil {
-			log.Infof("RECOVERED from fail in Connect: %v", r)
+			log.Debugf(Category, "RECOVERED from fail in Connect: %v", r)
 		}
 	}()
 
@@ -57,19 +57,19 @@ func (c *CoreClient) Connect() error {
 	}
 	err := unix.SetNonblock(fd, true)
 	if err != nil {
-		log.Infof("Set unix.SetNonblock error: %v", err)
+		log.Debugf(Category, "Set unix.SetNonblock error: %v", err)
 	} else {
-		log.Infof("[DEBUG][Core] tun fd set non-blocking fd=%d", fd)
+		log.Debugf(Category, "[DEBUG][Core] tun fd set non-blocking fd=%d", fd)
 	}
 
 	err = c.device.Open(0, "")
 	if err != nil {
-		log.Infof("failed to create protocol device: %v", err)
+		log.Debugf(Category, "failed to create protocol device: %v", err)
 		common.Client.MarkInactive(coreCommon.Name)
 		return err
 	}
 
-	log.Infof("starting tun2socks engine with proxy %s fd=%d mtu=%d", c.device.GetProxyAddr(), fd, c.mtu)
+	log.Debugf(Category, "starting tun2socks engine with proxy %s fd=%d mtu=%d", c.device.GetProxyAddr(), fd, c.mtu)
 	err = tunnel.StartEngine(platform_engine.EngineConfig{
 		ProxyAddr:   c.device.GetProxyAddr(),
 		FD:          fd,
@@ -77,39 +77,39 @@ func (c *CoreClient) Connect() error {
 		MTU:         c.mtu,
 	})
 	if err != nil {
-		log.Infof("Can't start tun2socks: %v", err)
+		log.Debugf(Category, "Can't start tun2socks: %v", err)
 		return err
 	}
 	c.engineStarted = true
 
 	common.Client.MarkActive(coreCommon.Name)
-	log.Infof("core client connected successfully via tun2socks in %dms", time.Since(start).Milliseconds())
+	log.Debugf(Category, "core client connected successfully via tun2socks in %dms", time.Since(start).Milliseconds())
 	return nil
 }
 
 func (c *CoreClient) Disconnect() error {
-	log.Infof("core client disconnect begin engineStarted=%v fd=%d deviceNil=%v", c.engineStarted, c.tunFD, c.device == nil)
+	log.Debugf(Category, "core client disconnect begin engineStarted=%v fd=%d deviceNil=%v", c.engineStarted, c.tunFD, c.device == nil)
 	tunnel.StopEngine()
-	log.Infof("core client disconnect: tun2socks engine stop requested")
+	log.Debugf(Category, "core client disconnect: tun2socks engine stop requested")
 	if !c.engineStarted && c.tunFD >= 0 {
 		if err := unix.Close(c.tunFD); err != nil {
-			log.Infof("failed to close unused tun fd: %v\n", err)
+			log.Debugf(Category, "failed to close unused tun fd: %v\n", err)
 		} else {
-			log.Infof("[DEBUG][Core] closed unused tun fd=%d", c.tunFD)
+			log.Debugf(Category, "[DEBUG][Core] closed unused tun fd=%d", c.tunFD)
 		}
 	}
 	c.engineStarted = false
 	c.tunFD = -1
 
 	if c.device != nil {
-		log.Infof("core client disconnect: closing protocol device serverIP=%s", c.device.GetServerIP())
+		log.Debugf(Category, "core client disconnect: closing protocol device serverIP=%s", c.device.GetServerIP())
 		if err := c.device.Close(); err != nil {
-			log.Infof("failed to close protocol device: %v\n", err)
+			log.Debugf(Category, "failed to close protocol device: %v\n", err)
 		}
 		c.device = nil
 	}
 
-	log.Infof("core client disconnected")
+	log.Debugf(Category, "core client disconnected")
 	common.Client.MarkInactive(coreCommon.Name)
 	return nil
 }
@@ -133,10 +133,10 @@ func (c *CoreClient) Status() string {
 	)
 	if statusProvider, ok := c.device.(pkg.StatusProvider); ok {
 		deviceStatus := statusProvider.Status(500 * time.Millisecond)
-		log.Infof("core client status: protocol device status=%s", deviceStatus)
+		log.Debugf(Category, "core client status: protocol device status=%s", deviceStatus)
 		status = fmt.Sprintf("%s %s", status, deviceStatus)
 	} else {
-		log.Infof("core client status: protocol device does not implement status provider type=%T", c.device)
+		log.Debugf(Category, "core client status: protocol device does not implement status provider type=%T", c.device)
 	}
 	return status
 }

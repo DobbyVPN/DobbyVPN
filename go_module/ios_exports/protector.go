@@ -13,9 +13,9 @@ import (
 // On iOS 26+, SO_NO_TC_NETPOLICY no longer works, so we use IP_BOUND_IF instead.
 func SetDefaultInterfaceIndex(index int) {
 	defer guard("SetDefaultInterfaceIndex")()
-	log.Infof("[iOS-Protect] Setting default interface index: %d", index)
+	log.Debugf("IOS-Protect", "Setting default interface index: %d", index)
 	protected_dialer.SetDefaultInterfaceForIOS(index)
-	log.Infof("[iOS-Protect] SetDefaultInterfaceIndex returned index=%d current=%d", index, protected_dialer.GetDefaultInterfaceForIOS())
+	log.Debugf("IOS-Protect", "SetDefaultInterfaceIndex returned index=%d current=%d", index, protected_dialer.GetDefaultInterfaceForIOS())
 }
 
 // GetDefaultInterfaceIndex returns the current default interface index.
@@ -23,7 +23,7 @@ func SetDefaultInterfaceIndex(index int) {
 func GetDefaultInterfaceIndex() (index int) {
 	defer guard("GetDefaultInterfaceIndex")()
 	index = protected_dialer.GetDefaultInterfaceForIOS()
-	log.Infof("[iOS-Protect] GetDefaultInterfaceIndex returned index=%d", index)
+	log.Debugf("IOS-Protect", "GetDefaultInterfaceIndex returned index=%d", index)
 	return index
 }
 
@@ -33,6 +33,6 @@ func GetDefaultInterfaceIndex() (index int) {
 func ProtectionDiagnostics() (diagnostics string) {
 	defer guard("ProtectionDiagnostics")()
 	diagnostics = protected_dialer.ProtectionDiagnosticsForIOS()
-	log.Infof("[iOS-Protect] ProtectionDiagnostics returned %s", diagnostics)
+	log.Debugf("IOS-Protect", "ProtectionDiagnostics returned %s", diagnostics)
 	return diagnostics
 }

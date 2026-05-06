@@ -54,7 +54,7 @@ func NewXrayDevice(vlessConfig string) (*XrayDevice, error) {
 		socksPass:    socksPass,
 	}
 
-	log.Infof("[Xray] SOCKS bridge started at %s (serverIP=%s)", d.proxyAddr, d.svrIP.String())
+	log.Debugf(Category, "SOCKS bridge started at %s (serverIP=%s)", d.proxyAddr, d.svrIP.String())
 	return d, nil
 }
 
@@ -76,7 +76,7 @@ func (d *XrayDevice) Open(routingTableID int, uplinkIface string) error {
 
 	loglevel, err := internal.ExtractLogLevel(d.vlessConfig)
 	if err != nil {
-		log.Infof("[Xray] failed to parse log level, continuing without logs")
+		log.Debugf(Category, "failed to parse log level, continuing without logs")
 	}
 	internal.SetupXrayLogging(loglevel)
 

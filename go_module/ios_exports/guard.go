@@ -21,7 +21,7 @@ func init() {
 func guard(fn string) func() {
 	return func() {
 		if r := recover(); r != nil {
-			log.Debugf(Category, "panic in %s: %v\n%s", fn, r, string(debug.Stack()))
+			log.Errorf(Category, "panic in %s: %v\n%s", fn, r, string(debug.Stack()))
 		}
 	}
 }
@@ -29,8 +29,8 @@ func guard(fn string) func() {
 func guardErr(fn string, errp *error) func() {
 	return func() {
 		if r := recover(); r != nil {
-			msg := fmt.Sprintf("[ios_exports] panic in %s: %v", fn, r)
-			log.Infof("%s\n%s", msg, string(debug.Stack()))
+			msg := fmt.Sprintf("panic in %s: %v", fn, r)
+			log.Errorf(Category, "%s\n%s", msg, string(debug.Stack()))
 			if errp != nil {
 				*errp = fmt.Errorf("%s", msg)
 			}
@@ -41,7 +41,7 @@ func guardErr(fn string, errp *error) func() {
 func guardStatus(fn string, statusp *int32) func() {
 	return func() {
 		if r := recover(); r != nil {
-			log.Infof("[ios_exports] panic in %s: %v\n%s", fn, r, string(debug.Stack()))
+			log.Errorf(Category, "panic in %s: %v\n%s", fn, r, string(debug.Stack()))
 			if statusp != nil {
 				*statusp = -1
 			}
