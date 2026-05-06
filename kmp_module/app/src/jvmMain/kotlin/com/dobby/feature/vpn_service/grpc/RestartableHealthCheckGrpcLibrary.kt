@@ -21,7 +21,7 @@ class RestartableHealthCheckGrpcLibrary(private val logger: Logger) : HealthChec
             GrpcVpnLibrary.healthCheckGrpcLibrary.GetConnectionState()
         } catch (e: VpnServiceStatusException) {
             logger.log("[ERROR] Failed to get vpn connection state: $e")
-            0
+            -1
         }
     }
 

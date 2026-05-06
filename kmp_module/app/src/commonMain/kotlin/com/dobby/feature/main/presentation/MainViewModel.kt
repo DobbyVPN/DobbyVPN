@@ -132,7 +132,7 @@ class MainViewModel(
         }
     }
 
-    private suspend fun setConfig(connectionUrl: String): Boolean {
+    suspend fun setConfig(connectionUrl: String): Boolean {
         logger.log("Start setConfig() with connectionUrl: ${maskStr(connectionUrl)}")
 
         configsRepository.setConnectionURL(connectionUrl)
@@ -232,7 +232,7 @@ class MainViewModel(
         }
     }
 
-    suspend fun startVpnService() {
+    suspend fun startVpnService(): Boolean {
         logger.log("Starting VPN service...")
         logger.log("Init health check")
         healthCheck.InitHealthCheck()
@@ -247,8 +247,10 @@ class MainViewModel(
             healthCheck.StartHealthCheck()
             logger.log("Start connection detector")
             startConnectionStateDetector()
+            return true
         } else {
             stopVpnService()
+            return false
         }
     }
 
