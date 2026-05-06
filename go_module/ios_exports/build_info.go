@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const nativeFeatureBuild = "ios-native/2026-05-05.4 features=disableNonDNSUDP,outlineDialCounters,nativeBuildInfo,protectionDiagnostics,routedUDPHealth,effectiveBypassValidation"
+const nativeFeatureBuild = "ios-native/2026-05-06.1 features=disableNonDNSUDP,outlineDialCounters,nativeBuildInfo,protectionDiagnostics,routedUDPHealth,effectiveBypassValidation,enforcedRoutes,serverBypassRouting"
 
 func NativeBuildInfo() string {
 	parts := []string{nativeFeatureBuild, "go=" + runtime.Version()}

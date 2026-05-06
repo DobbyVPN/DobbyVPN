@@ -251,14 +251,19 @@ public final class HealthCheckImpl: HealthCheck {
         logs.writeLog(log: "[HC] [diag] routed_non_dns_udp=\(nonDNSUDPOk)")
         groupResults["Routed non-DNS UDP group"] = nonDNSUDPOk
         if !nonDNSUDPOk {
-            let reason = nonDNSUDPDisabledByConfig
-                ? "disabledByConfig=true; Speedtest/QUIC UDP is expected to fail until transport UDP is enabled"
-                : "disabledByConfig=false; real UDP path is broken"
-            logs.writeLog(
-                log: "[HC] Group FAILED: Routed non-DNS UDP group " +
-                    "(\(reason))"
-            )
-            failedGroups.append("Routed non-DNS UDP group")
+            if nonDNSUDPDisabledByConfig {
+                logs.writeLog(
+                    log: "[HC] Group DIAGNOSTIC FAILED: Routed non-DNS UDP group " +
+                        "(disabledByConfig=true; not required for health; " +
+                        "Speedtest/QUIC UDP is expected to fail until transport UDP is enabled)"
+                )
+            } else {
+                logs.writeLog(
+                    log: "[HC] Group FAILED: Routed non-DNS UDP group " +
+                        "(disabledByConfig=false; real UDP path is broken)"
+                )
+                failedGroups.append("Routed non-DNS UDP group")
+            }
         } else {
             logs.writeLog(log: "[HC] Group OK: Routed non-DNS UDP group")
         }
@@ -271,6 +276,7 @@ public final class HealthCheckImpl: HealthCheck {
                 "upstreamProtected=\(lastProtectedServerOk) upstreamAddress=\(lastProtectedServerAddress) " +
                 "routedUdpDns=\(udpDNSOk) routedNonDnsUdp=\(nonDNSUDPOk) " +
                 "nonDnsUdpDisabledByConfig=\(nonDNSUDPDisabledByConfig) " +
+                "routedNonDnsUdpRequired=\(!nonDNSUDPDisabledByConfig) " +
                 "userStopRequested=\(isUserStopRequested())"
         )
 
@@ -305,6 +311,8 @@ public final class HealthCheckImpl: HealthCheck {
             dns: dnsOk,
             tcp443: tcp443Ok,
             outlineProxy: lastOutlineProxyOk,
+            upstreamProtected: lastProtectedServerOk,
+            upstreamAddress: lastProtectedServerAddress,
             https: httpsOk,
             nonDNSUDP: nonDNSUDPOk,
             nonDNSUDPDisabledByConfig: nonDNSUDPDisabledByConfig
@@ -331,12 +339,16 @@ public final class HealthCheckImpl: HealthCheck {
         dns: Bool,
         tcp443: Bool,
         outlineProxy: Bool,
+        upstreamProtected: Bool,
+        upstreamAddress: String,
         https: Bool,
         nonDNSUDP: Bool,
         nonDNSUDPDisabledByConfig: Bool
     ) {
         let diagnosis: String
-        if tunnelIP && tcpProxy && dns && tcp443 && outlineProxy && https && !nonDNSUDP && nonDNSUDPDisabledByConfig {
+        if tunnelIP && dns && outlineProxy && !upstreamProtected {
+            diagnosis = "SIDE: CLIENT/iOS ROUTING | REASON: protected upstream server check failed for \(upstreamAddress) - server dials are not reliably bypassing the packet tunnel; check effective_bypass verdict/localInterfaces"
+        } else if tunnelIP && tcpProxy && dns && tcp443 && outlineProxy && https && !nonDNSUDP && nonDNSUDPDisabledByConfig {
             diagnosis = "SIDE: CONFIG/TRANSPORT | REASON: TCP/DNS/HTTPS passed, but non-DNS UDP is disabled by current transport config — Speedtest/QUIC apps will fail by design"
         } else {
             switch (tunnelIP, tcpProxy, dns, tcp443, outlineProxy, https, nonDNSUDP) {
