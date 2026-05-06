@@ -6,7 +6,6 @@ import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.ConnectionStateRepository
-import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.domain.VpnManagerImpl
 import com.dobby.feature.main.presentation.MainViewModel
@@ -24,15 +23,12 @@ import kotlin.time.Duration.Companion.milliseconds
 class CliClient {
     private val healthCheckLibrary: RestartableHealthCheckGrpcLibrary
     private val logsRepository: LogsRepository
-    private val connectionStateRepository: ConnectionStateRepository
-    private val configsRepository: DobbyConfigsRepository
-    private val logger: Logger
-    private val logEventsChannel: LogEventsChannel = LogEventsChannel()
     private val mainViewModel: MainViewModel
 
     init {
+        val logEventsChannel = LogEventsChannel()
         logsRepository = LogsRepository(logEventsChannel = logEventsChannel)
-        logger = Logger(logsRepository)
+        val logger = Logger(logsRepository)
 
         healthCheckLibrary = RestartableHealthCheckGrpcLibrary(logger)
         val awgLibrary = RestartableAwgGrpcLibrary(logger)
@@ -41,8 +37,8 @@ class CliClient {
         val loggerLibrary = RestartableLoggerGrpcLibrary(logger)
         val georoutingLibrary = RestartableGeoroutingGrpcLibrary(logger)
 
-        configsRepository = DobbyConfigsRepositoryImpl(healthCheckLibrary = healthCheckLibrary)
-        connectionStateRepository = ConnectionStateRepository()
+        val configsRepository = DobbyConfigsRepositoryImpl(healthCheckLibrary = healthCheckLibrary)
+        val connectionStateRepository = ConnectionStateRepository()
         val permissionEventsChannel = PermissionEventsChannel()
         val dobbyVpnService = DobbyVpnService(
             dobbyConfigsRepository = configsRepository,
