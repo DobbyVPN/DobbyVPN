@@ -1,13 +1,11 @@
 package healthcheck
 
 import (
-	"context"
 	"time"
 
 	"github.com/matsuridayo/libneko/speedtest"
 
 	"go_module/log"
-	"go_module/tunnel/protected_dialer"
 )
 
 const (
