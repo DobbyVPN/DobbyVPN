@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -370,24 +369,6 @@ func (p *DobbyProxy) flowStats() string {
 	)
 }
 
-func (p *DobbyProxy) runtimeStats() string {
-	var mem runtime.MemStats
-	runtime.ReadMemStats(&mem)
-	return fmt.Sprintf(
-		"goroutines=%d allocMB=%.2f totalAllocMB=%.2f sysMB=%.2f heapAllocMB=%.2f heapInuseMB=%.2f heapIdleMB=%.2f stackInuseMB=%.2f nextGCMB=%.2f numGC=%d",
-		runtime.NumGoroutine(),
-		bytesToMB(mem.Alloc),
-		bytesToMB(mem.TotalAlloc),
-		bytesToMB(mem.Sys),
-		bytesToMB(mem.HeapAlloc),
-		bytesToMB(mem.HeapInuse),
-		bytesToMB(mem.HeapIdle),
-		bytesToMB(mem.StackInuse),
-		bytesToMB(mem.NextGC),
-		mem.NumGC,
-	)
-}
-
 func (p *DobbyProxy) logStatsLoop(stop <-chan struct{}) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -395,16 +376,12 @@ func (p *DobbyProxy) logStatsLoop(stop <-chan struct{}) {
 	for {
 		select {
 		case <-ticker.C:
-			log.Infof("[Router STATS] flow={%s} runtime={%s}", p.flowStats(), p.runtimeStats())
+			log.Infof("[Router STATS] flow={%s}", p.flowStats())
 		case <-stop:
-			log.Infof("[Router STATS] stopped flow={%s} runtime={%s}", p.flowStats(), p.runtimeStats())
+			log.Infof("[Router STATS] stopped flow={%s}", p.flowStats())
 			return
 		}
 	}
-}
-
-func bytesToMB(v uint64) float64 {
-	return float64(v) / 1024.0 / 1024.0
 }
 
 func updatePeakInt64(peak *atomic.Int64, current int64) {
