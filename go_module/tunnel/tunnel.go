@@ -68,7 +68,7 @@ func (c *trackedPacketConn) Close() error {
 	return err
 }
 
-func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (proxyConn net.Conn, err error) {
+func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
 	start := time.Now()
 	dest := metadata.DestinationAddress()
 	if IsBypass(metadata) {
