@@ -17,18 +17,6 @@ func TcpPing(address string) (ret int32, err error) {
 	return ret, nil
 }
 
-func ProtectedTcpPing(address string) (ret int32, err error) {
-	defer guardErr("ProtectedTcpPing", &err)()
-	log.Infof("[ios_exports] ProtectedTcpPing begin address=%s", address)
-	ret, err = healthcheck.ProtectedTCPPing(address)
-	if err != nil {
-		log.Infof("[ios_exports] ProtectedTcpPing failed address=%s err=%v", address, err)
-		return ret, err
-	}
-	log.Infof("[ios_exports] ProtectedTcpPing OK address=%s ms=%d", address, ret)
-	return ret, nil
-}
-
 func UrlTest(url string, standard int) (ret int32, err error) {
 	defer guardErr("UrlTest", &err)()
 	log.Infof("[ios_exports] UrlTest begin url=%s standard=%d", url, standard)

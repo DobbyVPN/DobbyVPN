@@ -143,8 +143,6 @@ func StopCloakClient() {
 
 	log.Infof("Client disconnected")
 
-	// Explicitly reclaim memory after the Cloak session and stream buffers are gone.
-	// This is especially useful inside iOS Network Extensions with tight memory caps.
 	runtime.GC()
 	debug.FreeOSMemory()
 	log.Infof("StopCloakClient: memory released")
