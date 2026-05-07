@@ -23,12 +23,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var pathMonitor: Network.NWPathMonitor?
     private var lastPathSignature: String?
-    private var heartbeatTimer: DispatchSourceTimer?
-    private let heartbeatQueue = DispatchQueue(label: "vpn.dobby.app.tunnel.heartbeat")
     private let memoryHighWaterLock = NSLock()
     private var memoryHighWaterMarkMB = 0.0
     private var tunnelStartedAt = Date()
-    private var heartbeatSequence = 0
     private let memoryWarningMB = 30.0
     private let memoryCriticalMB = 35.0
 
@@ -159,7 +156,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func startTunnel(options: [String : NSObject]?) async throws {
         tunnelStartedAt = Date()
-        heartbeatSequence = 0
         resetMemoryHighWaterMark()
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
@@ -169,11 +165,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
         logInterfacesDetailed(label: "BEFORE_VPN_TUNNEL")
-        logResourceSnapshot(label: "START_BEGIN")
 
         // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
         await teardownForStop(reason: "pre-start cleanup")
-        startProviderHeartbeat(reason: "startTunnel")
 
         startPathLogging()
         logInitialNetworkPath(timeout: 1.0)
@@ -246,7 +240,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         logInterfaces()
         logInterfacesDetailed(label: "AFTER_VPN_TUNNEL")
-        logResourceSnapshot(label: "AFTER_SETTINGS")
 
         let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
         logs.writeLog(log: "Start go logger init path = \(path)")
@@ -263,7 +256,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             throw error
         }
         logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
-        logResourceSnapshot(label: "AFTER_OUTLINE")
         do {
             logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak begin")
             try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
@@ -299,7 +291,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         } else {
             logs.writeLog(log: "[tunnel:\(tunnelId)] cancelTunnelWithError: nil")
         }
-        logResourceSnapshot(label: "CANCEL_TUNNEL")
         super.cancelTunnelWithError(error)
     }
 
@@ -420,53 +411,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    private func startProviderHeartbeat(reason: String) {
-        heartbeatTimer?.cancel()
-        heartbeatSequence = 0
-
-        let timer = DispatchSource.makeTimerSource(queue: heartbeatQueue)
-        timer.schedule(deadline: .now() + .seconds(5), repeating: .seconds(5), leeway: .milliseconds(500))
-        timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            self.heartbeatSequence += 1
-            self.logResourceSnapshot(label: "HEARTBEAT seq=\(self.heartbeatSequence)")
-        }
-        heartbeatTimer = timer
-        timer.resume()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] HEARTBEAT started reason=\(reason)")
-    }
-
-    private func stopProviderHeartbeat(reason: String) {
-        if heartbeatTimer != nil {
-            heartbeatTimer?.cancel()
-            heartbeatTimer = nil
-            logs.writeLog(log: "[tunnel:\(tunnelId)] HEARTBEAT stopped reason=\(reason)")
-        }
-    }
-
     private func logResourceSnapshot(label: String) {
         let memory = reportMemoryUsageMB()
         let highWater = currentMemoryHighWaterMark()
         let uptimeMs = elapsedMs(since: tunnelStartedAt)
         let path = lastPathSignature ?? "(none)"
-        let openFDs = openFileDescriptorCount()
         logs.writeLog(
             log: "[tunnel:\(tunnelId)] RESOURCE \(label) uptimeMs=\(uptimeMs) " +
                 "memoryMB=\(String(format: "%.2f", memory)) " +
                 "memoryHighWaterMB=\(String(format: "%.2f", highWater)) " +
-                "openFDs=\(openFDs) " +
                 "path=\(path) interfaces={\(dobbyInterfaceSummary())}"
         )
-    }
-
-    private func openFileDescriptorCount(limit: Int32 = 1024) -> Int {
-        var count = 0
-        for fd in 0..<limit {
-            if fcntl(fd, F_GETFD) != -1 {
-                count += 1
-            }
-        }
-        return count
     }
 
     private func dobbyInterfaceSummary() -> String {
@@ -514,7 +469,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func teardownForStop(reason: String) async {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
         logResourceSnapshot(label: "TEARDOWN_BEGIN reason=\(reason)")
-        stopProviderHeartbeat(reason: reason)
 
         do {
             try cloakInteractor.stopCloak()
@@ -659,29 +613,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func resolveIPv4IfNeededWithTimeout(_ host: String, timeout: TimeInterval) -> String? {
-        let group = DispatchGroup()
-        group.enter()
-        let lock = NSLock()
-        var result: String? = nil
-
+        var result: String?
+        let sema = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .userInitiated).async {
-            let ip = self.resolveIPv4IfNeeded(host)
-            lock.lock()
-            result = ip
-            lock.unlock()
-            group.leave()
+            result = self.resolveIPv4IfNeeded(host)
+            sema.signal()
         }
-
-        let wait = group.wait(timeout: .now() + timeout)
-        if wait == .timedOut {
-            logs.writeLog(
-                log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: host)) timed out after \(Int(timeout * 1000))ms"
-            )
+        if sema.wait(timeout: .now() + timeout) == .timedOut {
+            logs.writeLog(log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: host)) timed out after \(Int(timeout * 1000))ms")
             return nil
         }
-        lock.lock()
-        let value = result
-        lock.unlock()
-        return value
+        return result
     }
 }

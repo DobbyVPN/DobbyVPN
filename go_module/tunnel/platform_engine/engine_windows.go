@@ -45,7 +45,7 @@ func startPlatformEngine(cfg interface{}) error {
 		Device:    "wintun",
 		Interface: uplinkIface,
 		LogLevel:  "info",
-		MTU:       1500,
+		MTU:       1200,
 	}
 
 	engine.Insert(key)
@@ -167,7 +167,6 @@ func getCurrentDNS(name string) ([]string, bool) {
 			isDHCP = true
 		}
 
-		// ищем IP
 		if ip := net.ParseIP(line); ip != nil {
 			dns = append(dns, ip.String())
 		}
