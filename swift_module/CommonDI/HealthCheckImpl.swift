@@ -59,6 +59,9 @@ public final class HealthCheckImpl: HealthCheck {
     public private(set) var currentMemmoryUsageMb = 0.0
     private var checkSequence = 0
     private let checkSequenceLock = NSLock()
+    private let tunnelMemoryLock = NSLock()
+    private var lastTunnelMemoryUsageMb: Double?
+    private var tunnelMemoryHighWaterMb = 0.0
 
     public func shortConnectionCheckUp() -> Bool {
         let checkId = nextCheckId(prefix: "short")
@@ -444,31 +447,68 @@ public final class HealthCheckImpl: HealthCheck {
         }
         defer { freeifaddrs(ifaddrPtr) }
 
-        var matches: [String] = []
+        var vpnMatches: [String] = []
+        var dobbyMatches: [String] = []
         var ptr: UnsafeMutablePointer<ifaddrs>? = firstAddr
         while let addr = ptr {
-            let name = String(cString: addr.pointee.ifa_name).lowercased()
-            if name.contains("utun")
-                || name.contains("tun")
-                || name.contains("tap")
-                || name.contains("ppp")
-                || name.contains("ipsec") {
-                matches.append(name)
+            let rawName = String(cString: addr.pointee.ifa_name)
+            let lowerName = rawName.lowercased()
+            let address = interfaceAddressDescription(addr.pointee.ifa_addr)
+            let flags = addr.pointee.ifa_flags
+            let detail = "\(rawName)(\(address),flags=0x\(String(flags, radix: 16)))"
+            if isVPNInterfaceName(lowerName) {
+                vpnMatches.append(detail)
+            }
+            if address == "198.18.0.1" {
+                dobbyMatches.append(detail)
             }
             ptr = addr.pointee.ifa_next
         }
 
-        if matches.isEmpty {
+        if vpnMatches.isEmpty {
             logs.writeLog(log: "[HC] VPN interfaces: none")
+        } else {
+            logs.writeLog(log: "[HC] VPN interfaces: \(Array(Set(vpnMatches)).sorted().joined(separator: ","))")
+        }
+
+        if dobbyMatches.isEmpty {
+            logs.writeLog(log: "[HC] Dobby tunnel interface 198.18.0.1: missing")
             return false
         }
-        logs.writeLog(log: "[HC] VPN interfaces: \(Array(Set(matches)).sorted().joined(separator: ","))")
+        logs.writeLog(log: "[HC] Dobby tunnel interface 198.18.0.1: \(Array(Set(dobbyMatches)).sorted().joined(separator: ","))")
         return true
+    }
+
+    private func isVPNInterfaceName(_ lowerName: String) -> Bool {
+        lowerName.contains("utun") ||
+            lowerName.contains("tun") ||
+            lowerName.contains("tap") ||
+            lowerName.contains("ppp") ||
+            lowerName.contains("ipsec")
+    }
+
+    private func interfaceAddressDescription(_ addr: UnsafePointer<sockaddr>?) -> String {
+        guard let addr else { return "nil" }
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        let length: socklen_t
+        switch Int32(addr.pointee.sa_family) {
+        case AF_INET:
+            length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        case AF_INET6:
+            length = socklen_t(MemoryLayout<sockaddr_in6>.size)
+        default:
+            return "family=\(addr.pointee.sa_family)"
+        }
+        if getnameinfo(addr, length, &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
+            return String(cString: host)
+        }
+        return "family=\(addr.pointee.sa_family) getnameinfoErr=\(errno)"
     }
 
     private func isTunnelAliveViaXPC() -> Double {
         var memory: Double = -1
         let semaphore = DispatchSemaphore(value: 0)
+        let started = Date()
 
         NETunnelProviderManager.loadAllFromPreferences { managers, error in
             if let error {
@@ -502,9 +542,15 @@ public final class HealthCheckImpl: HealthCheck {
                     defer { semaphore.signal() }
                     memory = self.parseMemoryResponse(response)
                     if memory >= 0 {
-                        self.logs.writeLog(log: "[HC] XPC heartbeat OK memory=\(memory)MB")
+                        let stats = self.updateTunnelMemoryStats(memory)
+                        let deltaText = stats.delta.map { String(format: "%.2f", $0) } ?? "n/a"
+                        self.logs.writeLog(
+                            log: "[HC] XPC heartbeat OK memory=\(String(format: "%.2f", memory))MB " +
+                                "deltaMB=\(deltaText) highWaterMB=\(String(format: "%.2f", stats.highWater)) " +
+                                "elapsed=\(self.elapsedMs(since: started))ms"
+                        )
                     } else {
-                        self.logs.writeLog(log: "[HC] XPC heartbeat invalid response")
+                        self.logs.writeLog(log: "[HC] XPC heartbeat invalid response elapsed=\(self.elapsedMs(since: started))ms")
                     }
                 }
             } catch {
@@ -518,6 +564,18 @@ public final class HealthCheckImpl: HealthCheck {
             logs.writeLog(log: "[HC] XPC heartbeat timed out after \(Int(timeout * 1000))ms")
         }
         return memory
+    }
+
+    private func updateTunnelMemoryStats(_ value: Double) -> (delta: Double?, highWater: Double) {
+        tunnelMemoryLock.lock()
+        let delta = lastTunnelMemoryUsageMb.map { value - $0 }
+        lastTunnelMemoryUsageMb = value
+        if value > tunnelMemoryHighWaterMb {
+            tunnelMemoryHighWaterMb = value
+        }
+        let highWater = tunnelMemoryHighWaterMb
+        tunnelMemoryLock.unlock()
+        return (delta, highWater)
     }
 
     private func parseMemoryResponse(_ response: Data?) -> Double {

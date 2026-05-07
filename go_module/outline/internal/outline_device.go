@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,18 +30,38 @@ type OutlineDevice struct {
 	hasTCPPath   bool
 	hasUDPPath   bool
 	startedAt    time.Time
+	closed       chan struct{}
+	closeOnce    sync.Once
 
 	tcpDialAttempt  atomic.Uint64
 	tcpDialOK       atomic.Uint64
 	tcpDialErr      atomic.Uint64
+	tcpDialInFlight atomic.Int64
+	tcpDialPeak     atomic.Int64
 	udpDialAttempt  atomic.Uint64
 	udpDialOK       atomic.Uint64
 	udpDialErr      atomic.Uint64
+	udpDialInFlight atomic.Int64
+	udpDialPeak     atomic.Int64
 	udpDNSTruncated atomic.Uint64
 	unsupportedDial atomic.Uint64
 }
 
+var (
+	socksInternalAuthErr       atomic.Uint64
+	socksInternalResetErr      atomic.Uint64
+	socksInternalBrokenPipeErr atomic.Uint64
+)
+
+func resetSocksInternalStats() {
+	socksInternalAuthErr.Store(0)
+	socksInternalResetErr.Store(0)
+	socksInternalBrokenPipeErr.Store(0)
+}
+
 func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
+	resetSocksInternalStats()
+
 	ip, err := ResolveServerIPFromConfig(transportConfig)
 	if err != nil {
 		return nil, err
@@ -85,6 +106,7 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 		hasTCPPath:   hasTCPPath,
 		hasUDPPath:   hasUDPPath,
 		startedAt:    time.Now(),
+		closed:       make(chan struct{}),
 	}
 
 	server := socks5.NewServer(
@@ -112,6 +134,7 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 			}
 		}
 	}()
+	go od.logStatsLoop()
 
 	return od, nil
 }
@@ -123,6 +146,21 @@ func (socksLogger) Errorf(format string, args ...interface{}) {
 	if strings.Contains(msg, "EOF") ||
 		strings.Contains(msg, "use of closed network connection") ||
 		strings.Contains(msg, "client want to used addr") {
+		return
+	}
+	if strings.Contains(msg, "chacha20poly1305: message authentication failed") {
+		count := socksInternalAuthErr.Add(1)
+		log.Infof("[SOCKS5 internal][auth_error count=%d] %s", count, msg)
+		return
+	}
+	if strings.Contains(msg, "connection reset by peer") {
+		count := socksInternalResetErr.Add(1)
+		log.Infof("[SOCKS5 internal][reset count=%d] %s", count, msg)
+		return
+	}
+	if strings.Contains(msg, "broken pipe") {
+		count := socksInternalBrokenPipeErr.Add(1)
+		log.Infof("[SOCKS5 internal][broken_pipe count=%d] %s", count, msg)
 		return
 	}
 	log.Infof("[SOCKS5 internal] %s", msg)
@@ -155,6 +193,10 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 
 	case "tcp":
 		attempt := d.tcpDialAttempt.Add(1)
+		inFlight := d.startTCPDial()
+		log.Infof("[SOCKS5 TCP BEGIN] attempt=%d dst=%s server=%s inFlight=%d stats={%s}", attempt, addr, serverIP, inFlight, d.dialStats())
+		defer d.finishTCPDial()
+
 		conn, err := d.streamDialer.DialStream(ctx, addr)
 		if err != nil {
 			d.tcpDialErr.Add(1)
@@ -168,6 +210,9 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 
 	case "udp":
 		attempt := d.udpDialAttempt.Add(1)
+		inFlight := d.startUDPDial()
+		log.Infof("[SOCKS5 UDP BEGIN] attempt=%d dst=%s server=%s inFlight=%d stats={%s}", attempt, addr, serverIP, inFlight, d.dialStats())
+		defer d.finishUDPDial()
 
 		// DNS fallback for Cloak
 		if d.useCloak && port == 53 {
@@ -196,19 +241,77 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	return nil, err
 }
 
+func (d *OutlineDevice) startTCPDial() int64 {
+	current := d.tcpDialInFlight.Add(1)
+	updatePeakInt64(&d.tcpDialPeak, current)
+	return current
+}
+
+func (d *OutlineDevice) finishTCPDial() {
+	d.tcpDialInFlight.Add(-1)
+}
+
+func (d *OutlineDevice) startUDPDial() int64 {
+	current := d.udpDialInFlight.Add(1)
+	updatePeakInt64(&d.udpDialPeak, current)
+	return current
+}
+
+func (d *OutlineDevice) finishUDPDial() {
+	d.udpDialInFlight.Add(-1)
+}
+
+func updatePeakInt64(peak *atomic.Int64, current int64) {
+	for {
+		old := peak.Load()
+		if current <= old || peak.CompareAndSwap(old, current) {
+			return
+		}
+	}
+}
+
 func (d *OutlineDevice) dialStats() string {
 	return fmt.Sprintf(
-		"uptime=%s tcp=%d/%d/%d udp=%d/%d/%d udpDNSTrunc=%d unsupported=%d",
+		"uptime=%s tcp=%d/%d/%d/inflight=%d/peak=%d udp=%d/%d/%d/inflight=%d/peak=%d udpDNSTrunc=%d unsupported=%d internalAuth=%d internalReset=%d internalBrokenPipe=%d",
 		time.Since(d.startedAt).Truncate(time.Millisecond),
 		d.tcpDialAttempt.Load(),
 		d.tcpDialOK.Load(),
 		d.tcpDialErr.Load(),
+		d.tcpDialInFlight.Load(),
+		d.tcpDialPeak.Load(),
 		d.udpDialAttempt.Load(),
 		d.udpDialOK.Load(),
 		d.udpDialErr.Load(),
+		d.udpDialInFlight.Load(),
+		d.udpDialPeak.Load(),
 		d.udpDNSTruncated.Load(),
 		d.unsupportedDial.Load(),
+		socksInternalAuthErr.Load(),
+		socksInternalResetErr.Load(),
+		socksInternalBrokenPipeErr.Load(),
 	)
+}
+
+func (d *OutlineDevice) logStatsLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			log.Infof("[SOCKS5 STATS] proxy=%s server=%s stats={%s}", d.proxyAddr, d.serverIPString(), d.dialStats())
+		case <-d.closed:
+			log.Infof("[SOCKS5 STATS] proxy=%s stopped stats={%s}", d.proxyAddr, d.dialStats())
+			return
+		}
+	}
+}
+
+func (d *OutlineDevice) serverIPString() string {
+	if d.svrIP == nil {
+		return "<nil>"
+	}
+	return d.svrIP.String()
 }
 
 type truncatedDNSConn struct {
@@ -352,6 +455,9 @@ func (d *OutlineDevice) GetProxyAddr() string {
 
 func (d *OutlineDevice) Close() error {
 	log.Infof("SOCKS5 close requested proxy=%s stats={%s}", d.proxyAddr, d.dialStats())
+	d.closeOnce.Do(func() {
+		close(d.closed)
+	})
 	if d.listener != nil {
 		return d.listener.Close()
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,6 +22,7 @@ import (
 var (
 	mu        sync.Mutex
 	isRunning bool
+	statsStop chan struct{}
 )
 
 type DobbyProxy struct {
@@ -28,6 +30,15 @@ type DobbyProxy struct {
 	direct    proxy.Proxy
 	activeTCP atomic.Int64
 	activeUDP atomic.Int64
+	peakTCP   atomic.Int64
+	peakUDP   atomic.Int64
+
+	tcpDialAttempt atomic.Uint64
+	tcpDialOK      atomic.Uint64
+	tcpDialErr     atomic.Uint64
+	udpDialAttempt atomic.Uint64
+	udpDialOK      atomic.Uint64
+	udpDialErr     atomic.Uint64
 }
 
 type trackedConn struct {
@@ -71,50 +82,64 @@ func (c *trackedPacketConn) Close() error {
 func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
 	start := time.Now()
 	dest := metadata.DestinationAddress()
+	attempt := p.tcpDialAttempt.Add(1)
 	if IsBypass(metadata) {
-		log.Infof("[Router] TCP dial attempt route=DIRECT dstIP=%s dest=%s proto=%s activeTCP=%d activeUDP=%d", metadata.DstIP, dest, metadata.Network, p.activeTCP.Load(), p.activeUDP.Load())
+		log.Infof("[Router] TCP dial attempt=%d route=DIRECT dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
 		conn, err := p.direct.DialContext(ctx, metadata)
 		if err != nil {
-			log.Infof("[Router] DIRECT TCP dial error dest=%s elapsed=%s err=%v", dest, time.Since(start), err)
+			p.tcpDialErr.Add(1)
+			log.Infof("[Router] DIRECT TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", attempt, dest, time.Since(start), p.flowStats(), err)
 			return nil, err
 		}
+		p.tcpDialOK.Add(1)
 		active := p.activeTCP.Add(1)
-		log.Infof("[Router] DIRECT TCP dial OK dest=%s elapsed=%s local=%s remote=%s activeTCP=%d", dest, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), active)
+		updatePeakInt64(&p.peakTCP, active)
+		log.Infof("[Router] DIRECT TCP dial OK attempt=%d dest=%s elapsed=%s local=%s remote=%s stats={%s}", attempt, dest, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), p.flowStats())
 		return &trackedConn{Conn: conn, counter: &p.activeTCP, route: "DIRECT", dest: dest, started: time.Now()}, nil
 	}
-	log.Infof("[Router] TCP dial attempt route=VPN dstIP=%s dest=%s proto=%s activeTCP=%d activeUDP=%d", metadata.DstIP, dest, metadata.Network, p.activeTCP.Load(), p.activeUDP.Load())
+	log.Infof("[Router] TCP dial attempt=%d route=VPN dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
 	conn, err := p.vpn.DialContext(ctx, metadata)
 	if err != nil {
-		log.Infof("[Router] VPN TCP dial error dest=%s elapsed=%s err=%v", dest, time.Since(start), err)
+		p.tcpDialErr.Add(1)
+		log.Infof("[Router] VPN TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", attempt, dest, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
+	p.tcpDialOK.Add(1)
 	active := p.activeTCP.Add(1)
-	log.Infof("[Router] VPN TCP dial OK dest=%s elapsed=%s local=%s remote=%s activeTCP=%d", dest, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), active)
+	updatePeakInt64(&p.peakTCP, active)
+	log.Infof("[Router] VPN TCP dial OK attempt=%d dest=%s elapsed=%s local=%s remote=%s stats={%s}", attempt, dest, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), p.flowStats())
 	return &trackedConn{Conn: conn, counter: &p.activeTCP, route: "VPN", dest: dest, started: time.Now()}, nil
 }
 
 func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	start := time.Now()
 	dest := metadata.DestinationAddress()
+	attempt := p.udpDialAttempt.Add(1)
 	if IsBypass(metadata) {
-		log.Infof("[Router] UDP dial attempt route=DIRECT dstIP=%s dest=%s proto=%s activeTCP=%d activeUDP=%d", metadata.DstIP, dest, metadata.Network, p.activeTCP.Load(), p.activeUDP.Load())
+		log.Infof("[Router] UDP dial attempt=%d route=DIRECT dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
 		conn, err := p.direct.DialUDP(metadata)
 		if err != nil {
-			log.Infof("[Router] DIRECT UDP dial error dest=%s elapsed=%s err=%v", dest, time.Since(start), err)
+			p.udpDialErr.Add(1)
+			log.Infof("[Router] DIRECT UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", attempt, dest, time.Since(start), p.flowStats(), err)
 			return nil, err
 		}
+		p.udpDialOK.Add(1)
 		active := p.activeUDP.Add(1)
-		log.Infof("[Router] DIRECT UDP dial OK dest=%s elapsed=%s local=%s activeUDP=%d", dest, time.Since(start), conn.LocalAddr(), active)
+		updatePeakInt64(&p.peakUDP, active)
+		log.Infof("[Router] DIRECT UDP dial OK attempt=%d dest=%s elapsed=%s local=%s stats={%s}", attempt, dest, time.Since(start), conn.LocalAddr(), p.flowStats())
 		return &trackedPacketConn{PacketConn: conn, counter: &p.activeUDP, route: "DIRECT", dest: dest, started: time.Now()}, nil
 	}
-	log.Infof("[Router] UDP dial attempt route=VPN dstIP=%s dest=%s proto=%s activeTCP=%d activeUDP=%d", metadata.DstIP, dest, metadata.Network, p.activeTCP.Load(), p.activeUDP.Load())
+	log.Infof("[Router] UDP dial attempt=%d route=VPN dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
 	conn, err := p.vpn.DialUDP(metadata)
 	if err != nil {
-		log.Infof("[Router] VPN UDP dial error dest=%s elapsed=%s err=%v", dest, time.Since(start), err)
+		p.udpDialErr.Add(1)
+		log.Infof("[Router] VPN UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", attempt, dest, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
+	p.udpDialOK.Add(1)
 	active := p.activeUDP.Add(1)
-	log.Infof("[Router] VPN UDP dial OK dest=%s elapsed=%s local=%s activeUDP=%d", dest, time.Since(start), conn.LocalAddr(), active)
+	updatePeakInt64(&p.peakUDP, active)
+	log.Infof("[Router] VPN UDP dial OK attempt=%d dest=%s elapsed=%s local=%s stats={%s}", attempt, dest, time.Since(start), conn.LocalAddr(), p.flowStats())
 	return &trackedPacketConn{PacketConn: conn, counter: &p.activeUDP, route: "VPN", dest: dest, started: time.Now()}, nil
 }
 
@@ -169,12 +194,18 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 
 	t.SetDialer(wrapper)
 	log.Infof("[Engine] DobbyProxy installed")
+	statsStop = make(chan struct{})
+	go wrapper.logStatsLoop(statsStop)
 	isRunning = true
 	return nil
 }
 
 func stopLocked() {
 	log.Infof("[Engine] stopping tun2socks engine")
+	if statsStop != nil {
+		close(statsStop)
+		statsStop = nil
+	}
 	platform_engine.EngineStop()
 	isRunning = false
 	log.Infof("[Engine] tun2socks engine stopped")
@@ -190,4 +221,66 @@ func StopEngine() {
 	}
 
 	stopLocked()
+}
+
+func (p *DobbyProxy) flowStats() string {
+	return fmt.Sprintf(
+		"activeTCP=%d peakTCP=%d activeUDP=%d peakUDP=%d tcp=%d/%d/%d udp=%d/%d/%d",
+		p.activeTCP.Load(),
+		p.peakTCP.Load(),
+		p.activeUDP.Load(),
+		p.peakUDP.Load(),
+		p.tcpDialAttempt.Load(),
+		p.tcpDialOK.Load(),
+		p.tcpDialErr.Load(),
+		p.udpDialAttempt.Load(),
+		p.udpDialOK.Load(),
+		p.udpDialErr.Load(),
+	)
+}
+
+func (p *DobbyProxy) runtimeStats() string {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	return fmt.Sprintf(
+		"goroutines=%d allocMB=%.2f totalAllocMB=%.2f sysMB=%.2f heapAllocMB=%.2f heapInuseMB=%.2f heapIdleMB=%.2f stackInuseMB=%.2f nextGCMB=%.2f numGC=%d",
+		runtime.NumGoroutine(),
+		bytesToMB(mem.Alloc),
+		bytesToMB(mem.TotalAlloc),
+		bytesToMB(mem.Sys),
+		bytesToMB(mem.HeapAlloc),
+		bytesToMB(mem.HeapInuse),
+		bytesToMB(mem.HeapIdle),
+		bytesToMB(mem.StackInuse),
+		bytesToMB(mem.NextGC),
+		mem.NumGC,
+	)
+}
+
+func (p *DobbyProxy) logStatsLoop(stop <-chan struct{}) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			log.Infof("[Router STATS] flow={%s} runtime={%s}", p.flowStats(), p.runtimeStats())
+		case <-stop:
+			log.Infof("[Router STATS] stopped flow={%s} runtime={%s}", p.flowStats(), p.runtimeStats())
+			return
+		}
+	}
+}
+
+func bytesToMB(v uint64) float64 {
+	return float64(v) / 1024.0 / 1024.0
+}
+
+func updatePeakInt64(peak *atomic.Int64, current int64) {
+	for {
+		old := peak.Load()
+		if current <= old || peak.CompareAndSwap(old, current) {
+			return
+		}
+	}
 }
