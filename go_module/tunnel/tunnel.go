@@ -2,7 +2,6 @@ package tunnel
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -411,9 +410,6 @@ func newFlowLimiter() *flowLimiter {
 }
 
 func (p *DobbyProxy) reserveTCP(dest string) (int64, func() int64, error) {
-	if p.limiter == nil {
-		return p.activeTCP.Load(), nil, errNilFlowLimiter
-	}
 	return p.limiter.reserve(
 		dest,
 		&p.activeTCP,
@@ -426,9 +422,6 @@ func (p *DobbyProxy) reserveTCP(dest string) (int64, func() int64, error) {
 }
 
 func (p *DobbyProxy) reserveUDP(dest string) (int64, func() int64, error) {
-	if p.limiter == nil {
-		return p.activeUDP.Load(), nil, errNilFlowLimiter
-	}
 	return p.limiter.reserve(
 		dest,
 		&p.activeUDP,
@@ -468,17 +461,12 @@ func (l *flowLimiter) reserve(
 	destCounts[dest]++
 	currentActive = active.Add(1)
 
-	var once sync.Once
 	release := func() int64 {
-		releasedActive := currentActive
-		once.Do(func() {
-			l.mu.Lock()
-			defer l.mu.Unlock()
-			decrementFlowCount(hostCounts, host)
-			decrementFlowCount(destCounts, dest)
-			releasedActive = active.Add(-1)
-		})
-		return releasedActive
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		decrementFlowCount(hostCounts, host)
+		decrementFlowCount(destCounts, dest)
+		return active.Add(-1)
 	}
 
 	return currentActive, release, nil
@@ -503,4 +491,3 @@ func flowHost(dest string) string {
 	return host
 }
 
-var errNilFlowLimiter = errors.New("flow limiter is nil")
