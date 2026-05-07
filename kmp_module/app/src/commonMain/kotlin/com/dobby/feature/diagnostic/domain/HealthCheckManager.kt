@@ -28,6 +28,7 @@ class HealthCheckManager(
     private val gracePeriodMs: Long = 15_000
     private var lastVpnStartMark: TimeMark? = null
     private var lastFullConnectionSucceed = false
+    private var healthGeneration = 0L
 
     suspend fun startHealthCheck(address: String, port: Int) {
         logger.log("[HC] startHealthCheck() called")
@@ -45,6 +46,8 @@ class HealthCheckManager(
         )
 
         logger.log("[HC] Health check started")
+        healthGeneration += 1
+        val generation = healthGeneration
 
         if (address != "localhost" && address != "127.0.0.1") {
             val serverAlive = healthCheck.checkServerAlive(address, port)
@@ -59,7 +62,12 @@ class HealthCheckManager(
             delay(healthCheck.getTimeToWakeUp() * 1_000L)
 
             while (isActive) {
-               if (configsRepository.getIsUserInitStop()) {
+                if (generation != healthGeneration) {
+                    logger.log("[HC] Stop condition: generation changed → exiting loop")
+                    return@launch
+                }
+
+                if (configsRepository.getIsUserInitStop()) {
                     logger.log("[HC] Stop condition: getIsUserInitStop() == true → exiting loop")
                     return@launch
                 }
@@ -71,6 +79,11 @@ class HealthCheckManager(
                 } catch (t: Throwable) {
                     logger.log("[HC] isConnected() threw exception: ${t.message}")
                     false
+                }
+
+                if (generation != healthGeneration) {
+                    logger.log("[HC] Health check stopped while native check was in flight → ignoring result")
+                    return@launch
                 }
 
                 val vpnStarted = mainViewModel.connectionStateRepository.vpnStartedFlow.value
@@ -107,7 +120,9 @@ class HealthCheckManager(
     fun stopHealthCheck() {
         logger.log("[HC] stopHealthCheck() called")
         logger.log("[HC] Cancelling job: ${healthJob?.isActive == true}")
+        logger.log("[HC] In-flight native checks may continue logging until their timeout")
 
+        healthGeneration += 1
         healthJob?.cancel()
         healthJob = null
 
