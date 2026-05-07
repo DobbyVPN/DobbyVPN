@@ -270,7 +270,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logInterfacesDetailed(label: "AFTER_PROTOCOL_STARTUP")
         logResourceSnapshot(label: "AFTER_PROTOCOL_STARTUP")
     }
-    }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel reason=\(reason.rawValue) (\(reason))")
@@ -614,29 +613,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func resolveIPv4IfNeededWithTimeout(_ host: String, timeout: TimeInterval) -> String? {
-        let group = DispatchGroup()
-        group.enter()
-        let lock = NSLock()
-        var result: String? = nil
-
+        var result: String?
+        let sema = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .userInitiated).async {
-            let ip = self.resolveIPv4IfNeeded(host)
-            lock.lock()
-            result = ip
-            lock.unlock()
-            group.leave()
+            result = self.resolveIPv4IfNeeded(host)
+            sema.signal()
         }
-
-        let wait = group.wait(timeout: .now() + timeout)
-        if wait == .timedOut {
-            logs.writeLog(
-                log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: host)) timed out after \(Int(timeout * 1000))ms"
-            )
+        if sema.wait(timeout: .now() + timeout) == .timedOut {
+            logs.writeLog(log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: host)) timed out after \(Int(timeout * 1000))ms")
             return nil
         }
-        lock.lock()
-        let value = result
-        lock.unlock()
-        return value
+        return result
     }
 }
