@@ -4,35 +4,23 @@ package platform_engine
 
 import (
 	"fmt"
-	"runtime"
 
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 
 	"go_module/log"
 )
 
-const (
-	defaultFDMTU = 1500
-	iosFDMTU     = 1200
-)
-
 func startPlatformEngine(cfg interface{}) error {
 	c := cfg.(EngineConfig)
-	fd := c.FD
-	proxyAddr := c.ProxyAddr
-	mtu := c.MTU
-	if mtu <= 0 {
-		mtu = defaultPlatformMTU()
-	}
 
 	key := &engine.Key{
-		Proxy:    fmt.Sprintf("socks5://%s", proxyAddr),
-		Device:   fmt.Sprintf("fd://%d", fd),
+		Proxy:    fmt.Sprintf("socks5://%s", c.ProxyAddr),
+		Device:   fmt.Sprintf("fd://%d", c.FD),
 		LogLevel: "info",
-		MTU:      mtu,
+		MTU:      1200,
 	}
 
-	log.Infof("[Engine][FD] Insert key proxy=%s device=fd://%d mtu=%d", proxyAddr, fd, key.MTU)
+	log.Infof("[Engine][FD] Insert key proxy=%s device=fd://%d mtu=%d", c.ProxyAddr, c.FD, key.MTU)
 	engine.Insert(key)
 	log.Infof("[Engine][FD] Start begin")
 	engine.Start()
@@ -42,11 +30,4 @@ func startPlatformEngine(cfg interface{}) error {
 
 func stopPlatformEngine() {
 	log.Infof("[Engine][FD] platform stop hook")
-}
-
-func defaultPlatformMTU() int {
-	if runtime.GOOS == "ios" {
-		return iosFDMTU
-	}
-	return defaultFDMTU
 }
