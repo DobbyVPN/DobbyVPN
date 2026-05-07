@@ -6,6 +6,8 @@ import (
 	"github.com/cbeuw/Cloak/exported_client"
 	"go_module/common"
 	"net"
+	"runtime"
+	"runtime/debug"
 	"sync"
 
 	"go_module/log"
@@ -85,6 +87,14 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 	err = common.Client.Connect(Name)
 	if err != nil {
 		log.Infof("cloak client: Failed to connect to cloak client - %v", err)
+		client = nil
+		if cloakConfig.RemoteHost != "" {
+			common.Client.MarkInCriticalSection(Name)
+			StopRoutingCloak(cloakConfig.RemoteHost)
+			common.Client.MarkOutOffCriticalSection(Name)
+			cloakConfig.RemoteHost = ""
+		}
+		common.Client.MarkInactive(Name)
 		return
 	}
 
@@ -132,6 +142,12 @@ func StopCloakClient() {
 	client = nil
 
 	log.Infof("Client disconnected")
+
+	// Explicitly reclaim memory after the Cloak session and stream buffers are gone.
+	// This is especially useful inside iOS Network Extensions with tight memory caps.
+	runtime.GC()
+	debug.FreeOSMemory()
+	log.Infof("StopCloakClient: memory released")
 }
 
 func resolveRemoteHostIfNeeded(host string) (string, error) {
