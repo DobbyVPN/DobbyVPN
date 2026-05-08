@@ -178,9 +178,10 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 
 	case "tcp":
 		attempt := d.tcpDialAttempt.Add(1)
-		inFlight := d.startTCPDial()
+		inFlight := d.tcpDialInFlight.Add(1)
+		updatePeakInt64(&d.tcpDialPeak, inFlight)
 		log.Infof("[SOCKS5 TCP BEGIN] attempt=%d dst=%s server=%s inFlight=%d stats={%s}", attempt, addr, serverIP, inFlight, d.dialStats())
-		defer d.finishTCPDial()
+		defer d.tcpDialInFlight.Add(-1)
 
 		conn, err := d.streamDialer.DialStream(ctx, addr)
 		if err != nil {
@@ -195,9 +196,10 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 
 	case "udp":
 		attempt := d.udpDialAttempt.Add(1)
-		inFlight := d.startUDPDial()
+		inFlight := d.udpDialInFlight.Add(1)
+		updatePeakInt64(&d.udpDialPeak, inFlight)
 		log.Infof("[SOCKS5 UDP BEGIN] attempt=%d dst=%s server=%s inFlight=%d stats={%s}", attempt, addr, serverIP, inFlight, d.dialStats())
-		defer d.finishUDPDial()
+		defer d.udpDialInFlight.Add(-1)
 
 		// DNS fallback for Cloak
 		if d.useCloak && port == 53 {
@@ -224,26 +226,6 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	d.unsupportedDial.Add(1)
 	log.Infof("[SOCKS5 ERROR] dst=%s server=%s elapsed=%s err=%v", addr, serverIP, time.Since(start), err)
 	return nil, err
-}
-
-func (d *OutlineDevice) startTCPDial() int64 {
-	current := d.tcpDialInFlight.Add(1)
-	updatePeakInt64(&d.tcpDialPeak, current)
-	return current
-}
-
-func (d *OutlineDevice) finishTCPDial() {
-	d.tcpDialInFlight.Add(-1)
-}
-
-func (d *OutlineDevice) startUDPDial() int64 {
-	current := d.udpDialInFlight.Add(1)
-	updatePeakInt64(&d.udpDialPeak, current)
-	return current
-}
-
-func (d *OutlineDevice) finishUDPDial() {
-	d.udpDialInFlight.Add(-1)
 }
 
 func updatePeakInt64(peak *atomic.Int64, current int64) {

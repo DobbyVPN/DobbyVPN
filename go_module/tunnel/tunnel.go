@@ -46,12 +46,8 @@ type DobbyProxy struct {
 	peakUDP   atomic.Int64
 
 	tcpDialAttempt atomic.Uint64
-	tcpDialOK      atomic.Uint64
-	tcpDialErr     atomic.Uint64
 	tcpLimitErr    atomic.Uint64
 	udpDialAttempt atomic.Uint64
-	udpDialOK      atomic.Uint64
-	udpDialErr     atomic.Uint64
 	udpLimitErr    atomic.Uint64
 	udpIdleTimeout atomic.Uint64
 }
@@ -177,7 +173,7 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 	start := time.Now()
 	dest := metadata.DestinationAddress()
 	attempt := p.tcpDialAttempt.Add(1)
-	route, px := "VPN", proxy.Proxy(p.vpn)
+	route, px := "VPN", p.vpn
 	if IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
 	}
@@ -188,7 +184,6 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 func (p *DobbyProxy) dialTCPRoute(ctx context.Context, metadata *M.Metadata, route string, px proxy.Proxy, attempt uint64, dest string, start time.Time) (net.Conn, error) {
 	active, release, err := p.tcpSlot.reserve(dest, &p.activeTCP)
 	if err != nil {
-		p.tcpDialErr.Add(1)
 		p.tcpLimitErr.Add(1)
 		log.Infof("[Router] %s TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
 		return nil, err
@@ -196,11 +191,9 @@ func (p *DobbyProxy) dialTCPRoute(ctx context.Context, metadata *M.Metadata, rou
 	conn, err := px.DialContext(ctx, metadata)
 	if err != nil {
 		release()
-		p.tcpDialErr.Add(1)
 		log.Infof("[Router] %s TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
-	p.tcpDialOK.Add(1)
 	updatePeakInt64(&p.peakTCP, active)
 	log.Infof("[Router] %s TCP dial OK attempt=%d dest=%s elapsed=%s local=%s remote=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), p.flowStats())
 	return &trackedConn{Conn: conn, release: release, route: route, dest: dest, started: time.Now()}, nil
@@ -221,7 +214,6 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.Proxy, attempt uint64, dest string, start time.Time) (net.PacketConn, error) {
 	active, release, err := p.udpSlot.reserve(dest, &p.activeUDP)
 	if err != nil {
-		p.udpDialErr.Add(1)
 		p.udpLimitErr.Add(1)
 		log.Infof("[Router] %s UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
 		return nil, err
@@ -229,11 +221,9 @@ func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.P
 	conn, err := px.DialUDP(metadata)
 	if err != nil {
 		release()
-		p.udpDialErr.Add(1)
 		log.Infof("[Router] %s UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
-	p.udpDialOK.Add(1)
 	updatePeakInt64(&p.peakUDP, active)
 	log.Infof("[Router] %s UDP dial OK attempt=%d dest=%s elapsed=%s local=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), p.flowStats())
 	tracked := &trackedPacketConn{PacketConn: conn, release: release, route: route, dest: dest, started: time.Now()}
@@ -333,17 +323,13 @@ func StopEngine() {
 
 func (p *DobbyProxy) flowStats() string {
 	return fmt.Sprintf(
-		"activeTCP=%d peakTCP=%d activeUDP=%d peakUDP=%d tcp=%d/%d/%d udp=%d/%d/%d tcpLimit=%d udpLimit=%d udpIdleTimeout=%d",
+		"activeTCP=%d peakTCP=%d activeUDP=%d peakUDP=%d tcpAttempt=%d udpAttempt=%d tcpLimit=%d udpLimit=%d udpIdleTimeout=%d",
 		p.activeTCP.Load(),
 		p.peakTCP.Load(),
 		p.activeUDP.Load(),
 		p.peakUDP.Load(),
 		p.tcpDialAttempt.Load(),
-		p.tcpDialOK.Load(),
-		p.tcpDialErr.Load(),
 		p.udpDialAttempt.Load(),
-		p.udpDialOK.Load(),
-		p.udpDialErr.Load(),
 		p.tcpLimitErr.Load(),
 		p.udpLimitErr.Load(),
 		p.udpIdleTimeout.Load(),
@@ -383,13 +369,13 @@ type flowSlot struct {
 	maxDest  int
 }
 
-func (s *flowSlot) reserve(dest string, active *atomic.Int64) (int64, func() int64, error) {
+func (s *flowSlot) reserve(dest string, active *atomic.Int64) (cur int64, release func() int64, err error) {
 	host := flowHost(dest)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cur := active.Load()
+	cur = active.Load()
 	switch {
 	case cur >= s.maxTotal:
 		return cur, nil, fmt.Errorf("flow limit reached active=%d max=%d", cur, s.maxTotal)
@@ -403,7 +389,7 @@ func (s *flowSlot) reserve(dest string, active *atomic.Int64) (int64, func() int
 	s.byDest[dest]++
 	cur = active.Add(1)
 
-	release := func() int64 {
+	release = func() int64 {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		decrementFlowCount(s.byHost, host)
