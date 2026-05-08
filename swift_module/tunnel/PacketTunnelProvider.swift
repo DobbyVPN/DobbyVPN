@@ -26,8 +26,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let memoryHighWaterLock = NSLock()
     private var memoryHighWaterMarkMB = 0.0
     private var tunnelStartedAt = Date()
-    private let memoryWarningMB = 30.0
-    private let memoryCriticalMB = 35.0
 
     func reportMemoryUsageMB() -> Double {
         var info = task_vm_info_data_t()
@@ -42,49 +40,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         if result == KERN_SUCCESS {
             let usedBytes = info.phys_footprint
             let usedMB = Double(usedBytes) / 1024.0 / 1024.0
-            let highWater = updateMemoryHighWaterMark(usedMB)
+            memoryHighWaterLock.lock()
+            if usedMB > memoryHighWaterMarkMB { memoryHighWaterMarkMB = usedMB }
+            let highWater = memoryHighWaterMarkMB
+            memoryHighWaterLock.unlock()
             logs.writeLog(
                 log: "[Memory] VPN use: \(String(format: "%.2f", usedMB)) MB " +
                     "highWaterMB=\(String(format: "%.2f", highWater))"
             )
-            if usedMB >= memoryCriticalMB {
-                logs.writeLog(
-                    log: "[Memory][CRITICAL] VPN memory reached \(String(format: "%.2f", usedMB)) MB " +
-                        "criticalMB=\(String(format: "%.2f", memoryCriticalMB))"
-                )
-            } else if usedMB >= memoryWarningMB {
-                logs.writeLog(
-                    log: "[Memory][WARN] VPN memory reached \(String(format: "%.2f", usedMB)) MB " +
-                        "warningMB=\(String(format: "%.2f", memoryWarningMB))"
-                )
-            }
             return usedMB
         }
         logs.writeLog(log: "[Memory] unable to get info")
         return 0.0
-    }
-
-    private func updateMemoryHighWaterMark(_ value: Double) -> Double {
-        memoryHighWaterLock.lock()
-        if value > memoryHighWaterMarkMB {
-            memoryHighWaterMarkMB = value
-        }
-        let highWater = memoryHighWaterMarkMB
-        memoryHighWaterLock.unlock()
-        return highWater
-    }
-
-    private func currentMemoryHighWaterMark() -> Double {
-        memoryHighWaterLock.lock()
-        let highWater = memoryHighWaterMarkMB
-        memoryHighWaterLock.unlock()
-        return highWater
-    }
-
-    private func resetMemoryHighWaterMark() {
-        memoryHighWaterLock.lock()
-        memoryHighWaterMarkMB = 0
-        memoryHighWaterLock.unlock()
     }
 
     func logInterfaces() {
@@ -156,7 +123,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func startTunnel(options: [String : NSObject]?) async throws {
         tunnelStartedAt = Date()
-        resetMemoryHighWaterMark()
+        memoryHighWaterLock.lock()
+        memoryHighWaterMarkMB = 0
+        memoryHighWaterLock.unlock()
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let osVersionString = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
@@ -413,7 +382,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func logResourceSnapshot(label: String) {
         let memory = reportMemoryUsageMB()
-        let highWater = currentMemoryHighWaterMark()
+        memoryHighWaterLock.lock()
+        let highWater = memoryHighWaterMarkMB
+        memoryHighWaterLock.unlock()
         let uptimeMs = elapsedMs(since: tunnelStartedAt)
         let path = lastPathSignature ?? "(none)"
         logs.writeLog(

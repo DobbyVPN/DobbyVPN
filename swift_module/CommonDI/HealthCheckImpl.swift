@@ -59,9 +59,6 @@ public final class HealthCheckImpl: HealthCheck {
     public private(set) var currentMemmoryUsageMb = 0.0
     private var checkSequence = 0
     private let checkSequenceLock = NSLock()
-    private let tunnelMemoryLock = NSLock()
-    private var lastTunnelMemoryUsageMb: Double?
-    private var tunnelMemoryHighWaterMb = 0.0
 
     public func shortConnectionCheckUp() -> Bool {
         let checkId = nextCheckId(prefix: "short")
@@ -538,11 +535,8 @@ public final class HealthCheckImpl: HealthCheck {
                     defer { semaphore.signal() }
                     memory = self.parseMemoryResponse(response)
                     if memory >= 0 {
-                        let stats = self.updateTunnelMemoryStats(memory)
-                        let deltaText = stats.delta.map { String(format: "%.2f", $0) } ?? "n/a"
                         self.logs.writeLog(
                             log: "[HC] XPC heartbeat OK memory=\(String(format: "%.2f", memory))MB " +
-                                "deltaMB=\(deltaText) highWaterMB=\(String(format: "%.2f", stats.highWater)) " +
                                 "elapsed=\(self.elapsedMs(since: started))ms"
                         )
                     } else {
@@ -560,18 +554,6 @@ public final class HealthCheckImpl: HealthCheck {
             logs.writeLog(log: "[HC] XPC heartbeat timed out after \(Int(timeout * 1000))ms")
         }
         return memory
-    }
-
-    private func updateTunnelMemoryStats(_ value: Double) -> (delta: Double?, highWater: Double) {
-        tunnelMemoryLock.lock()
-        let delta = lastTunnelMemoryUsageMb.map { value - $0 }
-        lastTunnelMemoryUsageMb = value
-        if value > tunnelMemoryHighWaterMb {
-            tunnelMemoryHighWaterMb = value
-        }
-        let highWater = tunnelMemoryHighWaterMb
-        tunnelMemoryLock.unlock()
-        return (delta, highWater)
     }
 
     private func parseMemoryResponse(_ response: Data?) -> Double {

@@ -169,22 +169,7 @@ func (socksLogger) Errorf(format string, args ...interface{}) {
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
 
 	start := time.Now()
-	serverIP := "<nil>"
-	if d.svrIP != nil {
-		serverIP = d.svrIP.String()
-	}
-
-	log.Infof(
-		"[SOCKS5] dial network=%s addr=%s via server=%s websocket=%v tcpPath=%v udpPath=%v cloak=%v stats={%s}",
-		network,
-		addr,
-		serverIP,
-		d.websocket,
-		d.hasTCPPath,
-		d.hasUDPPath,
-		d.useCloak,
-		d.dialStats(),
-	)
+	serverIP := d.serverIPString()
 
 	host, portStr, _ := net.SplitHostPort(addr)
 	port, _ := strconv.Atoi(portStr)
