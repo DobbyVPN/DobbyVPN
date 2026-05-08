@@ -28,11 +28,14 @@ actual fun provideLogFilePath(): Path {
     return logFilePath
 }
 
+@OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 actual fun platformLogInfo(): String {
     val processInfo = NSProcessInfo.processInfo
-    val version = processInfo.operatingSystemVersion
+    val version = processInfo.operatingSystemVersion.useContents {
+        "$majorVersion.$minorVersion.$patchVersion"
+    }
     return "platform=ios " +
-        "osVersion=${version.majorVersion}.${version.minorVersion}.${version.patchVersion} " +
+        "osVersion=$version " +
         "osDescription=${processInfo.operatingSystemVersionString} " +
         "process=${processInfo.processName} " +
         "physicalMemory=${processInfo.physicalMemory}"
