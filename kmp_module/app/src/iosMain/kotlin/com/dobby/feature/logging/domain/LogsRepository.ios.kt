@@ -1,5 +1,7 @@
 package com.dobby.feature.logging.domain
 
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.useContents
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
@@ -28,7 +30,7 @@ actual fun provideLogFilePath(): Path {
     return logFilePath
 }
 
-@OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+@OptIn(ExperimentalForeignApi::class)
 actual fun platformLogInfo(): String {
     val processInfo = NSProcessInfo.processInfo
     val version = processInfo.operatingSystemVersion.useContents {
