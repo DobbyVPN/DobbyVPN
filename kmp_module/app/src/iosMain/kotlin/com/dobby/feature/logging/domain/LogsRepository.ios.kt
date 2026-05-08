@@ -4,6 +4,7 @@ import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
 import platform.Foundation.NSFileManager
+import platform.Foundation.NSProcessInfo
 
 actual val fileSystem: FileSystem = FileSystem.SYSTEM
 
@@ -25,4 +26,14 @@ actual fun provideLogFilePath(): Path {
         println("Log file already exists at: $logFilePath")
     }
     return logFilePath
+}
+
+actual fun platformLogInfo(): String {
+    val processInfo = NSProcessInfo.processInfo
+    val version = processInfo.operatingSystemVersion
+    return "platform=ios " +
+        "osVersion=${version.majorVersion}.${version.minorVersion}.${version.patchVersion} " +
+        "osDescription=${processInfo.operatingSystemVersionString} " +
+        "process=${processInfo.processName} " +
+        "physicalMemory=${processInfo.physicalMemory}"
 }

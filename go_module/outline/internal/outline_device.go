@@ -111,7 +111,7 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 
 	server := socks5.NewServer(
 		socks5.WithDial(od.handleDial),
-		socks5.WithLogger(socksLogger{}),
+		socks5.WithLogger(socksLogger{device: od}),
 	)
 
 	lc := net.ListenConfig{}
@@ -139,9 +139,11 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 	return od, nil
 }
 
-type socksLogger struct{}
+type socksLogger struct {
+	device *OutlineDevice
+}
 
-func (socksLogger) Errorf(format string, args ...interface{}) {
+func (l socksLogger) Errorf(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	if strings.Contains(msg, "EOF") ||
 		strings.Contains(msg, "use of closed network connection") ||
@@ -150,7 +152,27 @@ func (socksLogger) Errorf(format string, args ...interface{}) {
 	}
 	if strings.Contains(msg, "chacha20poly1305: message authentication failed") {
 		count := socksInternalAuthErr.Add(1)
-		log.Infof("[SOCKS5 internal][auth_error count=%d] %s", count, msg)
+		if l.device != nil {
+			log.Infof(
+				"[SOCKS5 internal][auth_error count=%d websocket=%v tcpPath=%v udpPath=%v packetDialer=%T] %s",
+				count,
+				l.device.websocket,
+				l.device.hasTCPPath,
+				l.device.hasUDPPath,
+				l.device.packetDialer,
+				msg,
+			)
+			if count == 1 || count%25 == 0 {
+				log.Infof(
+					"[SOCKS5 UDP DIAG] auth errors mean UDP responses could not be decrypted; websocket=%v udpPath=%v packetDialer=%T",
+					l.device.websocket,
+					l.device.hasUDPPath,
+					l.device.packetDialer,
+				)
+			}
+		} else {
+			log.Infof("[SOCKS5 internal][auth_error count=%d] %s", count, msg)
+		}
 		return
 	}
 	if strings.Contains(msg, "connection reset by peer") {

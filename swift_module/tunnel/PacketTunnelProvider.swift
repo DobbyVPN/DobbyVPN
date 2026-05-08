@@ -27,6 +27,43 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var memoryHighWaterMarkMB = 0.0
     private var tunnelStartedAt = Date()
 
+    private func fixedCString<T>(_ value: inout T) -> String {
+        withUnsafePointer(to: &value) { pointer in
+            pointer.withMemoryRebound(to: CChar.self, capacity: MemoryLayout<T>.size) { cString in
+                String(cString: cString)
+            }
+        }
+    }
+
+    private func logSystemInfo(osVersionString: String) {
+        let processInfo = ProcessInfo.processInfo
+        var sysname = "unknown"
+        var release = "unknown"
+        var version = "unknown"
+        var machine = "unknown"
+
+        var uts = utsname()
+        if uname(&uts) == 0 {
+            var utsSysname = uts.sysname
+            var utsRelease = uts.release
+            var utsVersion = uts.version
+            var utsMachine = uts.machine
+            sysname = fixedCString(&utsSysname)
+            release = fixedCString(&utsRelease)
+            version = fixedCString(&utsVersion)
+            machine = fixedCString(&utsMachine)
+        }
+
+        let physicalMemoryMB = processInfo.physicalMemory / 1024 / 1024
+        logs.writeLog(
+            log: "[tunnel:\(tunnelId)] OS platform=iOS osVersion=\(osVersionString) " +
+                "osDescription=\(processInfo.operatingSystemVersionString) " +
+                "process=\(processInfo.processName) kernel=\(sysname) " +
+                "kernelRelease=\(release) kernelVersion=\(version) " +
+                "machine=\(machine) physicalMemoryMB=\(physicalMemoryMB)"
+        )
+    }
+
     func reportMemoryUsageMB() -> Double {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<natural_t>.stride)
@@ -130,6 +167,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let osVersionString = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         let optionKeys = options?.keys.sorted().joined(separator: ",") ?? "(none)"
+        logSystemInfo(osVersionString: osVersionString)
         logs.writeLog(log: "[iOS26-RESEARCH] iOS version: \(osVersionString)")
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")

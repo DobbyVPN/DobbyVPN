@@ -25,12 +25,12 @@ var (
 )
 
 const (
-	maxActiveTCPConnections         = 96
-	maxActiveTCPConnectionsPerHost  = 32
-	maxActiveTCPConnectionsPerDest  = 16
-	maxActiveUDPAssociations        = 64
-	maxActiveUDPAssociationsPerHost = 16
-	maxActiveUDPAssociationsPerDest = 8
+	maxActiveTCPConnections         = 256
+	maxActiveTCPConnectionsPerHost  = 64
+	maxActiveTCPConnectionsPerDest  = 32
+	maxActiveUDPAssociations        = 256
+	maxActiveUDPAssociationsPerHost = 64
+	maxActiveUDPAssociationsPerDest = 32
 	udpAssociationIdleTimeout       = 10 * time.Second
 )
 
@@ -270,6 +270,16 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 		return fmt.Errorf("current dialer is not a proxy")
 	}
 	log.Infof("[Engine] vpn outbound proxy type=%T addr=%s", vpnOutbound, vpnOutbound.Addr())
+	log.Infof(
+		"[Engine] DobbyProxy limits tcp(total=%d host=%d dest=%d) udp(total=%d host=%d dest=%d idleTimeout=%s)",
+		maxActiveTCPConnections,
+		maxActiveTCPConnectionsPerHost,
+		maxActiveTCPConnectionsPerDest,
+		maxActiveUDPAssociations,
+		maxActiveUDPAssociationsPerHost,
+		maxActiveUDPAssociationsPerDest,
+		udpAssociationIdleTimeout,
+	)
 
 	wrapper := &DobbyProxy{
 		vpn:    vpnOutbound,
@@ -323,7 +333,7 @@ func StopEngine() {
 
 func (p *DobbyProxy) flowStats() string {
 	return fmt.Sprintf(
-		"activeTCP=%d peakTCP=%d activeUDP=%d peakUDP=%d tcpAttempt=%d udpAttempt=%d tcpLimit=%d udpLimit=%d udpIdleTimeout=%d",
+		"activeTCP=%d peakTCP=%d activeUDP=%d peakUDP=%d tcpAttempt=%d udpAttempt=%d tcpLimitErr=%d udpLimitErr=%d udpIdleTimeout=%d limits=tcp:%d/%d/%d,udp:%d/%d/%d",
 		p.activeTCP.Load(),
 		p.peakTCP.Load(),
 		p.activeUDP.Load(),
@@ -333,6 +343,12 @@ func (p *DobbyProxy) flowStats() string {
 		p.tcpLimitErr.Load(),
 		p.udpLimitErr.Load(),
 		p.udpIdleTimeout.Load(),
+		maxActiveTCPConnections,
+		maxActiveTCPConnectionsPerHost,
+		maxActiveTCPConnectionsPerDest,
+		maxActiveUDPAssociations,
+		maxActiveUDPAssociationsPerHost,
+		maxActiveUDPAssociationsPerDest,
 	)
 }
 
