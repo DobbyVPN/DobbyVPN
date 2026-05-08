@@ -138,7 +138,6 @@ func (d *tunDevice) GetFd() int {
 		return -1
 	}
 
-	// путь 1: *os.File
 	if f, ok := d.ReadWriteCloser.(*os.File); ok {
 		fd, err := protected_dialer.UintptrToInt(f.Fd())
 		if err != nil {
@@ -149,7 +148,6 @@ func (d *tunDevice) GetFd() int {
 		return fd
 	}
 
-	// путь 2: Fd() interface
 	type fder interface {
 		Fd() uintptr
 	}

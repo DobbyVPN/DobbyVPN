@@ -23,6 +23,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var pathMonitor: Network.NWPathMonitor?
     private var lastPathSignature: String?
+    private let memoryHighWaterLock = NSLock()
+    private var memoryHighWaterMarkMB = 0.0
+    private var tunnelStartedAt = Date()
 
     func reportMemoryUsageMB() -> Double {
         var info = task_vm_info_data_t()
@@ -37,7 +40,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         if result == KERN_SUCCESS {
             let usedBytes = info.phys_footprint
             let usedMB = Double(usedBytes) / 1024.0 / 1024.0
-            logs.writeLog(log: "[Memory] VPN use: \(String(format: "%.2f", usedMB)) MB")
+            memoryHighWaterLock.lock()
+            if usedMB > memoryHighWaterMarkMB { memoryHighWaterMarkMB = usedMB }
+            let highWater = memoryHighWaterMarkMB
+            memoryHighWaterLock.unlock()
+            logs.writeLog(
+                log: "[Memory] VPN use: \(String(format: "%.2f", usedMB)) MB " +
+                    "highWaterMB=\(String(format: "%.2f", highWater))"
+            )
             return usedMB
         }
         logs.writeLog(log: "[Memory] unable to get info")
@@ -112,6 +122,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func startTunnel(options: [String : NSObject]?) async throws {
+        tunnelStartedAt = Date()
+        memoryHighWaterLock.lock()
+        memoryHighWaterMarkMB = 0
+        memoryHighWaterLock.unlock()
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let osVersionString = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
@@ -223,6 +237,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         logs.writeLog(log: "startTunnel: all packet loops started")
         logInterfacesDetailed(label: "AFTER_PROTOCOL_STARTUP")
+        logResourceSnapshot(label: "AFTER_PROTOCOL_STARTUP")
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
@@ -365,9 +380,66 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    private func logResourceSnapshot(label: String) {
+        let memory = reportMemoryUsageMB()
+        memoryHighWaterLock.lock()
+        let highWater = memoryHighWaterMarkMB
+        memoryHighWaterLock.unlock()
+        let uptimeMs = elapsedMs(since: tunnelStartedAt)
+        let path = lastPathSignature ?? "(none)"
+        logs.writeLog(
+            log: "[tunnel:\(tunnelId)] RESOURCE \(label) uptimeMs=\(uptimeMs) " +
+                "memoryMB=\(String(format: "%.2f", memory)) " +
+                "memoryHighWaterMB=\(String(format: "%.2f", highWater)) " +
+                "path=\(path) interfaces={\(dobbyInterfaceSummary())}"
+        )
+    }
+
+    private func dobbyInterfaceSummary() -> String {
+        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else {
+            return "scanFailed errno=\(errno)"
+        }
+        defer { freeifaddrs(ifaddrPtr) }
+
+        var dobbyMatches: [String] = []
+        var vpnInterfaces: [String] = []
+        var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        while let current = ptr {
+            let rawName = String(cString: current.pointee.ifa_name)
+            let lowerName = rawName.lowercased()
+            let address = addressDescription(current.pointee.ifa_addr)
+            let flags = current.pointee.ifa_flags
+            let detail = "\(rawName)(\(address),flags=0x\(String(flags, radix: 16)))"
+
+            if isVPNInterfaceName(lowerName) {
+                vpnInterfaces.append(detail)
+            }
+            if address == "198.18.0.1" {
+                dobbyMatches.append(detail)
+            }
+            ptr = current.pointee.ifa_next
+        }
+
+        let vpnPrefix = Array(vpnInterfaces.prefix(10)).joined(separator: ",")
+        let vpnSuffix = vpnInterfaces.count > 10 ? ",truncated=\(vpnInterfaces.count - 10)" : ""
+        let dobby = dobbyMatches.isEmpty ? "none" : dobbyMatches.joined(separator: ",")
+        let vpn = vpnInterfaces.isEmpty ? "none" : "\(vpnPrefix)\(vpnSuffix)"
+        return "dobbyIPv4=\(dobby) vpnInterfaces=\(vpn)"
+    }
+
+    private func isVPNInterfaceName(_ lowerName: String) -> Bool {
+        lowerName.contains("utun") ||
+            lowerName.contains("tun") ||
+            lowerName.contains("tap") ||
+            lowerName.contains("ppp") ||
+            lowerName.contains("ipsec")
+    }
+
     @MainActor
     private func teardownForStop(reason: String) async {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
+        logResourceSnapshot(label: "TEARDOWN_BEGIN reason=\(reason)")
 
         do {
             try cloakInteractor.stopCloak()
@@ -398,6 +470,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         pathMonitor = nil
         lastPathSignature = nil
 
+        logResourceSnapshot(label: "TEARDOWN_END reason=\(reason)")
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason))")
     }
 
@@ -511,29 +584,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func resolveIPv4IfNeededWithTimeout(_ host: String, timeout: TimeInterval) -> String? {
-        let group = DispatchGroup()
-        group.enter()
-        let lock = NSLock()
-        var result: String? = nil
-
+        var result: String?
+        let sema = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .userInitiated).async {
-            let ip = self.resolveIPv4IfNeeded(host)
-            lock.lock()
-            result = ip
-            lock.unlock()
-            group.leave()
+            result = self.resolveIPv4IfNeeded(host)
+            sema.signal()
         }
-
-        let wait = group.wait(timeout: .now() + timeout)
-        if wait == .timedOut {
-            logs.writeLog(
-                log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: host)) timed out after \(Int(timeout * 1000))ms"
-            )
+        if sema.wait(timeout: .now() + timeout) == .timedOut {
+            logs.writeLog(log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: host)) timed out after \(Int(timeout * 1000))ms")
             return nil
         }
-        lock.lock()
-        let value = result
-        lock.unlock()
-        return value
+        return result
     }
 }

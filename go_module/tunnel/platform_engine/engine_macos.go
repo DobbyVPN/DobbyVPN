@@ -27,7 +27,7 @@ func startPlatformEngine(cfg interface{}) error {
 		Proxy:    fmt.Sprintf("socks5://%s", proxyAddr),
 		Device:   deviceName,
 		LogLevel: "info",
-		MTU:      1500,
+		MTU:      1200,
 	}
 
 	engine.Insert(key)
