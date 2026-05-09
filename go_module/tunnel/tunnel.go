@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,8 +26,8 @@ var (
 )
 
 const (
-	maxActiveTCPConnections  = 256
-	maxActiveUDPAssociations = 256
+	maxActiveTCPConnections   = 256
+	maxActiveUDPAssociations  = 256
 	udpAssociationIdleTimeout = 10 * time.Second
 )
 
@@ -370,18 +371,41 @@ func (p *DobbyProxy) flowStats() string {
 }
 
 func (p *DobbyProxy) logStatsLoop(stop <-chan struct{}) {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
+	log.Infof("[Router STATS] started interval=1s flow={%s} runtime={%s}", p.flowStats(), goRuntimeStats())
 	for {
 		select {
 		case <-ticker.C:
-			log.Infof("[Router STATS] flow={%s}", p.flowStats())
+			log.Infof("[Router STATS] flow={%s} runtime={%s}", p.flowStats(), goRuntimeStats())
 		case <-stop:
-			log.Infof("[Router STATS] stopped flow={%s}", p.flowStats())
+			log.Infof("[Router STATS] stopped flow={%s} runtime={%s}", p.flowStats(), goRuntimeStats())
 			return
 		}
 	}
+}
+
+func goRuntimeStats() string {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+
+	return fmt.Sprintf(
+		"goroutines=%d heapAllocMB=%.2f heapInuseMB=%.2f stackInuseMB=%.2f sysMB=%.2f nextGCMB=%.2f numGC=%d pauseTotalMs=%d gcCPUFraction=%.4f",
+		runtime.NumGoroutine(),
+		bytesToMiB(mem.HeapAlloc),
+		bytesToMiB(mem.HeapInuse),
+		bytesToMiB(mem.StackInuse),
+		bytesToMiB(mem.Sys),
+		bytesToMiB(mem.NextGC),
+		mem.NumGC,
+		mem.PauseTotalNs/uint64(time.Millisecond),
+		mem.GCCPUFraction,
+	)
+}
+
+func bytesToMiB(bytes uint64) float64 {
+	return float64(bytes) / 1024.0 / 1024.0
 }
 
 func updatePeakInt64(peak *atomic.Int64, current int64) {
