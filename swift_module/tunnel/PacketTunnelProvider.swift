@@ -23,9 +23,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var pathMonitor: Network.NWPathMonitor?
     private var lastPathSignature: String?
+    private var resourceSnapshotTimer: DispatchSourceTimer?
     private let memoryHighWaterLock = NSLock()
     private var memoryHighWaterMarkMB = 0.0
     private var tunnelStartedAt = Date()
+
+    private struct MemorySnapshot {
+        let footprintMB: Double
+        let residentMB: Double
+        let virtualMB: Double
+    }
 
     private func fixedCString<T>(_ value: inout T) -> String {
         withUnsafePointer(to: &value) { pointer in
@@ -64,7 +71,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         )
     }
 
-    func reportMemoryUsageMB() -> Double {
+    private func bytesToMB<T: BinaryInteger>(_ bytes: T) -> Double {
+        Double(bytes) / 1024.0 / 1024.0
+    }
+
+    private func readMemorySnapshot() -> MemorySnapshot? {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<natural_t>.stride)
 
@@ -75,20 +86,33 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         if result == KERN_SUCCESS {
-            let usedBytes = info.phys_footprint
-            let usedMB = Double(usedBytes) / 1024.0 / 1024.0
-            memoryHighWaterLock.lock()
-            if usedMB > memoryHighWaterMarkMB { memoryHighWaterMarkMB = usedMB }
-            let highWater = memoryHighWaterMarkMB
-            memoryHighWaterLock.unlock()
-            logs.writeLog(
-                log: "[Memory] VPN use: \(String(format: "%.2f", usedMB)) MB " +
-                    "highWaterMB=\(String(format: "%.2f", highWater))"
+            return MemorySnapshot(
+                footprintMB: bytesToMB(info.phys_footprint),
+                residentMB: bytesToMB(info.resident_size),
+                virtualMB: bytesToMB(info.virtual_size)
             )
-            return usedMB
         }
-        logs.writeLog(log: "[Memory] unable to get info")
-        return 0.0
+        logs.writeLog(log: "[Memory] task_info(TASK_VM_INFO) failed kern=\(result)")
+        return nil
+    }
+
+    func reportMemoryUsageMB() -> Double {
+        guard let snapshot = readMemorySnapshot() else {
+            return 0.0
+        }
+
+        let usedMB = snapshot.footprintMB
+        memoryHighWaterLock.lock()
+        if usedMB > memoryHighWaterMarkMB { memoryHighWaterMarkMB = usedMB }
+        let highWater = memoryHighWaterMarkMB
+        memoryHighWaterLock.unlock()
+        logs.writeLog(
+            log: "[Memory] footprintMB=\(String(format: "%.2f", snapshot.footprintMB)) " +
+                "residentMB=\(String(format: "%.2f", snapshot.residentMB)) " +
+                "virtualMB=\(String(format: "%.2f", snapshot.virtualMB)) " +
+                "highWaterMB=\(String(format: "%.2f", highWater))"
+        )
+        return usedMB
     }
 
     func logInterfaces() {
@@ -177,6 +201,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         await teardownForStop(reason: "pre-start cleanup")
 
         startPathLogging()
+        startResourceSnapshotLogging()
         logInitialNetworkPath(timeout: 1.0)
 
         let cloakConfig = configsRepository.getCloakConfig()
@@ -429,8 +454,54 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             log: "[tunnel:\(tunnelId)] RESOURCE \(label) uptimeMs=\(uptimeMs) " +
                 "memoryMB=\(String(format: "%.2f", memory)) " +
                 "memoryHighWaterMB=\(String(format: "%.2f", highWater)) " +
+                "fd={\(fileDescriptorSummary())} " +
                 "path=\(path) interfaces={\(dobbyInterfaceSummary())}"
         )
+    }
+
+    private func startResourceSnapshotLogging() {
+        stopResourceSnapshotLogging(reason: "restart")
+
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "vpn.dobby.app.tunnel.resources.\(tunnelId)"))
+        timer.schedule(deadline: .now() + 1.0, repeating: 1.0)
+        timer.setEventHandler { [weak self] in
+            self?.logResourceSnapshot(label: "PERIODIC")
+        }
+        resourceSnapshotTimer = timer
+        timer.resume()
+        logs.writeLog(log: "[tunnel:\(tunnelId)] resource snapshot timer started intervalMs=1000")
+    }
+
+    private func stopResourceSnapshotLogging(reason: String) {
+        guard let timer = resourceSnapshotTimer else { return }
+        timer.cancel()
+        resourceSnapshotTimer = nil
+        logs.writeLog(log: "[tunnel:\(tunnelId)] resource snapshot timer stopped reason=\(reason)")
+    }
+
+    private func fileDescriptorSummary() -> String {
+        let limit: Int32 = 1024
+        var openCount = 0
+        var socketCount = 0
+        var highestOpen: Int32 = -1
+
+        for fd in 0..<limit {
+            errno = 0
+            if fcntl(fd, F_GETFD, 0) == -1 && errno == EBADF {
+                continue
+            }
+
+            openCount += 1
+            highestOpen = fd
+
+            var socketType: Int32 = 0
+            var length = socklen_t(MemoryLayout<Int32>.size)
+            if getsockopt(fd, SOL_SOCKET, SO_TYPE, &socketType, &length) == 0 {
+                socketCount += 1
+            }
+        }
+
+        return "open=\(openCount) sockets=\(socketCount) highest=\(highestOpen) scanLimit=\(limit)"
     }
 
     private func dobbyInterfaceSummary() -> String {
@@ -478,6 +549,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func teardownForStop(reason: String) async {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
         logResourceSnapshot(label: "TEARDOWN_BEGIN reason=\(reason)")
+        stopResourceSnapshotLogging(reason: reason)
 
         do {
             try cloakInteractor.stopCloak()
