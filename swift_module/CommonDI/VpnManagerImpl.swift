@@ -133,6 +133,8 @@ public class VpnManagerImpl: VpnManager {
     }
 
     public func stop() {
+        let stack = Thread.callStackSymbols.prefix(8).joined(separator: " | ")
+        self.logs.writeLog(log: "[stop] callStack=\(stack)")
         self.logs.writeLog(log: "Actually vpnManager is \(String(describing: vpnManager))")
         guard let manager = vpnManager else {
             self.logs.writeLog(log: "[stop] Skip: vpnManager is nil")

@@ -2,6 +2,8 @@ package com.dobby.feature.main.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,6 +23,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dobby.feature.logging.presentation.LogsViewModel
+import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.util.koinViewModel
 import org.jetbrains.compose.ui.tooling.preview.Preview
@@ -37,8 +40,41 @@ fun DobbySocksScreen(
 ) {
     val uiMainState by mainViewModel.uiState.collectAsState()
     val uiLogState by logsViewModel.uiState.collectAsState()
+    val latestUiMainState by rememberUpdatedState(uiMainState)
 
     var showLogsDialog by remember { mutableStateOf(false) }
+    val connectionButtonInteractionSource = remember { MutableInteractionSource() }
+    var connectionButtonPressSequence by remember { mutableLongStateOf(0L) }
+    var connectionButtonCancelSequence by remember { mutableLongStateOf(0L) }
+    var handledClickPressSequence by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(connectionButtonInteractionSource) {
+        connectionButtonInteractionSource.interactions.collect { interaction ->
+            val state = latestUiMainState
+            val action = if (state.isVpnStarted) "Stop" else "Start"
+            when (interaction) {
+                is PressInteraction.Press -> {
+                    connectionButtonPressSequence += 1
+                    logsViewModel.logUiEvent(
+                        "[UI] connection button press seq=$connectionButtonPressSequence action=$action " +
+                            "position=${interaction.pressPosition} vpnStarted=${state.isVpnStarted} " +
+                            "connected=${state.isConnected}"
+                    )
+                }
+                is PressInteraction.Release -> logsViewModel.logUiEvent(
+                    "[UI] connection button release seq=$connectionButtonPressSequence action=$action " +
+                        "vpnStarted=${state.isVpnStarted} connected=${state.isConnected}"
+                )
+                is PressInteraction.Cancel -> {
+                    connectionButtonCancelSequence = connectionButtonPressSequence
+                    logsViewModel.logUiEvent(
+                        "[UI] connection button cancel seq=$connectionButtonCancelSequence action=$action " +
+                            "vpnStarted=${state.isVpnStarted} connected=${state.isConnected}"
+                    )
+                }
+            }
+        }
+    }
 
     Column(
         modifier = modifier
@@ -82,8 +118,32 @@ fun DobbySocksScreen(
 
             Button(
                 onClick = {
-                    mainViewModel.onConnectionButtonClicked(uiMainState.connectionURL)
+                    val action = if (uiMainState.isVpnStarted) "Stop" else "Start"
+                    val hasUnhandledPress = connectionButtonPressSequence > handledClickPressSequence &&
+                        connectionButtonCancelSequence < connectionButtonPressSequence
+                    val source = if (hasUnhandledPress) {
+                        handledClickPressSequence = connectionButtonPressSequence
+                        logsViewModel.logUiEvent(
+                            "[UI] connection button clicked seq=$connectionButtonPressSequence action=$action " +
+                                "url=${maskStr(uiMainState.connectionURL)} vpnStarted=${uiMainState.isVpnStarted} " +
+                                "connected=${uiMainState.isConnected}"
+                        )
+                        "ui_button_press_click"
+                    } else {
+                        logsViewModel.logUiEvent(
+                            "[UI] connection button onClick WITHOUT preceding press action=$action " +
+                                "pressSeq=$connectionButtonPressSequence handledSeq=$handledClickPressSequence " +
+                                "cancelSeq=$connectionButtonCancelSequence vpnStarted=${uiMainState.isVpnStarted} " +
+                                "connected=${uiMainState.isConnected}"
+                        )
+                        "ui_button_onClick_without_press"
+                    }
+                    mainViewModel.onConnectionToggleRequested(
+                        connectionUrl = uiMainState.connectionURL,
+                        source = source
+                    )
                 },
+                interactionSource = connectionButtonInteractionSource,
                 shape = RoundedCornerShape(6.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color.Black,

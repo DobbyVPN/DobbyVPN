@@ -40,6 +40,10 @@ class LogsViewModel(
         _uiState.value = LogsUiState(emptyList())
     }
 
+    fun logUiEvent(message: String) {
+        logsRepository.writeLog(message)
+    }
+
     fun copyLogsToClipBoard() {
         copyLogsInteractor.copy(logsRepository.readAllLogs())
     }

@@ -213,7 +213,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		}
 
 		d.tcpDialOK.Add(1)
-		log.Infof("[SOCKS5 TCP OK] attempt=%d dst=%s server=%s elapsed=%s local=%s remote=%s stats={%s}", attempt, addr, serverIP, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), d.dialStats())
+		log.Infof("[SOCKS5 TCP OK] attempt=%d dst=%s server=%s elapsed=%s local=%s localClass=%s remote=%s stats={%s}", attempt, addr, serverIP, time.Since(start), conn.LocalAddr(), classifyLocalAddr(conn.LocalAddr()), conn.RemoteAddr(), d.dialStats())
 		return conn, nil
 
 	case "udp":
@@ -240,7 +240,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		}
 
 		d.udpDialOK.Add(1)
-		log.Infof("[SOCKS5 UDP OK] attempt=%d dst=%s server=%s elapsed=%s local=%s stats={%s}", attempt, addr, serverIP, time.Since(start), conn.LocalAddr(), d.dialStats())
+		log.Infof("[SOCKS5 UDP OK] attempt=%d dst=%s server=%s elapsed=%s local=%s localClass=%s stats={%s}", attempt, addr, serverIP, time.Since(start), conn.LocalAddr(), classifyLocalAddr(conn.LocalAddr()), d.dialStats())
 		return conn, nil
 	}
 
@@ -282,15 +282,15 @@ func (d *OutlineDevice) dialStats() string {
 }
 
 func (d *OutlineDevice) logStatsLoop() {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			log.Infof("[SOCKS5 STATS] proxy=%s server=%s stats={%s}", d.proxyAddr, d.serverIPString(), d.dialStats())
+			log.Infof("[SOCKS5 STATS] proxy=%s server=%s stats={%s} go={%s}", d.proxyAddr, d.serverIPString(), d.dialStats(), log.RuntimeStatsString())
 		case <-d.closed:
-			log.Infof("[SOCKS5 STATS] proxy=%s stopped stats={%s}", d.proxyAddr, d.dialStats())
+			log.Infof("[SOCKS5 STATS] proxy=%s stopped stats={%s} go={%s}", d.proxyAddr, d.dialStats(), log.RuntimeStatsString())
 			return
 		}
 	}
@@ -301,6 +301,33 @@ func (d *OutlineDevice) serverIPString() string {
 		return "<nil>"
 	}
 	return d.svrIP.String()
+}
+
+func classifyLocalAddr(addr net.Addr) string {
+	if addr == nil {
+		return "nil"
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return "unknown"
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return "unknown"
+	}
+	if ip.IsLoopback() {
+		return "loopback"
+	}
+	if v4 := ip.To4(); v4 != nil && v4[0] == 198 && v4[1] == 18 {
+		return "dobbyTunnelIPv4"
+	}
+	if ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+		return "physicalPrivate"
+	}
+	if ip.IsGlobalUnicast() {
+		return "physicalGlobal"
+	}
+	return "other"
 }
 
 type truncatedDNSConn struct {

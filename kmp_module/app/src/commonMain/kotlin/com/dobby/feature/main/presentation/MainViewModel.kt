@@ -63,6 +63,7 @@ class MainViewModel(
     private val healthCheckManager: HealthCheckManager = HealthCheckManager(healthCheck, this, configsRepository, logger)
     private var serverAddress: String? = null
     private var serverPort: Int? = null
+    private var connectionActionSequence = 0L
 
     init {
         viewModelScope.launch {
@@ -102,57 +103,77 @@ class MainViewModel(
     }
 
     //region Cloak functions
-    fun onConnectionButtonClicked(
-        connectionUrl: String
+    fun onConnectionToggleRequested(
+        connectionUrl: String,
+        source: String,
     ) {
-        logger.log("The connection button was clicked with URL: ${maskStr(connectionUrl)}")
+        connectionActionSequence += 1
+        val actionId = connectionActionSequence
+        val vpnStartedBefore = connectionStateRepository.vpnStartedFlow.value
+        val statusBefore = connectionStateRepository.statusFlow.value
+        logger.log(
+            "[MainVM] connectionAction id=$actionId source=$source " +
+                "vpnStartedBefore=$vpnStartedBefore statusBefore=$statusBefore urlLength=${connectionUrl.length}"
+        )
 
         if (!configsRepository.couldStart()) {
-            logger.log("We couldn't do this operation, configsRepository.couldStart() returned FALSE")
+            logger.log("[MainVM] connectionAction id=$actionId source=$source rejected: configsRepository.couldStart() returned FALSE")
             return
         }
 
         viewModelScope.launch(Dispatchers.Default) {
-            logger.log("Proceeding with setConfig for the provided URL...")
+            logger.log("[MainVM] connectionAction id=$actionId source=$source proceeding on background dispatcher")
             if (!connectionStateRepository.vpnStartedFlow.value) {
                 try {
-                    logger.log("We get config by ${maskStr(connectionUrl)}")
+                    logger.log("[MainVM] connectionAction id=$actionId source=$source loading config by ${maskStr(connectionUrl)}")
                     val ok = setConfig(connectionUrl)
                     if (!ok) {
-                        logger.log("Config is invalid or failed to apply → abort start (no HC/VPN)")
+                        logger.log(
+                            "[MainVM] connectionAction id=$actionId source=$source " +
+                                "config invalid or failed to apply → abort start (no HC/VPN)"
+                        )
                         connectionStateRepository.updateVpnStarted(false)
                         connectionStateRepository.updateStatus(false)
                         return@launch
                     }
                 } catch (e: Exception) {
-                    logger.log("Error during setConfig: ${e.message}")
+                    logger.log("[MainVM] connectionAction id=$actionId source=$source error during setConfig: ${e.message}")
                     return@launch
                 } finally {
-                    logger.log("Finish setConfig()")
+                    logger.log("[MainVM] connectionAction id=$actionId source=$source finish setConfig()")
                 }
             }
 
             val currentState = connectionStateRepository.vpnStartedFlow.value
-            logger.log("Current vpnStarted state: $currentState")
+            logger.log("[MainVM] connectionAction id=$actionId source=$source current vpnStarted state: $currentState")
             configsRepository.setIsUserInitStop(currentState)
 
             when (currentState) {
                 true -> {
-                    logger.log("Stopping VPN service due to active connection")
+                    logger.log("[MainVM] connectionAction id=$actionId source=$source stopping VPN service due to active connection")
                     connectionStateRepository.updateVpnStarted(false)
                     connectionStateRepository.updateStatus(false)
                     healthCheckManager.stopHealthCheck()
-                    stopVpnService()
+                    stopVpnService(reason = "connectionAction source=$source id=$actionId active_connection_toggle")
                 }
                 false -> {
                     connectionStateRepository.updateVpnStarted(true)
-                    logger.log("Update vpnStarted state: VpnState = ${connectionStateRepository.vpnStartedFlow.value}")
-                    logger.log("VPN is currently disconnected")
+                    logger.log(
+                        "[MainVM] connectionAction id=$actionId source=$source " +
+                            "update vpnStarted state: VpnState = ${connectionStateRepository.vpnStartedFlow.value}"
+                    )
+                    logger.log("[MainVM] connectionAction id=$actionId source=$source VPN is currently disconnected")
                     if (isPermissionCheckNeeded) {
-                        logger.log("Permission check required, triggering permission dialog")
+                        logger.log(
+                            "[MainVM] connectionAction id=$actionId source=$source " +
+                                "permission check required, triggering permission dialog"
+                        )
                         permissionEventsChannel.checkPermissions()
                     } else {
-                        logger.log("Permission check is NOT required, starting VPN service directly")
+                        logger.log(
+                            "[MainVM] connectionAction id=$actionId source=$source " +
+                                "permission check is NOT required, starting VPN service directly"
+                        )
                         startVpnService()
                     }
                 }
@@ -238,8 +259,8 @@ class MainViewModel(
         vpnManager.start()
     }
 
-    fun stopVpnService(stoppedByHealthCheck: Boolean = false) {
-        logger.log("Stopping VPN service... stoppedByHealthCheck=$stoppedByHealthCheck")
+    fun stopVpnService(stoppedByHealthCheck: Boolean = false, reason: String = "unknown") {
+        logger.log("Stopping VPN service... stoppedByHealthCheck=$stoppedByHealthCheck reason=$reason")
         vpnManager.stop()
         if (!stoppedByHealthCheck) {
             configsRepository.clearOutlineAndCloakConfig()

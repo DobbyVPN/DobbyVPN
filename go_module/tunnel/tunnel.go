@@ -25,8 +25,8 @@ var (
 )
 
 const (
-	maxActiveTCPConnections  = 256
-	maxActiveUDPAssociations = 256
+	maxActiveTCPConnections   = 256
+	maxActiveUDPAssociations  = 256
 	udpAssociationIdleTimeout = 10 * time.Second
 )
 
@@ -324,15 +324,15 @@ func (p *DobbyProxy) flowStats() string {
 }
 
 func (p *DobbyProxy) logStatsLoop(stop <-chan struct{}) {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			log.Infof("[Router STATS] flow={%s}", p.flowStats())
+			log.Infof("[Router STATS] flow={%s} go={%s}", p.flowStats(), log.RuntimeStatsString())
 		case <-stop:
-			log.Infof("[Router STATS] stopped flow={%s}", p.flowStats())
+			log.Infof("[Router STATS] stopped flow={%s} go={%s}", p.flowStats(), log.RuntimeStatsString())
 			return
 		}
 	}

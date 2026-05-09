@@ -172,6 +172,31 @@ func logRuntimeInfo() {
 		modulePath,
 		moduleVersion,
 	)
+	Infof("[GoRuntime STATS] label=logger_init %s", RuntimeStatsString())
+}
+
+func RuntimeStatsString() string {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return fmt.Sprintf(
+		"goroutines=%d allocMB=%.2f totalAllocMB=%.2f sysMB=%.2f heapAllocMB=%.2f heapSysMB=%.2f heapInuseMB=%.2f heapIdleMB=%.2f heapReleasedMB=%.2f stackInuseMB=%.2f nextGCMB=%.2f numGC=%d",
+		runtime.NumGoroutine(),
+		bytesToMB(m.Alloc),
+		bytesToMB(m.TotalAlloc),
+		bytesToMB(m.Sys),
+		bytesToMB(m.HeapAlloc),
+		bytesToMB(m.HeapSys),
+		bytesToMB(m.HeapInuse),
+		bytesToMB(m.HeapIdle),
+		bytesToMB(m.HeapReleased),
+		bytesToMB(m.StackInuse),
+		bytesToMB(m.NextGC),
+		m.NumGC,
+	)
+}
+
+func bytesToMB(bytes uint64) float64 {
+	return float64(bytes) / 1024.0 / 1024.0
 }
 
 func (logger *Logger) bufInfof(format string, args ...any) {
