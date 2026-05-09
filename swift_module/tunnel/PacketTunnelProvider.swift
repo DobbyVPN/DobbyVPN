@@ -118,10 +118,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         if result == KERN_SUCCESS {
             let usedMB = bytesToMB(info.phys_footprint)
-            memoryHighWaterLock.lock()
-            if usedMB > memoryHighWaterMarkMB { memoryHighWaterMarkMB = usedMB }
-            let highWater = memoryHighWaterMarkMB
-            memoryHighWaterLock.unlock()
+            let highWater = memoryHighWaterLock.withLock { () -> Double in
+                if usedMB > memoryHighWaterMarkMB { memoryHighWaterMarkMB = usedMB }
+                return memoryHighWaterMarkMB
+            }
             return MemorySnapshot(
                 physFootprintMB: usedMB,
                 residentMB: bytesToMB(info.resident_size),
@@ -202,9 +202,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func startTunnel(options: [String : NSObject]?) async throws {
         tunnelStartedAt = Date()
-        memoryHighWaterLock.lock()
-        memoryHighWaterMarkMB = 0
-        memoryHighWaterLock.unlock()
+        memoryHighWaterLock.withLock { memoryHighWaterMarkMB = 0 }
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let osVersionString = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
@@ -532,14 +530,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         var otherSockets = 0
 
         for fd in 0..<scanLimit {
-            if fcntl(fd, F_GETFD) == -1 {
+            if fcntl(Int32(fd), F_GETFD) == -1 {
                 continue
             }
 
             open += 1
             var socketType: Int32 = 0
             var socketTypeLength = socklen_t(MemoryLayout<Int32>.size)
-            if getsockopt(fd, SOL_SOCKET, SO_TYPE, &socketType, &socketTypeLength) == 0 {
+            if getsockopt(Int32(fd), SOL_SOCKET, SO_TYPE, &socketType, &socketTypeLength) == 0 {
                 sockets += 1
                 switch socketType {
                 case SOCK_STREAM:
