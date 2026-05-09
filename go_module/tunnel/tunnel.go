@@ -50,18 +50,64 @@ type DobbyProxy struct {
 
 type trackedConn struct {
 	net.Conn
-	route   string
-	dest    string
-	started time.Time
-	release func() int64
-	once    sync.Once
+	route      string
+	dest       string
+	started    time.Time
+	release    func() int64
+	once       sync.Once
+	writeMu    sync.Mutex
+	lastWrite  time.Time
+	rttSamples []time.Duration
+}
+
+func (c *trackedConn) Write(b []byte) (int, error) {
+	c.writeMu.Lock()
+	c.lastWrite = time.Now()
+	c.writeMu.Unlock()
+	return c.Conn.Write(b)
+}
+
+func (c *trackedConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 {
+		c.writeMu.Lock()
+		lw := c.lastWrite
+		c.writeMu.Unlock()
+		if !lw.IsZero() {
+			rtt := time.Since(lw)
+			c.writeMu.Lock()
+			c.lastWrite = time.Time{}
+			c.rttSamples = append(c.rttSamples, rtt)
+			c.writeMu.Unlock()
+		}
+	}
+	return n, err
 }
 
 func (c *trackedConn) Close() error {
 	var err error
 	c.once.Do(func() {
 		active := c.release()
-		log.Infof("[Router] TCP closed route=%s dest=%s lifetime=%s activeTCP=%d", c.route, c.dest, time.Since(c.started), active)
+		c.writeMu.Lock()
+		samples := c.rttSamples
+		c.writeMu.Unlock()
+		rttInfo := ""
+		if len(samples) > 0 {
+			var sum time.Duration
+			min, max := samples[0], samples[0]
+			for _, s := range samples {
+				sum += s
+				if s < min {
+					min = s
+				}
+				if s > max {
+					max = s
+				}
+			}
+			avg := sum / time.Duration(len(samples))
+			rttInfo = fmt.Sprintf(" rtt(app): samples=%d min=%s avg=%s max=%s", len(samples), min, avg, max)
+		}
+		log.Infof("[Router] TCP closed route=%s dest=%s lifetime=%s activeTCP=%d%s", c.route, c.dest, time.Since(c.started), active, rttInfo)
 		err = c.Conn.Close()
 	})
 	return err
