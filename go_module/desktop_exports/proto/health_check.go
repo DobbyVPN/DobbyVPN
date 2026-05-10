@@ -37,9 +37,9 @@ func (s *Server) StartHealthCheck(_ context.Context, in *grpcproto.Empty) (*grpc
 	return &grpcproto.Empty{}, nil
 }
 
-func (s *Server) InitHealthCheck(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
+func (s *Server) InitHealthCheck(_ context.Context, in *grpcproto.InitHealthCheckRequest) (*grpcproto.Empty, error) {
 	log.Debugf(Category, "[GRPC] InitHealthCheck")
-	api.InitHealthCheck()
+	api.InitHealthCheck(in.Config)
 	log.Debugf(Category, "[GRPC] InitHealthCheck completed")
 
 	return &grpcproto.Empty{}, nil

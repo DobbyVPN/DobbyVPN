@@ -18,8 +18,8 @@ class HealthCheckImpl(
             }
         }
 
-    override fun InitHealthCheck() {
-        healthCheckLibrary.InitHealthCheck()
+    override fun InitHealthCheck(config: String) {
+        healthCheckLibrary.InitHealthCheck(config)
     }
 
     override fun StartHealthCheck() {

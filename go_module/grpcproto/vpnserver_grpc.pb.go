@@ -60,7 +60,7 @@ type VpnClient interface {
 	// health_check.go
 	CouldStart(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*CouldStartResponce, error)
 	GetConnectionState(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetConnectionStateResponce, error)
-	InitHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
+	InitHealthCheck(ctx context.Context, in *InitHealthCheckRequest, opts ...grpc.CallOption) (*Empty, error)
 	StartHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	StopHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	// cloak.go
@@ -185,7 +185,7 @@ func (c *vpnClient) GetConnectionState(ctx context.Context, in *Empty, opts ...g
 	return out, nil
 }
 
-func (c *vpnClient) InitHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
+func (c *vpnClient) InitHealthCheck(ctx context.Context, in *InitHealthCheckRequest, opts ...grpc.CallOption) (*Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
 	err := c.cc.Invoke(ctx, Vpn_InitHealthCheck_FullMethodName, in, out, cOpts...)
@@ -313,7 +313,7 @@ type VpnServer interface {
 	// health_check.go
 	CouldStart(context.Context, *Empty) (*CouldStartResponce, error)
 	GetConnectionState(context.Context, *Empty) (*GetConnectionStateResponce, error)
-	InitHealthCheck(context.Context, *Empty) (*Empty, error)
+	InitHealthCheck(context.Context, *InitHealthCheckRequest) (*Empty, error)
 	StartHealthCheck(context.Context, *Empty) (*Empty, error)
 	StopHealthCheck(context.Context, *Empty) (*Empty, error)
 	// cloak.go
@@ -368,7 +368,7 @@ func (UnimplementedVpnServer) CouldStart(context.Context, *Empty) (*CouldStartRe
 func (UnimplementedVpnServer) GetConnectionState(context.Context, *Empty) (*GetConnectionStateResponce, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetConnectionState not implemented")
 }
-func (UnimplementedVpnServer) InitHealthCheck(context.Context, *Empty) (*Empty, error) {
+func (UnimplementedVpnServer) InitHealthCheck(context.Context, *InitHealthCheckRequest) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InitHealthCheck not implemented")
 }
 func (UnimplementedVpnServer) StartHealthCheck(context.Context, *Empty) (*Empty, error) {
@@ -603,7 +603,7 @@ func _Vpn_GetConnectionState_Handler(srv interface{}, ctx context.Context, dec f
 }
 
 func _Vpn_InitHealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
+	in := new(InitHealthCheckRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -615,7 +615,7 @@ func _Vpn_InitHealthCheck_Handler(srv interface{}, ctx context.Context, dec func
 		FullMethod: Vpn_InitHealthCheck_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).InitHealthCheck(ctx, req.(*Empty))
+		return srv.(VpnServer).InitHealthCheck(ctx, req.(*InitHealthCheckRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }

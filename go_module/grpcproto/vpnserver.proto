@@ -20,11 +20,11 @@ service Vpn {
   rpc StopXray (Empty)               returns (Empty);
   
   // health_check.go
-  rpc CouldStart (Empty)              returns (CouldStartResponce);
-  rpc GetConnectionState (Empty)      returns (GetConnectionStateResponce);
-  rpc InitHealthCheck (Empty)         returns (Empty);
-  rpc StartHealthCheck (Empty)        returns (Empty);
-  rpc StopHealthCheck (Empty)         returns (Empty);
+  rpc CouldStart (Empty)                        returns (CouldStartResponce);
+  rpc GetConnectionState (Empty)                returns (GetConnectionStateResponce);
+  rpc InitHealthCheck (InitHealthCheckRequest)  returns (Empty);
+  rpc StartHealthCheck (Empty)                  returns (Empty);
+  rpc StopHealthCheck (Empty)                   returns (Empty);
   
   // cloak.go
   rpc StartCloakClient (StartCloakClientRequest)    returns (Empty);
@@ -104,6 +104,10 @@ message NetCheckRequest {
 
 message NetCheckResponse {
   string error = 1;
+}
+
+message InitHealthCheckRequest {
+  string config = 1;
 }
 
 message Empty {

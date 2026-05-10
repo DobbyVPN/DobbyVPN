@@ -12,8 +12,8 @@ class HealthCheckImpl : HealthCheck {
         }
     }
 
-    override fun InitHealthCheck() {
-        HealthCheckBackendWrapper.initHealthCheck()
+    override fun InitHealthCheck(config: String) {
+        HealthCheckBackendWrapper.initHealthCheck(config)
     }
 
     override fun StartHealthCheck() {

@@ -18,8 +18,8 @@ public final class HealthCheckImpl: HealthCheck {
         }
     }
 
-    public func InitHealthCheck() {
-        Cloak_outlineInitHealthCheck()
+    public func InitHealthCheck(config: String) {
+        Cloak_outlineInitHealthCheck(config)
     }
 
     public func StartHealthCheck() {

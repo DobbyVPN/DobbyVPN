@@ -3,7 +3,7 @@ package com.dobby.backend
 class HealthCheckBackend {
     external fun getConnectionState(): Int
 
-    external fun initHealthCheck(): Unit
+    external fun initHealthCheck(config: String): Unit
 
     external fun startHealthCheck(): Unit
 

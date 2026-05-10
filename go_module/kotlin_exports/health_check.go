@@ -22,8 +22,8 @@ func GetConnectionState() C.int {
 }
 
 //export InitHealthCheck
-func InitHealthCheck() {
-	healthcheck.InitHealthCheck()
+func InitHealthCheck(config string) {
+	healthcheck.InitHealthCheck(config)
 }
 
 //export StartHealthCheck

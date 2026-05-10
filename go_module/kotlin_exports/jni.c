@@ -22,7 +22,7 @@ extern void StopCloakClient(void);
 extern void SetGeoRoutingConf(GoString cidrs);
 extern void ClearGeoRoutingConf(void);
 extern GoInt32 GetConnectionState();
-extern void InitHealthCheck();
+extern void InitHealthCheck(GoString config);
 extern void StartHealthCheck();
 extern void StopHealthCheck();
 extern void InitLogger(GoString path);
@@ -176,9 +176,15 @@ JNIEXPORT jint JNICALL Java_com_dobby_backend_HealthCheckBackend_getConnectionSt
 	return GetConnectionState();
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_HealthCheckBackend_initHealthCheck(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_HealthCheckBackend_initHealthCheck(JNIEnv *env, jclass c, jstring jConfig)
 {
-	InitHealthCheck();
+    const char *config_str = (*env)->GetStringUTFChars(env, jConfig, 0);
+	size_t config_len = (*env)->GetStringUTFLength(env, jConfig);
+	InitHealthCheck((GoString) {
+		.p = config_str,
+		.n = config_len
+	});
+    (*env)->ReleaseStringUTFChars(env, jConfig, path_str);
 }
 
 JNIEXPORT void JNICALL Java_com_dobby_backend_HealthCheckBackend_startHealthCheck(JNIEnv *env, jclass c)
