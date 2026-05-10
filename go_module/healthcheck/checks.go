@@ -70,7 +70,8 @@ func pingHostCheck(host string) error {
 	if err != nil {
 		return fmt.Errorf("failed request init: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed request send: %w", err)
 	}
@@ -78,7 +79,7 @@ func pingHostCheck(host string) error {
 		return fmt.Errorf("failed request body close: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return fmt.Errorf("invalid status code: %d", resp.StatusCode)
+		log.Warnf(Category, "invalid status code: %d", resp.StatusCode)
 	}
 
 	return nil

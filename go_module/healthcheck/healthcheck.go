@@ -55,7 +55,7 @@ var (
 			return pingHostCheck("https://google.com/gen_204")
 		},
 		func() error {
-			return pingHostCheck("https://1.1.1.1")
+			return pingHostCheck("https://one.one.one.one")
 		},
 	}
 )
@@ -144,12 +144,12 @@ func healthCheckStep() {
 
 	for _, check := range connectionChecks {
 		if err := check(); err != nil {
-			log.Debugf(Category, "Failed check: %v", err)
+			log.Errorf(Category, "Failed check: %v", err)
 			switchState(Connecting)
 			return
 		}
 	}
 
-	log.Debugf(Category, "Health check succeed")
+	log.Infof(Category, "Health check succeed")
 	switchState(Connected)
 }
