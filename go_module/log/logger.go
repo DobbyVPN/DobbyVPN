@@ -5,10 +5,14 @@ import (
 	"context"
 	"fmt"
 	"go_module/telemetry"
+	"io"
 	"log/slog"
+	"math/rand/v2"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/contrib/bridges/otelslog"
@@ -100,9 +104,11 @@ func (h *logrusToSlogHook) Fire(e *logrus.Entry) error {
 }
 
 type TelemetryLogger struct {
-	ctx      context.Context
-	shutdown func(context.Context) error
-	endpoint string
+	ctx        context.Context
+	shutdown   func(context.Context) error
+	endpoint   string
+	externalIP string
+	clientID   string
 }
 
 type Logger struct {
@@ -120,14 +126,65 @@ var (
 	initMu sync.Mutex
 )
 
+const (
+	YandexIPAPI string = "https://yandex.ru/internet/api/v0/"
+)
+
+func loadExternalIP() (string, error) {
+	req, err := http.NewRequest("GET", YandexIPAPI, http.NoBody)
+	if err != nil {
+		return "", fmt.Errorf("failed create Yandex API request: %v", err)
+	}
+
+	client := http.Client{
+		Timeout: 2 * time.Second,
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed send Yandex API request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	result, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed read Yandex API response: %v", err)
+	}
+
+	return string(result), nil
+}
+
+// Set up OpenTelemetry.
 func NewTelemetryLogger(endpoint string) (*TelemetryLogger, error) {
-	// Set up OpenTelemetry.
 	ctx := context.Background()
 	otelShutdown, err := telemetry.SetupOTelSDK(ctx, endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("failed create otlp logger: %w", err)
 	}
-	return &TelemetryLogger{ctx: ctx, shutdown: otelShutdown, endpoint: endpoint}, nil
+
+	externalIP := "undefined"
+	minDelay := 200 * time.Millisecond
+	maxDelay := 500 * time.Millisecond
+	Debugf("LOG", "Loading user external IP")
+	for i := 0; i < 5; i++ {
+		if i > 0 {
+			time.Sleep(minDelay + (maxDelay-minDelay)*time.Duration(rand.Float32()))
+			Warnf("LOG", "Retry # %d", i)
+		}
+
+		extIP, err := loadExternalIP()
+		if err != nil {
+			Warnf("LOG", "Failed to load external IP: %v", err)
+			continue
+		}
+
+		externalIP = extIP
+		break
+	}
+	Debugf("LOG", "Using external IP = %s", externalIP)
+
+	clientID := string(rand.Uint64())
+
+	return &TelemetryLogger{ctx: ctx, shutdown: otelShutdown, endpoint: endpoint, externalIP: externalIP, clientID: clientID}, nil
 }
 
 func MaskStr(input string) string {
@@ -235,12 +292,16 @@ func prepareLog(message string, arguments map[string]any) string {
 
 func flattenArgs(arguments map[string]any) []any {
 	count := len(arguments)
-	all := make([]any, count*2)
+	all := make([]any, count*2+4)
 	i := 0
 	for k, v := range arguments {
 		all[i], all[i+1] = k, v
 		i += 2
 	}
+	all[count*2] = "externalIP"
+	all[count*2+1] = lg.tlogger.externalIP
+	all[count*2+2] = "clientID"
+	all[count*2+3] = lg.tlogger.clientID
 	return all
 }
 
