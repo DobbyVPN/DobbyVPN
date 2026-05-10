@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"math/rand"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -14,6 +15,23 @@ import (
 	"go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/trace"
+)
+
+const (
+	ExporterBatchSizeMin int = 1024
+	ExporterBatchSizeMax int = 4096
+	ExporterBufferSize   int = 16384
+
+	ExporterIntervalMin     time.Duration = 1 * time.Second
+	ExporterIntervalMax     time.Duration = 3 * time.Second
+	ExporterTimeoutMin      time.Duration = 5 * time.Second
+	ExporterTimeoutMax      time.Duration = 10 * time.Second
+	RetryInitialIntervalMin time.Duration = 500 * time.Millisecond
+	RetryInitialIntervalMax time.Duration = 2000 * time.Second
+	RetryMaxIntervalMin     time.Duration = 10 * time.Second
+	RetryMaxIntervalMax     time.Duration = 20 * time.Second
+	RetryMaxElapsedTimeMin  time.Duration = 5 * time.Minute
+	RetryMaxElapsedTimeMax  time.Duration = 10 * time.Minute
 )
 
 // setupOTelSDK bootstraps the OpenTelemetry pipeline.
@@ -104,18 +122,24 @@ func newMeterProvider() (*metric.MeterProvider, error) {
 	return meterProvider, nil
 }
 
+func randRange(min, max time.Duration) time.Duration {
+	if min == 0 && max == 0 {
+		return 0
+	}
+	return min + (max-min)*time.Duration(rand.Float32())
+}
+
 func newLoggerProvider(ctx context.Context, endpoint string) (*log.LoggerProvider, error) {
 	logExporter, err := otlploghttp.New(
 		ctx,
 		otlploghttp.WithEndpoint(endpoint),
 		otlploghttp.WithInsecure(),
-		otlploghttp.WithTimeout(30*time.Second),
 		otlploghttp.WithRetry(
 			otlploghttp.RetryConfig{
 				Enabled:         true,
-				InitialInterval: 500 * time.Millisecond,
-				MaxInterval:     5 * time.Second,
-				MaxElapsedTime:  time.Minute,
+				InitialInterval: randRange(RetryInitialIntervalMin, RetryInitialIntervalMax),
+				MaxInterval:     randRange(RetryMaxIntervalMin, RetryMaxIntervalMax),
+				MaxElapsedTime:  randRange(RetryMaxElapsedTimeMin, RetryMaxElapsedTimeMax),
 			},
 		),
 	)
@@ -123,8 +147,15 @@ func newLoggerProvider(ctx context.Context, endpoint string) (*log.LoggerProvide
 		return nil, err
 	}
 
+	logProcessor := log.NewBatchProcessor(
+		logExporter,
+		log.WithExportBufferSize(ExporterBufferSize),
+		log.WithExportMaxBatchSize(rand.Intn(ExporterBatchSizeMax-ExporterBatchSizeMin)+ExporterBatchSizeMin),
+		log.WithExportInterval(randRange(ExporterIntervalMin, ExporterIntervalMax)),
+		log.WithExportTimeout(randRange(ExporterTimeoutMin, ExporterTimeoutMax)),
+	)
 	loggerProvider := log.NewLoggerProvider(
-		log.WithProcessor(log.NewBatchProcessor(logExporter)),
+		log.WithProcessor(logProcessor),
 	)
 	return loggerProvider, nil
 }
