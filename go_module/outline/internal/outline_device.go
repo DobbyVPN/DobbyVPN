@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,18 +46,38 @@ type OutlineDevice struct {
 	udpDialPeak     atomic.Int64
 	udpDNSTruncated atomic.Uint64
 	unsupportedDial atomic.Uint64
+	tcpConnClosed   atomic.Uint64
+	tcpConnReadErr  atomic.Uint64
+	tcpConnWriteErr atomic.Uint64
+	tcpBytesRead    atomic.Uint64
+	tcpBytesWritten atomic.Uint64
+	udpConnClosed   atomic.Uint64
+	udpConnReadErr  atomic.Uint64
+	udpConnWriteErr atomic.Uint64
+	udpBytesRead    atomic.Uint64
+	udpBytesWritten atomic.Uint64
+	socksServeExit  atomic.Uint64
+	statsLoopExit   atomic.Uint64
 }
 
 var (
 	socksInternalAuthErr       atomic.Uint64
 	socksInternalResetErr      atomic.Uint64
 	socksInternalBrokenPipeErr atomic.Uint64
+	socksInternalEOF           atomic.Uint64
+	socksInternalClosed        atomic.Uint64
+	socksInternalAddrWarning   atomic.Uint64
+	socksInternalOther         atomic.Uint64
 )
 
 func resetSocksInternalStats() {
 	socksInternalAuthErr.Store(0)
 	socksInternalResetErr.Store(0)
 	socksInternalBrokenPipeErr.Store(0)
+	socksInternalEOF.Store(0)
+	socksInternalClosed.Store(0)
+	socksInternalAddrWarning.Store(0)
+	socksInternalOther.Store(0)
 }
 
 func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
@@ -72,11 +93,13 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 
 	sd, err := providers.NewStreamDialer(ctx, transportConfig)
 	if err != nil {
+		log.Infof("outline client: failed to create stream dialer websocket=%v tcpPath=%v err=%v", strings.Contains(transportConfig, "ws:"), strings.Contains(transportConfig, "tcp_path="), err)
 		return nil, err
 	}
 
 	pd, err := providers.NewPacketDialer(ctx, transportConfig)
 	if err != nil {
+		log.Infof("outline client: failed to create packet dialer websocket=%v udpPath=%v err=%v", strings.Contains(transportConfig, "ws:"), strings.Contains(transportConfig, "udp_path="), err)
 		return nil, err
 	}
 
@@ -124,17 +147,21 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 	od.listener = listener
 	od.proxyAddr = listener.Addr().String()
 
-	go func() {
+	od.runGuarded("socks5-serve", func() {
 		log.Infof("SOCKS5 started on %s", od.proxyAddr)
 		if err := server.Serve(listener); err != nil {
+			od.socksServeExit.Add(1)
 			if errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") {
-				log.Infof("SOCKS5 stopped on %s: closed", od.proxyAddr)
+				log.Infof("SOCKS5 stopped on %s: closed stats={%s}", od.proxyAddr, od.dialStats())
 			} else {
-				log.Infof("SOCKS5 stopped unexpectedly on %s: %v", od.proxyAddr, err)
+				log.Infof("SOCKS5 stopped unexpectedly on %s: %v stats={%s}", od.proxyAddr, err, od.dialStats())
 			}
+		} else {
+			od.socksServeExit.Add(1)
+			log.Infof("SOCKS5 stopped on %s: nil error stats={%s}", od.proxyAddr, od.dialStats())
 		}
-	}()
-	go od.logStatsLoop()
+	})
+	od.runGuarded("socks5-stats-loop", od.logStatsLoop)
 
 	return od, nil
 }
@@ -145,9 +172,25 @@ type socksLogger struct {
 
 func (l socksLogger) Errorf(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	if strings.Contains(msg, "EOF") ||
-		strings.Contains(msg, "use of closed network connection") ||
-		strings.Contains(msg, "client want to used addr") {
+	if strings.Contains(msg, "EOF") {
+		count := socksInternalEOF.Add(1)
+		if l.device != nil && (count == 1 || count%50 == 0) {
+			log.Infof("[SOCKS5 internal][eof count=%d] %s stats={%s}", count, msg, l.device.dialStats())
+		}
+		return
+	}
+	if strings.Contains(msg, "use of closed network connection") {
+		count := socksInternalClosed.Add(1)
+		if l.device != nil && (count == 1 || count%50 == 0) {
+			log.Infof("[SOCKS5 internal][closed count=%d] %s stats={%s}", count, msg, l.device.dialStats())
+		}
+		return
+	}
+	if strings.Contains(msg, "client want to used addr") {
+		count := socksInternalAddrWarning.Add(1)
+		if l.device != nil && (count == 1 || count%50 == 0) {
+			log.Infof("[SOCKS5 internal][addr_warning count=%d] %s stats={%s}", count, msg, l.device.dialStats())
+		}
 		return
 	}
 	if strings.Contains(msg, "chacha20poly1305: message authentication failed") {
@@ -185,7 +228,8 @@ func (l socksLogger) Errorf(format string, args ...interface{}) {
 		log.Infof("[SOCKS5 internal][broken_pipe count=%d] %s", count, msg)
 		return
 	}
-	log.Infof("[SOCKS5 internal] %s", msg)
+	count := socksInternalOther.Add(1)
+	log.Infof("[SOCKS5 internal][other count=%d] %s", count, msg)
 }
 
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -195,6 +239,9 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 
 	host, portStr, _ := net.SplitHostPort(addr)
 	port, _ := strconv.Atoi(portStr)
+	if host == "" || port == 0 {
+		log.Infof("[SOCKS5 DIAL WARN] network=%s addr=%s parsedHost=%s parsedPort=%d", network, addr, host, port)
+	}
 
 	switch network {
 
@@ -208,13 +255,13 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		conn, err := d.streamDialer.DialStream(ctx, addr)
 		if err != nil {
 			d.tcpDialErr.Add(1)
-			log.Infof("[SOCKS5 TCP ERROR] attempt=%d dst=%s server=%s elapsed=%s stats={%s} err=%v", attempt, addr, serverIP, time.Since(start), d.dialStats(), err)
+			log.Infof("[SOCKS5 TCP ERROR] attempt=%d dst=%s server=%s elapsed=%s ctxErr=%v cause=%s stats={%s} errClass=%s err=%v", attempt, addr, serverIP, time.Since(start), ctx.Err(), contextCause(ctx), d.dialStats(), classifyOutlineIOErr(err), err)
 			return nil, err
 		}
 
 		d.tcpDialOK.Add(1)
 		log.Infof("[SOCKS5 TCP OK] attempt=%d dst=%s server=%s elapsed=%s local=%s remote=%s stats={%s}", attempt, addr, serverIP, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), d.dialStats())
-		return conn, nil
+		return d.wrapConn("tcp", attempt, addr, conn), nil
 
 	case "udp":
 		attempt := d.udpDialAttempt.Add(1)
@@ -235,13 +282,13 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		conn, err := d.packetDialer.DialPacket(ctx, addr)
 		if err != nil {
 			d.udpDialErr.Add(1)
-			log.Infof("[SOCKS5 UDP ERROR] attempt=%d dst=%s server=%s elapsed=%s stats={%s} err=%v", attempt, addr, serverIP, time.Since(start), d.dialStats(), err)
+			log.Infof("[SOCKS5 UDP ERROR] attempt=%d dst=%s server=%s elapsed=%s ctxErr=%v cause=%s stats={%s} errClass=%s err=%v", attempt, addr, serverIP, time.Since(start), ctx.Err(), contextCause(ctx), d.dialStats(), classifyOutlineIOErr(err), err)
 			return nil, err
 		}
 
 		d.udpDialOK.Add(1)
 		log.Infof("[SOCKS5 UDP OK] attempt=%d dst=%s server=%s elapsed=%s local=%s stats={%s}", attempt, addr, serverIP, time.Since(start), conn.LocalAddr(), d.dialStats())
-		return conn, nil
+		return d.wrapConn("udp", attempt, addr, conn), nil
 	}
 
 	err := fmt.Errorf("unsupported network %s", network)
@@ -261,23 +308,39 @@ func updatePeakInt64(peak *atomic.Int64, current int64) {
 
 func (d *OutlineDevice) dialStats() string {
 	return fmt.Sprintf(
-		"uptime=%s tcp=%d/%d/%d/inflight=%d/peak=%d udp=%d/%d/%d/inflight=%d/peak=%d udpDNSTrunc=%d unsupported=%d internalAuth=%d internalReset=%d internalBrokenPipe=%d",
+		"uptime=%s tcp=%d/%d/%d/inflight=%d/peak=%d tcpIO=closed:%d/readErr:%d/writeErr:%d/readMB:%.2f/writeMB:%.2f udp=%d/%d/%d/inflight=%d/peak=%d udpIO=closed:%d/readErr:%d/writeErr:%d/readMB:%.2f/writeMB:%.2f udpDNSTrunc=%d unsupported=%d internalAuth=%d internalReset=%d internalBrokenPipe=%d internalEOF=%d internalClosed=%d internalAddrWarn=%d internalOther=%d goroutineExit=serve:%d/stats:%d",
 		time.Since(d.startedAt).Truncate(time.Millisecond),
 		d.tcpDialAttempt.Load(),
 		d.tcpDialOK.Load(),
 		d.tcpDialErr.Load(),
 		d.tcpDialInFlight.Load(),
 		d.tcpDialPeak.Load(),
+		d.tcpConnClosed.Load(),
+		d.tcpConnReadErr.Load(),
+		d.tcpConnWriteErr.Load(),
+		float64(d.tcpBytesRead.Load())/(1024*1024),
+		float64(d.tcpBytesWritten.Load())/(1024*1024),
 		d.udpDialAttempt.Load(),
 		d.udpDialOK.Load(),
 		d.udpDialErr.Load(),
 		d.udpDialInFlight.Load(),
 		d.udpDialPeak.Load(),
+		d.udpConnClosed.Load(),
+		d.udpConnReadErr.Load(),
+		d.udpConnWriteErr.Load(),
+		float64(d.udpBytesRead.Load())/(1024*1024),
+		float64(d.udpBytesWritten.Load())/(1024*1024),
 		d.udpDNSTruncated.Load(),
 		d.unsupportedDial.Load(),
 		socksInternalAuthErr.Load(),
 		socksInternalResetErr.Load(),
 		socksInternalBrokenPipeErr.Load(),
+		socksInternalEOF.Load(),
+		socksInternalClosed.Load(),
+		socksInternalAddrWarning.Load(),
+		socksInternalOther.Load(),
+		d.socksServeExit.Load(),
+		d.statsLoopExit.Load(),
 	)
 }
 
@@ -290,10 +353,22 @@ func (d *OutlineDevice) logStatsLoop() {
 		case <-ticker.C:
 			log.Infof("[SOCKS5 STATS] proxy=%s server=%s stats={%s}", d.proxyAddr, d.serverIPString(), d.dialStats())
 		case <-d.closed:
+			d.statsLoopExit.Add(1)
 			log.Infof("[SOCKS5 STATS] proxy=%s stopped stats={%s}", d.proxyAddr, d.dialStats())
 			return
 		}
 	}
+}
+
+func (d *OutlineDevice) runGuarded(name string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Infof("[OUTLINE PANIC] goroutine=%s panic=%v stats={%s}\n%s", name, r, d.dialStats(), string(debug.Stack()))
+			}
+		}()
+		fn()
+	}()
 }
 
 func (d *OutlineDevice) serverIPString() string {
@@ -301,6 +376,192 @@ func (d *OutlineDevice) serverIPString() string {
 		return "<nil>"
 	}
 	return d.svrIP.String()
+}
+
+func (d *OutlineDevice) wrapConn(network string, attempt uint64, dst string, conn net.Conn) net.Conn {
+	return &outlineLoggedConn{
+		Conn:      conn,
+		device:    d,
+		network:   network,
+		attempt:   attempt,
+		dst:       dst,
+		server:    d.serverIPString(),
+		startedAt: time.Now(),
+	}
+}
+
+type outlineLoggedConn struct {
+	net.Conn
+
+	device    *OutlineDevice
+	network   string
+	attempt   uint64
+	dst       string
+	server    string
+	startedAt time.Time
+
+	readBytes    atomic.Uint64
+	writtenBytes atomic.Uint64
+	readErrOnce  sync.Once
+	writeErrOnce sync.Once
+	closeOnce    sync.Once
+	lastErr      atomic.Value
+}
+
+func (c *outlineLoggedConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 {
+		c.readBytes.Add(uint64(n))
+		if c.network == "tcp" {
+			c.device.tcpBytesRead.Add(uint64(n))
+		} else {
+			c.device.udpBytesRead.Add(uint64(n))
+		}
+	}
+	if err != nil && !errors.Is(err, net.ErrClosed) {
+		c.recordIOErr("read", err)
+	}
+	return n, err
+}
+
+func (c *outlineLoggedConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if n > 0 {
+		c.writtenBytes.Add(uint64(n))
+		if c.network == "tcp" {
+			c.device.tcpBytesWritten.Add(uint64(n))
+		} else {
+			c.device.udpBytesWritten.Add(uint64(n))
+		}
+	}
+	if err != nil && !errors.Is(err, net.ErrClosed) {
+		c.recordIOErr("write", err)
+	}
+	return n, err
+}
+
+func (c *outlineLoggedConn) Close() error {
+	err := c.Conn.Close()
+	c.closeOnce.Do(func() {
+		var closed uint64
+		if c.network == "tcp" {
+			closed = c.device.tcpConnClosed.Add(1)
+		} else {
+			closed = c.device.udpConnClosed.Add(1)
+		}
+		lastErr := "<nil>"
+		if v := c.lastErr.Load(); v != nil {
+			lastErr = v.(string)
+		}
+		readMB := float64(c.readBytes.Load()) / (1024 * 1024)
+		writeMB := float64(c.writtenBytes.Load()) / (1024 * 1024)
+		shouldLog := lastErr != "<nil>" || closed == 1 || closed%25 == 0 || readMB >= 1 || writeMB >= 1 || time.Since(c.startedAt) >= 5*time.Second
+		if shouldLog {
+			log.Infof(
+				"[OUTLINE FLOW CLOSE] network=%s attempt=%d dst=%s server=%s lifetime=%s readMB=%.2f writeMB=%.2f local=%s remote=%s closeErr=%v lastIOErr=%s stats={%s}",
+				c.network,
+				c.attempt,
+				c.dst,
+				c.server,
+				time.Since(c.startedAt).Truncate(time.Millisecond),
+				readMB,
+				writeMB,
+				c.safeLocalAddr(),
+				c.safeRemoteAddr(),
+				err,
+				lastErr,
+				c.device.dialStats(),
+			)
+		}
+	})
+	return err
+}
+
+func (c *outlineLoggedConn) recordIOErr(op string, err error) {
+	errText := fmt.Sprintf("%s:%s", classifyOutlineIOErr(err), err.Error())
+	c.lastErr.Store(errText)
+	if c.network == "tcp" {
+		if op == "read" {
+			c.device.tcpConnReadErr.Add(1)
+			c.readErrOnce.Do(func() { c.logIOErr(op, errText) })
+		} else {
+			c.device.tcpConnWriteErr.Add(1)
+			c.writeErrOnce.Do(func() { c.logIOErr(op, errText) })
+		}
+		return
+	}
+	if op == "read" {
+		c.device.udpConnReadErr.Add(1)
+		c.readErrOnce.Do(func() { c.logIOErr(op, errText) })
+	} else {
+		c.device.udpConnWriteErr.Add(1)
+		c.writeErrOnce.Do(func() { c.logIOErr(op, errText) })
+	}
+}
+
+func (c *outlineLoggedConn) logIOErr(op, errText string) {
+	log.Infof(
+		"[OUTLINE FLOW IO ERROR] network=%s op=%s attempt=%d dst=%s server=%s lifetime=%s readBytes=%d writeBytes=%d local=%s remote=%s err=%s stats={%s}",
+		c.network,
+		op,
+		c.attempt,
+		c.dst,
+		c.server,
+		time.Since(c.startedAt).Truncate(time.Millisecond),
+		c.readBytes.Load(),
+		c.writtenBytes.Load(),
+		c.safeLocalAddr(),
+		c.safeRemoteAddr(),
+		errText,
+		c.device.dialStats(),
+	)
+}
+
+func classifyOutlineIOErr(err error) string {
+	if err == nil {
+		return "nil"
+	}
+	msg := err.Error()
+	switch {
+	case errors.Is(err, net.ErrClosed) || strings.Contains(msg, "use of closed network connection"):
+		return "closed"
+	case strings.Contains(msg, "chacha20poly1305: message authentication failed"):
+		return "aead_auth_failed"
+	case strings.Contains(msg, "connection reset by peer"):
+		return "reset_by_peer"
+	case strings.Contains(msg, "broken pipe"):
+		return "broken_pipe"
+	case strings.Contains(msg, "EOF"):
+		return "eof"
+	case strings.Contains(msg, "i/o timeout") || strings.Contains(msg, "deadline exceeded"):
+		return "timeout"
+	default:
+		return "other"
+	}
+}
+
+func contextCause(ctx context.Context) string {
+	if ctx == nil {
+		return "<nil>"
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return cause.Error()
+	}
+	return "<nil>"
+}
+
+func (c *outlineLoggedConn) safeLocalAddr() net.Addr {
+	if c.Conn == nil {
+		return nil
+	}
+	return c.Conn.LocalAddr()
+}
+
+func (c *outlineLoggedConn) safeRemoteAddr() net.Addr {
+	if c.Conn == nil {
+		return nil
+	}
+	return c.Conn.RemoteAddr()
 }
 
 type truncatedDNSConn struct {
