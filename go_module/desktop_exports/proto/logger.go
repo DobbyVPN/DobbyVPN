@@ -19,18 +19,18 @@ func (c *Server) InitLogger(_ context.Context, in *grpcproto.InitLoggerRequest) 
 
 func (c *Server) InitTelemetry(_ context.Context, in *grpcproto.InitTelemetryRequest) (*grpcproto.Empty, error) {
 	log.Debugf(Category, "InitTelemetry")
-	go api.InitTelemetry(in.Endpoint)
+	api.InitTelemetry(in.Endpoint)
 	return &grpcproto.Empty{}, nil
 }
 
 func (c *Server) StopTelemetry(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
 	log.Debugf(Category, "StopTelemetry")
-	go api.StopTelemetry()
+	api.StopTelemetry()
 	return &grpcproto.Empty{}, nil
 }
 
 func (c *Server) SetupTelemetryAttributes(_ context.Context, in *grpcproto.SetupTelemetryAttributesRequest) (*grpcproto.Empty, error) {
 	log.Debugf(Category, "SetupTelemetryAttributes")
-	go api.SetupTelemetryAttributes(in.Config)
+	api.SetupTelemetryAttributes(in.Config)
 	return &grpcproto.Empty{}, nil
 }

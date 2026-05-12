@@ -45,6 +45,14 @@ class DobbyConfigsRepositoryImpl(
         prefs.put("telemetryEndpoint", endpoint)
     }
 
+    override fun getTelemetryAttributes(): String {
+        return prefs.get("telemetryAttributes", "")
+    }
+
+    override fun setTelemetryAttributes(config: String) {
+        prefs.put("telemetryAttributes", config)
+    }
+
     override fun getCloakConfig(): String {
         return prefs.get("cloakConfig", "")
     }

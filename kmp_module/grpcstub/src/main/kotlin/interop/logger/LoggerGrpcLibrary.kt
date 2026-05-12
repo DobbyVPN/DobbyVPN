@@ -47,7 +47,7 @@ open class LoggerGrpcLibrary(channel: ManagedChannel) : LoggerLibrary {
 
     override fun SetupTelemetryAttributes(config: String) {
         return runBlocking {
-            val request = setupTelemetryAttributesRequest { this.config = endpoint }
+            val request = setupTelemetryAttributesRequest { this.config = config }
             try {
                 stub.setupTelemetryAttributes(request)
             } catch (e: StatusException) {

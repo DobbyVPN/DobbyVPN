@@ -8,6 +8,7 @@ import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.domain.VpnManagerImpl
+import com.dobby.feature.main.presentation.ConfigsProcessor
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.grpc.*
@@ -59,6 +60,7 @@ class CliClient {
             vpnManager = vpnManager,
             logger = logger,
             healthCheck = HealthCheckImpl(logger, healthCheckLibrary),
+            configsProcessor = ConfigsProcessor(configsRepository)
         )
     }
 

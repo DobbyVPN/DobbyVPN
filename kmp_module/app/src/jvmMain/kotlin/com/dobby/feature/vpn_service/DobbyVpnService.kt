@@ -91,6 +91,7 @@ class DobbyVpnService(
         logger.log("Init tunnel telemetry to the endpoint: $endpoint")
         if (endpoint.isNotBlank()) {
             loggerLibrary.InitTelemetry(endpoint)
+            logger.log("Initialized tunnel telemetry")
         } else {
             logger.log("No telemetry endpoint provided")
         }
@@ -98,6 +99,7 @@ class DobbyVpnService(
         val config = dobbyConfigsRepository.getTelemetryAttributes()
         if (config.isNotBlank()) {
             loggerLibrary.SetupTelemetryAttributes(config)
+            logger.log("Setup tunnel telemetry attributes")
         } else {
             logger.log("No telemetry attributes provided")
         }

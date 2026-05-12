@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -110,7 +111,6 @@ type TelemetryLogger struct {
 	endpoint         string
 	externalIP       string
 	connectionConfig map[string]any
-	clientID         string
 }
 
 type Logger struct {
@@ -129,11 +129,11 @@ var (
 )
 
 const (
-	YandexIPAPI string = "https://yandex.ru/internet/api/v0/"
+	YandexIPAPI string = "https://yandex.ru/internet/api/v0/ip"
 )
 
 var (
-	clientID string = string(rand.Uint64())
+	clientID string = strconv.FormatUint(rand.Uint64(), 10)
 )
 
 // Set up OpenTelemetry.
@@ -144,7 +144,7 @@ func NewTelemetryLogger(endpoint string) (*TelemetryLogger, error) {
 		return nil, fmt.Errorf("failed create otlp logger: %w", err)
 	}
 
-	return &TelemetryLogger{ctx: ctx, shutdown: otelShutdown, endpoint: endpoint, clientID: clientID}, nil
+	return &TelemetryLogger{ctx: ctx, shutdown: otelShutdown, endpoint: endpoint}, nil
 }
 
 func MaskStr(input string) string {
@@ -249,8 +249,9 @@ func loadExternalIPStep() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed read Yandex API response: %v", err)
 	}
+	resultString := string(result)
 
-	return string(result), nil
+	return resultString[1 : len(resultString)-1], nil
 }
 
 func loadExternalIP() string {
@@ -327,11 +328,15 @@ func prepareLog(message string, arguments map[string]any) string {
 }
 
 func flattenArgs(argumentsList ...map[string]any) []any {
-	all := make([]any, 0)
+	size := 0
+	for _, arguments := range argumentsList {
+		size += len(arguments)
+	}
+	all := make([]any, 4+2*size)
 	all[0] = "externalIP"
 	all[1] = lg.tlogger.externalIP
 	all[2] = "clientID"
-	all[3] = lg.tlogger.clientID
+	all[3] = clientID
 	i := 4
 	for _, arguments := range argumentsList {
 		for k, v := range arguments {
@@ -414,7 +419,7 @@ func Infof(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_info(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
-		otelLogger.InfoContext(lg.tlogger.ctx, categoryMessage)
+		otelLogger.InfoContext(lg.tlogger.ctx, categoryMessage, flattenArgs(lg.tlogger.connectionConfig)...)
 	}
 }
 
@@ -422,7 +427,7 @@ func Debugf(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_debug(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
-		otelLogger.DebugContext(lg.tlogger.ctx, categoryMessage)
+		otelLogger.DebugContext(lg.tlogger.ctx, categoryMessage, flattenArgs(lg.tlogger.connectionConfig)...)
 	}
 }
 
@@ -430,7 +435,7 @@ func Warnf(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_warn(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
-		otelLogger.WarnContext(lg.tlogger.ctx, categoryMessage)
+		otelLogger.WarnContext(lg.tlogger.ctx, categoryMessage, flattenArgs(lg.tlogger.connectionConfig)...)
 	}
 }
 
@@ -438,7 +443,7 @@ func Errorf(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_error(categoryMessage, make(map[string]any))
 	if lg.tlogger != nil {
-		otelLogger.ErrorContext(lg.tlogger.ctx, categoryMessage)
+		otelLogger.ErrorContext(lg.tlogger.ctx, categoryMessage, flattenArgs(lg.tlogger.connectionConfig)...)
 	}
 }
 
