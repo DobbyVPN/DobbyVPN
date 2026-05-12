@@ -19,27 +19,29 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Vpn_StartAwg_FullMethodName            = "/grpcproto.Vpn/StartAwg"
-	Vpn_StopAwg_FullMethodName             = "/grpcproto.Vpn/StopAwg"
-	Vpn_GetOutlineLastError_FullMethodName = "/grpcproto.Vpn/GetOutlineLastError"
-	Vpn_StartOutline_FullMethodName        = "/grpcproto.Vpn/StartOutline"
-	Vpn_StopOutline_FullMethodName         = "/grpcproto.Vpn/StopOutline"
-	Vpn_GetXrayLastError_FullMethodName    = "/grpcproto.Vpn/GetXrayLastError"
-	Vpn_StartXray_FullMethodName           = "/grpcproto.Vpn/StartXray"
-	Vpn_StopXray_FullMethodName            = "/grpcproto.Vpn/StopXray"
-	Vpn_CouldStart_FullMethodName          = "/grpcproto.Vpn/CouldStart"
-	Vpn_GetConnectionState_FullMethodName  = "/grpcproto.Vpn/GetConnectionState"
-	Vpn_InitHealthCheck_FullMethodName     = "/grpcproto.Vpn/InitHealthCheck"
-	Vpn_StartHealthCheck_FullMethodName    = "/grpcproto.Vpn/StartHealthCheck"
-	Vpn_StopHealthCheck_FullMethodName     = "/grpcproto.Vpn/StopHealthCheck"
-	Vpn_StartCloakClient_FullMethodName    = "/grpcproto.Vpn/StartCloakClient"
-	Vpn_StopCloakClient_FullMethodName     = "/grpcproto.Vpn/StopCloakClient"
-	Vpn_InitLogger_FullMethodName          = "/grpcproto.Vpn/InitLogger"
-	Vpn_InitTelemetry_FullMethodName       = "/grpcproto.Vpn/InitTelemetry"
-	Vpn_SetGeoRoutingConf_FullMethodName   = "/grpcproto.Vpn/SetGeoRoutingConf"
-	Vpn_ClearGeoRoutingConf_FullMethodName = "/grpcproto.Vpn/ClearGeoRoutingConf"
-	Vpn_NetCheck_FullMethodName            = "/grpcproto.Vpn/NetCheck"
-	Vpn_CancelNetCheck_FullMethodName      = "/grpcproto.Vpn/CancelNetCheck"
+	Vpn_StartAwg_FullMethodName                 = "/grpcproto.Vpn/StartAwg"
+	Vpn_StopAwg_FullMethodName                  = "/grpcproto.Vpn/StopAwg"
+	Vpn_GetOutlineLastError_FullMethodName      = "/grpcproto.Vpn/GetOutlineLastError"
+	Vpn_StartOutline_FullMethodName             = "/grpcproto.Vpn/StartOutline"
+	Vpn_StopOutline_FullMethodName              = "/grpcproto.Vpn/StopOutline"
+	Vpn_GetXrayLastError_FullMethodName         = "/grpcproto.Vpn/GetXrayLastError"
+	Vpn_StartXray_FullMethodName                = "/grpcproto.Vpn/StartXray"
+	Vpn_StopXray_FullMethodName                 = "/grpcproto.Vpn/StopXray"
+	Vpn_CouldStart_FullMethodName               = "/grpcproto.Vpn/CouldStart"
+	Vpn_GetConnectionState_FullMethodName       = "/grpcproto.Vpn/GetConnectionState"
+	Vpn_InitHealthCheck_FullMethodName          = "/grpcproto.Vpn/InitHealthCheck"
+	Vpn_StartHealthCheck_FullMethodName         = "/grpcproto.Vpn/StartHealthCheck"
+	Vpn_StopHealthCheck_FullMethodName          = "/grpcproto.Vpn/StopHealthCheck"
+	Vpn_StartCloakClient_FullMethodName         = "/grpcproto.Vpn/StartCloakClient"
+	Vpn_StopCloakClient_FullMethodName          = "/grpcproto.Vpn/StopCloakClient"
+	Vpn_InitLogger_FullMethodName               = "/grpcproto.Vpn/InitLogger"
+	Vpn_InitTelemetry_FullMethodName            = "/grpcproto.Vpn/InitTelemetry"
+	Vpn_StopTelemetry_FullMethodName            = "/grpcproto.Vpn/StopTelemetry"
+	Vpn_SetupTelemetryAttributes_FullMethodName = "/grpcproto.Vpn/SetupTelemetryAttributes"
+	Vpn_SetGeoRoutingConf_FullMethodName        = "/grpcproto.Vpn/SetGeoRoutingConf"
+	Vpn_ClearGeoRoutingConf_FullMethodName      = "/grpcproto.Vpn/ClearGeoRoutingConf"
+	Vpn_NetCheck_FullMethodName                 = "/grpcproto.Vpn/NetCheck"
+	Vpn_CancelNetCheck_FullMethodName           = "/grpcproto.Vpn/CancelNetCheck"
 )
 
 // VpnClient is the client API for Vpn service.
@@ -60,7 +62,7 @@ type VpnClient interface {
 	// health_check.go
 	CouldStart(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*CouldStartResponce, error)
 	GetConnectionState(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetConnectionStateResponce, error)
-	InitHealthCheck(ctx context.Context, in *InitHealthCheckRequest, opts ...grpc.CallOption) (*Empty, error)
+	InitHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	StartHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	StopHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	// cloak.go
@@ -69,6 +71,8 @@ type VpnClient interface {
 	// logger.go
 	InitLogger(ctx context.Context, in *InitLoggerRequest, opts ...grpc.CallOption) (*Empty, error)
 	InitTelemetry(ctx context.Context, in *InitTelemetryRequest, opts ...grpc.CallOption) (*Empty, error)
+	StopTelemetry(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
+	SetupTelemetryAttributes(ctx context.Context, in *SetupTelemetryAttributesRequest, opts ...grpc.CallOption) (*Empty, error)
 	// georouting.go
 	SetGeoRoutingConf(ctx context.Context, in *SetGeoRoutingConfRequest, opts ...grpc.CallOption) (*Empty, error)
 	ClearGeoRoutingConf(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
@@ -185,7 +189,7 @@ func (c *vpnClient) GetConnectionState(ctx context.Context, in *Empty, opts ...g
 	return out, nil
 }
 
-func (c *vpnClient) InitHealthCheck(ctx context.Context, in *InitHealthCheckRequest, opts ...grpc.CallOption) (*Empty, error) {
+func (c *vpnClient) InitHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
 	err := c.cc.Invoke(ctx, Vpn_InitHealthCheck_FullMethodName, in, out, cOpts...)
@@ -255,6 +259,26 @@ func (c *vpnClient) InitTelemetry(ctx context.Context, in *InitTelemetryRequest,
 	return out, nil
 }
 
+func (c *vpnClient) StopTelemetry(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, Vpn_StopTelemetry_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vpnClient) SetupTelemetryAttributes(ctx context.Context, in *SetupTelemetryAttributesRequest, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, Vpn_SetupTelemetryAttributes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *vpnClient) SetGeoRoutingConf(ctx context.Context, in *SetGeoRoutingConfRequest, opts ...grpc.CallOption) (*Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
@@ -313,7 +337,7 @@ type VpnServer interface {
 	// health_check.go
 	CouldStart(context.Context, *Empty) (*CouldStartResponce, error)
 	GetConnectionState(context.Context, *Empty) (*GetConnectionStateResponce, error)
-	InitHealthCheck(context.Context, *InitHealthCheckRequest) (*Empty, error)
+	InitHealthCheck(context.Context, *Empty) (*Empty, error)
 	StartHealthCheck(context.Context, *Empty) (*Empty, error)
 	StopHealthCheck(context.Context, *Empty) (*Empty, error)
 	// cloak.go
@@ -322,6 +346,8 @@ type VpnServer interface {
 	// logger.go
 	InitLogger(context.Context, *InitLoggerRequest) (*Empty, error)
 	InitTelemetry(context.Context, *InitTelemetryRequest) (*Empty, error)
+	StopTelemetry(context.Context, *Empty) (*Empty, error)
+	SetupTelemetryAttributes(context.Context, *SetupTelemetryAttributesRequest) (*Empty, error)
 	// georouting.go
 	SetGeoRoutingConf(context.Context, *SetGeoRoutingConfRequest) (*Empty, error)
 	ClearGeoRoutingConf(context.Context, *Empty) (*Empty, error)
@@ -368,7 +394,7 @@ func (UnimplementedVpnServer) CouldStart(context.Context, *Empty) (*CouldStartRe
 func (UnimplementedVpnServer) GetConnectionState(context.Context, *Empty) (*GetConnectionStateResponce, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetConnectionState not implemented")
 }
-func (UnimplementedVpnServer) InitHealthCheck(context.Context, *InitHealthCheckRequest) (*Empty, error) {
+func (UnimplementedVpnServer) InitHealthCheck(context.Context, *Empty) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InitHealthCheck not implemented")
 }
 func (UnimplementedVpnServer) StartHealthCheck(context.Context, *Empty) (*Empty, error) {
@@ -388,6 +414,12 @@ func (UnimplementedVpnServer) InitLogger(context.Context, *InitLoggerRequest) (*
 }
 func (UnimplementedVpnServer) InitTelemetry(context.Context, *InitTelemetryRequest) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InitTelemetry not implemented")
+}
+func (UnimplementedVpnServer) StopTelemetry(context.Context, *Empty) (*Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StopTelemetry not implemented")
+}
+func (UnimplementedVpnServer) SetupTelemetryAttributes(context.Context, *SetupTelemetryAttributesRequest) (*Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetupTelemetryAttributes not implemented")
 }
 func (UnimplementedVpnServer) SetGeoRoutingConf(context.Context, *SetGeoRoutingConfRequest) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetGeoRoutingConf not implemented")
@@ -603,7 +635,7 @@ func _Vpn_GetConnectionState_Handler(srv interface{}, ctx context.Context, dec f
 }
 
 func _Vpn_InitHealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(InitHealthCheckRequest)
+	in := new(Empty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -615,7 +647,7 @@ func _Vpn_InitHealthCheck_Handler(srv interface{}, ctx context.Context, dec func
 		FullMethod: Vpn_InitHealthCheck_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).InitHealthCheck(ctx, req.(*InitHealthCheckRequest))
+		return srv.(VpnServer).InitHealthCheck(ctx, req.(*Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -724,6 +756,42 @@ func _Vpn_InitTelemetry_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(VpnServer).InitTelemetry(ctx, req.(*InitTelemetryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_StopTelemetry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).StopTelemetry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_StopTelemetry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).StopTelemetry(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_SetupTelemetryAttributes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetupTelemetryAttributesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).SetupTelemetryAttributes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_SetupTelemetryAttributes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).SetupTelemetryAttributes(ctx, req.(*SetupTelemetryAttributesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -874,6 +942,14 @@ var Vpn_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "InitTelemetry",
 			Handler:    _Vpn_InitTelemetry_Handler,
+		},
+		{
+			MethodName: "StopTelemetry",
+			Handler:    _Vpn_StopTelemetry_Handler,
+		},
+		{
+			MethodName: "SetupTelemetryAttributes",
+			Handler:    _Vpn_SetupTelemetryAttributes_Handler,
 		},
 		{
 			MethodName: "SetGeoRoutingConf",

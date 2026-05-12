@@ -1,8 +1,10 @@
 package interop.logger
 
 import com.dobby.grpcproto.VpnGrpcKt
+import com.dobby.grpcproto.empty
 import com.dobby.grpcproto.initLoggerRequest
 import com.dobby.grpcproto.initTelemetryRequest
+import com.dobby.grpcproto.setupTelemetryAttributesRequest
 import interop.exceptions.VpnServiceStatusException
 import io.grpc.ManagedChannel
 import io.grpc.StatusException
@@ -27,6 +29,27 @@ open class LoggerGrpcLibrary(channel: ManagedChannel) : LoggerLibrary {
             val request = initTelemetryRequest { this.endpoint = endpoint }
             try {
                 stub.initTelemetry(request)
+            } catch (e: StatusException) {
+                throw VpnServiceStatusException(e)
+            }
+        }
+    }
+
+    override fun StopTelemetry() {
+        return runBlocking {
+            try {
+                stub.stopTelemetry(empty { })
+            } catch (e: StatusException) {
+                throw VpnServiceStatusException(e)
+            }
+        }
+    }
+
+    override fun SetupTelemetryAttributes(config: String) {
+        return runBlocking {
+            val request = setupTelemetryAttributesRequest { this.config = endpoint }
+            try {
+                stub.setupTelemetryAttributes(request)
             } catch (e: StatusException) {
                 throw VpnServiceStatusException(e)
             }

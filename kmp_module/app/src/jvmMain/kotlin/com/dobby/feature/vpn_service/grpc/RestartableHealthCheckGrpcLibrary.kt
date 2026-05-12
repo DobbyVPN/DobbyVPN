@@ -25,9 +25,9 @@ class RestartableHealthCheckGrpcLibrary(private val logger: Logger) : HealthChec
         }
     }
 
-    override fun InitHealthCheck(config: String) {
+    override fun InitHealthCheck() {
         return try {
-            GrpcVpnLibrary.healthCheckGrpcLibrary.InitHealthCheck(config)
+            GrpcVpnLibrary.healthCheckGrpcLibrary.InitHealthCheck()
         } catch (e: VpnServiceStatusException) {
             logger.log("[ERROR] Failed to init health check: $e")
         }

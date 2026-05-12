@@ -12,7 +12,7 @@ class HealthCheckImpl : HealthCheck {
         }
     }
 
-    override fun InitHealthCheck(config: String) {
+    override fun InitHealthCheck() {
         HealthCheckBackendWrapper.initHealthCheck(config)
     }
 

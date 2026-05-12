@@ -3,6 +3,7 @@ package log
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"go_module/telemetry"
 	"io"
@@ -104,11 +105,12 @@ func (h *logrusToSlogHook) Fire(e *logrus.Entry) error {
 }
 
 type TelemetryLogger struct {
-	ctx        context.Context
-	shutdown   func(context.Context) error
-	endpoint   string
-	externalIP string
-	clientID   string
+	ctx              context.Context
+	shutdown         func(context.Context) error
+	endpoint         string
+	externalIP       string
+	connectionConfig map[string]any
+	clientID         string
 }
 
 type Logger struct {
@@ -130,28 +132,9 @@ const (
 	YandexIPAPI string = "https://yandex.ru/internet/api/v0/"
 )
 
-func loadExternalIP() (string, error) {
-	req, err := http.NewRequest("GET", YandexIPAPI, http.NoBody)
-	if err != nil {
-		return "", fmt.Errorf("failed create Yandex API request: %v", err)
-	}
-
-	client := http.Client{
-		Timeout: 2 * time.Second,
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed send Yandex API request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	result, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed read Yandex API response: %v", err)
-	}
-
-	return string(result), nil
-}
+var (
+	clientID string = string(rand.Uint64())
+)
 
 // Set up OpenTelemetry.
 func NewTelemetryLogger(endpoint string) (*TelemetryLogger, error) {
@@ -161,30 +144,7 @@ func NewTelemetryLogger(endpoint string) (*TelemetryLogger, error) {
 		return nil, fmt.Errorf("failed create otlp logger: %w", err)
 	}
 
-	externalIP := "undefined"
-	minDelay := 200 * time.Millisecond
-	maxDelay := 500 * time.Millisecond
-	Debugf("LOG", "Loading user external IP")
-	for i := 0; i < 5; i++ {
-		if i > 0 {
-			time.Sleep(minDelay + (maxDelay-minDelay)*time.Duration(rand.Float32()))
-			Warnf("LOG", "Retry # %d", i)
-		}
-
-		extIP, err := loadExternalIP()
-		if err != nil {
-			Warnf("LOG", "Failed to load external IP: %v", err)
-			continue
-		}
-
-		externalIP = extIP
-		break
-	}
-	Debugf("LOG", "Using external IP = %s", externalIP)
-
-	clientID := string(rand.Uint64())
-
-	return &TelemetryLogger{ctx: ctx, shutdown: otelShutdown, endpoint: endpoint, externalIP: externalIP, clientID: clientID}, nil
+	return &TelemetryLogger{ctx: ctx, shutdown: otelShutdown, endpoint: endpoint, clientID: clientID}, nil
 }
 
 func MaskStr(input string) string {
@@ -247,7 +207,7 @@ func SetPath(path string) error {
 	return nil
 }
 
-func SetTelemetry(endpoint string) error {
+func InitTelemetry(endpoint string) error {
 	if lg.tlogger != nil {
 		if lg.tlogger.endpoint == endpoint {
 			Debugf("LOG", "Telemetry is already set up")
@@ -270,6 +230,82 @@ func SetTelemetry(endpoint string) error {
 	return nil
 }
 
+func loadExternalIPStep() (string, error) {
+	req, err := http.NewRequest("GET", YandexIPAPI, http.NoBody)
+	if err != nil {
+		return "", fmt.Errorf("failed create Yandex API request: %v", err)
+	}
+
+	client := http.Client{
+		Timeout: 2 * time.Second,
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed send Yandex API request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	result, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed read Yandex API response: %v", err)
+	}
+
+	return string(result), nil
+}
+
+func loadExternalIP() string {
+	minDelay := 200 * time.Millisecond
+	maxDelay := 500 * time.Millisecond
+	Debugf("LOG", "Loading user external IP")
+	for i := 0; i < 5; i++ {
+		if i > 0 {
+			time.Sleep(minDelay + (maxDelay-minDelay)*time.Duration(rand.Float32()))
+			Warnf("LOG", "Retry # %d", i)
+		}
+
+		extIP, err := loadExternalIPStep()
+		if err != nil {
+			Warnf("LOG", "Failed to load external IP: %v", err)
+			continue
+		}
+		return extIP
+	}
+
+	return "nan"
+}
+
+func SetupTelemetryAttributes(configJson string) {
+	Debugf("LOG", "Loading user external IP")
+
+	externalIP := loadExternalIP()
+	Debugf("LOG", "Loaded external IP")
+
+	var connectionConfig map[string]any
+	err := json.Unmarshal([]byte(configJson), &connectionConfig)
+	if err != nil {
+		Warnf("LOG", "Failed parse config json")
+		connectionConfig = map[string]any{}
+	}
+
+	initMu.Lock()
+	defer initMu.Unlock()
+	if lg.tlogger != nil {
+		lg.tlogger.externalIP = externalIP
+		lg.tlogger.connectionConfig = connectionConfig
+	}
+}
+
+func StopTelemetry() {
+	if lg.tlogger != nil {
+		if err := lg.tlogger.shutdown(lg.tlogger.ctx); err != nil {
+			Warnf("LOG", "Telemetry shutdown error: %v", err)
+		}
+		lg.tlogger = nil
+	} else {
+		Warnf("LOG", "No telemetry logger found")
+	}
+}
+
 const name = "https://github.com/DobbyVPN/DobbyVPN/go_module/log"
 
 var (
@@ -290,18 +326,19 @@ func prepareLog(message string, arguments map[string]any) string {
 	return msg.String()
 }
 
-func flattenArgs(arguments map[string]any) []any {
-	count := len(arguments)
-	all := make([]any, count*2+4)
-	i := 0
-	for k, v := range arguments {
-		all[i], all[i+1] = k, v
-		i += 2
+func flattenArgs(argumentsList ...map[string]any) []any {
+	all := make([]any, 0)
+	all[0] = "externalIP"
+	all[1] = lg.tlogger.externalIP
+	all[2] = "clientID"
+	all[3] = lg.tlogger.clientID
+	i := 4
+	for _, arguments := range argumentsList {
+		for k, v := range arguments {
+			all[i], all[i+1] = k, v
+			i += 2
+		}
 	}
-	all[count*2] = "externalIP"
-	all[count*2+1] = lg.tlogger.externalIP
-	all[count*2+2] = "clientID"
-	all[count*2+3] = lg.tlogger.clientID
 	return all
 }
 
@@ -345,7 +382,7 @@ func Info(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_info(categoryMessage, arguments)
 	if lg.tlogger != nil {
-		otelLogger.InfoContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
+		otelLogger.InfoContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments, lg.tlogger.connectionConfig)...)
 	}
 }
 
@@ -353,7 +390,7 @@ func Debug(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_debug(categoryMessage, arguments)
 	if lg.tlogger != nil {
-		otelLogger.DebugContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
+		otelLogger.DebugContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments, lg.tlogger.connectionConfig)...)
 	}
 }
 
@@ -361,7 +398,7 @@ func Warn(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_warn(categoryMessage, arguments)
 	if lg.tlogger != nil {
-		otelLogger.WarnContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
+		otelLogger.WarnContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments, lg.tlogger.connectionConfig)...)
 	}
 }
 
@@ -369,7 +406,7 @@ func Error(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_error(categoryMessage, arguments)
 	if lg.tlogger != nil {
-		otelLogger.ErrorContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments)...)
+		otelLogger.ErrorContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments, lg.tlogger.connectionConfig)...)
 	}
 }
 

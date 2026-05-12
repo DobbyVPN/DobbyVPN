@@ -1,7 +1,6 @@
 package healthcheck
 
 import (
-	"encoding/json"
 	"go_module/healthcheck/interfacecheck"
 	"go_module/log"
 	"sync"
@@ -22,7 +21,6 @@ var (
 	stopHealthCheckChannel chan bool
 	healthCheckStarted     bool = false
 	healthCheckStartedMu   sync.Mutex
-	checkingConfig         map[string]any
 )
 
 // Default variables
@@ -75,42 +73,32 @@ func join(map1, map2 map[string]any) map[string]any {
 }
 
 func GetConnectionState() ConnectionState {
-	log.Debug(Category, "Called GetConnectionState", checkingConfig)
+	log.Debugf(Category, "Called GetConnectionState")
 
 	csMu.Lock()
 	defer csMu.Unlock()
 	return connectionState
 }
 
-func InitHealthCheck(config string) {
-	log.Debug(Category, "Called InitHealthCheck", checkingConfig)
-
-	var result map[string]any
-
-	err := json.Unmarshal([]byte(config), &result)
-	if err != nil {
-		log.Warnf(Category, "Failed to parse provided JSON config")
-	}
-
-	log.Info(Category, "Healthcheck initialized", checkingConfig)
-	checkingConfig = result
+func InitHealthCheck() {
+	log.Debugf(Category, "Called InitHealthCheck")
 }
 
 func StartHealthCheck() {
-	log.Debug(Category, "Called StartHealthCheck", checkingConfig)
+	log.Debugf(Category, "Called StartHealthCheck")
 	healthCheckStartedMu.Lock()
 	defer healthCheckStartedMu.Unlock()
 
 	if healthCheckStarted {
-		log.Debug(Category, "Health check already running", checkingConfig)
+		log.Debugf(Category, "Health check already running")
 	} else {
-		log.Debug(Category, "Starting healtch check", checkingConfig)
+		log.Debugf(Category, "Starting healtch check")
 		go innerHealthCheck()
 	}
 }
 
 func StopHealthCheck() {
-	log.Debug(Category, "Called StopHealthCheck", checkingConfig)
+	log.Debugf(Category, "Called StopHealthCheck")
 
 	healthCheckStartedMu.Lock()
 	if healthCheckStarted {
@@ -120,7 +108,7 @@ func StopHealthCheck() {
 }
 
 func innerHealthCheck() {
-	log.Debug(Category, "Health check started", checkingConfig)
+	log.Debugf(Category, "Health check started")
 	healthCheckStartedMu.Lock()
 	healthCheckStarted = true
 	stopHealthCheckChannel = make(chan bool, 1)
@@ -140,7 +128,7 @@ func innerHealthCheck() {
 
 		select {
 		case <-stopHealthCheckChannel:
-			log.Debug(Category, "Health check stopped", checkingConfig)
+			log.Debugf(Category, "Health check stopped")
 			switchState(Disconnected)
 			healthCheckStartedMu.Lock()
 			healthCheckStarted = false
@@ -160,27 +148,27 @@ func switchState(newState ConnectionState) {
 		log.Debug(
 			Category,
 			"Switching connection state",
-			join(checkingConfig, map[string]any{"state": newState}),
+			map[string]any{"state": newState},
 		)
 		connectionState = newState
 	}
 }
 
 func healthCheckStep() {
-	log.Debug(Category, "Health check step", checkingConfig)
+	log.Debugf(Category, "Health check step")
 
 	for _, check := range connectionChecks {
 		if err := check(); err != nil {
 			log.Error(
 				Category,
 				"Failed check",
-				join(checkingConfig, map[string]any{"error": err}),
+				map[string]any{"error": err.Error()},
 			)
 			switchState(Connecting)
 			return
 		}
 	}
 
-	log.Info(Category, "Health check succeed", checkingConfig)
+	log.Infof(Category, "Health check succeed")
 	switchState(Connected)
 }

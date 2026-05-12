@@ -2,7 +2,6 @@ package interop.healthcheck
 
 import com.dobby.grpcproto.VpnGrpcKt
 import com.dobby.grpcproto.empty
-import com.dobby.grpcproto.initHealthCheckRequest
 import interop.exceptions.VpnServiceStatusException
 import io.grpc.ManagedChannel
 import io.grpc.StatusException
@@ -33,10 +32,10 @@ open class HealthCheckGrpcLibrary(channel: ManagedChannel) : HealthCheckLibrary 
         }
     }
 
-    override fun InitHealthCheck(config: String) {
+    override fun InitHealthCheck() {
         return runBlocking {
             try {
-                stub.initHealthCheck(initHealthCheckRequest { this.config = config })
+                stub.initHealthCheck(empty { })
             } catch (e: StatusException) {
                 throw VpnServiceStatusException(e)
             }

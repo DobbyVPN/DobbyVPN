@@ -11,5 +11,13 @@ func InitLogger(path string) {
 }
 
 func InitTelemetry(endpoint string) {
-	log.SetTelemetry(endpoint)
+	log.InitTelemetry(endpoint)
+}
+
+func StopTelemetry() {
+	log.StopTelemetry()
+}
+
+func SetupTelemetryAttributes(config string) {
+	log.SetupTelemetryAttributes(config)
 }

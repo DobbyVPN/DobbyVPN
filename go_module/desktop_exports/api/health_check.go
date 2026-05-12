@@ -17,8 +17,8 @@ func GetConnectionState() int32 {
 	return int32(healthcheck.GetConnectionState())
 }
 
-func InitHealthCheck(config string) {
-	healthcheck.InitHealthCheck(config)
+func InitHealthCheck() {
+	healthcheck.InitHealthCheck()
 }
 
 func StartHealthCheck() {

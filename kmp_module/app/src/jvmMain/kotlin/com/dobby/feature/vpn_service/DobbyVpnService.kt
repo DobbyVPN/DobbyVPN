@@ -94,6 +94,18 @@ class DobbyVpnService(
         } else {
             logger.log("No telemetry endpoint provided")
         }
+        logger.log("Setup telemetry attributes")
+        val config = dobbyConfigsRepository.getTelemetryAttributes()
+        if (config.isNotBlank()) {
+            loggerLibrary.SetupTelemetryAttributes(config)
+        } else {
+            logger.log("No telemetry attributes provided")
+        }
+    }
+
+    fun disableTunnelTelemetry() {
+        logger.log("Stop tunnel telemetry")
+        loggerLibrary.StopTelemetry()
     }
 
     /**
@@ -127,6 +139,7 @@ class DobbyVpnService(
     }
 
     private fun stopCurrentLocked() {
+        disableTunnelTelemetry()
         stopCloakOutline()
         stopXray()
         stopAwg()
