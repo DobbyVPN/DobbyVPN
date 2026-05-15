@@ -212,6 +212,7 @@ func (l socksLogger) Errorf(format string, args ...interface{}) {
 					l.device.hasUDPPath,
 					l.device.packetDialer,
 				)
+				log.Infof("[ErrorStats] %s", l.device.errorRateStats())
 			}
 		} else {
 			log.Infof("[SOCKS5 internal][auth_error count=%d] %s", count, msg)
@@ -221,15 +222,24 @@ func (l socksLogger) Errorf(format string, args ...interface{}) {
 	if strings.Contains(msg, "connection reset by peer") {
 		count := socksInternalResetErr.Add(1)
 		log.Infof("[SOCKS5 internal][reset count=%d] %s", count, msg)
+		if (count == 1 || count%10 == 0) && l.device != nil {
+			log.Infof("[ErrorStats] %s", l.device.errorRateStats())
+		}
 		return
 	}
 	if strings.Contains(msg, "broken pipe") {
 		count := socksInternalBrokenPipeErr.Add(1)
 		log.Infof("[SOCKS5 internal][broken_pipe count=%d] %s", count, msg)
+		if (count == 1 || count%10 == 0) && l.device != nil {
+			log.Infof("[ErrorStats] %s", l.device.errorRateStats())
+		}
 		return
 	}
 	count := socksInternalOther.Add(1)
 	log.Infof("[SOCKS5 internal][other count=%d] %s", count, msg)
+	if (count == 1 || count%10 == 0) && l.device != nil {
+		log.Infof("[ErrorStats] %s", l.device.errorRateStats())
+	}
 }
 
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -341,6 +351,32 @@ func (d *OutlineDevice) dialStats() string {
 		socksInternalOther.Load(),
 		d.socksServeExit.Load(),
 		d.statsLoopExit.Load(),
+	)
+}
+
+func (d *OutlineDevice) errorRateStats() string {
+	tcpAttempt := d.tcpDialAttempt.Load()
+	tcpFail := d.tcpDialErr.Load()
+	udpAttempt := d.udpDialAttempt.Load()
+	authErr := socksInternalAuthErr.Load()
+	resetErr := socksInternalResetErr.Load()
+	brokenPipeErr := socksInternalBrokenPipeErr.Load()
+	otherErr := socksInternalOther.Load()
+
+	pct := func(num, denom uint64) float64 {
+		if denom == 0 {
+			return 0
+		}
+		return float64(num) / float64(denom) * 100
+	}
+
+	return fmt.Sprintf(
+		"udpAuth=%.1f%%(%d/%d) tcpFail=%.1f%%(%d/%d) tcpReset=%.1f%%(%d/%d) brokePipe=%d other=%d",
+		pct(authErr, udpAttempt), authErr, udpAttempt,
+		pct(tcpFail, tcpAttempt), tcpFail, tcpAttempt,
+		pct(resetErr, tcpAttempt), resetErr, tcpAttempt,
+		brokenPipeErr,
+		otherErr,
 	)
 }
 
