@@ -51,12 +51,14 @@ var (
 	socksInternalAuthErr       atomic.Uint64
 	socksInternalResetErr      atomic.Uint64
 	socksInternalBrokenPipeErr atomic.Uint64
+	socksInternalOtherErr      atomic.Uint64
 )
 
 func resetSocksInternalStats() {
 	socksInternalAuthErr.Store(0)
 	socksInternalResetErr.Store(0)
 	socksInternalBrokenPipeErr.Store(0)
+	socksInternalOtherErr.Store(0)
 }
 
 func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
@@ -169,6 +171,7 @@ func (l socksLogger) Errorf(format string, args ...interface{}) {
 					l.device.hasUDPPath,
 					l.device.packetDialer,
 				)
+				log.Infof("[ErrorStats] %s", l.device.errorRateStats())
 			}
 		} else {
 			log.Infof("[SOCKS5 internal][auth_error count=%d] %s", count, msg)
@@ -178,14 +181,24 @@ func (l socksLogger) Errorf(format string, args ...interface{}) {
 	if strings.Contains(msg, "connection reset by peer") {
 		count := socksInternalResetErr.Add(1)
 		log.Infof("[SOCKS5 internal][reset count=%d] %s", count, msg)
+		if (count == 1 || count%10 == 0) && l.device != nil {
+			log.Infof("[ErrorStats] %s", l.device.errorRateStats())
+		}
 		return
 	}
 	if strings.Contains(msg, "broken pipe") {
 		count := socksInternalBrokenPipeErr.Add(1)
 		log.Infof("[SOCKS5 internal][broken_pipe count=%d] %s", count, msg)
+		if (count == 1 || count%10 == 0) && l.device != nil {
+			log.Infof("[ErrorStats] %s", l.device.errorRateStats())
+		}
 		return
 	}
-	log.Infof("[SOCKS5 internal] %s", msg)
+	count := socksInternalOtherErr.Add(1)
+	log.Infof("[SOCKS5 internal][other count=%d] %s", count, msg)
+	if (count == 1 || count%10 == 0) && l.device != nil {
+		log.Infof("[ErrorStats] %s", l.device.errorRateStats())
+	}
 }
 
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -261,7 +274,7 @@ func updatePeakInt64(peak *atomic.Int64, current int64) {
 
 func (d *OutlineDevice) dialStats() string {
 	return fmt.Sprintf(
-		"uptime=%s tcp=%d/%d/%d/inflight=%d/peak=%d udp=%d/%d/%d/inflight=%d/peak=%d udpDNSTrunc=%d unsupported=%d internalAuth=%d internalReset=%d internalBrokenPipe=%d",
+		"uptime=%s tcp=%d/%d/%d/inflight=%d/peak=%d udp=%d/%d/%d/inflight=%d/peak=%d udpDNSTrunc=%d unsupported=%d internalAuth=%d internalReset=%d internalBrokenPipe=%d internalOther=%d",
 		time.Since(d.startedAt).Truncate(time.Millisecond),
 		d.tcpDialAttempt.Load(),
 		d.tcpDialOK.Load(),
@@ -278,6 +291,34 @@ func (d *OutlineDevice) dialStats() string {
 		socksInternalAuthErr.Load(),
 		socksInternalResetErr.Load(),
 		socksInternalBrokenPipeErr.Load(),
+		socksInternalOtherErr.Load(),
+	)
+}
+
+func (d *OutlineDevice) errorRateStats() string {
+	tcpAttempt := d.tcpDialAttempt.Load()
+	tcpFail := d.tcpDialErr.Load()
+	udpAttempt := d.udpDialAttempt.Load()
+	authErr := socksInternalAuthErr.Load()
+	resetErr := socksInternalResetErr.Load()
+	brokenPipeErr := socksInternalBrokenPipeErr.Load()
+
+	pct := func(num, denom uint64) float64 {
+		if denom == 0 {
+			return 0
+		}
+		return float64(num) / float64(denom) * 100
+	}
+
+	otherErr := socksInternalOtherErr.Load()
+
+	return fmt.Sprintf(
+		"udpAuth=%.1f%%(%d/%d) tcpFail=%.1f%%(%d/%d) tcpReset=%.1f%%(%d/%d) brokePipe=%d other=%d",
+		pct(authErr, udpAttempt), authErr, udpAttempt,
+		pct(tcpFail, tcpAttempt), tcpFail, tcpAttempt,
+		pct(resetErr, tcpAttempt), resetErr, tcpAttempt,
+		brokenPipeErr,
+		otherErr,
 	)
 }
 
