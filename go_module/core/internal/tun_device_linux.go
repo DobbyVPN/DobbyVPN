@@ -9,7 +9,7 @@ import (
 	"go_module/tunnel/protected_dialer"
 	"os"
 
-	"github.com/Jigsaw-Code/outline-sdk/network"
+	"golang.getoutline.org/sdk/network"
 	"github.com/songgao/water"
 	"github.com/vishvananda/netlink"
 

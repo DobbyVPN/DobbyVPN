@@ -7,7 +7,7 @@ import (
 
 	"go_module/tunnel/protected_dialer"
 
-	"github.com/Jigsaw-Code/outline-sdk/transport"
+	"golang.getoutline.org/sdk/transport"
 )
 
 type ProtectedStreamDialer struct{}
