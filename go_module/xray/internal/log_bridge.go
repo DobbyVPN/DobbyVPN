@@ -1,7 +1,7 @@
 package internal
 
 import (
-	appLog "go_client/logger"
+	appLog "go_module/log"
 
 	xrayLog "github.com/xtls/xray-core/common/log"
 )

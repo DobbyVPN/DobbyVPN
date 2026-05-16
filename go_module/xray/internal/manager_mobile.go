@@ -5,15 +5,10 @@ package internal
 
 import (
 	"fmt"
-<<<<<<< HEAD:go_module/xray/internal/manager_mobile.go
-
-	"go_module/log"
-	xrayCommon "go_module/xray/common"
-=======
-	"go_module/log"
 	"os"
 	"strconv"
->>>>>>> 683c89bd (feat: add logger for xray-core, migrate from tun2socks + xray-core's socks proxy to newer xray-core's tun-in inbound):go_client/xray/internal/manager_mobile.go
+
+	"go_module/log"
 
 	"github.com/xtls/xray-core/core"
 )

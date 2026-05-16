@@ -7,14 +7,8 @@ import (
 	"fmt"
 	"time"
 
-<<<<<<< HEAD:go_module/xray/internal/manager_linux.go
 	"go_module/log"
 	"go_module/routing"
-	xrayCommon "go_module/xray/common"
-=======
-	"go_module/log"
-	"go_module/routing"
->>>>>>> 683c89bd (feat: add logger for xray-core, migrate from tun2socks + xray-core's socks proxy to newer xray-core's tun-in inbound):go_client/xray/internal/manager_linux.go
 
 	"github.com/jackpal/gateway"
 	"github.com/xtls/xray-core/core"
