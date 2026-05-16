@@ -32,6 +32,13 @@ require (
 )
 
 require (
+	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/juju/ratelimit v1.0.2 // indirect
+	github.com/refraction-networking/utls v1.8.1 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
+)
+
+require (
 	github.com/ajg/form v1.5.1 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/cloudflare/circl v1.6.1 // indirect
@@ -84,10 +91,6 @@ require (
 
 require (
 	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/juju/ratelimit v1.0.2 // indirect
-	github.com/refraction-networking/utls v1.8.1 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678 // indirect
 	golang.org/x/lint v0.0.0-20210508222113-6edffad5e616 // indirect
 	golang.org/x/tools/go/expect v0.1.1-deprecated // indirect
