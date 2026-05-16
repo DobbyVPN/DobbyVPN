@@ -226,13 +226,13 @@ class MainViewModel(
     }
 
     fun stopVpnService(stoppedByHealthCheck: Boolean = false) {
-        logger.log("Stopping VPN service...")
+        logger.log("Stopping VPN service... stoppedByHealthCheck=$stoppedByHealthCheck")
         vpnManager.stop()
         if (!stoppedByHealthCheck) {
             configsRepository.clearVpnConfig()
             connectionStateRepository.tryUpdateStatus(false)
         }
-        logger.log("VPN service stopped successfully, state reset to disconnected")
+        logger.log("VPN stop requested; local state updated. Await NEVPNStatusDidChange for actual disconnected status")
     }
 
     private fun updateServerTargetFromConfig(): Boolean {

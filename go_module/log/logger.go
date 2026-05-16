@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -158,8 +160,28 @@ func SetPath(path string) error {
 	lg.dumpBuffer()
 
 	logrus.AddHook(&logrusToSlogHook{})
+	logRuntimeInfo()
 
 	return nil
+}
+
+func logRuntimeInfo() {
+	modulePath := "(unknown)"
+	moduleVersion := "(unknown)"
+	if info, ok := debug.ReadBuildInfo(); ok {
+		modulePath = info.Main.Path
+		moduleVersion = info.Main.Version
+	}
+
+	Infof(
+		"[GoRuntime] goos=%s goarch=%s goVersion=%s numCPU=%d module=%s moduleVersion=%s",
+		runtime.GOOS,
+		runtime.GOARCH,
+		runtime.Version(),
+		runtime.NumCPU(),
+		modulePath,
+		moduleVersion,
+	)
 }
 
 func (logger *Logger) bufInfof(format string, args ...any) {

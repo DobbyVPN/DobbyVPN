@@ -10,9 +10,8 @@ import (
 	"golang.zx2c4.com/wintun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 
+	"golang.getoutline.org/sdk/network"
 	"go_module/log"
-
-	"github.com/Jigsaw-Code/outline-sdk/network"
 )
 
 type wintunDevice struct {

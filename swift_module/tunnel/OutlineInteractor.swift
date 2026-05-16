@@ -12,15 +12,11 @@ public final class OutlineInteractor {
     private var outlineStarted: Bool = false
 
     func startOutline() throws {
-        logs.writeLog(log: "startOutline: entering")
-        
-        if !configsRepository.getIsOutlineEnabled(){
-            logs.writeLog(log: "Outline: is disabled")
-            return
-        }
-        
+        let start = Date()
+        logs.writeLog(log: "[Outline] startOutline begin")
+
         let methodPassword = configsRepository.getMethodPasswordOutline()
-        let serverPort = configsRepository.getServerPort()
+        let serverPort = configsRepository.getServerPortOutline()
         let prefix = configsRepository.getPrefixOutline()
         let websocketEnabled = configsRepository.getIsWebsocketEnabled()
         let tcpPath = configsRepository.getTcpPathOutline()
@@ -29,8 +25,7 @@ public final class OutlineInteractor {
 
         // Validate config early (prevents passing empty config into native layer).
         if methodPassword.isEmpty || serverPort.isEmpty {
-            logs.writeLog(log: "[startTunnel] Empty Outline config (methodPassword/serverPort) → abort")
-            outlineStarted = false
+            logs.writeLog(log: "[startTunnel] Empty Outline config: methodPassword.isEmpty=\(methodPassword.isEmpty) serverPort.isEmpty=\(serverPort.isEmpty) → abort")
             throw NSError(
                 domain: "PacketTunnelProvider",
                 code: -2,
@@ -48,36 +43,58 @@ public final class OutlineInteractor {
         )
         logs.writeLog(log: "Outline config built (prefix=\(!prefix.isEmpty), ws=\(websocketEnabled), tcpPath=\(!tcpPath.isEmpty), udpPath=\(!udpPath.isEmpty))")
         if websocketEnabled {
-            logs.writeLog(log: "WebSocket transport requested (wss)")
+            logs.writeLog(
+                log: "WebSocket transport requested (wss) " +
+                    "serverHost=\(maskStr(value: OutlineInteractor.extractHost(from: serverPort)))"
+            )
         }
         
         var err: NSError?
 
-        Cloak_outlineNewVpnClient(config, "outline", &err)
+        logs.writeLog(log: "[DEBUG][Outline] calling native NewOutlineClient config.len=\(config.count)")
+        let newClientStart = Date()
+        Cloak_outlineNewOutlineClient(config, &err)
         if let error = err {
-            outlineStarted = false
+            logs.writeLog(
+                log: "[Outline] NewOutlineClient failed in \(elapsedMs(since: newClientStart))ms: " +
+                    "\(error.localizedDescription)"
+            )
             throw error
         }
+        logs.writeLog(log: "[Outline] NewOutlineClient succeeded in \(elapsedMs(since: newClientStart))ms")
 
-        Cloak_outlineVpnConnect(&err)
+        logs.writeLog(log: "[DEBUG][Outline] calling native OutlineConnect")
+        let connectStart = Date()
+        Cloak_outlineOutlineConnect(&err)
         if let error = err {
-            outlineStarted = false
+            logs.writeLog(
+                log: "[Outline] OutlineConnect failed in \(elapsedMs(since: connectStart))ms: " +
+                    "\(error.localizedDescription)"
+            )
             throw error
         }
         outlineStarted = true
+        logs.writeLog(
+            log: "[Outline] OutlineConnect succeeded in \(elapsedMs(since: connectStart))ms " +
+                "totalStartMs=\(elapsedMs(since: start))"
+        )
     }
 
-    func stopOutline() {
-        if !outlineStarted{
-            return
-        }
-        
+    func stopOutline() throws {
         var err: NSError?
-        Cloak_outlineVpnDisconnect(&err)
+
+        logs.writeLog(log: "[DEBUG][Outline] calling native OutlineDisconnect outlineStarted=\(outlineStarted)")
+        let start = Date()
+        Cloak_outlineOutlineDisconnect(&err)
         if let error = err {
-            logs.writeLog(log: "Stop Outline get error \(error)")
+            logs.writeLog(
+                log: "[Outline] OutlineDisconnect failed in \(elapsedMs(since: start))ms: " +
+                    "\(error.localizedDescription)"
+            )
+            throw error
         }
         outlineStarted = false
+        logs.writeLog(log: "[DEBUG][Outline] OutlineDisconnect returned in \(elapsedMs(since: start))ms")
     }
     
     func buildOutlineConfig(
@@ -119,6 +136,10 @@ public final class OutlineInteractor {
         // If WebSocket is enabled, wrap the Shadowsocks URL into WebSocket-over-TLS transport (wss://)
         if websocketEnabled {
             let effectiveHost = extractHost(serverPort).trimmingCharacters(in: .whitespacesAndNewlines)
+            logs.writeLog(
+                log: "[Outline] building WSS config effectiveHost=\(maskStr(value: effectiveHost)) " +
+                    "tcpPath.len=\(tcpPath.count) udpPath.len=\(udpPath.count)"
+            )
 
             var wsParams: [String] = []
             // outline-sdk v0.0.16: ws: does not support the `host=` option ("Unsupported option host")
@@ -152,5 +173,9 @@ public final class OutlineInteractor {
             return String(trimmed[..<lastColon])
         }
         return trimmed
+    }
+
+    private func elapsedMs(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
     }
 }

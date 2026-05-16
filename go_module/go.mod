@@ -7,8 +7,8 @@ replace github.com/cbeuw/Cloak => ./modules/Cloak
 replace github.com/xjasonlyu/tun2socks/v2/log => ./go_module/log
 
 require (
-	github.com/Jigsaw-Code/outline-sdk v0.0.20
-	github.com/Jigsaw-Code/outline-sdk/x v0.0.8
+	golang.getoutline.org/sdk v0.0.21
+	golang.getoutline.org/sdk/x v0.1.0
 	github.com/amnezia-vpn/amneziawg-go v0.2.16
 	github.com/amnezia-vpn/amneziawg-windows v0.1.8
 	github.com/cbeuw/Cloak v0.0.0-00010101000000-000000000000

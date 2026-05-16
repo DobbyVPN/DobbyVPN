@@ -1,43 +1,54 @@
 //go:build android || ios
 
-package core
+package outline
 
 import (
 	"fmt"
 	"go_module/common"
-	coreCommon "go_module/core/common"
-	"go_module/core/pkg"
 	"go_module/log"
+	outlineCommon "go_module/outline/common"
+	"go_module/outline/internal"
 	"go_module/tunnel"
 	"go_module/tunnel/platform_engine"
+	"golang.org/x/sys/unix"
 	"io"
 	"net"
 	"os"
-
-	"golang.org/x/sys/unix"
+	"time"
 )
 
-type CoreClient struct {
-	device pkg.ProtocolDevice
+type OutlineClient struct {
+	device *internal.OutlineDevice
 	tun    io.ReadWriteCloser
+	config string
 }
 
-func NewClient(device pkg.ProtocolDevice, tun io.ReadWriteCloser) *CoreClient {
-	c := &CoreClient{
-		device: device,
+func NewClient(transportConfig string, tun io.ReadWriteCloser) *OutlineClient {
+	c := &OutlineClient{
+		config: transportConfig,
 		tun:    tun,
 	}
-	log.Infof("core mobile client created (tun2socks version)")
-	common.Client.SetVpnClient(coreCommon.Name, c)
+	log.Infof("outline client created (tun2socks version) config.len=%d tunType=%T", len(transportConfig), tun)
+	common.Client.SetVpnClient(outlineCommon.Name, c)
 	return c
 }
 
-func (c *CoreClient) Connect() error {
+func (c *OutlineClient) Connect() error {
+	start := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
-			log.Infof("RECOVERED from fail in Connect: %v", r)
+			log.Infof("RECOVERED from fail in Connect after %s: %v", time.Since(start), r)
 		}
 	}()
+	log.Infof("outline Connect begin config.len=%d tunType=%T", len(c.config), c.tun)
+	od, err := internal.NewOutlineDevice(c.config)
+	if err != nil {
+		log.Infof("failed to create outline device after %s: %v\n", time.Since(start), err)
+		return err
+	}
+
+	log.Infof("outline device (SOCKS5 bridge) created proxy=%s serverIP=%v elapsed=%s", od.GetProxyAddr(), od.GetServerIP(), time.Since(start))
+	c.device = od
 
 	var fd int
 	if f, ok := c.tun.(*os.File); ok {
@@ -45,54 +56,57 @@ func (c *CoreClient) Connect() error {
 		err := unix.SetNonblock(fd, true)
 		if err != nil {
 			log.Infof("Set unix.SetNonblock error: %v", err)
+		} else {
+			log.Infof("Set unix.SetNonblock OK fd=%d", fd)
 		}
 	} else {
 		log.Infof("failed to get FD from tun: not an *os.File")
 		return fmt.Errorf("invalid tun device type")
 	}
 
-	err := c.device.Open(0, "")
-	if err != nil {
-		log.Infof("failed to create protocol device: %v", err)
-		common.Client.MarkInactive(coreCommon.Name)
-		return err
-	}
-
-	log.Infof("starting tun2socks engine with proxy %s", c.device.GetProxyAddr())
+	log.Infof("starting tun2socks engine with proxy %s fd=%d", od.GetProxyAddr(), fd)
 	err = tunnel.StartEngine(platform_engine.EngineConfig{
-		ProxyAddr:   c.device.GetProxyAddr(),
+		ProxyAddr:   od.GetProxyAddr(),
 		FD:          fd,
 		UplinkIface: "",
 	})
 	if err != nil {
-		log.Infof("Can't start tun2socks: %v", err)
+		log.Infof("Can't start tun2socks after %s: %v", time.Since(start), err)
 		return err
 	}
 
-	common.Client.MarkActive(coreCommon.Name)
-	log.Infof("core client connected successfully via tun2socks")
+	common.Client.MarkActive(outlineCommon.Name)
+	log.Infof("outline client connected successfully via tun2socks elapsed=%s", time.Since(start))
 	return nil
 }
 
-func (c *CoreClient) Disconnect() error {
+func (c *OutlineClient) Disconnect() error {
+	start := time.Now()
+	log.Infof("outline Disconnect begin deviceNil=%v", c.device == nil)
+	log.Infof("outline Disconnect stopping tun2socks engine")
 	tunnel.StopEngine()
+	log.Infof("outline Disconnect tun2socks engine stopped elapsed=%s", time.Since(start))
 
 	if c.device != nil {
+		log.Infof("outline Disconnect closing outline device proxy=%s", c.device.GetProxyAddr())
 		if err := c.device.Close(); err != nil {
 			log.Infof("failed to close outline device: %v\n", err)
 		}
 		c.device = nil
 	}
 
-	log.Infof("outline client disconnected")
-	common.Client.MarkInactive(coreCommon.Name)
+	log.Infof("outline client disconnected elapsed=%s", time.Since(start))
+	common.Client.MarkInactive(outlineCommon.Name)
 	return nil
 }
 
-func (c *CoreClient) Refresh() error {
+func (c *OutlineClient) Refresh() error {
 	return nil
 }
 
-func (c *CoreClient) GetServerIP() net.IP {
+func (c *OutlineClient) GetServerIP() net.IP {
+	if c.device == nil {
+		return nil
+	}
 	return c.device.GetServerIP()
 }

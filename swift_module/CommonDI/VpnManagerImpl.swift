@@ -47,8 +47,13 @@ public class VpnManagerImpl: VpnManager {
                   let connection = notification.object as? NEVPNConnection else { return }
 
             if let myConnection = self.vpnManager?.connection, myConnection !== connection {
+                self.logs.writeLog(log: "[NEVPNStatusDidChange] ignoring non-Dobby connection status=\(self.statusName(connection.status)) raw=\(connection.status.rawValue)")
                 return
             }
+
+            let previous = self.state
+            self.state = connection.status
+            self.logs.writeLog(log: "[NEVPNStatusDidChange] \(self.statusName(previous))(\(previous.rawValue)) -> \(self.statusName(connection.status))(\(connection.status.rawValue))")
 
             switch connection.status {
             case .connected:
@@ -82,7 +87,7 @@ public class VpnManagerImpl: VpnManager {
     }
 
     public func start() {
-        self.logs.writeLog(log: "call start")
+        self.logs.writeLog(log: "call start launchId=\(Self.launchId)")
         self.logs.writeLog(log: "Routing table without vpn:")
         getOrCreateManager { manager, _ in
             self.handleStart(manager: manager)
@@ -95,6 +100,11 @@ public class VpnManagerImpl: VpnManager {
             return
         }
         let status = manager.connection.status
+        self.logs.writeLog(log: "[start] manager loaded status=\(statusName(status)) raw=\(status.rawValue)")
+        if status == .connecting || status == .disconnecting || status == .reasserting {
+            self.logs.writeLog(log: "[start] Skip: connection is transitioning (\(status.rawValue))")
+            return
+        }
         if status == .connected {
             self.logs.writeLog(log: "[start] Skip: already connected")
             return
@@ -112,9 +122,9 @@ public class VpnManagerImpl: VpnManager {
                 self.logs.writeLog(log: "VPN configuration saved successfully!")
                 do {
                     self.logs.writeLog(log: "self.vpnManager = \(manager)")
-                    self.logs.writeLog(log: "starting tunnel \(manager.connection.status)")
+                    self.logs.writeLog(log: "starting tunnel status=\(self.statusName(manager.connection.status)) raw=\(manager.connection.status.rawValue)")
                     try manager.connection.startVPNTunnel()
-                    self.logs.writeLog(log: "Tunnel was started! manager.connection.status = \(manager.connection.status)")
+                    self.logs.writeLog(log: "startVPNTunnel returned; manager.connection.status = \(self.statusName(manager.connection.status)) raw=\(manager.connection.status.rawValue)")
                 } catch {
                     self.logs.writeLog(log: "Error starting VPNTunnel \(error)")
                 }
@@ -128,7 +138,7 @@ public class VpnManagerImpl: VpnManager {
             self.logs.writeLog(log: "[stop] Skip: vpnManager is nil")
             return
         }
-        self.logs.writeLog(log: "[stop] User initiated stopVPNTunnel()")
+        self.logs.writeLog(log: "[stop] stopVPNTunnel requested status=\(statusName(manager.connection.status)) raw=\(manager.connection.status.rawValue)")
         manager.connection.stopVPNTunnel()
         self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")
     }
@@ -136,10 +146,14 @@ public class VpnManagerImpl: VpnManager {
     private func getOrCreateManager(completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
             guard let self else { return }
+            if let error {
+                self.logs.writeLog(log: "Failed to load VPN preferences: \(error.localizedDescription)")
+            }
+            self.logs.writeLog(log: "Loaded VPN managers count=\(managers?.count ?? 0)")
 
             if let existingManager = managers?.first(where: { $0.localizedDescription == Self.dobbyName }) {
                 vpnManager = existingManager
-                self.logs.writeLog(log: "Existing manager found.")
+                self.logs.writeLog(log: "Existing manager found status=\(self.statusName(existingManager.connection.status)) raw=\(existingManager.connection.status.rawValue)")
                 self.applyProtocolDefaults(manager: existingManager)
                 completion(existingManager, nil)
             } else {
@@ -189,6 +203,25 @@ public class VpnManagerImpl: VpnManager {
             proto.excludeDeviceCommunication = false
         }
         manager.protocolConfiguration = proto
+    }
+
+    private func statusName(_ status: NEVPNStatus) -> String {
+        switch status {
+        case .invalid:
+            return "invalid"
+        case .disconnected:
+            return "disconnected"
+        case .connecting:
+            return "connecting"
+        case .connected:
+            return "connected"
+        case .reasserting:
+            return "reasserting"
+        case .disconnecting:
+            return "disconnecting"
+        @unknown default:
+            return "unknown"
+        }
     }
 
 //    static func startSentry() {

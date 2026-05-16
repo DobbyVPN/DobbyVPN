@@ -13,6 +13,7 @@ import org.koin.compose.koinInject
 
 expect val fileSystem: FileSystem
 expect fun provideLogFilePath(): Path
+expect fun platformLogInfo(): String
 
 interface SentryLogsRepository{
     fun log(string: String) {
@@ -49,6 +50,7 @@ class LogsRepository(
         if (!fileSystem.exists(logFilePath)) {
             fileSystem.sink(logFilePath).buffer().use { }
         }
+        writeLog("[Platform] ${platformLogInfo()} logPath=$logFilePath")
         CoroutineScope(Dispatchers.Default).launch {
             logEventsChannel.emitLogs(readLogs(UI_TAIL_LINES))
         }
