@@ -1,4 +1,4 @@
-package internal
+package outline
 
 import (
 	"context"
@@ -729,6 +729,12 @@ func extractSSHost(transportConfig string) (string, error) {
 	}
 
 	return "", errors.New("ss:// not found")
+}
+
+// Open implements pkg.ProtocolDevice. The SOCKS5 server is already started
+// by NewOutlineDevice, so this is a no-op.
+func (d *OutlineDevice) Open(routingTableID int, uplinkIface string) error {
+	return nil
 }
 
 func (d *OutlineDevice) GetServerIP() net.IP {

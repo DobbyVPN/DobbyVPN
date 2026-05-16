@@ -7,27 +7,20 @@ replace github.com/cbeuw/Cloak => ./modules/Cloak
 replace github.com/xjasonlyu/tun2socks/v2/log => ./go_module/log
 
 require (
-	golang.getoutline.org/sdk v0.0.21
-	golang.getoutline.org/sdk/x v0.1.0
 	github.com/amnezia-vpn/amneziawg-go v0.2.16
 	github.com/amnezia-vpn/amneziawg-windows v0.1.8
 	github.com/cbeuw/Cloak v0.0.0-00010101000000-000000000000
-	github.com/cbeuw/connutil v0.0.0-20200411215123-966bfaa51ee3
-	github.com/gorilla/mux v1.8.1
-	github.com/gorilla/websocket v1.5.3
 	github.com/jackpal/gateway v1.1.1
-	github.com/juju/ratelimit v1.0.2
 	github.com/lorenzosaino/go-sysctl v0.3.1
 	github.com/matsuridayo/libneko v0.0.0-20240702024904-1c47a3af7199
-	github.com/refraction-networking/utls v1.8.1
 	github.com/sirupsen/logrus v1.9.3
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
-	github.com/stretchr/testify v1.11.1
 	github.com/things-go/go-socks5 v0.1.0
 	github.com/vishvananda/netlink v1.3.1
 	github.com/xjasonlyu/tun2socks/v2 v2.6.0
 	github.com/xtls/xray-core v1.251208.0
-	go.etcd.io/bbolt v1.4.0
+	golang.getoutline.org/sdk v0.0.21
+	golang.getoutline.org/sdk/x v0.1.0
 	golang.org/x/crypto v0.46.0
 	golang.org/x/sys v0.39.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
@@ -89,6 +82,10 @@ require (
 
 require (
 	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/juju/ratelimit v1.0.2 // indirect
+	github.com/refraction-networking/utls v1.8.1 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678 // indirect
 	golang.org/x/lint v0.0.0-20210508222113-6edffad5e616 // indirect
 	golang.org/x/tools/go/expect v0.1.1-deprecated // indirect
