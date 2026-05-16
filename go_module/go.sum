@@ -4,6 +4,10 @@ golang.getoutline.org/sdk/x v0.1.0 h1:8ykaCEC8Eoi3h/2MdGW7uaMAt2BWFCRhrsVuJ0Y/IU
 golang.getoutline.org/sdk/x v0.1.0/go.mod h1:Vw7FWpLbYifHFYbbo0mXOCkhR14d1ADwjiF7uBQKyzM=
 github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c h1:pxW6RcqyfI9/kWtOwnv/G+AzdKuy2ZrqINhenH4HyNs=
 github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
+golang.getoutline.org/sdk v0.0.21 h1:zgtenz5DMbnIPOsuAOHNiWdrri81fHyBxhSfRi6Dk8s=
+golang.getoutline.org/sdk v0.0.21/go.mod h1:raUAs4PYbEaT/cLTK6PviiKSh7gjEj7JJczFFFr41zc=
+golang.getoutline.org/sdk/x v0.1.0 h1:8ykaCEC8Eoi3h/2MdGW7uaMAt2BWFCRhrSvuJ0Y/IU0=
+golang.getoutline.org/sdk/x v0.1.0/go.mod h1:Vw7FWpLbYifHFYbbo0mXOCkhR14d1ADwjiF7uBQKyzM=
 github.com/ajg/form v1.5.1 h1:t9c7v8JUKu/XxOGBU0yjNpaMloxGEJhUkqFRq0ibGeU=
 github.com/ajg/form v1.5.1/go.mod h1:uL1WgH+h2mgNtvBq0339dVnzXdBETtL2LeUXaIv25UY=
 github.com/amnezia-vpn/amneziawg-go v0.2.16 h1:XY6HOq/xtqH8ZXMncRWkjFs85EKdN10NLNnw23kTpE0=
