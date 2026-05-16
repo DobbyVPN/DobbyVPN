@@ -57,3 +57,4 @@ go.work.sum
 
 # Local non-project directories
 VKR-bach/
+.idea/
