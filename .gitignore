@@ -54,3 +54,6 @@ go.work.sum
 **/venv/
 **/__pycache__/
 *.pyc
+
+# Local non-project directories
+VKR-bach/
