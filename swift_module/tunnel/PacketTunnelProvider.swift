@@ -9,8 +9,6 @@ import Darwin
 import SystemConfiguration
 import Network
 
-
-
 class PacketTunnelProvider: NEPacketTunnelProvider {
     private let launchId = UUID().uuidString
     private let tunnelId = String(UUID().uuidString.prefix(8))

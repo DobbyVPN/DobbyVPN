@@ -1,7 +1,7 @@
-github.com/Jigsaw-Code/outline-sdk v0.0.20 h1:4ep7MK9lFmcyPIRIbn4xrP1VKdJNsqR6+iJEOHDKnNg=
-github.com/Jigsaw-Code/outline-sdk v0.0.20/go.mod h1:CFDKyGZA4zatKE4vMLe8TyQpZCyINOeRFbMAmYHxodw=
-github.com/Jigsaw-Code/outline-sdk/x v0.0.8 h1:fFHFXW7CKhRiegyNSdP25S/WIiVrRnMKysHDoO/N2Xg=
-github.com/Jigsaw-Code/outline-sdk/x v0.0.8/go.mod h1:zqSH7yEYIQ0pYOhrr4QnodATVb5X/eZXV4AjUp9zhvs=
+golang.getoutline.org/sdk v0.0.21 h1:zgtenz5DMbnIPOsuAOHNiWdrri81fHyBxhSfRi6Dk8s=
+golang.getoutline.org/sdk v0.0.21/go.mod h1:raUAs4PYbEaT/cLTK6PviiKSh7gjEj7JJczFFFr41zc=
+golang.getoutline.org/sdk/x v0.1.0 h1:8ykaCEC8Eoi3h/2MdGW7uaMAt2BWFCRhrSvuJ0Y/IU0=
+golang.getoutline.org/sdk/x v0.1.0/go.mod h1:Vw7FWpLbYifHFYbbo0mXOCkhR14d1ADwjiF7uBQKyzM=
 github.com/ajg/form v1.5.1 h1:t9c7v8JUKu/XxOGBU0yjNpaMloxGEJhUkqFRq0ibGeU=
 github.com/ajg/form v1.5.1/go.mod h1:uL1WgH+h2mgNtvBq0339dVnzXdBETtL2LeUXaIv25UY=
 github.com/amnezia-vpn/amneziawg-go v0.2.16 h1:XY6HOq/xtqH8ZXMncRWkjFs85EKdN10NLNnw23kTpE0=
