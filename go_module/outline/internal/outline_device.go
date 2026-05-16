@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
+	"golang.getoutline.org/sdk/transport"
+	"golang.getoutline.org/sdk/x/configurl"
 	socks5 "github.com/things-go/go-socks5"
 
 	"go_module/log"
