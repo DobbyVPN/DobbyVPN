@@ -50,7 +50,6 @@ val androidVpnModule = module {
     single<CloakConnectionInteractor> { CloakConnectionInteractor(get(), get(), get()) }
     single<OutlineInteractor> { OutlineInteractor(get(), get(), get(), get()) }
     single<AmneziaWGInteractor> { AmneziaWGInteractor(get(), get()) }
-    single<OutlineInteractor> { OutlineInteractor(get(), get(), get(), get()) }
     single<XrayInteractor> { XrayInteractor(get(), get(), get(), get()) }
     single<GeoRouting> { GeoRouting( get() ) }
     single<FDManager> { FDManager( get() ) }
