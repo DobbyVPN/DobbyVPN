@@ -16,7 +16,7 @@ public final class OutlineInteractor {
         logs.writeLog(log: "[Outline] startOutline begin")
 
         let methodPassword = configsRepository.getMethodPasswordOutline()
-        let serverPort = configsRepository.getServerPortOutline()
+        let serverPort = configsRepository.getServerPort()
         let prefix = configsRepository.getPrefixOutline()
         let websocketEnabled = configsRepository.getIsWebsocketEnabled()
         let tcpPath = configsRepository.getTcpPathOutline()

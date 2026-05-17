@@ -108,6 +108,28 @@ func VpnDisconnect() error {
 	return nil
 }
 
+// NewOutlineClient creates an Outline VPN client using the given transport config.
+// Equivalent to NewVpnClient(config, "outline").
+func NewOutlineClient(transportConfig string) (err error) {
+	defer guardExport("NewOutlineClient")()
+	log.Infof("NewOutlineClient() called config.len=%d", len(transportConfig))
+	return NewVpnClient(transportConfig, "outline")
+}
+
+// OutlineConnect connects the previously created Outline client.
+func OutlineConnect() error {
+	defer guardExport("OutlineConnect")()
+	log.Infof("OutlineConnect() called")
+	return VpnConnect()
+}
+
+// OutlineDisconnect disconnects and tears down the Outline client.
+func OutlineDisconnect() error {
+	defer guardExport("OutlineDisconnect")()
+	log.Infof("OutlineDisconnect() called")
+	return VpnDisconnect()
+}
+
 func GetTunnelFileDescriptor() int {
 	ctlInfo := &unix.CtlInfo{}
 	copy(ctlInfo.Name[:], utunControlName)

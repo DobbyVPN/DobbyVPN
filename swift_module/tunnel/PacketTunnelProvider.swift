@@ -222,7 +222,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
         // DNS resolution at tunnel start can hang in offline/captive-portal cases, so we do it with a hard timeout.
         var excludedRoutes: [NEIPv4Route] = []
-        if let hostOrIp = extractIP(from: configsRepository.getServerPortOutline()) {
+        if let hostOrIp = extractIP(from: configsRepository.getServerPort()) {
             let trimmed = hostOrIp.trimmingCharacters(in: .whitespacesAndNewlines)
             if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
                let route = makeExcludedRoute(host: ip) {
@@ -304,7 +304,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
         do {
             logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak begin")
-            try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
+            try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPort())
             logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak success")
         } catch {
             logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak failed: \(error.localizedDescription)")

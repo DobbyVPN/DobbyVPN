@@ -74,11 +74,11 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     }
 
     public func getServerPort() -> String {
-        return userDefaults.string(forKey: serverPortKey) ?? ""
+        return userDefaults.string(forKey: serverPortOutlineKey) ?? ""
     }
 
     public func setServerPort(newConfig: String) {
-        userDefaults.set(newConfig, forKey: serverPortKey)
+        userDefaults.set(newConfig, forKey: serverPortOutlineKey)
 
     }
 
