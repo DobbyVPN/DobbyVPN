@@ -94,14 +94,33 @@ public class VpnManagerImpl: VpnManager {
         }
     }
 
-    private func handleStart(manager: NETunnelProviderManager?) {
+    private func handleStart(manager: NETunnelProviderManager?, retryAttempt: Int = 0) {
         guard let manager = manager else {
             self.logs.writeLog(log: "Created VPNManager is nil")
             return
         }
         let status = manager.connection.status
         self.logs.writeLog(log: "[start] manager loaded status=\(statusName(status)) raw=\(status.rawValue)")
-        if status == .connecting || status == .disconnecting || status == .reasserting {
+        if status == .disconnecting {
+            let maxRetries = 30
+            guard retryAttempt < maxRetries else {
+                self.logs.writeLog(log: "[start] Give up: connection stayed disconnecting after \(retryAttempt) retries")
+                self.connectionRepository.tryUpdateVpnStarted(isStarted: false)
+                self.connectionRepository.tryUpdateStatus(isConnected: false)
+                return
+            }
+
+            let nextAttempt = retryAttempt + 1
+            self.logs.writeLog(log: "[start] Connection is disconnecting; retry start after 500ms (attempt \(nextAttempt)/\(maxRetries))")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self else { return }
+                self.getOrCreateManager { manager, _ in
+                    self.handleStart(manager: manager, retryAttempt: nextAttempt)
+                }
+            }
+            return
+        }
+        if status == .connecting || status == .reasserting {
             self.logs.writeLog(log: "[start] Skip: connection is transitioning (\(status.rawValue))")
             return
         }
@@ -138,7 +157,12 @@ public class VpnManagerImpl: VpnManager {
             self.logs.writeLog(log: "[stop] Skip: vpnManager is nil")
             return
         }
-        self.logs.writeLog(log: "[stop] stopVPNTunnel requested status=\(statusName(manager.connection.status)) raw=\(manager.connection.status.rawValue)")
+        let status = manager.connection.status
+        self.logs.writeLog(log: "[stop] stopVPNTunnel requested status=\(statusName(status)) raw=\(status.rawValue)")
+        if status == .disconnected || status == .invalid {
+            self.logs.writeLog(log: "[stop] Skip: tunnel is already \(statusName(status))")
+            return
+        }
         manager.connection.stopVPNTunnel()
         self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")
     }
