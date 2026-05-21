@@ -161,14 +161,26 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     }
 
     public func getVpnInterface() -> VpnInterface {
-        // TODO: Rewrite code below with swift code
-        // return VpnInterface.valueOf(userDefaults.string(forKey: vpnInterfaceKey) ?? "")
-        return VpnInterface.cloakOutline
+        switch userDefaults.string(forKey: vpnInterfaceKey) ?? "CLOAK_OUTLINE" {
+        case "XRAY":
+            return VpnInterface.xray
+        case "NONE":
+            return VpnInterface.none
+        default:
+            return VpnInterface.cloakOutline
+        }
     }
 
     public func setVpnInterface(vpnInterface: VpnInterface) {
-        // TODO: Rewrite code below with swift code
-        // userDefaults.set(vpnInterface.toString(), forKey: vpnInterfaceKey)
+        let value: String
+        if vpnInterface == VpnInterface.xray {
+            value = "XRAY"
+        } else if vpnInterface == VpnInterface.none {
+            value = "NONE"
+        } else {
+            value = "CLOAK_OUTLINE"
+        }
+        userDefaults.set(value, forKey: vpnInterfaceKey)
     }
 
     public func getXrayConfig() -> String {
@@ -185,6 +197,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     }
 
     public func setIsXrayEnabled(isXrayEnabled: Bool) {
+        setVpnInterface(vpnInterface: isXrayEnabled ? VpnInterface.xray : VpnInterface.cloakOutline)
         userDefaults.set(isXrayEnabled, forKey: isXrayEnabledKey)
 
     }

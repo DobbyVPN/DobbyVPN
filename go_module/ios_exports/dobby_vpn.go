@@ -67,7 +67,7 @@ func NewVpnClient(transportConfig string, protocol string) (err error) {
 		device, err = outline.NewOutlineDevice(transportConfig)
 	default:
 		log.Infof("NewVpnClient() failed: unsupported protocol")
-		return fmt.Errorf("unsupported protocol: " + protocol)
+		return fmt.Errorf("unsupported protocol: %s", protocol)
 	}
 
 	client = core.NewClient(device, tunFile)

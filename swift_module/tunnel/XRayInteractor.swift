@@ -13,7 +13,13 @@ public final class XRayInteractor {
 
     func startXRay() throws {
         if !configsRepository.getIsXrayEnabled() {
-            return
+            logs.writeLog(log: "[Xray] startXRay requested but Xray is disabled")
+            xrayStarted = false
+            throw NSError(
+                domain: "PacketTunnelProvider",
+                code: -5,
+                userInfo: [NSLocalizedDescriptionKey: "Xray is disabled"]
+            )
         }
         
         let xrayConfig = configsRepository.getXrayConfig()
@@ -31,18 +37,24 @@ public final class XRayInteractor {
         
         var err: NSError?
 
+        logs.writeLog(log: "[Xray] NewVpnClient begin config.len=\(xrayConfig.count)")
         Cloak_outlineNewVpnClient(xrayConfig, "xray", &err)
         if let error = err {
             xrayStarted = false
+            logs.writeLog(log: "[Xray] NewVpnClient failed: \(error.localizedDescription)")
             throw error
         }
+        logs.writeLog(log: "[Xray] NewVpnClient success")
 
+        logs.writeLog(log: "[Xray] VpnConnect begin")
         Cloak_outlineVpnConnect(&err)
         if let error = err {
             xrayStarted = false
+            logs.writeLog(log: "[Xray] VpnConnect failed: \(error.localizedDescription)")
             throw error
         }
         xrayStarted = true
+        logs.writeLog(log: "[Xray] VpnConnect success")
     }
 
     func stopXRay() {
@@ -50,10 +62,12 @@ public final class XRayInteractor {
             return
         }
         var err: NSError?
+        logs.writeLog(log: "[Xray] VpnDisconnect begin")
         Cloak_outlineVpnDisconnect(&err)
         if let error = err {
             logs.writeLog(log: "Stop Xray get error \(error)")
         }
         xrayStarted = false
+        logs.writeLog(log: "[Xray] VpnDisconnect returned")
     }
 }
