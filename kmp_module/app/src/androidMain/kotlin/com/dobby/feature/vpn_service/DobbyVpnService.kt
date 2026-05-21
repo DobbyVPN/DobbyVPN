@@ -25,14 +25,11 @@ import android.os.Debug
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.system.Os
 import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
 import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
 import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.vpn_service.domain.xray.XrayInteractor
-import java.io.File
-import java.io.FileInputStream
 import java.util.UUID
 
 const val IS_FROM_UI = "isLaunchedFromUi"
@@ -208,25 +205,27 @@ class DobbyVpnService : VpnService() {
         }
     }
 
+    @Synchronized
     fun teardownVpn() {
-        if (dobbyConfigsRepository.getVpnInterface() == VpnInterface.NONE) {
-            logger.log("Vpn interface is NONE, skipping teardown")
-            return
-        }
         val fdBefore = runCatching { vpnInterface?.fd }.getOrNull()
-        logger.log("[svc:$serviceId] teardownVpn(): begin fd=$fdBefore")
+        logger.log("[svc:$serviceId] teardownVpn(): begin fd=$fdBefore configuredInterface=${dobbyConfigsRepository.getVpnInterface()}")
 
-        runCatching {
-            runBlocking {
-                when (dobbyConfigsRepository.getVpnInterface()) {
-                    VpnInterface.CLOAK_OUTLINE -> outlineInteractor.stopOutline()
-                    VpnInterface.AMNEZIA_WG -> awgInteractor.stopAwg()
-                    VpnInterface.XRAY -> xrayInteractor.stopXray(instance)
-                    VpnInterface.NONE -> {}
-                }
+        runBlocking {
+            runCatching {
+                outlineInteractor.stopOutline()
+            }.onFailure { e ->
+                logger.log("[svc:$serviceId] teardownVpn(): outline disconnect warning: ${e.message}")
             }
-        }.onFailure { e ->
-            logger.log("[svc:$serviceId] onDestroy(): failed to disconnect Outline: ${e.message}")
+            runCatching {
+                xrayInteractor.stopXray(instance, updateState = false)
+            }.onFailure { e ->
+                logger.log("[svc:$serviceId] teardownVpn(): xray disconnect warning: ${e.message}")
+            }
+            runCatching {
+                awgInteractor.stopAwg()
+            }.onFailure { e ->
+                logger.log("[svc:$serviceId] teardownVpn(): awg disconnect warning: ${e.message}")
+            }
         }
         runCatching {
             runBlocking {
@@ -236,25 +235,7 @@ class DobbyVpnService : VpnService() {
             logger.log("[svc:$serviceId] onDestroy(): failed to stop Cloak: ${e.message}")
         }
         goTunFd?.let { targetFd ->
-            logger.log("[svc:$serviceId] teardownVpn(): safely terminating goTunFd=$targetFd")
-            try {
-                // Open /dev/null
-                val devNull = FileInputStream(File("/dev/null"))
-                val nullFd = devNull.fd
-
-                // Overwrite the VPN FD (targetFd) with the Null FD.
-                // This ATOMICALLY closes the VPN interface and replaces it with /dev/null.
-                // Go still holds 'targetFd', but now it points to /dev/null.
-                Os.dup2(nullFd, targetFd)
-
-                // Close our handle to /dev/null
-                devNull.close()
-
-                logger.log("[svc:$serviceId] teardownVpn(): successfully redirected goTunFd to /dev/null")
-            } catch (e: Exception) {
-                // If this fails, it might mean Go already closed it. That's fine.
-                logger.log("[svc:$serviceId] teardownVpn(): safe termination warning: ${e.message}")
-            }
+            logger.log("[svc:$serviceId] teardownVpn(): goTunFd=$targetFd released to Go disconnect path")
         }
         goTunFd = null
         runCatching {

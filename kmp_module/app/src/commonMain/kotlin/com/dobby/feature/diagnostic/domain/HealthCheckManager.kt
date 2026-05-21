@@ -97,13 +97,12 @@ class HealthCheckManager(
                     logger.log("[HC] OK")
                     logger.log("[HC] Connected → counters reset")
                 } else {
-                    mainViewModel.connectionStateRepository.updateStatus(false)
-
                     val sinceStartMs = (lastVpnStartMark?.elapsedNow()?.inWholeMilliseconds)
                         ?: Long.MAX_VALUE
                     if (sinceStartMs < gracePeriodMs) {
                         logger.log("[HC] Not connected during grace period (${sinceStartMs}ms < ${gracePeriodMs}ms) → ignore")
                     } else {
+                        mainViewModel.connectionStateRepository.updateStatus(false)
                         logger.log("[HC] Not connected — will retry on next tick")
                     }
                 }

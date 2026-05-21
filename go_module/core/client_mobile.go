@@ -77,6 +77,15 @@ func (c *CoreClient) Connect() error {
 func (c *CoreClient) Disconnect() error {
 	tunnel.StopEngine()
 
+	if c.tun != nil {
+		if err := c.tun.Close(); err != nil {
+			log.Infof("failed to close tun fd: %v", err)
+		} else {
+			log.Infof("tun fd closed")
+		}
+		c.tun = nil
+	}
+
 	if c.device != nil {
 		if err := c.device.Close(); err != nil {
 			log.Infof("failed to close outline device: %v\n", err)

@@ -64,12 +64,14 @@ class XrayInteractor(
         dobbyVpnService?.connectionState?.updateStatus(true)
     }
 
-    suspend fun stopXray(dobbyVpnService: DobbyVpnService?) {
+    suspend fun stopXray(dobbyVpnService: DobbyVpnService?, updateState: Boolean = true) {
         val serviceId = dobbyVpnService?.serviceId ?: "unknown"
-        logger.log("[svc:$serviceId] stopXray(): disconnecting Xray")
+        logger.log("[svc:$serviceId] stopXray(): disconnecting Xray updateState=$updateState")
 
         xrayLibFacade.disconnect()
 
-        dobbyVpnService?.connectionState?.updateStatus(false)
+        if (updateState) {
+            dobbyVpnService?.connectionState?.updateStatus(false)
+        }
     }
 }
