@@ -50,17 +50,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		1F6D0C7E2F8D9681004A1D65 /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				1F6D0C7D2F8D9681004A1D65 /* app.framework in Embed Frameworks */,
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		A12012F62D7DAE1200D43A3A /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -78,6 +67,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
+				1F6D0C7D2F8D9681004A1D65 /* app.framework in Embed Frameworks */,
 				A15F0FD52D874CDC007FA45D /* CommonDI.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
@@ -287,7 +277,6 @@
 				A15F0FCA2D874CDC007FA45D /* Sources */,
 				A15F0FCB2D874CDC007FA45D /* Frameworks */,
 				A15F0FCC2D874CDC007FA45D /* Resources */,
-				1F6D0C7E2F8D9681004A1D65 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
