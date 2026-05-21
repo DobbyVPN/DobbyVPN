@@ -13,11 +13,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	socks5 "github.com/things-go/go-socks5"
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
-	socks5 "github.com/things-go/go-socks5"
 
 	"go_module/log"
+)
+
+const (
+	networkTCP = "tcp"
+	nilString  = "<nil>"
 )
 
 type OutlineDevice struct {
@@ -172,27 +177,44 @@ type socksLogger struct {
 
 func (l socksLogger) Errorf(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
+	if l.logCommonSocksError(msg) {
+		return
+	}
+	if l.logAuthError(msg) {
+		return
+	}
+	if l.logFrequentSocksError(msg) {
+		return
+	}
+	l.logOtherError(msg)
+}
+
+func (l socksLogger) logCommonSocksError(msg string) bool {
 	if strings.Contains(msg, "EOF") {
 		count := socksInternalEOF.Add(1)
 		if l.device != nil && (count == 1 || count%50 == 0) {
 			log.Infof("[SOCKS5 internal][eof count=%d] %s stats={%s}", count, msg, l.device.dialStats())
 		}
-		return
+		return true
 	}
 	if strings.Contains(msg, "use of closed network connection") {
 		count := socksInternalClosed.Add(1)
 		if l.device != nil && (count == 1 || count%50 == 0) {
 			log.Infof("[SOCKS5 internal][closed count=%d] %s stats={%s}", count, msg, l.device.dialStats())
 		}
-		return
+		return true
 	}
 	if strings.Contains(msg, "client want to used addr") {
 		count := socksInternalAddrWarning.Add(1)
 		if l.device != nil && (count == 1 || count%50 == 0) {
 			log.Infof("[SOCKS5 internal][addr_warning count=%d] %s stats={%s}", count, msg, l.device.dialStats())
 		}
-		return
+		return true
 	}
+	return false
+}
+
+func (l socksLogger) logAuthError(msg string) bool {
 	if strings.Contains(msg, "chacha20poly1305: message authentication failed") {
 		count := socksInternalAuthErr.Add(1)
 		if l.device != nil {
@@ -217,15 +239,19 @@ func (l socksLogger) Errorf(format string, args ...interface{}) {
 		} else {
 			log.Infof("[SOCKS5 internal][auth_error count=%d] %s", count, msg)
 		}
-		return
+		return true
 	}
+	return false
+}
+
+func (l socksLogger) logFrequentSocksError(msg string) bool {
 	if strings.Contains(msg, "connection reset by peer") {
 		count := socksInternalResetErr.Add(1)
 		log.Infof("[SOCKS5 internal][reset count=%d] %s", count, msg)
 		if (count == 1 || count%10 == 0) && l.device != nil {
 			log.Infof("[ErrorStats] %s", l.device.errorRateStats())
 		}
-		return
+		return true
 	}
 	if strings.Contains(msg, "broken pipe") {
 		count := socksInternalBrokenPipeErr.Add(1)
@@ -233,8 +259,12 @@ func (l socksLogger) Errorf(format string, args ...interface{}) {
 		if (count == 1 || count%10 == 0) && l.device != nil {
 			log.Infof("[ErrorStats] %s", l.device.errorRateStats())
 		}
-		return
+		return true
 	}
+	return false
+}
+
+func (l socksLogger) logOtherError(msg string) {
 	count := socksInternalOther.Add(1)
 	log.Infof("[SOCKS5 internal][other count=%d] %s", count, msg)
 	if (count == 1 || count%10 == 0) && l.device != nil {
@@ -255,7 +285,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 
 	switch network {
 
-	case "tcp":
+	case networkTCP:
 		attempt := d.tcpDialAttempt.Add(1)
 		inFlight := d.tcpDialInFlight.Add(1)
 		updatePeakInt64(&d.tcpDialPeak, inFlight)
@@ -271,7 +301,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 
 		d.tcpDialOK.Add(1)
 		log.Infof("[SOCKS5 TCP OK] attempt=%d dst=%s server=%s elapsed=%s local=%s remote=%s stats={%s}", attempt, addr, serverIP, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), d.dialStats())
-		return d.wrapConn("tcp", attempt, addr, conn), nil
+		return d.wrapConn(networkTCP, attempt, addr, conn), nil
 
 	case "udp":
 		attempt := d.udpDialAttempt.Add(1)
@@ -409,7 +439,7 @@ func (d *OutlineDevice) runGuarded(name string, fn func()) {
 
 func (d *OutlineDevice) serverIPString() string {
 	if d.svrIP == nil {
-		return "<nil>"
+		return nilString
 	}
 	return d.svrIP.String()
 }
@@ -448,7 +478,7 @@ func (c *outlineLoggedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
 		c.readBytes.Add(uint64(n))
-		if c.network == "tcp" {
+		if c.network == networkTCP {
 			c.device.tcpBytesRead.Add(uint64(n))
 		} else {
 			c.device.udpBytesRead.Add(uint64(n))
@@ -464,7 +494,7 @@ func (c *outlineLoggedConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
 	if n > 0 {
 		c.writtenBytes.Add(uint64(n))
-		if c.network == "tcp" {
+		if c.network == networkTCP {
 			c.device.tcpBytesWritten.Add(uint64(n))
 		} else {
 			c.device.udpBytesWritten.Add(uint64(n))
@@ -480,7 +510,7 @@ func (c *outlineLoggedConn) Close() error {
 	err := c.Conn.Close()
 	c.closeOnce.Do(func() {
 		var closed uint64
-		if c.network == "tcp" {
+		if c.network == networkTCP {
 			closed = c.device.tcpConnClosed.Add(1)
 		} else {
 			closed = c.device.udpConnClosed.Add(1)
@@ -578,26 +608,26 @@ func classifyOutlineIOErr(err error) string {
 
 func contextCause(ctx context.Context) string {
 	if ctx == nil {
-		return "<nil>"
+		return nilString
 	}
 	if cause := context.Cause(ctx); cause != nil {
 		return cause.Error()
 	}
-	return "<nil>"
+	return nilString
 }
 
 func (c *outlineLoggedConn) safeLocalAddr() net.Addr {
 	if c.Conn == nil {
 		return nil
 	}
-	return c.Conn.LocalAddr()
+	return c.LocalAddr()
 }
 
 func (c *outlineLoggedConn) safeRemoteAddr() net.Addr {
 	if c.Conn == nil {
 		return nil
 	}
-	return c.Conn.RemoteAddr()
+	return c.RemoteAddr()
 }
 
 type truncatedDNSConn struct {

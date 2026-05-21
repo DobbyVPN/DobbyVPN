@@ -16,7 +16,15 @@ import (
 func ExecuteCommand(command string) (string, error) {
 	log.Infof("[Routing][Exec] → %s", log.MaskStr(command))
 
-	cmd := exec.Command("bash", "-c", command)
+	args := strings.Fields(command)
+	if len(args) == 0 {
+		return "", fmt.Errorf("empty command")
+	}
+	if args[0] != "ip" {
+		return "", fmt.Errorf("unsupported routing command: %s", args[0])
+	}
+
+	cmd := exec.Command("ip", args[1:]...)
 	output, err := cmd.CombinedOutput()
 	outStr := string(output)
 

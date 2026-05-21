@@ -95,18 +95,18 @@ func (c *trackedConn) Close() error {
 		rttInfo := ""
 		if len(samples) > 0 {
 			var sum time.Duration
-			min, max := samples[0], samples[0]
+			minRTT, maxRTT := samples[0], samples[0]
 			for _, s := range samples {
 				sum += s
-				if s < min {
-					min = s
+				if s < minRTT {
+					minRTT = s
 				}
-				if s > max {
-					max = s
+				if s > maxRTT {
+					maxRTT = s
 				}
 			}
 			avg := sum / time.Duration(len(samples))
-			rttInfo = fmt.Sprintf(" rtt(app): samples=%d min=%s avg=%s max=%s", len(samples), min, avg, max)
+			rttInfo = fmt.Sprintf(" rtt(app): samples=%d min=%s avg=%s max=%s", len(samples), minRTT, avg, maxRTT)
 		}
 		log.Infof("[Router] TCP closed route=%s dest=%s lifetime=%s activeTCP=%d%s", c.route, c.dest, time.Since(c.started), active, rttInfo)
 		err = c.Conn.Close()
@@ -246,7 +246,7 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	start := time.Now()
 	dest := metadata.DestinationAddress()
 	attempt := p.udpDialAttempt.Add(1)
-	route, px := "VPN", proxy.Proxy(p.vpn)
+	route, px := "VPN", p.vpn
 	if IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
 	}

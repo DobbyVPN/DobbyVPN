@@ -1,11 +1,11 @@
 package common
 
 import (
+	"crypto/rand"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"net"
 	"sync"
-	"time"
 )
 
 type NetworkConfig struct {
@@ -27,11 +27,15 @@ func GetNetworkConfig() *NetworkConfig {
 }
 
 func generateConfig() *NetworkConfig {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-
 	for i := 0; i < 20; i++ {
-		x := r.Intn(254) + 1
-		y := r.Intn(254) + 1
+		x, err := randomPrivateOctet()
+		if err != nil {
+			break
+		}
+		y, err := randomPrivateOctet()
+		if err != nil {
+			break
+		}
 
 		gateway := fmt.Sprintf("10.%d.%d.1", x, y)
 		device := fmt.Sprintf("10.%d.%d.2", x, y)
@@ -48,6 +52,14 @@ func generateConfig() *NetworkConfig {
 		TunGateway: "10.255.255.1",
 		TunDevice:  "10.255.255.2",
 	}
+}
+
+func randomPrivateOctet() (int64, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(254))
+	if err != nil {
+		return 0, err
+	}
+	return n.Int64() + 1, nil
 }
 
 func isIPFree(target string) bool {
