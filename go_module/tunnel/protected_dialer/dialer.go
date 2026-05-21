@@ -12,6 +12,13 @@ import (
 	"go_module/log"
 )
 
+const (
+	networkTCP4 = "tcp4"
+	networkTCP6 = "tcp6"
+	networkUDP4 = "udp4"
+	networkUDP6 = "udp6"
+)
+
 type ProtectedDirectProxy struct {
 	proxy.Proxy
 }
@@ -29,22 +36,22 @@ func normalizeTCP(address string) string {
 	host, _, _ := net.SplitHostPort(address)
 	ip := net.ParseIP(host)
 	if ip != nil && ip.To4() == nil {
-		return "tcp6"
+		return networkTCP6
 	}
-	return "tcp4"
+	return networkTCP4
 }
 
 func normalizeUDP(address string) string {
 	host, _, _ := net.SplitHostPort(address)
 	ip := net.ParseIP(host)
 	if ip != nil && ip.To4() == nil {
-		return "udp6"
+		return networkUDP6
 	}
-	return "udp4"
+	return networkUDP4
 }
 
 func listenAddr(network string) string {
-	if network == "udp6" {
+	if network == networkUDP6 {
 		return "[::]:0"
 	}
 	return "0.0.0.0:0"

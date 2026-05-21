@@ -4,7 +4,7 @@ import android.content.Context
 import android.os.Build
 import okio.Path
 import okio.Path.Companion.toPath
-import com.dobby.outline.OutlineGo
+import com.dobby.backend.GoBackendWrapper
 
 actual val fileSystem = okio.FileSystem.SYSTEM
 
@@ -34,5 +34,5 @@ actual fun platformLogInfo(): String {
 }
 
 fun initLogger() {
-    OutlineGo.initLogger(provideLogFilePath().toString())
+    GoBackendWrapper.initLogger(provideLogFilePath().toString())
 }

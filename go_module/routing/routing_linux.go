@@ -4,6 +4,7 @@
 package routing
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -16,7 +17,15 @@ import (
 func ExecuteCommand(command string) (string, error) {
 	log.Infof("[Routing][Exec] → %s", log.MaskStr(command))
 
-	cmd := exec.Command("bash", "-c", command)
+	args := strings.Fields(command)
+	if len(args) == 0 {
+		return "", fmt.Errorf("empty command")
+	}
+	if args[0] != "ip" {
+		return "", fmt.Errorf("unsupported routing command: %s", args[0])
+	}
+
+	cmd := exec.CommandContext(context.Background(), "ip", args[1:]...) // #nosec G204 command is restricted to the ip binary above.
 	output, err := cmd.CombinedOutput()
 	outStr := string(output)
 

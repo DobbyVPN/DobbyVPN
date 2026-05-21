@@ -22,6 +22,5 @@ dependencyResolutionManagement {
 rootProject.name = "kmp_module"
 include(":grpcprotos")
 include(":grpcstub")
-include(":outline")
-include(":awg")
+include(":backend")
 include(":app")

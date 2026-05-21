@@ -20,6 +20,12 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let udpPathOutlineKey = "UdpPathOutlineKey"
     private let isUserInitStopKey = "isUserInitStopKey"
     private let geoRoutingConfKey = "geoRoutingConfKey"
+    private let awgConfigKey = "awgConfigKey"
+    private let awgTomlConfigKey = "awgTomlConfigKey"
+    private let isAmneziaWGEnabledKey = "isAmneziaWGEnabledKey"
+    private let vpnInterfaceKey = "vpnInterfaceKey"
+    private let isXrayEnabledKey = "isXrayEnabledKey"
+    private let xrayConfigKey = "xrayConfigKey"
 
     public func getConnectionURL() -> String {
         return userDefaults.string(forKey: connectionURLKey) ?? ""
@@ -67,11 +73,11 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     }
 
-    public func getServerPortOutline() -> String {
+    public func getServerPort() -> String {
         return userDefaults.string(forKey: serverPortOutlineKey) ?? ""
     }
 
-    public func setServerPortOutline(newConfig: String) {
+    public func setServerPort(newConfig: String) {
         userDefaults.set(newConfig, forKey: serverPortOutlineKey)
 
     }
@@ -131,22 +137,70 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     }
 
     public func getAwgConfig() -> String {
-        return ""
+        return userDefaults.string(forKey: awgConfigKey) ?? ""
+    }
+
+    public func setAwgConfig(newConfig: String) {
+        userDefaults.set(newConfig, forKey: awgConfigKey)
+    }
+
+    public func getAwgTomlConfig() -> String {
+        return userDefaults.string(forKey: awgTomlConfigKey) ?? ""
+    }
+
+    public func setAwgTomlConfig(newConfig: String) {
+        userDefaults.set(newConfig, forKey: awgTomlConfigKey)
     }
 
     public func getIsAmneziaWGEnabled() -> Bool {
-        return false
+        return userDefaults.bool(forKey: isAmneziaWGEnabledKey)
+    }
+
+    public func setIsAmneziaWGEnabled(isAmneziaWGEnabled: Bool) {
+        userDefaults.set(isAmneziaWGEnabled, forKey: isAmneziaWGEnabledKey)
     }
 
     public func getVpnInterface() -> VpnInterface {
-        return VpnInterface.cloakOutline
+        switch userDefaults.string(forKey: vpnInterfaceKey) ?? "CLOAK_OUTLINE" {
+        case "XRAY":
+            return VpnInterface.xray
+        case "NONE":
+            return VpnInterface.none
+        default:
+            return VpnInterface.cloakOutline
+        }
     }
 
-    public func setAwgConfig(newConfig: String) {}
+    public func setVpnInterface(vpnInterface: VpnInterface) {
+        let value: String
+        if vpnInterface == VpnInterface.xray {
+            value = "XRAY"
+        } else if vpnInterface == VpnInterface.none {
+            value = "NONE"
+        } else {
+            value = "CLOAK_OUTLINE"
+        }
+        userDefaults.set(value, forKey: vpnInterfaceKey)
+    }
 
-    public func setIsAmneziaWGEnabled(isAmneziaWGEnabled: Bool) {}
+    public func getXrayConfig() -> String {
+        return userDefaults.string(forKey: xrayConfigKey) ?? ""
+    }
 
-    public func setVpnInterface(vpnInterface: VpnInterface) {}
+    public func setXrayConfig(config: String) {
+        userDefaults.set(config, forKey: xrayConfigKey)
+
+    }
+
+    public func getIsXrayEnabled() -> Bool {
+        return userDefaults.bool(forKey: isXrayEnabledKey)
+    }
+
+    public func setIsXrayEnabled(isXrayEnabled: Bool) {
+        setVpnInterface(vpnInterface: isXrayEnabled ? VpnInterface.xray : VpnInterface.cloakOutline)
+        userDefaults.set(isXrayEnabled, forKey: isXrayEnabledKey)
+
+    }
 
     public func couldStart() -> Bool {
         return true

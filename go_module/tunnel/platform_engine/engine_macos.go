@@ -3,12 +3,14 @@
 package platform_engine
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os/exec"
 	"time"
 
 	"github.com/xjasonlyu/tun2socks/v2/engine"
+
 	"go_module/log"
 )
 
@@ -49,7 +51,8 @@ func startPlatformEngine(cfg interface{}) error {
 	}
 
 	// Setting IP
-	cmd := exec.Command(
+	cmd := exec.CommandContext(
+		context.Background(),
 		"ifconfig",
 		deviceName,
 		"inet",
