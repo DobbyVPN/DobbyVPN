@@ -1,3 +1,15 @@
+//go:build android
+
+package main
+
+/*
+#include <stdlib.h>
+#include <string.h>
+*/
+import "C"
+
+}
+
 import (
     "fmt"
     "os"
