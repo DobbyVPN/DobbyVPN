@@ -65,7 +65,6 @@ kotlin {
             implementation(libs.koin.androidx.compose)
 
             implementation(project(":backend"))
-            implementation(project(":outline"))
 
             implementation(libs.okhttp)
             implementation(libs.ktor.client.okhttp)
