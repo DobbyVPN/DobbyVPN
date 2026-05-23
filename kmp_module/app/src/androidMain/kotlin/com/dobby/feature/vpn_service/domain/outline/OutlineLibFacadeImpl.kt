@@ -2,21 +2,21 @@ package com.dobby.feature.vpn_service.domain.outline
 
 import android.util.Log
 import com.dobby.feature.vpn_service.OutlineLibFacade
-import com.dobby.outline.OutlineGo
+import com.dobby.backend.GoBackendWrapper
 
 internal class OutlineLibFacadeImpl : OutlineLibFacade {
     private val TAG = "OutlineLibFacade"
 
     override fun init(apiKey: String, tunFd: Int): Boolean {
         Log.d(TAG, "init() called with apiKey length=${apiKey.length}, starts with: ${apiKey.take(30)}...")
-        OutlineGo.newOutlineClient(apiKey, tunFd)
+        GoBackendWrapper.newVpnClient(apiKey, "outline", tunFd)
         Log.d(TAG, "Connecting Outline...")
-        val result = OutlineGo.outlineConnect()
+        val result = GoBackendWrapper.vpnConnect()
         return if (result == 0) {
             Log.d(TAG, "Connect finished successfully")
             true
         } else {
-            val lastError = OutlineGo.getLastError()
+            val lastError = GoBackendWrapper.getLastError()
             Log.e(TAG, "Connect FAILED: $lastError")
             false
         }
@@ -24,7 +24,7 @@ internal class OutlineLibFacadeImpl : OutlineLibFacade {
 
     override fun disconnect() {
         Log.d(TAG, "disconnect() called")
-        OutlineGo.outlineDisconnect()
+        GoBackendWrapper.vpnDisconnect()
         Log.d(TAG, "disconnect() finished")
     }
 }

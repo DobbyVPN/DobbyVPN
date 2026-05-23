@@ -15,6 +15,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private let outlineInteractor: OutlineInteractor = OutlineInteractor()
     private let cloakInteractor: CloakInteractor = CloakInteractor()
+    private let xrayInteractor: XRayInteractor = XRayInteractor()
 
     private var logs = NativeModuleHolder.logsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
@@ -222,7 +223,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
         // DNS resolution at tunnel start can hang in offline/captive-portal cases, so we do it with a hard timeout.
         var excludedRoutes: [NEIPv4Route] = []
-        if let hostOrIp = extractIP(from: configsRepository.getServerPortOutline()) {
+        if let hostOrIp = extractIP(from: configsRepository.getServerPort()) {
             let trimmed = hostOrIp.trimmingCharacters(in: .whitespacesAndNewlines)
             if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
                let route = makeExcludedRoute(host: ip) {
@@ -292,24 +293,47 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         Cloak_outlineInitLogger(path)
         logs.writeLog(log: "Finish go logger init")
         Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
-        do {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline begin")
-            try outlineInteractor.startOutline()
-            logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline success")
-        } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline failed: \(error.localizedDescription)")
-            await teardownForStop(reason: "startOutline failure")
-            throw error
-        }
-        logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
-        do {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak begin")
-            try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPortOutline())
-            logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak success")
-        } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak failed: \(error.localizedDescription)")
-            await teardownForStop(reason: "startCloak failure")
-            throw error
+
+        let vpnInterface = configsRepository.getVpnInterface()
+        logs.writeLog(log: "[tunnel:\(tunnelId)] selected vpnInterface=\(vpnInterface)")
+        if vpnInterface == VpnInterface.xray {
+            do {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startXRay begin")
+                try xrayInteractor.startXRay()
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startXRay success")
+            } catch {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startXRay failed: \(error.localizedDescription)")
+                await teardownForStop(reason: "startXRay failure")
+                throw error
+            }
+        } else if vpnInterface == VpnInterface.none {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] no VPN protocol selected")
+            await teardownForStop(reason: "no VPN protocol selected")
+            throw NSError(
+                domain: "PacketTunnelProvider",
+                code: -4,
+                userInfo: [NSLocalizedDescriptionKey: "No VPN protocol selected"]
+            )
+        } else {
+            do {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline begin")
+                try outlineInteractor.startOutline()
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline success")
+            } catch {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline failed: \(error.localizedDescription)")
+                await teardownForStop(reason: "startOutline failure")
+                throw error
+            }
+            logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
+            do {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak begin")
+                try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPort())
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak success")
+            } catch {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak failed: \(error.localizedDescription)")
+                await teardownForStop(reason: "startCloak failure")
+                throw error
+            }
         }
 
         logs.writeLog(log: "startTunnel: all packet loops started")
@@ -657,6 +681,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         } catch {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop outline: \(error.localizedDescription)")
         }
+
+        xrayInteractor.stopXRay()
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] xray stop requested")
 
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] clearing geo routing config")
         Cloak_outlineClearGeoRoutingConf()

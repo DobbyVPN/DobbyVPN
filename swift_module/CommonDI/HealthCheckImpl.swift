@@ -145,11 +145,12 @@ public final class HealthCheckImpl: HealthCheck {
             logs.writeLog(log: "[HC] Group OK: Short health check group")
         }
 
-        let result = failedGroups.count <= 1
+        let networkFailures = failedGroups.filter { $0 != "Short health check group" }
+        let result = shortOk && networkFailures.count <= 1
         if !result {
             logs.writeLog(
-                log: "[HC] Too many failed groups (\(failedGroups.count)): " +
-                     failedGroups.joined(separator: ", ")
+                log: "[HC] Connection check failed: shortOk=\(shortOk) " +
+                     "networkFailures=\(networkFailures.count) failedGroups=\(failedGroups.joined(separator: ", "))"
             )
         }
 
@@ -526,7 +527,14 @@ public final class HealthCheckImpl: HealthCheck {
                 return
             }
 
-            self.logs.writeLog(log: "[HC] XPC heartbeat send status=\(manager.connection.status.rawValue)")
+            let status = manager.connection.status
+            guard status == .connected else {
+                self.logs.writeLog(log: "[HC] XPC heartbeat skipped status=\(status.rawValue)")
+                semaphore.signal()
+                return
+            }
+
+            self.logs.writeLog(log: "[HC] XPC heartbeat send status=\(status.rawValue)")
 
             do {
                 try session.sendProviderMessage(

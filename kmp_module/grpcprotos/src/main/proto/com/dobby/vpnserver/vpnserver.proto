@@ -17,6 +17,11 @@ service Vpn {
   rpc StartOutline (StartOutlineRequest)  returns (StartOutlineResponse);
   rpc StopOutline (Empty)                 returns (Empty);
 
+  // xray.go
+  rpc GetXrayLastError(Empty)        returns (GetXrayLastErrorResponse);
+  rpc StartXray (StartXrayRequest)   returns (StartXrayResponse);
+  rpc StopXray (Empty)               returns (Empty);
+
   // health_check.go
   rpc CouldStart (Empty)                            returns (CouldStartResponce);
   rpc CheckServerAlive (CheckServerAliveRequest)    returns (CheckServerAliveResponce);
@@ -47,6 +52,18 @@ message StartOutlineRequest {
 }
 
 message StartOutlineResponse {
+  int32 result = 1;
+}
+
+message GetXrayLastErrorResponse {
+  string error = 1;
+}
+
+message StartXrayRequest {
+  string config = 1;
+}
+
+message StartXrayResponse {
   int32 result = 1;
 }
 

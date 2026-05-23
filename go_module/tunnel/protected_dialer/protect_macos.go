@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	IP_BOUND_IF   = 25
-	IPV6_BOUND_IF = 125
+	ipBoundIf   = 25
+	ipv6BoundIf = 125
 )
 
 var defaultInterfaceIndex int
@@ -36,7 +36,7 @@ func isReachableViaInterface(iface net.Interface, gw net.IP) bool {
 	return false
 }
 
-func GetDefaultInterfaceNameDarwin(gatewayIP net.IP) (string, int, error) {
+func GetDefaultInterfaceNameDarwin(gatewayIP net.IP) (name string, index int, err error) {
 	log.Infof("[Darwin-Protect][Detect] Gateway detected: %s", gatewayIP.String())
 
 	ifaces, err := net.Interfaces()
@@ -91,10 +91,10 @@ func (m *macosProtector) Protect(fd uintptr, network string) {
 	}
 
 	switch network {
-	case "tcp4", "udp4":
-		_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, IP_BOUND_IF, defaultInterfaceIndex)
-	case "tcp6", "udp6":
-		_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, IPV6_BOUND_IF, defaultInterfaceIndex)
+	case networkTCP4, networkUDP4:
+		_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, ipBoundIf, defaultInterfaceIndex)
+	case networkTCP6, networkUDP6:
+		_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, ipv6BoundIf, defaultInterfaceIndex)
 	}
 }
 

@@ -4,8 +4,10 @@
 package routing
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 
 	"go_module/log"
 )
@@ -36,9 +38,17 @@ func DeleteScopedDefaultRoute(iface string) {
 }
 
 func ExecuteCommand(command string) (string, error) {
-	log.Infof("[Exec] Running shell command: %s", log.MaskStr(command))
+	log.Infof("[Exec] Running route command: %s", log.MaskStr(command))
 
-	cmd := exec.Command("bash", "-c", command)
+	args := strings.Fields(command)
+	if len(args) == 0 {
+		return "", fmt.Errorf("empty command")
+	}
+	if args[0] != "route" {
+		return "", fmt.Errorf("unsupported routing command: %s", args[0])
+	}
+
+	cmd := exec.CommandContext(context.Background(), "route", args[1:]...) // #nosec G204 command is restricted to the route binary above.
 	output, err := cmd.CombinedOutput()
 	outStr := string(output)
 
@@ -51,7 +61,7 @@ func ExecuteCommand(command string) (string, error) {
 	return outStr, nil
 }
 
-func AddProxyRoute(proxyIP string, gatewayIP string) error {
+func AddProxyRoute(proxyIP, gatewayIP string) error {
 	log.Infof("[Routing][Bypass] Adding direct route for proxy: %s -> %s (bypass VPN)", proxyIP, gatewayIP)
 
 	cmd := fmt.Sprintf("route -n add -host %s %s", proxyIP, gatewayIP)
@@ -65,7 +75,7 @@ func AddProxyRoute(proxyIP string, gatewayIP string) error {
 	return nil
 }
 
-func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
+func StartRouting(proxyIP, gatewayIP, tunName string) error {
 	log.Infof("[Routing][Start] Switching system routing to VPN (tun=%s)", tunName)
 
 	log.Infof("[Routing][Start] Deleting existing default route (if any)")
@@ -88,7 +98,7 @@ func StartRouting(proxyIP string, gatewayIP string, tunName string) error {
 	return nil
 }
 
-func StopRouting(proxyIP string, gatewayIP string) error {
+func StopRouting(proxyIP, gatewayIP string) error {
 	log.Infof("[Routing][Stop] Restoring system routing")
 
 	log.Infof("[Routing][Stop] Removing proxy bypass route: %s", proxyIP)
