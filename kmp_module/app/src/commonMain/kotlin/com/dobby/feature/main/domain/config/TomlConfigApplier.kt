@@ -91,10 +91,12 @@ class TomlConfigApplier(
 
         if (exclude?.IPs != null && exclude.IPs.isNotEmpty()) {
             val cidrsString = exclude.IPs.joinToString(" ")
-            logger.log("Applying ExcludeIPs: $cidrsString")
+            val sample = exclude.IPs.take(5).joinToString(" ")
+            logger.log("Applying ExcludeIPs: count=${exclude.IPs.size} size=${cidrsString.length} sample=$sample")
             mainRepo.setGeoRoutingConf(cidrsString)
         } else {
             logger.log("ExcludeIPs not found or empty → clearing routing")
+            mainRepo.setGeoRoutingConf("")
         }
 
         logger.log("Finish parseToml()")

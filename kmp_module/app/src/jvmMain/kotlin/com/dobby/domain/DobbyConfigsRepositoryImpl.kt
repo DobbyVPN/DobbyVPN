@@ -3,12 +3,42 @@ package com.dobby.domain
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import interop.healthcheck.HealthCheckLibrary
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
 import java.util.prefs.Preferences
 
 internal class DobbyConfigsRepositoryImpl(
     private val prefs: Preferences = Preferences.userRoot(),
     private val healthCheckLibrary: HealthCheckLibrary,
 ) : DobbyConfigsRepository {
+    private val storageDir: Path = Paths.get(
+        System.getProperty("user.home") ?: ".",
+        ".myapp",
+        "configs"
+    )
+    private val connectionUrlFile = storageDir.resolve("connection-url.txt")
+    private val connectionConfigFile = storageDir.resolve("connection-config.toml")
+    private val geoRoutingConfFile = storageDir.resolve("geo-routing-conf.txt")
+
+    private fun readLargeString(key: String, file: Path): String {
+        return if (Files.exists(file)) {
+            Files.readString(file, StandardCharsets.UTF_8)
+        } else {
+            prefs.get(key, "")
+        }
+    }
+
+    private fun writeLargeString(key: String, file: Path, value: String) {
+        Files.createDirectories(storageDir)
+        if (value.isEmpty()) {
+            Files.deleteIfExists(file)
+        } else {
+            Files.writeString(file, value, StandardCharsets.UTF_8)
+        }
+        prefs.remove(key)
+    }
 
     override fun getVpnInterface(): VpnInterface {
         val prefsResult = prefs.get("vpnInterface", VpnInterface.DEFAULT_VALUE.toString())
@@ -22,19 +52,19 @@ internal class DobbyConfigsRepositoryImpl(
     }
 
     override fun getConnectionURL(): String {
-        return prefs.get("connectionURL", "")
+        return readLargeString("connectionURL", connectionUrlFile)
     }
 
     override fun setConnectionURL(connectionURL: String) {
-        prefs.put("connectionURL", connectionURL)
+        writeLargeString("connectionURL", connectionUrlFile, connectionURL)
     }
 
     override fun getConnectionConfig(): String {
-        return prefs.get("connectionConfig", "")
+        return readLargeString("connectionConfig", connectionConfigFile)
     }
 
     override fun setConnectionConfig(connectionConfig: String) {
-        prefs.put("connectionConfig", connectionConfig)
+        writeLargeString("connectionConfig", connectionConfigFile, connectionConfig)
     }
 
     override fun getCloakConfig(): String {
@@ -175,11 +205,11 @@ internal class DobbyConfigsRepositoryImpl(
     }
 
     override fun getGeoRoutingConf(): String {
-        return prefs.get("geoRoutingConf", "")
+        return readLargeString("geoRoutingConf", geoRoutingConfFile)
     }
 
     override fun setGeoRoutingConf(geoRoutingConf: String) {
-        prefs.put("geoRoutingConf", geoRoutingConf)
+        writeLargeString("geoRoutingConf", geoRoutingConfFile, geoRoutingConf)
     }
 
     companion object {
