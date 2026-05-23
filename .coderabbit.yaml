@@ -167,7 +167,7 @@ reviews:
         2) go.sum must not be deleted or regenerated without justification —
            it pins cryptographic hashes of dependencies.
         3) The Go version directive should match the version used in CI
-           workflows (currently 1.24.3 for Android, 1.23.x for desktop/iOS).
+           workflows and the root .go-version file.
         4) Replace directives must point to stable local paths or pinned
            versions, not to remote @latest references.
 
