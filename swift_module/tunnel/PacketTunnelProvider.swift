@@ -209,6 +209,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logSystemInfo(osVersionString: osVersionString)
         logs.writeLog(log: "[iOS26-RESEARCH] iOS version: \(osVersionString)")
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
+        let connectionConfigLen = configsRepository.getConnectionConfig().count
+        let vpnInterface = configsRepository.getVpnInterface()
+        if connectionConfigLen == 0 || vpnInterface == VpnInterface.none {
+            logs.writeLog(
+                log: "[tunnel:\(tunnelId)] invalid start config: " +
+                    "connectionConfig.len=\(connectionConfigLen) vpnInterface=\(vpnInterface)"
+            )
+            throw NSError(
+                domain: "PacketTunnelProvider",
+                code: -6,
+                userInfo: [NSLocalizedDescriptionKey: "Missing VPN start configuration"]
+            )
+        }
         logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
         logInterfacesDetailed(label: "BEFORE_VPN_TUNNEL")
 
