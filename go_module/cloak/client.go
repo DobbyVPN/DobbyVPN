@@ -21,13 +21,14 @@ var (
 	cloakConfig exported_client.Config
 )
 
-func StartCloakClient(localHost, localPort, config string, udp bool) {
+func StartCloakClient(localHost, localPort, config string, udp bool) (err error) {
 	log.Infof("StartCloakClient inner")
 
 	// Handle panic
 	defer func() {
 		if r := recover(); r != nil {
 			log.Infof("StartCloakClient: recovered from panic: %v", r)
+			err = fmt.Errorf("StartCloakClient panic: %v", r)
 		}
 	}()
 
@@ -46,17 +47,17 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 	log.Infof("deleted old cloak client")
 
 	var rawConfig exported_client.Config
-	err := json.Unmarshal([]byte(config), &rawConfig)
+	err = json.Unmarshal([]byte(config), &rawConfig)
 	if err != nil {
 		log.Infof("cloak client: Failed to unmarshal config - %v", err)
-		return
+		return fmt.Errorf("cloak client: failed to unmarshal config: %w", err)
 	}
 	log.Infof("cloak client: rawConfig parsed successfully")
 
 	rawConfig.RemoteHost, err = resolveRemoteHostIfNeeded(rawConfig.RemoteHost)
 	if err != nil {
 		log.Infof("Can't resolve Remote Host: %v", err)
-		return
+		return fmt.Errorf("cloak client: can't resolve remote host: %w", err)
 	}
 	rawConfig.LocalHost = localHost
 	rawConfig.LocalPort = localPort
@@ -77,7 +78,7 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 	common.Client.MarkOutOffCriticalSection(Name)
 	if err != nil {
 		log.Infof("Can't routing cloak, %v", err)
-		return
+		return fmt.Errorf("cloak client: can't route cloak: %w", err)
 	}
 	log.Infof("cloak client: Routed")
 
@@ -95,12 +96,13 @@ func StartCloakClient(localHost, localPort, config string, udp bool) {
 			cloakConfig.RemoteHost = ""
 		}
 		common.Client.MarkInactive(Name)
-		return
+		return fmt.Errorf("cloak client: failed to connect: %w", err)
 	}
 
 	log.Infof("cloak client connected")
 
 	common.Client.MarkActive(Name)
+	return nil
 }
 
 func StopCloakClient() {

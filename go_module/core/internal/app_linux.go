@@ -32,6 +32,16 @@ func signalInit(initResult chan<- error, err error) {
 
 func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	log.Infof("[Linux][Init] ===== VPN initialization started =====")
+	if app.ProtocolDevice == nil {
+		err := fmt.Errorf("protocol device is not initialized")
+		signalInit(initResult, err)
+		return err
+	}
+	if app.RoutingConfig == nil {
+		err := fmt.Errorf("routing config is not initialized")
+		signalInit(initResult, err)
+		return err
+	}
 
 	// 1. discover gateway
 	log.Infof("[Linux][Step 1] Discovering default gateway...")

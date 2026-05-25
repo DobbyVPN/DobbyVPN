@@ -296,7 +296,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		if err != nil {
 			d.tcpDialErr.Add(1)
 			log.Infof("[SOCKS5 TCP ERROR] attempt=%d dst=%s server=%s elapsed=%s ctxErr=%v cause=%s stats={%s} errClass=%s err=%v", attempt, addr, serverIP, time.Since(start), ctx.Err(), contextCause(ctx), d.dialStats(), classifyOutlineIOErr(err), err)
-			return nil, err
+			return nil, fmt.Errorf("StreamDialer failed for %s: %w", addr, err)
 		}
 
 		d.tcpDialOK.Add(1)
@@ -323,7 +323,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		if err != nil {
 			d.udpDialErr.Add(1)
 			log.Infof("[SOCKS5 UDP ERROR] attempt=%d dst=%s server=%s elapsed=%s ctxErr=%v cause=%s stats={%s} errClass=%s err=%v", attempt, addr, serverIP, time.Since(start), ctx.Err(), contextCause(ctx), d.dialStats(), classifyOutlineIOErr(err), err)
-			return nil, err
+			return nil, fmt.Errorf("PacketDialer failed for %s: %w", addr, err)
 		}
 
 		d.udpDialOK.Add(1)
@@ -475,13 +475,18 @@ type outlineLoggedConn struct {
 }
 
 func (c *outlineLoggedConn) Read(b []byte) (int, error) {
+	if c == nil || c.Conn == nil {
+		return 0, errors.New("outline logged connection is not initialized")
+	}
 	n, err := c.Conn.Read(b)
 	if n > 0 {
 		c.readBytes.Add(uint64(n))
-		if c.network == networkTCP {
-			c.device.tcpBytesRead.Add(uint64(n))
-		} else {
-			c.device.udpBytesRead.Add(uint64(n))
+		if c.device != nil {
+			if c.network == networkTCP {
+				c.device.tcpBytesRead.Add(uint64(n))
+			} else {
+				c.device.udpBytesRead.Add(uint64(n))
+			}
 		}
 	}
 	if err != nil && !errors.Is(err, net.ErrClosed) {
@@ -491,13 +496,18 @@ func (c *outlineLoggedConn) Read(b []byte) (int, error) {
 }
 
 func (c *outlineLoggedConn) Write(b []byte) (int, error) {
+	if c == nil || c.Conn == nil {
+		return 0, errors.New("outline logged connection is not initialized")
+	}
 	n, err := c.Conn.Write(b)
 	if n > 0 {
 		c.writtenBytes.Add(uint64(n))
-		if c.network == networkTCP {
-			c.device.tcpBytesWritten.Add(uint64(n))
-		} else {
-			c.device.udpBytesWritten.Add(uint64(n))
+		if c.device != nil {
+			if c.network == networkTCP {
+				c.device.tcpBytesWritten.Add(uint64(n))
+			} else {
+				c.device.udpBytesWritten.Add(uint64(n))
+			}
 		}
 	}
 	if err != nil && !errors.Is(err, net.ErrClosed) {
@@ -507,13 +517,18 @@ func (c *outlineLoggedConn) Write(b []byte) (int, error) {
 }
 
 func (c *outlineLoggedConn) Close() error {
+	if c == nil || c.Conn == nil {
+		return errors.New("outline logged connection is not initialized")
+	}
 	err := c.Conn.Close()
 	c.closeOnce.Do(func() {
 		var closed uint64
-		if c.network == networkTCP {
-			closed = c.device.tcpConnClosed.Add(1)
-		} else {
-			closed = c.device.udpConnClosed.Add(1)
+		if c.device != nil {
+			if c.network == networkTCP {
+				closed = c.device.tcpConnClosed.Add(1)
+			} else {
+				closed = c.device.udpConnClosed.Add(1)
+			}
 		}
 		lastErr := "<nil>"
 		if v := c.lastErr.Load(); v != nil {
@@ -536,7 +551,7 @@ func (c *outlineLoggedConn) Close() error {
 				c.safeRemoteAddr(),
 				err,
 				lastErr,
-				c.device.dialStats(),
+				c.dialStatsForLog(),
 			)
 		}
 	})
@@ -544,8 +559,15 @@ func (c *outlineLoggedConn) Close() error {
 }
 
 func (c *outlineLoggedConn) recordIOErr(op string, err error) {
+	if c == nil {
+		return
+	}
 	errText := fmt.Sprintf("%s:%s", classifyOutlineIOErr(err), err.Error())
 	c.lastErr.Store(errText)
+	if c.device == nil {
+		c.logIOErr(op, errText)
+		return
+	}
 	if c.network == "tcp" {
 		if op == "read" {
 			c.device.tcpConnReadErr.Add(1)
@@ -566,6 +588,9 @@ func (c *outlineLoggedConn) recordIOErr(op string, err error) {
 }
 
 func (c *outlineLoggedConn) logIOErr(op, errText string) {
+	if c == nil {
+		return
+	}
 	log.Infof(
 		"[OUTLINE FLOW IO ERROR] network=%s op=%s attempt=%d dst=%s server=%s lifetime=%s readBytes=%d writeBytes=%d local=%s remote=%s err=%s stats={%s}",
 		c.network,
@@ -579,7 +604,7 @@ func (c *outlineLoggedConn) logIOErr(op, errText string) {
 		c.safeLocalAddr(),
 		c.safeRemoteAddr(),
 		errText,
-		c.device.dialStats(),
+		c.dialStatsForLog(),
 	)
 }
 
@@ -617,17 +642,24 @@ func contextCause(ctx context.Context) string {
 }
 
 func (c *outlineLoggedConn) safeLocalAddr() net.Addr {
-	if c.Conn == nil {
+	if c == nil || c.Conn == nil {
 		return nil
 	}
 	return c.LocalAddr()
 }
 
 func (c *outlineLoggedConn) safeRemoteAddr() net.Addr {
-	if c.Conn == nil {
+	if c == nil || c.Conn == nil {
 		return nil
 	}
 	return c.RemoteAddr()
+}
+
+func (c *outlineLoggedConn) dialStatsForLog() string {
+	if c == nil || c.device == nil {
+		return "device=nil"
+	}
+	return c.device.dialStats()
 }
 
 type truncatedDNSConn struct {
@@ -764,24 +796,38 @@ func extractSSHost(transportConfig string) (string, error) {
 // Open implements pkg.ProtocolDevice. The SOCKS5 server is already started
 // by NewOutlineDevice, so this is a no-op.
 func (d *OutlineDevice) Open(routingTableID int, uplinkIface string) error {
+	if d == nil {
+		return errors.New("outline device is not initialized")
+	}
 	return nil
 }
 
 func (d *OutlineDevice) GetServerIP() net.IP {
+	if d == nil {
+		return nil
+	}
 	return d.svrIP
 }
 
 func (d *OutlineDevice) GetProxyAddr() string {
+	if d == nil {
+		return ""
+	}
 	return d.proxyAddr
 }
 
 func (d *OutlineDevice) Close() error {
+	if d == nil {
+		return errors.New("outline device is not initialized")
+	}
 	log.Infof("SOCKS5 close requested proxy=%s stats={%s}", d.proxyAddr, d.dialStats())
 	d.closeOnce.Do(func() {
 		close(d.closed)
 	})
 	if d.listener != nil {
-		return d.listener.Close()
+		if err := d.listener.Close(); err != nil {
+			return fmt.Errorf("failed to close outline SOCKS listener: %w", err)
+		}
 	}
 	return nil
 }

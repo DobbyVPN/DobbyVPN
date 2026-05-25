@@ -3,6 +3,7 @@
 package awg
 
 import (
+	"errors"
 	"fmt"
 	"go_module/common"
 	_ "go_module/log"
@@ -27,6 +28,9 @@ type AwgClient struct {
 }
 
 func (c *AwgClient) Connect() error {
+	if c == nil {
+		return errors.New("awg ios client is not initialized")
+	}
 	c.tunnelHandle = AwgTurnOn("", c.tunFd, c.settings)
 	if c.tunnelHandle == -1 {
 		return fmt.Errorf("awgTurnOn failed") // TODO: handle error with more detail
@@ -35,6 +39,9 @@ func (c *AwgClient) Connect() error {
 }
 
 func (c *AwgClient) Disconnect() error {
+	if c == nil {
+		return errors.New("awg ios client is not initialized")
+	}
 	AwgTurnOff(c.tunnelHandle)
 	c.tunnelHandle = -1
 	return nil
@@ -42,9 +49,12 @@ func (c *AwgClient) Disconnect() error {
 
 func (c *AwgClient) Refresh() error {
 	if err := c.Disconnect(); err != nil {
-		return err
-	} // TODO: handle error with more detail
-	return c.Connect()
+		return fmt.Errorf("failed to refresh awg ios client: disconnect failed: %w", err)
+	}
+	if err := c.Connect(); err != nil {
+		return fmt.Errorf("failed to refresh awg ios client: connect failed: %w", err)
+	}
+	return nil
 }
 
 type tunnelHandle struct {

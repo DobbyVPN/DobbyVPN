@@ -29,12 +29,14 @@ func (l *linuxProtector) Protect(fdU uintptr, network string) {
 		log.Infof("[Linux-Protect] Protect fd err=%v", err)
 	}
 
-	_ = syscall.SetsockoptInt(
+	if err := syscall.SetsockoptInt(
 		fd,
 		syscall.SOL_SOCKET,
 		syscall.SO_MARK,
 		linuxSocketMark,
-	)
+	); err != nil {
+		log.Infof("[Linux-Protect] SO_MARK failed fd=%d mark=%d err=%v", fd, linuxSocketMark, err)
+	}
 }
 
 func init() {

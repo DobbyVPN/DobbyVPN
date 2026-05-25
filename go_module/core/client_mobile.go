@@ -3,6 +3,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"go_module/common"
 	coreCommon "go_module/core/common"
@@ -32,12 +33,23 @@ func NewClient(device pkg.ProtocolDevice, tun io.ReadWriteCloser) *CoreClient {
 	return c
 }
 
-func (c *CoreClient) Connect() error {
+func (c *CoreClient) Connect() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Infof("RECOVERED from fail in Connect: %v", r)
+			err = fmt.Errorf("core mobile connect panic: %v", r)
 		}
 	}()
+
+	if c == nil {
+		return errors.New("core mobile client is not initialized")
+	}
+	if c.tun == nil {
+		return errors.New("core mobile tun device is not initialized")
+	}
+	if c.device == nil {
+		return errors.New("core mobile protocol device is not initialized")
+	}
 
 	var fd int
 	if f, ok := c.tun.(*os.File); ok {
@@ -51,11 +63,11 @@ func (c *CoreClient) Connect() error {
 		return fmt.Errorf("invalid tun device type")
 	}
 
-	err := c.device.Open(0, "")
+	err = c.device.Open(0, "")
 	if err != nil {
 		log.Infof("failed to create protocol device: %v", err)
 		common.Client.MarkInactive(coreCommon.Name)
-		return err
+		return fmt.Errorf("failed to open protocol device: %w", err)
 	}
 
 	log.Infof("starting tun2socks engine with proxy %s", c.device.GetProxyAddr())
@@ -66,7 +78,7 @@ func (c *CoreClient) Connect() error {
 	})
 	if err != nil {
 		log.Infof("Can't start tun2socks: %v", err)
-		return err
+		return fmt.Errorf("failed to start tun2socks engine: %w", err)
 	}
 
 	common.Client.MarkActive(coreCommon.Name)
@@ -75,11 +87,17 @@ func (c *CoreClient) Connect() error {
 }
 
 func (c *CoreClient) Disconnect() error {
+	if c == nil {
+		return errors.New("core mobile client is not initialized")
+	}
+
 	tunnel.StopEngine()
 
+	var errs []error
 	if c.tun != nil {
 		if err := c.tun.Close(); err != nil {
 			log.Infof("failed to close tun fd: %v", err)
+			errs = append(errs, fmt.Errorf("failed to close tun fd: %w", err))
 		} else {
 			log.Infof("tun fd closed")
 		}
@@ -89,13 +107,14 @@ func (c *CoreClient) Disconnect() error {
 	if c.device != nil {
 		if err := c.device.Close(); err != nil {
 			log.Infof("failed to close outline device: %v\n", err)
+			errs = append(errs, fmt.Errorf("failed to close protocol device: %w", err))
 		}
 		c.device = nil
 	}
 
 	log.Infof("outline client disconnected")
 	common.Client.MarkInactive(coreCommon.Name)
-	return nil
+	return errors.Join(errs...)
 }
 
 func (c *CoreClient) Refresh() error {
@@ -103,5 +122,8 @@ func (c *CoreClient) Refresh() error {
 }
 
 func (c *CoreClient) GetServerIP() net.IP {
+	if c == nil || c.device == nil {
+		return nil
+	}
 	return c.device.GetServerIP()
 }

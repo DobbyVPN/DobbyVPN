@@ -28,13 +28,22 @@ type closeQuiescingListener struct {
 }
 
 func (l *closeQuiescingListener) Close() error {
+	if l == nil || l.Listener == nil {
+		return errors.New("quiescing listener is not initialized")
+	}
 	l.mu.Lock()
 	l.closed = true
 	l.mu.Unlock()
-	return l.Listener.Close()
+	if err := l.Listener.Close(); err != nil {
+		return fmt.Errorf("failed to close quiescing listener: %w", err)
+	}
+	return nil
 }
 
 func (l *closeQuiescingListener) Accept() (net.Conn, error) {
+	if l == nil || l.Listener == nil {
+		return nil, errors.New("quiescing listener is not initialized")
+	}
 	c, err := l.Listener.Accept()
 	if err == nil {
 		return c, nil
@@ -82,6 +91,10 @@ func (c *CkClient) Connect() (returnErr error) {
 		}
 	}()
 
+	if c == nil {
+		return errors.New("ck-client is not initialized")
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -91,7 +104,7 @@ func (c *CkClient) Connect() (returnErr error) {
 	localConfig, remoteConfig, authInfo, err := c.config.ProcessRawConfig(common.RealWorldState)
 	if err != nil {
 		c.connected = false
-		return err
+		return fmt.Errorf("failed to process cloak config: %w", err)
 	}
 
 	var adminUID []byte
@@ -189,6 +202,9 @@ func (c *CkClient) Connect() (returnErr error) {
 }
 
 func (c *CkClient) Disconnect() error {
+	if c == nil {
+		return errors.New("ck-client is not initialized")
+	}
 	prevExit := logrus.StandardLogger().ExitFunc
 	logrus.StandardLogger().ExitFunc = func(int) {}
 	defer func() { logrus.StandardLogger().ExitFunc = prevExit }()
@@ -248,8 +264,11 @@ func (c *CkClient) Disconnect() error {
 
 func (c *CkClient) Refresh() error {
 	if err := c.Disconnect(); err != nil { // TODO: handle error with more detail
-		return err
+		return fmt.Errorf("failed to refresh cloak client: disconnect failed: %w", err)
 	}
 
-	return c.Connect()
+	if err := c.Connect(); err != nil {
+		return fmt.Errorf("failed to refresh cloak client: connect failed: %w", err)
+	}
+	return nil
 }

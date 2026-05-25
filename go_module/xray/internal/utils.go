@@ -13,7 +13,7 @@ import (
 func ExtractServerIP(configStr string) (string, error) {
 	var config map[string]interface{}
 	if err := json.Unmarshal([]byte(configStr), &config); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to unmarshal xray config while extracting server IP: %w", err)
 	}
 
 	// Assuming standard Xray config structure where outbound[0] is the proxy
@@ -38,7 +38,7 @@ func ExtractServerIP(configStr string) (string, error) {
 func ExtractLogLevel(configStr string) (xrayLog.Severity, error) {
 	var config map[string]interface{}
 	if err := json.Unmarshal([]byte(configStr), &config); err != nil {
-		return xrayLog.Severity_Unknown, err
+		return xrayLog.Severity_Unknown, fmt.Errorf("failed to unmarshal xray config while extracting log level: %w", err)
 	}
 	// Assuming standard Xray config structure where log[0] is the log settings
 	if log, ok := config["log"].(map[string]interface{}); ok && len(log) > 0 {
@@ -75,7 +75,7 @@ func resolveIP(addr string) (string, error) {
 	// If it's a domain, resolve it
 	ips, err := net.LookupIP(addr)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to resolve xray address %q: %w", addr, err)
 	}
 	for _, ip := range ips {
 		if ip4 := ip.To4(); ip4 != nil {

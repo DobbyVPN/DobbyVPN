@@ -34,6 +34,7 @@ func CheckServerAlive(address string, port int) (status int32) {
 	defer guardStatus("CheckServerAlive", &status)()
 	log.Infof("[ios_exports] CheckServerAlive begin address=%s port=%d", address, port)
 	res := healthcheck.CheckServerAlive(address, port)
+	log.Infof("Health check result: %v", res)
 	if res == nil {
 		log.Infof("[ios_exports] CheckServerAlive OK address=%s port=%d", address, port)
 		return 0

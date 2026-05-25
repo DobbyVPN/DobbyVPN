@@ -3,6 +3,8 @@
 package awg
 
 import (
+	"errors"
+	"fmt"
 	"go_module/awg/internal"
 	"go_module/common"
 	_ "go_module/log"
@@ -15,25 +17,40 @@ type AwgClient struct {
 }
 
 func (a *AwgClient) Connect() error {
+	if a == nil || a.App == nil {
+		return errors.New("awg android client is not initialized")
+	}
 	common.Client.MarkActive(Name)
-	return a.App.Run()
+	if err := a.App.Run(); err != nil {
+		return fmt.Errorf("failed to run awg android app: %w", err)
+	}
+	return nil
 }
 
 func (a *AwgClient) Disconnect() error {
+	if a == nil || a.App == nil {
+		return errors.New("awg android client is not initialized")
+	}
 	common.Client.MarkInactive(Name)
 	a.App.Stop()
 	return nil
 }
 
 func (a *AwgClient) Refresh() error {
+	if a == nil || a.App == nil {
+		return errors.New("awg android client is not initialized")
+	}
 	a.App.Stop()
-	return a.App.Run()
+	if err := a.App.Run(); err != nil {
+		return fmt.Errorf("failed to refresh awg android app: %w", err)
+	}
+	return nil
 }
 
 func NewAwgClient(interfaceName, interfaceConfig string, interfaceFd int) (*AwgClient, error) {
 	app, err := internal.NewApp(interfaceName, interfaceConfig, interfaceFd)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create awg android app: %w", err)
 	}
 
 	cl := &AwgClient{App: app}

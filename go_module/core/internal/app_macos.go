@@ -30,8 +30,20 @@ func signalInit(initResult chan<- error, err error) {
 }
 
 func (app App) Run(ctx context.Context, initResult chan<- error) error {
+	if app.ProtocolDevice == nil {
+		err := fmt.Errorf("protocol device is not initialized")
+		signalInit(initResult, err)
+		return err
+	}
+	if app.RoutingConfig == nil {
+		err := fmt.Errorf("routing config is not initialized")
+		signalInit(initResult, err)
+		return err
+	}
+
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
+		err = fmt.Errorf("failed to discover gateway: %w", err)
 		signalInit(initResult, err)
 		return err
 	}

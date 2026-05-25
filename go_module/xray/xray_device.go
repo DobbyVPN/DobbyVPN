@@ -1,6 +1,7 @@
 package xray
 
 import (
+	"errors"
 	"fmt"
 	"net"
 
@@ -59,6 +60,9 @@ func NewXrayDevice(vlessConfig string) (*XrayDevice, error) {
 }
 
 func (d *XrayDevice) Open(routingTableID int, uplinkIface string) error {
+	if d == nil {
+		return errors.New("xray device is not initialized")
+	}
 	xrayConfig, err := internal.GenerateXrayConfig(d.vlessConfig, "127.0.0.1", d.svrPort, routingTableID, uplinkIface, d.socksUser, d.socksPass)
 	if err != nil {
 		return fmt.Errorf("failed to generate xray config: %w", err)
@@ -84,18 +88,29 @@ func (d *XrayDevice) Open(routingTableID int, uplinkIface string) error {
 }
 
 func (d *XrayDevice) GetServerIP() net.IP {
+	if d == nil {
+		return nil
+	}
 	return d.svrIP
 }
 
 func (d *XrayDevice) GetProxyAddr() string {
+	if d == nil {
+		return ""
+	}
 	return d.proxyAddr
 }
 
 func (d *XrayDevice) Close() error {
+	if d == nil {
+		return errors.New("xray device is not initialized")
+	}
 	if d.xrayInstance != nil {
 		err := d.xrayInstance.Close()
 		d.xrayInstance = nil
-		return err
+		if err != nil {
+			return fmt.Errorf("failed to close xray instance: %w", err)
+		}
 	}
 	return nil
 }

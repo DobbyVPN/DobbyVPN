@@ -4,6 +4,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"go_module/common"
 	coreCommon "go_module/core/common"
@@ -43,6 +44,10 @@ func NewClient(device pkg.ProtocolDevice) *CoreClient {
 }
 
 func (c *CoreClient) Connect() error {
+	if c == nil {
+		return errors.New("core desktop client is not initialized")
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -69,6 +74,16 @@ func (c *CoreClient) Connect() error {
 				common.Client.MarkInactive(coreCommon.Name)
 			}
 		}()
+		if c.app == nil {
+			err := errors.New("core desktop app is not initialized")
+			log.Infof("connect core client failed: %v", err)
+			common.Client.MarkInactive(coreCommon.Name)
+			select {
+			case initResult <- err:
+			default:
+			}
+			return
+		}
 		err := c.app.Run(ctx, initResult)
 		if err != nil {
 			log.Infof("connect core client failed: %v", err)
@@ -95,6 +110,10 @@ func (c *CoreClient) Connect() error {
 }
 
 func (c *CoreClient) Disconnect() error {
+	if c == nil {
+		return errors.New("core desktop client is not initialized")
+	}
+
 	log.Infof("Disconnect: try to lock c.mu")
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -112,6 +131,11 @@ func (c *CoreClient) Disconnect() error {
 }
 
 func (c *CoreClient) Refresh() error {
-	_ = c.Disconnect()
-	return c.Connect()
+	if err := c.Disconnect(); err != nil {
+		return fmt.Errorf("failed to refresh core client: disconnect failed: %w", err)
+	}
+	if err := c.Connect(); err != nil {
+		return fmt.Errorf("failed to refresh core client: connect failed: %w", err)
+	}
+	return nil
 }

@@ -57,7 +57,7 @@ func generateConfig() *NetworkConfig {
 func randomPrivateOctet() (int64, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(254))
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to generate private network octet: %w", err)
 	}
 	return n.Int64() + 1, nil
 }

@@ -1,6 +1,9 @@
 package common
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 type vpnClientInterface interface {
 	Connect() error
@@ -20,6 +23,9 @@ type CommonClient struct {
 }
 
 func (c *CommonClient) Connect(clientName string) error {
+	if c == nil {
+		return fmt.Errorf("failed to connect %s: common client registry is not initialized", clientName)
+	}
 	c.mu.Lock()
 	clientState, ok := c.vpnClients[clientName]
 	if !ok || clientState.connected || clientState.inCriticalSection {
@@ -30,6 +36,16 @@ func (c *CommonClient) Connect(clientName string) error {
 	c.vpnClients[clientName] = clientState
 	conn := clientState.vpnClientInterface
 	c.mu.Unlock()
+
+	if conn == nil {
+		c.mu.Lock()
+		if current, exists := c.vpnClients[clientName]; exists && current.vpnClientInterface == nil {
+			current.inCriticalSection = false
+			c.vpnClients[clientName] = current
+		}
+		c.mu.Unlock()
+		return fmt.Errorf("failed to connect %s: vpn client is not initialized", clientName)
+	}
 
 	err := conn.Connect()
 
@@ -42,10 +58,16 @@ func (c *CommonClient) Connect(clientName string) error {
 		}
 		c.vpnClients[clientName] = current
 	}
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to connect %s: %w", clientName, err)
+	}
+	return nil
 }
 
 func (c *CommonClient) Disconnect(clientName string) error {
+	if c == nil {
+		return fmt.Errorf("failed to disconnect %s: common client registry is not initialized", clientName)
+	}
 	c.mu.Lock()
 	clientState, ok := c.vpnClients[clientName]
 	if !ok || !clientState.connected || clientState.inCriticalSection {
@@ -56,6 +78,16 @@ func (c *CommonClient) Disconnect(clientName string) error {
 	c.vpnClients[clientName] = clientState
 	conn := clientState.vpnClientInterface
 	c.mu.Unlock()
+
+	if conn == nil {
+		c.mu.Lock()
+		if current, exists := c.vpnClients[clientName]; exists && current.vpnClientInterface == nil {
+			current.inCriticalSection = false
+			c.vpnClients[clientName] = current
+		}
+		c.mu.Unlock()
+		return fmt.Errorf("failed to disconnect %s: vpn client is not initialized", clientName)
+	}
 
 	err := conn.Disconnect()
 
@@ -68,19 +100,33 @@ func (c *CommonClient) Disconnect(clientName string) error {
 		}
 		c.vpnClients[clientName] = current
 	}
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to disconnect %s: %w", clientName, err)
+	}
+	return nil
 }
 
 func (c *CommonClient) Refresh(clientName string) error {
+	if c == nil {
+		return fmt.Errorf("failed to refresh %s: common client registry is not initialized", clientName)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if client, ok := c.vpnClients[clientName]; ok && client.connected && !client.inCriticalSection {
-		return client.Refresh()
+		if client.vpnClientInterface == nil {
+			return fmt.Errorf("failed to refresh %s: vpn client is not initialized", clientName)
+		}
+		if err := client.Refresh(); err != nil {
+			return fmt.Errorf("failed to refresh %s: %w", clientName, err)
+		}
 	}
 	return nil
 }
 
 func (c *CommonClient) SetVpnClient(clientName string, vc vpnClientInterface) {
+	if c == nil {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.vpnClients == nil {
@@ -90,6 +136,9 @@ func (c *CommonClient) SetVpnClient(clientName string, vc vpnClientInterface) {
 }
 
 func (c *CommonClient) MarkActive(clientName string) {
+	if c == nil {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if client, ok := c.vpnClients[clientName]; ok {
@@ -99,6 +148,9 @@ func (c *CommonClient) MarkActive(clientName string) {
 }
 
 func (c *CommonClient) MarkInactive(clientName string) {
+	if c == nil {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if client, ok := c.vpnClients[clientName]; ok {
@@ -108,6 +160,9 @@ func (c *CommonClient) MarkInactive(clientName string) {
 }
 
 func (c *CommonClient) MarkInCriticalSection(clientName string) {
+	if c == nil {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if client, ok := c.vpnClients[clientName]; ok {
@@ -117,6 +172,9 @@ func (c *CommonClient) MarkInCriticalSection(clientName string) {
 }
 
 func (c *CommonClient) MarkOutOffCriticalSection(clientName string) {
+	if c == nil {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if client, ok := c.vpnClients[clientName]; ok {
@@ -126,6 +184,9 @@ func (c *CommonClient) MarkOutOffCriticalSection(clientName string) {
 }
 
 func (c *CommonClient) CouldStart() bool {
+	if c == nil {
+		return false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, client := range c.vpnClients {
@@ -137,6 +198,9 @@ func (c *CommonClient) CouldStart() bool {
 }
 
 func (c *CommonClient) GetClientNames(active bool) []string {
+	if c == nil {
+		return nil
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	names := make([]string, 0, len(c.vpnClients))
@@ -150,14 +214,20 @@ func (c *CommonClient) GetClientNames(active bool) []string {
 }
 
 func (c *CommonClient) RefreshAll() error {
+	if c == nil {
+		return fmt.Errorf("failed to refresh clients: common client registry is not initialized")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, client := range c.vpnClients {
+	for name, client := range c.vpnClients {
 		if !client.connected {
 			continue
 		}
+		if client.vpnClientInterface == nil {
+			return fmt.Errorf("failed to refresh %s: vpn client is not initialized", name)
+		}
 		if err := client.Refresh(); err != nil {
-			return err
+			return fmt.Errorf("failed to refresh %s: %w", name, err)
 		}
 	}
 	return nil

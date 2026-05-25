@@ -37,7 +37,15 @@ public final class CloakInteractor {
             }
             logs.writeLog(log: "startCloakOutline: starting cloak config.len=\(cloakConfig.count)")
             let nativeStart = Date()
-            Cloak_outlineStartCloakClient("127.0.0.1", localPort, cloakConfig, false)
+            var err: NSError?
+            Cloak_outlineStartCloakClient("127.0.0.1", localPort, cloakConfig, false, &err)
+            if let error = err {
+                logs.writeLog(
+                    log: "startCloakOutline: failed to start cloak in \(elapsedMs(since: nativeStart))ms: " +
+                        "\(error.localizedDescription)"
+                )
+                throw error
+            }
             cloakStarted = true
             logs.writeLog(
                 log: "startCloakOutline: Cloak_outlineStartCloakClient returned " +
