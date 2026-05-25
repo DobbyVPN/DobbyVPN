@@ -307,7 +307,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "Finish go logger init")
         Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
 
-        let vpnInterface = configsRepository.getVpnInterface()
         logs.writeLog(log: "[tunnel:\(tunnelId)] selected vpnInterface=\(vpnInterface)")
         if vpnInterface == VpnInterface.xray {
             do {
