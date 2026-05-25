@@ -181,11 +181,13 @@ class MainViewModel(
         return if (connectionUrl.startsWith("http://") || connectionUrl.startsWith("https://")) {
             try {
                 logger.log("Fetching config from remote URL...")
-                httpClient.get(connectionUrl) {
+                val response = httpClient.get(connectionUrl) {
                     headers {
                         append("User-Agent", "DobbyVPN v${BuildConfig.VERSION_NAME}")
                     }
-                }.bodyAsText()
+                }
+                logger.log("Config fetch response status code: ${response.status.value}")
+                response.bodyAsText()
             } catch (e: Exception) {
                 val errorMsg = "Can't get config by url. Error: ${e.message}"
                 logger.log(errorMsg)
