@@ -209,17 +209,11 @@ func SetPath(path string) error {
 
 func InitTelemetry(endpoint string) error {
 	if lg.tlogger != nil {
-		if lg.tlogger.endpoint == endpoint {
-			Debugf("LOG", "Telemetry is already set up")
-			return nil
-		}
-
-		if err := lg.tlogger.shutdown(lg.tlogger.ctx); err != nil {
-			Warnf("LOG", "Telemetry shutdown error: %v", err)
-		}
-		lg.tlogger = nil
+		Debugf("LOG", "No need to create new OpenTelemetry SDK")
+		return nil
 	}
 
+	Debugf("LOG", "Create new OpenTelemetry SDK")
 	tlg, err := NewTelemetryLogger(endpoint)
 	if err != nil {
 		Warnf("OTEL", "Failed to create new telemetry logger: %v", err)

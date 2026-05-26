@@ -85,6 +85,7 @@ func SetupOTelSDK(ctx context.Context, endpoint string) (func(context.Context) e
 		handleErr(err)
 		return shutdown, err
 	}
+	shutdownFuncs = append(shutdownFuncs, loggerProvider.ForceFlush)
 	shutdownFuncs = append(shutdownFuncs, loggerProvider.Shutdown)
 	global.SetLoggerProvider(loggerProvider)
 

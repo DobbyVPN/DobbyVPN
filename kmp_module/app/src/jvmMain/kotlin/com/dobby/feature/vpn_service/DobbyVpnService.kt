@@ -106,8 +106,6 @@ class DobbyVpnService(
     }
 
     fun disableTunnelTelemetry() {
-        logger.log("Stop tunnel telemetry")
-        loggerLibrary.StopTelemetry()
     }
 
     /**
