@@ -7,19 +7,19 @@ import (
 
 func StartCloakClient(localHost string, localPort string, config string, udp bool) (err error) {
 	defer guardErr("StartCloakClient", &err)()
-	log.Infof("[ios_exports] StartCloakClient begin localHost=%s localPort=%s configLen=%d udp=%v", localHost, localPort, len(config), udp)
+	log.Debugf(Category, "StartCloakClient begin localHost=%s localPort=%s configLen=%d udp=%v", localHost, localPort, len(config), udp)
 	err = cloak.StartCloakClient(localHost, localPort, config, udp)
 	if err != nil {
-		log.Infof("[ios_exports] StartCloakClient failed localHost=%s localPort=%s err=%v", localHost, localPort, err)
+		log.Debugf(Category, "StartCloakClient failed localHost=%s localPort=%s err=%v", localHost, localPort, err)
 		return err
 	}
-	log.Infof("[ios_exports] StartCloakClient OK localHost=%s localPort=%s", localHost, localPort)
+	log.Debugf(Category, "StartCloakClient OK localHost=%s localPort=%s", localHost, localPort)
 	return nil
 }
 
 func StopCloakClient() {
 	defer guard("StopCloakClient")()
-	log.Infof("[ios_exports] StopCloakClient begin")
+	log.Debugf(Category, "StopCloakClient begin")
 	cloak.StopCloakClient()
-	log.Infof("[ios_exports] StopCloakClient returned")
+	log.Debugf(Category, "StopCloakClient returned")
 }

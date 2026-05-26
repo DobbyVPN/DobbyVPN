@@ -1,4 +1,4 @@
-//go:build !(android || ios)
+//go:build !(android || darwin)
 
 package awg
 
@@ -27,6 +27,10 @@ func (a *AwgClient) Disconnect() error {
 func (a *AwgClient) Refresh() error {
 	a.app.Stop()
 	return a.app.Run()
+}
+
+func (a *AwgClient) HealthCheck() error {
+	return nil
 }
 
 func NewAwgClient(config string) (*AwgClient, error) {

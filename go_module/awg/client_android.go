@@ -30,6 +30,10 @@ func (a *AwgClient) Refresh() error {
 	return a.App.Run()
 }
 
+func (c *AwgClient) HealthCheck() error {
+	return nil
+}
+
 func NewAwgClient(interfaceName, interfaceConfig string, interfaceFd int) (*AwgClient, error) {
 	app, err := internal.NewApp(interfaceName, interfaceConfig, interfaceFd)
 	if err != nil {

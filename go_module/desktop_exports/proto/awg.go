@@ -12,13 +12,13 @@ import (
 )
 
 func (s *Server) StartAwg(_ context.Context, in *grpcproto.StartAwgRequest) (*grpcproto.Empty, error) {
-	log.Infof("StartAwg: %v", in.GetTunnel())
-	go api.StartAwg(in.GetTunnel(), in.GetConfig())
+	log.Debugf(Category, "StartAwg")
+	go api.StartAwg(in.GetConfig())
 	return &grpcproto.Empty{}, nil
 }
 
 func (s *Server) StopAwg(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
-	log.Infof("StopAwg")
+	log.Debugf(Category, "StopAwg")
 	go api.StopAwg()
 	return &grpcproto.Empty{}, nil
 }

@@ -5,16 +5,33 @@ package main
 import "C"
 import (
 	"go_module/healthcheck"
-	"go_module/log"
-	"strings"
 )
 
-//export CheckServerAlive
-func CheckServerAlive(address string, port int32) int32 {
-	res := healthcheck.CheckServerAlive(strings.Clone(address), int(port))
-	log.Infof("[HC] Health check result: %v", res)
-	if res == nil {
+//export GetConnectionState
+func GetConnectionState() C.int {
+	switch healthcheck.GetConnectionState() {
+	case healthcheck.Disconnected:
+		return 0
+	case healthcheck.Connecting:
+		return 1
+	case healthcheck.Connected:
+		return 2
+	default:
 		return 0
 	}
-	return -1
+}
+
+//export InitHealthCheck
+func InitHealthCheck(config string) {
+	healthcheck.InitHealthCheck(config)
+}
+
+//export StartHealthCheck
+func StartHealthCheck() {
+	healthcheck.StartHealthCheck()
+}
+
+//export StopHealthCheck
+func StopHealthCheck() {
+	healthcheck.StopHealthCheck()
 }

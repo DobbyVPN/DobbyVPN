@@ -47,7 +47,7 @@ func setLastError(err string) {
 	errorMu.Lock()
 	defer errorMu.Unlock()
 	lastError = err
-	log.Infof("Error set: %s", err)
+	log.Debugf(Category, "Error set: %s", err)
 }
 
 func guardExport(fnName string) func() {
@@ -55,7 +55,7 @@ func guardExport(fnName string) func() {
 		if r := recover(); r != nil {
 			msg := "panic in " + fnName + ": " + unsafeToString(r)
 			setLastError(msg)
-			log.Infof("%s\n%s", msg, string(debug.Stack()))
+			log.Errorf(Category, "%s\n%s", msg, string(debug.Stack()))
 		}
 	}
 }
@@ -76,12 +76,12 @@ func unsafeToString(v any) string {
 //export NewVpnClient
 func NewVpnClient(config string, protocol string, fd int32, mtu int32) {
 	defer guardExport("NewVpnClient")()
-	log.Infof("NewVpnClient() called protocol=%s fd=%d mtu=%d", protocol, fd, mtu)
+	log.Debugf(Category, "NewVpnClient() called protocol=%s fd=%d mtu=%d", protocol, fd, mtu)
 
 	// Ensure any zombie connection is completely cleaned up
 	VpnDisconnect()
 
-	log.Infof("Config length=%d", len(config))
+	log.Debugf(Category, "Config length=%d", len(config))
 
 	var device pkg.ProtocolDevice
 	var err error
@@ -96,58 +96,58 @@ func NewVpnClient(config string, protocol string, fd int32, mtu int32) {
 		})
 	default:
 		setLastError("unsupported protocol: " + protocol)
-		log.Infof("NewVpnClient() failed: unsupported protocol")
+		log.Debugf(Category, "NewVpnClient() failed: unsupported protocol")
 		return
 	}
 
 	if err != nil {
 		setLastError(err.Error())
-		log.Infof("NewVpnClient() failed to create %s device: %v", protocol, err)
+		log.Debugf(Category, "NewVpnClient() failed to create %s device: %v", protocol, err)
 		return
 	}
 
 	// Inject the protocol device into the universal mobile client
 	vpnClient = core.NewClient(device, int(fd), int(mtu))
 
-	log.Infof("NewVpnClient() finished successfully")
+	log.Debugf(Category, "NewVpnClient() finished successfully")
 }
 
 //export VpnConnect
 func VpnConnect() int32 {
 	defer guardExport("VpnConnect")()
-	log.Infof("VpnConnect() called")
+	log.Debugf(Category, "VpnConnect() called")
 
 	clearLastError()
 
 	if vpnClient == nil {
 		setLastError("client is nil")
-		log.Infof("VpnConnect() failed: client is nil")
+		log.Debugf(Category, "VpnConnect() failed: client is nil")
 		return -1
 	}
 
 	err := vpnClient.Connect()
 	if err != nil {
 		setLastError(err.Error())
-		log.Infof("VpnConnect() failed: %v", err)
+		log.Debugf(Category, "VpnConnect() failed: %v", err)
 		return -1
 	}
 
-	log.Infof("VpnConnect() finished successfully")
+	log.Debugf(Category, "VpnConnect() finished successfully")
 	return 0
 }
 
 //export VpnDisconnect
 func VpnDisconnect() {
 	defer guardExport("VpnDisconnect")()
-	log.Infof("VpnDisconnect() called")
+	log.Debugf(Category, "VpnDisconnect() called")
 
 	if vpnClient == nil {
-		log.Infof("VpnDisconnect(): client is already nil")
+		log.Debugf(Category, "VpnDisconnect(): client is already nil")
 		return
 	}
 
 	_ = vpnClient.Disconnect()
 
 	vpnClient = nil
-	log.Infof("VpnDisconnect() finished")
+	log.Debugf(Category, "VpnDisconnect() finished")
 }

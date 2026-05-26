@@ -5,7 +5,7 @@ import com.dobby.feature.main.domain.VpnInterface
 import interop.healthcheck.HealthCheckLibrary
 import java.util.prefs.Preferences
 
-internal class DobbyConfigsRepositoryImpl(
+class DobbyConfigsRepositoryImpl(
     private val prefs: Preferences = Preferences.userRoot(),
     private val healthCheckLibrary: HealthCheckLibrary,
 ) : DobbyConfigsRepository {
@@ -35,6 +35,22 @@ internal class DobbyConfigsRepositoryImpl(
 
     override fun setConnectionConfig(connectionConfig: String) {
         prefs.put("connectionConfig", connectionConfig)
+    }
+
+    override fun getTelemetryEndpoint(): String {
+        return prefs.get("telemetryEndpoint", "")
+    }
+
+    override fun setTelemetryEndpoint(endpoint: String) {
+        prefs.put("telemetryEndpoint", endpoint)
+    }
+
+    override fun getTelemetryAttributes(): String {
+        return prefs.get("telemetryAttributes", "")
+    }
+
+    override fun setTelemetryAttributes(config: String) {
+        prefs.put("telemetryAttributes", config)
     }
 
     override fun getCloakConfig(): String {
@@ -166,20 +182,20 @@ internal class DobbyConfigsRepositoryImpl(
         return healthCheckLibrary.CouldStart()
     }
 
-    override fun getIsUserInitStop(): Boolean {
-        return prefs.get("isUserInitStop", "true").equals("true")
-    }
-
-    override fun setIsUserInitStop(isUserInitStop: Boolean) {
-        prefs.put("isUserInitStop", isUserInitStop.toString())
-    }
-
     override fun getGeoRoutingConf(): String {
         return prefs.get("geoRoutingConf", "")
     }
 
     override fun setGeoRoutingConf(geoRoutingConf: String) {
         prefs.put("geoRoutingConf", geoRoutingConf)
+    }
+
+    override fun getNetCheckConfig(): String {
+        return prefs.get("netCheckConfig", "")
+    }
+
+    override fun setNetCheckConfig(config: String) {
+        prefs.put("netCheckConfig", config)
     }
 
     companion object {

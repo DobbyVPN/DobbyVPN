@@ -1,10 +1,10 @@
 package com.dobby.domain
 
 import android.content.SharedPreferences
+import androidx.core.content.edit
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import android.util.Log.i as AndroidLog
-import androidx.core.content.edit
 
 internal class DobbyConfigsRepositoryImpl(
     private val prefs: SharedPreferences
@@ -56,6 +56,18 @@ internal class DobbyConfigsRepositoryImpl(
     override fun setConnectionConfig(connectionConfig: String) {
         prefs.edit().putString("connectionConfig", connectionConfig).apply().also {
             AndroidLog("DOBBY_TAG", "setConnectionConfig, config = ${connectionConfig}")
+        }
+    }
+
+    override fun getTelemetryEndpoint(): String {
+        return (prefs.getString("telemetryEndpoint", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getTelemetryEndpoint, config = $it")
+        }
+    }
+
+    override fun setTelemetryEndpoint(endpoint: String) {
+        prefs.edit().putString("telemetryEndpoint", endpoint).apply().also {
+            AndroidLog("DOBBY_TAG", "setTelemetryEndpoint, endpoint = $endpoint")
         }
     }
 
@@ -236,18 +248,6 @@ internal class DobbyConfigsRepositoryImpl(
         return true
     }
 
-    override fun getIsUserInitStop(): Boolean {
-        return prefs.getBoolean("isUserInitStop", true).also {
-            AndroidLog("DOBBY_TAG", "getIsUserInitStop = $it")
-        }
-    }
-
-    override fun setIsUserInitStop(isUserInitStop: Boolean) {
-        prefs.edit().putBoolean("isUserInitStop", isUserInitStop).apply().also {
-            AndroidLog("DOBBY_TAG", "setIsUserInitStop = $isUserInitStop")
-        }
-    }
-
     override fun getGeoRoutingConf(): String {
         return (prefs.getString("geoRoutingConf", "") ?: "").also {
             AndroidLog("DOBBY_TAG", "geoRoutingConf, len(geoRoutingConf) = ${it.length}")
@@ -257,6 +257,18 @@ internal class DobbyConfigsRepositoryImpl(
     override fun setGeoRoutingConf(geoRoutingConf: String) {
         prefs.edit { putString("geoRoutingConf", geoRoutingConf) }.also {
             AndroidLog("DOBBY_TAG", "geoRoutingConf = $geoRoutingConf")
+        }
+    }
+
+    override fun getNetCheckConfig(): String {
+        return (prefs.getString("netCheckConfig", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "netCheckConfig, len(netCheckConfig) = ${it.length}")
+        }
+    }
+
+    override fun setNetCheckConfig(config: String) {
+        prefs.edit { putString("netCheckConfig", config) }.also {
+            AndroidLog("DOBBY_TAG", "netCheckConfig = ${config.take(10)}...")
         }
     }
 

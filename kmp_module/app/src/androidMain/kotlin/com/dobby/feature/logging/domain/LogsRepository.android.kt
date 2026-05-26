@@ -1,9 +1,9 @@
 package com.dobby.feature.logging.domain
 
 import android.content.Context
+import com.dobby.backend.LoggerBackendWrapper
 import okio.Path
 import okio.Path.Companion.toPath
-import com.dobby.backend.GoBackendWrapper
 
 actual val fileSystem = okio.FileSystem.SYSTEM
 
@@ -18,5 +18,10 @@ actual fun provideLogFilePath(): Path {
 }
 
 fun initLogger() {
-    GoBackendWrapper.initLogger(provideLogFilePath().toString())
+    LoggerBackendWrapper.initLogger(provideLogFilePath().toString())
+}
+
+
+fun initTelemetry(endpoint: String) {
+    LoggerBackendWrapper.initTelemetry(endpoint)
 }

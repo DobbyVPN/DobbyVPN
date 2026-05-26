@@ -55,19 +55,19 @@ func listenAddr(network string) string {
 func protectSocket(fd uintptr, realNet, destination string) error {
 	if protector == nil {
 		// iOS 26: Log warning if protector is nil - this could explain connectivity issues
-		log.Infof("[Protect] WARNING: no socket protector registered network=%s destination=%s fd=%d - traffic may bypass VPN!", realNet, destination, fd)
+		log.Debugf(Category, "[Protect] WARNING: no socket protector registered network=%s destination=%s fd=%d - traffic may bypass VPN!", realNet, destination, fd)
 		return fmt.Errorf("no socket protector registered")
 	}
 
-	log.Infof("[Protect] protect_begin network=%s fd=%d destination=%s", realNet, fd, destination)
+	log.Debugf(Category, "[Protect] protect_begin network=%s fd=%d destination=%s", realNet, fd, destination)
 	if err := protector.Protect(fd, realNet); err != nil {
 		// iOS 26: Log detailed error - socket protection failure may cause network issues
-		log.Infof("[Protect] ERROR: %s fd=%d destination=%s protect_failed: %v - may cause iOS network issues", realNet, fd, destination, err)
+		log.Debugf(Category, "[Protect] ERROR: %s fd=%d destination=%s protect_failed: %v - may cause iOS network issues", realNet, fd, destination, err)
 		return err
 	}
 
 	// iOS 26: Log detailed success with more context
-	log.Infof("[Protect] %s fd=%d destination=%s protect_ok", realNet, fd, destination)
+	log.Debugf(Category, "[Protect] %s fd=%d destination=%s protect_ok", realNet, fd, destination)
 	return nil
 }
 
@@ -235,7 +235,7 @@ func validateProtectedAddrs(kind string, localAddr net.Addr, remoteAddr net.Addr
 
 	if verdict == "BYPASS_FAILED_TUNNEL_SOURCE" {
 		err := fmt.Errorf("protected %s upstream routed through tunnel source local=%s remote=%s dest=%s", strings.ToLower(kind), localAddr, remoteAddr, address)
-		log.Infof("[Protect] %s effective_bypass hard_fail err=%v", kind, err)
+		log.Debugf(Category, "[Protect] %s effective_bypass hard_fail err=%v", kind, err)
 		return err
 	}
 	return nil
@@ -249,20 +249,20 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 	realNet := normalizeTCP(address)
 	start := time.Now()
 	if deadline, ok := ctx.Deadline(); ok {
-		log.Infof("[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s protection={%s}", network, realNet, address, deadline.Format("2006-01-02T15:04:05.000Z07:00"), protectionDiagnosticsForLog())
+		log.Debugf(Category, "[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s protection={%s}", network, realNet, address, deadline.Format("2006-01-02T15:04:05.000Z07:00"), protectionDiagnosticsForLog())
 	} else {
-		log.Infof("[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none) protection={%s}", network, realNet, address, protectionDiagnosticsForLog())
+		log.Debugf(Category, "[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none) protection={%s}", network, realNet, address, protectionDiagnosticsForLog())
 	}
 
 	if isLoopback(address) {
-		log.Infof("[Protect] TCP BYPASS loopback: %s", address)
+		log.Debugf(Category, "[Protect] TCP BYPASS loopback: %s", address)
 		var d net.Dialer
 		conn, err := d.DialContext(ctx, realNet, address)
 		if err != nil {
-			log.Infof("[Protect] TCP BYPASS loopback failed network=%s dest=%s err=%v", realNet, address, err)
+			log.Debugf(Category, "[Protect] TCP BYPASS loopback failed network=%s dest=%s err=%v", realNet, address, err)
 			return nil, err
 		}
-		log.Infof("[Protect] TCP BYPASS loopback OK network=%s dest=%s local=%s remote=%s", realNet, address, conn.LocalAddr(), conn.RemoteAddr())
+		log.Debugf(Category, "[Protect] TCP BYPASS loopback OK network=%s dest=%s local=%s remote=%s", realNet, address, conn.LocalAddr(), conn.RemoteAddr())
 		return conn, nil
 	}
 
@@ -270,17 +270,17 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 	conn, err := d.DialContext(ctx, realNet, address)
 	if err != nil {
 		// iOS 26: Log detailed connection failure
-		log.Infof("[Protect] TCP dial FAILED: dest=%s err=%v", address, err)
+		log.Debugf(Category, "[Protect] TCP dial FAILED: dest=%s err=%v", address, err)
 		return nil, err
 	}
 
 	// Protected upstream sockets must bypass the packet tunnel. If they use the
 	// tunnel address, Outline/Cloak traffic can loop back into tun2socks.
-	log.Infof("[Protect] TCP dial OK: dest=%s local=%s remote=%s", address, conn.LocalAddr(), conn.RemoteAddr())
+	log.Debugf(Category, "[Protect] TCP dial OK: dest=%s local=%s remote=%s", address, conn.LocalAddr(), conn.RemoteAddr())
 
 	if err := validateProtectedConn("TCP", conn, network, realNet, address, start); err != nil {
 		if closeErr := conn.Close(); closeErr != nil {
-			log.Infof("[Protect] TCP close after bypass validation failure failed dest=%s closeErr=%v", address, closeErr)
+			log.Debugf(Category, "[Protect] TCP close after bypass validation failure failed dest=%s closeErr=%v", address, closeErr)
 		}
 		return nil, err
 	}
@@ -291,34 +291,34 @@ func DialPacketWithProtect(ctx context.Context, network, address string) (net.Co
 	realNet := normalizeUDP(address)
 	start := time.Now()
 	if deadline, ok := ctx.Deadline(); ok {
-		log.Infof("[Protect] UDP conn dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s protection={%s}", network, realNet, address, deadline.Format("2006-01-02T15:04:05.000Z07:00"), protectionDiagnosticsForLog())
+		log.Debugf(Category, "[Protect] UDP conn dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s protection={%s}", network, realNet, address, deadline.Format("2006-01-02T15:04:05.000Z07:00"), protectionDiagnosticsForLog())
 	} else {
-		log.Infof("[Protect] UDP conn dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none) protection={%s}", network, realNet, address, protectionDiagnosticsForLog())
+		log.Debugf(Category, "[Protect] UDP conn dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none) protection={%s}", network, realNet, address, protectionDiagnosticsForLog())
 	}
 
 	if isLoopback(address) {
-		log.Infof("[Protect] UDP conn BYPASS loopback: %s", address)
+		log.Debugf(Category, "[Protect] UDP conn BYPASS loopback: %s", address)
 		var d net.Dialer
 		conn, err := d.DialContext(ctx, realNet, address)
 		if err != nil {
-			log.Infof("[Protect] UDP conn BYPASS loopback failed network=%s dest=%s err=%v", realNet, address, err)
+			log.Debugf(Category, "[Protect] UDP conn BYPASS loopback failed network=%s dest=%s err=%v", realNet, address, err)
 			return nil, err
 		}
-		log.Infof("[Protect] UDP conn BYPASS loopback OK network=%s dest=%s local=%s remote=%s", realNet, address, conn.LocalAddr(), conn.RemoteAddr())
+		log.Debugf(Category, "[Protect] UDP conn BYPASS loopback OK network=%s dest=%s local=%s remote=%s", realNet, address, conn.LocalAddr(), conn.RemoteAddr())
 		return conn, nil
 	}
 
 	d := NewProtectedDialer(address)
 	conn, err := d.DialContext(ctx, realNet, address)
 	if err != nil {
-		log.Infof("[Protect] UDP conn dial FAILED: dest=%s err=%v", address, err)
+		log.Debugf(Category, "[Protect] UDP conn dial FAILED: dest=%s err=%v", address, err)
 		return nil, err
 	}
-	log.Infof("[Protect] UDP conn dial OK: dest=%s local=%s remote=%s", address, conn.LocalAddr(), conn.RemoteAddr())
+	log.Debugf(Category, "[Protect] UDP conn dial OK: dest=%s local=%s remote=%s", address, conn.LocalAddr(), conn.RemoteAddr())
 
 	if err := validateProtectedConn("UDP", conn, network, realNet, address, start); err != nil {
 		if closeErr := conn.Close(); closeErr != nil {
-			log.Infof("[Protect] UDP conn close after bypass validation failure failed dest=%s closeErr=%v", address, closeErr)
+			log.Debugf(Category, "[Protect] UDP conn close after bypass validation failure failed dest=%s closeErr=%v", address, closeErr)
 		}
 		return nil, err
 	}
@@ -329,32 +329,32 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 	realNet := normalizeUDP(address)
 	start := time.Now()
 	if deadline, ok := ctx.Deadline(); ok {
-		log.Infof("[Protect] UDP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s protection={%s}", network, realNet, address, deadline.Format("2006-01-02T15:04:05.000Z07:00"), protectionDiagnosticsForLog())
+		log.Debugf(Category, "[Protect] UDP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=%s protection={%s}", network, realNet, address, deadline.Format("2006-01-02T15:04:05.000Z07:00"), protectionDiagnosticsForLog())
 	} else {
-		log.Infof("[Protect] UDP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none) protection={%s}", network, realNet, address, protectionDiagnosticsForLog())
+		log.Debugf(Category, "[Protect] UDP dial begin requestedNetwork=%s realNetwork=%s dest=%s deadline=(none) protection={%s}", network, realNet, address, protectionDiagnosticsForLog())
 	}
 
 	if isLoopback(address) {
-		log.Infof("[Protect] UDP BYPASS loopback: %s", address)
+		log.Debugf(Category, "[Protect] UDP BYPASS loopback: %s", address)
 
 		lc := net.ListenConfig{}
 
 		pc, err := lc.ListenPacket(ctx, realNet, listenAddr(realNet))
 		if err != nil {
-			log.Infof("[Protect] UDP BYPASS loopback listen error network=%s destination=%s: %v", realNet, address, err)
+			log.Debugf(Category, "[Protect] UDP BYPASS loopback listen error network=%s destination=%s: %v", realNet, address, err)
 			return nil, err
 		}
 
 		udpAddr, err := net.ResolveUDPAddr(realNet, address)
 		if err != nil {
 			if closeErr := pc.Close(); closeErr != nil {
-				log.Infof("[Protect] UDP BYPASS loopback close after resolve error failed network=%s destination=%s closeErr=%v", realNet, address, closeErr)
+				log.Debugf(Category, "[Protect] UDP BYPASS loopback close after resolve error failed network=%s destination=%s closeErr=%v", realNet, address, closeErr)
 			}
-			log.Infof("[Protect] UDP BYPASS loopback resolve error network=%s destination=%s: %v", realNet, address, err)
+			log.Debugf(Category, "[Protect] UDP BYPASS loopback resolve error network=%s destination=%s: %v", realNet, address, err)
 			return nil, err
 		}
 
-		log.Infof("[DEBUG][Protect] UDP BYPASS loopback ready network=%s destination=%s local=%s remote=%s", realNet, address, pc.LocalAddr(), udpAddr)
+		log.Debugf(Category, "[DEBUG][Protect] UDP BYPASS loopback ready network=%s destination=%s local=%s remote=%s", realNet, address, pc.LocalAddr(), udpAddr)
 		return &connectedUDPConn{
 			PacketConn: pc,
 			remoteAddr: udpAddr,
@@ -364,25 +364,25 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 	lc := NewProtectedListenConfig(address)
 	pc, err := lc.ListenPacket(ctx, realNet, listenAddr(realNet))
 	if err != nil {
-		log.Infof("[Protect] UDP listen error network=%s destination=%s: %v", realNet, address, err)
+		log.Debugf(Category, "[Protect] UDP listen error network=%s destination=%s: %v", realNet, address, err)
 		return nil, err
 	}
 
 	udpAddr, err := net.ResolveUDPAddr(realNet, address)
 	if err != nil {
 		if closeErr := pc.Close(); closeErr != nil {
-			log.Infof("[Protect] UDP close after resolve error failed network=%s destination=%s closeErr=%v", realNet, address, closeErr)
+			log.Debugf(Category, "[Protect] UDP close after resolve error failed network=%s destination=%s closeErr=%v", realNet, address, closeErr)
 		}
-		log.Infof("[Protect] UDP resolve error network=%s destination=%s: %v", realNet, address, err)
+		log.Debugf(Category, "[Protect] UDP resolve error network=%s destination=%s: %v", realNet, address, err)
 		return nil, err
 	}
 
 	localAddr := pc.LocalAddr().String()
-	log.Infof("[DEBUG][Protect] UDP dial ready network=%s destination=%s local=%s remote=%s", realNet, address, localAddr, udpAddr)
+	log.Debugf(Category, "[DEBUG][Protect] UDP dial ready network=%s destination=%s local=%s remote=%s", realNet, address, localAddr, udpAddr)
 
 	if err := validateProtectedAddrs("UDP_PACKET", pc.LocalAddr(), udpAddr, network, realNet, address, start); err != nil {
 		if closeErr := pc.Close(); closeErr != nil {
-			log.Infof("[Protect] UDP close after bypass validation failure failed dest=%s closeErr=%v", address, closeErr)
+			log.Debugf(Category, "[Protect] UDP close after bypass validation failure failed dest=%s closeErr=%v", address, closeErr)
 		}
 		return nil, err
 	}

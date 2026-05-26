@@ -29,30 +29,30 @@ func setVpnLastError(err string) {
 	defer vpnErrorMu.Unlock()
 	vpnLastError = err
 	if err != "" {
-		log.Infof("Vpn error set: %s", err)
+		log.Debugf(Category, "Vpn error set: %s", err)
 	}
 }
 
 //export StartVpn
 func StartVpn(config, protocol string) int32 {
 	if !log.IsInitialized() {
-		log.Errorf("Logger is not initialized")
+		log.Errorf(Category, "Logger is not initialized")
 		setVpnLastError("Logger is not initialized. Call InitLogger first.")
 		return -1
 	}
-	log.Infof("StartVpn")
+	log.Debugf(Category, "StartVpn")
 	setVpnLastError("")
 
-	log.Infof("Make lock")
+	log.Debugf(Category, "Make lock")
 	vpnMu.Lock()
 	defer vpnMu.Unlock()
-	log.Infof("locked")
+	log.Debugf(Category, "locked")
 
 	if vpnClient != nil {
-		log.Infof("Disconnect existing vpn client")
+		log.Debugf(Category, "Disconnect existing vpn client")
 		err := vpnClient.Disconnect()
 		if err != nil {
-			log.Infof("Failed to disconnect existing vpn client: %v", err)
+			log.Debugf(Category, "Failed to disconnect existing vpn client: %v", err)
 			setVpnLastError(err.Error())
 			return -1
 		}
@@ -68,26 +68,26 @@ func StartVpn(config, protocol string) int32 {
 		device, err = outline.NewOutlineDevice(config)
 	default:
 		setVpnLastError("unsupported protocol: " + protocol)
-		log.Infof("NewVpnClient() failed: unsupported protocol")
+		log.Debugf(Category, "NewVpnClient() failed: unsupported protocol")
 		return -1
 	}
 
 	if err != nil {
-		log.Infof("Failed to create device for %s protocol: %v", protocol, err)
+		log.Debugf(Category, "Failed to create device for %s protocol: %v", protocol, err)
 		setVpnLastError(err.Error())
 		return -1
 	}
 
 	vpnClient = core.NewClient(device)
 
-	log.Infof("Connect vpn client")
+	log.Debugf(Category, "Connect vpn client")
 	err = vpnClient.Connect()
 	if err != nil {
-		log.Infof("Failed to connect vpn client: %v", err)
+		log.Debugf(Category, "Failed to connect vpn client: %v", err)
 		setVpnLastError(err.Error())
 		return -1
 	}
-	log.Infof("Vpn client connected successfully")
+	log.Debugf(Category, "Vpn client connected successfully")
 	return 0
 }
 
@@ -96,10 +96,10 @@ func StopVpn() {
 	vpnMu.Lock()
 	defer vpnMu.Unlock()
 	if vpnClient != nil {
-		log.Infof("Disconnect vpn client")
+		log.Debugf(Category, "Disconnect vpn client")
 		err := vpnClient.Disconnect()
 		if err != nil {
-			log.Infof("Failed to disconnect vpn client: %v", err)
+			log.Debugf(Category, "Failed to disconnect vpn client: %v", err)
 		}
 		vpnClient = nil
 	}

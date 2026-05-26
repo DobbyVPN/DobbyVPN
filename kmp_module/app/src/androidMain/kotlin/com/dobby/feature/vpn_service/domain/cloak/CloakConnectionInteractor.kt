@@ -15,10 +15,8 @@ class CloakConnectionInteractor(
     private val isConnected = AtomicBoolean(false)
     private val wasPreviouslyConnected = AtomicBoolean(false)
 
-
-    // Returns true on success, false on failure.
-    // The caller is responsible for teardown on false.
     suspend fun startCloak(): Boolean {
+        // If Cloak is enabled, start it BEFORE Outline tries to connect to 127.0.0.1:LocalPort.
         if (dobbyConfigsRepository.getIsCloakEnabled()) {
             val cloakConfig = dobbyConfigsRepository.getCloakConfig()
             val localPort = dobbyConfigsRepository.getCloakLocalPort().toString()
@@ -31,11 +29,11 @@ class CloakConnectionInteractor(
                 )
                 logger.log("Cloak connection result is $cloakResult")
                 if (cloakResult is ConnectResult.Error || cloakResult is ConnectResult.ValidationError) {
-                    logger.log("Cloak failed to start")
+                    logger.log("Cloak failed to start, stopping VPN service")
                     return false
                 }
             } else {
-                logger.log("Cloak is enabled but config is empty")
+                logger.log("Cloak is turn on in config, but no config for it was found. Stopping VPN service")
                 return false
             }
         }

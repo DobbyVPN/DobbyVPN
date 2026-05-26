@@ -101,6 +101,7 @@ func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) 
 	// concurrency. For plain Shadowsocks (no WebSocket) UDP works correctly.
 	disableNonDNSUDP := options.DisableNonDNSUDP && isWebSocket
 	log.Infof(
+		Category,
 		"outline client: transport summary len=%d websocket=%v tcpPath=%v udpPath=%v preferTCPDNS=%v disableNonDNSUDP=%v udpPolicy=%s streamDialer=%T packetDialer=%T",
 		len(transportConfig),
 		isWebSocket,
@@ -115,7 +116,7 @@ func NewOutlineDeviceWithOptions(transportConfig string, options DeviceOptions) 
 
 	useCloak := ip.IsLoopback()
 
-	log.Infof("outline client: cloak mode = %v", useCloak)
+	log.Debugf(Category, "outline client: cloak mode = %v", useCloak)
 
 	socksUser := auth.GenerateRandomAuth()
 	socksPass := auth.GenerateRandomAuth()
@@ -159,7 +160,7 @@ func (d *OutlineDevice) Open(routingTableID int, uplinkIface string) error {
 	d.listener = listener
 	d.listenAddr = listener.Addr().String()
 	d.proxyAddr = d.authenticatedProxyAddr(d.listenAddr)
-	log.Infof("SOCKS5 listener ready listenAddr=%s proxyAddr=%s", d.listenAddr, d.proxyAddr)
+	log.Debugf(Category, "SOCKS5 listener ready listenAddr=%s proxyAddr=%s", d.listenAddr, d.proxyAddr)
 
 	go d.serveLoop(server)
 
@@ -175,7 +176,7 @@ func (socksLogger) Errorf(format string, args ...interface{}) {
 		strings.Contains(msg, "client want to used addr") {
 		return
 	}
-	log.Infof("[SOCKS5 internal] %s", msg)
+	log.Debugf(Category, "[SOCKS5 internal] %s", msg)
 }
 
 func (d *OutlineDevice) serveLoop(server *socks5.Server) {
@@ -203,7 +204,7 @@ func (d *OutlineDevice) serveLoop(server *socks5.Server) {
 		err := d.serveOnce(server, listener)
 		if d.closed.Load() {
 			d.markServeStopped("closed")
-			log.Infof("SOCKS5 stopped on listenAddr=%s proxyAddr=%s: closed", listenAddr, proxyAddr)
+			log.Debugf(Category, "SOCKS5 stopped on listenAddr=%s proxyAddr=%s: closed", listenAddr, proxyAddr)
 			return
 		}
 
@@ -212,16 +213,16 @@ func (d *OutlineDevice) serveLoop(server *socks5.Server) {
 			errText = err.Error()
 		}
 		d.markServeStopped(errText)
-		log.Infof("SOCKS5 stopped unexpectedly on listenAddr=%s proxyAddr=%s: %s", listenAddr, proxyAddr, errText)
+		log.Debugf(Category, "SOCKS5 stopped unexpectedly on listenAddr=%s proxyAddr=%s: %s", listenAddr, proxyAddr, errText)
 
 		for !d.closed.Load() {
 			time.Sleep(250 * time.Millisecond)
 			if err := d.rebindListener(listenAddr); err != nil {
-				log.Infof("SOCKS5 rebind failed on listenAddr=%s: %v", listenAddr, err)
+				log.Debugf(Category, "SOCKS5 rebind failed on listenAddr=%s: %v", listenAddr, err)
 				time.Sleep(time.Second)
 				continue
 			}
-			log.Infof("SOCKS5 rebound on listenAddr=%s", listenAddr)
+			log.Debugf(Category, "SOCKS5 rebound on listenAddr=%s", listenAddr)
 			break
 		}
 	}
@@ -234,7 +235,7 @@ func (d *OutlineDevice) serveOnce(server *socks5.Server, listener net.Listener) 
 		}
 	}()
 
-	log.Infof("SOCKS5 started on %s", listener.Addr().String())
+	log.Debugf(Category, "SOCKS5 started on %s", listener.Addr().String())
 	return server.Serve(listener)
 }
 
@@ -271,7 +272,7 @@ func (d *OutlineDevice) markServeRunning() {
 	listenAddr := d.listenAddr
 	proxyAddr := d.proxyAddr
 	d.mu.Unlock()
-	log.Infof("SOCKS5 serve generation %d running on listenAddr=%s proxyAddr=%s", gen, listenAddr, proxyAddr)
+	log.Debugf(Category, "SOCKS5 serve generation %d running on listenAddr=%s proxyAddr=%s", gen, listenAddr, proxyAddr)
 }
 
 func (d *OutlineDevice) markServeStopped(reason string) {
@@ -304,12 +305,12 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		elapsed := time.Since(start).Milliseconds()
 		if err != nil {
 			d.tcpDialErr.Add(1)
-			log.Infof("[SOCKS5 TCP ERROR] %s in %dms: %v", addr, elapsed, err)
+			log.Debugf(Category, "[SOCKS5 TCP ERROR] %s in %dms: %v", addr, elapsed, err)
 			return nil, err
 		}
 		d.tcpDialOK.Add(1)
-		log.Infof("[SOCKS5 TCP OK] %s in %dms", addr, elapsed)
-		log.Infof("[DEBUG][SOCKS5 TCP] %s local=%s remote=%s", addr, conn.LocalAddr(), conn.RemoteAddr())
+		log.Debugf(Category, "[SOCKS5 TCP OK] %s in %dms", addr, elapsed)
+		log.Debugf(Category, "[DEBUG][SOCKS5 TCP] %s local=%s remote=%s", addr, conn.LocalAddr(), conn.RemoteAddr())
 		return conn, nil
 
 	case "udp":
@@ -318,7 +319,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		// Force DNS-over-TCP fallback when UDP is known to be unreliable for this transport.
 		if port == 53 && (d.useCloak || d.preferTCPDNS) {
 			d.udpDNSTruncated.Add(1)
-			log.Infof("[SOCKS5 DNS] returning truncated DNS (useCloak=%v preferTCPDNS=%v)", d.useCloak, d.preferTCPDNS)
+			log.Debugf(Category, "[SOCKS5 DNS] returning truncated DNS (useCloak=%v preferTCPDNS=%v)", d.useCloak, d.preferTCPDNS)
 			return newTruncatedDNSConn(host, port), nil
 		}
 
@@ -327,7 +328,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		// Reject non-DNS UDP immediately so the OS falls back to TCP without burning ~1s per attempt.
 		if d.disableNonDNSUDP && port != 53 {
 			d.udpNonDNSReject.Add(1)
-			log.Infof("[SOCKS5 UDP] rejected disabledByConfig=true addr=%s reason=non-DNS UDP disabled for WebSocket transport; Speedtest/QUIC traffic will fail or fall back to TCP if the app supports fallback", addr)
+			log.Debugf(Category, "[SOCKS5 UDP] rejected disabledByConfig=true addr=%s reason=non-DNS UDP disabled for WebSocket transport; Speedtest/QUIC traffic will fail or fall back to TCP if the app supports fallback", addr)
 			return nil, fmt.Errorf("non-DNS UDP disabled for this transport")
 		}
 
@@ -335,12 +336,12 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		elapsed := time.Since(start).Milliseconds()
 		if err != nil {
 			d.udpDialErr.Add(1)
-			log.Infof("[SOCKS5 UDP ERROR] %s in %dms: %v", addr, elapsed, err)
+			log.Debugf(Category, "[SOCKS5 UDP ERROR] %s in %dms: %v", addr, elapsed, err)
 			return nil, err
 		}
 		d.udpDialOK.Add(1)
-		log.Infof("[SOCKS5 UDP OK] %s in %dms", addr, elapsed)
-		log.Infof("[DEBUG][SOCKS5 UDP] %s local=%s", addr, conn.LocalAddr())
+		log.Debugf(Category, "[SOCKS5 UDP OK] %s in %dms", addr, elapsed)
+		log.Debugf(Category, "[DEBUG][SOCKS5 UDP] %s local=%s", addr, conn.LocalAddr())
 		return conn, nil
 	}
 
@@ -382,7 +383,7 @@ func (c *truncatedDNSConn) Write(b []byte) (int, error) {
 
 	resp, err := truncatedDNSResponse(b)
 	if err != nil {
-		log.Infof("[SOCKS5 DNS] invalid DNS packet for TCP fallback: %v", err)
+		log.Debugf(Category, "[SOCKS5 DNS] invalid DNS packet for TCP fallback: %v", err)
 		return len(b), nil
 	}
 
@@ -455,18 +456,18 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 
 	host := extractTLSSNIHost(transportConfig)
 	if host != "" {
-		log.Infof("outline client: detected WSS config, using TLS SNI host: %s", host)
+		log.Debugf(Category, "outline client: detected WSS config, using TLS SNI host: %s", host)
 	} else {
 		var err error
 		host, err = extractSSHost(transportConfig)
 		if err != nil {
 			return nil, err
 		}
-		log.Infof("outline client: using ss:// host: %s", host)
+		log.Debugf(Category, "outline client: using ss:// host: %s", host)
 	}
 
 	if host == "127.0.0.1" || host == "localhost" {
-		log.Infof("outline client: localhost detected, skipping IP resolution")
+		log.Debugf(Category, "outline client: localhost detected, skipping IP resolution")
 		return net.ParseIP("127.0.0.1").To4(), nil
 	}
 
@@ -478,11 +479,11 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 	if err != nil {
 		return nil, fmt.Errorf("DNS lookup for %s timed out or failed: %w", host, err)
 	}
-	log.Infof("outline client: DNS returned %d addresses for %s", len(ipList), host)
+	log.Debugf(Category, "outline client: DNS returned %d addresses for %s", len(ipList), host)
 
 	for _, ip := range ipList {
 		if v4 := ip.IP.To4(); v4 != nil {
-			log.Infof("outline client: resolved %s -> %s", host, v4.String())
+			log.Debugf(Category, "outline client: resolved %s -> %s", host, v4.String())
 			return v4, nil
 		}
 	}
@@ -586,7 +587,7 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 			uptimeMs,
 			runtimeStatus,
 		)
-		log.Infof("outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
+		log.Debugf(Category, "outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
 		return false, status
 	}
 
@@ -607,7 +608,7 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 			uptimeMs,
 			runtimeStatus,
 		)
-		log.Infof("outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
+		log.Debugf(Category, "outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
 		return false, status
 	}
 	if err := conn.Close(); err != nil {
@@ -623,7 +624,7 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 			uptimeMs,
 			runtimeStatus,
 		)
-		log.Infof("outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
+		log.Debugf(Category, "outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
 		return true, status
 	}
 
@@ -638,7 +639,7 @@ func (d *OutlineDevice) LocalProxyAlive(timeout time.Duration) (alive bool, stat
 		uptimeMs,
 		runtimeStatus,
 	)
-	log.Infof("outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
+	log.Debugf(Category, "outline local proxy health result=%s elapsedMs=%d", status, time.Since(start).Milliseconds())
 	return true, status
 }
 
@@ -701,7 +702,7 @@ func (d *OutlineDevice) Close() error {
 	d.mu.RUnlock()
 
 	if listener != nil {
-		log.Infof("SOCKS5 close requested listenAddr=%s proxyAddr=%s", listenAddr, proxyAddr)
+		log.Debugf(Category, "SOCKS5 close requested listenAddr=%s proxyAddr=%s", listenAddr, proxyAddr)
 		return listener.Close()
 	}
 	return nil

@@ -34,6 +34,9 @@ class TomlConfigApplier(
             return false
         }
 
+        // 0. Set telemetry server
+        mainRepo.setTelemetryEndpoint(root.Telemetry ?: "")
+
         // 1. Check for Xray Config
         val xray = root.Xray
         if (xray != null) {
@@ -53,14 +56,6 @@ class TomlConfigApplier(
         }
 
         logger.log("Unsupported config")
-        return false
-    }
-
-    private fun applyNone(): Boolean {
-        logger.log("VPN config not detected, turning off")
-        mainRepo.clearVpnConfig()
-        logger.log("Finish parseToml()")
-
         return false
     }
 

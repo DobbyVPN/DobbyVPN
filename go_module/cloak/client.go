@@ -3,12 +3,13 @@ package cloak
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/cbeuw/Cloak/exported_client"
 	"go_module/common"
 	"net"
 	"runtime"
 	"runtime/debug"
 	"sync"
+
+	"github.com/cbeuw/Cloak/exported_client"
 
 	"go_module/log"
 )
@@ -22,12 +23,12 @@ var (
 )
 
 func StartCloakClient(localHost, localPort, config string, udp bool) (err error) {
-	log.Infof("StartCloakClient inner")
+	log.Debugf(Category, "StartCloakClient inner")
 
 	// Handle panic
 	defer func() {
 		if r := recover(); r != nil {
-			log.Infof("StartCloakClient: recovered from panic: %v", r)
+			log.Debugf(Category, "StartCloakClient: recovered from panic: %v", r)
 			err = fmt.Errorf("StartCloakClient panic: %v", r)
 		}
 	}()
@@ -35,34 +36,34 @@ func StartCloakClient(localHost, localPort, config string, udp bool) (err error)
 	mu.Lock()
 	defer mu.Unlock()
 
-	log.Infof("Get lock")
+	log.Debugf(Category, "Get lock")
 
 	if client != nil {
-		log.Infof("Need to stop old cloak client")
+		log.Debugf(Category, "Need to stop old cloak client")
 		mu.Unlock()
 		StopCloakClient()
 		mu.Lock()
 	}
 
-	log.Infof("deleted old cloak client")
+	log.Debugf(Category, "deleted old cloak client")
 
 	var rawConfig exported_client.Config
 	err = json.Unmarshal([]byte(config), &rawConfig)
 	if err != nil {
-		log.Infof("cloak client: Failed to unmarshal config - %v", err)
+		log.Debugf(Category, "cloak client: Failed to unmarshal config - %v", err)
 		return fmt.Errorf("cloak client: failed to unmarshal config: %w", err)
 	}
-	log.Infof("cloak client: rawConfig parsed successfully")
+	log.Debugf(Category, "cloak client: rawConfig parsed successfully")
 
 	rawConfig.RemoteHost, err = resolveRemoteHostIfNeeded(rawConfig.RemoteHost)
 	if err != nil {
-		log.Infof("Can't resolve Remote Host: %v", err)
+		log.Debugf(Category, "Can't resolve Remote Host: %v", err)
 		return fmt.Errorf("cloak client: can't resolve remote host: %w", err)
 	}
 	rawConfig.LocalHost = localHost
 	rawConfig.LocalPort = localPort
 	rawConfig.UDP = udp
-	log.Infof("cloak client: rawConfig updated with LocalHost=%s, LocalPort=%s, UDP=%v", localHost, localPort, udp)
+	log.Debugf(Category, "cloak client: rawConfig updated with LocalHost=%s, LocalPort=%s, UDP=%v", localHost, localPort, udp)
 
 	// Forbidden words in logs
 	log.AddForbiddenWord(string(rawConfig.UID))
@@ -77,17 +78,17 @@ func StartCloakClient(localHost, localPort, config string, udp bool) (err error)
 	err = StartRoutingCloak(cloakConfig.RemoteHost)
 	common.Client.MarkOutOffCriticalSection(Name)
 	if err != nil {
-		log.Infof("Can't routing cloak, %v", err)
+		log.Debugf(Category, "Can't routing cloak, %v", err)
 		return fmt.Errorf("cloak client: can't route cloak: %w", err)
 	}
-	log.Infof("cloak client: Routed")
+	log.Debugf(Category, "cloak client: Routed")
 
 	client = exported_client.NewCkClient(rawConfig)
 
 	common.Client.SetVpnClient(Name, client)
 	err = common.Client.Connect(Name)
 	if err != nil {
-		log.Infof("cloak client: Failed to connect to cloak client - %v", err)
+		log.Debugf(Category, "cloak client: Failed to connect to cloak client - %v", err)
 		client = nil
 		if cloakConfig.RemoteHost != "" {
 			common.Client.MarkInCriticalSection(Name)
@@ -99,19 +100,19 @@ func StartCloakClient(localHost, localPort, config string, udp bool) (err error)
 		return fmt.Errorf("cloak client: failed to connect: %w", err)
 	}
 
-	log.Infof("cloak client connected")
+	log.Debugf(Category, Category, "cloak client connected")
 
 	common.Client.MarkActive(Name)
 	return nil
 }
 
 func StopCloakClient() {
-	log.Infof("StopCloakClient inner")
+	log.Debugf(Category, "StopCloakClient inner")
 
 	// Handle panic
 	defer func() {
 		if r := recover(); r != nil {
-			log.Infof("StopCloakClient: recovered from panic: %v", r)
+			log.Warnf(Category, "StopCloakClient: recovered from panic: %v", r)
 		}
 	}()
 
@@ -126,7 +127,7 @@ func StopCloakClient() {
 	log.RemoveForbiddenWord(cloakConfig.CDNWsUrlPath)
 	log.RemoveForbiddenWord(cloakConfig.CDNOriginHost)
 
-	log.Infof("Get mutex")
+	log.Debugf(Category, "Get mutex")
 	if cloakConfig.RemoteHost != "" {
 		common.Client.MarkInCriticalSection(Name)
 		StopRoutingCloak(cloakConfig.RemoteHost)
@@ -135,31 +136,32 @@ func StopCloakClient() {
 	}
 
 	if client == nil {
+		log.Warnf(Category, "Disconnecting empty client")
 		return
 	}
 
-	log.Infof("Start client disconnected")
+	log.Debugf(Category, "Start client disconnected")
 
 	common.Client.Disconnect(Name)
 	client = nil
 
-	log.Infof("Client disconnected")
+	log.Debugf(Category, "Client disconnected")
 
 	// Explicitly reclaim memory: the Cloak session, TLS connections, stream buffers,
 	// and sync.Pool entries would otherwise stay in the Go heap until the next GC cycle.
 	// On iOS Network Extensions (~50 MB limit) this matters a lot.
 	runtime.GC()
 	debug.FreeOSMemory()
-	log.Infof("StopCloakClient: memory released")
+	log.Debugf(Category, "StopCloakClient: memory released")
 }
 
 func resolveRemoteHostIfNeeded(host string) (string, error) {
 	if net.ParseIP(host) != nil {
-		log.Infof("cloak client: RemoteHost '%s' is valid IPv4", host)
+		log.Debugf(Category, "cloak client: RemoteHost '%s' is valid IPv4", host)
 		return host, nil
 	}
 
-	log.Infof("cloak client: RemoteHost '%s' is not IPv4 -> resolving DNS...", host)
+	log.Debugf(Category, "cloak client: RemoteHost '%s' is not IPv4 -> resolving DNS...", host)
 
 	ips, err := net.LookupIP(host)
 	if err != nil || len(ips) == 0 {
@@ -168,7 +170,7 @@ func resolveRemoteHostIfNeeded(host string) (string, error) {
 
 	for _, ip := range ips {
 		if v4 := ip.To4(); v4 != nil {
-			log.Infof("cloak client: DNS resolved '%s' -> %s", host, v4.String())
+			log.Debugf(Category, "cloak client: DNS resolved '%s' -> %s", host, v4.String())
 			return v4.String(), nil
 		}
 	}

@@ -9,6 +9,8 @@ Consume 'subscription' / 'dynamic keys' - YAML via HTTPS in one of the following
 
 **Clean ShadowSocks** (best performance)
 ```toml
+Telemetry = "123.123.123.123:1234" # OTLP http receiver
+
 [Outline] # Implementation library
 Description = "My fast SS" # description - whatever you like
 Server = "1.1.1.1" # IP or DNS name for the server
@@ -24,6 +26,8 @@ IPs = [
 
 **ShadowSocks via WebSocket** (caddy -> outline-ss-server) 
 ```toml
+Telemetry = "123.123.123.123:1234" # OTLP http receiver
+
 [Outline] # Implementation library
 Description = "My beautiful SS in WS" # description - whatever you like
 WebSocket = true # flag to enable WebSocket
@@ -40,6 +44,8 @@ IPs = [
 
 **ShadowSocks over cloak** (caddy -> cloak -> outline-ss-server)
 ```toml
+Telemetry = "123.123.123.123:1234" # OTLP http receiver
+
 [Outline] # Implementation library
 Description = "My sneaky SS in Cloak" # description - whatever you like
 Cloak = true # enables cloak (what is cloak? see ref # 2 below)

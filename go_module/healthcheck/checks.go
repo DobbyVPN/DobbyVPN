@@ -1,0 +1,86 @@
+package healthcheck
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"go_module/common"
+	"go_module/log"
+	"net"
+	"net/http"
+)
+
+// Check errors
+var (
+	ErrConnectionCheck   = errors.New("connection check error")
+	ErrClientHealthCheck = errors.New("client health check error")
+)
+
+func connectionCheck() error {
+	log.Debugf(Category, "Check: connection check")
+	activeClients := common.Client.GetClientNames(true)
+
+	if len(activeClients) == 0 {
+		log.Debugf(Category, "No vpn clients turned on")
+
+		return ErrConnectionCheck
+	}
+
+	return nil
+}
+
+func activeClientsCheck() error {
+	log.Debugf(Category, "Check: clients health checks")
+	activeClients := common.Client.GetClientNames(true)
+
+	for _, clientName := range activeClients {
+		err := common.Client.HealthCheck(clientName)
+		if err != nil {
+			return ErrClientHealthCheck
+		}
+	}
+
+	return nil
+}
+
+func dnsResolveCheck(host string) error {
+	log.Debugf(Category, "Check: dns resolution check %s", host)
+
+	log.Debugf(Category, "With timeout = %v", dnsTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
+	defer cancel()
+
+	_, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func pingHostCheck(host string) error {
+	log.Debugf(Category, "Check: ping hosts %s", host)
+
+	log.Debugf(Category, "With timeout = %v", pingTimeout)
+
+	log.Debugf(Category, "Sending GET request to %s", host)
+	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", host, http.NoBody)
+	if err != nil {
+		return fmt.Errorf("failed request init: %w", err)
+	}
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed request send: %w", err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		return fmt.Errorf("failed request body close: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		log.Warnf(Category, "invalid status code: %d", resp.StatusCode)
+	}
+
+	return nil
+}

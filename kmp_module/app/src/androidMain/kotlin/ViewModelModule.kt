@@ -3,8 +3,9 @@ import com.dobby.feature.diagnostic.presentation.DiagnosticViewModel
 import com.dobby.feature.authentication.presentation.AuthenticationSettingsViewModel
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.logging.presentation.SettingsViewModel
+import com.dobby.feature.main.presentation.ConfigsProcessor
 import com.dobby.feature.main.presentation.MainViewModel
-import org.koin.androidx.viewmodel.dsl.viewModelOf
+import com.dobby.feature.netcheck.presentation.NetCheckViewModel
 import org.koin.core.module.dsl.singleOf
 import org.koin.dsl.module
 
@@ -12,7 +13,9 @@ actual val sharedModule = module {
     singleOf(::PermissionEventsChannel)
     singleOf(::LogsViewModel)
     singleOf(::DiagnosticViewModel)
+    singleOf(::ConfigsProcessor)
     singleOf(::MainViewModel)
     singleOf(::AuthenticationSettingsViewModel)
     singleOf(::SettingsViewModel)
+    singleOf(::NetCheckViewModel)
 }

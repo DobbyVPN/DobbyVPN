@@ -12,3 +12,8 @@ import (
 func InitLogger(path string) {
 	log.SetPath(strings.Clone(path))
 }
+
+//export InitTelemetry
+func InitTelemetry(endpoint string) {
+	log.SetTelemetry(strings.Clone(endpoint))
+}

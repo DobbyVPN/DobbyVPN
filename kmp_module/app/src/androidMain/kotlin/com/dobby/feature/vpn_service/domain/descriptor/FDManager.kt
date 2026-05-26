@@ -13,9 +13,6 @@ class FDManager(
 
         if (tunFd < 0) {
             logger.log("[svc:$serviceId] startXray(): failed to create VPN interface")
-            dobbyVpnService?.connectionState?.tryUpdateStatus(false)
-            dobbyVpnService?.teardownVpn()
-            dobbyVpnService?.stopSelf()
             return -1
         }
         return tunFd

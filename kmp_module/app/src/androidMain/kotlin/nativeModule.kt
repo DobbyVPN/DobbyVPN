@@ -9,7 +9,9 @@ import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.ConnectionStateRepository
+import com.dobby.feature.main.domain.NetCheckManagerImpl
 import com.dobby.feature.main.domain.VpnManagerImpl
+import com.dobby.feature.netcheck.domain.NetCheckRepository
 import com.dobby.feature.vpn_service.CloakLibFacade
 import com.dobby.feature.vpn_service.OutlineLibFacade
 import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
@@ -38,8 +40,10 @@ val androidMainModule = makeNativeModule(
     },
     connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(androidContext()) },
-    authenticationManager = { AuthenticationManagerImpl(androidContext()) },
-    healthCheck = { HealthCheckImpl(get()) }
+    authenticationManager = { AuthenticationManagerImpl(androidContext())},
+    healthCheck = { HealthCheckImpl() },
+    netCheckManager = { NetCheckManagerImpl(get()) },
+    netCheckRepository = { NetCheckRepository() },
 )
 
 val androidVpnModule = module {

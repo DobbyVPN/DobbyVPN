@@ -3,6 +3,7 @@ package com.dobby.feature.vpn_service.domain.outline
 import android.util.Log
 import com.dobby.feature.vpn_service.OutlineLibFacade
 import com.dobby.backend.GoBackendWrapper
+import com.dobby.backend.VpnBackendWrapper
 
 internal class OutlineLibFacadeImpl : OutlineLibFacade {
     private val TAG = "OutlineLibFacade"
@@ -11,14 +12,14 @@ internal class OutlineLibFacadeImpl : OutlineLibFacade {
         Log.d(TAG, "init() called with apiKey length=${apiKey.length}, starts with: ${apiKey.take(30)}...")
         // MTU 1200 is the default used in iOS and matches core.NewClient default
         val mtu = 1200
-        GoBackendWrapper.newVpnClient(apiKey, "outline", tunFd, mtu)
+        VpnBackendWrapper.newVpnClient(apiKey, "outline", tunFd, mtu)
         Log.d(TAG, "Connecting Outline...")
-        val result = GoBackendWrapper.vpnConnect()
+        val result = VpnBackendWrapper.vpnConnect()
         return if (result == 0) {
             Log.d(TAG, "Connect finished successfully")
             true
         } else {
-            val lastError = GoBackendWrapper.getLastError()
+            val lastError = VpnBackendWrapper.getLastError()
             Log.e(TAG, "Connect FAILED: $lastError")
             false
         }
@@ -26,7 +27,7 @@ internal class OutlineLibFacadeImpl : OutlineLibFacade {
 
     override fun disconnect() {
         Log.d(TAG, "disconnect() called")
-        GoBackendWrapper.vpnDisconnect()
+        VpnBackendWrapper.vpnDisconnect()
         Log.d(TAG, "disconnect() finished")
     }
 }

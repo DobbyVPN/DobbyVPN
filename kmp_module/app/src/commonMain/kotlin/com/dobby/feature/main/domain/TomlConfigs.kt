@@ -200,9 +200,16 @@ data class XrayClientConfig(
 
 @Serializable
 data class TomlConfigs(
+    val Telemetry: String? = null,
     val Description: String? = null,
     val Outline: OutlineConfig? = null,
     val AmneziaWG: AmneziaWGConfig? = null,
     val Xray: XrayClientConfig? = null,
     val ExcludeIPs: ExcludeIPsConfig? = null
+)
+
+@Serializable
+data class NetCheckTomlConfigs(
+    val ConfigValue: String,
+    val Telemetry: String? = null,
 )

@@ -21,8 +21,14 @@ extern void StartCloakClient(GoString localHost, GoString localPort, GoString co
 extern void StopCloakClient(void);
 extern void SetGeoRoutingConf(GoString cidrs);
 extern void ClearGeoRoutingConf(void);
-extern GoInt32 CheckServerAlive(GoString address, GoInt32 port);
+extern GoInt32 GetConnectionState();
+extern void InitHealthCheck(GoString config);
+extern void StartHealthCheck();
+extern void StopHealthCheck();
 extern void InitLogger(GoString path);
+extern void InitTelemetry(GoString endpoint);
+extern char* NetCheck(GoString configPath);
+extern void CancelNetCheck();
 extern char* GetVpnLastError(void);
 extern void NewVpnClient(GoString config, GoString protocol, GoInt32 fd);
 extern GoInt32 VpnConnect(void);
@@ -56,31 +62,31 @@ EXPORT int go_protect_socket(int fd) {
 }
 
 JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_registerVpnService(JNIEnv *env, jclass clazz, jobject vpn_service) {
-    // 1. Очищаем старую ссылку, если она была (защита от утечек при перезапуске)
+    // 1. Release old reference if present (prevents leaks on restart)
     if (g_vpn_service_obj != NULL) {
         (*env)->DeleteGlobalRef(env, g_vpn_service_obj);
     }
 
-    // 2. Создаем глобальную ссылку на переданный объект
+    // 2. Create global reference to the passed object
     g_vpn_service_obj = (*env)->NewGlobalRef(env, vpn_service);
 
-    // 3. Ищем КЛАСС VpnService напрямую в системе
+    // 3. Find VpnService CLASS directly in the system
     jclass vpn_cls = (*env)->FindClass(env, "android/net/VpnService");
     if (vpn_cls == NULL) {
-        // Если класс не найден (теоретически невозможно на Android)
+        // Should not happen on Android
         return;
     }
 
-    // 4. Ищем метод protect в найденном КЛАССЕ VpnService
-    // Сигнатура "(I)Z" — принимает int, возвращает boolean
+    // 4. Find protect method in the VpnService CLASS
+    // Signature "(I)Z" — takes int, returns boolean
     g_protect_mid = (*env)->GetMethodID(env, vpn_cls, "protect", "(I)Z");
 
     if (g_protect_mid == NULL) {
-        // Ошибка: метод не найден в классе VpnService
-        // Проверь, что твой объект в Kotlin действительно наследует VpnService
+        // Error: protect method not found in VpnService class
+        // Ensure your Kotlin object actually extends VpnService
     }
 
-    // Освобождаем локальную ссылку на класс (GlobalRef для объекта остается!)
+    // Release local class reference (GlobalRef for the object remains)
     (*env)->DeleteLocalRef(env, vpn_cls);
 }
 
@@ -117,7 +123,7 @@ JNIEXPORT jint JNICALL Java_com_dobby_backend_AwgBackend_awgGetSocketV6(JNIEnv *
 	return AwgGetSocketV6();
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_startCloakClient(JNIEnv *env, jclass c, jstring jLocalHost, jstring jLocalPort, jstring jConfig, jboolean udp)
+JNIEXPORT void JNICALL Java_com_dobby_backend_CloakBackend_startCloakClient(JNIEnv *env, jclass c, jstring jLocalHost, jstring jLocalPort, jstring jConfig, jboolean udp)
 {
     const char *localHost_str = (*env)->GetStringUTFChars(env, jLocalHost, 0);
 	size_t localHost_len = (*env)->GetStringUTFLength(env, jLocalHost);
@@ -143,12 +149,12 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_startCloakClient(JNIEnv 
     (*env)->ReleaseStringUTFChars(env, jConfig, config_str);
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_stopCloakClient(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_CloakBackend_stopCloakClient(JNIEnv *env, jclass c)
 {
     StopCloakClient();
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_setGeoRoutingConf(JNIEnv *env, jclass c, jstring jCidrs)
+JNIEXPORT void JNICALL Java_com_dobby_backend_GeoRoutingBackend_setGeoRoutingConf(JNIEnv *env, jclass c, jstring jCidrs)
 {
 	const char *cidrs_str = (*env)->GetStringUTFChars(env, jCidrs, 0);
 	size_t cidrs_len = (*env)->GetStringUTFLength(env, jCidrs);
@@ -160,25 +166,38 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_setGeoRoutingConf(JNIEnv
     (*env)->ReleaseStringUTFChars(env, jCidrs, cidrs_str);
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_clearGeoRoutingConf(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_GeoRoutingBackend_clearGeoRoutingConf(JNIEnv *env, jclass c)
 {
     ClearGeoRoutingConf();
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_checkServerAlive(JNIEnv *env, jclass c, jstring jAddress, jint jPort)
+JNIEXPORT jint JNICALL Java_com_dobby_backend_HealthCheckBackend_getConnectionState(JNIEnv *env, jclass c)
 {
-	const char *address_str = (*env)->GetStringUTFChars(env, jAddress, 0);
-	size_t address_len = (*env)->GetStringUTFLength(env, jAddress);
-    int result = CheckServerAlive((GoString) {
-		.p = address_str,
-		.n = address_len
-	}, jPort);
-
-    (*env)->ReleaseStringUTFChars(env, jAddress, address_str);
-	return result;
+	return GetConnectionState();
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_initLogger(JNIEnv *env, jclass c, jstring jPath)
+JNIEXPORT void JNICALL Java_com_dobby_backend_HealthCheckBackend_initHealthCheck(JNIEnv *env, jclass c, jstring jConfig)
+{
+    const char *config_str = (*env)->GetStringUTFChars(env, jConfig, 0);
+	size_t config_len = (*env)->GetStringUTFLength(env, jConfig);
+	InitHealthCheck((GoString) {
+		.p = config_str,
+		.n = config_len
+	});
+    (*env)->ReleaseStringUTFChars(env, jConfig, path_str);
+}
+
+JNIEXPORT void JNICALL Java_com_dobby_backend_HealthCheckBackend_startHealthCheck(JNIEnv *env, jclass c)
+{
+	StartHealthCheck();
+}
+
+JNIEXPORT void JNICALL Java_com_dobby_backend_HealthCheckBackend_stopHealthCheck(JNIEnv *env, jclass c)
+{
+	StopHealthCheck();
+}
+
+JNIEXPORT void JNICALL Java_com_dobby_backend_LoggerBackend_initLogger(JNIEnv *env, jclass c, jstring jPath)
 {
     const char *path_str = (*env)->GetStringUTFChars(env, jPath, 0);
 	size_t path_len = (*env)->GetStringUTFLength(env, jPath);
@@ -189,7 +208,40 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_initLogger(JNIEnv *env, 
     (*env)->ReleaseStringUTFChars(env, jPath, path_str);
 }
 
-JNIEXPORT jstring JNICALL Java_com_dobby_backend_GoBackend_getLastError(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_LoggerBackend_initTelemetry(JNIEnv *env, jclass c, jstring jEndpoint)
+{
+    const char *endpoint_str = (*env)->GetStringUTFChars(env, jEndpoint, 0);
+	size_t endpoint_len = (*env)->GetStringUTFLength(env, jEndpoint);
+    InitTelemetry((GoString) {
+		.p = endpoint_str,
+		.n = endpoint_len
+	});
+    (*env)->ReleaseStringUTFChars(env, jEndpoint, endpoint_str);
+}
+
+JNIEXPORT jstring JNICALL Java_com_dobby_backend_NetCheckBackend_netCheck(JNIEnv *env, jclass c, jstring jConfigPath)
+{
+	jstring ret;
+    const char *config_path_str = (*env)->GetStringUTFChars(env, jConfigPath, 0);
+	size_t config_path_len = (*env)->GetStringUTFLength(env, jConfigPath);
+    char *result = NetCheck((GoString) {
+		.p = config_path_str,
+		.n = config_path_len
+	});
+    (*env)->ReleaseStringUTFChars(env, jConfigPath, config_path_str);
+	if (!result)
+		return NULL;
+	ret = (*env)->NewStringUTF(env, result);
+	free(result);
+	return ret;
+}
+
+JNIEXPORT void JNICALL Java_com_dobby_backend_NetCheckBackend_cancelNetCheck(JNIEnv *env, jclass c)
+{
+    CancelNetCheck();
+}
+
+JNIEXPORT jstring JNICALL Java_com_dobby_backend_VpnBackend_getLastError(JNIEnv *env, jclass c)
 {
 	jstring ret;
     char *result = GetVpnLastError();
@@ -200,7 +252,7 @@ JNIEXPORT jstring JNICALL Java_com_dobby_backend_GoBackend_getLastError(JNIEnv *
 	return ret;
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_newVpnClient(JNIEnv *env, jclass c, jstring jConfig, jstring jProtocol, jint jFd)
+JNIEXPORT void JNICALL Java_com_dobby_backend_VpnBackend_newVpnClient(JNIEnv *env, jclass c, jstring jConfig, jstring jProtocol, jint jFd)
 {
     const char *config_str = (*env)->GetStringUTFChars(env, jConfig, 0);
     const char *protocol_str = (*env)->GetStringUTFChars(env, jProtocol, 0);
@@ -217,12 +269,12 @@ JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_newVpnClient(JNIEnv *env
     (*env)->ReleaseStringUTFChars(env, jProtocol, protocol_str);
 }
 
-JNIEXPORT jint JNICALL Java_com_dobby_backend_GoBackend_vpnConnect(JNIEnv *env, jclass c)
+JNIEXPORT jint JNICALL Java_com_dobby_backend_VpnBackend_vpnConnect(JNIEnv *env, jclass c)
 {
     return VpnConnect();
 }
 
-JNIEXPORT void JNICALL Java_com_dobby_backend_GoBackend_vpnDisconnect(JNIEnv *env, jclass c)
+JNIEXPORT void JNICALL Java_com_dobby_backend_VpnBackend_vpnDisconnect(JNIEnv *env, jclass c)
 {
     VpnDisconnect();
 }

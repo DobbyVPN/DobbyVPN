@@ -5,7 +5,8 @@ interface DobbyConfigsRepository :
     DobbyConfigsRepositoryCloak,
     DobbyConfigsRepositoryAwg,
     DobbyConfigsRepositoryXray,
-    DobbyConfigsRepositoryVpn {
+    DobbyConfigsRepositoryVpn,
+    DobbyConfigsRepositoryNetCheck {
 
     // region global configs
 
@@ -17,13 +18,17 @@ interface DobbyConfigsRepository :
 
     fun setConnectionConfig(connectionConfig: String)
 
+    fun getTelemetryEndpoint(): String
+
+    fun setTelemetryEndpoint(endpoint: String)
+
+    fun getTelemetryAttributes(): String
+
+    fun setTelemetryAttributes(config: String)
+
     // endregion
 
     fun couldStart(): Boolean
-
-    fun getIsUserInitStop(): Boolean
-
-    fun setIsUserInitStop(isUserInitStop: Boolean)
 
     fun getGeoRoutingConf(): String
 

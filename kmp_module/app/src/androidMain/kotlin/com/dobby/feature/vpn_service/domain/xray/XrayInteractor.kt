@@ -1,10 +1,8 @@
 package com.dobby.feature.vpn_service.domain.xray
 
-import android.content.Intent
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.vpn_service.DobbyVpnService
-import com.dobby.feature.vpn_service.IS_FROM_UI
 import com.dobby.feature.vpn_service.domain.descriptor.FDManager
 
 class XrayInteractor(
@@ -14,26 +12,22 @@ class XrayInteractor(
     private val fdManager: FDManager,
 ) {
     private val interfaceFactory = XrayVpnInterfaceFactory(logger)
-    suspend fun startXray(intent: Intent?, dobbyVpnService: DobbyVpnService?) {
+
+    fun startXray(dobbyVpnService: DobbyVpnService?): Boolean {
         val serviceId = dobbyVpnService?.serviceId ?: "unknown"
         logger.log("[svc:$serviceId] startXray(): lock acquired vpnInterface=${dobbyVpnService?.vpnInterface?.fd}")
-        val isServiceStartedFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) ?: false
         val shouldTurnXrayOn = dobbyConfigsRepository.getIsXrayEnabled()
-        logger.log("[svc:$serviceId] startXray(): fromUi=$isServiceStartedFromUi shouldTurnXrayOn=$shouldTurnXrayOn")
+        logger.log("[svc:$serviceId] startXray(): shouldTurnXrayOn=$shouldTurnXrayOn")
 
-        if (!shouldTurnXrayOn && isServiceStartedFromUi) {
+        if (!shouldTurnXrayOn) {
             logger.log("Start disconnecting Xray")
-            dobbyVpnService?.teardownVpn()
-            dobbyVpnService?.stopSelf()
-            return
+            return false
         }
 
         val xrayConfig = dobbyConfigsRepository.getXrayConfig()
         if (xrayConfig.isEmpty()) {
             logger.log("[svc:$serviceId] startXray(): Xray config is empty, cannot start")
-            dobbyVpnService?.connectionState?.tryUpdateStatus(false)
-            dobbyVpnService?.stopSelf()
-            return
+            return false
         }
 
         dobbyVpnService?.run {
@@ -46,7 +40,7 @@ class XrayInteractor(
         }
 
         val tunFd = fdManager.GetTunFd(serviceId, dobbyVpnService)
-        if (tunFd < 0) return
+        if (tunFd < 0) return false
 
         logger.log("[svc:$serviceId] startXray(): initializing Xray with tunFd=$tunFd")
 
@@ -54,22 +48,17 @@ class XrayInteractor(
 
         if (!connected) {
             logger.log("[svc:$serviceId] startXray(): connection FAILED, stopping VPN service")
-            dobbyVpnService?.connectionState?.tryUpdateStatus(false)
-            dobbyVpnService?.teardownVpn()
-            dobbyVpnService?.stopSelf()
-            return
+            return false
         }
 
         logger.log("[svc:$serviceId] startXray(): connected successfully")
-        dobbyVpnService?.connectionState?.updateStatus(true)
+        return true
     }
 
-    suspend fun stopXray(dobbyVpnService: DobbyVpnService?) {
+    fun stopXray(dobbyVpnService: DobbyVpnService?) {
         val serviceId = dobbyVpnService?.serviceId ?: "unknown"
         logger.log("[svc:$serviceId] stopXray(): disconnecting Xray")
 
         xrayLibFacade.disconnect()
-
-        dobbyVpnService?.connectionState?.updateStatus(false)
     }
 }

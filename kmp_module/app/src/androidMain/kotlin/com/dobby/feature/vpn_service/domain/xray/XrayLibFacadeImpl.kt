@@ -3,6 +3,7 @@ package com.dobby.feature.vpn_service.domain.xray
 import android.util.Log
 import com.dobby.feature.vpn_service.XrayLibFacade
 import com.dobby.backend.GoBackendWrapper
+import com.dobby.backend.VpnBackendWrapper
 
 internal class XrayLibFacadeImpl : XrayLibFacade {
 
@@ -13,9 +14,9 @@ internal class XrayLibFacadeImpl : XrayLibFacade {
         try {
             // MTU 1200 is the default used in iOS and matches core.NewClient default
             val mtu = 1200
-            GoBackendWrapper.newVpnClient(config, "xray", tunFd, mtu)
+            VpnBackendWrapper.newVpnClient(config, "xray", tunFd, mtu)
             Log.d(TAG, "Connecting Xray...")
-            val result = GoBackendWrapper.vpnConnect()
+            val result = VpnBackendWrapper.vpnConnect()
             return if (result == 0) {
                 Log.d(TAG, "XrayConnect finished successfully")
                 true
@@ -32,7 +33,7 @@ internal class XrayLibFacadeImpl : XrayLibFacade {
     override fun disconnect() {
         Log.d(TAG, "disconnect() called")
         try {
-            GoBackendWrapper.vpnDisconnect()
+            VpnBackendWrapper.vpnDisconnect()
             Log.d(TAG, "disconnect() finished")
         } catch (e: Exception) {
             Log.e(TAG, "Xray disconnect failed", e)

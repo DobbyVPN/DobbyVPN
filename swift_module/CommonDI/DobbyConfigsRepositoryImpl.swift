@@ -24,6 +24,8 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let awgTomlConfigKey = "awgTomlConfigKey"
     private let isAmneziaWGEnabledKey = "isAmneziaWGEnabledKey"
     private let vpnInterfaceKey = "vpnInterfaceKey"
+    private let telemetryEndpointKey = "telemetryEndpointKey"
+    private let netCheckConfigKey = "netCheckConfigKey"
     private let isXrayEnabledKey = "isXrayEnabledKey"
     private let xrayConfigKey = "xrayConfigKey"
 
@@ -41,6 +43,22 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setConnectionConfig(connectionConfig: String) {
         userDefaults.set(connectionConfig, forKey: connectionConfigKey)
+    }
+
+    public func getTelemetryEndpoint() -> String {
+        return userDefaults.string(forKey: telemetryEndpointKey) ?? ""
+    }
+
+    public func setTelemetryEndpoint(endpoint: String) {
+        userDefaults.set(endpoint, forKey: telemetryEndpointKey)
+    }
+
+    public func getNetCheckConfig() -> String {
+        return userDefaults.string(forKey: netCheckConfigKey) ?? ""
+    }
+
+    public func setNetCheckConfig(config: String) {
+        userDefaults.set(config, forKey: netCheckConfigKey)
     }
 
     public func getCloakConfig() -> String {

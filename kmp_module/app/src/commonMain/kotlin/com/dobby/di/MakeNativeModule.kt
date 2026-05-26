@@ -14,6 +14,8 @@ import com.dobby.feature.main.domain.DobbyConfigsRepositoryAwg
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryCloak
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryOutline
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryXray
+import com.dobby.feature.netcheck.domain.NetCheckRepository
+import com.dobby.feature.netcheck.presentation.NetCheckManager
 import org.koin.core.module.Module
 import org.koin.core.scope.Scope
 import org.koin.dsl.module
@@ -30,9 +32,13 @@ fun makeNativeModule(
     vpnManager: NativeInjectionFactory<VpnManager>,
     authenticationManager: NativeInjectionFactory<AuthenticationManager>,
     healthCheck: NativeInjectionFactory<HealthCheck>,
+    netCheckManager: NativeInjectionFactory<NetCheckManager>,
+    netCheckRepository: NativeInjectionFactory<NetCheckRepository>
 ): Module {
     return module {
         factory { vpnManager() }
+        factory { netCheckManager() }
+
         single { copyLogsInteractor() }
         single { logEventsChannel() }
         single { logsRepository() }
@@ -41,6 +47,7 @@ fun makeNativeModule(
         single { connectionStateRepository() }
         single { configsRepository() }
         single { authenticationManager() }
+        single { netCheckRepository() }
 
         single<DobbyConfigsRepositoryOutline> { get<DobbyConfigsRepository>() }
         single<DobbyConfigsRepositoryCloak> { get<DobbyConfigsRepository>() }
