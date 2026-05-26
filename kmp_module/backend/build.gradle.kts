@@ -9,7 +9,7 @@ val pkg: String = "com.dobby.backend"
 
 android {
     namespace = pkg
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         minSdk = 24

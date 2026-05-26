@@ -45,8 +45,9 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           packages: >
-            build-tools;34.0.0
-            platforms;android-34
+            platforms;android-35
+            platforms;android-36
+            build-tools;36.0.0
 
       - name: Bundle Install
         run: |
