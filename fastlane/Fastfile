@@ -54,7 +54,7 @@ platform :android do
   desc "Build Desktop artifacts"
   lane :build_desktop do
     gradle(
-      task: "build",
+      task: ":app:jvmJar",
       project_dir: "kmp_module",
       properties: {
         "projectRepositoryCommit" => COMMIT,

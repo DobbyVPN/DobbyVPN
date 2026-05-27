@@ -12,7 +12,10 @@ plugins {
 val pkg: String = "com.dobby.backend"
 val repoRoot: File = rootProject.projectDir.parentFile
 val goModuleDir: File = repoRoot.resolve("go_module")
+val cloakInternalDir: File = repoRoot.resolve("Cloak/internal")
+val goModuleCloakInternalDir: File = goModuleDir.resolve("modules/Cloak/internal")
 val gomobileAar = layout.buildDirectory.file("generated/gomobile/backend.aar")
+val gomobileClassesJar = layout.buildDirectory.file("generated/gomobile/classes/gomobile-classes.jar")
 val gomobileExecutable = providers.gradleProperty("gomobileExecutable")
     .orElse(providers.environmentVariable("GOMOBILE"))
     .orElse(providers.provider {
@@ -78,16 +81,19 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         include("**/*.go")
         exclude("**/build/**")
     })
-    inputs.dir(repoRoot.resolve("Cloak/internal"))
+    inputs.dir(cloakInternalDir).optional()
     inputs.file(goModuleDir.resolve("go.mod"))
     inputs.file(goModuleDir.resolve("go.sum"))
     outputs.file(outputFile)
 
     doFirst {
+        check(cloakInternalDir.isDirectory) {
+            "Cloak submodule is not initialized: missing ${cloakInternalDir.absolutePath}"
+        }
         outputFile.parentFile.mkdirs()
         copy {
-            from(repoRoot.resolve("Cloak/internal"))
-            into(goModuleDir.resolve("modules/Cloak/internal"))
+            from(cloakInternalDir)
+            into(goModuleCloakInternalDir)
         }
     }
 
@@ -117,6 +123,19 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
     }
 }
 
+val extractGomobileClassesJar by tasks.registering(Copy::class) {
+    group = "build"
+    description = "Extracts gomobile classes for compiling the backend Android library."
+
+    dependsOn(gomobileBindAndroid)
+    from({ zipTree(gomobileAar.get().asFile) }) {
+        include("classes.jar")
+        rename { "gomobile-classes.jar" }
+    }
+    into(gomobileClassesJar.map { it.asFile.parentFile })
+    outputs.file(gomobileClassesJar)
+}
+
 tasks.named("preBuild").configure {
     dependsOn(gomobileBindAndroid)
 }
@@ -130,7 +149,7 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 dependencies {
-    compileOnly(files(gomobileAar).builtBy(gomobileBindAndroid))
+    compileOnly(files(gomobileClassesJar).builtBy(extractGomobileClassesJar))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
