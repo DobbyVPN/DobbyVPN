@@ -38,7 +38,7 @@ go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports
 export ANDROID_HOME=<ANDROID_SDK_PATH>
 export ANDROID_SDK_ROOT=$ANDROID_HOME
 
-go install golang.org/x/mobile/cmd/gomobile@latest
+go install golang.org/x/mobile/cmd/gomobile@$(go list -m -f '{{.Version}}' golang.org/x/mobile)
 gomobile init
 
 gomobile bind \

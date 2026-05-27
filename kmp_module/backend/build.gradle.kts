@@ -1,6 +1,5 @@
 @file:Suppress("UnstableApiUsage")
 
-import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import java.io.File
 import java.util.Properties
 
@@ -134,18 +133,6 @@ val extractGomobileClassesJar by tasks.registering(Copy::class) {
     }
     into(gomobileClassesJar.map { it.asFile.parentFile })
     outputs.file(gomobileClassesJar)
-}
-
-tasks.named("preBuild").configure {
-    dependsOn(gomobileBindAndroid)
-}
-
-tasks.withType<KotlinCompile>().configureEach {
-    dependsOn(gomobileBindAndroid)
-}
-
-tasks.withType<JavaCompile>().configureEach {
-    dependsOn(gomobileBindAndroid)
 }
 
 dependencies {

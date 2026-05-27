@@ -18,9 +18,7 @@ var (
 )
 
 func init() {
-	protected_dialer.MakeSocketProtected = func(fd uintptr) {
-		protectSocket(fd)
-	}
+	protected_dialer.MakeSocketProtected = protectSocket
 }
 
 func RegisterSocketProtector(protector SocketProtector) {
