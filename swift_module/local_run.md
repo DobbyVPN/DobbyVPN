@@ -14,8 +14,7 @@ then copy the resulting framework into `iosApp`.
 
 ## Certificate Setup
 
-You need to generate a **Development** certificate on the
-[Apple Developer](https://developer.apple.com/account/resources/profiles/list) website.
+You need to generate a **Development** certificate on the [Apple Developer](https://developer.apple.com/account/resources/profiles/list) website.
 
 In Xcode, open the app settings and go to the `Signing & Capabilities` section.
 In the `Signing (Debug)` block, under `iOS`, you need to sign in with your Apple developer account.
