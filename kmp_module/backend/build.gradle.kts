@@ -78,12 +78,17 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         include("**/*.go")
         exclude("**/build/**")
     })
+    inputs.dir(repoRoot.resolve("Cloak/internal"))
     inputs.file(goModuleDir.resolve("go.mod"))
     inputs.file(goModuleDir.resolve("go.sum"))
     outputs.file(outputFile)
 
     doFirst {
         outputFile.parentFile.mkdirs()
+        copy {
+            from(repoRoot.resolve("Cloak/internal"))
+            into(goModuleDir.resolve("modules/Cloak/internal"))
+        }
     }
 
     workingDir = goModuleDir
