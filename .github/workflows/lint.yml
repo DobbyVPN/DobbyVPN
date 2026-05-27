@@ -30,6 +30,7 @@ jobs:
           workdir: go_module
           golangci_lint_flags: --config .golangci.yml ./awg/... ./common/... ./healthcheck/... ./log/... ./outline/... ./routing/... ./tunnel/...
           reporter: github-pr-review
+          filter_mode: nofilter
           level: warning
           fail_level: error
 
