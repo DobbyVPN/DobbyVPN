@@ -1,33 +1,47 @@
 package com.dobby.backend
 
 import android.net.VpnService
+import com.dobby.gomobile.dobbyvpn.Dobbyvpn
+import com.dobby.gomobile.dobbyvpn.SocketProtector
 
 class GoBackend {
-    external fun startCloakClient(localHost: String, localPort: String, config: String, udp: Boolean): Unit
+    fun startCloakClient(localHost: String, localPort: String, config: String, udp: Boolean) {
+        Dobbyvpn.startCloakClient(localHost, localPort, config, udp)
+    }
 
-    external fun stopCloakClient(): Unit
+    fun stopCloakClient() {
+        Dobbyvpn.stopCloakClient()
+    }
 
-    external fun setGeoRoutingConf(cidrs: String): Unit
+    fun setGeoRoutingConf(cidrs: String) {
+        Dobbyvpn.setGeoRoutingConf(cidrs)
+    }
 
-    external fun clearGeoRoutingConf(): Unit
+    fun clearGeoRoutingConf() {
+        Dobbyvpn.clearGeoRoutingConf()
+    }
 
-    external fun checkServerAlive(address: String, port: Int): Int
+    fun checkServerAlive(address: String, port: Int): Int = Dobbyvpn.checkServerAlive(address, port)
 
-    external fun initLogger(path: String): Unit
+    fun initLogger(path: String) {
+        Dobbyvpn.initLogger(path)
+    }
 
-    external fun getLastError(): String?
+    fun getLastError(): String? = Dobbyvpn.getVpnLastError()?.ifEmpty { null }
 
-    external fun newVpnClient(config: String, protocol: String, fd: Int): Unit
+    fun newVpnClient(config: String, protocol: String, fd: Int) {
+        Dobbyvpn.newVpnClient(config, protocol, fd)
+    }
 
-    external fun vpnConnect(): Int
+    fun vpnConnect(): Int = Dobbyvpn.vpnConnect()
 
-    external fun vpnDisconnect(): Unit
+    fun vpnDisconnect() {
+        Dobbyvpn.vpnDisconnect()
+    }
 
-    external fun registerVpnService(service: VpnService): Unit
-
-    companion object {
-        init {
-            System.loadLibrary("backend")
-        }
+    fun registerVpnService(service: VpnService) {
+        Dobbyvpn.registerSocketProtector(object : SocketProtector {
+            override fun protect(fd: Int): Boolean = service.protect(fd)
+        })
     }
 }

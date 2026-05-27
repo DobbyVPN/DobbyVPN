@@ -35,20 +35,23 @@ go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports
 ### Android
 
 ```bash
-export ANDROID_SDK_ROOT=<ANDROID_SDK_PATH>
-export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/<ANDROID_NDK_VERSION>
-export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
-export DEBUG_PREFIX_FLAGS="-fdebug-prefix-map=$ANDROID_SDK_ROOT=/android-sdk -fdebug-prefix-map=$ANDROID_NDK_HOME=/android-ndk"
-export CGO_CFLAGS="$DEBUG_PREFIX_FLAGS ${CGO_CFLAGS:-}"
-export CGO_LDFLAGS="$DEBUG_PREFIX_FLAGS ${CGO_LDFLAGS:-}"
-export CC=aarch64-linux-android21-clang
-export CXX=aarch64-linux-android21-clang++
-export CGO_ENABLED="1"
-export GOOS="android"
-export GOARCH="arm64"
+export ANDROID_HOME=<ANDROID_SDK_PATH>
+export ANDROID_SDK_ROOT=$ANDROID_HOME
 
-go build -tags linux -ldflags="-buildid=" -v -trimpath -buildvcs=false -o libbackend.so -buildmode c-shared ./kotlin_exports/
+go install golang.org/x/mobile/cmd/gomobile@latest
+gomobile init
+
+gomobile bind \
+  -target=android/arm64 \
+  -androidapi=26 \
+  -javapkg=com.dobby.gomobile \
+  -o ../kmp_module/backend/build/generated/gomobile/backend.aar \
+  go_module/kotlin_exports
 ```
+
+The Gradle `:backend` module runs this `gomobile bind` step automatically before
+Android compilation. The generated AAR replaces the previous manual
+`libbackend.so` + JNI bridge.
 
 ### IOS
 

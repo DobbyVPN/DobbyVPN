@@ -1,12 +1,6 @@
 //go:build android
 
-package main
-
-/*
-#include <stdlib.h>
-#include <string.h>
-*/
-import "C"
+package dobbyvpn
 
 import (
 	"fmt"
@@ -32,16 +26,10 @@ var clientMu sync.Mutex
 // ERROR HANDLING & GUARDS
 // ==========================================
 
-//export GetVpnLastError
-func GetVpnLastError() *C.char {
+func GetVpnLastError() string {
 	errorMu.Lock()
 	defer errorMu.Unlock()
-
-	if lastError == "" {
-		return nil
-	}
-
-	return C.CString(lastError)
+	return lastError
 }
 
 func clearLastError() {
@@ -89,7 +77,6 @@ func disconnectLocked() {
 	log.Infof("disconnectLocked(): finished")
 }
 
-//export NewVpnClient
 func NewVpnClient(config string, protocol string, fd int32) {
 	defer guardExport("NewVpnClient")()
 
@@ -139,7 +126,6 @@ func NewVpnClient(config string, protocol string, fd int32) {
 	log.Infof("NewVpnClient() finished successfully")
 }
 
-//export VpnConnect
 func VpnConnect() int32 {
 	defer guardExport("VpnConnect")()
 
@@ -165,7 +151,6 @@ func VpnConnect() int32 {
 	return 0
 }
 
-//export VpnDisconnect
 func VpnDisconnect() {
 	defer guardExport("VpnDisconnect")()
 
