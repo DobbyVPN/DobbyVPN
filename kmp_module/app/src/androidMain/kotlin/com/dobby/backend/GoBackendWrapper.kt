@@ -1,27 +1,48 @@
 package com.dobby.backend
 
+import android.net.VpnService
+import com.dobby.gomobile.dobbyvpn.Dobbyvpn
+import com.dobby.gomobile.dobbyvpn.SocketProtector
+
 object GoBackendWrapper {
-    private val backend = GoBackend()
+    fun startCloakClient(localHost: String, localPort: String, config: String, udp: Boolean) {
+        Dobbyvpn.startCloakClient(localHost, localPort, config, udp)
+    }
 
-    val startCloakClient = backend::startCloakClient
+    fun stopCloakClient() {
+        Dobbyvpn.stopCloakClient()
+    }
 
-    val stopCloakClient = backend::stopCloakClient
+    fun setGeoRoutingConf(cidrs: String) {
+        Dobbyvpn.setGeoRoutingConf(cidrs)
+    }
 
-    val setGeoRoutingConf = backend::setGeoRoutingConf
+    fun clearGeoRoutingConf() {
+        Dobbyvpn.clearGeoRoutingConf()
+    }
 
-    val clearGeoRoutingConf = backend::clearGeoRoutingConf
+    fun checkServerAlive(address: String, port: Int): Int =
+        Dobbyvpn.checkServerAlive(address, port)
 
-    val checkServerAlive = backend::checkServerAlive
+    fun initLogger(path: String) {
+        Dobbyvpn.initLogger(path)
+    }
 
-    val initLogger = backend::initLogger
+    fun getLastError(): String? = Dobbyvpn.getVpnLastError()?.ifEmpty { null }
 
-    val getLastError = backend::getLastError
+    fun newVpnClient(config: String, protocol: String, fd: Int) {
+        Dobbyvpn.newVpnClient(config, protocol, fd)
+    }
 
-    val newVpnClient = backend::newVpnClient
+    fun vpnConnect(): Int = Dobbyvpn.vpnConnect()
 
-    val vpnConnect = backend::vpnConnect
+    fun vpnDisconnect() {
+        Dobbyvpn.vpnDisconnect()
+    }
 
-    val vpnDisconnect = backend::vpnDisconnect
-
-    val registerVpnService = backend::registerVpnService
+    fun registerVpnService(service: VpnService) {
+        Dobbyvpn.registerSocketProtector(object : SocketProtector {
+            override fun protect(fd: Int): Boolean = service.protect(fd)
+        })
+    }
 }
