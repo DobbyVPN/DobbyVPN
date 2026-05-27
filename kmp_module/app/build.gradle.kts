@@ -1,9 +1,33 @@
 import org.gradle.kotlin.dsl.implementation
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.io.File
+import java.util.Properties
 
-val backendGomobileAar = files(project(":backend").layout.buildDirectory.file("generated/gomobile/backend.aar"))
-    .builtBy(":backend:gomobileBindAndroid")
+val repoRoot: File = rootProject.projectDir.parentFile
+val goModuleDir: File = repoRoot.resolve("go_module")
+val cloakInternalDir: File = repoRoot.resolve("Cloak/internal")
+val goModuleCloakInternalDir: File = goModuleDir.resolve("modules/Cloak/internal")
+val gomobileAar = layout.buildDirectory.file("generated/gomobile/backend.aar")
+val gomobileExecutable = providers.gradleProperty("gomobileExecutable")
+    .orElse(providers.environmentVariable("GOMOBILE"))
+    .orElse(providers.provider {
+        val userHomeExecutable = File(System.getProperty("user.home"), "go/bin/gomobile")
+        if (userHomeExecutable.canExecute()) userHomeExecutable.absolutePath else "gomobile"
+    })
+val goCacheDir = layout.buildDirectory.dir("go-cache")
+val androidSdkDir = providers.environmentVariable("ANDROID_HOME")
+    .orElse(providers.environmentVariable("ANDROID_SDK_ROOT"))
+    .orElse(providers.provider {
+        val localProperties = rootProject.projectDir.resolve("local.properties")
+        if (!localProperties.isFile) {
+            return@provider ""
+        }
+        val properties = Properties()
+        localProperties.inputStream().use(properties::load)
+        properties.getProperty("sdk.dir").orEmpty()
+    })
+val backendGomobileAar = files(gomobileAar).builtBy(":app:gomobileBindAndroid")
 
 plugins {
     alias(libs.plugins.android.application)
@@ -67,7 +91,6 @@ kotlin {
             implementation(libs.koin.android)
             implementation(libs.koin.androidx.compose)
 
-            implementation(project(":backend"))
             implementation(backendGomobileAar)
 
             implementation(libs.okhttp)
@@ -190,6 +213,57 @@ android {
     }
 }
 
+val gomobileBindAndroid by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the Android Go backend AAR with gomobile."
+
+    val outputFile = gomobileAar.get().asFile
+    inputs.files(fileTree(goModuleDir) {
+        include("**/*.go")
+        exclude("**/build/**")
+    })
+    inputs.dir(cloakInternalDir).optional()
+    inputs.file(goModuleDir.resolve("go.mod"))
+    inputs.file(goModuleDir.resolve("go.sum"))
+    outputs.file(outputFile)
+
+    doFirst {
+        check(cloakInternalDir.isDirectory) {
+            "Cloak submodule is not initialized: missing ${cloakInternalDir.absolutePath}"
+        }
+        outputFile.parentFile.mkdirs()
+        copy {
+            from(cloakInternalDir)
+            into(goModuleCloakInternalDir)
+        }
+    }
+
+    workingDir = goModuleDir
+    commandLine(
+        gomobileExecutable.get(),
+        "bind",
+        "-target=android/arm64",
+        "-androidapi=26",
+        "-javapkg=com.dobby.gomobile",
+        "-o=${outputFile.absolutePath}",
+        "go_module/kotlin_exports"
+    )
+    environment(
+        "PATH",
+        listOf(
+            "/usr/local/go/bin",
+            File(System.getProperty("user.home"), "go/bin").absolutePath,
+            System.getenv("PATH").orEmpty()
+        ).joinToString(File.pathSeparator)
+    )
+    environment("GO111MODULE", "on")
+    environment("GOCACHE", goCacheDir.get().asFile.absolutePath)
+    if (androidSdkDir.get().isNotBlank()) {
+        environment("ANDROID_HOME", androidSdkDir.get())
+        environment("ANDROID_SDK_ROOT", androidSdkDir.get())
+    }
+}
+
 buildConfig {
     className = "BuildConfig"
     packageName = providers.gradleProperty("packageName").get()
@@ -228,7 +302,6 @@ buildConfig {
 
 dependencies {
     implementation(project(":grpcstub"))
-    implementation(project(":backend"))
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 }
