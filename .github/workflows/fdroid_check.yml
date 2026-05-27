@@ -33,11 +33,9 @@ jobs:
         with:
           submodules: true
 
-      - name: Download .so
-        uses: actions/download-artifact@v4
+      - uses: actions/setup-go@v5
         with:
-          name: libbackend.so
-          path: kmp_module/backend/src/main/jniLibs/arm64-v8a/
+          go-version-file: .go-version
 
       - uses: actions/setup-java@v5
         with:
@@ -50,6 +48,15 @@ jobs:
             platforms;android-35
             platforms;android-36
             build-tools;36.0.0
+            ndk;27.2.12479018
+
+      - name: Install gomobile
+        run: |
+          cd go_module
+          go install golang.org/x/mobile/cmd/gomobile@$(go list -m -f '{{.Version}}' golang.org/x/mobile)
+          cd ..
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+          "$HOME/go/bin/gomobile" init
 
       - name: Remove non-Android modules
         run: |
