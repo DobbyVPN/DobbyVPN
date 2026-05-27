@@ -1,13 +1,16 @@
 package com.dobby.backend
 
+import com.dobby.gomobile.dobbyvpn.Dobbyvpn
+
 object AwgBackendWrapper {
-    private val awgBackend = AwgBackend()
+    fun awgTurnOn(ifname: String, tunFd: Int, settings: String): Int =
+        Dobbyvpn.awgTurnOn(ifname, tunFd, settings)
 
-    val awgTurnOn = awgBackend::awgTurnOn
+    fun awgTurnOff() {
+        Dobbyvpn.awgTurnOff()
+    }
 
-    val awgTurnOff = awgBackend::awgTurnOff
+    fun awgGetSocketV4(): Int = Dobbyvpn.awgGetSocketV4()
 
-    val awgGetSocketV4 = awgBackend::awgGetSocketV4
-
-    val awgGetSocketV6 = awgBackend::awgGetSocketV6
+    fun awgGetSocketV6(): Int = Dobbyvpn.awgGetSocketV6()
 }

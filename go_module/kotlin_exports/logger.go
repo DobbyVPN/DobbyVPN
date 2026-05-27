@@ -1,14 +1,12 @@
 //go:build android
 
-package main
+package dobbyvpn
 
-import "C"
 import (
 	"go_module/log"
 	"strings"
 )
 
-//export InitLogger
 func InitLogger(path string) {
 	log.SetPath(strings.Clone(path))
 }

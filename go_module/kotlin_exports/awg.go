@@ -1,14 +1,10 @@
 //go:build android
 
-package main
-
-// extern int go_protect_socket(int fd);
-import "C"
+package dobbyvpn
 
 import (
 	"go_module/awg"
 	"go_module/log"
-	"go_module/tunnel/protected_dialer"
 	"strings"
 
 	"github.com/sirupsen/logrus"
@@ -16,15 +12,10 @@ import (
 
 func init() {
 	logrus.StandardLogger().ExitFunc = func(int) {}
-
-	protected_dialer.MakeSocketProtected = func(fd uintptr) {
-		C.go_protect_socket(C.int(fd))
-	}
 }
 
 var awgClient *awg.AwgClient
 
-//export AwgTurnOn
 func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	log.Infof("Create awg client")
 
@@ -59,7 +50,6 @@ func AwgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 	return 0
 }
 
-//export AwgTurnOff
 func AwgTurnOff() {
 	if awgClient == nil {
 		log.Infof("Awg client is null")
@@ -74,7 +64,6 @@ func AwgTurnOff() {
 	awgClient = nil
 }
 
-//export AwgGetSocketV4
 func AwgGetSocketV4() int32 {
 	if awgClient == nil {
 		log.Infof("Awg client is null")
@@ -84,7 +73,6 @@ func AwgGetSocketV4() int32 {
 	return int32(awgClient.App.TunnelData.GetSocketV4())
 }
 
-//export AwgGetSocketV6
 func AwgGetSocketV6() int32 {
 	if awgClient == nil {
 		log.Infof("Awg client is null")
