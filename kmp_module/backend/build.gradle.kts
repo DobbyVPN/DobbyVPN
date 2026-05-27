@@ -130,7 +130,7 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 dependencies {
-    implementation(files(gomobileAar))
+    compileOnly(files(gomobileAar).builtBy(gomobileBindAndroid))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)

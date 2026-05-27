@@ -2,6 +2,9 @@ import org.gradle.kotlin.dsl.implementation
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+val backendGomobileAar = files(project(":backend").layout.buildDirectory.file("generated/gomobile/backend.aar"))
+    .builtBy(":backend:gomobileBindAndroid")
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.composeMultiplatform)
@@ -65,6 +68,7 @@ kotlin {
             implementation(libs.koin.androidx.compose)
 
             implementation(project(":backend"))
+            implementation(backendGomobileAar)
 
             implementation(libs.okhttp)
             implementation(libs.ktor.client.okhttp)
