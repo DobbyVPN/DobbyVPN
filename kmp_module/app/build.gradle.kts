@@ -245,6 +245,7 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         "-target=android/arm64",
         "-androidapi=26",
         "-javapkg=com.dobby.gomobile",
+        "-trimpath",
         "-o=${outputFile.absolutePath}",
         "go_module/kotlin_exports"
     )
