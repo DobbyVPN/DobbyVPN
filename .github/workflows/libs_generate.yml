@@ -21,23 +21,37 @@ jobs:
         with:
           submodules: true
 
+      - name: Cache desktop VPN library
+        id: desktop_lib_cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            go_module/windows_grpcvpnserver.exe
+            go_module/ubuntu_grpcvpnserver
+            go_module/macos_grpcvpnserver
+          key: ${{ runner.os }}-desktop-vpn-lib-${{ hashFiles('.go-version', 'go_module/**', 'Cloak/internal/**') }}
+
       - name: Set up Go
+        if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
         uses: actions/setup-go@v5
         with:
           go-version-file: .go-version
+          cache-dependency-path: go_module/go.sum
 
       - name: Vendor Cloak/internal
+        if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
         run: |
           cp -r Cloak/internal go_module/modules/Cloak/
 
       - name: Download Go modules
+        if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
           go mod tidy
           go mod download
 
       - name: Install compiler
-        if: matrix.os != 'windows'
+        if: matrix.os != 'windows' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
         id: install_cc
         uses: rlalik/setup-cpp-compiler@master
         with:
@@ -110,32 +124,46 @@ jobs:
         with:
           submodules: true
 
+      - name: Cache iOS VPN library
+        id: ios_lib_cache
+        uses: actions/cache@v4
+        with:
+          path: go_module/MyLibrary.xcframework
+          key: ${{ runner.os }}-ios-vpn-lib-${{ hashFiles('.go-version', 'go_module/**', 'Cloak/internal/**') }}
+
       - name: Set up Go
+        if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         uses: actions/setup-go@v5
         with:
           go-version-file: .go-version
+          cache-dependency-path: go_module/go.sum
 
       - name: Vendor Cloak/internal
+        if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         run: |
           cp -r Cloak/internal go_module/modules/Cloak/
 
       - name: Download Go modules & dependencies
+        if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
           go mod download
           go mod tidy
 
       - name: Install gomobile & init
+        if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gomobile@$(cd go_module && go list -m -f '{{.Version}}' golang.org/x/mobile)
           gomobile init
 
       - name: Fetch gomobile runtime
+        if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
-          go get golang.org/x/mobile/bind@latest
+          go get golang.org/x/mobile/bind@$(go list -m -f '{{.Version}}' golang.org/x/mobile)
 
       - name: Build iOS XCFramework
+        if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
           GO111MODULE=on gomobile bind -target=ios -o MyLibrary.xcframework ./ios_exports
@@ -168,6 +196,22 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
+          cache: gradle
+          cache-dependency-path: |
+            kmp_module/**/*.gradle.kts
+            kmp_module/gradle/libs.versions.toml
+            kmp_module/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/.swiftpm
+            ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
+          key: ${{ runner.os }}-xcode-spm-${{ hashFiles('swift_module/iosApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-xcode-spm-
 
       - name: Resolve Swift Package Dependencies
         run: |
@@ -179,7 +223,7 @@ jobs:
         run: |
           VERSION_NAME="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
           VERSION_CODE=$((APP_MAJOR_VERSION * 1000000 + APP_MINOR_VERSION * 1000 + APP_MAINTENANCE_VERSION))
-          ./gradlew linkReleaseFrameworkIosArm64 \
+          ./gradlew linkReleaseFrameworkIosArm64 --build-cache --parallel \
             -PprojectRepositoryCommit="${GITHUB_SHA}" \
             -PprojectRepositoryCommitLink="https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_SHA}" \
             -Pandroid.injected.version.code="${VERSION_CODE}" \

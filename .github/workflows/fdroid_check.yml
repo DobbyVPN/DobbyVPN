@@ -38,19 +38,28 @@ jobs:
         with:
           go-version: '1.24.4'
 
+      - name: Read Android Go version
+        id: android_go
+        run: echo "version=$(cat .go-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Android Go toolchain
+        uses: actions/cache@v4
+        with:
+          path: .ci-cache/go-android
+          key: ${{ runner.os }}-android-go-${{ steps.android_go.outputs.version }}
+
       - name: Build Go from source for Android
         run: |
-          GO_VERSION="$(cat .go-version)"
-          GO_SRC="/home/vagrant/build/srclib/go"
+          GO_VERSION="${{ steps.android_go.outputs.version }}"
+          GO_SRC="$GITHUB_WORKSPACE/.ci-cache/go-android"
 
-          sudo rm -rf "$GO_SRC"
-          sudo mkdir -p "$(dirname "$GO_SRC")"
-          sudo chown -R "$USER:$USER" /home/vagrant
-
-          git clone --depth 1 --branch "go${GO_VERSION}" https://github.com/golang/go.git "$GO_SRC"
-          pushd "$GO_SRC/src"
-          ./make.bash
-          popd
+          if [ ! -x "$GO_SRC/bin/go" ]; then
+            rm -rf "$GO_SRC"
+            git clone --depth 1 --branch "go${GO_VERSION}" https://github.com/golang/go.git "$GO_SRC"
+            pushd "$GO_SRC/src"
+            ./make.bash
+            popd
+          fi
 
           echo "GOROOT=$GO_SRC" >> "$GITHUB_ENV"
           echo "$GO_SRC/bin" >> "$GITHUB_PATH"
@@ -60,6 +69,11 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+          cache: gradle
+          cache-dependency-path: |
+            kmp_module/**/*.gradle.kts
+            kmp_module/gradle/libs.versions.toml
+            kmp_module/gradle/wrapper/gradle-wrapper.properties
 
       - uses: android-actions/setup-android@v3
         with:
@@ -69,10 +83,21 @@ jobs:
             build-tools;36.0.0
             ndk;27.2.12479018
 
+      - name: Cache gomobile
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/bin/gomobile
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-gomobile-${{ steps.android_go.outputs.version }}-${{ hashFiles('go_module/go.sum') }}
+
       - name: Install gomobile
         run: |
           cd go_module
-          go install golang.org/x/mobile/cmd/gomobile@$(go list -m -f '{{.Version}}' golang.org/x/mobile)
+          if [ ! -x "$HOME/go/bin/gomobile" ]; then
+            go install golang.org/x/mobile/cmd/gomobile@$(go list -m -f '{{.Version}}' golang.org/x/mobile)
+          fi
           cd ..
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
           "$HOME/go/bin/gomobile" init
@@ -84,7 +109,7 @@ jobs:
       - name: Build APK
         working-directory: kmp_module
         run: |
-          ./gradlew app:assembleRelease -PdisableSentry=true \
+          ./gradlew app:assembleRelease --build-cache --parallel -PdisableSentry=true \
             -Pandroid.injected.version.code=1 \
             -Pandroid.injected.version.name=0.0.1
 

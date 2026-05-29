@@ -24,6 +24,17 @@ jobs:
           ruby-version: '3.2'
           bundler-cache: true
 
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/.swiftpm
+            ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
+          key: ${{ runner.os }}-xcode-spm-${{ hashFiles('swift_module/iosApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-xcode-spm-
+
       - name: Sentry auth
         working-directory: swift_module
         run: |
@@ -35,9 +46,6 @@ jobs:
         with:
           name: MyLibrary.xcframework
           path: swift_module/MyLibrary.xcframework
-
-      - name: Bundle install
-        run: bundle install
 
       - name: Fastlane bump build and version
         env:

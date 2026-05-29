@@ -15,6 +15,7 @@ platform :android do
     gradle(
       task: "assembleRelease",
       project_dir: "kmp_module",
+      flags: "--build-cache --parallel",
       properties: {
         "projectRepositoryCommit" => COMMIT,
         "projectRepositoryCommitLink" => COMMIT_LINK,
@@ -36,6 +37,7 @@ platform :android do
     gradle(
       task: "assembleRelease",
       project_dir: "kmp_module",
+      flags: "--build-cache --parallel",
       properties: {
         "projectRepositoryCommit" => COMMIT,
         "projectRepositoryCommitLink" => COMMIT_LINK,
@@ -56,6 +58,7 @@ platform :android do
     gradle(
       task: ":app:jvmJar",
       project_dir: "kmp_module",
+      flags: "--build-cache --parallel",
       properties: {
         "projectRepositoryCommit" => COMMIT,
         "projectRepositoryCommitLink" => COMMIT_LINK,

@@ -9,18 +9,20 @@ on:
     branches:
       - main
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   libs_build:
     uses: ./.github/workflows/libs_generate.yml
     secrets: inherit
 
   android_build:
-    needs: libs_build
     uses: ./.github/workflows/android_build.yml
     secrets: inherit
 
   fdroid_check:
-    needs: libs_build
     uses: ./.github/workflows/fdroid_check.yml
     secrets: inherit
 
