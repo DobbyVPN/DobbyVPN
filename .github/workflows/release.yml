@@ -14,8 +14,16 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  libs_build:
+  desktop_libs_build:
     uses: ./.github/workflows/libs_generate.yml
+    with:
+      target: desktop
+    secrets: inherit
+
+  ios_libs_build:
+    uses: ./.github/workflows/libs_generate.yml
+    with:
+      target: ios
     secrets: inherit
 
   android_build:
@@ -27,12 +35,12 @@ jobs:
     secrets: inherit
 
   ios_build:
-    needs: libs_build
+    needs: ios_libs_build
     uses: ./.github/workflows/ios_build.yml
     secrets: inherit
 
   desktop_build:
-    needs: libs_build
+    needs: desktop_libs_build
     uses: ./.github/workflows/desktop_build.yml
     secrets: inherit
 

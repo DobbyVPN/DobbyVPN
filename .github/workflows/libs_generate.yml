@@ -1,9 +1,24 @@
 name: Build VPN Libraries
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      target:
+        description: 'Library group to build'
+        required: false
+        default: 'all'
+        type: string
   workflow_dispatch:
     inputs:
+      target:
+        description: 'Library group to build'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - desktop
+          - ios
       release_tag:
         description: 'Tag for new library release'
         required: false
@@ -12,6 +27,7 @@ on:
 
 jobs:
   build_desktop_libs:
+    if: inputs.target == 'all' || inputs.target == 'desktop'
     runs-on: ${{ matrix.os }}-latest
     strategy:
       matrix:
@@ -58,7 +74,7 @@ jobs:
           compiler: latest
 
       - name: Build Windows library
-        if: matrix.os == 'windows'
+        if: matrix.os == 'windows' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
           go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
@@ -70,7 +86,7 @@ jobs:
           CXX: ${{ steps.install_cc.outputs.cxx }}
 
       - name: Build Linux library
-        if: matrix.os == 'ubuntu'
+        if: matrix.os == 'ubuntu' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
           go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
@@ -82,7 +98,7 @@ jobs:
           CXX: ${{ steps.install_cc.outputs.cxx }}
 
       - name: Build macOS library
-        if: matrix.os == 'macos'
+        if: matrix.os == 'macos' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
           go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports/
@@ -118,6 +134,7 @@ jobs:
             go_module/macos_grpcvpnserver
 
   build_ios_lib:
+    if: inputs.target == 'all' || inputs.target == 'ios'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -176,6 +193,7 @@ jobs:
 
 
   build_ios_app_lib:
+    if: inputs.target == 'all' || inputs.target == 'ios'
     runs-on: macos-15
     env:
       APP_MAJOR_VERSION: ${{ vars.MAJOR }}
@@ -201,6 +219,22 @@ jobs:
             kmp_module/**/*.gradle.kts
             kmp_module/gradle/libs.versions.toml
             kmp_module/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Cache Kotlin/Native compiler data
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: ${{ runner.os }}-konan-${{ hashFiles('kmp_module/gradle/libs.versions.toml', 'kmp_module/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-konan-
+
+      - name: Cache Gradle build outputs
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/caches/build-cache-*
+          key: ${{ runner.os }}-gradle-build-cache-${{ hashFiles('kmp_module/**/*.gradle.kts', 'kmp_module/gradle/libs.versions.toml', 'kmp_module/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-build-cache-
 
       - name: Cache Swift packages
         uses: actions/cache@v4
