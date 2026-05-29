@@ -27,6 +27,25 @@ val androidSdkDir = providers.environmentVariable("ANDROID_HOME")
         localProperties.inputStream().use(properties::load)
         properties.getProperty("sdk.dir").orEmpty()
     })
+val androidNdkDir = providers.environmentVariable("ANDROID_NDK_HOME")
+    .orElse(providers.environmentVariable("ANDROID_NDK_ROOT"))
+    .orElse(providers.provider {
+        val sdkDir = androidSdkDir.get()
+        if (sdkDir.isBlank()) {
+            return@provider ""
+        }
+        val ndkRoot = File(sdkDir, "ndk")
+        val preferredNdk = ndkRoot.resolve("27.2.12479018")
+        when {
+            preferredNdk.isDirectory -> preferredNdk.absolutePath
+            ndkRoot.isDirectory -> ndkRoot.listFiles()
+                ?.filter { it.isDirectory }
+                ?.maxByOrNull { it.name }
+                ?.absolutePath
+                .orEmpty()
+            else -> ""
+        }
+    })
 val backendGomobileAar = files(gomobileAar).builtBy(":app:gomobileBindAndroid")
 
 plugins {
@@ -263,6 +282,46 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
     if (androidSdkDir.get().isNotBlank()) {
         environment("ANDROID_HOME", androidSdkDir.get())
         environment("ANDROID_SDK_ROOT", androidSdkDir.get())
+    }
+    if (androidNdkDir.get().isNotBlank()) {
+        val ndkDir = File(androidNdkDir.get())
+        val toolchainBin = ndkDir
+            .resolve("toolchains/llvm/prebuilt")
+            .listFiles()
+            ?.firstOrNull { it.isDirectory }
+            ?.resolve("bin")
+
+        environment("ANDROID_NDK_HOME", ndkDir.absolutePath)
+        environment("ANDROID_NDK_ROOT", ndkDir.absolutePath)
+        environment("CGO_ENABLED", "1")
+        environment("CC", "aarch64-linux-android26-clang")
+        environment("CXX", "aarch64-linux-android26-clang++")
+
+        val debugPrefixFlags = listOf(
+            "-fdebug-prefix-map=${repoRoot.absolutePath}=.",
+            "-fdebug-prefix-map=${goModuleDir.absolutePath}=go_module",
+            "-fdebug-prefix-map=${androidSdkDir.get()}=/android-sdk",
+            "-fdebug-prefix-map=${ndkDir.absolutePath}=/android-ndk"
+        ).joinToString(" ")
+        environment("CGO_CFLAGS", listOf(debugPrefixFlags, System.getenv("CGO_CFLAGS").orEmpty()).joinToString(" ").trim())
+        environment(
+            "CGO_LDFLAGS",
+            listOf(debugPrefixFlags, "-Wl,-z,max-page-size=16384", System.getenv("CGO_LDFLAGS").orEmpty())
+                .joinToString(" ")
+                .trim()
+        )
+
+        if (toolchainBin?.isDirectory == true) {
+            environment(
+                "PATH",
+                listOf(
+                    toolchainBin.absolutePath,
+                    "/usr/local/go/bin",
+                    File(System.getProperty("user.home"), "go/bin").absolutePath,
+                    System.getenv("PATH").orEmpty()
+                ).joinToString(File.pathSeparator)
+            )
+        }
     }
 }
 
