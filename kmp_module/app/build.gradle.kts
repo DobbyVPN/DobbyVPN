@@ -16,6 +16,7 @@ val gomobileExecutable = providers.gradleProperty("gomobileExecutable")
         if (userHomeExecutable.canExecute()) userHomeExecutable.absolutePath else "gomobile"
     })
 val goCacheDir = layout.buildDirectory.dir("go-cache")
+val goTmpDir = layout.buildDirectory.dir("go-tmp")
 val androidSdkDir = providers.environmentVariable("ANDROID_HOME")
     .orElse(providers.environmentVariable("ANDROID_SDK_ROOT"))
     .orElse(providers.provider {
@@ -251,6 +252,7 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
             "Cloak submodule is not initialized: missing ${cloakInternalDir.absolutePath}"
         }
         outputFile.parentFile.mkdirs()
+        goTmpDir.get().asFile.mkdirs()
         copy {
             from(cloakInternalDir)
             into(goModuleCloakInternalDir)
@@ -279,6 +281,9 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
     )
     environment("GO111MODULE", "on")
     environment("GOCACHE", goCacheDir.get().asFile.absolutePath)
+    environment("GOTMPDIR", goTmpDir.get().asFile.absolutePath)
+    environment("SOURCE_DATE_EPOCH", "0")
+    environment("GOFLAGS", listOf("-buildvcs=false", System.getenv("GOFLAGS").orEmpty()).joinToString(" ").trim())
     if (androidSdkDir.get().isNotBlank()) {
         environment("ANDROID_HOME", androidSdkDir.get())
         environment("ANDROID_SDK_ROOT", androidSdkDir.get())
@@ -298,10 +303,16 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         environment("CXX", "aarch64-linux-android26-clang++")
 
         val debugPrefixFlags = listOf(
-            "-fdebug-prefix-map=${repoRoot.absolutePath}=.",
-            "-fdebug-prefix-map=${goModuleDir.absolutePath}=go_module",
+            "-fdebug-prefix-map=${repoRoot.absolutePath}=/src/DobbyVPN",
+            "-fdebug-prefix-map=${goModuleDir.absolutePath}=/src/DobbyVPN/go_module",
+            "-fdebug-prefix-map=${goTmpDir.get().asFile.absolutePath}=/tmp/go-build",
             "-fdebug-prefix-map=${androidSdkDir.get()}=/android-sdk",
-            "-fdebug-prefix-map=${ndkDir.absolutePath}=/android-ndk"
+            "-fdebug-prefix-map=${ndkDir.absolutePath}=/android-ndk",
+            "-ffile-prefix-map=${repoRoot.absolutePath}=/src/DobbyVPN",
+            "-ffile-prefix-map=${goModuleDir.absolutePath}=/src/DobbyVPN/go_module",
+            "-ffile-prefix-map=${goTmpDir.get().asFile.absolutePath}=/tmp/go-build",
+            "-ffile-prefix-map=${androidSdkDir.get()}=/android-sdk",
+            "-ffile-prefix-map=${ndkDir.absolutePath}=/android-ndk"
         ).joinToString(" ")
         environment("CGO_CFLAGS", listOf(debugPrefixFlags, System.getenv("CGO_CFLAGS").orEmpty()).joinToString(" ").trim())
         environment(
