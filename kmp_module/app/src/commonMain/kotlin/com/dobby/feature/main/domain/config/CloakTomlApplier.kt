@@ -21,6 +21,7 @@ internal class CloakTomlApplier(
         const val DEFAULT_CLOAK_NUM_CONN = 8
         const val DEFAULT_CLOAK_STREAM_TIMEOUT = 300
         const val CLOAK_TRANSPORT_CDN = "CDN"
+        const val CLOAK_TRANSPORT_DIRECT = "direct"
     }
 
     fun apply(outline: OutlineConfig, cloakEnabled: Boolean) {
@@ -31,7 +32,10 @@ internal class CloakTomlApplier(
 
         logger.log("Cloak enabled inside [Outline], building Cloak config")
 
-        val transport = outline.Transport?.trim().orEmpty().ifEmpty { CLOAK_TRANSPORT_CDN }
+        val cdnWsUrlPath = outline.CDNWsUrlPath?.trim()?.takeIf { it.isNotEmpty() }
+        val transport = outline.Transport?.trim().orEmpty().ifEmpty {
+            if (cdnWsUrlPath != null) CLOAK_TRANSPORT_CDN else CLOAK_TRANSPORT_DIRECT
+        }
         val encryptionMethod = outline.EncryptionMethod?.trim().orEmpty()
         val uid = outline.UID?.trim().orEmpty()
         val publicKey = outline.PublicKey?.trim().orEmpty()
@@ -49,13 +53,16 @@ internal class CloakTomlApplier(
             encryptionMethod.isEmpty() ||
             uid.isEmpty() ||
             publicKey.isEmpty() ||
+            serverName.isEmpty() ||
             remoteHost.isEmpty() ||
             remotePort.isEmpty()
         ) {
-            logger.log("Invalid [Cloak] fields: EncryptionMethod/UID/PublicKey/RemoteHost/RemotePort are required. Disabling Cloak.")
+            logger.log("Invalid [Cloak] fields: EncryptionMethod/UID/PublicKey/ServerName/RemoteHost/RemotePort are required. Disabling Cloak.")
             cloakRepo.clearCloakConfig()
             return
         }
+
+        val isCdnTransport = transport.equals(CLOAK_TRANSPORT_CDN, ignoreCase = true)
 
         val cloakConfig = CloakClientConfig(
             Transport = transport,
@@ -69,8 +76,8 @@ internal class CloakTomlApplier(
             StreamTimeout = outline.StreamTimeout ?: DEFAULT_CLOAK_STREAM_TIMEOUT,
             RemoteHost = remoteHost,
             RemotePort = remotePort,
-            CDNWsUrlPath = outline.CDNWsUrlPath?.trim()?.takeIf { it.isNotEmpty() },
-            CDNOriginHost = cdnOriginHost
+            CDNWsUrlPath = cdnWsUrlPath.takeIf { isCdnTransport },
+            CDNOriginHost = cdnOriginHost.takeIf { isCdnTransport }
         )
 
         cloakRepo.setIsCloakEnabled(true)
@@ -81,7 +88,7 @@ internal class CloakTomlApplier(
             UID = maskStr(cloakConfig.UID),
             RemoteHost = maskStr(cloakConfig.RemoteHost),
             ServerName = maskStr(cloakConfig.ServerName),
-            CDNOriginHost = maskStr(cloakConfig.CDNOriginHost),
+            CDNOriginHost = cloakConfig.CDNOriginHost?.let { maskStr(it) },
             CDNWsUrlPath = cloakConfig.CDNWsUrlPath?.let { maskStr(it) }
         )
         logger.log("Cloak config saved successfully (config=${buildCloakJson(cloakForLog)})")
@@ -102,7 +109,7 @@ internal class CloakTomlApplier(
             put("RemoteHost", config.RemoteHost)
             put("RemotePort", config.RemotePort)
             config.CDNWsUrlPath?.let { put("CDNWsUrlPath", it) }
-            put("CDNOriginHost", config.CDNOriginHost)
+            config.CDNOriginHost?.let { put("CDNOriginHost", it) }
         }
         return json.encodeToString(obj)
     }

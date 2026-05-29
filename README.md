@@ -58,6 +58,8 @@ IPs = [
 ]
 ```
 
+For direct Cloak mode, omit `CDNWsUrlPath` or set `Transport = "direct"` explicitly.
+
 **VLESS + Reality over xray-core** ([more details](https://xtls.github.io/en/config/outbounds/vless.html))
 ```toml
 [Xray] # Implementation library

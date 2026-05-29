@@ -170,7 +170,7 @@ data class CloakClientConfig(
     val RemoteHost: String,
     val RemotePort: String,
     var CDNWsUrlPath: String? = null,
-    val CDNOriginHost: String
+    val CDNOriginHost: String? = null
 )
 
 @Serializable

@@ -1,140 +1,10 @@
-name: Build VPN Libraries
+name: Build iOS VPN Libraries
 
 on:
   workflow_call:
-    inputs:
-      target:
-        description: 'Library group to build'
-        required: false
-        default: 'all'
-        type: string
-  workflow_dispatch:
-    inputs:
-      target:
-        description: 'Library group to build'
-        required: false
-        default: 'all'
-        type: choice
-        options:
-          - all
-          - desktop
-          - ios
-      release_tag:
-        description: 'Tag for new library release'
-        required: false
-        default: ''
-        type: string
 
 jobs:
-  build_desktop_libs:
-    if: inputs.target == 'all' || inputs.target == 'desktop'
-    runs-on: ${{ matrix.os }}-latest
-    strategy:
-      matrix:
-        os: [windows, ubuntu, macos]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Cache desktop VPN library
-        id: desktop_lib_cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            go_module/windows_grpcvpnserver.exe
-            go_module/ubuntu_grpcvpnserver
-            go_module/macos_grpcvpnserver
-          key: ${{ runner.os }}-desktop-vpn-lib-${{ hashFiles('.go-version', 'go_module/**', 'Cloak/internal/**') }}
-
-      - name: Set up Go
-        if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: .go-version
-          cache-dependency-path: go_module/go.sum
-
-      - name: Vendor Cloak/internal
-        if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        run: |
-          cp -r Cloak/internal go_module/modules/Cloak/
-
-      - name: Download Go modules
-        if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        working-directory: go_module
-        run: |
-          go mod tidy
-          go mod download
-
-      - name: Install compiler
-        if: matrix.os != 'windows' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        id: install_cc
-        uses: rlalik/setup-cpp-compiler@master
-        with:
-          compiler: latest
-
-      - name: Build Windows library
-        if: matrix.os == 'windows' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        working-directory: go_module
-        run: |
-          go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
-        env:
-          CGO_ENABLED: '1'
-          GOOS: 'windows'
-          GOARCH: 'amd64'
-          CC: ${{ steps.install_cc.outputs.cc }}
-          CXX: ${{ steps.install_cc.outputs.cxx }}
-
-      - name: Build Linux library
-        if: matrix.os == 'ubuntu' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        working-directory: go_module
-        run: |
-          go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
-        env:
-          CGO_ENABLED: '1'
-          GOOS: 'linux'
-          GOARCH: 'amd64'
-          CC: ${{ steps.install_cc.outputs.cc }}
-          CXX: ${{ steps.install_cc.outputs.cxx }}
-
-      - name: Build macOS library
-        if: matrix.os == 'macos' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        working-directory: go_module
-        run: |
-          go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports/
-        env:
-          CGO_ENABLED: '1'
-          GOOS: 'darwin'
-          GOARCH: 'arm64'
-          CC: ${{ steps.install_cc.outputs.cc }}
-          CXX: ${{ steps.install_cc.outputs.cxx }}
-
-      - name: Upload built libraries
-        if: matrix.os == 'windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows_grpcvpnserver.exe
-          path: |
-            go_module/windows_grpcvpnserver.exe
-
-      - name: Upload built libraries
-        if: matrix.os == 'ubuntu'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ubuntu_grpcvpnserver
-          path: |
-            go_module/ubuntu_grpcvpnserver
-
-      - name: Upload built libraries
-        if: matrix.os == 'macos'
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos_grpcvpnserver
-          path: |
-            go_module/macos_grpcvpnserver
-
   build_ios_lib:
-    if: inputs.target == 'all' || inputs.target == 'ios'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -191,9 +61,7 @@ jobs:
           name: MyLibrary.xcframework
           path: go_module/MyLibrary.xcframework
 
-
   build_ios_app_lib:
-    if: inputs.target == 'all' || inputs.target == 'ios'
     runs-on: macos-15
     env:
       APP_MAJOR_VERSION: ${{ vars.MAJOR }}

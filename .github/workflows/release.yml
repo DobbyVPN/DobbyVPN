@@ -15,15 +15,11 @@ concurrency:
 
 jobs:
   desktop_libs_build:
-    uses: ./.github/workflows/libs_generate.yml
-    with:
-      target: desktop
+    uses: ./.github/workflows/desktop_libs_generate.yml
     secrets: inherit
 
   ios_libs_build:
-    uses: ./.github/workflows/libs_generate.yml
-    with:
-      target: ios
+    uses: ./.github/workflows/ios_libs_generate.yml
     secrets: inherit
 
   android_build:
