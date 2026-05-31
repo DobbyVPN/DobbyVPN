@@ -6,6 +6,7 @@ package routing
 import (
 	"context"
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 
@@ -75,6 +76,11 @@ func AddProxyRoute(proxyIP, gatewayIP string) error {
 	return nil
 }
 
+func isLoopbackIP(ip string) bool {
+	parsed := net.ParseIP(ip)
+	return parsed != nil && parsed.IsLoopback()
+}
+
 func StartRouting(proxyIP, gatewayIP, tunName string) error {
 	log.Infof("[Routing][Start] Switching system routing to VPN (tun=%s)", tunName)
 
@@ -87,10 +93,14 @@ func StartRouting(proxyIP, gatewayIP, tunName string) error {
 		return fmt.Errorf("failed to set default via %s: %w", tunName, err)
 	}
 
-	log.Infof("[Routing][Start] Ensuring VPN server bypass route: %s -> %s", proxyIP, gatewayIP)
-	cmdProxy := fmt.Sprintf("route -n add -host %s %s", proxyIP, gatewayIP)
-	if _, err := ExecuteCommand(cmdProxy); err != nil {
-		log.Infof("[Routing][Start] WARN: proxy route may already exist: %v", err)
+	if isLoopbackIP(proxyIP) {
+		log.Infof("[Routing][Start] Skipping proxy bypass route for loopback server: %s", proxyIP)
+	} else {
+		log.Infof("[Routing][Start] Ensuring VPN server bypass route: %s -> %s", proxyIP, gatewayIP)
+		cmdProxy := fmt.Sprintf("route -n add -host %s %s", proxyIP, gatewayIP)
+		if _, err := ExecuteCommand(cmdProxy); err != nil {
+			log.Infof("[Routing][Start] WARN: proxy route may already exist: %v", err)
+		}
 	}
 
 	log.Infof("[Routing][Start] OK: default=VPN(%s), proxy bypass=%s->%s", tunName, proxyIP, gatewayIP)
@@ -101,9 +111,13 @@ func StartRouting(proxyIP, gatewayIP, tunName string) error {
 func StopRouting(proxyIP, gatewayIP string) error {
 	log.Infof("[Routing][Stop] Restoring system routing")
 
-	log.Infof("[Routing][Stop] Removing proxy bypass route: %s", proxyIP)
-	cmdDeleteProxy := fmt.Sprintf("route -n delete -host %s %s", proxyIP, gatewayIP)
-	_, _ = ExecuteCommand(cmdDeleteProxy)
+	if isLoopbackIP(proxyIP) {
+		log.Infof("[Routing][Stop] Skipping proxy bypass removal for loopback server: %s", proxyIP)
+	} else {
+		log.Infof("[Routing][Stop] Removing proxy bypass route: %s", proxyIP)
+		cmdDeleteProxy := fmt.Sprintf("route -n delete -host %s %s", proxyIP, gatewayIP)
+		_, _ = ExecuteCommand(cmdDeleteProxy)
+	}
 
 	log.Infof("[Routing][Stop] Removing VPN default route")
 	_, _ = ExecuteCommand("route -n delete default")
