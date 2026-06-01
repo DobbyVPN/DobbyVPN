@@ -13,7 +13,10 @@ import (
 
 func (s *Server) StartCloakClient(_ context.Context, in *grpcproto.StartCloakClientRequest) (*grpcproto.Empty, error) {
 	log.Infof("StartCloakClient")
-	go api.StartCloakClient(in.GetLocalHost(), in.GetLocalPort(), in.GetConfig(), in.GetUdp())
+	if err := api.StartCloakClient(in.GetLocalHost(), in.GetLocalPort(), in.GetConfig(), in.GetUdp()); err != nil {
+		log.Infof("StartCloakClient failed: %v", err)
+		return nil, err
+	}
 	return &grpcproto.Empty{}, nil
 }
 

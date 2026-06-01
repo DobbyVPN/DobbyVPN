@@ -155,6 +155,7 @@ func (c *CkClient) Connect() (returnErr error) {
 	}
 
 	done := make(chan struct{})
+	ready := make(chan error, 1)
 	c.routeDone = done
 
 	go func() {
@@ -174,18 +175,21 @@ func (c *CkClient) Connect() (returnErr error) {
 			conn, err := net.ListenUDP("udp", udpAddr)
 			if err != nil {
 				log.Infof("ck-client: goroutines: err %v\n", err)
+				ready <- fmt.Errorf("failed to listen on UDP %s: %w", localConfig.LocalAddr, err)
 				return
 			}
 
 			c.udpConn = conn
 
 			log.Infof("ck-client: start listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
+			ready <- nil
 			client.RouteUDP(func() (*net.UDPConn, error) { return conn, nil }, localConfig.Timeout, remoteConfig.Singleplex, seshMaker)
 			log.Infof("ck-client: stop listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
 		} else {
 			baseListener, err := net.Listen("tcp", localConfig.LocalAddr)
 			if err != nil {
 				log.Infof("ck-client: goroutines: err %v\n", err)
+				ready <- fmt.Errorf("failed to listen on TCP %s: %w", localConfig.LocalAddr, err)
 				return
 			}
 
@@ -193,10 +197,22 @@ func (c *CkClient) Connect() (returnErr error) {
 			c.listener = l
 
 			log.Infof("ck-client: start listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
+			ready <- nil
 			client.RouteTCP(l, localConfig.Timeout, remoteConfig.Singleplex, seshMaker)
 			log.Infof("ck-client: stop listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
 		}
 	}()
+
+	select {
+	case err := <-ready:
+		if err != nil {
+			c.connected = false
+			return err
+		}
+	case <-time.After(2 * time.Second):
+		c.connected = false
+		return fmt.Errorf("timed out waiting for Cloak listener on %s", localConfig.LocalAddr)
+	}
 
 	return nil
 }
