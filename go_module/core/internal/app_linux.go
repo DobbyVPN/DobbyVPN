@@ -183,16 +183,21 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	}
 	log.Infof("[Linux][Step 7][OK] SOCKS5 proxy=%s", app.ProtocolDevice.GetProxyAddr())
 
+	routingStarted := false
 	var closeOnce sync.Once
 	closeAll := func() {
 		closeOnce.Do(func() {
 			log.Infof("[Linux][Lifecycle] Shutting down...")
 
-			common.Client.MarkInCriticalSection(coreCommon.Name)
-			if err = routing.StopRouting(serverIP.String(), gatewayIP.String(), uplinkIface); err != nil {
-				log.Infof("[Linux][StopRouting][ERROR] %v", err)
+			if routingStarted {
+				common.Client.MarkInCriticalSection(coreCommon.Name)
+				if err = routing.StopRouting(serverIP.String(), gatewayIP.String(), uplinkIface); err != nil {
+					log.Infof("[Linux][StopRouting][ERROR] %v", err)
+				}
+				common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+			} else {
+				log.Infof("[Linux][Lifecycle] Routing switch was not completed; skipping StopRouting")
 			}
-			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
 			if err = routing.CleanupMarkedRouting(
 				app.RoutingConfig.RoutingTableID,
@@ -260,6 +265,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		return err
 	}
 	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+	routingStarted = true
 
 	log.Infof("[Linux][Step 10][OK] Default route switched to VPN")
 
