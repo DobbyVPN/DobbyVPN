@@ -1,20 +1,15 @@
-//go:build cgo && !(android || ios)
+//go:build !cgo && !(android || ios)
 
 package api
 
-import "C"
-
-//export GetVpnLastError
 func GetVpnLastError() string {
 	return getVpnLastError()
 }
 
-//export StartVpn
 func StartVpn(config, protocol string) int32 {
 	return startVpn(config, protocol)
 }
 
-//export StopVpn
 func StopVpn() {
 	stopVpn()
 }

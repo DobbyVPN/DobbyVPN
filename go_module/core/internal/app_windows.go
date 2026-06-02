@@ -77,19 +77,40 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	log.Infof("[Routing] Server IP resolved: %s", serverIP.String())
 
 	// protect route to VPN server
+	earlyRouteInstalled := false
 	if serverIP.String() != "127.0.0.1" {
 		log.Infof("[Routing] Adding early route for server %s via %s", serverIP.String(), gatewayIP.String())
 		common.Client.MarkInCriticalSection(coreCommon.Name)
-		routing.AddOrUpdateProxyRoute(serverIP.String(), gatewayIP.String(), netInterface.Name)
+		var routeChanged bool
+		routeChanged, err = routing.EnsureProxyRoute(serverIP.String(), gatewayIP.String(), netInterface.Name)
+		if err != nil {
+			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+			err = fmt.Errorf("failed to add early route for server: %w", err)
+			signalInit(initResult, err)
+			return err
+		}
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+		earlyRouteInstalled = routeChanged
 		log.Infof("[Routing] Early server route added successfully")
 	} else {
 		log.Infof("[Routing] Skipping early route for localhost (Cloak mode)")
+	}
+	cleanupEarlyRoute := func(reason string) {
+		if !earlyRouteInstalled {
+			return
+		}
+		common.Client.MarkInCriticalSection(coreCommon.Name)
+		log.Infof("[Routing] Removing early server route after %s", reason)
+		if cleanupErr := routing.DeleteProxyRoute(serverIP.String(), gatewayIP.String(), netInterface.Name); cleanupErr != nil {
+			log.Infof("[Routing] Failed to remove early server route after %s: %v", reason, cleanupErr)
+		}
+		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 	}
 
 	// SOCKS protocol device
 	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, netInterface.Name)
 	if err != nil {
+		cleanupEarlyRoute("ProtocolDevice error")
 		err = fmt.Errorf("failed to create CoreDevice: %w", err)
 		signalInit(initResult, err)
 		return err
@@ -102,6 +123,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	idx, err := protected_dialer.GetDefaultInterfaceIndex()
 	if err != nil {
+		cleanupEarlyRoute("default interface index error")
 		err = fmt.Errorf("failed to get default interface index: %w", err)
 		signalInit(initResult, err)
 		return err
@@ -115,17 +137,20 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	})
 	if err != nil {
 		log.Infof("Can't start tun2socks: %v", err)
+		cleanupEarlyRoute("tun2socks start error")
 		return err
 	}
 
 	tunInterface, err := routing.WaitForInterfaceByIP(cfg.TunDevice, 5*time.Second)
 	if err != nil {
 		tunnel.StopEngine()
+		cleanupEarlyRoute("TUN interface wait error")
 		signalInit(initResult, err)
 		return err
 	}
 
 	// routing
+	common.Client.MarkInCriticalSection(coreCommon.Name)
 	if err := routing.StartRouting(
 		serverIP.String(),
 		gatewayIP.String(),
@@ -134,6 +159,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		cfg.TunGateway,
 		cfg.TunDevice,
 	); err != nil {
+		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name, cfg.TunGateway)
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		tunnel.StopEngine()
 		err = fmt.Errorf("failed to configure routing: %w", err)

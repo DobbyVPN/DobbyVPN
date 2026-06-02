@@ -6,6 +6,7 @@ package routing
 import (
 	"context"
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 
@@ -74,17 +75,48 @@ func GetDefaultInterfaceNameLinux(gatewayIP string) (string, error) {
 	return "", err
 }
 
-func AddProxyRoute(proxyIP, gatewayIP, iface string) error {
+func EnsureProxyRoute(proxyIP, gatewayIP, iface string) (bool, error) {
+	if isLoopbackIP(proxyIP) {
+		log.Infof("[Routing][ProxyRoute] Skipping proxy route for loopback server: %s", proxyIP)
+		return false, nil
+	}
+
 	log.Infof("[Routing][ProxyRoute] Adding route: %s/32 via %s dev %s",
 		proxyIP, gatewayIP, iface)
 
-	cmd := fmt.Sprintf("ip route replace %s/32 via %s dev %s", proxyIP, gatewayIP, iface)
+	cmd := fmt.Sprintf("ip route add %s/32 via %s dev %s", proxyIP, gatewayIP, iface)
 	if _, err := ExecuteCommand(cmd); err != nil {
-		return fmt.Errorf("failed to add proxy route: %w", err)
+		if strings.Contains(err.Error(), "File exists") {
+			log.Infof("[Routing][ProxyRoute] Route already exists for %s; leaving it unchanged", proxyIP)
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to add proxy route: %w", err)
 	}
 
 	log.Infof("[Routing][ProxyRoute][OK] Route installed for %s", proxyIP)
+	return true, nil
+}
+
+func DeleteProxyRoute(proxyIP, gatewayIP, iface string) error {
+	if isLoopbackIP(proxyIP) {
+		log.Infof("[Routing][ProxyRoute] Skipping proxy route removal for loopback server: %s", proxyIP)
+		return nil
+	}
+
+	log.Infof("[Routing][ProxyRoute] Removing route: %s/32 via %s dev %s",
+		proxyIP, gatewayIP, iface)
+
+	if _, err := ExecuteCommand(fmt.Sprintf("ip route del %s/32 via %s dev %s", proxyIP, gatewayIP, iface)); err != nil {
+		return fmt.Errorf("failed to delete proxy route: %w", err)
+	}
+
+	log.Infof("[Routing][ProxyRoute][OK] Route removed for %s", proxyIP)
 	return nil
+}
+
+func isLoopbackIP(ip string) bool {
+	parsed := net.ParseIP(ip)
+	return parsed != nil && parsed.IsLoopback()
 }
 
 func SetupMarkedRouting(tableID, priority int, iface, gatewayIP string) error {
@@ -152,8 +184,12 @@ func StartRouting(proxyIP, gatewayIP, uplinkIface, tunName string) error {
 	log.Infof("[Routing][Start] Ensuring VPN server bypass: %s via %s dev %s",
 		proxyIP, gatewayIP, uplinkIface)
 
-	if _, err := ExecuteCommand(fmt.Sprintf("ip route replace %s/32 via %s dev %s", proxyIP, gatewayIP, uplinkIface)); err != nil {
-		return fmt.Errorf("failed to add direct route for proxy %s: %w", proxyIP, err)
+	if isLoopbackIP(proxyIP) {
+		log.Infof("[Routing][Start] Skipping VPN server bypass route for loopback server: %s", proxyIP)
+	} else {
+		if _, err := ExecuteCommand(fmt.Sprintf("ip route replace %s/32 via %s dev %s", proxyIP, gatewayIP, uplinkIface)); err != nil {
+			return fmt.Errorf("failed to add direct route for proxy %s: %w", proxyIP, err)
+		}
 	}
 
 	log.Infof("[Routing][Start][OK] default=VPN(%s), bypass=%s", tunName, proxyIP)
@@ -165,7 +201,11 @@ func StopRouting(proxyIP, gatewayIP, uplinkIface string) error {
 	log.Infof("[Routing][Stop] Restoring system routing")
 
 	log.Infof("[Routing][Stop] Removing proxy route: %s", proxyIP)
-	_, _ = ExecuteCommand(fmt.Sprintf("ip route del %s/32 via %s dev %s", proxyIP, gatewayIP, uplinkIface))
+	if isLoopbackIP(proxyIP) {
+		log.Infof("[Routing][Stop] Skipping proxy route removal for loopback server: %s", proxyIP)
+	} else {
+		_ = DeleteProxyRoute(proxyIP, gatewayIP, uplinkIface)
+	}
 
 	log.Infof("[Routing][Stop] Removing VPN default route")
 	_, _ = ExecuteCommand("ip route del default")

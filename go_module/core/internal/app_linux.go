@@ -75,12 +75,15 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	log.Infof("[Linux][Step 3][OK] Uplink interface=%s", uplinkIface)
 
 	// 4. early route
+	earlyRouteInstalled := false
 	if serverIP.String() != "127.0.0.1" {
 		log.Infof("[Linux][Step 4] Installing early route → %s via %s dev %s",
 			serverIP, gatewayIP, uplinkIface)
 
 		common.Client.MarkInCriticalSection(coreCommon.Name)
-		if err = routing.AddProxyRoute(serverIP.String(), gatewayIP.String(), uplinkIface); err != nil {
+		var routeChanged bool
+		routeChanged, err = routing.EnsureProxyRoute(serverIP.String(), gatewayIP.String(), uplinkIface)
+		if err != nil {
 			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 			err = fmt.Errorf("failed to add early route: %w", err)
 			log.Infof("[Linux][Step 4][ERROR] %v", err)
@@ -89,9 +92,35 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		}
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
+		earlyRouteInstalled = routeChanged
 		log.Infof("[Linux][Step 4][OK] Early route installed")
 	} else {
 		log.Infof("[Linux][Step 4] Skipped (localhost / Cloak)")
+	}
+
+	markedRoutingConfigured := false
+	cleanupStartupRoutes := func(reason string) {
+		common.Client.MarkInCriticalSection(coreCommon.Name)
+		defer common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+
+		if earlyRouteInstalled {
+			log.Infof("[Linux][Cleanup] Removing early route after %s", reason)
+			if cleanupErr := routing.DeleteProxyRoute(serverIP.String(), gatewayIP.String(), uplinkIface); cleanupErr != nil {
+				log.Infof("[Linux][Cleanup][WARN] Failed to remove early route: %v", cleanupErr)
+			}
+		}
+
+		if markedRoutingConfigured {
+			log.Infof("[Linux][Cleanup] Removing marked routing after %s", reason)
+			if cleanupErr := routing.CleanupMarkedRouting(
+				app.RoutingConfig.RoutingTableID,
+				app.RoutingConfig.RoutingTablePriority,
+				uplinkIface,
+				gatewayIP.String(),
+			); cleanupErr != nil {
+				log.Infof("[Linux][Cleanup][WARN] Failed to remove marked routing: %v", cleanupErr)
+			}
+		}
 	}
 
 	// 5. marked routing
@@ -116,6 +145,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	}
 	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
+	markedRoutingConfigured = true
 	log.Infof("[Linux][Step 5][OK] Policy routing configured")
 
 	// protected sockets
@@ -131,6 +161,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
 	if err != nil {
+		cleanupStartupRoutes("TUN creation error")
 		err = fmt.Errorf("failed to create TUN device: %w", err)
 		log.Infof("[Linux][Step 6][ERROR] %v", err)
 		signalInit(initResult, err)
@@ -144,6 +175,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, uplinkIface)
 	if err != nil {
 		_ = tun.Close()
+		cleanupStartupRoutes("ProtocolDevice error")
 		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
 		log.Infof("[Linux][Step 7][ERROR] %v", err)
 		signalInit(initResult, err)

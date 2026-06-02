@@ -170,13 +170,13 @@ func (a *TunnelData) tunnelLoop() {
 
 	select {
 	case err := <-a.errs:
-		log.Infof("[ERROR] Got error, stopping tunnel loop: %s", err)
+		log.Infof("[ERROR] Got error, stopping tunnel loop: %v", err)
 		return
 	case <-a.dev.Wait():
 		log.Infof("[WARNING] Device wait call, stopping tunnel loop")
 		return
 	case err := <-a.watcher.errors:
-		log.Infof("[ERROR] Got watcher error, stopping tunnel loop: %s", err)
+		log.Infof("[ERROR] Got watcher error, stopping tunnel loop: %v", err)
 		return
 	}
 }

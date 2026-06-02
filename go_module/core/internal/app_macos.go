@@ -58,16 +58,20 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	}
 	log.Infof("[Routing] Server IP resolved: %s", serverIP.String())
 
+	earlyRouteInstalled := false
 	if serverIP.String() != "127.0.0.1" {
 		log.Infof("[Routing] Adding direct route for VPN server %s via gateway %s (bypass VPN)", serverIP.String(), gatewayIP.String())
 		common.Client.MarkInCriticalSection(coreCommon.Name)
-		if err := routing.AddProxyRoute(serverIP.String(), gatewayIP.String()); err != nil {
+		var routeChanged bool
+		routeChanged, err = routing.EnsureProxyRoute(serverIP.String(), gatewayIP.String())
+		if err != nil {
 			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 			err = fmt.Errorf("failed to add early route for server: %w", err)
 			signalInit(initResult, err)
 			return err
 		}
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+		earlyRouteInstalled = routeChanged
 		log.Infof("[Routing] Direct route for VPN server installed")
 	} else {
 		log.Infof("[Routing] Skipping direct route for localhost (Cloak mode)")
@@ -77,6 +81,13 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, "")
 	if err != nil {
+		if earlyRouteInstalled {
+			common.Client.MarkInCriticalSection(coreCommon.Name)
+			if cleanupErr := routing.DeleteProxyRoute(serverIP.String(), gatewayIP.String()); cleanupErr != nil {
+				log.Infof("[Routing] Failed to remove early server route after ProtocolDevice error: %v", cleanupErr)
+			}
+			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+		}
 		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
 		signalInit(initResult, err)
 		return err
