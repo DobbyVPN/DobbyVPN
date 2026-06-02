@@ -3,8 +3,12 @@
 
 package exported_client
 
-import "syscall"
+import (
+	"syscall"
 
-func protector(string, string, syscall.RawConn) error {
-	return nil
+	"go_module/tunnel/protected_dialer"
+)
+
+func protector(network string, address string, c syscall.RawConn) error {
+	return protected_dialer.ProtectRawConn(network, address, c)
 }

@@ -106,6 +106,23 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 	return conn, nil
 }
 
+func ProtectRawConn(network, address string, c syscall.RawConn) error {
+	realNet := network
+	if realNet == "tcp" || realNet == "" {
+		realNet = normalizeTCP(address)
+	}
+
+	return c.Control(func(fd uintptr) {
+		if protector == nil {
+			log.Infof("[Protect] WARNING: no raw socket protector registered network=%s fd=%d destination=%s", realNet, fd, address)
+			return
+		}
+		log.Infof("[Protect] raw protect_begin network=%s fd=%d destination=%s protector=%T", realNet, fd, address, protector)
+		protector.Protect(fd, realNet)
+		log.Infof("[Protect] raw protect_end network=%s fd=%d destination=%s protector=%T", realNet, fd, address, protector)
+	})
+}
+
 func DialUDPWithProtect(ctx context.Context, network, address string) (net.PacketConn, error) {
 	realNet := normalizeUDP(address)
 	start := time.Now()
