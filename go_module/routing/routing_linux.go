@@ -4,10 +4,13 @@
 package routing
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/vishvananda/netlink"
@@ -44,6 +47,13 @@ func ExecuteCommand(command string) (string, error) {
 func GetDefaultInterfaceNameLinux(gatewayIP string) (string, error) {
 	log.Infof("[Routing][Detect] Looking for default interface via gateway=%s", gatewayIP)
 
+	gateway := net.ParseIP(gatewayIP).To4()
+	if gateway == nil {
+		err := fmt.Errorf("invalid IPv4 gateway %q", gatewayIP)
+		log.Infof("[Routing][Detect][ERROR] %v", err)
+		return "", err
+	}
+
 	routes, err := netlink.RouteList(nil, netlink.FAMILY_V4)
 	if err != nil {
 		log.Infof("[Routing][Detect][ERROR] RouteList failed: %v", err)
@@ -56,7 +66,7 @@ func GetDefaultInterfaceNameLinux(gatewayIP string) (string, error) {
 				r.Gw.String(), r.LinkIndex)
 		}
 
-		if r.Dst == nil && r.Gw != nil && r.Gw.String() == gatewayIP {
+		if r.Dst == nil && r.Gw != nil && r.Gw.To4() != nil && r.Gw.Equal(gateway) {
 			var link netlink.Link
 			link, err = netlink.LinkByIndex(r.LinkIndex)
 			if err != nil {
@@ -70,9 +80,65 @@ func GetDefaultInterfaceNameLinux(gatewayIP string) (string, error) {
 		}
 	}
 
+	iface, procErr := getDefaultInterfaceNameFromProcRoute(gateway)
+	if procErr == nil {
+		log.Infof("[Routing][Detect][OK] Found interface=%s for gateway=%s via /proc/net/route",
+			iface, gatewayIP)
+		return iface, nil
+	}
+	log.Infof("[Routing][Detect][WARN] /proc/net/route fallback failed: %v", procErr)
+
 	err = fmt.Errorf("default interface for gateway %s not found", gatewayIP)
 	log.Infof("[Routing][Detect][ERROR] %v", err)
 	return "", err
+}
+
+func getDefaultInterfaceNameFromProcRoute(gateway net.IP) (string, error) {
+	file, err := os.Open("/proc/net/route")
+	if err != nil {
+		return "", fmt.Errorf("failed to open /proc/net/route: %w", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 3 || fields[0] == "Iface" {
+			continue
+		}
+		if fields[1] != "00000000" {
+			continue
+		}
+
+		routeGateway, err := parseProcRouteIPv4(fields[2])
+		if err != nil {
+			log.Infof("[Routing][Detect][WARN] Invalid /proc/net/route gateway=%s iface=%s err=%v",
+				fields[2], fields[0], err)
+			continue
+		}
+
+		log.Infof("[Routing][Detect] /proc candidate route: iface=%s gw=%s",
+			fields[0], routeGateway.String())
+
+		if routeGateway.Equal(gateway) {
+			return fields[0], nil
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("failed to read /proc/net/route: %w", err)
+	}
+
+	return "", fmt.Errorf("gateway %s not found in /proc/net/route default routes", gateway.String())
+}
+
+func parseProcRouteIPv4(hexGateway string) (net.IP, error) {
+	value, err := strconv.ParseUint(hexGateway, 16, 32)
+	if err != nil {
+		return nil, err
+	}
+
+	return net.IPv4(byte(value), byte(value>>8), byte(value>>16), byte(value>>24)).To4(), nil
 }
 
 func EnsureProxyRoute(proxyIP, gatewayIP, iface string) (bool, error) {

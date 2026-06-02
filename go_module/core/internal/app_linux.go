@@ -246,6 +246,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	})
 	if err != nil {
 		log.Infof("Can't start tun2socks: %v", err)
+		signalInit(initResult, err)
 		return err
 	}
 
@@ -258,6 +259,12 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	common.Client.MarkInCriticalSection(coreCommon.Name)
 	if err = routing.StartRouting(serverIP.String(), gatewayIP.String(), uplinkIface, app.RoutingConfig.TunDeviceName); err != nil {
+		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+		log.Infof("[Linux][Step 10][Rollback] Restoring routing after failed VPN route switch")
+		common.Client.MarkInCriticalSection(coreCommon.Name)
+		if rollbackErr := routing.StopRouting(serverIP.String(), gatewayIP.String(), uplinkIface); rollbackErr != nil {
+			log.Infof("[Linux][Step 10][Rollback][WARN] Failed to restore routing after route switch error: %v", rollbackErr)
+		}
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		err = fmt.Errorf("failed to configure routing: %w", err)
 		log.Infof("[Linux][Step 10][ERROR] %v", err)
