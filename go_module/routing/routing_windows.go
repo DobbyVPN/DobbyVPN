@@ -95,15 +95,17 @@ func EnsureProxyRoute(proxyIp string, gatewayIp string, interfaceName string) (b
 		return false, nil
 	}
 
+	// Try updating an existing route first (locale-independent duplicate handling)
+	setCommand := fmt.Sprintf("netsh interface ipv4 set route %s/32 nexthop=%s interface=\"%s\" metric=0 store=active",
+		proxyIp, gatewayIp, interfaceName)
+	if _, err := ExecuteCommand(setCommand); err == nil {
+		log.Infof("Outline/routing: Proxy route already exists for IP %s; leaving it unchanged", proxyIp)
+		return false, nil
+	}
+
 	addCommand := fmt.Sprintf("netsh interface ipv4 add route %s/32 nexthop=%s interface=\"%s\" metric=0 store=active",
 		proxyIp, gatewayIp, interfaceName)
-	_, err := ExecuteCommand(addCommand)
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "object already exists") ||
-			strings.Contains(strings.ToLower(err.Error()), "already exists") {
-			log.Infof("Outline/routing: Proxy route already exists for IP %s; leaving it unchanged", proxyIp)
-			return false, nil
-		}
+	if _, err := ExecuteCommand(addCommand); err != nil {
 		return false, fmt.Errorf("failed to add proxy route for IP %s: %w", proxyIp, err)
 	}
 	return true, nil
