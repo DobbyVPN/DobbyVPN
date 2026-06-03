@@ -108,6 +108,51 @@ func isLoopbackIP(ip string) bool {
 	return parsed != nil && parsed.IsLoopback()
 }
 
+func startIPv6Block() error {
+	log.Infof("[Routing][IPv6] Installing IPv6 blackhole routes")
+
+	var errs []string
+	for _, subnet := range []string{"::/1", "8000::/1"} {
+		cmd := fmt.Sprintf("route -n add -inet6 -net %s -interface lo0 -blackhole", subnet)
+		out, err := ExecuteCommand(cmd)
+		if err != nil {
+			if strings.Contains(out, "File exists") || strings.Contains(err.Error(), "File exists") {
+				log.Infof("[Routing][IPv6] Blackhole route already exists for %s", subnet)
+				continue
+			}
+			errs = append(errs, fmt.Sprintf("%s: %v, output: %s", subnet, err, out))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to install IPv6 blackhole routes: %s", strings.Join(errs, "; "))
+	}
+
+	log.Infof("[Routing][IPv6][OK] IPv6 blackhole routes installed")
+	return nil
+}
+
+func stopIPv6Block() error {
+	log.Infof("[Routing][IPv6] Removing IPv6 blackhole routes")
+
+	var errs []string
+	for _, subnet := range []string{"::/1", "8000::/1"} {
+		cmd := fmt.Sprintf("route -n delete -inet6 -net %s -interface lo0", subnet)
+		out, err := ExecuteCommand(cmd)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v, output: %s", subnet, err, out))
+		}
+	}
+
+	if len(errs) > 0 {
+		log.Infof("[Routing][IPv6][WARN] Failed to remove some IPv6 blackhole routes: %s", strings.Join(errs, "; "))
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+
+	log.Infof("[Routing][IPv6][OK] IPv6 blackhole routes removed")
+	return nil
+}
+
 func StartRouting(proxyIP, gatewayIP, tunName string) error {
 	log.Infof("[Routing][Start] Switching system routing to VPN (tun=%s)", tunName)
 
@@ -118,6 +163,10 @@ func StartRouting(proxyIP, gatewayIP, tunName string) error {
 	cmdDefault := fmt.Sprintf("route -n add default -interface %s", tunName)
 	if _, err := ExecuteCommand(cmdDefault); err != nil {
 		return fmt.Errorf("failed to set default via %s: %w", tunName, err)
+	}
+
+	if err := startIPv6Block(); err != nil {
+		return err
 	}
 
 	if isLoopbackIP(proxyIP) {
@@ -137,6 +186,10 @@ func StartRouting(proxyIP, gatewayIP, tunName string) error {
 
 func StopRouting(proxyIP, gatewayIP string) error {
 	log.Infof("[Routing][Stop] Restoring system routing")
+
+	if err := stopIPv6Block(); err != nil {
+		log.Infof("[Routing][Stop][WARN] IPv6 block cleanup failed: %v", err)
+	}
 
 	if isLoopbackIP(proxyIP) {
 		log.Infof("[Routing][Stop] Skipping proxy bypass removal for loopback server: %s", proxyIP)

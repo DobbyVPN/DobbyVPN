@@ -216,6 +216,11 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 	start := time.Now()
 	dest := metadata.DestinationAddress()
 	attempt := p.tcpDialAttempt.Add(1)
+	if isBlockedIPv6Destination(metadata) {
+		err := fmt.Errorf("IPv6 destination blocked: %s", dest)
+		log.Infof("[Router] TCP IPv6 blocked attempt=%d dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
+		return nil, err
+	}
 	route, px := "VPN", p.vpn
 	if IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
@@ -246,6 +251,11 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	start := time.Now()
 	dest := metadata.DestinationAddress()
 	attempt := p.udpDialAttempt.Add(1)
+	if isBlockedIPv6Destination(metadata) {
+		err := fmt.Errorf("IPv6 destination blocked: %s", dest)
+		log.Infof("[Router] UDP IPv6 blocked attempt=%d dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
+		return nil, err
+	}
 	route, px := "VPN", p.vpn
 	if IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
@@ -277,6 +287,10 @@ func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.P
 
 func (p *DobbyProxy) Addr() string {
 	return p.vpn.Addr()
+}
+
+func isBlockedIPv6Destination(metadata *M.Metadata) bool {
+	return metadata != nil && metadata.DstIP.Is6() && !metadata.DstIP.Is4In6()
 }
 
 func (p *DobbyProxy) Proto() proto.Proto {

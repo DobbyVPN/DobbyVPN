@@ -38,6 +38,8 @@ var ipv4ReservedSubnets = []string{
 	"240.0.0.0/4",
 }
 
+const ipv6BlockRuleName = "DobbyVPN Block IPv6"
+
 func ExecuteCommand(command string) (string, error) {
 	cmd := exec.Command("cmd", "/C", command)
 
@@ -51,6 +53,35 @@ func ExecuteCommand(command string) (string, error) {
 	}
 	log.Infof("Outline/routing: Command executed: %s, output: %s", log.MaskStr(command), output)
 	return string(output), nil
+}
+
+func startIPv6Block() error {
+	log.Infof("Outline/routing: Installing IPv6 outbound block rule")
+
+	_, _ = ExecuteCommand(fmt.Sprintf("netsh advfirewall firewall delete rule name=\"%s\"", ipv6BlockRuleName))
+
+	command := fmt.Sprintf(
+		"netsh advfirewall firewall add rule name=\"%s\" dir=out action=block enable=yes remoteip=::/0",
+		ipv6BlockRuleName,
+	)
+	if _, err := ExecuteCommand(command); err != nil {
+		return fmt.Errorf("failed to install IPv6 outbound block rule: %w", err)
+	}
+
+	log.Infof("Outline/routing: IPv6 outbound block rule installed")
+	return nil
+}
+
+func stopIPv6Block() error {
+	log.Infof("Outline/routing: Removing IPv6 outbound block rule")
+
+	command := fmt.Sprintf("netsh advfirewall firewall delete rule name=\"%s\"", ipv6BlockRuleName)
+	if _, err := ExecuteCommand(command); err != nil {
+		return fmt.Errorf("failed to remove IPv6 outbound block rule: %w", err)
+	}
+
+	log.Infof("Outline/routing: IPv6 outbound block rule removed")
+	return nil
 }
 
 func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, InterfaceName string, TunGateway string, TunDeviceIP string) error {
@@ -70,6 +101,9 @@ func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, Interf
 		return err
 	}
 	log.Infof("Outline/routing: Added default IPv4 redirect routes via TUN")
+	if err := startIPv6Block(); err != nil {
+		return err
+	}
 
 	log.Infof("Outline/routing: Routing configuration completed successfully.")
 	return nil
@@ -77,6 +111,9 @@ func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, Interf
 
 func StopRouting(proxyIp string, TunDeviceName string, GatewayIP string, InterfaceName string, TunGateway string) {
 	log.Infof("Outline/routing: Cleaning up routing table and rules...")
+	if err := stopIPv6Block(); err != nil {
+		log.Infof("Outline/routing: Failed to remove IPv6 outbound block rule: %v", err)
+	}
 	if err := DeleteProxyRoute(proxyIp, GatewayIP, InterfaceName); err != nil {
 		log.Infof("Outline/routing: Failed to delete proxy route for IP %s: %v", proxyIp, err)
 	}

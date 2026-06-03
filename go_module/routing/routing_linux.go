@@ -236,6 +236,43 @@ func CleanupMarkedRouting(tableID, priority int, iface, gatewayIP string) error 
 	return nil
 }
 
+func startIPv6Block() error {
+	log.Infof("[Routing][IPv6] Installing IPv6 block routes")
+
+	var errs []string
+	for _, subnet := range []string{"::/1", "8000::/1"} {
+		if _, err := ExecuteCommand(fmt.Sprintf("ip -6 route replace blackhole %s metric 1", subnet)); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", subnet, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to install IPv6 block routes: %s", strings.Join(errs, "; "))
+	}
+
+	log.Infof("[Routing][IPv6][OK] IPv6 block routes installed")
+	return nil
+}
+
+func stopIPv6Block() error {
+	log.Infof("[Routing][IPv6] Removing IPv6 block routes")
+
+	var errs []string
+	for _, subnet := range []string{"::/1", "8000::/1"} {
+		if _, err := ExecuteCommand(fmt.Sprintf("ip -6 route del blackhole %s metric 1", subnet)); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", subnet, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		log.Infof("[Routing][IPv6][WARN] Failed to remove some IPv6 block routes: %s", strings.Join(errs, "; "))
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+
+	log.Infof("[Routing][IPv6][OK] IPv6 block routes removed")
+	return nil
+}
+
 func StartRouting(proxyIP, gatewayIP, uplinkIface, tunName string) error {
 	log.Infof("[Routing][Start] Switching default route → TUN (%s)", tunName)
 
@@ -245,6 +282,10 @@ func StartRouting(proxyIP, gatewayIP, uplinkIface, tunName string) error {
 	log.Infof("[Routing][Start] Setting default → dev %s", tunName)
 	if _, err := ExecuteCommand(fmt.Sprintf("ip route replace default dev %s", tunName)); err != nil {
 		return fmt.Errorf("failed to set default via tun %s: %w", tunName, err)
+	}
+
+	if err := startIPv6Block(); err != nil {
+		return err
 	}
 
 	log.Infof("[Routing][Start] Ensuring VPN server bypass: %s via %s dev %s",
@@ -265,6 +306,10 @@ func StartRouting(proxyIP, gatewayIP, uplinkIface, tunName string) error {
 
 func StopRouting(proxyIP, gatewayIP, uplinkIface string) error {
 	log.Infof("[Routing][Stop] Restoring system routing")
+
+	if err := stopIPv6Block(); err != nil {
+		log.Infof("[Routing][Stop][WARN] IPv6 block cleanup failed: %v", err)
+	}
 
 	log.Infof("[Routing][Stop] Removing proxy route: %s", proxyIP)
 	if isLoopbackIP(proxyIP) {
