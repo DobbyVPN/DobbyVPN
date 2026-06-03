@@ -28,6 +28,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 
+private val allowedExternalSchemes = setOf("mailto", "tel", "intent", "market", "geo")
+
 @Composable
 actual fun WebViewScreen(
     url: String,
@@ -50,11 +52,19 @@ actual fun WebViewScreen(
                                 request: WebResourceRequest?
                             ): Boolean {
                                 val target = request?.url ?: return false
+                                if (request.isForMainFrame != true) return false
                                 val scheme = target.scheme?.lowercase()
-                                if (scheme == "http" || scheme == "https") {
-                                    return false
+                                return when (scheme) {
+                                    "http", "https" -> false
+                                    in allowedExternalSchemes -> launchExternal(context, target)
+                                    else -> {
+                                        Log.w(
+                                            "DobbyWebView",
+                                            "Blocked unsupported external URI scheme: ${scheme ?: "unknown"}"
+                                        )
+                                        true
+                                    }
                                 }
-                                return launchExternal(context, target)
                             }
 
                             override fun onPageStarted(
@@ -83,7 +93,7 @@ actual fun WebViewScreen(
                                 isLoading = false
                                 Log.w(
                                     "DobbyWebView",
-                                    "load error ${error?.errorCode}: $errorDescription @ ${request.url}"
+                                    "load error ${error?.errorCode}: $errorDescription @ ${request.url.toLogString()}"
                                 )
                             }
                         }
@@ -120,8 +130,22 @@ private fun launchExternal(context: Context, uri: Uri): Boolean {
         context.startActivity(intent)
         true
     } catch (e: ActivityNotFoundException) {
-        Log.w("DobbyWebView", "No handler for $uri", e)
+        Log.w("DobbyWebView", "No handler for ${uri.toLogString()}", e)
         Toast.makeText(context, "No app to open this link", Toast.LENGTH_LONG).show()
         true
+    }
+}
+
+private fun Uri.toLogString(): String {
+    val scheme = scheme ?: return "unknown"
+    if (isOpaque) return "$scheme:<redacted>"
+
+    val host = host
+    val port = if (port != -1) ":$port" else ""
+    val path = encodedPath.orEmpty()
+    return if (host != null) {
+        "$scheme://$host$port$path"
+    } else {
+        "$scheme:$path"
     }
 }
