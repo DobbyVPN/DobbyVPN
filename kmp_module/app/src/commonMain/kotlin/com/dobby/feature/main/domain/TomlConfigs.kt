@@ -214,11 +214,17 @@ data class ConnectionProfile(
 )
 
 @Serializable
+data class TrustTunnelConfig(
+    val Config: String,
+)
+
+@Serializable
 data class TomlConfigs(
     val Description: String? = null,
     val Telemetry: TelemetryConfig? = null,
     val Outline: List<OutlineConfig> = emptyList(),
     val AmneziaWG: List<AmneziaWGConfig> = emptyList(),
     val Xray: List<XrayClientConfig> = emptyList(),
+    val TrustTunnel: List<TrustTunnelConfig> = emptyList(),
     val ExcludeIPs: ExcludeIPsConfig? = null
 )

@@ -13,6 +13,7 @@ import (
 	"go_module/core/pkg"
 	"go_module/log"
 	"go_module/outline"
+	"go_module/trusttunnel"
 	"go_module/xray"
 )
 
@@ -107,6 +108,8 @@ func NewVpnClient(config string, protocol string, fd int32) {
 		device, err = xray.NewXrayDevice(config)
 	case "outline":
 		device, err = outline.NewOutlineDevice(config)
+	case "trusttunnel":
+		device, err = trusttunnel.NewTrustTunnelDevice(config)
 	default:
 		setLastError("unsupported protocol: " + protocol)
 		log.Debugf("kotlin_exports", "NewVpnClient() failed: unsupported protocol=%s", protocol)

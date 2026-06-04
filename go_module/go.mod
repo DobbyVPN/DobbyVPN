@@ -6,6 +6,8 @@ replace github.com/cbeuw/Cloak => ./modules/Cloak
 
 replace github.com/xjasonlyu/tun2socks/v2/log => ./go_module/log
 
+replace trusttunnel-go => github.com/TrueKotenka/TrustTunnel-Go v0.0.0-20260603180438-eb5bb1370f3d
+
 require (
 	github.com/amnezia-vpn/amneziawg-go v0.2.16
 	github.com/amnezia-vpn/amneziawg-windows v0.1.8
@@ -106,6 +108,7 @@ require (
 	golang.org/x/mobile v0.0.0-20260520154334-0e4426e1883d // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	honnef.co/go/tools v0.5.1 // indirect
+	trusttunnel-go v0.0.0-00010101000000-000000000000 // indirect
 )
 
 tool golang.org/x/mobile/cmd/gobind

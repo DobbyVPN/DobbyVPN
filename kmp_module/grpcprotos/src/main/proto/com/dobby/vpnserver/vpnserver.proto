@@ -22,6 +22,11 @@ service Vpn {
   rpc StartXray (StartXrayRequest)   returns (StartXrayResponse);
   rpc StopXray (Empty)               returns (Empty);
 
+  // trusttunnel.go
+  rpc GetTrustTunnelLastError(Empty)             returns (GetTrustTunnelLastErrorResponse);
+  rpc StartTrustTunnel (StartTrustTunnelRequest) returns (StartTrustTunnelResponse);
+  rpc StopTrustTunnel (Empty)                    returns (Empty);
+
   // health_check.go
   rpc CouldStart (Empty)                        returns (CouldStartResponce);
   rpc GetConnectionState (Empty)                returns (GetConnectionStateResponce);
@@ -69,6 +74,18 @@ message StartXrayRequest {
 }
 
 message StartXrayResponse {
+  int32 result = 1;
+}
+
+message GetTrustTunnelLastErrorResponse {
+  string error = 1;
+}
+
+message StartTrustTunnelRequest {
+  string config = 1;
+}
+
+message StartTrustTunnelResponse {
   int32 result = 1;
 }
 

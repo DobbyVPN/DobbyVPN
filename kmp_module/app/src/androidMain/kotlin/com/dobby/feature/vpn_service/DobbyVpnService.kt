@@ -25,6 +25,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.koin.android.ext.android.inject
 import java.util.*
+import com.dobby.feature.vpn_service.domain.trusttunnel.TrustTunnelInteractor
+
+const val IS_FROM_UI = "isLaunchedFromUi"
 
 class DobbyVpnService : VpnService() {
     companion object {
@@ -47,6 +50,7 @@ class DobbyVpnService : VpnService() {
     private val outlineInteractor: OutlineInteractor by inject()
     private val awgInteractor: AmneziaWGInteractor by inject()
     private val xrayInteractor: XrayInteractor by inject()
+    private val trustTunnelInteractor: TrustTunnelInteractor by inject()
     private val dobbyConfigsRepository: DobbyConfigsRepository by inject()
     private val connectionState: ConnectionStateRepository by inject()
 
@@ -101,12 +105,12 @@ class DobbyVpnService : VpnService() {
             "[svc:$serviceId] onStartCommand(startId=$startId flags=$flags) vpnInterface=${vpnInterface?.fd}"
         )
 
-        startService()
+        startService(intent)
 
         return START_NOT_STICKY
     }
 
-    fun startService() {
+    fun startService(intent: Intent? = null) {
         logger.log(
             "[svc:$serviceId] startService() vpnInterface=${vpnInterface?.fd}"
         )
@@ -121,7 +125,7 @@ class DobbyVpnService : VpnService() {
                 }
 
                 geoRouting.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
-                startConfiguredProtocol()
+                startConfiguredProtocol(intent)
             }
         }
     }
@@ -145,11 +149,12 @@ class DobbyVpnService : VpnService() {
         logger.log("[svc:$serviceId] onDestroy() end")
     }
 
-    private suspend fun startConfiguredProtocol(): Boolean =
+    private suspend fun startConfiguredProtocol(intent: Intent?): Boolean =
         when (dobbyConfigsRepository.getVpnInterface()) {
             VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
             VpnInterface.AMNEZIA_WG -> startAwg()
             VpnInterface.XRAY -> startXray()
+            VpnInterface.TRUST_TUNNEL -> startTrustTunnel(intent)
             VpnInterface.NONE -> startNone()
         }
 
@@ -208,6 +213,11 @@ class DobbyVpnService : VpnService() {
         return false
     }
 
+    private suspend fun startTrustTunnel(intent: Intent?): Boolean {
+        trustTunnelInteractor.startTrustTunnel(intent, instance)
+        return true
+    }
+
     fun stopService() {
         logger.log("[svc:$serviceId] stopService() vpnInterface=${vpnInterface?.fd}")
         runBlocking {
@@ -228,6 +238,11 @@ class DobbyVpnService : VpnService() {
             xrayInteractor.stopXray(instance)
         }.onFailure { e ->
             logger.log("[svc:$serviceId] stopProtocols(): xray disconnect warning: ${e.message}")
+        }
+        runCatching {
+            trustTunnelInteractor.stopTrustTunnel(instance, updateState = false)
+        }.onFailure { e ->
+            logger.log("[svc:$serviceId] stopProtocols(): trusttunnel disconnect warning: ${e.message}")
         }
         runCatching {
             awgInteractor.stopAwg()

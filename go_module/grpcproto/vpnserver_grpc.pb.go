@@ -8,6 +8,7 @@ package grpcproto
 
 import (
 	context "context"
+
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -27,7 +28,11 @@ const (
 	Vpn_GetXrayLastError_FullMethodName         = "/grpcproto.Vpn/GetXrayLastError"
 	Vpn_StartXray_FullMethodName                = "/grpcproto.Vpn/StartXray"
 	Vpn_StopXray_FullMethodName                 = "/grpcproto.Vpn/StopXray"
+	Vpn_GetTrustTunnelLastError_FullMethodName  = "/grpcproto.Vpn/GetTrustTunnelLastError"
+	Vpn_StartTrustTunnel_FullMethodName         = "/grpcproto.Vpn/StartTrustTunnel"
+	Vpn_StopTrustTunnel_FullMethodName          = "/grpcproto.Vpn/StopTrustTunnel"
 	Vpn_CouldStart_FullMethodName               = "/grpcproto.Vpn/CouldStart"
+	Vpn_CheckServerAlive_FullMethodName         = "/grpcproto.Vpn/CheckServerAlive"
 	Vpn_GetConnectionState_FullMethodName       = "/grpcproto.Vpn/GetConnectionState"
 	Vpn_InitHealthCheck_FullMethodName          = "/grpcproto.Vpn/InitHealthCheck"
 	Vpn_StartHealthCheck_FullMethodName         = "/grpcproto.Vpn/StartHealthCheck"
@@ -57,6 +62,10 @@ type VpnClient interface {
 	GetXrayLastError(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetXrayLastErrorResponse, error)
 	StartXray(ctx context.Context, in *StartXrayRequest, opts ...grpc.CallOption) (*StartXrayResponse, error)
 	StopXray(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
+	// trusttunnel.go
+	GetTrustTunnelLastError(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetTrustTunnelLastErrorResponse, error)
+	StartTrustTunnel(ctx context.Context, in *StartTrustTunnelRequest, opts ...grpc.CallOption) (*StartTrustTunnelResponse, error)
+	StopTrustTunnel(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	// health_check.go
 	CouldStart(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*CouldStartResponce, error)
 	GetConnectionState(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetConnectionStateResponce, error)
@@ -158,6 +167,36 @@ func (c *vpnClient) StopXray(ctx context.Context, in *Empty, opts ...grpc.CallOp
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
 	err := c.cc.Invoke(ctx, Vpn_StopXray_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vpnClient) GetTrustTunnelLastError(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetTrustTunnelLastErrorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTrustTunnelLastErrorResponse)
+	err := c.cc.Invoke(ctx, Vpn_GetTrustTunnelLastError_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vpnClient) StartTrustTunnel(ctx context.Context, in *StartTrustTunnelRequest, opts ...grpc.CallOption) (*StartTrustTunnelResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StartTrustTunnelResponse)
+	err := c.cc.Invoke(ctx, Vpn_StartTrustTunnel_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vpnClient) StopTrustTunnel(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, Vpn_StopTrustTunnel_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -309,6 +348,10 @@ type VpnServer interface {
 	GetXrayLastError(context.Context, *Empty) (*GetXrayLastErrorResponse, error)
 	StartXray(context.Context, *StartXrayRequest) (*StartXrayResponse, error)
 	StopXray(context.Context, *Empty) (*Empty, error)
+	// trusttunnel.go
+	GetTrustTunnelLastError(context.Context, *Empty) (*GetTrustTunnelLastErrorResponse, error)
+	StartTrustTunnel(context.Context, *StartTrustTunnelRequest) (*StartTrustTunnelResponse, error)
+	StopTrustTunnel(context.Context, *Empty) (*Empty, error)
 	// health_check.go
 	CouldStart(context.Context, *Empty) (*CouldStartResponce, error)
 	GetConnectionState(context.Context, *Empty) (*GetConnectionStateResponce, error)
@@ -359,6 +402,15 @@ func (UnimplementedVpnServer) StartXray(context.Context, *StartXrayRequest) (*St
 }
 func (UnimplementedVpnServer) StopXray(context.Context, *Empty) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StopXray not implemented")
+}
+func (UnimplementedVpnServer) GetTrustTunnelLastError(context.Context, *Empty) (*GetTrustTunnelLastErrorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTrustTunnelLastError not implemented")
+}
+func (UnimplementedVpnServer) StartTrustTunnel(context.Context, *StartTrustTunnelRequest) (*StartTrustTunnelResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StartTrustTunnel not implemented")
+}
+func (UnimplementedVpnServer) StopTrustTunnel(context.Context, *Empty) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method StopTrustTunnel not implemented")
 }
 func (UnimplementedVpnServer) CouldStart(context.Context, *Empty) (*CouldStartResponce, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CouldStart not implemented")
@@ -560,6 +612,60 @@ func _Vpn_StopXray_Handler(srv interface{}, ctx context.Context, dec func(interf
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(VpnServer).StopXray(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_GetTrustTunnelLastError_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).GetTrustTunnelLastError(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_GetTrustTunnelLastError_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).GetTrustTunnelLastError(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_StartTrustTunnel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartTrustTunnelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).StartTrustTunnel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_StartTrustTunnel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).StartTrustTunnel(ctx, req.(*StartTrustTunnelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_StopTrustTunnel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).StopTrustTunnel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_StopTrustTunnel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).StopTrustTunnel(ctx, req.(*Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -836,6 +942,18 @@ var Vpn_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StopXray",
 			Handler:    _Vpn_StopXray_Handler,
+		},
+		{
+			MethodName: "GetTrustTunnelLastError",
+			Handler:    _Vpn_GetTrustTunnelLastError_Handler,
+		},
+		{
+			MethodName: "StartTrustTunnel",
+			Handler:    _Vpn_StartTrustTunnel_Handler,
+		},
+		{
+			MethodName: "StopTrustTunnel",
+			Handler:    _Vpn_StopTrustTunnel_Handler,
 		},
 		{
 			MethodName: "CouldStart",
