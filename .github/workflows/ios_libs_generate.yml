@@ -40,7 +40,7 @@ jobs:
       - name: Install gomobile & init
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         run: |
-          go install golang.org/x/mobile/cmd/gomobile@$(cd go_module && go list -m -f '{{.Version}}' golang.org/x/mobile)
+          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
           gomobile init
 
       - name: Fetch gomobile runtime

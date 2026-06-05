@@ -17,6 +17,7 @@ val gomobileExecutable = providers.gradleProperty("gomobileExecutable")
     })
 val goCacheDir = layout.buildDirectory.dir("go-cache")
 val goTmpDir = layout.buildDirectory.dir("go-tmp")
+val goRootDir = providers.environmentVariable("GOROOT")
 val androidSdkDir = providers.environmentVariable("ANDROID_HOME")
     .orElse(providers.environmentVariable("ANDROID_SDK_ROOT"))
     .orElse(providers.provider {
@@ -246,6 +247,12 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
     inputs.file(goModuleDir.resolve("go.mod"))
     inputs.file(goModuleDir.resolve("go.sum"))
     outputs.file(outputFile)
+    val gomobilePath = listOf(
+        goRootDir.orNull?.let { File(it, "bin").absolutePath }.orEmpty(),
+        File(System.getProperty("user.home"), "go/bin").absolutePath,
+        "/usr/local/go/bin",
+        System.getenv("PATH").orEmpty()
+    ).filter { it.isNotBlank() }.distinct().joinToString(File.pathSeparator)
 
     doFirst {
         check(cloakInternalDir.isDirectory) {
@@ -257,6 +264,9 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
             from(cloakInternalDir)
             into(goModuleCloakInternalDir)
         }
+        logger.lifecycle("gomobileBindAndroid: gomobile=${gomobileExecutable.get()}")
+        logger.lifecycle("gomobileBindAndroid: GOROOT=${goRootDir.orNull.orEmpty()}")
+        logger.lifecycle("gomobileBindAndroid: PATH=$gomobilePath")
     }
 
     workingDir = goModuleDir
@@ -273,12 +283,11 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
     )
     environment(
         "PATH",
-        listOf(
-            "/usr/local/go/bin",
-            File(System.getProperty("user.home"), "go/bin").absolutePath,
-            System.getenv("PATH").orEmpty()
-        ).joinToString(File.pathSeparator)
+        gomobilePath
     )
+    goRootDir.orNull?.takeIf { it.isNotBlank() }?.let {
+        environment("GOROOT", it)
+    }
     environment("GO111MODULE", "on")
     environment("GOCACHE", goCacheDir.get().asFile.absolutePath)
     environment("GOTMPDIR", goTmpDir.get().asFile.absolutePath)
@@ -327,9 +336,7 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
                 "PATH",
                 listOf(
                     toolchainBin.absolutePath,
-                    "/usr/local/go/bin",
-                    File(System.getProperty("user.home"), "go/bin").absolutePath,
-                    System.getenv("PATH").orEmpty()
+                    gomobilePath
                 ).joinToString(File.pathSeparator)
             )
         }

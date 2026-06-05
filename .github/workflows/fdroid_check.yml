@@ -102,11 +102,10 @@ jobs:
       - name: Install gomobile
         run: |
           cd go_module
-          if [ ! -x "$HOME/go/bin/gomobile" ]; then
-            go install golang.org/x/mobile/cmd/gomobile@$(go list -m -f '{{.Version}}' golang.org/x/mobile)
-          fi
+          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
           cd ..
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
+          go env GOROOT GOVERSION GOFLAGS
           "$HOME/go/bin/gomobile" init
 
       - name: Remove non-Android modules
