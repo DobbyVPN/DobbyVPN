@@ -98,7 +98,11 @@ func getDefaultInterfaceNameFromProcRoute(gateway net.IP) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to open /proc/net/route: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Infof("[Routing][Detect][WARN] Failed to close /proc/net/route: %v", err)
+		}
+	}()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -138,7 +142,8 @@ func parseProcRouteIPv4(hexGateway string) (net.IP, error) {
 		return nil, err
 	}
 
-	return net.IPv4(byte(value), byte(value>>8), byte(value>>16), byte(value>>24)).To4(), nil
+	gateway := uint32(value)
+	return net.IPv4(byte(gateway), byte(gateway>>8), byte(gateway>>16), byte(gateway>>24)).To4(), nil
 }
 
 func EnsureProxyRoute(proxyIP, gatewayIP, iface string) (bool, error) {

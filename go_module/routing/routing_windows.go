@@ -60,16 +60,27 @@ func startIPv6Block() error {
 
 	_, _ = ExecuteCommand(fmt.Sprintf("netsh advfirewall firewall delete rule name=\"%s\"", ipv6BlockRuleName))
 
-	command := fmt.Sprintf(
-		"netsh advfirewall firewall add rule name=\"%s\" dir=out action=block enable=yes remoteip=::/0",
-		ipv6BlockRuleName,
-	)
-	if _, err := ExecuteCommand(command); err != nil {
-		return fmt.Errorf("failed to install IPv6 outbound block rule: %w", err)
+	ipv6RemoteRanges := []string{
+		"0000:0000:0000:0000:0000:0000:0000:0000-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+		"0::/0",
+		"::/0",
+	}
+	var errs []string
+	for _, remoteIP := range ipv6RemoteRanges {
+		command := fmt.Sprintf(
+			"netsh advfirewall firewall add rule name=\"%s\" dir=out action=block enable=yes remoteip=%s",
+			ipv6BlockRuleName,
+			remoteIP,
+		)
+		if _, err := ExecuteCommand(command); err == nil {
+			log.Infof("Outline/routing: IPv6 outbound block rule installed with remoteip=%s", remoteIP)
+			return nil
+		} else {
+			errs = append(errs, fmt.Sprintf("remoteip=%s: %v", remoteIP, err))
+		}
 	}
 
-	log.Infof("Outline/routing: IPv6 outbound block rule installed")
-	return nil
+	return fmt.Errorf("failed to install IPv6 outbound block rule: %s", strings.Join(errs, "; "))
 }
 
 func stopIPv6Block() error {
@@ -102,7 +113,7 @@ func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, Interf
 	}
 	log.Infof("Outline/routing: Added default IPv4 redirect routes via TUN")
 	if err := startIPv6Block(); err != nil {
-		return err
+		log.Infof("Outline/routing: IPv6 outbound block rule was not installed; continuing with IPv4 routing: %v", err)
 	}
 
 	log.Infof("Outline/routing: Routing configuration completed successfully.")
