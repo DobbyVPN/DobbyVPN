@@ -68,6 +68,23 @@ func startPlatformEngine(cfg interface{}) error {
 		return fmt.Errorf("ifconfig failed: %w (%s)", err, out)
 	}
 
+	cmd = exec.CommandContext(
+		context.Background(),
+		"ifconfig",
+		deviceName,
+		"inet6",
+		"fd00:dbb::2",
+		"fd00:dbb::1",
+		"prefixlen",
+		"128",
+		"up",
+	)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		engine.Stop()
+		return fmt.Errorf("ifconfig inet6 failed: %w (%s)", err, out)
+	}
+
 	return nil
 }
 

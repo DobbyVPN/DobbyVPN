@@ -96,6 +96,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	log.Infof("[Protocol] ProtocolDevice successfully created")
 
 	var closeOnce sync.Once
+	tunName := ""
 	closeAll := func() {
 		closeOnce.Do(func() {
 			log.Infof("[Lifecycle] Shutting down VPN components (tun2socks + device)")
@@ -115,7 +116,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	defer func() {
 		common.Client.MarkInCriticalSection(coreCommon.Name)
 		log.Infof("[Routing] Restoring system routing (removing VPN routes)...")
-		routing.StopRouting(serverIP.String(), gatewayIP.String())
+		routing.StopRouting(serverIP.String(), gatewayIP.String(), tunName)
 		log.Infof("[Routing] System default route restored via %s", gatewayIP.String())
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 	}()
@@ -132,7 +133,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		return err
 	}
 
-	tunName := platform_engine.LastIface
+	tunName = platform_engine.LastIface
 
 	log.Infof("[Tunnel] tun2socks started, interface: %s", tunName)
 
