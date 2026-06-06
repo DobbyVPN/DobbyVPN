@@ -1,6 +1,7 @@
 source "https://rubygems.org"
 
 gem "fastlane"
+gem "multi_json"
 
 # Plugins support
 plugins_path = File.join(File.dirname(__FILE__), 'fastlane', 'Pluginfile')
