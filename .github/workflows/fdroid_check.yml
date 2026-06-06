@@ -28,6 +28,8 @@ jobs:
   scan-apk:
     name: Scan APK for proprietary packages
     runs-on: ubuntu-latest
+    env:
+      FDROID_COMPAT_SOURCE_ROOT: /home/vagrant/build/com.dobby.vpn
     steps:
       - uses: actions/checkout@v4
         with:
@@ -108,17 +110,23 @@ jobs:
           go env GOROOT GOVERSION GOFLAGS
           "$HOME/go/bin/gomobile" init
 
+      - name: Prepare F-Droid-compatible source path
+        run: |
+          sudo mkdir -p "$(dirname "$FDROID_COMPAT_SOURCE_ROOT")"
+          sudo chown -R "$USER:$USER" /home/vagrant
+          rsync -a --delete --exclude='.git' "$GITHUB_WORKSPACE/" "$FDROID_COMPAT_SOURCE_ROOT/"
+
       - name: Remove non-Android modules
         run: |
-          rm -rf swift_module
+          rm -rf "$FDROID_COMPAT_SOURCE_ROOT/swift_module"
 
       - name: Build gomobile Android backend
-        working-directory: kmp_module
+        working-directory: /home/vagrant/build/com.dobby.vpn/kmp_module
         run: |
           ./gradlew :app:gomobileBindAndroid --build-cache --parallel
 
       - name: Build APK
-        working-directory: kmp_module
+        working-directory: /home/vagrant/build/com.dobby.vpn/kmp_module
         run: |
           ./gradlew app:assembleRelease --build-cache --parallel \
             -Pandroid.injected.version.code=1 \

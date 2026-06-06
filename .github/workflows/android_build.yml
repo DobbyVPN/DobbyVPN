@@ -12,6 +12,7 @@ jobs:
       APP_MAINTENANCE_VERSION: ${{ vars.MAINTENANCE }}
       GITHUB_SHA: ${{ github.sha }}
       GITHUB_REPOSITORY: ${{ github.repository }}
+      FDROID_COMPAT_SOURCE_ROOT: /home/vagrant/build/com.dobby.vpn
 
     steps:
       - uses: actions/checkout@v4
@@ -94,11 +95,19 @@ jobs:
           go env GOROOT GOVERSION GOFLAGS
           "$HOME/go/bin/gomobile" init
 
+      - name: Prepare F-Droid-compatible source path
+        run: |
+          sudo mkdir -p "$(dirname "$FDROID_COMPAT_SOURCE_ROOT")"
+          sudo chown -R "$USER:$USER" /home/vagrant
+          rsync -a --delete --exclude='.git' "$GITHUB_WORKSPACE/" "$FDROID_COMPAT_SOURCE_ROOT/"
+
       - name: Build unsigned via Fastlane
+        working-directory: /home/vagrant/build/com.dobby.vpn
         run: |
           bundle exec fastlane android build_android
 
       - name: Build & sign via Fastlane
+        working-directory: /home/vagrant/build/com.dobby.vpn
         run: |
           bundle exec fastlane android build_android_and_signing
         env:
@@ -111,10 +120,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dobbyvpn-android-sign.apk
-          path: fastlane/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-sign.apk
+          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-sign.apk
 
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
           name: dobbyvpn-android-unsign.apk
-          path: fastlane/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-unsign.apk
+          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-unsign.apk
