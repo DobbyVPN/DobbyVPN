@@ -40,7 +40,7 @@ val androidNdkDir = providers.gradleProperty("gomobileAndroidNdkHome")
             return@provider ""
         }
         val ndkRoot = File(sdkDir, "ndk")
-        val preferredNdk = ndkRoot.resolve("27.2.12479018")
+        val preferredNdk = ndkRoot.resolve("27.3.13750724")
         when {
             preferredNdk.isDirectory -> preferredNdk.absolutePath
             ndkRoot.isDirectory -> ndkRoot.listFiles()
