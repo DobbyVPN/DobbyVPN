@@ -6,11 +6,11 @@ package routing
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 
 	"github.com/vishvananda/netlink"
@@ -137,13 +137,15 @@ func getDefaultInterfaceNameFromProcRoute(gateway net.IP) (string, error) {
 }
 
 func parseProcRouteIPv4(hexGateway string) (net.IP, error) {
-	value, err := strconv.ParseUint(hexGateway, 16, 32)
+	decoded, err := hex.DecodeString(hexGateway)
 	if err != nil {
 		return nil, err
 	}
+	if len(decoded) != net.IPv4len {
+		return nil, fmt.Errorf("invalid IPv4 gateway length %d", len(decoded))
+	}
 
-	gateway := uint32(value)
-	return net.IPv4(byte(gateway), byte(gateway>>8), byte(gateway>>16), byte(gateway>>24)).To4(), nil
+	return net.IPv4(decoded[3], decoded[2], decoded[1], decoded[0]).To4(), nil
 }
 
 func EnsureProxyRoute(proxyIP, gatewayIP, iface string) (bool, error) {
