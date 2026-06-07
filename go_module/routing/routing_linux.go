@@ -6,11 +6,11 @@ package routing
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 
 	"github.com/vishvananda/netlink"
@@ -98,7 +98,11 @@ func getDefaultInterfaceNameFromProcRoute(gateway net.IP) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to open /proc/net/route: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Infof("[Routing][Detect][WARN] Failed to close /proc/net/route: %v", err)
+		}
+	}()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -133,12 +137,15 @@ func getDefaultInterfaceNameFromProcRoute(gateway net.IP) (string, error) {
 }
 
 func parseProcRouteIPv4(hexGateway string) (net.IP, error) {
-	value, err := strconv.ParseUint(hexGateway, 16, 32)
+	decoded, err := hex.DecodeString(hexGateway)
 	if err != nil {
 		return nil, err
 	}
+	if len(decoded) != net.IPv4len {
+		return nil, fmt.Errorf("invalid IPv4 gateway length %d", len(decoded))
+	}
 
-	return net.IPv4(byte(value), byte(value>>8), byte(value>>16), byte(value>>24)).To4(), nil
+	return net.IPv4(decoded[3], decoded[2], decoded[1], decoded[0]).To4(), nil
 }
 
 func EnsureProxyRoute(proxyIP, gatewayIP, iface string) (bool, error) {
@@ -236,6 +243,43 @@ func CleanupMarkedRouting(tableID, priority int, iface, gatewayIP string) error 
 	return nil
 }
 
+func startIPv6Block() error {
+	log.Infof("[Routing][IPv6] Installing IPv6 block routes")
+
+	var errs []string
+	for _, subnet := range []string{"::/1", "8000::/1"} {
+		if _, err := ExecuteCommand(fmt.Sprintf("ip -6 route replace blackhole %s metric 1", subnet)); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", subnet, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to install IPv6 block routes: %s", strings.Join(errs, "; "))
+	}
+
+	log.Infof("[Routing][IPv6][OK] IPv6 block routes installed")
+	return nil
+}
+
+func stopIPv6Block() error {
+	log.Infof("[Routing][IPv6] Removing IPv6 block routes")
+
+	var errs []string
+	for _, subnet := range []string{"::/1", "8000::/1"} {
+		if _, err := ExecuteCommand(fmt.Sprintf("ip -6 route del blackhole %s metric 1", subnet)); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", subnet, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		log.Infof("[Routing][IPv6][WARN] Failed to remove some IPv6 block routes: %s", strings.Join(errs, "; "))
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+
+	log.Infof("[Routing][IPv6][OK] IPv6 block routes removed")
+	return nil
+}
+
 func StartRouting(proxyIP, gatewayIP, uplinkIface, tunName string) error {
 	log.Infof("[Routing][Start] Switching default route → TUN (%s)", tunName)
 
@@ -245,6 +289,10 @@ func StartRouting(proxyIP, gatewayIP, uplinkIface, tunName string) error {
 	log.Infof("[Routing][Start] Setting default → dev %s", tunName)
 	if _, err := ExecuteCommand(fmt.Sprintf("ip route replace default dev %s", tunName)); err != nil {
 		return fmt.Errorf("failed to set default via tun %s: %w", tunName, err)
+	}
+
+	if err := startIPv6Block(); err != nil {
+		return err
 	}
 
 	log.Infof("[Routing][Start] Ensuring VPN server bypass: %s via %s dev %s",
@@ -265,6 +313,10 @@ func StartRouting(proxyIP, gatewayIP, uplinkIface, tunName string) error {
 
 func StopRouting(proxyIP, gatewayIP, uplinkIface string) error {
 	log.Infof("[Routing][Stop] Restoring system routing")
+
+	if err := stopIPv6Block(); err != nil {
+		log.Infof("[Routing][Stop][WARN] IPv6 block cleanup failed: %v", err)
+	}
 
 	log.Infof("[Routing][Stop] Removing proxy route: %s", proxyIP)
 	if isLoopbackIP(proxyIP) {

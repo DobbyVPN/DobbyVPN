@@ -1,5 +1,35 @@
 package com.dobby.feature.vpn_service.common
 
+import android.net.VpnService
+import com.dobby.feature.logging.Logger
+
+private const val IPV6_BLOCK_ADDRESS = "fd00:dbb::1"
+private const val IPV6_BLOCK_ADDRESS_PREFIX = 128
+private const val IPV6_DEFAULT_ROUTE = "::"
+private const val IPV6_DEFAULT_ROUTE_PREFIX = 0
+
+fun VpnService.Builder.addIpv6BlockingRoute(logger: Logger, sessionName: String): VpnService.Builder {
+    return runCatching {
+        addAddress(IPV6_BLOCK_ADDRESS, IPV6_BLOCK_ADDRESS_PREFIX)
+        addRoute(IPV6_DEFAULT_ROUTE, IPV6_DEFAULT_ROUTE_PREFIX)
+        logger.log(
+            "$sessionName IPv6 default route captured by VPN interface: " +
+                "$IPV6_BLOCK_ADDRESS/$IPV6_BLOCK_ADDRESS_PREFIX, $IPV6_DEFAULT_ROUTE/$IPV6_DEFAULT_ROUTE_PREFIX"
+        )
+        this
+    }.onFailure { error ->
+        logger.log("$sessionName failed to install IPv6 blocking route: ${error.message}")
+    }.getOrThrow()
+}
+
+fun String.isIpv4Literal(): Boolean {
+    val parts = split(".")
+    return parts.size == 4 && parts.all { part ->
+        val octet = part.toIntOrNull()
+        part.isNotEmpty() && part.all { it.isDigit() } && octet != null && octet in 0..255
+    }
+}
+
 val reservedBypassSubnets = listOf(
     "1.0.0.0/8", "2.0.0.0/7", "4.0.0.0/6", "8.0.0.0/7", "11.0.0.0/8",
     "12.0.0.0/6", "16.0.0.0/4", "32.0.0.0/3", "64.0.0.0/3", "96.0.0.0/6",

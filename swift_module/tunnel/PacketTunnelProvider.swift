@@ -274,6 +274,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let remoteAddress = "254.1.1.1"
         let localAddress = "198.18.0.1"
         let subnetMask = "255.255.0.0"
+        let ipv6Address = "fd00:dbb::1"
+        let ipv6PrefixLength = 128
         let dnsServers = ["1.1.1.1", "8.8.8.8"]
 
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
@@ -284,12 +286,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         )
         settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
         settings.ipv4Settings?.excludedRoutes = excludedRoutes
-        settings.ipv6Settings = nil
+        settings.ipv6Settings = NEIPv6Settings(
+            addresses: [ipv6Address],
+            networkPrefixLengths: [NSNumber(value: ipv6PrefixLength)]
+        )
+        settings.ipv6Settings?.includedRoutes = [NEIPv6Route.default()]
         settings.dnsSettings = NEDNSSettings(servers: dnsServers)
         settings.dnsSettings?.matchDomains = [""]
 
         logs.writeLog(log: "Settings are ready:")
-        logs.writeLog(log: "[tunnel:\(tunnelId)] settings mtu=\(settings.mtu?.stringValue ?? "nil") ipv4=\(localAddress)/\(subnetMask) remote=\(remoteAddress) dns=\(dnsServers.joined(separator: ",")) excludedRoutes=\(excludedRoutes.count)")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] settings mtu=\(settings.mtu?.stringValue ?? "nil") ipv4=\(localAddress)/\(subnetMask) ipv6=\(ipv6Address)/\(ipv6PrefixLength) ipv6DefaultRoute=true remote=\(remoteAddress) dns=\(dnsServers.joined(separator: ",")) excludedRoutes=\(excludedRoutes.count)")
         do {
             try await self.setTunnelNetworkSettings(settings)
         } catch {

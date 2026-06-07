@@ -9,6 +9,8 @@ import android.util.Log
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.VpnInterfaceFactory
+import com.dobby.feature.vpn_service.common.addIpv6BlockingRoute
+import com.dobby.feature.vpn_service.common.isIpv4Literal
 import com.dobby.feature.vpn_service.common.reservedBypassSubnets
 
 class OutlineVpnInterfaceFactory(
@@ -23,11 +25,13 @@ class OutlineVpnInterfaceFactory(
             .addAddress("10.111.222.1", 24)
             .addDnsServer("1.1.1.1")
             .addDisallowedApplication(context.packageName)
+            .addIpv6BlockingRoute(logger, "Outline")
 
         logger.log("VPN interface created: address is 10.111.222.1")
 
         val dnsServers = getDnsServers(context)
             .filter { it.isNotBlank() }
+            .filter { it.isIpv4Literal() }
             .distinct()
         if (dnsServers.isNotEmpty()) {
             dnsServers.forEach { builder.addDnsServer(it) }

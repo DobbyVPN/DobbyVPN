@@ -9,6 +9,8 @@ import android.util.Log
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.VpnInterfaceFactory
+import com.dobby.feature.vpn_service.common.addIpv6BlockingRoute
+import com.dobby.feature.vpn_service.common.isIpv4Literal
 import com.dobby.feature.vpn_service.common.reservedBypassSubnets
 
 class XrayVpnInterfaceFactory(
@@ -22,11 +24,13 @@ class XrayVpnInterfaceFactory(
             .setMtu(1500) // Adjust if necessary
             .addAddress("10.233.233.1", 24) // Dummy local IP for the TUN
             .addDisallowedApplication(context.packageName)
+            .addIpv6BlockingRoute(logger, "Xray")
 
         builder.addDnsServer("1.1.1.1")
 
         val dnsServers = getDnsServers(context)
             .filter { it.isNotBlank() }
+            .filter { it.isIpv4Literal() }
             .distinct()
 
         if (dnsServers.isNotEmpty()) {
