@@ -8,4 +8,8 @@ interface DobbyConfigsRepositoryTrustTunnel {
     fun getIsTrustTunnelEnabled(): Boolean
 
     fun setIsTrustTunnelEnabled(isTrustTunnelEnabled: Boolean)
+
+    fun setServerPort(newConfig: String)
+
+    fun getServerPort(): String
 }

@@ -334,7 +334,7 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         environment("CGO_CFLAGS", listOf(debugPrefixFlags, System.getenv("CGO_CFLAGS").orEmpty()).joinToString(" ").trim())
         environment(
             "CGO_LDFLAGS",
-            listOf(debugPrefixFlags, "-Wl,-z,max-page-size=16384", System.getenv("CGO_LDFLAGS").orEmpty())
+            listOf("-Wl,-z,max-page-size=16384", System.getenv("CGO_LDFLAGS").orEmpty())
                 .joinToString(" ")
                 .trim()
         )
