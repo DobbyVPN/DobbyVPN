@@ -235,6 +235,30 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs"))
+        }
+    }
+}
+
+val copyLibCxxTask = tasks.register<Copy>("copyLibCxx") {
+    val ndkDir = File(androidNdkDir.get())
+    val osName = System.getProperty("os.name").lowercase()
+    val hostTag = when {
+        osName.contains("windows") -> "windows-x86_64"
+        osName.contains("mac") -> "darwin-x86_64"
+        else -> "linux-x86_64"
+    }
+    val libcxxPath = ndkDir.resolve("toolchains/llvm/prebuilt/$hostTag/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so")
+    
+    from(libcxxPath)
+    into(layout.buildDirectory.dir("generated/jniLibs/arm64-v8a"))
+}
+
+tasks.named("preBuild") {
+    dependsOn(copyLibCxxTask)
 }
 
 val gomobileBindAndroid by tasks.registering(Exec::class) {
@@ -334,7 +358,7 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         environment("CGO_CFLAGS", listOf(debugPrefixFlags, System.getenv("CGO_CFLAGS").orEmpty()).joinToString(" ").trim())
         environment(
             "CGO_LDFLAGS",
-            listOf("-Wl,-z,max-page-size=16384", System.getenv("CGO_LDFLAGS").orEmpty())
+            listOf("-static-libstdc++", "-Wl,-z,max-page-size=16384", System.getenv("CGO_LDFLAGS").orEmpty())
                 .joinToString(" ")
                 .trim()
         )
