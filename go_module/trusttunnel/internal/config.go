@@ -41,11 +41,13 @@ func ExtractServerIP(configStr string) (string, error) {
 	return resolveIP(address)
 }
 
-// resolveIP resolves a domain to an IPv4 address, or returns the IPv4 address
-// if it's already one. Returns an error if the address is IPv6 or cannot be
-// resolved to an IPv4 address.
 func resolveIP(addr string) (string, error) {
-	ip := net.ParseIP(addr)
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+
+	ip := net.ParseIP(host)
 	if ip != nil {
 		if ip4 := ip.To4(); ip4 != nil {
 			return ip4.String(), nil
@@ -54,9 +56,9 @@ func resolveIP(addr string) (string, error) {
 	}
 
 	// If it's a domain, resolve it
-	ips, err := net.LookupIP(addr)
+	ips, err := net.LookupIP(host)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve trusttunnel address %q: %w", addr, err)
+		return "", fmt.Errorf("failed to resolve trusttunnel address %q: %w", host, err)
 	}
 	for _, ip := range ips {
 		if ip4 := ip.To4(); ip4 != nil {

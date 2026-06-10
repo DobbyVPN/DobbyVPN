@@ -1,7 +1,7 @@
 github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c h1:pxW6RcqyfI9/kWtOwnv/G+AzdKuy2ZrqINhenH4HyNs=
 github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
-github.com/TrueKotenka/TrustTunnel-Go v0.0.0-20260607155912-b42c6e56a690 h1:54pn5muHN7t9bH4RCBoiXn0eC5dV0umHB6UwQ9s1ajY=
-github.com/TrueKotenka/TrustTunnel-Go v0.0.0-20260607155912-b42c6e56a690/go.mod h1:mnH3NaoLQC4CeQEqS24zaH6qkogk1nj0e5H1nl+rhHA=
+github.com/TrueKotenka/TrustTunnel-Go v1.0.0 h1:32L7XazXXsjjhKcNqzIc4eDr/vDK80IEdPx9fA7siLk=
+github.com/TrueKotenka/TrustTunnel-Go v1.0.0/go.mod h1:mnH3NaoLQC4CeQEqS24zaH6qkogk1nj0e5H1nl+rhHA=
 github.com/ajg/form v1.5.1 h1:t9c7v8JUKu/XxOGBU0yjNpaMloxGEJhUkqFRq0ibGeU=
 github.com/ajg/form v1.5.1/go.mod h1:uL1WgH+h2mgNtvBq0339dVnzXdBETtL2LeUXaIv25UY=
 github.com/amnezia-vpn/amneziawg-go v0.2.16 h1:XY6HOq/xtqH8ZXMncRWkjFs85EKdN10NLNnw23kTpE0=

@@ -17,13 +17,17 @@ go mod download
 ### Windows
 
 ```bash
-go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
+wget https://github.com/TrueKotenka/TrustTunnel-Go/releases/download/v1.0.0/dobby_bridge-windows-x86_64.zip
+unzip dobby_bridge-windows-x86_64.zip
+CGO_LDFLAGS="-L." go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
 ```
 
-### Linux/
+### Linux
 
 ```bash
-go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
+wget https://github.com/TrueKotenka/TrustTunnel-Go/releases/download/v1.0.0/libdobby_bridge-linux-x86_64.zip
+unzip libdobby_bridge-linux-x86_64.zip
+CGO_LDFLAGS="-L." go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
 ```
 
 ### MacOS

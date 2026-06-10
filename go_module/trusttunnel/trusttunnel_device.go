@@ -1,9 +1,12 @@
 package trusttunnel
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net"
+
+	"github.com/BurntSushi/toml"
 
 	"go_module/auth"
 	log "go_module/log"
@@ -34,7 +37,6 @@ func NewTrustTunnelDevice(trusttunnelConfig string) (*TrutTunnelDevice, error) {
 	}
 
 	// Pick a free local port for the SOCKS inbound.
-	// We intentionally bind+close to reserve a likely-free port for xray to listen on.
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate local port: %w", err)
@@ -44,6 +46,42 @@ func NewTrustTunnelDevice(trusttunnelConfig string) (*TrutTunnelDevice, error) {
 
 	socksUser := auth.GenerateRandomAuth()
 	socksPass := auth.GenerateRandomAuth()
+
+	// Rewrite listener.socks configuration
+	var parsedConfig map[string]interface{}
+	if _, err := toml.Decode(trusttunnelConfig, &parsedConfig); err != nil {
+		return nil, fmt.Errorf("failed to decode config for update: %w", err)
+	}
+
+	listenerIface, ok := parsedConfig["listener"]
+	if !ok {
+		listenerIface = make(map[string]interface{})
+		parsedConfig["listener"] = listenerIface
+	}
+	listener, ok := listenerIface.(map[string]interface{})
+	if !ok {
+		return nil, errors.New("invalid listener section in config")
+	}
+
+	socksIface, ok := listener["socks"]
+	if !ok {
+		socksIface = make(map[string]interface{})
+		listener["socks"] = socksIface
+	}
+	socks, ok := socksIface.(map[string]interface{})
+	if !ok {
+		return nil, errors.New("invalid listener.socks section in config")
+	}
+
+	socks["address"] = fmt.Sprintf("127.0.0.1:%d", port)
+	socks["username"] = socksUser
+	socks["password"] = socksPass
+
+	buf := new(bytes.Buffer)
+	if err := toml.NewEncoder(buf).Encode(parsedConfig); err != nil {
+		return nil, fmt.Errorf("failed to re-encode config: %w", err)
+	}
+	trusttunnelConfig = buf.String()
 
 	d := &TrutTunnelDevice{
 		trusttunnelInstance: tt.NewTrustTunnelManager(),

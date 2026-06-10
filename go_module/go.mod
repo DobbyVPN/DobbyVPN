@@ -6,7 +6,7 @@ replace github.com/cbeuw/Cloak => ./modules/Cloak
 
 replace github.com/xjasonlyu/tun2socks/v2/log => ./go_module/log
 
-replace trusttunnel-go => github.com/TrueKotenka/TrustTunnel-Go v0.0.0-20260607155912-b42c6e56a690
+replace trusttunnel-go => github.com/TrueKotenka/TrustTunnel-Go v1.0.0
 
 require (
 	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c
