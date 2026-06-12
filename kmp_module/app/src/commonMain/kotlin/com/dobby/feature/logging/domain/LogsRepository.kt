@@ -102,9 +102,15 @@ class LogsRepository(
                 )
                 .format("yyyy-MM-dd HH:mm:ss")
             val lines = readAllLogs()
+            var keepContinuation = false
             val retained = lines.filter { line ->
                 val timestamp = extractLogTimestamp(line)
-                timestamp == null || timestamp >= cutoff
+                if (timestamp == null) {
+                    keepContinuation
+                } else {
+                    keepContinuation = timestamp >= cutoff
+                    keepContinuation
+                }
             }
 
             if (retained.size != lines.size) {

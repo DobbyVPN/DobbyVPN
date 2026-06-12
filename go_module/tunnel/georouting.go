@@ -60,7 +60,7 @@ func SetGeoRoutingConf(cidrs string) {
 		mustCIDR(cidr)
 	}
 
-	log.Infof("[Routing] Set defaultBypassCIDRs: %v", defaultBypassCIDRs)
+	log.Infof("[Routing] Set defaultBypassCIDRs: %v", summarizeCIDRs(defaultBypassCIDRs))
 }
 
 func ClearGeoRoutingConf() {
@@ -69,6 +69,24 @@ func ClearGeoRoutingConf() {
 
 	defaultBypassCIDRs = nil
 	log.Infof("[Routing] Cleared defaultBypassCIDRs")
+}
+
+func summarizeCIDRs(cidrs []*net.IPNet) []string {
+	const limit = 10
+
+	count := len(cidrs)
+	if count > limit {
+		count = limit
+	}
+
+	result := make([]string, 0, count+1)
+	for _, cidr := range cidrs[:count] {
+		result = append(result, cidr.String())
+	}
+	if len(cidrs) > limit {
+		result = append(result, "...")
+	}
+	return result
 }
 
 func resolveHostToCIDRs(host string) []*net.IPNet {
