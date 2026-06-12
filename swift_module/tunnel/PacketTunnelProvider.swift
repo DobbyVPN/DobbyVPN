@@ -206,6 +206,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let osVersionString = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         let optionKeys = options?.keys.sorted().joined(separator: ",") ?? "(none)"
+        logs.cleanupOldLogs()
         logSystemInfo(osVersionString: osVersionString)
         logs.writeLog(log: "[iOS26-RESEARCH] iOS version: \(osVersionString)")
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")

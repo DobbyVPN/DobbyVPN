@@ -1,6 +1,7 @@
 package com.dobby.feature.vpn_service
 
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.main.domain.ConnectionStateRepository
@@ -71,6 +72,7 @@ private fun buildOutlineUrl(
 internal class DobbyVpnService(
     private val dobbyConfigsRepository: DobbyConfigsRepository,
     private val logger: Logger,
+    private val logsRepository: LogsRepository,
     private val awgLibrary: AwgLibrary,
     private val outlineLibrary: OutlineLibrary,
     private val xrayLibrary: XrayLibrary,
@@ -94,6 +96,7 @@ internal class DobbyVpnService(
                 stopCurrentLocked()
             }
 
+            logsRepository.cleanupOldLogs()
             enableTunnelLogging()
 
             val iface = dobbyConfigsRepository.getVpnInterface()

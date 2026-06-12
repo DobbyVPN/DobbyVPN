@@ -1,6 +1,7 @@
 import UIKit
 import UniformTypeIdentifiers
 import app
+import zlib
 
 class CopyLogsInteractorImpl: CopyLogsInteractor {
     private var logs = NativeModuleHolder.logsRepository
@@ -13,12 +14,12 @@ class CopyLogsInteractorImpl: CopyLogsInteractor {
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let dateString = formatter.string(from: Date())
 
-        let fileName = "DobbyVPN_logs_\(dateString).txt"
+        let fileName = "DobbyVPN_logs_\(dateString).txt.gz"
         let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
 
         do {
-            try logText.write(to: fileURL, atomically: true, encoding: .utf8)
-            self.logs.writeLog(log: "Write logs in temporary file: \(fileURL.path)")
+            try writeGzip(logText, to: fileURL)
+            self.logs.writeLog(log: "Write gzip logs in temporary file: \(fileURL.path)")
         } catch {
             self.logs.writeLog(log: "Error in log saving: \(error.localizedDescription)")
             return
@@ -58,6 +59,42 @@ class CopyLogsInteractorImpl: CopyLogsInteractor {
             top = presented
         }
         return top
+    }
+
+    private func writeGzip(_ text: String, to fileURL: URL) throws {
+        let data = Data(text.utf8)
+
+        try fileURL.path.withCString { path in
+            try "wb9".withCString { mode in
+                guard let gzipFile = gzopen(path, mode) else {
+                    throw NSError(
+                        domain: "CopyLogsInteractorImpl",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "Unable to open gzip file"]
+                    )
+                }
+                defer {
+                    gzclose(gzipFile)
+                }
+
+                if data.isEmpty {
+                    return
+                }
+
+                let written = data.withUnsafeBytes { bytes -> Int32 in
+                    guard let baseAddress = bytes.baseAddress else { return 0 }
+                    return gzwrite(gzipFile, baseAddress, UInt32(data.count))
+                }
+
+                if written != Int32(data.count) {
+                    throw NSError(
+                        domain: "CopyLogsInteractorImpl",
+                        code: 2,
+                        userInfo: [NSLocalizedDescriptionKey: "Incomplete gzip write"]
+                    )
+                }
+            }
+        }
     }
 }
 
