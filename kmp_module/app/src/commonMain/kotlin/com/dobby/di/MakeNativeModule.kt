@@ -1,19 +1,12 @@
 package com.dobby.di
 
-import com.dobby.feature.diagnostic.domain.HealthCheck
-import com.dobby.feature.diagnostic.domain.IpRepository
-import com.dobby.feature.logging.domain.CopyLogsInteractor
-import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.authentication.domain.AuthenticationManager
+import com.dobby.feature.diagnostic.domain.HealthCheck
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.domain.CopyLogsInteractor
 import com.dobby.feature.logging.domain.LogEventsChannel
-import com.dobby.feature.main.domain.VpnManager
-import com.dobby.feature.main.domain.ConnectionStateRepository
-import com.dobby.feature.main.domain.DobbyConfigsRepository
-import com.dobby.feature.main.domain.DobbyConfigsRepositoryAwg
-import com.dobby.feature.main.domain.DobbyConfigsRepositoryCloak
-import com.dobby.feature.main.domain.DobbyConfigsRepositoryOutline
-import com.dobby.feature.main.domain.DobbyConfigsRepositoryXray
+import com.dobby.feature.logging.domain.LogsRepository
+import com.dobby.feature.main.domain.*
 import org.koin.core.module.Module
 import org.koin.core.scope.Scope
 import org.koin.dsl.module
@@ -24,7 +17,6 @@ fun makeNativeModule(
     copyLogsInteractor: NativeInjectionFactory<CopyLogsInteractor>,
     logEventsChannel: NativeInjectionFactory<LogEventsChannel>,
     logsRepository: NativeInjectionFactory<LogsRepository>,
-    ipRepository: NativeInjectionFactory<IpRepository>,
     configsRepository: NativeInjectionFactory<DobbyConfigsRepository>,
     connectionStateRepository: NativeInjectionFactory<ConnectionStateRepository>,
     vpnManager: NativeInjectionFactory<VpnManager>,
@@ -37,7 +29,6 @@ fun makeNativeModule(
         single { logEventsChannel() }
         single { logsRepository() }
         single { Logger(get()) }
-        single { ipRepository() }
         single { connectionStateRepository() }
         single { configsRepository() }
         single { authenticationManager() }

@@ -34,6 +34,9 @@ class TomlConfigApplier(
             return false
         }
 
+        // 0. Set telemetry server
+        mainRepo.setTelemetryEndpoint(root.Telemetry ?: "")
+
         // 1. Check for Xray Config
         val xray = root.Xray
         if (xray != null) {

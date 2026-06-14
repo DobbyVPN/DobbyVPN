@@ -7,8 +7,6 @@ interface DobbyConfigsRepository :
     DobbyConfigsRepositoryXray,
     DobbyConfigsRepositoryVpn {
 
-    // region global configs
-
     fun getConnectionURL(): String
 
     fun setConnectionURL(connectionURL: String)
@@ -17,13 +15,15 @@ interface DobbyConfigsRepository :
 
     fun setConnectionConfig(connectionConfig: String)
 
-    // endregion
-
     fun couldStart(): Boolean
 
-    fun getIsUserInitStop(): Boolean
+    fun getTelemetryEndpoint(): String
 
-    fun setIsUserInitStop(isUserInitStop: Boolean)
+    fun setTelemetryEndpoint(endpoint: String)
+
+    fun getTelemetryAttributes(): String
+
+    fun setTelemetryAttributes(config: String)
 
     fun getGeoRoutingConf(): String
 

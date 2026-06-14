@@ -67,6 +67,22 @@ internal class DobbyConfigsRepositoryImpl(
         writeLargeString("connectionConfig", connectionConfigFile, connectionConfig)
     }
 
+    override fun getTelemetryEndpoint(): String {
+        return prefs.get("telemetryEndpoint", "")
+    }
+
+    override fun setTelemetryEndpoint(endpoint: String) {
+        prefs.put("telemetryEndpoint", endpoint)
+    }
+
+    override fun getTelemetryAttributes(): String {
+        return prefs.get("telemetryAttributes", "")
+    }
+
+    override fun setTelemetryAttributes(config: String) {
+        prefs.put("telemetryAttributes", config)
+    }
+
     override fun getCloakConfig(): String {
         return prefs.get("cloakConfig", "")
     }
@@ -194,14 +210,6 @@ internal class DobbyConfigsRepositoryImpl(
 
     override fun couldStart(): Boolean {
         return healthCheckLibrary.CouldStart()
-    }
-
-    override fun getIsUserInitStop(): Boolean {
-        return prefs.get("isUserInitStop", "true").equals("true")
-    }
-
-    override fun setIsUserInitStop(isUserInitStop: Boolean) {
-        prefs.put("isUserInitStop", isUserInitStop.toString())
     }
 
     override fun getGeoRoutingConf(): String {
