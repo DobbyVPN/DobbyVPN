@@ -4,15 +4,29 @@ package dobbyvpn
 
 import (
 	"go_module/healthcheck"
-	"go_module/log"
-	"strings"
 )
 
-func CheckServerAlive(address string, port int32) int32 {
-	res := healthcheck.CheckServerAlive(strings.Clone(address), int(port))
-	log.Infof("[HC] Health check result: %v", res)
-	if res == nil {
+func GetConnectionState() int32 {
+	switch healthcheck.GetConnectionState() {
+	case healthcheck.Disconnected:
+		return 0
+	case healthcheck.Connecting:
+		return 1
+	case healthcheck.Connected:
+		return 2
+	default:
 		return 0
 	}
-	return -1
+}
+
+func InitHealthCheck(config string) {
+	healthcheck.InitHealthCheck(config)
+}
+
+func StartHealthCheck() {
+	healthcheck.StartHealthCheck()
+}
+
+func StopHealthCheck() {
+	healthcheck.StopHealthCheck()
 }

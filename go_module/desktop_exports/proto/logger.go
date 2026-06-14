@@ -12,7 +12,25 @@ import (
 )
 
 func (c *Server) InitLogger(_ context.Context, in *grpcproto.InitLoggerRequest) (*grpcproto.Empty, error) {
-	log.Infof("InitLogger")
+	log.Debugf(Category, "InitLogger")
 	api.InitLogger(in.Path)
+	return &grpcproto.Empty{}, nil
+}
+
+func (c *Server) InitTelemetry(_ context.Context, in *grpcproto.InitTelemetryRequest) (*grpcproto.Empty, error) {
+	log.Debugf(Category, "InitTelemetry")
+	api.InitTelemetry(in.Endpoint)
+	return &grpcproto.Empty{}, nil
+}
+
+func (c *Server) StopTelemetry(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
+	log.Debugf(Category, "StopTelemetry")
+	api.StopTelemetry()
+	return &grpcproto.Empty{}, nil
+}
+
+func (c *Server) SetupTelemetryAttributes(_ context.Context, in *grpcproto.SetupTelemetryAttributesRequest) (*grpcproto.Empty, error) {
+	log.Debugf(Category, "SetupTelemetryAttributes")
+	api.SetupTelemetryAttributes(in.Config)
 	return &grpcproto.Empty{}, nil
 }
