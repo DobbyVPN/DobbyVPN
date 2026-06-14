@@ -54,6 +54,20 @@ jobs:
         working-directory: go_module
         run: |
           GO111MODULE=on gomobile bind -target=ios -o MyLibrary.xcframework ./ios_exports
+          
+          # Merge libdobby_bridge.a into the generated static framework for iOS arm64
+          MODULE_DIR=$(go list -m -f '{{.Dir}}' trusttunnel-go)
+          DOBBY_LIB="$MODULE_DIR/lib/ios/libdobby_bridge.a"
+          MY_LIB="MyLibrary.xcframework/ios-arm64/MyLibrary.framework/MyLibrary"
+          
+          if [ -f "$DOBBY_LIB" ] && [ -f "$MY_LIB" ]; then
+            echo "Merging $DOBBY_LIB into $MY_LIB"
+            libtool -static -o MyLibrary_merged.a "$MY_LIB" "$DOBBY_LIB"
+            mv MyLibrary_merged.a "$MY_LIB"
+          else
+            echo "Error: Could not find libraries to merge."
+            exit 1
+          fi
 
       - name: Upload iOS XCFramework
         uses: actions/upload-artifact@v4

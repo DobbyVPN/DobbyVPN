@@ -55,7 +55,7 @@ jobs:
         working-directory: go_module
         shell: bash
         run: |
-          curl -L -o dobby_bridge-windows-x86_64.zip "https://github.com/TrueKotenka/TrustTunnel-Go/releases/download/v1.0.0/dobby_bridge-windows-x86_64.zip"
+          curl -L -o dobby_bridge-windows-x86_64.zip "https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.0/dobby_bridge-windows-x86_64.zip"
           echo "9c0d79401c3da26d922e58c5fc3317c75d800598e9cb91a31ce3aebbf71b4668 dobby_bridge-windows-x86_64.zip" | sha256sum -c -
           unzip dobby_bridge-windows-x86_64.zip
 
@@ -85,7 +85,7 @@ jobs:
         if: matrix.os == 'ubuntu' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
-          curl -L -o libdobby_bridge-linux-x86_64.zip "https://github.com/TrueKotenka/TrustTunnel-Go/releases/download/v1.0.0/libdobby_bridge-linux-x86_64.zip"
+          curl -L -o libdobby_bridge-linux-x86_64.zip "https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.0/libdobby_bridge-linux-x86_64.zip"
           echo "515c6993672e35d768477b3cd5c04ee7dfcbeaaeecd5abef5e03c1603486cbfe libdobby_bridge-linux-x86_64.zip" | sha256sum -c -
           unzip libdobby_bridge-linux-x86_64.zip
 

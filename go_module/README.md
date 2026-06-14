@@ -17,7 +17,7 @@ go mod download
 ### Windows
 
 ```bash
-wget https://github.com/TrueKotenka/TrustTunnel-Go/releases/download/v1.0.0/dobby_bridge-windows-x86_64.zip
+wget https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.0/dobby_bridge-windows-x86_64.zip
 unzip dobby_bridge-windows-x86_64.zip
 CGO_LDFLAGS="-L." go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
 ```
@@ -25,7 +25,7 @@ CGO_LDFLAGS="-L." go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserv
 ### Linux
 
 ```bash
-wget https://github.com/TrueKotenka/TrustTunnel-Go/releases/download/v1.0.0/libdobby_bridge-linux-x86_64.zip
+wget https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.0/libdobby_bridge-linux-x86_64.zip
 unzip libdobby_bridge-linux-x86_64.zip
 CGO_LDFLAGS="-L." go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
 ```
