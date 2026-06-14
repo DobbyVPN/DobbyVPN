@@ -5,6 +5,7 @@ package interfacecheck
 import (
 	"errors"
 	"fmt"
+	"go_module/healthcheck/common"
 	"go_module/log"
 	"net"
 	"slices"
@@ -13,7 +14,7 @@ import (
 var ErrVpnInterfaceCheck = errors.New("vpn interface check error")
 
 func VpnInterfacesCheck(expectedIfaces []string) error {
-	log.Debugf(Category, "Check: vpn interfaces")
+	log.Debugf(common.Category, "Check: vpn interfaces")
 
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -22,9 +23,9 @@ func VpnInterfacesCheck(expectedIfaces []string) error {
 
 	foundIface := ""
 	for _, iface := range ifaces {
-		log.Debugf(Category, "Checking VPN interface %s", iface.Name)
+		log.Debugf(common.Category, "Checking VPN interface %s", iface.Name)
 		if slices.Contains(expectedIfaces, iface.Name) {
-			log.Debugf(Category, "Found VPN interface %s", iface.Name)
+			log.Debugf(common.Category, "Found VPN interface %s", iface.Name)
 			foundIface = iface.Name
 			break
 		}
@@ -33,6 +34,6 @@ func VpnInterfacesCheck(expectedIfaces []string) error {
 	if foundIface != "" {
 		return nil
 	}
-	log.Debugf(Category, "There is no expected net interface")
+	log.Debugf(common.Category, "There is no expected net interface")
 	return ErrVpnInterfaceCheck
 }

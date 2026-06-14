@@ -4,6 +4,7 @@ import (
 	"context"
 	"runtime/debug"
 
+	"go_module/desktop_exports/common"
 	"go_module/log"
 
 	"google.golang.org/grpc"
@@ -14,7 +15,7 @@ func PanicRecoveryUnaryInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Infof("PANIC recovered in %s: %v\nStack trace:\n%s",
+				log.Debugf(common.Category, "PANIC recovered in %s: %v\nStack trace:\n%s",
 					info.FullMethod, r, debug.Stack())
 			}
 		}()
@@ -26,11 +27,11 @@ func PanicRecoveryUnaryInterceptor() grpc.UnaryServerInterceptor {
 // ErrorLoggingUnaryInterceptor returns a unary server interceptor that logs errors.
 func ErrorLoggingUnaryInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		log.Infof("gRPC call: %s", info.FullMethod)
+		log.Debugf(common.Category, "gRPC call: %s", info.FullMethod)
 
 		resp, err := handler(ctx, req)
 		if err != nil {
-			log.Infof("gRPC error in %s: %v", info.FullMethod, err)
+			log.Debugf(common.Category, "gRPC error in %s: %v", info.FullMethod, err)
 		}
 
 		return resp, err

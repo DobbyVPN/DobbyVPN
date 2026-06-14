@@ -1,6 +1,7 @@
 package healthcheck
 
 import (
+	"go_module/healthcheck/common"
 	"go_module/healthcheck/interfacecheck"
 	"go_module/log"
 	"sync"
@@ -73,7 +74,7 @@ func join(map1, map2 map[string]any) map[string]any {
 }
 
 func GetConnectionState() ConnectionState {
-	log.Debugf(Category, "Called GetConnectionState")
+	log.Debugf(common.Category, "Called GetConnectionState")
 
 	csMu.Lock()
 	defer csMu.Unlock()
@@ -81,24 +82,24 @@ func GetConnectionState() ConnectionState {
 }
 
 func InitHealthCheck() {
-	log.Debugf(Category, "Called InitHealthCheck")
+	log.Debugf(common.Category, "Called InitHealthCheck")
 }
 
 func StartHealthCheck() {
-	log.Debugf(Category, "Called StartHealthCheck")
+	log.Debugf(common.Category, "Called StartHealthCheck")
 	healthCheckStartedMu.Lock()
 	defer healthCheckStartedMu.Unlock()
 
 	if healthCheckStarted {
-		log.Debugf(Category, "Health check already running")
+		log.Debugf(common.Category, "Health check already running")
 	} else {
-		log.Debugf(Category, "Starting healtch check")
+		log.Debugf(common.Category, "Starting healtch check")
 		go innerHealthCheck()
 	}
 }
 
 func StopHealthCheck() {
-	log.Debugf(Category, "Called StopHealthCheck")
+	log.Debugf(common.Category, "Called StopHealthCheck")
 
 	healthCheckStartedMu.Lock()
 	if healthCheckStarted {
@@ -108,7 +109,7 @@ func StopHealthCheck() {
 }
 
 func innerHealthCheck() {
-	log.Debugf(Category, "Health check started")
+	log.Debugf(common.Category, "Health check started")
 	healthCheckStartedMu.Lock()
 	healthCheckStarted = true
 	stopHealthCheckChannel = make(chan bool, 1)
@@ -128,7 +129,7 @@ func innerHealthCheck() {
 
 		select {
 		case <-stopHealthCheckChannel:
-			log.Debugf(Category, "Health check stopped")
+			log.Debugf(common.Category, "Health check stopped")
 			switchState(Disconnected)
 			healthCheckStartedMu.Lock()
 			healthCheckStarted = false
@@ -146,7 +147,7 @@ func switchState(newState ConnectionState) {
 
 	if connectionState != newState {
 		log.Debug(
-			Category,
+			common.Category,
 			"Switching connection state",
 			map[string]any{"state": newState},
 		)
@@ -155,12 +156,12 @@ func switchState(newState ConnectionState) {
 }
 
 func healthCheckStep() {
-	log.Debugf(Category, "Health check step")
+	log.Debugf(common.Category, "Health check step")
 
 	for _, check := range connectionChecks {
 		if err := check(); err != nil {
 			log.Error(
-				Category,
+				common.Category,
 				"Failed check",
 				map[string]any{"error": err.Error()},
 			)
@@ -169,6 +170,6 @@ func healthCheckStep() {
 		}
 	}
 
-	log.Infof(Category, "Health check succeed")
+	log.Infof(common.Category, "Health check succeed")
 	switchState(Connected)
 }

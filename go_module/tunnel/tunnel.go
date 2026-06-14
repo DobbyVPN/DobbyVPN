@@ -108,7 +108,7 @@ func (c *trackedConn) Close() error {
 			avg := sum / time.Duration(len(samples))
 			rttInfo = fmt.Sprintf(" rtt(app): samples=%d min=%s avg=%s max=%s", len(samples), minRTT, avg, maxRTT)
 		}
-		log.Infof("[Router] TCP closed route=%s dest=%s lifetime=%s activeTCP=%d%s", c.route, c.dest, time.Since(c.started), active, rttInfo)
+		log.Debugf(Category, "[Router] TCP closed route=%s dest=%s lifetime=%s activeTCP=%d%s", c.route, c.dest, time.Since(c.started), active, rttInfo)
 		err = c.Conn.Close()
 	})
 	return err
@@ -127,7 +127,7 @@ func (c *trackedPacketConn) Close() error {
 	var err error
 	c.once.Do(func() {
 		active := c.release()
-		log.Infof("[Router] UDP closed route=%s dest=%s lifetime=%s activeUDP=%d", c.route, c.dest, time.Since(c.started), active)
+		log.Debugf(Category, "[Router] UDP closed route=%s dest=%s lifetime=%s activeUDP=%d", c.route, c.dest, time.Since(c.started), active)
 		err = c.PacketConn.Close()
 	})
 	return err
@@ -198,7 +198,7 @@ func (c *idlePacketConn) closeAfterIdleTimeout() {
 	if c.onIdleTimeout != nil {
 		count = c.onIdleTimeout()
 	}
-	log.Infof("[Router] UDP idle timeout route=%s dest=%s timeout=%s count=%d", c.route, c.dest, c.timeout, count)
+	log.Debugf(Category, "[Router] UDP idle timeout route=%s dest=%s timeout=%s count=%d", c.route, c.dest, c.timeout, count)
 	_ = c.PacketConn.Close()
 }
 
@@ -218,14 +218,14 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 	attempt := p.tcpDialAttempt.Add(1)
 	if isBlockedIPv6Destination(metadata) {
 		err := fmt.Errorf("IPv6 destination blocked: %s", dest)
-		log.Infof("[Router] TCP IPv6 blocked attempt=%d dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
+		log.Debugf(Category, "[Router] TCP IPv6 blocked attempt=%d dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
 		return nil, err
 	}
 	route, px := "VPN", p.vpn
 	if IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
 	}
-	log.Infof("[Router] TCP dial attempt=%d route=%s dstIP=%s dest=%s proto=%s stats={%s}", attempt, route, metadata.DstIP, dest, metadata.Network, p.flowStats())
+	log.Debugf(Category, "[Router] TCP dial attempt=%d route=%s dstIP=%s dest=%s proto=%s stats={%s}", attempt, route, metadata.DstIP, dest, metadata.Network, p.flowStats())
 	return p.dialTCPRoute(ctx, metadata, route, px, attempt, dest, start)
 }
 
@@ -233,17 +233,17 @@ func (p *DobbyProxy) dialTCPRoute(ctx context.Context, metadata *M.Metadata, rou
 	active, release, err := p.tcpSlot.reserve(&p.activeTCP)
 	if err != nil {
 		p.tcpLimitErr.Add(1)
-		log.Infof("[Router] %s TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
+		log.Debugf(Category, "[Router] %s TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
 	conn, err := px.DialContext(ctx, metadata)
 	if err != nil {
 		release()
-		log.Infof("[Router] %s TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
+		log.Debugf(Category, "[Router] %s TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
 	updatePeakInt64(&p.peakTCP, active)
-	log.Infof("[Router] %s TCP dial OK attempt=%d dest=%s elapsed=%s local=%s remote=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), p.flowStats())
+	log.Debugf(Category, "[Router] %s TCP dial OK attempt=%d dest=%s elapsed=%s local=%s remote=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), p.flowStats())
 	return &trackedConn{Conn: conn, release: release, route: route, dest: dest, started: time.Now()}, nil
 }
 
@@ -253,14 +253,14 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	attempt := p.udpDialAttempt.Add(1)
 	if isBlockedIPv6Destination(metadata) {
 		err := fmt.Errorf("IPv6 destination blocked: %s", dest)
-		log.Infof("[Router] UDP IPv6 blocked attempt=%d dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
+		log.Debugf(Category, "[Router] UDP IPv6 blocked attempt=%d dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
 		return nil, err
 	}
 	route, px := "VPN", p.vpn
 	if IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
 	}
-	log.Infof("[Router] UDP dial attempt=%d route=%s dstIP=%s dest=%s proto=%s stats={%s}", attempt, route, metadata.DstIP, dest, metadata.Network, p.flowStats())
+	log.Debugf(Category, "[Router] UDP dial attempt=%d route=%s dstIP=%s dest=%s proto=%s stats={%s}", attempt, route, metadata.DstIP, dest, metadata.Network, p.flowStats())
 	return p.dialUDPRoute(metadata, route, px, attempt, dest, start)
 }
 
@@ -268,17 +268,17 @@ func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.P
 	active, release, err := p.udpSlot.reserve(&p.activeUDP)
 	if err != nil {
 		p.udpLimitErr.Add(1)
-		log.Infof("[Router] %s UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
+		log.Debugf(Category, "[Router] %s UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
 	conn, err := px.DialUDP(metadata)
 	if err != nil {
 		release()
-		log.Infof("[Router] %s UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
+		log.Debugf(Category, "[Router] %s UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
 	updatePeakInt64(&p.peakUDP, active)
-	log.Infof("[Router] %s UDP dial OK attempt=%d dest=%s elapsed=%s local=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), p.flowStats())
+	log.Debugf(Category, "[Router] %s UDP dial OK attempt=%d dest=%s elapsed=%s local=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), p.flowStats())
 	tracked := &trackedPacketConn{PacketConn: conn, release: release, route: route, dest: dest, started: time.Now()}
 	return newIdlePacketConn(tracked, udpAssociationIdleTimeout, route, dest, func() uint64 {
 		return p.udpIdleTimeout.Add(1)
@@ -302,32 +302,32 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 	defer mu.Unlock()
 
 	if isRunning {
-		log.Infof("[Engine] StartEngine requested while already running; stopping previous engine first")
+		log.Debugf(Category, "[Engine] StartEngine requested while already running; stopping previous engine first")
 		stopLocked()
 	}
 
-	log.Infof("[Engine] StartEngine config proxy=%s fd=%d uplinkIface=%s", cfg.ProxyAddr, cfg.FD, cfg.UplinkIface)
+	log.Debugf(Category, "[Engine] StartEngine config proxy=%s fd=%d uplinkIface=%s", cfg.ProxyAddr, cfg.FD, cfg.UplinkIface)
 	err := platform_engine.StartPlatformEngine(cfg)
 	if err != nil {
-		log.Infof("[Engine] StartPlatformEngine failed: %v", err)
+		log.Debugf(Category, "[Engine] StartPlatformEngine failed: %v", err)
 		return err
 	}
-	log.Infof("[Engine] StartPlatformEngine OK")
+	log.Debugf(Category, "[Engine] StartPlatformEngine OK")
 
 	t := tunnel.T()
 	if t == nil {
-		log.Infof("[Engine] tunnel.T() is nil after engine start")
+		log.Debugf(Category, "[Engine] tunnel.T() is nil after engine start")
 		return fmt.Errorf("tunnel not initialized after engine start")
 	}
 
 	currentDialer := t.Dialer()
 	vpnOutbound, ok := currentDialer.(proxy.Proxy)
 	if !ok {
-		log.Infof("[Engine] Current dialer is not a proxy (type=%T)", currentDialer)
+		log.Debugf(Category, "[Engine] Current dialer is not a proxy (type=%T)", currentDialer)
 		return fmt.Errorf("current dialer is not a proxy")
 	}
-	log.Infof("[Engine] vpn outbound proxy type=%T addr=%s", vpnOutbound, vpnOutbound.Addr())
-	log.Infof("[Engine] DobbyProxy limits tcp=%d udp=%d idleTimeout=%s", maxActiveTCPConnections, maxActiveUDPAssociations, udpAssociationIdleTimeout)
+	log.Debugf(Category, "[Engine] vpn outbound proxy type=%T addr=%s", vpnOutbound, vpnOutbound.Addr())
+	log.Debugf(Category, "[Engine] DobbyProxy limits tcp=%d udp=%d idleTimeout=%s", maxActiveTCPConnections, maxActiveUDPAssociations, udpAssociationIdleTimeout)
 
 	wrapper := &DobbyProxy{
 		vpn:     vpnOutbound,
@@ -337,7 +337,7 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 	}
 
 	t.SetDialer(wrapper)
-	log.Infof("[Engine] DobbyProxy installed")
+	log.Debugf(Category, "[Engine] DobbyProxy installed")
 	statsStop = make(chan struct{})
 	go wrapper.logStatsLoop(statsStop)
 	isRunning = true
@@ -345,14 +345,14 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 }
 
 func stopLocked() {
-	log.Infof("[Engine] stopping tun2socks engine")
+	log.Debugf(Category, "[Engine] stopping tun2socks engine")
 	if statsStop != nil {
 		close(statsStop)
 		statsStop = nil
 	}
 	platform_engine.EngineStop()
 	isRunning = false
-	log.Infof("[Engine] tun2socks engine stopped")
+	log.Debugf(Category, "[Engine] tun2socks engine stopped")
 }
 
 func StopEngine() {
@@ -360,7 +360,7 @@ func StopEngine() {
 	defer mu.Unlock()
 
 	if !isRunning {
-		log.Infof("[Engine] StopEngine skipped: not running")
+		log.Debugf(Category, "[Engine] StopEngine skipped: not running")
 		return
 	}
 
@@ -388,13 +388,13 @@ func (p *DobbyProxy) logStatsLoop(stop <-chan struct{}) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
-	log.Infof("[Router STATS] started interval=1s flow={%s} runtime={%s}", p.flowStats(), goRuntimeStats())
+	log.Debugf(Category, "[Router STATS] started interval=1s flow={%s} runtime={%s}", p.flowStats(), goRuntimeStats())
 	for {
 		select {
 		case <-ticker.C:
-			log.Infof("[Router STATS] flow={%s} runtime={%s}", p.flowStats(), goRuntimeStats())
+			log.Debugf(Category, "[Router STATS] flow={%s} runtime={%s}", p.flowStats(), goRuntimeStats())
 		case <-stop:
-			log.Infof("[Router STATS] stopped flow={%s} runtime={%s}", p.flowStats(), goRuntimeStats())
+			log.Debugf(Category, "[Router STATS] stopped flow={%s} runtime={%s}", p.flowStats(), goRuntimeStats())
 			return
 		}
 	}

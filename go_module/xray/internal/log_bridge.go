@@ -2,15 +2,16 @@ package internal
 
 import (
 	appLog "go_module/log"
+	"go_module/xray/common"
 
 	xrayLog "github.com/xtls/xray-core/common/log"
 )
 
 // SetupXrayLogging initializes the log redirection for xray-core.
 func SetupXrayLogging(logLevel xrayLog.Severity) {
-	appLog.Infof("Start xray's logging setup")
+	appLog.Infof(common.Category, "Start xray's logging setup")
 	xrayLog.RegisterHandler(&xrayLogBridge{logLevel: logLevel})
-	appLog.Infof("End xray's logging setup")
+	appLog.Infof(common.Category, "End xray's logging setup")
 }
 
 type xrayLogBridge struct {
@@ -23,18 +24,18 @@ func (l *xrayLogBridge) Handle(msg xrayLog.Message) {
 		if msg.Severity <= l.logLevel {
 			switch msg.Severity {
 			case xrayLog.Severity_Debug:
-				appLog.Debugf("[Xray-Core] %s", msg.Content)
+				appLog.Debugf("Xray-Core", "%s", msg.Content)
 			case xrayLog.Severity_Info:
-				appLog.Infof("[Xray-Core] %s", msg.Content)
+				appLog.Infof(common.Category, "Xray-Core", "%s", msg.Content)
 			case xrayLog.Severity_Warning:
-				appLog.Warnf("[Xray-Core] %s", msg.Content)
+				appLog.Warnf("Xray-Core", "%s", msg.Content)
 			case xrayLog.Severity_Error:
-				appLog.Errorf("[Xray-Core] %s", msg.Content)
+				appLog.Errorf("Xray-Core", "%s", msg.Content)
 			default:
-				appLog.Infof("[Xray-Core] %s", msg.Content)
+				appLog.Infof("Xray-Core", "%s", msg.Content)
 			}
 		}
 	default:
-		appLog.Infof("[Xray-Core] %s", msg.String())
+		appLog.Infof("Xray-Core", "%s", msg.String())
 	}
 }

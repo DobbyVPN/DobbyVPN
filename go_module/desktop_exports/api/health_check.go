@@ -4,12 +4,13 @@ package api
 
 import (
 	"go_module/common"
+	apiCommon "go_module/desktop_exports/common"
 	"go_module/healthcheck"
 	"go_module/log"
 )
 
 func CouldStart() bool {
-	log.Debugf(Category, "Call CouldStart: %v", common.Client.CouldStart())
+	log.Debugf(apiCommon.Category, "Call CouldStart: %v", common.Client.CouldStart())
 	return common.Client.CouldStart()
 }
 

@@ -66,7 +66,7 @@ func (c *CoreClient) Connect() error {
 		defer func() {
 			if r := recover(); r != nil {
 				err := fmt.Errorf("core client crashed: %v", r)
-				log.Infof("core goroutine recovered from panic: %v", err)
+				log.Debugf(coreCommon.Category, "core goroutine recovered from panic: %v", err)
 				select {
 				case initResult <- err:
 				default:
@@ -76,7 +76,7 @@ func (c *CoreClient) Connect() error {
 		}()
 		if c.app == nil {
 			err := errors.New("core desktop app is not initialized")
-			log.Infof("connect core client failed: %v", err)
+			log.Debugf(coreCommon.Category, "connect core client failed: %v", err)
 			common.Client.MarkInactive(coreCommon.Name)
 			select {
 			case initResult <- err:
@@ -86,7 +86,7 @@ func (c *CoreClient) Connect() error {
 		}
 		err := c.app.Run(ctx, initResult)
 		if err != nil {
-			log.Infof("connect core client failed: %v", err)
+			log.Debugf(coreCommon.Category, "connect core client failed: %v", err)
 			common.Client.MarkInactive(coreCommon.Name)
 		}
 	}()
@@ -99,7 +99,7 @@ func (c *CoreClient) Connect() error {
 			c.cancel = nil
 			return fmt.Errorf("failed to initialize core client connection: %w", err)
 		}
-		log.Infof("Core client connection initialized successfully")
+		log.Debugf(coreCommon.Category, "Core client connection initialized successfully")
 		common.Client.MarkActive(coreCommon.Name)
 		return nil
 	case <-time.After(30 * time.Second):
@@ -114,19 +114,19 @@ func (c *CoreClient) Disconnect() error {
 		return errors.New("core desktop client is not initialized")
 	}
 
-	log.Infof("Disconnect: try to lock c.mu")
+	log.Debugf(coreCommon.Category, "Disconnect: try to lock c.mu")
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	log.Infof("Disconnect: locked c.mu")
+	log.Debugf(coreCommon.Category, "Disconnect: locked c.mu")
 
 	if c.cancel != nil {
-		log.Infof("Disconnect: c.cancel != nil")
+		log.Debugf(coreCommon.Category, "Disconnect: c.cancel != nil")
 		c.cancel()
 		c.cancel = nil
 	}
-	log.Infof("Disconnect: common.Client.MarkInactive")
+	log.Debugf(coreCommon.Category, "Disconnect: common.Client.MarkInactive")
 	common.Client.MarkInactive(coreCommon.Name)
-	log.Infof("Disconnect: MarkedInactive")
+	log.Debugf(coreCommon.Category, "Disconnect: MarkedInactive")
 	return nil
 }
 
@@ -137,5 +137,9 @@ func (c *CoreClient) Refresh() error {
 	if err := c.Connect(); err != nil {
 		return fmt.Errorf("failed to refresh core client: connect failed: %w", err)
 	}
+	return nil
+}
+
+func (c *CoreClient) HealthCheck() error {
 	return nil
 }

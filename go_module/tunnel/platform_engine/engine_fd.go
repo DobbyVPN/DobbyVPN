@@ -20,14 +20,14 @@ func startPlatformEngine(cfg interface{}) error {
 		MTU:      1200,
 	}
 
-	log.Infof("[Engine][FD] Insert key proxy=%s device=fd://%d mtu=%d", c.ProxyAddr, c.FD, key.MTU)
+	log.Debugf(Category, "[Engine][FD] Insert key proxy=%s device=fd://%d mtu=%d", c.ProxyAddr, c.FD, key.MTU)
 	engine.Insert(key)
-	log.Infof("[Engine][FD] Start begin")
+	log.Debugf(Category, "[Engine][FD] Start begin")
 	engine.Start()
-	log.Infof("[Engine][FD] Start returned")
+	log.Debugf(Category, "[Engine][FD] Start returned")
 	return nil
 }
 
 func stopPlatformEngine() {
-	log.Infof("[Engine][FD] platform stop hook")
+	log.Debugf(Category, "[Engine][FD] platform stop hook")
 }

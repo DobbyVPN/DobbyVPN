@@ -28,7 +28,7 @@ func isReachableViaInterface(iface net.Interface, gw net.IP) bool {
 		}
 
 		if ipnet.Contains(gw) {
-			log.Infof("[Darwin-Protect][Detect] iface=%s contains gateway %s (cidr=%s)", iface.Name, gw.String(), ipnet.String())
+			log.Debugf(Category, "[Darwin-Protect][Detect] iface=%s contains gateway %s (cidr=%s)", iface.Name, gw.String(), ipnet.String())
 			return true
 		}
 	}
@@ -37,7 +37,7 @@ func isReachableViaInterface(iface net.Interface, gw net.IP) bool {
 }
 
 func GetDefaultInterfaceNameDarwin(gatewayIP net.IP) (name string, index int, err error) {
-	log.Infof("[Darwin-Protect][Detect] Gateway detected: %s", gatewayIP.String())
+	log.Debugf(Category, "[Darwin-Protect][Detect] Gateway detected: %s", gatewayIP.String())
 
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -46,18 +46,18 @@ func GetDefaultInterfaceNameDarwin(gatewayIP net.IP) (name string, index int, er
 
 	for _, iface := range ifaces {
 
-		log.Infof("[Darwin-Protect][Detect] Checking iface=%s flags=%v", iface.Name, iface.Flags)
+		log.Debugf(Category, "[Darwin-Protect][Detect] Checking iface=%s flags=%v", iface.Name, iface.Flags)
 
 		if iface.Flags&net.FlagUp == 0 {
-			log.Infof("[Darwin-Protect][Detect] skip %s: down", iface.Name)
+			log.Debugf(Category, "[Darwin-Protect][Detect] skip %s: down", iface.Name)
 			continue
 		}
 		if iface.Flags&net.FlagLoopback != 0 {
-			log.Infof("[Darwin-Protect][Detect] skip %s: loopback", iface.Name)
+			log.Debugf(Category, "[Darwin-Protect][Detect] skip %s: loopback", iface.Name)
 			continue
 		}
 		if len(iface.HardwareAddr) == 0 {
-			log.Infof("[Darwin-Protect][Detect] skip %s: no MAC", iface.Name)
+			log.Debugf(Category, "[Darwin-Protect][Detect] skip %s: no MAC", iface.Name)
 			continue
 		}
 
@@ -66,12 +66,12 @@ func GetDefaultInterfaceNameDarwin(gatewayIP net.IP) (name string, index int, er
 			strings.HasPrefix(iface.Name, "llw") ||
 			strings.HasPrefix(iface.Name, "bridge") ||
 			strings.HasPrefix(iface.Name, "lo") {
-			log.Infof("[Darwin-Protect][Detect] skip %s: virtual/unsupported", iface.Name)
+			log.Debugf(Category, "[Darwin-Protect][Detect] skip %s: virtual/unsupported", iface.Name)
 			continue
 		}
 
 		if isReachableViaInterface(iface, gatewayIP) {
-			log.Infof("[Darwin-Protect][Detect] SELECTED iface=%s index=%d (gateway reachable)", iface.Name, iface.Index)
+			log.Debugf(Category, "[Darwin-Protect][Detect] SELECTED iface=%s index=%d (gateway reachable)", iface.Name, iface.Index)
 			return iface.Name, iface.Index, nil
 		}
 	}
@@ -93,11 +93,11 @@ func (m *macosProtector) Protect(fd uintptr, network string) {
 	switch network {
 	case networkTCP4, networkUDP4:
 		if err := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, ipBoundIf, defaultInterfaceIndex); err != nil {
-			log.Infof("[Darwin-Protect] IP_BOUND_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
+			log.Debugf(Category, "[Darwin-Protect] IP_BOUND_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
 		}
 	case networkTCP6, networkUDP6:
 		if err := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, ipv6BoundIf, defaultInterfaceIndex); err != nil {
-			log.Infof("[Darwin-Protect] IPV6_BOUND_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
+			log.Debugf(Category, "[Darwin-Protect] IPV6_BOUND_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
 		}
 	}
 }

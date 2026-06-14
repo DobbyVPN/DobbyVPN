@@ -12,5 +12,5 @@ func InitLogger(path string) {
 }
 
 func InitTelemetry(endpoint string) {
-	log.SetTelemetry(strings.Clone(endpoint))
+	log.InitTelemetry(strings.Clone(endpoint))
 }

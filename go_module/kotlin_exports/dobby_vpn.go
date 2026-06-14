@@ -44,7 +44,7 @@ func setLastError(err string) {
 	defer errorMu.Unlock()
 
 	lastError = err
-	log.Infof("Error set: %s", err)
+	log.Debugf("kotlin_exports", "Error set: %s", err)
 }
 
 func guardExport(fnName string) func() {
@@ -52,7 +52,7 @@ func guardExport(fnName string) func() {
 		if r := recover(); r != nil {
 			msg := "panic in " + fnName + ": " + unsafeToString(r)
 			setLastError(msg)
-			log.Infof("%s\n%s", msg, string(debug.Stack()))
+			log.Debugf("kotlin_exports", "%s\n%s", msg, string(debug.Stack()))
 		}
 	}
 }
@@ -67,14 +67,14 @@ func unsafeToString(v any) string {
 
 func disconnectLocked() {
 	if vpnClient == nil {
-		log.Infof("disconnectLocked(): client is already nil")
+		log.Debugf("kotlin_exports", "disconnectLocked(): client is already nil")
 		return
 	}
 
 	_ = vpnClient.Disconnect()
 	vpnClient = nil
 
-	log.Infof("disconnectLocked(): finished")
+	log.Debugf("kotlin_exports", "disconnectLocked(): finished")
 }
 
 func NewVpnClient(config string, protocol string, fd int32) {
@@ -83,7 +83,7 @@ func NewVpnClient(config string, protocol string, fd int32) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 
-	log.Infof("NewVpnClient() called")
+	log.Debugf("kotlin_exports", "NewVpnClient() called")
 	clearLastError()
 
 	config = strings.Clone(config)
@@ -91,7 +91,7 @@ func NewVpnClient(config string, protocol string, fd int32) {
 
 	disconnectLocked()
 
-	log.Infof("NewVpnClient(): config.len=%d protocol=%s fd=%d", len(config), protocol, fd)
+	log.Debugf("kotlin_exports", "NewVpnClient(): config.len=%d protocol=%s fd=%d", len(config), protocol, fd)
 
 	tunFile := os.NewFile(uintptr(fd), "tun")
 	if tunFile == nil {
@@ -109,21 +109,21 @@ func NewVpnClient(config string, protocol string, fd int32) {
 		device, err = outline.NewOutlineDevice(config)
 	default:
 		setLastError("unsupported protocol: " + protocol)
-		log.Infof("NewVpnClient() failed: unsupported protocol=%s", protocol)
+		log.Debugf("kotlin_exports", "NewVpnClient() failed: unsupported protocol=%s", protocol)
 		return
 	}
 
 	if err != nil {
 		setLastError(err.Error())
-		log.Infof("NewVpnClient() failed to create %s device: %v", protocol, err)
+		log.Debugf("kotlin_exports", "NewVpnClient() failed to create %s device: %v", protocol, err)
 		return
 	}
 
-	log.Infof("NewVpnClient(): created device type=%T", device)
+	log.Debugf("kotlin_exports", "NewVpnClient(): created device type=%T", device)
 
 	vpnClient = core.NewClient(device, tunFile)
 
-	log.Infof("NewVpnClient() finished successfully")
+	log.Debugf("kotlin_exports", "NewVpnClient() finished successfully")
 }
 
 func VpnConnect() int32 {
@@ -132,22 +132,22 @@ func VpnConnect() int32 {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 
-	log.Infof("VpnConnect() called")
+	log.Debugf("kotlin_exports", "VpnConnect() called")
 	clearLastError()
 
 	if vpnClient == nil {
 		setLastError("client is nil")
-		log.Infof("VpnConnect() failed: client is nil")
+		log.Debugf("kotlin_exports", "VpnConnect() failed: client is nil")
 		return -1
 	}
 
 	if err := vpnClient.Connect(); err != nil {
 		setLastError(err.Error())
-		log.Infof("VpnConnect() failed: %v", err)
+		log.Debugf("kotlin_exports", "VpnConnect() failed: %v", err)
 		return -1
 	}
 
-	log.Infof("VpnConnect() finished successfully")
+	log.Debugf("kotlin_exports", "VpnConnect() finished successfully")
 	return 0
 }
 
@@ -157,7 +157,7 @@ func VpnDisconnect() {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 
-	log.Infof("VpnDisconnect() called")
+	log.Debugf("kotlin_exports", "VpnDisconnect() called")
 	disconnectLocked()
-	log.Infof("VpnDisconnect() finished")
+	log.Debugf("kotlin_exports", "VpnDisconnect() finished")
 }

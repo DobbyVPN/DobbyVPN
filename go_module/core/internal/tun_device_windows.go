@@ -10,8 +10,10 @@ import (
 	"golang.zx2c4.com/wintun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 
-	"golang.getoutline.org/sdk/network"
+	coreCommon "go_module/core/common"
 	"go_module/log"
+
+	"golang.getoutline.org/sdk/network"
 )
 
 type wintunDevice struct {
@@ -25,7 +27,7 @@ var _ network.IPDevice = (*wintunDevice)(nil)
 func NewTunDevice(name, ip string) (network.IPDevice, error) {
 	const mtu = 1500
 
-	log.Infof("[Wintun] Creating adapter...")
+	log.Debugf(coreCommon.Category, "[Wintun] Creating adapter...")
 
 	adapter, err := wintun.CreateAdapter(name, "DobbyVPN", nil)
 	if err != nil {
@@ -44,7 +46,7 @@ func NewTunDevice(name, ip string) (network.IPDevice, error) {
 		name:    name,
 	}
 
-	log.Infof("[Wintun] Adapter created: %s", name)
+	log.Debugf(coreCommon.Category, "[Wintun] Adapter created: %s", name)
 
 	if err := dev.configureIP(ip); err != nil {
 		dev.Close()
@@ -87,7 +89,7 @@ func (d *wintunDevice) MTU() int {
 }
 
 func (d *wintunDevice) configureIP(ip string) error {
-	log.Infof("[Wintun] Configuring IP: %s", ip)
+	log.Debugf(coreCommon.Category, "[Wintun] Configuring IP: %s", ip)
 
 	luid := winipcfg.LUID(d.iface.LUID())
 

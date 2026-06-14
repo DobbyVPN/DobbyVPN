@@ -57,6 +57,10 @@ func (c *AwgClient) Refresh() error {
 	return nil
 }
 
+func (c *AwgClient) HealthCheck() error {
+	return nil
+}
+
 type tunnelHandle struct {
 	*device.Device
 	*device.Logger

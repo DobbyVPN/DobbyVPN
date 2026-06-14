@@ -14,7 +14,7 @@ var linuxSocketMark int
 
 func SetLinuxSocketMark(mark int) {
 	linuxSocketMark = mark
-	log.Infof("[Linux-Protect] SO_MARK=%d", mark)
+	log.Debugf(Category, "[Linux-Protect] SO_MARK=%d", mark)
 }
 
 type linuxProtector struct{}
@@ -26,7 +26,7 @@ func (l *linuxProtector) Protect(fdU uintptr, network string) {
 
 	fd, err := UintptrToInt(fdU)
 	if err != nil {
-		log.Infof("[Linux-Protect] Protect fd err=%v", err)
+		log.Debugf(Category, "[Linux-Protect] Protect fd err=%v", err)
 	}
 
 	if err := syscall.SetsockoptInt(
@@ -35,7 +35,7 @@ func (l *linuxProtector) Protect(fdU uintptr, network string) {
 		syscall.SO_MARK,
 		linuxSocketMark,
 	); err != nil {
-		log.Infof("[Linux-Protect] SO_MARK failed fd=%d mark=%d err=%v", fd, linuxSocketMark, err)
+		log.Debugf(Category, "[Linux-Protect] SO_MARK failed fd=%d mark=%d err=%v", fd, linuxSocketMark, err)
 	}
 }
 

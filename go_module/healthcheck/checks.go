@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"go_module/common"
+	hcCommon "go_module/healthcheck/common"
 	"go_module/log"
 	"net"
 	"net/http"
@@ -17,11 +18,11 @@ var (
 )
 
 func connectionCheck() error {
-	log.Debugf(Category, "Check: connection check")
+	log.Debugf(hcCommon.Category, "Check: connection check")
 	activeClients := common.Client.GetClientNames(true)
 
 	if len(activeClients) == 0 {
-		log.Debugf(Category, "No vpn clients turned on")
+		log.Debugf(hcCommon.Category, "No vpn clients turned on")
 
 		return ErrConnectionCheck
 	}
@@ -30,7 +31,7 @@ func connectionCheck() error {
 }
 
 func activeClientsCheck() error {
-	log.Debugf(Category, "Check: clients health checks")
+	log.Debugf(hcCommon.Category, "Check: clients health checks")
 	activeClients := common.Client.GetClientNames(true)
 
 	for _, clientName := range activeClients {
@@ -44,9 +45,9 @@ func activeClientsCheck() error {
 }
 
 func dnsResolveCheck(host string) error {
-	log.Debugf(Category, "Check: dns resolution check %s", host)
+	log.Debugf(hcCommon.Category, "Check: dns resolution check %s", host)
 
-	log.Debugf(Category, "With timeout = %v", dnsTimeout)
+	log.Debugf(hcCommon.Category, "With timeout = %v", dnsTimeout)
 	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
 	defer cancel()
 
@@ -59,11 +60,11 @@ func dnsResolveCheck(host string) error {
 }
 
 func pingHostCheck(host string) error {
-	log.Debugf(Category, "Check: ping hosts %s", host)
+	log.Debugf(hcCommon.Category, "Check: ping hosts %s", host)
 
-	log.Debugf(Category, "With timeout = %v", pingTimeout)
+	log.Debugf(hcCommon.Category, "With timeout = %v", pingTimeout)
 
-	log.Debugf(Category, "Sending GET request to %s", host)
+	log.Debugf(hcCommon.Category, "Sending GET request to %s", host)
 	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", host, http.NoBody)
@@ -79,7 +80,7 @@ func pingHostCheck(host string) error {
 		return fmt.Errorf("failed request body close: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		log.Warnf(Category, "invalid status code: %d", resp.StatusCode)
+		log.Warnf(hcCommon.Category, "invalid status code: %d", resp.StatusCode)
 	}
 
 	return nil

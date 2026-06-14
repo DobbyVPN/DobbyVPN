@@ -10,14 +10,14 @@ type androidProtector struct{}
 
 func ProtectSocket(fd uintptr, network string) bool {
 	if MakeSocketProtected == nil {
-		log.Infof("[Android-Protect] skipped: socket protector is not registered fd=%d network=%s", fd, network)
+		log.Debugf(Category, "[Android-Protect] skipped: socket protector is not registered fd=%d network=%s", fd, network)
 		return false
 	}
 	if !MakeSocketProtected(fd) {
-		log.Infof("[Android-Protect] failed fd=%d network=%s", fd, network)
+		log.Debugf(Category, "[Android-Protect] failed fd=%d network=%s", fd, network)
 		return false
 	}
-	log.Infof("[Android-Protect] succeeded fd=%d network=%s", fd, network)
+	log.Debugf(Category, "[Android-Protect] succeeded fd=%d network=%s", fd, network)
 	return true
 }
 

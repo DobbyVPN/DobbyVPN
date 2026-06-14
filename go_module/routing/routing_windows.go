@@ -51,12 +51,12 @@ func ExecuteCommand(command string) (string, error) {
 	if err != nil {
 		return string(output), fmt.Errorf("command execution failed: %w, output: %s", err, output)
 	}
-	log.Infof("Outline/routing: Command executed: %s, output: %s", log.MaskStr(command), output)
+	log.Debugf(Category, "Outline/routing: Command executed: %s, output: %s", log.MaskStr(command), output)
 	return string(output), nil
 }
 
 func startIPv6Block() error {
-	log.Infof("Outline/routing: Installing IPv6 outbound block rule")
+	log.Debugf(Category, "Outline/routing: Installing IPv6 outbound block rule")
 
 	_, _ = ExecuteCommand(fmt.Sprintf("netsh advfirewall firewall delete rule name=\"%s\"", ipv6BlockRuleName))
 
@@ -73,7 +73,7 @@ func startIPv6Block() error {
 			remoteIP,
 		)
 		if _, err := ExecuteCommand(command); err == nil {
-			log.Infof("Outline/routing: IPv6 outbound block rule installed with remoteip=%s", remoteIP)
+			log.Debugf(Category, "Outline/routing: IPv6 outbound block rule installed with remoteip=%s", remoteIP)
 			return nil
 		} else {
 			errs = append(errs, fmt.Sprintf("remoteip=%s: %v", remoteIP, err))
@@ -84,62 +84,62 @@ func startIPv6Block() error {
 }
 
 func stopIPv6Block() error {
-	log.Infof("Outline/routing: Removing IPv6 outbound block rule")
+	log.Debugf(Category, "Outline/routing: Removing IPv6 outbound block rule")
 
 	command := fmt.Sprintf("netsh advfirewall firewall delete rule name=\"%s\"", ipv6BlockRuleName)
 	if _, err := ExecuteCommand(command); err != nil {
 		return fmt.Errorf("failed to remove IPv6 outbound block rule: %w", err)
 	}
 
-	log.Infof("Outline/routing: IPv6 outbound block rule removed")
+	log.Debugf(Category, "Outline/routing: IPv6 outbound block rule removed")
 	return nil
 }
 
 func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, InterfaceName string, TunGateway string, TunDeviceIP string) error {
-	log.Infof("Outline/routing: Starting routing configuration for Windows...")
-	log.Infof("Outline/routing: Proxy IP: %s, Tun Device Name: %s, Tun Gateway: %s, Tun Device IP: %s, Gateway IP: %s, Interface Name: %s",
+	log.Debugf(Category, "Outline/routing: Starting routing configuration for Windows...")
+	log.Debugf(Category, "Outline/routing: Proxy IP: %s, Tun Device Name: %s, Tun Gateway: %s, Tun Device IP: %s, Gateway IP: %s, Interface Name: %s",
 		proxyIP, TunDeviceName, TunGateway, TunDeviceIP, GatewayIP, InterfaceName)
-	log.Infof("Outline/routing: Setting up IP rule...")
+	log.Debugf(Category, "Outline/routing: Setting up IP rule...")
 	if _, err := EnsureProxyRoute(proxyIP, GatewayIP, InterfaceName); err != nil {
 		return err
 	}
-	log.Infof("Outline/routing: Added IP proxy rules via table")
+	log.Debugf(Category, "Outline/routing: Added IP proxy rules via table")
 	if err := addOrUpdateReservedSubnetBypass(GatewayIP, InterfaceName); err != nil {
 		return err
 	}
-	log.Infof("Outline/routing: Added IP reserved rules via table")
+	log.Debugf(Category, "Outline/routing: Added IP reserved rules via table")
 	if err := addIpv4TunRedirect(TunGateway, TunDeviceName); err != nil {
 		return err
 	}
-	log.Infof("Outline/routing: Added default IPv4 redirect routes via TUN")
+	log.Debugf(Category, "Outline/routing: Added default IPv4 redirect routes via TUN")
 	if err := startIPv6Block(); err != nil {
-		log.Infof("Outline/routing: IPv6 outbound block rule was not installed; continuing with IPv4 routing: %v", err)
+		log.Debugf(Category, "Outline/routing: IPv6 outbound block rule was not installed; continuing with IPv4 routing: %v", err)
 	}
 
-	log.Infof("Outline/routing: Routing configuration completed successfully.")
+	log.Debugf(Category, "Outline/routing: Routing configuration completed successfully.")
 	return nil
 }
 
 func StopRouting(proxyIp string, TunDeviceName string, GatewayIP string, InterfaceName string, TunGateway string) {
-	log.Infof("Outline/routing: Cleaning up routing table and rules...")
+	log.Debugf(Category, "Outline/routing: Cleaning up routing table and rules...")
 	if err := stopIPv6Block(); err != nil {
-		log.Infof("Outline/routing: Failed to remove IPv6 outbound block rule: %v", err)
+		log.Debugf(Category, "Outline/routing: Failed to remove IPv6 outbound block rule: %v", err)
 	}
 	if err := DeleteProxyRoute(proxyIp, GatewayIP, InterfaceName); err != nil {
-		log.Infof("Outline/routing: Failed to delete proxy route for IP %s: %v", proxyIp, err)
+		log.Debugf(Category, "Outline/routing: Failed to delete proxy route for IP %s: %v", proxyIp, err)
 	}
 	if err := removeReservedSubnetBypass(); err != nil {
-		log.Infof("Outline/routing: Failed to remove reserved subnet bypass routes: %v", err)
+		log.Debugf(Category, "Outline/routing: Failed to remove reserved subnet bypass routes: %v", err)
 	}
 	if err := stopRoutingIpv4(TunDeviceName); err != nil {
-		log.Infof("Outline/routing: Failed to remove IPv4 TUN redirect routes: %v", err)
+		log.Debugf(Category, "Outline/routing: Failed to remove IPv4 TUN redirect routes: %v", err)
 	}
-	log.Infof("Outline/routing: Cleaned up routing table and rules.")
+	log.Debugf(Category, "Outline/routing: Cleaned up routing table and rules.")
 }
 
 func EnsureProxyRoute(proxyIp string, gatewayIp string, interfaceName string) (bool, error) {
 	if isLoopbackIP(proxyIp) {
-		log.Infof("Outline/routing: Skipping proxy route for loopback server: %s", proxyIp)
+		log.Debugf(Category, "Outline/routing: Skipping proxy route for loopback server: %s", proxyIp)
 		return false, nil
 	}
 
@@ -147,7 +147,7 @@ func EnsureProxyRoute(proxyIp string, gatewayIp string, interfaceName string) (b
 	setCommand := fmt.Sprintf("netsh interface ipv4 set route %s/32 nexthop=%s interface=\"%s\" metric=0 store=active",
 		proxyIp, gatewayIp, interfaceName)
 	if _, err := ExecuteCommand(setCommand); err == nil {
-		log.Infof("Outline/routing: Proxy route already exists for IP %s; leaving it unchanged", proxyIp)
+		log.Debugf(Category, "Outline/routing: Proxy route already exists for IP %s; leaving it unchanged", proxyIp)
 		return false, nil
 	}
 
@@ -166,7 +166,7 @@ func isLoopbackIP(ip string) bool {
 
 func DeleteProxyRoute(proxyIp string, GatewayIP string, InterfaceName string) error {
 	if isLoopbackIP(proxyIp) {
-		log.Infof("Outline/routing: Skipping proxy route removal for loopback server: %s", proxyIp)
+		log.Debugf(Category, "Outline/routing: Skipping proxy route removal for loopback server: %s", proxyIp)
 		return nil
 	}
 

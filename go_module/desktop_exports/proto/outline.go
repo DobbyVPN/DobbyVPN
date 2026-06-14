@@ -6,25 +6,26 @@ import (
 	"context"
 
 	"go_module/desktop_exports/api"
+	"go_module/desktop_exports/common"
 	"go_module/grpcproto"
 
 	"go_module/log"
 )
 
 func (s *Server) GetOutlineLastError(_ context.Context, in *grpcproto.Empty) (*grpcproto.GetOutlineLastErrorResponse, error) {
-	log.Infof("GetOutlineLastError")
+	log.Debugf(common.Category, "GetOutlineLastError")
 	err := api.GetVpnLastError()
 	return &grpcproto.GetOutlineLastErrorResponse{Error: err}, nil
 }
 
 func (s *Server) StartOutline(_ context.Context, in *grpcproto.StartOutlineRequest) (*grpcproto.StartOutlineResponse, error) {
-	log.Infof("StartOutline")
+	log.Debugf(common.Category, "StartOutline")
 	result := api.StartVpn(in.GetConfig(), "outline")
 	return &grpcproto.StartOutlineResponse{Result: result}, nil
 }
 
 func (s *Server) StopOutline(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
-	log.Infof("StopOutline")
+	log.Debugf(common.Category, "StopOutline")
 	go api.StopVpn()
 	return &grpcproto.Empty{}, nil
 }

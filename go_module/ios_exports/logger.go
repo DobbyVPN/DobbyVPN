@@ -8,11 +8,14 @@ import (
 
 func InitLogger(path string) {
 	defer guard("InitLogger")()
-	log.Debugf(Category, "InitLogger begin path=%s", path)
 	if err := log.SetPath(path); err != nil {
-		log.Errorf(Category, "InitLogger failed: %v", err)
-		return
+		log.Debugf("ios_exports", "InitLogger failed: %v", err)
 	}
-	log.Debugf(Category, "InitLogger OK path=%s", path)
-	logNativeBuildInfo("InitLogger")
+}
+
+func InitTelemetry(endpoint string) {
+	defer guard("InitTelemetry")()
+	if err := log.InitTelemetry(endpoint); err != nil {
+		log.Debugf("ios_exports", "InitTelemetry failed: %v", err)
+	}
 }

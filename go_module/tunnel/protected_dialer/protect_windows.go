@@ -5,9 +5,10 @@ package protected_dialer
 import (
 	"syscall"
 
-	"github.com/jackpal/gateway"
 	"go_module/log"
 	"go_module/routing"
+
+	"github.com/jackpal/gateway"
 )
 
 var defaultInterfaceIndex int
@@ -33,7 +34,7 @@ func GetDefaultInterfaceIndex() (int, error) {
 
 func SetDefaultInterfaceIndex(idx int) {
 	defaultInterfaceIndex = idx
-	log.Infof("[Windows-Protect] ifindex=%d", idx)
+	log.Debugf(Category, "[Windows-Protect] ifindex=%d", idx)
 }
 
 type windowsProtector struct{}
@@ -48,13 +49,13 @@ func (w *windowsProtector) Protect(fd uintptr, network string) {
 		const IP_UNICAST_IF = 31
 		idx := htonl(uint32(defaultInterfaceIndex))
 		if err := syscall.SetsockoptInt(syscall.Handle(fd), syscall.IPPROTO_IP, IP_UNICAST_IF, int(idx)); err != nil {
-			log.Infof("[Windows-Protect] IP_UNICAST_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
+			log.Debugf(Category, "[Windows-Protect] IP_UNICAST_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
 		}
 
 	case "tcp6", "udp6":
 		const IPV6_UNICAST_IF = 31
 		if err := syscall.SetsockoptInt(syscall.Handle(fd), syscall.IPPROTO_IPV6, IPV6_UNICAST_IF, defaultInterfaceIndex); err != nil {
-			log.Infof("[Windows-Protect] IPV6_UNICAST_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
+			log.Debugf(Category, "[Windows-Protect] IPV6_UNICAST_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
 		}
 	}
 }

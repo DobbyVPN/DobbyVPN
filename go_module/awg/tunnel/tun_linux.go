@@ -35,34 +35,37 @@ func CreateTunnelData(tunnelName string, tunnelConfig *config.Config) *TunnelDat
 func (a *TunnelData) Run() error {
 	var err error
 
-	log.Infof("[AWG] Running awg tunnel (linux)")
+	log.Infof(Category, "Running awg tunnel (linux)")
 	a.errs = make(chan error, 1)
 
-	log.Infof("[AWG] DeduplicateNetworkEntries")
+	log.Infof(Category, "DeduplicateNetworkEntries")
 	a.InterfaceConfig.DeduplicateNetworkEntries()
 
-	log.Infof("[AWG] Converting interface config to the UAPI config")
+	log.Infof(Category, "Converting interface config to the UAPI config")
 	uapiConf, err := a.InterfaceConfig.ToUAPI()
 	if err != nil {
 		return fmt.Errorf("failed to convert config to UAPI: %w", err)
 	}
-	log.Infof("[AWG] [UAPI] %s", uapiConf)
 
-	log.Infof("[AWG] Create awg TUN device")
+	log.Infof(Category, "Create awg TUN device")
 	tdev, err := tun.CreateTUN(a.InterfaceName, device.DefaultMTU)
 	if err != nil {
 		return fmt.Errorf("failed to create TUN device: %w", err)
 	}
 
-	log.Infof("[AWG] Creating interface instance")
+	log.Infof(Category, "Creating interface instance")
 	bind := conn.NewDefaultBind()
 	logger := &device.Logger{
-		Verbosef: log.Infof,
-		Errorf:   log.Infof,
+		Verbosef: func(format string, args ...any) {
+			log.Debugf("TUN", format, args...)
+		},
+		Errorf: func(format string, args ...any) {
+			log.Errorf("TUN", format, args...)
+		},
 	}
 	a.dev = device.NewDevice(tdev, bind, logger)
 
-	log.Infof("[AWG] Setting interface configuration")
+	log.Infof(Category, "Setting interface configuration")
 	fileUAPI, err := ipc.UAPIOpen(a.InterfaceName)
 	if err != nil {
 		return fmt.Errorf("failed to open UAPI file: %w", err)
@@ -73,51 +76,51 @@ func (a *TunnelData) Run() error {
 	}
 	a.uapi = uapi
 
-	log.Infof("[AWG] Seting up UAPI config")
+	log.Infof(Category, "Seting up UAPI config")
 	err = a.dev.IpcSet(uapiConf)
 	if err != nil {
 		return fmt.Errorf("failed set IPC: %w", err)
 	}
 
-	log.Infof("[AWG] Bringing peers up")
+	log.Infof(Category, "Bringing peers up")
 	err = a.dev.Up()
 	if err != nil {
 		return fmt.Errorf("failed bringing peers up: %w", err)
 	}
 
-	log.Infof("[AWG] Setting up linux subnet")
+	log.Infof(Category, "Setting up linux subnet")
 
-	log.Infof("[AWG] Setting up %s interface", a.InterfaceName)
+	log.Infof(Category, "Setting up %s interface", a.InterfaceName)
 	if err := a.setUpInterface(); err != nil {
 		return fmt.Errorf("failed set up interface: %w", err)
 	}
 
-	log.Infof("[AWG] Adding all addresses")
+	log.Infof(Category, "Adding all addresses")
 	if err := a.addAddresses(); err != nil {
 		return fmt.Errorf("failed add addresses: %w", err)
 	}
 
-	log.Infof("[AWG] Adding all routes")
+	log.Infof(Category, "Adding all routes")
 	if err := a.addRoutes(); err != nil {
 		return fmt.Errorf("failed add routes: %w", err)
 	}
 
-	log.Infof("[AWG] IPC accept loop")
+	log.Infof(Category, "IPC accept loop")
 	go a.ipcAcceptLoop()
 
-	log.Infof("[AWG] Tunnel loop")
+	log.Infof(Category, "Tunnel loop")
 	go a.tunnelLoop()
 
 	return nil
 }
 
 func (a *TunnelData) Stop() {
-	log.Infof("[AWG] Shutting down")
+	log.Infof(Category, "Shutting down")
 
 	if a.uapi != nil {
 		err := a.uapi.Close()
 		if err != nil {
-			log.Infof("[AWG] Failed closing UAPI: %v", err)
+			log.Infof(Category, "Failed closing UAPI: %v", err)
 		}
 	}
 	if a.dev != nil {
@@ -126,14 +129,14 @@ func (a *TunnelData) Stop() {
 }
 
 func (a *TunnelData) ipcAcceptLoop() {
-	log.Infof("[AWG] Running IPC accept loop")
+	log.Infof(Category, "Running IPC accept loop")
 
 	for {
 		c, err := a.uapi.Accept()
 		if err != nil {
 			a.errs <- err
 
-			log.Infof("[AWG] [ERROR] Got IPC error, stopping IPC loop")
+			log.Infof(Category, "[ERROR] Got IPC error, stopping IPC loop")
 			return
 		}
 		go a.dev.IpcHandle(c)
@@ -141,16 +144,16 @@ func (a *TunnelData) ipcAcceptLoop() {
 }
 
 func (a *TunnelData) tunnelLoop() {
-	log.Infof("[AWG] Running tunnel loop")
+	log.Infof(Category, "Running tunnel loop")
 
 	defer a.Stop()
 
 	select {
 	case err := <-a.errs:
-		log.Infof("[AWG] [ERROR] Got error, stopping tunnel loop: %s", err)
+		log.Infof(Category, "[ERROR] Got error, stopping tunnel loop: %s", err)
 		return
 	case <-a.dev.Wait():
-		log.Infof("[AWG] [WARNING] Device wait call, stopping tunnel loop")
+		log.Infof(Category, "[WARNING] Device wait call, stopping tunnel loop")
 		return
 	}
 }
@@ -175,7 +178,7 @@ func (a *TunnelData) addAddresses() error {
 }
 
 func (a *TunnelData) addAddress(address string) error {
-	log.Infof("[AWG] Adding address %s dev %s", a.InterfaceName, address)
+	log.Debugf(Category, "Adding address %s dev %s", a.InterfaceName, address)
 
 	// sudo ip -4 address add <address> dev <interfaceName>
 	link, err := netlink.LinkByName(a.InterfaceName)
@@ -209,7 +212,7 @@ func (a *TunnelData) addRoutes() error {
 }
 
 func (a *TunnelData) addRoute(address string) error {
-	log.Infof("[AWG] Add route for %s %s", a.InterfaceName, address)
+	log.Debugf(Category, "Add route for %s %s", a.InterfaceName, address)
 
 	// sudo ip rule add not fwmark <table> table <table>
 	ruleNot := netlink.NewRule()

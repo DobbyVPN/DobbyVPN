@@ -28,7 +28,7 @@ func NewClient(device pkg.ProtocolDevice, tun io.ReadWriteCloser) *CoreClient {
 		device: device,
 		tun:    tun,
 	}
-	log.Infof("core mobile client created (tun2socks version)")
+	log.Debugf(coreCommon.Category, "core mobile client created (tun2socks version)")
 	common.Client.SetVpnClient(coreCommon.Name, c)
 	return c
 }
@@ -36,7 +36,7 @@ func NewClient(device pkg.ProtocolDevice, tun io.ReadWriteCloser) *CoreClient {
 func (c *CoreClient) Connect() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Infof("RECOVERED from fail in Connect: %v", r)
+			log.Debugf(coreCommon.Category, "RECOVERED from fail in Connect: %v", r)
 			err = fmt.Errorf("core mobile connect panic: %v", r)
 		}
 	}()
@@ -56,33 +56,33 @@ func (c *CoreClient) Connect() (err error) {
 		fd = int(f.Fd())
 		err := unix.SetNonblock(fd, true)
 		if err != nil {
-			log.Infof("Set unix.SetNonblock error: %v", err)
+			log.Debugf(coreCommon.Category, "Set unix.SetNonblock error: %v", err)
 		}
 	} else {
-		log.Infof("failed to get FD from tun: not an *os.File")
+		log.Debugf(coreCommon.Category, "failed to get FD from tun: not an *os.File")
 		return fmt.Errorf("invalid tun device type")
 	}
 
 	err = c.device.Open(0, "")
 	if err != nil {
-		log.Infof("failed to create protocol device: %v", err)
+		log.Debugf(coreCommon.Category, "failed to create protocol device: %v", err)
 		common.Client.MarkInactive(coreCommon.Name)
 		return fmt.Errorf("failed to open protocol device: %w", err)
 	}
 
-	log.Infof("starting tun2socks engine with proxy %s", c.device.GetProxyAddr())
+	log.Debugf(coreCommon.Category, "starting tun2socks engine with proxy %s", c.device.GetProxyAddr())
 	err = tunnel.StartEngine(platform_engine.EngineConfig{
 		ProxyAddr:   c.device.GetProxyAddr(),
 		FD:          fd,
 		UplinkIface: "",
 	})
 	if err != nil {
-		log.Infof("Can't start tun2socks: %v", err)
+		log.Debugf(coreCommon.Category, "Can't start tun2socks: %v", err)
 		return fmt.Errorf("failed to start tun2socks engine: %w", err)
 	}
 
 	common.Client.MarkActive(coreCommon.Name)
-	log.Infof("core client connected successfully via tun2socks")
+	log.Debugf(coreCommon.Category, "core client connected successfully via tun2socks")
 	return nil
 }
 
@@ -96,28 +96,32 @@ func (c *CoreClient) Disconnect() error {
 	var errs []error
 	if c.tun != nil {
 		if err := c.tun.Close(); err != nil {
-			log.Infof("failed to close tun fd: %v", err)
+			log.Debugf(coreCommon.Category, "failed to close tun fd: %v", err)
 			errs = append(errs, fmt.Errorf("failed to close tun fd: %w", err))
 		} else {
-			log.Infof("tun fd closed")
+			log.Debugf(coreCommon.Category, "tun fd closed")
 		}
 		c.tun = nil
 	}
 
 	if c.device != nil {
 		if err := c.device.Close(); err != nil {
-			log.Infof("failed to close outline device: %v\n", err)
+			log.Debugf(coreCommon.Category, "failed to close outline device: %v\n", err)
 			errs = append(errs, fmt.Errorf("failed to close protocol device: %w", err))
 		}
 		c.device = nil
 	}
 
-	log.Infof("outline client disconnected")
+	log.Debugf(coreCommon.Category, "outline client disconnected")
 	common.Client.MarkInactive(coreCommon.Name)
 	return errors.Join(errs...)
 }
 
 func (c *CoreClient) Refresh() error {
+	return nil
+}
+
+func (c *CoreClient) HealthCheck() error {
 	return nil
 }
 
