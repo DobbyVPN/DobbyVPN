@@ -42,6 +42,10 @@ class LogsRepository(
         const val UI_TAIL_LINES: Int = 50
 
         const val EXPORT_TAIL_LINES: Int = -1
+
+        private const val LOG_RETENTION_HOURS: Int = 48
+
+        private const val LOG_TIMESTAMP_LENGTH: Int = 19
     }
 
     private var sentryLogger: SentryLogsRepository? = null
@@ -87,6 +91,50 @@ class LogsRepository(
         }.onFailure { it.printStackTrace() }
     }
 
+    fun cleanupOldLogs() {
+        if (!fileSystem.exists(logFilePath)) return
+
+        runCatching {
+            val cutoff = DateTime
+                .fromUnixMillis(
+                    DateTime.now().unixMillisLong -
+                        LOG_RETENTION_HOURS.toLong() * 60L * 60L * 1000L
+                )
+                .format("yyyy-MM-dd HH:mm:ss")
+            val lines = readAllLogs()
+            var keepContinuation = false
+            val retained = lines.filter { line ->
+                val timestamp = extractLogTimestamp(line)
+                if (timestamp == null) {
+                    keepContinuation
+                } else {
+                    keepContinuation = timestamp >= cutoff
+                    keepContinuation
+                }
+            }
+
+            if (retained.size != lines.size) {
+                fileSystem.sink(logFilePath).buffer().use { sink ->
+                    for (line in retained) {
+                        sink.writeUtf8(line)
+                        sink.writeUtf8("\n")
+                    }
+                }
+
+                logEventsChannel.clear()
+                CoroutineScope(Dispatchers.Default).launch {
+                    logEventsChannel.emitLogs(retained.takeLast(UI_TAIL_LINES))
+                }
+            }
+
+            writeLog(
+                "[Logs] cleanup retentionHours=$LOG_RETENTION_HOURS " +
+                    "linesBefore=${lines.size} linesAfter=${retained.size} " +
+                    "removed=${lines.size - retained.size}"
+            )
+        }.onFailure { it.printStackTrace() }
+    }
+
     fun readAllLogs(): List<String> = readLogs(EXPORT_TAIL_LINES)
 
     fun readUILogs(): List<String> = readLogs(UI_TAIL_LINES)
@@ -126,6 +174,22 @@ class LogsRepository(
             it.printStackTrace()
             emptyList()
         }
+    }
+
+    private fun extractLogTimestamp(line: String): String? {
+        if (line.length < LOG_TIMESTAMP_LENGTH + 2) return null
+        if (line.first() != '[' || line[LOG_TIMESTAMP_LENGTH + 1] != ']') return null
+
+        val timestamp = line.substring(1, LOG_TIMESTAMP_LENGTH + 1)
+        val timestampLooksValid =
+            timestamp.length == LOG_TIMESTAMP_LENGTH &&
+                timestamp[4] == '-' &&
+                timestamp[7] == '-' &&
+                timestamp[10] == ' ' &&
+                timestamp[13] == ':' &&
+                timestamp[16] == ':'
+
+        return if (timestampLooksValid) timestamp else null
     }
 
 }

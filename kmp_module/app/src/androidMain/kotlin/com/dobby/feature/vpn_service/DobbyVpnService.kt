@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.domain.initLogger
 import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.main.domain.ConnectionStateRepository
@@ -51,6 +52,7 @@ class DobbyVpnService : VpnService() {
     val serviceId: String = UUID.randomUUID().toString().take(8)
     private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private val logger: Logger by inject()
+    private val logsRepository: LogsRepository by inject()
     private val geoRouting: GeoRouting by inject()
     private val cloakConnectInteractor: CloakConnectionInteractor by inject()
     private val outlineInteractor: OutlineInteractor by inject()
@@ -66,6 +68,7 @@ class DobbyVpnService : VpnService() {
         super.onCreate()
         instance = this
         logger.log("[svc:$serviceId] onCreate()")
+        logsRepository.cleanupOldLogs()
         logger.log("Start go logger init with file = ${provideLogFilePath().toString()}")
         initLogger()
         logger.log("Finish go logger init")
