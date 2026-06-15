@@ -57,9 +57,13 @@ public class VpnManagerImpl: VpnManager {
 
             switch connection.status {
             case .connected:
+                self.connectionRepository.tryUpdateVpnStarted(isStarted: true)
+                self.connectionRepository.tryUpdateStatus(isConnected: true)
                 self.logs.writeLog(log: "VPN connected")
 
             case .disconnected:
+                self.connectionRepository.tryUpdateVpnStarted(isStarted: false)
+                self.connectionRepository.tryUpdateStatus(isConnected: false)
                 self.logs.writeLog(log: "VPN disconnected")
 
             case .connecting:
@@ -69,9 +73,12 @@ public class VpnManagerImpl: VpnManager {
                 self.logs.writeLog(log: "VPN is reasserting…")
 
             case .disconnecting:
+                self.connectionRepository.tryUpdateStatus(isConnected: false)
                 self.logs.writeLog(log: "VPN is disconnecting…")
 
             case .invalid:
+                self.connectionRepository.tryUpdateVpnStarted(isStarted: false)
+                self.connectionRepository.tryUpdateStatus(isConnected: false)
                 self.logs.writeLog(log: "VPN status is invalid")
 
             @unknown default:
@@ -146,6 +153,8 @@ public class VpnManagerImpl: VpnManager {
                     self.logs.writeLog(log: "startVPNTunnel returned; manager.connection.status = \(self.statusName(manager.connection.status)) raw=\(manager.connection.status.rawValue)")
                 } catch {
                     self.logs.writeLog(log: "Error starting VPNTunnel \(error)")
+                    self.connectionRepository.tryUpdateVpnStarted(isStarted: false)
+                    self.connectionRepository.tryUpdateStatus(isConnected: false)
                 }
             }
         }

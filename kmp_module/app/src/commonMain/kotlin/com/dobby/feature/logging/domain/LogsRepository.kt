@@ -43,7 +43,7 @@ class LogsRepository(
 
         const val EXPORT_TAIL_LINES: Int = -1
 
-        private const val LOG_RETENTION_MINUTES: Int = 2
+        private const val LOG_RETENTION_HOURS: Int = 48
 
         private const val LOG_TIMESTAMP_LENGTH: Int = 19
     }
@@ -98,7 +98,7 @@ class LogsRepository(
             val cutoff = DateTime
                 .fromUnixMillis(
                     DateTime.now().unixMillisLong -
-                        LOG_RETENTION_MINUTES.toLong() * 60L * 1000L
+                        LOG_RETENTION_HOURS.toLong() * 60L * 60L * 1000L
                 )
                 .format("yyyy-MM-dd HH:mm:ss")
             val lines = readAllLogs()
@@ -128,7 +128,7 @@ class LogsRepository(
             }
 
             writeLog(
-                "[Logs] cleanup retentionMinutes=$LOG_RETENTION_MINUTES " +
+                "[Logs] cleanup retentionHours=$LOG_RETENTION_HOURS " +
                     "linesBefore=${lines.size} linesAfter=${retained.size} " +
                     "removed=${lines.size - retained.size}"
             )
