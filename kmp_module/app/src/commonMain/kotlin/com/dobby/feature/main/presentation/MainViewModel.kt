@@ -6,6 +6,7 @@ import com.dobby.feature.diagnostic.domain.HealthCheckManager
 import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.LoggerManager
+import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.*
 import com.dobby.feature.main.domain.config.TomlConfigApplier
@@ -32,6 +33,7 @@ class MainViewModel(
     private val vpnManager: VpnManager,
     private val loggerManager: LoggerManager,
     private val logger: Logger,
+    private val logsRepository: LogsRepository,
     private val healthCheckManager: HealthCheckManager,
     private val configsProcessor: ConfigsProcessor,
 ) : ViewModel() {
@@ -245,6 +247,7 @@ class MainViewModel(
         healthCheckManager.init()
 
         logger.log("Init logger")
+        logsRepository.cleanupOldLogs()
         loggerManager.init()
 
         logger.log("Start tunnel service")

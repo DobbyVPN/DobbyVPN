@@ -47,6 +47,7 @@ val jvmVpnModule = module {
         DobbyVpnService(
             get(),
             logger = get(),
+            logsRepository = get(),
             awgLibrary = get(),
             outlineLibrary = get(),
             xrayLibrary = get(),

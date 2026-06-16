@@ -9,6 +9,8 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.zip.Deflater
+import java.util.zip.GZIPOutputStream
 
 class CopyLogsInteractorImpl(
     private val context: Context
@@ -22,10 +24,12 @@ class CopyLogsInteractorImpl(
                 "yyyy-MM-dd_HH-mm-ss",
                 Locale.getDefault()
             ).format(Date())
-            val fileName = "DobbyVPN_logs_$timestamp.txt"
+            val fileName = "DobbyVPN_logs_$timestamp.txt.gz"
 
             val logFile = File(context.cacheDir, fileName)
-            logFile.writeText(joinedLogs)
+            bestCompressionGzip(logFile).bufferedWriter(Charsets.UTF_8).use { writer ->
+                writer.write(joinedLogs)
+            }
 
             val uri = FileProvider.getUriForFile(
                 context,
@@ -34,7 +38,7 @@ class CopyLogsInteractorImpl(
             )
 
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
+                type = "application/gzip"
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
@@ -47,6 +51,14 @@ class CopyLogsInteractorImpl(
         } catch (e: Exception) {
             e.printStackTrace()
             context.showToast("Can't send logs")
+        }
+    }
+
+    private fun bestCompressionGzip(file: File): GZIPOutputStream {
+        return object : GZIPOutputStream(file.outputStream()) {
+            init {
+                def.setLevel(Deflater.BEST_COMPRESSION)
+            }
         }
     }
 }

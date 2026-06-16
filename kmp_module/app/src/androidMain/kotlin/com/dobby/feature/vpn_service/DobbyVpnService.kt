@@ -9,6 +9,9 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.domain.LogsRepository
+import com.dobby.feature.logging.domain.initLogger
+import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
@@ -38,6 +41,7 @@ class DobbyVpnService : VpnService() {
     val serviceId: String = UUID.randomUUID().toString().take(8)
     private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private val logger: Logger by inject()
+    private val logsRepository: LogsRepository by inject()
     private val geoRouting: GeoRouting by inject()
     private val cloakConnectInteractor: CloakConnectionInteractor by inject()
     private val outlineInteractor: OutlineInteractor by inject()

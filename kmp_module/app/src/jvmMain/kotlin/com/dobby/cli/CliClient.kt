@@ -43,6 +43,7 @@ class CliClient {
         val dobbyVpnService = DobbyVpnService(
             dobbyConfigsRepository = configsRepository,
             logger = logger,
+            logsRepository = logsRepository,
             awgLibrary = awgLibrary,
             outlineLibrary = outlineLibrary,
             xrayLibrary = xrayLibrary,
@@ -55,10 +56,11 @@ class CliClient {
             connectionStateRepository = connectionStateRepository,
             permissionEventsChannel = permissionEventsChannel,
             vpnManager = vpnManager,
+            loggerManager = LoggerManagerImpl(logger, loggerLibrary, configsRepository),
             logger = logger,
+            logsRepository = logsRepository,
             healthCheckManager = HealthCheckManagerImpl(logger, healthCheckLibrary),
             configsProcessor = ConfigsProcessor(configsRepository),
-            loggerManager = LoggerManagerImpl(logger, loggerLibrary, configsRepository)
         )
     }
 

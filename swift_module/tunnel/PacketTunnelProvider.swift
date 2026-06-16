@@ -206,6 +206,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let osVersionString = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         let optionKeys = options?.keys.sorted().joined(separator: ",") ?? "(none)"
+        logs.cleanupOldLogs()
         logSystemInfo(osVersionString: osVersionString)
         logs.writeLog(log: "[iOS26-RESEARCH] iOS version: \(osVersionString)")
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
@@ -360,8 +361,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel reason=\(reason.rawValue) (\(reason))")
-        configsRepository.setIsUserInitStop(isUserInitStop: true)
+        let userStopRequested = configsRepository.getIsUserInitStop()
+        logs.writeLog(
+            log: "[tunnel:\(tunnelId)] stopTunnel reason=\(reason.rawValue) (\(reason)) " +
+                "userStopRequested=\(userStopRequested)"
+        )
+        if !userStopRequested {
+            configsRepository.setIsUserInitStop(isUserInitStop: false)
+            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel observed without app user-stop request")
+        }
         logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel clearing geo routing config")
         Cloak_outlineClearGeoRoutingConf()
         logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel geo routing clear returned")
