@@ -1,7 +1,7 @@
 import app
 import MyLibrary
 
-public final class HealthCheckManagerImpl: HealthCheckManager {
+public class HealthCheckManagerImpl: HealthCheckManager {
     public func getConnectionState() -> VpnConnectionState {
         let state = Cloak_outlineGetConnectionState()
 

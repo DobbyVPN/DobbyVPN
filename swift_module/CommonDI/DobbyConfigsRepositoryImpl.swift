@@ -229,8 +229,8 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         return userDefaults.string(forKey: telemetryAttributesKey) ?? ""
     }
 
-    public func setTelemetryAttributes(attributes: String) {
-        userDefaults.set(attributes, forKey: telemetryAttributesKey)
+    public func setTelemetryAttributes(config: String) {
+        userDefaults.set(config, forKey: telemetryAttributesKey)
     }
 
     public func getGeoRoutingConf() -> String {
