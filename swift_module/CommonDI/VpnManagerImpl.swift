@@ -19,11 +19,6 @@ public class VpnManagerImpl: VpnManager {
     @Published private(set) var state: NEVPNStatus = .invalid
 
     init(connectionRepository: ConnectionStateRepository) {
-        let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
-        logs.writeLog(log: "Start go logger init path = \(path)")
-        Cloak_outlineInitLogger(path)
-        logs.writeLog(log: "Finish go logger init")
-
 //        VpnManagerImpl.startSentry()
         self.connectionRepository = connectionRepository
         getOrCreateManager { [weak self] manager, _ in
