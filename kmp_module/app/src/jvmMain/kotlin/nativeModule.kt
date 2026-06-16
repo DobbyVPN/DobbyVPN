@@ -1,8 +1,9 @@
 import com.dobby.di.makeNativeModule
 import com.dobby.domain.DobbyConfigsRepositoryImpl
 import com.dobby.feature.authentication.domain.AuthenticationManagerImpl
-import com.dobby.feature.diagnostic.domain.HealthCheckImpl
+import com.dobby.feature.diagnostic.domain.HealthCheckManagerImpl
 import com.dobby.feature.logging.CopyLogsInteractorImpl
+import com.dobby.feature.logging.LoggerManagerImpl
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.ConnectionStateRepository
@@ -30,12 +31,8 @@ val jvmMainModule = makeNativeModule(
     connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(get(), get()) },
     authenticationManager = { AuthenticationManagerImpl() },
-    healthCheck = {
-        HealthCheckImpl(
-            logger = get(),
-            healthCheckLibrary = get()
-        )
-    },
+    healthCheckManager = { HealthCheckManagerImpl(get(), get()) },
+    loggerManager = { LoggerManagerImpl(get(), get(), get()) }
 )
 
 val jvmVpnModule = module {
@@ -54,7 +51,6 @@ val jvmVpnModule = module {
             outlineLibrary = get(),
             xrayLibrary = get(),
             cloakLibrary = get(),
-            loggerLibrary = get(),
             georoutingLibrary = get()
         )
     }

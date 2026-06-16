@@ -9,9 +9,9 @@ import java.util.concurrent.TimeUnit
 import com.dobby.backend.GoBackendWrapper
 import kotlin.concurrent.thread
 
-class HealthCheckImpl(
+class HealthCheckManagerImpl(
     private val logger: Logger,
-) : HealthCheck {
+) : HealthCheckManager {
 
     private val timeoutMs = 1_000L
 

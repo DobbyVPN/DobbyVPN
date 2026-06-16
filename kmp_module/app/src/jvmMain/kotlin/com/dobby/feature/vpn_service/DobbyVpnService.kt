@@ -2,14 +2,12 @@ package com.dobby.feature.vpn_service
 
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.maskStr
-import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.main.domain.clearVpnConfig
 import interop.awg.AwgLibrary
 import interop.cloak.CloakLibrary
 import interop.georouting.GeoroutingLibrary
-import interop.logger.LoggerLibrary
 import interop.outline.OutlineLibrary
 import interop.xray.XrayLibrary
 import kotlinx.coroutines.runBlocking
@@ -75,41 +73,9 @@ class DobbyVpnService(
     private val outlineLibrary: OutlineLibrary,
     private val xrayLibrary: XrayLibrary,
     private val cloakLibrary: CloakLibrary,
-    private val loggerLibrary: LoggerLibrary,
     private val georoutingLibrary: GeoroutingLibrary
 ) {
     private val startStopLock = Any()
-
-    fun enableTunnelLogging() {
-        val logFilePath = provideLogFilePath()
-        logger.log("Init tunnel logging to the path: $logFilePath")
-        loggerLibrary.InitLogger(logFilePath.toString())
-    }
-
-    fun enableTunnelTelemetry() {
-        val endpoint = dobbyConfigsRepository.getTelemetryEndpoint()
-        val token = dobbyConfigsRepository.getTelemetryApiToken()
-        val config = dobbyConfigsRepository.getTelemetryAttributes()
-
-        logger.log("Init tunnel telemetry to the endpoint=$endpoint, token.len=${token.length}")
-        if (endpoint.isNotBlank()) {
-            loggerLibrary.InitTelemetry(endpoint, token)
-            logger.log("Initialized tunnel telemetry")
-        } else {
-            logger.log("No telemetry endpoint provided")
-        }
-
-        logger.log("Setup telemetry attributes")
-        if (config.isNotBlank()) {
-            loggerLibrary.SetupTelemetryAttributes(config)
-            logger.log("Setup tunnel telemetry attributes")
-        } else {
-            logger.log("No telemetry attributes provided")
-        }
-    }
-
-    fun disableTunnelTelemetry() {
-    }
 
     /**
      * Starts VPN tunnel, that defined in the [dobbyConfigsRepository]
@@ -119,9 +85,6 @@ class DobbyVpnService(
     fun startService(): Boolean {
         synchronized(startStopLock) {
             val runningInterface = dobbyConfigsRepository.getVpnInterface()
-
-            enableTunnelLogging()
-            enableTunnelTelemetry()
 
             georoutingLibrary.SetGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
             val started = when (runningInterface) {
@@ -142,7 +105,6 @@ class DobbyVpnService(
     }
 
     private fun stopCurrentLocked() {
-        disableTunnelTelemetry()
         stopCloakOutline()
         stopXray()
         stopAwg()

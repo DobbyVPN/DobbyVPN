@@ -1,8 +1,9 @@
 package com.dobby.di
 
 import com.dobby.feature.authentication.domain.AuthenticationManager
-import com.dobby.feature.diagnostic.domain.HealthCheck
+import com.dobby.feature.diagnostic.domain.HealthCheckManager
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.LoggerManager
 import com.dobby.feature.logging.domain.CopyLogsInteractor
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
@@ -21,10 +22,14 @@ fun makeNativeModule(
     connectionStateRepository: NativeInjectionFactory<ConnectionStateRepository>,
     vpnManager: NativeInjectionFactory<VpnManager>,
     authenticationManager: NativeInjectionFactory<AuthenticationManager>,
-    healthCheck: NativeInjectionFactory<HealthCheck>,
+    healthCheckManager: NativeInjectionFactory<HealthCheckManager>,
+    loggerManager: NativeInjectionFactory<LoggerManager>,
 ): Module {
     return module {
         factory { vpnManager() }
+        factory { healthCheckManager() }
+        factory { loggerManager() }
+
         single { copyLogsInteractor() }
         single { logEventsChannel() }
         single { logsRepository() }
@@ -37,6 +42,5 @@ fun makeNativeModule(
         single<DobbyConfigsRepositoryCloak> { get<DobbyConfigsRepository>() }
         single<DobbyConfigsRepositoryAwg> { get<DobbyConfigsRepository>() }
         single<DobbyConfigsRepositoryXray> { get<DobbyConfigsRepository>() }
-        single { healthCheck() }
     }
 }

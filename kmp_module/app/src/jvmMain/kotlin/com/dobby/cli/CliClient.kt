@@ -1,8 +1,9 @@
 package com.dobby.cli
 
 import com.dobby.domain.DobbyConfigsRepositoryImpl
-import com.dobby.feature.diagnostic.domain.HealthCheckImpl
+import com.dobby.feature.diagnostic.domain.HealthCheckManagerImpl
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.LoggerManagerImpl
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.ConnectionStateRepository
@@ -12,13 +13,10 @@ import com.dobby.feature.main.presentation.ConfigsProcessor
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.grpc.*
-import io.ktor.utils.io.charsets.*
 import korlibs.time.DateTime
 import korlibs.time.seconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import java.io.File
-import java.nio.file.Files
 import kotlin.time.Duration.Companion.milliseconds
 
 class CliClient {
@@ -49,7 +47,6 @@ class CliClient {
             outlineLibrary = outlineLibrary,
             xrayLibrary = xrayLibrary,
             cloakLibrary = cloakLibrary,
-            loggerLibrary = loggerLibrary,
             georoutingLibrary = georoutingLibrary,
         )
         val vpnManager = VpnManagerImpl(connectionStateRepository, dobbyVpnService)
@@ -59,8 +56,9 @@ class CliClient {
             permissionEventsChannel = permissionEventsChannel,
             vpnManager = vpnManager,
             logger = logger,
-            healthCheck = HealthCheckImpl(logger, healthCheckLibrary),
-            configsProcessor = ConfigsProcessor(configsRepository)
+            healthCheckManager = HealthCheckManagerImpl(logger, healthCheckLibrary),
+            configsProcessor = ConfigsProcessor(configsRepository),
+            loggerManager = LoggerManagerImpl(logger, loggerLibrary, configsRepository)
         )
     }
 

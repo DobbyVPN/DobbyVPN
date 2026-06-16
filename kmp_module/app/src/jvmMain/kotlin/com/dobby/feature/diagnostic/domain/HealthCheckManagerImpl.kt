@@ -3,11 +3,11 @@ package com.dobby.feature.diagnostic.domain
 import com.dobby.feature.logging.Logger
 import interop.healthcheck.HealthCheckLibrary
 
-class HealthCheckImpl(
+class HealthCheckManagerImpl(
     private val logger: Logger,
     private val healthCheckLibrary: HealthCheckLibrary,
-) : HealthCheck {
-    override fun GetConnectionState(): VpnConnectionState =
+) : HealthCheckManager {
+    override fun getConnectionState(): VpnConnectionState =
         when (healthCheckLibrary.GetConnectionState()) {
             0 -> VpnConnectionState.DISCONNECTED
             1 -> VpnConnectionState.CONNECTING
@@ -18,15 +18,15 @@ class HealthCheckImpl(
             }
         }
 
-    override fun InitHealthCheck() {
+    override fun init() {
         healthCheckLibrary.InitHealthCheck()
     }
 
-    override fun StartHealthCheck() {
+    override fun start() {
         healthCheckLibrary.StartHealthCheck()
     }
 
-    override fun StopHealthCheck() {
+    override fun stop() {
         healthCheckLibrary.StopHealthCheck()
     }
 }

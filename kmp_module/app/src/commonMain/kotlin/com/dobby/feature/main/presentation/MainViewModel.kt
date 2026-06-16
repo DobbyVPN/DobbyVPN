@@ -2,9 +2,10 @@ package com.dobby.feature.main.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.dobby.feature.diagnostic.domain.HealthCheck
+import com.dobby.feature.diagnostic.domain.HealthCheckManager
 import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.LoggerManager
 import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.*
 import com.dobby.feature.main.domain.config.TomlConfigApplier
@@ -29,8 +30,9 @@ class MainViewModel(
     private val connectionStateRepository: ConnectionStateRepository,
     private val permissionEventsChannel: PermissionEventsChannel,
     private val vpnManager: VpnManager,
+    private val loggerManager: LoggerManager,
     private val logger: Logger,
-    private val healthCheck: HealthCheck,
+    private val healthCheckManager: HealthCheckManager,
     private val configsProcessor: ConfigsProcessor,
 ) : ViewModel() {
     @Volatile
@@ -60,7 +62,7 @@ class MainViewModel(
         }
         // Load initial UI state from go backend
         viewModelScope.launch {
-            val connectionState = healthCheck.GetConnectionState()
+            val connectionState = healthCheckManager.getConnectionState()
             logger.log("Init connection state: $connectionState")
             val newState = _uiState.value.copy(connectionState = connectionState)
             _uiState.emit(newState)
@@ -213,7 +215,7 @@ class MainViewModel(
         viewModelScope.launch {
             logger.log("Connection state detector: start")
             while (connectionDetectorAtomic) {
-                val connectionState = healthCheck.GetConnectionState()
+                val connectionState = healthCheckManager.getConnectionState()
                 val newState = _uiState.value.copy(connectionState = connectionState)
                 _uiState.emit(newState)
                 connectionStateRepository.updateStatus(connectionState)
@@ -221,7 +223,7 @@ class MainViewModel(
             }
             logger.log("Connection state detector: awaiting disconnection")
             while (true) {
-                val connectionState = healthCheck.GetConnectionState()
+                val connectionState = healthCheckManager.getConnectionState()
                 if (connectionState != VpnConnectionState.DISCONNECTED) {
                     logger.log("Closing healthcheck...")
                 } else {
@@ -238,17 +240,24 @@ class MainViewModel(
 
     suspend fun startVpnService(): Boolean {
         logger.log("Starting VPN service...")
+
         logger.log("Init health check")
-        healthCheck.InitHealthCheck()
+        healthCheckManager.init()
+
+        logger.log("Init logger")
+        loggerManager.init()
+
         logger.log("Start tunnel service")
         connectionStateRepository.serviceStartedFlow.prepare()
         vpnManager.start()
+
         logger.log("Await service started result")
         val connected = connectionStateRepository.serviceStartedFlow.awaitResult()
         logger.log("Got service started result: $connected")
+
         if (connected) {
             logger.log("Start health check")
-            healthCheck.StartHealthCheck()
+            healthCheckManager.start()
             logger.log("Start connection detector")
             startConnectionStateDetector()
             return true
@@ -263,7 +272,7 @@ class MainViewModel(
         logger.log("Stop tunnel service")
         vpnManager.stop()
         logger.log("Stop health check")
-        healthCheck.StopHealthCheck()
+        healthCheckManager.stop()
         logger.log("Stop connection detector")
         stopConnectionStateDetector()
         logger.log("VPN service stopped successfully, state reset to disconnected")
