@@ -28,8 +28,8 @@ var (
 var (
 	dnsTimeout             = 1 * time.Second
 	pingTimeout            = 3 * time.Second
-	delayTimeoutConnecting = 2 * time.Second
-	delayTimeoutConnected  = 7 * time.Second
+	delayTimeoutConnecting = 3 * time.Second
+	delayTimeoutConnected  = 10 * time.Second
 )
 
 // Connection state
@@ -53,10 +53,13 @@ var (
 			return dnsResolveCheck("one.one.one.one")
 		},
 		func() error {
-			return pingHostCheck("https://google.com/gen_204")
+			return pingHostCheck("https://www.google.com/generate_204")
 		},
 		func() error {
-			return pingHostCheck("https://one.one.one.one")
+			return pingHostCheck("https://www.cloudflare.com/cdn-cgi/trace")
+		},
+		func() error {
+			return pingHostCheck("https://about.google")
 		},
 	}
 )
