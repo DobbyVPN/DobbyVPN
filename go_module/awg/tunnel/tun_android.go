@@ -23,21 +23,21 @@ type TunnelData struct {
 func (a *TunnelData) Run() error {
 	log.Infof(Category, "Running awg tunnel (android)")
 
-	log.Infof(Category, "Converting interface config to the UAPI config")
+	log.Debugf(Category, "Converting interface config to the UAPI config")
 	uapiConfig, err := a.InterfaceConfig.ToUAPI()
 	if err != nil {
 		unix.Close(a.InterfaceFD)
 		return fmt.Errorf("Failed get IPC config: %v", err)
 	}
 
-	log.Infof(Category, "Create awg TUN device")
+	log.Debugf(Category, "Create awg TUN device")
 	tun, name, err := tun.CreateUnmonitoredTUNFromFD(a.InterfaceFD)
 	if err != nil {
 		unix.Close(a.InterfaceFD)
 		return fmt.Errorf("Failed create unmonitored TUN from FD: %v", err)
 	}
 
-	log.Infof(Category, "Creating interface instance %s", name)
+	log.Debugf(Category, "Creating interface instance %s", name)
 	bind := conn.NewStdNetBind()
 	logger := &device.Logger{
 		Verbosef: func(format string, args ...any) {
@@ -49,17 +49,17 @@ func (a *TunnelData) Run() error {
 	}
 	a.device = device.NewDevice(tun, bind, logger)
 
-	log.Infof(Category, "Seting up UAPI config")
+	log.Debugf(Category, "Seting up UAPI config")
 	err = a.device.IpcSet(uapiConfig)
 	if err != nil {
 		unix.Close(a.InterfaceFD)
 		return fmt.Errorf("Failed to set IPC config: %v", err)
 	}
 
-	log.Infof(Category, "Disable some roaming for broken mobile semantics")
+	log.Debugf(Category, "Disable some roaming for broken mobile semantics")
 	a.device.DisableSomeRoamingForBrokenMobileSemantics()
 
-	log.Infof(Category, "Bringing peers up")
+	log.Debugf(Category, "Bringing peers up")
 	err = a.device.Up()
 	if err != nil {
 		a.device.Close()

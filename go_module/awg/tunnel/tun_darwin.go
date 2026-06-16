@@ -44,22 +44,22 @@ func (a *TunnelData) Run() error {
 	log.Infof(Category, "Running awg tunnel (darwin)")
 	a.errs = make(chan error, 1)
 
-	log.Infof(Category, "DeduplicateNetworkEntries")
+	log.Debugf(Category, "DeduplicateNetworkEntries")
 	a.InterfaceConfig.DeduplicateNetworkEntries()
 
-	log.Infof(Category, "Converting interface config to the UAPI config")
+	log.Debugf(Category, "Converting interface config to the UAPI config")
 	uapiConf, err := a.InterfaceConfig.ToUAPI()
 	if err != nil {
 		return fmt.Errorf("failed to convert config to UAPI: %w", err)
 	}
 
-	log.Infof(Category, "Create awg TUN device")
+	log.Debugf(Category, "Create awg TUN device")
 	tdev, err := tun.CreateTUN(a.InterfaceName, device.DefaultMTU)
 	if err != nil {
 		return fmt.Errorf("failed to create TUN device: %w", err)
 	}
 
-	log.Infof(Category, "Creating interface instance")
+	log.Debugf(Category, "Creating interface instance")
 	bind := conn.NewDefaultBind()
 	logger := &device.Logger{
 		Verbosef: func(format string, args ...any) {
@@ -71,7 +71,7 @@ func (a *TunnelData) Run() error {
 	}
 	a.dev = device.NewDevice(tdev, bind, logger)
 
-	log.Infof(Category, "Setting interface configuration")
+	log.Debugf(Category, "Setting interface configuration")
 	fileUAPI, err := ipc.UAPIOpen(a.InterfaceName)
 	if err != nil {
 		return fmt.Errorf("failed to open UAPI file: %w", err)
@@ -82,38 +82,40 @@ func (a *TunnelData) Run() error {
 	}
 	a.uapi = uapi
 
-	log.Infof(Category, "Seting up UAPI config")
+	log.Debugf(Category, "Seting up UAPI config")
 	if err := a.dev.IpcSet(uapiConf); err != nil {
 		return fmt.Errorf("IPC set error: %w", err)
 	}
 
-	log.Infof(Category, "Bringing peers up")
+	log.Debugf(Category, "Bringing peers up")
 	if err := a.dev.Up(); err != nil {
 		return fmt.Errorf("bringing peers up error: %w", err)
 	}
 
-	log.Infof(Category, "Setting up darwin interface routes")
+	log.Debugf(Category, "Setting up darwin interface routes")
 
-	log.Infof(Category, "Setting up %s interface", a.InterfaceName)
+	log.Debugf(Category, "Setting up %s interface", a.InterfaceName)
 	if err := a.setUpInterface(); err != nil {
 		return err
 	}
 
-	log.Infof(Category, "Adding all addresses")
+	log.Debugf(Category, "Adding all addresses")
 	if err := a.addAddresses(); err != nil {
 		return err
 	}
 
-	log.Infof(Category, "Adding all routes")
+	log.Debugf(Category, "Adding all routes")
 	if err := a.addRoutes(); err != nil {
 		return err
 	}
 
-	log.Infof(Category, "IPC accept loop")
+	log.Debugf(Category, "IPC accept loop")
 	go a.ipcAcceptLoop()
 
-	log.Infof(Category, "Tunnel loop")
+	log.Debugf(Category, "Tunnel loop")
 	go a.tunnelLoop()
+
+	log.Infof(Category, "Device started")
 
 	return nil
 }
@@ -130,7 +132,7 @@ func (a *TunnelData) Stop() {
 }
 
 func (a *TunnelData) ipcAcceptLoop() {
-	log.Infof(Category, "Running IPC accept loop")
+	log.Debugf(Category, "Running IPC accept loop")
 
 	for {
 		c, err := a.uapi.Accept()
@@ -145,7 +147,7 @@ func (a *TunnelData) ipcAcceptLoop() {
 }
 
 func (a *TunnelData) tunnelLoop() {
-	log.Infof(Category, "Running tunnel loop")
+	log.Debugf(Category, "Running tunnel loop")
 
 	defer a.Stop()
 

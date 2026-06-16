@@ -38,22 +38,22 @@ func (a *TunnelData) Run() error {
 	log.Infof(Category, "Running awg tunnel (linux)")
 	a.errs = make(chan error, 1)
 
-	log.Infof(Category, "DeduplicateNetworkEntries")
+	log.Debugf(Category, "DeduplicateNetworkEntries")
 	a.InterfaceConfig.DeduplicateNetworkEntries()
 
-	log.Infof(Category, "Converting interface config to the UAPI config")
+	log.Debugf(Category, "Converting interface config to the UAPI config")
 	uapiConf, err := a.InterfaceConfig.ToUAPI()
 	if err != nil {
 		return fmt.Errorf("failed to convert config to UAPI: %w", err)
 	}
 
-	log.Infof(Category, "Create awg TUN device")
+	log.Debugf(Category, "Create awg TUN device")
 	tdev, err := tun.CreateTUN(a.InterfaceName, device.DefaultMTU)
 	if err != nil {
 		return fmt.Errorf("failed to create TUN device: %w", err)
 	}
 
-	log.Infof(Category, "Creating interface instance")
+	log.Debugf(Category, "Creating interface instance")
 	bind := conn.NewDefaultBind()
 	logger := &device.Logger{
 		Verbosef: func(format string, args ...any) {
@@ -65,7 +65,7 @@ func (a *TunnelData) Run() error {
 	}
 	a.dev = device.NewDevice(tdev, bind, logger)
 
-	log.Infof(Category, "Setting interface configuration")
+	log.Debugf(Category, "Setting interface configuration")
 	fileUAPI, err := ipc.UAPIOpen(a.InterfaceName)
 	if err != nil {
 		return fmt.Errorf("failed to open UAPI file: %w", err)
@@ -76,40 +76,42 @@ func (a *TunnelData) Run() error {
 	}
 	a.uapi = uapi
 
-	log.Infof(Category, "Seting up UAPI config")
+	log.Debugf(Category, "Seting up UAPI config")
 	err = a.dev.IpcSet(uapiConf)
 	if err != nil {
 		return fmt.Errorf("failed set IPC: %w", err)
 	}
 
-	log.Infof(Category, "Bringing peers up")
+	log.Debugf(Category, "Bringing peers up")
 	err = a.dev.Up()
 	if err != nil {
 		return fmt.Errorf("failed bringing peers up: %w", err)
 	}
 
-	log.Infof(Category, "Setting up linux subnet")
+	log.Debugf(Category, "Setting up linux subnet")
 
-	log.Infof(Category, "Setting up %s interface", a.InterfaceName)
+	log.Debugf(Category, "Setting up %s interface", a.InterfaceName)
 	if err := a.setUpInterface(); err != nil {
 		return fmt.Errorf("failed set up interface: %w", err)
 	}
 
-	log.Infof(Category, "Adding all addresses")
+	log.Debugf(Category, "Adding all addresses")
 	if err := a.addAddresses(); err != nil {
 		return fmt.Errorf("failed add addresses: %w", err)
 	}
 
-	log.Infof(Category, "Adding all routes")
+	log.Debugf(Category, "Adding all routes")
 	if err := a.addRoutes(); err != nil {
 		return fmt.Errorf("failed add routes: %w", err)
 	}
 
-	log.Infof(Category, "IPC accept loop")
+	log.Debugf(Category, "IPC accept loop")
 	go a.ipcAcceptLoop()
 
-	log.Infof(Category, "Tunnel loop")
+	log.Debugf(Category, "Tunnel loop")
 	go a.tunnelLoop()
+
+	log.Infof(Category, "Device started")
 
 	return nil
 }
@@ -120,7 +122,7 @@ func (a *TunnelData) Stop() {
 	if a.uapi != nil {
 		err := a.uapi.Close()
 		if err != nil {
-			log.Infof(Category, "Failed closing UAPI: %v", err)
+			log.Warnf(Category, "Failed closing UAPI: %v", err)
 		}
 	}
 	if a.dev != nil {
@@ -129,14 +131,14 @@ func (a *TunnelData) Stop() {
 }
 
 func (a *TunnelData) ipcAcceptLoop() {
-	log.Infof(Category, "Running IPC accept loop")
+	log.Debugf(Category, "Running IPC accept loop")
 
 	for {
 		c, err := a.uapi.Accept()
 		if err != nil {
 			a.errs <- err
 
-			log.Infof(Category, "[ERROR] Got IPC error, stopping IPC loop")
+			log.Errorf(Category, "Got IPC error, stopping IPC loop")
 			return
 		}
 		go a.dev.IpcHandle(c)
@@ -144,16 +146,16 @@ func (a *TunnelData) ipcAcceptLoop() {
 }
 
 func (a *TunnelData) tunnelLoop() {
-	log.Infof(Category, "Running tunnel loop")
+	log.Debugf(Category, "Running tunnel loop")
 
 	defer a.Stop()
 
 	select {
 	case err := <-a.errs:
-		log.Infof(Category, "[ERROR] Got error, stopping tunnel loop: %s", err)
+		log.Errorf(Category, "Got error, stopping tunnel loop: %s", err)
 		return
 	case <-a.dev.Wait():
-		log.Infof(Category, "[WARNING] Device wait call, stopping tunnel loop")
+		log.Warnf(Category, "Device wait call, stopping tunnel loop")
 		return
 	}
 }
