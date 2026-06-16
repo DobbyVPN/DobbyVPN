@@ -10,7 +10,7 @@ interface HealthCheckManager {
     /**
      * Platform dependent health check initiation. It should be run before VPN connection setup.
      */
-    fun init(): Unit
+    fun initHealthCheck(): Unit
 
     /**
      * Platform dependent health check start. It should be run after VPN connection setup.

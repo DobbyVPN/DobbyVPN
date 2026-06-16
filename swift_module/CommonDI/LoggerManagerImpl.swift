@@ -4,7 +4,7 @@ public class LoggerManagerImpl: LoggerManager {
     private var logs = NativeModuleHolder.logsRepository
     private var configsRepository: DobbyConfigsRepository
 
-    public func init() {
+    public func initLogger() {
         let logFilePath = LogsRepository_iosKt.provideLogFilePath().normalized().description()
         let endpoint = configsRepository.getTelemetryEndpoint()
         let token = configsRepository.getTelemetryApiToken()

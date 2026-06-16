@@ -244,11 +244,11 @@ class MainViewModel(
         logger.log("Starting VPN service...")
 
         logger.log("Init health check")
-        healthCheckManager.init()
+        healthCheckManager.initHealthCheck()
 
         logger.log("Init logger")
         logsRepository.cleanupOldLogs()
-        loggerManager.init()
+        loggerManager.initLogger()
 
         logger.log("Start tunnel service")
         connectionStateRepository.serviceStartedFlow.prepare()

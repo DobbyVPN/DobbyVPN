@@ -18,7 +18,7 @@ class HealthCheckManagerImpl(
             }
         }
 
-    override fun init() {
+    override fun initHealthCheck() {
         healthCheckLibrary.InitHealthCheck()
     }
 

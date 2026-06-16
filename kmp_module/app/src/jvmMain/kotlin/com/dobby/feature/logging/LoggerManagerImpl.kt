@@ -9,7 +9,7 @@ class LoggerManagerImpl(
     private val loggerLibrary: LoggerLibrary,
     private val configsRepository: DobbyConfigsRepository,
 ) : LoggerManager {
-    override fun init() {
+    override fun initLogger() {
         val logFilePath = provideLogFilePath()
         val endpoint = configsRepository.getTelemetryEndpoint()
         val token = configsRepository.getTelemetryApiToken()

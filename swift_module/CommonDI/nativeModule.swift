@@ -26,9 +26,6 @@ public class NativeModuleHolder {
         logsRepository: { _ in
             return logsRepository
         },
-        ipRepository: { _ in
-            return IpRepositoryImpl()
-        },
         configsRepository: { _ in
             return configsRepository
         },
@@ -41,8 +38,11 @@ public class NativeModuleHolder {
         authenticationManager: { _ in
             return AuthenticationManagerImpl()
         },
-        healthCheck: { _ in
-            return HealthCheckImpl()
+        healthCheckManager: { _ in
+            return HealthCheckManagerImpl()
+        },
+        loggerManager: { _ in 
+            return LoggerManagerImpl(logsRepository)
         }
     )
     

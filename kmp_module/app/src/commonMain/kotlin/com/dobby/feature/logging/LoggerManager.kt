@@ -4,5 +4,5 @@ interface LoggerManager {
     /**
      * Platform dependent logger initiation. Setups logger path, telemetry settings and attributes.
      */
-    fun init()
+    fun initLogger()
 }
