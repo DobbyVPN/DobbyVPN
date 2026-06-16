@@ -3,15 +3,17 @@ package log
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"go_module/auth"
 	"go_module/telemetry"
 	"io"
 	"log/slog"
-	"math/rand/v2"
+	"math"
+	"math/big"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -133,7 +135,7 @@ const (
 )
 
 var (
-	clientID string = strconv.FormatUint(rand.Uint64(), 10)
+	clientID string = auth.GenerateRandomAuth()
 )
 
 // Set up OpenTelemetry.
@@ -225,23 +227,24 @@ func InitTelemetry(endpoint, token string) error {
 }
 
 func loadExternalIPStep() (string, error) {
-	req, err := http.NewRequest("GET", YandexIPAPI, http.NoBody)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", YandexIPAPI, http.NoBody)
 	if err != nil {
-		return "", fmt.Errorf("failed create Yandex API request: %v", err)
+		return "", fmt.Errorf("failed create Yandex API request: %w", err)
 	}
 
-	client := http.Client{
-		Timeout: 2 * time.Second,
-	}
+	client := http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed send Yandex API request: %v", err)
+		return "", fmt.Errorf("failed send Yandex API request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	result, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed read Yandex API response: %v", err)
+		return "", fmt.Errorf("failed read Yandex API response: %w", err)
 	}
 	resultString := string(result)
 
@@ -254,7 +257,13 @@ func loadExternalIP() string {
 	Debugf("LOG", "Loading user external IP")
 	for i := 0; i < 5; i++ {
 		if i > 0 {
-			time.Sleep(minDelay + (maxDelay-minDelay)*time.Duration(rand.Float32()))
+			f, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+			if err != nil {
+				Warnf("LOG", "unable to generate rand number %v", err)
+				continue
+			}
+			randFloat, _ := f.Float64()
+			time.Sleep(minDelay + (maxDelay-minDelay)*time.Duration(randFloat))
 			Warnf("LOG", "Retry # %d", i)
 		}
 
@@ -269,14 +278,14 @@ func loadExternalIP() string {
 	return "nan"
 }
 
-func SetupTelemetryAttributes(configJson string) {
+func SetupTelemetryAttributes(config string) {
 	Debugf("LOG", "Loading user external IP")
 
 	externalIP := loadExternalIP()
 	Debugf("LOG", "Loaded external IP")
 
 	var connectionConfig map[string]any
-	err := json.Unmarshal([]byte(configJson), &connectionConfig)
+	err := json.Unmarshal([]byte(config), &connectionConfig)
 	if err != nil {
 		Warnf("LOG", "Failed parse config json")
 		connectionConfig = map[string]any{}

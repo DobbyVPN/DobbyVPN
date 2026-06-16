@@ -61,18 +61,6 @@ var (
 	}
 )
 
-func join(map1, map2 map[string]any) map[string]any {
-	result := make(map[string]any)
-	for k, v := range map1 {
-		result[k] = v
-	}
-	for k, v := range map2 {
-		result[k] = v
-	}
-
-	return result
-}
-
 func GetConnectionState() ConnectionState {
 	log.Debugf(common.Category, "Called GetConnectionState")
 

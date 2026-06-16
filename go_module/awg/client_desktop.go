@@ -35,7 +35,7 @@ func (a *AwgClient) Disconnect() error {
 	return nil
 }
 
-func (c *AwgClient) HealthCheck() error {
+func (a *AwgClient) HealthCheck() error {
 	return nil
 }
 
