@@ -20,7 +20,7 @@ func (c *Server) InitLogger(_ context.Context, in *grpcproto.InitLoggerRequest) 
 
 func (c *Server) InitTelemetry(_ context.Context, in *grpcproto.InitTelemetryRequest) (*grpcproto.Empty, error) {
 	log.Debugf(common.Category, "InitTelemetry")
-	api.InitTelemetry(in.Endpoint)
+	api.InitTelemetry(in.Endpoint, in.Token)
 	return &grpcproto.Empty{}, nil
 }
 

@@ -24,9 +24,12 @@ open class LoggerGrpcLibrary(channel: ManagedChannel) : LoggerLibrary {
         }
     }
 
-    override fun InitTelemetry(endpoint: String) {
+    override fun InitTelemetry(endpoint: String, token: String) {
         return runBlocking {
-            val request = initTelemetryRequest { this.endpoint = endpoint }
+            val request = initTelemetryRequest {
+                this.endpoint = endpoint
+                this.token = token
+            }
             try {
                 stub.initTelemetry(request)
             } catch (e: StatusException) {

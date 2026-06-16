@@ -137,9 +137,9 @@ var (
 )
 
 // Set up OpenTelemetry.
-func NewTelemetryLogger(endpoint string) (*TelemetryLogger, error) {
+func NewTelemetryLogger(endpoint, token string) (*TelemetryLogger, error) {
 	ctx := context.Background()
-	otelShutdown, err := telemetry.SetupOTelSDK(ctx, endpoint)
+	otelShutdown, err := telemetry.SetupOTelSDK(ctx, endpoint, token)
 	if err != nil {
 		return nil, fmt.Errorf("failed create otlp logger: %w", err)
 	}
@@ -207,14 +207,14 @@ func SetPath(path string) error {
 	return nil
 }
 
-func InitTelemetry(endpoint string) error {
+func InitTelemetry(endpoint, token string) error {
 	if lg.tlogger != nil {
 		Debugf("LOG", "No need to create new OpenTelemetry SDK")
 		return nil
 	}
 
 	Debugf("LOG", "Create new OpenTelemetry SDK")
-	tlg, err := NewTelemetryLogger(endpoint)
+	tlg, err := NewTelemetryLogger(endpoint, token)
 	if err != nil {
 		Warnf("OTEL", "Failed to create new telemetry logger: %v", err)
 		return fmt.Errorf("failed to create new telemetry logger: %w", err)

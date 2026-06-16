@@ -10,8 +10,8 @@ func InitLogger(path string) {
 	log.SetPath(path)
 }
 
-func InitTelemetry(endpoint string) {
-	log.InitTelemetry(endpoint)
+func InitTelemetry(endpoint, token string) {
+	log.InitTelemetry(endpoint, token)
 }
 
 func StopTelemetry() {

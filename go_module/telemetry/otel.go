@@ -36,7 +36,7 @@ const (
 
 // setupOTelSDK bootstraps the OpenTelemetry pipeline.
 // If it does not return an error, make sure to call shutdown for proper cleanup.
-func SetupOTelSDK(ctx context.Context, endpoint string) (func(context.Context) error, error) {
+func SetupOTelSDK(ctx context.Context, endpoint, token string) (func(context.Context) error, error) {
 	var shutdownFuncs []func(context.Context) error
 	var err error
 
@@ -80,7 +80,7 @@ func SetupOTelSDK(ctx context.Context, endpoint string) (func(context.Context) e
 	otel.SetMeterProvider(meterProvider)
 
 	// Set up logger provider.
-	loggerProvider, err := newLoggerProvider(ctx, endpoint)
+	loggerProvider, err := newLoggerProvider(ctx, endpoint, token)
 	if err != nil {
 		handleErr(err)
 		return shutdown, err
@@ -100,6 +100,10 @@ func newPropagator() propagation.TextMapPropagator {
 }
 
 func newTracerProvider() (*trace.TracerProvider, error) {
+	// traceExporter, err := otlptracehttp.New(
+	// 	context.Background(),
+	// 	otlptracehttp
+	// )
 	traceExporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
 	if err != nil {
 		return nil, err
@@ -130,10 +134,13 @@ func randRange(min, max time.Duration) time.Duration {
 	return min + (max-min)*time.Duration(rand.Float32())
 }
 
-func newLoggerProvider(ctx context.Context, endpoint string) (*log.LoggerProvider, error) {
+func newLoggerProvider(ctx context.Context, endpoint, token string) (*log.LoggerProvider, error) {
 	logExporter, err := otlploghttp.New(
 		ctx,
 		otlploghttp.WithEndpoint(endpoint),
+		otlploghttp.WithHeaders(map[string]string{
+			"Authorization": token,
+		}),
 		otlploghttp.WithInsecure(),
 		otlploghttp.WithRetry(
 			otlploghttp.RetryConfig{

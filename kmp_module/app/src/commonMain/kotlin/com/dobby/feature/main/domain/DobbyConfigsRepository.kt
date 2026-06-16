@@ -21,6 +21,10 @@ interface DobbyConfigsRepository :
 
     fun setTelemetryEndpoint(endpoint: String)
 
+    fun getTelemetryApiToken(): String
+
+    fun setTelemetryApiToken(token: String)
+
     fun getTelemetryAttributes(): String
 
     fun setTelemetryAttributes(config: String)

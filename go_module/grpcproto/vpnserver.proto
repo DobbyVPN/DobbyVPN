@@ -90,6 +90,7 @@ message InitLoggerRequest {
 
 message InitTelemetryRequest {
   string endpoint = 1;
+  string token = 2;
 }
 
 message SetGeoRoutingConfRequest {

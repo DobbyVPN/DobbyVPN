@@ -75,6 +75,14 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("telemetryEndpoint", endpoint)
     }
 
+    override fun getTelemetryApiToken(): String {
+        return prefs.get("telemetryApiToken", "")
+    }
+
+    override fun setTelemetryApiToken(token: String) {
+        prefs.put("telemetryApiToken", token)
+    }
+
     override fun getTelemetryAttributes(): String {
         return prefs.get("telemetryAttributes", "")
     }
