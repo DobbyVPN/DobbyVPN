@@ -1,3 +1,4 @@
+import app
 import MyLibrary
 
 public class LoggerManagerImpl: LoggerManager {
