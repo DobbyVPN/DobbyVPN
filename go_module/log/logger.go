@@ -241,9 +241,9 @@ func loadExternalIPStep() (string, error) {
 		return "", fmt.Errorf("failed send Yandex API request: %w", err)
 	}
 	defer func() {
-		err := resp.Body.Close()
-		if err != nil {
-			Warnf("LOG", "Failed close response body: %v", err)
+		bodyErr := resp.Body.Close()
+		if bodyErr != nil {
+			Warnf("LOG", "Failed close response body: %v", bodyErr)
 		}
 	}()
 
