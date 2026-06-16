@@ -4,13 +4,20 @@ package dobbyvpn
 
 import (
 	"go_module/log"
-	"strings"
 )
 
 func InitLogger(path string) {
-	log.SetPath(strings.Clone(path))
+	log.SetPath(path)
 }
 
-func InitTelemetry(endpoint string) {
-	log.InitTelemetry(strings.Clone(endpoint))
+func InitTelemetry(endpoint, token string) {
+	log.InitTelemetry(endpoint, token)
+}
+
+func StopTelemetry() {
+	log.StopTelemetry()
+}
+
+func SetupTelemetryAttributes(config string) {
+	log.SetupTelemetryAttributes(config)
 }

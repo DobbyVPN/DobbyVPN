@@ -27,9 +27,9 @@ var (
 // Default variables
 var (
 	dnsTimeout             = 1 * time.Second
-	pingTimeout            = 1 * time.Second
-	delayTimeoutConnecting = 1 * time.Second
-	delayTimeoutConnected  = 5 * time.Second
+	pingTimeout            = 3 * time.Second
+	delayTimeoutConnecting = 2 * time.Second
+	delayTimeoutConnected  = 7 * time.Second
 )
 
 // Connection state

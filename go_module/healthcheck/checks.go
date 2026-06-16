@@ -45,9 +45,8 @@ func activeClientsCheck() error {
 }
 
 func dnsResolveCheck(host string) error {
-	log.Debugf(hcCommon.Category, "Check: dns resolution check %s", host)
+	log.Debugf(hcCommon.Category, "Check: dns resolution check %s with timeout = %v", host, dnsTimeout)
 
-	log.Debugf(hcCommon.Category, "With timeout = %v", dnsTimeout)
 	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
 	defer cancel()
 
@@ -60,9 +59,7 @@ func dnsResolveCheck(host string) error {
 }
 
 func pingHostCheck(host string) error {
-	log.Debugf(hcCommon.Category, "Check: ping hosts %s", host)
-
-	log.Debugf(hcCommon.Category, "With timeout = %v", pingTimeout)
+	log.Debugf(hcCommon.Category, "Check: ping host %s with timeout = %v", host, pingTimeout)
 
 	log.Debugf(hcCommon.Category, "Sending GET request to %s", host)
 	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)

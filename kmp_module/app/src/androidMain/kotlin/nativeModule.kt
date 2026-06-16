@@ -5,6 +5,7 @@ import com.dobby.feature.authentication.domain.AuthenticationManagerImpl
 import com.dobby.feature.diagnostic.domain.HealthCheckManagerImpl
 import com.dobby.feature.logging.CopyLogsInteractorImpl
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.LoggerManagerImpl
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.ConnectionStateRepository
@@ -36,7 +37,8 @@ val androidMainModule = makeNativeModule(
     connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(androidContext()) },
     authenticationManager = { AuthenticationManagerImpl(androidContext()) },
-    healthCheckManager = { HealthCheckManagerImpl(get()) }
+    healthCheckManager = { HealthCheckManagerImpl(get()) },
+    loggerManager = { LoggerManagerImpl(get(), get()) }
 )
 
 val androidVpnModule = module {
@@ -49,5 +51,5 @@ val androidVpnModule = module {
     single<AmneziaWGInteractor> { AmneziaWGInteractor(get(), get()) }
     single<XrayInteractor> { XrayInteractor(get(), get(), get(), get()) }
     single<GeoRouting> { GeoRouting( get() ) }
-    single<FDManager> { FDManager( get() ) }
+    single<FDManager> { FDManager() }
 }

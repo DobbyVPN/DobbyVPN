@@ -236,15 +236,39 @@ internal class DobbyConfigsRepositoryImpl(
         return true
     }
 
-    override fun getIsUserInitStop(): Boolean {
-        return prefs.getBoolean("isUserInitStop", true).also {
-            AndroidLog("DOBBY_TAG", "getIsUserInitStop = $it")
+    override fun getTelemetryEndpoint(): String {
+        return (prefs.getString("telemetryEndpoint", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getTelemetryEndpoint, size = ${it.length}")
         }
     }
 
-    override fun setIsUserInitStop(isUserInitStop: Boolean) {
-        prefs.edit().putBoolean("isUserInitStop", isUserInitStop).apply().also {
-            AndroidLog("DOBBY_TAG", "setIsUserInitStop = $isUserInitStop")
+    override fun setTelemetryEndpoint(endpoint: String) {
+        prefs.edit().putString("telemetryEndpoint", endpoint).apply().also {
+            AndroidLog("DOBBY_TAG", "setTelemetryEndpoint, size = ${endpoint.length}")
+        }
+    }
+
+    override fun getTelemetryApiToken(): String {
+        return (prefs.getString("telemetryApiToken", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getTelemetryApiToken, size = ${it.length}")
+        }
+    }
+
+    override fun setTelemetryApiToken(token: String) {
+        prefs.edit().putString("telemetryApiToken", token).apply().also {
+            AndroidLog("DOBBY_TAG", "setTelemetryApiToken, size = ${token.length}")
+        }
+    }
+
+    override fun getTelemetryAttributes(): String {
+        return (prefs.getString("telemetryAttributes", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getTelemetryAttributes, size = ${it.length}")
+        }
+    }
+
+    override fun setTelemetryAttributes(config: String) {
+        prefs.edit().putString("telemetryAttributes", config).apply().also {
+            AndroidLog("DOBBY_TAG", "setTelemetryAttributes, size = ${config.length}")
         }
     }
 

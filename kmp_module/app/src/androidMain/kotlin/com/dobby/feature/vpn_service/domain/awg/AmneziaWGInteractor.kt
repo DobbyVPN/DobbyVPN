@@ -1,13 +1,10 @@
 package com.dobby.feature.vpn_service.domain.awg
 
-import android.content.Intent
 import com.dobby.backend.AwgBackendWrapper
-import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.AmneziaWGConfig
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.vpn_service.DobbyVpnService
-import com.dobby.feature.vpn_service.IS_FROM_UI
 import kotlinx.serialization.decodeFromString
 import net.peanuuutz.tomlkt.Toml
 
@@ -15,34 +12,26 @@ class AmneziaWGInteractor(
     private val logger: Logger,
     private val dobbyConfigsRepository: DobbyConfigsRepository,
 ) {
-
-    private fun startupFailure(dobbyVpnService: DobbyVpnService?) {
-        dobbyVpnService?.connectionState?.tryUpdateStatus(false)
-        dobbyVpnService?.teardownVpn()
-        dobbyVpnService?.stopSelf()
-    }
-
-    suspend fun startAwg(intent: Intent?, dobbyVpnService: DobbyVpnService?) {
+    fun startAwg(dobbyVpnService: DobbyVpnService?): Boolean {
         logger.log("[svc:${dobbyVpnService?.serviceId}] startAwg(): lock acquired vpnInterface=${dobbyVpnService?.vpnInterface?.fd}")
-        val isServiceStartedFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) ?: false
         val shouldTurnOn = dobbyConfigsRepository.getIsAmneziaWGEnabled()
-        logger.log("[svc:${dobbyVpnService?.serviceId}] startAwg(): fromUi=$isServiceStartedFromUi shouldTurnOutlineOn=$shouldTurnOn")
+        logger.log("[svc:${dobbyVpnService?.serviceId}] startAwg(): shouldTurnOutlineOn=$shouldTurnOn")
 
-        if (!shouldTurnOn && isServiceStartedFromUi) {
+        if (!shouldTurnOn) {
             logger.log("Start disconnecting AmneziaWG")
-            return startupFailure(dobbyVpnService)
+            return false
         }
 
         val tomlConfigString = dobbyConfigsRepository.getAwgTomlConfig()
         val tomlConfig = if (tomlConfigString.isBlank()) {
             logger.log("AmneziaWG config is empty")
-            return startupFailure(dobbyVpnService)
+            return false
         } else {
             try {
                 Toml.decodeFromString<AmneziaWGConfig>(tomlConfigString)
             } catch (e: Exception) {
                 logger.log("AmneziaWG config parse failed: $e")
-                return startupFailure(dobbyVpnService)
+                return false
             }
         }
 
@@ -62,7 +51,7 @@ class AmneziaWGInteractor(
 
         if (tunFd < 0) {
             logger.log("[svc:${dobbyVpnService?.serviceId}] startAwg(): failed to create VPN interface")
-            return startupFailure(dobbyVpnService)
+            return false
         }
 
         logger.log("[svc:${dobbyVpnService?.serviceId}] startAwg(): initializing AmneziaWG with tunFd=$tunFd")
@@ -70,7 +59,7 @@ class AmneziaWGInteractor(
         val connected = AwgBackendWrapper.awgTurnOn("awg0", tunFd, tomlConfig.toAwgQuick())
         if (connected != 0) {
             logger.log("AmneziaWG connection FAILED, stopping VPN service")
-            return startupFailure(dobbyVpnService)
+            return false
         }
         logger.log("AmneziaWG connected successfully")
 
@@ -78,8 +67,8 @@ class AmneziaWGInteractor(
         dobbyVpnService?.protect(AwgBackendWrapper.awgGetSocketV6())
         logger.log("AmneziaWG peers protect")
 
-        dobbyVpnService?.connectionState?.updateStatus(true)
         logger.log("[svc:${dobbyVpnService?.serviceId}] startAwg(): completed (status=true) vpnInterface=${dobbyVpnService?.vpnInterface?.fd}")
+        return true
     }
 
     fun stopAwg() {
