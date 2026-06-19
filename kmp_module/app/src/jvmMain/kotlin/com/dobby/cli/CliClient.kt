@@ -17,6 +17,9 @@ import korlibs.time.DateTime
 import korlibs.time.seconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import java.io.File
+import java.nio.charset.Charset
+import java.nio.file.Files
 import kotlin.time.Duration.Companion.milliseconds
 
 class CliClient {
@@ -105,41 +108,41 @@ class CliClient {
     }
 
     fun connect(options: List<String>): ExitCode {
-//        val skipHealthCheck: Boolean = when (options.size) {
-//            1 -> false
-//            2 if options[1] == "--skip-healthcheck" -> true
-//            else -> return ExitCode.INVALID_ARGS
-//        }
-//
-//        val filePath = options[0]
-//        val connectionUrl = if (filePath.isValidUrl()) {
-//            filePath
-//        } else {
-//            val path = File(filePath).toPath()
-//            val charset = Charset.forName("utf-8")
-//            runCatching {
-//                Files.readString(path, charset)
-//            }.getOrElse { return ExitCode.INVALID_ARGS }
-//        }
-//
-//        val okConfig = runBlocking { mainViewModel.setConfig(connectionUrl) }
-//        if (!okConfig) {
-//            return ExitCode.CONFIG_FORMAT_ERROR
-//        }
-//
-//        val okVpn = runBlocking { mainViewModel.startVpnService() }
-//        if (!okVpn) {
-//            return ExitCode.TUNNEL_START_ERROR
-//        }
-//
-//        if (skipHealthCheck) {
-//            return ExitCode.OK
-//        }
-//
-//        val okHC = runBlocking { awaitHealthCheck() }
-//        if (!okHC) {
-//            return ExitCode.HEALTHCHECK_CONFIG_ERROR
-//        }
+        val skipHealthCheck: Boolean = when (options.size) {
+            1 -> false
+            2 if options[1] == "--skip-healthcheck" -> true
+            else -> return ExitCode.INVALID_ARGS
+        }
+
+        val filePath = options[0]
+        val connectionUrl = if (filePath.isValidUrl()) {
+            filePath
+        } else {
+            val path = File(filePath).toPath()
+            val charset = Charset.forName("utf-8")
+            runCatching {
+                Files.readString(path, charset)
+            }.getOrElse { return ExitCode.INVALID_ARGS }
+        }
+
+        val okConfig = runBlocking { mainViewModel.setConfig(connectionUrl) }
+        if (!okConfig) {
+            return ExitCode.CONFIG_FORMAT_ERROR
+        }
+
+        val okVpn = runBlocking { mainViewModel.startVpnService() }
+        if (!okVpn) {
+            return ExitCode.TUNNEL_START_ERROR
+        }
+
+        if (skipHealthCheck) {
+            return ExitCode.OK
+        }
+
+        val okHC = runBlocking { awaitHealthCheck() }
+        if (!okHC) {
+            return ExitCode.HEALTHCHECK_CONFIG_ERROR
+        }
 
         return ExitCode.OK
     }
