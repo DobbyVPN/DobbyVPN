@@ -27,11 +27,11 @@ class HealthCheckManagerImpl(
         GoBackendWrapper.initHealthCheck()
     }
 
-    override fun start() {
+    override fun startHealthCheck() {
         GoBackendWrapper.startHealthCheck()
     }
 
-    override fun stop() {
+    override fun stopHealthCheck() {
         GoBackendWrapper.stopHealthCheck()
     }
 }

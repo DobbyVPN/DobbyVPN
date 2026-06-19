@@ -42,7 +42,7 @@ public class NativeModuleHolder {
             return HealthCheckManagerImpl()
         },
         loggerManager: { _ in 
-            return LoggerManagerImpl(configsRepository)
+            return LoggerManagerImpl(configsRepository: configsRepository)
         }
     )
     

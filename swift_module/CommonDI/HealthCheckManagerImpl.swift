@@ -22,11 +22,11 @@ public class HealthCheckManagerImpl: HealthCheckManager {
         Cloak_outlineInitHealthCheck()
     }
 
-    public func start() {
+    public func startHealthCheck() {
         Cloak_outlineStartHealthCheck()
     }
 
-    public func stop() {
+    public func stopHealthCheck() {
         Cloak_outlineStopHealthCheck()
     }
 }

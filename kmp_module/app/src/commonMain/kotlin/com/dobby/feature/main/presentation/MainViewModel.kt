@@ -260,7 +260,7 @@ class MainViewModel(
 
         if (connected) {
             logger.log("Start health check")
-            healthCheckManager.start()
+            healthCheckManager.startHealthCheck()
             logger.log("Start connection detector")
             startConnectionStateDetector()
             return true
@@ -275,7 +275,7 @@ class MainViewModel(
         logger.log("Stop tunnel service")
         vpnManager.stop()
         logger.log("Stop health check")
-        healthCheckManager.stop()
+        healthCheckManager.stopHealthCheck()
         logger.log("Stop connection detector")
         stopConnectionStateDetector()
         logger.log("VPN service stopped successfully, state reset to disconnected")

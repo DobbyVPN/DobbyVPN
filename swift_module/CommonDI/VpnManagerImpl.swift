@@ -25,11 +25,9 @@ public class VpnManagerImpl: VpnManager {
             guard let self else { return }
             if manager?.connection.status == .connected {
                 self.state = manager?.connection.status ?? .invalid
-                connectionRepository.tryUpdateVpnStarted(isStarted: true)
                 self.vpnManager = manager
             } else {
                 self.state = manager?.connection.status ?? .invalid
-                connectionRepository.tryUpdateVpnStarted(isStarted: false)
             }
         }
 
@@ -52,13 +50,11 @@ public class VpnManagerImpl: VpnManager {
 
             switch connection.status {
             case .connected:
-                self.connectionRepository.tryUpdateVpnStarted(isStarted: true)
-                self.connectionRepository.tryUpdateStatus(isConnected: true)
+                self.connectionRepository.tryUpdateServiceStarted(isStarted: true)
                 self.logs.writeLog(log: "VPN connected")
 
             case .disconnected:
-                self.connectionRepository.tryUpdateVpnStarted(isStarted: false)
-                self.connectionRepository.tryUpdateStatus(isConnected: false)
+                self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
                 self.logs.writeLog(log: "VPN disconnected")
 
             case .connecting:
@@ -68,12 +64,10 @@ public class VpnManagerImpl: VpnManager {
                 self.logs.writeLog(log: "VPN is reasserting…")
 
             case .disconnecting:
-                self.connectionRepository.tryUpdateStatus(isConnected: false)
                 self.logs.writeLog(log: "VPN is disconnecting…")
 
             case .invalid:
-                self.connectionRepository.tryUpdateVpnStarted(isStarted: false)
-                self.connectionRepository.tryUpdateStatus(isConnected: false)
+                self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
                 self.logs.writeLog(log: "VPN status is invalid")
 
             @unknown default:
@@ -107,8 +101,7 @@ public class VpnManagerImpl: VpnManager {
             let maxRetries = 30
             guard retryAttempt < maxRetries else {
                 self.logs.writeLog(log: "[start] Give up: connection stayed disconnecting after \(retryAttempt) retries")
-                self.connectionRepository.tryUpdateVpnStarted(isStarted: false)
-                self.connectionRepository.tryUpdateStatus(isConnected: false)
+                self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
                 return
             }
 
@@ -148,8 +141,7 @@ public class VpnManagerImpl: VpnManager {
                     self.logs.writeLog(log: "startVPNTunnel returned; manager.connection.status = \(self.statusName(manager.connection.status)) raw=\(manager.connection.status.rawValue)")
                 } catch {
                     self.logs.writeLog(log: "Error starting VPNTunnel \(error)")
-                    self.connectionRepository.tryUpdateVpnStarted(isStarted: false)
-                    self.connectionRepository.tryUpdateStatus(isConnected: false)
+                    self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
                 }
             }
         }

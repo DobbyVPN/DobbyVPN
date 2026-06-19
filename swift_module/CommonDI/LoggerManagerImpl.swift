@@ -5,6 +5,10 @@ public class LoggerManagerImpl: LoggerManager {
     private var logs = NativeModuleHolder.logsRepository
     private var configsRepository: DobbyConfigsRepository
 
+    init(configsRepository: DobbyConfigsRepository) {
+        self.configsRepository = configsRepository
+    }
+
     public func initLogger() {
         let logFilePath = LogsRepository_iosKt.provideLogFilePath().normalized().description()
         let endpoint = configsRepository.getTelemetryEndpoint()
@@ -30,9 +34,5 @@ public class LoggerManagerImpl: LoggerManager {
         } else {
             logs.log("No telemetry attributes provided")
         }
-    }
-
-    init(configsRepository: DobbyConfigsRepository) {
-        self.configsRepository = configsRepository
     }
 }

@@ -22,11 +22,11 @@ class HealthCheckManagerImpl(
         healthCheckLibrary.InitHealthCheck()
     }
 
-    override fun start() {
+    override fun startHealthCheck() {
         healthCheckLibrary.StartHealthCheck()
     }
 
-    override fun stop() {
+    override fun stopHealthCheck() {
         healthCheckLibrary.StopHealthCheck()
     }
 }

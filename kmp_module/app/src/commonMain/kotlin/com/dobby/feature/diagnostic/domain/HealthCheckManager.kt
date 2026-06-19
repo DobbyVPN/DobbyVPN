@@ -15,10 +15,10 @@ interface HealthCheckManager {
     /**
      * Platform dependent health check start. It should be run after VPN connection setup.
      */
-    fun start(): Unit
+    fun startHealthCheck(): Unit
 
     /**
      * Platform dependent health check stop
      */
-    fun stop(): Unit
+    fun stopHealthCheck(): Unit
 }
