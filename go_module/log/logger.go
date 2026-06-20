@@ -252,7 +252,7 @@ func loadExternalIPStep() (string, error) {
 	}
 	resultString := string(result)
 	if len(resultString) < 2 {
-		return "", fmt.Errorf("Yandex API returned an empty IP response")
+		return "", fmt.Errorf("yandex API returned an empty IP response")
 	}
 
 	return resultString[1 : len(resultString)-1], nil
