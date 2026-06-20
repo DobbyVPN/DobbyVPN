@@ -84,6 +84,10 @@ func startVpn(config, protocol string) int32 {
 	err = vpnClient.Connect()
 	if err != nil {
 		log.Debugf(common.Category, "Failed to connect vpn client: %v", err)
+		if disconnectErr := vpnClient.Disconnect(); disconnectErr != nil {
+			log.Debugf(common.Category, "Failed to clean up vpn client after connect error: %v", disconnectErr)
+		}
+		vpnClient = nil
 		setVpnLastError(err.Error())
 		return -1
 	}

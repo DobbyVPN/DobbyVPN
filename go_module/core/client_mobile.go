@@ -78,6 +78,12 @@ func (c *CoreClient) Connect() (err error) {
 	})
 	if err != nil {
 		log.Debugf(coreCommon.Category, "Can't start tun2socks: %v", err)
+		if closeErr := c.device.Close(); closeErr != nil {
+			log.Debugf(coreCommon.Category, "failed to close protocol device after tun2socks start error: %v", closeErr)
+			err = errors.Join(err, fmt.Errorf("failed to close protocol device after tun2socks start error: %w", closeErr))
+		}
+		c.device = nil
+		common.Client.MarkInactive(coreCommon.Name)
 		return fmt.Errorf("failed to start tun2socks engine: %w", err)
 	}
 
@@ -106,13 +112,13 @@ func (c *CoreClient) Disconnect() error {
 
 	if c.device != nil {
 		if err := c.device.Close(); err != nil {
-			log.Debugf(coreCommon.Category, "failed to close outline device: %v\n", err)
+			log.Debugf(coreCommon.Category, "failed to close protocol device: %v", err)
 			errs = append(errs, fmt.Errorf("failed to close protocol device: %w", err))
 		}
 		c.device = nil
 	}
 
-	log.Debugf(coreCommon.Category, "outline client disconnected")
+	log.Debugf(coreCommon.Category, "core client disconnected")
 	common.Client.MarkInactive(coreCommon.Name)
 	return errors.Join(errs...)
 }

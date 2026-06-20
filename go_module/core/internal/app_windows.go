@@ -111,7 +111,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, netInterface.Name)
 	if err != nil {
 		cleanupEarlyRoute("ProtocolDevice error")
-		err = fmt.Errorf("failed to create CoreDevice: %w", err)
+		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
