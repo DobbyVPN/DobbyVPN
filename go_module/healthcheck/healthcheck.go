@@ -19,7 +19,7 @@ const (
 
 // Healthcheck management
 var (
-	stopHealthCheckChannel chan bool
+	stopHealthCheckChannel chan struct{}
 	healthCheckStarted     bool = false
 	healthCheckStartedMu   sync.Mutex
 )
@@ -84,8 +84,10 @@ func StartHealthCheck() {
 	if healthCheckStarted {
 		log.Debugf(common.Category, "Health check already running")
 	} else {
-		log.Debugf(common.Category, "Starting healtch check")
-		go innerHealthCheck()
+		log.Debugf(common.Category, "Starting health check")
+		healthCheckStarted = true
+		stopHealthCheckChannel = make(chan struct{}, 1)
+		go innerHealthCheck(stopHealthCheckChannel)
 	}
 }
 
@@ -94,17 +96,18 @@ func StopHealthCheck() {
 
 	healthCheckStartedMu.Lock()
 	if healthCheckStarted {
-		stopHealthCheckChannel <- true
+		select {
+		case stopHealthCheckChannel <- struct{}{}:
+			log.Debugf(common.Category, "Health check stop requested")
+		default:
+			log.Debugf(common.Category, "Health check stop already requested")
+		}
 	}
 	healthCheckStartedMu.Unlock()
 }
 
-func innerHealthCheck() {
+func innerHealthCheck(stopCh <-chan struct{}) {
 	log.Debugf(common.Category, "Health check started")
-	healthCheckStartedMu.Lock()
-	healthCheckStarted = true
-	stopHealthCheckChannel = make(chan bool, 1)
-	healthCheckStartedMu.Unlock()
 
 	switchState(Connecting)
 	for {
@@ -119,7 +122,7 @@ func innerHealthCheck() {
 		csMu.Unlock()
 
 		select {
-		case <-stopHealthCheckChannel:
+		case <-stopCh:
 			log.Debugf(common.Category, "Health check stopped")
 			switchState(Disconnected)
 			healthCheckStartedMu.Lock()

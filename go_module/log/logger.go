@@ -10,7 +10,6 @@ import (
 	"go_module/telemetry"
 	"io"
 	"log/slog"
-	"math"
 	"math/big"
 	"net/http"
 	"os"
@@ -252,8 +251,26 @@ func loadExternalIPStep() (string, error) {
 		return "", fmt.Errorf("failed read Yandex API response: %w", err)
 	}
 	resultString := string(result)
+	if len(resultString) < 2 {
+		return "", fmt.Errorf("Yandex API returned an empty IP response")
+	}
 
 	return resultString[1 : len(resultString)-1], nil
+}
+
+func jitterDelay(minDelay, maxDelay time.Duration) time.Duration {
+	if maxDelay <= minDelay {
+		return minDelay
+	}
+
+	delta := maxDelay - minDelay
+	randomOffset, err := rand.Int(rand.Reader, big.NewInt(int64(delta)))
+	if err != nil {
+		Warnf("LOG", "unable to generate rand number %v", err)
+		return minDelay
+	}
+
+	return minDelay + time.Duration(randomOffset.Int64())
 }
 
 func loadExternalIP() string {
@@ -262,13 +279,7 @@ func loadExternalIP() string {
 	Debugf("LOG", "Loading user external IP")
 	for i := 0; i < 5; i++ {
 		if i > 0 {
-			f, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
-			if err != nil {
-				Warnf("LOG", "unable to generate rand number %v", err)
-				continue
-			}
-			randFloat, _ := f.Float64()
-			time.Sleep(minDelay + (maxDelay-minDelay)*time.Duration(randFloat))
+			time.Sleep(jitterDelay(minDelay, maxDelay))
 			Warnf("LOG", "Retry # %d", i)
 		}
 

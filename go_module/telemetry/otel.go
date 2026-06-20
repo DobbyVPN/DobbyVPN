@@ -27,7 +27,7 @@ const (
 	ExporterTimeoutMin      time.Duration = 5 * time.Second
 	ExporterTimeoutMax      time.Duration = 10 * time.Second
 	RetryInitialIntervalMin time.Duration = 500 * time.Millisecond
-	RetryInitialIntervalMax time.Duration = 2000 * time.Second
+	RetryInitialIntervalMax time.Duration = 2 * time.Second
 	RetryMaxIntervalMin     time.Duration = 10 * time.Second
 	RetryMaxIntervalMax     time.Duration = 20 * time.Second
 	RetryMaxElapsedTimeMin  time.Duration = 5 * time.Minute
