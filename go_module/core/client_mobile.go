@@ -91,8 +91,6 @@ func (c *CoreClient) Disconnect() error {
 		return errors.New("core mobile client is not initialized")
 	}
 
-	tunnel.StopEngine()
-
 	var errs []error
 	if c.tun != nil {
 		if err := c.tun.Close(); err != nil {
@@ -103,6 +101,8 @@ func (c *CoreClient) Disconnect() error {
 		}
 		c.tun = nil
 	}
+
+	tunnel.StopEngine()
 
 	if c.device != nil {
 		if err := c.device.Close(); err != nil {

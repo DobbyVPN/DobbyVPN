@@ -9,6 +9,7 @@ import (
 	"go_module/log"
 	"net"
 	"net/http"
+	"runtime"
 )
 
 // Check errors
@@ -19,6 +20,11 @@ var (
 
 func connectionCheck() error {
 	log.Debugf(hcCommon.Category, "Check: connection check")
+	if runtime.GOOS == "ios" {
+		log.Debugf(hcCommon.Category, "Skipping active Go client check on iOS app process")
+		return nil
+	}
+
 	activeClients := common.Client.GetClientNames(true)
 
 	if len(activeClients) == 0 {

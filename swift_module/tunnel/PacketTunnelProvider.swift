@@ -366,8 +366,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             log: "[tunnel:\(tunnelId)] stopTunnel reason=\(reason.rawValue) (\(reason)) " +
                 "userStopRequested=\(userStopRequested)"
         )
-        if !userStopRequested {
-            configsRepository.setIsUserInitStop(isUserInitStop: false)
+        configsRepository.setIsUserInitStop(isUserInitStop: false)
+        if userStopRequested {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel observed after app user-stop request")
+        } else {
             logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel observed without app user-stop request")
         }
         logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel clearing geo routing config")

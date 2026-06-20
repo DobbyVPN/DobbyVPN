@@ -14,6 +14,7 @@ public class VpnManagerImpl: VpnManager {
 
     private var vpnManager: NETunnelProviderManager?
     private var connectionRepository: ConnectionStateRepository
+    private var suppressDisconnectedForPendingStart = false
 
     private var observer: NSObjectProtocol?
     @Published private(set) var state: NEVPNStatus = .invalid
@@ -50,10 +51,16 @@ public class VpnManagerImpl: VpnManager {
 
             switch connection.status {
             case .connected:
+                self.suppressDisconnectedForPendingStart = false
                 self.connectionRepository.tryUpdateServiceStarted(isStarted: true)
                 self.logs.writeLog(log: "VPN connected")
 
             case .disconnected:
+                if self.suppressDisconnectedForPendingStart {
+                    self.suppressDisconnectedForPendingStart = false
+                    self.logs.writeLog(log: "[NEVPNStatusDidChange] disconnected belongs to previous stop; waiting for pending start retry")
+                    return
+                }
                 self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
                 self.logs.writeLog(log: "VPN disconnected")
 
@@ -67,6 +74,7 @@ public class VpnManagerImpl: VpnManager {
                 self.logs.writeLog(log: "VPN is disconnecting…")
 
             case .invalid:
+                self.suppressDisconnectedForPendingStart = false
                 self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
                 self.logs.writeLog(log: "VPN status is invalid")
 
@@ -98,9 +106,11 @@ public class VpnManagerImpl: VpnManager {
         let status = manager.connection.status
         self.logs.writeLog(log: "[start] manager loaded status=\(statusName(status)) raw=\(status.rawValue)")
         if status == .disconnecting {
+            self.suppressDisconnectedForPendingStart = true
             let maxRetries = 30
             guard retryAttempt < maxRetries else {
                 self.logs.writeLog(log: "[start] Give up: connection stayed disconnecting after \(retryAttempt) retries")
+                self.suppressDisconnectedForPendingStart = false
                 self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
                 return
             }
@@ -121,6 +131,8 @@ public class VpnManagerImpl: VpnManager {
         }
         if status == .connected {
             self.logs.writeLog(log: "[start] Skip: already connected")
+            self.suppressDisconnectedForPendingStart = false
+            self.connectionRepository.tryUpdateServiceStarted(isStarted: true)
             return
         }
         if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
@@ -141,6 +153,7 @@ public class VpnManagerImpl: VpnManager {
                     self.logs.writeLog(log: "startVPNTunnel returned; manager.connection.status = \(self.statusName(manager.connection.status)) raw=\(manager.connection.status.rawValue)")
                 } catch {
                     self.logs.writeLog(log: "Error starting VPNTunnel \(error)")
+                    self.suppressDisconnectedForPendingStart = false
                     self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
                 }
             }
@@ -159,6 +172,7 @@ public class VpnManagerImpl: VpnManager {
             self.logs.writeLog(log: "[stop] Skip: tunnel is already \(statusName(status))")
             return
         }
+        DobbyConfigsRepositoryImpl.shared.setIsUserInitStop(isUserInitStop: true)
         manager.connection.stopVPNTunnel()
         self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")
     }
