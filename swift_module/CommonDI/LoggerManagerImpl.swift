@@ -19,20 +19,20 @@ public class LoggerManagerImpl: LoggerManager {
         Cloak_outlineInitLogger(logFilePath)
         logs.writeLog(log: "Finish go logger init")
 
-        logs.log("Init tunnel telemetry to the endpoint=\(endpoint)")
+        logs.writeLog(log: "Init tunnel telemetry to the endpoint=\(endpoint)")
         if !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             Cloak_outlineInitTelemetry(endpoint, token)
-            logs.log("Initialized tunnel telemetry")
+            logs.writeLog(log: "Initialized tunnel telemetry")
         } else {
-            logs.log("No telemetry endpoint provided")
+            logs.writeLog(log: "No telemetry endpoint provided")
         }
 
-        logs.log("Setup telemetry attributes")
+        logs.writeLog(log: "Setup telemetry attributes")
         if !config.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             Cloak_outlineSetupTelemetryAttributes(config)
-            logs.log("Setup tunnel telemetry attributes")
+            logs.writeLog(log: "Setup tunnel telemetry attributes")
         } else {
-            logs.log("No telemetry attributes provided")
+            logs.writeLog(log: "No telemetry attributes provided")
         }
     }
 }
