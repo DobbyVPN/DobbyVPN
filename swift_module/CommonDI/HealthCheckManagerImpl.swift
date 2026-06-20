@@ -2,8 +2,11 @@ import app
 import MyLibrary
 
 public class HealthCheckManagerImpl: HealthCheckManager {
+    private let configsRepository = DobbyConfigsRepositoryImpl.shared
+
     public func getConnectionState() -> VpnConnectionState {
-        let state = Cloak_outlineGetConnectionState()
+        let sharedState = configsRepository.getHealthCheckState()
+        let state = sharedState >= 0 ? sharedState : Cloak_outlineGetConnectionState()
 
         switch state {
         case 0:
@@ -19,14 +22,14 @@ public class HealthCheckManagerImpl: HealthCheckManager {
     }
 
     public func doInitHealthCheck() {
-        Cloak_outlineInitHealthCheck()
+        configsRepository.setHealthCheckState(state: 0)
     }
 
     public func startHealthCheck() {
-        Cloak_outlineStartHealthCheck()
+        configsRepository.setHealthCheckState(state: 1)
     }
 
     public func stopHealthCheck() {
-        Cloak_outlineStopHealthCheck()
+        configsRepository.setHealthCheckState(state: 0)
     }
 }

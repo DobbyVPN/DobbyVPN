@@ -29,6 +29,8 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let telemetryEndpointKey = "telemetryEndpointKey"
     private let telemetryApiTokenKey = "telemetryApiTokenKey"
     private let telemetryAttributesKey = "telemetryAttributesKey"
+    private let healthCheckStateKey = "healthCheckStateKey"
+    private let healthCheckStateUpdatedAtKey = "healthCheckStateUpdatedAtKey"
 
     public func getConnectionURL() -> String {
         return userDefaults.string(forKey: connectionURLKey) ?? ""
@@ -247,5 +249,21 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setGeoRoutingConf(geoRoutingConf: String) {
         userDefaults.set(geoRoutingConf, forKey: geoRoutingConfKey)
+    }
+
+    public func getHealthCheckState() -> Int32 {
+        if userDefaults.object(forKey: healthCheckStateKey) == nil {
+            return -1
+        }
+        return Int32(userDefaults.integer(forKey: healthCheckStateKey))
+    }
+
+    public func setHealthCheckState(state: Int32) {
+        userDefaults.set(Int(state), forKey: healthCheckStateKey)
+        userDefaults.set(Date().timeIntervalSince1970, forKey: healthCheckStateUpdatedAtKey)
+    }
+
+    public func getHealthCheckStateUpdatedAt() -> Double {
+        return userDefaults.double(forKey: healthCheckStateUpdatedAtKey)
     }
 }
