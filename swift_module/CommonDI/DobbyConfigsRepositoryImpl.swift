@@ -209,6 +209,14 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         return true
     }
 
+    public func getIsUserInitStop() -> Bool {
+        return userDefaults.bool(forKey: isUserInitStopKey)
+    }
+
+    public func setIsUserInitStop(isUserInitStop: Bool) {
+        userDefaults.set(isUserInitStop, forKey: isUserInitStopKey)
+    }
+
     public func getTelemetryEndpoint() -> String {
         return userDefaults.string(forKey: telemetryEndpointKey) ?? ""
     }
