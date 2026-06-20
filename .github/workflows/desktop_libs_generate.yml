@@ -22,6 +22,8 @@ jobs:
             go_module/windows_grpcvpnserver.exe
             go_module/ubuntu_grpcvpnserver
             go_module/macos_grpcvpnserver
+            go_module/libdobby_bridge.dll
+            go_module/libdobby_bridge.so
           key: ${{ runner.os }}-desktop-vpn-lib-${{ hashFiles('.go-version', 'go_module/**', 'Cloak/internal/**') }}
 
       - name: Set up Go

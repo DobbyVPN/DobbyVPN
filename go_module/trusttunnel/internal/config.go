@@ -1,9 +1,11 @@
 package internal
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -20,6 +22,7 @@ type EndpointConfig struct {
 	Username         string   `toml:"username"`
 	Password         string   `toml:"password"`
 	UpstreamProtocol string   `toml:"upstream_protocol"`
+	Certificate      string   `toml:"certificate,omitempty"`
 }
 
 // ExtractServerIP parses the TOML config and extracts the first server IP address
@@ -56,12 +59,15 @@ func resolveIP(addr string) (string, error) {
 	}
 
 	// If it's a domain, resolve it
-	ips, err := net.LookupIP(host)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ips, err := (&net.Resolver{}).LookupIPAddr(ctx, host)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve trusttunnel address %q: %w", host, err)
 	}
 	for _, ip := range ips {
-		if ip4 := ip.To4(); ip4 != nil {
+		if ip4 := ip.IP.To4(); ip4 != nil {
 			return ip4.String(), nil
 		}
 	}

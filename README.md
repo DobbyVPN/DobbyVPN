@@ -138,6 +138,32 @@ IPs = [
 ]
 ```
 
+**TrustTunnel** ([more details](https://github.com/TrustTunnel/TrustTunnel))
+```toml
+[TrustTunnel]
+loglevel = "info"
+vpn_mode = "general"
+killswitch_enabled = false
+post_quantum_group_enabled = true
+exclusions = []
+
+[TrustTunnel.endpoint]
+hostname = "domain.com"
+addresses = ["ip:port"]
+custom_sni = "domain.com"
+has_ipv6 = true
+username = "your_username"
+password = "your_password"
+client_random = ""
+skip_verification = true
+upstream_protocol = "http3"
+anti_dpi = true
+dns_upstreams = []
+
+[TrustTunnel.listener.socks]
+address = "127.0.0.1:10808"
+```
+
 Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nicely expressed Issues accordingly.
 
 Windows and MacOS apps require manual intervention to be installed for now - notarization is a work in progress.

@@ -11,11 +11,12 @@ import (
 	"go_module/auth"
 	log "go_module/log"
 	"go_module/trusttunnel/internal"
+	"go_module/tunnel/protected_dialer"
 
 	tt "trusttunnel-go/manager"
 )
 
-type TrutTunnelDevice struct {
+type TrustTunnelDevice struct {
 	trusttunnelInstance *tt.TrustTunnelManager
 	config              string
 	proxyAddr           string
@@ -25,7 +26,7 @@ type TrutTunnelDevice struct {
 	socksPass           string
 }
 
-func NewTrustTunnelDevice(trusttunnelConfig string) (*TrutTunnelDevice, error) {
+func NewTrustTunnelDevice(trusttunnelConfig string) (*TrustTunnelDevice, error) {
 	serverIPStr, err := internal.ExtractServerIP(trusttunnelConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract server IP: %w", err)
@@ -83,7 +84,7 @@ func NewTrustTunnelDevice(trusttunnelConfig string) (*TrutTunnelDevice, error) {
 	}
 	trusttunnelConfig = buf.String()
 
-	d := &TrutTunnelDevice{
+	d := &TrustTunnelDevice{
 		trusttunnelInstance: tt.NewTrustTunnelManager(),
 		config:              trusttunnelConfig,
 		proxyAddr:           fmt.Sprintf("%s:%s@127.0.0.1:%d", socksUser, socksPass, port),
@@ -95,11 +96,18 @@ func NewTrustTunnelDevice(trusttunnelConfig string) (*TrutTunnelDevice, error) {
 
 	d.trusttunnelInstance.SetLogCallback(internal.LogFunc)
 
+	// Register the global socket protection callback
+	// This delegates TrustTunnel's OS-level socket protection back to DobbyVPN's `protected_dialer`
+	d.trusttunnelInstance.SetProtectSocketCallback(func(fd int) int {
+		protected_dialer.ProtectSocketInt(fd)
+		return 0 // return success
+	})
+
 	log.Infof("[TrustTunnel] SOCKS bridge started at %s (serverIP=%s)", d.proxyAddr, d.svrIP.String())
 	return d, nil
 }
 
-func (d *TrutTunnelDevice) Open(routingTableID int, uplinkIface string) error {
+func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 	if d == nil {
 		return errors.New("trusttunnel device is not initialized")
 	}
@@ -114,26 +122,26 @@ func (d *TrutTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 	if err != nil {
 		log.Infof("[TrustTunnel] failed to parse log level, continuing without logs")
 	}
-	internal.SetLogLever(loglevel)
+	internal.SetLogLevel(loglevel)
 
 	return nil
 }
 
-func (d *TrutTunnelDevice) GetServerIP() net.IP {
+func (d *TrustTunnelDevice) GetServerIP() net.IP {
 	if d == nil {
 		return nil
 	}
 	return d.svrIP
 }
 
-func (d *TrutTunnelDevice) GetProxyAddr() string {
+func (d *TrustTunnelDevice) GetProxyAddr() string {
 	if d == nil {
 		return ""
 	}
 	return d.proxyAddr
 }
 
-func (d *TrutTunnelDevice) Close() error {
+func (d *TrustTunnelDevice) Close() error {
 	if d == nil {
 		return errors.New("trusttunnel device is not initialized")
 	}

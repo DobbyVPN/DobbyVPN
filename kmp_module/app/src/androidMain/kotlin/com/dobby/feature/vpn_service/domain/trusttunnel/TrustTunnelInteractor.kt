@@ -33,6 +33,7 @@ class TrustTunnelInteractor(
         if (config.isEmpty()) {
             logger.log("[svc:$serviceId] startTrustTunnel(): TrustTunnel config is empty, cannot start")
             dobbyVpnService?.connectionState?.tryUpdateStatus(false)
+            dobbyVpnService?.teardownVpn()
             dobbyVpnService?.stopSelf()
             return
         }
@@ -47,7 +48,10 @@ class TrustTunnelInteractor(
         }
 
         val tunFd = fdManager.GetTunFd(serviceId, dobbyVpnService)
-        if (tunFd < 0) return
+        if (tunFd < 0) {
+            dobbyVpnService?.teardownVpn()
+            return
+        }
 
         logger.log("[svc:$serviceId] startTrustTunnel(): initializing TrustTunnel with tunFd=$tunFd")
 

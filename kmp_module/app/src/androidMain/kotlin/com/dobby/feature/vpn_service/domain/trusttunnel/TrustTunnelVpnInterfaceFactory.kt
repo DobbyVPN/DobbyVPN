@@ -37,13 +37,42 @@ class TrustTunnelVpnInterfaceFactory(
         }
 
         reservedBypassSubnets.forEach { subnet ->
+            val parts = subnet.split("/")
+            if (parts.size != 2) {
+                val msg = "Invalid bypass subnet format (expected exactly one '/'): $subnet"
+                Log.e("TrustTunnelVpnInterfaceFactory", msg)
+                throw IllegalArgumentException(msg)
+            }
+            val address = parts[0]
+            val prefixLength = parts[1].toIntOrNull()
+            
+            if (prefixLength == null || prefixLength < 0 || prefixLength > 128) {
+                val msg = "Invalid bypass subnet prefix length: $subnet"
+                Log.e("TrustTunnelVpnInterfaceFactory", msg)
+                throw IllegalArgumentException(msg)
+            }
+            
+            val isIpv4 = address.contains('.')
+            if (isIpv4 && prefixLength > 32) {
+                val msg = "Invalid IPv4 bypass subnet prefix length: $subnet"
+                Log.e("TrustTunnelVpnInterfaceFactory", msg)
+                throw IllegalArgumentException(msg)
+            }
+
             try {
-                val parts = subnet.split("/")
-                val address = parts[0]
-                val prefixLength = parts[1].toInt()
+                java.net.InetAddress.getByName(address)
+            } catch (e: Exception) {
+                val msg = "Invalid bypass subnet IP address: $subnet"
+                Log.e("TrustTunnelVpnInterfaceFactory", msg, e)
+                throw IllegalArgumentException(msg, e)
+            }
+            
+            try {
                 builder.addRoute(address, prefixLength)
             } catch (e: Exception) {
-                Log.e("TrustTunnelVpnInterfaceFactory", "Error adding route: $subnet", e)
+                val msg = "Error adding route: $subnet"
+                Log.e("TrustTunnelVpnInterfaceFactory", msg, e)
+                throw IllegalArgumentException(msg, e)
             }
         }
 

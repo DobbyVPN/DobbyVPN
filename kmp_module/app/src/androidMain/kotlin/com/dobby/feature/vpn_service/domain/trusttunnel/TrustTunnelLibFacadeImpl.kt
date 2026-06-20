@@ -11,18 +11,20 @@ internal class TrustTunnelLibFacadeImpl : TrustTunnelLibFacade {
     override fun init(config: String, tunFd: Int): Boolean {
         Log.d(TAG, "init() called with config length=${config.length}, tunFd=$tunFd")
         try {
-            GoBackendWrapper.newVpnClient(config, "trusttunnel", tunFd)
+            GoBackendWrapper.newVpnClient(config, TrustTunnelLibFacade.TRUST_TUNNEL_PROTOCOL, tunFd)
             Log.d(TAG, "Connecting TrustTunnel...")
             val result = GoBackendWrapper.vpnConnect()
-            return if (result == 0) {
+            if (result == 0) {
                 Log.d(TAG, "TrustTunnelConnect finished successfully")
-                true
+                return true
             } else {
                 Log.e(TAG, "TrustTunnelConnect FAILED")
-                false
+                GoBackendWrapper.vpnDisconnect()
+                return false
             }
         } catch (e: Exception) {
             Log.e(TAG, "TrustTunnel init failed", e)
+            GoBackendWrapper.vpnDisconnect()
             return false
         }
     }

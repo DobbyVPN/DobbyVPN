@@ -1,15 +1,18 @@
 package internal
 
 import (
-	"github.com/BurntSushi/toml"
+	"sync/atomic"
+
 	log "go_module/log"
 	tt "trusttunnel-go/manager"
+
+	"github.com/BurntSushi/toml"
 )
 
-var logLevel tt.LogLevel
+var logLevel int32
 
 func LogFunc(level tt.LogLevel, message string) {
-	if level > logLevel {
+	if int32(level) > atomic.LoadInt32(&logLevel) {
 		return
 	}
 	switch level {
@@ -26,8 +29,8 @@ func LogFunc(level tt.LogLevel, message string) {
 	}
 }
 
-func SetLogLever(level tt.LogLevel) {
-	logLevel = level
+func SetLogLevel(level tt.LogLevel) {
+	atomic.StoreInt32(&logLevel, int32(level))
 }
 
 func ExtractLogLevel(configStr string) (tt.LogLevel, error) {

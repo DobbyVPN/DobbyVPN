@@ -18,8 +18,8 @@ go mod download
 
 ```bash
 wget https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.0/dobby_bridge-windows-x86_64.zip
-unzip dobby_bridge-windows-x86_64.zip
-CGO_LDFLAGS="-L." go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
+unzip dobby_bridge-windows-x86_64.zip lib/windows
+go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
 ```
 
 ### Linux

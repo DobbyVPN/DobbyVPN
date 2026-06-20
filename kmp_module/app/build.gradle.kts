@@ -246,9 +246,17 @@ android {
 val copyLibCxxTask = tasks.register<Copy>("copyLibCxx") {
     val ndkDir = File(androidNdkDir.get())
     val osName = System.getProperty("os.name").lowercase()
+    val osArch = System.getProperty("os.arch").lowercase()
     val hostTag = when {
         osName.contains("windows") -> "windows-x86_64"
-        osName.contains("mac") -> "darwin-x86_64"
+        osName.contains("mac") -> {
+            val armTag = "darwin-x86_64"
+            val arm64Tag = "darwin-arm64"
+            if (ndkDir.resolve("toolchains/llvm/prebuilt/$arm64Tag").exists()) arm64Tag
+            else if (ndkDir.resolve("toolchains/llvm/prebuilt/$armTag").exists()) armTag
+            else if (osArch.contains("arm") || osArch.contains("aarch64")) arm64Tag
+            else armTag
+        }
         else -> "linux-x86_64"
     }
     val libcxxPath = ndkDir.resolve("toolchains/llvm/prebuilt/$hostTag/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so")
@@ -358,7 +366,7 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         environment("CGO_CFLAGS", listOf(debugPrefixFlags, System.getenv("CGO_CFLAGS").orEmpty()).joinToString(" ").trim())
         environment(
             "CGO_LDFLAGS",
-            listOf("-static-libstdc++", "-Wl,-z,max-page-size=16384", System.getenv("CGO_LDFLAGS").orEmpty())
+            listOf(debugPrefixFlags, "-Wl,-z,max-page-size=16384", System.getenv("CGO_LDFLAGS").orEmpty())
                 .joinToString(" ")
                 .trim()
         )

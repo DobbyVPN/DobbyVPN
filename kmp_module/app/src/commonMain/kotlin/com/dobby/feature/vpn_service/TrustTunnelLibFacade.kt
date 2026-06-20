@@ -1,6 +1,9 @@
 package com.dobby.feature.vpn_service
 
 interface TrustTunnelLibFacade {
+    companion object {
+        const val TRUST_TUNNEL_PROTOCOL = "trusttunnel"
+    }
 
     /**
      * Initialize and connect TrustTunnel client.

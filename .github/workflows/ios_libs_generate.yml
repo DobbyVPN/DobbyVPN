@@ -16,7 +16,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: go_module/MyLibrary.xcframework
-          key: ${{ runner.os }}-ios-vpn-lib-${{ hashFiles('.go-version', 'go_module/**', 'Cloak/internal/**') }}
+          key: ${{ runner.os }}-ios-vpn-lib-${{ hashFiles('.go-version', 'go_module/go.sum', 'go_module/**', 'Cloak/internal/**') }}
 
       - name: Set up Go
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
@@ -53,16 +53,26 @@ jobs:
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
-          GO111MODULE=on gomobile bind -target=ios -o MyLibrary.xcframework ./ios_exports
+          GO111MODULE=on gomobile bind -trimpath -ldflags="-buildid=" -target=ios -o MyLibrary.xcframework ./ios_exports
           
           # Merge libdobby_bridge.a into the generated static framework for iOS arm64
           MODULE_DIR=$(go list -m -f '{{.Dir}}' trusttunnel-go)
           DOBBY_LIB="$MODULE_DIR/lib/ios/libdobby_bridge.a"
+          
+          EXPECTED_HASH="cbf8a0937ca8a745be4629246f4f9b9aac06cffac85e67cd3dcab7b7d1fdf6e1"
+          ACTUAL_HASH=$(shasum -a 256 "$DOBBY_LIB" | awk '{print $1}')
+          if [ "$ACTUAL_HASH" != "$EXPECTED_HASH" ]; then
+            echo "Error: SHA256 hash verification failed for $DOBBY_LIB"
+            echo "Expected: $EXPECTED_HASH"
+            echo "Actual:   $ACTUAL_HASH"
+            exit 1
+          fi
+
           MY_LIB="MyLibrary.xcframework/ios-arm64/MyLibrary.framework/MyLibrary"
           
           if [ -f "$DOBBY_LIB" ] && [ -f "$MY_LIB" ]; then
             echo "Merging $DOBBY_LIB into $MY_LIB"
-            libtool -static -o MyLibrary_merged.a "$MY_LIB" "$DOBBY_LIB"
+            libtool -static -D -o MyLibrary_merged.a "$MY_LIB" "$DOBBY_LIB"
             mv MyLibrary_merged.a "$MY_LIB"
           else
             echo "Error: Could not find libraries to merge."
