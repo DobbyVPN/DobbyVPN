@@ -18,7 +18,7 @@ public class HealthCheckManagerImpl: HealthCheckManager {
         }
     }
 
-    public func initHealthCheck() {
+    public func doInitHealthCheck() {
         Cloak_outlineInitHealthCheck()
     }
 

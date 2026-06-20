@@ -9,7 +9,7 @@ public class LoggerManagerImpl: LoggerManager {
         self.configsRepository = configsRepository
     }
 
-    public func initLogger() {
+    public func doInitLogger() {
         let logFilePath = LogsRepository_iosKt.provideLogFilePath().normalized().description()
         let endpoint = configsRepository.getTelemetryEndpoint()
         let token = configsRepository.getTelemetryApiToken()
