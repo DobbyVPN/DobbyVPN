@@ -38,6 +38,11 @@ func connectionCheck() error {
 
 func activeClientsCheck() error {
 	log.Debugf(hcCommon.Category, "Check: clients health checks")
+	if runtime.GOOS == "ios" {
+		log.Debugf(hcCommon.Category, "Skipping Go client health checks on iOS app process")
+		return nil
+	}
+
 	activeClients := common.Client.GetClientNames(true)
 
 	for _, clientName := range activeClients {

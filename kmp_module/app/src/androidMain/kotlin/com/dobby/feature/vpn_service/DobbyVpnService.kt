@@ -150,59 +150,51 @@ class DobbyVpnService : VpnService() {
         logger.log("[svc:$serviceId] onDestroy() end")
     }
 
-    private fun startCloakOutline() {
-        serviceScope.launch {
-            startStopMutex.withLock {
-                if (dobbyConfigsRepository.getIsCloakEnabled()) {
-                    if (!cloakConnectInteractor.startCloak()) {
-                        connectionState.updateServiceStarted(false)
-                        teardownVpn()
-                        stopSelf()
-                        return@launch
-                    }
-                }
-                if (!outlineInteractor.startOutline(instance)) {
-                    connectionState.updateServiceStarted(false)
-                    teardownVpn()
-                    stopSelf()
-                    return@launch
-                }
-
-                connectionState.updateServiceStarted(true)
+    private suspend fun startCloakOutline() {
+        if (dobbyConfigsRepository.getIsCloakEnabled()) {
+            if (!cloakConnectInteractor.startCloak()) {
+                connectionState.updateServiceStarted(false)
+                teardownVpn()
+                stopSelf()
+                return
             }
         }
+        if (!outlineInteractor.startOutline(instance)) {
+            connectionState.updateServiceStarted(false)
+            teardownVpn()
+            stopSelf()
+            return
+        }
+
+        connectionState.updateServiceStarted(true)
     }
 
-    private fun startAwg() {
-        serviceScope.launch {
-            startStopMutex.withLock {
-                if (!awgInteractor.startAwg(instance)) {
-                    connectionState.updateServiceStarted(false)
-                    teardownVpn()
-                    stopSelf()
-                    return@launch
-                }
-
-                connectionState.updateServiceStarted(true)
-            }
+    private suspend fun startAwg() {
+        if (!awgInteractor.startAwg(instance)) {
+            connectionState.updateServiceStarted(false)
+            teardownVpn()
+            stopSelf()
+            return
         }
+
+        connectionState.updateServiceStarted(true)
     }
 
-    private fun startXray() {
-        serviceScope.launch {
-            startStopMutex.withLock {
-                if (dobbyConfigsRepository.getIsXrayEnabled()) {
-                    if (!xrayInteractor.startXray(instance)) {
-                        connectionState.updateServiceStarted(false)
-                        teardownVpn()
-                        stopSelf()
-                        return@launch
-                    }
-
-                    connectionState.updateServiceStarted(true)
-                }
-            }
+    private suspend fun startXray() {
+        if (!dobbyConfigsRepository.getIsXrayEnabled()) {
+            connectionState.updateServiceStarted(false)
+            stopSelf()
+            return
         }
+
+        if (!xrayInteractor.startXray(instance)) {
+            connectionState.updateServiceStarted(false)
+            teardownVpn()
+            stopSelf()
+            return
+        }
+
+        connectionState.updateServiceStarted(true)
     }
 
     private fun startNone() {

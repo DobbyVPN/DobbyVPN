@@ -124,6 +124,12 @@ type Logger struct {
 	errorBuf []string
 }
 
+type telemetrySnapshot struct {
+	ctx              context.Context
+	externalIP       string
+	connectionConfig map[string]any
+}
+
 var (
 	lg     = &Logger{debugBuf: []string{}, infoBuf: []string{}, warnBuf: []string{}, errorBuf: []string{}}
 	initMu sync.Mutex
@@ -209,10 +215,13 @@ func SetPath(path string) error {
 }
 
 func InitTelemetry(endpoint, token string) error {
+	initMu.Lock()
 	if lg.tlogger != nil {
+		initMu.Unlock()
 		Debugf("LOG", "No need to create new OpenTelemetry SDK")
 		return nil
 	}
+	initMu.Unlock()
 
 	Debugf("LOG", "Create new OpenTelemetry SDK")
 	tlg, err := NewTelemetryLogger(endpoint, token)
@@ -220,7 +229,18 @@ func InitTelemetry(endpoint, token string) error {
 		Warnf("OTEL", "Failed to create new telemetry logger: %v", err)
 		return fmt.Errorf("failed to create new telemetry logger: %w", err)
 	}
+
+	initMu.Lock()
+	if lg.tlogger != nil {
+		initMu.Unlock()
+		if err := tlg.shutdown(tlg.ctx); err != nil {
+			Warnf("LOG", "Telemetry shutdown error: %v", err)
+		}
+		Debugf("LOG", "No need to replace existing OpenTelemetry SDK")
+		return nil
+	}
 	lg.tlogger = tlg
+	initMu.Unlock()
 
 	return nil
 }
@@ -295,8 +315,6 @@ func loadExternalIP() string {
 }
 
 func SetupTelemetryAttributes(config string) {
-	Debugf("LOG", "Loading user external IP")
-
 	externalIP := loadExternalIP()
 	Debugf("LOG", "Loaded external IP")
 
@@ -316,13 +334,17 @@ func SetupTelemetryAttributes(config string) {
 }
 
 func StopTelemetry() {
-	if lg.tlogger != nil {
-		if err := lg.tlogger.shutdown(lg.tlogger.ctx); err != nil {
-			Warnf("LOG", "Telemetry shutdown error: %v", err)
-		}
-		lg.tlogger = nil
-	} else {
+	initMu.Lock()
+	tlg := lg.tlogger
+	lg.tlogger = nil
+	initMu.Unlock()
+
+	if tlg == nil {
 		Warnf("LOG", "No telemetry logger found")
+		return
+	}
+	if err := tlg.shutdown(tlg.ctx); err != nil {
+		Warnf("LOG", "Telemetry shutdown error: %v", err)
 	}
 }
 
@@ -346,14 +368,36 @@ func prepareLog(message string, arguments map[string]any) string {
 	return msg.String()
 }
 
-func flattenArgs(argumentsList ...map[string]any) []any {
+func copyMap(arguments map[string]any) map[string]any {
+	copied := make(map[string]any, len(arguments))
+	for key, value := range arguments {
+		copied[key] = value
+	}
+	return copied
+}
+
+func getTelemetrySnapshot() (telemetrySnapshot, bool) {
+	initMu.Lock()
+	defer initMu.Unlock()
+
+	if lg.tlogger == nil {
+		return telemetrySnapshot{}, false
+	}
+	return telemetrySnapshot{
+		ctx:              lg.tlogger.ctx,
+		externalIP:       lg.tlogger.externalIP,
+		connectionConfig: copyMap(lg.tlogger.connectionConfig),
+	}, true
+}
+
+func flattenArgs(snapshot telemetrySnapshot, argumentsList ...map[string]any) []any {
 	size := 0
 	for _, arguments := range argumentsList {
 		size += len(arguments)
 	}
 	all := make([]any, 4+2*size)
 	all[0] = "externalIP"
-	all[1] = lg.tlogger.externalIP
+	all[1] = snapshot.externalIP
 	all[2] = "clientID"
 	all[3] = clientID
 	i := 4
@@ -405,64 +449,64 @@ func _error(categoryMessage string, arguments map[string]any) {
 func Info(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_info(categoryMessage, arguments)
-	if lg.tlogger != nil {
-		otelLogger.InfoContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments, lg.tlogger.connectionConfig)...)
+	if snapshot, ok := getTelemetrySnapshot(); ok {
+		otelLogger.InfoContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, arguments, snapshot.connectionConfig)...)
 	}
 }
 
 func Debug(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_debug(categoryMessage, arguments)
-	if lg.tlogger != nil {
-		otelLogger.DebugContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments, lg.tlogger.connectionConfig)...)
+	if snapshot, ok := getTelemetrySnapshot(); ok {
+		otelLogger.DebugContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, arguments, snapshot.connectionConfig)...)
 	}
 }
 
 func Warn(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_warn(categoryMessage, arguments)
-	if lg.tlogger != nil {
-		otelLogger.WarnContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments, lg.tlogger.connectionConfig)...)
+	if snapshot, ok := getTelemetrySnapshot(); ok {
+		otelLogger.WarnContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, arguments, snapshot.connectionConfig)...)
 	}
 }
 
 func Error(category, message string, arguments map[string]any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
 	_error(categoryMessage, arguments)
-	if lg.tlogger != nil {
-		otelLogger.ErrorContext(lg.tlogger.ctx, categoryMessage, flattenArgs(arguments, lg.tlogger.connectionConfig)...)
+	if snapshot, ok := getTelemetrySnapshot(); ok {
+		otelLogger.ErrorContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, arguments, snapshot.connectionConfig)...)
 	}
 }
 
 func Infof(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_info(categoryMessage, make(map[string]any))
-	if lg.tlogger != nil {
-		otelLogger.InfoContext(lg.tlogger.ctx, categoryMessage, flattenArgs(lg.tlogger.connectionConfig)...)
+	if snapshot, ok := getTelemetrySnapshot(); ok {
+		otelLogger.InfoContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, snapshot.connectionConfig)...)
 	}
 }
 
 func Debugf(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_debug(categoryMessage, make(map[string]any))
-	if lg.tlogger != nil {
-		otelLogger.DebugContext(lg.tlogger.ctx, categoryMessage, flattenArgs(lg.tlogger.connectionConfig)...)
+	if snapshot, ok := getTelemetrySnapshot(); ok {
+		otelLogger.DebugContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, snapshot.connectionConfig)...)
 	}
 }
 
 func Warnf(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_warn(categoryMessage, make(map[string]any))
-	if lg.tlogger != nil {
-		otelLogger.WarnContext(lg.tlogger.ctx, categoryMessage, flattenArgs(lg.tlogger.connectionConfig)...)
+	if snapshot, ok := getTelemetrySnapshot(); ok {
+		otelLogger.WarnContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, snapshot.connectionConfig)...)
 	}
 }
 
 func Errorf(category, format string, args ...any) {
 	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
 	_error(categoryMessage, make(map[string]any))
-	if lg.tlogger != nil {
-		otelLogger.ErrorContext(lg.tlogger.ctx, categoryMessage, flattenArgs(lg.tlogger.connectionConfig)...)
+	if snapshot, ok := getTelemetrySnapshot(); ok {
+		otelLogger.ErrorContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, snapshot.connectionConfig)...)
 	}
 }
 

@@ -1,9 +1,9 @@
 package com.dobby.feature.main.domain
 
 import com.dobby.feature.diagnostic.domain.VpnConnectionState
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 
 class ConnectionStateRepository {
     private val _statusFlow = MutableStateFlow(VpnConnectionState.DISCONNECTED)
@@ -38,23 +38,23 @@ class ConnectionStateRepository {
  * what will block coroutine scope until we receive the result from the VPN service.
  */
 class ServiceStarted {
-    private val value = MutableStateFlow<Boolean?>(null)
+    private val result = Channel<Boolean>(capacity = Channel.CONFLATED)
 
-    suspend fun prepare() {
-        value.emit(null)
+    fun prepare() {
+        while (!result.tryReceive().isFailure) {
+            // Drain stale start results before a new launch attempt.
+        }
     }
 
     suspend fun emit(started: Boolean) {
-        value.emit(started)
+        result.send(started)
     }
 
     fun tryEmit(started: Boolean) {
-        value.tryEmit(started)
+        result.trySend(started)
     }
 
     suspend fun awaitResult(): Boolean {
-        val connected = value.first { it != null }
-        return connected!!
+        return result.receive()
     }
-
 }

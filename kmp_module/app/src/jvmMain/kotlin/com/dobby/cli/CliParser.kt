@@ -67,8 +67,13 @@ COMMANDS:
 }
 
 fun runCliClient(args: Array<String>) {
+    if (args.isEmpty()) {
+        printHelp(ExitCode.INVALID_ARGS)
+        return
+    }
+
     val cliClient = CliClient()
-    val options = args.slice(1..args.lastIndex)
+    val options = args.drop(1)
     when (args[0]) {
         "--help" -> printHelp(ExitCode.OK)
         "logs" -> {
