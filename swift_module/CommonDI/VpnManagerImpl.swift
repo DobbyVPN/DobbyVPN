@@ -9,6 +9,7 @@ public class VpnManagerImpl: VpnManager {
     private static let launchId = UUID().uuidString
     private static let disconnectingStartRetryDelay: TimeInterval = 0.5
     private static let disconnectingStartMaxRetries = 120
+    private static let switchProtocolTimeout: DispatchTimeInterval = .seconds(60)
     private var logs = NativeModuleHolder.logsRepository
 
     public static var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
@@ -129,7 +130,7 @@ public class VpnManagerImpl: VpnManager {
             return false
         }
 
-        let waitResult = semaphore.wait(timeout: .now() + 20)
+        let waitResult = semaphore.wait(timeout: .now() + Self.switchProtocolTimeout)
         if waitResult == .timedOut {
             self.logs.writeLog(log: "[switchProtocol] timed out waiting for provider response")
             return false

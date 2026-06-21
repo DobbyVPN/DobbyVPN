@@ -11,13 +11,17 @@ import (
 	"go_module/xray"
 	"os"
 	"runtime/debug"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
 
 const utunControlName = "com.apple.net.utun_control"
 
-var client *core.CoreClient
+var (
+	client   *core.CoreClient
+	clientMu sync.Mutex
+)
 
 func guardExportErr(fnName string, errp *error) func() {
 	return func() {
@@ -43,9 +47,13 @@ func unsafeToString(v any) string {
 func NewVpnClient(transportConfig string, protocol string) (err error) {
 	defer guardExportErr("NewVpnClient", &err)()
 	log.Debugf("ios_exports", "NewVpnClient() called")
+	log.Debugf("ios_exports", "NewVpnClient(): waiting for client lock")
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	log.Debugf("ios_exports", "NewVpnClient(): client lock acquired")
 
 	if client != nil {
-		if err := VpnDisconnect(); err != nil {
+		if err := vpnDisconnectLocked(); err != nil {
 			log.Debugf("ios_exports", "NewVpnClient(): previous client disconnect failed: %v", err)
 			return fmt.Errorf("NewVpnClient(): disconnect failed: %w", err)
 		}
@@ -94,6 +102,10 @@ func NewVpnClient(transportConfig string, protocol string) (err error) {
 func VpnConnect() (err error) {
 	defer guardExportErr("VpnConnect", &err)()
 	log.Debugf("ios_exports", "VpnConnect() called")
+	log.Debugf("ios_exports", "VpnConnect(): waiting for client lock")
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	log.Debugf("ios_exports", "VpnConnect(): client lock acquired")
 
 	if client == nil {
 		log.Debugf("ios_exports", "VpnConnect() failed: client is nil")
@@ -112,7 +124,15 @@ func VpnConnect() (err error) {
 func VpnDisconnect() (err error) {
 	defer guardExportErr("VpnDisconnect", &err)()
 	log.Debugf("ios_exports", "VpnDisconnect() called")
+	log.Debugf("ios_exports", "VpnDisconnect(): waiting for client lock")
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	log.Debugf("ios_exports", "VpnDisconnect(): client lock acquired")
 
+	return vpnDisconnectLocked()
+}
+
+func vpnDisconnectLocked() error {
 	if client == nil {
 		log.Debugf("ios_exports", "VpnDisconnect(): client already nil")
 		return nil
