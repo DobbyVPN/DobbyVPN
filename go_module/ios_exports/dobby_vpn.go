@@ -61,7 +61,12 @@ func NewVpnClient(transportConfig string, protocol string) (err error) {
 	log.Debugf("ios_exports", "Fd was found, fd = %d", fd)
 	log.Debugf("ios_exports", "Config length=%d", len(transportConfig))
 
-	tunFile := os.NewFile(uintptr(fd), "utun")
+	tunFd, err := unix.Dup(fd)
+	if err != nil {
+		return fmt.Errorf("NewVpnClient(): failed to duplicate utun fd: %w", err)
+	}
+	log.Debugf("ios_exports", "Duplicated utun fd = %d", tunFd)
+	tunFile := os.NewFile(uintptr(tunFd), "utun")
 
 	var device pkg.ProtocolDevice
 
