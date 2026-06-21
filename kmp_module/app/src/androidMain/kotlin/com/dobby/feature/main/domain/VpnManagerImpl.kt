@@ -13,9 +13,6 @@ class VpnManagerImpl(
             .let(context::startService)
     }
 
-    override fun switchProtocol(): Boolean =
-        DobbyVpnService.instance?.switchProtocol() == true
-
     override fun stop() {
         DobbyVpnService
             .instance

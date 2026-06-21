@@ -10,12 +10,6 @@ interface VpnManager {
     fun start()
 
     /**
-     * Switches the active protocol inside an already running VPN session when the platform supports it.
-     * Returns false when hot switching is unavailable or failed, so callers can fall back to stop/start.
-     */
-    fun switchProtocol(): Boolean
-
-    /**
      * Platform dependent VPN stop. Desktops: via gRPC. Mobile: via imported libraries.
      * Stops VPN service completely
      */

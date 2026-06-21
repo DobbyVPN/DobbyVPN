@@ -126,25 +126,6 @@ class DobbyVpnService : VpnService() {
         }
     }
 
-    fun switchProtocol(): Boolean {
-        logger.log("[svc:$serviceId] switchProtocol() requested vpnInterface=${vpnInterface?.fd} goTunFd=$goTunFd")
-        return runBlocking {
-            startStopMutex.withLock {
-                val hasActiveTunnel = vpnInterface != null || goTunFd != null
-                if (!hasActiveTunnel) {
-                    logger.log("[svc:$serviceId] switchProtocol(): no active tunnel")
-                    return@withLock false
-                }
-
-                stopProtocolsForSwitch()
-                geoRouting.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
-                val switched = startConfiguredProtocol()
-                logger.log("[svc:$serviceId] switchProtocol(): result=$switched")
-                switched
-            }
-        }
-    }
-
     override fun onDestroy() {
         logger.log("[svc:$serviceId] onDestroy() begin")
         teardownVpn()

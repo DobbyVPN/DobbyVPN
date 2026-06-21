@@ -382,16 +382,7 @@ class MainViewModel(
             connectionStateRepository.updateStatus(VpnConnectionState.CONNECTING)
             _uiState.emit(_uiState.value.copy(connectionState = VpnConnectionState.CONNECTING))
 
-            logger.log("[Failover] Trying hot protocol switch after $reason")
-            if (vpnManager.switchProtocol()) {
-                logger.log("[Failover] Hot protocol switch succeeded after $reason")
-                healthCheckManager.initHealthCheck()
-                healthCheckManager.startHealthCheck()
-                startConnectionStateDetector()
-                return@launch
-            }
-
-            logger.log("[Failover] Hot protocol switch failed after $reason, falling back to full VPN restart")
+            logger.log("[Failover] Restarting VPN after $reason")
             stopVpnRuntime(resetUiState = false)
             startVpnServiceLoop(initialReason = "failover after $reason")
         }
