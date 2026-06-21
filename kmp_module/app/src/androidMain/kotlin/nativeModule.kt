@@ -15,7 +15,7 @@ import com.dobby.feature.vpn_service.OutlineLibFacade
 import com.dobby.feature.vpn_service.XrayLibFacade
 import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
 import com.dobby.feature.vpn_service.TrustTunnelLibFacade
-import com.dobby.feature.vpn_service.domain.xray.XrayLibFacadeImpl
+
 import com.dobby.feature.vpn_service.domain.trusttunnel.TrustTunnelLibFacadeImpl
 import com.dobby.feature.vpn_service.domain.trusttunnel.TrustTunnelInteractor
 

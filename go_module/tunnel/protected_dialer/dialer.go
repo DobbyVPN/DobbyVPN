@@ -224,9 +224,9 @@ func (p *ProtectedDirectProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, er
 // natively using DobbyVPN's cross-platform socket protector.
 func ProtectSocketInt(fd int) {
 	if protector == nil {
-		log.Infof("[Protect] WARNING: no socket protector registered for ProtectSocketInt fd=%d", fd)
+		log.Infof("protected_dialer", "[Protect] WARNING: no socket protector registered for ProtectSocketInt fd=%d", fd)
 		return
 	}
-	log.Infof("[Protect] ProtectSocketInt protecting fd=%d", fd)
+	log.Infof("protected_dialer", "[Protect] ProtectSocketInt protecting fd=%d", fd)
 	protector.Protect(uintptr(fd), "tcp")
 }

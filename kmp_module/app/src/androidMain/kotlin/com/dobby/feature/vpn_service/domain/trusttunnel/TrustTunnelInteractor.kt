@@ -15,27 +15,20 @@ class TrustTunnelInteractor(
 ) {
     private val interfaceFactory = TrustTunnelVpnInterfaceFactory(logger)
 
-    suspend fun startTrustTunnel(intent: Intent?, dobbyVpnService: DobbyVpnService?) {
+    fun startTrustTunnel(dobbyVpnService: DobbyVpnService?): Boolean {
         val serviceId = dobbyVpnService?.serviceId ?: "unknown"
         logger.log("[svc:$serviceId] startTrustTunnel(): begin vpnInterface=${dobbyVpnService?.vpnInterface?.fd}")
-        val isServiceStartedFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) ?: false
+        
         val shouldTurnOn = dobbyConfigsRepository.getIsTrustTunnelEnabled()
-        logger.log("[svc:$serviceId] startTrustTunnel(): fromUi=$isServiceStartedFromUi shouldTurnOn=$shouldTurnOn")
-
-        if (!shouldTurnOn && isServiceStartedFromUi) {
-            logger.log("[svc:$serviceId] startTrustTunnel(): disconnecting TrustTunnel (not enabled)")
-            dobbyVpnService?.teardownVpn()
-            dobbyVpnService?.stopSelf()
-            return
+        if (!shouldTurnOn) {
+            logger.log("[svc:$serviceId] startTrustTunnel(): TrustTunnel not enabled")
+            return false
         }
 
         val config = dobbyConfigsRepository.getTrustTunnelConfig()
         if (config.isEmpty()) {
             logger.log("[svc:$serviceId] startTrustTunnel(): TrustTunnel config is empty, cannot start")
-            dobbyVpnService?.connectionState?.tryUpdateStatus(false)
-            dobbyVpnService?.teardownVpn()
-            dobbyVpnService?.stopSelf()
-            return
+            return false
         }
 
         dobbyVpnService?.run {
@@ -47,10 +40,10 @@ class TrustTunnelInteractor(
             }.getOrNull()
         }
 
-        val tunFd = fdManager.GetTunFd(serviceId, dobbyVpnService)
+        val tunFd = fdManager.GetTunFd(dobbyVpnService)
         if (tunFd < 0) {
-            dobbyVpnService?.teardownVpn()
-            return
+            logger.log("[svc:$serviceId] startTrustTunnel(): failed to get tunFd")
+            return false
         }
 
         logger.log("[svc:$serviceId] startTrustTunnel(): initializing TrustTunnel with tunFd=$tunFd")
@@ -59,24 +52,17 @@ class TrustTunnelInteractor(
 
         if (!connected) {
             logger.log("[svc:$serviceId] startTrustTunnel(): connection FAILED, stopping VPN service")
-            dobbyVpnService?.connectionState?.tryUpdateStatus(false)
-            dobbyVpnService?.teardownVpn()
-            dobbyVpnService?.stopSelf()
-            return
+            return false
         }
 
         logger.log("[svc:$serviceId] startTrustTunnel(): connected successfully")
-        dobbyVpnService?.connectionState?.updateStatus(true)
+        return true
     }
 
-    suspend fun stopTrustTunnel(dobbyVpnService: DobbyVpnService?, updateState: Boolean = true) {
+    fun stopTrustTunnel(dobbyVpnService: DobbyVpnService?) {
         val serviceId = dobbyVpnService?.serviceId ?: "unknown"
-        logger.log("[svc:$serviceId] stopTrustTunnel(): disconnecting TrustTunnel updateState=$updateState")
+        logger.log("[svc:$serviceId] stopTrustTunnel(): disconnecting TrustTunnel")
 
         trustTunnelLibFacade.disconnect()
-
-        if (updateState) {
-            dobbyVpnService?.connectionState?.updateStatus(false)
-        }
     }
 }

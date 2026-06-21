@@ -56,6 +56,7 @@ class CliClient {
         val cloakLibrary = RestartableCloakGrpcLibrary(logger)
         val loggerLibrary = RestartableLoggerGrpcLibrary(logger)
         val georoutingLibrary = RestartableGeoroutingGrpcLibrary(logger)
+        val trustTunnelLibrary = RestartableTrustTunnelGrpcLibrary(logger)
 
         configsRepository = DobbyConfigsRepositoryImpl(healthCheckLibrary = healthCheckLibrary)
         connectionStateRepository = ConnectionStateRepository()
@@ -69,6 +70,7 @@ class CliClient {
             xrayLibrary = xrayLibrary,
             cloakLibrary = cloakLibrary,
             georoutingLibrary = georoutingLibrary,
+            trustTunnelLibrary = trustTunnelLibrary,
         )
         vpnManager = VpnManagerImpl(connectionStateRepository, dobbyVpnService)
         loggerManager = LoggerManagerImpl(logger, loggerLibrary, configsRepository)

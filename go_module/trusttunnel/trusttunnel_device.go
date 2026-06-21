@@ -103,7 +103,7 @@ func NewTrustTunnelDevice(trusttunnelConfig string) (*TrustTunnelDevice, error) 
 		return 0 // return success
 	})
 
-	log.Infof("[TrustTunnel] SOCKS bridge started at %s (serverIP=%s)", d.proxyAddr, d.svrIP.String())
+	log.Infof("trusttunnel", "[TrustTunnel] SOCKS bridge started at %s (serverIP=%s)", d.proxyAddr, d.svrIP.String())
 	return d, nil
 }
 
@@ -120,7 +120,7 @@ func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 
 	loglevel, err := internal.ExtractLogLevel(d.config)
 	if err != nil {
-		log.Infof("[TrustTunnel] failed to parse log level, continuing without logs")
+		log.Infof("trusttunnel", "[TrustTunnel] failed to parse log level, continuing without logs")
 	}
 	internal.SetLogLevel(loglevel)
 

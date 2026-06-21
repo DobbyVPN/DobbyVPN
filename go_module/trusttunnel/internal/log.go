@@ -17,15 +17,15 @@ func LogFunc(level tt.LogLevel, message string) {
 	}
 	switch level {
 	case tt.LogError:
-		log.Errorf("[TrustTunnel] %s", message)
+		log.Errorf("trusttunnel", "[TrustTunnel] %s", message)
 	case tt.LogWarn:
-		log.Warnf("[TrustTunnel] %s", message)
+		log.Warnf("trusttunnel", "[TrustTunnel] %s", message)
 	case tt.LogInfo:
-		log.Infof("[TrustTunnel] %s", message)
+		log.Infof("trusttunnel", "[TrustTunnel] %s", message)
 	case tt.LogDebug:
-		log.Debugf("[TrustTunnel] %s", message)
+		log.Debugf("trusttunnel", "[TrustTunnel] %s", message)
 	default:
-		log.Debugf("[TrustTunnel] %s", message)
+		log.Debugf("trusttunnel", "[TrustTunnel] %s", message)
 	}
 }
 

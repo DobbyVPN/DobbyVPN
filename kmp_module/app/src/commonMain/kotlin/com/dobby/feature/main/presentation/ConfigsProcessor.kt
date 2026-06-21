@@ -28,6 +28,8 @@ class ConfigsProcessor(
 
             VpnInterface.XRAY -> buildXrayAttributesJson()
 
+            VpnInterface.TRUST_TUNNEL -> buildTrustTunnelAttributesJson()
+
             VpnInterface.NONE -> buildNoneAttributesJson()
         }
 
@@ -35,6 +37,13 @@ class ConfigsProcessor(
         Json.encodeToString(
             mapOf(
                 "interface" to "None",
+            )
+        )
+
+    private fun buildTrustTunnelAttributesJson(): String =
+        Json.encodeToString(
+            mapOf(
+                "interface" to "TrustTunnel",
             )
         )
 

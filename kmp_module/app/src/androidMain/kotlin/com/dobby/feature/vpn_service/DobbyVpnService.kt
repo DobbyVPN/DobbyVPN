@@ -105,14 +105,14 @@ class DobbyVpnService : VpnService() {
             "[svc:$serviceId] onStartCommand(startId=$startId flags=$flags) vpnInterface=${vpnInterface?.fd}"
         )
 
-        startService(intent)
+        startDobbyVpnService(intent)
 
         return START_NOT_STICKY
     }
 
-    fun startService(intent: Intent? = null) {
+    fun startDobbyVpnService(intent: Intent? = null) {
         logger.log(
-            "[svc:$serviceId] startService() vpnInterface=${vpnInterface?.fd}"
+            "[svc:$serviceId] startDobbyVpnService() vpnInterface=${vpnInterface?.fd}"
         )
 
         serviceScope.launch {
@@ -214,7 +214,24 @@ class DobbyVpnService : VpnService() {
     }
 
     private suspend fun startTrustTunnel(intent: Intent?): Boolean {
-        trustTunnelInteractor.startTrustTunnel(intent, instance)
+        val isServiceStartedFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) ?: false
+        val shouldTurnOn = dobbyConfigsRepository.getIsTrustTunnelEnabled()
+
+        if (!shouldTurnOn && isServiceStartedFromUi) {
+            connectionState.updateServiceStarted(false)
+            teardownVpn()
+            stopSelf()
+            return false
+        }
+
+        if (!trustTunnelInteractor.startTrustTunnel(instance)) {
+            connectionState.updateServiceStarted(false)
+            teardownVpn()
+            stopSelf()
+            return false
+        }
+
+        connectionState.updateServiceStarted(true)
         return true
     }
 
@@ -240,7 +257,7 @@ class DobbyVpnService : VpnService() {
             logger.log("[svc:$serviceId] stopProtocols(): xray disconnect warning: ${e.message}")
         }
         runCatching {
-            trustTunnelInteractor.stopTrustTunnel(instance, updateState = false)
+            trustTunnelInteractor.stopTrustTunnel(instance)
         }.onFailure { e ->
             logger.log("[svc:$serviceId] stopProtocols(): trusttunnel disconnect warning: ${e.message}")
         }
