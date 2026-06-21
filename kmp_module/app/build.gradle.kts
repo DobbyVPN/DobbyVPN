@@ -311,7 +311,6 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         "-target=android/arm64",
         "-androidapi=26",
         "-javapkg=com.dobby.gomobile",
-        "-trimpath",
         "-ldflags=-s -w -buildid=",
         "-o=${outputFile.absolutePath}",
         "go_module/kotlin_exports"
@@ -327,9 +326,12 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
     environment("GOCACHE", goCacheDir.get().asFile.absolutePath)
     environment("GOTMPDIR", goTmpDir.get().asFile.absolutePath)
     environment("SOURCE_DATE_EPOCH", "0")
+    environment("CGO_CFLAGS_ALLOW", ".*")
+    environment("CGO_CXXFLAGS_ALLOW", ".*")
+    environment("CGO_LDFLAGS_ALLOW", ".*")
     environment(
         "GOFLAGS",
-        listOf("-trimpath", "-buildvcs=false", System.getenv("GOFLAGS").orEmpty())
+        listOf("-buildvcs=false", System.getenv("GOFLAGS").orEmpty())
             .joinToString(" ")
             .trim()
     )
@@ -351,18 +353,23 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         environment("CC", "aarch64-linux-android26-clang")
         environment("CXX", "aarch64-linux-android26-clang++")
 
-        val debugPrefixFlags = listOf(
-            "-fdebug-prefix-map=${repoRoot.absolutePath}=/src/DobbyVPN",
-            "-fdebug-prefix-map=${goModuleDir.absolutePath}=/src/DobbyVPN/go_module",
-            "-fdebug-prefix-map=${goTmpDir.get().asFile.absolutePath}=/tmp/go-build",
-            "-fdebug-prefix-map=${androidSdkDir.get()}=/android-sdk",
-            "-fdebug-prefix-map=${ndkDir.absolutePath}=/android-ndk",
-            "-ffile-prefix-map=${repoRoot.absolutePath}=/src/DobbyVPN",
-            "-ffile-prefix-map=${goModuleDir.absolutePath}=/src/DobbyVPN/go_module",
-            "-ffile-prefix-map=${goTmpDir.get().asFile.absolutePath}=/tmp/go-build",
-            "-ffile-prefix-map=${androidSdkDir.get()}=/android-sdk",
-            "-ffile-prefix-map=${ndkDir.absolutePath}=/android-ndk"
-        ).joinToString(" ")
+        val isWindows = System.getProperty("os.name").lowercase().contains("windows")
+        val debugPrefixFlags = if (isWindows) {
+            ""
+        } else {
+            listOf(
+                "-fdebug-prefix-map=${repoRoot.absolutePath}=/src/DobbyVPN",
+                "-fdebug-prefix-map=${goModuleDir.absolutePath}=/src/DobbyVPN/go_module",
+                "-fdebug-prefix-map=${goTmpDir.get().asFile.absolutePath}=/tmp/go-build",
+                "-fdebug-prefix-map=${androidSdkDir.get()}=/android-sdk",
+                "-fdebug-prefix-map=${ndkDir.absolutePath}=/android-ndk",
+                "-ffile-prefix-map=${repoRoot.absolutePath}=/src/DobbyVPN",
+                "-ffile-prefix-map=${goModuleDir.absolutePath}=/src/DobbyVPN/go_module",
+                "-ffile-prefix-map=${goTmpDir.get().asFile.absolutePath}=/tmp/go-build",
+                "-ffile-prefix-map=${androidSdkDir.get()}=/android-sdk",
+                "-ffile-prefix-map=${ndkDir.absolutePath}=/android-ndk"
+            ).joinToString(" ")
+        }
         environment("CGO_CFLAGS", listOf(debugPrefixFlags, System.getenv("CGO_CFLAGS").orEmpty()).joinToString(" ").trim())
         environment(
             "CGO_LDFLAGS",

@@ -124,7 +124,7 @@ jobs:
           name: windows_grpcvpnserver.exe
           path: |
             go_module/windows_grpcvpnserver.exe
-            go_module/libdobby_bridge.dll
+            go_module/dobby_bridge.dll
 
       - name: Upload built libraries
         if: matrix.os == 'ubuntu'
