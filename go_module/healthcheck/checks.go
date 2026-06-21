@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"strings"
 )
 
 // Check errors
@@ -92,4 +93,22 @@ func pingHostCheck(host string) error {
 	}
 
 	return nil
+}
+
+func anyHTTPPingCheck(hosts []string) error {
+	log.Debugf(hcCommon.Category, "Check: HTTP connectivity candidates=%s", strings.Join(hosts, ", "))
+
+	var errs []error
+	for _, host := range hosts {
+		if err := pingHostCheck(host); err != nil {
+			log.Warnf(hcCommon.Category, "HTTP connectivity candidate failed host=%s error=%v", host, err)
+			errs = append(errs, fmt.Errorf("%s: %w", host, err))
+			continue
+		}
+
+		log.Debugf(hcCommon.Category, "HTTP connectivity candidate succeeded host=%s", host)
+		return nil
+	}
+
+	return fmt.Errorf("all HTTP connectivity candidates failed: %w", errors.Join(errs...))
 }

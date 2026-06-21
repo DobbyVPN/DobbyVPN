@@ -53,13 +53,11 @@ var (
 			return dnsResolveCheck("one.one.one.one")
 		},
 		func() error {
-			return pingHostCheck("https://www.google.com/generate_204")
-		},
-		func() error {
-			return pingHostCheck("https://www.cloudflare.com/cdn-cgi/trace")
-		},
-		func() error {
-			return pingHostCheck("https://about.google")
+			return anyHTTPPingCheck([]string{
+				"https://www.google.com/generate_204",
+				"https://www.cloudflare.com/cdn-cgi/trace",
+				"https://about.google",
+			})
 		},
 	}
 )
