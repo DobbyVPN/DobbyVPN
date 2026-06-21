@@ -35,6 +35,10 @@ func (a *AwgClient) Disconnect() error {
 	return nil
 }
 
+func (a *AwgClient) HealthCheck() error {
+	return nil
+}
+
 func (a *AwgClient) Refresh() error {
 	if a == nil || a.app == nil {
 		return errors.New("awg desktop client is not initialized")

@@ -48,7 +48,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		return err
 	}
 
-	log.Infof("[Network] Default gateway detected: %s", gatewayIP.String())
+	log.Debugf(coreCommon.Category, "[Network] Default gateway detected: %s", gatewayIP.String())
 
 	serverIP := app.ProtocolDevice.GetServerIP()
 	if serverIP == nil {
@@ -56,11 +56,11 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		signalInit(initResult, err)
 		return err
 	}
-	log.Infof("[Routing] Server IP resolved: %s", serverIP.String())
+	log.Debugf(coreCommon.Category, "[Routing] Server IP resolved: %s", serverIP.String())
 
 	earlyRouteInstalled := false
 	if serverIP.String() != "127.0.0.1" {
-		log.Infof("[Routing] Adding direct route for VPN server %s via gateway %s (bypass VPN)", serverIP.String(), gatewayIP.String())
+		log.Debugf(coreCommon.Category, "[Routing] Adding direct route for VPN server %s via gateway %s (bypass VPN)", serverIP.String(), gatewayIP.String())
 		common.Client.MarkInCriticalSection(coreCommon.Name)
 		var routeChanged bool
 		routeChanged, err = routing.EnsureProxyRoute(serverIP.String(), gatewayIP.String())
@@ -72,19 +72,19 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		}
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		earlyRouteInstalled = routeChanged
-		log.Infof("[Routing] Direct route for VPN server installed")
+		log.Debugf(coreCommon.Category, "[Routing] Direct route for VPN server installed")
 	} else {
-		log.Infof("[Routing] Skipping direct route for localhost (Cloak mode)")
+		log.Debugf(coreCommon.Category, "[Routing] Skipping direct route for localhost (Cloak mode)")
 	}
 
-	log.Infof("[TUN] Initializing virtual interface (utun)...")
+	log.Debugf(coreCommon.Category, "[TUN] Initializing virtual interface (utun)...")
 
 	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, "")
 	if err != nil {
 		if earlyRouteInstalled {
 			common.Client.MarkInCriticalSection(coreCommon.Name)
 			if cleanupErr := routing.DeleteProxyRoute(serverIP.String(), gatewayIP.String()); cleanupErr != nil {
-				log.Infof("[Routing] Failed to remove early server route after ProtocolDevice error: %v", cleanupErr)
+				log.Debugf(coreCommon.Category, "[Routing] Failed to remove early server route after ProtocolDevice error: %v", cleanupErr)
 			}
 			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		}
@@ -93,13 +93,13 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		return err
 	}
 
-	log.Infof("[Protocol] ProtocolDevice successfully created")
+	log.Debugf(coreCommon.Category, "[Protocol] ProtocolDevice successfully created")
 
 	var closeOnce sync.Once
 	tunName := ""
 	closeAll := func() {
 		closeOnce.Do(func() {
-			log.Infof("[Lifecycle] Shutting down VPN components (tun2socks + device)")
+			log.Debugf(coreCommon.Category, "[Lifecycle] Shutting down VPN components (tun2socks + device)")
 			tunnel.StopEngine()
 			_ = app.ProtocolDevice.Close()
 		})
@@ -110,18 +110,18 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	go func() {
 		<-ctx.Done()
 		closeAll()
-		log.Infof("[Lifecycle] Context cancelled — closing VPN interfaces")
+		log.Debugf(coreCommon.Category, "[Lifecycle] Context cancelled — closing VPN interfaces")
 	}()
 
 	defer func() {
 		common.Client.MarkInCriticalSection(coreCommon.Name)
-		log.Infof("[Routing] Restoring system routing (removing VPN routes)...")
+		log.Debugf(coreCommon.Category, "[Routing] Restoring system routing (removing VPN routes)...")
 		routing.StopRouting(serverIP.String(), gatewayIP.String(), tunName)
-		log.Infof("[Routing] System default route restored via %s", gatewayIP.String())
+		log.Debugf(coreCommon.Category, "[Routing] System default route restored via %s", gatewayIP.String())
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 	}()
 
-	log.Infof("[Tunnel] Starting tun2socks engine (darwin/utun mode)...")
+	log.Debugf(coreCommon.Category, "[Tunnel] Starting tun2socks engine (darwin/utun mode)...")
 
 	err = tunnel.StartEngine(platform_engine.EngineConfig{
 		ProxyAddr:   app.ProtocolDevice.GetProxyAddr(),
@@ -135,53 +135,53 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 	tunName = platform_engine.LastIface
 
-	log.Infof("[Tunnel] tun2socks started, interface: %s", tunName)
+	log.Debugf(coreCommon.Category, "[Tunnel] tun2socks started, interface: %s", tunName)
 
 	common.Client.MarkInCriticalSection(coreCommon.Name)
 
-	log.Infof("[Routing] Switching default route to TUN interface (%s)", tunName)
+	log.Debugf(coreCommon.Category, "[Routing] Switching default route to TUN interface (%s)", tunName)
 	if err := routing.StartRouting(serverIP.String(), gatewayIP.String(), tunName); err != nil {
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		err = fmt.Errorf("failed to configure routing: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Infof("[Routing] Default route is now redirected to VPN (TUN)")
+	log.Debugf(coreCommon.Category, "[Routing] Default route is now redirected to VPN (TUN)")
 
-	log.Infof("[Tunnel] VPN dataplane is up, starting traffic handling...")
+	log.Debugf(coreCommon.Category, "[Tunnel] VPN dataplane is up, starting traffic handling...")
 
 	ifaceName, idx, err := protected_dialer.GetDefaultInterfaceNameDarwin(gatewayIP)
 	if err != nil {
-		log.Infof("[Darwin-Protect] ERROR: failed to detect default interface for protected sockets: %v", err)
+		log.Debugf(coreCommon.Category, "[Darwin-Protect] ERROR: failed to detect default interface for protected sockets: %v", err)
 	} else {
-		log.Infof("[Darwin-Protect] Selected interface for direct traffic: %s (index=%d)", ifaceName, idx)
+		log.Debugf(coreCommon.Category, "[Darwin-Protect] Selected interface for direct traffic: %s (index=%d)", ifaceName, idx)
 
 		protected_dialer.SetDefaultInterface(idx)
 
-		log.Infof("[Routing] Adding scoped default route via %s -> %s (for protected traffic bypass)", ifaceName, gatewayIP.String())
+		log.Debugf(coreCommon.Category, "[Routing] Adding scoped default route via %s -> %s (for protected traffic bypass)", ifaceName, gatewayIP.String())
 		if err := routing.AddScopedDefaultRoute(ifaceName, gatewayIP.String()); err != nil {
-			log.Infof("[Routing] ERROR: failed to add scoped default route via %s: %v", ifaceName, err)
+			log.Debugf(coreCommon.Category, "[Routing] ERROR: failed to add scoped default route via %s: %v", ifaceName, err)
 		} else {
-			log.Infof("[Routing] Scoped default route installed: interface=%s gateway=%s", ifaceName, gatewayIP.String())
+			log.Debugf(coreCommon.Category, "[Routing] Scoped default route installed: interface=%s gateway=%s", ifaceName, gatewayIP.String())
 		}
 	}
 
 	defer func() {
 		if ifaceName != "" {
-			log.Infof("[Routing] Removing scoped default route for interface %s", ifaceName)
+			log.Debugf(coreCommon.Category, "[Routing] Removing scoped default route for interface %s", ifaceName)
 			routing.DeleteScopedDefaultRoute(ifaceName)
 		}
 	}()
 
 	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
-	log.Infof("[Lifecycle] VPN initialization completed successfully")
+	log.Debugf(coreCommon.Category, "[Lifecycle] VPN initialization completed successfully")
 
 	signalInit(initResult, nil)
 
 	<-ctx.Done()
 
-	log.Infof("[Lifecycle] Context cancelled — stopping VPN engine")
+	log.Debugf(coreCommon.Category, "[Lifecycle] Context cancelled — stopping VPN engine")
 
 	return nil
 }

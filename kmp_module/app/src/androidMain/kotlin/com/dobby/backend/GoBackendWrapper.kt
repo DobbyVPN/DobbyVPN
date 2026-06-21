@@ -1,6 +1,7 @@
 package com.dobby.backend
 
 import android.net.VpnService
+import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import com.dobby.gomobile.dobbyvpn.Dobbyvpn
 import com.dobby.gomobile.dobbyvpn.SocketProtector
 
@@ -21,11 +22,36 @@ object GoBackendWrapper {
         Dobbyvpn.clearGeoRoutingConf()
     }
 
-    fun checkServerAlive(address: String, port: Int): Int =
-        Dobbyvpn.checkServerAlive(address, port)
-
     fun initLogger(path: String) {
         Dobbyvpn.initLogger(path)
+    }
+
+    fun initTelemetry(endpoint: String, token: String) {
+        Dobbyvpn.initTelemetry(endpoint, token)
+    }
+
+    fun stopTelemetry() {
+        Dobbyvpn.stopTelemetry()
+    }
+
+    fun setupTelemetryAttributes(config: String) {
+        Dobbyvpn.setupTelemetryAttributes(config)
+    }
+
+    fun getConnectionState(): Int {
+        return Dobbyvpn.getConnectionState()
+    }
+
+    fun initHealthCheck() {
+        Dobbyvpn.initHealthCheck()
+    }
+
+    fun startHealthCheck() {
+        Dobbyvpn.startHealthCheck()
+    }
+
+    fun stopHealthCheck() {
+        Dobbyvpn.stopHealthCheck()
     }
 
     fun getLastError(): String? = Dobbyvpn.getVpnLastError()?.ifEmpty { null }

@@ -26,7 +26,7 @@ func RegisterSocketProtector(protector SocketProtector) {
 	defer socketProtectorMu.Unlock()
 
 	socketProtector = protector
-	log.Infof("socket protector registered: %v", protector != nil)
+	log.Debugf("kotlin_exports", "socket protector registered: %v", protector != nil)
 }
 
 func protectSocket(fd uintptr) bool {
@@ -35,13 +35,13 @@ func protectSocket(fd uintptr) bool {
 	socketProtectorMu.RUnlock()
 
 	if protector == nil {
-		log.Infof("socket protect skipped: protector is not registered")
+		log.Debugf("kotlin_exports", "socket protect skipped: protector is not registered")
 		return false
 	}
 	if !protector.Protect(int32(fd)) {
-		log.Infof("socket protect failed for fd=%d", fd)
+		log.Debugf("kotlin_exports", "socket protect failed for fd=%d", fd)
 		return false
 	}
-	log.Infof("socket protect succeeded for fd=%d", fd)
+	log.Debugf("kotlin_exports", "socket protect succeeded for fd=%d", fd)
 	return true
 }

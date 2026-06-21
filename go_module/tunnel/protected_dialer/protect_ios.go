@@ -16,10 +16,10 @@ type iosProtector struct{}
 func (i *iosProtector) Protect(fd uintptr, network string) {
 	err := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, SO_NO_TC_NETPOLICY, 1)
 	if err != nil {
-		log.Infof("[iOS-Protect] SO_NO_TC_NETPOLICY failed fd=%d network=%s err=%v interfaces=[%s]", fd, network, err, describeInterfacesForLog())
+		log.Debugf(Category, "[iOS-Protect] SO_NO_TC_NETPOLICY failed fd=%d network=%s err=%v interfaces=[%s]", fd, network, err, describeInterfacesForLog())
 		return
 	}
-	log.Infof("[iOS-Protect] SO_NO_TC_NETPOLICY success fd=%d network=%s interfaces=[%s]", fd, network, describeInterfacesForLog())
+	log.Debugf(Category, "[iOS-Protect] SO_NO_TC_NETPOLICY success fd=%d network=%s interfaces=[%s]", fd, network, describeInterfacesForLog())
 }
 
 func describeInterfacesForLog() string {
@@ -37,5 +37,5 @@ func describeInterfacesForLog() string {
 
 func init() {
 	protector = &iosProtector{}
-	log.Infof("[iOS-Protect] Initialized with SO_NO_TC_NETPOLICY diagnostics")
+	log.Debugf(Category, "[iOS-Protect] Initialized with SO_NO_TC_NETPOLICY diagnostics")
 }

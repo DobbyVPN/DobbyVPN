@@ -9,6 +9,10 @@ Consume 'subscription' / 'dynamic keys' - YAML via HTTPS in one of the following
 
 **Clean ShadowSocks** (best performance)
 ```toml
+[Telemetry]
+Endpoint = "localhost:4318" # Telemetry host
+ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
+
 [Outline] # Implementation library
 Description = "My fast SS" # description - whatever you like
 Server = "1.1.1.1" # IP or DNS name for the server
@@ -24,6 +28,10 @@ IPs = [
 
 **ShadowSocks via WebSocket** (caddy -> outline-ss-server) 
 ```toml
+[Telemetry]
+Endpoint = "localhost:4318" # Telemetry host
+ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
+
 [Outline] # Implementation library
 Description = "My beautiful SS in WS" # description - whatever you like
 WebSocket = true # flag to enable WebSocket
@@ -40,6 +48,10 @@ IPs = [
 
 **ShadowSocks over cloak** (caddy -> cloak -> outline-ss-server)
 ```toml
+[Telemetry]
+Endpoint = "localhost:4318" # Telemetry host
+ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
+
 [Outline] # Implementation library
 Description = "My sneaky SS in Cloak" # description - whatever you like
 Cloak = true # enables cloak (what is cloak? see ref # 2 below)
@@ -62,6 +74,10 @@ For direct Cloak mode, omit `CDNWsUrlPath` or set `Transport = "direct"` explici
 
 **VLESS + Reality over xray-core** ([more details](https://xtls.github.io/en/config/outbounds/vless.html))
 ```toml
+[Telemetry]
+Endpoint = "localhost:4318" # Telemetry host
+ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
+
 [Xray] # Implementation library
 log = { loglevel = "info" } # Providing DobbyVPN and xray's log level
 # Warning: Inbound field will be modified due to custom tunneling settings

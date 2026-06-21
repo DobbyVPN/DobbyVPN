@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 
+	"go_module/core/common"
 	"go_module/desktop_exports/proto"
 	"go_module/grpcproto"
 
@@ -32,7 +33,7 @@ func run(port int) error {
 
 	grpcproto.RegisterVpnServer(s, &proto.Server{})
 
-	log.Infof("server listening at %v", lis.Addr())
+	log.Debugf(common.Category, "server listening at %v", lis.Addr())
 	if err := s.Serve(lis); err != nil {
 		return fmt.Errorf("failed to serve: %v", err)
 	}
@@ -45,6 +46,6 @@ func (c *Executor) Execute(port int, mode string) {
 	case "normal":
 		run(port)
 	default:
-		log.Infof("[ERROR] Invalid run mode")
+		log.Debugf(common.Category, "[ERROR] Invalid run mode")
 	}
 }

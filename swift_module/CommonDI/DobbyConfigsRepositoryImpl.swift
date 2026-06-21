@@ -26,6 +26,11 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let vpnInterfaceKey = "vpnInterfaceKey"
     private let isXrayEnabledKey = "isXrayEnabledKey"
     private let xrayConfigKey = "xrayConfigKey"
+    private let telemetryEndpointKey = "telemetryEndpointKey"
+    private let telemetryApiTokenKey = "telemetryApiTokenKey"
+    private let telemetryAttributesKey = "telemetryAttributesKey"
+    private let healthCheckStateKey = "healthCheckStateKey"
+    private let healthCheckStateUpdatedAtKey = "healthCheckStateUpdatedAtKey"
 
     public func getConnectionURL() -> String {
         return userDefaults.string(forKey: connectionURLKey) ?? ""
@@ -212,7 +217,30 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setIsUserInitStop(isUserInitStop: Bool) {
         userDefaults.set(isUserInitStop, forKey: isUserInitStopKey)
+    }
 
+    public func getTelemetryEndpoint() -> String {
+        return userDefaults.string(forKey: telemetryEndpointKey) ?? ""
+    }
+
+    public func setTelemetryEndpoint(endpoint: String) {
+        userDefaults.set(endpoint, forKey: telemetryEndpointKey)
+    }
+
+    public func getTelemetryApiToken() -> String {
+        return userDefaults.string(forKey: telemetryApiTokenKey) ?? ""
+    }
+
+    public func setTelemetryApiToken(token: String) {
+        userDefaults.set(token, forKey: telemetryApiTokenKey)
+    }
+
+    public func getTelemetryAttributes() -> String {
+        return userDefaults.string(forKey: telemetryAttributesKey) ?? ""
+    }
+
+    public func setTelemetryAttributes(config: String) {
+        userDefaults.set(config, forKey: telemetryAttributesKey)
     }
 
     public func getGeoRoutingConf() -> String {
@@ -221,5 +249,21 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     public func setGeoRoutingConf(geoRoutingConf: String) {
         userDefaults.set(geoRoutingConf, forKey: geoRoutingConfKey)
+    }
+
+    public func getHealthCheckState() -> Int32 {
+        if userDefaults.object(forKey: healthCheckStateKey) == nil {
+            return -1
+        }
+        return Int32(userDefaults.integer(forKey: healthCheckStateKey))
+    }
+
+    public func setHealthCheckState(state: Int32) {
+        userDefaults.set(Int(state), forKey: healthCheckStateKey)
+        userDefaults.set(Date().timeIntervalSince1970, forKey: healthCheckStateUpdatedAtKey)
+    }
+
+    public func getHealthCheckStateUpdatedAt() -> Double {
+        return userDefaults.double(forKey: healthCheckStateUpdatedAtKey)
     }
 }

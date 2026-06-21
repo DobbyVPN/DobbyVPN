@@ -14,32 +14,32 @@ import (
 )
 
 func AddScopedDefaultRoute(iface, gatewayIP string) error {
-	log.Infof("[Routing][Scoped] Adding scoped default route: default -> %s (ifscope=%s)", gatewayIP, iface)
+	log.Debugf(Category, "[Routing][Scoped] Adding scoped default route: default -> %s (ifscope=%s)", gatewayIP, iface)
 
 	cmd := fmt.Sprintf("route -n add default %s -ifscope %s", gatewayIP, iface)
 	out, err := ExecuteCommand(cmd)
 	if err != nil {
-		log.Infof("[Routing][Scoped] WARN: scoped default may already exist or failed: %v | output=%s", err, out)
+		log.Debugf(Category, "[Routing][Scoped] WARN: scoped default may already exist or failed: %v | output=%s", err, out)
 	} else {
-		log.Infof("[Routing][Scoped] OK: scoped default installed via %s (%s)", iface, gatewayIP)
+		log.Debugf(Category, "[Routing][Scoped] OK: scoped default installed via %s (%s)", iface, gatewayIP)
 	}
 	return nil
 }
 
 func DeleteScopedDefaultRoute(iface string) {
-	log.Infof("[Routing][Scoped] Removing scoped default route (ifscope=%s)", iface)
+	log.Debugf(Category, "[Routing][Scoped] Removing scoped default route (ifscope=%s)", iface)
 
 	cmd := fmt.Sprintf("route -n delete default -ifscope %s", iface)
 	out, err := ExecuteCommand(cmd)
 	if err != nil {
-		log.Infof("[Routing][Scoped] WARN: failed to delete scoped default: %v | output=%s", err, out)
+		log.Debugf(Category, "[Routing][Scoped] WARN: failed to delete scoped default: %v | output=%s", err, out)
 	} else {
-		log.Infof("[Routing][Scoped] OK: scoped default removed for %s", iface)
+		log.Debugf(Category, "[Routing][Scoped] OK: scoped default removed for %s", iface)
 	}
 }
 
 func ExecuteCommand(command string) (string, error) {
-	log.Infof("[Exec] Running route command: %s", log.MaskStr(command))
+	log.Debugf(Category, "[Exec] Running route command: %s", log.MaskStr(command))
 
 	args := strings.Fields(command)
 	if len(args) == 0 {
@@ -54,32 +54,32 @@ func ExecuteCommand(command string) (string, error) {
 	outStr := string(output)
 
 	if err != nil {
-		log.Infof("[Exec] ERROR: command failed: %v | output=%s", err, outStr)
+		log.Debugf(Category, "[Exec] ERROR: command failed: %v | output=%s", err, outStr)
 		return outStr, fmt.Errorf("command execution failed: %w, output: %s", err, outStr)
 	}
 
-	log.Infof("[Exec] OK: output=%s", outStr)
+	log.Debugf(Category, "[Exec] OK: output=%s", outStr)
 	return outStr, nil
 }
 
 func EnsureProxyRoute(proxyIP, gatewayIP string) (bool, error) {
 	if isLoopbackIP(proxyIP) {
-		log.Infof("[Routing][Bypass] Skipping direct route for loopback server: %s", proxyIP)
+		log.Debugf(Category, "[Routing][Bypass] Skipping direct route for loopback server: %s", proxyIP)
 		return false, nil
 	}
 
-	log.Infof("[Routing][Bypass] Adding direct route for proxy: %s -> %s (bypass VPN)", proxyIP, gatewayIP)
+	log.Debugf(Category, "[Routing][Bypass] Adding direct route for proxy: %s -> %s (bypass VPN)", proxyIP, gatewayIP)
 
 	cmd := fmt.Sprintf("route -n add -host %s %s", proxyIP, gatewayIP)
 	out, err := ExecuteCommand(cmd)
 	if err != nil {
 		if strings.Contains(out, "File exists") || strings.Contains(err.Error(), "File exists") {
-			log.Infof("[Routing][Bypass] Route already exists for %s; leaving it unchanged", proxyIP)
+			log.Debugf(Category, "[Routing][Bypass] Route already exists for %s; leaving it unchanged", proxyIP)
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to add proxy route: %w, output: %s", err, out)
 	} else {
-		log.Infof("[Routing][Bypass] OK: proxy route installed")
+		log.Debugf(Category, "[Routing][Bypass] OK: proxy route installed")
 	}
 
 	return true, nil
@@ -87,11 +87,11 @@ func EnsureProxyRoute(proxyIP, gatewayIP string) (bool, error) {
 
 func DeleteProxyRoute(proxyIP, gatewayIP string) error {
 	if isLoopbackIP(proxyIP) {
-		log.Infof("[Routing][Bypass] Skipping direct route removal for loopback server: %s", proxyIP)
+		log.Debugf(Category, "[Routing][Bypass] Skipping direct route removal for loopback server: %s", proxyIP)
 		return nil
 	}
 
-	log.Infof("[Routing][Bypass] Removing direct route for proxy: %s -> %s", proxyIP, gatewayIP)
+	log.Debugf(Category, "[Routing][Bypass] Removing direct route for proxy: %s -> %s", proxyIP, gatewayIP)
 
 	cmd := fmt.Sprintf("route -n delete -host %s %s", proxyIP, gatewayIP)
 	out, err := ExecuteCommand(cmd)
@@ -99,7 +99,7 @@ func DeleteProxyRoute(proxyIP, gatewayIP string) error {
 		return fmt.Errorf("failed to remove proxy route: %w, output: %s", err, out)
 	}
 
-	log.Infof("[Routing][Bypass] OK: proxy route removed")
+	log.Debugf(Category, "[Routing][Bypass] OK: proxy route removed")
 	return nil
 }
 
@@ -111,7 +111,7 @@ func isLoopbackIP(ip string) bool {
 var ipv6DefaultSubnets = []string{"::/1", "8000::/1"}
 
 func startIPv6Block(tunName string) error {
-	log.Infof("[Routing][IPv6] Installing IPv6 sink routes via %s", tunName)
+	log.Debugf(Category, "[Routing][IPv6] Installing IPv6 sink routes via %s", tunName)
 
 	deleteIPv6SinkRoutes(tunName, false)
 
@@ -121,7 +121,7 @@ func startIPv6Block(tunName string) error {
 		out, err := ExecuteCommand(cmd)
 		if err != nil {
 			if strings.Contains(out, "File exists") || strings.Contains(err.Error(), "File exists") {
-				log.Infof("[Routing][IPv6] Sink route already exists for %s", subnet)
+				log.Debugf(Category, "[Routing][IPv6] Sink route already exists for %s", subnet)
 				continue
 			}
 			errs = append(errs, fmt.Sprintf("%s via %s: %v, output: %s", subnet, tunName, err, out))
@@ -132,24 +132,24 @@ func startIPv6Block(tunName string) error {
 		return fmt.Errorf("failed to install IPv6 sink routes: %s", strings.Join(errs, "; "))
 	}
 
-	log.Infof("[Routing][IPv6][OK] IPv6 sink routes installed via %s", tunName)
+	log.Debugf(Category, "[Routing][IPv6][OK] IPv6 sink routes installed via %s", tunName)
 	return nil
 }
 
 func stopIPv6Block(tunName string) error {
-	log.Infof("[Routing][IPv6] Removing IPv6 sink routes")
+	log.Debugf(Category, "[Routing][IPv6] Removing IPv6 sink routes")
 	if tunName == "" {
-		log.Infof("[Routing][IPv6] Skipping IPv6 sink cleanup: TUN interface is not known")
+		log.Debugf(Category, "[Routing][IPv6] Skipping IPv6 sink cleanup: TUN interface is not known")
 		return nil
 	}
 
 	errs := deleteIPv6SinkRoutes(tunName, true)
 	if len(errs) > 0 {
-		log.Infof("[Routing][IPv6][WARN] Failed to remove some IPv6 sink routes: %s", strings.Join(errs, "; "))
+		log.Debugf(Category, "[Routing][IPv6][WARN] Failed to remove some IPv6 sink routes: %s", strings.Join(errs, "; "))
 		return fmt.Errorf("%s", strings.Join(errs, "; "))
 	}
 
-	log.Infof("[Routing][IPv6][OK] IPv6 sink routes removed")
+	log.Debugf(Category, "[Routing][IPv6][OK] IPv6 sink routes removed")
 	return nil
 }
 
@@ -170,12 +170,12 @@ func deleteIPv6SinkRoutes(tunName string, collectErrors bool) []string {
 }
 
 func StartRouting(proxyIP, gatewayIP, tunName string) error {
-	log.Infof("[Routing][Start] Switching system routing to VPN (tun=%s)", tunName)
+	log.Debugf(Category, "[Routing][Start] Switching system routing to VPN (tun=%s)", tunName)
 
-	log.Infof("[Routing][Start] Deleting existing default route (if any)")
+	log.Debugf(Category, "[Routing][Start] Deleting existing default route (if any)")
 	_, _ = ExecuteCommand("route -n delete default")
 
-	log.Infof("[Routing][Start] Setting default route -> %s (VPN)", tunName)
+	log.Debugf(Category, "[Routing][Start] Setting default route -> %s (VPN)", tunName)
 	cmdDefault := fmt.Sprintf("route -n add default -interface %s", tunName)
 	if _, err := ExecuteCommand(cmdDefault); err != nil {
 		return fmt.Errorf("failed to set default via %s: %w", tunName, err)
@@ -186,44 +186,44 @@ func StartRouting(proxyIP, gatewayIP, tunName string) error {
 	}
 
 	if isLoopbackIP(proxyIP) {
-		log.Infof("[Routing][Start] Skipping proxy bypass route for loopback server: %s", proxyIP)
+		log.Debugf(Category, "[Routing][Start] Skipping proxy bypass route for loopback server: %s", proxyIP)
 	} else {
-		log.Infof("[Routing][Start] Ensuring VPN server bypass route: %s -> %s", proxyIP, gatewayIP)
+		log.Debugf(Category, "[Routing][Start] Ensuring VPN server bypass route: %s -> %s", proxyIP, gatewayIP)
 		cmdProxy := fmt.Sprintf("route -n add -host %s %s", proxyIP, gatewayIP)
 		if _, err := ExecuteCommand(cmdProxy); err != nil {
-			log.Infof("[Routing][Start] WARN: proxy route may already exist: %v", err)
+			log.Debugf(Category, "[Routing][Start] WARN: proxy route may already exist: %v", err)
 		}
 	}
 
-	log.Infof("[Routing][Start] OK: default=VPN(%s), proxy bypass=%s->%s", tunName, proxyIP, gatewayIP)
+	log.Debugf(Category, "[Routing][Start] OK: default=VPN(%s), proxy bypass=%s->%s", tunName, proxyIP, gatewayIP)
 
 	return nil
 }
 
 func StopRouting(proxyIP, gatewayIP, tunName string) error {
-	log.Infof("[Routing][Stop] Restoring system routing")
+	log.Debugf(Category, "[Routing][Stop] Restoring system routing")
 
 	if err := stopIPv6Block(tunName); err != nil {
-		log.Infof("[Routing][Stop][WARN] IPv6 block cleanup failed: %v", err)
+		log.Debugf(Category, "[Routing][Stop][WARN] IPv6 block cleanup failed: %v", err)
 	}
 
 	if isLoopbackIP(proxyIP) {
-		log.Infof("[Routing][Stop] Skipping proxy bypass removal for loopback server: %s", proxyIP)
+		log.Debugf(Category, "[Routing][Stop] Skipping proxy bypass removal for loopback server: %s", proxyIP)
 	} else {
-		log.Infof("[Routing][Stop] Removing proxy bypass route: %s", proxyIP)
+		log.Debugf(Category, "[Routing][Stop] Removing proxy bypass route: %s", proxyIP)
 		_ = DeleteProxyRoute(proxyIP, gatewayIP)
 	}
 
-	log.Infof("[Routing][Stop] Removing VPN default route")
+	log.Debugf(Category, "[Routing][Stop] Removing VPN default route")
 	_, _ = ExecuteCommand("route -n delete default")
 
-	log.Infof("[Routing][Stop] Restoring default route -> %s (physical network)", gatewayIP)
+	log.Debugf(Category, "[Routing][Stop] Restoring default route -> %s (physical network)", gatewayIP)
 	cmdRestore := fmt.Sprintf("route -n add default %s", gatewayIP)
 	if _, err := ExecuteCommand(cmdRestore); err != nil {
 		return fmt.Errorf("failed to restore default: %w", err)
 	}
 
-	log.Infof("[Routing][Stop] OK: default route restored via %s", gatewayIP)
+	log.Debugf(Category, "[Routing][Stop] OK: default route restored via %s", gatewayIP)
 
 	return nil
 }

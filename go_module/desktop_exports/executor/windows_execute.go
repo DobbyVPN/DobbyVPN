@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 
+	"go_module/core/common"
 	"go_module/desktop_exports/proto"
 	"go_module/grpcproto"
 
@@ -25,16 +26,16 @@ func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", service.serverPort))
 	if err != nil {
-		log.Infof("[ERROR] failed to listen: %v", err)
+		log.Debugf(common.Category, "[ERROR] failed to listen: %v", err)
 	}
 	grpcServer := grpc.NewServer()
 
 	grpcproto.RegisterVpnServer(grpcServer, &proto.Server{})
 
 	go func() {
-		log.Infof("server listening at %v", lis.Addr())
+		log.Debugf(common.Category, "server listening at %v", lis.Addr())
 		if err := grpcServer.Serve(lis); err != nil {
-			log.Infof("[ERROR] failed to serve: %v", err)
+			log.Debugf(common.Category, "[ERROR] failed to serve: %v", err)
 		}
 	}()
 
@@ -45,7 +46,7 @@ loop:
 			grpcServer.GracefulStop()
 			break loop
 		default:
-			log.Infof("Unexpected service control request #%d", c)
+			log.Debugf(common.Category, "Unexpected service control request #%d", c)
 		}
 	}
 
@@ -72,7 +73,7 @@ func run(port int) error {
 
 	grpcproto.RegisterVpnServer(s, &proto.Server{})
 
-	log.Infof("server listening at %v", lis.Addr())
+	log.Debugf(common.Category, "server listening at %v", lis.Addr())
 	if err := s.Serve(lis); err != nil {
 		return fmt.Errorf("failed to serve: %v", err)
 	}
@@ -81,7 +82,7 @@ func run(port int) error {
 }
 
 func (c *Executor) Execute(port int, mode string) {
-	log.Infof("Executing with mode: %v", mode)
+	log.Debugf(common.Category, "Executing with mode: %v", mode)
 
 	switch mode {
 	case "normal":
@@ -89,6 +90,6 @@ func (c *Executor) Execute(port int, mode string) {
 	case "service":
 		runService(port)
 	default:
-		log.Infof("[ERROR] Invalid run mode")
+		log.Debugf(common.Category, "[ERROR] Invalid run mode")
 	}
 }

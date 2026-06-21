@@ -23,6 +23,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var pathMonitor: Network.NWPathMonitor?
     private var lastPathSignature: String?
     private var loadSampler: DispatchSourceTimer?
+    private var healthCheckStateSampler: DispatchSourceTimer?
+    private var lastSharedHealthCheckState: Int32?
     private let memoryHighWaterLock = NSLock()
     private var memoryHighWaterMarkMB = 0.0
     private var tunnelStartedAt = Date()
@@ -356,6 +358,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         logs.writeLog(log: "startTunnel: all packet loops started")
+        startHealthCheck()
         logInterfacesDetailed(label: "AFTER_PROTOCOL_STARTUP")
         logResourceSnapshot(label: "AFTER_PROTOCOL_STARTUP")
     }
@@ -366,8 +369,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             log: "[tunnel:\(tunnelId)] stopTunnel reason=\(reason.rawValue) (\(reason)) " +
                 "userStopRequested=\(userStopRequested)"
         )
-        if !userStopRequested {
-            configsRepository.setIsUserInitStop(isUserInitStop: false)
+        configsRepository.setIsUserInitStop(isUserInitStop: false)
+        if userStopRequested {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel observed after app user-stop request")
+        } else {
             logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel observed without app user-stop request")
         }
         logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel clearing geo routing config")
@@ -397,6 +402,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func wake() {
         logs.writeLog(log: "[tunnel:\(tunnelId)] wake()")
+        publishHealthCheckState(label: "wake")
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
@@ -537,6 +543,51 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         timer.setEventHandler {}
         timer.cancel()
         logs.writeLog(log: "[tunnel:\(tunnelId)] LOAD_SAMPLER stopped reason=\(reason)")
+    }
+
+    private func startHealthCheck() {
+        stopHealthCheck(reason: "restart", markDisconnected: false)
+
+        logs.writeLog(log: "[tunnel:\(tunnelId)] HEALTH_CHECK starting in packet tunnel extension")
+        configsRepository.setHealthCheckState(state: 1)
+        Cloak_outlineInitHealthCheck()
+        Cloak_outlineStartHealthCheck()
+        publishHealthCheckState(label: "start")
+
+        let queue = DispatchQueue(label: "vpn.dobby.app.tunnel.healthcheck.\(tunnelId)", qos: .utility)
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 1.0, repeating: 1.0, leeway: .milliseconds(100))
+        timer.setEventHandler { [weak self] in
+            self?.publishHealthCheckState(label: "periodic")
+        }
+        healthCheckStateSampler = timer
+        timer.resume()
+        logs.writeLog(log: "[tunnel:\(tunnelId)] HEALTH_CHECK sampler started intervalMs=1000")
+    }
+
+    private func stopHealthCheck(reason: String, markDisconnected: Bool = true) {
+        if let timer = healthCheckStateSampler {
+            healthCheckStateSampler = nil
+            timer.setEventHandler {}
+            timer.cancel()
+            logs.writeLog(log: "[tunnel:\(tunnelId)] HEALTH_CHECK sampler stopped reason=\(reason)")
+        }
+
+        logs.writeLog(log: "[tunnel:\(tunnelId)] HEALTH_CHECK stop requested reason=\(reason)")
+        Cloak_outlineStopHealthCheck()
+        if markDisconnected {
+            configsRepository.setHealthCheckState(state: 0)
+            lastSharedHealthCheckState = 0
+        }
+    }
+
+    private func publishHealthCheckState(label: String) {
+        let state = Cloak_outlineGetConnectionState()
+        configsRepository.setHealthCheckState(state: state)
+        if lastSharedHealthCheckState != state || label != "periodic" {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] HEALTH_CHECK state=\(state) source=\(label)")
+        }
+        lastSharedHealthCheckState = state
     }
 
     private func loadSnapshotDetails() -> String {
@@ -693,6 +744,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func teardownForStop(reason: String) async {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
         logResourceSnapshot(label: "TEARDOWN_BEGIN reason=\(reason)")
+        stopHealthCheck(reason: reason)
         stopLoadSampler(reason: reason)
 
         do {

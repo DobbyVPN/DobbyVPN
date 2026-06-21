@@ -7,15 +7,16 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/cbeuw/Cloak/internal/client"
-	"github.com/cbeuw/Cloak/internal/common"
-	mux "github.com/cbeuw/Cloak/internal/multiplex"
-	"github.com/sirupsen/logrus"
 	"go_module/log"
 	"net"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cbeuw/Cloak/internal/client"
+	"github.com/cbeuw/Cloak/internal/common"
+	mux "github.com/cbeuw/Cloak/internal/multiplex"
+	"github.com/sirupsen/logrus"
 )
 
 var errListenerClosed = errors.New("listener closed")
@@ -86,7 +87,7 @@ func NewCkClient(config Config) *CkClient {
 func (c *CkClient) Connect() (returnErr error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Infof("ck-client Connect: recovered from panic: %v", r)
+			log.Debugf("ck-client", "ck-client Connect: recovered from panic: %v", r)
 			returnErr = fmt.Errorf("panic in Connect: %v", r)
 		}
 	}()
@@ -99,7 +100,7 @@ func (c *CkClient) Connect() (returnErr error) {
 	defer c.mu.Unlock()
 
 	c.connected = true
-	log.Infof("ck-client connected")
+	log.Debugf("ck-client", "ck-client connected")
 
 	localConfig, remoteConfig, authInfo, err := c.config.ProcessRawConfig(common.RealWorldState)
 	if err != nil {
@@ -110,7 +111,7 @@ func (c *CkClient) Connect() (returnErr error) {
 	var adminUID []byte
 	if len(c.config.UID) != 0 {
 		adminUID = c.config.UID
-		log.Infof("ck-client: adminUID set to %s", adminUID)
+		log.Debugf("ck-client", "ck-client: adminUID set to %s", adminUID)
 	}
 
 	var seshMaker func() *mux.Session
@@ -118,14 +119,14 @@ func (c *CkClient) Connect() (returnErr error) {
 	d := &net.Dialer{Control: protector, KeepAlive: remoteConfig.KeepAlive}
 
 	if adminUID != nil {
-		log.Infof("API base is %v", localConfig.LocalAddr)
+		log.Debugf("API base", "API base is %v", localConfig.LocalAddr)
 		authInfo.UID = adminUID
 		authInfo.SessionId = 0
 		remoteConfig.NumConn = 1
 
-		log.Infof("Before seshMaker")
+		log.Debugf("Before seshMaker", "Before seshMaker")
 		seshMaker = func() *mux.Session {
-			log.Infof("In seshMaker")
+			log.Debugf("In seshMaker", "In seshMaker")
 			c.session = client.MakeSession(remoteConfig, authInfo, d)
 			return c.session
 		}
@@ -136,7 +137,7 @@ func (c *CkClient) Connect() (returnErr error) {
 		} else {
 			network = "TCP"
 		}
-		log.Infof("ck-client: Listening on %v %v for %v client", network, localConfig.LocalAddr, authInfo.ProxyMethod)
+		log.Debugf("ck-client", "ck-client: Listening on %v %v for %v client", network, localConfig.LocalAddr, authInfo.ProxyMethod)
 		seshMaker = func() *mux.Session {
 			authInfo := authInfo // copy the struct because we are overwriting SessionId
 
@@ -167,28 +168,28 @@ func (c *CkClient) Connect() (returnErr error) {
 				if v, ok := r.(error); ok && errors.Is(v, errListenerClosed) {
 					return
 				}
-				log.Infof("ck-client: recovered from panic from: %v", r)
+				log.Debugf("ck-client", "ck-client: recovered from panic from: %v", r)
 			}
 		}()
 		if authInfo.Unordered {
 			udpAddr, _ := net.ResolveUDPAddr("udp", localConfig.LocalAddr)
 			conn, err := net.ListenUDP("udp", udpAddr)
 			if err != nil {
-				log.Infof("ck-client: goroutines: err %v\n", err)
+				log.Debugf("ck-client", "ck-client: goroutines: err %v\n", err)
 				ready <- fmt.Errorf("failed to listen on UDP %s: %w", localConfig.LocalAddr, err)
 				return
 			}
 
 			c.udpConn = conn
 
-			log.Infof("ck-client: start listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
+			log.Debugf("ck-client", "ck-client: start listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
 			ready <- nil
 			client.RouteUDP(func() (*net.UDPConn, error) { return conn, nil }, localConfig.Timeout, remoteConfig.Singleplex, seshMaker)
-			log.Infof("ck-client: stop listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
+			log.Debugf("ck-client", "ck-client: stop listening on UDP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
 		} else {
 			baseListener, err := net.Listen("tcp", localConfig.LocalAddr)
 			if err != nil {
-				log.Infof("ck-client: goroutines: err %v\n", err)
+				log.Debugf("ck-client", "ck-client: goroutines: err %v\n", err)
 				ready <- fmt.Errorf("failed to listen on TCP %s: %w", localConfig.LocalAddr, err)
 				return
 			}
@@ -196,10 +197,10 @@ func (c *CkClient) Connect() (returnErr error) {
 			l := &closeQuiescingListener{Listener: baseListener}
 			c.listener = l
 
-			log.Infof("ck-client: start listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
+			log.Debugf("ck-client", "ck-client: start listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
 			ready <- nil
 			client.RouteTCP(l, localConfig.Timeout, remoteConfig.Singleplex, seshMaker)
-			log.Infof("ck-client: stop listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
+			log.Debugf("ck-client", "ck-client: stop listening on TCP %v for %v client", localConfig.LocalAddr, authInfo.ProxyMethod)
 		}
 	}()
 
@@ -229,19 +230,19 @@ func (c *CkClient) Disconnect() error {
 	defer c.mu.Unlock()
 
 	if !c.connected {
-		log.Infof("ck-client: already disconnected")
+		log.Debugf("ck-client", "ck-client: already disconnected")
 		return nil
 	}
 
-	log.Infof("ck-client: initiating disconnect...")
+	log.Debugf("ck-client", "ck-client: initiating disconnect...")
 	c.connected = false
 
 	if c.listener != nil {
 		addr := c.listener.Addr().String()
 		if err := c.listener.Close(); err != nil {
-			log.Infof("ck-client: error closing TCP listener %v: %v", addr, err)
+			log.Debugf("ck-client", "ck-client: error closing TCP listener %v: %v", addr, err)
 		} else {
-			log.Infof("ck-client: TCP listener %v closed", addr)
+			log.Debugf("ck-client", "ck-client: TCP listener %v closed", addr)
 		}
 		c.listener = nil
 	}
@@ -249,18 +250,18 @@ func (c *CkClient) Disconnect() error {
 	if c.udpConn != nil {
 		addr := c.udpConn.LocalAddr().String()
 		if err := c.udpConn.Close(); err != nil {
-			log.Infof("ck-client: error closing UDP conn %v: %v", addr, err)
+			log.Debugf("ck-client", "ck-client: error closing UDP conn %v: %v", addr, err)
 		} else {
-			log.Infof("ck-client: UDP listener %v closed", addr)
+			log.Debugf("ck-client", "ck-client: UDP listener %v closed", addr)
 		}
 		c.udpConn = nil
 	}
 
 	if c.session != nil {
-		log.Infof("ck-client: closing session...")
+		log.Debugf("ck-client", "ck-client: closing session...")
 		c.session.Close()
 		c.session = nil
-		log.Infof("ck-client: session closed")
+		log.Debugf("ck-client", "ck-client: session closed")
 	}
 
 	// Best-effort: wait for routing goroutine to exit so stop is deterministic.
@@ -269,12 +270,12 @@ func (c *CkClient) Disconnect() error {
 		case <-c.routeDone:
 			// ok
 		case <-time.After(2 * time.Second):
-			log.Infof("ck-client: routing goroutine did not exit within timeout")
+			log.Debugf("ck-client", "ck-client: routing goroutine did not exit within timeout")
 		}
 		c.routeDone = nil
 	}
 
-	log.Infof("ck-client: fully disconnected")
+	log.Debugf("ck-client", "ck-client: fully disconnected")
 	return nil
 }
 
@@ -286,5 +287,9 @@ func (c *CkClient) Refresh() error {
 	if err := c.Connect(); err != nil {
 		return fmt.Errorf("failed to refresh cloak client: connect failed: %w", err)
 	}
+	return nil
+}
+
+func (c *CkClient) HealthCheck() error {
 	return nil
 }

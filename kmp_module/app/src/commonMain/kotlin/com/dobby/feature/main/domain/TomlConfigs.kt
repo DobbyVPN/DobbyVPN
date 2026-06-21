@@ -199,8 +199,15 @@ data class XrayClientConfig(
 
 
 @Serializable
+data class TelemetryConfig(
+    val Endpoint: String,
+    val ApiToken: String,
+)
+
+@Serializable
 data class TomlConfigs(
     val Description: String? = null,
+    val Telemetry: TelemetryConfig? = null,
     val Outline: OutlineConfig? = null,
     val AmneziaWG: AmneziaWGConfig? = null,
     val Xray: XrayClientConfig? = null,

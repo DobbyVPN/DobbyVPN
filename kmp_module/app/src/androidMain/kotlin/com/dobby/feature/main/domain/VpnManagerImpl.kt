@@ -15,7 +15,7 @@ class VpnManagerImpl(
 
     override fun stop() {
         DobbyVpnService
-            .createIntent(context)
-            .let(context::stopService)
+            .instance
+            ?.stopService()
     }
 }

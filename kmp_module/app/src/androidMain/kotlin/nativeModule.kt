@@ -2,20 +2,18 @@ import android.content.Context.MODE_PRIVATE
 import com.dobby.di.makeNativeModule
 import com.dobby.domain.DobbyConfigsRepositoryImpl
 import com.dobby.feature.authentication.domain.AuthenticationManagerImpl
-import com.dobby.feature.diagnostic.IpRepositoryImpl
-import com.dobby.feature.diagnostic.domain.HealthCheckImpl
+import com.dobby.feature.diagnostic.domain.HealthCheckManagerImpl
 import com.dobby.feature.logging.CopyLogsInteractorImpl
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.LoggerManagerImpl
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.VpnManagerImpl
 import com.dobby.feature.vpn_service.CloakLibFacade
 import com.dobby.feature.vpn_service.OutlineLibFacade
-import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
 import com.dobby.feature.vpn_service.XrayLibFacade
-import com.dobby.feature.vpn_service.domain.xray.XrayLibFacadeImpl
-
+import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
 import com.dobby.feature.vpn_service.domain.cloak.CloakConnectionInteractor
 import com.dobby.feature.vpn_service.domain.cloak.CloakLibFacadeImpl
 import com.dobby.feature.vpn_service.domain.descriptor.FDManager
@@ -23,6 +21,7 @@ import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
 import com.dobby.feature.vpn_service.domain.outline.OutlineLibFacadeImpl
 import com.dobby.feature.vpn_service.domain.xray.XrayInteractor
+import com.dobby.feature.vpn_service.domain.xray.XrayLibFacadeImpl
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
@@ -30,7 +29,6 @@ val androidMainModule = makeNativeModule(
     copyLogsInteractor = { CopyLogsInteractorImpl(get()) },
     logEventsChannel = { LogEventsChannel() },
     logsRepository = { LogsRepository(logEventsChannel = get()) },
-    ipRepository = { IpRepositoryImpl(get()) },
     configsRepository = {
         DobbyConfigsRepositoryImpl(
             prefs = androidContext().getSharedPreferences("DobbyPrefs", MODE_PRIVATE)
@@ -39,7 +37,8 @@ val androidMainModule = makeNativeModule(
     connectionStateRepository = { ConnectionStateRepository() },
     vpnManager = { VpnManagerImpl(androidContext()) },
     authenticationManager = { AuthenticationManagerImpl(androidContext()) },
-    healthCheck = { HealthCheckImpl(get()) }
+    healthCheckManager = { HealthCheckManagerImpl(get()) },
+    loggerManager = { LoggerManagerImpl(get(), get()) }
 )
 
 val androidVpnModule = module {
@@ -52,5 +51,5 @@ val androidVpnModule = module {
     single<AmneziaWGInteractor> { AmneziaWGInteractor(get(), get()) }
     single<XrayInteractor> { XrayInteractor(get(), get(), get(), get()) }
     single<GeoRouting> { GeoRouting( get() ) }
-    single<FDManager> { FDManager( get() ) }
+    single<FDManager> { FDManager() }
 }

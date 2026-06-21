@@ -3,6 +3,10 @@ import UIKit
 import app
 import CoreLocation
 
+private final class NotificationObserverBox: @unchecked Sendable {
+    var observer: NSObjectProtocol?
+}
+
 class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationManagerDelegate {
 
     private var context = LAContext()
@@ -41,8 +45,6 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
     }
 
     func requireLocationService(endingFunc: @escaping (KotlinBoolean) -> Void) {
-        let locationManager = CLLocationManager()
-
         func isLocationEnabled() -> Bool {
             return CLLocationManager.locationServicesEnabled()
         }
@@ -67,19 +69,25 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
                 return
             }
             
-            var observer: NSObjectProtocol?
-            observer = NotificationCenter.default.addObserver(
+            let observerBox = NotificationObserverBox()
+            observerBox.observer = NotificationCenter.default.addObserver(
                 forName: UIApplication.didBecomeActiveNotification,
                 object: nil,
                 queue: .main
-            ) { _ in
-                if let obs = observer { NotificationCenter.default.removeObserver(obs) }
+            ) { [observerBox] _ in
+                if let observer = observerBox.observer {
+                    NotificationCenter.default.removeObserver(observer)
+                    observerBox.observer = nil
+                }
                 endingFunc(KotlinBoolean(value: isLocationEnabled()))
             }
 
             UIApplication.shared.open(url) { success in
                 if !success {
-                    if let obs = observer { NotificationCenter.default.removeObserver(obs) }
+                    if let observer = observerBox.observer {
+                        NotificationCenter.default.removeObserver(observer)
+                        observerBox.observer = nil
+                    }
                     endingFunc(KotlinBoolean(value: false))
                 }
             }
@@ -90,7 +98,13 @@ class AuthenticationManagerImpl: NSObject, AuthenticationManager, CLLocationMana
         })
 
         // Get the top-most view controller to present the alert
-        if let rootVC = UIApplication.shared.windows.first?.rootViewController {
+        let rootVC = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }?
+            .rootViewController
+
+        if let rootVC {
             rootVC.present(alert, animated: true)
         } else {
             endingFunc(KotlinBoolean(value: false))

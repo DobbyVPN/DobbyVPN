@@ -6,22 +6,22 @@ import (
 	"context"
 
 	"go_module/desktop_exports/api"
+	"go_module/desktop_exports/common"
 	"go_module/grpcproto"
 
 	"go_module/log"
 )
 
 func (s *Server) StartCloakClient(_ context.Context, in *grpcproto.StartCloakClientRequest) (*grpcproto.Empty, error) {
-	log.Infof("StartCloakClient")
+	log.Debugf(common.Category, "StartCloakClient")
 	if err := api.StartCloakClient(in.GetLocalHost(), in.GetLocalPort(), in.GetConfig(), in.GetUdp()); err != nil {
-		log.Infof("StartCloakClient failed: %v", err)
+		log.Debugf(common.Category, "StartCloakClient failed: %v", err)
 		return nil, err
 	}
 	return &grpcproto.Empty{}, nil
 }
 
 func (s *Server) StopCloakClient(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
-	log.Infof("StopCloakClient")
 	go api.StopCloakClient()
 	return &grpcproto.Empty{}, nil
 }

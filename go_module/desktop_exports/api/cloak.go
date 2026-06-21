@@ -4,21 +4,22 @@ package api
 
 import (
 	"go_module/cloak"
+	"go_module/desktop_exports/common"
 	"go_module/log"
 )
 
 func StartCloakClient(localHost, localPort, config string, udp bool) error {
-	log.Infof("StartCloakClient")
+	log.Debugf(common.Category, "StartCloakClient")
 	if err := cloak.StartCloakClient(
 		localHost,
 		localPort,
 		config,
 		bool(udp),
 	); err != nil {
-		log.Infof("StartCloakClient failed: %v", err)
+		log.Debugf(common.Category, "StartCloakClient failed: %v", err)
 		return err
 	}
-	log.Infof("end StartCloakClient")
+	log.Debugf(common.Category, "end StartCloakClient")
 	return nil
 }
 

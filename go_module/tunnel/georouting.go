@@ -33,11 +33,11 @@ func IsBypass(metadata *M.Metadata) bool {
 
 	for _, route := range defaultBypassCIDRs {
 		if route.Contains(stdIP) {
-			log.Infof("[Router] BYPASS hit for IP: %s", stdIP)
+			log.Debugf(Category, "[Router] BYPASS hit for IP: %s", stdIP)
 			return true
 		}
 	}
-	log.Infof("[Router] PROXY route for IP: %s", stdIP)
+	log.Debugf(Category, "[Router] PROXY route for IP: %s", stdIP)
 	return false
 }
 
@@ -60,7 +60,7 @@ func SetGeoRoutingConf(cidrs string) {
 		mustCIDR(cidr)
 	}
 
-	log.Infof("[Routing] Set defaultBypassCIDRs: %v", summarizeCIDRs(defaultBypassCIDRs))
+	log.Debugf(Category, "[Routing] Set defaultBypassCIDRs: %v", summarizeCIDRs(defaultBypassCIDRs))
 }
 
 func ClearGeoRoutingConf() {
@@ -68,7 +68,7 @@ func ClearGeoRoutingConf() {
 	defer routesMu.Unlock()
 
 	defaultBypassCIDRs = nil
-	log.Infof("[Routing] Cleared defaultBypassCIDRs")
+	log.Debugf(Category, "[Routing] Cleared defaultBypassCIDRs")
 }
 
 func summarizeCIDRs(cidrs []*net.IPNet) []string {
@@ -95,7 +95,7 @@ func resolveHostToCIDRs(host string) []*net.IPNet {
 	ctx := context.Background()
 	ips, err := resolver.LookupIPAddr(ctx, host)
 	if err != nil {
-		log.Infof("[Bypass] resolve failed for %s: %v", host, err)
+		log.Debugf(Category, "[Bypass] resolve failed for %s: %v", host, err)
 		return nil
 	}
 
@@ -115,7 +115,7 @@ func resolveHostToCIDRs(host string) []*net.IPNet {
 func addBypassHost(host string) {
 	cidrs := resolveHostToCIDRs(host)
 	if len(cidrs) == 0 {
-		log.Infof("[Bypass] no IPs resolved for %s", host)
+		log.Debugf(Category, "[Bypass] no IPs resolved for %s", host)
 		return
 	}
 
@@ -125,6 +125,6 @@ func addBypassHost(host string) {
 	defaultBypassCIDRs = append(defaultBypassCIDRs, cidrs...)
 
 	for _, c := range cidrs {
-		log.Infof("[Bypass] added %s for host %s", c.String(), host)
+		log.Debugf(Category, "[Bypass] added %s for host %s", c.String(), host)
 	}
 }
