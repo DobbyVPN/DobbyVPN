@@ -101,6 +101,18 @@ class DobbyVpnService(
         }
     }
 
+    fun switchProtocol(): Boolean {
+        synchronized(startStopLock) {
+            logger.log("switchProtocol requested")
+            stopProtocolsForSwitch()
+            georoutingLibrary.SetGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
+            val runningInterface = dobbyConfigsRepository.getVpnInterface()
+            val switched = startConfiguredProtocol(runningInterface)
+            logger.log("switchProtocol result=$switched")
+            return switched
+        }
+    }
+
     private fun stopCurrentLocked() {
         stopProtocolsForSwitch()
         georoutingLibrary.ClearGeoRoutingConf()

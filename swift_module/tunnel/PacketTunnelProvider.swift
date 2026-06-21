@@ -28,6 +28,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let memoryHighWaterLock = NSLock()
     private var memoryHighWaterMarkMB = 0.0
     private var tunnelStartedAt = Date()
+    private var protocolSwitchInProgress = false
 
     private struct MemorySnapshot {
         let physFootprintMB: Double
@@ -384,6 +385,30 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         startHealthCheck()
     }
 
+    @MainActor
+    private func switchActiveProtocolFromAppMessage() async -> Bool {
+        if protocolSwitchInProgress {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] switchProtocol ignored: switch already in progress")
+            return false
+        }
+
+        protocolSwitchInProgress = true
+        defer { protocolSwitchInProgress = false }
+
+        logs.writeLog(log: "[tunnel:\(tunnelId)] switchProtocol begin")
+        stopProtocolsForSwitch(reason: "app message switchProtocol")
+        do {
+            try await startActiveProtocol(reason: "app message switchProtocol", teardownOnFailure: false)
+            logs.writeLog(log: "[tunnel:\(tunnelId)] switchProtocol success")
+            logResourceSnapshot(label: "AFTER_PROTOCOL_SWITCH")
+            return true
+        } catch {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] switchProtocol failed: \(error.localizedDescription)")
+            stopProtocolsForSwitch(reason: "app message switchProtocol failure cleanup")
+            return false
+        }
+    }
+
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         let appStopRequested = configsRepository.getIsUserInitStop()
         logs.writeLog(
@@ -433,6 +458,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let response = "Memory:\(reportMemoryUsageMB())".data(using: .utf8)
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory responseBytes=\(response?.count ?? -1)")
             completionHandler?(response)
+        } else if let msg = String(data: messageData, encoding: .utf8), msg == "switchProtocol" {
+            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage switchProtocol")
+            Task {
+                let ok = await self.switchActiveProtocolFromAppMessage()
+                let response = (ok ? "ok" : "error").data(using: .utf8)
+                completionHandler?(response)
+            }
         } else {
             if let msg = String(data: messageData, encoding: .utf8) {
                 logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage unknown='\(msg)' echo bytes=\(messageData.count)")
