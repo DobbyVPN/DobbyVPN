@@ -1,5 +1,7 @@
 package com.dobby.feature.main.domain
 
+import kotlinx.serialization.Serializable
+
 interface DobbyConfigsRepository :
     DobbyConfigsRepositoryOutline,
     DobbyConfigsRepositoryCloak,
@@ -14,6 +16,14 @@ interface DobbyConfigsRepository :
     fun getConnectionConfig(): String
 
     fun setConnectionConfig(connectionConfig: String)
+
+    fun getConnectionProfiles(): String
+
+    fun setConnectionProfiles(connectionProfiles: String)
+
+    fun getActiveConnectionProfileIndex(): Int
+
+    fun setActiveConnectionProfileIndex(index: Int)
 
     fun couldStart(): Boolean
 
@@ -34,6 +44,7 @@ interface DobbyConfigsRepository :
     fun setGeoRoutingConf(geoRoutingConf: String)
 }
 
+@Serializable
 enum class VpnInterface {
     CLOAK_OUTLINE,
     AMNEZIA_WG,
