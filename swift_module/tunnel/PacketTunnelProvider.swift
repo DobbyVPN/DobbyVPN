@@ -28,6 +28,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let memoryHighWaterLock = NSLock()
     private var memoryHighWaterMarkMB = 0.0
     private var tunnelStartedAt = Date()
+    private var protocolSwitchInProgress = false
 
     private struct MemorySnapshot {
         let physFootprintMB: Double
@@ -316,51 +317,96 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "Finish go logger init")
         Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
 
-        logs.writeLog(log: "[tunnel:\(tunnelId)] selected vpnInterface=\(vpnInterface)")
+        do {
+            try await startActiveProtocol(reason: "startTunnel", teardownOnFailure: true)
+        } catch {
+            throw error
+        }
+
+        logs.writeLog(log: "startTunnel: all packet loops started")
+        logInterfacesDetailed(label: "AFTER_PROTOCOL_STARTUP")
+        logResourceSnapshot(label: "AFTER_PROTOCOL_STARTUP")
+    }
+
+    private func startActiveProtocol(reason: String, teardownOnFailure: Bool) async throws {
+        let vpnInterface = configsRepository.getVpnInterface()
+        logs.writeLog(log: "[tunnel:\(tunnelId)] selected vpnInterface=\(vpnInterface) reason=\(reason)")
+        Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
+
         if vpnInterface == VpnInterface.xray {
             do {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startXRay begin")
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startXRay begin reason=\(reason)")
                 try xrayInteractor.startXRay()
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startXRay success")
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startXRay success reason=\(reason)")
             } catch {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startXRay failed: \(error.localizedDescription)")
-                await teardownForStop(reason: "startXRay failure")
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startXRay failed reason=\(reason): \(error.localizedDescription)")
+                if teardownOnFailure {
+                    await teardownForStop(reason: "startXRay failure")
+                }
                 throw error
             }
         } else if vpnInterface == VpnInterface.none {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] no VPN protocol selected")
-            await teardownForStop(reason: "no VPN protocol selected")
-            throw NSError(
+            logs.writeLog(log: "[tunnel:\(tunnelId)] no VPN protocol selected reason=\(reason)")
+            let error = NSError(
                 domain: "PacketTunnelProvider",
                 code: -4,
                 userInfo: [NSLocalizedDescriptionKey: "No VPN protocol selected"]
             )
+            if teardownOnFailure {
+                await teardownForStop(reason: "no VPN protocol selected")
+            }
+            throw error
         } else {
             do {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline begin")
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline begin reason=\(reason)")
                 try outlineInteractor.startOutline()
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline success")
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline success reason=\(reason)")
             } catch {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline failed: \(error.localizedDescription)")
-                await teardownForStop(reason: "startOutline failure")
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline failed reason=\(reason): \(error.localizedDescription)")
+                if teardownOnFailure {
+                    await teardownForStop(reason: "startOutline failure")
+                }
                 throw error
             }
             logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
             do {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak begin")
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak begin reason=\(reason)")
                 try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPort())
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak success")
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak success reason=\(reason)")
             } catch {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak failed: \(error.localizedDescription)")
-                await teardownForStop(reason: "startCloak failure")
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak failed reason=\(reason): \(error.localizedDescription)")
+                if teardownOnFailure {
+                    await teardownForStop(reason: "startCloak failure")
+                }
                 throw error
             }
         }
 
-        logs.writeLog(log: "startTunnel: all packet loops started")
         startHealthCheck()
-        logInterfacesDetailed(label: "AFTER_PROTOCOL_STARTUP")
-        logResourceSnapshot(label: "AFTER_PROTOCOL_STARTUP")
+    }
+
+    @MainActor
+    private func switchActiveProtocolFromAppMessage() async -> Bool {
+        if protocolSwitchInProgress {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] switchProtocol ignored: already in progress")
+            return false
+        }
+
+        protocolSwitchInProgress = true
+        defer { protocolSwitchInProgress = false }
+
+        logs.writeLog(log: "[tunnel:\(tunnelId)] switchProtocol begin")
+        stopProtocolsForSwitch(reason: "app message switchProtocol")
+        do {
+            try await startActiveProtocol(reason: "app message switchProtocol", teardownOnFailure: false)
+            logs.writeLog(log: "[tunnel:\(tunnelId)] switchProtocol success")
+            logResourceSnapshot(label: "AFTER_PROTOCOL_SWITCH")
+            return true
+        } catch {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] switchProtocol failed: \(error.localizedDescription)")
+            stopProtocolsForSwitch(reason: "app message switchProtocol failure cleanup")
+            return false
+        }
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
@@ -412,6 +458,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let response = "Memory:\(reportMemoryUsageMB())".data(using: .utf8)
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory responseBytes=\(response?.count ?? -1)")
             completionHandler?(response)
+        } else if let msg = String(data: messageData, encoding: .utf8), msg == "switchProtocol" {
+            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage switchProtocol")
+            Task {
+                let ok = await self.switchActiveProtocolFromAppMessage()
+                let response = (ok ? "ok" : "error").data(using: .utf8)
+                completionHandler?(response)
+            }
         } else {
             if let msg = String(data: messageData, encoding: .utf8) {
                 logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage unknown='\(msg)' echo bytes=\(messageData.count)")
@@ -741,31 +794,38 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     @MainActor
-    private func teardownForStop(reason: String) async {
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
-        logResourceSnapshot(label: "TEARDOWN_BEGIN reason=\(reason)")
+    private func stopProtocolsForSwitch(reason: String) {
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] stop begin (\(reason))")
         stopHealthCheck(reason: reason)
-        stopLoadSampler(reason: reason)
 
         do {
             try cloakInteractor.stopCloak()
         } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop cloak: \(error.localizedDescription)")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] could not stop cloak: \(error.localizedDescription)")
         }
 
         do {
             try outlineInteractor.stopOutline()
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] outline stopped")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] outline stopped")
         } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] could not stop outline: \(error.localizedDescription)")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] could not stop outline: \(error.localizedDescription)")
         }
 
         xrayInteractor.stopXRay()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] xray stop requested")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] xray stop requested")
 
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] clearing geo routing config")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] clearing geo routing config")
         Cloak_outlineClearGeoRoutingConf()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] geo routing clear returned")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] geo routing clear returned")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] stop end (\(reason))")
+    }
+
+    @MainActor
+    private func teardownForStop(reason: String) async {
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
+        logResourceSnapshot(label: "TEARDOWN_BEGIN reason=\(reason)")
+        stopLoadSampler(reason: reason)
+        stopProtocolsForSwitch(reason: reason)
 
         do {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] clearing tunnel network settings")

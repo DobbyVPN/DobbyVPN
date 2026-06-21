@@ -121,12 +121,26 @@ class DobbyVpnService : VpnService() {
                 }
 
                 geoRouting.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
-                when (dobbyConfigsRepository.getVpnInterface()) {
-                    VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
-                    VpnInterface.AMNEZIA_WG -> startAwg()
-                    VpnInterface.XRAY -> startXray()
-                    VpnInterface.NONE -> startNone()
+                startConfiguredProtocol()
+            }
+        }
+    }
+
+    fun switchProtocol(): Boolean {
+        logger.log("[svc:$serviceId] switchProtocol() requested vpnInterface=${vpnInterface?.fd} goTunFd=$goTunFd")
+        return runBlocking {
+            startStopMutex.withLock {
+                val hasActiveTunnel = vpnInterface != null || goTunFd != null
+                if (!hasActiveTunnel) {
+                    logger.log("[svc:$serviceId] switchProtocol(): no active tunnel")
+                    return@withLock false
                 }
+
+                stopProtocolsForSwitch()
+                geoRouting.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
+                val switched = startConfiguredProtocol()
+                logger.log("[svc:$serviceId] switchProtocol(): result=$switched")
+                switched
             }
         }
     }
@@ -150,60 +164,102 @@ class DobbyVpnService : VpnService() {
         logger.log("[svc:$serviceId] onDestroy() end")
     }
 
-    private suspend fun startCloakOutline() {
+    private suspend fun startConfiguredProtocol(): Boolean =
+        when (dobbyConfigsRepository.getVpnInterface()) {
+            VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
+            VpnInterface.AMNEZIA_WG -> startAwg()
+            VpnInterface.XRAY -> startXray()
+            VpnInterface.NONE -> startNone()
+        }
+
+    private suspend fun startCloakOutline(): Boolean {
         if (dobbyConfigsRepository.getIsCloakEnabled()) {
             if (!cloakConnectInteractor.startCloak()) {
                 connectionState.updateServiceStarted(false)
                 teardownVpn()
                 stopSelf()
-                return
+                return false
             }
         }
         if (!outlineInteractor.startOutline(instance)) {
             connectionState.updateServiceStarted(false)
             teardownVpn()
             stopSelf()
-            return
+            return false
         }
 
         connectionState.updateServiceStarted(true)
+        return true
     }
 
-    private suspend fun startAwg() {
+    private suspend fun startAwg(): Boolean {
         if (!awgInteractor.startAwg(instance)) {
             connectionState.updateServiceStarted(false)
             teardownVpn()
             stopSelf()
-            return
+            return false
         }
 
         connectionState.updateServiceStarted(true)
+        return true
     }
 
-    private suspend fun startXray() {
+    private suspend fun startXray(): Boolean {
         if (!dobbyConfigsRepository.getIsXrayEnabled()) {
             connectionState.updateServiceStarted(false)
             stopSelf()
-            return
+            return false
         }
 
         if (!xrayInteractor.startXray(instance)) {
             connectionState.updateServiceStarted(false)
             teardownVpn()
             stopSelf()
-            return
+            return false
         }
 
         connectionState.updateServiceStarted(true)
+        return true
     }
 
-    private fun startNone() {
+    private fun startNone(): Boolean {
         connectionState.tryUpdateServiceStarted(false)
+        return false
     }
 
     fun stopService() {
         logger.log("[svc:$serviceId] stopService() vpnInterface=${vpnInterface?.fd}")
-        teardownVpn()
+        runBlocking {
+            startStopMutex.withLock {
+                teardownVpn()
+            }
+        }
+    }
+
+    private suspend fun stopProtocolsForSwitch() {
+        logger.log("[svc:$serviceId] stopProtocolsForSwitch(): begin configuredInterface=${dobbyConfigsRepository.getVpnInterface()}")
+        runCatching {
+            outlineInteractor.stopOutline()
+        }.onFailure { e ->
+            logger.log("[svc:$serviceId] stopProtocolsForSwitch(): outline disconnect warning: ${e.message}")
+        }
+        runCatching {
+            xrayInteractor.stopXray(instance)
+        }.onFailure { e ->
+            logger.log("[svc:$serviceId] stopProtocolsForSwitch(): xray disconnect warning: ${e.message}")
+        }
+        runCatching {
+            awgInteractor.stopAwg()
+        }.onFailure { e ->
+            logger.log("[svc:$serviceId] stopProtocolsForSwitch(): awg disconnect warning: ${e.message}")
+        }
+        runCatching {
+            logger.log("Stopping Cloak client for protocol switch (if running)...")
+            cloakConnectInteractor.disconnect()
+        }.onFailure { e ->
+            logger.log("[svc:$serviceId] stopProtocolsForSwitch(): failed to stop Cloak: ${e.message}")
+        }
+        logger.log("[svc:$serviceId] stopProtocolsForSwitch(): end")
     }
 
     @Synchronized
@@ -212,29 +268,7 @@ class DobbyVpnService : VpnService() {
         logger.log("[svc:$serviceId] teardownVpn(): begin fd=$fdBefore configuredInterface=${dobbyConfigsRepository.getVpnInterface()}")
 
         runBlocking {
-            runCatching {
-                outlineInteractor.stopOutline()
-            }.onFailure { e ->
-                logger.log("[svc:$serviceId] teardownVpn(): outline disconnect warning: ${e.message}")
-            }
-            runCatching {
-                xrayInteractor.stopXray(instance)
-            }.onFailure { e ->
-                logger.log("[svc:$serviceId] teardownVpn(): xray disconnect warning: ${e.message}")
-            }
-            runCatching {
-                awgInteractor.stopAwg()
-            }.onFailure { e ->
-                logger.log("[svc:$serviceId] teardownVpn(): awg disconnect warning: ${e.message}")
-            }
-        }
-        runCatching {
-            runBlocking {
-                logger.log("Stopping Cloak client (if running)...")
-                cloakConnectInteractor.disconnect()
-            }
-        }.onFailure { e ->
-            logger.log("[svc:$serviceId] onDestroy(): failed to stop Cloak: ${e.message}")
+            stopProtocolsForSwitch()
         }
         goTunFd?.let { targetFd ->
             logger.log("[svc:$serviceId] teardownVpn(): goTunFd=$targetFd released to Go disconnect path")

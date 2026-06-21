@@ -89,14 +89,21 @@ class DobbyVpnService(
             val runningInterface = dobbyConfigsRepository.getVpnInterface()
 
             georoutingLibrary.SetGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
-            val started = when (runningInterface) {
-                VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
-                VpnInterface.AMNEZIA_WG -> startAwg()
-                VpnInterface.XRAY -> startXray()
-                VpnInterface.NONE -> startNone()
-            }
+            val started = startConfiguredProtocol(runningInterface)
 
             return started
+        }
+    }
+
+    fun switchProtocol(): Boolean {
+        synchronized(startStopLock) {
+            logger.log("switchProtocol requested")
+            stopProtocolsForSwitch()
+            georoutingLibrary.SetGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
+            val runningInterface = dobbyConfigsRepository.getVpnInterface()
+            val switched = startConfiguredProtocol(runningInterface)
+            logger.log("switchProtocol result=$switched")
+            return switched
         }
     }
 
@@ -107,13 +114,25 @@ class DobbyVpnService(
     }
 
     private fun stopCurrentLocked() {
+        stopProtocolsForSwitch()
+        georoutingLibrary.ClearGeoRoutingConf()
+        dobbyConfigsRepository.clearVpnConfig()
+    }
+
+    private fun stopProtocolsForSwitch() {
         stopCloakOutline()
         stopXray()
         stopAwg()
         stopNone()
-        georoutingLibrary.ClearGeoRoutingConf()
-        dobbyConfigsRepository.clearVpnConfig()
     }
+
+    private fun startConfiguredProtocol(runningInterface: VpnInterface): Boolean =
+        when (runningInterface) {
+            VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
+            VpnInterface.AMNEZIA_WG -> startAwg()
+            VpnInterface.XRAY -> startXray()
+            VpnInterface.NONE -> startNone()
+        }
 
     private fun startCloakOutline(): Boolean {
         logger.log("Start startCloakOutline")
