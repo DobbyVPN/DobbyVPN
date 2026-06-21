@@ -224,17 +224,27 @@ class MainViewModel(
             var connectedSeen = false
             while (isActive) {
                 val connectionState = healthCheckManager.getConnectionState()
+                val elapsedMs = detectorStartedAt.elapsedNow().inWholeMilliseconds
                 if (
                     shouldFailoverFromHealthState(
                         connectionState = connectionState,
                         connectedSeen = connectedSeen,
-                        elapsedMs = detectorStartedAt.elapsedNow().inWholeMilliseconds
+                        elapsedMs = elapsedMs
                     ) &&
                     profileManager.hasMultipleProfiles() &&
                     !stopRequested
                 ) {
                     logger.log("[Failover] Health check reported failed state=$connectionState for active profile")
                     requestFailover("health check state=$connectionState")
+                    return@launch
+                }
+                if (
+                    elapsedMs >= TEST_PROFILE_SWITCH_INTERVAL_MS &&
+                    profileManager.hasMultipleProfiles() &&
+                    !stopRequested
+                ) {
+                    logger.log("[Failover] Test profile switch interval reached")
+                    requestFailover("test interval reached")
                     return@launch
                 }
                 if (connectionState == VpnConnectionState.CONNECTED) {
@@ -380,6 +390,7 @@ class MainViewModel(
 
     private companion object {
         const val HEALTH_CHECK_START_GRACE_MS = 15_000L
+        const val TEST_PROFILE_SWITCH_INTERVAL_MS = 120_000L
     }
     //endregion
 }
