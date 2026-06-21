@@ -326,7 +326,7 @@ class MainViewModel(
         vpnManager.start()
 
         logger.log("Await service started result")
-        val connected = connectionStateRepository.serviceStartedFlow.awaitResult()
+        val connected = connectionStateRepository.serviceStartedFlow.awaitResult(SERVICE_START_TIMEOUT_MS)
         logger.log("Got service started result: $connected")
 
         if (connected) {
@@ -360,7 +360,7 @@ class MainViewModel(
             _uiState.tryEmit(disconnectedState)
             connectionStateRepository.tryUpdateStatus(VpnConnectionState.DISCONNECTED)
         }
-        logger.log("VPN service stopped successfully, resetUiState=$resetUiState")
+        logger.log("VPN service stop requested, resetUiState=$resetUiState")
     }
 
     private fun requestFailover(reason: String) {
@@ -396,6 +396,7 @@ class MainViewModel(
 
     private companion object {
         const val HEALTH_CHECK_START_GRACE_MS = 15_000L
+        const val SERVICE_START_TIMEOUT_MS = 90_000L
         const val TEST_PROFILE_SWITCH_INTERVAL_MS = 120_000L
     }
     //endregion

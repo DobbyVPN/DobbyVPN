@@ -385,16 +385,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        let userStopRequested = configsRepository.getIsUserInitStop()
+        let appStopRequested = configsRepository.getIsUserInitStop()
         logs.writeLog(
             log: "[tunnel:\(tunnelId)] stopTunnel reason=\(reason.rawValue) (\(reason)) " +
-                "userStopRequested=\(userStopRequested)"
+                "appStopRequested=\(appStopRequested)"
         )
         configsRepository.setIsUserInitStop(isUserInitStop: false)
-        if userStopRequested {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel observed after app user-stop request")
+        if appStopRequested {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel observed after app stop request")
         } else {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel observed without app user-stop request")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel observed without app stop request")
         }
         logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel clearing geo routing config")
         Cloak_outlineClearGeoRoutingConf()
