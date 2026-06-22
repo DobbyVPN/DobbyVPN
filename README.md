@@ -7,6 +7,48 @@ DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 
 Consume 'subscription' / 'dynamic keys' - YAML via HTTPS in one of the following formats:
 
+**Multiple connection variants** (cyclic fallback)
+```toml
+[Telemetry]
+Endpoint = "localhost:4318" # Telemetry host shared by all variants
+ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
+
+[[Outline]] # First variant
+Description = "My fast SS"
+Server = "1.1.1.1"
+Port = 443
+Password = "Qwerty123"
+DisguisePrefix = "POST "
+
+[[Xray]] # Second variant
+Description = "My VLESS Reality"
+log = { loglevel = "info" }
+outbounds = [
+{ tag = "proxy", protocol = "vless", settings = { vnext = [{address = "www.myserver.com", port = 443, users = [{id = "hi8WIXyln+amtgfQeT11zQ==", flow = "xtls-rprx-vision", encryption = "none"}]}]}, streamSettings = {network = "tcp",security = "reality", realitySettings = {show= false, fingerprint = "randomized", serverName = "secretSNI.com", publicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo=", shortId = "a1b2c3d4", spiderX = "/"}}},
+{tag = "direct", protocol = "freedom"}]
+
+[[Outline]] # Third variant
+Description = "My sneaky SS in Cloak"
+Cloak = true
+Server = "www.myserver.com"
+Password = "Qwerty123"
+BrowserSig = "chrome"
+EncryptionMethod = "plain"
+UID = "hi8WIXyln+amtgfQeT11zQ=="
+PublicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo="
+CDNWsUrlPath = "/JmJWXlmVXByXicD7DGrdMWV1btwHv0ARK0Yjoaig"
+
+[ExcludeIPs] # Shared by all variants and kept at the end
+IPs = [
+  "200.200.200.200/32"
+]
+```
+
+DobbyVPN tries protocol variants in file order. If the active variant cannot start,
+or health check later reports it as disconnected, DobbyVPN switches to the next
+variant. The list is cyclic and keeps retrying until the user stops the VPN.
+For a single variant, behavior remains the same as the legacy one-protocol config.
+
 **Clean ShadowSocks** (best performance)
 ```toml
 [Telemetry]

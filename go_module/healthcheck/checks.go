@@ -19,9 +19,14 @@ var (
 	ErrClientHealthCheck = errors.New("client health check error")
 )
 
+const (
+	goosAndroid = "android"
+	goosIOS     = "ios"
+)
+
 func connectionCheck() error {
 	log.Debugf(hcCommon.Category, "Check: connection check")
-	if runtime.GOOS == "ios" {
+	if runtime.GOOS == goosIOS {
 		log.Debugf(hcCommon.Category, "Skipping active Go client check on iOS app process")
 		return nil
 	}
@@ -39,7 +44,7 @@ func connectionCheck() error {
 
 func activeClientsCheck() error {
 	log.Debugf(hcCommon.Category, "Check: clients health checks")
-	if runtime.GOOS == "ios" {
+	if runtime.GOOS == goosIOS {
 		log.Debugf(hcCommon.Category, "Skipping Go client health checks on iOS app process")
 		return nil
 	}
@@ -57,6 +62,11 @@ func activeClientsCheck() error {
 }
 
 func dnsResolveCheck(host string) error {
+	if runtime.GOOS == goosAndroid || runtime.GOOS == goosIOS {
+		log.Debugf(hcCommon.Category, "Skipping standalone DNS resolution check %s on %s", host, runtime.GOOS)
+		return nil
+	}
+
 	log.Debugf(hcCommon.Category, "Check: dns resolution check %s with timeout = %v", host, dnsTimeout)
 
 	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)

@@ -180,6 +180,7 @@ data class ExcludeIPsConfig(
 
 @Serializable
 data class XrayClientConfig(
+    val Description: String? = null,
     val version: TomlElement? = null,
     val log: TomlElement? = null,
     val api: TomlElement? = null,
@@ -205,11 +206,29 @@ data class TelemetryConfig(
 )
 
 @Serializable
+data class ConnectionProfile(
+    val protocol: VpnInterface,
+    val description: String? = null,
+    val sourceIndex: Int,
+    val payload: String,
+)
+
+@Serializable
 data class TomlConfigs(
     val Description: String? = null,
     val Telemetry: TelemetryConfig? = null,
     val Outline: OutlineConfig? = null,
     val AmneziaWG: AmneziaWGConfig? = null,
     val Xray: XrayClientConfig? = null,
+    val ExcludeIPs: ExcludeIPsConfig? = null
+)
+
+@Serializable
+data class MultiTomlConfigs(
+    val Description: String? = null,
+    val Telemetry: TelemetryConfig? = null,
+    val Outline: List<OutlineConfig> = emptyList(),
+    val AmneziaWG: List<AmneziaWGConfig> = emptyList(),
+    val Xray: List<XrayClientConfig> = emptyList(),
     val ExcludeIPs: ExcludeIPsConfig? = null
 )

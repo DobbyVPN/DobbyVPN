@@ -2,22 +2,15 @@ package com.dobby.feature.main.domain.config
 
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.*
+import kotlinx.serialization.encodeToString
 import net.peanuuutz.tomlkt.Toml
 import net.peanuuutz.tomlkt.decodeFromString
 
 class TomlConfigApplier(
-    private val vpnRepo: DobbyConfigsRepositoryVpn,
-    private val outlineRepo: DobbyConfigsRepositoryOutline,
-    private val cloakRepo: DobbyConfigsRepositoryCloak,
-    private val awgRepo: DobbyConfigsRepositoryAwg,
-    private val xrayRepo: DobbyConfigsRepositoryXray,
     private val mainRepo: DobbyConfigsRepository,
     private val logger: Logger,
 ) {
-    private val outlineApplier = OutlineTomlApplier(vpnRepo, outlineRepo, cloakRepo, logger)
-    private val cloakApplier = CloakTomlApplier(cloakRepo, logger)
-    private val awgApplier = AmneziaWGTomlApplier(vpnRepo, awgRepo, logger)
-    private val xrayApplier = XrayTomlApplier(xrayRepo, logger)
+    private val profileManager = ConnectionProfileManager(mainRepo, logger)
 
     fun apply(connectionConfig: String): Boolean {
         logger.log("Start parseToml()")
@@ -27,6 +20,35 @@ class TomlConfigApplier(
             return false
         }
 
+        return if (hasMultiProtocolHeaders(connectionConfig)) {
+            applyMulti(connectionConfig)
+        } else {
+            applyLegacy(connectionConfig)
+        }
+    }
+
+    private fun applyMulti(connectionConfig: String): Boolean {
+        val root = try {
+            Toml.decodeFromString<MultiTomlConfigs>(connectionConfig)
+        } catch (e: Exception) {
+            logger.log("Failed to parse multi-protocol TOML: ${e.message}")
+            return false
+        }
+
+        applyCommon(root.Telemetry, root.ExcludeIPs)
+
+        val profiles = buildOrderedProfiles(connectionConfig, root) ?: return false
+        if (profiles.isEmpty()) {
+            logger.log("Unsupported config: no protocol profiles found")
+            return false
+        }
+
+        val applied = profileManager.replaceProfilesAndApplyFirstAvailable(profiles)
+        logger.log("Finish parseToml()")
+        return applied
+    }
+
+    private fun applyLegacy(connectionConfig: String): Boolean {
         val root = try {
             Toml.decodeFromString<TomlConfigs>(connectionConfig)
         } catch (e: Exception) {
@@ -34,64 +56,43 @@ class TomlConfigApplier(
             return false
         }
 
-        // 0. Set telemetry server
-        mainRepo.setTelemetryEndpoint(root.Telemetry?.Endpoint ?: "")
-        mainRepo.setTelemetryApiToken(root.Telemetry?.ApiToken ?: "")
+        applyCommon(root.Telemetry, root.ExcludeIPs)
 
-        // 1. Check for Xray Config
-        val xray = root.Xray
-        if (xray != null) {
-            return applyXray(xray)
+        val profile = when {
+            root.Xray != null -> ConnectionProfile(
+                protocol = VpnInterface.XRAY,
+                description = root.Xray.Description,
+                sourceIndex = 0,
+                payload = Toml.encodeToString(root.Xray)
+            )
+            root.Outline != null -> ConnectionProfile(
+                protocol = VpnInterface.CLOAK_OUTLINE,
+                description = root.Outline.Description,
+                sourceIndex = 0,
+                payload = Toml.encodeToString(root.Outline)
+            )
+            root.AmneziaWG != null -> ConnectionProfile(
+                protocol = VpnInterface.AMNEZIA_WG,
+                description = null,
+                sourceIndex = 0,
+                payload = Toml.encodeToString(root.AmneziaWG)
+            )
+            else -> null
         }
 
-        // 2. Check for Outline Config
-        val outline = root.Outline
-        if (outline != null) {
-            return applyOutline(outline, root)
-        }
-
-        // 3. Check for AWG Config
-        val awg = root.AmneziaWG
-        if (awg != null) {
-            return applyAmenziaWG(awg)
-        }
-
-        logger.log("Unsupported config")
-        return false
-    }
-
-    private fun applyNone(): Boolean {
-        logger.log("VPN config not detected, turning off")
-        mainRepo.clearVpnConfig()
-        logger.log("Finish parseToml()")
-
-        return false
-    }
-
-    private fun applyXray(config: XrayClientConfig): Boolean {
-        logger.log("Xray config detected")
-        xrayApplier.apply(config)
-        logger.log("Finish parseToml()")
-
-        return true
-    }
-
-    private fun applyOutline(
-        config: OutlineConfig,
-        root: TomlConfigs
-    ): Boolean {
-        logger.log("Outline config detected")
-
-        val outlineResult = outlineApplier.apply(config) ?: run {
-            outlineRepo.clearOutlineConfig()
-            cloakRepo.clearCloakConfig()
-            logger.log("Finish parseToml()")
+        if (profile == null) {
+            logger.log("Unsupported config")
             return false
         }
-        val (cloakEnabled, _) = outlineResult
-        cloakApplier.apply(config, cloakEnabled)
 
-        val exclude = root.ExcludeIPs
+        val applied = profileManager.replaceProfilesAndApplyFirstAvailable(listOf(profile))
+        logger.log("Finish parseToml()")
+        return applied
+    }
+
+    private fun applyCommon(telemetry: TelemetryConfig?, exclude: ExcludeIPsConfig?) {
+        mainRepo.setTelemetryEndpoint(telemetry?.Endpoint ?: "")
+        mainRepo.setTelemetryApiToken(telemetry?.ApiToken ?: "")
 
         if (exclude?.IPs != null && exclude.IPs.isNotEmpty()) {
             val cidrsString = exclude.IPs.joinToString(" ")
@@ -102,16 +103,68 @@ class TomlConfigApplier(
             logger.log("ExcludeIPs not found or empty → clearing routing")
             mainRepo.setGeoRoutingConf("")
         }
-
-        logger.log("Finish parseToml()")
-        return true
     }
 
-    private fun applyAmenziaWG(config: AmneziaWGConfig): Boolean {
-        logger.log("AmneziaWG config detected")
-        awgApplier.apply(config)
-        logger.log("Finish parseToml()")
+    private fun hasMultiProtocolHeaders(connectionConfig: String): Boolean =
+        protocolHeaderRegex.containsMatchIn(connectionConfig)
 
-        return true
+    private fun buildOrderedProfiles(
+        connectionConfig: String,
+        root: MultiTomlConfigs
+    ): List<ConnectionProfile>? {
+        val headers = protocolHeaderRegex.findAll(connectionConfig)
+            .map { it.groupValues[1] }
+            .toList()
+
+        val headerCounts = headers.groupingBy { it }.eachCount()
+        if (
+            headerCounts.getOrElse("Outline") { 0 } != root.Outline.size ||
+            headerCounts.getOrElse("Xray") { 0 } != root.Xray.size ||
+            headerCounts.getOrElse("AmneziaWG") { 0 } != root.AmneziaWG.size
+        ) {
+            logger.log(
+                "Invalid multi-protocol config: header counts do not match parsed blocks " +
+                    "headers=$headerCounts parsed={Outline=${root.Outline.size}, Xray=${root.Xray.size}, AmneziaWG=${root.AmneziaWG.size}}"
+            )
+            return null
+        }
+
+        var outlineIndex = 0
+        var xrayIndex = 0
+        var awgIndex = 0
+
+        return headers.mapIndexed { index, name ->
+            when (name) {
+                "Outline" -> root.Outline[outlineIndex++].let {
+                    ConnectionProfile(
+                        protocol = VpnInterface.CLOAK_OUTLINE,
+                        description = it.Description,
+                        sourceIndex = index,
+                        payload = Toml.encodeToString(it)
+                    )
+                }
+                "Xray" -> root.Xray[xrayIndex++].let {
+                    ConnectionProfile(
+                        protocol = VpnInterface.XRAY,
+                        description = it.Description,
+                        sourceIndex = index,
+                        payload = Toml.encodeToString(it)
+                    )
+                }
+                "AmneziaWG" -> root.AmneziaWG[awgIndex++].let {
+                    ConnectionProfile(
+                        protocol = VpnInterface.AMNEZIA_WG,
+                        description = null,
+                        sourceIndex = index,
+                        payload = Toml.encodeToString(it)
+                    )
+                }
+                else -> error("Unexpected protocol header: $name")
+            }
+        }
+    }
+
+    private companion object {
+        val protocolHeaderRegex = Regex("""(?m)^\s*\[\[\s*(Outline|Xray|AmneziaWG)\s*]]""")
     }
 }

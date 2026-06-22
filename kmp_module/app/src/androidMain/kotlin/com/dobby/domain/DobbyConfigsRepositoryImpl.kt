@@ -59,6 +59,30 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun getConnectionProfiles(): String {
+        return (prefs.getString("connectionProfiles", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getConnectionProfiles, size = ${it.length}")
+        }
+    }
+
+    override fun setConnectionProfiles(connectionProfiles: String) {
+        prefs.edit().putString("connectionProfiles", connectionProfiles).apply().also {
+            AndroidLog("DOBBY_TAG", "setConnectionProfiles, size = ${connectionProfiles.length}")
+        }
+    }
+
+    override fun getActiveConnectionProfileIndex(): Int {
+        return prefs.getInt("activeConnectionProfileIndex", 0).also {
+            AndroidLog("DOBBY_TAG", "getActiveConnectionProfileIndex = $it")
+        }
+    }
+
+    override fun setActiveConnectionProfileIndex(index: Int) {
+        prefs.edit().putInt("activeConnectionProfileIndex", index).apply().also {
+            AndroidLog("DOBBY_TAG", "setActiveConnectionProfileIndex = $index")
+        }
+    }
+
     override fun getIsCloakEnabled(): Boolean {
         return prefs.getBoolean("isCloakEnabled", false).also {
             AndroidLog("DOBBY_TAG", "getIsCloakEnabled: $it")

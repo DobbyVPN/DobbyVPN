@@ -63,6 +63,19 @@ func (c *CoreClient) Connect() (err error) {
 		return fmt.Errorf("invalid tun device type")
 	}
 
+	engineFD, err := unix.Dup(fd)
+	if err != nil {
+		log.Debugf(coreCommon.Category, "failed to duplicate tun fd for tun2socks: %v", err)
+		common.Client.MarkInactive(coreCommon.Name)
+		return fmt.Errorf("failed to duplicate tun fd for tun2socks: %w", err)
+	}
+	engineStarted := false
+	defer func() {
+		if !engineStarted {
+			_ = unix.Close(engineFD)
+		}
+	}()
+
 	err = c.device.Open(0, "")
 	if err != nil {
 		log.Debugf(coreCommon.Category, "failed to create protocol device: %v", err)
@@ -73,11 +86,18 @@ func (c *CoreClient) Connect() (err error) {
 	log.Debugf(coreCommon.Category, "starting tun2socks engine with proxy %s", c.device.GetProxyAddr())
 	err = tunnel.StartEngine(platform_engine.EngineConfig{
 		ProxyAddr:   c.device.GetProxyAddr(),
-		FD:          fd,
+		FD:          engineFD,
 		UplinkIface: "",
 	})
 	if err != nil {
 		log.Debugf(coreCommon.Category, "Can't start tun2socks: %v", err)
+		if c.tun != nil {
+			if closeErr := c.tun.Close(); closeErr != nil {
+				log.Debugf(coreCommon.Category, "failed to close tun fd after tun2socks start error: %v", closeErr)
+				err = errors.Join(err, fmt.Errorf("failed to close tun fd after tun2socks start error: %w", closeErr))
+			}
+			c.tun = nil
+		}
 		if closeErr := c.device.Close(); closeErr != nil {
 			log.Debugf(coreCommon.Category, "failed to close protocol device after tun2socks start error: %v", closeErr)
 			err = errors.Join(err, fmt.Errorf("failed to close protocol device after tun2socks start error: %w", closeErr))
@@ -85,6 +105,16 @@ func (c *CoreClient) Connect() (err error) {
 		c.device = nil
 		common.Client.MarkInactive(coreCommon.Name)
 		return fmt.Errorf("failed to start tun2socks engine: %w", err)
+	}
+	engineStarted = true
+
+	if c.tun != nil {
+		if closeErr := c.tun.Close(); closeErr != nil {
+			log.Debugf(coreCommon.Category, "failed to close local tun fd wrapper after engine start: %v", closeErr)
+		} else {
+			log.Debugf(coreCommon.Category, "local tun fd wrapper closed after engine start")
+		}
+		c.tun = nil
 	}
 
 	common.Client.MarkActive(coreCommon.Name)
@@ -98,17 +128,15 @@ func (c *CoreClient) Disconnect() error {
 	}
 
 	var errs []error
+	tunnel.StopEngine()
+
 	if c.tun != nil {
 		if err := c.tun.Close(); err != nil {
-			log.Debugf(coreCommon.Category, "failed to close tun fd: %v", err)
-			errs = append(errs, fmt.Errorf("failed to close tun fd: %w", err))
-		} else {
-			log.Debugf(coreCommon.Category, "tun fd closed")
+			log.Debugf(coreCommon.Category, "failed to close unused tun fd wrapper: %v", err)
+			errs = append(errs, fmt.Errorf("failed to close unused tun fd wrapper: %w", err))
 		}
 		c.tun = nil
 	}
-
-	tunnel.StopEngine()
 
 	if c.device != nil {
 		if err := c.device.Close(); err != nil {

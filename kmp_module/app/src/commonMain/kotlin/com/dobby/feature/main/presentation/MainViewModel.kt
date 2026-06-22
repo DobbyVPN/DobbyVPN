@@ -9,6 +9,7 @@ import com.dobby.feature.logging.LoggerManager
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.*
+import com.dobby.feature.main.domain.config.ConnectionProfileManager
 import com.dobby.feature.main.domain.config.TomlConfigApplier
 import com.dobby.feature.main.ui.MainUiState
 import com.dobby.vpn.BuildConfig
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 val httpClient = HttpClient()
 
@@ -38,17 +40,18 @@ class MainViewModel(
     private val configsProcessor: ConfigsProcessor,
 ) : ViewModel() {
     private var connectionDetectorJob: Job? = null
+    private var stopRequested = false
+    private var failoverJob: Job? = null
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
     //endregion
 
     private val tomlConfigApplier = TomlConfigApplier(
-        vpnRepo = configsRepository,
-        outlineRepo = configsRepository,
-        cloakRepo = configsRepository,
         mainRepo = configsRepository,
-        awgRepo = configsRepository,
-        xrayRepo = configsRepository,
+        logger = logger
+    )
+    private val profileManager = ConnectionProfileManager(
+        repo = configsRepository,
         logger = logger
     )
 
@@ -154,15 +157,12 @@ class MainViewModel(
             }
             .getOrDefault(false)
 
-        val attributes = configsProcessor.buildConfigAttributesJson()
-        configsRepository.setTelemetryAttributes(attributes)
-        logger.log("Configs attributes saved to repository")
-
         if (!applied) {
             logger.log("Config not applied (invalid/unsupported) → will not start VPN/HC")
             return false
         }
 
+        saveTelemetryAttributes()
         return true
     }
 
@@ -220,8 +220,27 @@ class MainViewModel(
 
         connectionDetectorJob = viewModelScope.launch {
             logger.log("Connection state detector: start")
+            val detectorStartedAt = TimeSource.Monotonic.markNow()
+            var connectedSeen = false
             while (isActive) {
                 val connectionState = healthCheckManager.getConnectionState()
+                val elapsedMs = detectorStartedAt.elapsedNow().inWholeMilliseconds
+                if (
+                    shouldFailoverFromHealthState(
+                        connectionState = connectionState,
+                        connectedSeen = connectedSeen,
+                        elapsedMs = elapsedMs
+                    ) &&
+                    profileManager.hasMultipleProfiles() &&
+                    !stopRequested
+                ) {
+                    logger.log("[Failover] Health check reported failed state=$connectionState for active profile")
+                    requestFailover("health check state=$connectionState")
+                    return@launch
+                }
+                if (connectionState == VpnConnectionState.CONNECTED) {
+                    connectedSeen = true
+                }
                 val newState = _uiState.value.copy(connectionState = connectionState)
                 _uiState.emit(newState)
                 connectionStateRepository.updateStatus(connectionState)
@@ -230,8 +249,62 @@ class MainViewModel(
         }
     }
 
+    private fun shouldFailoverFromHealthState(
+        connectionState: VpnConnectionState,
+        connectedSeen: Boolean,
+        elapsedMs: Long,
+    ): Boolean {
+        if (connectionState == VpnConnectionState.CONNECTED) return false
+
+        // Native healthcheck uses CONNECTING both while checks are warming up and when a later
+        // check fails. Right after start/restart it can also briefly report DISCONNECTED while
+        // the native healthcheck state is being reset. After CONNECTED was observed, any non-
+        // connected state means the active profile lost HC.
+        if (connectedSeen) return true
+
+        // Give a freshly started profile enough time for the first native healthcheck rounds.
+        return elapsedMs >= HEALTH_CHECK_START_GRACE_MS
+    }
+
     suspend fun startVpnService(): Boolean {
+        stopRequested = false
+        return startVpnServiceLoop(initialReason = "start requested")
+    }
+
+    private suspend fun startVpnServiceLoop(initialReason: String): Boolean {
+        var reason = initialReason
+        while (!stopRequested) {
+            logger.log("[Failover] Starting active profile, reason=$reason")
+            val connected = startActiveVpnServiceOnce()
+            if (connected) return true
+
+            if (!profileManager.hasMultipleProfiles()) {
+                logger.log("[Failover] Active profile failed and no fallback profile exists")
+                stopVpnRuntime(resetUiState = true)
+                return false
+            }
+
+            stopVpnRuntime(resetUiState = false)
+            val switched = profileManager.switchToNext("start failed")
+            if (!switched) {
+                logger.log("[Failover] Could not switch after start failure")
+                stopVpnRuntime(resetUiState = true)
+                return false
+            }
+            saveTelemetryAttributes()
+            reason = "retry after start failure"
+            delay(1.seconds)
+        }
+
+        logger.log("[Failover] Start loop stopped because stopRequested=true")
+        return false
+    }
+
+    private suspend fun startActiveVpnServiceOnce(): Boolean {
         logger.log("Starting VPN service...")
+
+        connectionStateRepository.updateStatus(VpnConnectionState.CONNECTING)
+        _uiState.emit(_uiState.value.copy(connectionState = VpnConnectionState.CONNECTING))
 
         logger.log("Init health check")
         healthCheckManager.initHealthCheck()
@@ -245,7 +318,7 @@ class MainViewModel(
         vpnManager.start()
 
         logger.log("Await service started result")
-        val connected = connectionStateRepository.serviceStartedFlow.awaitResult()
+        val connected = connectionStateRepository.serviceStartedFlow.awaitResult(SERVICE_START_TIMEOUT_MS)
         logger.log("Got service started result: $connected")
 
         if (connected) {
@@ -255,12 +328,18 @@ class MainViewModel(
             startConnectionStateDetector()
             return true
         } else {
-            stopVpnService()
             return false
         }
     }
 
     fun stopVpnService() {
+        stopRequested = true
+        failoverJob?.cancel()
+        failoverJob = null
+        stopVpnRuntime(resetUiState = true)
+    }
+
+    private fun stopVpnRuntime(resetUiState: Boolean) {
         logger.log("Stopping VPN service...")
         logger.log("Stop tunnel service")
         vpnManager.stop()
@@ -268,10 +347,49 @@ class MainViewModel(
         healthCheckManager.stopHealthCheck()
         logger.log("Stop connection detector")
         stopConnectionStateDetector()
-        val disconnectedState = _uiState.value.copy(connectionState = VpnConnectionState.DISCONNECTED)
-        _uiState.tryEmit(disconnectedState)
-        connectionStateRepository.tryUpdateStatus(VpnConnectionState.DISCONNECTED)
-        logger.log("VPN service stopped successfully, state reset to disconnected")
+        if (resetUiState) {
+            val disconnectedState = _uiState.value.copy(connectionState = VpnConnectionState.DISCONNECTED)
+            _uiState.tryEmit(disconnectedState)
+            connectionStateRepository.tryUpdateStatus(VpnConnectionState.DISCONNECTED)
+        }
+        logger.log("VPN service stop requested, resetUiState=$resetUiState")
+    }
+
+    private fun requestFailover(reason: String) {
+        if (failoverJob?.isActive == true) {
+            logger.log("[Failover] Request ignored, failover already running reason=$reason")
+            return
+        }
+
+        failoverJob = viewModelScope.launch(Dispatchers.Default) {
+            stopConnectionStateDetector()
+            healthCheckManager.stopHealthCheck()
+            logger.log("[Failover] Restarting VPN after $reason")
+            stopVpnRuntime(resetUiState = false)
+
+            val switched = profileManager.switchToNext(reason)
+            if (!switched) {
+                logger.log("[Failover] Could not switch profile after $reason")
+                stopVpnRuntime(resetUiState = true)
+                return@launch
+            }
+            saveTelemetryAttributes()
+            connectionStateRepository.updateStatus(VpnConnectionState.CONNECTING)
+            _uiState.emit(_uiState.value.copy(connectionState = VpnConnectionState.CONNECTING))
+
+            startVpnServiceLoop(initialReason = "failover after $reason")
+        }
+    }
+
+    private fun saveTelemetryAttributes() {
+        val attributes = configsProcessor.buildConfigAttributesJson()
+        configsRepository.setTelemetryAttributes(attributes)
+        logger.log("Configs attributes saved to repository")
+    }
+
+    private companion object {
+        const val HEALTH_CHECK_START_GRACE_MS = 15_000L
+        const val SERVICE_START_TIMEOUT_MS = 90_000L
     }
     //endregion
 }

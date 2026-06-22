@@ -4,6 +4,7 @@ import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withTimeoutOrNull
 
 class ConnectionStateRepository {
     private val _statusFlow = MutableStateFlow(VpnConnectionState.DISCONNECTED)
@@ -54,7 +55,9 @@ class ServiceStarted {
         result.trySend(started)
     }
 
-    suspend fun awaitResult(): Boolean {
-        return result.receive()
+    suspend fun awaitResult(timeoutMs: Long): Boolean {
+        return withTimeoutOrNull(timeoutMs) {
+            result.receive()
+        } ?: false
     }
 }

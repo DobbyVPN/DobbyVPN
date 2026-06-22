@@ -29,6 +29,8 @@ fun DobbyConfigsRepositoryXray.clearXrayConfig() {
 
 fun DobbyConfigsRepository.clearVpnConfig() {
     setVpnInterface(VpnInterface.NONE)
+    setConnectionProfiles("")
+    setActiveConnectionProfileIndex(0)
     clearOutlineConfig()
     clearCloakConfig()
     clearXrayConfig()

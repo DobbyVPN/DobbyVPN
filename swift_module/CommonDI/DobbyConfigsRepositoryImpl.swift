@@ -14,6 +14,8 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let isOutlineEnabledKey = "isOutlineEnabledKey"
     private let connectionURLKey = "connectionURLKey"
     private let connectionConfigKey = "connectionConfigKey"
+    private let connectionProfilesKey = "connectionProfilesKey"
+    private let activeConnectionProfileIndexKey = "activeConnectionProfileIndexKey"
     private let prefixOutlineKey = "PrefixOutlineKey"
     private let tcpPathOutlineKey = "TcpPathOutlineKey"
     private let isWebsocketEnabledKey = "isWebsocketEnabledKey"
@@ -48,6 +50,22 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     public func setConnectionConfig(connectionConfig: String) {
         userDefaults.set(connectionConfig, forKey: connectionConfigKey)
 
+    }
+
+    public func getConnectionProfiles() -> String {
+        return userDefaults.string(forKey: connectionProfilesKey) ?? ""
+    }
+
+    public func setConnectionProfiles(connectionProfiles: String) {
+        userDefaults.set(connectionProfiles, forKey: connectionProfilesKey)
+    }
+
+    public func getActiveConnectionProfileIndex() -> Int32 {
+        return Int32(userDefaults.integer(forKey: activeConnectionProfileIndexKey))
+    }
+
+    public func setActiveConnectionProfileIndex(index: Int32) {
+        userDefaults.set(Int(index), forKey: activeConnectionProfileIndexKey)
     }
 
     public func getCloakConfig() -> String {
@@ -169,6 +187,8 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         switch userDefaults.string(forKey: vpnInterfaceKey) ?? "CLOAK_OUTLINE" {
         case "XRAY":
             return VpnInterface.xray
+        case "AMNEZIA_WG":
+            return VpnInterface.amneziaWg
         case "NONE":
             return VpnInterface.none
         default:
@@ -180,6 +200,8 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         let value: String
         if vpnInterface == VpnInterface.xray {
             value = "XRAY"
+        } else if vpnInterface == VpnInterface.amneziaWg {
+            value = "AMNEZIA_WG"
         } else if vpnInterface == VpnInterface.none {
             value = "NONE"
         } else {

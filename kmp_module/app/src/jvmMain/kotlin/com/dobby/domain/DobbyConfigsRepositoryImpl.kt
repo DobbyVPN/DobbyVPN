@@ -20,6 +20,7 @@ internal class DobbyConfigsRepositoryImpl(
     )
     private val connectionUrlFile = storageDir.resolve("connection-url.txt")
     private val connectionConfigFile = storageDir.resolve("connection-config.toml")
+    private val connectionProfilesFile = storageDir.resolve("connection-profiles.json")
     private val geoRoutingConfFile = storageDir.resolve("geo-routing-conf.txt")
 
     private fun readLargeString(key: String, file: Path): String {
@@ -65,6 +66,22 @@ internal class DobbyConfigsRepositoryImpl(
 
     override fun setConnectionConfig(connectionConfig: String) {
         writeLargeString("connectionConfig", connectionConfigFile, connectionConfig)
+    }
+
+    override fun getConnectionProfiles(): String {
+        return readLargeString("connectionProfiles", connectionProfilesFile)
+    }
+
+    override fun setConnectionProfiles(connectionProfiles: String) {
+        writeLargeString("connectionProfiles", connectionProfilesFile, connectionProfiles)
+    }
+
+    override fun getActiveConnectionProfileIndex(): Int {
+        return prefs.get("activeConnectionProfileIndex", "0").toIntOrNull() ?: 0
+    }
+
+    override fun setActiveConnectionProfileIndex(index: Int) {
+        prefs.put("activeConnectionProfileIndex", index.toString())
     }
 
     override fun getTelemetryEndpoint(): String {

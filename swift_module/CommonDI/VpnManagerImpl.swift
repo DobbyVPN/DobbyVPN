@@ -7,6 +7,8 @@ import MyLibrary
 
 public class VpnManagerImpl: VpnManager {
     private static let launchId = UUID().uuidString
+    private static let disconnectingStartRetryDelay: TimeInterval = 0.5
+    private static let disconnectingStartMaxRetries = 120
     private var logs = NativeModuleHolder.logsRepository
 
     public static var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
@@ -107,8 +109,7 @@ public class VpnManagerImpl: VpnManager {
         self.logs.writeLog(log: "[start] manager loaded status=\(statusName(status)) raw=\(status.rawValue)")
         if status == .disconnecting {
             self.suppressDisconnectedForPendingStart = true
-            let maxRetries = 30
-            guard retryAttempt < maxRetries else {
+            guard retryAttempt < Self.disconnectingStartMaxRetries else {
                 self.logs.writeLog(log: "[start] Give up: connection stayed disconnecting after \(retryAttempt) retries")
                 self.suppressDisconnectedForPendingStart = false
                 self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
@@ -116,8 +117,8 @@ public class VpnManagerImpl: VpnManager {
             }
 
             let nextAttempt = retryAttempt + 1
-            self.logs.writeLog(log: "[start] Connection is disconnecting; retry start after 500ms (attempt \(nextAttempt)/\(maxRetries))")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self.logs.writeLog(log: "[start] Connection is disconnecting; retry start after 500ms (attempt \(nextAttempt)/\(Self.disconnectingStartMaxRetries))")
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.disconnectingStartRetryDelay) { [weak self] in
                 guard let self else { return }
                 self.getOrCreateManager { manager, _ in
                     self.handleStart(manager: manager, retryAttempt: nextAttempt)
