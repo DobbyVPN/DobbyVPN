@@ -264,10 +264,11 @@ class MainViewModel(
         elapsedMs: Long,
     ): Boolean {
         if (connectionState == VpnConnectionState.CONNECTED) return false
-        if (connectionState == VpnConnectionState.DISCONNECTED) return true
 
         // Native healthcheck uses CONNECTING both while checks are warming up and when a later
-        // check fails. After CONNECTED was observed, CONNECTING means the active profile lost HC.
+        // check fails. Right after start/hot switch it can also briefly report DISCONNECTED while
+        // the native healthcheck state is being reset. After CONNECTED was observed, any non-
+        // connected state means the active profile lost HC.
         if (connectedSeen) return true
 
         // Give a freshly started profile enough time for the first native healthcheck rounds.

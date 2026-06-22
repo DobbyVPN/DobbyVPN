@@ -57,6 +57,11 @@ func activeClientsCheck() error {
 }
 
 func dnsResolveCheck(host string) error {
+	if runtime.GOOS == "android" || runtime.GOOS == "ios" {
+		log.Debugf(hcCommon.Category, "Skipping standalone DNS resolution check %s on %s", host, runtime.GOOS)
+		return nil
+	}
+
 	log.Debugf(hcCommon.Category, "Check: dns resolution check %s with timeout = %v", host, dnsTimeout)
 
 	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)

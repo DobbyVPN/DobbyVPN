@@ -109,13 +109,16 @@ class OutlineInteractor(
         logger.log("Outline URL: $outlineUrl")
 
         dobbyVpnService?.run {
-            logger.log("[svc:$${serviceId}] setupVpn(): begin")
-            vpnInterface = runCatching {
-                interfaceFactory.create(context=this, vpnService=this).establish()
-            }.onFailure { e ->
-                logger.log("[svc:$${serviceId}] setupVpn(): establish FAILED: ${e.message}")
-            }.getOrNull()
-
+            if (vpnInterface == null) {
+                logger.log("[svc:$serviceId] setupVpn(): begin")
+                vpnInterface = runCatching {
+                    interfaceFactory.create(context = this, vpnService = this).establish()
+                }.onFailure { e ->
+                    logger.log("[svc:$serviceId] setupVpn(): establish FAILED: ${e.message}")
+                }.getOrNull()
+            } else {
+                logger.log("[svc:$serviceId] setupVpn(): reusing existing vpnInterface=${vpnInterface?.fd}")
+            }
         }
 
         val tunFd = fdManager.GetTunFd(dobbyVpnService)
