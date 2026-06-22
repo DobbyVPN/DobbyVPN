@@ -102,12 +102,12 @@ class DobbyVpnService(
     }
 
     private fun stopCurrentLocked() {
-        stopProtocolsForSwitch()
+        stopProtocols()
         georoutingLibrary.ClearGeoRoutingConf()
         dobbyConfigsRepository.clearVpnConfig()
     }
 
-    private fun stopProtocolsForSwitch() {
+    private fun stopProtocols() {
         stopCloakOutline()
         stopXray()
         stopAwg()

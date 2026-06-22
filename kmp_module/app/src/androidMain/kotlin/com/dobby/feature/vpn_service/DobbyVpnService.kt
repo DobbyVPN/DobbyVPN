@@ -217,30 +217,30 @@ class DobbyVpnService : VpnService() {
         }
     }
 
-    private suspend fun stopProtocolsForSwitch() {
-        logger.log("[svc:$serviceId] stopProtocolsForSwitch(): begin configuredInterface=${dobbyConfigsRepository.getVpnInterface()}")
+    private suspend fun stopProtocols() {
+        logger.log("[svc:$serviceId] stopProtocols(): begin configuredInterface=${dobbyConfigsRepository.getVpnInterface()}")
         runCatching {
             outlineInteractor.stopOutline()
         }.onFailure { e ->
-            logger.log("[svc:$serviceId] stopProtocolsForSwitch(): outline disconnect warning: ${e.message}")
+            logger.log("[svc:$serviceId] stopProtocols(): outline disconnect warning: ${e.message}")
         }
         runCatching {
             xrayInteractor.stopXray(instance)
         }.onFailure { e ->
-            logger.log("[svc:$serviceId] stopProtocolsForSwitch(): xray disconnect warning: ${e.message}")
+            logger.log("[svc:$serviceId] stopProtocols(): xray disconnect warning: ${e.message}")
         }
         runCatching {
             awgInteractor.stopAwg()
         }.onFailure { e ->
-            logger.log("[svc:$serviceId] stopProtocolsForSwitch(): awg disconnect warning: ${e.message}")
+            logger.log("[svc:$serviceId] stopProtocols(): awg disconnect warning: ${e.message}")
         }
         runCatching {
-            logger.log("Stopping Cloak client for protocol switch (if running)...")
+            logger.log("Stopping Cloak client (if running)...")
             cloakConnectInteractor.disconnect()
         }.onFailure { e ->
-            logger.log("[svc:$serviceId] stopProtocolsForSwitch(): failed to stop Cloak: ${e.message}")
+            logger.log("[svc:$serviceId] stopProtocols(): failed to stop Cloak: ${e.message}")
         }
-        logger.log("[svc:$serviceId] stopProtocolsForSwitch(): end")
+        logger.log("[svc:$serviceId] stopProtocols(): end")
     }
 
     @Synchronized
@@ -249,7 +249,7 @@ class DobbyVpnService : VpnService() {
         logger.log("[svc:$serviceId] teardownVpn(): begin fd=$fdBefore configuredInterface=${dobbyConfigsRepository.getVpnInterface()}")
 
         runBlocking {
-            stopProtocolsForSwitch()
+            stopProtocols()
         }
         goTunFd?.let { targetFd ->
             logger.log("[svc:$serviceId] teardownVpn(): goTunFd=$targetFd released to Go disconnect path")

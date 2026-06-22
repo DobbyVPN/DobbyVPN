@@ -238,15 +238,6 @@ class MainViewModel(
                     requestFailover("health check state=$connectionState")
                     return@launch
                 }
-                if (
-                    elapsedMs >= TEST_PROFILE_SWITCH_INTERVAL_MS &&
-                    profileManager.hasMultipleProfiles() &&
-                    !stopRequested
-                ) {
-                    logger.log("[Failover] Test profile switch interval reached")
-                    requestFailover("test interval reached")
-                    return@launch
-                }
                 if (connectionState == VpnConnectionState.CONNECTED) {
                     connectedSeen = true
                 }
@@ -266,7 +257,7 @@ class MainViewModel(
         if (connectionState == VpnConnectionState.CONNECTED) return false
 
         // Native healthcheck uses CONNECTING both while checks are warming up and when a later
-        // check fails. Right after start/hot switch it can also briefly report DISCONNECTED while
+        // check fails. Right after start/restart it can also briefly report DISCONNECTED while
         // the native healthcheck state is being reset. After CONNECTED was observed, any non-
         // connected state means the active profile lost HC.
         if (connectedSeen) return true
@@ -373,6 +364,9 @@ class MainViewModel(
         failoverJob = viewModelScope.launch(Dispatchers.Default) {
             stopConnectionStateDetector()
             healthCheckManager.stopHealthCheck()
+            logger.log("[Failover] Restarting VPN after $reason")
+            stopVpnRuntime(resetUiState = false)
+
             val switched = profileManager.switchToNext(reason)
             if (!switched) {
                 logger.log("[Failover] Could not switch profile after $reason")
@@ -383,8 +377,6 @@ class MainViewModel(
             connectionStateRepository.updateStatus(VpnConnectionState.CONNECTING)
             _uiState.emit(_uiState.value.copy(connectionState = VpnConnectionState.CONNECTING))
 
-            logger.log("[Failover] Restarting VPN after $reason")
-            stopVpnRuntime(resetUiState = false)
             startVpnServiceLoop(initialReason = "failover after $reason")
         }
     }
@@ -398,7 +390,6 @@ class MainViewModel(
     private companion object {
         const val HEALTH_CHECK_START_GRACE_MS = 15_000L
         const val SERVICE_START_TIMEOUT_MS = 90_000L
-        const val TEST_PROFILE_SWITCH_INTERVAL_MS = 120_000L
     }
     //endregion
 }

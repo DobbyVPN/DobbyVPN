@@ -762,7 +762,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     @MainActor
-    private func stopProtocolsForSwitch(reason: String) {
+    private func stopProtocols(reason: String) {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] stop begin (\(reason))")
         stopHealthCheck(reason: reason)
 
@@ -793,7 +793,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
         logResourceSnapshot(label: "TEARDOWN_BEGIN reason=\(reason)")
         stopLoadSampler(reason: reason)
-        stopProtocolsForSwitch(reason: reason)
+        stopProtocols(reason: reason)
 
         do {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] clearing tunnel network settings")
