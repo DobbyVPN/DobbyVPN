@@ -9,7 +9,6 @@ public class VpnManagerImpl: VpnManager {
     private static let launchId = UUID().uuidString
     private static let disconnectingStartRetryDelay: TimeInterval = 0.5
     private static let disconnectingStartMaxRetries = 120
-    private static let switchProtocolTimeout: DispatchTimeInterval = .seconds(60)
     private var logs = NativeModuleHolder.logsRepository
 
     public static var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
@@ -99,43 +98,6 @@ public class VpnManagerImpl: VpnManager {
         getOrCreateManager { manager, _ in
             self.handleStart(manager: manager)
         }
-    }
-
-    public func switchProtocol() -> Bool {
-        self.logs.writeLog(log: "[switchProtocol] requested")
-        guard let session = vpnManager?.connection as? NETunnelProviderSession else {
-            self.logs.writeLog(log: "[switchProtocol] failed: active connection is not NETunnelProviderSession")
-            return false
-        }
-        guard vpnManager?.connection.status == .connected else {
-            self.logs.writeLog(log: "[switchProtocol] failed: VPN status=\(statusName(vpnManager?.connection.status ?? .invalid))")
-            return false
-        }
-        guard let message = "switchProtocol".data(using: .utf8) else {
-            self.logs.writeLog(log: "[switchProtocol] failed: could not encode provider message")
-            return false
-        }
-
-        let semaphore = DispatchSemaphore(value: 0)
-        var switched = false
-        do {
-            try session.sendProviderMessage(message) { response in
-                let text = response.flatMap { String(data: $0, encoding: .utf8) } ?? "(nil)"
-                switched = text == "ok"
-                self.logs.writeLog(log: "[switchProtocol] provider response=\(text)")
-                semaphore.signal()
-            }
-        } catch {
-            self.logs.writeLog(log: "[switchProtocol] sendProviderMessage failed: \(error.localizedDescription)")
-            return false
-        }
-
-        let waitResult = semaphore.wait(timeout: .now() + Self.switchProtocolTimeout)
-        if waitResult == .timedOut {
-            self.logs.writeLog(log: "[switchProtocol] timed out waiting for provider response")
-            return false
-        }
-        return switched
     }
 
     private func handleStart(manager: NETunnelProviderManager?, retryAttempt: Int = 0) {

@@ -18,9 +18,4 @@ class VpnManagerImpl(
             .instance
             ?.stopService()
     }
-
-    override fun switchProtocol(): Boolean =
-        DobbyVpnService
-            .instance
-            ?.switchProtocol() == true
 }

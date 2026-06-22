@@ -14,10 +14,4 @@ interface VpnManager {
      * Stops VPN service completely
      */
     fun stop()
-
-    /**
-     * Switches only the active protocol inside an already running VPN session.
-     * Returns false when hot switching is unavailable or failed, so callers can fall back to stop/start.
-     */
-    fun switchProtocol(): Boolean
 }

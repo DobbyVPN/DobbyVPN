@@ -15,7 +15,4 @@ internal class VpnManagerImpl(
     override fun stop() {
         dobbyVpnService.stopService()
     }
-
-    override fun switchProtocol(): Boolean =
-        dobbyVpnService.switchProtocol()
 }
