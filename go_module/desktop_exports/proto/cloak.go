@@ -22,6 +22,7 @@ func (s *Server) StartCloakClient(_ context.Context, in *grpcproto.StartCloakCli
 }
 
 func (s *Server) StopCloakClient(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
-	go api.StopCloakClient()
+	log.Debugf(common.Category, "StopCloakClient")
+	api.StopCloakClient()
 	return &grpcproto.Empty{}, nil
 }

@@ -5,11 +5,11 @@ XRay & AWG are in progress.
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 
-Consume 'subscription' / 'dynamic keys' - YAML via HTTPS in one of the following formats:
+Consume 'subscription' / 'dynamic keys' as TOML via HTTPS or inline:
 
-**Multiple connection variants** (cyclic fallback)
+**Connection variants** (one or more, cyclic fallback)
 ```toml
-[Telemetry]
+[Telemetry] # [Optional]
 Endpoint = "localhost:4318" # Telemetry host shared by all variants
 ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
 
@@ -38,7 +38,7 @@ UID = "hi8WIXyln+amtgfQeT11zQ=="
 PublicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo="
 CDNWsUrlPath = "/JmJWXlmVXByXicD7DGrdMWV1btwHv0ARK0Yjoaig"
 
-[ExcludeIPs] # Shared by all variants and kept at the end
+[ExcludeIPs] # Shared by all variants and kept at the end [Optional]
 IPs = [
   "200.200.200.200/32"
 ]
@@ -47,22 +47,23 @@ IPs = [
 DobbyVPN tries protocol variants in file order. If the active variant cannot start,
 or health check later reports it as disconnected, DobbyVPN switches to the next
 variant. The list is cyclic and keeps retrying until the user stops the VPN.
-For a single variant, behavior remains the same as the legacy one-protocol config.
+Use the same `[[Outline]]`, `[[Xray]]` section format even
+when the configuration contains only one variant.
 
 **Clean ShadowSocks** (best performance)
 ```toml
-[Telemetry]
+[Telemetry] # [Optional]
 Endpoint = "localhost:4318" # Telemetry host
 ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
 
-[Outline] # Implementation library
+[[Outline]] # Implementation library
 Description = "My fast SS" # description - whatever you like
 Server = "1.1.1.1" # IP or DNS name for the server
 Port = 443 # ShadowSocks port
 Password = "Qwerty123" # user's 'secret' from the Outline's config - NOT the part in 'ss://' config
 DisguisePrefix = "POST " # one - for TCP & UDP for now; for options - see ref. # 1 below
 
-[ExcludeIPs]
+[ExcludeIPs] # [Optional]
 IPs = [
   "200.200.200.200/32" # IP adress or subnet that we want to exlude from vpn-routing
 ]
@@ -70,11 +71,11 @@ IPs = [
 
 **ShadowSocks via WebSocket** (caddy -> outline-ss-server) 
 ```toml
-[Telemetry]
+[Telemetry] # [Optional]
 Endpoint = "localhost:4318" # Telemetry host
 ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
 
-[Outline] # Implementation library
+[[Outline]] # Implementation library
 Description = "My beautiful SS in WS" # description - whatever you like
 WebSocket = true # flag to enable WebSocket
 Server = "www.myserver.com" # DNS name of the server
@@ -82,7 +83,7 @@ Password = "Qwerty123" # user's 'secret' from the Outline's config
 WebSocketPath = "/WS_Ooth5OoCoo7reDah5oich1gai0che2ugh8pho" # listeners.path (one for both TCP & UDP for now) 
 DisguisePrefix = "POST " # for options see ref. # 1 below
 
-[ExcludeIPs]
+[ExcludeIPs] # [Optional]
 IPs = [
   "200.200.200.200/32" # IP adress or subnet that we want to exlude from vpn-routing
 ]
@@ -90,11 +91,11 @@ IPs = [
 
 **ShadowSocks over cloak** (caddy -> cloak -> outline-ss-server)
 ```toml
-[Telemetry]
+[Telemetry] # [Optional]
 Endpoint = "localhost:4318" # Telemetry host
 ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
 
-[Outline] # Implementation library
+[[Outline]] # Implementation library
 Description = "My sneaky SS in Cloak" # description - whatever you like
 Cloak = true # enables cloak (what is cloak? see ref # 2 below)
 Server = "www.myserver.com"
@@ -106,7 +107,7 @@ UID = "hi8WIXyln+amtgfQeT11zQ=="
 PublicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo="
 CDNWsUrlPath = "/JmJWXlmVXByXicD7DGrdMWV1btwHv0ARK0Yjoaig"
 
-[ExcludeIPs]
+[ExcludeIPs] # [Optional]
 IPs = [
   "200.200.200.200/32" # IP adress or subnet that we want to exlude from vpn-routing
 ]
@@ -116,16 +117,21 @@ For direct Cloak mode, omit `CDNWsUrlPath` or set `Transport = "direct"` explici
 
 **VLESS + Reality over xray-core** ([more details](https://xtls.github.io/en/config/outbounds/vless.html))
 ```toml
-[Telemetry]
+[Telemetry] # [Optional]
 Endpoint = "localhost:4318" # Telemetry host
 ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
 
-[Xray] # Implementation library
+[[Xray]] # Implementation library
 log = { loglevel = "info" } # Providing DobbyVPN and xray's log level
 # Warning: Inbound field will be modified due to custom tunneling settings
 outbounds = [
 { tag = "proxy", protocol = "vless", settings = { vnext = [{address = "www.myserver.com", port = 443, users = [{id = "hi8WIXyln+amtgfQeT11zQ==", flow = "xtls-rprx-vision", encryption = "none"}]}]}, streamSettings = {network = "tcp",security = "reality", realitySettings = {show= false, fingerprint = "randomized", serverName = "secretSNI.com", publicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo=", shortId = "a1b2c3d4", spiderX = "/"}}},
 {tag = "direct", protocol = "freedom"}]
+
+[ExcludeIPs] # [Optional]
+IPs = [
+	"200.200.200.200/32" # IP adress or subnet that we want to exlude from vpn-routing
+]
 ```
 
 Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nicely expressed Issues accordingly.

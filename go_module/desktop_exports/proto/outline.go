@@ -26,6 +26,6 @@ func (s *Server) StartOutline(_ context.Context, in *grpcproto.StartOutlineReque
 
 func (s *Server) StopOutline(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
 	log.Debugf(common.Category, "StopOutline")
-	go api.StopVpn()
+	api.StopVpn()
 	return &grpcproto.Empty{}, nil
 }

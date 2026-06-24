@@ -30,7 +30,7 @@ internal class CloakTomlApplier(
             return
         }
 
-        logger.log("Cloak enabled inside [Outline], building Cloak config")
+        logger.log("Cloak enabled inside Outline profile, building Cloak config")
 
         val cdnWsUrlPath = outline.CDNWsUrlPath?.trim()?.takeIf { it.isNotEmpty() }
         val transport = outline.Transport?.trim().orEmpty().ifEmpty {
@@ -57,7 +57,7 @@ internal class CloakTomlApplier(
             remoteHost.isEmpty() ||
             remotePort.isEmpty()
         ) {
-            logger.log("Invalid [Cloak] fields: EncryptionMethod/UID/PublicKey/ServerName/RemoteHost/RemotePort are required. Disabling Cloak.")
+            logger.log("Invalid Cloak fields: EncryptionMethod/UID/PublicKey/ServerName/RemoteHost/RemotePort are required. Disabling Cloak.")
             cloakRepo.clearCloakConfig()
             return
         }

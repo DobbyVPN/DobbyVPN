@@ -23,6 +23,6 @@ func (s *Server) StartXray(_ context.Context, in *grpcproto.StartXrayRequest) (*
 
 func (s *Server) StopXray(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
 	log.Debugf(common.Category, "StopXray")
-	go api.StopVpn()
+	api.StopVpn()
 	return &grpcproto.Empty{}, nil
 }

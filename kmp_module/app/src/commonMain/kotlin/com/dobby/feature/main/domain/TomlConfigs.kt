@@ -139,7 +139,7 @@ data class OutlineConfig(
     val DisguisePrefix: String? = null,
     val WebSocketPath: String? = null,
 
-    // Cloak (configured inside [Outline])
+    // Cloak (configured inside an Outline profile)
     val Cloak: Boolean? = null,
     val ProxyMethod: String? = null,
     val Transport: String? = null,
@@ -215,16 +215,6 @@ data class ConnectionProfile(
 
 @Serializable
 data class TomlConfigs(
-    val Description: String? = null,
-    val Telemetry: TelemetryConfig? = null,
-    val Outline: OutlineConfig? = null,
-    val AmneziaWG: AmneziaWGConfig? = null,
-    val Xray: XrayClientConfig? = null,
-    val ExcludeIPs: ExcludeIPsConfig? = null
-)
-
-@Serializable
-data class MultiTomlConfigs(
     val Description: String? = null,
     val Telemetry: TelemetryConfig? = null,
     val Outline: List<OutlineConfig> = emptyList(),

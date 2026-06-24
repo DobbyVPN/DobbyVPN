@@ -28,11 +28,11 @@ internal class XrayTomlApplier(
     }
 
     fun apply(config: XrayClientConfig): Boolean {
-        logger.log("Applying generic [Xray] configuration")
+        logger.log("Applying generic Xray profile")
 
         // Xray usually needs at least one outbound
         if (config.outbounds == null) {
-            logger.log("Invalid [Xray]: Config is empty (no outbounds).")
+            logger.log("Invalid Xray profile: Config is empty (no outbounds).")
             xrayRepo.clearXrayConfig()
             return false
         }

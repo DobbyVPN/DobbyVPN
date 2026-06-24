@@ -20,18 +20,22 @@ class TomlConfigApplier(
             return false
         }
 
-        return if (hasMultiProtocolHeaders(connectionConfig)) {
-            applyMulti(connectionConfig)
-        } else {
-            applyLegacy(connectionConfig)
+        if (!hasProtocolHeaders(connectionConfig)) {
+            logger.log(
+                "Unsupported config: expected protocol sections [[Outline]], [[Xray]], or [[AmneziaWG]]. " +
+                    "Legacy single-table protocol sections are not supported."
+            )
+            return false
         }
+
+        return applyConfig(connectionConfig)
     }
 
-    private fun applyMulti(connectionConfig: String): Boolean {
+    private fun applyConfig(connectionConfig: String): Boolean {
         val root = try {
-            Toml.decodeFromString<MultiTomlConfigs>(connectionConfig)
+            Toml.decodeFromString<TomlConfigs>(connectionConfig)
         } catch (e: Exception) {
-            logger.log("Failed to parse multi-protocol TOML: ${e.message}")
+            logger.log("Failed to parse TOML config: ${e.message}")
             return false
         }
 
@@ -44,48 +48,6 @@ class TomlConfigApplier(
         }
 
         val applied = profileManager.replaceProfilesAndApplyFirstAvailable(profiles)
-        logger.log("Finish parseToml()")
-        return applied
-    }
-
-    private fun applyLegacy(connectionConfig: String): Boolean {
-        val root = try {
-            Toml.decodeFromString<TomlConfigs>(connectionConfig)
-        } catch (e: Exception) {
-            logger.log("Failed to parse TOML: ${e.message}")
-            return false
-        }
-
-        applyCommon(root.Telemetry, root.ExcludeIPs)
-
-        val profile = when {
-            root.Xray != null -> ConnectionProfile(
-                protocol = VpnInterface.XRAY,
-                description = root.Xray.Description,
-                sourceIndex = 0,
-                payload = Toml.encodeToString(root.Xray)
-            )
-            root.Outline != null -> ConnectionProfile(
-                protocol = VpnInterface.CLOAK_OUTLINE,
-                description = root.Outline.Description,
-                sourceIndex = 0,
-                payload = Toml.encodeToString(root.Outline)
-            )
-            root.AmneziaWG != null -> ConnectionProfile(
-                protocol = VpnInterface.AMNEZIA_WG,
-                description = null,
-                sourceIndex = 0,
-                payload = Toml.encodeToString(root.AmneziaWG)
-            )
-            else -> null
-        }
-
-        if (profile == null) {
-            logger.log("Unsupported config")
-            return false
-        }
-
-        val applied = profileManager.replaceProfilesAndApplyFirstAvailable(listOf(profile))
         logger.log("Finish parseToml()")
         return applied
     }
@@ -105,12 +67,12 @@ class TomlConfigApplier(
         }
     }
 
-    private fun hasMultiProtocolHeaders(connectionConfig: String): Boolean =
+    private fun hasProtocolHeaders(connectionConfig: String): Boolean =
         protocolHeaderRegex.containsMatchIn(connectionConfig)
 
     private fun buildOrderedProfiles(
         connectionConfig: String,
-        root: MultiTomlConfigs
+        root: TomlConfigs
     ): List<ConnectionProfile>? {
         val headers = protocolHeaderRegex.findAll(connectionConfig)
             .map { it.groupValues[1] }
@@ -123,7 +85,7 @@ class TomlConfigApplier(
             headerCounts.getOrElse("AmneziaWG") { 0 } != root.AmneziaWG.size
         ) {
             logger.log(
-                "Invalid multi-protocol config: header counts do not match parsed blocks " +
+                "Invalid TOML config: protocol header counts do not match parsed blocks " +
                     "headers=$headerCounts parsed={Outline=${root.Outline.size}, Xray=${root.Xray.size}, AmneziaWG=${root.AmneziaWG.size}}"
             )
             return null

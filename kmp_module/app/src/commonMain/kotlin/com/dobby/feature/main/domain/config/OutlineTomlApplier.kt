@@ -23,7 +23,7 @@ internal class OutlineTomlApplier(
     }
 
     fun apply(outline: OutlineConfig): Pair<Boolean, Boolean>? {
-        logger.log("Detected [Outline] config, applying Outline parameters")
+        logger.log("Detected Outline profile, applying Outline parameters")
 
         vpnRepo.setVpnInterface(VpnInterface.CLOAK_OUTLINE)
         outlineRepo.setIsOutlineEnabled(true)
@@ -34,7 +34,7 @@ internal class OutlineTomlApplier(
         val websocketEnabled = outline.WebSocket == true
 
         if (password.isEmpty()) {
-            logger.log("Invalid [Outline]: Password is required. Disabling Outline/Cloak.")
+            logger.log("Invalid Outline profile: Password is required. Disabling Outline/Cloak.")
             outlineRepo.clearOutlineConfig()
             cloakRepo.clearCloakConfig()
             return null
@@ -51,13 +51,13 @@ internal class OutlineTomlApplier(
             val server = outline.Server?.trim().orEmpty()
             val port = outline.Port ?: if (websocketEnabled) DEFAULT_HTTPS_PORT else null
             if (server.isEmpty()) {
-                logger.log("Invalid [Outline]: Server is required. Disabling Outline.")
+                logger.log("Invalid Outline profile: Server is required. Disabling Outline.")
                 outlineRepo.clearOutlineConfig()
                 cloakRepo.clearCloakConfig()
                 return null
             }
             if (port == null) {
-                logger.log("Invalid [Outline]: Port is required (unless WebSocket=true, then default is 443). Disabling Outline.")
+                logger.log("Invalid Outline profile: Port is required (unless WebSocket=true, then default is 443). Disabling Outline.")
                 outlineRepo.clearOutlineConfig()
                 cloakRepo.clearCloakConfig()
                 return null

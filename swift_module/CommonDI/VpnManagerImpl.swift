@@ -147,16 +147,40 @@ public class VpnManagerImpl: VpnManager {
                 self.logs.writeLog(log: "Failed to save VPN configuration: \(saveError)")
             } else {
                 self.logs.writeLog(log: "VPN configuration saved successfully!")
-                do {
-                    self.logs.writeLog(log: "self.vpnManager = \(manager)")
-                    self.logs.writeLog(log: "starting tunnel status=\(self.statusName(manager.connection.status)) raw=\(manager.connection.status.rawValue)")
-                    try manager.connection.startVPNTunnel()
-                    self.logs.writeLog(log: "startVPNTunnel returned; manager.connection.status = \(self.statusName(manager.connection.status)) raw=\(manager.connection.status.rawValue)")
-                } catch {
-                    self.logs.writeLog(log: "Error starting VPNTunnel \(error)")
-                    self.suppressDisconnectedForPendingStart = false
-                    self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
-                }
+                self.reloadManagerAndStartTunnel(fallbackManager: manager)
+            }
+        }
+    }
+
+    private func reloadManagerAndStartTunnel(fallbackManager: NETunnelProviderManager) {
+        NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, loadError in
+            guard let self else { return }
+            if let loadError {
+                self.logs.writeLog(log: "[start] Failed to reload VPN configuration after save: \(loadError.localizedDescription)")
+            }
+
+            let reloadedManager = managers?.first(where: { $0.localizedDescription == Self.dobbyName })
+            let managerToStart = reloadedManager ?? fallbackManager
+            if reloadedManager == nil {
+                self.logs.writeLog(log: "[start] Reloaded VPN manager not found after save; starting saved manager instance")
+            } else {
+                self.logs.writeLog(
+                    log: "[start] Reloaded VPN manager after save status=" +
+                        "\(self.statusName(managerToStart.connection.status)) raw=\(managerToStart.connection.status.rawValue)"
+                )
+            }
+
+            self.vpnManager = managerToStart
+
+            do {
+                self.logs.writeLog(log: "self.vpnManager = \(managerToStart)")
+                self.logs.writeLog(log: "starting tunnel status=\(self.statusName(managerToStart.connection.status)) raw=\(managerToStart.connection.status.rawValue)")
+                try managerToStart.connection.startVPNTunnel()
+                self.logs.writeLog(log: "startVPNTunnel returned; manager.connection.status = \(self.statusName(managerToStart.connection.status)) raw=\(managerToStart.connection.status.rawValue)")
+            } catch {
+                self.logs.writeLog(log: "Error starting VPNTunnel \(error)")
+                self.suppressDisconnectedForPendingStart = false
+                self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
             }
         }
     }
