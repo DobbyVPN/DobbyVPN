@@ -40,8 +40,13 @@ jobs:
     uses: ./.github/workflows/desktop_build.yml
     secrets: inherit
 
+  desktop_cli_tests:
+    needs: [desktop_libs_build, desktop_build]
+    uses: ./.github/workflows/desktop_cli_tests.yml
+    secrets: inherit
+
   installers_build:
-    needs: desktop_build
+    needs: desktop_cli_tests
     uses: ./.github/workflows/installers_build.yml
     secrets: inherit
 
