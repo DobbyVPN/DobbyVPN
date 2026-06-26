@@ -44,7 +44,7 @@ var (
 		connectionCheck,
 		activeClientsCheck,
 		func() error {
-			return interfacecheck.VpnInterfacesCheck([]string{"tun", "tap", "ppp", "ipsec", "wg", "awg", "awg0", "tun0", "dobby233", "utun0"})
+			return interfacecheck.VpnInterfacesCheck([]string{"tun", "tap", "ppp", "ipsec", "wg", "awg", "awg0", "tun0", "wintun", "dobby233", "utun0"})
 		},
 		func() error {
 			return dnsResolveCheck("google.com")
