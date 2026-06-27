@@ -88,7 +88,12 @@ jobs:
 
           cli="$(command -v dobby-vpn || true)"
           if [[ -z "$cli" ]]; then
-            cli="$(find /opt /usr/local/bin /usr/bin -type f \( -name 'dobby-vpn' -o -name 'Dobby Vpn' \) -perm -111 2>/dev/null | head -n 1)"
+            cli="$(
+              find /opt /usr/local/bin /usr/bin \
+                -type f \
+                \( -name 'dobby-vpn' -o -name 'Dobby Vpn' \) \
+                -perm -111 2>/dev/null | head -n 1
+            )"
           fi
           if [[ -z "$cli" ]]; then
             echo "Dobby CLI executable was not found"
@@ -96,14 +101,7 @@ jobs:
             exit 1
           fi
 
-          PORT="$PORT" "$cli" connect "$config_arg"
-          PORT="$PORT" "$cli" status --json | tee connected-status.json
-          grep -q '"code": 2' connected-status.json
-          grep -q '"state": "Connected"' connected-status.json
-          PORT="$PORT" "$cli" disconnect
-          PORT="$PORT" "$cli" status --json | tee disconnected-status.json
-          grep -q '"code": 0' disconnected-status.json
-          grep -q '"state": "Disconnected"' disconnected-status.json
+          PORT="$PORT" "$cli" check-config "$config_arg"
 
       - name: Test macOS CLI
         if: matrix.platform == 'macos'
@@ -153,14 +151,7 @@ jobs:
             exit 1
           fi
 
-          PORT="$PORT" "$cli" connect "$config_arg"
-          PORT="$PORT" "$cli" status --json | tee connected-status.json
-          grep -q '"code": 2' connected-status.json
-          grep -q '"state": "Connected"' connected-status.json
-          PORT="$PORT" "$cli" disconnect
-          PORT="$PORT" "$cli" status --json | tee disconnected-status.json
-          grep -q '"code": 0' disconnected-status.json
-          grep -q '"state": "Disconnected"' disconnected-status.json
+          PORT="$PORT" "$cli" check-config "$config_arg"
 
       - name: Test Windows CLI
         if: matrix.platform == 'windows'
@@ -185,7 +176,15 @@ jobs:
           $serviceDir = Split-Path -Parent $service
           $serviceOut = Join-Path $PWD "grpcvpnserver.out"
           $serviceErr = Join-Path $PWD "grpcvpnserver.err"
-          $serviceProcess = Start-Process -FilePath $service -WorkingDirectory $serviceDir -ArgumentList @("-port", $env:PORT) -RedirectStandardOutput $serviceOut -RedirectStandardError $serviceErr -PassThru
+          $serviceArgs = @{
+            FilePath = $service
+            WorkingDirectory = $serviceDir
+            ArgumentList = @("-port", $env:PORT)
+            RedirectStandardOutput = $serviceOut
+            RedirectStandardError = $serviceErr
+            PassThru = $true
+          }
+          $serviceProcess = Start-Process @serviceArgs
 
           try {
             $isReady = $false
@@ -209,26 +208,8 @@ jobs:
               throw "Dobby CLI executable was not found"
             }
 
-            & $cli.FullName connect $configArg
-            if ($LASTEXITCODE -ne 0) { throw "connect failed with exit code $LASTEXITCODE" }
-            & $cli.FullName status --json | Tee-Object -FilePath connected-status.json
-            if ($LASTEXITCODE -ne 0) { throw "connected status failed with exit code $LASTEXITCODE" }
-            if (-not (Select-String -Path connected-status.json -Pattern '"code": 2' -Quiet)) {
-              throw "status output did not contain connected code"
-            }
-            if (-not (Select-String -Path connected-status.json -Pattern '"state": "Connected"' -Quiet)) {
-              throw "status output did not contain connected state"
-            }
-            & $cli.FullName disconnect
-            if ($LASTEXITCODE -ne 0) { throw "disconnect failed with exit code $LASTEXITCODE" }
-            & $cli.FullName status --json | Tee-Object -FilePath disconnected-status.json
-            if ($LASTEXITCODE -ne 0) { throw "disconnected status failed with exit code $LASTEXITCODE" }
-            if (-not (Select-String -Path disconnected-status.json -Pattern '"code": 0' -Quiet)) {
-              throw "status output did not contain disconnected code"
-            }
-            if (-not (Select-String -Path disconnected-status.json -Pattern '"state": "Disconnected"' -Quiet)) {
-              throw "status output did not contain disconnected state"
-            }
+            & $cli.FullName check-config $configArg
+            if ($LASTEXITCODE -ne 0) { throw "check-config failed with exit code $LASTEXITCODE" }
           } finally {
             if ($serviceProcess -and -not $serviceProcess.HasExited) {
               Stop-Process -Id $serviceProcess.Id -Force

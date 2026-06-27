@@ -1,14 +1,22 @@
 package com.dobby.cli
 
 import com.dobby.domain.DobbyConfigsRepositoryImpl
+import com.dobby.feature.diagnostic.domain.HealthCheckManager
 import com.dobby.feature.diagnostic.domain.HealthCheckManagerImpl
+import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.LoggerManager
 import com.dobby.feature.logging.LoggerManagerImpl
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
+import com.dobby.feature.main.domain.ConnectionProfile
 import com.dobby.feature.main.domain.ConnectionStateRepository
+import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
+import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.VpnManagerImpl
+import com.dobby.feature.main.domain.config.ConnectionProfileApplier
+import com.dobby.feature.main.domain.config.ConnectionProfileStore
 import com.dobby.feature.main.presentation.ConfigsProcessor
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.feature.vpn_service.DobbyVpnService
@@ -25,12 +33,21 @@ import kotlin.time.Duration.Companion.milliseconds
 class CliClient {
     private val healthCheckLibrary: RestartableHealthCheckGrpcLibrary
     private val logsRepository: LogsRepository
+    private val logger: Logger
+    private val configsRepository: DobbyConfigsRepository
+    private val connectionStateRepository: ConnectionStateRepository
+    private val vpnManager: VpnManager
+    private val loggerManager: LoggerManager
+    private val healthCheckManager: HealthCheckManager
+    private val configsProcessor: ConfigsProcessor
+    private val profileStore: ConnectionProfileStore
+    private val profileApplier: ConnectionProfileApplier
     private val mainViewModel: MainViewModel
 
     init {
         val logEventsChannel = LogEventsChannel()
         logsRepository = LogsRepository(logEventsChannel = logEventsChannel)
-        val logger = Logger(logsRepository)
+        logger = Logger(logsRepository)
 
         healthCheckLibrary = RestartableHealthCheckGrpcLibrary(logger)
         val awgLibrary = RestartableAwgGrpcLibrary(logger)
@@ -40,8 +57,8 @@ class CliClient {
         val loggerLibrary = RestartableLoggerGrpcLibrary(logger)
         val georoutingLibrary = RestartableGeoroutingGrpcLibrary(logger)
 
-        val configsRepository = DobbyConfigsRepositoryImpl(healthCheckLibrary = healthCheckLibrary)
-        val connectionStateRepository = ConnectionStateRepository()
+        configsRepository = DobbyConfigsRepositoryImpl(healthCheckLibrary = healthCheckLibrary)
+        connectionStateRepository = ConnectionStateRepository()
         val permissionEventsChannel = PermissionEventsChannel()
         val dobbyVpnService = DobbyVpnService(
             dobbyConfigsRepository = configsRepository,
@@ -53,17 +70,22 @@ class CliClient {
             cloakLibrary = cloakLibrary,
             georoutingLibrary = georoutingLibrary,
         )
-        val vpnManager = VpnManagerImpl(connectionStateRepository, dobbyVpnService)
+        vpnManager = VpnManagerImpl(connectionStateRepository, dobbyVpnService)
+        loggerManager = LoggerManagerImpl(logger, loggerLibrary, configsRepository)
+        healthCheckManager = HealthCheckManagerImpl(logger, healthCheckLibrary)
+        configsProcessor = ConfigsProcessor(configsRepository)
+        profileStore = ConnectionProfileStore(configsRepository, logger)
+        profileApplier = ConnectionProfileApplier(configsRepository, logger)
         mainViewModel = MainViewModel(
             configsRepository = configsRepository,
             connectionStateRepository = connectionStateRepository,
             permissionEventsChannel = permissionEventsChannel,
             vpnManager = vpnManager,
-            loggerManager = LoggerManagerImpl(logger, loggerLibrary, configsRepository),
+            loggerManager = loggerManager,
             logger = logger,
             logsRepository = logsRepository,
-            healthCheckManager = HealthCheckManagerImpl(logger, healthCheckLibrary),
-            configsProcessor = ConfigsProcessor(configsRepository),
+            healthCheckManager = healthCheckManager,
+            configsProcessor = configsProcessor,
         )
     }
 
@@ -114,16 +136,7 @@ class CliClient {
             else -> return ExitCode.INVALID_ARGS
         }
 
-        val filePath = options[0]
-        val connectionUrl = if (filePath.isValidUrl()) {
-            filePath
-        } else {
-            val path = File(filePath).toPath()
-            val charset = Charset.forName("utf-8")
-            runCatching {
-                Files.readString(path, charset)
-            }.getOrElse { return ExitCode.INVALID_ARGS }
-        }
+        val connectionUrl = readConnectionArgument(options[0]) ?: return ExitCode.INVALID_ARGS
 
         val okConfig = runBlocking { mainViewModel.setConfig(connectionUrl) }
         if (!okConfig) {
@@ -146,6 +159,126 @@ class CliClient {
 
         return ExitCode.OK
     }
+
+    fun checkConfig(options: List<String>): ExitCode {
+        if (options.size != 1) {
+            return ExitCode.INVALID_ARGS
+        }
+
+        val connectionUrl = readConnectionArgument(options[0]) ?: return ExitCode.INVALID_ARGS
+
+        val okConfig = runBlocking { mainViewModel.setConfig(connectionUrl) }
+        if (!okConfig) {
+            return ExitCode.CONFIG_FORMAT_ERROR
+        }
+
+        val profiles = profileStore.getProfiles()
+        if (profiles.isEmpty()) {
+            return ExitCode.CONFIG_FORMAT_ERROR
+        }
+
+        return runBlocking {
+            checkProfiles(profiles)
+        }
+    }
+
+    private suspend fun checkProfiles(profiles: List<ConnectionProfile>): ExitCode {
+        var failures = 0
+
+        for ((index, profile) in profiles.withIndex()) {
+            val label = profile.label(index, profiles.size)
+            println("Checking $label")
+            logger.log("[CLI] Checking $label")
+
+            configsRepository.setActiveConnectionProfileIndex(index)
+            val applied = profileApplier.apply(profile)
+            if (!applied) {
+                failures += 1
+                println("FAILED $label: profile config could not be applied")
+                logger.log("[CLI] FAILED $label: profile config could not be applied")
+                continue
+            }
+
+            configsRepository.setTelemetryAttributes(configsProcessor.buildConfigAttributesJson())
+
+            try {
+                val started = startVpnServiceOnce()
+                if (!started) {
+                    failures += 1
+                    println("FAILED $label: VPN tunnel did not start")
+                    logger.log("[CLI] FAILED $label: VPN tunnel did not start")
+                    continue
+                }
+
+                val healthy = awaitHealthCheck()
+                if (!healthy) {
+                    failures += 1
+                    val state = connectionStateDescription(healthCheckLibrary.GetConnectionState())
+                    println("FAILED $label: healthcheck did not report Connected, state=$state")
+                    logger.log("[CLI] FAILED $label: healthcheck did not report Connected, state=$state")
+                    continue
+                }
+
+                println("OK $label")
+                logger.log("[CLI] OK $label")
+            } finally {
+                stopVpnRuntime()
+            }
+        }
+
+        println("Checked ${profiles.size} profile(s), failures=$failures")
+
+        return if (failures > 0) {
+            ExitCode.PROTOCOL_CHECK_FAILED
+        } else {
+            ExitCode.OK
+        }
+    }
+
+    private suspend fun startVpnServiceOnce(): Boolean {
+        connectionStateRepository.updateStatus(VpnConnectionState.CONNECTING)
+        healthCheckManager.initHealthCheck()
+        logsRepository.cleanupOldLogs()
+        loggerManager.initLogger()
+        connectionStateRepository.serviceStartedFlow.prepare()
+        vpnManager.start()
+
+        val connected = connectionStateRepository.serviceStartedFlow.awaitResult(SERVICE_START_TIMEOUT_MS)
+        if (connected) {
+            healthCheckManager.startHealthCheck()
+        }
+        return connected
+    }
+
+    private fun stopVpnRuntime() {
+        vpnManager.stop()
+        healthCheckManager.stopHealthCheck()
+        connectionStateRepository.tryUpdateStatus(VpnConnectionState.DISCONNECTED)
+    }
+
+    private fun readConnectionArgument(value: String): String? {
+        if (value.isValidUrl()) {
+            return value
+        }
+
+        val path = File(value).toPath()
+        val charset = Charset.forName("utf-8")
+        return runCatching {
+            Files.readString(path, charset)
+        }.getOrNull()
+    }
+
+    private fun ConnectionProfile.label(index: Int, total: Int): String {
+        return "profile ${index + 1}/$total: protocol=$protocol, sourceIndex=$sourceIndex"
+    }
+
+    private fun connectionStateDescription(code: Int): String =
+        when (code) {
+            0 -> "Disconnected"
+            1 -> "Connecting"
+            2 -> "Connected"
+            else -> "Unknown($code)"
+        }
 
     fun disconnect(options: List<String>): ExitCode = if (options.isNotEmpty()) {
         ExitCode.INVALID_ARGS
@@ -178,6 +311,10 @@ class CliClient {
         } else {
             ExitCode.INVALID_ARGS
         }
+    }
+
+    private companion object {
+        const val SERVICE_START_TIMEOUT_MS = 90_000L
     }
 }
 
