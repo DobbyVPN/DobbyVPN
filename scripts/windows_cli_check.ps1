@@ -67,14 +67,26 @@ function Get-AdoptiumArch {
 }
 
 function Test-GoVersion {
-  if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
-    return $false
+  $candidates = @()
+  $goCommand = Get-Command go -ErrorAction SilentlyContinue
+  if ($goCommand) {
+    $candidates += $goCommand.Source
   }
-  return ((go version) -match "go$GoVersion")
+  $candidates += (Join-Path $ToolsDir "go-$GoVersion\bin\go.exe")
+
+  foreach ($candidate in $candidates) {
+    if ((Test-Path $candidate) -and ((& $candidate version) -match "go$GoVersion")) {
+      return (Split-Path -Parent $candidate)
+    }
+  }
+
+  return $null
 }
 
 function Install-Go {
-  if (Test-GoVersion) {
+  $goBinDir = Test-GoVersion
+  if ($goBinDir) {
+    $env:PATH = "$goBinDir;$env:PATH"
     Write-Log "Go $GoVersion already available"
     return
   }

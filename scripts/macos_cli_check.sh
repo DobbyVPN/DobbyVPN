@@ -112,8 +112,28 @@ require_command_line_tools() {
   die "Install Xcode Command Line Tools from the opened dialog, then run this script again"
 }
 
+find_go() {
+  local candidates=()
+  if command -v go >/dev/null 2>&1; then
+    candidates+=("$(command -v go)")
+  fi
+  candidates+=("$TOOLS_DIR/go-${GO_VERSION}/bin/go")
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate" ]] && "$candidate" version | grep -q "go${GO_VERSION}"; then
+      dirname "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 install_go() {
-  if command -v go >/dev/null 2>&1 && go version | grep -q "go${GO_VERSION}"; then
+  local go_bin_dir
+  if go_bin_dir="$(find_go)"; then
+    export PATH="$go_bin_dir:$PATH"
     log "Go ${GO_VERSION} already available"
     return
   fi
