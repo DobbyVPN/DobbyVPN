@@ -209,8 +209,12 @@ jobs:
               throw "Dobby CLI executable was not found"
             }
 
-            & $cli.FullName check-config $configArg
-            if ($LASTEXITCODE -ne 0) { throw "check-config failed with exit code $LASTEXITCODE" }
+            $cliOut = Join-Path $PWD "dobby-cli.out"
+            $cliErr = Join-Path $PWD "dobby-cli.err"
+            $cliProcess = Start-Process -FilePath $cli.FullName -ArgumentList @("check-config", $configArg) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $cliOut -RedirectStandardError $cliErr
+            if (Test-Path $cliOut) { Get-Content $cliOut }
+            if (Test-Path $cliErr) { Get-Content $cliErr }
+            if ($cliProcess.ExitCode -ne 0) { throw "check-config failed with exit code $($cliProcess.ExitCode)" }
           } finally {
             if ($serviceProcess -and -not $serviceProcess.HasExited) {
               Stop-Process -Id $serviceProcess.Id -Force

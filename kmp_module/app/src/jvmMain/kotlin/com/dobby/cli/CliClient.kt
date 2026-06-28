@@ -113,11 +113,11 @@ class CliClient {
         ExitCode.INVALID_ARGS
     }
 
-    private suspend fun awaitHealthCheck(): Boolean {
+    private suspend fun awaitHealthCheck(timeoutSeconds: Int = DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS): Boolean {
         val initialTime = DateTime.now()
         var time = initialTime
 
-        while (time < initialTime + 15.seconds) {
+        while (time < initialTime + timeoutSeconds.seconds) {
             time = DateTime.now()
             when (healthCheckLibrary.GetConnectionState()) {
                 0, 1 -> delay(200.milliseconds)
@@ -212,15 +212,17 @@ class CliClient {
                     failures += 1
                     println("FAILED $label: VPN tunnel did not start")
                     logger.log("[CLI] FAILED $label: VPN tunnel did not start")
+                    printRecentLogs()
                     continue
                 }
 
-                val healthy = awaitHealthCheck()
+                val healthy = awaitHealthCheck(PROFILE_HEALTHCHECK_TIMEOUT_SECONDS)
                 if (!healthy) {
                     failures += 1
                     val state = connectionStateDescription(healthCheckLibrary.GetConnectionState())
                     println("FAILED $label: healthcheck did not report Connected, state=$state")
                     logger.log("[CLI] FAILED $label: healthcheck did not report Connected, state=$state")
+                    printRecentLogs()
                     continue
                 }
 
@@ -259,6 +261,13 @@ class CliClient {
         vpnManager.stop()
         healthCheckManager.stopHealthCheck()
         connectionStateRepository.tryUpdateStatus(VpnConnectionState.DISCONNECTED)
+    }
+
+    private fun printRecentLogs() {
+        println("Recent logs:")
+        logsRepository.readLogs(20).forEach {
+            println(it)
+        }
     }
 
     private fun readConnectionArgument(value: String): String? {
@@ -319,6 +328,8 @@ class CliClient {
     }
 
     private companion object {
+        const val DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS = 15
+        const val PROFILE_HEALTHCHECK_TIMEOUT_SECONDS = 30
         const val SERVICE_START_TIMEOUT_MS = 90_000L
     }
 }
