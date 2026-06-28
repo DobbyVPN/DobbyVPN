@@ -1,9 +1,6 @@
 # Local CLI VPN checks
 
-These scripts build and run the local desktop VPN path without Hydraulic Conveyor
-or platform installers. They are intended for manual checks from a freshly cloned
-repository.
-
+These scripts build and run the local desktop VPN.
 Each script does the same high-level flow:
 
 1. Install or locate local build dependencies.
