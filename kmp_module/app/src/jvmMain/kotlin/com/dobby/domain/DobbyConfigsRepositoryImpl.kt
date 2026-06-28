@@ -22,6 +22,7 @@ internal class DobbyConfigsRepositoryImpl(
     private val connectionConfigFile = storageDir.resolve("connection-config.toml")
     private val connectionProfilesFile = storageDir.resolve("connection-profiles.json")
     private val geoRoutingConfFile = storageDir.resolve("geo-routing-conf.txt")
+    private val prefixOutlineFile = storageDir.resolve("prefix-outline.txt")
 
     private fun readLargeString(key: String, file: Path): String {
         return if (Files.exists(file)) {
@@ -157,11 +158,11 @@ internal class DobbyConfigsRepositoryImpl(
     }
 
     override fun getPrefixOutline(): String {
-        return prefs.get("PrefixOutlineKey", "")
+        return readLargeString("PrefixOutlineKey", prefixOutlineFile)
     }
 
     override fun setPrefixOutline(prefix: String) {
-        prefs.put("PrefixOutlineKey", prefix)
+        writeLargeString("PrefixOutlineKey", prefixOutlineFile, prefix)
     }
 
     override fun getTcpPathOutline(): String {

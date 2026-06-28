@@ -11,6 +11,7 @@ jobs:
   desktop_cli_tests:
     name: "Desktop CLI tests - ${{ matrix.platform }}"
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

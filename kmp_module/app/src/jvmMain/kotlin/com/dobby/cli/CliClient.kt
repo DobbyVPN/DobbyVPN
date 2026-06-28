@@ -191,7 +191,12 @@ class CliClient {
             logger.log("[CLI] Checking $label")
 
             configsRepository.setActiveConnectionProfileIndex(index)
-            val applied = profileApplier.apply(profile)
+            val applied = runCatching {
+                profileApplier.apply(profile)
+            }.getOrElse { error ->
+                logger.log("[CLI] FAILED $label: profile config could not be applied: ${error.message}")
+                false
+            }
             if (!applied) {
                 failures += 1
                 println("FAILED $label: profile config could not be applied")
