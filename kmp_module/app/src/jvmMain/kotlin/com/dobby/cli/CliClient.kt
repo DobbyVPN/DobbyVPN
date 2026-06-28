@@ -283,7 +283,13 @@ class CliClient {
     }
 
     private fun ConnectionProfile.label(index: Int, total: Int): String {
-        return "profile ${index + 1}/$total: protocol=$protocol, sourceIndex=$sourceIndex"
+        val descriptionPart = description
+            ?.replace(Regex("\\s+"), " ")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { "description=\"$it\", " }
+            .orEmpty()
+        return "profile ${index + 1}/$total: ${descriptionPart}protocol=$protocol, sourceIndex=$sourceIndex"
     }
 
     private fun connectionStateDescription(code: Int): String =
