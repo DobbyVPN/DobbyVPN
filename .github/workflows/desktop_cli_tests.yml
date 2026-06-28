@@ -1,0 +1,224 @@
+name: Desktop CLI Tests
+
+on:
+  workflow_call:
+    secrets:
+      DOBBYVPN_CLI_TEST_CONFIG:
+        description: "URL or inline TOML config used by the desktop CLI tests."
+        required: true
+
+jobs:
+  desktop_cli_tests:
+    name: "Desktop CLI tests - ${{ matrix.platform }}"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-24.04
+            app_artifact: dobbyVPN-linux.deb
+            service_artifact: ubuntu_grpcvpnserver
+          - platform: macos
+            os: macos-14
+            app_artifact: dobbyVPN-macos-aarch64.zip
+            service_artifact: macos_grpcvpnserver
+          - platform: windows
+            os: windows-2022
+            app_artifact: dobbyVPN-windows.zip
+            service_artifact: windows_grpcvpnserver.exe
+
+    env:
+      PORT: 50151
+
+    steps:
+      - name: Download desktop app
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.app_artifact }}
+          path: artifacts/app
+
+      - name: Download gRPC VPN service
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.service_artifact }}
+          path: artifacts/service
+
+      - name: Prepare Windows tunnel dependency
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile wintun.zip
+          Expand-Archive -Path wintun.zip -DestinationPath artifacts/wintun
+          Copy-Item -Path "artifacts/wintun/wintun/bin/amd64/wintun.dll" -Destination "artifacts/service/wintun.dll"
+
+      - name: Test Linux CLI
+        if: matrix.platform == 'linux'
+        shell: bash
+        env:
+          DOBBYVPN_CLI_TEST_CONFIG: ${{ secrets.DOBBYVPN_CLI_TEST_CONFIG }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DOBBYVPN_CLI_TEST_CONFIG:-}" ]]; then
+            echo "DOBBYVPN_CLI_TEST_CONFIG secret is empty"
+            exit 1
+          fi
+
+          sudo apt-get install -y ./artifacts/app/dobbyVPN-linux.deb
+
+          config_arg="$DOBBYVPN_CLI_TEST_CONFIG"
+          if [[ ! "$config_arg" =~ ^https?:// ]]; then
+            printf '%s' "$DOBBYVPN_CLI_TEST_CONFIG" > cli-test-config.toml
+            config_arg="cli-test-config.toml"
+          fi
+
+          chmod +x ./artifacts/service/ubuntu_grpcvpnserver
+          sudo ./artifacts/service/ubuntu_grpcvpnserver -port "$PORT" > grpcvpnserver.log 2>&1 &
+          service_pid=$!
+          trap 'sudo kill "$service_pid" 2>/dev/null || kill "$service_pid" 2>/dev/null || true; cat grpcvpnserver.log || true' EXIT
+
+          for _ in {1..30}; do
+            if bash -c ":</dev/tcp/127.0.0.1/$PORT" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          bash -c ":</dev/tcp/127.0.0.1/$PORT"
+
+          cli="$(command -v dobby-vpn || true)"
+          if [[ -z "$cli" ]]; then
+            cli="$(
+              find /opt /usr/local/bin /usr/bin \
+                -type f \
+                \( -name 'dobby-vpn' -o -name 'Dobby Vpn' \) \
+                -perm -111 2>/dev/null | head -n 1
+            )"
+          fi
+          if [[ -z "$cli" ]]; then
+            echo "Dobby CLI executable was not found"
+            find /opt /usr/local/bin /usr/bin -maxdepth 4 -iname '*dobby*' 2>/dev/null || true
+            exit 1
+          fi
+
+          PORT="$PORT" "$cli" check-config "$config_arg"
+
+      - name: Test macOS CLI
+        if: matrix.platform == 'macos'
+        shell: bash
+        env:
+          DOBBYVPN_CLI_TEST_CONFIG: ${{ secrets.DOBBYVPN_CLI_TEST_CONFIG }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DOBBYVPN_CLI_TEST_CONFIG:-}" ]]; then
+            echo "DOBBYVPN_CLI_TEST_CONFIG secret is empty"
+            exit 1
+          fi
+
+          unzip -q artifacts/app/dobbyVPN-macos-aarch64.zip -d artifacts/app/unpacked
+
+          config_arg="$DOBBYVPN_CLI_TEST_CONFIG"
+          if [[ ! "$config_arg" =~ ^https?:// ]]; then
+            printf '%s' "$DOBBYVPN_CLI_TEST_CONFIG" > cli-test-config.toml
+            config_arg="cli-test-config.toml"
+          fi
+
+          chmod +x ./artifacts/service/macos_grpcvpnserver
+          sudo ./artifacts/service/macos_grpcvpnserver -port "$PORT" > grpcvpnserver.log 2>&1 &
+          service_pid=$!
+          trap 'sudo kill "$service_pid" 2>/dev/null || kill "$service_pid" 2>/dev/null || true; cat grpcvpnserver.log || true' EXIT
+
+          for _ in {1..30}; do
+            if nc -z 127.0.0.1 "$PORT"; then
+              break
+            fi
+            sleep 1
+          done
+          nc -z 127.0.0.1 "$PORT"
+
+          app="$(find artifacts/app/unpacked -name '*.app' -type d | head -n 1)"
+          if [[ -z "$app" ]]; then
+            echo "Dobby .app bundle was not found"
+            find artifacts/app/unpacked -maxdepth 4 -iname '*dobby*' || true
+            exit 1
+          fi
+
+          cli="$app/Contents/MacOS/Dobby Vpn"
+          if [[ ! -x "$cli" ]]; then
+            echo "Dobby CLI executable was not found at $cli"
+            find "$app/Contents/MacOS" -maxdepth 1 -type f -print || true
+            exit 1
+          fi
+
+          PORT="$PORT" "$cli" check-config "$config_arg"
+
+      - name: Test Windows CLI
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        env:
+          DOBBYVPN_CLI_TEST_CONFIG: ${{ secrets.DOBBYVPN_CLI_TEST_CONFIG }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:DOBBYVPN_CLI_TEST_CONFIG)) {
+            throw "DOBBYVPN_CLI_TEST_CONFIG secret is empty"
+          }
+
+          Expand-Archive -Path artifacts/app/dobbyVPN-windows.zip -DestinationPath artifacts/app/unpacked
+
+          $configArg = $env:DOBBYVPN_CLI_TEST_CONFIG
+          if ($configArg -notmatch '^https?://') {
+            [System.IO.File]::WriteAllText("cli-test-config.toml", $configArg, [System.Text.UTF8Encoding]::new($false))
+            $configArg = "cli-test-config.toml"
+          }
+
+          $service = Resolve-Path "artifacts/service/windows_grpcvpnserver.exe"
+          $serviceDir = Split-Path -Parent $service
+          $serviceOut = Join-Path $PWD "grpcvpnserver.out"
+          $serviceErr = Join-Path $PWD "grpcvpnserver.err"
+          $serviceArgs = @{
+            FilePath = $service
+            WorkingDirectory = $serviceDir
+            ArgumentList = @("-port", $env:PORT)
+            RedirectStandardOutput = $serviceOut
+            RedirectStandardError = $serviceErr
+            PassThru = $true
+          }
+          $serviceProcess = Start-Process @serviceArgs
+
+          try {
+            $isReady = $false
+            foreach ($attempt in 1..30) {
+              try {
+                $client = [System.Net.Sockets.TcpClient]::new("127.0.0.1", [int]$env:PORT)
+                $client.Close()
+                $isReady = $true
+                break
+              } catch {
+                Start-Sleep -Seconds 1
+              }
+            }
+            if (-not $isReady) {
+              throw "gRPC VPN service did not start on port $env:PORT"
+            }
+
+            $cli = Get-ChildItem -Path artifacts/app/unpacked -Recurse -Filter "Dobby Vpn.exe" | Select-Object -First 1
+            if (-not $cli) {
+              Get-ChildItem -Path artifacts/app/unpacked -Recurse | Where-Object { $_.Name -like "*Dobby*" }
+              throw "Dobby CLI executable was not found"
+            }
+
+            $cliOut = Join-Path $PWD "dobby-cli.out"
+            $cliErr = Join-Path $PWD "dobby-cli.err"
+            $cliProcess = Start-Process -FilePath $cli.FullName -ArgumentList @("check-config", $configArg) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $cliOut -RedirectStandardError $cliErr
+            if (Test-Path $cliOut) { Get-Content $cliOut }
+            if (Test-Path $cliErr) { Get-Content $cliErr }
+            if ($cliProcess.ExitCode -ne 0) { throw "check-config failed with exit code $($cliProcess.ExitCode)" }
+          } finally {
+            if ($serviceProcess -and -not $serviceProcess.HasExited) {
+              Stop-Process -Id $serviceProcess.Id -Force
+            }
+            if (Test-Path $serviceOut) { Get-Content $serviceOut }
+            if (Test-Path $serviceErr) { Get-Content $serviceErr }
+          }

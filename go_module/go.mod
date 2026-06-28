@@ -26,8 +26,8 @@ require (
 	go.opentelemetry.io/otel/sdk/log v0.20.0
 	golang.getoutline.org/sdk v0.0.21
 	golang.getoutline.org/sdk/x v0.1.0
-	golang.org/x/crypto v0.51.0
-	golang.org/x/sys v0.45.0
+	golang.org/x/crypto v0.52.0
+	golang.org/x/sys v0.46.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
 	google.golang.org/grpc v1.81.1
@@ -50,7 +50,7 @@ require (
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/schema v1.4.1 // indirect
-	github.com/klauspost/compress v1.18.1 // indirect
+	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
 	github.com/miekg/dns v1.1.68 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
@@ -94,7 +94,7 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/juju/ratelimit v1.0.2 // indirect
-	github.com/refraction-networking/utls v1.8.1 // indirect
+	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect

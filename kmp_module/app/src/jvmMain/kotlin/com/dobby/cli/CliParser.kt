@@ -34,15 +34,25 @@ COMMANDS:
         Establish a connection using a configuration file
 
         USAGE:
-            ./dobby connect <config_path> [--skip-healthcheck]
+            ./dobby connect <config_path_or_url> [--skip-healthcheck]
 
         ARGS:
-            <config_path>
+            <config_path_or_url>
                 Path to configuration file. Can be remote file provided via URL.
 
         OPTIONS:
             --skip-healthcheck
                 Skip healthcheck confirmation after connecting
+
+    check-config
+        Check every protocol profile from a configuration file
+
+        USAGE:
+            ./dobby check-config <config_path_or_url>
+
+        ARGS:
+            <config_path_or_url>
+                Path to configuration file. Can be remote file provided via URL.
 
     disconnect
         Disconnect the current session
@@ -83,6 +93,11 @@ fun runCliClient(args: Array<String>) {
 
         "connect" -> {
             val exitCode = cliClient.connect(options)
+            properExit(exitCode)
+        }
+
+        "check-config" -> {
+            val exitCode = cliClient.checkConfig(options)
             properExit(exitCode)
         }
 
