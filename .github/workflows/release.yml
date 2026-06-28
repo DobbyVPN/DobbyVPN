@@ -2,6 +2,7 @@ name: Release
 
 # Configures this workflow to run every time a change is pushed to the main branch.
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
