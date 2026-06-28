@@ -35,6 +35,13 @@ die() {
   exit 1
 }
 
+download_file() {
+  local url="$1"
+  local output="$2"
+
+  curl --fail --location --show-error --progress-bar --retry 3 --connect-timeout 30 "$url" -o "$output"
+}
+
 cleanup() {
   if [[ -n "${SERVICE_PID}" ]] && kill -0 "${SERVICE_PID}" 2>/dev/null; then
     log "Stopping gRPC VPN service"
@@ -138,10 +145,20 @@ install_go() {
 
   local tarball="/tmp/go${GO_VERSION}.linux-${arch}.tar.gz"
   log "Installing Go ${GO_VERSION}"
-  curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" -o "$tarball"
+  download_file "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" "$tarball"
+  log "Extracting Go ${GO_VERSION}"
   sudo rm -rf /usr/local/go
   sudo tar -C /usr/local -xzf "$tarball"
   export PATH="/usr/local/go/bin:$PATH"
+}
+
+accept_android_licenses() {
+  log "Accepting Android SDK licenses"
+  set +o pipefail
+  yes | sdkmanager --licenses
+  local sdkmanager_status="${PIPESTATUS[1]}"
+  set -o pipefail
+  return "$sdkmanager_status"
 }
 
 install_android_sdk() {
@@ -162,12 +179,14 @@ install_android_sdk() {
   local tools_dir="$sdk_root/cmdline-tools"
   log "Installing Android SDK command line tools"
   mkdir -p "$tools_dir"
-  curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o "$tools_zip"
+  download_file "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" "$tools_zip"
+  log "Extracting Android SDK command line tools"
   rm -rf "$tools_dir/latest" "$tools_dir/cmdline-tools"
   unzip -q "$tools_zip" -d "$tools_dir"
   mv "$tools_dir/cmdline-tools" "$tools_dir/latest"
 
-  yes | sdkmanager --licenses >/dev/null
+  accept_android_licenses
+  log "Installing Android SDK packages"
   sdkmanager "platforms;android-35" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 }
 

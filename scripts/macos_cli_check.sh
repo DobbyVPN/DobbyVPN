@@ -36,6 +36,13 @@ die() {
   exit 1
 }
 
+download_file() {
+  local url="$1"
+  local output="$2"
+
+  curl --fail --location --show-error --progress-bar --retry 3 --connect-timeout 30 "$url" -o "$output"
+}
+
 cleanup() {
   if [[ -n "${SERVICE_PID}" ]] && kill -0 "${SERVICE_PID}" 2>/dev/null; then
     log "Stopping gRPC VPN service"
@@ -121,7 +128,8 @@ install_go() {
     log "Installing Go ${GO_VERSION} locally"
     rm -rf "$extract_dir" "$go_root"
     mkdir -p "$TOOLS_DIR" "$extract_dir"
-    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.darwin-${arch}.tar.gz" -o "$tarball"
+    download_file "https://go.dev/dl/go${GO_VERSION}.darwin-${arch}.tar.gz" "$tarball"
+    log "Extracting Go ${GO_VERSION}"
     tar -xzf "$tarball" -C "$extract_dir"
     mv "$extract_dir/go" "$go_root"
   else
@@ -163,7 +171,8 @@ install_jdk() {
     log "Installing JDK 17 locally"
     rm -rf "$extract_dir" "$jdk_root"
     mkdir -p "$TOOLS_DIR" "$extract_dir"
-    curl -LfsS "https://api.adoptium.net/v3/binary/latest/17/ga/mac/$(adoptium_arch)/jdk/hotspot/normal/eclipse" -o "$tarball"
+    download_file "https://api.adoptium.net/v3/binary/latest/17/ga/mac/$(adoptium_arch)/jdk/hotspot/normal/eclipse" "$tarball"
+    log "Extracting JDK 17"
     tar -xzf "$tarball" -C "$extract_dir"
     java_home="$(find "$extract_dir" -path '*/Contents/Home' -type d | head -n 1)"
     [[ -n "$java_home" ]] || die "Downloaded JDK 17 archive did not contain Contents/Home"
@@ -174,6 +183,15 @@ install_jdk() {
 
   export JAVA_HOME="$jdk_root"
   export PATH="$JAVA_HOME/bin:$PATH"
+}
+
+accept_android_licenses() {
+  log "Accepting Android SDK licenses"
+  set +o pipefail
+  yes | sdkmanager --licenses
+  local sdkmanager_status="${PIPESTATUS[1]}"
+  set -o pipefail
+  return "$sdkmanager_status"
 }
 
 install_android_sdk() {
@@ -195,12 +213,14 @@ install_android_sdk() {
   tools_dir="$sdk_root/cmdline-tools"
   log "Installing Android SDK command line tools"
   mkdir -p "$tools_dir"
-  curl -fsSL "https://dl.google.com/android/repository/commandlinetools-mac-11076708_latest.zip" -o "$tools_zip"
+  download_file "https://dl.google.com/android/repository/commandlinetools-mac-11076708_latest.zip" "$tools_zip"
+  log "Extracting Android SDK command line tools"
   rm -rf "$tools_dir/latest" "$tools_dir/cmdline-tools"
   unzip -q "$tools_zip" -d "$tools_dir"
   mv "$tools_dir/cmdline-tools" "$tools_dir/latest"
 
-  yes | sdkmanager --licenses >/dev/null
+  accept_android_licenses
+  log "Installing Android SDK packages"
   sdkmanager "platforms;android-35" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 }
 
