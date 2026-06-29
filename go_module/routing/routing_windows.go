@@ -55,6 +55,35 @@ func ExecuteCommand(command string) (string, error) {
 	return string(output), nil
 }
 
+func executeNetshCommand(args ...string) (string, error) {
+	log.Debugf(Category, "Outline/routing: Executing command: %s", log.MaskStr(formatCommandForLog("netsh", args...)))
+
+	cmd := exec.Command("netsh", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow: true,
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("command execution failed: %w, output: %s", err, output)
+	}
+	log.Debugf(Category, "Outline/routing: Command executed: %s, output: %s", log.MaskStr(formatCommandForLog("netsh", args...)), output)
+	return string(output), nil
+}
+
+func formatCommandForLog(name string, args ...string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, name)
+	for _, arg := range args {
+		if strings.ContainsAny(arg, " \t\"") {
+			parts = append(parts, fmt.Sprintf("%q", arg))
+		} else {
+			parts = append(parts, arg)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func startIPv6Block() error {
 	log.Debugf(Category, "Outline/routing: Installing IPv6 outbound block rule")
 
@@ -144,16 +173,24 @@ func EnsureProxyRoute(proxyIp string, gatewayIp string, interfaceName string) (b
 	}
 
 	// Try updating an existing route first (locale-independent duplicate handling)
-	setCommand := fmt.Sprintf("netsh interface ipv4 set route %s/32 nexthop=%s interface=\"%s\" metric=0 store=active",
-		proxyIp, gatewayIp, interfaceName)
-	if _, err := ExecuteCommand(setCommand); err == nil {
+	if _, err := executeNetshCommand(
+		"interface", "ipv4", "set", "route", proxyIp+"/32",
+		"nexthop="+gatewayIp,
+		"interface="+interfaceName,
+		"metric=0",
+		"store=active",
+	); err == nil {
 		log.Debugf(Category, "Outline/routing: Proxy route already exists for IP %s; leaving it unchanged", proxyIp)
 		return false, nil
 	}
 
-	addCommand := fmt.Sprintf("netsh interface ipv4 add route %s/32 nexthop=%s interface=\"%s\" metric=0 store=active",
-		proxyIp, gatewayIp, interfaceName)
-	if _, err := ExecuteCommand(addCommand); err != nil {
+	if _, err := executeNetshCommand(
+		"interface", "ipv4", "add", "route", proxyIp+"/32",
+		"nexthop="+gatewayIp,
+		"interface="+interfaceName,
+		"metric=0",
+		"store=active",
+	); err != nil {
 		return false, fmt.Errorf("failed to add proxy route for IP %s: %w", proxyIp, err)
 	}
 	return true, nil
