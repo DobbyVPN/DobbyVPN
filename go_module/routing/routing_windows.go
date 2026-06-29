@@ -56,7 +56,8 @@ func ExecuteCommand(command string) (string, error) {
 }
 
 func executeNetshCommand(args ...string) (string, error) {
-	log.Debugf(Category, "Outline/routing: Executing command: %s", log.MaskStr(formatCommandForLog("netsh", args...)))
+	commandForLog := formatCommandForLog("netsh", args...)
+	log.Debugf(Category, "Outline/routing: Executing command: %s", log.MaskStr(commandForLog))
 
 	cmd := exec.Command("netsh", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -67,7 +68,7 @@ func executeNetshCommand(args ...string) (string, error) {
 	if err != nil {
 		return string(output), fmt.Errorf("command execution failed: %w, output: %s", err, output)
 	}
-	log.Debugf(Category, "Outline/routing: Command executed: %s, output: %s", log.MaskStr(formatCommandForLog("netsh", args...)), output)
+	log.Debugf(Category, "Outline/routing: Command executed: %s, output: %s", log.MaskStr(commandForLog), output)
 	return string(output), nil
 }
 
@@ -313,6 +314,11 @@ func FindInterfaceIPByGateway(gatewayIP string) (string, error) {
 			parts := strings.Fields(line)
 			if len(parts) >= 4 {
 				interfaceIP := parts[3]
+				iface, err := GetNetworkInterfaceByIP(interfaceIP)
+				if err == nil && IsTunnelInterfaceName(iface.Name) {
+					log.Debugf(Category, "Outline/routing: Skipping tunnel interface %s for gateway %s", iface.Name, gatewayIP)
+					continue
+				}
 				return interfaceIP, nil
 			}
 		}
@@ -323,6 +329,15 @@ func FindInterfaceIPByGateway(gatewayIP string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no interface %s", gatewayIP)
+}
+
+func IsTunnelInterfaceName(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.Contains(lower, "wintun") ||
+		strings.Contains(lower, "dobby") ||
+		strings.Contains(lower, "wireguard") ||
+		strings.Contains(lower, "tap") ||
+		strings.Contains(lower, "tun")
 }
 
 func GetNetworkInterfaceByIP(currentIP string) (*net.Interface, error) {

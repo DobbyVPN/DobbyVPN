@@ -18,6 +18,7 @@ import (
 type CoreClient struct {
 	app    *internal.App
 	cancel func()
+	done   chan struct{}
 
 	mu sync.Mutex
 }
@@ -53,16 +54,20 @@ func (c *CoreClient) Connect() error {
 
 	if c.cancel != nil {
 		c.cancel()
+		c.waitForShutdownLocked("before reconnect")
 		c.cancel = nil
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
+	c.done = make(chan struct{})
 
 	// Channel to receive initialization result from the goroutine
 	initResult := make(chan error, 1)
+	done := c.done
 
 	go func() {
+		defer close(done)
 		defer func() {
 			if r := recover(); r != nil {
 				err := fmt.Errorf("core client crashed: %v", r)
@@ -96,6 +101,7 @@ func (c *CoreClient) Connect() error {
 	case err := <-initResult:
 		if err != nil {
 			c.cancel()
+			c.waitForShutdownLocked("after initialization error")
 			c.cancel = nil
 			return fmt.Errorf("failed to initialize core client connection: %w", err)
 		}
@@ -104,6 +110,7 @@ func (c *CoreClient) Connect() error {
 		return nil
 	case <-time.After(30 * time.Second):
 		c.cancel()
+		c.waitForShutdownLocked("after initialization timeout")
 		c.cancel = nil
 		return fmt.Errorf("timeout waiting for core client connection initialization")
 	}
@@ -122,12 +129,28 @@ func (c *CoreClient) Disconnect() error {
 	if c.cancel != nil {
 		log.Debugf(coreCommon.Category, "Disconnect: c.cancel != nil")
 		c.cancel()
+		c.waitForShutdownLocked("disconnect")
 		c.cancel = nil
 	}
 	log.Debugf(coreCommon.Category, "Disconnect: common.Client.MarkInactive")
 	common.Client.MarkInactive(coreCommon.Name)
 	log.Debugf(coreCommon.Category, "Disconnect: MarkedInactive")
 	return nil
+}
+
+func (c *CoreClient) waitForShutdownLocked(reason string) {
+	if c.done == nil {
+		return
+	}
+
+	done := c.done
+	select {
+	case <-done:
+		log.Debugf(coreCommon.Category, "Core/app shutdown completed after %s", reason)
+	case <-time.After(10 * time.Second):
+		log.Debugf(coreCommon.Category, "Core/app shutdown wait timed out after %s", reason)
+	}
+	c.done = nil
 }
 
 func (c *CoreClient) Refresh() error {

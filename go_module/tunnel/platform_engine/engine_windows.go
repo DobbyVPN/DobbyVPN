@@ -40,6 +40,9 @@ func startPlatformEngine(cfg interface{}) error {
 	uplinkIface := c.UplinkIface
 
 	log.Debugf(Category, "[Engine][Windows] proxy=%s iface=%s", proxyAddr, uplinkIface)
+	if routing.IsTunnelInterfaceName(uplinkIface) {
+		return fmt.Errorf("refusing to use tunnel interface %q as Windows uplink", uplinkIface)
+	}
 
 	key := &engine.Key{
 		Proxy:     fmt.Sprintf("socks5://%s", proxyAddr),
