@@ -24,7 +24,7 @@ jobs:
             go_module/macos_grpcvpnserver
             go_module/libdobby_bridge.dll
             go_module/libdobby_bridge.so
-          key: ${{ runner.os }}-desktop-vpn-lib-${{ hashFiles('.go-version', 'go_module/**', 'Cloak/internal/**') }}
+          key: ${{ runner.os }}-desktop-vpn-lib-${{ hashFiles('.go-version', 'go_module/**', 'Cloak/internal/**', '.github/workflows/desktop_libs_generate.yml') }}
 
       - name: Set up Go
         if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
@@ -65,7 +65,7 @@ jobs:
         if: matrix.os == 'windows' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
-          go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
+          go build -trimpath -ldflags="-buildid= -extldflags '-static'" -o windows_grpcvpnserver.exe ./desktop_exports/
         env:
           CGO_ENABLED: '1'
           GOOS: 'windows'
@@ -96,6 +96,11 @@ jobs:
         working-directory: go_module
         run: |
           go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
+          LIBCPP=""
+          for f in /usr/lib/llvm-21/lib/x86_64-linux-gnu/libc++.so.1 /usr/lib/llvm-21/lib/libc++.so.1 /usr/lib/x86_64-linux-gnu/libc++.so.1; do
+            if [ -e "$f" ]; then LIBCPP="$f"; break; fi
+          done
+          if [ -n "$LIBCPP" ]; then cp -L "$LIBCPP" ./libc++.so.1; else echo "64-bit libc++.so.1 not found"; exit 1; fi
         env:
           CGO_ENABLED: '1'
           GOOS: 'linux'
@@ -134,6 +139,7 @@ jobs:
           path: |
             go_module/ubuntu_grpcvpnserver
             go_module/libdobby_bridge.so
+            go_module/libc++.so.1
 
       - name: Upload built libraries
         if: matrix.os == 'macos'
