@@ -5,7 +5,6 @@ import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
-import com.dobby.feature.main.domain.clearVpnConfig
 import interop.awg.AwgLibrary
 import interop.cloak.CloakLibrary
 import interop.georouting.GeoroutingLibrary
@@ -104,7 +103,7 @@ class DobbyVpnService(
     private fun stopCurrentLocked() {
         stopProtocols()
         georoutingLibrary.ClearGeoRoutingConf()
-        dobbyConfigsRepository.clearVpnConfig()
+        logger.log("VPN runtime stopped; saved connection profiles remain available")
     }
 
     private fun stopProtocols() {

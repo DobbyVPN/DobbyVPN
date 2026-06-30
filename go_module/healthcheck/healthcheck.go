@@ -75,6 +75,8 @@ func GetConnectionState() ConnectionState {
 
 func InitHealthCheck() {
 	log.Debugf(common.Category, "Called InitHealthCheck")
+	switchState(Disconnected)
+	resetFailedChecks()
 }
 
 func StartHealthCheck() {

@@ -23,8 +23,9 @@ class XrayVpnInterfaceFactory(
             .setSession("Xray")
             .setMtu(1500) // Adjust if necessary
             .addAddress("10.233.233.1", 24) // Dummy local IP for the TUN
-            .addDisallowedApplication(context.packageName)
             .addIpv6BlockingRoute(logger, "Xray")
+
+        logger.log("Dobby app traffic is included in Xray VPN so Android health checks and latency probes use the tunnel")
 
         builder.addDnsServer("1.1.1.1")
 

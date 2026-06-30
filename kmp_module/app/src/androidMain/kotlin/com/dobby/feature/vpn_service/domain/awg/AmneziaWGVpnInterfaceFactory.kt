@@ -21,7 +21,8 @@ class AmneziaWGVpnInterfaceFactory(
         val builder = vpnService.Builder()
             .setSession("AmneziaWG")
             .setMtu(amneziaWGConfgig.Interface.MTU?.toInt() ?: 1280)
-            .addDisallowedApplication(context.packageName)
+
+        logger.log("Dobby app traffic is included in AmneziaWG VPN so Android health checks and latency probes use the tunnel")
 
         try {
             val parts = amneziaWGConfgig.Interface.Address.split("/")
