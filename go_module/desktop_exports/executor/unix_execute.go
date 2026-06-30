@@ -17,7 +17,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-func run(port int) error {
+func run(port int) {
 	// Convert logrus.Fatal (os.Exit) into a panic so goroutines can recover from it
 	// instead of crashing the entire gRPC server process.
 	logrus.StandardLogger().ExitFunc = func(code int) {
@@ -25,9 +25,9 @@ func run(port int) error {
 	}
 
 	flag.Parse()
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	lis, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
-		return fmt.Errorf("failed to listen: %v", err)
+		panic(fmt.Sprintf("failed to listen: %v", err))
 	}
 	s := grpc.NewServer()
 
@@ -35,10 +35,8 @@ func run(port int) error {
 
 	log.Debugf(common.Category, "server listening at %v", lis.Addr())
 	if err := s.Serve(lis); err != nil {
-		return fmt.Errorf("failed to serve: %v", err)
+		panic(fmt.Sprintf("failed to serve: %v", err))
 	}
-
-	return nil
 }
 
 func (c *Executor) Execute(port int, mode string) {

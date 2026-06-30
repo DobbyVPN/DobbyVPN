@@ -22,7 +22,7 @@ class TomlConfigApplier(
 
         if (!hasProtocolHeaders(connectionConfig)) {
             logger.log(
-                "Unsupported config: expected protocol sections [[Outline]], [[Xray]], or [[AmneziaWG]]. " +
+                "Unsupported config: expected protocol sections [[Outline]], [[Xray]], [[AmneziaWG]], or [[TrustTunnel]]. " +
                     "Legacy single-table protocol sections are not supported."
             )
             return false
@@ -82,11 +82,12 @@ class TomlConfigApplier(
         if (
             headerCounts.getOrElse("Outline") { 0 } != root.Outline.size ||
             headerCounts.getOrElse("Xray") { 0 } != root.Xray.size ||
-            headerCounts.getOrElse("AmneziaWG") { 0 } != root.AmneziaWG.size
+            headerCounts.getOrElse("AmneziaWG") { 0 } != root.AmneziaWG.size ||
+            headerCounts.getOrElse("TrustTunnel") { 0 } != root.TrustTunnel.size
         ) {
             logger.log(
                 "Invalid TOML config: protocol header counts do not match parsed blocks " +
-                    "headers=$headerCounts parsed={Outline=${root.Outline.size}, Xray=${root.Xray.size}, AmneziaWG=${root.AmneziaWG.size}}"
+                    "headers=$headerCounts parsed={Outline=${root.Outline.size}, Xray=${root.Xray.size}, AmneziaWG=${root.AmneziaWG.size}, TrustTunnel=${root.TrustTunnel.size}}"
             )
             return null
         }
@@ -94,6 +95,7 @@ class TomlConfigApplier(
         var outlineIndex = 0
         var xrayIndex = 0
         var awgIndex = 0
+        var trustTunnelIndex = 0
 
         return headers.mapIndexed { index, name ->
             when (name) {
@@ -121,12 +123,21 @@ class TomlConfigApplier(
                         payload = Toml.encodeToString(it)
                     )
                 }
+                "TrustTunnel" -> root.TrustTunnel[trustTunnelIndex++].let {
+                    ConnectionProfile(
+                        protocol = VpnInterface.TRUST_TUNNEL,
+                        description = null,
+                        sourceIndex = index,
+                        payload = Toml.encodeToString(it)
+                    )
+                }
                 else -> error("Unexpected protocol header: $name")
             }
         }
     }
 
     private companion object {
-        val protocolHeaderRegex = Regex("""(?m)^\s*\[\[\s*(Outline|Xray|AmneziaWG)\s*]]""")
+        val protocolHeaderRegex = Regex("""(?m)^\s*\[\[\s*(Outline|Xray|AmneziaWG|TrustTunnel)\s*]]""")
     }
+
 }

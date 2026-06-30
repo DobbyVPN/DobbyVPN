@@ -80,6 +80,7 @@ jobs:
           path: swift_module/build/ipa/*.ipa
 
       - name: Fastlane upload_testflight
+        if: ${{ github.ref == 'refs/heads/main' }}
         env:
           APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
           APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}

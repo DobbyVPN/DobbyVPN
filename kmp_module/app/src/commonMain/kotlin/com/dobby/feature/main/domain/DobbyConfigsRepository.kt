@@ -7,6 +7,7 @@ interface DobbyConfigsRepository :
     DobbyConfigsRepositoryCloak,
     DobbyConfigsRepositoryAwg,
     DobbyConfigsRepositoryXray,
+    DobbyConfigsRepositoryTrustTunnel,
     DobbyConfigsRepositoryVpn {
 
     fun getConnectionURL(): String
@@ -49,6 +50,7 @@ enum class VpnInterface {
     CLOAK_OUTLINE,
     AMNEZIA_WG,
     XRAY,
+    TRUST_TUNNEL,
     NONE;
 
     companion object {

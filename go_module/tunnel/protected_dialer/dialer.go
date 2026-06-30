@@ -219,3 +219,14 @@ func (p *ProtectedDirectProxy) DialContext(ctx context.Context, metadata *M.Meta
 func (p *ProtectedDirectProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	return DialUDPWithProtect(context.Background(), metadata.Network.String(), metadata.DestinationAddress())
 }
+
+// ProtectSocketInt allows external modules (like C/C++ integrations) to apply socket protection
+// natively using DobbyVPN's cross-platform socket protector.
+func ProtectSocketInt(fd int) {
+	if protector == nil {
+		log.Infof("protected_dialer", "[Protect] WARNING: no socket protector registered for ProtectSocketInt fd=%d", fd)
+		return
+	}
+	log.Infof("protected_dialer", "[Protect] ProtectSocketInt protecting fd=%d", fd)
+	protector.Protect(uintptr(fd), "tcp")
+}
