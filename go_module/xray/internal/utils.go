@@ -1,17 +1,13 @@
 package internal
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
-	"time"
 
 	xrayLog "github.com/xtls/xray-core/common/log"
 )
-
-const serverResolveTimeout = 5 * time.Second
 
 // ExtractServerIP parses the generic VLESS JSON to find the remote server IP.
 func ExtractServerIP(configStr string) (string, error) {
@@ -76,18 +72,13 @@ func resolveIP(addr string) (string, error) {
 		return "", errors.New("IPv6 address not supported; routing requires IPv4")
 	}
 
-	// If it's a domain, resolve it with a bounded timeout so protocol probes cannot
-	// block for the platform resolver's full retry window.
-	ctx, cancel := context.WithTimeout(context.Background(), serverResolveTimeout)
-	defer cancel()
-
-	resolver := net.Resolver{}
-	addrs, err := resolver.LookupIPAddr(ctx, addr)
+	// If it's a domain, resolve it
+	ips, err := net.LookupIP(addr)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve xray address %q: %w", addr, err)
 	}
-	for _, addr := range addrs {
-		if ip4 := addr.IP.To4(); ip4 != nil {
+	for _, ip := range ips {
+		if ip4 := ip.To4(); ip4 != nil {
 			return ip4.String(), nil
 		}
 	}
