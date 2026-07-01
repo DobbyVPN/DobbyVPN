@@ -381,6 +381,7 @@ class MainViewModel(
                 logger.log("[ProtocolSelection] Probe failed $label: VPN tunnel did not start")
                 return null
             }
+            waitBeforeTunnelProbe(label)
 
             val averageLatencyMs = measureHealthCheckAverageLatencyMillis(
                 maxAttempts = PROFILE_TUNNEL_PROBE_ATTEMPTS,
@@ -420,6 +421,7 @@ class MainViewModel(
 
         val started = startActiveVpnServiceOnce(startDetector = true)
         if (!started) return false
+        waitBeforeTunnelProbe(profile.profile.label(profile.index, profile.total))
 
         return (measureHealthCheckAverageLatencyMillis(maxAttempts = SELECTED_TUNNEL_PROBE_ATTEMPTS) != null).also { healthy ->
             if (!healthy) {
@@ -448,7 +450,8 @@ class MainViewModel(
 
         logger.log("Start tunnel service")
         connectionStateRepository.serviceStartedFlow.prepare()
-        vpnManager.start()
+        connectionStateRepository.vpnNetworkReadyFlow.prepare()
+        vpnManager.start(isProtocolProbe = !startDetector)
 
         logger.log("Await service started result")
         val connected = connectionStateRepository.serviceStartedFlow.awaitResult(SERVICE_START_TIMEOUT_MS)
@@ -512,6 +515,20 @@ class MainViewModel(
         }
     }
 
+    private suspend fun waitBeforeTunnelProbe(label: String) {
+        if (stopRequested) return
+        if (!vpnManager.supportsVpnNetworkReadySignal) {
+            logger.log("[ProtocolSelection] VPN network route wait is not supported before tunnel probe $label")
+            return
+        }
+        logger.log("[ProtocolSelection] Waiting VPN network route before tunnel probe $label")
+        val ready = connectionStateRepository.vpnNetworkReadyFlow.awaitResult(TUNNEL_PROBE_ROUTE_READY_TIMEOUT_MS)
+        logger.log(
+            "[ProtocolSelection] VPN network route wait finished " +
+                "ready=$ready timeoutMs=$TUNNEL_PROBE_ROUTE_READY_TIMEOUT_MS $label"
+        )
+    }
+
     private suspend fun measureHealthCheckAverageLatencyMillis(
         maxAttempts: Int = DEFAULT_TUNNEL_PROBE_ATTEMPTS,
         retryDelayMs: Long = DEFAULT_TUNNEL_PROBE_RETRY_DELAY_MS,
@@ -571,6 +588,7 @@ class MainViewModel(
         const val PROFILE_TUNNEL_PROBE_ATTEMPTS = 1
         const val PROFILE_TUNNEL_PROBE_RETRY_DELAY_MS = 500L
         const val SELECTED_TUNNEL_PROBE_ATTEMPTS = 1
+        const val TUNNEL_PROBE_ROUTE_READY_TIMEOUT_MS = 1_500L
     }
 
     private data class ProfileProbeResult(

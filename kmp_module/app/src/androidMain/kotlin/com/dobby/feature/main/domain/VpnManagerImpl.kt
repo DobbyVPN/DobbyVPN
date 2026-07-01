@@ -6,8 +6,9 @@ import com.dobby.feature.vpn_service.DobbyVpnService
 class VpnManagerImpl(
     private val context: Context,
 ): VpnManager {
+    override val supportsVpnNetworkReadySignal: Boolean = true
 
-    override fun start() {
+    override fun start(isProtocolProbe: Boolean) {
         DobbyVpnService
             .createIntent(context)
             .let(context::startService)

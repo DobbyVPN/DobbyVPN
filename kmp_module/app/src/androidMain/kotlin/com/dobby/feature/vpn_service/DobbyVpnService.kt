@@ -74,17 +74,21 @@ class DobbyVpnService : VpnService() {
                 override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
                     val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                     val validated = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    val hasVpnTransport = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
                     val transports = buildList {
                         if (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) add("WIFI")
                         if (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) add("CELL")
                         if (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) add("ETH")
-                        if (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) add("VPN")
+                        if (hasVpnTransport) add("VPN")
                     }.joinToString("|")
                     logger.log(
                         "[svc:$serviceId] net:onCapabilitiesChanged " +
                             "net=$network transports=$transports " +
                             "internet=$hasInternet validated=$validated"
                     )
+                    if (hasVpnTransport) {
+                        connectionState.tryUpdateVpnNetworkReady(true)
+                    }
                 }
             }
             defaultNetworkCallback = cb
@@ -126,6 +130,7 @@ class DobbyVpnService : VpnService() {
                         teardownVpn()
                     } else {
                         logger.log("[svc:$serviceId] startService(): existing VPN interface detected; switching protocol without closing interface")
+                        connectionState.tryUpdateVpnNetworkReady(true)
                         stopCloakSidecarForProtocolRestart()
                         goTunFd = null
                     }
