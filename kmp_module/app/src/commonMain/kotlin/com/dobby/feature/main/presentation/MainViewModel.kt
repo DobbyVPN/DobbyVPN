@@ -568,9 +568,9 @@ class MainViewModel(
         const val SERVICE_START_TIMEOUT_MS = 90_000L
         const val DEFAULT_TUNNEL_PROBE_ATTEMPTS = 1
         const val DEFAULT_TUNNEL_PROBE_RETRY_DELAY_MS = 500L
-        const val PROFILE_TUNNEL_PROBE_ATTEMPTS = 2
+        const val PROFILE_TUNNEL_PROBE_ATTEMPTS = 1
         const val PROFILE_TUNNEL_PROBE_RETRY_DELAY_MS = 500L
-        const val SELECTED_TUNNEL_PROBE_ATTEMPTS = 2
+        const val SELECTED_TUNNEL_PROBE_ATTEMPTS = 1
     }
 
     private data class ProfileProbeResult(
