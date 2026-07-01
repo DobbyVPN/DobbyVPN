@@ -428,7 +428,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage bytes=\(messageData.count)")
-        if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
+        if let msg = String(data: messageData, encoding: .utf8), msg == "restartActiveProtocol" {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] handleAppMessage restartActiveProtocol")
+            Task { @MainActor in
+                let ok = await self.restartActiveProtocolFromAppMessage()
+                let response = (ok ? "ok" : "error").data(using: .utf8)
+                completionHandler?(response)
+            }
+        } else if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory")
             let response = "Memory:\(reportMemoryUsageMB())".data(using: .utf8)
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory responseBytes=\(response?.count ?? -1)")
@@ -440,6 +447,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage nonUtf8 echo bytes=\(messageData.count)")
             }
             completionHandler?(messageData)
+        }
+    }
+
+    @MainActor
+    private func restartActiveProtocolFromAppMessage() async -> Bool {
+        logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart begin reason=appMessage restartActiveProtocol")
+        stopProtocols(reason: "appMessage restartActiveProtocol")
+        do {
+            try await startActiveProtocol(reason: "appMessage restartActiveProtocol", teardownOnFailure: false)
+            logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart success reason=appMessage restartActiveProtocol")
+            return true
+        } catch {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart failed reason=appMessage restartActiveProtocol: \(error.localizedDescription)")
+            configsRepository.setHealthCheckState(state: 0)
+            return false
         }
     }
 

@@ -109,6 +109,7 @@ func anyHTTPPingCheck(hosts []string) error {
 	log.Debugf(hcCommon.Category, "Check: HTTP connectivity candidates=%s", strings.Join(hosts, ", "))
 
 	var errs []error
+	successes := 0
 	for _, host := range hosts {
 		if err := pingHostCheck(host); err != nil {
 			log.Warnf(hcCommon.Category, "HTTP connectivity candidate failed host=%s error=%v", host, err)
@@ -116,11 +117,12 @@ func anyHTTPPingCheck(hosts []string) error {
 			continue
 		}
 
+		successes++
 		log.Debugf(hcCommon.Category, "HTTP connectivity candidate succeeded host=%s", host)
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("HTTP connectivity candidates failed passed=%d total=%d: %w", len(hosts)-len(errs), len(hosts), errors.Join(errs...))
+	if successes == 0 {
+		return fmt.Errorf("HTTP connectivity candidates failed passed=0 total=%d: %w", len(hosts), errors.Join(errs...))
 	}
 
 	return nil

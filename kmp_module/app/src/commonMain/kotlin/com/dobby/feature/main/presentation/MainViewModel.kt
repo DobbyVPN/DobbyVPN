@@ -330,7 +330,6 @@ class MainViewModel(
                 return null
             }
 
-            awaitHealthCheckDisconnected(HEALTH_CHECK_STOP_TIMEOUT_MS)
             val result = probeProfile(
                 index = index,
                 total = profiles.size,
@@ -385,9 +384,9 @@ class MainViewModel(
                 return null
             }
 
-            val healthy = awaitHealthCheckConnected(PROFILE_HEALTH_CHECK_TIMEOUT_MS)
+            val healthy = awaitFreshHealthCheckConnected(PROFILE_HEALTH_CHECK_TIMEOUT_MS)
             if (!healthy) {
-                logger.log("[ProtocolSelection] Probe failed $label: HC did not report connected")
+                logger.log("[ProtocolSelection] Probe failed $label: HC did not report fresh connected state")
                 return null
             }
 
@@ -405,8 +404,7 @@ class MainViewModel(
                 averageLatencyMs = averageLatencyMs
             )
         } finally {
-            stopVpnRuntime(resetUiState = false)
-            awaitHealthCheckDisconnected(HEALTH_CHECK_STOP_TIMEOUT_MS)
+            logger.log("[ProtocolSelection] Probe finished $label; keeping VPN interface available for protocol reuse")
         }
     }
 
@@ -424,7 +422,17 @@ class MainViewModel(
         connectionStateRepository.updateStatus(VpnConnectionState.CONNECTING)
         _uiState.emit(_uiState.value.copy(connectionState = VpnConnectionState.CONNECTING))
 
-        return startActiveVpnServiceOnce(startDetector = true)
+        val started = startActiveVpnServiceOnce(startDetector = true)
+        if (!started) return false
+
+        return awaitFreshHealthCheckConnected(PROFILE_HEALTH_CHECK_TIMEOUT_MS).also { healthy ->
+            if (!healthy) {
+                logger.log(
+                    "[ProtocolSelection] Selected profile failed fresh HC confirmation " +
+                        "index=${profile.index} timeoutMs=$PROFILE_HEALTH_CHECK_TIMEOUT_MS"
+                )
+            }
+        }
     }
 
     private suspend fun startActiveVpnServiceOnce(startDetector: Boolean): Boolean {
@@ -496,7 +504,6 @@ class MainViewModel(
             stopConnectionStateDetector()
             healthCheckManager.stopHealthCheck()
             logger.log("[ProtocolSelection] Restarting protocol selection after $reason")
-            stopVpnRuntime(resetUiState = false)
 
             connectionStateRepository.updateStatus(VpnConnectionState.CONNECTING)
             _uiState.emit(_uiState.value.copy(connectionState = VpnConnectionState.CONNECTING))
@@ -505,35 +512,30 @@ class MainViewModel(
         }
     }
 
-    private suspend fun awaitHealthCheckConnected(timeoutMs: Long): Boolean {
+    private suspend fun awaitFreshHealthCheckConnected(timeoutMs: Long): Boolean {
         val startedAt = TimeSource.Monotonic.markNow()
         var lastState = healthCheckManager.getConnectionState()
+        var sawFreshCycle = lastState != VpnConnectionState.CONNECTED
+        if (!sawFreshCycle) {
+            logger.log("[ProtocolSelection] HC wait started while state is still CONNECTED; waiting for fresh cycle")
+        }
 
         while (!stopRequested && startedAt.elapsedNow().inWholeMilliseconds < timeoutMs) {
             lastState = healthCheckManager.getConnectionState()
-            if (lastState == VpnConnectionState.CONNECTED) {
+            if (lastState != VpnConnectionState.CONNECTED) {
+                sawFreshCycle = true
+            }
+            if (sawFreshCycle && lastState == VpnConnectionState.CONNECTED) {
                 return true
             }
             delay(HEALTH_CHECK_POLL_INTERVAL_MS.milliseconds)
         }
 
-        logger.log("[ProtocolSelection] HC wait finished timeoutMs=$timeoutMs lastState=$lastState")
+        logger.log(
+            "[ProtocolSelection] HC wait finished timeoutMs=$timeoutMs " +
+                "lastState=$lastState sawFreshCycle=$sawFreshCycle"
+        )
         return false
-    }
-
-    private suspend fun awaitHealthCheckDisconnected(timeoutMs: Long) {
-        val startedAt = TimeSource.Monotonic.markNow()
-        var lastState = healthCheckManager.getConnectionState()
-
-        while (startedAt.elapsedNow().inWholeMilliseconds < timeoutMs) {
-            lastState = healthCheckManager.getConnectionState()
-            if (lastState == VpnConnectionState.DISCONNECTED) {
-                return
-            }
-            delay(HEALTH_CHECK_POLL_INTERVAL_MS.milliseconds)
-        }
-
-        logger.log("[ProtocolSelection] HC stop wait finished timeoutMs=$timeoutMs lastState=$lastState")
     }
 
     private suspend fun measureHealthCheckAverageLatencyMillis(): Long? {
@@ -554,7 +556,7 @@ class MainViewModel(
                 }
             }.onFailure { e ->
                 logger.log("[ProtocolSelection] HC latency endpoint failed url=$url error=${e.message}")
-            }.getOrNull() ?: return null
+            }.getOrNull() ?: continue
 
             val latencyMs = startedAt.elapsedNow().inWholeMilliseconds.coerceAtLeast(1)
             if (statusCode < 200 || statusCode >= 400) {
@@ -565,6 +567,7 @@ class MainViewModel(
         }
 
         if (samples.isEmpty()) return null
+        logger.log("[ProtocolSelection] HC latency samples successful=${samples.size}/${HEALTH_CHECK_HTTP_URLS.size}")
         return samples.average().roundToLong()
     }
 
@@ -588,7 +591,6 @@ class MainViewModel(
         const val HEALTH_CHECK_START_GRACE_MS = 15_000L
         const val HEALTH_CHECK_POLL_INTERVAL_MS = 200L
         const val HEALTH_CHECK_HTTP_TIMEOUT_MS = 5_000L
-        const val HEALTH_CHECK_STOP_TIMEOUT_MS = 2_000L
         const val PROFILE_HEALTH_CHECK_TIMEOUT_MS = 30_000L
         const val SERVICE_START_TIMEOUT_MS = 90_000L
         val HEALTH_CHECK_HTTP_URLS = listOf(

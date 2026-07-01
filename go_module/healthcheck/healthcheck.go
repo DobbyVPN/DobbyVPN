@@ -20,6 +20,7 @@ const (
 // Healthcheck management
 var (
 	stopHealthCheckChannel chan struct{}
+	wakeHealthCheckChannel chan struct{}
 	healthCheckStarted     bool = false
 	healthCheckStartedMu   sync.Mutex
 )
@@ -85,12 +86,21 @@ func StartHealthCheck() {
 	defer healthCheckStartedMu.Unlock()
 
 	if healthCheckStarted {
-		log.Debugf(common.Category, "Health check already running")
+		log.Debugf(common.Category, "Health check already running; reset counters and request immediate check")
+		resetFailedChecks()
+		switchState(Connecting)
+		select {
+		case wakeHealthCheckChannel <- struct{}{}:
+			log.Debugf(common.Category, "Health check wakeup requested")
+		default:
+			log.Debugf(common.Category, "Health check wakeup already pending")
+		}
 	} else {
 		log.Debugf(common.Category, "Starting health check")
 		healthCheckStarted = true
 		stopHealthCheckChannel = make(chan struct{}, 1)
-		go innerHealthCheck(stopHealthCheckChannel)
+		wakeHealthCheckChannel = make(chan struct{}, 1)
+		go innerHealthCheck(stopHealthCheckChannel, wakeHealthCheckChannel)
 	}
 }
 
@@ -122,7 +132,7 @@ func recordFailedCheck() int {
 	return failedChecks
 }
 
-func innerHealthCheck(stopCh <-chan struct{}) {
+func innerHealthCheck(stopCh <-chan struct{}, wakeCh <-chan struct{}) {
 	log.Debugf(common.Category, "Health check started")
 
 	switchState(Connecting)
@@ -147,6 +157,9 @@ func innerHealthCheck(stopCh <-chan struct{}) {
 			healthCheckStartedMu.Unlock()
 			return
 		case <-time.After(delayTimeout):
+			healthCheckStep()
+		case <-wakeCh:
+			log.Debugf(common.Category, "Health check wakeup received")
 			healthCheckStep()
 		}
 	}

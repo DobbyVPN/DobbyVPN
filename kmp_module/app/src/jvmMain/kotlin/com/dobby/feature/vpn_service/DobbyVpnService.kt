@@ -87,6 +87,8 @@ class DobbyVpnService(
         synchronized(startStopLock) {
             val runningInterface = dobbyConfigsRepository.getVpnInterface()
 
+            logger.log("Restarting VPN protocols before starting configured interface=$runningInterface")
+            stopProtocols()
             georoutingLibrary.SetGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
             val started = startConfiguredProtocol(runningInterface)
 

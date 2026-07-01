@@ -9,6 +9,7 @@ public class VpnManagerImpl: VpnManager {
     private static let launchId = UUID().uuidString
     private static let disconnectingStartRetryDelay: TimeInterval = 0.5
     private static let disconnectingStartMaxRetries = 120
+    private static let protocolRestartResponseTimeout: TimeInterval = 15
     private var logs = NativeModuleHolder.logsRepository
 
     public static var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
@@ -131,9 +132,9 @@ public class VpnManagerImpl: VpnManager {
             return
         }
         if status == .connected {
-            self.logs.writeLog(log: "[start] Skip: already connected")
+            self.logs.writeLog(log: "[start] Tunnel already connected; requesting in-place protocol restart")
             self.suppressDisconnectedForPendingStart = false
-            self.connectionRepository.tryUpdateServiceStarted(isStarted: true)
+            self.restartActiveProtocolInProvider(manager: manager)
             return
         }
         if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
@@ -182,6 +183,62 @@ public class VpnManagerImpl: VpnManager {
                 self.suppressDisconnectedForPendingStart = false
                 self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
             }
+        }
+    }
+
+    private func restartActiveProtocolInProvider(manager: NETunnelProviderManager) {
+        guard let session = manager.connection as? NETunnelProviderSession else {
+            self.logs.writeLog(log: "[start] In-place protocol restart failed: connection is not NETunnelProviderSession")
+            self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
+            return
+        }
+
+        guard let message = "restartActiveProtocol".data(using: .utf8) else {
+            self.logs.writeLog(log: "[start] In-place protocol restart failed: message encoding failed")
+            self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
+            return
+        }
+
+        let logs = self.logs
+        let connectionRepository = self.connectionRepository
+        let completionLock = NSLock()
+        var completed = false
+        func finish(isStarted: Bool, source: String) {
+            completionLock.lock()
+            if completed {
+                completionLock.unlock()
+                logs.writeLog(log: "[start] In-place protocol restart late result ignored source=\(source) isStarted=\(isStarted)")
+                return
+            }
+            completed = true
+            completionLock.unlock()
+            connectionRepository.tryUpdateServiceStarted(isStarted: isStarted)
+        }
+
+        let timeoutWorkItem = DispatchWorkItem {
+            logs.writeLog(
+                log: "[start] In-place protocol restart timed out after \(Self.protocolRestartResponseTimeout)s"
+            )
+            finish(isStarted: false, source: "timeout")
+        }
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.protocolRestartResponseTimeout,
+            execute: timeoutWorkItem
+        )
+
+        do {
+            try session.sendProviderMessage(message) { [weak self] response in
+                guard let self else { return }
+                timeoutWorkItem.cancel()
+                let responseText = response.flatMap { String(data: $0, encoding: .utf8) } ?? "(nil)"
+                let ok = responseText == "ok"
+                self.logs.writeLog(log: "[start] In-place protocol restart response=\(responseText) ok=\(ok)")
+                finish(isStarted: ok, source: "response")
+            }
+        } catch {
+            timeoutWorkItem.cancel()
+            self.logs.writeLog(log: "[start] In-place protocol restart send failed: \(error.localizedDescription)")
+            finish(isStarted: false, source: "sendError")
         }
     }
 
