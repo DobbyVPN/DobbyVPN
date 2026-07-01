@@ -116,8 +116,8 @@ func probeEndpoint(url string, keepBody bool) probeEndpointResult {
 		return probeEndpointResult{url: url, err: err}
 	}
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			log.Warnf(hcCommon.Category, "Tunnel probe response body close failed url=%s error=%v", url, err)
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warnf(hcCommon.Category, "Tunnel probe response body close failed url=%s error=%v", url, closeErr)
 		}
 	}()
 
