@@ -54,6 +54,10 @@ object GoBackendWrapper {
         Dobbyvpn.stopHealthCheck()
     }
 
+    fun measureTunnelProbeAverageLatencyMillis(): Long {
+        return Dobbyvpn.measureTunnelProbeAverageLatencyMillis()
+    }
+
     fun getLastError(): String? = Dobbyvpn.getVpnLastError()?.ifEmpty { null }
 
     fun newVpnClient(config: String, protocol: String, fd: Int) {

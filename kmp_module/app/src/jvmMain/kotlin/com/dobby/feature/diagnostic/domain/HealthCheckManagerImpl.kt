@@ -29,4 +29,9 @@ class HealthCheckManagerImpl(
     override fun stopHealthCheck() {
         healthCheckLibrary.StopHealthCheck()
     }
+
+    override fun measureTunnelProbeAverageLatencyMillis(): Long {
+        logger.log("[ProtocolSelection] Native tunnel probe is not implemented for JVM health check manager")
+        return -1
+    }
 }

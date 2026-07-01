@@ -18,20 +18,15 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.supervisorScope
-import kotlinx.coroutines.withTimeout
-import kotlin.math.roundToLong
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
-val httpClient = HttpClient()
+private val configHttpClient = HttpClient()
 
 class MainViewModel(
     private val configsRepository: DobbyConfigsRepository,
@@ -178,7 +173,7 @@ class MainViewModel(
         return if (connectionUrl.startsWith("http://") || connectionUrl.startsWith("https://")) {
             try {
                 logger.log("Fetching config from remote URL...")
-                httpClient.get(connectionUrl) {
+                configHttpClient.get(connectionUrl) {
                     headers {
                         append("User-Agent", "DobbyVPN v${BuildConfig.VERSION_NAME}")
                     }
@@ -514,42 +509,18 @@ class MainViewModel(
 
     private suspend fun measureHealthCheckAverageLatencyMillis(): Long? {
         if (stopRequested) {
-            logger.log("[ProtocolSelection] HC latency probe stopped because stopRequested=true")
+            logger.log("[ProtocolSelection] Tunnel probe stopped because stopRequested=true")
             return null
         }
 
-        val samples = supervisorScope {
-            HEALTH_CHECK_HTTP_URLS.map { url ->
-                async {
-                    measureHealthCheckEndpointLatencyMillis(url)
-                }
-            }.awaitAll().filterNotNull()
-        }
-
-        if (samples.isEmpty()) return null
-        logger.log("[ProtocolSelection] HC latency samples successful=${samples.size}/${HEALTH_CHECK_HTTP_URLS.size}")
-        return samples.average().roundToLong()
-    }
-
-    private suspend fun measureHealthCheckEndpointLatencyMillis(url: String): Long? {
-        val startedAt = TimeSource.Monotonic.markNow()
-        val statusCode = runCatching {
-            withTimeout(HEALTH_CHECK_HTTP_TIMEOUT_MS) {
-                val response = httpClient.get(url)
-                response.bodyAsText()
-                response.status.value
-            }
-        }.onFailure { e ->
-            logger.log("[ProtocolSelection] HC latency endpoint failed url=$url error=${e.message}")
-        }.getOrNull() ?: return null
-
-        val latencyMs = startedAt.elapsedNow().inWholeMilliseconds.coerceAtLeast(1)
-        if (statusCode < 200 || statusCode >= 400) {
-            logger.log("[ProtocolSelection] HC latency endpoint returned status=$statusCode url=$url")
+        val averageLatencyMs = healthCheckManager.measureTunnelProbeAverageLatencyMillis()
+        if (averageLatencyMs < 0) {
+            logger.log("[ProtocolSelection] Tunnel probe failed")
             return null
         }
-        logger.log("[ProtocolSelection] HC latency endpoint ok url=$url latencyMs=$latencyMs status=$statusCode")
-        return latencyMs
+
+        logger.log("[ProtocolSelection] Tunnel probe OK averageLatencyMs=$averageLatencyMs")
+        return averageLatencyMs
     }
 
     private fun ConnectionProfile.label(index: Int, total: Int): String {
@@ -570,13 +541,7 @@ class MainViewModel(
 
     private companion object {
         const val HEALTH_CHECK_START_GRACE_MS = 15_000L
-        const val HEALTH_CHECK_HTTP_TIMEOUT_MS = 2_000L
         const val SERVICE_START_TIMEOUT_MS = 90_000L
-        val HEALTH_CHECK_HTTP_URLS = listOf(
-            "https://www.google.com/generate_204",
-            "https://www.cloudflare.com/cdn-cgi/trace",
-            "https://about.google",
-        )
     }
 
     private data class ProfileProbeResult(
