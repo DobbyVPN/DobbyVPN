@@ -125,8 +125,8 @@ class DobbyVpnService : VpnService() {
                         )
                         teardownVpn()
                     } else {
-                        logger.log("[svc:$serviceId] startService(): existing VPN interface detected; restarting protocols without closing interface")
-                        stopProtocols()
+                        logger.log("[svc:$serviceId] startService(): existing VPN interface detected; switching protocol without closing interface")
+                        stopCloakSidecarForProtocolRestart()
                         goTunFd = null
                     }
                 }
@@ -237,6 +237,15 @@ class DobbyVpnService : VpnService() {
             startStopMutex.withLock {
                 teardownVpn()
             }
+        }
+    }
+
+    private suspend fun stopCloakSidecarForProtocolRestart() {
+        runCatching {
+            logger.log("[svc:$serviceId] stopCloak before protocol restart")
+            cloakConnectInteractor.disconnect()
+        }.onFailure { e ->
+            logger.log("[svc:$serviceId] stopCloak before protocol restart failed: ${e.message}")
         }
     }
 

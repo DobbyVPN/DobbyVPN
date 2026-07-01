@@ -453,7 +453,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     @MainActor
     private func restartActiveProtocolFromAppMessage() async -> Bool {
         logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart begin reason=appMessage restartActiveProtocol")
-        stopProtocols(reason: "appMessage restartActiveProtocol")
+        stopHealthCheck(reason: "appMessage restartActiveProtocol")
+        stopCloakSidecarForProtocolRestart()
         do {
             try await startActiveProtocol(reason: "appMessage restartActiveProtocol", teardownOnFailure: false)
             logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart success reason=appMessage restartActiveProtocol")
@@ -462,6 +463,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart failed reason=appMessage restartActiveProtocol: \(error.localizedDescription)")
             configsRepository.setHealthCheckState(state: 0)
             return false
+        }
+    }
+
+    @MainActor
+    private func stopCloakSidecarForProtocolRestart() {
+        do {
+            try cloakInteractor.stopCloak()
+        } catch {
+            logs.writeLog(
+                log: "[tunnel:\(tunnelId)] stopCloak before protocol restart failed: \(error.localizedDescription)"
+            )
         }
     }
 
