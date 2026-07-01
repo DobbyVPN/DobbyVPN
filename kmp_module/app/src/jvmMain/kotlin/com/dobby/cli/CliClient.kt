@@ -248,7 +248,7 @@ class CliClient {
         logsRepository.cleanupOldLogs()
         loggerManager.initLogger()
         connectionStateRepository.serviceStartedFlow.prepare()
-        vpnManager.start()
+        vpnManager.start(isProtocolProbe = false)
 
         val connected = connectionStateRepository.serviceStartedFlow.awaitResult(SERVICE_START_TIMEOUT_MS)
         if (connected) {
