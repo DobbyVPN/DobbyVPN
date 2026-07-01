@@ -455,12 +455,13 @@ class MainViewModel(
         logger.log("Got service started result: $connected")
 
         if (connected) {
-            logger.log("Start health check")
-            healthCheckManager.startHealthCheck()
             if (startDetector) {
+                logger.log("Start health check")
+                healthCheckManager.startHealthCheck()
                 logger.log("Start connection detector")
                 startConnectionStateDetector()
             } else {
+                logger.log("Health check is not started for protocol probe")
                 logger.log("Connection detector is not started for protocol probe")
             }
             return true

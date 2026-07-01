@@ -72,13 +72,11 @@ func MeasureTunnelProbeAverageLatencyMillis() int64 {
 	ipify := probeEndpoint(probeIPifyURL, true)
 	if ipify.err != nil {
 		log.Warnf(hcCommon.Category, "Tunnel probe ipify failed url=%s error=%v", ipify.url, ipify.err)
-		return probeFailureResult
-	}
-	if net.ParseIP(ipify.body) == nil {
+	} else if net.ParseIP(ipify.body) == nil {
 		log.Warnf(hcCommon.Category, "Tunnel probe ipify failed url=%s invalid_public_ip=%q", ipify.url, ipify.body)
-		return probeFailureResult
+	} else {
+		log.Infof(hcCommon.Category, "Tunnel probe ipify ok url=%s publicIP=%s latencyMs=%d status=%d", ipify.url, ipify.body, ipify.latencyMs, ipify.status)
 	}
-	log.Infof(hcCommon.Category, "Tunnel probe ipify ok url=%s publicIP=%s latencyMs=%d status=%d", ipify.url, ipify.body, ipify.latencyMs, ipify.status)
 
 	avg := sum / int64(successes)
 	log.Debugf(hcCommon.Category, "Tunnel probe finished averageLatencyMs=%d", avg)
