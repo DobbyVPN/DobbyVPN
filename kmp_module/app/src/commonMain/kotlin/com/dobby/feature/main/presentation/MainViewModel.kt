@@ -383,8 +383,9 @@ class MainViewModel(
             }
 
             val averageLatencyMs = measureHealthCheckAverageLatencyMillis(
-                maxAttempts = if (index == 0) COLD_START_TUNNEL_PROBE_ATTEMPTS else DEFAULT_TUNNEL_PROBE_ATTEMPTS,
-                retryDelayMs = if (index == 0) COLD_START_TUNNEL_PROBE_RETRY_DELAY_MS else DEFAULT_TUNNEL_PROBE_RETRY_DELAY_MS,
+                maxAttempts = PROFILE_TUNNEL_PROBE_ATTEMPTS,
+                retryDelayMs = PROFILE_TUNNEL_PROBE_RETRY_DELAY_MS,
+                preferLastSuccessfulAttempt = true,
             )
             if (averageLatencyMs == null) {
                 logger.log("[ProtocolSelection] Probe failed $label: HC latency probe failed")
@@ -513,28 +514,36 @@ class MainViewModel(
     private suspend fun measureHealthCheckAverageLatencyMillis(
         maxAttempts: Int = DEFAULT_TUNNEL_PROBE_ATTEMPTS,
         retryDelayMs: Long = DEFAULT_TUNNEL_PROBE_RETRY_DELAY_MS,
+        preferLastSuccessfulAttempt: Boolean = false,
     ): Long? {
         if (stopRequested) {
             logger.log("[ProtocolSelection] Tunnel probe stopped because stopRequested=true")
             return null
         }
 
-        repeat(maxAttempts.coerceAtLeast(1)) { attempt ->
+        var lastSuccessfulLatencyMs: Long? = null
+        val attempts = maxAttempts.coerceAtLeast(1)
+        repeat(attempts) { attempt ->
             val attemptNumber = attempt + 1
             val averageLatencyMs = healthCheckManager.measureTunnelProbeAverageLatencyMillis()
             if (averageLatencyMs >= 0) {
                 logger.log("[ProtocolSelection] Tunnel probe OK attempt=$attemptNumber/$maxAttempts averageLatencyMs=$averageLatencyMs")
-                return averageLatencyMs
+                lastSuccessfulLatencyMs = averageLatencyMs
+                if (!preferLastSuccessfulAttempt || attemptNumber == attempts) {
+                    return averageLatencyMs
+                }
             }
 
-            logger.log("[ProtocolSelection] Tunnel probe failed attempt=$attemptNumber/$maxAttempts")
-            if (attemptNumber < maxAttempts && !stopRequested) {
-                logger.log("[ProtocolSelection] Tunnel probe retry after ${retryDelayMs}ms")
+            if (averageLatencyMs < 0) {
+                logger.log("[ProtocolSelection] Tunnel probe failed attempt=$attemptNumber/$maxAttempts")
+            }
+            if (attemptNumber < attempts && !stopRequested) {
+                logger.log("[ProtocolSelection] Tunnel probe warmup retry after ${retryDelayMs}ms")
                 delay(retryDelayMs)
             }
         }
 
-        return null
+        return lastSuccessfulLatencyMs
     }
 
     private fun ConnectionProfile.label(index: Int, total: Int): String {
@@ -558,8 +567,8 @@ class MainViewModel(
         const val SERVICE_START_TIMEOUT_MS = 90_000L
         const val DEFAULT_TUNNEL_PROBE_ATTEMPTS = 1
         const val DEFAULT_TUNNEL_PROBE_RETRY_DELAY_MS = 500L
-        const val COLD_START_TUNNEL_PROBE_ATTEMPTS = 2
-        const val COLD_START_TUNNEL_PROBE_RETRY_DELAY_MS = 750L
+        const val PROFILE_TUNNEL_PROBE_ATTEMPTS = 2
+        const val PROFILE_TUNNEL_PROBE_RETRY_DELAY_MS = 500L
         const val SELECTED_TUNNEL_PROBE_ATTEMPTS = 2
     }
 
