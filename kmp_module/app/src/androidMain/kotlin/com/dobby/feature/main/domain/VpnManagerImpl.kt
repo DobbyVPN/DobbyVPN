@@ -10,7 +10,7 @@ class VpnManagerImpl(
 
     override fun start(isProtocolProbe: Boolean) {
         DobbyVpnService
-            .createIntent(context)
+            .createIntent(context, isProtocolProbe)
             .let(context::startService)
     }
 

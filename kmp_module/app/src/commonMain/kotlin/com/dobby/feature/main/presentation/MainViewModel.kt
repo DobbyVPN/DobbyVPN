@@ -276,8 +276,8 @@ class MainViewModel(
     private suspend fun startVpnServiceLoop(initialReason: String): Boolean {
         var reason = initialReason
         while (!stopRequested) {
-            val selectedProfile = scanProfilesForFirstWorking(reason)
-            if (selectedProfile == null) {
+            val bestProfile = scanProfilesForBest(reason)
+            if (bestProfile == null) {
                 if (stopRequested) {
                     logger.log("[ProtocolSelection] Profile scan stopped because stopRequested=true")
                     return false
@@ -290,14 +290,14 @@ class MainViewModel(
 
             logger.log(
                 "[ProtocolSelection] Starting selected profile " +
-                    "${selectedProfile.profile.label(selectedProfile.index, selectedProfile.total)} " +
-                    "averageLatencyMs=${selectedProfile.averageLatencyMs} reason=$reason"
+                    "${bestProfile.profile.label(bestProfile.index, bestProfile.total)} " +
+                    "averageLatencyMs=${bestProfile.averageLatencyMs} reason=$reason"
             )
-            val connected = startSelectedProfile(selectedProfile, reason)
+            val connected = startSelectedProfile(bestProfile, reason)
             if (connected) {
                 logger.log(
                     "[ProtocolSelection] Selected profile is active " +
-                        "index=${selectedProfile.index} averageLatencyMs=${selectedProfile.averageLatencyMs}"
+                        "index=${bestProfile.index} averageLatencyMs=${bestProfile.averageLatencyMs}"
                 )
                 return true
             }
@@ -312,7 +312,7 @@ class MainViewModel(
         return false
     }
 
-    private suspend fun scanProfilesForFirstWorking(reason: String): ProfileProbeResult? {
+    private suspend fun scanProfilesForBest(reason: String): ProfileProbeResult? {
         val profiles = profileManager.getProfiles()
         if (profiles.isEmpty()) {
             logger.log("[ProtocolSelection] No saved profiles to scan reason=$reason")
@@ -321,6 +321,7 @@ class MainViewModel(
 
         logger.log("[ProtocolSelection] Start profile scan reason=$reason profiles=${profiles.size}")
 
+        val results = mutableListOf<ProfileProbeResult>()
         for ((index, profile) in profiles.withIndex()) {
             if (stopRequested) {
                 logger.log("[ProtocolSelection] Stop requested during profile scan")
@@ -334,16 +335,25 @@ class MainViewModel(
                 reason = reason
             )
             if (result != null) {
-                logger.log(
-                    "[ProtocolSelection] Profile scan selected first working profile " +
-                        "index=${result.index} averageLatencyMs=${result.averageLatencyMs}"
-                )
-                return result
+                results += result
             }
         }
 
-        logger.log("[ProtocolSelection] Profile scan finished without working profiles")
-        return null
+        if (results.isEmpty()) {
+            logger.log("[ProtocolSelection] Profile scan finished without working profiles")
+            return null
+        }
+
+        logger.log(
+            "[ProtocolSelection] Profile scan results " +
+                "working=${results.size}/${profiles.size} " +
+                "latencies=${results.joinToString { "index=${it.index}:avgMs=${it.averageLatencyMs}" }}"
+        )
+
+        return results.minWithOrNull(
+            compareBy<ProfileProbeResult> { it.averageLatencyMs }
+                .thenBy { it.index }
+        )
     }
 
     private suspend fun probeProfile(
