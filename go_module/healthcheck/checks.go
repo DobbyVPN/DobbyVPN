@@ -119,6 +119,7 @@ func anyHTTPPingCheck(hosts []string) error {
 
 		successes++
 		log.Debugf(hcCommon.Category, "HTTP connectivity candidate succeeded host=%s", host)
+		return nil
 	}
 
 	if successes == 0 {

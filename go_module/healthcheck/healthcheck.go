@@ -136,6 +136,7 @@ func innerHealthCheck(stopCh <-chan struct{}, wakeCh <-chan struct{}) {
 	log.Debugf(common.Category, "Health check started")
 
 	switchState(Connecting)
+	healthCheckStep()
 	for {
 		var delayTimeout time.Duration
 
