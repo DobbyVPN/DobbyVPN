@@ -64,8 +64,8 @@ func MeasureTunnelProbeAverageLatencyMillis() int64 {
 		log.Debugf(hcCommon.Category, "Tunnel probe endpoint ok url=%s latencyMs=%d status=%d", result.url, result.latencyMs, result.status)
 	}
 	log.Debugf(hcCommon.Category, "Tunnel probe latency samples successful=%d/%d", successes, len(probeHTTPURLs))
-	if successes == 0 {
-		log.Warnf(hcCommon.Category, "Tunnel probe failed: no latency endpoint succeeded")
+	if successes != len(probeHTTPURLs) {
+		log.Warnf(hcCommon.Category, "Tunnel probe failed: not all latency endpoints succeeded passed=%d total=%d", successes, len(probeHTTPURLs))
 		return probeFailureResult
 	}
 
@@ -115,7 +115,11 @@ func probeEndpoint(url string, keepBody bool) probeEndpointResult {
 	if err != nil {
 		return probeEndpointResult{url: url, err: err}
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Warnf(hcCommon.Category, "Tunnel probe response body close failed url=%s error=%v", url, err)
+		}
+	}()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, probeMaxBodyBytes))
 	if err != nil {

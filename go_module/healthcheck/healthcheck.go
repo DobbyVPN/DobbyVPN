@@ -132,7 +132,7 @@ func recordFailedCheck() int {
 	return failedChecks
 }
 
-func innerHealthCheck(stopCh <-chan struct{}, wakeCh <-chan struct{}) {
+func innerHealthCheck(stopCh, wakeCh <-chan struct{}) {
 	log.Debugf(common.Category, "Health check started")
 
 	switchState(Connecting)
