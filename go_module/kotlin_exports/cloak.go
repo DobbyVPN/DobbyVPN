@@ -5,8 +5,8 @@ package dobbyvpn
 import (
 	"go_module/cloak"
 	"go_module/log"
+	"strings"
 )
-import "strings"
 
 func StartCloakClient(localHost string, localPort string, config string, udp bool) (result int32) {
 	defer guardExport("StartCloakClient")()
