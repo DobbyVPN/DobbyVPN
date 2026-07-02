@@ -1,6 +1,7 @@
 package com.dobby.feature.main.domain.config
 
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.DobbyConfigsRepositoryXray
 import com.dobby.feature.main.domain.XrayClientConfig
 import com.dobby.feature.main.domain.clearXrayConfig
@@ -21,6 +22,7 @@ internal class XrayTomlApplier(
     private val xrayRepo: DobbyConfigsRepositoryXray,
     private val logger: Logger,
 ) {
+    private val serverResolver = ProfileServerResolver(logger)
     private val json = Json {
         prettyPrint = true
         ignoreUnknownKeys = true
@@ -37,7 +39,12 @@ internal class XrayTomlApplier(
             return false
         }
 
-        val xrayJsonString = buildXrayJson(config)
+        val xrayJsonString = runCatching {
+            buildXrayJson(config)
+        }.onFailure { e ->
+            logger.log("Invalid Xray profile: DNS pre-resolve failed: ${e.message}")
+            xrayRepo.clearXrayConfig()
+        }.getOrNull() ?: return false
 
         xrayRepo.setXrayConfig(xrayJsonString)
         xrayRepo.setIsXrayEnabled(true)
@@ -82,8 +89,9 @@ internal class XrayTomlApplier(
                     val endpoint = (firstPeer?.get("endpoint") as? TomlLiteral)?.content
                     if (endpoint != null) {
                         // Wireguard endpoint is already formatted as "IP:Port"
-                        xrayRepo.setServerPort(endpoint)
-                        logger.log("Extracted Xray Server Port (wireguard): $endpoint")
+                        val resolvedEndpoint = resolveEndpointHost(endpoint, "Xray wireguard endpoint") ?: endpoint
+                        xrayRepo.setServerPort(resolvedEndpoint)
+                        logger.log("Extracted Xray Server Port (wireguard): $resolvedEndpoint")
                         return
                     }
                 }
@@ -95,7 +103,8 @@ internal class XrayTomlApplier(
 
             // If we successfully grabbed both, save and exit loop
             if (address != null && port != null) {
-                val ipPort = "$address:$port"
+                val resolvedAddress = serverResolver.resolveIpv4(address, "Xray $protocol server") ?: address
+                val ipPort = "$resolvedAddress:$port"
                 xrayRepo.setServerPort(ipPort)
                 logger.log("Extracted Xray Server Port ($protocol): $ipPort")
                 return
@@ -109,7 +118,7 @@ internal class XrayTomlApplier(
         val rootMap = mutableMapOf<String, JsonElement>()
 
         fun add(key: String, value: TomlElement?) {
-            if (value != null) rootMap[key] = convertTomlToJson(value)
+            if (value != null) rootMap[key] = convertTomlToJson(value, listOf(key))
         }
 
         add("version", config.version)
@@ -135,23 +144,23 @@ internal class XrayTomlApplier(
         return json.encodeToString(JsonObject(rootMap))
     }
 
-    private fun convertTomlToJson(element: TomlElement): JsonElement {
+    private fun convertTomlToJson(element: TomlElement, path: List<String> = emptyList()): JsonElement {
         return when (element) {
             is TomlTable -> {
                 val map = element.entries.associate { (key, value) ->
-                    key to convertTomlToJson(value)
+                    key to convertTomlToJson(value, path + key)
                 }
                 JsonObject(map)
             }
             is TomlArray -> {
-                val list = element.map { convertTomlToJson(it) }
+                val list = element.map { convertTomlToJson(it, path + "[]") }
                 JsonArray(list)
             }
             is TomlLiteral -> {
                 // Convert literal string value to appropriate JsonPrimitive
                 // TOML parser usually gives us a string representation.
                 // We try to parse it back to specific types for JSON.
-                val content = element.content
+                val content = resolveRuntimeLiteral(element.content, path)
 
                 // Try Boolean
                 if (content.equals("true", ignoreCase = true)) return JsonPrimitive(true)
@@ -166,9 +175,51 @@ internal class XrayTomlApplier(
                 if (doubleVal != null) return JsonPrimitive(doubleVal)
 
                 // Fallback to String
-                JsonPrimitive(content)
+                JsonPrimitive(content.trim('"'))
             }
             is TomlNull -> JsonNull
         }
     }
+
+    private fun resolveRuntimeLiteral(content: String, path: List<String>): String {
+        val stringContent = content.trim('"')
+        return when {
+            path.endsWithPath("outbounds", "[]", "settings", "vnext", "[]", "address") ||
+                path.endsWithPath("outbounds", "[]", "settings", "servers", "[]", "address") -> {
+                resolveRequiredHost(stringContent, "Xray outbound address")
+            }
+            path.endsWithPath("outbounds", "[]", "settings", "peers", "[]", "endpoint") -> {
+                resolveEndpointHost(stringContent, "Xray peer endpoint")
+                    ?: throw DnsResolutionException("Xray peer endpoint is empty or invalid")
+            }
+            else -> content
+        }
+    }
+
+    private fun resolveRequiredHost(host: String, context: String): String {
+        if (host.isIpv4Literal()) return host
+        return serverResolver.resolveIpv4(host, context)
+            ?: throw DnsResolutionException("could not resolve $context host=${maskStr(host)}")
+    }
+
+    private fun resolveEndpointHost(endpoint: String, context: String): String? {
+        val trimmed = endpoint.trim()
+        if (trimmed.isEmpty()) return null
+        if (trimmed.startsWith("[")) return trimmed
+
+        val separator = trimmed.lastIndexOf(':')
+        if (separator <= 0 || separator == trimmed.lastIndex) return trimmed
+
+        val host = trimmed.substring(0, separator)
+        val port = trimmed.substring(separator + 1)
+        val resolvedHost = resolveRequiredHost(host, context)
+        return "$resolvedHost:$port"
+    }
+
+    private fun List<String>.endsWithPath(vararg suffix: String): Boolean {
+        if (size < suffix.size) return false
+        return takeLast(suffix.size) == suffix.toList()
+    }
+
+    private class DnsResolutionException(message: String) : RuntimeException(message)
 }

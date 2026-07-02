@@ -11,6 +11,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let cloakLocalPortKey = "cloakLocalPortKey"
     private let methodPasswordOutlineKey = "MethodPasswordOutlineKey"
     private let serverPortOutlineKey = "ServerPortOutlineKey"
+    private let serverHostnameKey = "ServerHostnameKey"
     private let isOutlineEnabledKey = "isOutlineEnabledKey"
     private let connectionURLKey = "connectionURLKey"
     private let connectionConfigKey = "connectionConfigKey"
@@ -103,6 +104,14 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     public func setServerPort(newConfig: String) {
         userDefaults.set(newConfig, forKey: serverPortOutlineKey)
 
+    }
+
+    public func getServerHostname() -> String {
+        return userDefaults.string(forKey: serverHostnameKey) ?? ""
+    }
+
+    public func setServerHostname(hostname: String) {
+        userDefaults.set(hostname, forKey: serverHostnameKey)
     }
 
     public func getMethodPasswordOutline() -> String {

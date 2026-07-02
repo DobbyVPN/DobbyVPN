@@ -1,6 +1,7 @@
 package cloak
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"go_module/common"
@@ -8,6 +9,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"github.com/cbeuw/Cloak/exported_client"
 
@@ -15,6 +17,8 @@ import (
 )
 
 const Name = "cloak"
+
+const remoteHostResolveTimeout = 5 * time.Second
 
 var (
 	client      *exported_client.CkClient
@@ -157,15 +161,22 @@ func resolveRemoteHostIfNeeded(host string) (string, error) {
 		return host, nil
 	}
 
-	log.Debugf(Category, "cloak client: RemoteHost '%s' is not IPv4 -> resolving DNS...", host)
+	log.Debugf(Category, "cloak client: RemoteHost '%s' is not IPv4 -> resolving DNS timeout=%s...", host, remoteHostResolveTimeout)
 
-	ips, err := net.LookupIP(host)
-	if err != nil || len(ips) == 0 {
+	ctx, cancel := context.WithTimeout(context.Background(), remoteHostResolveTimeout)
+	defer cancel()
+
+	resolver := net.Resolver{}
+	addrs, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
 		return "", fmt.Errorf("DNS resolve failed: %w", err)
 	}
+	if len(addrs) == 0 {
+		return "", fmt.Errorf("DNS resolve returned no addresses")
+	}
 
-	for _, ip := range ips {
-		if v4 := ip.To4(); v4 != nil {
+	for _, addr := range addrs {
+		if v4 := addr.IP.To4(); v4 != nil {
 			log.Debugf(Category, "cloak client: DNS resolved '%s' -> %s", host, v4.String())
 			return v4.String(), nil
 		}

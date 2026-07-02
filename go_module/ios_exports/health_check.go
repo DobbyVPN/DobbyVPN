@@ -34,3 +34,8 @@ func StopHealthCheck() {
 	log.Debugf("ios_exports", "Stop health check")
 	healthcheck.StopHealthCheck()
 }
+
+func MeasureTunnelProbeAverageLatencyMillis() int64 {
+	log.Debugf("ios_exports", "Measure tunnel probe average latency")
+	return healthcheck.MeasureTunnelProbeAverageLatencyMillis()
+}

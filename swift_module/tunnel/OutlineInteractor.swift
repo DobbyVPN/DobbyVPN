@@ -17,6 +17,7 @@ public final class OutlineInteractor {
 
         let methodPassword = configsRepository.getMethodPasswordOutline()
         let serverPort = configsRepository.getServerPort()
+        let serverHostname = configsRepository.getServerHostname()
         let prefix = configsRepository.getPrefixOutline()
         let websocketEnabled = configsRepository.getIsWebsocketEnabled()
         let tcpPath = configsRepository.getTcpPathOutline()
@@ -39,7 +40,8 @@ public final class OutlineInteractor {
             prefix: prefix,
             websocketEnabled: websocketEnabled,
             tcpPath: tcpPath,
-            udpPath: udpPath
+            udpPath: udpPath,
+            serverHostname: serverHostname
         )
         logs.writeLog(log: "Outline config built (prefix=\(!prefix.isEmpty), ws=\(websocketEnabled), tcpPath=\(!tcpPath.isEmpty), udpPath=\(!udpPath.isEmpty))")
         if websocketEnabled {
@@ -103,7 +105,8 @@ public final class OutlineInteractor {
         prefix: String = "",
         websocketEnabled: Bool = false,
         tcpPath: String = "",
-        udpPath: String = ""
+        udpPath: String = "",
+        serverHostname: String = ""
     ) -> String {
         let encoded = methodPassword.data(using: .utf8)?.base64EncodedString() ?? ""
         let baseUrl = "ss://\(encoded)@\(serverPort)"
@@ -135,7 +138,13 @@ public final class OutlineInteractor {
 
         // If WebSocket is enabled, wrap the Shadowsocks URL into WebSocket-over-TLS transport (wss://)
         if websocketEnabled {
-            let effectiveHost = extractHost(serverPort).trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedServerName = serverHostname.trimmingCharacters(in: .whitespacesAndNewlines)
+            let effectiveHost: String
+            if trimmedServerName.isEmpty {
+                effectiveHost = extractHost(serverPort).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                effectiveHost = trimmedServerName
+            }
             logs.writeLog(
                 log: "[Outline] building WSS config effectiveHost=\(maskStr(value: effectiveHost)) " +
                     "tcpPath.len=\(tcpPath.count) udpPath.len=\(udpPath.count)"

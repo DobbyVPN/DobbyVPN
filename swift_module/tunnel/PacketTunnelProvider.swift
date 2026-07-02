@@ -25,6 +25,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var loadSampler: DispatchSourceTimer?
     private var healthCheckStateSampler: DispatchSourceTimer?
     private var lastSharedHealthCheckState: Int32?
+    private var isProtocolProbeStart = false
     private let memoryHighWaterLock = NSLock()
     private var memoryHighWaterMarkMB = 0.0
     private var tunnelStartedAt = Date()
@@ -202,6 +203,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func startTunnel(options: [String : NSObject]?) async throws {
+        isProtocolProbeStart = (options?["dobbyProtocolProbe"] as? NSNumber)?.boolValue == true
         tunnelStartedAt = Date()
         memoryHighWaterLock.withLock { memoryHighWaterMarkMB = 0 }
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
@@ -211,7 +213,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.cleanupOldLogs()
         logSystemInfo(osVersionString: osVersionString)
         logs.writeLog(log: "[iOS26-RESEARCH] iOS version: \(osVersionString)")
-        logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys) isProtocolProbe=\(isProtocolProbeStart)")
         let connectionConfigLen = configsRepository.getConnectionConfig().count
         let vpnInterface = configsRepository.getVpnInterface()
         if connectionConfigLen == 0 || vpnInterface == VpnInterface.none {
@@ -317,7 +319,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
 
         do {
-            try await startActiveProtocol(reason: "startTunnel", teardownOnFailure: true)
+            try await startActiveProtocol(
+                reason: "startTunnel",
+                teardownOnFailure: true,
+                startHealthCheckAfterStart: !isProtocolProbeStart
+            )
         } catch {
             throw error
         }
@@ -327,7 +333,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logResourceSnapshot(label: "AFTER_PROTOCOL_STARTUP")
     }
 
-    private func startActiveProtocol(reason: String, teardownOnFailure: Bool) async throws {
+    private func startActiveProtocol(
+        reason: String,
+        teardownOnFailure: Bool,
+        startHealthCheckAfterStart: Bool
+    ) async throws {
         let vpnInterface = configsRepository.getVpnInterface()
         logs.writeLog(log: "[tunnel:\(tunnelId)] selected vpnInterface=\(vpnInterface) reason=\(reason)")
         Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
@@ -381,7 +391,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         }
 
-        startHealthCheck()
+        if startHealthCheckAfterStart {
+            startHealthCheck()
+        } else {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] HEALTH_CHECK skipped for protocol probe reason=\(reason)")
+        }
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
@@ -428,7 +442,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage bytes=\(messageData.count)")
-        if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
+        if let msg = String(data: messageData, encoding: .utf8), msg == "restartActiveProtocol" || msg == "restartActiveProtocol:probe" {
+            let isProtocolProbe = msg == "restartActiveProtocol:probe"
+            logs.writeLog(log: "[tunnel:\(tunnelId)] handleAppMessage restartActiveProtocol isProtocolProbe=\(isProtocolProbe)")
+            Task { @MainActor in
+                let ok = await self.restartActiveProtocolFromAppMessage(isProtocolProbe: isProtocolProbe)
+                let response = (ok ? "ok" : "error").data(using: .utf8)
+                completionHandler?(response)
+            }
+        } else if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory")
             let response = "Memory:\(reportMemoryUsageMB())".data(using: .utf8)
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory responseBytes=\(response?.count ?? -1)")
@@ -440,6 +462,37 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage nonUtf8 echo bytes=\(messageData.count)")
             }
             completionHandler?(messageData)
+        }
+    }
+
+    @MainActor
+    private func restartActiveProtocolFromAppMessage(isProtocolProbe: Bool) async -> Bool {
+        logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart begin reason=appMessage restartActiveProtocol isProtocolProbe=\(isProtocolProbe)")
+        stopHealthCheck(reason: "appMessage restartActiveProtocol")
+        stopCloakSidecarForProtocolRestart()
+        do {
+            try await startActiveProtocol(
+                reason: "appMessage restartActiveProtocol",
+                teardownOnFailure: false,
+                startHealthCheckAfterStart: !isProtocolProbe
+            )
+            logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart success reason=appMessage restartActiveProtocol isProtocolProbe=\(isProtocolProbe)")
+            return true
+        } catch {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart failed reason=appMessage restartActiveProtocol isProtocolProbe=\(isProtocolProbe): \(error.localizedDescription)")
+            configsRepository.setHealthCheckState(state: 0)
+            return false
+        }
+    }
+
+    @MainActor
+    private func stopCloakSidecarForProtocolRestart() {
+        do {
+            try cloakInteractor.stopCloak()
+        } catch {
+            logs.writeLog(
+                log: "[tunnel:\(tunnelId)] stopCloak before protocol restart failed: \(error.localizedDescription)"
+            )
         }
     }
 

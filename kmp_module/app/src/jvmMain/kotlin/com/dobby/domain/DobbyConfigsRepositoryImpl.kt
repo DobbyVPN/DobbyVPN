@@ -145,6 +145,14 @@ internal class DobbyConfigsRepositoryImpl(
         return prefs.get("ServerPortKey", "")
     }
 
+    override fun setServerHostname(hostname: String) {
+        prefs.put("ServerHostnameKey", hostname)
+    }
+
+    override fun getServerHostname(): String {
+        return prefs.get("ServerHostnameKey", "")
+    }
+
     override fun getMethodPasswordOutline(): String {
         return prefs.get("MethodPasswordOutlineKey", "")
     }

@@ -6,8 +6,9 @@ internal class VpnManagerImpl(
     private val connectionStateRepository: ConnectionStateRepository,
     private val dobbyVpnService: DobbyVpnService,
 ) : VpnManager {
+    override val supportsVpnNetworkReadySignal: Boolean = false
 
-    override fun start() {
+    override fun start(isProtocolProbe: Boolean) {
         val isStarted = dobbyVpnService.startService()
         connectionStateRepository.tryUpdateServiceStarted(isStarted)
     }
