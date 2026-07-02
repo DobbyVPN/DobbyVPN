@@ -1,6 +1,6 @@
 package com.dobby.feature.main.domain
 
-interface DobbyConfigsRepositoryXray {
+interface DobbyConfigsRepositoryXray : DobbyConfigsRepositoryServerEndpoint {
     fun getXrayConfig(): String
 
     fun setXrayConfig(config: String)
@@ -8,7 +8,4 @@ interface DobbyConfigsRepositoryXray {
     fun getIsXrayEnabled(): Boolean
 
     fun setIsXrayEnabled(isXrayEnabled: Boolean)
-
-    fun setServerPort(newConfig: String)
-    fun getServerPort(): String
 }

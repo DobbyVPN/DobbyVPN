@@ -46,10 +46,12 @@ internal class OutlineTomlApplier(
         if (cloakEnabled) {
             cloakRepo.setCloakLocalPort(DEFAULT_CLOAK_LOCAL_PORT)
             outlineRepo.setServerPort("127.0.0.1:$DEFAULT_CLOAK_LOCAL_PORT")
+            outlineRepo.setServerHostname("")
             logger.log("Cloak enabled: Outline will connect to local endpoint 127.0.0.1:$DEFAULT_CLOAK_LOCAL_PORT (ignoring Outline.Server/Port)")
         } else {
             val server = outline.Server?.trim().orEmpty()
             val port = outline.Port ?: if (websocketEnabled) DEFAULT_HTTPS_PORT else null
+            val serverName = outline.ServerName?.trim().orEmpty().ifEmpty { server }
             if (server.isEmpty()) {
                 logger.log("Invalid Outline profile: Server is required. Disabling Outline.")
                 outlineRepo.clearOutlineConfig()
@@ -63,6 +65,7 @@ internal class OutlineTomlApplier(
                 return null
             }
             outlineRepo.setServerPort("${server}:${port}")
+            outlineRepo.setServerHostname(serverName.takeIf { websocketEnabled } ?: "")
             // Ensure Cloak is cleared when not used.
             cloakRepo.clearCloakConfig()
         }

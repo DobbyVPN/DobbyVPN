@@ -125,6 +125,18 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
+    override fun setServerHostname(hostname: String) {
+        prefs.edit().putString("ServerHostnameKey", hostname).apply().also {
+            AndroidLog("DOBBY_TAG", "setServerHostname, size = ${hostname.length}")
+        }
+    }
+
+    override fun getServerHostname(): String {
+        return (prefs.getString("ServerHostnameKey", "") ?: "").also {
+            AndroidLog("DOBBY_TAG", "getServerHostname, size = ${it.length}")
+        }
+    }
+
     override fun getMethodPasswordOutline(): String {
         return (prefs.getString("MethodPasswordOutlineKey", "") ?: "").also {
             AndroidLog("DOBBY_TAG", "getMethodPasswordOutline, size = ${it.length}")

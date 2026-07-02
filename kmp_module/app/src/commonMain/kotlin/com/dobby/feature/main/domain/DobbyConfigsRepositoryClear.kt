@@ -4,6 +4,7 @@ fun DobbyConfigsRepositoryOutline.clearOutlineConfig() {
     setIsOutlineEnabled(false)
     setMethodPasswordOutline("")
     setServerPort("")
+    setServerHostname("")
     setPrefixOutline("")
     setIsWebsocketEnabled(false)
     setTcpPathOutline("")
@@ -24,6 +25,7 @@ fun DobbyConfigsRepositoryAwg.clearAwgConfig() {
 fun DobbyConfigsRepositoryXray.clearXrayConfig() {
     setIsXrayEnabled(false)
     setXrayConfig("")
+    setServerHostname("")
 }
 
 

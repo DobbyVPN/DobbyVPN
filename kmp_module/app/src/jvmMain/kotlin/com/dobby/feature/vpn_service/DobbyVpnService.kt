@@ -32,7 +32,8 @@ private fun buildOutlineUrl(
     prefix: String = "",
     websocketEnabled: Boolean = false,
     tcpPath: String = "",
-    udpPath: String = ""
+    udpPath: String = "",
+    serverHostname: String = "",
 ): String {
     val encoded = Base64.getEncoder().encodeToString(methodPassword.toByteArray())
     val baseUrl = "ss://$encoded@$serverPort"
@@ -48,7 +49,7 @@ private fun buildOutlineUrl(
 
     // Wrap with WebSocket over TLS transport if enabled (wss://)
     return if (websocketEnabled) {
-        val effectiveHost = extractHostFromHostPort(serverPort).trim()
+        val effectiveHost = serverHostname.trim().ifEmpty { extractHostFromHostPort(serverPort).trim() }
         val wsParams = buildList {
             if (tcpPath.isNotEmpty()) add("tcp_path=$tcpPath")
             if (udpPath.isNotEmpty()) add("udp_path=$udpPath")
@@ -127,6 +128,7 @@ class DobbyVpnService(
         logger.log("Start startCloakOutline")
         val methodPassword = dobbyConfigsRepository.getMethodPasswordOutline()
         val serverPort = dobbyConfigsRepository.getServerPort()
+        val serverHostname = dobbyConfigsRepository.getServerHostname()
         val prefix = dobbyConfigsRepository.getPrefixOutline()
         val websocketEnabled = dobbyConfigsRepository.getIsWebsocketEnabled()
         val tcpPath = dobbyConfigsRepository.getTcpPathOutline()
@@ -147,7 +149,8 @@ class DobbyVpnService(
                 prefix = prefix,
                 websocketEnabled = websocketEnabled,
                 tcpPath = tcpPath,
-                udpPath = udpPath
+                udpPath = udpPath,
+                serverHostname = serverHostname,
             )
             logger.log("Outline URL built (prefix=${prefix.isNotEmpty()}, ws=$websocketEnabled, tcpPath=${tcpPath.isNotEmpty()}, udpPath=${udpPath.isNotEmpty()})")
             if (websocketEnabled) {
