@@ -30,12 +30,15 @@ var (
 	pingTimeout            = 3 * time.Second
 	delayTimeoutConnecting = 3 * time.Second
 	delayTimeoutConnected  = 10 * time.Second
+	failedCheckThreshold   = 2
 )
 
 // Connection state
 var (
 	connectionState ConnectionState = Disconnected
 	csMu            sync.Mutex
+	failedChecks    int
+	failedChecksMu  sync.Mutex
 )
 
 // Connection checks
@@ -104,6 +107,19 @@ func StopHealthCheck() {
 	healthCheckStartedMu.Unlock()
 }
 
+func resetFailedChecks() {
+	failedChecksMu.Lock()
+	failedChecks = 0
+	failedChecksMu.Unlock()
+}
+
+func recordFailedCheck() int {
+	failedChecksMu.Lock()
+	defer failedChecksMu.Unlock()
+	failedChecks++
+	return failedChecks
+}
+
 func innerHealthCheck(stopCh <-chan struct{}) {
 	log.Debugf(common.Category, "Health check started")
 
@@ -123,6 +139,7 @@ func innerHealthCheck(stopCh <-chan struct{}) {
 		case <-stopCh:
 			log.Debugf(common.Category, "Health check stopped")
 			switchState(Disconnected)
+			resetFailedChecks()
 			healthCheckStartedMu.Lock()
 			healthCheckStarted = false
 			healthCheckStartedMu.Unlock()
@@ -152,16 +169,33 @@ func healthCheckStep() {
 
 	for _, check := range connectionChecks {
 		if err := check(); err != nil {
-			log.Error(
+			consecutiveFails := recordFailedCheck()
+			if consecutiveFails >= failedCheckThreshold {
+				log.Error(
+					common.Category,
+					"Health check failed",
+					map[string]any{
+						"error":            err.Error(),
+						"consecutiveFails": consecutiveFails,
+						"threshold":        failedCheckThreshold,
+					},
+				)
+				switchState(Connecting)
+				return
+			}
+
+			log.Warnf(
 				common.Category,
-				"Failed check",
-				map[string]any{"error": err.Error()},
+				"Health check HTTP cycle failed consecutiveFails=%d threshold=%d error=%v",
+				consecutiveFails,
+				failedCheckThreshold,
+				err,
 			)
-			switchState(Connecting)
 			return
 		}
 	}
 
+	resetFailedChecks()
 	log.Infof(common.Category, "Health check succeed")
 	switchState(Connected)
 }
