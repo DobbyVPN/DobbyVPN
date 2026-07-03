@@ -86,6 +86,11 @@ rpc CheckServerAlive (CheckServerAliveRequest)    returns (CheckServerAliveRespo
 rpc StartCloakClient (StartCloakClientRequest)    returns (Empty);
 rpc StopCloakClient (Empty)                       returns (Empty);
 
+// trusttunnel.go
+rpc GetTrustTunnelLastError(Empty)                returns (GetTrustTunnelLastErrorResponse);
+rpc StartTrustTunnel (StartTrustTunnelRequest)    returns (StartTrustTunnelResponse);
+rpc StopTrustTunnel (Empty)                       returns (Empty);
+
 // logger.go
 rpc InitLogger (InitLoggerRequest)                returns (Empty);
 

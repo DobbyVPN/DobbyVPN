@@ -109,7 +109,7 @@ sc.exe sidtype "DobbyVPN Server" unrestricted
 sc.exe start "DobbyVPN Server"
 ```
 
-> **Note**: Ensure that `libdobby_bridge.dll` is placed in the same directory as `windows_grpcvpnserver.exe` so the service can load the dynamic library.
+> **Note**: Ensure that `dobby_bridge.dll` is placed in the same directory as `windows_grpcvpnserver.exe` so the service can load the dynamic library.
 
 ### Stop vpn service
 

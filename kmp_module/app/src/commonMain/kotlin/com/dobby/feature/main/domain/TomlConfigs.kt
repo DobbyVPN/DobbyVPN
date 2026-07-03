@@ -215,18 +215,29 @@ data class ConnectionProfile(
 
 @Serializable
 data class TrustTunnelConfig(
-    val loglevel: TomlElement? = null,
-    val vpn_mode: TomlElement? = null,
-    val vpnMode: TomlElement? = null,
-    val killswitch_enabled: TomlElement? = null,
-    val killswitchEnabled: TomlElement? = null,
-    val killswitch_allow_ports: TomlElement? = null,
-    val killswitchAllowPorts: TomlElement? = null,
-    val post_quantum_group_enabled: TomlElement? = null,
-    val postQuantumGroupEnabled: TomlElement? = null,
-    val exclusions: TomlElement? = null,
-    val endpoint: TomlElement? = null,
-    val listener: TomlElement? = null,
+    val loglevel: String? = null,
+    val vpn_mode: String? = null,
+    val vpnMode: String? = null,
+    val killswitch_enabled: Boolean? = null,
+    val killswitchEnabled: Boolean? = null,
+    val killswitch_allow_ports: String? = null,
+    val killswitchAllowPorts: String? = null,
+    val post_quantum_group_enabled: Boolean? = null,
+    val postQuantumGroupEnabled: Boolean? = null,
+    val exclusions: List<String> = emptyList(),
+    
+    val endpoint_hostname: String? = null,
+    val endpoint_addresses: List<String> = emptyList(),
+    val endpoint_custom_sni: String? = null,
+    val endpoint_username: String? = null,
+    val endpoint_password: String? = null,
+    val endpoint_client_random: String? = null,
+    val endpoint_skip_verification: Boolean? = null,
+    val endpoint_upstream_protocol: String? = null,
+    val endpoint_anti_dpi: Boolean? = null,
+    val endpoint_dns_upstreams: List<String> = emptyList(),
+    
+    val listener_socks_address: String? = null,
 )
 
 @Serializable

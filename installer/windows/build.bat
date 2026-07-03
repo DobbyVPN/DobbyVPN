@@ -29,6 +29,11 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 		goto :error
 	)
 
+	if exist "dobby_bridge.dll" (
+		echo [+] Inserting dobby_bridge.dll to the dobbyvpn application
+		xcopy "dobby_bridge.dll" ".\dobbyVPN-windows\bin\" /Y
+	)
+
 :build
 	call :msi amd64 x64 || goto :error
 	call :msi x86 x86 || goto :error
