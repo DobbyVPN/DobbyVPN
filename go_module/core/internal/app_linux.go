@@ -6,6 +6,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"go_module/core/pkg"
 	"go_module/tunnel/platform_engine"
 	"go_module/tunnel/protected_dialer"
 	"sync"
@@ -30,7 +31,7 @@ func signalInit(initResult chan<- error, err error) {
 	}
 }
 
-func (app App) Run(ctx context.Context, initResult chan<- error) error {
+func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	log.Debugf(coreCommon.Category, "[Linux][Init] ===== VPN initialization started =====")
 	if app.ProtocolDevice == nil {
 		err := fmt.Errorf("protocol device is not initialized")
@@ -73,6 +74,7 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		return err
 	}
 	log.Debugf(coreCommon.Category, "[Linux][Step 3][OK] Uplink interface=%s", uplinkIface)
+	protected_dialer.SetDefaultRoute(gatewayIP.String(), uplinkIface, 0)
 
 	// 4. early route
 	earlyRouteInstalled := false
@@ -189,9 +191,22 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 		closeOnce.Do(func() {
 			log.Debugf(coreCommon.Category, "[Linux][Lifecycle] Shutting down...")
 
+			app.mu.Lock()
+			currentDevice := app.currentDevice
+			currentServerIP := app.serverIP
+			if currentDevice == nil {
+				currentDevice = app.ProtocolDevice
+			}
+			if currentServerIP == "" && serverIP != nil {
+				currentServerIP = serverIP.String()
+			}
+			app.currentDevice = nil
+			app.running = false
+			app.mu.Unlock()
+
 			if routingStarted {
 				common.Client.MarkInCriticalSection(coreCommon.Name)
-				if err = routing.StopRouting(serverIP.String(), gatewayIP.String(), uplinkIface); err != nil {
+				if err = routing.StopRouting(currentServerIP, gatewayIP.String(), uplinkIface); err != nil {
 					log.Debugf(coreCommon.Category, "[Linux][StopRouting][ERROR] %v", err)
 				}
 				common.Client.MarkOutOffCriticalSection(coreCommon.Name)
@@ -210,7 +225,9 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 
 			tunnel.StopEngine()
 
-			_ = app.ProtocolDevice.Close()
+			if currentDevice != nil {
+				_ = currentDevice.Close()
+			}
 
 			_ = tun.Close()
 
@@ -274,6 +291,15 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 	routingStarted = true
 
+	app.mu.Lock()
+	app.currentDevice = app.ProtocolDevice
+	app.gatewayIP = gatewayIP.String()
+	app.uplinkIface = uplinkIface
+	app.tunIface = app.RoutingConfig.TunDeviceName
+	app.serverIP = serverIP.String()
+	app.running = true
+	app.mu.Unlock()
+
 	log.Debugf(coreCommon.Category, "[Linux][Step 10][OK] Default route switched to VPN")
 
 	log.Debugf(coreCommon.Category, "[Linux][Init] ===== VPN started successfully =====")
@@ -286,5 +312,93 @@ func (app App) Run(ctx context.Context, initResult chan<- error) error {
 	tunnel.StopEngine()
 
 	log.Debugf(coreCommon.Category, "[Linux][Lifecycle] Context cancelled — stopping engine")
+	return nil
+}
+
+func (app *App) SwitchProtocolDevice(device pkg.ProtocolDevice) error {
+	startedAt := time.Now()
+	if app == nil {
+		return fmt.Errorf("core app is not initialized")
+	}
+	if device == nil {
+		return fmt.Errorf("protocol device is not initialized")
+	}
+	if app.RoutingConfig == nil {
+		return fmt.Errorf("routing config is not initialized")
+	}
+
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	if !app.running || app.currentDevice == nil {
+		return fmt.Errorf("core app is not running")
+	}
+
+	newServerIP := device.GetServerIP()
+	if newServerIP == nil {
+		return fmt.Errorf("server IP is nil")
+	}
+
+	oldDevice := app.currentDevice
+	oldServerIP := app.serverIP
+	gatewayIP := app.gatewayIP
+	uplinkIface := app.uplinkIface
+
+	log.Debugf(coreCommon.Category, "[Linux] Hot-switch protocol begin oldServer=%s newServer=%s", oldServerIP, newServerIP.String())
+
+	newRouteChanged := false
+	if newServerIP.String() != "127.0.0.1" {
+		common.Client.MarkInCriticalSection(coreCommon.Name)
+		routeChanged, err := routing.EnsureProxyRoute(newServerIP.String(), gatewayIP, uplinkIface)
+		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+		if err != nil {
+			return fmt.Errorf("failed to add route for new server: %w", err)
+		}
+		newRouteChanged = routeChanged
+		log.Debugf(coreCommon.Category, "[Linux] Hot-switch route ready newServer=%s changed=%v elapsed=%s", newServerIP.String(), routeChanged, time.Since(startedAt).Truncate(time.Millisecond))
+	}
+
+	if err := device.Open(app.RoutingConfig.RoutingTableID, uplinkIface); err != nil {
+		if newRouteChanged {
+			common.Client.MarkInCriticalSection(coreCommon.Name)
+			if cleanupErr := routing.DeleteProxyRoute(newServerIP.String(), gatewayIP, uplinkIface); cleanupErr != nil {
+				log.Debugf(coreCommon.Category, "[Linux] Hot-switch cleanup new route failed after open error: %v", cleanupErr)
+			}
+			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+		}
+		return fmt.Errorf("failed to open new protocol device: %w", err)
+	}
+	log.Debugf(coreCommon.Category, "[Linux] Hot-switch ProtocolDevice.Open OK proxy=%s elapsed=%s", device.GetProxyAddr(), time.Since(startedAt).Truncate(time.Millisecond))
+
+	if err := tunnel.SwitchVPNProxy(device.GetProxyAddr()); err != nil {
+		_ = device.Close()
+		if newRouteChanged {
+			common.Client.MarkInCriticalSection(coreCommon.Name)
+			if cleanupErr := routing.DeleteProxyRoute(newServerIP.String(), gatewayIP, uplinkIface); cleanupErr != nil {
+				log.Debugf(coreCommon.Category, "[Linux] Hot-switch cleanup new route failed after switch error: %v", cleanupErr)
+			}
+			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+		}
+		return fmt.Errorf("failed to switch tun2socks proxy: %w", err)
+	}
+
+	app.ProtocolDevice = device
+	app.currentDevice = device
+	app.serverIP = newServerIP.String()
+
+	if oldDevice != nil {
+		if err := oldDevice.Close(); err != nil {
+			log.Debugf(coreCommon.Category, "[Linux] Hot-switch old ProtocolDevice.Close failed: %v", err)
+		}
+	}
+	if oldServerIP != "" && oldServerIP != newServerIP.String() {
+		common.Client.MarkInCriticalSection(coreCommon.Name)
+		if err := routing.DeleteProxyRoute(oldServerIP, gatewayIP, uplinkIface); err != nil {
+			log.Debugf(coreCommon.Category, "[Linux] Hot-switch old server route cleanup failed oldServer=%s err=%v", oldServerIP, err)
+		}
+		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+	}
+
+	log.Debugf(coreCommon.Category, "[Linux] Hot-switch protocol done oldServer=%s newServer=%s proxy=%s elapsed=%s", oldServerIP, newServerIP.String(), device.GetProxyAddr(), time.Since(startedAt).Truncate(time.Millisecond))
 	return nil
 }

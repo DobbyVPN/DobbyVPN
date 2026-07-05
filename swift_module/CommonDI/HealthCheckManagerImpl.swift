@@ -32,4 +32,8 @@ public class HealthCheckManagerImpl: HealthCheckManager {
     public func stopHealthCheck() {
         configsRepository.setHealthCheckState(state: 0)
     }
+
+    public func measureTunnelProbeAverageLatencyMillis(timeoutMillis: Int64) -> Int64 {
+        return Cloak_outlineMeasureTunnelProbeAverageLatencyMillis()
+    }
 }

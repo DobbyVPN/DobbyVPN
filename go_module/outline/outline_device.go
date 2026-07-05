@@ -15,9 +15,10 @@ import (
 
 	socks5 "github.com/things-go/go-socks5"
 	"golang.getoutline.org/sdk/transport"
-	"golang.getoutline.org/sdk/x/configurl"
 
+	"go_module/dnscache"
 	"go_module/log"
+	"go_module/tunnel/protected_dialer"
 )
 
 const (
@@ -94,7 +95,7 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 	}
 
 	ctx := context.Background()
-	providers := configurl.NewDefaultProviders()
+	providers := protected_dialer.NewOutlineProviders()
 
 	sd, err := providers.NewStreamDialer(ctx, transportConfig)
 	if err != nil {
@@ -728,23 +729,12 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 		return net.ParseIP("127.0.0.1").To4(), nil
 	}
 
-	resolver := net.Resolver{}
-	ctx := context.Background()
-
-	ipList, err := resolver.LookupIPAddr(ctx, host)
+	ip, err := dnscache.ResolveIPv4(context.Background(), host, 2*time.Second, "outline")
 	if err != nil {
 		return nil, err
 	}
-	log.Debugf(Category, "outline client: DNS returned %d addresses for %s", len(ipList), host)
-
-	for _, ip := range ipList {
-		if v4 := ip.IP.To4(); v4 != nil {
-			log.Debugf(Category, "outline client: resolved %s -> %s", host, v4.String())
-			return v4, nil
-		}
-	}
-
-	return nil, errors.New("IPv6 only Shadowsocks server is not supported yet")
+	log.Debugf(Category, "outline client: resolved %s -> %s", host, ip.String())
+	return ip, nil
 }
 
 func extractTLSSNIHost(transportConfig string) string {

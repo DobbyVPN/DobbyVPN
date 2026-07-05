@@ -29,3 +29,7 @@ func StartHealthCheck() {
 func StopHealthCheck() {
 	healthcheck.StopHealthCheck()
 }
+
+func MeasureTunnelProbeAverageLatencyMillis(timeoutMillis int64) int64 {
+	return healthcheck.MeasureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis)
+}

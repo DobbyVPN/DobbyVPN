@@ -15,6 +15,7 @@ import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.VpnManagerImpl
+import com.dobby.feature.main.domain.DnsPreflightResolverImpl
 import com.dobby.feature.main.domain.config.ConnectionProfileApplier
 import com.dobby.feature.main.domain.config.ConnectionProfileStore
 import com.dobby.feature.main.presentation.ConfigsProcessor
@@ -54,6 +55,7 @@ class CliClient {
         val outlineLibrary = RestartableOutlineGrpcLibrary(logger)
         val xrayLibrary = RestartableXrayGrpcLibrary(logger)
         val cloakLibrary = RestartableCloakGrpcLibrary(logger)
+        val dnsCacheLibrary = RestartableDnsCacheGrpcLibrary(logger)
         val loggerLibrary = RestartableLoggerGrpcLibrary(logger)
         val georoutingLibrary = RestartableGeoroutingGrpcLibrary(logger)
 
@@ -86,6 +88,7 @@ class CliClient {
             logsRepository = logsRepository,
             healthCheckManager = healthCheckManager,
             configsProcessor = configsProcessor,
+            dnsPreflightResolver = DnsPreflightResolverImpl(dnsCacheLibrary, logger),
         )
     }
 
@@ -248,7 +251,7 @@ class CliClient {
         logsRepository.cleanupOldLogs()
         loggerManager.initLogger()
         connectionStateRepository.serviceStartedFlow.prepare()
-        vpnManager.start()
+        vpnManager.start(isProtocolProbe = false)
 
         val connected = connectionStateRepository.serviceStartedFlow.awaitResult(SERVICE_START_TIMEOUT_MS)
         if (connected) {

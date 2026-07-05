@@ -11,6 +11,7 @@ class ConnectionStateRepository {
     val statusFlow = _statusFlow.asStateFlow()
 
     val serviceStartedFlow = ServiceStarted()
+    val vpnNetworkReadyFlow = ServiceStarted()
 
     suspend fun updateStatus(connectionState: VpnConnectionState) {
         _statusFlow.emit(connectionState)
@@ -26,6 +27,10 @@ class ConnectionStateRepository {
 
     fun tryUpdateServiceStarted(isStarted: Boolean) {
         serviceStartedFlow.tryEmit(isStarted)
+    }
+
+    fun tryUpdateVpnNetworkReady(isReady: Boolean) {
+        vpnNetworkReadyFlow.tryEmit(isReady)
     }
 }
 

@@ -1,13 +1,7 @@
 package com.dobby.feature.diagnostic.domain
 
-import android.os.SystemClock
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.vpn_service.DobbyVpnService
-import java.net.*
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import com.dobby.backend.GoBackendWrapper
-import kotlin.concurrent.thread
 
 class HealthCheckManagerImpl(
     private val logger: Logger,
@@ -33,5 +27,9 @@ class HealthCheckManagerImpl(
 
     override fun stopHealthCheck() {
         GoBackendWrapper.stopHealthCheck()
+    }
+
+    override fun measureTunnelProbeAverageLatencyMillis(timeoutMillis: Long): Long {
+        return GoBackendWrapper.measureTunnelProbeAverageLatencyMillis(timeoutMillis)
     }
 }

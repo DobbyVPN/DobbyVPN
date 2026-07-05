@@ -48,4 +48,13 @@ class RestartableHealthCheckGrpcLibrary(private val logger: Logger) : HealthChec
             logger.log("[ERROR] Failed to stop health check: $e")
         }
     }
+
+    override fun MeasureTunnelProbeAverageLatencyMillis(timeoutMillis: Long): Long {
+        return try {
+            GrpcVpnLibrary.healthCheckGrpcLibrary.MeasureTunnelProbeAverageLatencyMillis(timeoutMillis)
+        } catch (e: VpnServiceStatusException) {
+            logger.log("[ERROR] Failed to measure tunnel probe timeoutMs=$timeoutMillis: $e")
+            -1
+        }
+    }
 }

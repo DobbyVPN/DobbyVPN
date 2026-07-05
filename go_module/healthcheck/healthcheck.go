@@ -20,6 +20,7 @@ const (
 // Healthcheck management
 var (
 	stopHealthCheckChannel chan struct{}
+	wakeHealthCheckChannel chan struct{}
 	healthCheckStarted     bool = false
 	healthCheckStartedMu   sync.Mutex
 )
@@ -56,7 +57,7 @@ var (
 			return dnsResolveCheck("one.one.one.one")
 		},
 		func() error {
-			return anyHTTPPingCheck([]string{
+			return allHTTPPingCheck([]string{
 				"https://www.google.com/generate_204",
 				"https://www.cloudflare.com/cdn-cgi/trace",
 				"https://about.google",
@@ -75,6 +76,8 @@ func GetConnectionState() ConnectionState {
 
 func InitHealthCheck() {
 	log.Debugf(common.Category, "Called InitHealthCheck")
+	switchState(Disconnected)
+	resetFailedChecks()
 }
 
 func StartHealthCheck() {
@@ -83,12 +86,21 @@ func StartHealthCheck() {
 	defer healthCheckStartedMu.Unlock()
 
 	if healthCheckStarted {
-		log.Debugf(common.Category, "Health check already running")
+		log.Debugf(common.Category, "Health check already running; reset counters and request immediate check")
+		resetFailedChecks()
+		switchState(Connecting)
+		select {
+		case wakeHealthCheckChannel <- struct{}{}:
+			log.Debugf(common.Category, "Health check wakeup requested")
+		default:
+			log.Debugf(common.Category, "Health check wakeup already pending")
+		}
 	} else {
 		log.Debugf(common.Category, "Starting health check")
 		healthCheckStarted = true
 		stopHealthCheckChannel = make(chan struct{}, 1)
-		go innerHealthCheck(stopHealthCheckChannel)
+		wakeHealthCheckChannel = make(chan struct{}, 1)
+		go innerHealthCheck(stopHealthCheckChannel, wakeHealthCheckChannel)
 	}
 }
 
@@ -120,10 +132,11 @@ func recordFailedCheck() int {
 	return failedChecks
 }
 
-func innerHealthCheck(stopCh <-chan struct{}) {
+func innerHealthCheck(stopCh, wakeCh <-chan struct{}) {
 	log.Debugf(common.Category, "Health check started")
 
 	switchState(Connecting)
+	healthCheckStep()
 	for {
 		var delayTimeout time.Duration
 
@@ -145,6 +158,9 @@ func innerHealthCheck(stopCh <-chan struct{}) {
 			healthCheckStartedMu.Unlock()
 			return
 		case <-time.After(delayTimeout):
+			healthCheckStep()
+		case <-wakeCh:
+			log.Debugf(common.Category, "Health check wakeup received")
 			healthCheckStep()
 		}
 	}

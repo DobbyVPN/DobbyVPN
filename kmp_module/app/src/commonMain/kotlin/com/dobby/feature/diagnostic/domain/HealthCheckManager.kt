@@ -21,4 +21,10 @@ interface HealthCheckManager {
      * Platform dependent health check stop
      */
     fun stopHealthCheck(): Unit
+
+    /**
+     * Measures protocol-selection latency using the native tunnel probe.
+     * Returns a negative value when the probe failed.
+     */
+    fun measureTunnelProbeAverageLatencyMillis(timeoutMillis: Long): Long
 }

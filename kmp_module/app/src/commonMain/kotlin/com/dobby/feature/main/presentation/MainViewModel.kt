@@ -26,7 +26,7 @@ import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
-val httpClient = HttpClient()
+private val configHttpClient = HttpClient()
 
 class MainViewModel(
     private val configsRepository: DobbyConfigsRepository,
@@ -38,10 +38,12 @@ class MainViewModel(
     private val logsRepository: LogsRepository,
     private val healthCheckManager: HealthCheckManager,
     private val configsProcessor: ConfigsProcessor,
+    private val dnsPreflightResolver: DnsPreflightResolver,
 ) : ViewModel() {
     private var connectionDetectorJob: Job? = null
     private var stopRequested = false
     private var failoverJob: Job? = null
+    private var backendRuntimeInitialized = false
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
     //endregion
@@ -96,15 +98,15 @@ class MainViewModel(
     ) {
         logger.log("The connection button was clicked with URL: ${maskStr(connectionUrl)}")
 
-        if (!configsRepository.couldStart()) {
-            logger.log("We couldn't do this operation, configsRepository.couldStart() returned FALSE")
-            return
-        }
-
         viewModelScope.launch(Dispatchers.Default) {
-            logger.log("Proceeding with setConfig for the provided URL...")
             when (connectionStateRepository.statusFlow.value) {
                 VpnConnectionState.DISCONNECTED -> {
+                    if (!configsRepository.couldStart()) {
+                        logger.log("We couldn't start VPN, configsRepository.couldStart() returned FALSE")
+                        return@launch
+                    }
+
+                    logger.log("Proceeding with setConfig for the provided URL...")
                     try {
                         logger.log("We get config by ${maskStr(connectionUrl)}")
                         val ok = setConfig(connectionUrl)
@@ -131,7 +133,7 @@ class MainViewModel(
                 }
 
                 VpnConnectionState.CONNECTING, VpnConnectionState.CONNECTED -> {
-                    logger.log("Stopping VPN service due to active connection")
+                    logger.log("Stopping VPN service due to current state=${connectionStateRepository.statusFlow.value}")
                     stopVpnService()
                 }
             }
@@ -163,6 +165,8 @@ class MainViewModel(
         }
 
         saveTelemetryAttributes()
+        runCatching { dnsPreflightResolver.prewarm(profileManager.getProfiles()) }
+            .onFailure { e -> logger.log("[DNSPreflight] Failed before VPN start: ${e.message}") }
         return true
     }
 
@@ -172,7 +176,7 @@ class MainViewModel(
         return if (connectionUrl.startsWith("http://") || connectionUrl.startsWith("https://")) {
             try {
                 logger.log("Fetching config from remote URL...")
-                httpClient.get(connectionUrl) {
+                configHttpClient.get(connectionUrl) {
                     headers {
                         append("User-Agent", "DobbyVPN v${BuildConfig.VERSION_NAME}")
                     }
@@ -231,11 +235,10 @@ class MainViewModel(
                         connectedSeen = connectedSeen,
                         elapsedMs = elapsedMs
                     ) &&
-                    profileManager.hasMultipleProfiles() &&
                     !stopRequested
                 ) {
-                    logger.log("[Failover] Health check reported failed state=$connectionState for active profile")
-                    requestFailover("health check state=$connectionState")
+                    logger.log("[ProtocolSelection] Health check reported failed state=$connectionState for active profile")
+                    requestProtocolRescan("health check state=$connectionState")
                     return@launch
                 }
                 if (connectionState == VpnConnectionState.CONNECTED) {
@@ -268,39 +271,173 @@ class MainViewModel(
 
     suspend fun startVpnService(): Boolean {
         stopRequested = false
+        failoverJob?.cancel()
+        failoverJob = null
         return startVpnServiceLoop(initialReason = "start requested")
     }
 
     private suspend fun startVpnServiceLoop(initialReason: String): Boolean {
         var reason = initialReason
         while (!stopRequested) {
-            logger.log("[Failover] Starting active profile, reason=$reason")
-            val connected = startActiveVpnServiceOnce()
-            if (connected) return true
+            val bestProfile = scanProfilesForBest(reason)
+            if (bestProfile == null) {
+                if (stopRequested) {
+                    logger.log("[ProtocolSelection] Profile scan stopped because stopRequested=true")
+                    return false
+                }
 
-            if (!profileManager.hasMultipleProfiles()) {
-                logger.log("[Failover] Active profile failed and no fallback profile exists")
+                logger.log("[ProtocolSelection] No working profile found during scan reason=$reason")
                 stopVpnRuntime(resetUiState = true)
                 return false
             }
 
+            logger.log(
+                "[ProtocolSelection] Starting selected profile " +
+                    "${bestProfile.profile.label(bestProfile.index, bestProfile.total)} " +
+                    "averageLatencyMs=${bestProfile.averageLatencyMs} reason=$reason"
+            )
+            val connected = startSelectedProfile(bestProfile, reason)
+            if (connected) {
+                logger.log(
+                    "[ProtocolSelection] Selected profile is active " +
+                        "index=${bestProfile.index} averageLatencyMs=${bestProfile.averageLatencyMs}"
+                )
+                return true
+            }
+
+            logger.log("[ProtocolSelection] Selected profile failed after scan; repeating full scan")
             stopVpnRuntime(resetUiState = false)
-            val switched = profileManager.switchToNext("start failed")
-            if (!switched) {
-                logger.log("[Failover] Could not switch after start failure")
-                stopVpnRuntime(resetUiState = true)
-                return false
-            }
-            saveTelemetryAttributes()
-            reason = "retry after start failure"
+            reason = "selected profile failed after scan"
             delay(1.seconds)
         }
 
-        logger.log("[Failover] Start loop stopped because stopRequested=true")
+        logger.log("[ProtocolSelection] Start loop stopped because stopRequested=true")
         return false
     }
 
-    private suspend fun startActiveVpnServiceOnce(): Boolean {
+    private suspend fun scanProfilesForBest(reason: String): ProfileProbeResult? {
+        val profiles = profileManager.getProfiles()
+        if (profiles.isEmpty()) {
+            logger.log("[ProtocolSelection] No saved profiles to scan reason=$reason")
+            return null
+        }
+
+        logger.log("[ProtocolSelection] Start profile scan reason=$reason profiles=${profiles.size}")
+
+        val results = mutableListOf<ProfileProbeResult>()
+        for ((index, profile) in profiles.withIndex()) {
+            if (stopRequested) {
+                logger.log("[ProtocolSelection] Stop requested during profile scan")
+                return null
+            }
+
+            val result = probeProfile(
+                index = index,
+                total = profiles.size,
+                profile = profile,
+                reason = reason
+            )
+            if (result != null) {
+                results += result
+            }
+        }
+
+        if (results.isEmpty()) {
+            logger.log("[ProtocolSelection] Profile scan finished without working profiles")
+            return null
+        }
+
+        logger.log(
+            "[ProtocolSelection] Profile scan results " +
+                "working=${results.size}/${profiles.size} " +
+                "latencies=${results.joinToString { "index=${it.index}:avgMs=${it.averageLatencyMs}" }}"
+        )
+
+        return results.minWithOrNull(
+            compareBy<ProfileProbeResult> { it.averageLatencyMs }
+                .thenBy { it.index }
+        )
+    }
+
+    private suspend fun probeProfile(
+        index: Int,
+        total: Int,
+        profile: ConnectionProfile,
+        reason: String,
+    ): ProfileProbeResult? {
+        val label = profile.label(index, total)
+        logger.log("[ProtocolSelection] Probe start $label reason=$reason")
+
+        try {
+            val applied = profileManager.applyProfile(index, "protocol selection probe")
+            if (!applied) {
+                logger.log("[ProtocolSelection] Probe failed $label: profile config could not be applied")
+                return null
+            }
+            saveTelemetryAttributes()
+
+            connectionStateRepository.updateStatus(VpnConnectionState.CONNECTING)
+            _uiState.emit(_uiState.value.copy(connectionState = VpnConnectionState.CONNECTING))
+
+            val started = startActiveVpnServiceOnce(
+                isProtocolProbe = true,
+            )
+            if (!started) {
+                logger.log("[ProtocolSelection] Probe failed $label: VPN tunnel did not start")
+                return null
+            }
+            waitBeforeTunnelProbe(label)
+
+            val averageLatencyMs = measureHealthCheckAverageLatencyMillis()
+            if (averageLatencyMs == null) {
+                logger.log("[ProtocolSelection] Probe failed $label: HC latency probe failed")
+                return null
+            }
+
+            logger.log("[ProtocolSelection] Probe OK $label averageLatencyMs=$averageLatencyMs")
+            return ProfileProbeResult(
+                index = index,
+                total = total,
+                profile = profile,
+                averageLatencyMs = averageLatencyMs
+            )
+        } finally {
+            logger.log("[ProtocolSelection] Probe finished $label; keeping VPN interface available for protocol reuse")
+        }
+    }
+
+    private suspend fun startSelectedProfile(profile: ProfileProbeResult, reason: String): Boolean {
+        val applied = profileManager.applyProfile(
+            index = profile.index,
+            reason = "selected best latencyMs=${profile.averageLatencyMs} after $reason"
+        )
+        if (!applied) {
+            logger.log("[ProtocolSelection] Selected profile could not be applied index=${profile.index}")
+            return false
+        }
+
+        saveTelemetryAttributes()
+        connectionStateRepository.updateStatus(VpnConnectionState.CONNECTING)
+        _uiState.emit(_uiState.value.copy(connectionState = VpnConnectionState.CONNECTING))
+
+        val started = startActiveVpnServiceOnce(
+            isProtocolProbe = false,
+        )
+        if (!started) return false
+        waitBeforeTunnelProbe(profile.profile.label(profile.index, profile.total))
+
+        val healthy = measureHealthCheckAverageLatencyMillis() != null
+        if (!healthy) {
+            logger.log("[ProtocolSelection] Selected profile failed active latency confirmation index=${profile.index}")
+            return false
+        }
+        startHealthCheckAndDetector()
+        return true
+    }
+
+    private suspend fun startActiveVpnServiceOnce(
+        isProtocolProbe: Boolean,
+    ): Boolean {
         logger.log("Starting VPN service...")
 
         connectionStateRepository.updateStatus(VpnConnectionState.CONNECTING)
@@ -309,27 +446,43 @@ class MainViewModel(
         logger.log("Init health check")
         healthCheckManager.initHealthCheck()
 
-        logger.log("Init logger")
-        logsRepository.cleanupOldLogs()
-        loggerManager.initLogger()
+        if (!backendRuntimeInitialized) {
+            logger.log("Init logger")
+            logsRepository.cleanupOldLogs()
+            loggerManager.initLogger()
+            backendRuntimeInitialized = true
+        } else {
+            logger.log("Backend logger already initialized; skipping runtime logger init")
+        }
 
         logger.log("Start tunnel service")
         connectionStateRepository.serviceStartedFlow.prepare()
-        vpnManager.start()
+        connectionStateRepository.vpnNetworkReadyFlow.prepare()
+        vpnManager.start(isProtocolProbe = isProtocolProbe)
 
         logger.log("Await service started result")
         val connected = connectionStateRepository.serviceStartedFlow.awaitResult(SERVICE_START_TIMEOUT_MS)
         logger.log("Got service started result: $connected")
 
         if (connected) {
-            logger.log("Start health check")
-            healthCheckManager.startHealthCheck()
-            logger.log("Start connection detector")
-            startConnectionStateDetector()
+            if (isProtocolProbe) {
+                logger.log("Health check is not started for protocol probe")
+                logger.log("Connection detector is not started for protocol probe")
+            } else {
+                logger.log("Health check is deferred until selected profile latency confirmation")
+                logger.log("Connection detector is deferred until selected profile latency confirmation")
+            }
             return true
         } else {
             return false
         }
+    }
+
+    private fun startHealthCheckAndDetector() {
+        logger.log("Start health check")
+        healthCheckManager.startHealthCheck()
+        logger.log("Start connection detector")
+        startConnectionStateDetector()
     }
 
     fun stopVpnService() {
@@ -347,6 +500,7 @@ class MainViewModel(
         healthCheckManager.stopHealthCheck()
         logger.log("Stop connection detector")
         stopConnectionStateDetector()
+        backendRuntimeInitialized = false
         if (resetUiState) {
             val disconnectedState = _uiState.value.copy(connectionState = VpnConnectionState.DISCONNECTED)
             _uiState.tryEmit(disconnectedState)
@@ -355,30 +509,105 @@ class MainViewModel(
         logger.log("VPN service stop requested, resetUiState=$resetUiState")
     }
 
-    private fun requestFailover(reason: String) {
+    private fun requestProtocolRescan(reason: String) {
         if (failoverJob?.isActive == true) {
-            logger.log("[Failover] Request ignored, failover already running reason=$reason")
+            logger.log("[ProtocolSelection] Rescan request ignored, rescan already running reason=$reason")
             return
         }
 
         failoverJob = viewModelScope.launch(Dispatchers.Default) {
             stopConnectionStateDetector()
             healthCheckManager.stopHealthCheck()
-            logger.log("[Failover] Restarting VPN after $reason")
-            stopVpnRuntime(resetUiState = false)
+            logger.log("[ProtocolSelection] Restarting protocol selection after $reason")
 
-            val switched = profileManager.switchToNext(reason)
-            if (!switched) {
-                logger.log("[Failover] Could not switch profile after $reason")
-                stopVpnRuntime(resetUiState = true)
-                return@launch
-            }
-            saveTelemetryAttributes()
             connectionStateRepository.updateStatus(VpnConnectionState.CONNECTING)
             _uiState.emit(_uiState.value.copy(connectionState = VpnConnectionState.CONNECTING))
 
-            startVpnServiceLoop(initialReason = "failover after $reason")
+            startVpnServiceLoop(initialReason = "rescan after $reason")
         }
+    }
+
+    private suspend fun waitBeforeTunnelProbe(label: String) {
+        if (stopRequested) return
+        if (!vpnManager.supportsVpnNetworkReadySignal) {
+            logger.log("[ProtocolSelection] VPN network route wait is not supported before tunnel probe $label")
+            return
+        }
+        logger.log("[ProtocolSelection] Waiting VPN network route before tunnel probe $label")
+        val ready = connectionStateRepository.vpnNetworkReadyFlow.awaitResult(TUNNEL_PROBE_ROUTE_READY_TIMEOUT_MS)
+        logger.log(
+            "[ProtocolSelection] VPN network route wait finished " +
+                "ready=$ready timeoutMs=$TUNNEL_PROBE_ROUTE_READY_TIMEOUT_MS $label"
+        )
+    }
+
+    private suspend fun measureHealthCheckAverageLatencyMillis(): Long? {
+        if (stopRequested) {
+            logger.log("[ProtocolSelection] Tunnel probe stopped because stopRequested=true")
+            return null
+        }
+
+        val firstLatencyMs = measureTunnelProbeAttempt(
+            attemptNumber = 1,
+            totalAttempts = 2,
+            timeoutMillis = TUNNEL_PROBE_FAST_TIMEOUT_MS,
+        )
+        if (firstLatencyMs in 0..TUNNEL_PROBE_SLOW_RETRY_THRESHOLD_MS) {
+            return firstLatencyMs
+        }
+        if (stopRequested) {
+            logger.log("[ProtocolSelection] Tunnel probe stopped because stopRequested=true")
+            return null
+        }
+
+        if (firstLatencyMs < 0) {
+            logger.log(
+                "[ProtocolSelection] Tunnel probe retry because first attempt failed " +
+                    "timeoutMs=$TUNNEL_PROBE_RETRY_TIMEOUT_MS"
+            )
+        } else {
+            logger.log(
+                "[ProtocolSelection] Tunnel probe retry because first attempt was slow " +
+                    "averageLatencyMs=$firstLatencyMs thresholdMs=$TUNNEL_PROBE_SLOW_RETRY_THRESHOLD_MS " +
+                    "timeoutMs=$TUNNEL_PROBE_RETRY_TIMEOUT_MS"
+            )
+        }
+
+        return measureTunnelProbeAttempt(
+            attemptNumber = 2,
+            totalAttempts = 2,
+            timeoutMillis = TUNNEL_PROBE_RETRY_TIMEOUT_MS,
+        ).takeIf { it >= 0 }
+    }
+
+    private fun measureTunnelProbeAttempt(
+        attemptNumber: Int,
+        totalAttempts: Int,
+        timeoutMillis: Long,
+    ): Long {
+        val averageLatencyMs = healthCheckManager.measureTunnelProbeAverageLatencyMillis(timeoutMillis)
+        if (averageLatencyMs >= 0) {
+            logger.log(
+                "[ProtocolSelection] Tunnel probe OK " +
+                    "attempt=$attemptNumber/$totalAttempts timeoutMs=$timeoutMillis averageLatencyMs=$averageLatencyMs"
+            )
+        } else {
+            logger.log(
+                "[ProtocolSelection] Tunnel probe failed " +
+                    "attempt=$attemptNumber/$totalAttempts timeoutMs=$timeoutMillis"
+            )
+        }
+        return averageLatencyMs
+    }
+
+    private fun ConnectionProfile.label(index: Int, total: Int): String {
+        val descriptionPart = description
+            ?.replace(Regex("\\s+"), " ")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { "description=\"$it\", " }
+            .orEmpty()
+        return "profile ${index + 1}/$total: ${descriptionPart}protocol=$protocol sourceIndex=$sourceIndex"
     }
 
     private fun saveTelemetryAttributes() {
@@ -390,6 +619,17 @@ class MainViewModel(
     private companion object {
         const val HEALTH_CHECK_START_GRACE_MS = 15_000L
         const val SERVICE_START_TIMEOUT_MS = 90_000L
+        const val TUNNEL_PROBE_FAST_TIMEOUT_MS = 2_000L
+        const val TUNNEL_PROBE_RETRY_TIMEOUT_MS = 3_000L
+        const val TUNNEL_PROBE_SLOW_RETRY_THRESHOLD_MS = 1_000L
+        const val TUNNEL_PROBE_ROUTE_READY_TIMEOUT_MS = 1_500L
     }
+
+    private data class ProfileProbeResult(
+        val index: Int,
+        val total: Int,
+        val profile: ConnectionProfile,
+        val averageLatencyMs: Long,
+    )
     //endregion
 }

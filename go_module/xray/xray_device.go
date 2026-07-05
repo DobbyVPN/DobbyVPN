@@ -34,14 +34,13 @@ func NewXrayDevice(vlessConfig string) (*XrayDevice, error) {
 		return nil, fmt.Errorf("invalid server IP: %q", serverIPStr)
 	}
 
-	// Pick a free local port for the SOCKS inbound.
-	// We intentionally bind+close to reserve a likely-free port for xray to listen on.
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	// Pick a free local port for the SOCKS inbound. Xray opens TCP and UDP
+	// on the same port when udp=true, so validate both protocols before
+	// handing the port to xray.
+	port, err := allocateLocalSocksPort()
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate local port: %w", err)
 	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
 
 	socksUser := auth.GenerateRandomAuth()
 	socksPass := auth.GenerateRandomAuth()
@@ -60,10 +59,54 @@ func NewXrayDevice(vlessConfig string) (*XrayDevice, error) {
 	return d, nil
 }
 
+func allocateLocalSocksPort() (int, error) {
+	const attempts = 100
+
+	var lastErr error = errors.New("no allocation attempts")
+	for attempt := 1; attempt <= attempts; attempt++ {
+		// Pick UDP first. On Windows a port can be free for TCP while UDP bind
+		// is forbidden by an excluded/reserved range, which made Xray fail before
+		// it even started. Xray needs both protocols on the same SOCKS port.
+		pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		port := pc.LocalAddr().(*net.UDPAddr).Port
+		l, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			lastErr = err
+			_ = pc.Close()
+			continue
+		}
+
+		_ = l.Close()
+		_ = pc.Close()
+		if attempt > 1 {
+			log.Debugf(common.Category, "Allocated Xray local SOCKS port after retries port=%d attempts=%d", port, attempt)
+		}
+		return port, nil
+	}
+
+	return 0, fmt.Errorf("no TCP/UDP localhost port available after %d attempts: %w", attempts, lastErr)
+}
+
 func (d *XrayDevice) Open(routingTableID int, uplinkIface string) error {
 	if d == nil {
 		return errors.New("xray device is not initialized")
 	}
+
+	loglevel, err := internal.ExtractLogLevel(d.vlessConfig)
+	if err != nil {
+		log.Debugf(common.Category, "failed to parse xray log level, using default=%s err=%v", internal.XrayLogLevelName(internal.DefaultXrayLogLevel()), err)
+		loglevel = internal.DefaultXrayLogLevel()
+	} else if loglevel == internal.NoXrayLogLevel() {
+		log.Debugf(common.Category, "xray log level disabled in config, using default=%s for runtime diagnostics", internal.XrayLogLevelName(internal.DefaultXrayLogLevel()))
+		loglevel = internal.DefaultXrayLogLevel()
+	}
+	internal.SetupXrayLogging(loglevel)
+
 	xrayConfig, err := internal.GenerateXrayConfig(d.vlessConfig, "127.0.0.1", d.svrPort, routingTableID, uplinkIface, d.socksUser, d.socksPass)
 	if err != nil {
 		return fmt.Errorf("failed to generate xray config: %w", err)
@@ -78,12 +121,6 @@ func (d *XrayDevice) Open(routingTableID int, uplinkIface string) error {
 		_ = d.xrayInstance.Close()
 		return fmt.Errorf("failed to start xray: %w", err)
 	}
-
-	loglevel, err := internal.ExtractLogLevel(d.vlessConfig)
-	if err != nil {
-		log.Debugf(common.Category, "failed to parse log level, continuing without logs")
-	}
-	internal.SetupXrayLogging(loglevel)
 
 	return nil
 }

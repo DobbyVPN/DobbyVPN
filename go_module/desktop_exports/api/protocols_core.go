@@ -48,16 +48,6 @@ func startVpn(config, protocol string) int32 {
 	defer vpnMu.Unlock()
 	log.Debugf(common.Category, "locked")
 
-	if vpnClient != nil {
-		log.Debugf(common.Category, "Disconnect existing vpn client")
-		err := vpnClient.Disconnect()
-		if err != nil {
-			log.Debugf(common.Category, "Failed to disconnect existing vpn client: %v", err)
-			setVpnLastError(err.Error())
-			return -1
-		}
-	}
-
 	var device pkg.ProtocolDevice
 	var err error
 
@@ -76,6 +66,43 @@ func startVpn(config, protocol string) int32 {
 		log.Debugf(common.Category, "Failed to create device for %s protocol: %v", protocol, err)
 		setVpnLastError(err.Error())
 		return -1
+	}
+
+	if vpnClient != nil {
+		log.Debugf(common.Category, "Existing vpn client detected; trying protocol hot-switch")
+		if err := vpnClient.SwitchDevice(device); err == nil {
+			log.Debugf(common.Category, "Vpn client protocol hot-switch completed successfully")
+			return 0
+		} else {
+			log.Debugf(common.Category, "Protocol hot-switch failed, falling back to full reconnect: %v", err)
+			if closeErr := device.Close(); closeErr != nil {
+				log.Debugf(common.Category, "Failed to close unused protocol device after hot-switch failure: %v", closeErr)
+			}
+		}
+
+		log.Debugf(common.Category, "Disconnect existing vpn client")
+		err := vpnClient.Disconnect()
+		if err != nil {
+			log.Debugf(common.Category, "Failed to disconnect existing vpn client: %v", err)
+			setVpnLastError(err.Error())
+			return -1
+		}
+
+		switch protocol {
+		case "xray":
+			device, err = xray.NewXrayDevice(config)
+		case "outline":
+			device, err = outline.NewOutlineDevice(config)
+		default:
+			setVpnLastError("unsupported protocol: " + protocol)
+			log.Debugf(common.Category, "NewVpnClient() failed: unsupported protocol")
+			return -1
+		}
+		if err != nil {
+			log.Debugf(common.Category, "Failed to create device for %s protocol after reconnect fallback: %v", protocol, err)
+			setVpnLastError(err.Error())
+			return -1
+		}
 	}
 
 	vpnClient = core.NewClient(device)

@@ -1,5 +1,6 @@
 package com.dobby.feature.vpn_service.domain.cloak
 
+import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.vpn_service.CloakLibFacade
@@ -58,7 +59,9 @@ class CloakConnectionInteractor(
                     if (!wasPreviouslyConnected.compareAndSet(false, true)) {
                         cloakLibFacade.stopClient()
                     }
-                    cloakLibFacade.startClient(localHost, localPort, config)
+                    if (!cloakLibFacade.startClient(localHost, localPort, config)) {
+                        error(GoBackendWrapper.getLastError() ?: "Cloak native start failed")
+                    }
                 }
                 if (result.isSuccess) {
                     ConnectResult.Success

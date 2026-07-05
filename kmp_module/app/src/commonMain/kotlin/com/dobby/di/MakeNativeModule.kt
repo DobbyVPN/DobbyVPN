@@ -24,6 +24,7 @@ fun makeNativeModule(
     authenticationManager: NativeInjectionFactory<AuthenticationManager>,
     healthCheckManager: NativeInjectionFactory<HealthCheckManager>,
     loggerManager: NativeInjectionFactory<LoggerManager>,
+    dnsPreflightResolver: NativeInjectionFactory<DnsPreflightResolver>,
 ): Module {
     return module {
         factory { vpnManager() }
@@ -37,6 +38,7 @@ fun makeNativeModule(
         single { connectionStateRepository() }
         single { configsRepository() }
         single { authenticationManager() }
+        single { dnsPreflightResolver() }
 
         single<DobbyConfigsRepositoryOutline> { get<DobbyConfigsRepository>() }
         single<DobbyConfigsRepositoryCloak> { get<DobbyConfigsRepository>() }

@@ -14,11 +14,23 @@
 
 package internal
 
-import "go_module/core/pkg"
+import (
+	"sync"
+
+	"go_module/core/pkg"
+)
 
 type App struct {
 	ProtocolDevice pkg.ProtocolDevice
 	RoutingConfig  *RoutingConfig
+
+	mu            sync.Mutex
+	currentDevice pkg.ProtocolDevice
+	gatewayIP     string
+	uplinkIface   string
+	tunIface      string
+	serverIP      string
+	running       bool
 }
 
 type RoutingConfig struct {

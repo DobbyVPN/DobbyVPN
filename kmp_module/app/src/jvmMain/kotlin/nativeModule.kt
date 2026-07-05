@@ -7,11 +7,13 @@ import com.dobby.feature.logging.LoggerManagerImpl
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.ConnectionStateRepository
+import com.dobby.feature.main.domain.DnsPreflightResolverImpl
 import com.dobby.feature.main.domain.VpnManagerImpl
 import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.grpc.*
 import interop.awg.AwgLibrary
 import interop.cloak.CloakLibrary
+import interop.dnscache.DnsCacheLibrary
 import interop.georouting.GeoroutingLibrary
 import interop.healthcheck.HealthCheckLibrary
 import interop.logger.LoggerLibrary
@@ -32,7 +34,8 @@ val jvmMainModule = makeNativeModule(
     vpnManager = { VpnManagerImpl(get(), get()) },
     authenticationManager = { AuthenticationManagerImpl() },
     healthCheckManager = { HealthCheckManagerImpl(get(), get()) },
-    loggerManager = { LoggerManagerImpl(get(), get(), get()) }
+    loggerManager = { LoggerManagerImpl(get(), get(), get()) },
+    dnsPreflightResolver = { DnsPreflightResolverImpl(get(), get()) }
 )
 
 val jvmVpnModule = module {
@@ -41,6 +44,7 @@ val jvmVpnModule = module {
     single<XrayLibrary> { RestartableXrayGrpcLibrary(get()) }
     single<CloakLibrary> { RestartableCloakGrpcLibrary(get()) }
     single<HealthCheckLibrary> { RestartableHealthCheckGrpcLibrary(get()) }
+    single<DnsCacheLibrary> { RestartableDnsCacheGrpcLibrary(get()) }
     single<LoggerLibrary> { RestartableLoggerGrpcLibrary(get()) }
     single<GeoroutingLibrary> { RestartableGeoroutingGrpcLibrary(get()) }
     single<DobbyVpnService> {
