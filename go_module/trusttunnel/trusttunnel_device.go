@@ -107,7 +107,7 @@ func NewTrustTunnelDevice(trusttunnelConfig string) (*TrustTunnelDevice, error) 
 	return d, nil
 }
 
-func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
+func (d *TrustTunnelDevice) Open(_ int, _ string) error {
 	if d == nil {
 		return errors.New("trusttunnel device is not initialized")
 	}

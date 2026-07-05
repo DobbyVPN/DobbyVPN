@@ -128,5 +128,14 @@ message StartTrustTunnelResponse {
 }
 
 
+message CheckServerAliveRequest {
+  string address = 1;
+  int32 port = 2;
+}
+
+message CheckServerAliveResponce {
+  int32 result = 1;
+}
+
 message Empty {
 }

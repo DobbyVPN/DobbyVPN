@@ -33,6 +33,7 @@ service Vpn {
   rpc InitHealthCheck (Empty)  					returns (Empty);
   rpc StartHealthCheck (Empty)                  returns (Empty);
   rpc StopHealthCheck (Empty)                   returns (Empty);
+  rpc CheckServerAlive (CheckServerAliveRequest) returns (CheckServerAliveResponce);
 
   // cloak.go
   rpc StartCloakClient (StartCloakClientRequest)    returns (Empty);
@@ -127,6 +128,15 @@ message NetCheckResponse {
 
 message SetupTelemetryAttributesRequest {
   string config = 1;
+}
+
+message CheckServerAliveRequest {
+  string address = 1;
+  int32 port = 2;
+}
+
+message CheckServerAliveResponce {
+  int32 result = 1;
 }
 
 message Empty {
