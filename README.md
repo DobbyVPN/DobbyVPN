@@ -5,8 +5,8 @@ XRay & AWG are in progress.
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 
-Local desktop CLI/VPN checks without Hydraulic Conveyor are documented in
-[scripts/local-cli-checks.md](scripts/README.md).
+Local desktop CLI/VPN checks and CI desktop build commands are documented in
+[.github/scripts/README.md](.github/scripts/README.md).
 
 Consume 'subscription' / 'dynamic keys' as TOML via HTTPS or inline:
 

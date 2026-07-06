@@ -1,6 +1,7 @@
 // LogsRepository.kt
 package com.dobby.feature.logging.domain
 
+import com.dobby.vpn.BuildConfig
 import korlibs.time.DateTime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -55,6 +56,12 @@ class LogsRepository(
             fileSystem.sink(logFilePath).buffer().use { }
         }
         writeLog("[Platform] ${platformLogInfo()} logPath=$logFilePath")
+        writeLog(
+            "[Build] version=${BuildConfig.VERSION_NAME} " +
+                "versionCode=${BuildConfig.VERSION_CODE} " +
+                "commit=${BuildConfig.PROJECT_REPOSITORY_COMMIT} " +
+                "commitLink=${BuildConfig.PROJECT_REPOSITORY_COMMIT_LINK}"
+        )
         CoroutineScope(Dispatchers.Default).launch {
             logEventsChannel.emitLogs(readLogs(UI_TAIL_LINES))
         }
