@@ -7,14 +7,12 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"time"
 
 	xrayLog "github.com/xtls/xray-core/common/log"
 
 	"go_module/dnscache"
 )
 
-const xrayResolveTimeout = 2 * time.Second
 const defaultXrayLogLevelName = "debug"
 
 func DefaultXrayLogLevel() xrayLog.Severity {
@@ -105,7 +103,7 @@ func resolveIP(addr string) (string, error) {
 		return "", errors.New("IPv6 address not supported; routing requires IPv4")
 	}
 
-	ip4, err := dnscache.ResolveIPv4(context.Background(), addr, xrayResolveTimeout, "xray")
+	ip4, err := dnscache.ResolveIPv4(context.Background(), addr, dnscache.FastResolveTimeout, "xray")
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve xray address %q: %w", addr, err)
 	}

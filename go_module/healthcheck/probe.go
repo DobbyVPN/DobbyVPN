@@ -6,9 +6,7 @@ import (
 	hcCommon "go_module/healthcheck/common"
 	"go_module/log"
 	"io"
-	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
@@ -16,7 +14,6 @@ import (
 const (
 	probeTimeout          = 2 * time.Second
 	probeMinTimeout       = 100 * time.Millisecond
-	probeIPifyURL         = "https://api.ipify.org/"
 	probeMaxBodyBytes     = 4096
 	httpProbeMinSuccesses = 2
 	probeFailureResult    = int64(-1)
@@ -30,7 +27,6 @@ var httpProbeURLs = []string{
 
 type probeEndpointResult struct {
 	url       string
-	body      string
 	latencyMs int64
 	status    int
 	err       error
@@ -50,7 +46,7 @@ func MeasureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis int64) int6
 		log.Warnf(hcCommon.Category, "Tunnel probe timeout is too small timeoutMs=%d using default=%s", timeoutMillis, probeTimeout)
 		timeout = probeTimeout
 	}
-	log.Debugf(hcCommon.Category, "Tunnel probe begin endpoints=%d ipify=%s timeout=%s", len(httpProbeURLs), probeIPifyURL, timeout)
+	log.Debugf(hcCommon.Category, "Tunnel probe begin endpoints=%d timeout=%s", len(httpProbeURLs), timeout)
 
 	results := make([]probeEndpointResult, len(httpProbeURLs))
 	var wg sync.WaitGroup
@@ -58,7 +54,7 @@ func MeasureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis int64) int6
 		wg.Add(1)
 		go func(i int, url string) {
 			defer wg.Done()
-			results[i] = probeEndpoint(url, false, timeout)
+			results[i] = probeEndpoint(url, timeout)
 		}(i, url)
 	}
 	wg.Wait()
@@ -87,22 +83,12 @@ func MeasureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis int64) int6
 		log.Warnf(hcCommon.Category, "Tunnel probe continuing with partial latency quorum passed=%d total=%d", successes, len(httpProbeURLs))
 	}
 
-	ipify := probeEndpoint(probeIPifyURL, true, timeout)
-	switch {
-	case ipify.err != nil:
-		log.Warnf(hcCommon.Category, "Tunnel probe ipify failed url=%s error=%v", ipify.url, ipify.err)
-	case net.ParseIP(ipify.body) == nil:
-		log.Warnf(hcCommon.Category, "Tunnel probe ipify failed url=%s invalid_public_ip=%q", ipify.url, ipify.body)
-	default:
-		log.Infof(hcCommon.Category, "Tunnel probe ipify ok url=%s publicIP=%s latencyMs=%d status=%d", ipify.url, ipify.body, ipify.latencyMs, ipify.status)
-	}
-
 	avg := sum / int64(successes)
 	log.Debugf(hcCommon.Category, "Tunnel probe finished averageLatencyMs=%d", avg)
 	return avg
 }
 
-func probeEndpoint(url string, keepBody bool, timeout time.Duration) probeEndpointResult {
+func probeEndpoint(url string, timeout time.Duration) probeEndpointResult {
 	startedAt := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -138,7 +124,7 @@ func probeEndpoint(url string, keepBody bool, timeout time.Duration) probeEndpoi
 		}
 	}()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, probeMaxBodyBytes))
+	_, err = io.ReadAll(io.LimitReader(resp.Body, probeMaxBodyBytes))
 	if err != nil {
 		return probeEndpointResult{url: url, status: resp.StatusCode, err: err}
 	}
@@ -150,9 +136,6 @@ func probeEndpoint(url string, keepBody bool, timeout time.Duration) probeEndpoi
 		url:       url,
 		latencyMs: maxInt64(1, time.Since(startedAt).Milliseconds()),
 		status:    resp.StatusCode,
-	}
-	if keepBody {
-		result.body = strings.TrimSpace(string(body))
 	}
 	return result
 }

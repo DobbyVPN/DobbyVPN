@@ -317,11 +317,21 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 
 func (app *App) SwitchProtocolDevice(device pkg.ProtocolDevice) error {
 	startedAt := time.Now()
-	if app == nil {
-		return fmt.Errorf("core app is not initialized")
-	}
 	if device == nil {
 		return fmt.Errorf("protocol device is not initialized")
+	}
+	replacementAdopted := false
+	defer func() {
+		if replacementAdopted {
+			return
+		}
+		if closeErr := device.Close(); closeErr != nil {
+			log.Debugf(coreCommon.Category, "[Linux] Failed to close replacement ProtocolDevice after failed hot-switch: %v", closeErr)
+		}
+	}()
+
+	if app == nil {
+		return fmt.Errorf("core app is not initialized")
 	}
 	if app.RoutingConfig == nil {
 		return fmt.Errorf("routing config is not initialized")
@@ -359,9 +369,6 @@ func (app *App) SwitchProtocolDevice(device pkg.ProtocolDevice) error {
 	}
 
 	if err := device.Open(app.RoutingConfig.RoutingTableID, uplinkIface); err != nil {
-		if closeErr := device.Close(); closeErr != nil {
-			log.Debugf(coreCommon.Category, "[Linux] Hot-switch replacement ProtocolDevice.Close failed after open error: %v", closeErr)
-		}
 		if newRouteChanged {
 			common.Client.MarkInCriticalSection(coreCommon.Name)
 			if cleanupErr := routing.DeleteProxyRoute(newServerIP.String(), gatewayIP, uplinkIface); cleanupErr != nil {
@@ -374,7 +381,6 @@ func (app *App) SwitchProtocolDevice(device pkg.ProtocolDevice) error {
 	log.Debugf(coreCommon.Category, "[Linux] Hot-switch ProtocolDevice.Open OK proxy=%s elapsed=%s", device.GetProxyAddr(), time.Since(startedAt).Truncate(time.Millisecond))
 
 	if err := tunnel.SwitchVPNProxy(device.GetProxyAddr()); err != nil {
-		_ = device.Close()
 		if newRouteChanged {
 			common.Client.MarkInCriticalSection(coreCommon.Name)
 			if cleanupErr := routing.DeleteProxyRoute(newServerIP.String(), gatewayIP, uplinkIface); cleanupErr != nil {
@@ -388,6 +394,7 @@ func (app *App) SwitchProtocolDevice(device pkg.ProtocolDevice) error {
 	app.ProtocolDevice = device
 	app.currentDevice = device
 	app.serverIP = newServerIP.String()
+	replacementAdopted = true
 
 	if oldDevice != nil {
 		if err := oldDevice.Close(); err != nil {

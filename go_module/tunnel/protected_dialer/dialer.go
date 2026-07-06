@@ -139,9 +139,7 @@ func DialUDPConnWithProtect(ctx context.Context, network, address string) (net.C
 	}
 
 	d := net.Dialer{
-		Control: func(network, address string, c syscall.RawConn) error {
-			return ProtectRawConn(network, address, c)
-		},
+		Control: ProtectRawConn,
 	}
 	conn, err := d.DialContext(ctx, realNet, dialAddress)
 	if err != nil {

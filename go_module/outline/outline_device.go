@@ -729,7 +729,7 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 		return net.ParseIP("127.0.0.1").To4(), nil
 	}
 
-	ip, err := dnscache.ResolveIPv4(context.Background(), host, 2*time.Second, "outline")
+	ip, err := dnscache.ResolveIPv4(context.Background(), host, dnscache.FastResolveTimeout, "outline")
 	if err != nil {
 		return nil, err
 	}

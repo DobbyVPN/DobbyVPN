@@ -75,9 +75,6 @@ func startVpn(config, protocol string) int32 {
 			return 0
 		} else {
 			log.Debugf(common.Category, "Protocol hot-switch failed; keeping current vpn client active: %v", err)
-			if closeErr := device.Close(); closeErr != nil {
-				log.Debugf(common.Category, "Failed to close unused protocol device after hot-switch failure: %v", closeErr)
-			}
 			setVpnLastError(err.Error())
 			return -1
 		}

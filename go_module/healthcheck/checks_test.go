@@ -1,6 +1,7 @@
 package healthcheck
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -43,7 +44,8 @@ func TestQuorumHTTPPingCheckFailsWithoutQuorum(t *testing.T) {
 func closedLocalHTTPURL(t *testing.T) string {
 	t.Helper()
 
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listenConfig := net.ListenConfig{}
+	listener, err := listenConfig.Listen(context.Background(), "tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Listen failed: %v", err)
 	}

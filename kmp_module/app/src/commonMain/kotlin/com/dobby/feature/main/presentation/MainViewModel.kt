@@ -562,7 +562,7 @@ class MainViewModel(
 
         if (firstLatencyMs < 0) {
             logger.log(
-                    "[ProtocolSelection] Tunnel probe retry because first attempt failed " +
+                "[ProtocolSelection] Tunnel probe retry because first attempt failed " +
                     "timeoutMs=${ProtocolSelectionSettings.TUNNEL_PROBE_RETRY_TIMEOUT_MS}"
             )
         } else {

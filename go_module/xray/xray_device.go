@@ -1,6 +1,7 @@
 package xray
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -63,18 +64,19 @@ func allocateLocalSocksPort() (int, error) {
 	const attempts = 100
 
 	var lastErr error = errors.New("no allocation attempts")
+	listenConfig := net.ListenConfig{}
 	for attempt := 1; attempt <= attempts; attempt++ {
 		// Pick UDP first. On Windows a port can be free for TCP while UDP bind
 		// is forbidden by an excluded/reserved range, which made Xray fail before
 		// it even started. Xray needs both protocols on the same SOCKS port.
-		pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+		pc, err := listenConfig.ListenPacket(context.Background(), "udp4", "127.0.0.1:0")
 		if err != nil {
 			lastErr = err
 			continue
 		}
 
 		port := pc.LocalAddr().(*net.UDPAddr).Port
-		l, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
+		l, err := listenConfig.Listen(context.Background(), "tcp4", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {
 			lastErr = err
 			_ = pc.Close()
