@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"time"
 
 	"go_module/dnscache"
 	"go_module/log"
@@ -64,7 +63,6 @@ func GenerateXrayConfig(vlessConfigStr string, socksListen string, socksPort int
 	ensureXrayLogConfig(userConfig)
 	applyResolvedOutboundAddresses(userConfig)
 	applyProtectedSockopt(userConfig, routingTableID, uplinkIface)
-	logXrayOutboundSummary(userConfig)
 
 	finalJson, err := json.Marshal(userConfig)
 	if err != nil {
@@ -152,9 +150,9 @@ func applyResolvedOutboundAddresses(userConfig map[string]interface{}) {
 				continue
 			}
 
-			ip4, err := dnscache.ResolveIPv4(context.Background(), address, 750*time.Millisecond, "xray-config")
+			ip4, err := dnscache.ResolveIPv4(context.Background(), address, dnscache.FastResolveTimeout, "xray-config")
 			if err != nil {
-				log.Debugf(xrayCommon.Category, "protected DNS rewrite skipped: address=%s timeout=%s err=%v", address, 750*time.Millisecond, err)
+				log.Debugf(xrayCommon.Category, "protected DNS rewrite skipped: address=%s timeout=%s err=%v", address, dnscache.FastResolveTimeout, err)
 				skipped++
 				continue
 			}
@@ -302,116 +300,4 @@ func applySockoptToStreamSettings(streamSettings map[string]interface{}, protect
 			applySockoptToStreamSettings(downloadSettings, protectedSockopt)
 		}
 	}
-}
-
-func logXrayOutboundSummary(userConfig map[string]interface{}) {
-	outbounds, ok := userConfig["outbounds"].([]interface{})
-	if !ok {
-		log.Debugf(xrayCommon.Category, "xray outbound summary skipped: outbounds missing or invalid type")
-		return
-	}
-
-	for index, outbound := range outbounds {
-		outboundMap, ok := outbound.(map[string]interface{})
-		if !ok {
-			log.Debugf(xrayCommon.Category, "xray outbound[%d] summary skipped: invalid type", index)
-			continue
-		}
-
-		tag, _ := outboundMap["tag"].(string)
-		protocol, _ := outboundMap["protocol"].(string)
-		address, port := firstVnextEndpoint(outboundMap)
-		network, security, sockopt := streamSettingsSummary(outboundMap)
-		serverName, authority, host, downloadSockopt := streamNameSummary(outboundMap)
-
-		log.Debugf(
-			xrayCommon.Category,
-			"xray outbound[%d] summary: tag=%q protocol=%q address=%q port=%d network=%q security=%q serverName=%q authority=%q host=%q sockopt=%v downloadSockopt=%v",
-			index,
-			tag,
-			protocol,
-			address,
-			port,
-			network,
-			security,
-			serverName,
-			authority,
-			host,
-			sockopt,
-			downloadSockopt,
-		)
-	}
-}
-
-func firstVnextEndpoint(outboundMap map[string]interface{}) (string, int) {
-	settings, ok := outboundMap["settings"].(map[string]interface{})
-	if !ok {
-		return "", 0
-	}
-	vnext, ok := settings["vnext"].([]interface{})
-	if !ok || len(vnext) == 0 {
-		return "", 0
-	}
-	server, ok := vnext[0].(map[string]interface{})
-	if !ok {
-		return "", 0
-	}
-
-	address, _ := server["address"].(string)
-	port := 0
-	if rawPort, ok := server["port"].(float64); ok {
-		port = int(rawPort)
-	}
-	return address, port
-}
-
-func streamSettingsSummary(outboundMap map[string]interface{}) (string, string, map[string]interface{}) {
-	streamSettings, ok := outboundMap["streamSettings"].(map[string]interface{})
-	if !ok {
-		return "", "", nil
-	}
-
-	network, _ := streamSettings["network"].(string)
-	security, _ := streamSettings["security"].(string)
-	sockopt, _ := streamSettings["sockopt"].(map[string]interface{})
-	return network, security, sockopt
-}
-
-func streamNameSummary(outboundMap map[string]interface{}) (string, string, string, map[string]interface{}) {
-	streamSettings, ok := outboundMap["streamSettings"].(map[string]interface{})
-	if !ok {
-		return "", "", "", nil
-	}
-
-	serverName := firstStringFromMaps(streamSettings, "serverName", "tlsSettings", "realitySettings")
-	authority := firstStringFromMaps(streamSettings, "authority", "grpcSettings")
-	host := firstStringFromMaps(streamSettings, "host", "xhttpSettings", "splithttpSettings")
-	var downloadSockopt map[string]interface{}
-	for _, key := range []string{"xhttpSettings", "splithttpSettings"} {
-		xhttpSettings, ok := streamSettings[key].(map[string]interface{})
-		if !ok {
-			continue
-		}
-		downloadSettings, ok := xhttpSettings["downloadSettings"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-		downloadSockopt, _ = downloadSettings["sockopt"].(map[string]interface{})
-		break
-	}
-	return serverName, authority, host, downloadSockopt
-}
-
-func firstStringFromMaps(parent map[string]interface{}, valueKey string, mapKeys ...string) string {
-	for _, mapKey := range mapKeys {
-		child, ok := parent[mapKey].(map[string]interface{})
-		if !ok {
-			continue
-		}
-		value, _ := child[valueKey].(string)
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

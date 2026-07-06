@@ -12,7 +12,11 @@ import (
 	"go_module/log"
 )
 
-const Category = "DNSCache"
+const (
+	Category           = "DNSCache"
+	PreflightCacheTTL  = 12 * time.Hour
+	FastResolveTimeout = 750 * time.Millisecond
+)
 
 type entry struct {
 	ip        net.IP

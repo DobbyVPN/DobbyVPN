@@ -34,6 +34,6 @@ public class HealthCheckManagerImpl: HealthCheckManager {
     }
 
     public func measureTunnelProbeAverageLatencyMillis(timeoutMillis: Int64) -> Int64 {
-        return Cloak_outlineMeasureTunnelProbeAverageLatencyMillis()
+        return Cloak_outlineMeasureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis)
     }
 }

@@ -25,6 +25,12 @@ internal fun collectDnsPreflightHosts(profiles: List<ConnectionProfile>): List<S
     return hosts.mapNotNull(::normalizeHost).distinct()
 }
 
+internal fun isLocalOrIpLiteral(host: String): Boolean {
+    if (host == "localhost" || host == "127.0.0.1" || host == "::1") return true
+    if (ipv4Literal.matches(host)) return true
+    return host.contains(":")
+}
+
 private fun collectOutlineHosts(payload: String): List<String> {
     val config = runCatching { Toml.decodeFromString<OutlineConfig>(payload) }.getOrNull() ?: return emptyList()
     val host = if (config.Cloak == true) {
@@ -91,3 +97,5 @@ private fun normalizeHost(host: String): String? {
         .orEmpty()
     return normalized.ifEmpty { null }
 }
+
+private val ipv4Literal = Regex("""^\d{1,3}(\.\d{1,3}){3}$""")

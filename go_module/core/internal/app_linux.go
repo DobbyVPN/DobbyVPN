@@ -359,6 +359,9 @@ func (app *App) SwitchProtocolDevice(device pkg.ProtocolDevice) error {
 	}
 
 	if err := device.Open(app.RoutingConfig.RoutingTableID, uplinkIface); err != nil {
+		if closeErr := device.Close(); closeErr != nil {
+			log.Debugf(coreCommon.Category, "[Linux] Hot-switch replacement ProtocolDevice.Close failed after open error: %v", closeErr)
+		}
 		if newRouteChanged {
 			common.Client.MarkInCriticalSection(coreCommon.Name)
 			if cleanupErr := routing.DeleteProxyRoute(newServerIP.String(), gatewayIP, uplinkIface); cleanupErr != nil {

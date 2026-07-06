@@ -254,19 +254,24 @@ public class VpnManagerImpl: VpnManager {
         }
     }
 
-    public func stop() {
+    public func stop(isUserInitiated: Bool) {
+        if !isUserInitiated {
+            DobbyConfigsRepositoryImpl.shared.setIsUserInitStop(isUserInitStop: false)
+        }
         self.logs.writeLog(log: "Actually vpnManager is \(String(describing: vpnManager))")
         guard let manager = vpnManager else {
             self.logs.writeLog(log: "[stop] Skip: vpnManager is nil")
             return
         }
         let status = manager.connection.status
-        self.logs.writeLog(log: "[stop] stopVPNTunnel requested status=\(statusName(status)) raw=\(status.rawValue)")
+        self.logs.writeLog(log: "[stop] stopVPNTunnel requested status=\(statusName(status)) raw=\(status.rawValue) isUserInitiated=\(isUserInitiated)")
         if status == .disconnected || status == .invalid {
             self.logs.writeLog(log: "[stop] Skip: tunnel is already \(statusName(status))")
             return
         }
-        DobbyConfigsRepositoryImpl.shared.setIsUserInitStop(isUserInitStop: true)
+        if isUserInitiated {
+            DobbyConfigsRepositoryImpl.shared.setIsUserInitStop(isUserInitStop: true)
+        }
         manager.connection.stopVPNTunnel()
         self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")
     }

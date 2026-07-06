@@ -176,6 +176,9 @@ func (c *CoreClient) SwitchDevice(device pkg.ProtocolDevice) error {
 	}
 
 	if err := device.Open(0, ""); err != nil {
+		if closeErr := device.Close(); closeErr != nil {
+			log.Debugf(coreCommon.Category, "failed to close replacement protocol device after open error: %v", closeErr)
+		}
 		return fmt.Errorf("failed to open replacement protocol device: %w", err)
 	}
 

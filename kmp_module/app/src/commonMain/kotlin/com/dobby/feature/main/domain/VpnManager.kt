@@ -14,6 +14,8 @@ interface VpnManager {
     /**
      * Platform dependent VPN stop. Desktops: via gRPC. Mobile: via imported libraries.
      * Stops VPN service completely
+     *
+     * @param isUserInitiated true only when the stop was directly requested by the user.
      */
-    fun stop()
+    fun stop(isUserInitiated: Boolean)
 }

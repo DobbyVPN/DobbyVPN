@@ -182,7 +182,10 @@ class DobbyVpnService : VpnService() {
                 preserveActiveTunnelOnProbeFailure = preserveActiveTunnelOnProbeFailure,
             )
             VpnInterface.AMNEZIA_WG -> startAwg()
-            VpnInterface.XRAY -> startXray()
+            VpnInterface.XRAY -> startXray(
+                isProtocolProbe = isProtocolProbe,
+                preserveActiveTunnelOnProbeFailure = preserveActiveTunnelOnProbeFailure,
+            )
             VpnInterface.NONE -> startNone()
         }
         activeInterface = if (started) {
@@ -209,23 +212,19 @@ class DobbyVpnService : VpnService() {
     ): Boolean {
         if (dobbyConfigsRepository.getIsCloakEnabled()) {
             if (!cloakConnectInteractor.startCloak()) {
-                connectionState.updateServiceStarted(false)
-                if (isProtocolProbe && preserveActiveTunnelOnProbeFailure) {
-                    logger.log(
-                        "[svc:$serviceId] Cloak probe failed; preserving existing VPN interface for further protocol probes"
-                    )
-                    return false
-                }
-                teardownVpn()
-                stopSelf()
-                return false
+                return handleProtocolStartFailure(
+                    protocolName = "Cloak",
+                    isProtocolProbe = isProtocolProbe,
+                    preserveActiveTunnelOnProbeFailure = preserveActiveTunnelOnProbeFailure,
+                )
             }
         }
         if (!outlineInteractor.startOutline(instance)) {
-            connectionState.updateServiceStarted(false)
-            teardownVpn()
-            stopSelf()
-            return false
+            return handleProtocolStartFailure(
+                protocolName = "Outline",
+                isProtocolProbe = isProtocolProbe,
+                preserveActiveTunnelOnProbeFailure = preserveActiveTunnelOnProbeFailure,
+            )
         }
 
         connectionState.updateServiceStarted(true)
@@ -244,22 +243,47 @@ class DobbyVpnService : VpnService() {
         return true
     }
 
-    private suspend fun startXray(): Boolean {
+    private suspend fun startXray(
+        isProtocolProbe: Boolean,
+        preserveActiveTunnelOnProbeFailure: Boolean,
+    ): Boolean {
         if (!dobbyConfigsRepository.getIsXrayEnabled()) {
-            connectionState.updateServiceStarted(false)
-            stopSelf()
-            return false
+            return handleProtocolStartFailure(
+                protocolName = "Xray",
+                isProtocolProbe = isProtocolProbe,
+                preserveActiveTunnelOnProbeFailure = preserveActiveTunnelOnProbeFailure,
+            )
         }
 
         if (!xrayInteractor.startXray(instance)) {
-            connectionState.updateServiceStarted(false)
-            teardownVpn()
-            stopSelf()
-            return false
+            return handleProtocolStartFailure(
+                protocolName = "Xray",
+                isProtocolProbe = isProtocolProbe,
+                preserveActiveTunnelOnProbeFailure = preserveActiveTunnelOnProbeFailure,
+            )
         }
 
         connectionState.updateServiceStarted(true)
         return true
+    }
+
+    private suspend fun handleProtocolStartFailure(
+        protocolName: String,
+        isProtocolProbe: Boolean,
+        preserveActiveTunnelOnProbeFailure: Boolean,
+    ): Boolean {
+        connectionState.updateServiceStarted(false)
+        if (isProtocolProbe && preserveActiveTunnelOnProbeFailure) {
+            logger.log(
+                "[svc:$serviceId] $protocolName probe failed; preserving existing VPN interface for further protocol probes"
+            )
+            stopProtocols()
+            return false
+        }
+
+        teardownVpn()
+        stopSelf()
+        return false
     }
 
     private fun startNone(): Boolean {

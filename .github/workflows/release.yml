@@ -41,20 +41,20 @@ jobs:
     uses: ./.github/workflows/desktop_build.yml
     secrets: inherit
 
-  installers_build:
-    needs: desktop_build
-    uses: ./.github/workflows/installers_build.yml
+  desktop_cli_tests:
+    needs: [desktop_libs_build, desktop_build]
+    uses: ./.github/workflows/desktop_cli_tests.yml
     secrets: inherit
 
-  desktop_cli_tests:
-    needs: installers_build
-    uses: ./.github/workflows/desktop_cli_tests.yml
+  installers_build:
+    needs: desktop_cli_tests
+    uses: ./.github/workflows/installers_build.yml
     secrets: inherit
 
   release:
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    needs: [installers_build, desktop_cli_tests, android_build, ios_build]
+    needs: [installers_build, android_build, ios_build]
     permissions: write-all
     env:
       APP_MAJOR_VERSION: ${{ vars.MAJOR }}

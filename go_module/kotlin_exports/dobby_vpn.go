@@ -165,6 +165,10 @@ func VpnConnect() int32 {
 	defer clientMu.Unlock()
 
 	log.Debugf("kotlin_exports", "VpnConnect() called")
+	if pendingErr := GetVpnLastError(); pendingErr != "" {
+		log.Debugf("kotlin_exports", "VpnConnect() aborted because NewVpnClient failed: %s", pendingErr)
+		return -1
+	}
 	clearLastError()
 
 	if vpnClient == nil {

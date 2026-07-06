@@ -14,14 +14,15 @@ import (
 )
 
 const (
-	probeTimeout       = 2 * time.Second
-	probeMinTimeout    = 100 * time.Millisecond
-	probeIPifyURL      = "https://api.ipify.org/"
-	probeMaxBodyBytes  = 4096
-	probeFailureResult = int64(-1)
+	probeTimeout          = 2 * time.Second
+	probeMinTimeout       = 100 * time.Millisecond
+	probeIPifyURL         = "https://api.ipify.org/"
+	probeMaxBodyBytes     = 4096
+	httpProbeMinSuccesses = 2
+	probeFailureResult    = int64(-1)
 )
 
-var probeHTTPURLs = []string{
+var httpProbeURLs = []string{
 	"https://www.google.com/generate_204",
 	"https://www.cloudflare.com/cdn-cgi/trace",
 	"https://about.google",
@@ -49,11 +50,11 @@ func MeasureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis int64) int6
 		log.Warnf(hcCommon.Category, "Tunnel probe timeout is too small timeoutMs=%d using default=%s", timeoutMillis, probeTimeout)
 		timeout = probeTimeout
 	}
-	log.Debugf(hcCommon.Category, "Tunnel probe begin endpoints=%d ipify=%s timeout=%s", len(probeHTTPURLs), probeIPifyURL, timeout)
+	log.Debugf(hcCommon.Category, "Tunnel probe begin endpoints=%d ipify=%s timeout=%s", len(httpProbeURLs), probeIPifyURL, timeout)
 
-	results := make([]probeEndpointResult, len(probeHTTPURLs))
+	results := make([]probeEndpointResult, len(httpProbeURLs))
 	var wg sync.WaitGroup
-	for i, url := range probeHTTPURLs {
+	for i, url := range httpProbeURLs {
 		wg.Add(1)
 		go func(i int, url string) {
 			defer wg.Done()
@@ -73,10 +74,17 @@ func MeasureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis int64) int6
 		sum += result.latencyMs
 		log.Debugf(hcCommon.Category, "Tunnel probe endpoint ok url=%s latencyMs=%d status=%d", result.url, result.latencyMs, result.status)
 	}
-	log.Debugf(hcCommon.Category, "Tunnel probe latency samples successful=%d/%d", successes, len(probeHTTPURLs))
-	if successes != len(probeHTTPURLs) {
-		log.Warnf(hcCommon.Category, "Tunnel probe failed: not all latency endpoints succeeded passed=%d total=%d", successes, len(probeHTTPURLs))
+	requiredSuccesses := httpProbeMinSuccesses
+	if requiredSuccesses > len(httpProbeURLs) {
+		requiredSuccesses = len(httpProbeURLs)
+	}
+	log.Debugf(hcCommon.Category, "Tunnel probe latency samples successful=%d/%d required=%d", successes, len(httpProbeURLs), requiredSuccesses)
+	if successes < requiredSuccesses {
+		log.Warnf(hcCommon.Category, "Tunnel probe failed: not enough latency endpoints succeeded passed=%d required=%d total=%d", successes, requiredSuccesses, len(httpProbeURLs))
 		return probeFailureResult
+	}
+	if successes != len(httpProbeURLs) {
+		log.Warnf(hcCommon.Category, "Tunnel probe continuing with partial latency quorum passed=%d total=%d", successes, len(httpProbeURLs))
 	}
 
 	ipify := probeEndpoint(probeIPifyURL, true, timeout)

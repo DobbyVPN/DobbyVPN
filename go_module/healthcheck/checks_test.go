@@ -7,25 +7,36 @@ import (
 	"testing"
 )
 
-func TestAllHTTPPingCheckSucceedsWhenAllCandidatesWork(t *testing.T) {
+func TestQuorumHTTPPingCheckSucceedsWhenAllCandidatesWork(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
 
-	if err := allHTTPPingCheck([]string{server.URL, server.URL, server.URL}); err != nil {
-		t.Fatalf("allHTTPPingCheck returned error with all candidates working: %v", err)
+	if err := quorumHTTPPingCheck([]string{server.URL, server.URL, server.URL}); err != nil {
+		t.Fatalf("quorumHTTPPingCheck returned error with all candidates working: %v", err)
 	}
 }
 
-func TestAllHTTPPingCheckFailsWhenAnyCandidateFails(t *testing.T) {
+func TestQuorumHTTPPingCheckSucceedsWhenOneCandidateFails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
 
-	if err := allHTTPPingCheck([]string{server.URL, closedLocalHTTPURL(t), server.URL}); err == nil {
-		t.Fatal("allHTTPPingCheck returned nil when one candidate failed")
+	if err := quorumHTTPPingCheck([]string{server.URL, closedLocalHTTPURL(t), server.URL}); err != nil {
+		t.Fatalf("quorumHTTPPingCheck returned error with quorum available: %v", err)
+	}
+}
+
+func TestQuorumHTTPPingCheckFailsWithoutQuorum(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if err := quorumHTTPPingCheck([]string{closedLocalHTTPURL(t), closedLocalHTTPURL(t), server.URL}); err == nil {
+		t.Fatal("quorumHTTPPingCheck returned nil without quorum")
 	}
 }
 

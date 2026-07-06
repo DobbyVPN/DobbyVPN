@@ -266,7 +266,7 @@ class MainViewModel(
         if (connectedSeen) return true
 
         // Give a freshly started profile enough time for the first native healthcheck rounds.
-        return elapsedMs >= HEALTH_CHECK_START_GRACE_MS
+        return elapsedMs >= ProtocolSelectionSettings.HEALTH_CHECK_START_GRACE_MS
     }
 
     suspend fun startVpnService(): Boolean {
@@ -287,7 +287,7 @@ class MainViewModel(
                 }
 
                 logger.log("[ProtocolSelection] No working profile found during scan reason=$reason")
-                stopVpnRuntime(resetUiState = true)
+                stopVpnRuntime(resetUiState = true, isUserInitiated = false)
                 return false
             }
 
@@ -306,7 +306,7 @@ class MainViewModel(
             }
 
             logger.log("[ProtocolSelection] Selected profile failed after scan; repeating full scan")
-            stopVpnRuntime(resetUiState = false)
+            stopVpnRuntime(resetUiState = false, isUserInitiated = false)
             reason = "selected profile failed after scan"
             delay(1.seconds)
         }
@@ -461,7 +461,7 @@ class MainViewModel(
         vpnManager.start(isProtocolProbe = isProtocolProbe)
 
         logger.log("Await service started result")
-        val connected = connectionStateRepository.serviceStartedFlow.awaitResult(SERVICE_START_TIMEOUT_MS)
+        val connected = connectionStateRepository.serviceStartedFlow.awaitResult(ProtocolSelectionSettings.SERVICE_START_TIMEOUT_MS)
         logger.log("Got service started result: $connected")
 
         if (connected) {
@@ -489,13 +489,13 @@ class MainViewModel(
         stopRequested = true
         failoverJob?.cancel()
         failoverJob = null
-        stopVpnRuntime(resetUiState = true)
+        stopVpnRuntime(resetUiState = true, isUserInitiated = true)
     }
 
-    private fun stopVpnRuntime(resetUiState: Boolean) {
+    private fun stopVpnRuntime(resetUiState: Boolean, isUserInitiated: Boolean) {
         logger.log("Stopping VPN service...")
         logger.log("Stop tunnel service")
-        vpnManager.stop()
+        vpnManager.stop(isUserInitiated = isUserInitiated)
         logger.log("Stop health check")
         healthCheckManager.stopHealthCheck()
         logger.log("Stop connection detector")
@@ -506,7 +506,7 @@ class MainViewModel(
             _uiState.tryEmit(disconnectedState)
             connectionStateRepository.tryUpdateStatus(VpnConnectionState.DISCONNECTED)
         }
-        logger.log("VPN service stop requested, resetUiState=$resetUiState")
+        logger.log("VPN service stop requested, resetUiState=$resetUiState isUserInitiated=$isUserInitiated")
     }
 
     private fun requestProtocolRescan(reason: String) {
@@ -534,10 +534,10 @@ class MainViewModel(
             return
         }
         logger.log("[ProtocolSelection] Waiting VPN network route before tunnel probe $label")
-        val ready = connectionStateRepository.vpnNetworkReadyFlow.awaitResult(TUNNEL_PROBE_ROUTE_READY_TIMEOUT_MS)
+        val ready = connectionStateRepository.vpnNetworkReadyFlow.awaitResult(ProtocolSelectionSettings.TUNNEL_PROBE_ROUTE_READY_TIMEOUT_MS)
         logger.log(
             "[ProtocolSelection] VPN network route wait finished " +
-                "ready=$ready timeoutMs=$TUNNEL_PROBE_ROUTE_READY_TIMEOUT_MS $label"
+                "ready=$ready timeoutMs=${ProtocolSelectionSettings.TUNNEL_PROBE_ROUTE_READY_TIMEOUT_MS} $label"
         )
     }
 
@@ -550,9 +550,9 @@ class MainViewModel(
         val firstLatencyMs = measureTunnelProbeAttempt(
             attemptNumber = 1,
             totalAttempts = 2,
-            timeoutMillis = TUNNEL_PROBE_FAST_TIMEOUT_MS,
+            timeoutMillis = ProtocolSelectionSettings.TUNNEL_PROBE_FAST_TIMEOUT_MS,
         )
-        if (firstLatencyMs in 0..TUNNEL_PROBE_SLOW_RETRY_THRESHOLD_MS) {
+        if (firstLatencyMs in 0..ProtocolSelectionSettings.TUNNEL_PROBE_SLOW_RETRY_THRESHOLD_MS) {
             return firstLatencyMs
         }
         if (stopRequested) {
@@ -562,21 +562,21 @@ class MainViewModel(
 
         if (firstLatencyMs < 0) {
             logger.log(
-                "[ProtocolSelection] Tunnel probe retry because first attempt failed " +
-                    "timeoutMs=$TUNNEL_PROBE_RETRY_TIMEOUT_MS"
+                    "[ProtocolSelection] Tunnel probe retry because first attempt failed " +
+                    "timeoutMs=${ProtocolSelectionSettings.TUNNEL_PROBE_RETRY_TIMEOUT_MS}"
             )
         } else {
             logger.log(
                 "[ProtocolSelection] Tunnel probe retry because first attempt was slow " +
-                    "averageLatencyMs=$firstLatencyMs thresholdMs=$TUNNEL_PROBE_SLOW_RETRY_THRESHOLD_MS " +
-                    "timeoutMs=$TUNNEL_PROBE_RETRY_TIMEOUT_MS"
+                    "averageLatencyMs=$firstLatencyMs thresholdMs=${ProtocolSelectionSettings.TUNNEL_PROBE_SLOW_RETRY_THRESHOLD_MS} " +
+                    "timeoutMs=${ProtocolSelectionSettings.TUNNEL_PROBE_RETRY_TIMEOUT_MS}"
             )
         }
 
         return measureTunnelProbeAttempt(
             attemptNumber = 2,
             totalAttempts = 2,
-            timeoutMillis = TUNNEL_PROBE_RETRY_TIMEOUT_MS,
+            timeoutMillis = ProtocolSelectionSettings.TUNNEL_PROBE_RETRY_TIMEOUT_MS,
         ).takeIf { it >= 0 }
     }
 
@@ -614,15 +614,6 @@ class MainViewModel(
         val attributes = configsProcessor.buildConfigAttributesJson()
         configsRepository.setTelemetryAttributes(attributes)
         logger.log("Configs attributes saved to repository")
-    }
-
-    private companion object {
-        const val HEALTH_CHECK_START_GRACE_MS = 15_000L
-        const val SERVICE_START_TIMEOUT_MS = 90_000L
-        const val TUNNEL_PROBE_FAST_TIMEOUT_MS = 2_000L
-        const val TUNNEL_PROBE_RETRY_TIMEOUT_MS = 3_000L
-        const val TUNNEL_PROBE_SLOW_RETRY_THRESHOLD_MS = 1_000L
-        const val TUNNEL_PROBE_ROUTE_READY_TIMEOUT_MS = 1_500L
     }
 
     private data class ProfileProbeResult(

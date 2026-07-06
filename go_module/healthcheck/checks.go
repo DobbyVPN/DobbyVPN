@@ -115,7 +115,7 @@ func pingHostCheck(host string) error {
 	return nil
 }
 
-func allHTTPPingCheck(hosts []string) error {
+func quorumHTTPPingCheck(hosts []string) error {
 	log.Debugf(hcCommon.Category, "Check: HTTP connectivity candidates=%s", strings.Join(hosts, ", "))
 
 	var errs []error
@@ -131,8 +131,15 @@ func allHTTPPingCheck(hosts []string) error {
 		log.Debugf(hcCommon.Category, "HTTP connectivity candidate succeeded host=%s", host)
 	}
 
+	requiredSuccesses := httpProbeMinSuccesses
+	if requiredSuccesses > len(hosts) {
+		requiredSuccesses = len(hosts)
+	}
+	if successes < requiredSuccesses {
+		return fmt.Errorf("HTTP connectivity candidates failed passed=%d required=%d total=%d: %w", successes, requiredSuccesses, len(hosts), errors.Join(errs...))
+	}
 	if successes != len(hosts) {
-		return fmt.Errorf("HTTP connectivity candidates failed passed=%d total=%d: %w", successes, len(hosts), errors.Join(errs...))
+		log.Warnf(hcCommon.Category, "HTTP connectivity continuing with partial quorum passed=%d total=%d", successes, len(hosts))
 	}
 
 	return nil

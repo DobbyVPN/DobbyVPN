@@ -2,24 +2,26 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+GO_VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/.go-version")"
 PORT="${PORT:-50151}"
 CONFIG_ARG="${DOBBYVPN_CLI_TEST_CONFIG:-}"
-BRANCH_ARG="${DOBBYVPN_ARTIFACT_BRANCH:-}"
-REPOSITORY="${DOBBYVPN_GITHUB_REPOSITORY:-DobbyVPN/DobbyVPN}"
-WORKFLOW="release.yml"
-ARTIFACTS_DIR="$ROOT_DIR/.local-artifacts/ubuntu"
+SKIP_DEPS=0
+SKIP_BUILD=0
 SERVICE_PID=""
-CLI_PATH=""
 
 usage() {
   cat <<USAGE
 Usage:
   scripts/ubuntu_cli_check.sh --config <url-or-toml-file>
 
+Builds and checks the local VPN path on Ubuntu without Hydraulic Conveyor:
+  Go gRPC VPN service -> Gradle desktop CLI -> check-config for every profile.
+
 Options:
-  --config <value>   Config URL, local TOML file, or inline TOML.
+  --config <value>   Config URL or local TOML file. Can also be set with DOBBYVPN_CLI_TEST_CONFIG.
   --port <port>      gRPC VPN service port. Default: ${PORT}
-  --branch <branch>  Artifact branch. Default: current git branch, or main.
+  --skip-deps        Do not install system dependencies.
+  --skip-build       Reuse existing build outputs.
   -h, --help         Show this help.
 USAGE
 }
@@ -33,124 +35,236 @@ die() {
   exit 1
 }
 
-require_linux() {
-  [[ "$(uname -s)" == "Linux" ]] || die "This script is intended for Ubuntu/Linux"
-}
+download_file() {
+  local url="$1"
+  local output="$2"
 
-require_gh() {
-  command -v gh >/dev/null 2>&1 || die "GitHub CLI (gh) is required to download artifacts"
-}
-
-github_repo() {
-  local remote
-
-  remote="$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null || true)"
-  remote="${remote%.git}"
-  case "$remote" in
-    git@github.com:*) printf '%s' "${remote#git@github.com:}"; return ;;
-    https://github.com/*) printf '%s' "${remote#https://github.com/}"; return ;;
-    http://github.com/*) printf '%s' "${remote#http://github.com/}"; return ;;
-  esac
-
-  printf '%s' "$REPOSITORY"
-}
-
-artifact_branch() {
-  local branch
-
-  if [[ -n "$BRANCH_ARG" ]]; then
-    printf '%s' "$BRANCH_ARG"
-    return
-  fi
-
-  branch="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  if [[ -n "$branch" && "$branch" != "HEAD" ]]; then
-    printf '%s' "$branch"
-    return
-  fi
-
-  printf 'main'
-}
-
-download_artifacts() {
-  local repo branch run_id
-
-  require_gh
-  repo="$(github_repo)"
-  branch="$(artifact_branch)"
-
-  log "Finding latest successful ${WORKFLOW} run for ${repo}:${branch}"
-  run_id="$(gh -R "$repo" run list \
-    --workflow "$WORKFLOW" \
-    --branch "$branch" \
-    --status success \
-    --limit 1 \
-    --json databaseId \
-    --jq '.[0].databaseId // empty')"
-  if [[ -z "$run_id" && "$branch" != "main" ]]; then
-    log "No successful ${WORKFLOW} run for ${branch}; falling back to main"
-    branch="main"
-    run_id="$(gh -R "$repo" run list \
-      --workflow "$WORKFLOW" \
-      --branch "$branch" \
-      --status success \
-      --limit 1 \
-      --json databaseId \
-      --jq '.[0].databaseId // empty')"
-  fi
-  [[ -n "$run_id" ]] || die "No successful ${WORKFLOW} run found for ${repo}:${branch}"
-
-  rm -rf "$ARTIFACTS_DIR"
-  mkdir -p "$ARTIFACTS_DIR/app" "$ARTIFACTS_DIR/service"
-  gh -R "$repo" run download "$run_id" --name dobbyVPN-linux.deb --dir "$ARTIFACTS_DIR/app"
-  gh -R "$repo" run download "$run_id" --name ubuntu_grpcvpnserver --dir "$ARTIFACTS_DIR/service"
-}
-
-config_arg() {
-  if [[ "$CONFIG_ARG" =~ ^https?:// || -f "$CONFIG_ARG" ]]; then
-    printf '%s' "$CONFIG_ARG"
-    return
-  fi
-
-  printf '%s' "$CONFIG_ARG" > "$ARTIFACTS_DIR/cli-test-config.toml"
-  printf '%s' "$ARTIFACTS_DIR/cli-test-config.toml"
-}
-
-prepare_cli() {
-  local deb="$ARTIFACTS_DIR/app/dobbyVPN-linux.deb"
-
-  [[ -f "$deb" ]] || die "Missing downloaded app artifact: $deb"
-  log "Installing downloaded desktop app"
-  sudo apt-get install -y "$deb"
-
-  CLI_PATH="$(command -v dobby-vpn || true)"
-  if [[ -z "$CLI_PATH" ]]; then
-    CLI_PATH="$(
-      find /opt /usr/local/bin /usr/bin \
-        -type f \
-        \( -name 'dobby-vpn' -o -name 'Dobby Vpn' \) \
-        -perm -111 2>/dev/null | head -n 1
-    )"
-  fi
-  [[ -n "$CLI_PATH" ]] || die "Dobby CLI executable was not found"
+  curl --fail --location --show-error --progress-bar --retry 3 --connect-timeout 30 "$url" -o "$output"
 }
 
 cleanup() {
-  if [[ -n "$SERVICE_PID" ]] && kill -0 "$SERVICE_PID" 2>/dev/null; then
+  if [[ -n "${SERVICE_PID}" ]] && kill -0 "${SERVICE_PID}" 2>/dev/null; then
     log "Stopping gRPC VPN service"
-    sudo kill "$SERVICE_PID" 2>/dev/null || kill "$SERVICE_PID" 2>/dev/null || true
+    sudo kill "${SERVICE_PID}" 2>/dev/null || kill "${SERVICE_PID}" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
 
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --config)
+      CONFIG_ARG="${2:-}"
+      shift 2
+      ;;
+    --port)
+      PORT="${2:-}"
+      shift 2
+      ;;
+    --skip-deps)
+      SKIP_DEPS=1
+      shift
+      ;;
+    --skip-build)
+      SKIP_BUILD=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+[[ -n "${CONFIG_ARG}" ]] || die "Pass --config <url-or-file> or set DOBBYVPN_CLI_TEST_CONFIG"
+[[ -d "$ROOT_DIR/go_module" && -d "$ROOT_DIR/kmp_module" ]] || die "Run this from a cloned DobbyVPN repository"
+
+require_linux() {
+  [[ "$(uname -s)" == "Linux" ]] || die "This script is intended for Ubuntu/Linux"
+}
+
+linux_go_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf 'amd64' ;;
+    aarch64|arm64) printf 'arm64' ;;
+    *) die "Unsupported CPU architecture: $(uname -m)" ;;
+  esac
+}
+
+find_go() {
+  local candidates=()
+  if command -v go >/dev/null 2>&1; then
+    candidates+=("$(command -v go)")
+  fi
+  candidates+=("/usr/local/go/bin/go")
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate" ]] && "$candidate" version | grep -q "go${GO_VERSION}"; then
+      dirname "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+need_sudo() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    return 0
+  fi
+  command -v sudo >/dev/null 2>&1 || die "sudo is required on a clean Ubuntu install"
+}
+
+install_apt_packages() {
+  need_sudo
+  local packages=(
+    ca-certificates
+    curl
+    unzip
+    zip
+    git
+    build-essential
+    gcc
+    g++
+    pkg-config
+    iproute2
+    openjdk-17-jdk
+  )
+  local missing=()
+
+  for package in "${packages[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed'; then
+      missing+=("$package")
+    fi
+  done
+
+  if [[ "${#missing[@]}" -eq 0 ]]; then
+    log "APT dependencies already installed"
+    return
+  fi
+
+  log "Installing APT dependencies: ${missing[*]}"
+  sudo apt-get update
+  sudo apt-get install -y "${missing[@]}"
+}
+
+install_go() {
+  local go_bin_dir
+  if go_bin_dir="$(find_go)"; then
+    export PATH="$go_bin_dir:$PATH"
+    log "Go ${GO_VERSION} already installed"
+    return
+  fi
+
+  need_sudo
+  local arch
+  arch="$(linux_go_arch)"
+
+  local tarball="/tmp/go${GO_VERSION}.linux-${arch}.tar.gz"
+  log "Installing Go ${GO_VERSION}"
+  download_file "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" "$tarball"
+  log "Extracting Go ${GO_VERSION}"
+  sudo rm -rf /usr/local/go
+  sudo tar -C /usr/local -xzf "$tarball"
+  export PATH="/usr/local/go/bin:$PATH"
+}
+
+accept_android_licenses() {
+  log "Accepting Android SDK licenses"
+  set +o pipefail
+  yes | sdkmanager --licenses
+  local sdkmanager_status="${PIPESTATUS[1]}"
+  set -o pipefail
+  return "$sdkmanager_status"
+}
+
+install_android_sdk() {
+  local sdk_root="${ANDROID_HOME:-$HOME/Android/Sdk}"
+  export ANDROID_HOME="$sdk_root"
+  export ANDROID_SDK_ROOT="$sdk_root"
+  export PATH="$sdk_root/cmdline-tools/latest/bin:$sdk_root/platform-tools:$PATH"
+
+  if [[ -x "$sdk_root/cmdline-tools/latest/bin/sdkmanager" ]] &&
+    [[ -d "$sdk_root/platforms/android-35" ]] &&
+    [[ -d "$sdk_root/platforms/android-36" ]] &&
+    [[ -d "$sdk_root/build-tools/36.0.0" ]]; then
+    log "Android SDK already installed"
+    return
+  fi
+
+  local tools_zip="/tmp/android-commandlinetools-linux.zip"
+  local tools_dir="$sdk_root/cmdline-tools"
+  log "Installing Android SDK command line tools"
+  mkdir -p "$tools_dir"
+  download_file "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" "$tools_zip"
+  log "Extracting Android SDK command line tools"
+  rm -rf "$tools_dir/latest" "$tools_dir/cmdline-tools"
+  unzip -q "$tools_zip" -d "$tools_dir"
+  mv "$tools_dir/cmdline-tools" "$tools_dir/latest"
+
+  accept_android_licenses
+  log "Installing Android SDK packages"
+  sdkmanager "platforms;android-35" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+}
+
+prepare_cloak_internal() {
+  local source_dir="$ROOT_DIR/Cloak/internal"
+  local target_dir="$ROOT_DIR/go_module/modules/Cloak/internal"
+
+  if [[ ! -d "$source_dir" ]]; then
+    log "Initializing git submodules"
+    git -C "$ROOT_DIR" submodule update --init --recursive
+  fi
+  [[ -d "$source_dir" ]] || die "Missing $source_dir after submodule initialization"
+
+  if [[ -d "$target_dir" ]]; then
+    log "Cloak/internal already vendored"
+    return
+  fi
+
+  log "Vendoring Cloak/internal into go_module/modules/Cloak"
+  cp -R "$source_dir" "$target_dir"
+}
+
+build_service() {
+  local service="$ROOT_DIR/go_module/ubuntu_grpcvpnserver"
+  local arch
+  arch="$(linux_go_arch)"
+
+  if [[ "$SKIP_BUILD" -eq 1 && -x "$service" ]]; then
+    log "Reusing existing gRPC VPN service"
+  else
+    log "Building Linux gRPC VPN service"
+    (
+      cd "$ROOT_DIR/go_module"
+      CGO_ENABLED=1 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
+    )
+  fi
+
+  mkdir -p "$ROOT_DIR/kmp_module/services"
+  cp "$service" "$ROOT_DIR/kmp_module/services/ubuntu_grpcvpnserver"
+  chmod +x "$ROOT_DIR/kmp_module/services/ubuntu_grpcvpnserver"
+}
+
+build_desktop_cli() {
+  if [[ "$SKIP_BUILD" -eq 1 ]]; then
+    log "Skipping Gradle build"
+    return
+  fi
+
+  log "Building desktop JVM app"
+  (
+    cd "$ROOT_DIR/kmp_module"
+    ./gradlew --build-cache --parallel :app:jvmJar
+  )
+}
+
 start_service() {
-  local service="$ARTIFACTS_DIR/service/ubuntu_grpcvpnserver"
-
-  [[ -f "$service" ]] || die "Missing downloaded service artifact: $service"
-  chmod +x "$service"
-
   log "Starting gRPC VPN service on port ${PORT}"
-  sudo "$service" -port "$PORT" > "$ROOT_DIR/grpcvpnserver.log" 2>&1 &
+  sudo "$ROOT_DIR/kmp_module/services/ubuntu_grpcvpnserver" -port "$PORT" > "$ROOT_DIR/grpcvpnserver.log" 2>&1 &
   SERVICE_PID="$!"
 
   for _ in {1..30}; do
@@ -165,27 +279,32 @@ start_service() {
   die "gRPC VPN service did not start on port ${PORT}"
 }
 
-run_check() {
-  [[ -x "$CLI_PATH" ]] || die "Dobby CLI executable is not ready"
+run_cli_check() {
   log "Running CLI config check"
-  PORT="$PORT" "$CLI_PATH" check-config "$(config_arg)"
+  (
+    cd "$ROOT_DIR/kmp_module"
+    PORT="$PORT" ./gradlew --quiet :app:run --args="check-config ${CONFIG_ARG}"
+  )
 }
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --config) CONFIG_ARG="${2:-}"; shift 2 ;;
-    --port) PORT="${2:-}"; shift 2 ;;
-    --branch) BRANCH_ARG="${2:-}"; shift 2 ;;
-    -h|--help) usage; exit 0 ;;
-    *) die "Unknown argument: $1" ;;
-  esac
-done
+main() {
+  require_linux
 
-[[ -n "$CONFIG_ARG" ]] || die "Pass --config <url-or-file> or set DOBBYVPN_CLI_TEST_CONFIG"
+  if [[ "$SKIP_DEPS" -eq 0 ]]; then
+    install_apt_packages
+    install_go
+    install_android_sdk
+  else
+    log "Skipping dependency installation"
+    export PATH="/usr/local/go/bin:${ANDROID_HOME:-$HOME/Android/Sdk}/cmdline-tools/latest/bin:${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools:$PATH"
+  fi
 
-require_linux
-download_artifacts
-prepare_cli
-start_service
-run_check
-log "Done"
+  prepare_cloak_internal
+  build_service
+  build_desktop_cli
+  start_service
+  run_cli_check
+  log "Done"
+}
+
+main

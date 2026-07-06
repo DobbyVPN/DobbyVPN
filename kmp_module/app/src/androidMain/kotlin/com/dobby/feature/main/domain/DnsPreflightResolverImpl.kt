@@ -8,13 +8,14 @@ import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.config.collectDnsPreflightHosts
+import com.dobby.feature.main.domain.config.isLocalOrIpLiteral
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class DnsPreflightResolverImpl(
     context: Context,
@@ -27,7 +28,7 @@ class DnsPreflightResolverImpl(
         GoBackendWrapper.clearDNSCache()
 
         val hosts = collectDnsPreflightHosts(profiles)
-            .plus(HEALTHCHECK_PREWARM_HOSTS)
+            .plus(ProtocolSelectionSettings.HEALTHCHECK_PREWARM_HOSTS)
             .filterNot(::isLocalOrIpLiteral)
             .distinct()
 
@@ -39,16 +40,13 @@ class DnsPreflightResolverImpl(
         val network = selectPhysicalNetwork()
         logger.log(
             "[DNSPreflight] Start hosts=${hosts.size} profiles=${profiles.size} " +
-                "network=${network?.toString() ?: "active/default"} sample=${hosts.take(3).joinToString { maskStr(it) }}"
+                "network=${network?.toString() ?: "active/default"} " +
+                "hostTimeoutMs=${ProtocolSelectionSettings.DNS_PREFLIGHT_HOST_TIMEOUT_MS} " +
+                "totalTimeoutMs=${ProtocolSelectionSettings.DNS_PREFLIGHT_TOTAL_TIMEOUT_MS} " +
+                "sample=${hosts.take(3).joinToString { maskStr(it) }}"
         )
 
-        val resolved = coroutineScope {
-            hosts.map { host ->
-                async(Dispatchers.IO) {
-                    resolveHost(network, host)
-                }
-            }.awaitAll().filterNotNull()
-        }
+        val resolved = resolveHosts(network, hosts)
 
         val entries = resolved.joinToString("\n") { "${it.host}=${it.ip}" }
         val cachedCount = GoBackendWrapper.setDNSCacheEntries(entries)
@@ -59,17 +57,49 @@ class DnsPreflightResolverImpl(
         )
     }
 
-    private suspend fun resolveHost(network: Network?, host: String): ResolvedHost? {
-        val addresses = withTimeoutOrNull(DNS_PREFLIGHT_HOST_TIMEOUT_MS) {
-            runCatching {
-                val raw = network?.getAllByName(host) ?: InetAddress.getAllByName(host)
-                raw.toList()
-            }.getOrElse { error ->
-                logger.log("[DNSPreflight] Failed host=${maskStr(host)} error=${error.message}")
-                return@withTimeoutOrNull emptyList()
+    private suspend fun resolveHosts(network: Network?, hosts: List<String>): List<ResolvedHost> = withContext(Dispatchers.IO) {
+        val executor = Executors.newFixedThreadPool(hosts.size)
+        try {
+            val tasks = hosts.map { host ->
+                Callable {
+                    resolveHost(network, host)
+                }
             }
-        } ?: run {
-            logger.log("[DNSPreflight] Timeout host=${maskStr(host)} timeoutMs=$DNS_PREFLIGHT_HOST_TIMEOUT_MS")
+            val futures = executor.invokeAll(
+                tasks,
+                ProtocolSelectionSettings.DNS_PREFLIGHT_TOTAL_TIMEOUT_MS,
+                TimeUnit.MILLISECONDS
+            )
+            futures.mapIndexedNotNull { index, future ->
+                if (future.isCancelled) {
+                    logger.log(
+                        "[DNSPreflight] Batch timeout host=${maskStr(hosts[index])} " +
+                            "timeoutMs=${ProtocolSelectionSettings.DNS_PREFLIGHT_TOTAL_TIMEOUT_MS}"
+                    )
+                    null
+                } else {
+                    runCatching { future.get() }
+                        .getOrElse { error ->
+                            logger.log("[DNSPreflight] Failed host=${maskStr(hosts[index])} error=${error.message}")
+                            null
+                        }
+                }
+            }
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            logger.log("[DNSPreflight] Interrupted hosts=${hosts.size} error=${error.message}")
+            emptyList()
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    private fun resolveHost(network: Network?, host: String): ResolvedHost? {
+        val addresses = runCatching {
+            val raw = network?.getAllByName(host) ?: InetAddress.getAllByName(host)
+            raw.toList()
+        }.getOrElse { error ->
+            logger.log("[DNSPreflight] Failed host=${maskStr(host)} error=${error.message}")
             return null
         }
 
@@ -94,24 +124,5 @@ class DnsPreflightResolverImpl(
         return physical ?: connectivityManager.activeNetwork
     }
 
-    private fun isLocalOrIpLiteral(host: String): Boolean {
-        if (host == "localhost" || host == "127.0.0.1" || host == "::1") return true
-        if (ipv4Literal.matches(host)) return true
-        return host.contains(":")
-    }
-
     private data class ResolvedHost(val host: String, val ip: String)
-
-    private companion object {
-        const val DNS_PREFLIGHT_HOST_TIMEOUT_MS = 2_000L
-        val ipv4Literal = Regex("""^\d{1,3}(\.\d{1,3}){3}$""")
-        val HEALTHCHECK_PREWARM_HOSTS = listOf(
-            "google.com",
-            "one.one.one.one",
-            "www.google.com",
-            "www.cloudflare.com",
-            "about.google",
-            "api.ipify.org",
-        )
-    }
 }

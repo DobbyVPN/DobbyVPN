@@ -14,11 +14,10 @@ import (
 )
 
 const (
-	networkTCP4           = "tcp4"
-	networkTCP6           = "tcp6"
-	networkUDP4           = "udp4"
-	networkUDP6           = "udp6"
-	protectResolveTimeout = 750 * time.Millisecond
+	networkTCP4 = "tcp4"
+	networkTCP6 = "tcp6"
+	networkUDP4 = "udp4"
+	networkUDP6 = "udp6"
 )
 
 type ProtectedDirectProxy struct {
@@ -68,9 +67,9 @@ func resolveAddressForProtect(ctx context.Context, address string) string {
 		return address
 	}
 
-	ip, err := dnscache.ResolveIPv4(ctx, host, protectResolveTimeout, "protected-dialer")
+	ip, err := dnscache.ResolveIPv4(ctx, host, dnscache.FastResolveTimeout, "protected-dialer")
 	if err != nil {
-		log.Debugf(Category, "[Protect] DNS resolve skipped dest=%s timeout=%s err=%v", address, protectResolveTimeout, err)
+		log.Debugf(Category, "[Protect] DNS resolve skipped dest=%s timeout=%s err=%v", address, dnscache.FastResolveTimeout, err)
 		return address
 	}
 

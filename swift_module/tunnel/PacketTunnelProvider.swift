@@ -21,6 +21,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
     private let dnsPreflightHostsKey = "dnsPreflightHosts"
     private let dnsPreflightEntriesKey = "dnsPreflightEntries"
+    private let dnsPreflightHostTimeoutMsKey = "dnsPreflightHostTimeoutMs"
+    private let dnsPreflightTotalTimeoutMsKey = "dnsPreflightTotalTimeoutMs"
+    private let dnsPreflightDefaultHostTimeoutMs = 2000
+    private let dnsPreflightDefaultTotalTimeoutMs = 2000
     private var preparedDnsPreflightEntries = ""
 
     private var pathMonitor: Network.NWPathMonitor?
@@ -365,6 +369,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
 
+        let hostTimeout = dnsPreflightTimeout(
+            key: dnsPreflightHostTimeoutMsKey,
+            defaultMs: dnsPreflightDefaultHostTimeoutMs
+        )
+        let totalTimeout = dnsPreflightTimeout(
+            key: dnsPreflightTotalTimeoutMsKey,
+            defaultMs: dnsPreflightDefaultTotalTimeoutMs
+        )
         let start = Date()
         let queue = DispatchQueue(label: "vpn.dobby.app.tunnel.dns-preflight.\(tunnelId)", qos: .userInitiated, attributes: .concurrent)
         let group = DispatchGroup()
@@ -372,11 +384,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         var accepting = true
         var resolved: [(String, String)] = []
 
-        logs.writeLog(log: "[DNSPreflight] Tunnel pre-resolve start hosts=\(hosts.count)")
+        logs.writeLog(
+            log: "[DNSPreflight] Tunnel pre-resolve start hosts=\(hosts.count) " +
+                "hostTimeoutMs=\(Int(hostTimeout * 1000)) totalTimeoutMs=\(Int(totalTimeout * 1000))"
+        )
         for host in hosts {
             group.enter()
             queue.async {
-                let ip = self.resolveIPv4IfNeededWithTimeout(host, timeout: 1.0)
+                let ip = self.resolveIPv4IfNeededWithTimeout(host, timeout: hostTimeout)
                 lock.lock()
                 if accepting, let ip {
                     resolved.append((host, ip))
@@ -386,7 +401,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         }
 
-        let waitResult = group.wait(timeout: .now() + 2.0)
+        let waitResult = group.wait(timeout: .now() + totalTimeout)
         lock.lock()
         accepting = false
         let snapshot = resolved
@@ -401,6 +416,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 "resolved=\(snapshot.count) failed=\(failed) timedOut=\(waitResult == .timedOut) " +
                 "elapsedMs=\(elapsedMs(since: start))"
         )
+    }
+
+    private func dnsPreflightTimeout(key: String, defaultMs: Int) -> TimeInterval {
+        let raw = userDefaults.string(forKey: key)
+        guard let raw = raw, let timeoutMs = Double(raw), timeoutMs > 0 else {
+            return TimeInterval(defaultMs) / 1000.0
+        }
+        return timeoutMs / 1000.0
     }
 
     private func startActiveProtocol(

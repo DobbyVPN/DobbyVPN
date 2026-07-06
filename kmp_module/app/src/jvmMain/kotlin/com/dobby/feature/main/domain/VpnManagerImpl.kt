@@ -13,7 +13,7 @@ internal class VpnManagerImpl(
         connectionStateRepository.tryUpdateServiceStarted(isStarted)
     }
 
-    override fun stop() {
+    override fun stop(isUserInitiated: Boolean) {
         dobbyVpnService.stopService()
     }
 }

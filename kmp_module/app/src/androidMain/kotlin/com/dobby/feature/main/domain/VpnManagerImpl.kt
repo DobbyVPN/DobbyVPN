@@ -14,7 +14,7 @@ class VpnManagerImpl(
             .let(context::startService)
     }
 
-    override fun stop() {
+    override fun stop(isUserInitiated: Boolean) {
         DobbyVpnService
             .instance
             ?.stopService()

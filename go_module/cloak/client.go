@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sync"
-	"time"
 
 	"github.com/cbeuw/Cloak/exported_client"
 
@@ -18,8 +17,6 @@ import (
 )
 
 const Name = "cloak"
-
-const remoteHostResolveTimeout = 750 * time.Millisecond
 
 var (
 	client      *exported_client.CkClient
@@ -166,9 +163,9 @@ func resolveRemoteHostIfNeeded(host string) (string, error) {
 		return ip.String(), nil
 	}
 
-	log.Debugf(Category, "cloak client: RemoteHost '%s' cache miss -> resolving DNS timeout=%s...", host, remoteHostResolveTimeout)
+	log.Debugf(Category, "cloak client: RemoteHost '%s' cache miss -> resolving DNS timeout=%s...", host, dnscache.FastResolveTimeout)
 
-	ip, err := dnscache.ResolveIPv4(context.Background(), host, remoteHostResolveTimeout, "cloak")
+	ip, err := dnscache.ResolveIPv4(context.Background(), host, dnscache.FastResolveTimeout, "cloak")
 	if err != nil {
 		return "", err
 	}
