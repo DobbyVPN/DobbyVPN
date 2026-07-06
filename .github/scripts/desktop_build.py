@@ -416,7 +416,13 @@ def ensure_android_tools_executable(sdk_root: Path) -> None:
         return
     for tool in tools_bin.iterdir():
         if tool.is_file():
-            tool.chmod(tool.stat().st_mode | 0o111)
+            try:
+                tool.chmod(tool.stat().st_mode | 0o111)
+            except PermissionError:
+                if TOOLS_DIR in sdk_root.resolve().parents:
+                    fail(f"Android SDK tool is not writable: {tool}")
+                log(f"Android SDK tools are not writable, leaving permissions unchanged: {tools_bin}")
+                return
 
 
 def install_android_sdk(skip_deps: bool) -> None:
