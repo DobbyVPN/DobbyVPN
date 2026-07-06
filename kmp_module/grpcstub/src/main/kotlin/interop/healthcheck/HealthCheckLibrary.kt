@@ -6,4 +6,5 @@ interface HealthCheckLibrary {
     fun InitHealthCheck(): Unit
     fun StartHealthCheck(): Unit
     fun StopHealthCheck(): Unit
+    fun MeasureTunnelProbeAverageLatencyMillis(timeoutMillis: Long): Long
 }

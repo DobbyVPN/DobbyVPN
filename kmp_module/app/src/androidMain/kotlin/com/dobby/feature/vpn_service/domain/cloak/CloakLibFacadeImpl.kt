@@ -6,9 +6,8 @@ import com.dobby.backend.GoBackendWrapper
 
 class CloakLibFacadeImpl : CloakLibFacade {
 
-    override fun startClient(localHost: String, localPort: String, config: String) {
-        GoBackendWrapper.startCloakClient(localHost, localPort, config, false)
-    }
+    override fun startClient(localHost: String, localPort: String, config: String): Boolean =
+        GoBackendWrapper.startCloakClient(localHost, localPort, config, false) == 0
 
     override fun stopClient() {
         GoBackendWrapper.stopCloakClient()

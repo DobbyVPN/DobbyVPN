@@ -24,10 +24,10 @@ class OutlineVpnInterfaceFactory(
             .setMtu(1500)
             .addAddress("10.111.222.1", 24)
             .addDnsServer("1.1.1.1")
-            .addDisallowedApplication(context.packageName)
             .addIpv6BlockingRoute(logger, "Outline")
 
         logger.log("VPN interface created: address is 10.111.222.1")
+        logger.log("Dobby app traffic is included in Outline VPN so Android health checks and latency probes use the tunnel")
 
         val dnsServers = getDnsServers(context)
             .filter { it.isNotBlank() }

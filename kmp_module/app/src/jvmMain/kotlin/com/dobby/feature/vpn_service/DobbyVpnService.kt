@@ -5,7 +5,6 @@ import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
-import com.dobby.feature.main.domain.clearVpnConfig
 import interop.awg.AwgLibrary
 import interop.cloak.CloakLibrary
 import interop.georouting.GeoroutingLibrary
@@ -78,18 +77,54 @@ class DobbyVpnService(
     private val georoutingLibrary: GeoroutingLibrary
 ) {
     private val startStopLock = Any()
+    private var runtimeStarted: Boolean = false
+    private var runtimeUsesCloak: Boolean = false
 
     /**
      * Starts VPN tunnel, that defined in the [dobbyConfigsRepository]
      *
      * @return true if VPN tunnel started successfully
      */
-    fun startService(): Boolean {
+    fun startService(isProtocolProbe: Boolean): Boolean {
         synchronized(startStopLock) {
+            val hadRuntimeStarted = runtimeStarted
+            val hadRuntimeUsingCloak = runtimeUsesCloak
             val runningInterface = dobbyConfigsRepository.getVpnInterface()
+            val startingUsesCloak = runningInterface == VpnInterface.CLOAK_OUTLINE &&
+                dobbyConfigsRepository.getIsCloakEnabled()
 
+            if (runtimeStarted && runtimeUsesCloak && startingUsesCloak) {
+                logger.log(
+                    "Stopping Cloak sidecar before protocol hot-switch " +
+                        "configuredInterface=$runningInterface protocolProbe=$isProtocolProbe " +
+                        "startingUsesCloak=$startingUsesCloak"
+                )
+                stopCloakSidecar()
+                runtimeUsesCloak = false
+            }
+
+            if (runtimeStarted) {
+                logger.log(
+                    "Switching VPN protocol on existing runtime " +
+                        "configuredInterface=$runningInterface protocolProbe=$isProtocolProbe"
+                )
+            } else {
+                logger.log("Restarting VPN protocols before starting configured interface=$runningInterface")
+                stopProtocols()
+            }
             georoutingLibrary.SetGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
             val started = startConfiguredProtocol(runningInterface)
+            runtimeStarted = started || hadRuntimeStarted
+            if (started) {
+                runtimeUsesCloak = startingUsesCloak
+                if (hadRuntimeStarted && hadRuntimeUsingCloak && !startingUsesCloak) {
+                    logger.log(
+                        "Stopping previous Cloak sidecar after successful protocol hot-switch " +
+                            "configuredInterface=$runningInterface protocolProbe=$isProtocolProbe"
+                    )
+                    stopCloakSidecar()
+                }
+            }
 
             return started
         }
@@ -104,7 +139,9 @@ class DobbyVpnService(
     private fun stopCurrentLocked() {
         stopProtocols()
         georoutingLibrary.ClearGeoRoutingConf()
-        dobbyConfigsRepository.clearVpnConfig()
+        runtimeStarted = false
+        runtimeUsesCloak = false
+        logger.log("VPN runtime stopped; saved connection profiles remain available")
     }
 
     private fun stopProtocols() {
@@ -112,6 +149,13 @@ class DobbyVpnService(
         stopXray()
         stopAwg()
         stopNone()
+    }
+
+    private fun stopCloakSidecar() {
+        runBlocking {
+            logger.log("StopCloak")
+            cloakLibrary.StopCloakClient()
+        }
     }
 
     private fun startConfiguredProtocol(runningInterface: VpnInterface): Boolean =

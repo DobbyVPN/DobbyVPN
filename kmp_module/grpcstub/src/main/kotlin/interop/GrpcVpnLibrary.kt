@@ -2,6 +2,7 @@ package interop
 
 import interop.awg.AwgGrpcLibrary
 import interop.cloak.CloakGrpcLibrary
+import interop.dnscache.DnsCacheGrpcLibrary
 import interop.georouting.GeoroutingGrpcLibrary
 import interop.healthcheck.HealthCheckGrpcLibrary
 import interop.logger.LoggerGrpcLibrary
@@ -25,6 +26,7 @@ object GrpcVpnLibrary: Closeable {
     val xrayGrpcLibrary = XrayGrpcLibrary(channel)
     val cloakGrpcLibrary = CloakGrpcLibrary(channel)
     val healthCheckGrpcLibrary = HealthCheckGrpcLibrary(channel)
+    val dnsCacheGrpcLibrary = DnsCacheGrpcLibrary(channel)
     val loggerGrpcLibrary = LoggerGrpcLibrary(channel)
     val georoutingGrpcLibrary = GeoroutingGrpcLibrary(channel)
 

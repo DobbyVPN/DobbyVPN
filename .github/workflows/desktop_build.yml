@@ -44,12 +44,6 @@ jobs:
             kmp_module/gradle/libs.versions.toml
             kmp_module/gradle/wrapper/gradle-wrapper.properties
 
-      - name: Install Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.2'
-          bundler-cache: true
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -58,9 +52,9 @@ jobs:
             platforms;android-36
             build-tools;36.0.0
 
-      - name: Build desktop via Fastlane
+      - name: Build desktop via script
         run: |
-          bundle exec fastlane android build_desktop
+          python .github/scripts/desktop_build.py app --skip-libs --require-all-services
         env:
           APP_MAJOR_VERSION: ${{ vars.MAJOR }}
           APP_MINOR_VERSION: ${{ vars.MINOR }}

@@ -47,3 +47,13 @@ func (s *Server) StopHealthCheck(_ context.Context, in *grpcproto.Empty) (*grpcp
 
 	return &grpcproto.Empty{}, nil
 }
+
+func (s *Server) MeasureTunnelProbeAverageLatencyMillis(_ context.Context, in *grpcproto.MeasureTunnelProbeRequest) (*grpcproto.MeasureTunnelProbeResponse, error) {
+	timeoutMillis := in.GetTimeoutMillis()
+	log.Debugf(common.Category, "MeasureTunnelProbeAverageLatencyMillis timeoutMs=%d", timeoutMillis)
+	result := api.MeasureTunnelProbeAverageLatencyMillis(timeoutMillis)
+
+	return &grpcproto.MeasureTunnelProbeResponse{
+		AverageLatencyMillis: result,
+	}, nil
+}

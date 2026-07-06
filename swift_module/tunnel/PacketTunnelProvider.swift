@@ -19,12 +19,20 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var logs = NativeModuleHolder.logsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
+    private let dnsPreflightHostsKey = "dnsPreflightHosts"
+    private let dnsPreflightEntriesKey = "dnsPreflightEntries"
+    private let dnsPreflightHostTimeoutMsKey = "dnsPreflightHostTimeoutMs"
+    private let dnsPreflightTotalTimeoutMsKey = "dnsPreflightTotalTimeoutMs"
+    private let dnsPreflightDefaultHostTimeoutMs = 2000
+    private let dnsPreflightDefaultTotalTimeoutMs = 2000
+    private var preparedDnsPreflightEntries = ""
 
     private var pathMonitor: Network.NWPathMonitor?
     private var lastPathSignature: String?
     private var loadSampler: DispatchSourceTimer?
     private var healthCheckStateSampler: DispatchSourceTimer?
     private var lastSharedHealthCheckState: Int32?
+    private var isProtocolProbeStart = false
     private let memoryHighWaterLock = NSLock()
     private var memoryHighWaterMarkMB = 0.0
     private var tunnelStartedAt = Date()
@@ -202,6 +210,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func startTunnel(options: [String : NSObject]?) async throws {
+        isProtocolProbeStart = (options?["dobbyProtocolProbe"] as? NSNumber)?.boolValue == true
         tunnelStartedAt = Date()
         memoryHighWaterLock.withLock { memoryHighWaterMarkMB = 0 }
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
@@ -211,7 +220,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.cleanupOldLogs()
         logSystemInfo(osVersionString: osVersionString)
         logs.writeLog(log: "[iOS26-RESEARCH] iOS version: \(osVersionString)")
-        logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys) isProtocolProbe=\(isProtocolProbeStart)")
         let connectionConfigLen = configsRepository.getConnectionConfig().count
         let vpnInterface = configsRepository.getVpnInterface()
         if connectionConfigLen == 0 || vpnInterface == VpnInterface.none {
@@ -234,6 +243,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         startPathLogging()
         logInitialNetworkPath(timeout: 1.0)
         startLoadSampler()
+        prepareDnsPreflightEntries()
 
         let cloakConfig = configsRepository.getCloakConfig()
         // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
@@ -315,9 +325,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         Cloak_outlineInitLogger(path)
         logs.writeLog(log: "Finish go logger init")
         Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
+        loadDnsPreflightEntries()
 
         do {
-            try await startActiveProtocol(reason: "startTunnel", teardownOnFailure: true)
+            try await startActiveProtocol(
+                reason: "startTunnel",
+                teardownOnFailure: true,
+                startHealthCheckAfterStart: !isProtocolProbeStart
+            )
         } catch {
             throw error
         }
@@ -327,7 +342,95 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logResourceSnapshot(label: "AFTER_PROTOCOL_STARTUP")
     }
 
-    private func startActiveProtocol(reason: String, teardownOnFailure: Bool) async throws {
+    private func loadDnsPreflightEntries() {
+        Cloak_outlineClearDNSCache()
+        let entries = preparedDnsPreflightEntries.isEmpty
+            ? (userDefaults.string(forKey: dnsPreflightEntriesKey) ?? "")
+            : preparedDnsPreflightEntries
+        if entries.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            logs.writeLog(log: "[DNSPreflight] No App Group entries available for tunnel process")
+            return
+        }
+        let count = Cloak_outlineSetDNSCacheEntries(entries)
+        logs.writeLog(log: "[DNSPreflight] Loaded App Group entries into tunnel process cached=\(count)")
+    }
+
+    private func prepareDnsPreflightEntries() {
+        preparedDnsPreflightEntries = ""
+        let hostsText = userDefaults.string(forKey: dnsPreflightHostsKey) ?? ""
+        let hosts = Array(Set(
+            hostsText
+                .split(whereSeparator: \.isNewline)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .filter { !$0.isEmpty }
+        ))
+        if hosts.isEmpty {
+            logs.writeLog(log: "[DNSPreflight] No App Group hosts available for tunnel pre-resolve")
+            return
+        }
+
+        let hostTimeout = dnsPreflightTimeout(
+            key: dnsPreflightHostTimeoutMsKey,
+            defaultMs: dnsPreflightDefaultHostTimeoutMs
+        )
+        let totalTimeout = dnsPreflightTimeout(
+            key: dnsPreflightTotalTimeoutMsKey,
+            defaultMs: dnsPreflightDefaultTotalTimeoutMs
+        )
+        let start = Date()
+        let queue = DispatchQueue(label: "vpn.dobby.app.tunnel.dns-preflight.\(tunnelId)", qos: .userInitiated, attributes: .concurrent)
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var accepting = true
+        var resolved: [(String, String)] = []
+
+        logs.writeLog(
+            log: "[DNSPreflight] Tunnel pre-resolve start hosts=\(hosts.count) " +
+                "hostTimeoutMs=\(Int(hostTimeout * 1000)) totalTimeoutMs=\(Int(totalTimeout * 1000))"
+        )
+        for host in hosts {
+            group.enter()
+            queue.async {
+                let ip = self.resolveIPv4IfNeededWithTimeout(host, timeout: hostTimeout)
+                lock.lock()
+                if accepting, let ip {
+                    resolved.append((host, ip))
+                }
+                lock.unlock()
+                group.leave()
+            }
+        }
+
+        let waitResult = group.wait(timeout: .now() + totalTimeout)
+        lock.lock()
+        accepting = false
+        let snapshot = resolved
+        lock.unlock()
+
+        let entries = snapshot.map { "\($0.0)=\($0.1)" }.joined(separator: "\n")
+        preparedDnsPreflightEntries = entries
+        userDefaults.set(entries, forKey: dnsPreflightEntriesKey)
+        let failed = hosts.count - snapshot.count
+        logs.writeLog(
+            log: "[DNSPreflight] Tunnel pre-resolve finished hosts=\(hosts.count) " +
+                "resolved=\(snapshot.count) failed=\(failed) timedOut=\(waitResult == .timedOut) " +
+                "elapsedMs=\(elapsedMs(since: start))"
+        )
+    }
+
+    private func dnsPreflightTimeout(key: String, defaultMs: Int) -> TimeInterval {
+        let raw = userDefaults.string(forKey: key)
+        guard let raw = raw, let timeoutMs = Double(raw), timeoutMs > 0 else {
+            return TimeInterval(defaultMs) / 1000.0
+        }
+        return timeoutMs / 1000.0
+    }
+
+    private func startActiveProtocol(
+        reason: String,
+        teardownOnFailure: Bool,
+        startHealthCheckAfterStart: Bool
+    ) async throws {
         let vpnInterface = configsRepository.getVpnInterface()
         logs.writeLog(log: "[tunnel:\(tunnelId)] selected vpnInterface=\(vpnInterface) reason=\(reason)")
         Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
@@ -381,7 +484,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         }
 
-        startHealthCheck()
+        if startHealthCheckAfterStart {
+            startHealthCheck()
+        } else {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] HEALTH_CHECK skipped for protocol probe reason=\(reason)")
+        }
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
@@ -428,7 +535,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage bytes=\(messageData.count)")
-        if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
+        if let msg = String(data: messageData, encoding: .utf8), msg == "restartActiveProtocol" || msg == "restartActiveProtocol:probe" {
+            let isProtocolProbe = msg == "restartActiveProtocol:probe"
+            logs.writeLog(log: "[tunnel:\(tunnelId)] handleAppMessage restartActiveProtocol isProtocolProbe=\(isProtocolProbe)")
+            Task { @MainActor in
+                let ok = await self.restartActiveProtocolFromAppMessage(isProtocolProbe: isProtocolProbe)
+                let response = (ok ? "ok" : "error").data(using: .utf8)
+                completionHandler?(response)
+            }
+        } else if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory")
             let response = "Memory:\(reportMemoryUsageMB())".data(using: .utf8)
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory responseBytes=\(response?.count ?? -1)")
@@ -440,6 +555,37 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage nonUtf8 echo bytes=\(messageData.count)")
             }
             completionHandler?(messageData)
+        }
+    }
+
+    @MainActor
+    private func restartActiveProtocolFromAppMessage(isProtocolProbe: Bool) async -> Bool {
+        logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart begin reason=appMessage restartActiveProtocol isProtocolProbe=\(isProtocolProbe)")
+        stopHealthCheck(reason: "appMessage restartActiveProtocol")
+        stopCloakSidecarForProtocolRestart()
+        do {
+            try await startActiveProtocol(
+                reason: "appMessage restartActiveProtocol",
+                teardownOnFailure: false,
+                startHealthCheckAfterStart: !isProtocolProbe
+            )
+            logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart success reason=appMessage restartActiveProtocol isProtocolProbe=\(isProtocolProbe)")
+            return true
+        } catch {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart failed reason=appMessage restartActiveProtocol isProtocolProbe=\(isProtocolProbe): \(error.localizedDescription)")
+            configsRepository.setHealthCheckState(state: 0)
+            return false
+        }
+    }
+
+    @MainActor
+    private func stopCloakSidecarForProtocolRestart() {
+        do {
+            try cloakInteractor.stopCloak()
+        } catch {
+            logs.writeLog(
+                log: "[tunnel:\(tunnelId)] stopCloak before protocol restart failed: \(error.localizedDescription)"
+            )
         }
     }
 

@@ -20,8 +20,10 @@ const (
 // Healthcheck management
 var (
 	stopHealthCheckChannel chan struct{}
+	wakeHealthCheckChannel chan struct{}
 	healthCheckStarted     bool = false
 	healthCheckStartedMu   sync.Mutex
+	healthCheckGeneration  uint64
 )
 
 // Default variables
@@ -56,11 +58,7 @@ var (
 			return dnsResolveCheck("one.one.one.one")
 		},
 		func() error {
-			return anyHTTPPingCheck([]string{
-				"https://www.google.com/generate_204",
-				"https://www.cloudflare.com/cdn-cgi/trace",
-				"https://about.google",
-			})
+			return quorumHTTPPingCheck(httpProbeURLs)
 		},
 	}
 )
@@ -75,20 +73,37 @@ func GetConnectionState() ConnectionState {
 
 func InitHealthCheck() {
 	log.Debugf(common.Category, "Called InitHealthCheck")
+	switchState(Disconnected)
+	resetFailedChecks()
 }
 
 func StartHealthCheck() {
 	log.Debugf(common.Category, "Called StartHealthCheck")
 	healthCheckStartedMu.Lock()
-	defer healthCheckStartedMu.Unlock()
 
 	if healthCheckStarted {
-		log.Debugf(common.Category, "Health check already running")
+		log.Debugf(common.Category, "Health check already running; reset counters and request immediate check")
+		resetFailedChecks()
+		switchState(Connecting)
+		wakeCh := wakeHealthCheckChannel
+		healthCheckStartedMu.Unlock()
+		select {
+		case wakeCh <- struct{}{}:
+			log.Debugf(common.Category, "Health check wakeup requested")
+		default:
+			log.Debugf(common.Category, "Health check wakeup already pending")
+		}
 	} else {
 		log.Debugf(common.Category, "Starting health check")
 		healthCheckStarted = true
 		stopHealthCheckChannel = make(chan struct{}, 1)
-		go innerHealthCheck(stopHealthCheckChannel)
+		wakeHealthCheckChannel = make(chan struct{}, 1)
+		healthCheckGeneration++
+		generation := healthCheckGeneration
+		stopCh := stopHealthCheckChannel
+		wakeCh := wakeHealthCheckChannel
+		healthCheckStartedMu.Unlock()
+		go innerHealthCheck(stopCh, wakeCh, generation)
 	}
 }
 
@@ -97,12 +112,22 @@ func StopHealthCheck() {
 
 	healthCheckStartedMu.Lock()
 	if healthCheckStarted {
+		stopCh := stopHealthCheckChannel
+		healthCheckStarted = false
+		healthCheckGeneration++
+		stopHealthCheckChannel = nil
+		wakeHealthCheckChannel = nil
+		healthCheckStartedMu.Unlock()
+
 		select {
-		case stopHealthCheckChannel <- struct{}{}:
+		case stopCh <- struct{}{}:
 			log.Debugf(common.Category, "Health check stop requested")
 		default:
 			log.Debugf(common.Category, "Health check stop already requested")
 		}
+		switchState(Disconnected)
+		resetFailedChecks()
+		return
 	}
 	healthCheckStartedMu.Unlock()
 }
@@ -120,10 +145,11 @@ func recordFailedCheck() int {
 	return failedChecks
 }
 
-func innerHealthCheck(stopCh <-chan struct{}) {
-	log.Debugf(common.Category, "Health check started")
+func innerHealthCheck(stopCh, wakeCh <-chan struct{}, generation uint64) {
+	log.Debugf(common.Category, "Health check started generation=%d", generation)
 
-	switchState(Connecting)
+	switchStateForGeneration(generation, Connecting)
+	healthCheckStep(generation)
 	for {
 		var delayTimeout time.Duration
 
@@ -137,17 +163,29 @@ func innerHealthCheck(stopCh <-chan struct{}) {
 
 		select {
 		case <-stopCh:
-			log.Debugf(common.Category, "Health check stopped")
-			switchState(Disconnected)
-			resetFailedChecks()
-			healthCheckStartedMu.Lock()
-			healthCheckStarted = false
-			healthCheckStartedMu.Unlock()
+			log.Debugf(common.Category, "Health check stopped generation=%d", generation)
 			return
 		case <-time.After(delayTimeout):
-			healthCheckStep()
+			healthCheckStep(generation)
+		case <-wakeCh:
+			log.Debugf(common.Category, "Health check wakeup received generation=%d", generation)
+			healthCheckStep(generation)
 		}
 	}
+}
+
+func isHealthCheckGenerationCurrent(generation uint64) bool {
+	healthCheckStartedMu.Lock()
+	defer healthCheckStartedMu.Unlock()
+	return healthCheckStarted && healthCheckGeneration == generation
+}
+
+func switchStateForGeneration(generation uint64, newState ConnectionState) {
+	if !isHealthCheckGenerationCurrent(generation) {
+		log.Debugf(common.Category, "Ignore stale health check state generation=%d state=%d", generation, newState)
+		return
+	}
+	switchState(newState)
 }
 
 func switchState(newState ConnectionState) {
@@ -164,11 +202,24 @@ func switchState(newState ConnectionState) {
 	}
 }
 
-func healthCheckStep() {
-	log.Debugf(common.Category, "Health check step")
+func healthCheckStep(generation uint64) {
+	if !isHealthCheckGenerationCurrent(generation) {
+		log.Debugf(common.Category, "Skip stale health check step generation=%d", generation)
+		return
+	}
+	log.Debugf(common.Category, "Health check step generation=%d", generation)
 
 	for _, check := range connectionChecks {
-		if err := check(); err != nil {
+		if !isHealthCheckGenerationCurrent(generation) {
+			log.Debugf(common.Category, "Abort stale health check step generation=%d", generation)
+			return
+		}
+		err := check()
+		if !isHealthCheckGenerationCurrent(generation) {
+			log.Debugf(common.Category, "Ignore stale health check result generation=%d", generation)
+			return
+		}
+		if err != nil {
 			consecutiveFails := recordFailedCheck()
 			if consecutiveFails >= failedCheckThreshold {
 				log.Error(
@@ -180,7 +231,7 @@ func healthCheckStep() {
 						"threshold":        failedCheckThreshold,
 					},
 				)
-				switchState(Connecting)
+				switchStateForGeneration(generation, Connecting)
 				return
 			}
 
@@ -195,7 +246,11 @@ func healthCheckStep() {
 		}
 	}
 
+	if !isHealthCheckGenerationCurrent(generation) {
+		log.Debugf(common.Category, "Ignore stale successful health check generation=%d", generation)
+		return
+	}
 	resetFailedChecks()
 	log.Infof(common.Category, "Health check succeed")
-	switchState(Connected)
+	switchStateForGeneration(generation, Connected)
 }

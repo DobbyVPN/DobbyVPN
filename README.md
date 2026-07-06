@@ -5,8 +5,8 @@ XRay & AWG are in progress.
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 
-Local desktop CLI/VPN checks without Hydraulic Conveyor are documented in
-[scripts/local-cli-checks.md](scripts/README.md).
+Local desktop CLI/VPN checks and CI desktop build commands are documented in
+[.github/scripts/README.md](.github/scripts/README.md).
 
 Consume 'subscription' / 'dynamic keys' as TOML via HTTPS or inline:
 
@@ -48,11 +48,13 @@ IPs = [
 ]
 ```
 
-DobbyVPN tries protocol variants in file order. If the active variant cannot start,
-or health check later reports it as disconnected, DobbyVPN switches to the next
-variant. The list is cyclic and keeps retrying until the user stops the VPN.
-Use the same `[[Outline]]`, `[[Xray]]` section format even
-when the configuration contains only one variant.
+DobbyVPN probes protocol variants one by one when the VPN starts. Each variant
+must start and pass latency probes through the tunnel; DobbyVPN then activates
+the working variant with the lowest average latency. If health check later
+reports that the active variant is no longer connected, DobbyVPN repeats the
+full probe-and-rank procedure until the user stops the VPN. Use the same
+`[[Outline]]`, `[[Xray]]`, or `[[AmneziaWG]]` section format even when the
+configuration contains only one variant.
 
 **Clean ShadowSocks** (best performance)
 ```toml

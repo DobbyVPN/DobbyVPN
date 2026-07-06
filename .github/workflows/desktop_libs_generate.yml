@@ -8,7 +8,16 @@ jobs:
     runs-on: ${{ matrix.os }}-latest
     strategy:
       matrix:
-        os: [windows, ubuntu, macos]
+        include:
+          - os: windows
+            platform: windows
+            arch: amd64
+          - os: ubuntu
+            platform: linux
+            arch: amd64
+          - os: macos
+            platform: macos
+            arch: arm64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,63 +40,13 @@ jobs:
           go-version-file: .go-version
           cache-dependency-path: go_module/go.sum
 
-      - name: Vendor Cloak/internal
+      - name: Build desktop VPN library
         if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
         run: |
-          cp -r Cloak/internal go_module/modules/Cloak/
-
-      - name: Download Go modules
-        if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        working-directory: go_module
-        run: |
-          go mod tidy
-          go mod download
-
-      - name: Install compiler
-        if: matrix.os != 'windows' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        id: install_cc
-        uses: rlalik/setup-cpp-compiler@master
-        with:
-          compiler: latest
-
-      - name: Build Windows library
-        if: matrix.os == 'windows' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        working-directory: go_module
-        run: |
-          go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
-        env:
-          CGO_ENABLED: '1'
-          GOOS: 'windows'
-          GOARCH: 'amd64'
-          CC: ${{ steps.install_cc.outputs.cc }}
-          CXX: ${{ steps.install_cc.outputs.cxx }}
-
-      - name: Build Linux library
-        if: matrix.os == 'ubuntu' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        working-directory: go_module
-        run: |
-          go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
-        env:
-          CGO_ENABLED: '1'
-          GOOS: 'linux'
-          GOARCH: 'amd64'
-          CC: ${{ steps.install_cc.outputs.cc }}
-          CXX: ${{ steps.install_cc.outputs.cxx }}
-
-      - name: Build macOS library
-        if: matrix.os == 'macos' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        working-directory: go_module
-        run: |
-          go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports/
-        env:
-          CGO_ENABLED: '1'
-          GOOS: 'darwin'
-          GOARCH: 'arm64'
-          CC: ${{ steps.install_cc.outputs.cc }}
-          CXX: ${{ steps.install_cc.outputs.cxx }}
+          python .github/scripts/desktop_build.py libs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --go-mod-tidy
 
       - name: Upload built libraries
-        if: matrix.os == 'windows'
+        if: matrix.platform == 'windows'
         uses: actions/upload-artifact@v4
         with:
           name: windows_grpcvpnserver.exe
@@ -95,7 +54,7 @@ jobs:
             go_module/windows_grpcvpnserver.exe
 
       - name: Upload built libraries
-        if: matrix.os == 'ubuntu'
+        if: matrix.platform == 'linux'
         uses: actions/upload-artifact@v4
         with:
           name: ubuntu_grpcvpnserver
@@ -103,7 +62,7 @@ jobs:
             go_module/ubuntu_grpcvpnserver
 
       - name: Upload built libraries
-        if: matrix.os == 'macos'
+        if: matrix.platform == 'macos'
         uses: actions/upload-artifact@v4
         with:
           name: macos_grpcvpnserver

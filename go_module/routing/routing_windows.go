@@ -8,10 +8,14 @@ import (
 	"net"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"go_module/log"
+
+	"golang.org/x/sys/windows"
 )
 
 var ipv4Subnets = []string{
@@ -40,7 +44,15 @@ var ipv4ReservedSubnets = []string{
 
 const ipv6BlockRuleName = "DobbyVPN Block IPv6"
 
+var (
+	interfaceChangeCallback = windows.NewCallback(onInterfaceChange)
+	interfaceWaitersMu      sync.Mutex
+	interfaceWaitersNextID  uintptr
+	interfaceWaiters        = map[uintptr]chan struct{}{}
+)
+
 func ExecuteCommand(command string) (string, error) {
+	startedAt := time.Now()
 	cmd := exec.Command("cmd", "/C", command)
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -48,10 +60,11 @@ func ExecuteCommand(command string) (string, error) {
 	}
 
 	output, err := cmd.CombinedOutput()
+	elapsed := time.Since(startedAt).Truncate(time.Millisecond)
 	if err != nil {
-		return string(output), fmt.Errorf("command execution failed: %w, output: %s", err, output)
+		return string(output), fmt.Errorf("command execution failed after %s: %w, output: %s", elapsed, err, output)
 	}
-	log.Debugf(Category, "Outline/routing: Command executed: %s, output: %s", log.MaskStr(command), output)
+	log.Debugf(Category, "Outline/routing: Command executed elapsed=%s: %s, output: %s", elapsed, log.MaskStr(command), output)
 	return string(output), nil
 }
 
@@ -59,16 +72,18 @@ func executeNetshCommand(args ...string) (string, error) {
 	commandForLog := formatCommandForLog("netsh", args...)
 	log.Debugf(Category, "Outline/routing: Executing command: %s", log.MaskStr(commandForLog))
 
+	startedAt := time.Now()
 	cmd := exec.Command("netsh", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow: true,
 	}
 
 	output, err := cmd.CombinedOutput()
+	elapsed := time.Since(startedAt).Truncate(time.Millisecond)
 	if err != nil {
-		return string(output), fmt.Errorf("command execution failed: %w, output: %s", err, output)
+		return string(output), fmt.Errorf("command execution failed after %s: %w, output: %s", elapsed, err, output)
 	}
-	log.Debugf(Category, "Outline/routing: Command executed: %s, output: %s", log.MaskStr(commandForLog), output)
+	log.Debugf(Category, "Outline/routing: Command executed elapsed=%s: %s, output: %s", elapsed, log.MaskStr(commandForLog), output)
 	return string(output), nil
 }
 
@@ -340,6 +355,116 @@ func IsTunnelInterfaceName(name string) bool {
 		strings.Contains(lower, "tun")
 }
 
+func onInterfaceChange(callerContext unsafe.Pointer, _ *windows.MibIpInterfaceRow, _ uint32) uintptr {
+	id := uintptr(callerContext)
+	interfaceWaitersMu.Lock()
+	ch := interfaceWaiters[id]
+	interfaceWaitersMu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	return 0
+}
+
+func nextInterfaceWaiterID() uintptr {
+	interfaceWaitersMu.Lock()
+	defer interfaceWaitersMu.Unlock()
+	interfaceWaitersNextID++
+	if interfaceWaitersNextID == 0 {
+		interfaceWaitersNextID++
+	}
+	return interfaceWaitersNextID
+}
+
+func waitForInterfaceChange(timeout time.Duration, label string, match func() (*net.Interface, error)) (*net.Interface, error) {
+	iface, err := match()
+	if err == nil {
+		return iface, nil
+	}
+
+	startedAt := time.Now()
+	ch := make(chan struct{}, 1)
+	id := nextInterfaceWaiterID()
+
+	interfaceWaitersMu.Lock()
+	interfaceWaiters[id] = ch
+	interfaceWaitersMu.Unlock()
+	defer func() {
+		interfaceWaitersMu.Lock()
+		delete(interfaceWaiters, id)
+		interfaceWaitersMu.Unlock()
+	}()
+
+	var notificationHandle windows.Handle
+	err = windows.NotifyIpInterfaceChange(windows.AF_UNSPEC, interfaceChangeCallback, unsafe.Pointer(id), true, &notificationHandle)
+	if err != nil {
+		log.Debugf(Category, "Outline/routing: interface event wait unavailable label=%s err=%v; using short fallback polling", label, err)
+		return waitForInterfacePolling(timeout, label, match)
+	}
+	defer func() {
+		if notificationHandle != 0 {
+			if cancelErr := windows.CancelMibChangeNotify2(notificationHandle); cancelErr != nil {
+				log.Debugf(Category, "Outline/routing: interface event cancel failed label=%s err=%v", label, cancelErr)
+			}
+		}
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ch:
+			iface, err := match()
+			if err == nil {
+				log.Debugf(Category, "Outline/routing: interface event wait OK label=%s iface=%s elapsed=%s", label, iface.Name, time.Since(startedAt).Truncate(time.Millisecond))
+				return iface, nil
+			}
+		case <-timer.C:
+			iface, err := match()
+			if err == nil {
+				log.Debugf(Category, "Outline/routing: interface event wait OK on timeout check label=%s iface=%s elapsed=%s", label, iface.Name, time.Since(startedAt).Truncate(time.Millisecond))
+				return iface, nil
+			}
+			return nil, fmt.Errorf("%s not found after %s", label, time.Since(startedAt).Truncate(time.Millisecond))
+		}
+	}
+}
+
+func waitForInterfacePolling(timeout time.Duration, label string, match func() (*net.Interface, error)) (*net.Interface, error) {
+	startedAt := time.Now()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		iface, err := match()
+		if err == nil {
+			log.Debugf(Category, "Outline/routing: interface polling wait OK label=%s iface=%s elapsed=%s", label, iface.Name, time.Since(startedAt).Truncate(time.Millisecond))
+			return iface, nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("%s not found after %s", label, time.Since(startedAt).Truncate(time.Millisecond))
+}
+
+func WaitForInterfaceNameContains(namePart string, timeout time.Duration) (*net.Interface, error) {
+	label := fmt.Sprintf("interface name containing %q", namePart)
+	needle := strings.ToLower(namePart)
+	return waitForInterfaceChange(timeout, label, func() (*net.Interface, error) {
+		interfaces, err := net.Interfaces()
+		if err != nil {
+			return nil, err
+		}
+		for _, ifc := range interfaces {
+			if strings.Contains(strings.ToLower(ifc.Name), needle) {
+				return &ifc, nil
+			}
+		}
+		return nil, fmt.Errorf("%s is not present", label)
+	})
+}
+
 func GetNetworkInterfaceByIP(currentIP string) (*net.Interface, error) {
 	interfaces, err := net.Interfaces()
 	if err != nil {
@@ -363,15 +488,13 @@ func GetNetworkInterfaceByIP(currentIP string) (*net.Interface, error) {
 }
 
 func WaitForInterfaceByIP(ip string, timeout time.Duration) (*net.Interface, error) {
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
-		iface, err := GetNetworkInterfaceByIP(ip)
-		if err == nil {
-			return iface, nil
-		}
-		time.Sleep(300 * time.Millisecond)
+	startedAt := time.Now()
+	iface, err := waitForInterfaceChange(timeout, "interface with IP "+ip, func() (*net.Interface, error) {
+		return GetNetworkInterfaceByIP(ip)
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	return nil, fmt.Errorf("interface with IP %s not found", ip)
+	log.Debugf(Category, "Outline/routing: WaitForInterfaceByIP OK ip=%s iface=%s elapsed=%s", ip, iface.Name, time.Since(startedAt).Truncate(time.Millisecond))
+	return iface, nil
 }

@@ -29,4 +29,8 @@ class HealthCheckManagerImpl(
     override fun stopHealthCheck() {
         healthCheckLibrary.StopHealthCheck()
     }
+
+    override fun measureTunnelProbeAverageLatencyMillis(timeoutMillis: Long): Long {
+        return healthCheckLibrary.MeasureTunnelProbeAverageLatencyMillis(timeoutMillis)
+    }
 }

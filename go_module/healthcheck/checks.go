@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"go_module/common"
+	"go_module/dnscache"
 	hcCommon "go_module/healthcheck/common"
 	"go_module/log"
-	"net"
 	"net/http"
 	"runtime"
 	"strings"
@@ -67,15 +67,16 @@ func dnsResolveCheck(host string) error {
 		return nil
 	}
 
-	log.Debugf(hcCommon.Category, "Check: dns resolution check %s with timeout = %v", host, dnsTimeout)
+	log.Debugf(hcCommon.Category, "Check: dns resolution check %s via shared DNS cache with timeout = %v", host, dnsTimeout)
 
 	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
 	defer cancel()
 
-	_, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	ip, err := dnscache.ResolveIPv4(ctx, host, 0, "healthcheck-dns")
 	if err != nil {
 		return err
 	}
+	log.Debugf(hcCommon.Category, "DNS resolution check OK host=%s ip=%s", host, ip.String())
 
 	return nil
 }
@@ -90,7 +91,16 @@ func pingHostCheck(host string) error {
 	if err != nil {
 		return fmt.Errorf("failed request init: %w", err)
 	}
-	client := &http.Client{}
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext:         cachedDialContext(pingTimeout, "healthcheck-http"),
+			DisableKeepAlives:   true,
+			ForceAttemptHTTP2:   false,
+			TLSHandshakeTimeout: pingTimeout,
+		},
+		Timeout: pingTimeout,
+	}
+	defer client.CloseIdleConnections()
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed request send: %w", err)
@@ -105,10 +115,11 @@ func pingHostCheck(host string) error {
 	return nil
 }
 
-func anyHTTPPingCheck(hosts []string) error {
+func quorumHTTPPingCheck(hosts []string) error {
 	log.Debugf(hcCommon.Category, "Check: HTTP connectivity candidates=%s", strings.Join(hosts, ", "))
 
 	var errs []error
+	successes := 0
 	for _, host := range hosts {
 		if err := pingHostCheck(host); err != nil {
 			log.Warnf(hcCommon.Category, "HTTP connectivity candidate failed host=%s error=%v", host, err)
@@ -116,11 +127,19 @@ func anyHTTPPingCheck(hosts []string) error {
 			continue
 		}
 
+		successes++
 		log.Debugf(hcCommon.Category, "HTTP connectivity candidate succeeded host=%s", host)
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("HTTP connectivity candidates failed passed=%d total=%d: %w", len(hosts)-len(errs), len(hosts), errors.Join(errs...))
+	requiredSuccesses := httpProbeMinSuccesses
+	if requiredSuccesses > len(hosts) {
+		requiredSuccesses = len(hosts)
+	}
+	if successes < requiredSuccesses {
+		return fmt.Errorf("HTTP connectivity candidates failed passed=%d required=%d total=%d: %w", successes, requiredSuccesses, len(hosts), errors.Join(errs...))
+	}
+	if successes != len(hosts) {
+		log.Warnf(hcCommon.Category, "HTTP connectivity continuing with partial quorum passed=%d total=%d", successes, len(hosts))
 	}
 
 	return nil
