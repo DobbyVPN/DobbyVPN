@@ -43,6 +43,9 @@ public class NativeModuleHolder {
         },
         loggerManager: { _ in 
             return LoggerManagerImpl(configsRepository: configsRepository)
+        },
+        dnsPreflightResolver: { _ in
+            return DnsPreflightResolverImpl()
         }
     )
     

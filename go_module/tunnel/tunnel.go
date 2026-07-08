@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -20,9 +21,10 @@ import (
 )
 
 var (
-	mu        sync.Mutex
-	isRunning bool
-	statsStop chan struct{}
+	mu                sync.Mutex
+	isRunning         bool
+	statsStop         chan struct{}
+	currentDobbyProxy *DobbyProxy
 )
 
 const (
@@ -33,6 +35,7 @@ const (
 
 type DobbyProxy struct {
 	vpn     proxy.Proxy
+	vpnMu   sync.RWMutex
 	direct  proxy.Proxy
 	tcpSlot flowSlot
 	udpSlot flowSlot
@@ -221,7 +224,7 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 		log.Debugf(Category, "[Router] TCP IPv6 blocked attempt=%d dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
 		return nil, err
 	}
-	route, px := "VPN", p.vpn
+	route, px := "VPN", p.currentVPNProxy()
 	if IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
 	}
@@ -256,7 +259,7 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 		log.Debugf(Category, "[Router] UDP IPv6 blocked attempt=%d dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
 		return nil, err
 	}
-	route, px := "VPN", p.vpn
+	route, px := "VPN", p.currentVPNProxy()
 	if IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
 	}
@@ -286,7 +289,7 @@ func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.P
 }
 
 func (p *DobbyProxy) Addr() string {
-	return p.vpn.Addr()
+	return p.currentVPNProxy().Addr()
 }
 
 func isBlockedIPv6Destination(metadata *M.Metadata) bool {
@@ -294,7 +297,34 @@ func isBlockedIPv6Destination(metadata *M.Metadata) bool {
 }
 
 func (p *DobbyProxy) Proto() proto.Proto {
-	return p.vpn.Proto()
+	return p.currentVPNProxy().Proto()
+}
+
+func (p *DobbyProxy) currentVPNProxy() proxy.Proxy {
+	p.vpnMu.RLock()
+	defer p.vpnMu.RUnlock()
+	return p.vpn
+}
+
+func (p *DobbyProxy) updateVPNProxy(px proxy.Proxy) {
+	p.vpnMu.Lock()
+	defer p.vpnMu.Unlock()
+	p.vpn = px
+}
+
+func newSocks5Proxy(proxyAddr string) (proxy.Proxy, error) {
+	parsed, err := url.Parse("socks5://" + proxyAddr)
+	if err != nil {
+		return nil, fmt.Errorf("parse SOCKS5 proxy address %q: %w", proxyAddr, err)
+	}
+	host := parsed.Host
+	user := ""
+	pass := ""
+	if parsed.User != nil {
+		user = parsed.User.Username()
+		pass, _ = parsed.User.Password()
+	}
+	return proxy.NewSocks5(host, user, pass)
 }
 
 func StartEngine(cfg platform_engine.EngineConfig) error {
@@ -337,6 +367,7 @@ func StartEngine(cfg platform_engine.EngineConfig) error {
 	}
 
 	t.SetDialer(wrapper)
+	currentDobbyProxy = wrapper
 	log.Debugf(Category, "[Engine] DobbyProxy installed")
 	statsStop = make(chan struct{})
 	go wrapper.logStatsLoop(statsStop)
@@ -352,6 +383,7 @@ func stopLocked() {
 	}
 	platform_engine.EngineStop()
 	isRunning = false
+	currentDobbyProxy = nil
 	log.Debugf(Category, "[Engine] tun2socks engine stopped")
 }
 
@@ -365,6 +397,24 @@ func StopEngine() {
 	}
 
 	stopLocked()
+}
+
+func SwitchVPNProxy(proxyAddr string) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if !isRunning || currentDobbyProxy == nil {
+		return fmt.Errorf("tun2socks engine is not running")
+	}
+
+	px, err := newSocks5Proxy(proxyAddr)
+	if err != nil {
+		return err
+	}
+
+	currentDobbyProxy.updateVPNProxy(px)
+	log.Debugf(Category, "[Engine] switched VPN outbound proxy to %s", proxyAddr)
+	return nil
 }
 
 func (p *DobbyProxy) flowStats() string {

@@ -138,6 +138,26 @@ func (c *CoreClient) Disconnect() error {
 	return nil
 }
 
+func (c *CoreClient) SwitchDevice(device pkg.ProtocolDevice) error {
+	if c == nil {
+		return errors.New("core desktop client is not initialized")
+	}
+	if device == nil {
+		return errors.New("protocol device is not initialized")
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.cancel == nil {
+		return errors.New("core desktop client is not connected")
+	}
+	if c.app == nil {
+		return errors.New("core desktop app is not initialized")
+	}
+	return c.app.SwitchProtocolDevice(device)
+}
+
 func (c *CoreClient) waitForShutdownLocked(reason string) {
 	if c.done == nil {
 		return

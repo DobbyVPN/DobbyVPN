@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -21,6 +22,7 @@ import (
 type CoreClient struct {
 	device pkg.ProtocolDevice
 	tun    io.ReadWriteCloser
+	mu     sync.Mutex
 }
 
 func NewClient(device pkg.ProtocolDevice, tun io.ReadWriteCloser) *CoreClient {
@@ -44,11 +46,16 @@ func (c *CoreClient) Connect() (err error) {
 	if c == nil {
 		return errors.New("core mobile client is not initialized")
 	}
-	if c.tun == nil {
-		return errors.New("core mobile tun device is not initialized")
-	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.device == nil {
 		return errors.New("core mobile protocol device is not initialized")
+	}
+	if c.tun == nil {
+		common.Client.MarkActive(coreCommon.Name)
+		log.Debugf(coreCommon.Category, "core mobile client already connected; skipping tun2socks engine start")
+		return nil
 	}
 
 	var fd int
@@ -126,6 +133,8 @@ func (c *CoreClient) Disconnect() error {
 	if c == nil {
 		return errors.New("core mobile client is not initialized")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	var errs []error
 	tunnel.StopEngine()
@@ -149,6 +158,47 @@ func (c *CoreClient) Disconnect() error {
 	log.Debugf(coreCommon.Category, "core client disconnected")
 	common.Client.MarkInactive(coreCommon.Name)
 	return errors.Join(errs...)
+}
+
+func (c *CoreClient) SwitchDevice(device pkg.ProtocolDevice) error {
+	if c == nil {
+		return errors.New("core mobile client is not initialized")
+	}
+	if device == nil {
+		return errors.New("core mobile protocol device is not initialized")
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.device == nil {
+		return errors.New("core mobile current protocol device is not initialized")
+	}
+
+	if err := device.Open(0, ""); err != nil {
+		if closeErr := device.Close(); closeErr != nil {
+			log.Debugf(coreCommon.Category, "failed to close replacement protocol device after open error: %v", closeErr)
+		}
+		return fmt.Errorf("failed to open replacement protocol device: %w", err)
+	}
+
+	proxyAddr := device.GetProxyAddr()
+	if err := tunnel.SwitchVPNProxy(proxyAddr); err != nil {
+		_ = device.Close()
+		return fmt.Errorf("failed to switch tun2socks proxy to replacement device: %w", err)
+	}
+
+	oldDevice := c.device
+	c.device = device
+	common.Client.MarkActive(coreCommon.Name)
+	log.Debugf(coreCommon.Category, "core mobile client switched protocol device proxy=%s", proxyAddr)
+
+	go func() {
+		if err := oldDevice.Close(); err != nil {
+			log.Debugf(coreCommon.Category, "failed to close previous protocol device after switch: %v", err)
+		}
+	}()
+	return nil
 }
 
 func (c *CoreClient) Refresh() error {

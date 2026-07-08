@@ -46,10 +46,16 @@ func NewVpnClient(transportConfig string, protocol string) (err error) {
 	log.Debugf("ios_exports", "NewVpnClient() called")
 
 	if client != nil {
-		if err := VpnDisconnect(); err != nil {
-			log.Debugf("ios_exports", "NewVpnClient(): previous client disconnect failed: %v", err)
-			return fmt.Errorf("NewVpnClient(): disconnect failed: %w", err)
+		log.Debugf("ios_exports", "NewVpnClient(): existing client detected, switching protocol device")
+		device, err := newProtocolDevice(transportConfig, protocol)
+		if err != nil {
+			return err
 		}
+		if err := client.SwitchDevice(device); err != nil {
+			return fmt.Errorf("NewVpnClient(): switch protocol device failed: %w", err)
+		}
+		log.Debugf("ios_exports", "NewVpnClient(): existing client protocol device switched")
+		return nil
 	}
 
 	log.Debugf("ios_exports", "Start fd search")
@@ -69,22 +75,12 @@ func NewVpnClient(transportConfig string, protocol string) (err error) {
 	log.Debugf("ios_exports", "Duplicated utun fd = %d", tunFd)
 	tunFile := os.NewFile(uintptr(tunFd), "utun")
 
-	var device pkg.ProtocolDevice
-
-	// Factory: Create the protocol-specific device
-	switch protocol {
-	case "xray":
-		device, err = xray.NewXrayDevice(transportConfig)
-	case "outline":
-		device, err = outline.NewOutlineDevice(transportConfig)
-	case "trusttunnel":
-		device, err = trusttunnel.NewTrustTunnelDevice(transportConfig)
-	default:
-		log.Debugf("ios_exports", "NewVpnClient() failed: unsupported protocol")
-		return fmt.Errorf("unsupported protocol: %s", protocol)
-	}
+	device, err := newProtocolDevice(transportConfig, protocol)
 	if err != nil {
 		log.Debugf("ios_exports", "NewVpnClient() failed to create device: %v", err)
+		if closeErr := tunFile.Close(); closeErr != nil {
+			log.Debugf("ios_exports", "NewVpnClient(): failed to close duplicated utun fd after device creation error: %v", closeErr)
+		}
 		return fmt.Errorf("failed to create %s device: %w", protocol, err)
 	}
 
@@ -92,6 +88,20 @@ func NewVpnClient(transportConfig string, protocol string) (err error) {
 
 	log.Debugf("ios_exports", "NewVpnClient() finished")
 	return nil
+}
+
+func newProtocolDevice(transportConfig string, protocol string) (pkg.ProtocolDevice, error) {
+	switch protocol {
+	case "xray":
+		return xray.NewXrayDevice(transportConfig)
+	case "outline":
+		return outline.NewOutlineDevice(transportConfig)
+	case "trusttunnel":
+		return trusttunnel.NewTrustTunnelDevice(transportConfig)
+	default:
+		log.Debugf("ios_exports", "NewVpnClient() failed: unsupported protocol")
+		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
+	}
 }
 
 func VpnConnect() (err error) {

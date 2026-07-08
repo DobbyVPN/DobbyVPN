@@ -12,6 +12,8 @@ import (
 )
 
 var defaultInterfaceIndex int
+var defaultGatewayIP string
+var defaultInterfaceName string
 
 func GetDefaultInterfaceIndex() (int, error) {
 	gw, err := gateway.DiscoverGateway()
@@ -35,6 +37,17 @@ func GetDefaultInterfaceIndex() (int, error) {
 func SetDefaultInterfaceIndex(idx int) {
 	defaultInterfaceIndex = idx
 	log.Debugf(Category, "[Windows-Protect] ifindex=%d", idx)
+}
+
+func SetDefaultRoute(gatewayIP, interfaceName string, idx int) {
+	defaultGatewayIP = gatewayIP
+	defaultInterfaceName = interfaceName
+	defaultInterfaceIndex = idx
+	log.Debugf(Category, "[Windows-Protect] default route gateway=%s iface=%s ifindex=%d", gatewayIP, interfaceName, idx)
+}
+
+func GetDefaultRoute() (gatewayIP, interfaceName string, ok bool) {
+	return defaultGatewayIP, defaultInterfaceName, defaultGatewayIP != "" && defaultInterfaceName != ""
 }
 
 type windowsProtector struct{}

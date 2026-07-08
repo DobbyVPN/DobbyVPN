@@ -22,19 +22,22 @@ var (
 )
 
 func execAndLog(cmd string, context string) error {
+	startedAt := time.Now()
 	out, err := routing.ExecuteCommand(cmd)
+	elapsed := time.Since(startedAt).Truncate(time.Millisecond)
 	if err != nil {
-		log.Debugf(Category, "[Engine][Windows][ERROR] %s: %v | output=%s",
-			context, err, out,
+		log.Debugf(Category, "[Engine][Windows][ERROR] %s elapsed=%s: %v | output=%s",
+			context, elapsed, err, out,
 		)
 		return err
 	}
 
-	log.Debugf(Category, "[Engine][Windows][OK] %s: %s", context, out)
+	log.Debugf(Category, "[Engine][Windows][OK] %s elapsed=%s: %s", context, elapsed, out)
 	return nil
 }
 
 func startPlatformEngine(cfg interface{}) error {
+	startedAt := time.Now()
 	c := cfg.(EngineConfig)
 	proxyAddr := c.ProxyAddr
 	uplinkIface := c.UplinkIface
@@ -53,17 +56,23 @@ func startPlatformEngine(cfg interface{}) error {
 	}
 
 	engine.Insert(key)
+	engineStartAt := time.Now()
 	engine.Start()
+	log.Debugf(Category, "[Engine][Windows] engine.Start returned elapsed=%s total=%s", time.Since(engineStartAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
+	waitStartedAt := time.Now()
 	ifName, err := waitForWintun(5 * time.Second)
 	if err != nil {
 		engine.Stop()
 		return err
 	}
+	log.Debugf(Category, "[Engine][Windows] waitForWintun OK iface=%s elapsed=%s total=%s", ifName, time.Since(waitStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	lastIface = ifName
 
+	dnsReadStartedAt := time.Now()
 	prevDNS, prevDHCP = getCurrentDNS(ifName)
+	log.Debugf(Category, "[Engine][Windows] getCurrentDNS elapsed=%s total=%s", time.Since(dnsReadStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	tunCfg := common.GetNetworkConfig()
 
@@ -76,6 +85,7 @@ func startPlatformEngine(cfg interface{}) error {
 		return err
 	}
 
+	log.Debugf(Category, "[Engine][Windows] platform engine ready iface=%s elapsed=%s", ifName, time.Since(startedAt).Truncate(time.Millisecond))
 	return nil
 }
 
@@ -118,17 +128,11 @@ func stopPlatformEngine() {
 }
 
 func waitForWintun(timeout time.Duration) (string, error) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		ifaces, _ := net.Interfaces()
-		for _, ifc := range ifaces {
-			if strings.Contains(strings.ToLower(ifc.Name), "wintun") {
-				return ifc.Name, nil
-			}
-		}
-		time.Sleep(300 * time.Millisecond)
+	iface, err := routing.WaitForInterfaceNameContains("wintun", timeout)
+	if err != nil {
+		return "", fmt.Errorf("wintun not found: %w", err)
 	}
-	return "", fmt.Errorf("wintun not found")
+	return iface.Name, nil
 }
 
 func setInterfaceAddress(name, ip string) error {

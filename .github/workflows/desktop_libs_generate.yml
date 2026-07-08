@@ -8,7 +8,16 @@ jobs:
     runs-on: ${{ matrix.os }}-latest
     strategy:
       matrix:
-        os: [windows, ubuntu, macos]
+        include:
+          - os: windows
+            platform: windows
+            arch: amd64
+          - os: ubuntu
+            platform: linux
+            arch: amd64
+          - os: macos
+            platform: macos
+            arch: arm64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,24 +42,6 @@ jobs:
           go-version-file: .go-version
           cache-dependency-path: go_module/go.sum
 
-      - name: Vendor Cloak/internal
-        if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        run: |
-          cp -r Cloak/internal go_module/modules/Cloak/
-
-      - name: Download Go modules
-        if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        working-directory: go_module
-        run: |
-          go mod tidy
-          go mod download
-
-      - name: Install compiler
-        if: matrix.os != 'windows' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        id: install_cc
-        uses: rlalik/setup-cpp-compiler@master
-        with:
-          compiler: latest
 
       - name: Download TrustTunnel Windows lib
         if: matrix.os == 'windows' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
@@ -60,19 +51,6 @@ jobs:
           curl -L -o dobby_bridge-windows-x86_64.zip "https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.0/dobby_bridge-windows-x86_64.zip"
           echo "9c0d79401c3da26d922e58c5fc3317c75d800598e9cb91a31ce3aebbf71b4668 dobby_bridge-windows-x86_64.zip" | sha256sum -c -
           unzip dobby_bridge-windows-x86_64.zip
-
-      - name: Build Windows library
-        if: matrix.os == 'windows' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        working-directory: go_module
-        run: |
-          go build -trimpath -ldflags="-buildid= -extldflags '-static'" -o windows_grpcvpnserver.exe ./desktop_exports/
-        env:
-          CGO_ENABLED: '1'
-          GOOS: 'windows'
-          GOARCH: 'amd64'
-          CGO_LDFLAGS: "-L${{ github.workspace }}/go_module"
-          CC: ${{ steps.install_cc.outputs.cc }}
-          CXX: ${{ steps.install_cc.outputs.cxx }}
 
       - name: Install libc++ for Linux
         if: matrix.os == 'ubuntu' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
@@ -91,39 +69,29 @@ jobs:
           echo "515c6993672e35d768477b3cd5c04ee7dfcbeaaeecd5abef5e03c1603486cbfe libdobby_bridge-linux-x86_64.zip" | sha256sum -c -
           unzip libdobby_bridge-linux-x86_64.zip
 
-      - name: Build Linux library
+      - name: Prepare libc++ for packaging
         if: matrix.os == 'ubuntu' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
-          go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
           LIBCPP=""
           for f in /usr/lib/llvm-21/lib/x86_64-linux-gnu/libc++.so.1 /usr/lib/llvm-21/lib/libc++.so.1 /usr/lib/x86_64-linux-gnu/libc++.so.1; do
             if [ -e "$f" ]; then LIBCPP="$f"; break; fi
           done
           if [ -n "$LIBCPP" ]; then cp -L "$LIBCPP" ./libc++.so.1; else echo "64-bit libc++.so.1 not found"; exit 1; fi
-        env:
-          CGO_ENABLED: '1'
-          GOOS: 'linux'
-          GOARCH: 'amd64'
-          CGO_LDFLAGS: "-L${{ github.workspace }}/go_module"
-          CC: ${{ steps.install_cc.outputs.cc }}
-          CXX: ${{ steps.install_cc.outputs.cxx }}
 
-      - name: Build macOS library
-        if: matrix.os == 'macos' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        working-directory: go_module
+      - name: Build desktop VPN library
+        if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
         run: |
-          go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports/
-        env:
-          CGO_ENABLED: '1'
-          GOOS: 'darwin'
-          GOARCH: 'arm64'
-          CGO_LDFLAGS: "-lc++ -framework SystemConfiguration -framework CoreFoundation -framework Security -framework Network"
-          CC: ${{ steps.install_cc.outputs.cc }}
-          CXX: ${{ steps.install_cc.outputs.cxx }}
+          if [ "${{ matrix.os }}" == "macos" ]; then
+            export CGO_LDFLAGS="-lc++ -framework SystemConfiguration -framework CoreFoundation -framework Security -framework Network"
+          else
+            export CGO_LDFLAGS="-L${{ github.workspace }}/go_module"
+          fi
+          python .github/scripts/desktop_build.py libs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --go-mod-tidy
+        shell: bash
 
       - name: Upload built libraries
-        if: matrix.os == 'windows'
+        if: matrix.platform == 'windows'
         uses: actions/upload-artifact@v4
         with:
           name: windows_grpcvpnserver.exe
@@ -132,7 +100,7 @@ jobs:
             go_module/dobby_bridge.dll
 
       - name: Upload built libraries
-        if: matrix.os == 'ubuntu'
+        if: matrix.platform == 'linux'
         uses: actions/upload-artifact@v4
         with:
           name: ubuntu_grpcvpnserver
@@ -142,7 +110,7 @@ jobs:
             go_module/libc++.so.1
 
       - name: Upload built libraries
-        if: matrix.os == 'macos'
+        if: matrix.platform == 'macos'
         uses: actions/upload-artifact@v4
         with:
           name: macos_grpcvpnserver

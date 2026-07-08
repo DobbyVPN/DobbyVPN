@@ -49,16 +49,6 @@ func startVpn(config, protocol string) int32 {
 	defer vpnMu.Unlock()
 	log.Debugf(common.Category, "locked")
 
-	if vpnClient != nil {
-		log.Debugf(common.Category, "Disconnect existing vpn client")
-		err := vpnClient.Disconnect()
-		if err != nil {
-			log.Debugf(common.Category, "Failed to disconnect existing vpn client: %v", err)
-			setVpnLastError(err.Error())
-			return -1
-		}
-	}
-
 	var device pkg.ProtocolDevice
 	var err error
 
@@ -79,6 +69,18 @@ func startVpn(config, protocol string) int32 {
 		log.Debugf(common.Category, "Failed to create device for %s protocol: %v", protocol, err)
 		setVpnLastError(err.Error())
 		return -1
+	}
+
+	if vpnClient != nil {
+		log.Debugf(common.Category, "Existing vpn client detected; trying protocol hot-switch")
+		if err := vpnClient.SwitchDevice(device); err == nil {
+			log.Debugf(common.Category, "Vpn client protocol hot-switch completed successfully")
+			return 0
+		} else {
+			log.Debugf(common.Category, "Protocol hot-switch failed; keeping current vpn client active: %v", err)
+			setVpnLastError(err.Error())
+			return -1
+		}
 	}
 
 	vpnClient = core.NewClient(device)

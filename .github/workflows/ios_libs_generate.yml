@@ -47,7 +47,7 @@ jobs:
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
-          go get golang.org/x/mobile/bind@$(go list -m -f '{{.Version}}' golang.org/x/mobile)
+          go get "golang.org/x/mobile/bind@$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
 
       - name: Build iOS XCFramework
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'

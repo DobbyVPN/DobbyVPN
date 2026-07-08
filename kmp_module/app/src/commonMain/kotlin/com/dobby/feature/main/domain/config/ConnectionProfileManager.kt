@@ -11,6 +11,8 @@ internal class ConnectionProfileManager(
     private val store = ConnectionProfileStore(repo, logger)
     private val applier = ConnectionProfileApplier(repo, logger)
 
+    fun getProfiles(): List<ConnectionProfile> = store.getProfiles()
+
     fun hasMultipleProfiles(): Boolean = store.hasMultipleProfiles()
 
     fun replaceProfilesAndApplyFirstAvailable(profiles: List<ConnectionProfile>): Boolean {
@@ -28,6 +30,22 @@ internal class ConnectionProfileManager(
 
         logger.log("[Profiles] No profile could be applied")
         return false
+    }
+
+    fun applyProfile(index: Int, reason: String): Boolean {
+        val profiles = store.getProfiles()
+        if (profiles.isEmpty()) {
+            logger.log("[Profiles] Cannot apply profile: no saved profiles reason=$reason")
+            return false
+        }
+        if (index !in profiles.indices) {
+            logger.log("[Profiles] Cannot apply profile: index=$index profiles=${profiles.size} reason=$reason")
+            return false
+        }
+
+        repo.setActiveConnectionProfileIndex(index)
+        logger.log("[Profiles] Applying selected profile index=$index profiles=${profiles.size} reason=$reason")
+        return applier.apply(profiles[index])
     }
 
     fun switchToNext(reason: String): Boolean {

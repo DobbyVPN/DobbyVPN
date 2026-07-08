@@ -11,10 +11,22 @@ import (
 )
 
 var linuxSocketMark int
+var defaultGatewayIP string
+var defaultInterfaceName string
 
 func SetLinuxSocketMark(mark int) {
 	linuxSocketMark = mark
 	log.Debugf(Category, "[Linux-Protect] SO_MARK=%d", mark)
+}
+
+func SetDefaultRoute(gatewayIP, interfaceName string, _ int) {
+	defaultGatewayIP = gatewayIP
+	defaultInterfaceName = interfaceName
+	log.Debugf(Category, "[Linux-Protect] default route gateway=%s iface=%s", gatewayIP, interfaceName)
+}
+
+func GetDefaultRoute() (gatewayIP, interfaceName string, ok bool) {
+	return defaultGatewayIP, defaultInterfaceName, defaultGatewayIP != "" && defaultInterfaceName != ""
 }
 
 type linuxProtector struct{}

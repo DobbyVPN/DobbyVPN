@@ -2,6 +2,7 @@ package interop.healthcheck
 
 import com.dobby.grpcproto.VpnGrpcKt
 import com.dobby.grpcproto.empty
+import com.dobby.grpcproto.measureTunnelProbeRequest
 import interop.exceptions.VpnServiceStatusException
 import io.grpc.ManagedChannel
 import io.grpc.StatusException
@@ -56,6 +57,22 @@ open class HealthCheckGrpcLibrary(channel: ManagedChannel) : HealthCheckLibrary 
         return runBlocking {
             try {
                 stub.stopHealthCheck(empty {})
+            } catch (e: StatusException) {
+                throw VpnServiceStatusException(e)
+            }
+        }
+    }
+
+    override fun MeasureTunnelProbeAverageLatencyMillis(timeoutMillis: Long): Long {
+        return runBlocking {
+            try {
+                val response = stub.measureTunnelProbeAverageLatencyMillis(
+                    measureTunnelProbeRequest {
+                        this.timeoutMillis = timeoutMillis
+                    }
+                )
+
+                response.averageLatencyMillis
             } catch (e: StatusException) {
                 throw VpnServiceStatusException(e)
             }

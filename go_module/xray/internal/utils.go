@@ -1,13 +1,44 @@
 package internal
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 
 	xrayLog "github.com/xtls/xray-core/common/log"
+
+	"go_module/dnscache"
 )
+
+const defaultXrayLogLevelName = "debug"
+
+func DefaultXrayLogLevel() xrayLog.Severity {
+	return xrayLog.Severity_Debug
+}
+
+func NoXrayLogLevel() xrayLog.Severity {
+	return xrayLog.Severity_Unknown
+}
+
+func XrayLogLevelName(level xrayLog.Severity) string {
+	switch level {
+	case xrayLog.Severity_Debug:
+		return "debug"
+	case xrayLog.Severity_Info:
+		return "info"
+	case xrayLog.Severity_Warning:
+		return "warning"
+	case xrayLog.Severity_Error:
+		return "error"
+	case xrayLog.Severity_Unknown:
+		return "none"
+	default:
+		return fmt.Sprintf("unknown(%d)", level)
+	}
+}
 
 // ExtractServerIP parses the generic VLESS JSON to find the remote server IP.
 func ExtractServerIP(configStr string) (string, error) {
@@ -43,7 +74,7 @@ func ExtractLogLevel(configStr string) (xrayLog.Severity, error) {
 	// Assuming standard Xray config structure where log[0] is the log settings
 	if log, ok := config["log"].(map[string]interface{}); ok && len(log) > 0 {
 		if loglevel, ok := log["loglevel"].(string); ok {
-			switch loglevel {
+			switch strings.ToLower(loglevel) {
 			case "debug":
 				return xrayLog.Severity_Debug, nil
 			case "info":
@@ -72,15 +103,9 @@ func resolveIP(addr string) (string, error) {
 		return "", errors.New("IPv6 address not supported; routing requires IPv4")
 	}
 
-	// If it's a domain, resolve it
-	ips, err := net.LookupIP(addr)
+	ip4, err := dnscache.ResolveIPv4(context.Background(), addr, dnscache.FastResolveTimeout, "xray")
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve xray address %q: %w", addr, err)
 	}
-	for _, ip := range ips {
-		if ip4 := ip.To4(); ip4 != nil {
-			return ip4.String(), nil
-		}
-	}
-	return "", errors.New("no IPv4 address found for domain")
+	return ip4.String(), nil
 }

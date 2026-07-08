@@ -6,9 +6,8 @@ import com.dobby.gomobile.dobbyvpn.Dobbyvpn
 import com.dobby.gomobile.dobbyvpn.SocketProtector
 
 object GoBackendWrapper {
-    fun startCloakClient(localHost: String, localPort: String, config: String, udp: Boolean) {
+    fun startCloakClient(localHost: String, localPort: String, config: String, udp: Boolean): Int =
         Dobbyvpn.startCloakClient(localHost, localPort, config, udp)
-    }
 
     fun stopCloakClient() {
         Dobbyvpn.stopCloakClient()
@@ -20,6 +19,14 @@ object GoBackendWrapper {
 
     fun clearGeoRoutingConf() {
         Dobbyvpn.clearGeoRoutingConf()
+    }
+
+    fun clearDNSCache() {
+        Dobbyvpn.clearDNSCache()
+    }
+
+    fun setDNSCacheEntries(entries: String): Int {
+        return Dobbyvpn.setDNSCacheEntries(entries).toInt()
     }
 
     fun initLogger(path: String) {
@@ -52,6 +59,10 @@ object GoBackendWrapper {
 
     fun stopHealthCheck() {
         Dobbyvpn.stopHealthCheck()
+    }
+
+    fun measureTunnelProbeAverageLatencyMillis(timeoutMillis: Long): Long {
+        return Dobbyvpn.measureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis)
     }
 
     fun getLastError(): String? = Dobbyvpn.getVpnLastError()?.ifEmpty { null }

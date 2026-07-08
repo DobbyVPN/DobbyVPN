@@ -1,9 +1,11 @@
 package cloak
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"go_module/common"
+	"go_module/dnscache"
 	"net"
 	"runtime"
 	"runtime/debug"
@@ -152,24 +154,21 @@ func StopCloakClient() {
 }
 
 func resolveRemoteHostIfNeeded(host string) (string, error) {
-	if net.ParseIP(host) != nil {
+	if ip := net.ParseIP(host); ip != nil && ip.To4() != nil {
 		log.Debugf(Category, "cloak client: RemoteHost '%s' is valid IPv4", host)
 		return host, nil
 	}
-
-	log.Debugf(Category, "cloak client: RemoteHost '%s' is not IPv4 -> resolving DNS...", host)
-
-	ips, err := net.LookupIP(host)
-	if err != nil || len(ips) == 0 {
-		return "", fmt.Errorf("DNS resolve failed: %w", err)
+	if ip, ok := dnscache.LookupIPv4(host, "cloak"); ok {
+		log.Debugf(Category, "cloak client: RemoteHost '%s' resolved from shared DNS cache -> %s", host, ip.String())
+		return ip.String(), nil
 	}
 
-	for _, ip := range ips {
-		if v4 := ip.To4(); v4 != nil {
-			log.Debugf(Category, "cloak client: DNS resolved '%s' -> %s", host, v4.String())
-			return v4.String(), nil
-		}
-	}
+	log.Debugf(Category, "cloak client: RemoteHost '%s' cache miss -> resolving DNS timeout=%s...", host, dnscache.FastResolveTimeout)
 
-	return "", fmt.Errorf("DNS resolved only IPv6, IPv4 required")
+	ip, err := dnscache.ResolveIPv4(context.Background(), host, dnscache.FastResolveTimeout, "cloak")
+	if err != nil {
+		return "", err
+	}
+	log.Debugf(Category, "cloak client: DNS resolved '%s' -> %s", host, ip.String())
+	return ip.String(), nil
 }

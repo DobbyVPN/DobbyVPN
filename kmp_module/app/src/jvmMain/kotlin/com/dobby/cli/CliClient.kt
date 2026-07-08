@@ -12,7 +12,9 @@ import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.ConnectionProfile
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
+import com.dobby.feature.main.domain.DnsPreflightResolverImpl
 import com.dobby.feature.main.domain.PermissionEventsChannel
+import com.dobby.feature.main.domain.ProtocolSelectionSettings
 import com.dobby.feature.main.domain.VpnManager
 import com.dobby.feature.main.domain.VpnManagerImpl
 import com.dobby.feature.main.domain.config.ConnectionProfileApplier
@@ -54,6 +56,7 @@ class CliClient {
         val outlineLibrary = RestartableOutlineGrpcLibrary(logger)
         val xrayLibrary = RestartableXrayGrpcLibrary(logger)
         val cloakLibrary = RestartableCloakGrpcLibrary(logger)
+        val dnsCacheLibrary = RestartableDnsCacheGrpcLibrary(logger)
         val loggerLibrary = RestartableLoggerGrpcLibrary(logger)
         val georoutingLibrary = RestartableGeoroutingGrpcLibrary(logger)
         val trustTunnelLibrary = RestartableTrustTunnelGrpcLibrary(logger)
@@ -88,6 +91,7 @@ class CliClient {
             logsRepository = logsRepository,
             healthCheckManager = healthCheckManager,
             configsProcessor = configsProcessor,
+            dnsPreflightResolver = DnsPreflightResolverImpl(dnsCacheLibrary, logger),
         )
     }
 
@@ -250,9 +254,9 @@ class CliClient {
         logsRepository.cleanupOldLogs()
         loggerManager.initLogger()
         connectionStateRepository.serviceStartedFlow.prepare()
-        vpnManager.start()
+        vpnManager.start(isProtocolProbe = false)
 
-        val connected = connectionStateRepository.serviceStartedFlow.awaitResult(SERVICE_START_TIMEOUT_MS)
+        val connected = connectionStateRepository.serviceStartedFlow.awaitResult(ProtocolSelectionSettings.SERVICE_START_TIMEOUT_MS)
         if (connected) {
             healthCheckManager.startHealthCheck()
         }
@@ -260,7 +264,7 @@ class CliClient {
     }
 
     private fun stopVpnRuntime() {
-        vpnManager.stop()
+        vpnManager.stop(isUserInitiated = false)
         healthCheckManager.stopHealthCheck()
         connectionStateRepository.tryUpdateStatus(VpnConnectionState.DISCONNECTED)
     }
@@ -338,7 +342,6 @@ class CliClient {
     private companion object {
         const val DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS = 15
         const val PROFILE_HEALTHCHECK_TIMEOUT_SECONDS = 30
-        const val SERVICE_START_TIMEOUT_MS = 90_000L
     }
 }
 

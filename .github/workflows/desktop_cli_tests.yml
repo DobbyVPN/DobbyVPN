@@ -75,7 +75,7 @@ jobs:
           fi
 
           chmod +x ./artifacts/service/ubuntu_grpcvpnserver
-          sudo env LD_LIBRARY_PATH=./artifacts/service ./artifacts/service/ubuntu_grpcvpnserver -port "$PORT" > grpcvpnserver.log 2>&1 &
+          sudo bash -c "env LD_LIBRARY_PATH=./artifacts/service ./artifacts/service/ubuntu_grpcvpnserver -port \"$PORT\" > grpcvpnserver.log 2>&1" &
           service_pid=$!
           trap 'sudo kill "$service_pid" 2>/dev/null || kill "$service_pid" 2>/dev/null || true; cat grpcvpnserver.log || true' EXIT
 
@@ -126,7 +126,7 @@ jobs:
           fi
 
           chmod +x ./artifacts/service/macos_grpcvpnserver
-          sudo ./artifacts/service/macos_grpcvpnserver -port "$PORT" > grpcvpnserver.log 2>&1 &
+          sudo bash -c "./artifacts/service/macos_grpcvpnserver -port \"$PORT\" > grpcvpnserver.log 2>&1" &
           service_pid=$!
           trap 'sudo kill "$service_pid" 2>/dev/null || kill "$service_pid" 2>/dev/null || true; cat grpcvpnserver.log || true' EXIT
 
