@@ -107,18 +107,44 @@ func NewTrustTunnelDevice(trusttunnelConfig string) (*TrustTunnelDevice, error) 
 	return d, nil
 }
 
-func (d *TrustTunnelDevice) Open(_ int, _ string) error {
+func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 	if d == nil {
 		return errors.New("trusttunnel device is not initialized")
 	}
 
-	err := d.trusttunnelInstance.Start(d.config)
+	var parsedConfig map[string]interface{}
+	if _, err := toml.Decode(d.config, &parsedConfig); err != nil {
+		return fmt.Errorf("failed to decode config for routing update: %w", err)
+	}
+
+	routingIface, ok := parsedConfig["routing"]
+	if !ok {
+		routingIface = make(map[string]interface{})
+		parsedConfig["routing"] = routingIface
+	}
+	routingMap, ok := routingIface.(map[string]interface{})
+	if !ok {
+		return errors.New("invalid routing section in config")
+	}
+
+	routingMap["routing_table_id"] = routingTableID
+	if uplinkIface != "" {
+		routingMap["uplink_interface"] = uplinkIface
+	}
+
+	buf := new(bytes.Buffer)
+	if err := toml.NewEncoder(buf).Encode(parsedConfig); err != nil {
+		return fmt.Errorf("failed to re-encode config with routing: %w", err)
+	}
+	finalConfig := buf.String()
+
+	err := d.trusttunnelInstance.Start(finalConfig)
 	if err != nil {
 		d.trusttunnelInstance.Stop()
 		return fmt.Errorf("failed to start trusttunnel: %w", err)
 	}
 
-	loglevel, err := internal.ExtractLogLevel(d.config)
+	loglevel, err := internal.ExtractLogLevel(finalConfig)
 	if err != nil {
 		log.Infof("trusttunnel", "[TrustTunnel] failed to parse log level, continuing without logs")
 	}
