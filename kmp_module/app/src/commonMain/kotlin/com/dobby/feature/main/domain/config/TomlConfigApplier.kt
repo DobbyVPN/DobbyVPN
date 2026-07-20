@@ -12,6 +12,19 @@ class TomlConfigApplier(
 ) {
     private val profileManager = ConnectionProfileManager(mainRepo, logger)
 
+    private fun preprocess(text: String): String {
+        val sectionRe = Regex("^\\|([A-Za-z_][\\w-]*)\\|\\s*$", RegexOption.MULTILINE)
+        
+        return sectionRe.replace(text) { match ->
+            val sectionName = match.groupValues[1]
+            when (sectionName) {
+                "endpoint" -> "[TrustTunnel.endpoint]"
+                "socks" -> "[TrustTunnel.listener.socks]"
+                else -> "[TrustTunnel.$sectionName]"
+            }
+        }
+    }
+
     fun apply(connectionConfig: String): Boolean {
         logger.log("Start parseToml()")
 
@@ -28,7 +41,7 @@ class TomlConfigApplier(
             return false
         }
 
-        return applyConfig(connectionConfig)
+        return applyConfig(preprocess(connectionConfig))
     }
 
     private fun applyConfig(connectionConfig: String): Boolean {

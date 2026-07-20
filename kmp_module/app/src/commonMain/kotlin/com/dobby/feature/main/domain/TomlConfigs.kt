@@ -214,6 +214,30 @@ data class ConnectionProfile(
 )
 
 @Serializable
+data class TrustTunnelEndpointConfig(
+    val hostname: String? = null,
+    val addresses: List<String> = emptyList(),
+    val custom_sni: String? = null,
+    val username: String? = null,
+    val password: String? = null,
+    val client_random: String? = null,
+    val skip_verification: Boolean? = null,
+    val upstream_protocol: String? = null,
+    val anti_dpi: Boolean? = null,
+    val dns_upstreams: List<String> = emptyList()
+)
+
+@Serializable
+data class TrustTunnelSocksConfig(
+    val address: String? = null
+)
+
+@Serializable
+data class TrustTunnelListenerConfig(
+    val socks: TrustTunnelSocksConfig? = null
+)
+
+@Serializable
 data class TrustTunnelConfig(
     val loglevel: String? = null,
     val vpn_mode: String? = null,
@@ -225,19 +249,9 @@ data class TrustTunnelConfig(
     val post_quantum_group_enabled: Boolean? = null,
     val postQuantumGroupEnabled: Boolean? = null,
     val exclusions: List<String> = emptyList(),
-    
-    val endpoint_hostname: String? = null,
-    val endpoint_addresses: List<String> = emptyList(),
-    val endpoint_custom_sni: String? = null,
-    val endpoint_username: String? = null,
-    val endpoint_password: String? = null,
-    val endpoint_client_random: String? = null,
-    val endpoint_skip_verification: Boolean? = null,
-    val endpoint_upstream_protocol: String? = null,
-    val endpoint_anti_dpi: Boolean? = null,
-    val endpoint_dns_upstreams: List<String> = emptyList(),
-    
-    val listener_socks_address: String? = null,
+
+    val endpoint: TrustTunnelEndpointConfig? = null,
+    val listener: TrustTunnelListenerConfig? = null
 )
 
 @Serializable

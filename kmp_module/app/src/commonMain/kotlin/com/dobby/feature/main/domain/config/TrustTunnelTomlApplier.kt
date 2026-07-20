@@ -61,19 +61,21 @@ internal class TrustTunnelTomlApplier(
             killswitch_allow_ports = config.killswitch_allow_ports ?: config.killswitchAllowPorts,
             post_quantum_group_enabled = config.post_quantum_group_enabled ?: config.postQuantumGroupEnabled,
             exclusions = config.exclusions.takeIf { it.isNotEmpty() },
-            endpoint = NestedEndpoint(
-                hostname = config.endpoint_hostname,
-                addresses = config.endpoint_addresses.takeIf { it.isNotEmpty() },
-                custom_sni = config.endpoint_custom_sni,
-                username = config.endpoint_username,
-                password = config.endpoint_password,
-                client_random = config.endpoint_client_random,
-                skip_verification = config.endpoint_skip_verification,
-                upstream_protocol = config.endpoint_upstream_protocol,
-                anti_dpi = config.endpoint_anti_dpi,
-                dns_upstreams = config.endpoint_dns_upstreams.takeIf { it.isNotEmpty() }
-            ),
-            listener = config.listener_socks_address?.let { NestedListener(NestedSocks(it)) }
+            endpoint = config.endpoint?.let {
+                NestedEndpoint(
+                    hostname = it.hostname,
+                    addresses = it.addresses.takeIf { it.isNotEmpty() },
+                    custom_sni = it.custom_sni,
+                    username = it.username,
+                    password = it.password,
+                    client_random = it.client_random,
+                    skip_verification = it.skip_verification,
+                    upstream_protocol = it.upstream_protocol,
+                    anti_dpi = it.anti_dpi,
+                    dns_upstreams = it.dns_upstreams.takeIf { it.isNotEmpty() }
+                )
+            },
+            listener = config.listener?.socks?.address?.let { NestedListener(NestedSocks(it)) }
         )
 
         val tomlString = try {
@@ -102,7 +104,7 @@ internal class TrustTunnelTomlApplier(
     }
 
     private fun extractAndSetServerPort(config: TrustTunnelConfig) {
-        val hostname = config.endpoint_hostname
+        val hostname = config.endpoint?.hostname
 
         if (hostname != null) {
             trustTunnelRepo.setServerPort(hostname)

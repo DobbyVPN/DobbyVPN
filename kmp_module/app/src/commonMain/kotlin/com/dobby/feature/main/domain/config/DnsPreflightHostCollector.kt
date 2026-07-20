@@ -50,7 +50,7 @@ private fun collectAwgHosts(payload: String): List<String> {
 
 private fun collectTrustTunnelHosts(payload: String): List<String> {
     val config = runCatching { Toml.decodeFromString<TrustTunnelConfig>(payload) }.getOrNull() ?: return emptyList()
-    return listOfNotNull(config.endpoint_hostname, config.endpoint_custom_sni) + config.endpoint_addresses
+    return listOfNotNull(config.endpoint?.hostname, config.endpoint?.custom_sni) + config.endpoint?.addresses.orEmpty()
 }
 
 private fun collectXrayHosts(payload: String): List<String> {
