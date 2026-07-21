@@ -34,6 +34,7 @@ jobs:
             go_module/dobby_bridge.dll
             go_module/libdobby_bridge.so
             go_module/libc++.so.1
+            go_module/wintun.dll
           key: ${{ runner.os }}-desktop-vpn-lib-${{ hashFiles('.go-version', 'go_module/**', 'Cloak/internal/**', '.github/workflows/desktop_libs_generate.yml') }}
 
       - name: Set up Go
@@ -91,6 +92,16 @@ jobs:
           python .github/scripts/desktop_build.py libs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --go-mod-tidy
         shell: bash
 
+      - name: Download wintun.dll for Windows
+        if: matrix.os == 'windows' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
+        working-directory: go_module
+        shell: bash
+        run: |
+          curl -#fLo wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
+          unzip wintun.zip wintun/bin/amd64/wintun.dll
+          cp wintun/bin/amd64/wintun.dll ./wintun.dll
+          rm -rf wintun.zip wintun
+
       - name: Upload built libraries
         if: matrix.platform == 'windows'
         uses: actions/upload-artifact@v4
@@ -99,6 +110,7 @@ jobs:
           path: |
             go_module/windows_grpcvpnserver.exe
             go_module/dobby_bridge.dll
+            go_module/wintun.dll
 
       - name: Upload built libraries
         if: matrix.platform == 'linux'
