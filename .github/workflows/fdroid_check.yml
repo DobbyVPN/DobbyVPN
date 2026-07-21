@@ -38,7 +38,7 @@ jobs:
       - name: Set up bootstrap Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.4'
+          go-version-file: .go-version
 
       - name: Read Android Go version
         id: android_go

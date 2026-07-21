@@ -16,6 +16,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let outlineInteractor: OutlineInteractor = OutlineInteractor()
     private let cloakInteractor: CloakInteractor = CloakInteractor()
     private let xrayInteractor: XRayInteractor = XRayInteractor()
+    private let trustTunnelInteractor: TrustTunnelInteractor = TrustTunnelInteractor()
 
     private var logs = NativeModuleHolder.logsRepository
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
@@ -444,6 +445,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 logs.writeLog(log: "[tunnel:\(tunnelId)] startXRay failed reason=\(reason): \(error.localizedDescription)")
                 if teardownOnFailure {
                     await teardownForStop(reason: "startXRay failure")
+                }
+                throw error
+            }
+        } else if vpnInterface == VpnInterface.trustTunnel {
+            do {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startTrustTunnel begin reason=\(reason)")
+                try trustTunnelInteractor.startTrustTunnel()
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startTrustTunnel success reason=\(reason)")
+            } catch {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] startTrustTunnel failed reason=\(reason): \(error.localizedDescription)")
+                if teardownOnFailure {
+                    await teardownForStop(reason: "startTrustTunnel failure")
                 }
                 throw error
             }
@@ -927,6 +940,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         xrayInteractor.stopXRay()
         logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] xray stop requested")
+
+        trustTunnelInteractor.stopTrustTunnel()
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] trusttunnel stop requested")
 
         logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] clearing geo routing config")
         Cloak_outlineClearGeoRoutingConf()

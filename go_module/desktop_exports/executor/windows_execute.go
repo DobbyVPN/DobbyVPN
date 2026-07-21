@@ -24,7 +24,7 @@ func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest
 	changes <- svc.Status{State: svc.StartPending}
 	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptSessionChange}
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", service.serverPort))
+	lis, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", service.serverPort))
 	if err != nil {
 		log.Debugf(common.Category, "[ERROR] failed to listen: %v", err)
 	}
@@ -59,10 +59,10 @@ func runService(port int) error {
 	return svc.Run("DobbyVPN vpn service", &managerService{serverPort: port})
 }
 
-func run(port int) error {
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+func run(port int) {
+	lis, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
-		return fmt.Errorf("failed to listen: %v", err)
+		panic(fmt.Sprintf("failed to listen: %v", err))
 	}
 	s := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
@@ -75,10 +75,8 @@ func run(port int) error {
 
 	log.Debugf(common.Category, "server listening at %v", lis.Addr())
 	if err := s.Serve(lis); err != nil {
-		return fmt.Errorf("failed to serve: %v", err)
+		panic(fmt.Sprintf("failed to serve: %v", err))
 	}
-
-	return nil
 }
 
 func (c *Executor) Execute(port int, mode string) {

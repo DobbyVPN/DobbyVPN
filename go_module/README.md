@@ -17,13 +17,17 @@ go mod download
 ### Windows
 
 ```bash
+wget https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.0/dobby_bridge-windows-x86_64.zip
+unzip dobby_bridge-windows-x86_64.zip lib/windows
 go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
 ```
 
-### Linux/
+### Linux
 
 ```bash
-go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
+wget https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.0/libdobby_bridge-linux-x86_64.zip
+unzip libdobby_bridge-linux-x86_64.zip
+CGO_LDFLAGS="-L." go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
 ```
 
 ### MacOS
@@ -44,9 +48,11 @@ gomobile init
 gomobile bind \
   -target=android/arm64 \
   -androidapi=26 \
+  -tags=static \
   -javapkg=com.dobby.gomobile \
-  -o ../kmp_module/app/build/generated/gomobile/backend.aar \
-  go_module/kotlin_exports
+  -ldflags="-s -w -buildid=" \
+  -o backend.aar \
+  ./kotlin_exports
 ```
 
 The Gradle `:app` module runs this `gomobile bind` step automatically before
@@ -59,7 +65,7 @@ Android compilation. The generated AAR replaces the previous manual
 go install golang.org/x/mobile/cmd/gomobile@latest
 gomobile init
 go get golang.org/x/mobile/bind@latest
-GO111MODULE=on gomobile bind -target=ios -o MyLibrary.xcframework ./ios_exports
+GO111MODULE=on gomobile bind -tags=static -target=ios -o MyLibrary.xcframework ./ios_exports
 ```
 
 ## RPC API reference
@@ -81,6 +87,11 @@ rpc CheckServerAlive (CheckServerAliveRequest)    returns (CheckServerAliveRespo
 // cloak.go
 rpc StartCloakClient (StartCloakClientRequest)    returns (Empty);
 rpc StopCloakClient (Empty)                       returns (Empty);
+
+// trusttunnel.go
+rpc GetTrustTunnelLastError(Empty)                returns (GetTrustTunnelLastErrorResponse);
+rpc StartTrustTunnel (StartTrustTunnelRequest)    returns (StartTrustTunnelResponse);
+rpc StopTrustTunnel (Empty)                       returns (Empty);
 
 // logger.go
 rpc InitLogger (InitLoggerRequest)                returns (Empty);

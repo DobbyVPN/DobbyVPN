@@ -1,6 +1,6 @@
 # doBBYVPN - do Better By VPN
 
-Yet another VPN client. Currently wraps around OutlineSDK & cloak.
+Yet another VPN client. Currently wraps around OutlineSDK, cloak, and TrustTunnel.
 XRay & AWG are in progress.
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
@@ -30,16 +30,23 @@ outbounds = [
 { tag = "proxy", protocol = "vless", settings = { vnext = [{address = "www.myserver.com", port = 443, users = [{id = "hi8WIXyln+amtgfQeT11zQ==", flow = "xtls-rprx-vision", encryption = "none"}]}]}, streamSettings = {network = "tcp",security = "reality", realitySettings = {show= false, fingerprint = "randomized", serverName = "secretSNI.com", publicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo=", shortId = "a1b2c3d4", spiderX = "/"}}},
 {tag = "direct", protocol = "freedom"}]
 
-[[Outline]] # Third variant
-Description = "My sneaky SS in Cloak"
-Cloak = true
-Server = "www.myserver.com"
-Password = "Qwerty123"
-BrowserSig = "chrome"
-EncryptionMethod = "plain"
-UID = "hi8WIXyln+amtgfQeT11zQ=="
-PublicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo="
-CDNWsUrlPath = "/JmJWXlmVXByXicD7DGrdMWV1btwHv0ARK0Yjoaig"
+[[TrustTunnel]] # Third variant
+loglevel = "info"
+vpn_mode = "general"
+killswitch_enabled = false
+post_quantum_group_enabled = true
+exclusions = []
+endpoint_hostname = "domain.com"
+endpoint_addresses = ["ip:port"]
+endpoint_custom_sni = "domain.com"
+endpoint_username = "your_username"
+endpoint_password = "your_password"
+endpoint_client_random = ""
+endpoint_skip_verification = true
+endpoint_upstream_protocol = "http3"
+endpoint_anti_dpi = true
+endpoint_dns_upstreams = []
+listener_socks_address = "127.0.0.1:10808"
 
 # Shared by all variants and kept at the end 
 [ExcludeIPs] # Optional
@@ -53,7 +60,7 @@ must start and pass latency probes through the tunnel; DobbyVPN then activates
 the working variant with the lowest average latency. If health check later
 reports that the active variant is no longer connected, DobbyVPN repeats the
 full probe-and-rank procedure until the user stops the VPN. Use the same
-`[[Outline]]`, `[[Xray]]`, or `[[AmneziaWG]]` section format even when the
+`[[Outline]]`, `[[Xray]]`, `[[AmneziaWG]]`, or `[[TrustTunnel]]` section format even when the
 configuration contains only one variant.
 
 **Clean ShadowSocks** (best performance)
@@ -138,6 +145,27 @@ outbounds = [
 IPs = [
 	"200.200.200.200/32" # IP adress or subnet that we want to exlude from vpn-routing
 ]
+```
+
+**TrustTunnel** ([more details](https://github.com/TrustTunnel/TrustTunnel))
+```toml
+[[TrustTunnel]]
+loglevel = "info"
+vpn_mode = "general"
+killswitch_enabled = false
+post_quantum_group_enabled = true
+exclusions = []
+endpoint_hostname = "domain.com"
+endpoint_addresses = ["ip:port"]
+endpoint_custom_sni = "domain.com"
+endpoint_username = "your_username"
+endpoint_password = "your_password"
+endpoint_client_random = ""
+endpoint_skip_verification = true
+endpoint_upstream_protocol = "http3"
+endpoint_anti_dpi = true
+endpoint_dns_upstreams = []
+listener_socks_address = "127.0.0.1:10808"
 ```
 
 Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nicely expressed Issues accordingly.

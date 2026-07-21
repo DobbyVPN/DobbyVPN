@@ -234,6 +234,25 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("isXrayEnabled", isXrayEnabled.toString())
     }
 
+    override fun getTrustTunnelConfig(): String = prefs.get("trustTunnelConfig", "")
+
+    override fun setTrustTunnelConfig(config: String) {
+        prefs.put("trustTunnelConfig", config)
+    }
+
+    override fun getIsTrustTunnelEnabled(): Boolean {
+        return prefs.get("isTrustTunnelEnabled", "false").equals("true")
+    }
+
+    override fun setIsTrustTunnelEnabled(isTrustTunnelEnabled: Boolean) {
+        if (isTrustTunnelEnabled) {
+            setVpnInterface(VpnInterface.TRUST_TUNNEL)
+        } else {
+            setVpnInterface(VpnInterface.DEFAULT_VALUE)
+        }
+        prefs.put("isTrustTunnelEnabled", isTrustTunnelEnabled.toString())
+    }
+
     override fun couldStart(): Boolean {
         return healthCheckLibrary.CouldStart()
     }

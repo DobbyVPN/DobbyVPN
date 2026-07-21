@@ -8,6 +8,7 @@ import (
 	"go_module/core/pkg"
 	"go_module/log"
 	"go_module/outline"
+	"go_module/trusttunnel"
 	"go_module/xray"
 	"os"
 	"runtime/debug"
@@ -95,6 +96,8 @@ func newProtocolDevice(transportConfig string, protocol string) (pkg.ProtocolDev
 		return xray.NewXrayDevice(transportConfig)
 	case "outline":
 		return outline.NewOutlineDevice(transportConfig)
+	case "trusttunnel":
+		return trusttunnel.NewTrustTunnelDevice(transportConfig)
 	default:
 		log.Debugf("ios_exports", "NewVpnClient() failed: unsupported protocol")
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)

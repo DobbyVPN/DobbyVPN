@@ -11,6 +11,8 @@ import com.dobby.feature.main.domain.clearAwgConfig
 import com.dobby.feature.main.domain.clearCloakConfig
 import com.dobby.feature.main.domain.clearOutlineConfig
 import com.dobby.feature.main.domain.clearXrayConfig
+import com.dobby.feature.main.domain.clearTrustTunnelConfig
+import com.dobby.feature.main.domain.TrustTunnelConfig
 import net.peanuuutz.tomlkt.Toml
 import net.peanuuutz.tomlkt.decodeFromString
 
@@ -22,6 +24,7 @@ internal class ConnectionProfileApplier(
     private val cloakApplier = CloakTomlApplier(repo, logger)
     private val awgApplier = AmneziaWGTomlApplier(repo, repo, logger)
     private val xrayApplier = XrayTomlApplier(repo, logger)
+    private val trustTunnelApplier = TrustTunnelTomlApplier(repo, logger)
 
     fun apply(profile: ConnectionProfile): Boolean {
         logger.log(
@@ -35,6 +38,7 @@ internal class ConnectionProfileApplier(
             VpnInterface.CLOAK_OUTLINE -> applyOutline(profile)
             VpnInterface.AMNEZIA_WG -> applyAwg(profile)
             VpnInterface.XRAY -> applyXray(profile)
+            VpnInterface.TRUST_TUNNEL -> applyTrustTunnel(profile)
             VpnInterface.NONE -> {
                 repo.setVpnInterface(VpnInterface.NONE)
                 false
@@ -47,6 +51,7 @@ internal class ConnectionProfileApplier(
         repo.clearCloakConfig()
         repo.clearXrayConfig()
         repo.clearAwgConfig()
+        repo.clearTrustTunnelConfig()
     }
 
     private fun applyOutline(profile: ConnectionProfile): Boolean {
@@ -81,5 +86,15 @@ internal class ConnectionProfileApplier(
         }.getOrNull() ?: return false
 
         return xrayApplier.apply(config)
+    }
+
+    private fun applyTrustTunnel(profile: ConnectionProfile): Boolean {
+        val config = runCatching {
+            Toml.decodeFromString<TrustTunnelConfig>(profile.payload)
+        }.onFailure { e ->
+            logger.log("[Profiles] Failed to decode TrustTunnel profile: ${e.message}")
+        }.getOrNull() ?: return false
+
+        return trustTunnelApplier.apply(config)
     }
 }

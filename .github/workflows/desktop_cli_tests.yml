@@ -75,7 +75,7 @@ jobs:
           fi
 
           chmod +x ./artifacts/service/ubuntu_grpcvpnserver
-          sudo ./artifacts/service/ubuntu_grpcvpnserver -port "$PORT" > grpcvpnserver.log 2>&1 &
+          sudo bash -c "env LD_LIBRARY_PATH=./artifacts/service ./artifacts/service/ubuntu_grpcvpnserver -port \"$PORT\" > grpcvpnserver.log 2>&1" &
           service_pid=$!
           trap 'sudo kill "$service_pid" 2>/dev/null || kill "$service_pid" 2>/dev/null || true; cat grpcvpnserver.log || true' EXIT
 
@@ -126,7 +126,7 @@ jobs:
           fi
 
           chmod +x ./artifacts/service/macos_grpcvpnserver
-          sudo ./artifacts/service/macos_grpcvpnserver -port "$PORT" > grpcvpnserver.log 2>&1 &
+          sudo bash -c "./artifacts/service/macos_grpcvpnserver -port \"$PORT\" > grpcvpnserver.log 2>&1" &
           service_pid=$!
           trap 'sudo kill "$service_pid" 2>/dev/null || kill "$service_pid" 2>/dev/null || true; cat grpcvpnserver.log || true' EXIT
 
@@ -218,6 +218,8 @@ jobs:
           } finally {
             if ($serviceProcess -and -not $serviceProcess.HasExited) {
               Stop-Process -Id $serviceProcess.Id -Force
+            } elseif ($serviceProcess -and $serviceProcess.HasExited) {
+              Write-Host "Service exited early with code: $($serviceProcess.ExitCode)"
             }
             if (Test-Path $serviceOut) { Get-Content $serviceOut }
             if (Test-Path $serviceErr) { Get-Content $serviceErr }

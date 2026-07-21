@@ -22,12 +22,18 @@ service Vpn {
   rpc StartXray (StartXrayRequest)   returns (StartXrayResponse);
   rpc StopXray (Empty)               returns (Empty);
 
+  // trusttunnel.go
+  rpc GetTrustTunnelLastError(Empty)             returns (GetTrustTunnelLastErrorResponse);
+  rpc StartTrustTunnel (StartTrustTunnelRequest) returns (StartTrustTunnelResponse);
+  rpc StopTrustTunnel (Empty)                    returns (Empty);
+
   // health_check.go
   rpc CouldStart (Empty)                        returns (CouldStartResponce);
   rpc GetConnectionState (Empty)                returns (GetConnectionStateResponce);
   rpc InitHealthCheck (Empty)  					returns (Empty);
   rpc StartHealthCheck (Empty)                  returns (Empty);
   rpc StopHealthCheck (Empty)                   returns (Empty);
+  rpc CheckServerAlive (CheckServerAliveRequest) returns (CheckServerAliveResponce);
   rpc MeasureTunnelProbeAverageLatencyMillis (MeasureTunnelProbeRequest) returns (MeasureTunnelProbeResponse);
 
   // cloak.go
@@ -77,6 +83,18 @@ message StartXrayResponse {
   int32 result = 1;
 }
 
+message GetTrustTunnelLastErrorResponse {
+  string error = 1;
+}
+
+message StartTrustTunnelRequest {
+  string config = 1;
+}
+
+message StartTrustTunnelResponse {
+  int32 result = 1;
+}
+
 message CouldStartResponce {
   bool result = 1;
 }
@@ -123,6 +141,15 @@ message NetCheckResponse {
 
 message SetupTelemetryAttributesRequest {
   string config = 1;
+}
+
+message CheckServerAliveRequest {
+  string address = 1;
+  int32 port = 2;
+}
+
+message CheckServerAliveResponce {
+  int32 result = 1;
 }
 
 message SetDNSCacheEntriesRequest {
