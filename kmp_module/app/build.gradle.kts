@@ -310,6 +310,7 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         "bind",
         "-target=android/arm64",
         "-androidapi=26",
+        "-tags=static",
         "-javapkg=com.dobby.gomobile",
         "-ldflags=-s -w -buildid=",
         "-o=${outputFile.absolutePath}",

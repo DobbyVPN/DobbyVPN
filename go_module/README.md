@@ -48,9 +48,11 @@ gomobile init
 gomobile bind \
   -target=android/arm64 \
   -androidapi=26 \
+  -tags=static \
   -javapkg=com.dobby.gomobile \
-  -o ../kmp_module/app/build/generated/gomobile/backend.aar \
-  go_module/kotlin_exports
+  -ldflags="-s -w -buildid=" \
+  -o backend.aar \
+  ./kotlin_exports
 ```
 
 The Gradle `:app` module runs this `gomobile bind` step automatically before
@@ -63,7 +65,7 @@ Android compilation. The generated AAR replaces the previous manual
 go install golang.org/x/mobile/cmd/gomobile@latest
 gomobile init
 go get golang.org/x/mobile/bind@latest
-GO111MODULE=on gomobile bind -target=ios -o MyLibrary.xcframework ./ios_exports
+GO111MODULE=on gomobile bind -tags=static -target=ios -o MyLibrary.xcframework ./ios_exports
 ```
 
 ## RPC API reference
