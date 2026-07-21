@@ -31,7 +31,7 @@ jobs:
             go_module/windows_grpcvpnserver.exe
             go_module/ubuntu_grpcvpnserver
             go_module/macos_grpcvpnserver
-            go_module/libdobby_bridge.dll
+            go_module/dobby_bridge.dll
             go_module/libdobby_bridge.so
             go_module/libc++.so.1
           key: ${{ runner.os }}-desktop-vpn-lib-${{ hashFiles('.go-version', 'go_module/**', 'Cloak/internal/**', '.github/workflows/desktop_libs_generate.yml') }}
