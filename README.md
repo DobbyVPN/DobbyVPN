@@ -36,17 +36,19 @@ vpn_mode = "general"
 killswitch_enabled = false
 post_quantum_group_enabled = true
 exclusions = []
-endpoint_hostname = "domain.com"
-endpoint_addresses = ["ip:port"]
-endpoint_custom_sni = "domain.com"
-endpoint_username = "your_username"
-endpoint_password = "your_password"
-endpoint_client_random = ""
-endpoint_skip_verification = true
-endpoint_upstream_protocol = "http3"
-endpoint_anti_dpi = true
-endpoint_dns_upstreams = []
-listener_socks_address = "127.0.0.1:10808"
+|endpoint|
+hostname = "domain.com"
+addresses = ["ip:port"]
+custom_sni = "domain.com"
+username = "your_username"
+password = "your_password"
+client_random = ""
+skip_verification = true
+upstream_protocol = "http3"
+anti_dpi = true
+dns_upstreams = []
+|socks|
+address = "127.0.0.1:10808"
 
 # Shared by all variants and kept at the end 
 [ExcludeIPs] # Optional
@@ -155,17 +157,19 @@ vpn_mode = "general"
 killswitch_enabled = false
 post_quantum_group_enabled = true
 exclusions = []
-endpoint_hostname = "domain.com"
-endpoint_addresses = ["ip:port"]
-endpoint_custom_sni = "domain.com"
-endpoint_username = "your_username"
-endpoint_password = "your_password"
-endpoint_client_random = ""
-endpoint_skip_verification = true
-endpoint_upstream_protocol = "http3"
-endpoint_anti_dpi = true
-endpoint_dns_upstreams = []
-listener_socks_address = "127.0.0.1:10808"
+|endpoint|
+hostname = "domain.com"
+addresses = ["ip:port"]
+custom_sni = "domain.com"
+username = "your_username"
+password = "your_password"
+client_random = ""
+skip_verification = true
+upstream_protocol = "http3"
+anti_dpi = true
+dns_upstreams = []
+|socks|
+address = "127.0.0.1:10808"
 ```
 
 Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nicely expressed Issues accordingly.
