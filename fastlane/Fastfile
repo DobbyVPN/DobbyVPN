@@ -101,7 +101,7 @@ platform :ios do
   ARCHIVE    = File.expand_path("../swift_module/build/archive.xcarchive", __dir__)
 
   IPA_NAME   = "DobbyVPN.ipa"
-  TEAM_ID    = "F6CHJX72K5"
+  TEAM_ID    = ENV['APPLE_TEAM_ID']
   BUNDLE_ID  = "vpn.dobby.app"
   BUNDLE_ID_TUNNEL = "vpn.dobby.app.tunnel"
 

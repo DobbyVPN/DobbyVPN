@@ -30,6 +30,8 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let telemetryAttributesKey = "telemetryAttributesKey"
     private let healthCheckStateKey = "healthCheckStateKey"
     private let healthCheckStateUpdatedAtKey = "healthCheckStateUpdatedAtKey"
+    private let isTrustTunnelEnabledKey = "isTrustTunnelEnabledKey"
+    private let trustTunnelConfigKey = "trustTunnelConfigKey"
 
     public func getConnectionURL() -> String {
         return userDefaults.string(forKey: connectionURLKey) ?? ""
@@ -160,6 +162,8 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         switch userDefaults.string(forKey: vpnInterfaceKey) ?? "CLOAK_OUTLINE" {
         case "XRAY":
             return VpnInterface.xray
+        case "TRUST_TUNNEL":
+            return VpnInterface.trustTunnel
         case "NONE":
             return VpnInterface.none
         default:
@@ -171,6 +175,8 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         let value: String
         if vpnInterface == VpnInterface.xray {
             value = "XRAY"
+        } else if vpnInterface == VpnInterface.trustTunnel {
+            value = "TRUST_TUNNEL"
         } else if vpnInterface == VpnInterface.none {
             value = "NONE"
         } else {
@@ -196,6 +202,23 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         setVpnInterface(vpnInterface: isXrayEnabled ? VpnInterface.xray : VpnInterface.cloakOutline)
         userDefaults.set(isXrayEnabled, forKey: isXrayEnabledKey)
 
+    }
+
+    public func getTrustTunnelConfig() -> String {
+        return userDefaults.string(forKey: trustTunnelConfigKey) ?? ""
+    }
+
+    public func setTrustTunnelConfig(config: String) {
+        userDefaults.set(config, forKey: trustTunnelConfigKey)
+    }
+
+    public func getIsTrustTunnelEnabled() -> Bool {
+        return userDefaults.bool(forKey: isTrustTunnelEnabledKey)
+    }
+
+    public func setIsTrustTunnelEnabled(isTrustTunnelEnabled: Bool) {
+        setVpnInterface(vpnInterface: isTrustTunnelEnabled ? VpnInterface.trustTunnel : VpnInterface.cloakOutline)
+        userDefaults.set(isTrustTunnelEnabled, forKey: isTrustTunnelEnabledKey)
     }
 
     public func couldStart() -> Bool {

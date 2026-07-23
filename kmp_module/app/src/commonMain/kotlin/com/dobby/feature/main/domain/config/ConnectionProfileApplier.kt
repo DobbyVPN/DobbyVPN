@@ -9,6 +9,8 @@ import com.dobby.feature.main.domain.XrayClientConfig
 import com.dobby.feature.main.domain.clearCloakConfig
 import com.dobby.feature.main.domain.clearOutlineConfig
 import com.dobby.feature.main.domain.clearXrayConfig
+import com.dobby.feature.main.domain.clearTrustTunnelConfig
+import com.dobby.feature.main.domain.TrustTunnelConfig
 import net.peanuuutz.tomlkt.Toml
 import net.peanuuutz.tomlkt.decodeFromString
 
@@ -19,6 +21,7 @@ internal class ConnectionProfileApplier(
     private val outlineApplier = OutlineTomlApplier(repo, repo, repo, logger)
     private val cloakApplier = CloakTomlApplier(repo, logger)
     private val xrayApplier = XrayTomlApplier(repo, logger)
+    private val trustTunnelApplier = TrustTunnelTomlApplier(repo, logger)
 
     fun apply(profile: ConnectionProfile): Boolean {
         logger.log(
@@ -31,6 +34,7 @@ internal class ConnectionProfileApplier(
         return when (profile.protocol) {
             VpnInterface.CLOAK_OUTLINE -> applyOutline(profile)
             VpnInterface.XRAY -> applyXray(profile)
+            VpnInterface.TRUST_TUNNEL -> applyTrustTunnel(profile)
             VpnInterface.NONE -> {
                 repo.setVpnInterface(VpnInterface.NONE)
                 false
@@ -42,6 +46,7 @@ internal class ConnectionProfileApplier(
         repo.clearOutlineConfig()
         repo.clearCloakConfig()
         repo.clearXrayConfig()
+        repo.clearTrustTunnelConfig()
     }
 
     private fun applyOutline(profile: ConnectionProfile): Boolean {
@@ -65,5 +70,15 @@ internal class ConnectionProfileApplier(
         }.getOrNull() ?: return false
 
         return xrayApplier.apply(config)
+    }
+
+    private fun applyTrustTunnel(profile: ConnectionProfile): Boolean {
+        val config = runCatching {
+            Toml.decodeFromString<TrustTunnelConfig>(profile.payload)
+        }.onFailure { e ->
+            logger.log("[Profiles] Failed to decode TrustTunnel profile: ${e.message}")
+        }.getOrNull() ?: return false
+
+        return trustTunnelApplier.apply(config)
     }
 }

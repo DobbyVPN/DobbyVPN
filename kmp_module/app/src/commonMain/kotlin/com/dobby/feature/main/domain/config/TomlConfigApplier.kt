@@ -12,6 +12,19 @@ class TomlConfigApplier(
 ) {
     private val profileManager = ConnectionProfileManager(mainRepo, logger)
 
+    private fun preprocess(text: String): String {
+        val sectionRe = Regex("^\\|([A-Za-z_][\\w-]*)\\|\\s*$", RegexOption.MULTILINE)
+
+        return sectionRe.replace(text) { match ->
+            val sectionName = match.groupValues[1]
+            when (sectionName) {
+                "endpoint" -> "[TrustTunnel.endpoint]"
+                "socks" -> "[TrustTunnel.listener.socks]"
+                else -> "[TrustTunnel.$sectionName]"
+            }
+        }
+    }
+
     fun apply(connectionConfig: String): Boolean {
         logger.log("Start parseToml()")
 
@@ -22,13 +35,13 @@ class TomlConfigApplier(
 
         if (!hasProtocolHeaders(connectionConfig)) {
             logger.log(
-                "Unsupported config: expected protocol sections [[Outline]] or [[Xray]]. " +
+                "Unsupported config: expected protocol sections [[Outline]], [[Xray]], or [[TrustTunnel]]. " +
                     "Legacy single-table protocol sections are not supported."
             )
             return false
         }
 
-        return applyConfig(connectionConfig)
+        return applyConfig(preprocess(connectionConfig))
     }
 
     private fun applyConfig(connectionConfig: String): Boolean {
@@ -81,17 +94,19 @@ class TomlConfigApplier(
         val headerCounts = headers.groupingBy { it }.eachCount()
         if (
             headerCounts.getOrElse("Outline") { 0 } != root.Outline.size ||
-            headerCounts.getOrElse("Xray") { 0 } != root.Xray.size
+            headerCounts.getOrElse("Xray") { 0 } != root.Xray.size ||
+            headerCounts.getOrElse("TrustTunnel") { 0 } != root.TrustTunnel.size
         ) {
             logger.log(
                 "Invalid TOML config: protocol header counts do not match parsed blocks " +
-                    "headers=$headerCounts parsed={Outline=${root.Outline.size}, Xray=${root.Xray.size}}"
+                    "headers=$headerCounts parsed={Outline=${root.Outline.size}, Xray=${root.Xray.size}, TrustTunnel=${root.TrustTunnel.size}}"
             )
             return null
         }
 
         var outlineIndex = 0
         var xrayIndex = 0
+        var trustTunnelIndex = 0
 
         return headers.mapIndexed { index, name ->
             when (name) {
@@ -111,12 +126,21 @@ class TomlConfigApplier(
                         payload = Toml.encodeToString(it)
                     )
                 }
+                "TrustTunnel" -> root.TrustTunnel[trustTunnelIndex++].let {
+                    ConnectionProfile(
+                        protocol = VpnInterface.TRUST_TUNNEL,
+                        description = null,
+                        sourceIndex = index,
+                        payload = Toml.encodeToString(it)
+                    )
+                }
                 else -> error("Unexpected protocol header: $name")
             }
         }
     }
 
     private companion object {
-        val protocolHeaderRegex = Regex("""(?m)^\s*\[\[\s*(Outline|Xray)\s*]]""")
+        val protocolHeaderRegex = Regex("""(?m)^\s*\[\[\s*(Outline|Xray|TrustTunnel)\s*]]""")
     }
+
 }

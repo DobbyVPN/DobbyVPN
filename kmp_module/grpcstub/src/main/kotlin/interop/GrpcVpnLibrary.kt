@@ -6,6 +6,7 @@ import interop.georouting.GeoroutingGrpcLibrary
 import interop.healthcheck.HealthCheckGrpcLibrary
 import interop.logger.LoggerGrpcLibrary
 import interop.outline.OutlineGrpcLibrary
+import interop.trusttunnel.TrustTunnelGrpcLibrary
 import interop.xray.XrayGrpcLibrary
 import io.grpc.ManagedChannelBuilder
 import java.io.Closeable
@@ -22,6 +23,7 @@ object GrpcVpnLibrary: Closeable {
 
     val outlineGrpcLibrary = OutlineGrpcLibrary(channel)
     val xrayGrpcLibrary = XrayGrpcLibrary(channel)
+    val trustTunnelGrpcLibrary = TrustTunnelGrpcLibrary(channel)
     val cloakGrpcLibrary = CloakGrpcLibrary(channel)
     val healthCheckGrpcLibrary = HealthCheckGrpcLibrary(channel)
     val dnsCacheGrpcLibrary = DnsCacheGrpcLibrary(channel)

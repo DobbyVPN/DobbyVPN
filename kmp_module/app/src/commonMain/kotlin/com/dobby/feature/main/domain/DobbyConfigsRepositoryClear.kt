@@ -20,6 +20,10 @@ fun DobbyConfigsRepositoryXray.clearXrayConfig() {
     setXrayConfig("")
 }
 
+fun DobbyConfigsRepositoryTrustTunnel.clearTrustTunnelConfig() {
+    setIsTrustTunnelEnabled(false)
+    setTrustTunnelConfig("")
+}
 
 fun DobbyConfigsRepository.clearVpnConfig() {
     setVpnInterface(VpnInterface.NONE)
@@ -28,4 +32,5 @@ fun DobbyConfigsRepository.clearVpnConfig() {
     clearOutlineConfig()
     clearCloakConfig()
     clearXrayConfig()
+    clearTrustTunnelConfig()
 }

@@ -13,6 +13,7 @@ import (
 	"go_module/core/pkg"
 	"go_module/log"
 	"go_module/outline"
+	"go_module/trusttunnel"
 	"go_module/xray"
 
 	"golang.org/x/sys/unix"
@@ -85,6 +86,8 @@ func newProtocolDevice(config string, protocol string) (pkg.ProtocolDevice, erro
 		return xray.NewXrayDevice(config)
 	case "outline":
 		return outline.NewOutlineDevice(config)
+	case "trusttunnel":
+		return trusttunnel.NewTrustTunnelDevice(config)
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}

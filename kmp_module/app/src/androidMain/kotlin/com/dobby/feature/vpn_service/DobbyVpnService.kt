@@ -22,6 +22,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.koin.android.ext.android.inject
 import java.util.*
+import com.dobby.feature.vpn_service.domain.trusttunnel.TrustTunnelInteractor
+
+const val IS_FROM_UI = "isLaunchedFromUi"
 
 class DobbyVpnService : VpnService() {
     companion object {
@@ -46,6 +49,7 @@ class DobbyVpnService : VpnService() {
     private val cloakConnectInteractor: CloakConnectionInteractor by inject()
     private val outlineInteractor: OutlineInteractor by inject()
     private val xrayInteractor: XrayInteractor by inject()
+    private val trustTunnelInteractor: TrustTunnelInteractor by inject()
     private val dobbyConfigsRepository: DobbyConfigsRepository by inject()
     private val connectionState: ConnectionStateRepository by inject()
 
@@ -107,12 +111,12 @@ class DobbyVpnService : VpnService() {
                 "isProtocolProbe=$isProtocolProbe) vpnInterface=${vpnInterface?.fd}"
         )
 
-        startService(isProtocolProbe)
+        startService(intent, isProtocolProbe)
 
         return START_NOT_STICKY
     }
 
-    fun startService(isProtocolProbe: Boolean) {
+    fun startService(intent: Intent? = null, isProtocolProbe: Boolean) {
         logger.log(
             "[svc:$serviceId] startService(isProtocolProbe=$isProtocolProbe) vpnInterface=${vpnInterface?.fd}"
         )
@@ -141,6 +145,7 @@ class DobbyVpnService : VpnService() {
 
                 geoRouting.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
                 startConfiguredProtocol(
+                    intent = intent,
                     isProtocolProbe = isProtocolProbe,
                     preserveActiveTunnelOnProbeFailure = canPreserveActiveTunnelOnProbeFailure
                 )
@@ -168,6 +173,7 @@ class DobbyVpnService : VpnService() {
     }
 
     private suspend fun startConfiguredProtocol(
+        intent: Intent?,
         isProtocolProbe: Boolean,
         preserveActiveTunnelOnProbeFailure: Boolean,
     ): Boolean {
@@ -181,6 +187,7 @@ class DobbyVpnService : VpnService() {
                 isProtocolProbe = isProtocolProbe,
                 preserveActiveTunnelOnProbeFailure = preserveActiveTunnelOnProbeFailure,
             )
+            VpnInterface.TRUST_TUNNEL -> startTrustTunnel(intent)
             VpnInterface.NONE -> startNone()
         }
         activeInterface = if (started) {
@@ -274,6 +281,28 @@ class DobbyVpnService : VpnService() {
         return false
     }
 
+    private suspend fun startTrustTunnel(intent: Intent?): Boolean {
+        val isServiceStartedFromUi = intent?.getBooleanExtra(IS_FROM_UI, false) ?: false
+        val shouldTurnOn = dobbyConfigsRepository.getIsTrustTunnelEnabled()
+
+        if (!shouldTurnOn && isServiceStartedFromUi) {
+            connectionState.updateServiceStarted(false)
+            teardownVpn()
+            stopSelf()
+            return false
+        }
+
+        if (!trustTunnelInteractor.startTrustTunnel(instance)) {
+            connectionState.updateServiceStarted(false)
+            teardownVpn()
+            stopSelf()
+            return false
+        }
+
+        connectionState.updateServiceStarted(true)
+        return true
+    }
+
     fun stopService() {
         logger.log("[svc:$serviceId] stopService() vpnInterface=${vpnInterface?.fd}")
         runBlocking {
@@ -303,6 +332,11 @@ class DobbyVpnService : VpnService() {
             xrayInteractor.stopXray(instance)
         }.onFailure { e ->
             logger.log("[svc:$serviceId] stopProtocols(): xray disconnect warning: ${e.message}")
+        }
+        runCatching {
+            trustTunnelInteractor.stopTrustTunnel(instance)
+        }.onFailure { e ->
+            logger.log("[svc:$serviceId] stopProtocols(): trusttunnel disconnect warning: ${e.message}")
         }
         runCatching {
             logger.log("Stopping Cloak client (if running)...")

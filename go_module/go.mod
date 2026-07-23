@@ -6,7 +6,10 @@ replace github.com/cbeuw/Cloak => ./modules/Cloak
 
 replace github.com/xjasonlyu/tun2socks/v2/log => ./go_module/log
 
+replace trusttunnel-go => github.com/DobbyVPN/go-go-tunnel v1.0.0
+
 require (
+	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c
 	github.com/cbeuw/Cloak v0.0.0-00010101000000-000000000000
 	github.com/jackpal/gateway v1.1.1
 	github.com/matsuridayo/libneko v0.0.0-20240702024904-1c47a3af7199
@@ -26,8 +29,9 @@ require (
 	golang.org/x/sys v0.46.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
-	google.golang.org/grpc v1.81.1
+	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
+	trusttunnel-go v0.0.0-00010101000000-000000000000
 )
 
 require (

@@ -71,6 +71,7 @@ class DobbyVpnService(
     private val logsRepository: LogsRepository,
     private val outlineLibrary: OutlineLibrary,
     private val xrayLibrary: XrayLibrary,
+    private val trustTunnelLibrary: interop.trusttunnel.TrustTunnelLibrary,
     private val cloakLibrary: CloakLibrary,
     private val georoutingLibrary: GeoroutingLibrary
 ) {
@@ -145,6 +146,7 @@ class DobbyVpnService(
     private fun stopProtocols() {
         stopCloakOutline()
         stopXray()
+        stopTrustTunnel()
         stopNone()
     }
 
@@ -159,6 +161,7 @@ class DobbyVpnService(
         when (runningInterface) {
             VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
             VpnInterface.XRAY -> startXray()
+            VpnInterface.TRUST_TUNNEL -> startTrustTunnel()
             VpnInterface.NONE -> startNone()
         }
 
@@ -263,6 +266,30 @@ class DobbyVpnService(
     private fun startNone(): Boolean {
         logger.log("[WARNING] There is no VPN, that can be started")
         return false
+    }
+
+    private fun startTrustTunnel(): Boolean {
+        val config = dobbyConfigsRepository.getTrustTunnelConfig()
+        logger.log("startTrustTunnel with config length: ${config.length}")
+        if (config.isEmpty()) {
+            logger.log("TrustTunnel config is empty, cannot start")
+            return false
+        }
+        return runBlocking {
+            val result = trustTunnelLibrary.StartTrustTunnel(config)
+            if (result == 0) {
+                logger.log("TrustTunnel connection established successfully")
+                true
+            } else {
+                logger.log("TrustTunnel connection FAILED: ${trustTunnelLibrary.GetTrustTunnelLastError()}")
+                false
+            }
+        }
+    }
+
+    private fun stopTrustTunnel() {
+        logger.log("stopTrustTunnel")
+        trustTunnelLibrary.StopTrustTunnel()
     }
 
     private fun stopNone() {

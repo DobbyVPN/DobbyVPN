@@ -20,6 +20,8 @@ Alias=vpnserver.service
 WantedBy=multi-user.target
 ```
 
+> **Note**: The `libdobby_bridge.so` must be placed in the same directory as the executable, or you can add `Environment="LD_LIBRARY_PATH=<Directory of libdobby_bridge.so>"` to the `[Service]` section.
+
 It can be created with symbolic link
 
 ```bash
@@ -106,6 +108,8 @@ sc.exe create "DobbyVPN Server" binPath="...\windows_grpcvpnserver.exe -mode=ser
 sc.exe sidtype "DobbyVPN Server" unrestricted
 sc.exe start "DobbyVPN Server"
 ```
+
+> **Note**: Ensure that `dobby_bridge.dll` is placed in the same directory as `windows_grpcvpnserver.exe` so the service can load the dynamic library.
 
 ### Stop vpn service
 

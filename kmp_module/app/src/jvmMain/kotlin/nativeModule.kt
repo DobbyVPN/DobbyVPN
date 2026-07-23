@@ -17,6 +17,7 @@ import interop.georouting.GeoroutingLibrary
 import interop.healthcheck.HealthCheckLibrary
 import interop.logger.LoggerLibrary
 import interop.outline.OutlineLibrary
+import interop.trusttunnel.TrustTunnelLibrary
 import interop.xray.XrayLibrary
 import org.koin.dsl.module
 
@@ -40,6 +41,7 @@ val jvmMainModule = makeNativeModule(
 val jvmVpnModule = module {
     single<OutlineLibrary> { RestartableOutlineGrpcLibrary(get()) }
     single<XrayLibrary> { RestartableXrayGrpcLibrary(get()) }
+    single<TrustTunnelLibrary> { RestartableTrustTunnelGrpcLibrary(get()) }
     single<CloakLibrary> { RestartableCloakGrpcLibrary(get()) }
     single<HealthCheckLibrary> { RestartableHealthCheckGrpcLibrary(get()) }
     single<DnsCacheLibrary> { RestartableDnsCacheGrpcLibrary(get()) }
@@ -52,6 +54,7 @@ val jvmVpnModule = module {
             logsRepository = get(),
             outlineLibrary = get(),
             xrayLibrary = get(),
+            trustTunnelLibrary = get(),
             cloakLibrary = get(),
             georoutingLibrary = get()
         )

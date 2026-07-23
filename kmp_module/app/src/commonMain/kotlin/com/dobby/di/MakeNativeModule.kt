@@ -43,5 +43,6 @@ fun makeNativeModule(
         single<DobbyConfigsRepositoryOutline> { get<DobbyConfigsRepository>() }
         single<DobbyConfigsRepositoryCloak> { get<DobbyConfigsRepository>() }
         single<DobbyConfigsRepositoryXray> { get<DobbyConfigsRepository>() }
+        single<DobbyConfigsRepositoryTrustTunnel> { get<DobbyConfigsRepository>() }
     }
 }

@@ -89,10 +89,52 @@ data class ConnectionProfile(
 )
 
 @Serializable
+data class TrustTunnelEndpointConfig(
+    val hostname: String? = null,
+    val addresses: List<String> = emptyList(),
+    val custom_sni: String? = null,
+    val username: String? = null,
+    val password: String? = null,
+    val client_random: String? = null,
+    val skip_verification: Boolean? = null,
+    val upstream_protocol: String? = null,
+    val anti_dpi: Boolean? = null,
+    val dns_upstreams: List<String> = emptyList()
+)
+
+@Serializable
+data class TrustTunnelSocksConfig(
+    val address: String? = null
+)
+
+@Serializable
+data class TrustTunnelListenerConfig(
+    val socks: TrustTunnelSocksConfig? = null
+)
+
+@Serializable
+data class TrustTunnelConfig(
+    val loglevel: String? = null,
+    val vpn_mode: String? = null,
+    val vpnMode: String? = null,
+    val killswitch_enabled: Boolean? = null,
+    val killswitchEnabled: Boolean? = null,
+    val killswitch_allow_ports: String? = null,
+    val killswitchAllowPorts: String? = null,
+    val post_quantum_group_enabled: Boolean? = null,
+    val postQuantumGroupEnabled: Boolean? = null,
+    val exclusions: List<String> = emptyList(),
+
+    val endpoint: TrustTunnelEndpointConfig? = null,
+    val listener: TrustTunnelListenerConfig? = null
+)
+
+@Serializable
 data class TomlConfigs(
     val Description: String? = null,
     val Telemetry: TelemetryConfig? = null,
     val Outline: List<OutlineConfig> = emptyList(),
     val Xray: List<XrayClientConfig> = emptyList(),
+    val TrustTunnel: List<TrustTunnelConfig> = emptyList(),
     val ExcludeIPs: ExcludeIPsConfig? = null
 )

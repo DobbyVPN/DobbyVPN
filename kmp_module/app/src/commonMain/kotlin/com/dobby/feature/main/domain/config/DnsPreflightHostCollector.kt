@@ -2,6 +2,7 @@ package com.dobby.feature.main.domain.config
 
 import com.dobby.feature.main.domain.ConnectionProfile
 import com.dobby.feature.main.domain.OutlineConfig
+import com.dobby.feature.main.domain.TrustTunnelConfig
 import com.dobby.feature.main.domain.VpnInterface
 import com.dobby.feature.main.domain.XrayClientConfig
 import net.peanuuutz.tomlkt.Toml
@@ -17,6 +18,7 @@ internal fun collectDnsPreflightHosts(profiles: List<ConnectionProfile>): List<S
         when (profile.protocol) {
             VpnInterface.CLOAK_OUTLINE -> hosts += collectOutlineHosts(profile.payload)
             VpnInterface.XRAY -> hosts += collectXrayHosts(profile.payload)
+            VpnInterface.TRUST_TUNNEL -> hosts += collectTrustTunnelHosts(profile.payload)
             VpnInterface.NONE -> Unit
         }
     }
@@ -37,6 +39,11 @@ private fun collectOutlineHosts(payload: String): List<String> {
         config.Server
     }
     return listOfNotNull(host)
+}
+
+private fun collectTrustTunnelHosts(payload: String): List<String> {
+    val config = runCatching { Toml.decodeFromString<TrustTunnelConfig>(payload) }.getOrNull() ?: return emptyList()
+    return listOfNotNull(config.endpoint?.hostname, config.endpoint?.custom_sni) + config.endpoint?.addresses.orEmpty()
 }
 
 private fun collectXrayHosts(payload: String): List<String> {
