@@ -271,27 +271,4 @@ internal class DobbyConfigsRepositoryImpl(
             AndroidLog("DOBBY_TAG", "geoRoutingConf = $geoRoutingConf")
         }
     }
-
-    companion object {
-        const val DEFAULT_AWG_CONFIG = """[Interface]
-PrivateKey = <...>
-Address = <...>
-DNS = 8.8.8.8
-Jc = 0
-Jmin = 0
-Jmax = 0
-S1 = 0
-S2 = 0
-H1 = 1
-H2 = 2
-H3 = 3
-H4 = 4
-
-[Peer]
-PublicKey = <...>
-Endpoint = <...>
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 60
-"""
-    }
 }

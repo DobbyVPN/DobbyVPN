@@ -22,7 +22,7 @@ class TomlConfigApplier(
 
         if (!hasProtocolHeaders(connectionConfig)) {
             logger.log(
-                "Unsupported config: expected protocol sections [[Outline]], [[Xray]], or [[AmneziaWG]]. " +
+                "Unsupported config: expected protocol sections [[Outline]] or [[Xray]]. " +
                     "Legacy single-table protocol sections are not supported."
             )
             return false
@@ -117,6 +117,6 @@ class TomlConfigApplier(
     }
 
     private companion object {
-        val protocolHeaderRegex = Regex("""(?m)^\s*\[\[\s*(Outline|Xray|AmneziaWG)\s*]]""")
+        val protocolHeaderRegex = Regex("""(?m)^\s*\[\[\s*(Outline|Xray)\s*]]""")
     }
 }
