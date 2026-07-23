@@ -1,7 +1,10 @@
 # doBBYVPN - do Better By VPN
 
-Yet another VPN client. Currently wraps around OutlineSDK, cloak, and TrustTunnel.
-XRay & AWG are in progress.
+Yet another VPN client. Currently wraps around OutlineSDK, cloak, TrustTunnel & XRay.
+More protocols planned.
+
+AppStore: https://apps.apple.com/us/app/dobbyvpn-do-better-by-vpn/id6741442515
+F-Droid: https://f-droid.org/en/packages/com.dobby.vpn/
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 
