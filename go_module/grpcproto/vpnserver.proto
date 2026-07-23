@@ -5,10 +5,6 @@ option go_package = "go_module/grpcproto";
 package grpcproto;
 
 service Vpn {
-  // awg.go
-  rpc StartAwg (StartAwgRequest)  returns (Empty);
-  rpc StopAwg (Empty)             returns (Empty);
-  
   // outline.go
   rpc GetOutlineLastError(Empty)          returns (GetOutlineLastErrorResponse);
   rpc StartOutline (StartOutlineRequest)  returns (StartOutlineResponse);
@@ -44,10 +40,6 @@ service Vpn {
   // dns_cache.go
   rpc ClearDNSCache (Empty)                                  returns (Empty);
   rpc SetDNSCacheEntries (SetDNSCacheEntriesRequest)         returns (SetDNSCacheEntriesResponse);
-}
-
-message StartAwgRequest {
-  string config = 1;
 }
 
 message GetOutlineLastErrorResponse {

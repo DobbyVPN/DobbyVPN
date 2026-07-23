@@ -1,6 +1,6 @@
 # Go Library
 
-VPN protocols multiplatform library. 
+VPN protocols multiplatform library.
 
 On desktop platfotms this lirary is a gRPC server, to run with super user privileges in service to use go code via RPC.
 
@@ -65,29 +65,41 @@ GO111MODULE=on gomobile bind -target=ios -o MyLibrary.xcframework ./ios_exports
 ## RPC API reference
 
 ```
-// awg.go
-rpc StartAwg (StartAwgRequest)  returns (Empty);
-rpc StopAwg (Empty)             returns (Empty);
-
 // outline.go
 rpc GetOutlineLastError(Empty)          returns (GetOutlineLastErrorResponse);
 rpc StartOutline (StartOutlineRequest)  returns (StartOutlineResponse);
 rpc StopOutline (Empty)                 returns (Empty);
 
+// xray.go
+rpc GetXrayLastError(Empty)        returns (GetXrayLastErrorResponse);
+rpc StartXray (StartXrayRequest)   returns (StartXrayResponse);
+rpc StopXray (Empty)               returns (Empty);
+
 // health_check.go
-rpc CouldStart (Empty)                            returns (CouldStartResponce);
-rpc CheckServerAlive (CheckServerAliveRequest)    returns (CheckServerAliveResponce);
+rpc CouldStart (Empty)                        returns (CouldStartResponce);
+rpc GetConnectionState (Empty)                returns (GetConnectionStateResponce);
+rpc InitHealthCheck (Empty)                   returns (Empty);
+rpc StartHealthCheck (Empty)                  returns (Empty);
+rpc StopHealthCheck (Empty)                   returns (Empty);
+rpc MeasureTunnelProbeAverageLatencyMillis (MeasureTunnelProbeRequest) returns (MeasureTunnelProbeResponse);
 
 // cloak.go
 rpc StartCloakClient (StartCloakClientRequest)    returns (Empty);
 rpc StopCloakClient (Empty)                       returns (Empty);
 
 // logger.go
-rpc InitLogger (InitLoggerRequest)                returns (Empty);
+rpc InitLogger (InitLoggerRequest)                              returns (Empty);
+rpc InitTelemetry (InitTelemetryRequest)                        returns (Empty);
+rpc StopTelemetry (Empty)                                       returns (Empty);
+rpc SetupTelemetryAttributes (SetupTelemetryAttributesRequest)  returns (Empty);
 
 // georouting.go
 rpc SetGeoRoutingConf (SetGeoRoutingConfRequest)  returns (Empty);
 rpc ClearGeoRoutingConf (Empty)                   returns (Empty);
+
+// dns_cache.go
+rpc ClearDNSCache (Empty)                                  returns (Empty);
+rpc SetDNSCacheEntries (SetDNSCacheEntriesRequest)         returns (SetDNSCacheEntriesResponse);
 ```
 
 Or this can be found in the [vpnserver.proto](./vpnserver.proto) file, that defines RPC API for the desktop library.
@@ -100,4 +112,4 @@ protoc --go_out=../ --go-grpc_out=../ ./grpcproto/vpnserver.proto
 
 ## Additional documentation
 
-* [How to manage services on different platforms](./SERVICES.md)
+- [How to manage services on different platforms](./SERVICES.md)
