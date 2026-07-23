@@ -11,7 +11,6 @@ import com.dobby.feature.main.domain.DnsPreflightResolverImpl
 import com.dobby.feature.main.domain.VpnManagerImpl
 import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.grpc.*
-import interop.awg.AwgLibrary
 import interop.cloak.CloakLibrary
 import interop.dnscache.DnsCacheLibrary
 import interop.georouting.GeoroutingLibrary
@@ -39,7 +38,6 @@ val jvmMainModule = makeNativeModule(
 )
 
 val jvmVpnModule = module {
-    single<AwgLibrary> { RestartableAwgGrpcLibrary(get()) }
     single<OutlineLibrary> { RestartableOutlineGrpcLibrary(get()) }
     single<XrayLibrary> { RestartableXrayGrpcLibrary(get()) }
     single<CloakLibrary> { RestartableCloakGrpcLibrary(get()) }
@@ -52,7 +50,6 @@ val jvmVpnModule = module {
             get(),
             logger = get(),
             logsRepository = get(),
-            awgLibrary = get(),
             outlineLibrary = get(),
             xrayLibrary = get(),
             cloakLibrary = get(),

@@ -52,7 +52,6 @@ class CliClient {
         logger = Logger(logsRepository)
 
         healthCheckLibrary = RestartableHealthCheckGrpcLibrary(logger)
-        val awgLibrary = RestartableAwgGrpcLibrary(logger)
         val outlineLibrary = RestartableOutlineGrpcLibrary(logger)
         val xrayLibrary = RestartableXrayGrpcLibrary(logger)
         val cloakLibrary = RestartableCloakGrpcLibrary(logger)
@@ -67,7 +66,6 @@ class CliClient {
             dobbyConfigsRepository = configsRepository,
             logger = logger,
             logsRepository = logsRepository,
-            awgLibrary = awgLibrary,
             outlineLibrary = outlineLibrary,
             xrayLibrary = xrayLibrary,
             cloakLibrary = cloakLibrary,

@@ -10,12 +10,9 @@ import android.os.ParcelFileDescriptor
 import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogsRepository
-import com.dobby.feature.logging.domain.initLogger
-import com.dobby.feature.logging.domain.provideLogFilePath
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
-import com.dobby.feature.vpn_service.domain.awg.AmneziaWGInteractor
 import com.dobby.feature.vpn_service.domain.cloak.CloakConnectionInteractor
 import com.dobby.feature.vpn_service.domain.georouting.GeoRouting
 import com.dobby.feature.vpn_service.domain.outline.OutlineInteractor
@@ -48,7 +45,6 @@ class DobbyVpnService : VpnService() {
     private val geoRouting: GeoRouting by inject()
     private val cloakConnectInteractor: CloakConnectionInteractor by inject()
     private val outlineInteractor: OutlineInteractor by inject()
-    private val awgInteractor: AmneziaWGInteractor by inject()
     private val xrayInteractor: XrayInteractor by inject()
     private val dobbyConfigsRepository: DobbyConfigsRepository by inject()
     private val connectionState: ConnectionStateRepository by inject()
@@ -181,7 +177,6 @@ class DobbyVpnService : VpnService() {
                 isProtocolProbe = isProtocolProbe,
                 preserveActiveTunnelOnProbeFailure = preserveActiveTunnelOnProbeFailure,
             )
-            VpnInterface.AMNEZIA_WG -> startAwg()
             VpnInterface.XRAY -> startXray(
                 isProtocolProbe = isProtocolProbe,
                 preserveActiveTunnelOnProbeFailure = preserveActiveTunnelOnProbeFailure,
@@ -203,7 +198,7 @@ class DobbyVpnService : VpnService() {
         requestedInterface: VpnInterface,
     ): Boolean {
         if (currentInterface == null) return true
-        return currentInterface == VpnInterface.AMNEZIA_WG || requestedInterface == VpnInterface.AMNEZIA_WG
+        return false
     }
 
     private suspend fun startCloakOutline(
@@ -225,18 +220,6 @@ class DobbyVpnService : VpnService() {
                 isProtocolProbe = isProtocolProbe,
                 preserveActiveTunnelOnProbeFailure = preserveActiveTunnelOnProbeFailure,
             )
-        }
-
-        connectionState.updateServiceStarted(true)
-        return true
-    }
-
-    private suspend fun startAwg(): Boolean {
-        if (!awgInteractor.startAwg(instance)) {
-            connectionState.updateServiceStarted(false)
-            teardownVpn()
-            stopSelf()
-            return false
         }
 
         connectionState.updateServiceStarted(true)
@@ -320,11 +303,6 @@ class DobbyVpnService : VpnService() {
             xrayInteractor.stopXray(instance)
         }.onFailure { e ->
             logger.log("[svc:$serviceId] stopProtocols(): xray disconnect warning: ${e.message}")
-        }
-        runCatching {
-            awgInteractor.stopAwg()
-        }.onFailure { e ->
-            logger.log("[svc:$serviceId] stopProtocols(): awg disconnect warning: ${e.message}")
         }
         runCatching {
             logger.log("Stopping Cloak client (if running)...")

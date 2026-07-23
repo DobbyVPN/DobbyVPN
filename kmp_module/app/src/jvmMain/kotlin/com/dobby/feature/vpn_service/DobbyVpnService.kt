@@ -5,7 +5,6 @@ import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
-import interop.awg.AwgLibrary
 import interop.cloak.CloakLibrary
 import interop.georouting.GeoroutingLibrary
 import interop.outline.OutlineLibrary
@@ -70,7 +69,6 @@ class DobbyVpnService(
     private val dobbyConfigsRepository: DobbyConfigsRepository,
     private val logger: Logger,
     private val logsRepository: LogsRepository,
-    private val awgLibrary: AwgLibrary,
     private val outlineLibrary: OutlineLibrary,
     private val xrayLibrary: XrayLibrary,
     private val cloakLibrary: CloakLibrary,
@@ -147,7 +145,6 @@ class DobbyVpnService(
     private fun stopProtocols() {
         stopCloakOutline()
         stopXray()
-        stopAwg()
         stopNone()
     }
 
@@ -161,7 +158,6 @@ class DobbyVpnService(
     private fun startConfiguredProtocol(runningInterface: VpnInterface): Boolean =
         when (runningInterface) {
             VpnInterface.CLOAK_OUTLINE -> startCloakOutline()
-            VpnInterface.AMNEZIA_WG -> startAwg()
             VpnInterface.XRAY -> startXray()
             VpnInterface.NONE -> startNone()
         }
@@ -228,23 +224,6 @@ class DobbyVpnService(
                 cloakLibrary.StopCloakClient()
             }
         }
-    }
-
-    /**
-     * Starts AmneziaWG tunnel
-     *
-     * @return true if VPN tunnel started successfully
-     */
-    private fun startAwg(): Boolean {
-        val apiKey = dobbyConfigsRepository.getAwgConfig()
-        logger.log("startAwg with key.len=${apiKey.length}")
-        val connected = awgLibrary.StartAwg(apiKey)
-        return connected == 0
-    }
-
-    private fun stopAwg() {
-        logger.log("stopAwg")
-        awgLibrary.StopAwg()
     }
 
     /**

@@ -1,6 +1,5 @@
 package com.dobby.feature.main.presentation
 
-import com.dobby.feature.main.domain.AmneziaWGConfig
 import com.dobby.feature.main.domain.CloakClientConfig
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
@@ -23,8 +22,6 @@ class ConfigsProcessor(
     fun buildConfigAttributesJson(): String =
         when (configsRepository.getVpnInterface()) {
             VpnInterface.CLOAK_OUTLINE -> buildOutlineAttributesJson()
-
-            VpnInterface.AMNEZIA_WG -> buildAmneziaWGAttributesJson()
 
             VpnInterface.XRAY -> buildXrayAttributesJson()
 
@@ -68,41 +65,6 @@ class ConfigsProcessor(
                 "metrics" to (xrayConfig?.metrics?.toString() ?: "null"),
                 "observatory" to (xrayConfig?.observatory?.toString() ?: "null"),
                 "burstObservatory" to (xrayConfig?.burstObservatory?.toString() ?: "null"),
-            )
-        )
-    }
-
-    private fun buildAmneziaWGAttributesJson(): String {
-        val tomlConfigString = configsRepository.getAwgTomlConfig()
-        val tomlConfig = if (tomlConfigString.isBlank()) {
-            null
-        } else {
-            try {
-                Toml.decodeFromString<AmneziaWGConfig>(tomlConfigString)
-            } catch (_: Exception) {
-                null
-            }
-        }
-
-        return Json.encodeToString(
-            mapOf(
-                "interface" to "AmneziaWG",
-                "Jc" to (tomlConfig?.Interface?.Jc?.toString() ?: "null"),
-                "Jmin" to (tomlConfig?.Interface?.Jmin?.toString() ?: "null"),
-                "Jmax" to (tomlConfig?.Interface?.Jmax?.toString() ?: "null"),
-                "S1" to (tomlConfig?.Interface?.S1?.toString() ?: "null"),
-                "S2" to (tomlConfig?.Interface?.S2?.toString() ?: "null"),
-                "S3" to (tomlConfig?.Interface?.S3?.toString() ?: "null"),
-                "S4" to (tomlConfig?.Interface?.S4?.toString() ?: "null"),
-                "H1" to (tomlConfig?.Interface?.H1 ?: "null"),
-                "H2" to (tomlConfig?.Interface?.H2 ?: "null"),
-                "H3" to (tomlConfig?.Interface?.H3 ?: "null"),
-                "H4" to (tomlConfig?.Interface?.H4 ?: "null"),
-                "I1" to (tomlConfig?.Interface?.I1 ?: "null"),
-                "I2" to (tomlConfig?.Interface?.I2 ?: "null"),
-                "I3" to (tomlConfig?.Interface?.I3 ?: "null"),
-                "I4" to (tomlConfig?.Interface?.I4 ?: "null"),
-                "I5" to (tomlConfig?.Interface?.I5 ?: "null"),
             )
         )
     }

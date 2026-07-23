@@ -81,19 +81,17 @@ class TomlConfigApplier(
         val headerCounts = headers.groupingBy { it }.eachCount()
         if (
             headerCounts.getOrElse("Outline") { 0 } != root.Outline.size ||
-            headerCounts.getOrElse("Xray") { 0 } != root.Xray.size ||
-            headerCounts.getOrElse("AmneziaWG") { 0 } != root.AmneziaWG.size
+            headerCounts.getOrElse("Xray") { 0 } != root.Xray.size
         ) {
             logger.log(
                 "Invalid TOML config: protocol header counts do not match parsed blocks " +
-                    "headers=$headerCounts parsed={Outline=${root.Outline.size}, Xray=${root.Xray.size}, AmneziaWG=${root.AmneziaWG.size}}"
+                    "headers=$headerCounts parsed={Outline=${root.Outline.size}, Xray=${root.Xray.size}}"
             )
             return null
         }
 
         var outlineIndex = 0
         var xrayIndex = 0
-        var awgIndex = 0
 
         return headers.mapIndexed { index, name ->
             when (name) {
@@ -109,14 +107,6 @@ class TomlConfigApplier(
                     ConnectionProfile(
                         protocol = VpnInterface.XRAY,
                         description = it.Description,
-                        sourceIndex = index,
-                        payload = Toml.encodeToString(it)
-                    )
-                }
-                "AmneziaWG" -> root.AmneziaWG[awgIndex++].let {
-                    ConnectionProfile(
-                        protocol = VpnInterface.AMNEZIA_WG,
-                        description = null,
                         sourceIndex = index,
                         payload = Toml.encodeToString(it)
                     )

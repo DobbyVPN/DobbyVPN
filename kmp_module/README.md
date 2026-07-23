@@ -4,9 +4,9 @@ A cross-platform VPN client built using Kotlin Multiplatform (KMP), sharing busi
 
 ## Prerequisites
 
-* Java 17+
-* Golang
-* Android SDK with NDK support
+- Java 17+
+- Golang
+- Android SDK with NDK support
 
 ## Build
 
@@ -21,7 +21,6 @@ The project gradle layered architecture:
 ```
 kmp_module/
 ├── app/ --- UI library
-├── awg/ --- Library to import AmneziaWG tunnel golang code (legacy)
 ├── grpcprotos/ --- Library to generate automatic code for gRPC client
 ├── grpcstub/ --- Library-wrapper for gRPC client
 ├── iosApp/

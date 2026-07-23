@@ -1,6 +1,5 @@
 package interop
 
-import interop.awg.AwgGrpcLibrary
 import interop.cloak.CloakGrpcLibrary
 import interop.dnscache.DnsCacheGrpcLibrary
 import interop.georouting.GeoroutingGrpcLibrary
@@ -21,7 +20,6 @@ object GrpcVpnLibrary: Closeable {
     private val port = System.getenv(PORT_ENV)?.toInt() ?: PORT_DEFAULT
     private val channel = ManagedChannelBuilder.forAddress(HOST, port).usePlaintext().build()
 
-    val awgGrpcLibrary = AwgGrpcLibrary(channel)
     val outlineGrpcLibrary = OutlineGrpcLibrary(channel)
     val xrayGrpcLibrary = XrayGrpcLibrary(channel)
     val cloakGrpcLibrary = CloakGrpcLibrary(channel)

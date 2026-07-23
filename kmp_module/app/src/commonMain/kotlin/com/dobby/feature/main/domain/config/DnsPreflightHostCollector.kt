@@ -1,6 +1,5 @@
 package com.dobby.feature.main.domain.config
 
-import com.dobby.feature.main.domain.AmneziaWGConfig
 import com.dobby.feature.main.domain.ConnectionProfile
 import com.dobby.feature.main.domain.OutlineConfig
 import com.dobby.feature.main.domain.VpnInterface
@@ -18,7 +17,6 @@ internal fun collectDnsPreflightHosts(profiles: List<ConnectionProfile>): List<S
         when (profile.protocol) {
             VpnInterface.CLOAK_OUTLINE -> hosts += collectOutlineHosts(profile.payload)
             VpnInterface.XRAY -> hosts += collectXrayHosts(profile.payload)
-            VpnInterface.AMNEZIA_WG -> hosts += collectAwgHosts(profile.payload)
             VpnInterface.NONE -> Unit
         }
     }
@@ -39,11 +37,6 @@ private fun collectOutlineHosts(payload: String): List<String> {
         config.Server
     }
     return listOfNotNull(host)
-}
-
-private fun collectAwgHosts(payload: String): List<String> {
-    val config = runCatching { Toml.decodeFromString<AmneziaWGConfig>(payload) }.getOrNull() ?: return emptyList()
-    return config.Peer.mapNotNull { extractEndpointHost(it.Endpoint) }
 }
 
 private fun collectXrayHosts(payload: String): List<String> {

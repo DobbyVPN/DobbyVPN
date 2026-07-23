@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 interface DobbyConfigsRepository :
     DobbyConfigsRepositoryOutline,
     DobbyConfigsRepositoryCloak,
-    DobbyConfigsRepositoryAwg,
     DobbyConfigsRepositoryXray,
     DobbyConfigsRepositoryVpn {
 
@@ -47,7 +46,6 @@ interface DobbyConfigsRepository :
 @Serializable
 enum class VpnInterface {
     CLOAK_OUTLINE,
-    AMNEZIA_WG,
     XRAY,
     NONE;
 

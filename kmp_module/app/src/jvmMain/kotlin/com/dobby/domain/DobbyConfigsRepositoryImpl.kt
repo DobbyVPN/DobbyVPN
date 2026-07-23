@@ -189,30 +189,6 @@ internal class DobbyConfigsRepositoryImpl(
         prefs.put("UdpPathOutlineKey", udpPath)
     }
 
-    override fun getAwgConfig(): String {
-        return prefs.get("awgConfig", DEFAULT_AWG_CONFIG)
-    }
-
-    override fun setAwgConfig(newConfig: String) {
-        prefs.put("awgConfig", newConfig)
-    }
-
-    override fun getAwgTomlConfig(): String {
-        return prefs.get("awgTomlConfig", "")
-    }
-
-    override fun setAwgTomlConfig(newConfig: String) {
-        prefs.put("awgTomlConfig", newConfig)
-    }
-
-    override fun getIsAmneziaWGEnabled(): Boolean {
-        return prefs.get("isAmneziaWGEnabled", "false").equals("true")
-    }
-
-    override fun setIsAmneziaWGEnabled(isAmneziaWGEnabled: Boolean) {
-        prefs.put("isAmneziaWGEnabled", isAmneziaWGEnabled.toString())
-    }
-
     override fun getXrayConfig(): String {
         return prefs.get("xrayConfig", "")
     }
@@ -244,28 +220,5 @@ internal class DobbyConfigsRepositoryImpl(
 
     override fun setGeoRoutingConf(geoRoutingConf: String) {
         writeLargeString("geoRoutingConf", geoRoutingConfFile, geoRoutingConf)
-    }
-
-    companion object {
-        const val DEFAULT_AWG_CONFIG = """[Interface]
-PrivateKey = <...>
-Address = <...>
-DNS = 8.8.8.8
-Jc = 0
-Jmin = 0
-Jmax = 0
-S1 = 0
-S2 = 0
-H1 = 1
-H2 = 2
-H3 = 3
-H4 = 4
-
-[Peer]
-PublicKey = <...>
-Endpoint = <...>
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 60
-"""
     }
 }

@@ -15,7 +15,7 @@ plugins {
 }
 
 // detekt for all subprojects except vendored/ported modules
-val detektExcluded = setOf("outline", "awg")
+val detektExcluded = setOf("outline")
 allprojects {
     if (project.name !in detektExcluded) {
         apply(plugin = "io.gitlab.arturbosch.detekt")
