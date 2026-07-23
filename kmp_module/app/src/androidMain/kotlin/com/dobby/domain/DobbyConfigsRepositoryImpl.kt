@@ -191,42 +191,6 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
-    override fun getAwgConfig(): String {
-        return (prefs.getString("awgConfig", DEFAULT_AWG_CONFIG) ?: "").also {
-            AndroidLog("DOBBY_TAG", "getAwgConfig, size = ${it.length}")
-        }
-    }
-
-    override fun setAwgConfig(newConfig: String) {
-        prefs.edit().putString("awgConfig", newConfig).apply().also {
-            AndroidLog("DOBBY_TAG", "setAwgConfig, size = ${newConfig.length}")
-        }
-    }
-
-    override fun getAwgTomlConfig(): String {
-        return (prefs.getString("awgTomlConfig", "") ?: "").also {
-            AndroidLog("DOBBY_TAG", "getAwgTomlConfig, size = ${it.length}")
-        }
-    }
-
-    override fun setAwgTomlConfig(newConfig: String) {
-        prefs.edit().putString("awgTomlConfig", newConfig).apply().also {
-            AndroidLog("DOBBY_TAG", "setAwgTomlConfig, size = ${newConfig.length}")
-        }
-    }
-
-    override fun getIsAmneziaWGEnabled(): Boolean {
-        return prefs.getBoolean("isAmneziaWGEnabled", false).also {
-            AndroidLog("DOBBY_TAG", "getIsAmneziaWGEnabled = $it")
-        }
-    }
-
-    override fun setIsAmneziaWGEnabled(isAmneziaWGEnabled: Boolean) {
-        prefs.edit().putBoolean("isAmneziaWGEnabled", isAmneziaWGEnabled).apply().also {
-            AndroidLog("DOBBY_TAG", "setIsAmneziaWGEnabled = $isAmneziaWGEnabled")
-        }
-    }
-
     override fun getXrayConfig(): String {
         return (prefs.getString("xrayConfig", "") ?: "").also {
             AndroidLog("DOBBY_TAG", "getXrayConfig, size = ${it.length}")
