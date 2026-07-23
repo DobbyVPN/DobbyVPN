@@ -22,9 +22,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let udpPathOutlineKey = "UdpPathOutlineKey"
     private let isUserInitStopKey = "isUserInitStopKey"
     private let geoRoutingConfKey = "geoRoutingConfKey"
-    private let awgConfigKey = "awgConfigKey"
-    private let awgTomlConfigKey = "awgTomlConfigKey"
-    private let isAmneziaWGEnabledKey = "isAmneziaWGEnabledKey"
     private let vpnInterfaceKey = "vpnInterfaceKey"
     private let isXrayEnabledKey = "isXrayEnabledKey"
     private let xrayConfigKey = "xrayConfigKey"
@@ -159,36 +156,10 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
 
     }
 
-    public func getAwgConfig() -> String {
-        return userDefaults.string(forKey: awgConfigKey) ?? ""
-    }
-
-    public func setAwgConfig(newConfig: String) {
-        userDefaults.set(newConfig, forKey: awgConfigKey)
-    }
-
-    public func getAwgTomlConfig() -> String {
-        return userDefaults.string(forKey: awgTomlConfigKey) ?? ""
-    }
-
-    public func setAwgTomlConfig(newConfig: String) {
-        userDefaults.set(newConfig, forKey: awgTomlConfigKey)
-    }
-
-    public func getIsAmneziaWGEnabled() -> Bool {
-        return userDefaults.bool(forKey: isAmneziaWGEnabledKey)
-    }
-
-    public func setIsAmneziaWGEnabled(isAmneziaWGEnabled: Bool) {
-        userDefaults.set(isAmneziaWGEnabled, forKey: isAmneziaWGEnabledKey)
-    }
-
     public func getVpnInterface() -> VpnInterface {
         switch userDefaults.string(forKey: vpnInterfaceKey) ?? "CLOAK_OUTLINE" {
         case "XRAY":
             return VpnInterface.xray
-        case "AMNEZIA_WG":
-            return VpnInterface.amneziaWg
         case "NONE":
             return VpnInterface.none
         default:
@@ -200,8 +171,6 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
         let value: String
         if vpnInterface == VpnInterface.xray {
             value = "XRAY"
-        } else if vpnInterface == VpnInterface.amneziaWg {
-            value = "AMNEZIA_WG"
         } else if vpnInterface == VpnInterface.none {
             value = "NONE"
         } else {
