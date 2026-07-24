@@ -9,7 +9,8 @@ jobs:
     env:
       APP_MAJOR_VERSION: ${{ vars.MAJOR }}
       APP_MINOR_VERSION: ${{ vars.MINOR }}
-      APP_MAINTENANCE_VERSION: ${{ vars.MAINTENANCE }}
+      # Patch = run_number so store versionName matches iOS/desktop release trains.
+      APP_MAINTENANCE_VERSION: ${{ github.run_number }}
       GITHUB_SHA: ${{ github.sha }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       FDROID_COMPAT_SOURCE_ROOT: /home/vagrant/build/com.dobby.vpn
@@ -129,10 +130,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dobbyvpn-android-sign.apk
-          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-sign.apk
+          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ github.run_number }}-sign.apk
 
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
           name: dobbyvpn-android-unsign.apk
-          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ vars.MAINTENANCE }}-unsign.apk
+          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ github.run_number }}-unsign.apk

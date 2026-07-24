@@ -66,7 +66,8 @@ jobs:
     env:
       APP_MAJOR_VERSION: ${{ vars.MAJOR }}
       APP_MINOR_VERSION: ${{ vars.MINOR }}
-      APP_MAINTENANCE_VERSION: ${{ vars.MAINTENANCE }}
+      # Patch = run_number: unique GitHub Release tag / F-Droid version.txt per CI run.
+      APP_MAINTENANCE_VERSION: ${{ github.run_number }}
 
     steps:
       - uses: actions/checkout@v4
@@ -145,15 +146,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update MAINTENANCE variable
-        run: |
-          CUR=${{ vars.MAINTENANCE }}
-          NEXT=$((CUR + 1))
-          echo "Current maintenance: $CUR, next: $NEXT"
-          gh api \
-            --method PATCH \
-            -H "Accept: application/vnd.github+json" \
-            /repos/${{ github.repository }}/actions/variables/MAINTENANCE \
-            -f value="$NEXT"
-        env:
-          GH_TOKEN: ${{ secrets.DobbyVPN_MAINTENANCE }}
