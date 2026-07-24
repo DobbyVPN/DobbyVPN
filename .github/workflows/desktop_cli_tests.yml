@@ -33,6 +33,9 @@ jobs:
       PORT: 50151
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download desktop app
         uses: actions/download-artifact@v4
         with:
@@ -68,11 +71,9 @@ jobs:
 
           sudo apt-get install -y ./artifacts/app/dobbyVPN-linux.deb
 
-          config_arg="$DOBBYVPN_CLI_TEST_CONFIG"
-          if [[ ! "$config_arg" =~ ^https?:// ]]; then
-            printf '%s' "$DOBBYVPN_CLI_TEST_CONFIG" > cli-test-config.toml
-            config_arg="cli-test-config.toml"
-          fi
+          mapfile -t config_args < <(python3 .github/scripts/prepare_cli_test_config.py)
+          check_config_arg="${config_args[0]}"
+          verify_session_arg="${config_args[1]}"
 
           chmod +x ./artifacts/service/ubuntu_grpcvpnserver
           sudo bash -c "env LD_LIBRARY_PATH=./artifacts/service ./artifacts/service/ubuntu_grpcvpnserver -port \"$PORT\" > grpcvpnserver.log 2>&1" &
@@ -102,8 +103,8 @@ jobs:
             exit 1
           fi
 
-          PORT="$PORT" "$cli" check-config "$config_arg"
-          PORT="$PORT" "$cli" verify-session "$config_arg"
+          PORT="$PORT" "$cli" check-config "$check_config_arg"
+          PORT="$PORT" "$cli" verify-session "$verify_session_arg"
 
       - name: Test macOS CLI
         if: matrix.platform == 'macos'
@@ -120,11 +121,9 @@ jobs:
 
           unzip -q artifacts/app/dobbyVPN-macos-aarch64.zip -d artifacts/app/unpacked
 
-          config_arg="$DOBBYVPN_CLI_TEST_CONFIG"
-          if [[ ! "$config_arg" =~ ^https?:// ]]; then
-            printf '%s' "$DOBBYVPN_CLI_TEST_CONFIG" > cli-test-config.toml
-            config_arg="cli-test-config.toml"
-          fi
+          mapfile -t config_args < <(python3 .github/scripts/prepare_cli_test_config.py)
+          check_config_arg="${config_args[0]}"
+          verify_session_arg="${config_args[1]}"
 
           chmod +x ./artifacts/service/macos_grpcvpnserver
           sudo bash -c "./artifacts/service/macos_grpcvpnserver -port \"$PORT\" > grpcvpnserver.log 2>&1" &
@@ -153,8 +152,8 @@ jobs:
             exit 1
           fi
 
-          PORT="$PORT" "$cli" check-config "$config_arg"
-          PORT="$PORT" "$cli" verify-session "$config_arg"
+          PORT="$PORT" "$cli" check-config "$check_config_arg"
+          PORT="$PORT" "$cli" verify-session "$verify_session_arg"
 
       - name: Test Windows CLI
         if: matrix.platform == 'windows'
@@ -169,11 +168,9 @@ jobs:
 
           Expand-Archive -Path artifacts/app/dobbyVPN-windows.zip -DestinationPath artifacts/app/unpacked
 
-          $configArg = $env:DOBBYVPN_CLI_TEST_CONFIG
-          if ($configArg -notmatch '^https?://') {
-            [System.IO.File]::WriteAllText("cli-test-config.toml", $configArg, [System.Text.UTF8Encoding]::new($false))
-            $configArg = "cli-test-config.toml"
-          }
+          $configJson = python .github/scripts/prepare_cli_test_config.py --format json | ConvertFrom-Json
+          $checkConfigArg = $configJson.check_config_arg
+          $verifySessionArg = $configJson.verify_session_arg
 
           $service = Resolve-Path "artifacts/service/windows_grpcvpnserver.exe"
           $serviceDir = Split-Path -Parent $service
@@ -213,14 +210,14 @@ jobs:
 
             $cliOut = Join-Path $PWD "dobby-cli.out"
             $cliErr = Join-Path $PWD "dobby-cli.err"
-            $cliProcess = Start-Process -FilePath $cli.FullName -ArgumentList @("check-config", $configArg) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $cliOut -RedirectStandardError $cliErr
+            $cliProcess = Start-Process -FilePath $cli.FullName -ArgumentList @("check-config", $checkConfigArg) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $cliOut -RedirectStandardError $cliErr
             if (Test-Path $cliOut) { Get-Content $cliOut }
             if (Test-Path $cliErr) { Get-Content $cliErr }
             if ($cliProcess.ExitCode -ne 0) { throw "check-config failed with exit code $($cliProcess.ExitCode)" }
 
             $verifyOut = Join-Path $PWD "dobby-verify.out"
             $verifyErr = Join-Path $PWD "dobby-verify.err"
-            $verifyProcess = Start-Process -FilePath $cli.FullName -ArgumentList @("verify-session", $configArg) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $verifyOut -RedirectStandardError $verifyErr
+            $verifyProcess = Start-Process -FilePath $cli.FullName -ArgumentList @("verify-session", $verifySessionArg) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $verifyOut -RedirectStandardError $verifyErr
             if (Test-Path $verifyOut) { Get-Content $verifyOut }
             if (Test-Path $verifyErr) { Get-Content $verifyErr }
             if ($verifyProcess.ExitCode -ne 0) { throw "verify-session failed with exit code $($verifyProcess.ExitCode)" }
