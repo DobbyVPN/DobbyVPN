@@ -452,11 +452,12 @@ class CliClient {
             .version(HttpClient.Version.HTTP_1_1)
             .connectTimeout(Duration.ofSeconds(10))
             .build()
+        // Note: HttpRequest forbids restricted headers like "Connection"; a fresh
+        // client per call already avoids keep-alive reuse across baseline/tunnel.
         val request = HttpRequest.newBuilder(URI.create(url))
             .timeout(Duration.ofSeconds(10))
             .header("Cache-Control", "no-store")
             .header("Pragma", "no-cache")
-            .header("Connection", "close")
             .GET()
             .build()
         val response = client.send(request, HttpResponse.BodyHandlers.ofString())
