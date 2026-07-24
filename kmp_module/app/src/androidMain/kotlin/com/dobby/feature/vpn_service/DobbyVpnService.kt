@@ -1,5 +1,8 @@
 package com.dobby.feature.vpn_service
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
@@ -7,6 +10,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import android.os.Build
 import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogsRepository
@@ -29,13 +33,25 @@ const val IS_FROM_UI = "isLaunchedFromUi"
 class DobbyVpnService : VpnService() {
     companion object {
         private const val EXTRA_IS_PROTOCOL_PROBE = "com.dobby.vpn.extra.IS_PROTOCOL_PROBE"
+        private const val EXTRA_GENERATION = "com.dobby.vpn.extra.GENERATION"
+        private const val EXTRA_USER_INITIATED_STOP = "com.dobby.vpn.extra.USER_INITIATED_STOP"
+        private const val ACTION_START = "com.dobby.vpn.action.START"
+        private const val ACTION_STOP = "com.dobby.vpn.action.STOP"
+        private const val FOREGROUND_CHANNEL_ID = "dobby_vpn"
+        private const val FOREGROUND_NOTIFICATION_ID = 101
 
-        @Volatile
-        var instance: DobbyVpnService? = null
-
-        fun createIntent(context: Context, isProtocolProbe: Boolean): Intent {
+        fun createStartIntent(context: Context, isProtocolProbe: Boolean, generation: Long): Intent {
             return Intent(context, DobbyVpnService::class.java)
+                .setAction(ACTION_START)
                 .putExtra(EXTRA_IS_PROTOCOL_PROBE, isProtocolProbe)
+                .putExtra(EXTRA_GENERATION, generation)
+        }
+
+        fun createStopIntent(context: Context, generation: Long, isUserInitiated: Boolean): Intent {
+            return Intent(context, DobbyVpnService::class.java)
+                .setAction(ACTION_STOP)
+                .putExtra(EXTRA_GENERATION, generation)
+                .putExtra(EXTRA_USER_INITIATED_STOP, isUserInitiated)
         }
     }
 
@@ -56,10 +72,10 @@ class DobbyVpnService : VpnService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val startStopMutex = Mutex()
     private var activeInterface: VpnInterface? = null
+    private var activeGeneration: Long = -1L
 
     override fun onCreate() {
         super.onCreate()
-        instance = this
         logger.log("[svc:$serviceId] onCreate()")
 
         // Logs-only: track network transitions to correlate with crashes / restarts.
@@ -105,49 +121,55 @@ class DobbyVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action ?: ACTION_START
         val isProtocolProbe = intent?.getBooleanExtra(EXTRA_IS_PROTOCOL_PROBE, false) == true
+        val generation = intent?.getLongExtra(EXTRA_GENERATION, 0L) ?: 0L
         logger.log(
             "[svc:$serviceId] onStartCommand(startId=$startId flags=$flags " +
-                "isProtocolProbe=$isProtocolProbe) vpnInterface=${vpnInterface?.fd}"
+                "action=$action generation=$generation isProtocolProbe=$isProtocolProbe) vpnInterface=${vpnInterface?.fd}"
         )
 
-        startService(intent, isProtocolProbe)
+        if (action == ACTION_STOP) {
+            stopGeneration(generation, startId)
+        } else {
+            // Android requires foreground promotion before work that may establish a VPN.
+            ensureForeground()
+            startService(intent, isProtocolProbe, generation)
+        }
 
         return START_NOT_STICKY
     }
 
-    fun startService(intent: Intent? = null, isProtocolProbe: Boolean) {
+    fun startService(intent: Intent? = null, isProtocolProbe: Boolean, generation: Long = 0L) {
         logger.log(
-            "[svc:$serviceId] startService(isProtocolProbe=$isProtocolProbe) vpnInterface=${vpnInterface?.fd}"
+            "[svc:$serviceId] startService(generation=$generation isProtocolProbe=$isProtocolProbe) vpnInterface=${vpnInterface?.fd}"
         )
 
         serviceScope.launch {
             startStopMutex.withLock {
-                val hasActiveTunnel = vpnInterface != null || goTunFd != null
-                var canPreserveActiveTunnelOnProbeFailure = hasActiveTunnel
-                val requestedInterface = dobbyConfigsRepository.getVpnInterface()
-
-                if (hasActiveTunnel) {
-                    if (requiresInterfaceTeardown(activeInterface, requestedInterface)) {
-                        canPreserveActiveTunnelOnProbeFailure = false
-                        logger.log(
-                            "[svc:$serviceId] startService(): existing VPN interface is incompatible with " +
-                                "requestedInterface=$requestedInterface activeInterface=$activeInterface; tearing down interface"
-                        )
-                        teardownVpn()
-                    } else {
-                        logger.log("[svc:$serviceId] startService(): existing VPN interface detected; switching protocol without closing interface")
-                        connectionState.tryUpdateVpnNetworkReady(true)
-                        stopCloakSidecarForProtocolRestart()
-                        goTunFd = null
-                    }
+                if (generation < activeGeneration) {
+                    logger.log("[svc:$serviceId] Ignoring stale start generation=$generation active=$activeGeneration")
+                    return@withLock
                 }
+                if (generation == activeGeneration && (vpnInterface != null || goTunFd != null)) {
+                    logger.log("[svc:$serviceId] Duplicate start for active generation=$generation ignored")
+                    return@withLock
+                }
+
+                // A profile probe always owns a fresh TUN and protocol runtime. Reusing a
+                // session here lets a delayed probe mutate the next selected profile.
+                if (vpnInterface != null || goTunFd != null || activeGeneration >= 0L) {
+                    logger.log("[svc:$serviceId] Fully stopping generation=$activeGeneration before generation=$generation")
+                    teardownVpn()
+                }
+                activeGeneration = generation
+                val requestedInterface = dobbyConfigsRepository.getVpnInterface()
 
                 geoRouting.setGeoRoutingConf(dobbyConfigsRepository.getGeoRoutingConf())
                 startConfiguredProtocol(
                     intent = intent,
                     isProtocolProbe = isProtocolProbe,
-                    preserveActiveTunnelOnProbeFailure = canPreserveActiveTunnelOnProbeFailure
+                    preserveActiveTunnelOnProbeFailure = false
                 )
             }
         }
@@ -167,7 +189,6 @@ class DobbyVpnService : VpnService() {
             logger.log("[svc:$serviceId] net:unregisterNetworkCallback FAILED: ${e.message}")
         }
         serviceScope.cancel()
-        instance = null
         super.onDestroy()
         logger.log("[svc:$serviceId] onDestroy() end")
     }
@@ -221,7 +242,7 @@ class DobbyVpnService : VpnService() {
                 )
             }
         }
-        if (!outlineInteractor.startOutline(instance)) {
+        if (!outlineInteractor.startOutline(this)) {
             return handleProtocolStartFailure(
                 protocolName = "Outline",
                 isProtocolProbe = isProtocolProbe,
@@ -229,7 +250,7 @@ class DobbyVpnService : VpnService() {
             )
         }
 
-        connectionState.updateServiceStarted(true)
+        connectionState.updateServiceStarted(true, activeGeneration)
         return true
     }
 
@@ -245,7 +266,7 @@ class DobbyVpnService : VpnService() {
             )
         }
 
-        if (!xrayInteractor.startXray(instance)) {
+        if (!xrayInteractor.startXray(this)) {
             return handleProtocolStartFailure(
                 protocolName = "Xray",
                 isProtocolProbe = isProtocolProbe,
@@ -253,7 +274,7 @@ class DobbyVpnService : VpnService() {
             )
         }
 
-        connectionState.updateServiceStarted(true)
+        connectionState.updateServiceStarted(true, activeGeneration)
         return true
     }
 
@@ -262,7 +283,7 @@ class DobbyVpnService : VpnService() {
         isProtocolProbe: Boolean,
         preserveActiveTunnelOnProbeFailure: Boolean,
     ): Boolean {
-        connectionState.updateServiceStarted(false)
+        connectionState.updateServiceStarted(false, activeGeneration)
         if (isProtocolProbe && preserveActiveTunnelOnProbeFailure) {
             logger.log(
                 "[svc:$serviceId] $protocolName probe failed; preserving existing VPN interface for further protocol probes"
@@ -277,7 +298,7 @@ class DobbyVpnService : VpnService() {
     }
 
     private fun startNone(): Boolean {
-        connectionState.tryUpdateServiceStarted(false)
+        connectionState.tryUpdateServiceStarted(false, activeGeneration)
         return false
     }
 
@@ -286,28 +307,38 @@ class DobbyVpnService : VpnService() {
         val shouldTurnOn = dobbyConfigsRepository.getIsTrustTunnelEnabled()
 
         if (!shouldTurnOn && isServiceStartedFromUi) {
-            connectionState.updateServiceStarted(false)
+            connectionState.updateServiceStarted(false, activeGeneration)
             teardownVpn()
             stopSelf()
             return false
         }
 
-        if (!trustTunnelInteractor.startTrustTunnel(instance)) {
-            connectionState.updateServiceStarted(false)
+        if (!trustTunnelInteractor.startTrustTunnel(this)) {
+            connectionState.updateServiceStarted(false, activeGeneration)
             teardownVpn()
             stopSelf()
             return false
         }
 
-        connectionState.updateServiceStarted(true)
+        connectionState.updateServiceStarted(true, activeGeneration)
         return true
     }
 
-    fun stopService() {
-        logger.log("[svc:$serviceId] stopService() vpnInterface=${vpnInterface?.fd}")
-        runBlocking {
+    private fun stopGeneration(generation: Long, startId: Int) {
+        serviceScope.launch {
             startStopMutex.withLock {
+                if (generation < activeGeneration) {
+                    logger.log("[svc:$serviceId] Ignoring stale stop generation=$generation active=$activeGeneration")
+                    return@withLock
+                }
+                logger.log("[svc:$serviceId] Stopping generation=$activeGeneration requested=$generation")
                 teardownVpn()
+                geoRouting.clearGeoRoutingConf()
+                activeGeneration = -1L
+                connectionState.tryUpdateVpnNetworkReady(false)
+                connectionState.tryUpdateServiceStarted(false, activeGeneration)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelfResult(startId)
             }
         }
     }
@@ -329,12 +360,12 @@ class DobbyVpnService : VpnService() {
             logger.log("[svc:$serviceId] stopProtocols(): outline disconnect warning: ${e.message}")
         }
         runCatching {
-            xrayInteractor.stopXray(instance)
+            xrayInteractor.stopXray(this)
         }.onFailure { e ->
             logger.log("[svc:$serviceId] stopProtocols(): xray disconnect warning: ${e.message}")
         }
         runCatching {
-            trustTunnelInteractor.stopTrustTunnel(instance)
+            trustTunnelInteractor.stopTrustTunnel(this)
         }.onFailure { e ->
             logger.log("[svc:$serviceId] stopProtocols(): trusttunnel disconnect warning: ${e.message}")
         }
@@ -365,5 +396,38 @@ class DobbyVpnService : VpnService() {
         vpnInterface = null
         activeInterface = null
         logger.log("[svc:$serviceId] teardownVpn(): end fd=$fdBefore")
+    }
+
+    private fun ensureForeground() {
+        val manager = getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    FOREGROUND_CHANNEL_ID,
+                    "Dobby VPN",
+                    NotificationManager.IMPORTANCE_LOW,
+                )
+            )
+        }
+        val notification = Notification.Builder(this, FOREGROUND_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setContentTitle("Dobby VPN")
+            .setContentText("VPN connection is active")
+            .setOngoing(true)
+            .build()
+        startForeground(FOREGROUND_NOTIFICATION_ID, notification)
+    }
+
+    /**
+     * The gomobile callback has only a Boolean return type today.  Keep the failure visible at
+     * the platform boundary so the native caller can abort its dial instead of silently routing
+     * a protocol socket back into this VPN.
+     */
+    fun protectProtocolSocket(fd: Int): Boolean {
+        val protected = protect(fd)
+        if (!protected) {
+            logger.log("[svc:$serviceId] Socket protection failed fd=$fd; protocol dial must abort")
+        }
+        return protected
     }
 }

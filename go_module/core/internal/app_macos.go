@@ -105,6 +105,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Debugf(coreCommon.Category, "[Protocol] ProtocolDevice successfully created")
 
+	var ownedEngine *tunnel.Engine
 	var closeOnce sync.Once
 	tunName := ""
 	closeAll := func() {
@@ -117,8 +118,12 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 			}
 			app.currentDevice = nil
 			app.running = false
+			ownedEngine = app.engine
+			app.engine = nil
 			app.mu.Unlock()
-			tunnel.StopEngine()
+			if ownedEngine != nil {
+				ownedEngine.Stop()
+			}
 			if currentDevice != nil {
 				_ = currentDevice.Close()
 			}
@@ -157,7 +162,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Debugf(coreCommon.Category, "[Tunnel] Starting tun2socks engine (darwin/utun mode)...")
 
-	err = tunnel.StartEngine(platform_engine.EngineConfig{
+	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{
 		ProxyAddr:   app.ProtocolDevice.GetProxyAddr(),
 		FD:          -1,
 		UplinkIface: "",
@@ -166,6 +171,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 		signalInit(initResult, err)
 		return err
 	}
+	app.mu.Lock()
+	app.engine = ownedEngine
+	app.mu.Unlock()
 
 	tunName = platform_engine.LastIface
 

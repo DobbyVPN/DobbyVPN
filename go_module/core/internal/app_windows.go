@@ -47,6 +47,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	}
 
 	cfg := common.GetNetworkConfig()
+	var ownedEngine *tunnel.Engine
 
 	stepStartedAt := time.Now()
 	gatewayIP, err := gateway.DiscoverGateway()
@@ -137,7 +138,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	log.Debugf(coreCommon.Category, "[Windows] Proxy addr: %s", app.ProtocolDevice.GetProxyAddr())
 
 	stepStartedAt = time.Now()
-	err = tunnel.StartEngine(platform_engine.EngineConfig{
+	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{
 		ProxyAddr:   app.ProtocolDevice.GetProxyAddr(),
 		FD:          -1,
 		UplinkIface: netInterface.Name,
@@ -150,12 +151,18 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 		cleanupEarlyRoute("tun2socks start error")
 		return err
 	}
+	app.mu.Lock()
+	app.engine = ownedEngine
+	app.mu.Unlock()
 	log.Debugf(coreCommon.Category, "[Windows] tunnel.StartEngine OK elapsed=%s total=%s", time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	stepStartedAt = time.Now()
 	tunInterface, err := routing.WaitForInterfaceByIP(cfg.TunDevice, 5*time.Second)
 	if err != nil {
-		tunnel.StopEngine()
+		ownedEngine.Stop()
+		app.mu.Lock()
+		app.engine = nil
+		app.mu.Unlock()
 		if closeErr := app.ProtocolDevice.Close(); closeErr != nil {
 			log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Close after TUN interface wait error failed: %v", closeErr)
 		}
@@ -178,7 +185,10 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	); err != nil {
 		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name, cfg.TunGateway)
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		tunnel.StopEngine()
+		ownedEngine.Stop()
+		app.mu.Lock()
+		app.engine = nil
+		app.mu.Unlock()
 		if closeErr := app.ProtocolDevice.Close(); closeErr != nil {
 			log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Close after routing error failed: %v", closeErr)
 		}
@@ -213,6 +223,8 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 		currentTunIface := app.tunIface
 		app.currentDevice = nil
 		app.running = false
+		ownedEngine = app.engine
+		app.engine = nil
 		app.mu.Unlock()
 
 		common.Client.MarkInCriticalSection(coreCommon.Name)
@@ -222,7 +234,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
 		log.Debugf(coreCommon.Category, "[Tunnel] Stopping tun2socks engine")
-		tunnel.StopEngine()
+		if ownedEngine != nil {
+			ownedEngine.Stop()
+		}
 		if currentDevice != nil {
 			if closeErr := currentDevice.Close(); closeErr != nil {
 				log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Close during shutdown failed: %v", closeErr)

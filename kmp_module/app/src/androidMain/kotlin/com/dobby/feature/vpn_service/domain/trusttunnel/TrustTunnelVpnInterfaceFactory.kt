@@ -23,8 +23,11 @@ class TrustTunnelVpnInterfaceFactory(
             .setSession("TrustTunnel")
             .setMtu(1500)
             .addAddress("10.233.233.1", 24)
-            .addDisallowedApplication(context.packageName)
             .addIpv6BlockingRoute(logger, "TrustTunnel")
+
+        // All protocols use the same app-inclusion policy.  Excluding Dobby here made its
+        // health checks bypass TrustTunnel while Outline and Xray sent them through the TUN.
+        logger.log("Dobby app traffic is included in TrustTunnel VPN so health checks and latency probes use the tunnel")
 
         builder.addDnsServer("1.1.1.1")
 

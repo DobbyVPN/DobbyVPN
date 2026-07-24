@@ -20,15 +20,20 @@ import (
 )
 
 type CoreClient struct {
-	device pkg.ProtocolDevice
-	tun    io.ReadWriteCloser
-	mu     sync.Mutex
+	device     pkg.ProtocolDevice
+	tun        io.ReadWriteCloser
+	engine     *tunnel.Engine
+	resources  *resourceLedger
+	state      LifecycleState
+	generation uint64
+	mu         sync.Mutex
 }
 
 func NewClient(device pkg.ProtocolDevice, tun io.ReadWriteCloser) *CoreClient {
 	c := &CoreClient{
 		device: device,
 		tun:    tun,
+		state:  StateIdle,
 	}
 	log.Debugf(coreCommon.Category, "core mobile client created (tun2socks version)")
 	common.Client.SetVpnClient(coreCommon.Name, c)
@@ -40,6 +45,7 @@ func (c *CoreClient) Connect() (err error) {
 		if r := recover(); r != nil {
 			log.Debugf(coreCommon.Category, "RECOVERED from fail in Connect: %v", r)
 			err = fmt.Errorf("core mobile connect panic: %v", r)
+			_ = c.Disconnect()
 		}
 	}()
 
@@ -48,15 +54,30 @@ func (c *CoreClient) Connect() (err error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.state != StateIdle && c.state != StateFailed {
+		return lifecycleBusyError(c.state)
+	}
+	c.generation++
+	c.state = StatePreparing
+	ledger := &resourceLedger{}
+	c.resources = ledger
+	fail := func(cause error) error {
+		c.state = StateFailed
+		cleanupErr := ledger.Rollback()
+		c.engine = nil
+		c.tun = nil
+		c.device = nil
+		common.Client.MarkInactive(coreCommon.Name)
+		return errors.Join(cause, cleanupErr)
+	}
 
 	if c.device == nil {
-		return errors.New("core mobile protocol device is not initialized")
+		return fail(errors.New("core mobile protocol device is not initialized"))
 	}
 	if c.tun == nil {
-		common.Client.MarkActive(coreCommon.Name)
-		log.Debugf(coreCommon.Category, "core mobile client already connected; skipping tun2socks engine start")
-		return nil
+		return fail(errors.New("core mobile TUN device is not initialized"))
 	}
+	releaseTun := ledger.Add(c.tun.Close)
 
 	var fd int
 	if f, ok := c.tun.(*os.File); ok {
@@ -67,53 +88,35 @@ func (c *CoreClient) Connect() (err error) {
 		}
 	} else {
 		log.Debugf(coreCommon.Category, "failed to get FD from tun: not an *os.File")
-		return fmt.Errorf("invalid tun device type")
+		return fail(fmt.Errorf("invalid tun device type"))
 	}
 
 	engineFD, err := unix.Dup(fd)
 	if err != nil {
 		log.Debugf(coreCommon.Category, "failed to duplicate tun fd for tun2socks: %v", err)
-		common.Client.MarkInactive(coreCommon.Name)
-		return fmt.Errorf("failed to duplicate tun fd for tun2socks: %w", err)
+		return fail(fmt.Errorf("failed to duplicate tun fd for tun2socks: %w", err))
 	}
-	engineStarted := false
-	defer func() {
-		if !engineStarted {
-			_ = unix.Close(engineFD)
-		}
-	}()
+	releaseFD := ledger.Add(func() error { return unix.Close(engineFD) })
 
 	err = c.device.Open(0, "")
 	if err != nil {
 		log.Debugf(coreCommon.Category, "failed to create protocol device: %v", err)
-		common.Client.MarkInactive(coreCommon.Name)
-		return fmt.Errorf("failed to open protocol device: %w", err)
+		return fail(fmt.Errorf("failed to open protocol device: %w", err))
 	}
+	ledger.Add(c.device.Close)
 
 	log.Debugf(coreCommon.Category, "starting tun2socks engine with proxy %s", c.device.GetProxyAddr())
-	err = tunnel.StartEngine(platform_engine.EngineConfig{
+	c.engine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{
 		ProxyAddr:   c.device.GetProxyAddr(),
 		FD:          engineFD,
 		UplinkIface: "",
 	})
 	if err != nil {
 		log.Debugf(coreCommon.Category, "Can't start tun2socks: %v", err)
-		if c.tun != nil {
-			if closeErr := c.tun.Close(); closeErr != nil {
-				log.Debugf(coreCommon.Category, "failed to close tun fd after tun2socks start error: %v", closeErr)
-				err = errors.Join(err, fmt.Errorf("failed to close tun fd after tun2socks start error: %w", closeErr))
-			}
-			c.tun = nil
-		}
-		if closeErr := c.device.Close(); closeErr != nil {
-			log.Debugf(coreCommon.Category, "failed to close protocol device after tun2socks start error: %v", closeErr)
-			err = errors.Join(err, fmt.Errorf("failed to close protocol device after tun2socks start error: %w", closeErr))
-		}
-		c.device = nil
-		common.Client.MarkInactive(coreCommon.Name)
-		return fmt.Errorf("failed to start tun2socks engine: %w", err)
+		return fail(fmt.Errorf("failed to start tun2socks engine: %w", err))
 	}
-	engineStarted = true
+	releaseFD() // tun2socks now owns the duplicated descriptor.
+	ledger.Add(func() error { c.engine.Stop(); return nil })
 
 	if c.tun != nil {
 		if closeErr := c.tun.Close(); closeErr != nil {
@@ -123,7 +126,9 @@ func (c *CoreClient) Connect() (err error) {
 		}
 		c.tun = nil
 	}
+	releaseTun()
 
+	c.state = StateConnected
 	common.Client.MarkActive(coreCommon.Name)
 	log.Debugf(coreCommon.Category, "core client connected successfully via tun2socks")
 	return nil
@@ -135,29 +140,21 @@ func (c *CoreClient) Disconnect() error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	var errs []error
-	tunnel.StopEngine()
-
-	if c.tun != nil {
-		if err := c.tun.Close(); err != nil {
-			log.Debugf(coreCommon.Category, "failed to close unused tun fd wrapper: %v", err)
-			errs = append(errs, fmt.Errorf("failed to close unused tun fd wrapper: %w", err))
-		}
-		c.tun = nil
+	if c.state == StateIdle {
+		return nil
 	}
+	c.state = StateStopping
 
-	if c.device != nil {
-		if err := c.device.Close(); err != nil {
-			log.Debugf(coreCommon.Category, "failed to close protocol device: %v", err)
-			errs = append(errs, fmt.Errorf("failed to close protocol device: %w", err))
-		}
-		c.device = nil
-	}
+	err := c.resources.Rollback()
+	c.resources = nil
+	c.engine = nil
+	c.tun = nil
+	c.device = nil
+	c.state = StateIdle
 
 	log.Debugf(coreCommon.Category, "core client disconnected")
 	common.Client.MarkInactive(coreCommon.Name)
-	return errors.Join(errs...)
+	return err
 }
 
 func (c *CoreClient) SwitchDevice(device pkg.ProtocolDevice) error {
@@ -168,41 +165,11 @@ func (c *CoreClient) SwitchDevice(device pkg.ProtocolDevice) error {
 		return errors.New("core mobile protocol device is not initialized")
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.device == nil {
-		return errors.New("core mobile current protocol device is not initialized")
-	}
-
-	if err := device.Open(0, ""); err != nil {
-		if closeErr := device.Close(); closeErr != nil {
-			log.Debugf(coreCommon.Category, "failed to close replacement protocol device after open error: %v", closeErr)
-		}
-		return fmt.Errorf("failed to open replacement protocol device: %w", err)
-	}
-
-	proxyAddr := device.GetProxyAddr()
-	if err := tunnel.SwitchVPNProxy(proxyAddr); err != nil {
-		_ = device.Close()
-		return fmt.Errorf("failed to switch tun2socks proxy to replacement device: %w", err)
-	}
-
-	oldDevice := c.device
-	c.device = device
-	common.Client.MarkActive(coreCommon.Name)
-	log.Debugf(coreCommon.Category, "core mobile client switched protocol device proxy=%s", proxyAddr)
-
-	go func() {
-		if err := oldDevice.Close(); err != nil {
-			log.Debugf(coreCommon.Category, "failed to close previous protocol device after switch: %v", err)
-		}
-	}()
-	return nil
+	return fmt.Errorf("protocol changes require a completed disconnect before starting a new session")
 }
 
 func (c *CoreClient) Refresh() error {
-	return nil
+	return fmt.Errorf("core client refresh is unsupported; stop and start a new session")
 }
 
 func (c *CoreClient) HealthCheck() error {
@@ -210,8 +177,30 @@ func (c *CoreClient) HealthCheck() error {
 }
 
 func (c *CoreClient) GetServerIP() net.IP {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c == nil || c.device == nil {
 		return nil
 	}
 	return c.device.GetServerIP()
+}
+
+// State returns the current lifecycle state without exposing mutable resources.
+func (c *CoreClient) State() LifecycleState {
+	if c == nil {
+		return StateFailed
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.state
+}
+
+// Generation changes for every accepted start attempt.
+func (c *CoreClient) Generation() uint64 {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.generation
 }

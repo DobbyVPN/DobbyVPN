@@ -64,11 +64,13 @@ fun DobbySocksScreen(
                     tagText = when (uiMainState.connectionState) {
                         VpnConnectionState.DISCONNECTED -> "Status: disconnected"
                         VpnConnectionState.CONNECTING -> "Status: connecting..."
+                        VpnConnectionState.STOPPING -> "Status: stopping..."
                         VpnConnectionState.CONNECTED -> "Status: connected"
                     },
                     color = when (uiMainState.connectionState) {
                         VpnConnectionState.DISCONNECTED -> 0xFFFEE2E2
                         VpnConnectionState.CONNECTING -> 0xFFFEFEDC
+                        VpnConnectionState.STOPPING -> 0xFFFEFEDC
                         VpnConnectionState.CONNECTED -> 0xFFDCFCE7
                     },
                 )
@@ -106,6 +108,7 @@ fun DobbySocksScreen(
                     when (uiMainState.connectionState) {
                         VpnConnectionState.DISCONNECTED -> "Start"
                         VpnConnectionState.CONNECTING -> "Stop"
+                        VpnConnectionState.STOPPING -> "Stopping..."
                         VpnConnectionState.CONNECTED -> "Stop"
                     }
                 )

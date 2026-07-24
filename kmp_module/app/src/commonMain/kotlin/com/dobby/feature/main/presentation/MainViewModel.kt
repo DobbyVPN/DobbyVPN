@@ -23,6 +23,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
@@ -44,6 +46,9 @@ class MainViewModel(
     private var stopRequested = false
     private var failoverJob: Job? = null
     private var backendRuntimeInitialized = false
+    private val lifecycleMutex = Mutex()
+    private var nextTunnelGeneration = 0L
+    private var activeTunnelGeneration = 0L
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
     //endregion
@@ -135,6 +140,10 @@ class MainViewModel(
                 VpnConnectionState.CONNECTING, VpnConnectionState.CONNECTED -> {
                     logger.log("Stopping VPN service due to current state=${connectionStateRepository.statusFlow.value}")
                     stopVpnService()
+                }
+
+                VpnConnectionState.STOPPING -> {
+                    logger.log("Ignoring connection button while VPN cleanup is still running")
                 }
             }
         }
@@ -270,10 +279,12 @@ class MainViewModel(
     }
 
     suspend fun startVpnService(): Boolean {
-        stopRequested = false
-        failoverJob?.cancel()
-        failoverJob = null
-        return startVpnServiceLoop(initialReason = "start requested")
+        return lifecycleMutex.withLock {
+            stopRequested = false
+            failoverJob?.cancel()
+            failoverJob = null
+            startVpnServiceLoop(initialReason = "start requested")
+        }
     }
 
     private suspend fun startVpnServiceLoop(initialReason: String): Boolean {
@@ -402,7 +413,10 @@ class MainViewModel(
                 averageLatencyMs = averageLatencyMs
             )
         } finally {
-            logger.log("[ProtocolSelection] Probe finished $label; keeping VPN interface available for protocol reuse")
+            // Probes must not hand an established TUN to the next profile.  In particular a
+            // slow failure from this profile must not reconnect after another profile is chosen.
+            logger.log("[ProtocolSelection] Probe finished $label; fully stopping its tunnel generation")
+            stopVpnRuntime(resetUiState = false, isUserInitiated = false)
         }
     }
 
@@ -456,13 +470,18 @@ class MainViewModel(
         }
 
         logger.log("Start tunnel service")
-        connectionStateRepository.serviceStartedFlow.prepare()
+        val generation = ++nextTunnelGeneration
+        activeTunnelGeneration = generation
+        connectionStateRepository.serviceStartedFlow.prepare(generation)
         connectionStateRepository.vpnNetworkReadyFlow.prepare()
-        vpnManager.start(isProtocolProbe = isProtocolProbe)
+        vpnManager.start(isProtocolProbe = isProtocolProbe, generation = generation)
 
         logger.log("Await service started result")
-        val connected = connectionStateRepository.serviceStartedFlow.awaitResult(ProtocolSelectionSettings.SERVICE_START_TIMEOUT_MS)
-        logger.log("Got service started result: $connected")
+        val connected = connectionStateRepository.serviceStartedFlow.awaitResult(
+            ProtocolSelectionSettings.SERVICE_START_TIMEOUT_MS,
+            generation,
+        )
+        logger.log("Got service started result: $connected generation=$generation")
 
         if (connected) {
             if (isProtocolProbe) {
@@ -489,13 +508,21 @@ class MainViewModel(
         stopRequested = true
         failoverJob?.cancel()
         failoverJob = null
-        stopVpnRuntime(resetUiState = true, isUserInitiated = true)
+        connectionStateRepository.tryUpdateStatus(VpnConnectionState.STOPPING)
+        _uiState.tryEmit(_uiState.value.copy(connectionState = VpnConnectionState.STOPPING))
+        // A stop request is visible immediately to in-flight probes; cleanup itself is
+        // serialized with start/failover so no next profile can acquire a TUN until it ends.
+        viewModelScope.launch(Dispatchers.Default) {
+            lifecycleMutex.withLock {
+                stopVpnRuntime(resetUiState = true, isUserInitiated = true)
+            }
+        }
     }
 
     private fun stopVpnRuntime(resetUiState: Boolean, isUserInitiated: Boolean) {
         logger.log("Stopping VPN service...")
         logger.log("Stop tunnel service")
-        vpnManager.stop(isUserInitiated = isUserInitiated)
+        vpnManager.stop(isUserInitiated = isUserInitiated, generation = activeTunnelGeneration)
         logger.log("Stop health check")
         healthCheckManager.stopHealthCheck()
         logger.log("Stop connection detector")
@@ -518,14 +545,18 @@ class MainViewModel(
         }
 
         failoverJob = viewModelScope.launch(Dispatchers.Default) {
-            stopConnectionStateDetector()
-            healthCheckManager.stopHealthCheck()
-            logger.log("[ProtocolSelection] Restarting protocol selection after $reason")
+            lifecycleMutex.withLock {
+                if (stopRequested) return@withLock
+                stopConnectionStateDetector()
+                healthCheckManager.stopHealthCheck()
+                stopVpnRuntime(resetUiState = false, isUserInitiated = false)
+                logger.log("[ProtocolSelection] Restarting protocol selection after $reason")
 
-            connectionStateRepository.updateStatus(VpnConnectionState.CONNECTING)
-            _uiState.emit(_uiState.value.copy(connectionState = VpnConnectionState.CONNECTING))
+                connectionStateRepository.updateStatus(VpnConnectionState.CONNECTING)
+                _uiState.emit(_uiState.value.copy(connectionState = VpnConnectionState.CONNECTING))
 
-            startVpnServiceLoop(initialReason = "rescan after $reason")
+                startVpnServiceLoop(initialReason = "rescan after $reason")
+            }
         }
     }
 

@@ -2,6 +2,7 @@ package com.dobby.backend
 
 import android.net.VpnService
 import com.dobby.feature.diagnostic.domain.VpnConnectionState
+import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.gomobile.dobbyvpn.Dobbyvpn
 import com.dobby.gomobile.dobbyvpn.SocketProtector
 
@@ -79,7 +80,10 @@ object GoBackendWrapper {
 
     fun registerVpnService(service: VpnService) {
         Dobbyvpn.registerSocketProtector(object : SocketProtector {
-            override fun protect(fd: Int): Boolean = service.protect(fd)
+            override fun protect(fd: Int): Boolean = when (service) {
+                is DobbyVpnService -> service.protectProtocolSocket(fd)
+                else -> service.protect(fd)
+            }
         })
     }
 }

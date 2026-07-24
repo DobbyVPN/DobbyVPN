@@ -75,16 +75,20 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	}
 	log.Debugf(coreCommon.Category, "[Linux][Step 3][OK] Uplink interface=%s", uplinkIface)
 	protected_dialer.SetDefaultRoute(gatewayIP.String(), uplinkIface, 0)
+	routePlan := routing.NewPlan(fmt.Sprintf("%s:%s", app.RoutingConfig.TunDeviceName, serverIP.String()))
+	defer func() {
+		if cleanupErr := routePlan.Close(); cleanupErr != nil {
+			log.Debugf(coreCommon.Category, "[Linux][RoutingPlan][WARN] %v", cleanupErr)
+		}
+	}()
 
 	// 4. early route
-	earlyRouteInstalled := false
 	if serverIP.String() != "127.0.0.1" {
 		log.Debugf(coreCommon.Category, "[Linux][Step 4] Installing early route → %s via %s dev %s",
 			serverIP, gatewayIP, uplinkIface)
 
 		common.Client.MarkInCriticalSection(coreCommon.Name)
-		var routeChanged bool
-		routeChanged, err = routing.EnsureProxyRoute(serverIP.String(), gatewayIP.String(), uplinkIface)
+		_, err = routePlan.AcquireLinuxProxyRoute(serverIP.String(), gatewayIP.String(), uplinkIface)
 		if err != nil {
 			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 			err = fmt.Errorf("failed to add early route: %w", err)
@@ -94,35 +98,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 		}
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
-		earlyRouteInstalled = routeChanged
 		log.Debugf(coreCommon.Category, "[Linux][Step 4][OK] Early route installed")
 	} else {
 		log.Debugf(coreCommon.Category, "[Linux][Step 4] Skipped (localhost / Cloak)")
-	}
-
-	markedRoutingConfigured := false
-	cleanupStartupRoutes := func(reason string) {
-		common.Client.MarkInCriticalSection(coreCommon.Name)
-		defer common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-
-		if earlyRouteInstalled {
-			log.Debugf(coreCommon.Category, "[Linux][Cleanup] Removing early route after %s", reason)
-			if cleanupErr := routing.DeleteProxyRoute(serverIP.String(), gatewayIP.String(), uplinkIface); cleanupErr != nil {
-				log.Debugf(coreCommon.Category, "[Linux][Cleanup][WARN] Failed to remove early route: %v", cleanupErr)
-			}
-		}
-
-		if markedRoutingConfigured {
-			log.Debugf(coreCommon.Category, "[Linux][Cleanup] Removing marked routing after %s", reason)
-			if cleanupErr := routing.CleanupMarkedRouting(
-				app.RoutingConfig.RoutingTableID,
-				app.RoutingConfig.RoutingTablePriority,
-				uplinkIface,
-				gatewayIP.String(),
-			); cleanupErr != nil {
-				log.Debugf(coreCommon.Category, "[Linux][Cleanup][WARN] Failed to remove marked routing: %v", cleanupErr)
-			}
-		}
 	}
 
 	// 5. marked routing
@@ -133,7 +111,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	)
 
 	common.Client.MarkInCriticalSection(coreCommon.Name)
-	if err = routing.SetupMarkedRouting(
+	if err = routePlan.AcquireLinuxMarkedRouting(
 		app.RoutingConfig.RoutingTableID,
 		app.RoutingConfig.RoutingTablePriority,
 		uplinkIface,
@@ -147,11 +125,11 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	}
 	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
-	markedRoutingConfigured = true
 	log.Debugf(coreCommon.Category, "[Linux][Step 5][OK] Policy routing configured")
 
 	// protected sockets
 	protected_dialer.SetLinuxSocketMark(app.RoutingConfig.RoutingTableID)
+	defer protected_dialer.SetLinuxSocketMark(0)
 
 	log.Debugf(coreCommon.Category, "[Linux][Step 5] Protected dialers installed (SO_MARK=%d)", app.RoutingConfig.RoutingTableID)
 
@@ -163,7 +141,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 
 	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
 	if err != nil {
-		cleanupStartupRoutes("TUN creation error")
 		err = fmt.Errorf("failed to create TUN device: %w", err)
 		log.Debugf(coreCommon.Category, "[Linux][Step 6][ERROR] %v", err)
 		signalInit(initResult, err)
@@ -177,7 +154,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, uplinkIface)
 	if err != nil {
 		_ = tun.Close()
-		cleanupStartupRoutes("ProtocolDevice error")
 		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
 		log.Debugf(coreCommon.Category, "[Linux][Step 7][ERROR] %v", err)
 		signalInit(initResult, err)
@@ -185,7 +161,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	}
 	log.Debugf(coreCommon.Category, "[Linux][Step 7][OK] SOCKS5 proxy=%s", app.ProtocolDevice.GetProxyAddr())
 
-	routingStarted := false
+	var ownedEngine *tunnel.Engine
 	var closeOnce sync.Once
 	closeAll := func() {
 		closeOnce.Do(func() {
@@ -202,28 +178,19 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 			}
 			app.currentDevice = nil
 			app.running = false
+			ownedEngine = app.engine
+			app.engine = nil
 			app.mu.Unlock()
 
-			if routingStarted {
-				common.Client.MarkInCriticalSection(coreCommon.Name)
-				if err = routing.StopRouting(currentServerIP, gatewayIP.String(), uplinkIface); err != nil {
-					log.Debugf(coreCommon.Category, "[Linux][StopRouting][ERROR] %v", err)
-				}
-				common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-			} else {
-				log.Debugf(coreCommon.Category, "[Linux][Lifecycle] Routing switch was not completed; skipping StopRouting")
+			common.Client.MarkInCriticalSection(coreCommon.Name)
+			if cleanupErr := routePlan.Close(); cleanupErr != nil {
+				log.Debugf(coreCommon.Category, "[Linux][RoutingPlan][WARN] %v", cleanupErr)
 			}
+			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
-			if err = routing.CleanupMarkedRouting(
-				app.RoutingConfig.RoutingTableID,
-				app.RoutingConfig.RoutingTablePriority,
-				uplinkIface,
-				gatewayIP.String(),
-			); err != nil {
-				log.Debugf(coreCommon.Category, "[Linux][CleanupMarkedRouting][WARN] %v", err)
+			if ownedEngine != nil {
+				ownedEngine.Stop()
 			}
-
-			tunnel.StopEngine()
 
 			if currentDevice != nil {
 				_ = currentDevice.Close()
@@ -231,7 +198,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 
 			_ = tun.Close()
 
-			log.Debugf(coreCommon.Category, "[Linux][Lifecycle] Shutdown complete")
+			log.Debugf(coreCommon.Category, "[Linux][Lifecycle] Shutdown complete server=%s", currentServerIP)
 		})
 	}
 
@@ -256,7 +223,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 
 	// 9. tun2socks
 	log.Debugf(coreCommon.Category, "[Linux][Step 9] Starting tun2socks (fd=%d proxy=%s)", fd, app.ProtocolDevice.GetProxyAddr())
-	err = tunnel.StartEngine(platform_engine.EngineConfig{
+	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{
 		ProxyAddr:   app.ProtocolDevice.GetProxyAddr(),
 		FD:          fd,
 		UplinkIface: "",
@@ -266,6 +233,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 		signalInit(initResult, err)
 		return err
 	}
+	app.mu.Lock()
+	app.engine = ownedEngine
+	app.mu.Unlock()
 
 	log.Debugf(coreCommon.Category, "[Linux][Step 9][OK] tun2socks started — waiting for readiness...")
 
@@ -275,13 +245,10 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	log.Debugf(coreCommon.Category, "[Linux][Step 10] Switching default route → TUN (%s)", app.RoutingConfig.TunDeviceName)
 
 	common.Client.MarkInCriticalSection(coreCommon.Name)
-	if err = routing.StartRouting(serverIP.String(), gatewayIP.String(), uplinkIface, app.RoutingConfig.TunDeviceName); err != nil {
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		log.Debugf(coreCommon.Category, "[Linux][Step 10][Rollback] Restoring routing after failed VPN route switch")
-		common.Client.MarkInCriticalSection(coreCommon.Name)
-		if rollbackErr := routing.StopRouting(serverIP.String(), gatewayIP.String(), uplinkIface); rollbackErr != nil {
-			log.Debugf(coreCommon.Category, "[Linux][Step 10][Rollback][WARN] Failed to restore routing after route switch error: %v", rollbackErr)
-		}
+	if _, err = routePlan.AcquireLinuxTunnelDefault(app.RoutingConfig.TunDeviceName); err == nil {
+		err = routePlan.AcquireLinuxIPv6Block()
+	}
+	if err != nil {
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		err = fmt.Errorf("failed to configure routing: %w", err)
 		log.Debugf(coreCommon.Category, "[Linux][Step 10][ERROR] %v", err)
@@ -289,7 +256,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 		return err
 	}
 	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-	routingStarted = true
 
 	app.mu.Lock()
 	app.currentDevice = app.ProtocolDevice
@@ -307,9 +273,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	signalInit(initResult, nil)
 
 	<-ctx.Done()
-
-	log.Debugf(coreCommon.Category, "[Tunnel] Stopping engine")
-	tunnel.StopEngine()
 
 	log.Debugf(coreCommon.Category, "[Linux][Lifecycle] Context cancelled — stopping engine")
 	return nil

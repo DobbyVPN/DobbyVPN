@@ -2,7 +2,11 @@
 
 package protected_dialer
 
-import "go_module/log"
+import (
+	"fmt"
+
+	"go_module/log"
+)
 
 var MakeSocketProtected func(fd uintptr) bool
 
@@ -21,8 +25,11 @@ func ProtectSocket(fd uintptr, network string) bool {
 	return true
 }
 
-func (a *androidProtector) Protect(fd uintptr, network string) {
-	ProtectSocket(fd, network)
+func (a *androidProtector) Protect(fd uintptr, network string) error {
+	if !ProtectSocket(fd, network) {
+		return fmt.Errorf("%w: Android VpnService.protect rejected fd=%d", ErrSocketProtectionUnavailable, fd)
+	}
+	return nil
 }
 
 func init() {

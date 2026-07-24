@@ -30,6 +30,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let telemetryAttributesKey = "telemetryAttributesKey"
     private let healthCheckStateKey = "healthCheckStateKey"
     private let healthCheckStateUpdatedAtKey = "healthCheckStateUpdatedAtKey"
+    private let healthCheckGenerationKey = "healthCheckGenerationKey"
     private let isTrustTunnelEnabledKey = "isTrustTunnelEnabledKey"
     private let trustTunnelConfigKey = "trustTunnelConfigKey"
 
@@ -275,6 +276,11 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     public func setHealthCheckState(state: Int32) {
         userDefaults.set(Int(state), forKey: healthCheckStateKey)
         userDefaults.set(Date().timeIntervalSince1970, forKey: healthCheckStateUpdatedAtKey)
+    }
+
+    /// Diagnostic correlation only.  Consumers must use NetworkExtension status for connection.
+    public func setHealthCheckGeneration(_ generation: UInt64) {
+        userDefaults.set(String(generation), forKey: healthCheckGenerationKey)
     }
 
     public func getHealthCheckStateUpdatedAt() -> Double {
