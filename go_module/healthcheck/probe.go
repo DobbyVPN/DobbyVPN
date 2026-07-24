@@ -41,6 +41,14 @@ func MeasureTunnelProbeAverageLatencyMillis() int64 {
 }
 
 func MeasureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis int64) int64 {
+	return MeasureTunnelProbeAverageLatencyMillisWithContext(context.Background(), timeoutMillis)
+}
+
+// MeasureTunnelProbeAverageLatencyMillisWithContext runs the tunnel probe with
+// the supplied cancellation context. The context is propagated to every
+// endpoint request; timeoutMillis remains the per-endpoint upper bound for
+// callers which do not have a tighter deadline.
+func MeasureTunnelProbeAverageLatencyMillisWithContext(ctx context.Context, timeoutMillis int64) int64 {
 	timeout := time.Duration(timeoutMillis) * time.Millisecond
 	if timeout < probeMinTimeout {
 		log.Warnf(hcCommon.Category, "Tunnel probe timeout is too small timeoutMs=%d using default=%s", timeoutMillis, probeTimeout)
@@ -54,7 +62,7 @@ func MeasureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis int64) int6
 		wg.Add(1)
 		go func(i int, url string) {
 			defer wg.Done()
-			results[i] = probeEndpoint(url, timeout)
+			results[i] = probeEndpoint(ctx, url, timeout)
 		}(i, url)
 	}
 	wg.Wait()
@@ -88,9 +96,9 @@ func MeasureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis int64) int6
 	return avg
 }
 
-func probeEndpoint(url string, timeout time.Duration) probeEndpointResult {
+func probeEndpoint(parent context.Context, url string, timeout time.Duration) probeEndpointResult {
 	startedAt := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	transport := &http.Transport{

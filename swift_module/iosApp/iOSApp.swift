@@ -6,6 +6,7 @@ import CommonDI
 @main
 struct iOSApp: App {
     init() {
+        NativeModuleHolder.installSessionBridge()
         StartDIKt.startDI(nativeModules: [NativeModuleHolder.shared]) { _ in }
     }
 

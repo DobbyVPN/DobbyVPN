@@ -111,7 +111,22 @@ rpc ClearGeoRoutingConf (Empty)                   returns (Empty);
 // dns_cache.go
 rpc ClearDNSCache (Empty)                                  returns (Empty);
 rpc SetDNSCacheEntries (SetDNSCacheEntriesRequest)         returns (SetDNSCacheEntriesResponse);
+
+// sessionapi/v1 (versioned, protocol-neutral desktop transport)
+rpc GetCapabilities (SessionGetCapabilitiesRequest)         returns (SessionGetCapabilitiesResponse);
+rpc CreateSession (SessionCreateSessionRequest)             returns (SessionCreateSessionResponse);
+rpc Configure (SessionConfigureRequest)                     returns (SessionConfigureResponse);
+rpc Start (SessionStartRequest)                             returns (SessionStartResponse);
+rpc Stop (SessionStopRequest)                               returns (SessionStopResponse);
+rpc Snapshot (SessionSnapshotRequest)                       returns (SessionSnapshotResponse);
+rpc Observe (SessionObserveRequest)                         returns (SessionObserveResponse);
+rpc DestroySession (SessionDestroySessionRequest)           returns (SessionDestroySessionResponse);
 ```
+
+`sessionapi/v1` uses opaque session and command IDs, raw configuration bytes,
+generation-correlated start/stop operations, and ordered session events. Its
+responses contain only safe profile summaries, warnings, state, and typed
+failures; they never return the submitted configuration or credentials.
 
 Or see the canonical [vpnserver.proto](../kmp_module/grpcprotos/src/main/proto/com/dobby/vpnserver/vpnserver.proto) for the desktop gRPC API.
 
@@ -121,13 +136,14 @@ After editing that proto, regenerate stubs:
 
 ```bash
 cd go_module
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-chmod +x scripts/regenerate-grpcproto.sh
+export PATH="$PWD/../../tools/protoc/bin:$(go env GOPATH)/bin:$PATH"
 ./scripts/regenerate-grpcproto.sh
 ```
 
-The script copies the canonical proto into `grpcproto/` (gitignored) and runs `protoc`.
+The script copies the canonical proto into `grpcproto/` (gitignored) and runs
+the workspace-local `tools/protoc/bin/protoc`. It requires `protoc-gen-go` and
+`protoc-gen-go-grpc` in `$(go env GOPATH)/bin`; install those user-local plugins
+only when they are absent.
 
 **Kotlin** (from `kmp_module/`, uses Gradle/protobuf plugin — same canonical file):
 

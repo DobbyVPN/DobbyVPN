@@ -6,6 +6,7 @@ import interop.georouting.GeoroutingGrpcLibrary
 import interop.healthcheck.HealthCheckGrpcLibrary
 import interop.logger.LoggerGrpcLibrary
 import interop.outline.OutlineGrpcLibrary
+import interop.session.SessionGrpcLibrary
 import interop.trusttunnel.TrustTunnelGrpcLibrary
 import interop.xray.XrayGrpcLibrary
 import io.grpc.ManagedChannelBuilder
@@ -29,6 +30,7 @@ object GrpcVpnLibrary: Closeable {
     val dnsCacheGrpcLibrary = DnsCacheGrpcLibrary(channel)
     val loggerGrpcLibrary = LoggerGrpcLibrary(channel)
     val georoutingGrpcLibrary = GeoroutingGrpcLibrary(channel)
+    val sessionGrpcLibrary = SessionGrpcLibrary(channel)
 
     override fun close() {
         this.channel.shutdown().awaitTermination(TERMINATION_TIMEOUT, TimeUnit.SECONDS)

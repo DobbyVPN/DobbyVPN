@@ -15,6 +15,8 @@ public class NativeModuleHolder {
     public static let logsRepository = LogsRepository
         .init(logFilePath: path, logEventsChannel: chan)
         .setSentryLogger(_sentryLogger: SentryLogsRepositoryImpl())
+    private static let vpnManager = VpnManagerImpl(connectionRepository: connectionStateRepository)
+    private static let sessionShell = IOSSessionShell(manager: vpnManager)
     
     public static let shared: Koin_coreModule = MakeNativeModuleKt.makeNativeModule(
         copyLogsInteractor: { _ in
@@ -33,7 +35,7 @@ public class NativeModuleHolder {
             return connectionStateRepository
         },
         vpnManager: { _ in
-            return VpnManagerImpl(connectionRepository: connectionStateRepository)
+            return vpnManager
         },
         authenticationManager: { _ in
             return AuthenticationManagerImpl()
@@ -48,6 +50,13 @@ public class NativeModuleHolder {
             return DnsPreflightResolverImpl()
         }
     )
+
+    // Must run before StartDI constructs MainViewModel. The bridge is narrow:
+    // it only persists opaque bytes, controls NetworkExtension, and reports
+    // authoritative NE status; Go remains extension-process lifecycle owner.
+    public static func installSessionBridge() {
+        IosSessionBridgeRegistry.shared.install(bridge: sessionShell)
+    }
     
     private init() {
     }

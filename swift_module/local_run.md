@@ -1,5 +1,13 @@
 # Guide to Running the iOS App Locally
 
+## Release gate: physical NetworkExtension smoke test
+
+Simulator and Linux CI cannot exercise packet-tunnel ownership. Before an iOS
+release, run a signed build on a physical device and verify a connect, a stop
+during startup, a restart after cleanup, and that the UI stays disconnected if
+NetworkExtension is disconnected. Record the device/OS result with the release
+notes.
+
 ## Installing Dependencies
 
 ### MyLibrary.xcframework

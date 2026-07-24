@@ -11,6 +11,8 @@ import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DnsPreflightResolverImpl
 import com.dobby.feature.main.domain.VpnManagerImpl
+import com.dobby.feature.main.domain.AndroidSessionController
+import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.vpn_service.CloakLibFacade
 import com.dobby.feature.vpn_service.OutlineLibFacade
 import com.dobby.feature.vpn_service.XrayLibFacade
@@ -49,6 +51,7 @@ val androidMainModule = makeNativeModule(
 
 val androidVpnModule = module {
     single { Logger(get()) }
+    single<SessionController> { AndroidSessionController(androidContext()) }
     factory<CloakLibFacade> { CloakLibFacadeImpl() }
     factory<OutlineLibFacade> { OutlineLibFacadeImpl() }
     factory<XrayLibFacade> { XrayLibFacadeImpl() }

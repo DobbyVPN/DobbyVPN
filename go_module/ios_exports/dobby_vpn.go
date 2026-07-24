@@ -4,134 +4,159 @@ package cloak_outline
 
 import (
 	"fmt"
-	"go_module/core"
+	"sync"
+	"syscall"
+
 	"go_module/log"
+	"go_module/sessionapi/mobilebinding"
 	"go_module/vpnmanager"
-	"os"
 
 	"golang.org/x/sys/unix"
 )
 
 const utunControlName = "com.apple.net.utun_control"
 const logCategory = "ios_exports"
+const soNoTCNetPolicy = 0x1101
 
-var vpnHolder = vpnmanager.NewClientHolder(logCategory)
+var (
+	iosCallbacks   iosPlatformCallbacks
+	mobileSessions = mobilebinding.New(&iosCallbacks)
+	legacySession  = mobileSessions.NewLegacyClient()
+)
 
+// RegisterSessionPlatform lets the NetworkExtension shell receive only safe,
+// generation-correlated state. Without a delegate, iOS acquires its TUN by
+// locating and duplicating the current utun for every runtime generation.
+func RegisterSessionPlatform(callbacks mobilebinding.PlatformCallbacks) {
+	iosCallbacks.set(callbacks)
+}
+
+func GetSessionCapabilities() string { return mobileSessions.GetCapabilities() }
+func CreateSession() string          { return mobileSessions.CreateSession() }
+func ConfigureSession(sessionID, commandID string, rawConfig []byte) string {
+	return mobileSessions.Configure(sessionID, commandID, rawConfig)
+}
+func StartSession(sessionID, commandID, mode string, index int32) string {
+	return mobileSessions.Start(sessionID, commandID, mode, index)
+}
+func StopSession(sessionID, commandID string, generation int64) string {
+	return mobileSessions.Stop(sessionID, commandID, generation)
+}
+func SnapshotSession(sessionID string) string { return mobileSessions.Snapshot(sessionID) }
+func ObserveSession(sessionID string, afterSequence int64) string {
+	return mobileSessions.Observe(sessionID, afterSequence)
+}
+func DestroySession(sessionID string) string { return mobileSessions.Destroy(sessionID) }
+
+// NewVpnClient remains an iOS compatibility wrapper. It creates a v1 legacy
+// profile; actual utun discovery and duplication happen only when it starts.
 func NewVpnClient(transportConfig string, protocol string) (err error) {
 	defer vpnmanager.GuardErr(logCategory, "NewVpnClient", &err)()
-	log.Debugf(logCategory, "NewVpnClient() called")
-
-	vpnHolder.Lock()
-	defer vpnHolder.Unlock()
-
-	device, switched, err := vpnHolder.SwitchOrPrepareDevice(transportConfig, protocol)
-	if err != nil {
-		return fmt.Errorf("NewVpnClient(): %w", err)
+	if err := legacySession.Configure(transportConfig, protocol, -1); err != nil {
+		log.Debugf(logCategory, "legacy configure failed")
+		return fmt.Errorf("NewVpnClient: %w", err)
 	}
-	if switched {
-		return nil
-	}
-
-	log.Debugf(logCategory, "Start fd search")
-
-	fd := GetTunnelFileDescriptor()
-	if fd < 0 {
-		return fmt.Errorf("NewVpnClient(): utun fd not found")
-	}
-
-	log.Debugf(logCategory, "Fd was found, fd = %d", fd)
-	log.Debugf(logCategory, "Config length=%d", len(transportConfig))
-
-	tunFd, err := unix.Dup(fd)
-	if err != nil {
-		return fmt.Errorf("NewVpnClient(): failed to duplicate utun fd: %w", err)
-	}
-	log.Debugf(logCategory, "Duplicated utun fd = %d", tunFd)
-	tunFile := os.NewFile(uintptr(tunFd), "utun")
-
-	vpnHolder.SetClient(core.NewClient(device, tunFile))
-
-	log.Debugf(logCategory, "NewVpnClient() finished")
+	log.Debugf(logCategory, "legacy session configured")
 	return nil
 }
 
 func VpnConnect() (err error) {
 	defer vpnmanager.GuardErr(logCategory, "VpnConnect", &err)()
-	log.Debugf(logCategory, "VpnConnect() called")
-
-	vpnHolder.Lock()
-	defer vpnHolder.Unlock()
-
-	if err := vpnHolder.Connect(); err != nil {
-		return fmt.Errorf("VpnConnect(): %w", err)
+	if err := legacySession.Connect(); err != nil {
+		log.Debugf(logCategory, "legacy start rejected")
+		return fmt.Errorf("VpnConnect: %w", err)
 	}
-
-	log.Debugf(logCategory, "VpnConnect() finished successfully")
+	log.Debugf(logCategory, "legacy start requested")
 	return nil
 }
 
 func VpnDisconnect() (err error) {
 	defer vpnmanager.GuardErr(logCategory, "VpnDisconnect", &err)()
-	log.Debugf(logCategory, "VpnDisconnect() called")
-
-	vpnHolder.Lock()
-	defer vpnHolder.Unlock()
-
-	if err := vpnHolder.DisconnectAndClear(); err != nil {
-		return fmt.Errorf("VpnDisconnect(): %w", err)
+	if err := legacySession.Disconnect(); err != nil {
+		log.Debugf(logCategory, "legacy stop failed")
+		return fmt.Errorf("VpnDisconnect: %w", err)
 	}
-
-	log.Debugf(logCategory, "VpnDisconnect() finished")
+	log.Debugf(logCategory, "legacy session stopped")
 	return nil
 }
 
-// NewOutlineClient creates an Outline VPN client using the given transport config.
-// Equivalent to NewVpnClient(config, "outline").
 func NewOutlineClient(transportConfig string) (err error) {
 	defer vpnmanager.GuardErr(logCategory, "NewOutlineClient", &err)()
-	log.Debugf(logCategory, "NewOutlineClient() called config.len=%d", len(transportConfig))
 	return NewVpnClient(transportConfig, "outline")
 }
-
-// OutlineConnect connects the previously created Outline client.
 func OutlineConnect() (err error) {
 	defer vpnmanager.GuardErr(logCategory, "OutlineConnect", &err)()
-	log.Debugf(logCategory, "OutlineConnect() called")
 	return VpnConnect()
 }
-
-// OutlineDisconnect disconnects and tears down the Outline client.
 func OutlineDisconnect() (err error) {
 	defer vpnmanager.GuardErr(logCategory, "OutlineDisconnect", &err)()
-	log.Debugf(logCategory, "OutlineDisconnect() called")
 	return VpnDisconnect()
+}
+
+type iosPlatformCallbacks struct {
+	mu       sync.RWMutex
+	delegate mobilebinding.PlatformCallbacks
+}
+
+func (p *iosPlatformCallbacks) set(callbacks mobilebinding.PlatformCallbacks) {
+	p.mu.Lock()
+	p.delegate = callbacks
+	p.mu.Unlock()
+}
+func (p *iosPlatformCallbacks) callback() mobilebinding.PlatformCallbacks {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.delegate
+}
+func (p *iosPlatformCallbacks) AcquireTunnel(sessionID string, generation int64) int32 {
+	if callback := p.callback(); callback != nil {
+		return callback.AcquireTunnel(sessionID, generation)
+	}
+	fd := GetTunnelFileDescriptor()
+	if fd < 0 {
+		return -1
+	}
+	dup, err := unix.Dup(fd)
+	if err != nil {
+		return -1
+	}
+	return int32(dup)
+}
+func (p *iosPlatformCallbacks) ReleaseTunnel(sessionID string, generation int64, fd int32) {
+	if callback := p.callback(); callback != nil {
+		callback.ReleaseTunnel(sessionID, generation, fd)
+	}
+}
+func (p *iosPlatformCallbacks) ProtectSocket(sessionID string, generation int64, fd int32) bool {
+	if callback := p.callback(); callback != nil {
+		return callback.ProtectSocket(sessionID, generation, fd)
+	}
+	return syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, soNoTCNetPolicy, 1) == nil
+}
+func (p *iosPlatformCallbacks) PublishState(sessionID string, generation int64, sequence int64, state string, profileIndex int32, profileProtocol string, failureCode string) {
+	if callback := p.callback(); callback != nil {
+		callback.PublishState(sessionID, generation, sequence, state, profileIndex, profileProtocol, failureCode)
+	}
 }
 
 func GetTunnelFileDescriptor() int {
 	ctlInfo := &unix.CtlInfo{}
 	copy(ctlInfo.Name[:], utunControlName)
-
 	for fd := 0; fd < 1024; fd++ {
 		addr, err := unix.Getpeername(fd)
 		if err != nil {
 			continue
 		}
-
 		addrCTL, ok := addr.(*unix.SockaddrCtl)
 		if !ok {
 			continue
 		}
-
-		if ctlInfo.Id == 0 {
-			if err := unix.IoctlCtlInfo(fd, ctlInfo); err != nil {
-				continue
-			}
+		if ctlInfo.Id == 0 && unix.IoctlCtlInfo(fd, ctlInfo) != nil {
+			continue
 		}
-
 		if addrCTL.ID == ctlInfo.Id {
 			return fd
 		}
 	}
-
 	return -1
 }

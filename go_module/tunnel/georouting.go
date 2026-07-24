@@ -2,6 +2,8 @@ package tunnel
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -44,7 +46,7 @@ func IsBypass(metadata *M.Metadata) bool {
 func mustCIDR(s string) {
 	_, ipnet, err := net.ParseCIDR(s)
 	if err != nil {
-		addBypassHost(s)
+		defaultBypassCIDRs = append(defaultBypassCIDRs, resolveHostToCIDRs(s)...)
 	} else {
 		defaultBypassCIDRs = append(defaultBypassCIDRs, ipnet)
 	}
@@ -69,6 +71,82 @@ func ClearGeoRoutingConf() {
 
 	defaultBypassCIDRs = nil
 	log.Debugf(Category, "[Routing] Cleared defaultBypassCIDRs")
+}
+
+// GeoRoutingLease owns a temporary replacement of the process-wide bypass
+// policy. Release is idempotent and restores the exact policy which existed
+// before acquisition. Session orchestration is serialized, so leases must be
+// released in acquisition order and must not overlap.
+type GeoRoutingLease struct {
+	once     sync.Once
+	previous []*net.IPNet
+}
+
+// AcquireGeoRoutingConf validates and resolves the complete policy before
+// changing global state. A failed acquisition therefore leaves the baseline
+// policy untouched.
+func AcquireGeoRoutingConf(entries []string) (*GeoRoutingLease, error) {
+	next, err := resolveRoutingEntries(entries)
+	if err != nil {
+		return nil, err
+	}
+	routesMu.Lock()
+	previous := cloneIPNets(defaultBypassCIDRs)
+	defaultBypassCIDRs = cloneIPNets(next)
+	routesMu.Unlock()
+	log.Debugf(Category, "[Routing] Acquired session bypass policy: %v", summarizeCIDRs(next))
+	return &GeoRoutingLease{previous: previous}, nil
+}
+
+func (l *GeoRoutingLease) Release() {
+	if l == nil {
+		return
+	}
+	l.once.Do(func() {
+		routesMu.Lock()
+		defaultBypassCIDRs = cloneIPNets(l.previous)
+		routesMu.Unlock()
+		log.Debugf(Category, "[Routing] Restored previous bypass policy")
+	})
+}
+
+func resolveRoutingEntries(entries []string) ([]*net.IPNet, error) {
+	var result []*net.IPNet
+	var errs []error
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if _, network, err := net.ParseCIDR(entry); err == nil {
+			result = append(result, network)
+			continue
+		}
+		resolved := resolveHostToCIDRs(entry)
+		if len(resolved) == 0 {
+			errs = append(errs, fmt.Errorf("could not resolve bypass host"))
+			continue
+		}
+		result = append(result, resolved...)
+	}
+	if len(errs) != 0 {
+		return nil, errors.Join(errs...)
+	}
+	return result, nil
+}
+
+func cloneIPNets(input []*net.IPNet) []*net.IPNet {
+	result := make([]*net.IPNet, 0, len(input))
+	for _, network := range input {
+		if network == nil {
+			continue
+		}
+		result = append(result, &net.IPNet{
+			IP:   append(net.IP(nil), network.IP...),
+			Mask: append(net.IPMask(nil), network.Mask...),
+		})
+	}
+	return result
 }
 
 func summarizeCIDRs(cidrs []*net.IPNet) []string {

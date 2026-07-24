@@ -1,0 +1,468 @@
+// Package runtimecore adapts sessionapi/v1 profiles to the existing protocol
+// devices and tun2socks CoreClient. It is deliberately owned by Go: callers
+// never need to interpret profile TOML or normalized protocol payloads.
+package runtimecore
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"sync"
+	"time"
+
+	"go_module/core/pkg"
+	"go_module/healthcheck"
+	"go_module/log"
+	"go_module/sessionapi/v1"
+	"go_module/tunnel"
+)
+
+const category = "sessionapi/runtimecore"
+
+// TunnelProvider is the deliberately narrow mobile boundary. Acquire must
+// return a newly allocated TUN for this exact SessionRef; a provider must not
+// retain or reuse a TUN from an earlier generation. ProtectSocket is passed to
+// custom device factories so platform dial hooks can correlate protection with
+// the session which owns the socket.
+type TunnelProvider interface {
+	Acquire(context.Context, v1.SessionRef) (TunnelLease, error)
+	ProtectSocket(context.Context, v1.SessionRef, int) error
+}
+
+type TunnelLease interface {
+	io.ReadWriteCloser
+	Release(context.Context) error
+}
+
+// InputProvider owns the Go-only routing and DNS preparation inputs. It must
+// return a lease which reverses exactly its session's changes. The built-in
+// implementation owns tunnel's process-global exclusion policy; Runtime
+// serializes all leases so no other runtime lease can overwrite that policy.
+type InputProvider interface {
+	Apply(context.Context, v1.SessionRef, []string, []string) (InputLease, error)
+}
+
+type InputLease interface{ Release(context.Context) error }
+
+// DeviceFactory receives only the normalized config for every protocol.
+// cloakRaw is deliberately not supplied here: Cloak compatibility parsing is
+// handled by the CloakStarter before the Outline device is constructed.
+type DeviceFactory func(context.Context, v1.SessionRef, v1.RuntimeProfile, SocketProtector) (pkg.ProtocolDevice, error)
+
+type SocketProtector func(context.Context, int) error
+
+type CoreFactory func(pkg.ProtocolDevice, io.ReadWriteCloser) coreClient
+
+type coreClient interface {
+	Connect() error
+	Disconnect() error
+}
+
+// CloakStarter starts the legacy global Cloak client and returns its matching
+// stop operation. Custom starters make lifecycle tests independent of Cloak's
+// native/network implementation.
+type CloakStarter func(context.Context, v1.SessionRef, []byte) (func(context.Context) error, error)
+
+type ProbeFunc func(context.Context) (int64, error)
+
+// ConnectedHealthFunc runs one connected-health check for a specific lease.
+// It must return promptly when ctx is canceled; the monitor uses that guarantee
+// to stop before runtime resources are released.
+type ConnectedHealthFunc func(context.Context, v1.SessionRef) error
+
+type Options struct {
+	Tunnel                 TunnelProvider
+	Inputs                 InputProvider
+	NewDevice              DeviceFactory
+	NewCore                CoreFactory
+	StartCloak             CloakStarter
+	Probe                  ProbeFunc
+	ProbeTimeout           time.Duration
+	ConnectedHealth        ConnectedHealthFunc
+	HealthInterval         time.Duration
+	HealthFailureThreshold int
+}
+
+// New returns a v1.Runtime. Its operation mutex deliberately serializes all
+// runs: existing CoreClient/CommonClient, Cloak, and desktop routing own
+// process-wide state, so parallel profile probes would not be isolated.
+func New(options Options) v1.Runtime {
+	r := &runtime{options: options}
+	if r.options.Inputs == nil {
+		r.options.Inputs = defaultInputs{}
+	}
+	if r.options.NewDevice == nil {
+		r.options.NewDevice = unsupportedDevice
+	}
+	if r.options.NewCore == nil {
+		r.options.NewCore = newPlatformCore
+	}
+	if r.options.StartCloak == nil {
+		r.options.StartCloak = unsupportedCloak
+	}
+	if r.options.Probe == nil {
+		r.options.Probe = defaultProbe
+	}
+	if r.options.ProbeTimeout <= 0 {
+		r.options.ProbeTimeout = 5 * time.Second
+	}
+	if r.options.ConnectedHealth == nil {
+		r.options.ConnectedHealth = defaultConnectedHealth
+	}
+	if r.options.HealthInterval <= 0 {
+		r.options.HealthInterval = 10 * time.Second
+	}
+	if r.options.HealthFailureThreshold <= 0 {
+		r.options.HealthFailureThreshold = 2
+	}
+	return r
+}
+
+type runtime struct {
+	mu      sync.Mutex
+	active  bool
+	options Options
+}
+
+func (r *runtime) Start(ctx context.Context, ref v1.SessionRef, profile v1.RuntimeProfile) (v1.RuntimeLease, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active {
+		return nil, errors.New("another runtime lease is active")
+	}
+	r.active = true
+	lease, err := r.startLocked(ctx, ref, profile)
+	if err != nil {
+		r.active = false
+		return nil, err
+	}
+	lease.setOnDone(func() {
+		r.mu.Lock()
+		r.active = false
+		r.mu.Unlock()
+	})
+	lease.startHealthMonitor(ctx, ref, r.options.ConnectedHealth, r.options.HealthInterval, r.options.HealthFailureThreshold)
+	return lease, nil
+}
+
+func (r *runtime) Probe(ctx context.Context, ref v1.SessionRef, profile v1.RuntimeProfile) (v1.ProbeResult, error) {
+	if err := ctx.Err(); err != nil {
+		return v1.ProbeResult{}, err
+	}
+	r.mu.Lock()
+	if r.active {
+		r.mu.Unlock()
+		return v1.ProbeResult{}, errors.New("another runtime lease is active")
+	}
+	r.active = true
+
+	// A probe owns an ordinary, fresh runtime lease. It is always stopped before
+	// returning, even when the health seam or context fails.
+	lease, err := r.startLocked(ctx, ref, profile)
+	if err != nil {
+		r.active = false
+		r.mu.Unlock()
+		return v1.ProbeResult{}, err
+	}
+	lease.setOnDone(func() {
+		r.mu.Lock()
+		r.active = false
+		r.mu.Unlock()
+	})
+	r.mu.Unlock()
+	defer func() { _ = lease.Stop(context.Background()) }()
+
+	probeCtx, cancel := context.WithTimeout(ctx, r.options.ProbeTimeout)
+	defer cancel()
+	latency, err := r.options.Probe(probeCtx)
+	if err != nil {
+		return v1.ProbeResult{}, err
+	}
+	if err := probeCtx.Err(); err != nil {
+		return v1.ProbeResult{}, err
+	}
+	if latency < 0 {
+		return v1.ProbeResult{}, errors.New("runtime health probe did not reach quorum")
+	}
+	return v1.ProbeResult{LatencyMillis: latency}, nil
+}
+
+func (r *runtime) startLocked(ctx context.Context, ref v1.SessionRef, profile v1.RuntimeProfile) (*lease, error) {
+	if len(profile.NormalizedConfig) == 0 {
+		return nil, errors.New("runtime profile has no normalized config")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	owned := &lease{}
+	fail := func(cause error) (*lease, error) {
+		return nil, errors.Join(cause, owned.Stop(context.Background()))
+	}
+
+	inputs, err := r.options.Inputs.Apply(ctx, ref, profile.ExcludeCIDRs, profile.PreflightHosts)
+	if err != nil {
+		return fail(fmt.Errorf("prepare Go routing/DNS inputs: %w", err))
+	}
+	if inputs == nil {
+		return fail(errors.New("prepare Go routing/DNS inputs returned nil lease"))
+	}
+	owned.push(inputs.Release)
+
+	if profile.Summary.Protocol == v1.ProtocolOutline && outlineUsesCloak(profile.RawTOML) {
+		stop, err := r.options.StartCloak(ctx, ref, profile.RawTOML)
+		if err != nil {
+			return fail(fmt.Errorf("start Cloak for Outline: %w", err))
+		}
+		if stop == nil {
+			return fail(errors.New("start Cloak returned nil stop operation"))
+		}
+		owned.push(stop)
+	}
+
+	protect := func(protectCtx context.Context, fd int) error {
+		if r.options.Tunnel == nil {
+			return nil // desktop protocol devices use their existing routing path.
+		}
+		if err := r.options.Tunnel.ProtectSocket(protectCtx, ref, fd); err != nil {
+			return fmt.Errorf("protect socket for session generation %d: %w", ref.Generation, err)
+		}
+		return nil
+	}
+	device, err := r.options.NewDevice(ctx, ref, profile, protect)
+	if err != nil {
+		return fail(fmt.Errorf("create protocol device: %w", err))
+	}
+	if device == nil {
+		return fail(errors.New("create protocol device returned nil"))
+	}
+
+	var tun TunnelLease
+	if mobileRuntime {
+		if r.options.Tunnel == nil {
+			return fail(errors.New("mobile runtime requires a TunnelProvider"))
+		}
+		tun, err = r.options.Tunnel.Acquire(ctx, ref)
+		if err != nil {
+			return fail(fmt.Errorf("acquire fresh TUN: %w", err))
+		}
+		// Acquisition is recorded immediately, before any later construction.
+		if tun == nil {
+			return fail(errors.New("acquire fresh TUN returned nil lease"))
+		}
+		owned.push(tun.Release)
+	}
+
+	client := r.options.NewCore(device, tun)
+	if client == nil {
+		return fail(errors.New("create core client returned nil"))
+	}
+	// A partially connected CoreClient can own a device/engine, so register its
+	// rollback before Connect rather than only after Connect reports success.
+	owned.push(func(context.Context) error { return client.Disconnect() })
+	if err := connectContext(ctx, client); err != nil {
+		return fail(fmt.Errorf("connect transactional core client: %w", err))
+	}
+	// CoreClient is stopped before Cloak, input lease, and mobile TUN in strict
+	// LIFO order. This preserves the tun2socks/device dependency chain.
+	log.Debugf(category, "runtime connected protocol=%s generation=%d", profile.Summary.Protocol, ref.Generation)
+	return owned, nil
+}
+
+func connectContext(ctx context.Context, client coreClient) error {
+	result := make(chan error, 1)
+	go func() { result <- client.Connect() }()
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		_ = client.Disconnect()
+		// Do not return a failed start while Connect can still publish a late
+		// successful core. CoreClient's Disconnect cancels its bounded startup;
+		// waiting here makes cancellation ownership deterministic.
+		<-result
+		return ctx.Err()
+	}
+}
+
+type lease struct {
+	mu           sync.Mutex
+	stopped      bool
+	undo         []func(context.Context) error
+	onDone       func()
+	done         chan struct{}
+	cleanupErr   error
+	healthCancel context.CancelFunc
+	healthDone   chan struct{}
+	healthFailed chan struct{}
+}
+
+func (l *lease) push(fn func(context.Context) error) { l.undo = append(l.undo, fn) }
+func (l *lease) setOnDone(fn func())                 { l.onDone = fn }
+
+// HealthFailures implements v1.HealthMonitoringLease. It is closed after the
+// lease has stopped, so the manager watcher cannot outlive its runtime lease.
+func (l *lease) HealthFailures() <-chan struct{} { return l.healthFailed }
+
+func (l *lease) startHealthMonitor(parent context.Context, ref v1.SessionRef, check ConnectedHealthFunc, interval time.Duration, threshold int) {
+	ctx, cancel := context.WithCancel(parent)
+	l.healthCancel = cancel
+	l.healthDone = make(chan struct{})
+	l.healthFailed = make(chan struct{}, 1)
+	go func() {
+		defer close(l.healthDone)
+		defer close(l.healthFailed)
+		failures := 0
+		for {
+			if err := check(ctx, ref); err != nil {
+				failures++
+				if failures >= threshold {
+					select {
+					case l.healthFailed <- struct{}{}:
+					case <-ctx.Done():
+					}
+					return
+				}
+			} else {
+				failures = 0
+			}
+			if interval <= 0 {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				continue
+			}
+			timer := time.NewTimer(interval)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-timer.C:
+			}
+		}
+	}()
+}
+
+func (l *lease) Stop(ctx context.Context) error {
+	l.mu.Lock()
+	if l.stopped {
+		done := l.done
+		l.mu.Unlock()
+		<-done
+		l.mu.Lock()
+		err := l.cleanupErr
+		l.mu.Unlock()
+		return err
+	}
+	l.stopped = true
+	l.done = make(chan struct{})
+	undo := l.undo
+	onDone := l.onDone
+	l.undo = nil
+	l.onDone = nil
+	healthCancel, healthDone := l.healthCancel, l.healthDone
+	l.healthCancel = nil
+	l.mu.Unlock()
+	if healthCancel != nil {
+		healthCancel()
+	}
+	if healthDone != nil {
+		<-healthDone
+	}
+	var errs []error
+	for i := len(undo) - 1; i >= 0; i-- {
+		if err := undo[i](ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if onDone != nil {
+		onDone()
+	}
+	err := errors.Join(errs...)
+	l.mu.Lock()
+	l.cleanupErr = err
+	close(l.done)
+	l.mu.Unlock()
+	return err
+}
+
+type defaultInputs struct{}
+
+func (defaultInputs) Apply(ctx context.Context, _ v1.SessionRef, cidrs, hosts []string) (InputLease, error) {
+	routes, err := tunnel.AcquireGeoRoutingConf(cidrs)
+	if err != nil {
+		return nil, fmt.Errorf("acquire exclusion policy: %w", err)
+	}
+	resolver := net.Resolver{}
+	for _, host := range hosts {
+		if err := ctx.Err(); err != nil {
+			routes.Release()
+			return nil, err
+		}
+		if _, err := resolver.LookupIPAddr(ctx, host); err != nil {
+			// DNS prewarm is best-effort; protocol DNS remains authoritative.
+			log.Debugf(category, "preflight DNS did not resolve host count=%d", len(hosts))
+		}
+	}
+	return routingInputs{routes: routes}, nil
+}
+
+type routingInputs struct{ routes *tunnel.GeoRoutingLease }
+
+func (l routingInputs) Release(context.Context) error { l.routes.Release(); return nil }
+
+func unsupportedDevice(_ context.Context, _ v1.SessionRef, _ v1.RuntimeProfile, _ SocketProtector) (pkg.ProtocolDevice, error) {
+	return nil, errors.New("native protocol device factory is not installed")
+}
+
+func unsupportedCloak(context.Context, v1.SessionRef, []byte) (func(context.Context) error, error) {
+	return nil, errors.New("native Cloak starter is not installed")
+}
+
+func defaultProbe(ctx context.Context) (int64, error) {
+	timeout, err := probeTimeout(ctx)
+	if err != nil {
+		return 0, err
+	}
+	latency := healthcheck.MeasureTunnelProbeAverageLatencyMillisWithContext(ctx, int64(timeout/time.Millisecond))
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return latency, nil
+}
+
+func probeTimeout(ctx context.Context) (time.Duration, error) {
+	const defaultTimeout = 5 * time.Second
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return defaultTimeout, nil
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0, ctx.Err()
+	}
+	return remaining, nil
+}
+
+func defaultConnectedHealth(ctx context.Context, _ v1.SessionRef) error {
+	latency, err := defaultProbe(ctx)
+	if err != nil {
+		return err
+	}
+	if latency < 0 {
+		return errors.New("runtime connected health check did not reach quorum")
+	}
+	return nil
+}

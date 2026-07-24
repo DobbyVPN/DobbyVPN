@@ -31,4 +31,6 @@ dependencies {
     implementation(libs.protobuf.java.util)
     implementation(libs.protobuf.kotlin)
     implementation(libs.grpc.kotlin.stub)
+
+    testImplementation(kotlin("test"))
 }

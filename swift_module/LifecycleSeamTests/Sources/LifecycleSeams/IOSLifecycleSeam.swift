@@ -75,3 +75,40 @@ public struct IOSLifecycleSeam {
         }
     }
 }
+
+/// Models the distinction between a Go command reply and the completion that
+/// NetworkExtension may safely report to the OS. A Start reply only carries a
+/// generation; CONNECTED remains a later, correlated observation. Likewise a
+/// Stop reply is not cleanup completion.
+public struct IOSSessionCommandSeam {
+    public private(set) var generation: UInt64 = 0
+    public private(set) var startAccepted = false
+    public private(set) var cleanupComplete = true
+    public private(set) var state: NetworkExtensionState = .disconnected
+
+    public init() {}
+
+    public mutating func acceptStart(generation: UInt64) {
+        self.generation = generation
+        startAccepted = true
+        cleanupComplete = false
+        state = .connecting
+    }
+
+    public mutating func acceptStop(generation: UInt64) -> Bool {
+        guard generation == self.generation else { return false }
+        state = .disconnecting
+        cleanupComplete = false
+        return true
+    }
+
+    public mutating func observe(_ state: NetworkExtensionState, generation: UInt64, cleanupComplete: Bool) -> Bool {
+        guard generation == self.generation else { return false }
+        self.state = state
+        self.cleanupComplete = cleanupComplete
+        return true
+    }
+
+    public var startCompleted: Bool { startAccepted && state == .connected }
+    public var stopCompleted: Bool { cleanupComplete && state == .disconnected }
+}

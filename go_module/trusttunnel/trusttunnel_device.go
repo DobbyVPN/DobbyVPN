@@ -26,6 +26,16 @@ type TrustTunnelDevice struct {
 	socksPass           string
 }
 
+var protectSocket = protected_dialer.ProtectSocketIntErr
+
+func protectTrustTunnelSocket(fd int) int {
+	if err := protectSocket(fd); err != nil {
+		log.Errorf("trusttunnel", "[TrustTunnel] socket protection failed: %v", err)
+		return 1
+	}
+	return 0
+}
+
 func NewTrustTunnelDevice(trusttunnelConfig string) (*TrustTunnelDevice, error) {
 	serverIPStr, err := internal.ExtractServerIP(trusttunnelConfig)
 	if err != nil {
@@ -98,10 +108,7 @@ func NewTrustTunnelDevice(trusttunnelConfig string) (*TrustTunnelDevice, error) 
 
 	// Register the global socket protection callback
 	// This delegates TrustTunnel's OS-level socket protection back to DobbyVPN's `protected_dialer`
-	d.trusttunnelInstance.SetProtectSocketCallback(func(fd int) int {
-		protected_dialer.ProtectSocketInt(fd)
-		return 0 // return success
-	})
+	d.trusttunnelInstance.SetProtectSocketCallback(protectTrustTunnelSocket)
 
 	log.Infof("trusttunnel", "[TrustTunnel] SOCKS bridge started at %s (serverIP=%s)", d.proxyAddr, d.svrIP.String())
 	return d, nil

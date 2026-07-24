@@ -8,6 +8,8 @@ import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DnsPreflightResolverImpl
+import com.dobby.feature.main.domain.GrpcSessionController
+import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.VpnManagerImpl
 import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.grpc.*
@@ -17,6 +19,8 @@ import interop.georouting.GeoroutingLibrary
 import interop.healthcheck.HealthCheckLibrary
 import interop.logger.LoggerLibrary
 import interop.outline.OutlineLibrary
+import interop.GrpcVpnLibrary
+import interop.session.SessionLibrary
 import interop.trusttunnel.TrustTunnelLibrary
 import interop.xray.XrayLibrary
 import org.koin.dsl.module
@@ -39,6 +43,8 @@ val jvmMainModule = makeNativeModule(
 )
 
 val jvmVpnModule = module {
+    single<SessionLibrary> { GrpcVpnLibrary.sessionGrpcLibrary }
+    single<SessionController> { GrpcSessionController(get()) }
     single<OutlineLibrary> { RestartableOutlineGrpcLibrary(get()) }
     single<XrayLibrary> { RestartableXrayGrpcLibrary(get()) }
     single<TrustTunnelLibrary> { RestartableTrustTunnelGrpcLibrary(get()) }
