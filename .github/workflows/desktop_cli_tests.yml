@@ -71,9 +71,10 @@ jobs:
 
           sudo apt-get install -y ./artifacts/app/dobbyVPN-linux.deb
 
-          mapfile -t config_args < <(python3 .github/scripts/prepare_cli_test_config.py)
-          check_config_arg="${config_args[0]}"
-          verify_session_arg="${config_args[1]}"
+          # JSON (not mapfile): macOS runners use Bash 3.2 without mapfile.
+          config_json="$(python3 .github/scripts/prepare_cli_test_config.py --format json)"
+          check_config_arg="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["check_config_arg"])' <<<"$config_json")"
+          verify_session_arg="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["verify_session_arg"])' <<<"$config_json")"
 
           chmod +x ./artifacts/service/ubuntu_grpcvpnserver
           sudo bash -c "env LD_LIBRARY_PATH=./artifacts/service ./artifacts/service/ubuntu_grpcvpnserver -port \"$PORT\" > grpcvpnserver.log 2>&1" &
@@ -121,9 +122,10 @@ jobs:
 
           unzip -q artifacts/app/dobbyVPN-macos-aarch64.zip -d artifacts/app/unpacked
 
-          mapfile -t config_args < <(python3 .github/scripts/prepare_cli_test_config.py)
-          check_config_arg="${config_args[0]}"
-          verify_session_arg="${config_args[1]}"
+          # JSON (not mapfile): macOS runners use Bash 3.2 without mapfile.
+          config_json="$(python3 .github/scripts/prepare_cli_test_config.py --format json)"
+          check_config_arg="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["check_config_arg"])' <<<"$config_json")"
+          verify_session_arg="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["verify_session_arg"])' <<<"$config_json")"
 
           chmod +x ./artifacts/service/macos_grpcvpnserver
           sudo bash -c "./artifacts/service/macos_grpcvpnserver -port \"$PORT\" > grpcvpnserver.log 2>&1" &
