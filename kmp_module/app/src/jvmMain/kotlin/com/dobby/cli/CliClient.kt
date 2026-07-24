@@ -381,13 +381,13 @@ class CliClient {
             return ExitCode.TUNNEL_START_ERROR
         }
 
-        val tunnelIp = fetchExternalIp()
-        if (tunnelIp == null || tunnelIp == baselineIp) {
+        val tunnelIp = waitForExternalIpChange(baselineIp, TUNNEL_IP_VERIFY_TIMEOUT_SECONDS)
+        if (tunnelIp == null) {
             println(
                 "FAILED: external IP did not change through tunnel " +
-                    "(baseline=$baselineIp tunnel=${tunnelIp ?: "unavailable"})",
+                    "(baseline=$baselineIp tunnel=unchanged after ${TUNNEL_IP_VERIFY_TIMEOUT_SECONDS}s)",
             )
-            logger.log("[CLI] FAILED verify-session: IP unchanged baseline=$baselineIp tunnel=$tunnelIp")
+            logger.log("[CLI] FAILED verify-session: IP unchanged baseline=$baselineIp")
             stopVpnRuntime()
             return ExitCode.SESSION_VERIFY_FAILED
         }
@@ -417,24 +417,54 @@ class CliClient {
         return ExitCode.OK
     }
 
+    private fun waitForExternalIpChange(baselineIp: String, timeoutSeconds: Int): String? {
+        val deadlineMs = System.currentTimeMillis() + timeoutSeconds * 1000L
+        while (System.currentTimeMillis() < deadlineMs) {
+            val ip = fetchExternalIp()
+            if (ip != null && ip != baselineIp) {
+                return ip
+            }
+            Thread.sleep(TUNNEL_IP_POLL_INTERVAL_MS)
+        }
+        val last = fetchExternalIp()
+        return last?.takeIf { it != baselineIp }
+    }
+
     private fun fetchExternalIp(): String? {
         val endpoints = listOf(
             "https://api.ipify.org",
             "https://ifconfig.me/ip",
         )
         for (endpoint in endpoints) {
-            val ip = runCatching {
-                val connection = java.net.URL(endpoint).openConnection() as java.net.HttpURLConnection
-                connection.connectTimeout = 10_000
-                connection.readTimeout = 10_000
-                connection.inputStream.bufferedReader().use { it.readText().trim() }
-            }.getOrNull()
+            val ip = fetchExternalIpViaCurl(endpoint) ?: fetchExternalIpViaJvm(endpoint)
             if (!ip.isNullOrBlank()) {
                 return ip
             }
         }
         return null
     }
+
+    private fun fetchExternalIpViaCurl(url: String): String? = runCatching {
+        val process = ProcessBuilder("curl", "-fsS", "--max-time", "10", url)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText().trim() }
+        if (process.waitFor() == 0 && output.isNotBlank()) {
+            output
+        } else {
+            null
+        }
+    }.getOrNull()
+
+    private fun fetchExternalIpViaJvm(url: String): String? = runCatching {
+        val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 10_000
+        connection.setRequestProperty("Cache-Control", "no-store")
+        connection.setRequestProperty("Pragma", "no-cache")
+        connection.setRequestProperty("Connection", "close")
+        connection.inputStream.bufferedReader().use { it.readText().trim() }
+    }.getOrNull()
 
     fun status(options: List<String>): ExitCode {
         return if (options.isEmpty()) {
@@ -463,6 +493,8 @@ class CliClient {
     private companion object {
         const val DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS = 15
         const val PROFILE_HEALTHCHECK_TIMEOUT_SECONDS = 30
+        const val TUNNEL_IP_VERIFY_TIMEOUT_SECONDS = 30
+        const val TUNNEL_IP_POLL_INTERVAL_MS = 1_000L
     }
 }
 
