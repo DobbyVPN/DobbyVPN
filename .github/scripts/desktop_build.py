@@ -679,14 +679,20 @@ def desktop_version_properties() -> list[str]:
 
     if major is not None and minor is not None and maintenance is not None:
         version_name = f"{major}.{minor}.{maintenance}"
-        version_code = str(int(major) * 1_000_000 + int(minor) * 1_000 + int(maintenance))
     else:
         version_name = os.environ.get("VERSION_NAME") or gradle_properties.get("versionName", "0.0.1")
-        version_code = (
-            os.environ.get("VERSION_CODE")
-            or os.environ.get("ANDROID_VERSION_CODE")
-            or gradle_properties.get("versionCode", "1")
-        )
+
+    # Prefer CI run number (same as Android/iOS APPLE_BUILD_NUMBER) so desktop
+    # stays unique when marketing VERSION is held constant.
+    version_code = (
+        os.environ.get("APPLE_BUILD_NUMBER")
+        or os.environ.get("VERSION_CODE")
+        or os.environ.get("ANDROID_VERSION_CODE")
+    )
+    if version_code is None and major is not None and minor is not None and maintenance is not None:
+        version_code = str(int(major) * 1_000_000 + int(minor) * 1_000 + int(maintenance))
+    if version_code is None:
+        version_code = gradle_properties.get("versionCode", "1")
 
     commit = os.environ.get("GITHUB_SHA") or run_capture(["git", "rev-parse", "HEAD"]) or "N/A"
     repo = os.environ.get("GITHUB_REPOSITORY") or github_repo_from_remote() or "DobbyVPN/DobbyVPN"
