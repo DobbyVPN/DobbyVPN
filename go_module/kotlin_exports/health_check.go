@@ -4,19 +4,11 @@ package dobbyvpn
 
 import (
 	"go_module/healthcheck"
+	"go_module/vpnmanager"
 )
 
 func GetConnectionState() int32 {
-	switch healthcheck.GetConnectionState() {
-	case healthcheck.Disconnected:
-		return 0
-	case healthcheck.Connecting:
-		return 1
-	case healthcheck.Connected:
-		return 2
-	default:
-		return 0
-	}
+	return vpnmanager.ConnectionStateToInt32(healthcheck.GetConnectionState())
 }
 
 func InitHealthCheck() {

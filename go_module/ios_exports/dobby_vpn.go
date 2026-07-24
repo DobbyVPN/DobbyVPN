@@ -5,160 +5,105 @@ package cloak_outline
 import (
 	"fmt"
 	"go_module/core"
-	"go_module/core/pkg"
 	"go_module/log"
-	"go_module/outline"
-	"go_module/trusttunnel"
-	"go_module/xray"
+	"go_module/vpnmanager"
 	"os"
-	"runtime/debug"
 
 	"golang.org/x/sys/unix"
 )
 
 const utunControlName = "com.apple.net.utun_control"
+const logCategory = "ios_exports"
 
-var client *core.CoreClient
-
-func guardExportErr(fnName string, errp *error) func() {
-	return func() {
-		if r := recover(); r != nil {
-			msg := "panic in " + fnName + ": " + unsafeToString(r)
-			log.Debugf("ios_exports", "%s\n%s", msg, string(debug.Stack()))
-			if errp != nil {
-				*errp = fmt.Errorf("%s", msg)
-			}
-		}
-	}
-}
-
-func unsafeToString(v any) string {
-	switch t := v.(type) {
-	case string:
-		return t
-	default:
-		return fmt.Sprintf("%v", v)
-	}
-}
+var vpnHolder = vpnmanager.NewClientHolder(logCategory)
 
 func NewVpnClient(transportConfig string, protocol string) (err error) {
-	defer guardExportErr("NewVpnClient", &err)()
-	log.Debugf("ios_exports", "NewVpnClient() called")
+	defer vpnmanager.GuardErr(logCategory, "NewVpnClient", &err)()
+	log.Debugf(logCategory, "NewVpnClient() called")
 
-	if client != nil {
-		log.Debugf("ios_exports", "NewVpnClient(): existing client detected, switching protocol device")
-		device, err := newProtocolDevice(transportConfig, protocol)
-		if err != nil {
-			return err
-		}
-		if err := client.SwitchDevice(device); err != nil {
-			return fmt.Errorf("NewVpnClient(): switch protocol device failed: %w", err)
-		}
-		log.Debugf("ios_exports", "NewVpnClient(): existing client protocol device switched")
+	vpnHolder.Lock()
+	defer vpnHolder.Unlock()
+
+	device, switched, err := vpnHolder.SwitchOrPrepareDevice(transportConfig, protocol)
+	if err != nil {
+		return fmt.Errorf("NewVpnClient(): %w", err)
+	}
+	if switched {
 		return nil
 	}
 
-	log.Debugf("ios_exports", "Start fd search")
+	log.Debugf(logCategory, "Start fd search")
 
 	fd := GetTunnelFileDescriptor()
 	if fd < 0 {
 		return fmt.Errorf("NewVpnClient(): utun fd not found")
 	}
 
-	log.Debugf("ios_exports", "Fd was found, fd = %d", fd)
-	log.Debugf("ios_exports", "Config length=%d", len(transportConfig))
+	log.Debugf(logCategory, "Fd was found, fd = %d", fd)
+	log.Debugf(logCategory, "Config length=%d", len(transportConfig))
 
 	tunFd, err := unix.Dup(fd)
 	if err != nil {
 		return fmt.Errorf("NewVpnClient(): failed to duplicate utun fd: %w", err)
 	}
-	log.Debugf("ios_exports", "Duplicated utun fd = %d", tunFd)
+	log.Debugf(logCategory, "Duplicated utun fd = %d", tunFd)
 	tunFile := os.NewFile(uintptr(tunFd), "utun")
 
-	device, err := newProtocolDevice(transportConfig, protocol)
-	if err != nil {
-		log.Debugf("ios_exports", "NewVpnClient() failed to create device: %v", err)
-		if closeErr := tunFile.Close(); closeErr != nil {
-			log.Debugf("ios_exports", "NewVpnClient(): failed to close duplicated utun fd after device creation error: %v", closeErr)
-		}
-		return fmt.Errorf("failed to create %s device: %w", protocol, err)
-	}
+	vpnHolder.SetClient(core.NewClient(device, tunFile))
 
-	client = core.NewClient(device, tunFile)
-
-	log.Debugf("ios_exports", "NewVpnClient() finished")
+	log.Debugf(logCategory, "NewVpnClient() finished")
 	return nil
 }
 
-func newProtocolDevice(transportConfig string, protocol string) (pkg.ProtocolDevice, error) {
-	switch protocol {
-	case "xray":
-		return xray.NewXrayDevice(transportConfig)
-	case "outline":
-		return outline.NewOutlineDevice(transportConfig)
-	case "trusttunnel":
-		return trusttunnel.NewTrustTunnelDevice(transportConfig)
-	default:
-		log.Debugf("ios_exports", "NewVpnClient() failed: unsupported protocol")
-		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
-	}
-}
-
 func VpnConnect() (err error) {
-	defer guardExportErr("VpnConnect", &err)()
-	log.Debugf("ios_exports", "VpnConnect() called")
+	defer vpnmanager.GuardErr(logCategory, "VpnConnect", &err)()
+	log.Debugf(logCategory, "VpnConnect() called")
 
-	if client == nil {
-		log.Debugf("ios_exports", "VpnConnect() failed: client is nil")
-		return fmt.Errorf("VpnConnect(): client is nil")
-	}
+	vpnHolder.Lock()
+	defer vpnHolder.Unlock()
 
-	if err := client.Connect(); err != nil {
-		log.Debugf("ios_exports", "VpnConnect() failed: %v", err)
+	if err := vpnHolder.Connect(); err != nil {
 		return fmt.Errorf("VpnConnect(): %w", err)
 	}
 
-	log.Debugf("ios_exports", "VpnConnect() finished successfully")
+	log.Debugf(logCategory, "VpnConnect() finished successfully")
 	return nil
 }
 
 func VpnDisconnect() (err error) {
-	defer guardExportErr("VpnDisconnect", &err)()
-	log.Debugf("ios_exports", "VpnDisconnect() called")
-	if client == nil {
-		log.Debugf("ios_exports", "VpnDisconnect(): client already nil")
-		return nil
-	}
+	defer vpnmanager.GuardErr(logCategory, "VpnDisconnect", &err)()
+	log.Debugf(logCategory, "VpnDisconnect() called")
 
-	if err := client.Disconnect(); err != nil {
-		log.Debugf("ios_exports", "VpnDisconnect(): client disconnect failed: %v", err)
+	vpnHolder.Lock()
+	defer vpnHolder.Unlock()
+
+	if err := vpnHolder.DisconnectAndClear(); err != nil {
 		return fmt.Errorf("VpnDisconnect(): %w", err)
 	}
-	client = nil
 
-	log.Debugf("ios_exports", "VpnDisconnect() finished")
+	log.Debugf(logCategory, "VpnDisconnect() finished")
 	return nil
 }
 
 // NewOutlineClient creates an Outline VPN client using the given transport config.
 // Equivalent to NewVpnClient(config, "outline").
 func NewOutlineClient(transportConfig string) (err error) {
-	defer guardExportErr("NewOutlineClient", &err)()
-	log.Debugf("ios_exports", "NewOutlineClient() called config.len=%d", len(transportConfig))
+	defer vpnmanager.GuardErr(logCategory, "NewOutlineClient", &err)()
+	log.Debugf(logCategory, "NewOutlineClient() called config.len=%d", len(transportConfig))
 	return NewVpnClient(transportConfig, "outline")
 }
 
 // OutlineConnect connects the previously created Outline client.
 func OutlineConnect() (err error) {
-	defer guardExportErr("OutlineConnect", &err)()
-	log.Debugf("ios_exports", "OutlineConnect() called")
+	defer vpnmanager.GuardErr(logCategory, "OutlineConnect", &err)()
+	log.Debugf(logCategory, "OutlineConnect() called")
 	return VpnConnect()
 }
 
 // OutlineDisconnect disconnects and tears down the Outline client.
 func OutlineDisconnect() (err error) {
-	defer guardExportErr("OutlineDisconnect", &err)()
-	log.Debugf("ios_exports", "OutlineDisconnect() called")
+	defer vpnmanager.GuardErr(logCategory, "OutlineDisconnect", &err)()
+	log.Debugf(logCategory, "OutlineDisconnect() called")
 	return VpnDisconnect()
 }
 

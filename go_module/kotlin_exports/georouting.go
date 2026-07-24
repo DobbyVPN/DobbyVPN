@@ -3,14 +3,14 @@
 package dobbyvpn
 
 import (
-	"go_module/tunnel"
+	"go_module/vpnmanager"
 	"strings"
 )
 
 func SetGeoRoutingConf(cidrs string) {
-	tunnel.SetGeoRoutingConf(strings.Clone(cidrs))
+	vpnmanager.SetGeoRoutingConf(strings.Clone(cidrs))
 }
 
 func ClearGeoRoutingConf() {
-	tunnel.ClearGeoRoutingConf()
+	vpnmanager.ClearGeoRoutingConf()
 }

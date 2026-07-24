@@ -4,28 +4,19 @@ package cloak_outline
 
 import (
 	"fmt"
-	"go_module/cloak"
-	"go_module/log"
-	"time"
+
+	"go_module/vpnmanager"
 )
 
 func StartCloakClient(localHost string, localPort string, config string, udp bool) (err error) {
 	defer guardErr("StartCloakClient", &err)()
-	start := time.Now()
-	log.Debugf("ios_exports", "StartCloakClient begin localHost=%s localPort=%s config.len=%d udp=%v", localHost, localPort, len(config), udp)
-	err = cloak.StartCloakClient(localHost, localPort, config, udp)
-	if err != nil {
-		log.Debugf("ios_exports", "StartCloakClient failed localHost=%s localPort=%s elapsed=%s err=%v", localHost, localPort, time.Since(start), err)
+	if err := vpnmanager.StartCloakClient(logCategory, localHost, localPort, config, udp); err != nil {
 		return fmt.Errorf("StartCloakClient failed: %w", err)
 	}
-	log.Debugf("ios_exports", "StartCloakClient returned elapsed=%s", time.Since(start))
 	return nil
 }
 
 func StopCloakClient() {
 	defer guard("StopCloakClient")()
-	start := time.Now()
-	log.Debugf("ios_exports", "StopCloakClient begin")
-	cloak.StopCloakClient()
-	log.Debugf("ios_exports", "StopCloakClient returned elapsed=%s", time.Since(start))
+	vpnmanager.StopCloakClient(logCategory)
 }

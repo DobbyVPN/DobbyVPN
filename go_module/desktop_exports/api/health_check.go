@@ -7,6 +7,7 @@ import (
 	apiCommon "go_module/desktop_exports/common"
 	"go_module/healthcheck"
 	"go_module/log"
+	"go_module/vpnmanager"
 )
 
 func CouldStart() bool {
@@ -15,7 +16,7 @@ func CouldStart() bool {
 }
 
 func GetConnectionState() int32 {
-	return int32(healthcheck.GetConnectionState())
+	return vpnmanager.ConnectionStateToInt32(healthcheck.GetConnectionState())
 }
 
 func InitHealthCheck() {

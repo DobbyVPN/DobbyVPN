@@ -2,14 +2,12 @@
 
 package api
 
-import (
-	"go_module/tunnel"
-)
+import "go_module/vpnmanager"
 
 func SetGeoRoutingConf(cidrs string) {
-	tunnel.SetGeoRoutingConf(cidrs)
+	vpnmanager.SetGeoRoutingConf(cidrs)
 }
 
 func ClearGeoRoutingConf() {
-	tunnel.ClearGeoRoutingConf()
+	vpnmanager.ClearGeoRoutingConf()
 }

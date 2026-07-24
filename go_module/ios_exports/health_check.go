@@ -5,42 +5,34 @@ package cloak_outline
 import (
 	"go_module/healthcheck"
 	"go_module/log"
+	"go_module/vpnmanager"
 )
 
 func GetConnectionState() int32 {
-	switch healthcheck.GetConnectionState() {
-	case healthcheck.Disconnected:
-		return 0
-	case healthcheck.Connecting:
-		return 1
-	case healthcheck.Connected:
-		return 2
-	default:
-		return 0
-	}
+	return vpnmanager.ConnectionStateToInt32(healthcheck.GetConnectionState())
 }
 
 func InitHealthCheck() {
-	log.Debugf("ios_exports", "Init health check")
+	log.Debugf(logCategory, "Init health check")
 	healthcheck.InitHealthCheck()
 }
 
 func StartHealthCheck() {
-	log.Debugf("ios_exports", "Start health check")
+	log.Debugf(logCategory, "Start health check")
 	healthcheck.StartHealthCheck()
 }
 
 func StopHealthCheck() {
-	log.Debugf("ios_exports", "Stop health check")
+	log.Debugf(logCategory, "Stop health check")
 	healthcheck.StopHealthCheck()
 }
 
 func MeasureTunnelProbeAverageLatencyMillis() int64 {
-	log.Debugf("ios_exports", "Measure tunnel probe average latency")
+	log.Debugf(logCategory, "Measure tunnel probe average latency")
 	return healthcheck.MeasureTunnelProbeAverageLatencyMillis()
 }
 
 func MeasureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis int64) int64 {
-	log.Debugf("ios_exports", "Measure tunnel probe average latency timeoutMs=%d", timeoutMillis)
+	log.Debugf(logCategory, "Measure tunnel probe average latency timeoutMs=%d", timeoutMillis)
 	return healthcheck.MeasureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis)
 }

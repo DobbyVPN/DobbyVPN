@@ -2,12 +2,12 @@
 
 package dobbyvpn
 
-import "go_module/dnscache"
+import "go_module/vpnmanager"
 
 func ClearDNSCache() {
-	dnscache.Clear()
+	vpnmanager.ClearDNSCache()
 }
 
 func SetDNSCacheEntries(entries string) int32 {
-	return int32(dnscache.SetEntries(entries, "android-preflight", dnscache.PreflightCacheTTL))
+	return vpnmanager.SetDNSCacheEntries(entries, "android-preflight")
 }
