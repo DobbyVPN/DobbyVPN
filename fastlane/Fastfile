@@ -1,11 +1,9 @@
 default_platform(:android)
 
-# CI sets APP_* from the VERSION file (prepare_version auto-bumps patch on each main push).
-# CFBundleVersion uses APPLE_BUILD_NUMBER (GitHub Actions run number). ASC requires x.y.z integers only.
+# CI sets APP_* from the manual VERSION file (prepare_version reads x.y.z, no auto-bump).
+# versionCode / CFBundleVersion use APPLE_BUILD_NUMBER (GitHub Actions run number).
 FULL_VERSION    = "#{ENV['APP_MAJOR_VERSION']}.#{ENV['APP_MINOR_VERSION']}.#{ENV['APP_MAINTENANCE_VERSION']}"
-VERSION_CODE    = ENV['APP_MAJOR_VERSION'].to_i * 1_000_000 +
-                  ENV['APP_MINOR_VERSION'].to_i * 1_000 +
-                  ENV['APP_MAINTENANCE_VERSION'].to_i
+VERSION_CODE    = ENV['APPLE_BUILD_NUMBER'].to_i
 COMMIT          = ENV["GITHUB_SHA"]
 SHORT_SHA       = COMMIT && !COMMIT.empty? ? COMMIT[0, 7] : "unknown"
 REPO            = ENV["GITHUB_REPOSITORY"]
@@ -198,7 +196,7 @@ platform :ios do
     )
   end
 
-  desc "Upload to TestFlight"
+  desc "Upload IPA to TestFlight (no external distribute — public beta is manual)"
   lane :upload_testflight do
     api_key = app_store_connect_api_key(
       key_id: ENV['APP_STORE_KEY_ID'],
@@ -207,13 +205,14 @@ platform :ios do
       duration: 1200
     )
 
+    # CI only parks the build in ASC/TestFlight. External/public beta review
+    # is triggered later via the local AppStore/publish_public.py script.
     upload_to_testflight(
       ipa: "#{EXPORT_DIR}/#{IPA_NAME}",
       api_key: api_key,
       skip_waiting_for_build_processing: false,
-      notify_external_testers: true,
-      distribute_external: true,
-      groups: [ENV['APP_TESTFLIGHT_EXTERNAL_GROUP']],
+      distribute_external: false,
+      notify_external_testers: false,
       changelog: "Build #{FULL_VERSION} (#{SHORT_SHA})"
     )
   end

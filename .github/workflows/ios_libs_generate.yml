@@ -101,6 +101,7 @@ jobs:
       APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
       APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
       APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
+      APPLE_BUILD_NUMBER: ${{ github.run_number }}
       GITHUB_SHA: ${{ github.sha }}
       GITHUB_REPOSITORY: ${{ github.repository }}
     steps:
@@ -168,7 +169,7 @@ jobs:
         working-directory: kmp_module
         run: |
           VERSION_NAME="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          VERSION_CODE=$((APP_MAJOR_VERSION * 1000000 + APP_MINOR_VERSION * 1000 + APP_MAINTENANCE_VERSION))
+          VERSION_CODE="${APPLE_BUILD_NUMBER}"
           ./gradlew linkReleaseFrameworkIosArm64 --build-cache --parallel \
             -PprojectRepositoryCommit="${GITHUB_SHA}" \
             -PprojectRepositoryCommitLink="https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_SHA}" \

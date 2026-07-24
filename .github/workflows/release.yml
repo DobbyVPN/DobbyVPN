@@ -12,29 +12,23 @@ on:
 
 concurrency:
   group: release-${{ github.ref }}
-  # Serialize main releases so VERSION bumps cannot race; cancel only PR runs.
+  # Serialize main builds; cancel only PR runs.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Bump patch on each main push (ASC-safe x.y.z). Major/minor bumps are manual VERSION edits.
-  # Persisted in VERSION (repo file) because GITHUB_TOKEN cannot update Actions variables.
+  # Marketing version (x.y.z) is manual via the repo VERSION file.
   prepare_version:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     outputs:
-      major: ${{ steps.bump.outputs.major }}
-      minor: ${{ steps.bump.outputs.minor }}
-      maintenance: ${{ steps.bump.outputs.maintenance }}
-      version_name: ${{ steps.bump.outputs.version_name }}
+      major: ${{ steps.version.outputs.major }}
+      minor: ${{ steps.version.outputs.minor }}
+      maintenance: ${{ steps.version.outputs.maintenance }}
+      version_name: ${{ steps.version.outputs.version_name }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          # Need a token that can push VERSION on main.
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve and bump VERSION
-        id: bump
+      - name: Read VERSION
+        id: version
         run: |
           set -euo pipefail
           raw="$(tr -d '[:space:]' < VERSION 2>/dev/null || echo '1.4.0')"
@@ -43,36 +37,13 @@ jobs:
           minor="${minor:-0}"
           patch="${patch:-0}"
 
-          bumped=false
-          if [[ "${{ github.ref }}" == "refs/heads/main" && "${{ github.event_name }}" != "pull_request" ]]; then
-            # Every main commit bumps patch only: x.y.z → x.y.(z+1)
-            patch=$((patch + 1))
-            bumped=true
-            printf '%s.%s.%s\n' "$major" "$minor" "$patch" > VERSION
-          fi
-
           {
             echo "major=$major"
             echo "minor=$minor"
             echo "maintenance=$patch"
             echo "version_name=${major}.${minor}.${patch}"
-            echo "bumped=$bumped"
           } >> "$GITHUB_OUTPUT"
-          echo "Resolved version ${major}.${minor}.${patch} (bumped=${bumped})"
-
-      - name: Persist VERSION bump on main
-        if: steps.bump.outputs.bumped == 'true'
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add VERSION
-          if git diff --staged --quiet; then
-            echo "VERSION unchanged"
-            exit 0
-          fi
-          git commit -m "chore: bump VERSION to ${{ steps.bump.outputs.version_name }} [skip ci]"
-          git push
+          echo "Marketing version ${major}.${minor}.${patch} (from VERSION file)"
 
   desktop_libs_build:
     uses: ./.github/workflows/desktop_libs_generate.yml
@@ -139,89 +110,5 @@ jobs:
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
     secrets: inherit
 
-  release:
-    if: ${{ github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    needs: [prepare_version, installers_build, android_build, ios_build]
-    permissions: write-all
-    env:
-      APP_MAJOR_VERSION: ${{ needs.prepare_version.outputs.major }}
-      APP_MINOR_VERSION: ${{ needs.prepare_version.outputs.minor }}
-      APP_MAINTENANCE_VERSION: ${{ needs.prepare_version.outputs.maintenance }}
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Make release dir
-        run: mkdir release
-
-      - name: Download Linux deb client
-        uses: actions/download-artifact@v4
-        with:
-          name: dobbyVPN-linux.deb
-          path: release
-
-      - name: Download Windows x86 MSI client
-        uses: actions/download-artifact@v4
-        with:
-          name: dobbyVPN-windows-x86.msi
-          path: release
-
-      - name: Download Windows amd64 MSI client
-        uses: actions/download-artifact@v4
-        with:
-          name: dobbyVPN-windows-amd64.msi
-          path: release
-
-      - name: Download Windows arm64 MSI client
-        uses: actions/download-artifact@v4
-        with:
-          name: dobbyVPN-windows-arm64.msi
-          path: release
-
-      - name: Download macos amd64 client
-        uses: actions/download-artifact@v4
-        with:
-          name: dobbyVPN-macos-amd64.pkg
-          path: release
-
-      - name: Download macos aarch64 client
-        uses: actions/download-artifact@v4
-        with:
-          name: dobbyVPN-macos-aarch64.pkg
-          path: release
-
-      - name: Download Android client (signed)
-        uses: actions/download-artifact@v4
-        with:
-          name: dobbyvpn-android-sign.apk
-          path: release
-
-      - name: Download Android client (unsigned)
-        uses: actions/download-artifact@v4
-        with:
-          name: dobbyvpn-android-unsign.apk
-          path: release
-
-      - name: Create version file for F-Droid
-        run: |
-          VERSION_NAME="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          VERSION_CODE=$((APP_MAJOR_VERSION * 1000000 + APP_MINOR_VERSION * 1000 + APP_MAINTENANCE_VERSION))
-          {
-            echo "versionName=${VERSION_NAME}"
-            echo "versionCode=${VERSION_CODE}"
-          } > release/version.txt
-
-      - name: Compute tag
-        id: tag
-        run: |
-          TAG="v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          files: release/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # GitHub Release (and thus F-Droid AutoUpdate) is intentional/manual.
+  # After a known-good build, run local AppStore/publish_public.py.
