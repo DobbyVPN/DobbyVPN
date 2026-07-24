@@ -28,8 +28,13 @@ import korlibs.time.seconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import java.io.File
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.nio.charset.Charset
 import java.nio.file.Files
+import java.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
 class CliClient {
@@ -436,34 +441,26 @@ class CliClient {
             "https://ifconfig.me/ip",
         )
         for (endpoint in endpoints) {
-            val ip = fetchExternalIpViaCurl(endpoint) ?: fetchExternalIpViaJvm(endpoint)
-            if (!ip.isNullOrBlank()) {
-                return ip
-            }
+            val ip = fetchExternalIpViaHttpClient(endpoint)
+            if (!ip.isNullOrBlank()) return ip
         }
         return null
     }
 
-    private fun fetchExternalIpViaCurl(url: String): String? = runCatching {
-        val process = ProcessBuilder("curl", "-fsS", "--max-time", "10", url)
-            .redirectErrorStream(true)
-            .start()
-        val output = process.inputStream.bufferedReader().use { it.readText().trim() }
-        if (process.waitFor() == 0 && output.isNotBlank()) {
-            output
-        } else {
-            null
-        }
-    }.getOrNull()
-
-    private fun fetchExternalIpViaJvm(url: String): String? = runCatching {
-        val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-        connection.connectTimeout = 10_000
-        connection.readTimeout = 10_000
-        connection.setRequestProperty("Cache-Control", "no-store")
-        connection.setRequestProperty("Pragma", "no-cache")
-        connection.setRequestProperty("Connection", "close")
-        connection.inputStream.bufferedReader().use { it.readText().trim() }
+    private fun fetchExternalIpViaHttpClient(url: String): String? = runCatching {
+        val client = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .connectTimeout(Duration.ofSeconds(10))
+            .build()
+        val request = HttpRequest.newBuilder(URI.create(url))
+            .timeout(Duration.ofSeconds(10))
+            .header("Cache-Control", "no-store")
+            .header("Pragma", "no-cache")
+            .header("Connection", "close")
+            .GET()
+            .build()
+        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+        response.body().trim().takeIf { response.statusCode() in 200..299 && it.isNotBlank() }
     }.getOrNull()
 
     fun status(options: List<String>): ExitCode {
