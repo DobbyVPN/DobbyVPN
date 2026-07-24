@@ -44,7 +44,7 @@ Follow these steps precisely:
    - `GetServerIP() net.IP` (returns remote VPN server IP for routing)
    - `Close() error` (stops engine)
 3. **Desktop Exports**: 
-   - Update `grpcproto/vpnserver.proto` with new RPCs (e.g., `StartNewProto`, `StopNewProto`). Run protoc.
+   - Update `kmp_module/grpcprotos/src/main/proto/com/dobby/vpnserver/vpnserver.proto` with new RPCs (e.g., `StartNewProto`, `StopNewProto`). Run `go_module/scripts/regenerate-grpcproto.sh` and `./gradlew :grpcstub:generateProto`.
    - Create `desktop_exports/proto/newproto.go` to implement the gRPC handlers.
    - Update `desktop_exports/api/protocols_core.go` inside the `startVpn()` switch statement.
 4. **Android Exports**: Update `kotlin_exports/dobby_vpn.go` inside the `NewVpnClient()` switch statement.

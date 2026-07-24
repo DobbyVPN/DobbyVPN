@@ -113,12 +113,27 @@ rpc ClearDNSCache (Empty)                                  returns (Empty);
 rpc SetDNSCacheEntries (SetDNSCacheEntriesRequest)         returns (SetDNSCacheEntriesResponse);
 ```
 
-Or this can be found in the [vpnserver.proto](./vpnserver.proto) file, that defines RPC API for the desktop library.
+Or see the canonical [vpnserver.proto](../kmp_module/grpcprotos/src/main/proto/com/dobby/vpnserver/vpnserver.proto) for the desktop gRPC API.
 
-Using this file should be generated required files in the [vpnserver/](./vpnserver/) folder, using this command:
+After editing that proto, regenerate stubs:
+
+**Go** (local `protoc` only — see workspace `AGENTS.md`; do not rely on system install):
 
 ```bash
-protoc --go_out=../ --go-grpc_out=../ ./grpcproto/vpnserver.proto
+cd go_module
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+chmod +x scripts/regenerate-grpcproto.sh
+./scripts/regenerate-grpcproto.sh
+```
+
+The script copies the canonical proto into `grpcproto/` (gitignored) and runs `protoc`.
+
+**Kotlin** (from `kmp_module/`, uses Gradle/protobuf plugin — same canonical file):
+
+```bash
+cd kmp_module
+./gradlew :grpcstub:generateProto
 ```
 
 ## Additional documentation
