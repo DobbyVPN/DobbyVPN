@@ -3,11 +3,21 @@ name: Test
 on:
   workflow_call:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
+  workflow-policy:
+    name: Workflow secret-isolation policy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce secretless PR workflow policy
+        run: python3 .github/scripts/check_workflow_policy.py
+
   go:
     name: Go tests
     runs-on: ubuntu-24.04

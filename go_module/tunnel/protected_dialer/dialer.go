@@ -70,12 +70,12 @@ func resolveAddressForProtect(ctx context.Context, address string) string {
 
 	ip, err := dnscache.ResolveIPv4(ctx, host, dnscache.FastResolveTimeout, "protected-dialer")
 	if err != nil {
-		log.Debugf(Category, "[Protect] DNS resolve skipped dest=%s timeout=%s err=%v", address, dnscache.FastResolveTimeout, err)
+		log.Debugf(Category, "[Protect] DNS resolve skipped timeout=%s err=%v", dnscache.FastResolveTimeout, err)
 		return address
 	}
 
 	resolved := net.JoinHostPort(ip.String(), port)
-	log.Debugf(Category, "[Protect] DNS resolved dest=%s resolved=%s", address, resolved)
+	log.Debugf(Category, "[Protect] DNS resolved destination_redacted=true")
 	return resolved
 }
 
@@ -90,7 +90,7 @@ func protectFD(fd uintptr, network, address string) error {
 		return ErrSocketProtectionUnavailable
 	}
 
-	log.Debugf(Category, "[Protect] protect_begin network=%s fd=%d destination=%s protector=%T", network, fd, address, protector)
+	log.Debugf(Category, "[Protect] protect_begin network=%s fd=%d destination_redacted=true protector=%T", network, fd, protector)
 	if err := protector.Protect(fd, network); err != nil {
 		return fmt.Errorf("%w: network=%s destination=%s: %v", ErrSocketProtectionUnavailable, network, address, err)
 	}
@@ -114,13 +114,13 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 	dialAddress := resolveAddressForProtect(ctx, address)
 	realNet := normalizeTCP(dialAddress)
 	if deadline, ok := ctx.Deadline(); ok {
-		log.Debugf(Category, "[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s dialDest=%s deadline=%s protector=%T", network, realNet, address, dialAddress, deadline.Format(time.RFC3339Nano), protector)
+		log.Debugf(Category, "[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s destination_redacted=true deadline=%s protector=%T", network, realNet, deadline.Format(time.RFC3339Nano), protector)
 	} else {
-		log.Debugf(Category, "[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s dialDest=%s deadline=(none) protector=%T", network, realNet, address, dialAddress, protector)
+		log.Debugf(Category, "[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s destination_redacted=true deadline=(none) protector=%T", network, realNet, protector)
 	}
 
 	if isLoopback(dialAddress) {
-		log.Debugf(Category, "[Protect] TCP BYPASS loopback: %s", dialAddress)
+		log.Debugf(Category, "[Protect] TCP BYPASS loopback")
 		var d net.Dialer
 		conn, err := d.DialContext(ctx, realNet, dialAddress)
 		if err != nil {

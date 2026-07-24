@@ -4,11 +4,11 @@ import com.dobby.grpcproto.VpnGrpcKt
 import com.dobby.grpcproto.empty
 import com.dobby.grpcproto.startXrayRequest
 import interop.exceptions.VpnServiceStatusException
-import io.grpc.ManagedChannel
+import io.grpc.Channel
 import io.grpc.StatusException
 import kotlinx.coroutines.runBlocking
 
-open class XrayGrpcLibrary(channel: ManagedChannel) : XrayLibrary {
+open class XrayGrpcLibrary(channel: Channel) : XrayLibrary {
     private val stub = VpnGrpcKt.VpnCoroutineStub(channel)
 
     override fun GetXrayLastError(): String {
@@ -44,4 +44,3 @@ open class XrayGrpcLibrary(channel: ManagedChannel) : XrayLibrary {
         }
     }
 }
-

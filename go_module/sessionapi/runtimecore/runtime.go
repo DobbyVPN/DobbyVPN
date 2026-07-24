@@ -8,11 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"sync"
 	"time"
 
 	"go_module/core/pkg"
+	"go_module/dnscache"
 	"go_module/healthcheck"
 	"go_module/log"
 	"go_module/sessionapi/v1"
@@ -73,16 +73,20 @@ type ProbeFunc func(context.Context) (int64, error)
 type ConnectedHealthFunc func(context.Context, v1.SessionRef) error
 
 type Options struct {
-	Tunnel                 TunnelProvider
-	Inputs                 InputProvider
-	NewDevice              DeviceFactory
-	NewCore                CoreFactory
-	StartCloak             CloakStarter
-	Probe                  ProbeFunc
-	ProbeTimeout           time.Duration
-	ConnectedHealth        ConnectedHealthFunc
-	HealthInterval         time.Duration
-	HealthFailureThreshold int
+	Tunnel                  TunnelProvider
+	Inputs                  InputProvider
+	NewDevice               DeviceFactory
+	NewCore                 CoreFactory
+	StartCloak              CloakStarter
+	Probe                   ProbeFunc
+	ProbeTimeout            time.Duration
+	InitialReadiness        ConnectedHealthFunc
+	ReadinessAttempts       int
+	ReadinessAttemptTimeout time.Duration
+	ReadinessRetryInterval  time.Duration
+	ConnectedHealth         ConnectedHealthFunc
+	HealthInterval          time.Duration
+	HealthFailureThreshold  int
 }
 
 // New returns a v1.Runtime. Its operation mutex deliberately serializes all
@@ -110,6 +114,18 @@ func New(options Options) v1.Runtime {
 	}
 	if r.options.ConnectedHealth == nil {
 		r.options.ConnectedHealth = defaultConnectedHealth
+	}
+	if r.options.InitialReadiness == nil {
+		r.options.InitialReadiness = r.options.ConnectedHealth
+	}
+	if r.options.ReadinessAttempts <= 0 {
+		r.options.ReadinessAttempts = 6
+	}
+	if r.options.ReadinessAttemptTimeout <= 0 {
+		r.options.ReadinessAttemptTimeout = 5 * time.Second
+	}
+	if r.options.ReadinessRetryInterval <= 0 {
+		r.options.ReadinessRetryInterval = 200 * time.Millisecond
 	}
 	if r.options.HealthInterval <= 0 {
 		r.options.HealthInterval = 10 * time.Second
@@ -140,6 +156,24 @@ func (r *runtime) Start(ctx context.Context, ref v1.SessionRef, profile v1.Runti
 	if err != nil {
 		r.active = false
 		return nil, err
+	}
+	if err := waitForInitialReadiness(
+		ctx,
+		ref,
+		r.options.InitialReadiness,
+		r.options.ReadinessAttempts,
+		r.options.ReadinessAttemptTimeout,
+		r.options.ReadinessRetryInterval,
+	); err != nil {
+		log.Debugf(category, "initial readiness failed generation=%d; rolling back runtime lease", ref.Generation)
+		r.active = false
+		cleanupErr := lease.Stop(context.Background())
+		if cleanupErr != nil {
+			log.Debugf(category, "initial readiness rollback failed generation=%d", ref.Generation)
+		} else {
+			log.Debugf(category, "initial readiness rollback complete generation=%d", ref.Generation)
+		}
+		return nil, errors.Join(fmt.Errorf("wait for initial tunnel readiness: %w", err), cleanupErr)
 	}
 	lease.setOnDone(func() {
 		r.mu.Lock()
@@ -274,6 +308,55 @@ func (r *runtime) startLocked(ctx context.Context, ref v1.SessionRef, profile v1
 	return owned, nil
 }
 
+func waitForInitialReadiness(
+	ctx context.Context,
+	ref v1.SessionRef,
+	check ConnectedHealthFunc,
+	attempts int,
+	attemptTimeout time.Duration,
+	retryInterval time.Duration,
+) error {
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		startedAt := time.Now()
+		log.Debugf(category, "initial readiness attempt begin generation=%d attempt=%d/%d timeout=%s", ref.Generation, attempt, attempts, attemptTimeout)
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		err := check(attemptCtx, ref)
+		cancel()
+		if err == nil {
+			log.Debugf(category, "initial readiness attempt succeeded generation=%d attempt=%d/%d elapsed=%s", ref.Generation, attempt, attempts, time.Since(startedAt).Truncate(time.Millisecond))
+			return nil
+		}
+		outcome := "check_failed"
+		if errors.Is(err, context.DeadlineExceeded) {
+			outcome = "timeout"
+		} else if errors.Is(err, context.Canceled) {
+			outcome = "canceled"
+		}
+		log.Debugf(category, "initial readiness attempt failed generation=%d attempt=%d/%d outcome=%s elapsed=%s", ref.Generation, attempt, attempts, outcome, time.Since(startedAt).Truncate(time.Millisecond))
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		lastErr = err
+		if attempt == attempts {
+			break
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return fmt.Errorf("readiness failed after %d attempts: %w", attempts, lastErr)
+}
+
 func connectContext(ctx context.Context, client coreClient) error {
 	result := make(chan error, 1)
 	go func() { result <- client.Connect() }()
@@ -402,17 +485,33 @@ func (defaultInputs) Apply(ctx context.Context, _ v1.SessionRef, cidrs, hosts []
 	if err != nil {
 		return nil, fmt.Errorf("acquire exclusion policy: %w", err)
 	}
-	resolver := net.Resolver{}
+	profileResolved := 0
 	for _, host := range hosts {
 		if err := ctx.Err(); err != nil {
 			routes.Release()
 			return nil, err
 		}
-		if _, err := resolver.LookupIPAddr(ctx, host); err != nil {
+		if _, err := dnscache.ResolveIPv4(
+			ctx,
+			host,
+			dnscache.FastResolveTimeout,
+			"runtime-profile-preflight",
+		); err != nil {
 			// DNS prewarm is best-effort; protocol DNS remains authoritative.
 			log.Debugf(category, "preflight DNS did not resolve host count=%d", len(hosts))
+		} else {
+			profileResolved++
 		}
 	}
+	probeResolved, probeTotal := healthcheck.PreflightTunnelProbeDNS(ctx)
+	log.Debugf(
+		category,
+		"preflight DNS complete profileResolved=%d profileTotal=%d probeResolved=%d probeTotal=%d",
+		profileResolved,
+		len(hosts),
+		probeResolved,
+		probeTotal,
+	)
 	return routingInputs{routes: routes}, nil
 }
 

@@ -4,9 +4,18 @@
 
 Requires theese file put in the current folder:
 
-* `dobby-vpn-1.1-mac-aarch64.zip`
-* `dobby-vpn-1.1-mac-amd64.zip`
-* `grpcvpnserver`
+* `dobbyVPN-macos-aarch64.zip`
+* `dobbyVPN-macos-amd64.zip`
+* `services/arm64/macos_grpcvpnserver`
+* `services/amd64/macos_grpcvpnserver`
+* `services/amd64/trusttunnel_client` (official TrustTunnelClient v1.0.49
+  universal helper, checksum-verified by the desktop service workflow)
+
+`build.sh` verifies the Mach-O architecture with `lipo` before inserting each
+service. An amd64 package therefore fails to build if it is given an arm64
+service binary. The amd64 package also places the validated official
+`trusttunnel_client` helper beside its service; the Intel-only backend never
+searches PATH for it.
 
 ## Build PKG
 

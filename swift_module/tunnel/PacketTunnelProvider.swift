@@ -3,7 +3,6 @@ import MyLibrary
 import os
 import app
 import CommonDI
-import Sentry
 import Foundation
 import Darwin
 import SystemConfiguration
@@ -23,7 +22,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var sessionSequence: Int64 = 0
 
     private var logs = NativeModuleHolder.logsRepository
-    private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
+    private let secrets = SharedKeychainSecretStore.shared
     private var pathMonitor: Network.NWPathMonitor?
     private var lastPathSignature: String?
     private var loadSampler: DispatchSourceTimer?
@@ -216,12 +215,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logSystemInfo(osVersionString: osVersionString)
         logs.writeLog(log: "[Interfaces] iOS version: \(osVersionString)")
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys) isProtocolProbe=\(isProtocolProbeStart)")
-        guard let rawConfiguration = userDefaults.data(forKey: sessionRawConfigurationKey),
+        guard let rawConfiguration = secrets.data(for: sessionRawConfigurationKey),
               !rawConfiguration.isEmpty else {
             logs.writeLog(log: "[tunnel:\(tunnelId)] missing opaque sessionapi configuration bytes")
             throw sessionError("CONFIGURATION_UNAVAILABLE")
         }
-        logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
         logInterfacesDetailed(label: "BEFORE_VPN_TUNNEL")
 
         // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
@@ -457,18 +455,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory responseBytes=\(response?.count ?? -1)")
             completionHandler?(response)
         } else {
-            if let msg = String(data: messageData, encoding: .utf8) {
-                logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage unknown='\(msg)' echo bytes=\(messageData.count)")
-            } else {
-                logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage nonUtf8 echo bytes=\(messageData.count)")
-            }
+            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage unknown payload bytes=\(messageData.count)")
             completionHandler?(messageData)
         }
     }
 
     @MainActor
     private func restartActiveProtocolFromAppMessage(isProtocolProbe: Bool) async -> Bool {
-        guard let raw = userDefaults.data(forKey: sessionRawConfigurationKey), !raw.isEmpty else {
+        guard let raw = secrets.data(for: sessionRawConfigurationKey), !raw.isEmpty else {
             logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi restart rejected: no raw configuration")
             return false
         }

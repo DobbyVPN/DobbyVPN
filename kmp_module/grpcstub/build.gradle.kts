@@ -31,6 +31,13 @@ dependencies {
     implementation(libs.protobuf.java.util)
     implementation(libs.protobuf.kotlin)
     implementation(libs.grpc.kotlin.stub)
+    implementation(libs.grpc.netty)
+    implementation("io.netty:netty-transport-native-epoll:4.1.127.Final")
+    implementation("io.netty:netty-transport-native-kqueue:4.1.127.Final")
+    runtimeOnly("io.netty:netty-transport-native-epoll:4.1.127.Final:linux-x86_64")
+    runtimeOnly("io.netty:netty-transport-native-epoll:4.1.127.Final:linux-aarch_64")
+    runtimeOnly("io.netty:netty-transport-native-kqueue:4.1.127.Final:osx-x86_64")
+    runtimeOnly("io.netty:netty-transport-native-kqueue:4.1.127.Final:osx-aarch_64")
 
     testImplementation(kotlin("test"))
 }

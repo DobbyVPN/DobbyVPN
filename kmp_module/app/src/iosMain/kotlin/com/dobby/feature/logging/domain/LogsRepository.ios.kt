@@ -1,17 +1,20 @@
 package com.dobby.feature.logging.domain
 
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.convert
 import kotlinx.cinterop.useContents
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSProcessInfo
+import platform.posix.chmod
 
 actual val fileSystem: FileSystem = FileSystem.SYSTEM
 
 private const val appGroupIdentifier = "group.vpn.dobby.app"
 
+@OptIn(ExperimentalForeignApi::class)
 actual fun provideLogFilePath(): Path {
 
     val fileManager = NSFileManager.defaultManager
@@ -27,6 +30,8 @@ actual fun provideLogFilePath(): Path {
     } else {
         println("Log file already exists at: $logFilePath")
     }
+    check(chmod(logFilePath.parent.toString(), 448.convert()) == 0) { "Failed to secure iOS log directory" }
+    check(chmod(logFilePath.toString(), 384.convert()) == 0) { "Failed to secure iOS log file" }
     return logFilePath
 }
 

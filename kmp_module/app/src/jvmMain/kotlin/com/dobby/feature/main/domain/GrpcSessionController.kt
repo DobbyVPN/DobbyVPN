@@ -122,7 +122,7 @@ private fun SessionStartTarget.toGrpc(): GrpcStartTarget = when (this) {
 
 private fun GrpcConfiguration.toDomain() = SessionConfiguration(
     digest = digest,
-    profiles = profiles.map { SessionProfile(it.index, it.protocol.toDomain(), it.description) },
+    profiles = profiles.map { SessionProfile(it.index, mapProtocol(it.protocol), it.description) },
     warnings = warnings.map { SessionWarning(it.code, it.message) },
 )
 
@@ -131,6 +131,7 @@ private fun GrpcSnapshot.toDomain() = SessionSnapshot(
     state = state.toDomain(),
     configured = configured,
     cleanupComplete = cleanupComplete,
+    lastFailureCode = lastFailure?.code?.name?.toSessionFailureCode(),
 )
 
 private fun GrpcObservation.toDomain() = SessionObservation(
@@ -138,9 +139,14 @@ private fun GrpcObservation.toDomain() = SessionObservation(
     nextSequence = nextSequence,
 )
 
-private fun GrpcEvent.toDomain() = SessionEvent(generation, sequence, state.toDomain())
+private fun GrpcEvent.toDomain() = SessionEvent(
+    generation = generation,
+    sequence = sequence,
+    state = state.toDomain(),
+    failureCode = failure?.code?.name?.toSessionFailureCode(),
+)
 
-private fun interop.session.SessionProtocol.toDomain() = when (this) {
+private fun mapProtocol(protocol: interop.session.SessionProtocol) = when (protocol) {
     interop.session.SessionProtocol.UNSPECIFIED -> SessionProtocol.UNSPECIFIED
     interop.session.SessionProtocol.OUTLINE -> SessionProtocol.OUTLINE
     interop.session.SessionProtocol.XRAY -> SessionProtocol.XRAY
@@ -165,12 +171,12 @@ private fun <T, R> GrpcResult<T>.toController(transform: (T) -> R): SessionContr
     is GrpcResult.Success -> SessionControllerResult.Success(transform(value))
     is GrpcResult.Failure -> SessionControllerResult.Failure(
         message = failure.message,
-        code = failure.code.name,
+        code = failure.code.name.toSessionFailureCode(),
     )
 }
 
 private fun SessionControllerResult<*>.isMissingSession(): Boolean =
-    this is SessionControllerResult.Failure && code == "NOT_FOUND"
+    this is SessionControllerResult.Failure && code == SessionFailureCode.NOT_FOUND
 
 /** Optional platform-owned session identity storage. UI callers intentionally leave it null. */
 internal interface SessionIdentityStore {

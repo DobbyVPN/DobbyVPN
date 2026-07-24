@@ -81,7 +81,7 @@ class MainViewModel(
     suspend fun setConfig(connectionUrl: String): Boolean {
         logger.log("Acquiring connection configuration for ${maskStr(connectionUrl)}")
         val rawConfig = runCatching { getConfigBytes(connectionUrl) }
-            .onFailure { logger.log("Configuration acquisition failed: ${it.message}") }
+            .onFailure { logger.log("Configuration acquisition failed: type=${it::class.simpleName ?: "UNKNOWN"}") }
             .getOrElse { return false }
 
         // Retain only the user-entered source and configuration acquisition record for migration.
@@ -97,7 +97,7 @@ class MainViewModel(
             }
             is SessionControllerResult.Failure -> {
                 configured = false
-                logger.log("Session configuration rejected: ${result.message}")
+                logger.log("Session configuration rejected: failureCode=${result.code.name}")
                 false
             }
         }
@@ -116,7 +116,7 @@ class MainViewModel(
                         }
                     }
                     is SessionControllerResult.Failure -> {
-                        logger.log("Session event poll failed: ${result.message}")
+                        logger.log("Session event poll failed: failureCode=${result.code.name}")
                     }
                 }
                 delay(250.milliseconds)
@@ -150,7 +150,7 @@ class MainViewModel(
             is SessionControllerResult.Failure -> {
                 startInFlight = false
                 lifecycle.failStart()
-                logger.log("Session start rejected: ${result.message}")
+                logger.log("Session start rejected: failureCode=${result.code.name}")
                 publish(VpnConnectionState.DISCONNECTED)
                 false
             }
@@ -171,7 +171,8 @@ class MainViewModel(
 
             when (val result = sessionController.stop(generation)) {
                 is SessionControllerResult.Success -> logger.log("Session stop accepted for generation=$generation")
-                is SessionControllerResult.Failure -> logger.log("Session stop rejected: ${result.message}")
+                is SessionControllerResult.Failure ->
+                    logger.log("Session stop rejected: generation=$generation failureCode=${result.code.name}")
             }
         }
     }
@@ -180,7 +181,8 @@ class MainViewModel(
         stopConnectionStateDetector()
         when (val result = sessionController.destroy()) {
             is SessionControllerResult.Success -> publish(VpnConnectionState.DISCONNECTED)
-            is SessionControllerResult.Failure -> logger.log("Session destroy failed: ${result.message}")
+            is SessionControllerResult.Failure ->
+                logger.log("Session destroy failed: failureCode=${result.code.name}")
         }
     }
 

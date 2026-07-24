@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import os
 import platform
 import shutil
@@ -30,6 +31,10 @@ ANDROID_PACKAGES = (
 )
 ANDROID_TOOLS_VERSION = "11076708"
 WINTUN_VERSION = "0.14.1"
+TRUSTTUNNEL_LINUX_VERSION = "1.0.0"
+TRUSTTUNNEL_LINUX_ARCHIVE_SHA256 = "515c6993672e35d768477b3cd5c04ee7dfcbeaaeecd5abef5e03c1603486cbfe"
+TRUSTTUNNEL_MACOS_VERSION = "1.0.49"
+TRUSTTUNNEL_MACOS_ARCHIVE_SHA256 = "f2dab732d17a885dcc4c81831fa4b263db250f5bea8a151416b518e936979c64"
 
 SERVICE_NAMES = {
     "linux": "ubuntu_grpcvpnserver",
@@ -555,6 +560,57 @@ def install_wintun(skip_deps: bool) -> None:
     log(f"Installed {target}")
 
 
+def install_linux_trusttunnel_bridge(skip_deps: bool) -> None:
+    """Stage the checksum-pinned Linux bridge for linking and packaging."""
+    if host_platform() != "linux":
+        return
+
+    bridge = GO_MODULE_DIR / "libdobby_bridge.so"
+    if not bridge.exists():
+        if skip_deps:
+            fail("libdobby_bridge.so is required for the Linux gRPC VPN service")
+
+        archive = (
+            TOOLS_DIR
+            / "downloads"
+            / f"libdobby_bridge-linux-x86_64-v{TRUSTTUNNEL_LINUX_VERSION}.zip"
+        )
+        if not archive.exists():
+            download(
+                "https://github.com/DobbyVPN/go-go-tunnel/releases/download/"
+                f"v{TRUSTTUNNEL_LINUX_VERSION}/libdobby_bridge-linux-x86_64.zip",
+                archive,
+            )
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if digest != TRUSTTUNNEL_LINUX_ARCHIVE_SHA256:
+            fail("TrustTunnel Linux bridge archive checksum mismatch")
+
+        with zipfile.ZipFile(archive) as zip_file:
+            candidates = [
+                member
+                for member in zip_file.infolist()
+                if not member.is_dir() and Path(member.filename).name == bridge.name
+            ]
+            if len(candidates) != 1:
+                fail("TrustTunnel Linux bridge archive did not contain exactly one shared library")
+            member = candidates[0]
+            source = zip_file.open(member)
+            temporary = bridge.with_suffix(".so.tmp")
+            try:
+                with source, open(temporary, "wb") as handle:
+                    shutil.copyfileobj(source, handle)
+                temporary.chmod(0o755)
+                temporary.replace(bridge)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    staged = SERVICES_DIR / bridge.name
+    shutil.copyfile(bridge, staged)
+    staged.chmod(0o755)
+    log(f"Staged checksum-pinned TrustTunnel Linux bridge: {staged}")
+
+
 def ensure_build_dependencies(target_platform: str, skip_deps: bool, need_android: bool) -> None:
     install_linux_packages(skip_deps)
     install_go(skip_deps)
@@ -592,6 +648,53 @@ def service_target_path(target_platform: str) -> Path:
     return SERVICES_DIR / SERVICE_NAMES[target_platform]
 
 
+def install_macos_amd64_trusttunnel_helper(skip_deps: bool) -> None:
+    """Stage the pinned official helper beside the Intel macOS service.
+
+    The in-process bridge remains the arm64 implementation. Intel macOS uses
+    this separate universal executable so it never links the arm64-only
+    go-go-tunnel archive.
+    """
+    if skip_deps:
+        helper = GO_MODULE_DIR / "trusttunnel_client"
+        if not helper.exists():
+            fail("official TrustTunnelClient helper is required for macOS amd64")
+    archive = TOOLS_DIR / "downloads" / f"trusttunnel_client-v{TRUSTTUNNEL_MACOS_VERSION}-macos-universal.tar.gz"
+    if not archive.exists() and not skip_deps:
+        download(
+            "https://github.com/TrustTunnel/TrustTunnelClient/releases/download/"
+            f"v{TRUSTTUNNEL_MACOS_VERSION}/trusttunnel_client-v{TRUSTTUNNEL_MACOS_VERSION}-macos-universal.tar.gz",
+            archive,
+        )
+    if archive.exists():
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if digest != TRUSTTUNNEL_MACOS_ARCHIVE_SHA256:
+            fail("official TrustTunnelClient archive checksum mismatch")
+        with tarfile.open(archive, "r:gz") as tar_file:
+            member_name = f"trusttunnel_client-v{TRUSTTUNNEL_MACOS_VERSION}-macos-universal/trusttunnel_client"
+            try:
+                member = tar_file.getmember(member_name)
+            except KeyError:
+                fail("official TrustTunnelClient archive did not contain the helper")
+            if not member.isfile():
+                fail("official TrustTunnelClient helper archive member is invalid")
+            source = tar_file.extractfile(member)
+            if source is None:
+                fail("official TrustTunnelClient helper could not be extracted")
+            target = GO_MODULE_DIR / "trusttunnel_client"
+            with source, open(target, "wb") as handle:
+                shutil.copyfileobj(source, handle)
+            target.chmod(0o755)
+    helper = GO_MODULE_DIR / "trusttunnel_client"
+    if not helper.exists():
+        fail("official TrustTunnelClient helper is unavailable")
+    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    staged = SERVICES_DIR / "trusttunnel_client"
+    shutil.copyfile(helper, staged)
+    staged.chmod(0o755)
+    log(f"Staged pinned TrustTunnelClient helper beside Intel macOS service: {staged}")
+
+
 def default_service_arch(target_platform: str) -> str:
     if os.environ.get("GITHUB_ACTIONS") == "true":
         return CI_ARCH_BY_PLATFORM[target_platform]
@@ -609,6 +712,10 @@ def build_service(
 ) -> None:
     target_arch = arch or default_service_arch(target_platform)
     ensure_build_dependencies(target_platform, skip_deps, need_android=False)
+    if target_platform == "linux":
+        if target_arch != "amd64":
+            fail("The pinned TrustTunnel Linux bridge currently supports amd64 only")
+        install_linux_trusttunnel_bridge(skip_deps)
     prepare_cloak_internal()
     go_mod_download(run_go_mod_tidy)
 
@@ -625,6 +732,12 @@ def build_service(
                 "GOARCH": target_arch,
             }
         )
+        if target_platform == "linux":
+            link_search_path = f"-L{GO_MODULE_DIR}"
+            existing_ldflags = env.get("CGO_LDFLAGS", "").strip()
+            env["CGO_LDFLAGS"] = " ".join(
+                part for part in (existing_ldflags, link_search_path) if part
+            )
         run(
             [
                 "go",
@@ -644,6 +757,8 @@ def build_service(
     shutil.copyfile(output, target)
     if target_platform != "windows":
         target.chmod(target.stat().st_mode | 0o111)
+    if target_platform == "macos" and target_arch == "amd64":
+        install_macos_amd64_trusttunnel_helper(skip_deps)
     log(f"Copied {output.name} to {target}")
 
 

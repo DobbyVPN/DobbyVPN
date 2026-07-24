@@ -33,8 +33,12 @@ CGO_LDFLAGS="-L." go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserve
 ### MacOS
 
 ```bash
-go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports/
+GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver-arm64 ./desktop_exports/
+GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver-amd64 ./desktop_exports/
 ```
+
+With CGO enabled, build each target on its matching macOS runner/toolchain. CI
+uses GitHub-hosted `macos-15` for arm64 and `macos-15-intel` for amd64.
 
 ### Android
 

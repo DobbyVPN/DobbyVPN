@@ -105,7 +105,7 @@ func (c *CoreClient) Connect() (err error) {
 	}
 	ledger.Add(c.device.Close)
 
-	log.Debugf(coreCommon.Category, "starting tun2socks engine with proxy %s", c.device.GetProxyAddr())
+	log.Debugf(coreCommon.Category, "starting tun2socks engine proxy_ready=true")
 	c.engine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{
 		ProxyAddr:   c.device.GetProxyAddr(),
 		FD:          engineFD,

@@ -8,17 +8,26 @@ import (
 	"net"
 	"strings"
 	"time"
+	"unsafe"
 
 	"go_module/log"
 	"go_module/routing"
 
 	"github.com/xjasonlyu/tun2socks/v2/engine"
+	"golang.org/x/sys/windows"
 )
 
 var (
 	lastIface string
 	prevDNS   []string
 	prevDHCP  bool
+	prevDAD   uint32
+	dadKnown  bool
+)
+
+const (
+	windowsTunMTU      = 1200
+	WindowsAdapterName = "wintun"
 )
 
 func execAndLog(cmd string, context string) error {
@@ -42,17 +51,17 @@ func startPlatformEngine(cfg interface{}) error {
 	proxyAddr := c.ProxyAddr
 	uplinkIface := c.UplinkIface
 
-	log.Debugf(Category, "[Engine][Windows] proxy=%s iface=%s", proxyAddr, uplinkIface)
+	log.Debugf(Category, "[Engine][Windows] proxy_ready=true uplink_iface=%s", uplinkIface)
 	if routing.IsTunnelInterfaceName(uplinkIface) {
 		return fmt.Errorf("refusing to use tunnel interface %q as Windows uplink", uplinkIface)
 	}
 
 	key := &engine.Key{
 		Proxy:     fmt.Sprintf("socks5://%s", proxyAddr),
-		Device:    "wintun",
+		Device:    WindowsAdapterName,
 		Interface: uplinkIface,
 		LogLevel:  "info",
-		MTU:       1200,
+		MTU:       windowsTunMTU,
 	}
 
 	engine.Insert(key)
@@ -69,6 +78,20 @@ func startPlatformEngine(cfg interface{}) error {
 	log.Debugf(Category, "[Engine][Windows] waitForWintun OK iface=%s elapsed=%s total=%s", ifName, time.Since(waitStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	lastIface = ifName
+	previousDAD, err := getInterfaceDADTransmits(ifName)
+	if err != nil {
+		lastIface = ""
+		engine.Stop()
+		return err
+	}
+	prevDAD, dadKnown = previousDAD, true
+	if previousDAD != 0 {
+		if err := setInterfaceDADTransmits(ifName, 0); err != nil {
+			stopPlatformEngine()
+			engine.Stop()
+			return err
+		}
+	}
 
 	dnsReadStartedAt := time.Now()
 	prevDNS, prevDHCP = getCurrentDNS(ifName)
@@ -77,10 +100,17 @@ func startPlatformEngine(cfg interface{}) error {
 	tunCfg := common.GetNetworkConfig()
 
 	if err := setInterfaceAddress(ifName, tunCfg.TunDevice); err != nil {
+		stopPlatformEngine()
+		engine.Stop()
+		return err
+	}
+	if err := waitForPreferredIPv4(ifName, tunCfg.TunDevice, 5*time.Second); err != nil {
+		stopPlatformEngine()
 		engine.Stop()
 		return err
 	}
 	if err := setDNS(ifName, "1.1.1.1"); err != nil {
+		stopPlatformEngine()
 		engine.Stop()
 		return err
 	}
@@ -121,18 +151,124 @@ func stopPlatformEngine() {
 			_ = execAndLog(cmd, fmt.Sprintf("restore DNS index=%d", i+1))
 		}
 	}
-
+	if dadKnown {
+		log.Debugf(Category, "[Engine][Windows] restoring DAD transmits iface=%s count=%d", lastIface, prevDAD)
+		_ = setInterfaceDADTransmits(lastIface, prevDAD)
+	}
 	lastIface = ""
 	prevDNS = nil
 	prevDHCP = false
+	prevDAD = 0
+	dadKnown = false
 }
 
 func waitForWintun(timeout time.Duration) (string, error) {
-	iface, err := routing.WaitForInterfaceNameContains("wintun", timeout)
+	iface, err := routing.WaitForInterfaceName(WindowsAdapterName, timeout)
 	if err != nil {
-		return "", fmt.Errorf("wintun not found: %w", err)
+		return "", fmt.Errorf("owned Wintun adapter %q not found: %w", WindowsAdapterName, err)
 	}
 	return iface.Name, nil
+}
+
+func windowsSetDADCommand(name string, transmits uint32) string {
+	return fmt.Sprintf(
+		"netsh interface ipv4 set interface interface=\"%s\" dadtransmits=%d store=active",
+		name,
+		transmits,
+	)
+}
+
+func getInterfaceDADTransmits(name string) (uint32, error) {
+	iface, err := net.InterfaceByName(name)
+	if err != nil {
+		return 0, fmt.Errorf("resolve interface %q for DAD snapshot: %w", name, err)
+	}
+	row := windows.MibIpInterfaceRow{
+		Family:         windows.AF_INET,
+		InterfaceIndex: uint32(iface.Index),
+	}
+	if err := windows.GetIpInterfaceEntry(&row); err != nil {
+		return 0, fmt.Errorf("read interface %q DAD settings: %w", name, err)
+	}
+	return row.DadTransmits, nil
+}
+
+func setInterfaceDADTransmits(name string, transmits uint32) error {
+	return execAndLog(windowsSetDADCommand(name, transmits), "setInterfaceDADTransmits")
+}
+
+func waitForPreferredIPv4(name, expectedAddress string, timeout time.Duration) error {
+	iface, err := net.InterfaceByName(name)
+	if err != nil {
+		return fmt.Errorf("resolve interface %q for IPv4 readiness: %w", name, err)
+	}
+	expected := net.ParseIP(expectedAddress).To4()
+	if expected == nil {
+		return fmt.Errorf("parse expected IPv4 address for interface %q", name)
+	}
+	startedAt := time.Now()
+	deadline := startedAt.Add(timeout)
+	for {
+		found, preferred, skipAsSource, duplicate, err := interfaceIPv4State(uint32(iface.Index), expected)
+		if err != nil {
+			return fmt.Errorf("read IPv4 readiness for interface %q: %w", name, err)
+		}
+		if found && preferred && !skipAsSource {
+			log.Debugf(
+				Category,
+				"[Engine][Windows] IPv4 source ready iface=%s elapsed=%s",
+				name,
+				time.Since(startedAt).Truncate(time.Millisecond),
+			)
+			return nil
+		}
+		if duplicate {
+			return fmt.Errorf("IPv4 address for interface %q is duplicate", name)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf(
+				"IPv4 address for interface %q not preferred after %s found=%t skipAsSource=%t",
+				name,
+				time.Since(startedAt).Truncate(time.Millisecond),
+				found,
+				skipAsSource,
+			)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func interfaceIPv4State(interfaceIndex uint32, expected net.IP) (found, preferred, skipAsSource, duplicate bool, err error) {
+	var table *windows.MibUnicastIpAddressTable
+	if err = windows.GetUnicastIpAddressTable(windows.AF_INET, &table); err != nil {
+		return
+	}
+	defer windows.FreeMibTable(unsafe.Pointer(table))
+	rows := unsafe.Slice(&table.Table[0], table.NumEntries)
+	return findInterfaceIPv4State(rows, interfaceIndex, expected)
+}
+
+func findInterfaceIPv4State(rows []windows.MibUnicastIpAddressRow, interfaceIndex uint32, expected net.IP) (found, preferred, skipAsSource, duplicate bool, err error) {
+	expected = expected.To4()
+	if expected == nil {
+		return false, false, false, false, fmt.Errorf("expected address is not IPv4")
+	}
+	for index := range rows {
+		row := &rows[index]
+		if row.InterfaceIndex != interfaceIndex || row.Address.Family != windows.AF_INET {
+			continue
+		}
+		raw := (*windows.RawSockaddrInet4)(unsafe.Pointer(&row.Address))
+		if !net.IP(raw.Addr[:]).Equal(expected) {
+			continue
+		}
+		return true,
+			row.DadState == windows.IpDadStatePreferred,
+			row.SkipAsSource != 0,
+			row.DadState == windows.IpDadStateDuplicate,
+			nil
+	}
+	return false, false, false, false, nil
 }
 
 func setInterfaceAddress(name, ip string) error {

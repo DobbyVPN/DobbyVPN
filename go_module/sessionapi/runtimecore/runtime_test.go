@@ -62,10 +62,11 @@ type inputRelease struct{ record *recorded }
 func (l inputRelease) Release(context.Context) error { l.record.add("inputs-stop"); return nil }
 
 type fakeCore struct {
-	record     *recorded
-	connectErr error
-	block      <-chan struct{}
-	stopBlock  <-chan struct{}
+	record      *recorded
+	connectErr  error
+	block       <-chan struct{}
+	stopBlock   <-chan struct{}
+	stopEntered chan<- struct{}
 }
 
 func (c fakeCore) Connect() error {
@@ -77,6 +78,9 @@ func (c fakeCore) Connect() error {
 }
 func (c fakeCore) Disconnect() error {
 	c.record.add("core-stop")
+	if c.stopEntered != nil {
+		c.stopEntered <- struct{}{}
+	}
 	if c.stopBlock != nil {
 		<-c.stopBlock
 	}
@@ -111,10 +115,168 @@ func options(record *recorded) Options {
 			return fakeCore{record: record}
 		},
 		Probe: func(context.Context) (int64, error) { record.add("probe"); return 7, nil },
+		InitialReadiness: func(context.Context, v1.SessionRef) error {
+			return nil
+		},
 		ConnectedHealth: func(ctx context.Context, _ v1.SessionRef) error {
 			<-ctx.Done()
 			return ctx.Err()
 		},
+	}
+}
+
+func TestStartWaitsForInitialReadinessAndRetries(t *testing.T) {
+	record := &recorded{}
+	o := options(record)
+	o.ReadinessAttempts = 3
+	o.ReadinessRetryInterval = time.Nanosecond
+	attempts := 0
+	o.InitialReadiness = func(context.Context, v1.SessionRef) error {
+		attempts++
+		record.add("ready")
+		if attempts < 3 {
+			return errors.New("not ready")
+		}
+		return nil
+	}
+
+	lease, err := New(o).Start(context.Background(), v1.SessionRef{Generation: 1}, profile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 3 {
+		t.Fatalf("readiness attempts=%d, want 3", attempts)
+	}
+	if err := lease.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"inputs", "cloak", "device", "connect", "ready", "ready", "ready", "core-stop", "cloak-stop", "inputs-stop"}
+	if got := record.got(); !same(got, want) {
+		t.Fatalf("order=%v, want=%v", got, want)
+	}
+}
+
+func TestInitialReadinessFailureRollsBackLIFO(t *testing.T) {
+	record := &recorded{}
+	o := options(record)
+	o.ReadinessAttempts = 2
+	o.ReadinessRetryInterval = time.Nanosecond
+	o.InitialReadiness = func(context.Context, v1.SessionRef) error {
+		record.add("ready")
+		return errors.New("not ready")
+	}
+
+	if _, err := New(o).Start(context.Background(), v1.SessionRef{Generation: 2}, profile()); err == nil {
+		t.Fatal("Start succeeded without tunnel readiness")
+	}
+	want := []string{"inputs", "cloak", "device", "connect", "ready", "ready", "core-stop", "cloak-stop", "inputs-stop"}
+	if got := record.got(); !same(got, want) {
+		t.Fatalf("order=%v, want=%v", got, want)
+	}
+}
+
+func TestInitialReadinessCancellationRollsBackLIFO(t *testing.T) {
+	record := &recorded{}
+	o := options(record)
+	entered := make(chan struct{})
+	o.InitialReadiness = func(ctx context.Context, _ v1.SessionRef) error {
+		close(entered)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := New(o).Start(ctx, v1.SessionRef{Generation: 3}, profile())
+		result <- err
+	}()
+	<-entered
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v, want cancellation", err)
+	}
+	want := []string{"inputs", "cloak", "device", "connect", "core-stop", "cloak-stop", "inputs-stop"}
+	if got := record.got(); !same(got, want) {
+		t.Fatalf("order=%v, want=%v", got, want)
+	}
+}
+
+func TestInitialReadinessAttemptTimeoutIsBounded(t *testing.T) {
+	record := &recorded{}
+	o := options(record)
+	o.ReadinessAttempts = 1
+	o.ReadinessAttemptTimeout = time.Millisecond
+	o.InitialReadiness = func(ctx context.Context, _ v1.SessionRef) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	started := time.Now()
+	_, err := New(o).Start(context.Background(), v1.SessionRef{Generation: 4}, profile())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err=%v, want readiness deadline", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("readiness timeout took %s", elapsed)
+	}
+	want := []string{"inputs", "cloak", "device", "connect", "core-stop", "cloak-stop", "inputs-stop"}
+	if got := record.got(); !same(got, want) {
+		t.Fatalf("order=%v, want=%v", got, want)
+	}
+}
+
+func TestSecondStartWaitsUntilReadinessRollbackCleanupCompletes(t *testing.T) {
+	record := &recorded{}
+	cleanupRelease := make(chan struct{})
+	cleanupEntered := make(chan struct{}, 1)
+	o := options(record)
+	o.ReadinessAttempts = 1
+	o.InitialReadiness = func(_ context.Context, ref v1.SessionRef) error {
+		if ref.Generation == 1 {
+			return errors.New("not ready")
+		}
+		return nil
+	}
+	o.NewCore = func(pkg.ProtocolDevice, io.ReadWriteCloser) coreClient {
+		return fakeCore{
+			record:      record,
+			stopBlock:   cleanupRelease,
+			stopEntered: cleanupEntered,
+		}
+	}
+	r := New(o)
+
+	first := make(chan error, 1)
+	go func() {
+		_, err := r.Start(context.Background(), v1.SessionRef{Generation: 1}, profile())
+		first <- err
+	}()
+	<-cleanupEntered
+
+	second := make(chan error, 1)
+	var secondLease v1.RuntimeLease
+	go func() {
+		lease, err := r.Start(context.Background(), v1.SessionRef{Generation: 2}, profile())
+		secondLease = lease
+		second <- err
+	}()
+	select {
+	case err := <-second:
+		t.Fatalf("second Start completed before cleanup release: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(cleanupRelease)
+	if err := <-first; err == nil {
+		t.Fatal("first Start unexpectedly succeeded")
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("second Start after cleanup failed: %v", err)
+	}
+	if secondLease == nil {
+		t.Fatal("second Start returned a nil lease")
+	}
+	if err := secondLease.Stop(context.Background()); err != nil {
+		t.Fatalf("stop second lease: %v", err)
 	}
 }
 
@@ -275,10 +437,19 @@ func (p protectionProvider) ProtectSocket(context.Context, v1.SessionRef, int) e
 
 func TestProbeOwnsTemporaryResourcesAndRuntimeDoesNotOverlap(t *testing.T) {
 	record := &recorded{}
-	r := New(options(record))
+	o := options(record)
+	readinessChecks := 0
+	o.InitialReadiness = func(context.Context, v1.SessionRef) error {
+		readinessChecks++
+		return nil
+	}
+	r := New(o)
 	result, err := r.Probe(context.Background(), v1.SessionRef{Generation: 1}, profile())
 	if err != nil || result.LatencyMillis != 7 {
 		t.Fatalf("Probe=%#v err=%v", result, err)
+	}
+	if readinessChecks != 0 {
+		t.Fatalf("Probe ran final-session readiness checks=%d", readinessChecks)
 	}
 	want := []string{"inputs", "cloak", "device", "connect", "probe", "core-stop", "cloak-stop", "inputs-stop"}
 	if got := record.got(); !same(got, want) {

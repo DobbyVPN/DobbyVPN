@@ -7,6 +7,7 @@ import com.dobby.feature.main.domain.GrpcSessionController
 import com.dobby.feature.main.domain.SessionConfiguration
 import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.SessionControllerResult
+import com.dobby.feature.main.domain.SessionFailureCode
 import com.dobby.feature.main.domain.SessionIdentityStore
 import com.dobby.feature.main.domain.SessionProfile
 import com.dobby.feature.main.domain.SessionStartTarget
@@ -26,6 +27,11 @@ import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
 import java.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+
+private const val configFetchTimeoutSeconds = 20L
+private const val externalIpTimeoutSeconds = 10L
+private const val millisPerSecond = 1_000L
+private val HTTP_SUCCESS_STATUS = 200..299
 
 /**
  * JVM command-line shell for sessionapi/v1.
@@ -83,6 +89,20 @@ class CliClient(
         }
     }
 
+    /** Connects one exact Go-provided profile index without interpreting the configuration. */
+    fun connectProfile(options: List<String>): ExitCode {
+        if (options.size != 2) return ExitCode.INVALID_ARGS
+        val profileIndex = options[1].toIntOrNull()?.takeIf { it >= 0 } ?: return ExitCode.INVALID_ARGS
+        val rawConfig = readConnectionArgument(options[0]) ?: return ExitCode.INVALID_ARGS
+        if (!configure(rawConfig)) return ExitCode.CONFIG_FORMAT_ERROR
+
+        return if (runBlocking { startAndAwait(SessionStartTarget.ProfileIndex(profileIndex)) }) {
+            ExitCode.OK
+        } else {
+            ExitCode.TUNNEL_START_ERROR
+        }
+    }
+
     fun checkConfig(options: List<String>): ExitCode {
         if (options.size != 1) return ExitCode.INVALID_ARGS
         val rawConfig = readConnectionArgument(options[0]) ?: return ExitCode.INVALID_ARGS
@@ -104,7 +124,10 @@ class CliClient(
                 is SessionControllerResult.Failure -> {
                     failures += 1
                     println("FAILED $label: VPN tunnel did not start")
-                    logger.log("[CLI] FAILED $label: ${result.message}")
+                    logger.log(
+                        "[CLI] Session start rejected state=START_REJECTED generation=0 " +
+                            "failureCode=${result.code.safeFailureCode()}"
+                    )
                     continue
                 }
             }
@@ -167,7 +190,10 @@ class CliClient(
             if (!runBlocking { awaitTerminal(generation) }) return ExitCode.TUNNEL_START_ERROR
             val tunnelIp = waitForExternalIpChange(baselineIp, TUNNEL_IP_VERIFY_TIMEOUT_SECONDS)
             if (tunnelIp == null) {
-                println("FAILED: external IP did not change through tunnel (baseline=$baselineIp tunnel=unchanged after ${TUNNEL_IP_VERIFY_TIMEOUT_SECONDS}s)")
+                println(
+                    "FAILED: external IP did not change through tunnel " +
+                        "(baseline=$baselineIp tunnel=unchanged after ${TUNNEL_IP_VERIFY_TIMEOUT_SECONDS}s)"
+                )
                 logger.log("[CLI] FAILED verify-session: IP unchanged")
                 return ExitCode.SESSION_VERIFY_FAILED
             }
@@ -218,7 +244,10 @@ class CliClient(
                 result.value
             }
             is SessionControllerResult.Failure -> {
-                logger.log("[CLI] Session configuration rejected: ${result.message}")
+                logger.log(
+                    "[CLI] Session configuration rejected " +
+                        "failureCode=${result.code.safeFailureCode()}"
+                )
                 null
             }
         }
@@ -231,7 +260,10 @@ class CliClient(
             connected
         }
         is SessionControllerResult.Failure -> {
-            logger.log("[CLI] Session start rejected: ${result.message}")
+            logger.log(
+                "[CLI] Session start rejected state=START_REJECTED generation=0 " +
+                    "failureCode=${result.code.safeFailureCode()}"
+            )
             false
         }
     }
@@ -239,43 +271,60 @@ class CliClient(
     /** Waits only on ordered Go events, with Snapshot as a lossless terminal-state fallback. */
     private suspend fun awaitTerminal(generation: ULong): Boolean {
         repeat(MAX_EVENT_POLLS) {
-            when (val observation = sessionController.observe(observedSequence)) {
-                is SessionControllerResult.Success -> {
-                    observedSequence = observation.value.nextSequence
-                    for (event in observation.value.events) {
-                        if (event.generation != generation) continue
-                        when (event.state) {
-                            SessionState.CONNECTED -> return true
-                            SessionState.FAILED, SessionState.IDLE, SessionState.DESTROYED -> return false
-                            else -> Unit
-                        }
-                    }
-                }
-                is SessionControllerResult.Failure -> {
-                    logger.log("[CLI] Session event poll failed: ${observation.message}")
-                    return false
-                }
-            }
-            when (val snapshot = sessionController.snapshot()) {
-                is SessionControllerResult.Success -> if (snapshot.value.generation == generation) {
-                    when (snapshot.value.state) {
-                        SessionState.CONNECTED -> return true
-                        SessionState.FAILED, SessionState.IDLE, SessionState.DESTROYED -> return false
-                        else -> Unit
-                    }
-                }
-                is SessionControllerResult.Failure -> return false
-            }
+            val terminal = pollEvents(generation) ?: pollSnapshot(generation)
+            if (terminal != null) return terminal
             delay(EVENT_POLL_INTERVAL_MS.milliseconds)
         }
         logger.log("[CLI] Session start timed out waiting for generation=$generation")
         return false
     }
 
+    private suspend fun pollEvents(generation: ULong): Boolean? =
+        when (val observation = sessionController.observe(observedSequence)) {
+            is SessionControllerResult.Success -> {
+                observedSequence = observation.value.nextSequence
+                observation.value.events
+                    .asSequence()
+                    .filter { it.generation == generation }
+                    .mapNotNull { event ->
+                        event.state.terminalResult()?.also { connected ->
+                            if (!connected && event.state == SessionState.FAILED) {
+                                logTerminalFailure(generation, event.failureCode)
+                            }
+                        }
+                    }
+                    .firstOrNull()
+            }
+            is SessionControllerResult.Failure -> {
+                logger.log(
+                    "[CLI] Session event poll failed " +
+                        "failureCode=${observation.code.safeFailureCode()}"
+                )
+                false
+            }
+        }
+
+    private suspend fun pollSnapshot(generation: ULong): Boolean? =
+        when (val snapshot = sessionController.snapshot()) {
+            is SessionControllerResult.Success -> snapshot.value
+                .takeIf { it.generation == generation }
+                ?.let {
+                    it.state.terminalResult()?.also { connected ->
+                        if (!connected && it.state == SessionState.FAILED) {
+                            logTerminalFailure(generation, it.lastFailureCode)
+                        }
+                    }
+                }
+            is SessionControllerResult.Failure -> false
+        }
+
     private suspend fun stopAndWait(generation: ULong): Boolean {
         when (val result = sessionController.stop(generation)) {
             is SessionControllerResult.Failure -> {
-                logger.log("[CLI] Session stop rejected: ${result.message}")
+                logger.log(
+                    "[CLI] Session stop rejected generation=$generation " +
+                        "failureCode=${result.code.safeFailureCode()}"
+                )
                 return false
             }
             is SessionControllerResult.Success -> Unit
@@ -291,6 +340,13 @@ class CliClient(
         }
         logger.log("[CLI] Session stop timed out waiting for cleanup generation=$generation")
         return false
+    }
+
+    private fun logTerminalFailure(generation: ULong, failureCode: SessionFailureCode?) {
+        logger.log(
+            "[CLI] Session terminal state=FAILED generation=$generation " +
+                "failureCode=${failureCode.safeFailureCode()}"
+        )
     }
 
     private fun printRecentLogs() {
@@ -310,10 +366,10 @@ class CliClient(
     }
 
     private fun fetchConfig(uri: URI): ByteArray? = runCatching {
-        val request = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(20)).GET().build()
-        val response = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).build()
+        val request = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(configFetchTimeoutSeconds)).GET().build()
+        val response = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(configFetchTimeoutSeconds)).build()
             .send(request, HttpResponse.BodyHandlers.ofByteArray())
-        response.body().takeIf { response.statusCode() in 200..299 }
+        response.body().takeIf { response.statusCode() in HTTP_SUCCESS_STATUS }
     }.getOrNull()
 
     private fun SessionProfile.label(index: Int, total: Int): String {
@@ -323,7 +379,7 @@ class CliClient(
     }
 
     private fun waitForExternalIpChange(baselineIp: String, timeoutSeconds: Int): String? {
-        val deadlineMs = System.currentTimeMillis() + timeoutSeconds * 1_000L
+        val deadlineMs = System.currentTimeMillis() + timeoutSeconds * millisPerSecond
         while (System.currentTimeMillis() < deadlineMs) {
             val ip = externalIpLookup()
             if (ip != null && ip != baselineIp) return ip
@@ -340,10 +396,19 @@ class CliClient(
     }
 }
 
+private fun SessionFailureCode?.safeFailureCode(): String =
+    (this ?: SessionFailureCode.UNSPECIFIED).name
+
 private fun SessionState.displayState(): String = when (this) {
     SessionState.PROBING, SessionState.PREPARING, SessionState.STOPPING -> "Connecting"
     SessionState.CONNECTED -> "Connected"
     else -> "Disconnected"
+}
+
+private fun SessionState.terminalResult(): Boolean? = when (this) {
+    SessionState.CONNECTED -> true
+    SessionState.FAILED, SessionState.IDLE, SessionState.DESTROYED -> false
+    else -> null
 }
 
 private fun SessionState.statusCode(): Int = when (this) {
@@ -357,15 +422,16 @@ private fun fetchExternalIp(): String? {
     for (endpoint in endpoints) {
         val response = runCatching {
             val request = HttpRequest.newBuilder(URI.create(endpoint))
-                .timeout(Duration.ofSeconds(10))
+                .timeout(Duration.ofSeconds(externalIpTimeoutSeconds))
                 .header("Cache-Control", "no-store")
                 .header("Pragma", "no-cache")
                 .GET().build()
-            HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(10)).build()
+            HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(externalIpTimeoutSeconds)).build()
                 .send(request, HttpResponse.BodyHandlers.ofString())
         }.getOrNull()
         val ip = response?.body()?.trim()
-        if (response != null && response.statusCode() in 200..299 && !ip.isNullOrBlank()) return ip
+        if (response != null && response.statusCode() in HTTP_SUCCESS_STATUS && !ip.isNullOrBlank()) return ip
     }
     return null
 }

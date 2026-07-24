@@ -4,11 +4,11 @@ import com.dobby.grpcproto.empty
 import com.dobby.grpcproto.VpnGrpcKt
 import com.dobby.grpcproto.setGeoRoutingConfRequest
 import interop.exceptions.VpnServiceStatusException
-import io.grpc.ManagedChannel
+import io.grpc.Channel
 import io.grpc.StatusException
 import kotlinx.coroutines.runBlocking
 
-open class GeoroutingGrpcLibrary(channel: ManagedChannel) : GeoroutingLibrary {
+open class GeoroutingGrpcLibrary(channel: Channel) : GeoroutingLibrary {
     private val stub = VpnGrpcKt.VpnCoroutineStub(channel)
 
     override fun SetGeoRoutingConf(cidrs: String) {

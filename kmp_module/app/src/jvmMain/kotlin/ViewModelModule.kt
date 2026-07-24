@@ -3,7 +3,6 @@ import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.logging.presentation.SettingsViewModel
 import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.main.presentation.ConfigsProcessor
 import com.dobby.feature.main.presentation.MainViewModel
 import org.koin.core.module.dsl.singleOf
 import org.koin.dsl.module
@@ -12,7 +11,6 @@ actual val sharedModule = module {
     singleOf(::Logger)
     singleOf(::PermissionEventsChannel)
     singleOf(::LogsViewModel)
-    singleOf(::ConfigsProcessor)
     singleOf(::MainViewModel)
     singleOf(::AuthenticationSettingsViewModel)
     singleOf(::SettingsViewModel)

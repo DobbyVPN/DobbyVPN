@@ -73,6 +73,7 @@ internal class IosSessionController(
                 state = result.string("state").toIosSessionState(),
                 configured = result.bool("configured"),
                 cleanupComplete = result.bool("cleanup_complete"),
+                lastFailureCode = result.optionalString("last_failure")?.toSessionFailureCode(),
             )
         }
     }
@@ -81,7 +82,12 @@ internal class IosSessionController(
         parse(bridge.observe(afterSequence.toLong())) { result ->
             SessionObservation(
                 events = result.array("events").map { event ->
-                    SessionEvent(event.long("generation").toULong(), event.long("sequence").toULong(), event.string("state").toIosSessionState())
+                    SessionEvent(
+                        generation = event.long("generation").toULong(),
+                        sequence = event.long("sequence").toULong(),
+                        state = event.string("state").toIosSessionState(),
+                        failureCode = event.optionalString("failure")?.toSessionFailureCode(),
+                    )
                 },
                 nextSequence = result.long("next_sequence").toULong(),
             )
@@ -96,15 +102,22 @@ internal class IosSessionController(
         val root = json.parseToJsonElement(payload).jsonObject
         if (!root.bool("ok")) {
             val code = root["error"]?.jsonObject?.string("code") ?: "INTERNAL"
-            return SessionControllerResult.Failure(message = code, code = code)
+            return SessionControllerResult.Failure(message = code, code = code.toSessionFailureCode())
         }
         SessionControllerResult.Success(transform(root["result"]?.jsonObject ?: JsonObject(emptyMap())))
-    }.getOrElse { SessionControllerResult.Failure(message = "INTERNAL", code = "INTERNAL") }
+    }.getOrElse {
+        SessionControllerResult.Failure(
+            message = "INTERNAL",
+            code = SessionFailureCode.INTERNAL,
+        )
+    }
 
     private companion object { val json = Json { ignoreUnknownKeys = true } }
 }
 
 private fun JsonObject.string(name: String): String = this[name]?.jsonPrimitive?.content.orEmpty()
+private fun JsonObject.optionalString(name: String): String? =
+    this[name]?.jsonPrimitive?.content?.takeIf(String::isNotBlank)
 private fun JsonObject.long(name: String): Long = this[name]?.jsonPrimitive?.longOrNull ?: 0L
 private fun JsonObject.int(name: String): Int = this[name]?.jsonPrimitive?.intOrNull ?: -1
 private fun JsonObject.bool(name: String): Boolean = this[name]?.jsonPrimitive?.booleanOrNull ?: false

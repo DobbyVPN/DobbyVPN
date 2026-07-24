@@ -2,6 +2,23 @@ name: iOS Build
 
 on:
   workflow_call:
+    secrets:
+      KEYCHAIN_PASSWORD:
+        required: true
+      CERT_P12_PASSWORD:
+        required: true
+      CERT_P12_BASE64:
+        required: true
+      PROVISION_DOBBY_BASE64:
+        required: true
+      PROVISION_DOBBY_TUNNEL_BASE64:
+        required: true
+      APP_STORE_API_KEY:
+        required: true
+      APP_STORE_KEY_ID:
+        required: true
+      APP_STORE_ISSUER_ID:
+        required: true
     inputs:
       app_major_version:
         type: string
@@ -16,6 +33,7 @@ on:
 jobs:
   ios_build:
     runs-on: macos-15
+    environment: release
     env:
       APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
       APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
@@ -45,12 +63,6 @@ jobs:
           key: ${{ runner.os }}-xcode-spm-${{ hashFiles('swift_module/iosApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-xcode-spm-
-
-      - name: Sentry auth
-        working-directory: swift_module
-        run: |
-          echo "[auth]" > .sentryclirc
-          echo "token=${{ secrets.SENTRY_AUTH }}" >> .sentryclirc
 
       - name: Download iOS lib
         uses: actions/download-artifact@v4

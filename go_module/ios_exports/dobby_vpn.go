@@ -24,10 +24,28 @@ var (
 	legacySession  = mobileSessions.NewLegacyClient()
 )
 
+// PlatformCallbacks is declared in the bound package so gobind emits the
+// Objective-C protocol instead of skipping an interface imported from another
+// Go package.
+type PlatformCallbacks interface {
+	AcquireTunnel(sessionID string, generation int64) int32
+	ReleaseTunnel(sessionID string, generation int64, fd int32)
+	ProtectSocket(sessionID string, generation int64, fd int32) bool
+	PublishState(
+		sessionID string,
+		generation int64,
+		sequence int64,
+		state string,
+		profileIndex int32,
+		profileProtocol string,
+		failureCode string,
+	)
+}
+
 // RegisterSessionPlatform lets the NetworkExtension shell receive only safe,
 // generation-correlated state. Without a delegate, iOS acquires its TUN by
 // locating and duplicating the current utun for every runtime generation.
-func RegisterSessionPlatform(callbacks mobilebinding.PlatformCallbacks) {
+func RegisterSessionPlatform(callbacks PlatformCallbacks) {
 	iosCallbacks.set(callbacks)
 }
 

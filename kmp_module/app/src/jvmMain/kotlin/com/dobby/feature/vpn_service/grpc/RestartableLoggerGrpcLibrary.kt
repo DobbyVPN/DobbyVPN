@@ -15,26 +15,14 @@ class RestartableLoggerGrpcLibrary(private val logger: Logger) : LoggerLibrary {
     }
 
     override fun InitTelemetry(endpoint: String, token: String) {
-        try {
-            GrpcVpnLibrary.loggerGrpcLibrary.InitTelemetry(endpoint, token)
-        } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to init telemetry with endpoint $endpoint: $e, token.len: ${token.length}")
-        }
+        logger.log("Remote telemetry request ignored; local logging only")
     }
 
     override fun StopTelemetry() {
-        try {
-            GrpcVpnLibrary.loggerGrpcLibrary.StopTelemetry()
-        } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to stop telemetry: $e")
-        }
+        logger.log("Remote telemetry is disabled; no exporter to stop")
     }
 
     override fun SetupTelemetryAttributes(config: String) {
-        try {
-            GrpcVpnLibrary.loggerGrpcLibrary.SetupTelemetryAttributes(config)
-        } catch (e: VpnServiceStatusException) {
-            logger.log("[ERROR] Failed to setup telemetry attributes with config.len=${config.length}: $e")
-        }
+        logger.log("Telemetry attributes ignored; remote telemetry is disabled")
     }
 }

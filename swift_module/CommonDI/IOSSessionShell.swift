@@ -11,6 +11,7 @@ import app
 /// can never manufacture a connected UI state here.
 final class IOSSessionShell: NSObject, IosSessionBridge {
     private let defaults = UserDefaults(suiteName: appGroupIdentifier) ?? .standard
+    private let secrets = SharedKeychainSecretStore.shared
     private let rawConfigurationKey = "sessionapi.v1.rawConfiguration"
     private let manager: VpnManagerImpl
     private var configured = false
@@ -20,18 +21,21 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
     init(manager: VpnManagerImpl) {
         self.manager = manager
         super.init()
+        secrets.migrate(keys: [rawConfigurationKey], from: defaults)
+        configured = secrets.data(for: rawConfigurationKey)?.isEmpty == false
     }
 
     func configure(rawConfig: KotlinByteArray) -> String {
         let raw = data(from: rawConfig)
         guard !raw.isEmpty else { return failure("MALFORMED_CONFIG") }
-        defaults.set(raw, forKey: rawConfigurationKey)
+        guard secrets.set(raw, for: rawConfigurationKey) else { return failure("SECURE_STORAGE_FAILED") }
+        defaults.removeObject(forKey: rawConfigurationKey)
         configured = true
         return success(["digest": "extension-pending", "profiles": [], "warnings": []])
     }
 
     func start(mode: String, index: Int32) -> String {
-        guard configured, defaults.data(forKey: rawConfigurationKey)?.isEmpty == false else {
+        guard configured, secrets.data(for: rawConfigurationKey)?.isEmpty == false else {
             return failure("NOT_CONFIGURED")
         }
         // iOS intentionally has no UI-side profile selection. The extension
@@ -83,6 +87,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
 
     func destroy() -> String {
         configured = false
+        secrets.remove(rawConfigurationKey)
         defaults.removeObject(forKey: rawConfigurationKey)
         return success([:])
     }

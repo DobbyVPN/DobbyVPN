@@ -3,10 +3,13 @@ package healthcheck
 import (
 	"context"
 	"fmt"
+	"go_module/dnscache"
 	hcCommon "go_module/healthcheck/common"
 	"go_module/log"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -17,6 +20,7 @@ const (
 	probeMaxBodyBytes     = 4096
 	httpProbeMinSuccesses = 2
 	probeFailureResult    = int64(-1)
+	probeDNSPreflightTTL  = 12 * time.Hour
 )
 
 var httpProbeURLs = []string{
@@ -25,11 +29,64 @@ var httpProbeURLs = []string{
 	"https://about.google",
 }
 
+var probeDNSLookup = net.DefaultResolver.LookupIPAddr
+
 type probeEndpointResult struct {
 	url       string
 	latencyMs int64
 	status    int
 	err       error
+}
+
+// PreflightTunnelProbeDNS resolves the fixed readiness hosts before a platform
+// redirects DNS into the new tunnel. The cached IPv4 answers remove a circular
+// dependency where proving the tunnel requires the tunnel's first DNS exchange
+// to have already succeeded. Failures remain best-effort because a platform may
+// still provide working DNS through the tunnel.
+func PreflightTunnelProbeDNS(ctx context.Context) (resolved int, total int) {
+	hosts := tunnelProbeHosts(httpProbeURLs)
+	for _, host := range hosts {
+		if err := ctx.Err(); err != nil {
+			break
+		}
+		lookupCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+		addresses, err := probeDNSLookup(lookupCtx, host)
+		cancel()
+		if err != nil {
+			continue
+		}
+		for _, address := range addresses {
+			if ipv4 := address.IP.To4(); ipv4 != nil {
+				if dnscache.SetIPv4(host, ipv4.String(), "tunnel-probe-preflight", probeDNSPreflightTTL) {
+					resolved++
+				}
+				break
+			}
+		}
+	}
+	log.Debugf(hcCommon.Category, "Tunnel probe DNS preflight resolved=%d total=%d", resolved, len(hosts))
+	return resolved, len(hosts)
+}
+
+func tunnelProbeHosts(rawURLs []string) []string {
+	seen := make(map[string]struct{}, len(rawURLs))
+	hosts := make([]string, 0, len(rawURLs))
+	for _, rawURL := range rawURLs {
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			continue
+		}
+		host := dnscache.NormalizeHost(parsed.Hostname())
+		if host == "" || net.ParseIP(host) != nil {
+			continue
+		}
+		if _, exists := seen[host]; exists {
+			continue
+		}
+		seen[host] = struct{}{}
+		hosts = append(hosts, host)
+	}
+	return hosts
 }
 
 // MeasureTunnelProbeAverageLatencyMillis runs protocol-selection probes through
@@ -69,14 +126,25 @@ func MeasureTunnelProbeAverageLatencyMillisWithContext(ctx context.Context, time
 
 	var sum int64
 	successes := 0
-	for _, result := range results {
+	for index, result := range results {
 		if result.err != nil {
-			log.Warnf(hcCommon.Category, "Tunnel probe endpoint failed url=%s error=%v", result.url, result.err)
+			log.Warnf(
+				hcCommon.Category,
+				"Tunnel probe endpoint failed endpoint=%d errorType=%T",
+				index,
+				result.err,
+			)
 			continue
 		}
 		successes++
 		sum += result.latencyMs
-		log.Debugf(hcCommon.Category, "Tunnel probe endpoint ok url=%s latencyMs=%d status=%d", result.url, result.latencyMs, result.status)
+		log.Debugf(
+			hcCommon.Category,
+			"Tunnel probe endpoint ok endpoint=%d latencyMs=%d status=%d",
+			index,
+			result.latencyMs,
+			result.status,
+		)
 	}
 	requiredSuccesses := httpProbeMinSuccesses
 	if requiredSuccesses > len(httpProbeURLs) {
@@ -128,7 +196,7 @@ func probeEndpoint(parent context.Context, url string, timeout time.Duration) pr
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			log.Warnf(hcCommon.Category, "Tunnel probe response body close failed url=%s error=%v", url, closeErr)
+			log.Warnf(hcCommon.Category, "Tunnel probe response body close failed errorType=%T", closeErr)
 		}
 	}()
 

@@ -1,3 +1,5 @@
+//go:build !(darwin && amd64)
+
 package internal
 
 import (

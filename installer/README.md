@@ -88,6 +88,10 @@ cd macos/
 sh build.sh
 ```
 
+The builder requires separate `services/arm64/macos_grpcvpnserver` and
+`services/amd64/macos_grpcvpnserver` inputs. It checks their Mach-O
+architectures before packaging.
+
 ### Output
 
 ```

@@ -2,12 +2,63 @@ package healthcheck
 
 import (
 	"context"
+	"go_module/dnscache"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+func TestTunnelProbeDNSPreflightCachesEveryUniqueHost(t *testing.T) {
+	dnscache.Clear()
+	t.Cleanup(dnscache.Clear)
+	originalURLs := httpProbeURLs
+	originalLookup := probeDNSLookup
+	httpProbeURLs = []string{
+		"https://first.invalid/path",
+		"https://FIRST.invalid/other",
+		"https://second.invalid",
+	}
+	lookups := 0
+	probeDNSLookup = func(context.Context, string) ([]net.IPAddr, error) {
+		lookups++
+		return []net.IPAddr{{IP: net.ParseIP("192.0.2.20")}}, nil
+	}
+	t.Cleanup(func() {
+		httpProbeURLs = originalURLs
+		probeDNSLookup = originalLookup
+	})
+
+	resolved, total := PreflightTunnelProbeDNS(context.Background())
+	if resolved != 2 || total != 2 || lookups != 2 {
+		t.Fatalf("resolved=%d total=%d lookups=%d, want 2/2/2", resolved, total, lookups)
+	}
+	for _, host := range []string{"first.invalid", "second.invalid"} {
+		if _, ok := dnscache.LookupIPv4(host, "test"); !ok {
+			t.Fatalf("host %q was not cached", host)
+		}
+	}
+}
+
+func TestTunnelProbeHostsAreUniqueAndExcludeInvalidOrLiteralEntries(t *testing.T) {
+	got := tunnelProbeHosts([]string{
+		"https://first.invalid/path",
+		"https://FIRST.invalid/other",
+		"https://second.invalid",
+		"http://192.0.2.10",
+		"://invalid",
+	})
+	want := []string{"first.invalid", "second.invalid"}
+	if len(got) != len(want) {
+		t.Fatalf("hosts=%v, want=%v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("hosts=%v, want=%v", got, want)
+		}
+	}
+}
 
 func TestQuorumHTTPPingCheckSucceedsWhenAllCandidatesWork(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

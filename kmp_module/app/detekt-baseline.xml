@@ -72,7 +72,6 @@
     <ID>ConstructorParameterNaming:TrustTunnelTomlApplier.kt$TrustTunnelTomlApplier.NestedTrustTunnelConfig$val vpn_mode: String? = null</ID>
     <ID>CyclomaticComplexMethod:DobbySocksScreen.kt$@Preview @Composable fun DobbySocksScreen( mainViewModel: MainViewModel, logsViewModel: LogsViewModel, modifier: Modifier = Modifier, )</ID>
     <ID>EmptyDefaultConstructor:AuthenticationSettingsViewModel.kt$AuthenticationSettingsViewModel$()</ID>
-    <ID>FunctionParameterNaming:LogsRepository.kt$LogsRepository$_sentryLogger: SentryLogsRepository</ID>
     <ID>LongMethod:App.kt$@Composable fun App(modifier: Modifier = Modifier)</ID>
     <ID>LongMethod:CloakTomlApplier.kt$CloakTomlApplier$fun apply(outline: OutlineConfig, cloakEnabled: Boolean)</ID>
     <ID>LongMethod:DobbySocksScreen.kt$@Preview @Composable fun DobbySocksScreen( mainViewModel: MainViewModel, logsViewModel: LogsViewModel, modifier: Modifier = Modifier, )</ID>

@@ -5,6 +5,7 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     static let shared = DobbyConfigsRepositoryImpl()
 
     private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier) ?? UserDefaults.standard
+    private let secrets = SharedKeychainSecretStore.shared
 
     private let cloakConfigKey = "cloakConfigKey"
     private let isCloakEnabledKey = "isCloakEnabledKey"
@@ -34,30 +35,43 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     private let isTrustTunnelEnabledKey = "isTrustTunnelEnabledKey"
     private let trustTunnelConfigKey = "trustTunnelConfigKey"
 
+    private init() {
+        secrets.migrate(keys: Self.sensitiveKeys, from: userDefaults)
+    }
+
+    private func secret(_ key: String) -> String {
+        secrets.string(for: key) ?? ""
+    }
+
+    private func setSecret(_ value: String, for key: String) {
+        precondition(secrets.set(value, for: key), "secure configuration write failed")
+        userDefaults.removeObject(forKey: key)
+    }
+
     public func getConnectionURL() -> String {
-        return userDefaults.string(forKey: connectionURLKey) ?? ""
+        return secret(connectionURLKey)
     }
 
     public func setConnectionURL(connectionURL: String) {
-        userDefaults.set(connectionURL, forKey: connectionURLKey)
+        setSecret(connectionURL, for: connectionURLKey)
 
     }
 
     public func getConnectionConfig() -> String {
-        return userDefaults.string(forKey: connectionConfigKey) ?? ""
+        return secret(connectionConfigKey)
     }
 
     public func setConnectionConfig(connectionConfig: String) {
-        userDefaults.set(connectionConfig, forKey: connectionConfigKey)
+        setSecret(connectionConfig, for: connectionConfigKey)
 
     }
 
     public func getConnectionProfiles() -> String {
-        return userDefaults.string(forKey: connectionProfilesKey) ?? ""
+        return secret(connectionProfilesKey)
     }
 
     public func setConnectionProfiles(connectionProfiles: String) {
-        userDefaults.set(connectionProfiles, forKey: connectionProfilesKey)
+        setSecret(connectionProfiles, for: connectionProfilesKey)
     }
 
     public func getActiveConnectionProfileIndex() -> Int32 {
@@ -69,11 +83,11 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     }
 
     public func getCloakConfig() -> String {
-        return userDefaults.string(forKey: cloakConfigKey) ?? ""
+        return secret(cloakConfigKey)
     }
 
     public func setCloakConfig(newConfig: String) {
-        userDefaults.set(newConfig, forKey: cloakConfigKey)
+        setSecret(newConfig, for: cloakConfigKey)
 
     }
 
@@ -97,20 +111,20 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     }
 
     public func getServerPort() -> String {
-        return userDefaults.string(forKey: serverPortOutlineKey) ?? ""
+        return secret(serverPortOutlineKey)
     }
 
     public func setServerPort(newConfig: String) {
-        userDefaults.set(newConfig, forKey: serverPortOutlineKey)
+        setSecret(newConfig, for: serverPortOutlineKey)
 
     }
 
     public func getMethodPasswordOutline() -> String {
-        return userDefaults.string(forKey: methodPasswordOutlineKey) ?? ""
+        return secret(methodPasswordOutlineKey)
     }
 
     public func setMethodPasswordOutline(newConfig: String) {
-        userDefaults.set(newConfig, forKey: methodPasswordOutlineKey)
+        setSecret(newConfig, for: methodPasswordOutlineKey)
 
     }
 
@@ -124,20 +138,20 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     }
 
     public func getPrefixOutline() -> String {
-        return userDefaults.string(forKey: prefixOutlineKey) ?? ""
+        return secret(prefixOutlineKey)
     }
 
     public func setPrefixOutline(prefix: String) {
-        userDefaults.set(prefix, forKey: prefixOutlineKey)
+        setSecret(prefix, for: prefixOutlineKey)
 
     }
 
     public func getTcpPathOutline() -> String {
-        return userDefaults.string(forKey: tcpPathOutlineKey) ?? ""
+        return secret(tcpPathOutlineKey)
     }
 
     public func setTcpPathOutline(tcpPath: String) {
-        userDefaults.set(tcpPath, forKey: tcpPathOutlineKey)
+        setSecret(tcpPath, for: tcpPathOutlineKey)
 
     }
 
@@ -151,11 +165,11 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     }
 
     public func getUdpPathOutline() -> String {
-        return userDefaults.string(forKey: udpPathOutlineKey) ?? ""
+        return secret(udpPathOutlineKey)
     }
 
     public func setUdpPathOutline(udpPath: String) {
-        userDefaults.set(udpPath, forKey: udpPathOutlineKey)
+        setSecret(udpPath, for: udpPathOutlineKey)
 
     }
 
@@ -187,11 +201,11 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     }
 
     public func getXrayConfig() -> String {
-        return userDefaults.string(forKey: xrayConfigKey) ?? ""
+        return secret(xrayConfigKey)
     }
 
     public func setXrayConfig(config: String) {
-        userDefaults.set(config, forKey: xrayConfigKey)
+        setSecret(config, for: xrayConfigKey)
 
     }
 
@@ -206,11 +220,11 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     }
 
     public func getTrustTunnelConfig() -> String {
-        return userDefaults.string(forKey: trustTunnelConfigKey) ?? ""
+        return secret(trustTunnelConfigKey)
     }
 
     public func setTrustTunnelConfig(config: String) {
-        userDefaults.set(config, forKey: trustTunnelConfigKey)
+        setSecret(config, for: trustTunnelConfigKey)
     }
 
     public func getIsTrustTunnelEnabled() -> Bool {
@@ -235,35 +249,35 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     }
 
     public func getTelemetryEndpoint() -> String {
-        return userDefaults.string(forKey: telemetryEndpointKey) ?? ""
+        return secret(telemetryEndpointKey)
     }
 
     public func setTelemetryEndpoint(endpoint: String) {
-        userDefaults.set(endpoint, forKey: telemetryEndpointKey)
+        setSecret(endpoint, for: telemetryEndpointKey)
     }
 
     public func getTelemetryApiToken() -> String {
-        return userDefaults.string(forKey: telemetryApiTokenKey) ?? ""
+        return secret(telemetryApiTokenKey)
     }
 
     public func setTelemetryApiToken(token: String) {
-        userDefaults.set(token, forKey: telemetryApiTokenKey)
+        setSecret(token, for: telemetryApiTokenKey)
     }
 
     public func getTelemetryAttributes() -> String {
-        return userDefaults.string(forKey: telemetryAttributesKey) ?? ""
+        return secret(telemetryAttributesKey)
     }
 
     public func setTelemetryAttributes(config: String) {
-        userDefaults.set(config, forKey: telemetryAttributesKey)
+        setSecret(config, for: telemetryAttributesKey)
     }
 
     public func getGeoRoutingConf() -> String {
-        return userDefaults.string(forKey: geoRoutingConfKey) ?? ""
+        return secret(geoRoutingConfKey)
     }
 
     public func setGeoRoutingConf(geoRoutingConf: String) {
-        userDefaults.set(geoRoutingConf, forKey: geoRoutingConfKey)
+        setSecret(geoRoutingConf, for: geoRoutingConfKey)
     }
 
     public func getHealthCheckState() -> Int32 {
@@ -286,4 +300,23 @@ public class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
     public func getHealthCheckStateUpdatedAt() -> Double {
         return userDefaults.double(forKey: healthCheckStateUpdatedAtKey)
     }
+
+    private static let sensitiveKeys = [
+        "connectionURLKey",
+        "connectionConfigKey",
+        "connectionProfilesKey",
+        "cloakConfigKey",
+        "ServerPortOutlineKey",
+        "MethodPasswordOutlineKey",
+        "PrefixOutlineKey",
+        "TcpPathOutlineKey",
+        "UdpPathOutlineKey",
+        "xrayConfigKey",
+        "trustTunnelConfigKey",
+        "telemetryEndpointKey",
+        "telemetryApiTokenKey",
+        "telemetryAttributesKey",
+        "geoRoutingConfKey",
+        "sessionapi.v1.rawConfiguration",
+    ]
 }

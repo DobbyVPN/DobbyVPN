@@ -44,6 +44,18 @@ COMMANDS:
             --skip-healthcheck
                 Skip healthcheck confirmation after connecting
 
+    connect-profile
+        Establish a connection using one profile from a configuration file
+
+        USAGE:
+            ./dobby connect-profile <config_path_or_url> <profile_index>
+
+        ARGS:
+            <config_path_or_url>
+                Path to configuration file. Can be remote file provided via URL.
+            <profile_index>
+                Source profile index shown by check-config.
+
     check-config
         Check every protocol profile from a configuration file
 
@@ -109,6 +121,11 @@ fun runCliClient(args: Array<String>) {
 
         "connect" -> {
             val exitCode = cliClient.connect(options)
+            properExit(exitCode)
+        }
+
+        "connect-profile" -> {
+            val exitCode = cliClient.connectProfile(options)
             properExit(exitCode)
         }
 

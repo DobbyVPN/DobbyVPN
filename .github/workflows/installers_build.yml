@@ -15,10 +15,16 @@ on:
 
 jobs:
   build_desktop_installers:
-    runs-on: ${{ matrix.os }}-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        os: [windows, ubuntu, macos]
+        include:
+          - os: windows
+            runner: windows-latest
+          - os: ubuntu
+            runner: ubuntu-latest
+          - os: macos
+            runner: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,16 +36,23 @@ jobs:
           name: windows_grpcvpnserver.exe
           path: installer/windows/
 
-      - name: Download macOS gRPC vpn service
+      - name: Download macOS arm64 gRPC vpn service
         uses: actions/download-artifact@v4
         with:
-          name: macos_grpcvpnserver
-          path: installer/macos/
+          name: macos_grpcvpnserver-arm64
+          path: installer/macos/services/arm64
 
-      - name: Add permissions to macos service executable
+      - name: Download macOS amd64 gRPC vpn service
+        uses: actions/download-artifact@v4
+        with:
+          name: macos_grpcvpnserver-amd64
+          path: installer/macos/services/amd64
+
+      - name: Add permissions to macOS service executables
         working-directory: installer/macos/
         run: |
-          chmod +x macos_grpcvpnserver
+          chmod +x services/arm64/macos_grpcvpnserver
+          chmod +x services/amd64/macos_grpcvpnserver
 
       - name: Download Windows built application
         uses: actions/download-artifact@v4

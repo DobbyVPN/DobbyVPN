@@ -56,7 +56,7 @@ func NewXrayDevice(vlessConfig string) (*XrayDevice, error) {
 		socksPass:    socksPass,
 	}
 
-	log.Debugf(common.Category, "SOCKS bridge started at %s (serverIP=%s)", d.proxyAddr, d.svrIP.String())
+	log.Debugf(common.Category, "SOCKS bridge started proxy_ready=true server_resolved=true")
 	return d, nil
 }
 

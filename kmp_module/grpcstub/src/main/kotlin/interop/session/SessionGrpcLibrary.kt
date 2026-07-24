@@ -18,7 +18,7 @@ import com.dobby.grpcproto.SessionStopRequest
 import com.dobby.grpcproto.SessionWarning as ProtoWarning
 import com.dobby.grpcproto.VpnGrpcKt
 import com.google.protobuf.ByteString
-import io.grpc.ManagedChannel
+import io.grpc.Channel
 import io.grpc.StatusException
 
 /**
@@ -26,7 +26,7 @@ import io.grpc.StatusException
  * parsing, decoding, or logging, so configuration text and credentials stay out of this
  * layer's errors and diagnostics.
  */
-open class SessionGrpcLibrary(channel: ManagedChannel) : SessionLibrary {
+open class SessionGrpcLibrary(channel: Channel) : SessionLibrary {
     private val stub = VpnGrpcKt.VpnCoroutineStub(channel)
 
     override suspend fun getCapabilities(): SessionResult<SessionCapabilities> = try {

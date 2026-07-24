@@ -49,7 +49,11 @@ enum IOSVpnConnectionAuthority {
     }
 }
 
-public class VpnManagerImpl: VpnManager {
+/// NetworkExtension-only transport shell for `IOSSessionShell`.
+///
+/// This deliberately is not a KMP lifecycle implementation: Go owns session
+/// selection, probing, failover, and resource lifecycle in the extension.
+public class VpnManagerImpl {
     private static let launchId = UUID().uuidString
     private static let disconnectingStartRetryDelay: TimeInterval = 0.5
     private static let disconnectingStartMaxRetries = 120
@@ -209,8 +213,7 @@ public class VpnManagerImpl: VpnManager {
             return
         }
         if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
-            let address = proto.serverAddress ?? "nil"
-            self.logs.writeLog(log: "VPN Manager serverAddress = \(address)")
+            self.logs.writeLog(log: "VPN Manager server address configured=\(proto.serverAddress != nil)")
         }
         self.vpnManager = manager
         self.vpnManager?.isEnabled = true

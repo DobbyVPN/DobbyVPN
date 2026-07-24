@@ -4,69 +4,78 @@ import android.content.SharedPreferences
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.VpnInterface
 import android.util.Log.i as AndroidLog
-import androidx.core.content.edit
 
 internal class DobbyConfigsRepositoryImpl(
     private val prefs: SharedPreferences
 ) : DobbyConfigsRepository {
+    private val secrets = AndroidKeystoreSecretStore(prefs)
+
+    init {
+        secrets.migrate(SENSITIVE_STRING_KEYS)
+    }
+
+    private fun secret(name: String): String = secrets.read(name)
+    private fun putSecret(name: String, value: String) {
+        check(secrets.write(name, value)) { "secure configuration write failed" }
+    }
+
     override fun getVpnInterface(): VpnInterface {
-        val prefsResult = prefs.getString("vpnInterface", VpnInterface.DEFAULT_VALUE.toString())
-            ?: VpnInterface.DEFAULT_VALUE.toString()
+        val prefsResult = secret("vpnInterface").ifEmpty { VpnInterface.DEFAULT_VALUE.toString() }
         AndroidLog("DOBBY_TAG", "getVpnInterface: $prefsResult")
 
         return VpnInterface.valueOf(prefsResult)
     }
 
     override fun setVpnInterface(vpnInterface: VpnInterface) {
-        prefs.edit().putString("vpnInterface", vpnInterface.toString()).apply().also {
+        putSecret("vpnInterface", vpnInterface.toString()).also {
             AndroidLog("DOBBY_TAG", "setVpnInterface: $vpnInterface")
         }
     }
 
     override fun getConnectionURL(): String {
-        return (prefs.getString("сonnectionURL", "") ?: "").also {
-            AndroidLog("DOBBY_TAG", "getConnectionURL, url = ${it}")
+        return secret("сonnectionURL").also {
+            AndroidLog("DOBBY_TAG", "getConnectionURL, size = ${it.length}")
         }
     }
 
     override fun setConnectionURL(connectionURL: String) {
-        prefs.edit().putString("сonnectionURL", connectionURL).apply().also {
-            AndroidLog("DOBBY_TAG", "setConnectionURL, url = ${connectionURL}")
+        putSecret("сonnectionURL", connectionURL).also {
+            AndroidLog("DOBBY_TAG", "setConnectionURL, size = ${connectionURL.length}")
         }
     }
 
     override fun getCloakConfig(): String {
-        return (prefs.getString("cloakConfig", "") ?: "").also {
+        return secret("cloakConfig").also {
             AndroidLog("DOBBY_TAG", "getCloakConfig, size = ${it.length}")
         }
     }
 
     override fun setCloakConfig(newConfig: String) {
-        prefs.edit().putString("cloakConfig", newConfig).apply().also {
+        putSecret("cloakConfig", newConfig).also {
             AndroidLog("DOBBY_TAG", "setCloakConfig, size = ${newConfig.length}")
         }
     }
 
     override fun getConnectionConfig(): String {
-        return (prefs.getString("сonnectionConfig", "") ?: "").also {
-            AndroidLog("DOBBY_TAG", "getConnectionConfig, config = ${it}")
+        return secret("сonnectionConfig").also {
+            AndroidLog("DOBBY_TAG", "getConnectionConfig, size = ${it.length}")
         }
     }
 
     override fun setConnectionConfig(connectionConfig: String) {
-        prefs.edit().putString("сonnectionConfig", connectionConfig).apply().also {
-            AndroidLog("DOBBY_TAG", "setConnectionConfig, config = ${connectionConfig}")
+        putSecret("сonnectionConfig", connectionConfig).also {
+            AndroidLog("DOBBY_TAG", "setConnectionConfig, size = ${connectionConfig.length}")
         }
     }
 
     override fun getConnectionProfiles(): String {
-        return (prefs.getString("connectionProfiles", "") ?: "").also {
+        return secret("connectionProfiles").also {
             AndroidLog("DOBBY_TAG", "getConnectionProfiles, size = ${it.length}")
         }
     }
 
     override fun setConnectionProfiles(connectionProfiles: String) {
-        prefs.edit().putString("connectionProfiles", connectionProfiles).apply().also {
+        putSecret("connectionProfiles", connectionProfiles).also {
             AndroidLog("DOBBY_TAG", "setConnectionProfiles, size = ${connectionProfiles.length}")
         }
     }
@@ -108,25 +117,25 @@ internal class DobbyConfigsRepositoryImpl(
     }
 
     override fun setServerPort(newConfig: String) {
-        prefs.edit().putString("ServerPortKey", newConfig).apply().also {
+        putSecret("ServerPortKey", newConfig).also {
             AndroidLog("DOBBY_TAG", "setServerPort, size = ${newConfig.length}")
         }
     }
 
     override fun setMethodPasswordOutline(newConfig: String) {
-        prefs.edit().putString("MethodPasswordOutlineKey", newConfig).apply().also {
+        putSecret("MethodPasswordOutlineKey", newConfig).also {
             AndroidLog("DOBBY_TAG", "setMethodPasswordOutline, size = ${newConfig.length}")
         }
     }
 
     override fun getServerPort(): String {
-        return (prefs.getString("ServerPortKey", "") ?: "").also {
+        return secret("ServerPortKey").also {
             AndroidLog("DOBBY_TAG", "getServerPort, size = ${it.length}")
         }
     }
 
     override fun getMethodPasswordOutline(): String {
-        return (prefs.getString("MethodPasswordOutlineKey", "") ?: "").also {
+        return secret("MethodPasswordOutlineKey").also {
             AndroidLog("DOBBY_TAG", "getMethodPasswordOutline, size = ${it.length}")
         }
     }
@@ -144,26 +153,26 @@ internal class DobbyConfigsRepositoryImpl(
     }
 
     override fun getPrefixOutline(): String {
-        return (prefs.getString("PrefixOutlineKey", "") ?: "").also {
-            AndroidLog("DOBBY_TAG", "getPrefixOutline, value = $it")
+        return secret("PrefixOutlineKey").also {
+            AndroidLog("DOBBY_TAG", "getPrefixOutline, size = ${it.length}")
         }
     }
 
     override fun setPrefixOutline(prefix: String) {
-        prefs.edit().putString("PrefixOutlineKey", prefix).apply().also {
-            AndroidLog("DOBBY_TAG", "setPrefixOutline, value = $prefix")
+        putSecret("PrefixOutlineKey", prefix).also {
+            AndroidLog("DOBBY_TAG", "setPrefixOutline, size = ${prefix.length}")
         }
     }
 
     override fun getTcpPathOutline(): String {
-        return (prefs.getString("TcpPathOutlineKey", "") ?: "").also {
-            AndroidLog("DOBBY_TAG", "getTcpPathOutline, value = $it")
+        return secret("TcpPathOutlineKey").also {
+            AndroidLog("DOBBY_TAG", "getTcpPathOutline, size = ${it.length}")
         }
     }
 
     override fun setTcpPathOutline(tcpPath: String) {
-        prefs.edit().putString("TcpPathOutlineKey", tcpPath).apply().also {
-            AndroidLog("DOBBY_TAG", "setTcpPathOutline, value = $tcpPath")
+        putSecret("TcpPathOutlineKey", tcpPath).also {
+            AndroidLog("DOBBY_TAG", "setTcpPathOutline, size = ${tcpPath.length}")
         }
     }
 
@@ -180,25 +189,25 @@ internal class DobbyConfigsRepositoryImpl(
     }
 
     override fun getUdpPathOutline(): String {
-        return (prefs.getString("UdpPathOutlineKey", "") ?: "").also {
-            AndroidLog("DOBBY_TAG", "getUdpPathOutline, value = $it")
+        return secret("UdpPathOutlineKey").also {
+            AndroidLog("DOBBY_TAG", "getUdpPathOutline, size = ${it.length}")
         }
     }
 
     override fun setUdpPathOutline(udpPath: String) {
-        prefs.edit().putString("UdpPathOutlineKey", udpPath).apply().also {
-            AndroidLog("DOBBY_TAG", "setUdpPathOutline, value = $udpPath")
+        putSecret("UdpPathOutlineKey", udpPath).also {
+            AndroidLog("DOBBY_TAG", "setUdpPathOutline, size = ${udpPath.length}")
         }
     }
 
     override fun getXrayConfig(): String {
-        return (prefs.getString("xrayConfig", "") ?: "").also {
+        return secret("xrayConfig").also {
             AndroidLog("DOBBY_TAG", "getXrayConfig, size = ${it.length}")
         }
     }
 
     override fun setXrayConfig(newConfig: String) {
-        prefs.edit().putString("xrayConfig", newConfig).apply().also {
+        putSecret("xrayConfig", newConfig).also {
             AndroidLog("DOBBY_TAG", "setXrayConfig, size = ${newConfig.length}")
         }
     }
@@ -221,13 +230,13 @@ internal class DobbyConfigsRepositoryImpl(
     }
 
     override fun getTrustTunnelConfig(): String {
-        return (prefs.getString("trustTunnelConfig", "") ?: "").also {
+        return secret("trustTunnelConfig").also {
             AndroidLog("DOBBY_TAG", "getTrustTunnelConfig, size = ${it.length}")
         }
     }
 
     override fun setTrustTunnelConfig(config: String) {
-        prefs.edit().putString("trustTunnelConfig", config).apply().also {
+        putSecret("trustTunnelConfig", config).also {
             AndroidLog("DOBBY_TAG", "setTrustTunnelConfig, size = ${config.length}")
         }
     }
@@ -254,50 +263,71 @@ internal class DobbyConfigsRepositoryImpl(
     }
 
     override fun getTelemetryEndpoint(): String {
-        return (prefs.getString("telemetryEndpoint", "") ?: "").also {
+        return secret("telemetryEndpoint").also {
             AndroidLog("DOBBY_TAG", "getTelemetryEndpoint, size = ${it.length}")
         }
     }
 
     override fun setTelemetryEndpoint(endpoint: String) {
-        prefs.edit().putString("telemetryEndpoint", endpoint).apply().also {
+        putSecret("telemetryEndpoint", endpoint).also {
             AndroidLog("DOBBY_TAG", "setTelemetryEndpoint, size = ${endpoint.length}")
         }
     }
 
     override fun getTelemetryApiToken(): String {
-        return (prefs.getString("telemetryApiToken", "") ?: "").also {
+        return secret("telemetryApiToken").also {
             AndroidLog("DOBBY_TAG", "getTelemetryApiToken, size = ${it.length}")
         }
     }
 
     override fun setTelemetryApiToken(token: String) {
-        prefs.edit().putString("telemetryApiToken", token).apply().also {
+        putSecret("telemetryApiToken", token).also {
             AndroidLog("DOBBY_TAG", "setTelemetryApiToken, size = ${token.length}")
         }
     }
 
     override fun getTelemetryAttributes(): String {
-        return (prefs.getString("telemetryAttributes", "") ?: "").also {
+        return secret("telemetryAttributes").also {
             AndroidLog("DOBBY_TAG", "getTelemetryAttributes, size = ${it.length}")
         }
     }
 
     override fun setTelemetryAttributes(config: String) {
-        prefs.edit().putString("telemetryAttributes", config).apply().also {
+        putSecret("telemetryAttributes", config).also {
             AndroidLog("DOBBY_TAG", "setTelemetryAttributes, size = ${config.length}")
         }
     }
 
     override fun getGeoRoutingConf(): String {
-        return (prefs.getString("geoRoutingConf", "") ?: "").also {
+        return secret("geoRoutingConf").also {
             AndroidLog("DOBBY_TAG", "geoRoutingConf, len(geoRoutingConf) = ${it.length}")
         }
     }
 
     override fun setGeoRoutingConf(geoRoutingConf: String) {
-        prefs.edit { putString("geoRoutingConf", geoRoutingConf) }.also {
-            AndroidLog("DOBBY_TAG", "geoRoutingConf = $geoRoutingConf")
+        putSecret("geoRoutingConf", geoRoutingConf).also {
+            AndroidLog("DOBBY_TAG", "setGeoRoutingConf, size = ${geoRoutingConf.length}")
         }
+    }
+
+    private companion object {
+        val SENSITIVE_STRING_KEYS = setOf(
+            "vpnInterface",
+            "сonnectionURL",
+            "cloakConfig",
+            "сonnectionConfig",
+            "connectionProfiles",
+            "ServerPortKey",
+            "MethodPasswordOutlineKey",
+            "PrefixOutlineKey",
+            "TcpPathOutlineKey",
+            "UdpPathOutlineKey",
+            "xrayConfig",
+            "trustTunnelConfig",
+            "telemetryEndpoint",
+            "telemetryApiToken",
+            "telemetryAttributes",
+            "geoRoutingConf",
+        )
     }
 }

@@ -16,13 +16,11 @@
 		8C7731F12E566DCD00B3782E /* MyLibrary.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */; };
 		8CF4C25F2E61E1C400A1B0E4 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		8CF4C2602E61E1C400A1B0E4 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
-		8CF4C2612E61E1C400A1B0E4 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = F9EDD575E30B42BCA81EA237 /* Sentry */; };
 		A12013A02D80DE3200D43A3A /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */; };
 		A12013A82D80DE3200D43A3A /* tunnel.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A120139F2D80DE3100D43A3A /* tunnel.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A15F0FD42D874CDC007FA45D /* CommonDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; };
 		A15F0FD52D874CDC007FA45D /* CommonDI.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A15F0FEA2D874D38007FA45D /* CommonDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; settings = {ATTRIBUTES = (Required, ); }; };
-		F7DF1050154F40A18C26FC85 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = F9EDD575E30B42BCA81EA237 /* Sentry */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -130,7 +128,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				1F6D0C7C2F8D9681004A1D65 /* app.framework in Frameworks */,
-				F7DF1050154F40A18C26FC85 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -140,7 +137,6 @@
 			files = (
 				A15F0FD42D874CDC007FA45D /* CommonDI.framework in Frameworks */,
 				8CF4C2602E61E1C400A1B0E4 /* (null) in Frameworks */,
-				8CF4C2612E61E1C400A1B0E4 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -230,7 +226,6 @@
 				7555FF79242A565900829871 /* Resources */,
 				A12012F62D7DAE1200D43A3A /* Embed Foundation Extensions */,
 				A12013402D7E4A6000D43A3A /* Embed Frameworks */,
-				35B6E1C2A4E543D783FC8A57 /* Upload Debug Symbols to Sentry */,
 			);
 			buildRules = (
 			);
@@ -240,7 +235,6 @@
 			);
 			name = iosApp;
 			packageProductDependencies = (
-				F9EDD575E30B42BCA81EA237 /* Sentry */,
 			);
 			productName = iosApp;
 			productReference = 7555FF7B242A565900829871 /* doBBYVPN.app */;
@@ -324,7 +318,6 @@
 			);
 			mainGroup = 7555FF72242A565900829871;
 			packageReferences = (
-				DA5C79649DF34256B38A117F /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 			);
 			productRefGroup = 7555FF7C242A565900829871 /* Products */;
 			projectDirPath = "";
@@ -362,24 +355,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		35B6E1C2A4E543D783FC8A57 /* Upload Debug Symbols to Sentry */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}",
-			);
-			name = "Upload Debug Symbols to Sentry";
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "# This script is responsible for uploading debug symbols and source context for Sentry.\nif which sentry-cli >/dev/null; then\n  export SENTRY_ORG=dobby-jn\n  export SENTRY_PROJECT=apple-ios\n  ERROR=$(sentry-cli debug-files upload --include-sources \"$DWARF_DSYM_FOLDER_PATH\" 2>&1 >/dev/null)\n  if [ ! $? -eq 0 ]; then\n    echo \"warning: sentry-cli - $ERROR\"\n  fi\nelse\n  echo \"warning: sentry-cli not installed, download from https://github.com/getsentry/sentry-cli/releases\"\nfi\n";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		7555FF77242A565900829871 /* Sources */ = {
@@ -846,24 +821,6 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		DA5C79649DF34256B38A117F /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/getsentry/sentry-cocoa/";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 8.0.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		F9EDD575E30B42BCA81EA237 /* Sentry */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = DA5C79649DF34256B38A117F /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
-			productName = Sentry;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 7555FF73242A565900829871 /* Project object */;
 }

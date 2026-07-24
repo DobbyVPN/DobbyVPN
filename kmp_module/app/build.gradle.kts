@@ -62,7 +62,6 @@ plugins {
     alias(libs.plugins.hydraulic.conveyor)
 
     id("com.github.gmazzo.buildconfig") version "5.6.5"
-    id("io.sentry.kotlin.multiplatform.gradle") version "0.18.0" apply false
 }
 
 version = "1.0"
@@ -71,12 +70,6 @@ java {
     toolchain {
         languageVersion.set(JavaLanguageVersion.of(17))
     }
-}
-
-// Keep it enabled by default (CI/release), but allow disabling for local Xcode builds via: -PdisableSentry=true
-val disableSentry = providers.gradleProperty("disableSentry").orNull?.lowercase() in setOf("1", "true", "yes")
-if (!disableSentry) {
-    apply(plugin = "io.sentry.kotlin.multiplatform.gradle")
 }
 
 kotlin {
@@ -176,6 +169,12 @@ kotlin {
             implementation(libs.junit)
         }
 
+        androidInstrumentedTest.dependencies {
+            implementation(libs.androidx.junit)
+            implementation(libs.androidx.test.runner)
+            implementation(libs.junit)
+        }
+
         iosMain.dependencies {
 
             implementation(libs.ktor.client.darwin)
@@ -210,6 +209,8 @@ android {
         versionName = providers.gradleProperty("android.injected.version.name")
             .orElse(providers.gradleProperty("versionName"))
             .getOrElse("0.0.1")
+
+        testInstrumentationRunner = "com.dobby.TestApplicationRunner"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -437,7 +438,6 @@ buildConfig {
 
 
 dependencies {
-    implementation(project(":grpcstub"))
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 }

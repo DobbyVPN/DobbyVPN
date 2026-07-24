@@ -3,28 +3,33 @@ package log
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/json"
 	"fmt"
-	"go_module/auth"
-	"go_module/telemetry"
 	"io"
 	"log/slog"
-	"math/big"
-	"net/http"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/sirupsen/logrus"
-	"go.opentelemetry.io/contrib/bridges/otelslog"
-	"go.opentelemetry.io/otel"
 )
 
 var (
 	forbiddenMu    sync.RWMutex
 	forbiddenWords = make([]string, 0)
+	urlPattern     = regexp.MustCompile(`(?i)\b(?:https?|ss|vless|vmess|trojan)://[^\s"']+`)
+	// Network locations are credentials-adjacent data in a VPN client: a local
+	// SOCKS listener can contain generated credentials and a remote name/IP
+	// identifies a user's selected service.  Keep lifecycle and timing facts,
+	// but never persist either kind of location in local logs.
+	// Mask address literals wherever a dependency embeds them. Host names are
+	// masked only when they carry an endpoint-related key or an explicit port;
+	// masking every dotted word would also destroy useful source file names.
+	networkEndpointPattern = regexp.MustCompile(`(?i)(?:\[[0-9a-f:.]+\](?::\d{1,5})?|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b|\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|local):\d{1,5}\b)`)
+	secretPattern          = regexp.MustCompile(`(?i)(["']?(?:token|api[_-]?key|password|secret|credential|authorization|auth|endpoint|url|config|server(?:ip|_ip)?|host|address|remote|proxy|gateway|dest(?:ination)?|resolved)["']?\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,}\]]+)`)
+	tomlPattern            = regexp.MustCompile(`(?m)^\s*\[{1,2}[A-Za-z0-9_.-]+\]{1,2}\s*$`)
+	jsonConfig             = regexp.MustCompile(`["'][A-Za-z0-9_.-]+["']\s*:`)
 )
 
 func AddForbiddenWord(word string) {
@@ -33,8 +38,8 @@ func AddForbiddenWord(word string) {
 	}
 	forbiddenMu.Lock()
 	defer forbiddenMu.Unlock()
-	for _, w := range forbiddenWords {
-		if w == word {
+	for _, existing := range forbiddenWords {
+		if existing == word {
 			return
 		}
 	}
@@ -44,128 +49,133 @@ func AddForbiddenWord(word string) {
 func RemoveForbiddenWord(word string) {
 	forbiddenMu.Lock()
 	defer forbiddenMu.Unlock()
-
-	for i, w := range forbiddenWords {
-		if w == word {
+	for i, existing := range forbiddenWords {
+		if existing == word {
 			forbiddenWords = append(forbiddenWords[:i], forbiddenWords[i+1:]...)
 			return
 		}
 	}
 }
 
-func maskMessage(msg string) string {
-	forbiddenMu.RLock()
-	defer forbiddenMu.RUnlock()
+// MaskStr is for callers that need a short human-readable secret marker.
+func MaskStr(input string) string {
+	if input == "" {
+		return ""
+	}
+	return "[REDACTED]"
+}
 
-	for _, w := range forbiddenWords {
-		if w == "" {
-			continue
-		}
-
-		for {
-			idx := strings.Index(msg, w)
-			if idx == -1 {
-				break
-			}
-
-			masked := MaskStr(w)
-			msg = msg[:idx] + masked + msg[idx+len(w):]
+func isSensitiveKey(key string) bool {
+	key = strings.ToLower(key)
+	for _, marker := range []string{"config", "url", "endpoint", "token", "password", "secret", "credential", "authorization", "auth", "api_key", "apikey", "server", "host", "address"} {
+		if strings.Contains(key, marker) {
+			return true
 		}
 	}
+	return false
+}
 
-	return msg
+func redactText(message string) string {
+	// A TOML/JSON configuration is never useful in a diagnostic line and may
+	// carry multiple credentials beyond any individual key-value pattern.
+	if tomlPattern.MatchString(message) || (strings.Contains(message, "{") && jsonConfig.MatchString(message)) {
+		return "[REDACTED CONFIGURATION]"
+	}
+	message = urlPattern.ReplaceAllString(message, "[REDACTED URL]")
+	message = secretPattern.ReplaceAllString(message, "${1}[REDACTED]")
+	message = networkEndpointPattern.ReplaceAllString(message, "[REDACTED ENDPOINT]")
+	return message
+}
+
+func redactValue(key string, value any) any {
+	if isSensitiveKey(key) {
+		return "[REDACTED]"
+	}
+	switch typed := value.(type) {
+	case string:
+		return redactText(typed)
+	case []byte:
+		return "[REDACTED BINARY]"
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for nestedKey, nestedValue := range typed {
+			out[nestedKey] = redactValue(nestedKey, nestedValue)
+		}
+		return out
+	case logrus.Fields:
+		out := make(map[string]any, len(typed))
+		for nestedKey, nestedValue := range typed {
+			out[nestedKey] = redactValue(nestedKey, nestedValue)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func maskMessage(message string) string {
+	forbiddenMu.RLock()
+	words := append([]string(nil), forbiddenWords...)
+	forbiddenMu.RUnlock()
+	for _, word := range words {
+		if word != "" {
+			message = strings.ReplaceAll(message, word, "[REDACTED]")
+		}
+	}
+	return redactText(message)
 }
 
 type logrusToSlogHook struct{}
 
-func (h *logrusToSlogHook) Levels() []logrus.Level {
-	return logrus.AllLevels
-}
-
-func (h *logrusToSlogHook) Fire(e *logrus.Entry) error {
-	if lg.logger == nil {
-		return nil
+func (*logrusToSlogHook) Levels() []logrus.Level { return logrus.AllLevels }
+func (*logrusToSlogHook) Fire(entry *logrus.Entry) error {
+	message := entry.Message
+	if len(entry.Data) > 0 {
+		message = fmt.Sprintf("%s | %v", message, redactValue("metadata", entry.Data))
 	}
-
-	msg := e.Message
-	if len(e.Data) > 0 {
-		msg = fmt.Sprintf("%s | %v", msg, e.Data)
-	}
-
-	switch e.Level {
+	level := slog.LevelDebug
+	switch entry.Level {
 	case logrus.PanicLevel, logrus.FatalLevel, logrus.ErrorLevel:
-		lg.logger.Error(msg)
+		level = slog.LevelError
 	case logrus.WarnLevel:
-		lg.logger.Warn(msg)
+		level = slog.LevelWarn
 	case logrus.InfoLevel:
-		lg.logger.Info(msg)
-	case logrus.DebugLevel, logrus.TraceLevel:
-		lg.logger.Debug(msg)
+		level = slog.LevelInfo
 	}
-
+	write(level, "LOGRUS", message, nil)
 	return nil
 }
 
-type TelemetryLogger struct {
-	ctx              context.Context
-	shutdown         func(context.Context) error
-	endpoint         string
-	externalIP       string
-	connectionConfig map[string]any
-}
+// TelemetryLogger remains as an empty compatibility type. It cannot transport
+// data and intentionally stores neither endpoint nor token.
+type TelemetryLogger struct{}
 
 type Logger struct {
 	file     *os.File
-	tlogger  *TelemetryLogger
 	logger   *slog.Logger
 	debugBuf []string
 	infoBuf  []string
 	warnBuf  []string
 	errorBuf []string
-}
-
-type telemetrySnapshot struct {
-	ctx              context.Context
-	externalIP       string
-	connectionConfig map[string]any
+	fallback bool
 }
 
 var (
 	lg     = &Logger{debugBuf: []string{}, infoBuf: []string{}, warnBuf: []string{}, errorBuf: []string{}}
 	initMu sync.Mutex
+	bridge sync.Once
 )
 
-const (
-	YandexIPAPI string = "https://yandex.ru/internet/api/v0/ip"
-)
-
-var (
-	clientID string = auth.GenerateRandomAuth()
-)
-
-// Set up OpenTelemetry.
-func NewTelemetryLogger(endpoint, token string) (*TelemetryLogger, error) {
-	ctx := context.Background()
-	otelShutdown, err := telemetry.SetupOTelSDK(ctx, endpoint, token)
-	if err != nil {
-		return nil, fmt.Errorf("failed create otlp logger: %w", err)
-	}
-
-	return &TelemetryLogger{ctx: ctx, shutdown: otelShutdown, endpoint: endpoint}, nil
+func init() {
+	bridge.Do(func() {
+		// Hooks do not replace Logrus's default output. Suppress that raw path
+		// and route every entry through the redacting bridge above.
+		logrus.SetOutput(io.Discard)
+		logrus.AddHook(&logrusToSlogHook{})
+	})
 }
 
-func MaskStr(input string) string {
-	runes := []rune(input)
-
-	switch len(runes) {
-	case 0:
-		return ""
-	case 1, 2:
-		return input
-	default:
-		return string(runes[0]) + "***" + string(runes[len(runes)-1])
-	}
-}
+func NewTelemetryLogger(_, _ string) (*TelemetryLogger, error) { return &TelemetryLogger{}, nil }
 
 func (logger *Logger) dumpBuffer() {
 	for _, message := range logger.debugBuf {
@@ -180,6 +190,10 @@ func (logger *Logger) dumpBuffer() {
 	for _, message := range logger.errorBuf {
 		logger.logger.Error(message)
 	}
+	logger.debugBuf = nil
+	logger.infoBuf = nil
+	logger.warnBuf = nil
+	logger.errorBuf = nil
 }
 
 func IsInitialized() bool {
@@ -188,352 +202,120 @@ func IsInitialized() bool {
 	return lg.logger != nil
 }
 
-func SetPath(path string) error {
+// Close releases the local log file and returns the logger to its buffered
+// pre-initialization state. It is safe to call repeatedly during orderly
+// process shutdown and allows permission tests to remove their temporary log.
+func Close() error {
 	initMu.Lock()
 	defer initMu.Unlock()
-
-	if lg.logger != nil {
-		return nil
+	var err error
+	if lg.file != nil {
+		err = lg.file.Close()
 	}
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644) //nolint:gosec // G302: logs should be readable
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Cannot open log file %s: %v\n", path, err)
-		fmt.Fprintf(os.Stderr, "Falling back to stderr logging\n")
-		lg.dumpBuffer()
-		logrus.AddHook(&logrusToSlogHook{})
-		return fmt.Errorf("cannot open log file: %w", err)
-	}
-
-	lg.file = f
-	lg.logger = slog.New(&simpleHandler{file: f})
-	lg.dumpBuffer()
-
-	logrus.AddHook(&logrusToSlogHook{})
-
-	return nil
-}
-
-func InitTelemetry(endpoint, token string) error {
-	initMu.Lock()
-	if lg.tlogger != nil {
-		initMu.Unlock()
-		Debugf("LOG", "No need to create new OpenTelemetry SDK")
-		return nil
-	}
-	initMu.Unlock()
-
-	Debugf("LOG", "Create new OpenTelemetry SDK")
-	tlg, err := NewTelemetryLogger(endpoint, token)
-	if err != nil {
-		Warnf("OTEL", "Failed to create new telemetry logger: %v", err)
-		return fmt.Errorf("failed to create new telemetry logger: %w", err)
-	}
-
-	initMu.Lock()
-	if lg.tlogger != nil {
-		initMu.Unlock()
-		if err := tlg.shutdown(tlg.ctx); err != nil {
-			Warnf("LOG", "Telemetry shutdown error: %v", err)
-		}
-		Debugf("LOG", "No need to replace existing OpenTelemetry SDK")
-		return nil
-	}
-	lg.tlogger = tlg
-	initMu.Unlock()
-
-	return nil
-}
-
-func loadExternalIPStep() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", YandexIPAPI, http.NoBody)
-	if err != nil {
-		return "", fmt.Errorf("failed create Yandex API request: %w", err)
-	}
-
-	client := http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed send Yandex API request: %w", err)
-	}
-	defer func() {
-		bodyErr := resp.Body.Close()
-		if bodyErr != nil {
-			Warnf("LOG", "Failed close response body: %v", bodyErr)
-		}
-	}()
-
-	result, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed read Yandex API response: %w", err)
-	}
-	resultString := string(result)
-	if len(resultString) < 2 {
-		return "", fmt.Errorf("yandex API returned an empty IP response")
-	}
-
-	return resultString[1 : len(resultString)-1], nil
-}
-
-func jitterDelay(minDelay, maxDelay time.Duration) time.Duration {
-	if maxDelay <= minDelay {
-		return minDelay
-	}
-
-	delta := maxDelay - minDelay
-	randomOffset, err := rand.Int(rand.Reader, big.NewInt(int64(delta)))
-	if err != nil {
-		Warnf("LOG", "unable to generate rand number %v", err)
-		return minDelay
-	}
-
-	return minDelay + time.Duration(randomOffset.Int64())
-}
-
-func loadExternalIP() string {
-	minDelay := 200 * time.Millisecond
-	maxDelay := 500 * time.Millisecond
-	Debugf("LOG", "Loading user external IP")
-	for i := 0; i < 5; i++ {
-		if i > 0 {
-			time.Sleep(jitterDelay(minDelay, maxDelay))
-			Warnf("LOG", "Retry # %d", i)
-		}
-
-		extIP, err := loadExternalIPStep()
-		if err != nil {
-			Warnf("LOG", "Failed to load external IP: %v", err)
-			continue
-		}
-		return extIP
-	}
-
-	return "nan"
-}
-
-func SetupTelemetryAttributes(config string) {
-	externalIP := loadExternalIP()
-	Debugf("LOG", "Loaded external IP")
-
-	var connectionConfig map[string]any
-	err := json.Unmarshal([]byte(config), &connectionConfig)
-	if err != nil {
-		Warnf("LOG", "Failed parse config json")
-		connectionConfig = map[string]any{}
-	}
-
-	initMu.Lock()
-	defer initMu.Unlock()
-	if lg.tlogger != nil {
-		lg.tlogger.externalIP = externalIP
-		lg.tlogger.connectionConfig = connectionConfig
-	}
-}
-
-func StopTelemetry() {
-	initMu.Lock()
-	tlg := lg.tlogger
-	lg.tlogger = nil
-	initMu.Unlock()
-
-	if tlg == nil {
-		Warnf("LOG", "No telemetry logger found")
-		return
-	}
-	if err := tlg.shutdown(tlg.ctx); err != nil {
-		Warnf("LOG", "Telemetry shutdown error: %v", err)
-	}
-}
-
-const name = "https://github.com/DobbyVPN/DobbyVPN/go_module/log"
-
-var (
-	_          = otel.Tracer(name)
-	_          = otel.Meter(name)
-	otelLogger = otelslog.NewLogger(name)
-)
-
-// New logging
-func prepareLog(message string, arguments map[string]any) string {
-	var msg bytes.Buffer
-	msg.WriteString(message)
-
-	for key, value := range arguments {
-		fmt.Fprintf(&msg, " %q=\"%v\"", key, value)
-	}
-
-	return msg.String()
-}
-
-func copyMap(arguments map[string]any) map[string]any {
-	copied := make(map[string]any, len(arguments))
-	for key, value := range arguments {
-		copied[key] = value
-	}
-	return copied
-}
-
-func getTelemetrySnapshot() (telemetrySnapshot, bool) {
-	initMu.Lock()
-	defer initMu.Unlock()
-
-	if lg.tlogger == nil {
-		return telemetrySnapshot{}, false
-	}
-	return telemetrySnapshot{
-		ctx:              lg.tlogger.ctx,
-		externalIP:       lg.tlogger.externalIP,
-		connectionConfig: copyMap(lg.tlogger.connectionConfig),
-	}, true
-}
-
-func flattenArgs(snapshot telemetrySnapshot, argumentsList ...map[string]any) []any {
-	size := 0
-	for _, arguments := range argumentsList {
-		size += len(arguments)
-	}
-	all := make([]any, 4+2*size)
-	all[0] = "externalIP"
-	all[1] = snapshot.externalIP
-	all[2] = "clientID"
-	all[3] = clientID
-	i := 4
-	for _, arguments := range argumentsList {
-		for k, v := range arguments {
-			all[i], all[i+1] = k, v
-			i += 2
-		}
-	}
-	return all
-}
-
-func _debug(categoryMessage string, arguments map[string]any) {
-	stdoutMessage := prepareLog(categoryMessage, arguments)
-	if lg.logger == nil {
-		lg.debugBuf = append(lg.debugBuf, stdoutMessage)
-	} else {
-		lg.logger.Debug(stdoutMessage)
-	}
-}
-
-func _info(categoryMessage string, arguments map[string]any) {
-	stdoutMessage := prepareLog(categoryMessage, arguments)
-	if lg.logger == nil {
-		lg.infoBuf = append(lg.infoBuf, stdoutMessage)
-	} else {
-		lg.logger.Info(stdoutMessage)
-	}
-}
-
-func _warn(categoryMessage string, arguments map[string]any) {
-	stdoutMessage := prepareLog(categoryMessage, arguments)
-	if lg.logger == nil {
-		lg.warnBuf = append(lg.warnBuf, stdoutMessage)
-	} else {
-		lg.logger.Warn(stdoutMessage)
-	}
-}
-
-func _error(categoryMessage string, arguments map[string]any) {
-	stdoutMessage := prepareLog(categoryMessage, arguments)
-	if lg.logger == nil {
-		lg.errorBuf = append(lg.errorBuf, stdoutMessage)
-	} else {
-		lg.logger.Error(stdoutMessage)
-	}
-}
-
-func Info(category, message string, arguments map[string]any) {
-	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	_info(categoryMessage, arguments)
-	if snapshot, ok := getTelemetrySnapshot(); ok {
-		otelLogger.InfoContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, arguments, snapshot.connectionConfig)...)
-	}
-}
-
-func Debug(category, message string, arguments map[string]any) {
-	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	_debug(categoryMessage, arguments)
-	if snapshot, ok := getTelemetrySnapshot(); ok {
-		otelLogger.DebugContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, arguments, snapshot.connectionConfig)...)
-	}
-}
-
-func Warn(category, message string, arguments map[string]any) {
-	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	_warn(categoryMessage, arguments)
-	if snapshot, ok := getTelemetrySnapshot(); ok {
-		otelLogger.WarnContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, arguments, snapshot.connectionConfig)...)
-	}
-}
-
-func Error(category, message string, arguments map[string]any) {
-	categoryMessage := fmt.Sprintf("[%s] %s", category, message)
-	_error(categoryMessage, arguments)
-	if snapshot, ok := getTelemetrySnapshot(); ok {
-		otelLogger.ErrorContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, arguments, snapshot.connectionConfig)...)
-	}
-}
-
-func Infof(category, format string, args ...any) {
-	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
-	_info(categoryMessage, make(map[string]any))
-	if snapshot, ok := getTelemetrySnapshot(); ok {
-		otelLogger.InfoContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, snapshot.connectionConfig)...)
-	}
-}
-
-func Debugf(category, format string, args ...any) {
-	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
-	_debug(categoryMessage, make(map[string]any))
-	if snapshot, ok := getTelemetrySnapshot(); ok {
-		otelLogger.DebugContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, snapshot.connectionConfig)...)
-	}
-}
-
-func Warnf(category, format string, args ...any) {
-	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
-	_warn(categoryMessage, make(map[string]any))
-	if snapshot, ok := getTelemetrySnapshot(); ok {
-		otelLogger.WarnContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, snapshot.connectionConfig)...)
-	}
-}
-
-func Errorf(category, format string, args ...any) {
-	categoryMessage := fmt.Sprintf("[%s] %s", category, fmt.Sprintf(format, args...))
-	_error(categoryMessage, make(map[string]any))
-	if snapshot, ok := getTelemetrySnapshot(); ok {
-		otelLogger.ErrorContext(snapshot.ctx, categoryMessage, flattenArgs(snapshot, snapshot.connectionConfig)...)
-	}
-}
-
-type simpleHandler struct {
-	file *os.File
-}
-
-func (h *simpleHandler) Enabled(_ context.Context, _ slog.Level) bool {
-	return true
-}
-
-func (h *simpleHandler) Handle(_ context.Context, r slog.Record) error {
-	_, err := fmt.Fprintf(
-		h.file,
-		"[%s] [%s] %q [from go]\n",
-		r.Time.Format("2006-01-02 15:04:05"),
-		r.Level.String(),
-		maskMessage(r.Message),
-	)
-
+	lg.file = nil
+	lg.logger = nil
+	lg.fallback = false
 	return err
 }
 
-func (h *simpleHandler) WithAttrs(_ []slog.Attr) slog.Handler {
-	return h
+// SetPath creates local log storage with owner-only permissions, correcting
+// permissions on pre-existing files/directories as well.
+func SetPath(path string) error {
+	initMu.Lock()
+	defer initMu.Unlock()
+	if lg.logger != nil && !lg.fallback {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create log directory: %w", err)
+	}
+	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("secure log directory: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Cannot open local log file; falling back to stderr logging")
+		lg.logger = slog.New(&simpleHandler{file: os.Stderr})
+		lg.fallback = true
+		lg.dumpBuffer()
+		return fmt.Errorf("open local log file: %w", err)
+	}
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("secure log file: %w", err)
+	}
+	lg.file = f
+	lg.logger = slog.New(&simpleHandler{file: f})
+	lg.fallback = false
+	lg.dumpBuffer()
+	return nil
 }
 
-func (h *simpleHandler) WithGroup(_ string) slog.Handler {
-	return h
+// InitTelemetry is intentionally local-only. Its parameters are discarded so
+// legacy callers cannot cause a remote request or leave secrets in memory.
+func InitTelemetry(_, _ string) error {
+	Warnf("LOG", "Remote telemetry is disabled; logs remain on this device")
+	return nil
 }
+
+func SetupTelemetryAttributes(_ string) {
+	Debugf("LOG", "Telemetry attributes ignored because remote telemetry is disabled")
+}
+
+func StopTelemetry() { Debugf("LOG", "Remote telemetry is disabled; no exporter to stop") }
+
+func prepareLog(message string, arguments map[string]any) string {
+	var out bytes.Buffer
+	out.WriteString(maskMessage(message))
+	for key, value := range arguments {
+		fmt.Fprintf(&out, " %q=%q", key, fmt.Sprint(redactValue(key, value)))
+	}
+	return maskMessage(out.String())
+}
+
+func write(level slog.Level, category, message string, arguments map[string]any) {
+	entry := prepareLog(fmt.Sprintf("[%s] %s", category, message), arguments)
+	initMu.Lock()
+	defer initMu.Unlock()
+	if lg.logger == nil {
+		switch level {
+		case slog.LevelDebug:
+			lg.debugBuf = append(lg.debugBuf, entry)
+		case slog.LevelInfo:
+			lg.infoBuf = append(lg.infoBuf, entry)
+		case slog.LevelWarn:
+			lg.warnBuf = append(lg.warnBuf, entry)
+		default:
+			lg.errorBuf = append(lg.errorBuf, entry)
+		}
+		return
+	}
+	lg.logger.Log(context.Background(), level, entry)
+}
+
+func Info(category, message string, arguments map[string]any) {
+	write(slog.LevelInfo, category, message, arguments)
+}
+func Debug(category, message string, arguments map[string]any) {
+	write(slog.LevelDebug, category, message, arguments)
+}
+func Warn(category, message string, arguments map[string]any) {
+	write(slog.LevelWarn, category, message, arguments)
+}
+func Error(category, message string, arguments map[string]any) {
+	write(slog.LevelError, category, message, arguments)
+}
+func Infof(category, format string, args ...any)  { Info(category, fmt.Sprintf(format, args...), nil) }
+func Debugf(category, format string, args ...any) { Debug(category, fmt.Sprintf(format, args...), nil) }
+func Warnf(category, format string, args ...any)  { Warn(category, fmt.Sprintf(format, args...), nil) }
+func Errorf(category, format string, args ...any) { Error(category, fmt.Sprintf(format, args...), nil) }
+
+type simpleHandler struct{ file *os.File }
+
+func (*simpleHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *simpleHandler) Handle(_ context.Context, record slog.Record) error {
+	_, err := fmt.Fprintf(h.file, "[%s] [%s] %q [from go]\n", record.Time.Format("2006-01-02 15:04:05"), record.Level.String(), maskMessage(record.Message))
+	return err
+}
+func (h *simpleHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *simpleHandler) WithGroup(string) slog.Handler      { return h }

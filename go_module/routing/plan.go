@@ -55,7 +55,7 @@ func (p *Plan) Acquire(name string, apply, release func() error) (*Lease, error)
 
 	lease := &Lease{name: name, release: release}
 	p.leases = append(p.leases, lease)
-	log.Debugf(Category, "[Plan] session=%s acquired=%s", p.sessionID, name)
+	log.Debugf(Category, "[Plan] session_owned=true acquired=%s", name)
 	return lease, nil
 }
 
@@ -88,7 +88,7 @@ func (p *Plan) Close() error {
 			errs = append(errs, fmt.Errorf("%s: %w", lease.name, err))
 			continue
 		}
-		log.Debugf(Category, "[Plan] session=%s released=%s", p.sessionID, lease.name)
+		log.Debugf(Category, "[Plan] session_owned=true released=%s", lease.name)
 	}
 	return errors.Join(errs...)
 }

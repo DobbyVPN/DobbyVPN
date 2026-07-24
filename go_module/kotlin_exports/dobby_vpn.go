@@ -20,10 +20,28 @@ var (
 	legacySession    = mobileSessions.NewLegacyClient()
 )
 
+// PlatformCallbacks is declared in the bound package so gobind emits the Java
+// interface. Interfaces imported from another Go package are skipped by
+// gomobile even when all of their methods use supported types.
+type PlatformCallbacks interface {
+	AcquireTunnel(sessionID string, generation int64) int32
+	ReleaseTunnel(sessionID string, generation int64, fd int32)
+	ProtectSocket(sessionID string, generation int64, fd int32) bool
+	PublishState(
+		sessionID string,
+		generation int64,
+		sequence int64,
+		state string,
+		profileIndex int32,
+		profileProtocol string,
+		failureCode string,
+	)
+}
+
 // RegisterSessionPlatform installs the narrow Android VpnService boundary for
 // sessionapi. The callback acquires a fresh, already-duplicated TUN per
 // generation and receives all correlated state notifications.
-func RegisterSessionPlatform(callbacks mobilebinding.PlatformCallbacks) {
+func RegisterSessionPlatform(callbacks PlatformCallbacks) {
 	androidCallbacks.set(callbacks)
 }
 

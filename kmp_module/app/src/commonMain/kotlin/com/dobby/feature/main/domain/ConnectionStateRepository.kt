@@ -40,7 +40,7 @@ class ConnectionStateRepository {
  *
  * **Expected usage**:
  *
- * [ServiceStarted.prepare] -> [VpnManager.start] -> [ServiceStarted.awaitResult] ->
+ * [ServiceStarted.prepare] -> generation-tagged platform request -> [ServiceStarted.awaitResult] ->
  * what will block coroutine scope until we receive the result from the VPN service.
  */
 class ServiceStarted {

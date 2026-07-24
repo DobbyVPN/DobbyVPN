@@ -9,8 +9,9 @@ on:
 
 jobs:
   desktop_cli_tests:
-    name: "Desktop CLI tests - ${{ matrix.platform }}"
+    name: "Desktop CLI tests - ${{ matrix.platform }} (${{ matrix.arch }})"
     runs-on: ${{ matrix.os }}
+    environment: release
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -18,14 +19,22 @@ jobs:
         include:
           - platform: linux
             os: ubuntu-24.04
+            arch: amd64
             app_artifact: dobbyVPN-linux.deb
             service_artifact: ubuntu_grpcvpnserver
           - platform: macos
             os: macos-14
+            arch: arm64
             app_artifact: dobbyVPN-macos-aarch64.zip
-            service_artifact: macos_grpcvpnserver
+            service_artifact: macos_grpcvpnserver-arm64
+          - platform: macos
+            os: macos-15-intel
+            arch: amd64
+            app_artifact: dobbyVPN-macos-amd64.zip
+            service_artifact: macos_grpcvpnserver-amd64
           - platform: windows
             os: windows-2022
+            arch: amd64
             app_artifact: dobbyVPN-windows.zip
             service_artifact: windows_grpcvpnserver.exe
 
@@ -77,17 +86,23 @@ jobs:
           verify_session_arg="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["verify_session_arg"])' <<<"$config_json")"
 
           chmod +x ./artifacts/service/ubuntu_grpcvpnserver
-          sudo bash -c "env LD_LIBRARY_PATH=./artifacts/service ./artifacts/service/ubuntu_grpcvpnserver -port \"$PORT\" > grpcvpnserver.log 2>&1" &
+          export DOBBYVPN_CONTROL_SOCKET="/tmp/dobbyvpn-control-$(id -u)/control.sock"
+          control_uid="$(id -u)"
+          sudo env \
+            DOBBYVPN_CONTROL_SOCKET="$DOBBYVPN_CONTROL_SOCKET" \
+            DOBBYVPN_CONTROL_PEER_UID="$control_uid" \
+            LD_LIBRARY_PATH=./artifacts/service \
+            ./artifacts/service/ubuntu_grpcvpnserver > grpcvpnserver.log 2>&1 &
           service_pid=$!
           trap 'sudo kill "$service_pid" 2>/dev/null || kill "$service_pid" 2>/dev/null || true; cat grpcvpnserver.log || true' EXIT
 
           for _ in {1..30}; do
-            if bash -c ":</dev/tcp/127.0.0.1/$PORT" 2>/dev/null; then
+            if [[ -S "$DOBBYVPN_CONTROL_SOCKET" ]]; then
               break
             fi
             sleep 1
           done
-          bash -c ":</dev/tcp/127.0.0.1/$PORT"
+          [[ -S "$DOBBYVPN_CONTROL_SOCKET" ]]
 
           cli="$(command -v dobby-vpn || true)"
           if [[ -z "$cli" ]]; then
@@ -120,7 +135,7 @@ jobs:
             exit 1
           fi
 
-          unzip -q artifacts/app/dobbyVPN-macos-aarch64.zip -d artifacts/app/unpacked
+          unzip -q "artifacts/app/${{ matrix.app_artifact }}" -d artifacts/app/unpacked
 
           # JSON (not mapfile): macOS runners use Bash 3.2 without mapfile.
           config_json="$(python3 .github/scripts/prepare_cli_test_config.py --format json)"
@@ -128,17 +143,29 @@ jobs:
           verify_session_arg="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["verify_session_arg"])' <<<"$config_json")"
 
           chmod +x ./artifacts/service/macos_grpcvpnserver
-          sudo bash -c "./artifacts/service/macos_grpcvpnserver -port \"$PORT\" > grpcvpnserver.log 2>&1" &
+          if [[ "${{ matrix.arch }}" == "amd64" ]]; then
+            # The Intel-only backend starts this official helper as the root
+            # launch/service process. Keep ownership and mode compatible with
+            # its runtime trust check.
+            sudo chown root:wheel ./artifacts/service/trusttunnel_client
+            sudo chmod 755 ./artifacts/service/trusttunnel_client
+          fi
+          export DOBBYVPN_CONTROL_SOCKET="/tmp/dobbyvpn-control-$(id -u)/control.sock"
+          control_uid="$(id -u)"
+          sudo env \
+            DOBBYVPN_CONTROL_SOCKET="$DOBBYVPN_CONTROL_SOCKET" \
+            DOBBYVPN_CONTROL_PEER_UID="$control_uid" \
+            ./artifacts/service/macos_grpcvpnserver > grpcvpnserver.log 2>&1 &
           service_pid=$!
           trap 'sudo kill "$service_pid" 2>/dev/null || kill "$service_pid" 2>/dev/null || true; cat grpcvpnserver.log || true' EXIT
 
           for _ in {1..30}; do
-            if nc -z 127.0.0.1 "$PORT"; then
+            if [[ -S "$DOBBYVPN_CONTROL_SOCKET" ]]; then
               break
             fi
             sleep 1
           done
-          nc -z 127.0.0.1 "$PORT"
+          [[ -S "$DOBBYVPN_CONTROL_SOCKET" ]]
 
           app="$(find artifacts/app/unpacked -name '*.app' -type d | head -n 1)"
           if [[ -z "$app" ]]; then

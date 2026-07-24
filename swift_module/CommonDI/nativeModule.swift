@@ -1,12 +1,4 @@
 import app
-import Sentry
-
-
-class SentryLogsRepositoryImpl : SentryLogsRepository {
-    func log(string: String) {
-        SentrySDK.capture(message: string)
-    }
-}
 
 
 public class NativeModuleHolder {
@@ -14,7 +6,6 @@ public class NativeModuleHolder {
     private static let chan = LogEventsChannel()
     public static let logsRepository = LogsRepository
         .init(logFilePath: path, logEventsChannel: chan)
-        .setSentryLogger(_sentryLogger: SentryLogsRepositoryImpl())
     private static let vpnManager = VpnManagerImpl(connectionRepository: connectionStateRepository)
     private static let sessionShell = IOSSessionShell(manager: vpnManager)
     
@@ -34,20 +25,11 @@ public class NativeModuleHolder {
         connectionStateRepository: { _ in
             return connectionStateRepository
         },
-        vpnManager: { _ in
-            return vpnManager
-        },
         authenticationManager: { _ in
             return AuthenticationManagerImpl()
         },
-        healthCheckManager: { _ in
-            return HealthCheckManagerImpl()
-        },
         loggerManager: { _ in 
-            return LoggerManagerImpl(configsRepository: configsRepository)
-        },
-        dnsPreflightResolver: { _ in
-            return DnsPreflightResolverImpl()
+            return LoggerManagerImpl()
         }
     )
 

@@ -11,7 +11,6 @@ import (
 	"go_module/tunnel/platform_engine"
 	"go_module/tunnel/protected_dialer"
 	"sync"
-	"time"
 
 	"go_module/common"
 	coreCommon "go_module/core/common"
@@ -32,6 +31,7 @@ func signalInit(initResult chan<- error, err error) {
 }
 
 func (app *App) Run(ctx context.Context, initResult chan<- error) error {
+	log.Debugf(coreCommon.Category, "[Darwin][Init] VPN initialization started")
 	if app.ProtocolDevice == nil {
 		err := fmt.Errorf("protocol device is not initialized")
 		signalInit(initResult, err)
@@ -50,7 +50,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 		return err
 	}
 
-	log.Debugf(coreCommon.Category, "[Network] Default gateway detected: %s", gatewayIP.String())
+	log.Debugf(coreCommon.Category, "[Network] Default gateway detected")
 
 	serverIP := app.ProtocolDevice.GetServerIP()
 	if serverIP == nil {
@@ -58,26 +58,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "[Routing] Server IP resolved: %s", serverIP.String())
-
-	earlyRouteInstalled := false
-	if serverIP.String() != "127.0.0.1" {
-		log.Debugf(coreCommon.Category, "[Routing] Adding direct route for VPN server %s via gateway %s (bypass VPN)", serverIP.String(), gatewayIP.String())
-		common.Client.MarkInCriticalSection(coreCommon.Name)
-		var routeChanged bool
-		routeChanged, err = routing.EnsureProxyRoute(serverIP.String(), gatewayIP.String())
-		if err != nil {
-			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-			err = fmt.Errorf("failed to add early route for server: %w", err)
-			signalInit(initResult, err)
-			return err
-		}
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		earlyRouteInstalled = routeChanged
-		log.Debugf(coreCommon.Category, "[Routing] Direct route for VPN server installed")
-	} else {
-		log.Debugf(coreCommon.Category, "[Routing] Skipping direct route for localhost (Cloak mode)")
-	}
+	log.Debugf(coreCommon.Category, "[Routing] VPN server address resolved")
 
 	ifaceName, idx, err := protected_dialer.GetDefaultInterfaceNameDarwin(gatewayIP)
 	if err != nil {
@@ -87,33 +68,17 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 		protected_dialer.SetDefaultRoute(gatewayIP.String(), ifaceName, idx)
 	}
 
-	log.Debugf(coreCommon.Category, "[TUN] Initializing virtual interface (utun)...")
-
-	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, ifaceName)
-	if err != nil {
-		if earlyRouteInstalled {
-			common.Client.MarkInCriticalSection(coreCommon.Name)
-			if cleanupErr := routing.DeleteProxyRoute(serverIP.String(), gatewayIP.String()); cleanupErr != nil {
-				log.Debugf(coreCommon.Category, "[Routing] Failed to remove early server route after ProtocolDevice error: %v", cleanupErr)
-			}
-			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		}
-		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
-		signalInit(initResult, err)
-		return err
-	}
-
-	log.Debugf(coreCommon.Category, "[Protocol] ProtocolDevice successfully created")
-
+	routePlan := routing.NewPlan(fmt.Sprintf("darwin:%p", app))
 	var ownedEngine *tunnel.Engine
 	var closeOnce sync.Once
 	tunName := ""
+	protocolOpened := false
 	closeAll := func() {
 		closeOnce.Do(func() {
-			log.Debugf(coreCommon.Category, "[Lifecycle] Shutting down VPN components (tun2socks + device)")
+			log.Debugf(coreCommon.Category, "[Darwin][Lifecycle] stopping generation-owned resources")
 			app.mu.Lock()
 			currentDevice := app.currentDevice
-			if currentDevice == nil {
+			if currentDevice == nil && protocolOpened {
 				currentDevice = app.ProtocolDevice
 			}
 			app.currentDevice = nil
@@ -121,46 +86,53 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 			ownedEngine = app.engine
 			app.engine = nil
 			app.mu.Unlock()
+			// Restore the captured system routes while the owned utun still
+			// exists. Stopping tun2socks first can make the default route vanish
+			// before the Plan can prove ownership and restore its baseline.
+			common.Client.MarkInCriticalSection(coreCommon.Name)
+			if cleanupErr := routePlan.Close(); cleanupErr != nil {
+				log.Debugf(coreCommon.Category, "[Darwin][RoutingPlan][WARN] %v", cleanupErr)
+			}
+			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 			if ownedEngine != nil {
 				ownedEngine.Stop()
 			}
 			if currentDevice != nil {
-				_ = currentDevice.Close()
+				if closeErr := currentDevice.Close(); closeErr != nil {
+					log.Debugf(coreCommon.Category, "[Darwin][Lifecycle][WARN] ProtocolDevice.Close failed: %v", closeErr)
+				}
 			}
+			log.Debugf(coreCommon.Category, "[Darwin][Lifecycle] generation cleanup complete")
 		})
 	}
 
 	defer closeAll()
 
-	go func() {
-		<-ctx.Done()
-		closeAll()
-		log.Debugf(coreCommon.Category, "[Lifecycle] Context cancelled — closing VPN interfaces")
-	}()
-
-	defer func() {
-		app.mu.Lock()
-		currentServerIP := app.serverIP
-		currentGatewayIP := app.gatewayIP
-		currentTunIface := app.tunIface
-		app.mu.Unlock()
-		if currentServerIP == "" && serverIP != nil {
-			currentServerIP = serverIP.String()
-		}
-		if currentGatewayIP == "" {
-			currentGatewayIP = gatewayIP.String()
-		}
-		if currentTunIface == "" {
-			currentTunIface = tunName
-		}
+	if serverIP.String() != "127.0.0.1" {
+		log.Debugf(coreCommon.Category, "[Darwin][Routing] acquiring direct VPN bypass route")
 		common.Client.MarkInCriticalSection(coreCommon.Name)
-		log.Debugf(coreCommon.Category, "[Routing] Restoring system routing (removing VPN routes)...")
-		routing.StopRouting(currentServerIP, currentGatewayIP, currentTunIface)
-		log.Debugf(coreCommon.Category, "[Routing] System default route restored via %s", currentGatewayIP)
+		_, err = routePlan.AcquireMacOSProxyRoute(serverIP.String(), gatewayIP.String())
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-	}()
+		if err != nil {
+			err = fmt.Errorf("failed to acquire server bypass route: %w", err)
+			signalInit(initResult, err)
+			return err
+		}
+	} else {
+		log.Debugf(coreCommon.Category, "[Darwin][Routing] loopback server bypass not required")
+	}
 
-	log.Debugf(coreCommon.Category, "[Tunnel] Starting tun2socks engine (darwin/utun mode)...")
+	log.Debugf(coreCommon.Category, "[Darwin][Protocol] opening protocol SOCKS bridge")
+	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, ifaceName)
+	if err != nil {
+		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
+		signalInit(initResult, err)
+		return err
+	}
+	protocolOpened = true
+	log.Debugf(coreCommon.Category, "[Darwin][Protocol] protocol SOCKS bridge ready")
+
+	log.Debugf(coreCommon.Category, "[Darwin][Tunnel] starting tun2socks engine")
 
 	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{
 		ProxyAddr:   app.ProtocolDevice.GetProxyAddr(),
@@ -177,38 +149,28 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 
 	tunName = platform_engine.LastIface
 
-	log.Debugf(coreCommon.Category, "[Tunnel] tun2socks started, interface: %s", tunName)
-
-	common.Client.MarkInCriticalSection(coreCommon.Name)
-
-	log.Debugf(coreCommon.Category, "[Routing] Switching default route to TUN interface (%s)", tunName)
-	if err := routing.StartRouting(serverIP.String(), gatewayIP.String(), tunName); err != nil {
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		err = fmt.Errorf("failed to configure routing: %w", err)
+	if tunName == "" {
+		err = fmt.Errorf("tun2socks did not report a TUN interface")
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "[Routing] Default route is now redirected to VPN (TUN)")
+	log.Debugf(coreCommon.Category, "[Darwin][Tunnel] tun2socks engine ready interface=%s", tunName)
 
-	log.Debugf(coreCommon.Category, "[Tunnel] VPN dataplane is up, starting traffic handling...")
-
-	if ifaceName != "" {
-		log.Debugf(coreCommon.Category, "[Routing] Adding scoped default route via %s -> %s (for protected traffic bypass)", ifaceName, gatewayIP.String())
-		if err := routing.AddScopedDefaultRoute(ifaceName, gatewayIP.String()); err != nil {
-			log.Debugf(coreCommon.Category, "[Routing] ERROR: failed to add scoped default route via %s: %v", ifaceName, err)
-		} else {
-			log.Debugf(coreCommon.Category, "[Routing] Scoped default route installed: interface=%s gateway=%s", ifaceName, gatewayIP.String())
-		}
+	common.Client.MarkInCriticalSection(coreCommon.Name)
+	_, err = routePlan.AcquireMacOSTunnelDefault(tunName)
+	if err == nil {
+		err = routePlan.AcquireMacOSIPv6Block(tunName)
 	}
-
-	defer func() {
-		if ifaceName != "" {
-			log.Debugf(coreCommon.Category, "[Routing] Removing scoped default route for interface %s", ifaceName)
-			routing.DeleteScopedDefaultRoute(ifaceName)
-		}
-	}()
-
+	if err == nil && ifaceName != "" {
+		_, err = routePlan.AcquireMacOSScopedDefault(ifaceName, gatewayIP.String())
+	}
 	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+	if err != nil {
+		err = fmt.Errorf("failed to acquire generation-owned routing: %w", err)
+		signalInit(initResult, err)
+		return err
+	}
+	log.Debugf(coreCommon.Category, "[Darwin][Routing] generation-owned default, IPv6, and protected routes ready")
 
 	app.mu.Lock()
 	app.currentDevice = app.ProtocolDevice
@@ -219,111 +181,26 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	app.running = true
 	app.mu.Unlock()
 
-	log.Debugf(coreCommon.Category, "[Lifecycle] VPN initialization completed successfully")
+	log.Debugf(coreCommon.Category, "[Darwin][Lifecycle] VPN initialization completed successfully")
 
 	signalInit(initResult, nil)
 
 	<-ctx.Done()
 
-	log.Debugf(coreCommon.Category, "[Lifecycle] Context cancelled — stopping VPN engine")
+	log.Debugf(coreCommon.Category, "[Darwin][Lifecycle] context cancelled — stopping generation")
 
 	return nil
 }
 
 func (app *App) SwitchProtocolDevice(device pkg.ProtocolDevice) error {
-	startedAt := time.Now()
-	if device == nil {
-		return fmt.Errorf("protocol device is not initialized")
-	}
-	replacementAdopted := false
-	defer func() {
-		if replacementAdopted {
-			return
-		}
+	_ = app
+	if device != nil {
 		if closeErr := device.Close(); closeErr != nil {
-			log.Debugf(coreCommon.Category, "[Darwin] Failed to close replacement ProtocolDevice after failed hot-switch: %v", closeErr)
-		}
-	}()
-
-	if app == nil {
-		return fmt.Errorf("core app is not initialized")
-	}
-	if app.RoutingConfig == nil {
-		return fmt.Errorf("routing config is not initialized")
-	}
-
-	app.mu.Lock()
-	defer app.mu.Unlock()
-
-	if !app.running || app.currentDevice == nil {
-		return fmt.Errorf("core app is not running")
-	}
-
-	newServerIP := device.GetServerIP()
-	if newServerIP == nil {
-		return fmt.Errorf("server IP is nil")
-	}
-
-	oldDevice := app.currentDevice
-	oldServerIP := app.serverIP
-	gatewayIP := app.gatewayIP
-	uplinkIface := app.uplinkIface
-
-	log.Debugf(coreCommon.Category, "[Darwin] Hot-switch protocol begin oldServer=%s newServer=%s", oldServerIP, newServerIP.String())
-
-	newRouteChanged := false
-	if newServerIP.String() != "127.0.0.1" {
-		common.Client.MarkInCriticalSection(coreCommon.Name)
-		routeChanged, err := routing.EnsureProxyRoute(newServerIP.String(), gatewayIP)
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		if err != nil {
-			return fmt.Errorf("failed to add route for new server: %w", err)
-		}
-		newRouteChanged = routeChanged
-		log.Debugf(coreCommon.Category, "[Darwin] Hot-switch route ready newServer=%s changed=%v elapsed=%s", newServerIP.String(), routeChanged, time.Since(startedAt).Truncate(time.Millisecond))
-	}
-
-	if err := device.Open(app.RoutingConfig.RoutingTableID, uplinkIface); err != nil {
-		if newRouteChanged {
-			common.Client.MarkInCriticalSection(coreCommon.Name)
-			if cleanupErr := routing.DeleteProxyRoute(newServerIP.String(), gatewayIP); cleanupErr != nil {
-				log.Debugf(coreCommon.Category, "[Darwin] Hot-switch cleanup new route failed after open error: %v", cleanupErr)
-			}
-			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		}
-		return fmt.Errorf("failed to open new protocol device: %w", err)
-	}
-	log.Debugf(coreCommon.Category, "[Darwin] Hot-switch ProtocolDevice.Open OK proxy=%s elapsed=%s", device.GetProxyAddr(), time.Since(startedAt).Truncate(time.Millisecond))
-
-	if err := tunnel.SwitchVPNProxy(device.GetProxyAddr()); err != nil {
-		if newRouteChanged {
-			common.Client.MarkInCriticalSection(coreCommon.Name)
-			if cleanupErr := routing.DeleteProxyRoute(newServerIP.String(), gatewayIP); cleanupErr != nil {
-				log.Debugf(coreCommon.Category, "[Darwin] Hot-switch cleanup new route failed after switch error: %v", cleanupErr)
-			}
-			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		}
-		return fmt.Errorf("failed to switch tun2socks proxy: %w", err)
-	}
-
-	app.ProtocolDevice = device
-	app.currentDevice = device
-	app.serverIP = newServerIP.String()
-	replacementAdopted = true
-
-	if oldDevice != nil {
-		if err := oldDevice.Close(); err != nil {
-			log.Debugf(coreCommon.Category, "[Darwin] Hot-switch old ProtocolDevice.Close failed: %v", err)
+			log.Debugf(coreCommon.Category, "[Darwin][Lifecycle] replacement device close after rejected switch failed: %v", closeErr)
 		}
 	}
-	if oldServerIP != "" && oldServerIP != newServerIP.String() {
-		common.Client.MarkInCriticalSection(coreCommon.Name)
-		if err := routing.DeleteProxyRoute(oldServerIP, gatewayIP); err != nil {
-			log.Debugf(coreCommon.Category, "[Darwin] Hot-switch old server route cleanup failed oldServer=%s err=%v", oldServerIP, err)
-		}
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-	}
-
-	log.Debugf(coreCommon.Category, "[Darwin] Hot-switch protocol done oldServer=%s newServer=%s proxy=%s elapsed=%s", oldServerIP, newServerIP.String(), device.GetProxyAddr(), time.Since(startedAt).Truncate(time.Millisecond))
-	return nil
+	// macOS routing is a generation-owned transaction. Changing protocol while
+	// it is live would require sharing the active Plan with another device, so
+	// callers must fully stop before they start the replacement profile.
+	return fmt.Errorf("macOS protocol hot-switch is unavailable; stop the active session before starting another profile")
 }

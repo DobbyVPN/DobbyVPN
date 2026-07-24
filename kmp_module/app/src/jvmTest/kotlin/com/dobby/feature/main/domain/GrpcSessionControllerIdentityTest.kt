@@ -3,7 +3,8 @@ package com.dobby.feature.main.domain
 import interop.session.SessionCapabilities as TransportCapabilities
 import interop.session.SessionConfiguration as TransportConfiguration
 import interop.session.SessionFailure
-import interop.session.SessionFailureCode
+import interop.session.SessionFailureCode as TransportFailureCode
+import interop.session.SessionEvent as TransportEvent
 import interop.session.SessionLibrary
 import interop.session.SessionObservation as TransportObservation
 import interop.session.SessionProfile as TransportProfile
@@ -47,6 +48,24 @@ class GrpcSessionControllerIdentityTest {
         assertEquals("session-1", store.value)
         assertEquals(1, library.createCalls)
     }
+
+    @Test
+    fun snapshotAndEventsPreserveTypedFailureCodesOnly() = runBlocking {
+        val library = RecordingSessionLibrary().apply {
+            terminalFailure = SessionFailure(TransportFailureCode.RUNTIME_FAILED, "credential-value")
+        }
+        val controller = GrpcSessionController(library, MemoryStore())
+        assertIs<SessionControllerResult.Success<SessionConfiguration>>(controller.configure(byteArrayOf(1)))
+
+        val snapshot = assertIs<SessionControllerResult.Success<SessionSnapshot>>(controller.snapshot()).value
+        assertEquals(SessionState.FAILED, snapshot.state)
+        assertEquals(SessionFailureCode.RUNTIME_FAILED, snapshot.lastFailureCode)
+
+        val event = assertIs<SessionControllerResult.Success<SessionObservation>>(controller.observe(0uL))
+            .value.events.single()
+        assertEquals(SessionState.FAILED, event.state)
+        assertEquals(SessionFailureCode.RUNTIME_FAILED, event.failureCode)
+    }
 }
 
 private class MemoryStore(var value: String? = null) : SessionIdentityStore {
@@ -59,6 +78,7 @@ private class RecordingSessionLibrary : SessionLibrary {
     var createCalls = 0
     var snapshotSessionId: String? = null
     var stopSessionId: String? = null
+    var terminalFailure: SessionFailure? = null
     private val sessions = mutableSetOf<String>()
 
     override suspend fun getCapabilities(): SessionResult<TransportCapabilities> =
@@ -85,17 +105,36 @@ private class RecordingSessionLibrary : SessionLibrary {
     override suspend fun snapshot(sessionId: String): SessionResult<TransportSnapshot> {
         snapshotSessionId = sessionId
         return if (sessionId !in sessions) missing() else SessionResult.Success(
-            TransportSnapshot(sessionId, 7uL, TransportState.CONNECTED, true, null, null, false),
+            TransportSnapshot(
+                sessionId,
+                7uL,
+                if (terminalFailure == null) TransportState.CONNECTED else TransportState.FAILED,
+                true,
+                null,
+                terminalFailure,
+                false,
+            ),
         )
     }
 
     override suspend fun observe(sessionId: String, afterSequence: ULong): SessionResult<TransportObservation> =
-        if (sessionId !in sessions) missing() else SessionResult.Success(TransportObservation(emptyList(), afterSequence))
+        if (sessionId !in sessions) {
+            missing()
+        } else {
+            SessionResult.Success(
+                TransportObservation(
+                    events = terminalFailure?.let {
+                        listOf(TransportEvent(sessionId, 7uL, 1uL, TransportState.FAILED, null, it, null))
+                    }.orEmpty(),
+                    nextSequence = if (terminalFailure == null) afterSequence else 1uL,
+                ),
+            )
+        }
 
     override suspend fun destroySession(sessionId: String): SessionResult<Unit> =
         if (sessionId !in sessions) missing() else SessionResult.Success(Unit)
 
     private fun <T> missing(): SessionResult<T> = SessionResult.Failure(
-        SessionFailure(SessionFailureCode.NOT_FOUND, "session does not exist"),
+        SessionFailure(TransportFailureCode.NOT_FOUND, "session does not exist"),
     )
 }

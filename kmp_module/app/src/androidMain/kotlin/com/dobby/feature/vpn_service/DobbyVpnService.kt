@@ -33,6 +33,13 @@ const val IS_FROM_UI = "isLaunchedFromUi"
  */
 class DobbyVpnService : VpnService() {
     companion object {
+        @Volatile
+        internal var nativePlatformRegistrar: (DobbyVpnService) -> Unit =
+            GoBackendWrapper::registerSessionPlatform
+
+        internal fun resetNativePlatformRegistrar() {
+            nativePlatformRegistrar = GoBackendWrapper::registerSessionPlatform
+        }
         private const val ACTION_PREPARE = "com.dobby.vpn.action.PREPARE"
         private const val ACTION_START = "com.dobby.vpn.action.START" // legacy alias
         private const val ACTION_STOP = "com.dobby.vpn.action.STOP"
@@ -49,7 +56,7 @@ class DobbyVpnService : VpnService() {
                 .setAction(ACTION_PREPARE)
                 .putExtra(EXTRA_SESSION_ID, sessionId)
 
-        // Kept for callers compiled against the pre-v1 VpnManager. It does not start a protocol.
+        // Kept for callers compiled against the pre-v1 service-intent API. It does not start a protocol.
         fun createStartIntent(context: Context, isProtocolProbe: Boolean, generation: Long): Intent =
             Intent(context, DobbyVpnService::class.java)
                 .setAction(ACTION_START)
@@ -82,7 +89,7 @@ class DobbyVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
-        GoBackendWrapper.registerSessionPlatform(this)
+        nativePlatformRegistrar(this)
         logger.log("[svc:$serviceId] created Android session platform shell")
     }
 
@@ -90,13 +97,17 @@ class DobbyVpnService : VpnService() {
         val action = intent?.action ?: ACTION_PREPARE
         val sessionId = intent?.getStringExtra(EXTRA_SESSION_ID)
         val generation = intent?.getLongExtra(EXTRA_GENERATION, -1L) ?: -1L
-        logger.log("[svc:$serviceId] command action=$action generation=$generation session=${sessionId?.take(8)}")
+        logger.log("[svc:$serviceId] command action=$action generation=$generation sessionProvided=${!sessionId.isNullOrBlank()}")
         when (action) {
             ACTION_PREPARE, ACTION_START -> {
                 // Foreground promotion precedes every possible callback to Go that may create a TUN.
                 ensureForeground()
+                DobbyVpnServiceTestEvents.record("foreground")
                 if (!sessionId.isNullOrBlank()) activeSessionId = sessionId
-                if (!sessionId.isNullOrBlank()) PlatformServiceRegistry.ready(this, sessionId)
+                if (!sessionId.isNullOrBlank()) {
+                    PlatformServiceRegistry.ready(this, sessionId)
+                    DobbyVpnServiceTestEvents.record("prepared")
+                }
             }
             ACTION_STOP -> releaseForIntent(generation, startId)
         }
@@ -107,7 +118,7 @@ class DobbyVpnService : VpnService() {
     @Synchronized
     fun acquireTunnel(sessionId: String, generation: Long): Int {
         if (sessionId != activeSessionId) {
-            logger.log("[svc:$serviceId] reject TUN for unprepared/stale session=${sessionId.take(8)}")
+            logger.log("[svc:$serviceId] reject TUN for unprepared or stale session")
             return -1
         }
         if (generation < activeGeneration || vpnInterface != null || goTunFd != null) {
@@ -128,18 +139,18 @@ class DobbyVpnService : VpnService() {
                 .addDnsServer("2606:4700:4700::1111")
                 .establish()
         }.getOrElse { error ->
-            logger.log("[svc:$serviceId] TUN establish failed generation=$generation: ${error.message}")
+            logger.log("[svc:$serviceId] TUN establish failed generation=$generation errorType=${error::class.simpleName ?: "UNKNOWN"}")
             null
         } ?: return -1
 
         val duplicate = runCatching { ParcelFileDescriptor.dup(established.fileDescriptor) }
             .getOrElse { error ->
-                logger.log("[svc:$serviceId] TUN duplication failed generation=$generation: ${error.message}")
+                logger.log("[svc:$serviceId] TUN duplication failed generation=$generation errorType=${error::class.simpleName ?: "UNKNOWN"}")
                 established.close()
                 return -1
             }
         val fd = runCatching { duplicate.detachFd() }.getOrElse { error ->
-            logger.log("[svc:$serviceId] TUN FD transfer failed generation=$generation: ${error.message}")
+            logger.log("[svc:$serviceId] TUN FD transfer failed generation=$generation errorType=${error::class.simpleName ?: "UNKNOWN"}")
             duplicate.close()
             established.close()
             return -1
@@ -203,7 +214,7 @@ class DobbyVpnService : VpnService() {
             val stopped = runCatching {
                 sessionStopSucceeded(GoBackendWrapper.stopSession(session, UUID.randomUUID().toString(), generation))
             }.getOrElse {
-                logger.log("[svc:$serviceId] session stop during destroy failed: ${it.message}")
+                logger.log("[svc:$serviceId] session stop during destroy failed errorType=${it::class.simpleName ?: "UNKNOWN"}")
                 false
             }
             if (!stopped) logger.log("[svc:$serviceId] Go rejected stop during destroy; forcing Android descriptor close")
@@ -230,7 +241,7 @@ class DobbyVpnService : VpnService() {
             val stopped = runCatching {
                 sessionStopSucceeded(GoBackendWrapper.stopSession(session, UUID.randomUUID().toString(), active))
             }.getOrElse {
-                logger.log("[svc:$serviceId] session stop from intent failed: ${it.message}")
+                logger.log("[svc:$serviceId] session stop from intent failed errorType=${it::class.simpleName ?: "UNKNOWN"}")
                 false
             }
             if (!stopped) {
@@ -250,7 +261,7 @@ class DobbyVpnService : VpnService() {
         runCatching { vpnInterface?.close() }
         vpnInterface = null
         activeGeneration = -1L
-        logger.log("[svc:$serviceId] closed service-owned TUN fd=$fd: $reason")
+        logger.log("[svc:$serviceId] closed service-owned TUN descriptorPresent=${fd != null} reason=$reason")
     }
 
     private fun sessionStopSucceeded(payload: String): Boolean = runCatching {
@@ -270,6 +281,31 @@ class DobbyVpnService : VpnService() {
             .build()
         startForeground(FOREGROUND_NOTIFICATION_ID, notification)
     }
+}
+
+/**
+ * In-process event seam for Android instrumentation only.  It records ordering without exposing
+ * credentials, descriptors, or protocol state and is never consumed by production code.
+ */
+internal object DobbyVpnServiceTestEvents {
+    private val events = mutableListOf<String>()
+    private var capturing = false
+
+    @Synchronized fun beginCapture() {
+        events.clear()
+        capturing = true
+    }
+
+    @Synchronized fun endCapture() {
+        capturing = false
+        events.clear()
+    }
+
+    @Synchronized fun record(event: String) {
+        if (capturing) events += event
+    }
+
+    @Synchronized fun snapshot(): List<String> = events.toList()
 }
 
 /** Process-recreation safe hand-off between the controller and foreground service. */

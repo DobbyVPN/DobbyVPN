@@ -19,7 +19,7 @@ sealed interface SessionControllerResult<out T> {
     data class Success<T>(val value: T) : SessionControllerResult<T>
     data class Failure(
         val message: String,
-        val code: String? = null,
+        val code: SessionFailureCode = SessionFailureCode.UNKNOWN,
     ) : SessionControllerResult<Nothing>
 }
 
@@ -57,10 +57,32 @@ enum class SessionState {
     UNKNOWN,
 }
 
+enum class SessionFailureCode {
+    UNSPECIFIED,
+    INVALID_ARGUMENT,
+    NOT_FOUND,
+    CONFLICT,
+    NOT_CONFIGURED,
+    STALE_GENERATION,
+    UNSUPPORTED,
+    MALFORMED_CONFIG,
+    PROBE_FAILED,
+    PLATFORM_FAILED,
+    RUNTIME_FAILED,
+    CANCELED,
+    INTERNAL,
+    UNKNOWN,
+}
+
+internal fun String?.toSessionFailureCode(): SessionFailureCode =
+    this?.let { raw -> SessionFailureCode.entries.firstOrNull { it.name == raw } }
+        ?: SessionFailureCode.UNKNOWN
+
 data class SessionEvent(
     val generation: ULong,
     val sequence: ULong,
     val state: SessionState,
+    val failureCode: SessionFailureCode? = null,
 )
 
 data class SessionSnapshot(
@@ -68,6 +90,7 @@ data class SessionSnapshot(
     val state: SessionState,
     val configured: Boolean,
     val cleanupComplete: Boolean,
+    val lastFailureCode: SessionFailureCode? = null,
 )
 
 data class SessionObservation(val events: List<SessionEvent>, val nextSequence: ULong)
