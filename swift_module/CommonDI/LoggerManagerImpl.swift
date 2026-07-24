@@ -35,4 +35,9 @@ public class LoggerManagerImpl: LoggerManager {
             logs.writeLog(log: "No telemetry attributes provided")
         }
     }
+
+    public func stopTelemetry() {
+        logs.writeLog(log: "Stop tunnel telemetry")
+        Cloak_outlineStopTelemetry()
+    }
 }

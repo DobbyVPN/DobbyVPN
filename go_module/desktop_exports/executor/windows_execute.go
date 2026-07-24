@@ -28,7 +28,12 @@ func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest
 	if err != nil {
 		log.Debugf(common.Category, "[ERROR] failed to listen: %v", err)
 	}
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			proto.PanicRecoveryUnaryInterceptor(),
+			proto.ErrorLoggingUnaryInterceptor(),
+		),
+	)
 
 	grpcproto.RegisterVpnServer(grpcServer, &proto.Server{})
 

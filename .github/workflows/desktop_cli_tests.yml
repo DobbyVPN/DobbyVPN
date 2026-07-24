@@ -103,6 +103,7 @@ jobs:
           fi
 
           PORT="$PORT" "$cli" check-config "$config_arg"
+          PORT="$PORT" "$cli" verify-session "$config_arg"
 
       - name: Test macOS CLI
         if: matrix.platform == 'macos'
@@ -153,6 +154,7 @@ jobs:
           fi
 
           PORT="$PORT" "$cli" check-config "$config_arg"
+          PORT="$PORT" "$cli" verify-session "$config_arg"
 
       - name: Test Windows CLI
         if: matrix.platform == 'windows'
@@ -215,6 +217,13 @@ jobs:
             if (Test-Path $cliOut) { Get-Content $cliOut }
             if (Test-Path $cliErr) { Get-Content $cliErr }
             if ($cliProcess.ExitCode -ne 0) { throw "check-config failed with exit code $($cliProcess.ExitCode)" }
+
+            $verifyOut = Join-Path $PWD "dobby-verify.out"
+            $verifyErr = Join-Path $PWD "dobby-verify.err"
+            $verifyProcess = Start-Process -FilePath $cli.FullName -ArgumentList @("verify-session", $configArg) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $verifyOut -RedirectStandardError $verifyErr
+            if (Test-Path $verifyOut) { Get-Content $verifyOut }
+            if (Test-Path $verifyErr) { Get-Content $verifyErr }
+            if ($verifyProcess.ExitCode -ne 0) { throw "verify-session failed with exit code $($verifyProcess.ExitCode)" }
           } finally {
             if ($serviceProcess -and -not $serviceProcess.HasExited) {
               Stop-Process -Id $serviceProcess.Id -Force

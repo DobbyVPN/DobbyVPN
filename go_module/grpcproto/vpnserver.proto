@@ -26,7 +26,6 @@ service Vpn {
   rpc InitHealthCheck (Empty)                   returns (Empty);
   rpc StartHealthCheck (Empty)                  returns (Empty);
   rpc StopHealthCheck (Empty)                   returns (Empty);
-  rpc CheckServerAlive (CheckServerAliveRequest) returns (CheckServerAliveResponce);
   rpc MeasureTunnelProbeAverageLatencyMillis (MeasureTunnelProbeRequest) returns (MeasureTunnelProbeResponse);
 
   // cloak.go
@@ -108,14 +107,6 @@ message SetGeoRoutingConfRequest {
   string cidrs = 1;
 }
 
-message NetCheckRequest {
-  string configPath = 1;
-}
-
-message NetCheckResponse {
-  string error = 1;
-}
-
 message SetupTelemetryAttributesRequest {
   string config = 1;
 }
@@ -129,16 +120,6 @@ message StartTrustTunnelRequest {
 }
 
 message StartTrustTunnelResponse {
-  int32 result = 1;
-}
-
-
-message CheckServerAliveRequest {
-  string address = 1;
-  int32 port = 2;
-}
-
-message CheckServerAliveResponce {
   int32 result = 1;
 }
 

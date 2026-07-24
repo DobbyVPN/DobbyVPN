@@ -500,6 +500,8 @@ class MainViewModel(
         healthCheckManager.stopHealthCheck()
         logger.log("Stop connection detector")
         stopConnectionStateDetector()
+        logger.log("Stop telemetry")
+        loggerManager.stopTelemetry()
         backendRuntimeInitialized = false
         if (resetUiState) {
             val disconnectedState = _uiState.value.copy(connectionState = VpnConnectionState.DISCONNECTED)

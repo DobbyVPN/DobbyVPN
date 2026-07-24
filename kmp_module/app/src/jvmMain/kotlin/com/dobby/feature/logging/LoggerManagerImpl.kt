@@ -34,4 +34,9 @@ class LoggerManagerImpl(
             logger.log("No telemetry attributes provided")
         }
     }
+
+    override fun stopTelemetry() {
+        logger.log("Stop tunnel telemetry")
+        loggerLibrary.StopTelemetry()
+    }
 }

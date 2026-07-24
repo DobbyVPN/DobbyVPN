@@ -49,6 +49,7 @@ When disconnecting, the client performs cleanup in the following order:
 1. `StopTunnel`
 2. `StopHealthCheck`
 3. `StopConnectionStateDetector`
+4. `StopTelemetry`
 
 ### Flow
 
@@ -56,7 +57,8 @@ When disconnecting, the client performs cleanup in the following order:
 Disconnect
 ├── StopTunnel
 ├── StopHealthCheck
-└── StopConnectionStateDetector
+├── StopConnectionStateDetector
+└── StopTelemetry
 ```
 
 ---
@@ -67,7 +69,7 @@ Disconnect
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Turn On**    | `StartConnectionStateDetector` _(VPN tunnel only)_                                                                                                            |
 | **Connect**    | `InitTelemetry` → `SetConfig` → `SaveTelemetry` → `StartTunnel` → `StartHealthCheck` _(VPN tunnel only)_ → `StartConnectionStateDetector` _(VPN tunnel only)_ |
-| **Disconnect** | `StopTunnel` → `StopHealthCheck` → `StopConnectionStateDetector`                                                                                              |
+| **Disconnect** | `StopTunnel` → `StopHealthCheck` → `StopConnectionStateDetector` → `StopTelemetry`                                                                            |
 
 ## Notes
 

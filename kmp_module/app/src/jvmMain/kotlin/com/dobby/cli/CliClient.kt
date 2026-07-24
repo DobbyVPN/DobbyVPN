@@ -264,6 +264,7 @@ class CliClient {
     private fun stopVpnRuntime() {
         vpnManager.stop(isUserInitiated = false)
         healthCheckManager.stopHealthCheck()
+        loggerManager.stopTelemetry()
         connectionStateRepository.tryUpdateStatus(VpnConnectionState.DISCONNECTED)
     }
 
@@ -311,6 +312,103 @@ class CliClient {
             mainViewModel.stopVpnService()
         }
         ExitCode.OK
+    }
+
+    fun externalIp(options: List<String>): ExitCode {
+        if (options.isNotEmpty()) {
+            return ExitCode.INVALID_ARGS
+        }
+        val ip = fetchExternalIp()
+            ?: return ExitCode.PROGRAM_FAILED
+        println(ip)
+        return ExitCode.OK
+    }
+
+    fun verifySession(options: List<String>): ExitCode {
+        if (options.size != 1) {
+            return ExitCode.INVALID_ARGS
+        }
+
+        val connectionUrl = readConnectionArgument(options[0]) ?: return ExitCode.INVALID_ARGS
+
+        val baselineIp = fetchExternalIp()
+        if (baselineIp == null) {
+            println("FAILED: could not determine baseline external IP")
+            logger.log("[CLI] FAILED verify-session: baseline external IP unavailable")
+            return ExitCode.SESSION_VERIFY_FAILED
+        }
+        println("Baseline IP: $baselineIp")
+        logger.log("[CLI] verify-session baseline IP=$baselineIp")
+
+        val okConfig = runBlocking { mainViewModel.setConfig(connectionUrl) }
+        if (!okConfig) {
+            return ExitCode.CONFIG_FORMAT_ERROR
+        }
+
+        val okVpn = runBlocking { mainViewModel.startVpnService() }
+        if (!okVpn) {
+            return ExitCode.TUNNEL_START_ERROR
+        }
+
+        val okHC = runBlocking { awaitHealthCheck() }
+        if (!okHC) {
+            stopVpnRuntime()
+            return ExitCode.HEALTHCHECK_CONFIG_ERROR
+        }
+
+        val tunnelIp = fetchExternalIp()
+        if (tunnelIp == null || tunnelIp == baselineIp) {
+            println(
+                "FAILED: external IP did not change through tunnel " +
+                    "(baseline=$baselineIp tunnel=${tunnelIp ?: "unavailable"})",
+            )
+            logger.log("[CLI] FAILED verify-session: IP unchanged baseline=$baselineIp tunnel=$tunnelIp")
+            stopVpnRuntime()
+            return ExitCode.SESSION_VERIFY_FAILED
+        }
+        println("Tunnel IP: $tunnelIp")
+        logger.log("[CLI] verify-session tunnel IP=$tunnelIp")
+
+        stopVpnRuntime()
+
+        val restoredIp = fetchExternalIp()
+        if (restoredIp == null) {
+            println("FAILED: could not determine external IP after disconnect")
+            logger.log("[CLI] FAILED verify-session: post-disconnect IP unavailable")
+            return ExitCode.SESSION_VERIFY_FAILED
+        }
+        println("Restored IP: $restoredIp")
+        logger.log("[CLI] verify-session restored IP=$restoredIp")
+
+        if (restoredIp != baselineIp) {
+            println(
+                "WARNING: restored IP differs from baseline " +
+                    "(baseline=$baselineIp restored=$restoredIp)",
+            )
+            logger.log("[CLI] verify-session warning: restored IP != baseline")
+        }
+
+        println("OK verify-session")
+        return ExitCode.OK
+    }
+
+    private fun fetchExternalIp(): String? {
+        val endpoints = listOf(
+            "https://api.ipify.org",
+            "https://ifconfig.me/ip",
+        )
+        for (endpoint in endpoints) {
+            val ip = runCatching {
+                val connection = java.net.URL(endpoint).openConnection() as java.net.HttpURLConnection
+                connection.connectTimeout = 10_000
+                connection.readTimeout = 10_000
+                connection.inputStream.bufferedReader().use { it.readText().trim() }
+            }.getOrNull()
+            if (!ip.isNullOrBlank()) {
+                return ip
+            }
+        }
+        return null
     }
 
     fun status(options: List<String>): ExitCode {

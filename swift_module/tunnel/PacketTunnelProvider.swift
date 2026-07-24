@@ -160,16 +160,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     func logInterfacesDetailed(label: String) {
-        logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: \(label) ==========")
+        logs.writeLog(log: "[Interfaces] ========== INTERFACES: \(label) ==========")
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else {
             logs.writeLog(log: "[DEBUG][Interfaces] getifaddrs failed errno=\(errno)")
-            logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: END_\(label) ==========")
+            logs.writeLog(log: "[Interfaces] ========== INTERFACES: END_\(label) ==========")
             return
         }
         defer {
             freeifaddrs(ifaddrPtr)
-            logs.writeLog(log: "[iOS26-RESEARCH] ========== INTERFACES: END_\(label) ==========")
+            logs.writeLog(log: "[Interfaces] ========== INTERFACES: END_\(label) ==========")
         }
 
         var ptr: UnsafeMutablePointer<ifaddrs>? = first
@@ -220,7 +220,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let optionKeys = options?.keys.sorted().joined(separator: ",") ?? "(none)"
         logs.cleanupOldLogs()
         logSystemInfo(osVersionString: osVersionString)
-        logs.writeLog(log: "[iOS26-RESEARCH] iOS version: \(osVersionString)")
+        logs.writeLog(log: "[Interfaces] iOS version: \(osVersionString)")
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys) isProtocolProbe=\(isProtocolProbeStart)")
         let connectionConfigLen = configsRepository.getConnectionConfig().count
         let vpnInterface = configsRepository.getVpnInterface()
@@ -619,7 +619,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 let previous = self.lastPathSignature ?? "(none)"
                 self.lastPathSignature = signature
                 if previous != "(none)" {
-                    self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] NETWORK_CHANGED: \(previous) -> \(signature)")
+                    self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] [Interfaces] NETWORK_CHANGED: \(previous) -> \(signature)")
                 }
                 self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] PATH_UPDATE \(signature)")
                 if expensive && constrained {
@@ -629,7 +629,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] WARNING: path is unsatisfied")
                 }
                 for iface in path.availableInterfaces {
-                    self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] [iOS26-RESEARCH] INTERFACE name=\(iface.name) type=\(self.interfaceTypeKey(iface.type)) raw=\(iface.type)")
+                    self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] [Interfaces] INTERFACE name=\(iface.name) type=\(self.interfaceTypeKey(iface.type)) raw=\(iface.type)")
                 }
             }
         }

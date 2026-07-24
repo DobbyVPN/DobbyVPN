@@ -1,6 +1,5 @@
 import app
 import NetworkExtension
-import Sentry
 import Foundation
 import SystemConfiguration
 import MyLibrary
@@ -24,7 +23,6 @@ public class VpnManagerImpl: VpnManager {
     public let supportsVpnNetworkReadySignal: Bool = true
 
     init(connectionRepository: ConnectionStateRepository) {
-//        VpnManagerImpl.startSentry()
         self.connectionRepository = connectionRepository
         getOrCreateManager { [weak self] manager, _ in
             guard let self else { return }
@@ -356,28 +354,5 @@ public class VpnManagerImpl: VpnManager {
             return "unknown"
         }
     }
-
-//    static func startSentry() {
-//        SentrySDK.start { options in
-//            options.dsn = "https://1ebacdcb98b5a261d06aeb0216cdafc5@o4509873345265664.ingest.de.sentry.io/4509927590068304"
-//            options.debug = true
-//
-//            options.sendDefaultPii = true
-//
-//            options.tracesSampleRate = 1.0
-//            options.configureProfiling = {
-//                $0.sessionSampleRate = 1.0
-//                $0.lifecycle = .trace
-//            }
-//
-//            options.experimental.enableLogs = true
-//        }
-//
-//        SentrySDK.configureScope { scope in
-//            scope.setTag(value: VpnManagerImpl.launchId, key: "launch_id")
-//        }
-//
-//        SentrySDK.capture(message: "Sentry started, launch_id: \(VpnManagerImpl.launchId)")
-//    }
 
 }

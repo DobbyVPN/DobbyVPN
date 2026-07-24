@@ -8,4 +8,5 @@ enum class ExitCode(val value: Int, val description: String) {
     TUNNEL_START_ERROR(4, "VPN start error"),
     HEALTHCHECK_CONFIG_ERROR(5, "Failed config VPN connection"),
     PROTOCOL_CHECK_FAILED(6, "One or more config profiles failed"),
+    SESSION_VERIFY_FAILED(7, "VPN session verification failed"),
 }

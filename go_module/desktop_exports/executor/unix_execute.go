@@ -29,7 +29,12 @@ func run(port int) {
 	if err != nil {
 		panic(fmt.Sprintf("failed to listen: %v", err))
 	}
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			proto.PanicRecoveryUnaryInterceptor(),
+			proto.ErrorLoggingUnaryInterceptor(),
+		),
+	)
 
 	grpcproto.RegisterVpnServer(s, &proto.Server{})
 

@@ -60,6 +60,22 @@ COMMANDS:
         USAGE:
             ./dobby disconnect
 
+    external-ip
+        Print the current external IP address
+
+        USAGE:
+            ./dobby external-ip
+
+    verify-session
+        Connect, assert the external IP changes through the tunnel, then disconnect
+
+        USAGE:
+            ./dobby verify-session <config_path_or_url>
+
+        ARGS:
+            <config_path_or_url>
+                Path to configuration file. Can be remote file provided via URL.
+
     status
         Show current system/connection status
 
@@ -103,6 +119,16 @@ fun runCliClient(args: Array<String>) {
 
         "disconnect" -> {
             val exitCode = cliClient.disconnect(options)
+            properExit(exitCode)
+        }
+
+        "external-ip" -> {
+            val exitCode = cliClient.externalIp(options)
+            properExit(exitCode)
+        }
+
+        "verify-session" -> {
+            val exitCode = cliClient.verifySession(options)
             properExit(exitCode)
         }
 
