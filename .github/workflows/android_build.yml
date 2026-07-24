@@ -84,7 +84,16 @@ jobs:
             ~/go/bin/gomobile
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-gomobile-${{ steps.android_go.outputs.version }}-${{ hashFiles('go_module/go.sum') }}
+          key: ${{ runner.os }}-gomobile-${{ steps.android_go.outputs.version }}-${{ hashFiles('go_module/go.sum', 'go_module/**/*.go', 'go_module/modules/**') }}
+
+      - name: Cache gomobile Android AAR
+        id: gomobile_aar_cache
+        uses: actions/cache@v4
+        with:
+          path: kmp_module/app/build/generated/gomobile
+          key: gomobile-aar-${{ hashFiles('.go-version', 'go_module/go.sum', 'go_module/**/*.go', 'go_module/modules/**', 'kmp_module/app/build.gradle.kts') }}
+          restore-keys: |
+            gomobile-aar-
 
       - name: Install gomobile
         run: |

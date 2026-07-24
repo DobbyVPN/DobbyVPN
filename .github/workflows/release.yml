@@ -31,6 +31,10 @@ jobs:
     uses: ./.github/workflows/fdroid_check.yml
     secrets: inherit
 
+  fdroid_scan_apk:
+    needs: android_build
+    uses: ./.github/workflows/fdroid_scan_apk.yml
+
   ios_build:
     needs: ios_libs_build
     uses: ./.github/workflows/ios_build.yml

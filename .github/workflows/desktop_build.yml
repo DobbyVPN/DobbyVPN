@@ -62,6 +62,14 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
 
+      - name: Cache Conveyor downloads
+        uses: actions/cache@v4
+        with:
+          path: .conveyor/cache
+          key: conveyor-${{ runner.os }}-${{ hashFiles('kmp_module/conveyor.conf', 'kmp_module/**/*.gradle.kts', 'kmp_module/gradle/libs.versions.toml') }}
+          restore-keys: |
+            conveyor-${{ runner.os }}-
+
       - name: Conveyor build site
         uses: hydraulic-software/conveyor/actions/build@v16.0
         env:
@@ -113,11 +121,6 @@ jobs:
         with:
           name: dobbyVPN-windows.zip
           path: upload/dobbyVPN-windows.zip
-
-      - name: Cleanup Conveyor
-        if: always()
-        run: |
-          rm -rf .conveyor/cache/*
 
       - name: Display file tree with sizes after Windows build
         run: |

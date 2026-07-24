@@ -324,6 +324,37 @@ class CliClient {
         return ExitCode.OK
     }
 
+    private suspend fun connectFirstWorkingProfile(): Boolean {
+        val profiles = profileStore.getProfiles()
+        if (profiles.isEmpty()) {
+            return false
+        }
+
+        for ((index, profile) in profiles.withIndex()) {
+            configsRepository.setActiveConnectionProfileIndex(index)
+            val applied = runCatching {
+                profileApplier.apply(profile)
+            }.getOrElse { false }
+            if (!applied) {
+                continue
+            }
+
+            configsRepository.setTelemetryAttributes(configsProcessor.buildConfigAttributesJson())
+
+            if (!startVpnServiceOnce()) {
+                stopVpnRuntime()
+                continue
+            }
+            if (!awaitHealthCheck(PROFILE_HEALTHCHECK_TIMEOUT_SECONDS)) {
+                stopVpnRuntime()
+                continue
+            }
+            return true
+        }
+
+        return false
+    }
+
     fun verifySession(options: List<String>): ExitCode {
         if (options.size != 1) {
             return ExitCode.INVALID_ARGS
@@ -345,15 +376,9 @@ class CliClient {
             return ExitCode.CONFIG_FORMAT_ERROR
         }
 
-        val okVpn = runBlocking { mainViewModel.startVpnService() }
-        if (!okVpn) {
+        val connected = runBlocking { connectFirstWorkingProfile() }
+        if (!connected) {
             return ExitCode.TUNNEL_START_ERROR
-        }
-
-        val okHC = runBlocking { awaitHealthCheck() }
-        if (!okHC) {
-            stopVpnRuntime()
-            return ExitCode.HEALTHCHECK_CONFIG_ERROR
         }
 
         val tunnelIp = fetchExternalIp()

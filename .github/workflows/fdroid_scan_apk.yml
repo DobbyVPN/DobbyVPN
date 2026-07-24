@@ -1,0 +1,76 @@
+name: F-Droid APK Scan
+
+on:
+  workflow_call:
+
+jobs:
+  scan-apk:
+    name: Scan APK for proprietary packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: build-tools;36.0.0
+
+      - name: Download unsigned APK from android_build
+        uses: actions/download-artifact@v4
+        with:
+          name: dobbyvpn-android-unsign.apk
+          path: apk
+
+      - name: Scan for proprietary packages
+        run: |
+          BLOCKED=(
+            "com.google.firebase"
+            "com.google.android.gms"
+            "com.google.gms"
+            "com.google.android.play"
+            "com.google.android.libraries"
+            "com.google.mlkit"
+            "com.google.android.recaptcha"
+            "com.google.android.ump"
+            "com.google.ads"
+            "com.crashlytics"
+            "io.fabric"
+            "com.amplitude"
+            "com.mixpanel"
+            "com.appsflyer"
+            "com.adjust.sdk"
+            "com.flurry"
+            "com.facebook.android"
+            "com.unity3d.ads"
+            "com.applovin"
+            "com.chartboost"
+            "com.vungle"
+            "com.ironsource"
+            "com.adcolony"
+            "com.startapp"
+          )
+
+          APK=$(find apk -name '*.apk' -type f | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "::error::Unsigned APK artifact was not found"
+            exit 1
+          fi
+
+          PACKAGES=$(apkanalyzer dex packages "$APK" 2>/dev/null | awk '{print $NF}')
+
+          FOUND=0
+          for p in "${BLOCKED[@]}"; do
+            if echo "$PACKAGES" | grep -q "^${p}"; then
+              echo "::error::Proprietary package in APK: $p"
+              FOUND=1
+            fi
+          done
+
+          if [ "$FOUND" -eq 1 ]; then
+            exit 1
+          fi
+          echo "No proprietary packages found in APK"

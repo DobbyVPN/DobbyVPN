@@ -144,7 +144,17 @@ jobs:
           xcodebuild -resolvePackageDependencies \
             -project swift_module/iosApp.xcodeproj
 
+      - name: Cache KMP iOS release framework
+        id: kmp_ios_framework_cache
+        uses: actions/cache@v4
+        with:
+          path: kmp_module/app/build/bin/iosArm64/releaseFramework
+          key: kmp-ios-framework-${{ hashFiles('kmp_module/app/**', 'kmp_module/grpcstub/**', 'kmp_module/grpcprotos/**', 'kmp_module/gradle/libs.versions.toml') }}
+          restore-keys: |
+            kmp-ios-framework-
+
       - name: Build KMP iOS framework
+        if: steps.kmp_ios_framework_cache.outputs.cache-hit != 'true'
         working-directory: kmp_module
         run: |
           VERSION_NAME="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
