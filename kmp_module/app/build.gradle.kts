@@ -151,6 +151,10 @@ kotlin {
             implementation(compose.components.resources)
         }
 
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+        }
+
         jvmMain.dependencies {
             implementation(project(":grpcstub"))
             runtimeOnly(libs.grpc.netty)
@@ -165,6 +169,11 @@ kotlin {
             implementation(libs.jna)
             implementation(libs.gson)
             implementation(libs.ktor.client.cio)
+        }
+
+        androidUnitTest.dependencies {
+            implementation(kotlin("test-junit"))
+            implementation(libs.junit)
         }
 
         iosMain.dependencies {

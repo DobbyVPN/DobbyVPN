@@ -16,6 +16,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  verification:
+    uses: ./.github/workflows/test.yml
+
   # Marketing version (x.y.z) is manual via the repo VERSION file.
   prepare_version:
     runs-on: ubuntu-latest
@@ -46,12 +49,13 @@ jobs:
           echo "Marketing version ${major}.${minor}.${patch} (from VERSION file)"
 
   desktop_libs_build:
+    needs: verification
     uses: ./.github/workflows/desktop_libs_generate.yml
     secrets: inherit
 
   ios_libs_build:
     if: github.event_name != 'pull_request'
-    needs: prepare_version
+    needs: [verification, prepare_version]
     uses: ./.github/workflows/ios_libs_generate.yml
     with:
       app_major_version: ${{ needs.prepare_version.outputs.major }}
@@ -60,7 +64,7 @@ jobs:
     secrets: inherit
 
   android_build:
-    needs: prepare_version
+    needs: [verification, prepare_version]
     uses: ./.github/workflows/android_build.yml
     with:
       app_major_version: ${{ needs.prepare_version.outputs.major }}
@@ -69,6 +73,7 @@ jobs:
     secrets: inherit
 
   fdroid_check:
+    needs: verification
     uses: ./.github/workflows/fdroid_check.yml
     secrets: inherit
 

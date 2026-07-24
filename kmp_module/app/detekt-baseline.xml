@@ -1,0 +1,140 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues></ManuallySuppressedIssues>
+  <CurrentIssues>
+    <ID>ComplexCondition:CloakTomlApplier.kt$CloakTomlApplier$transport.isEmpty() || encryptionMethod.isEmpty() || uid.isEmpty() || publicKey.isEmpty() || serverName.isEmpty() || remoteHost.isEmpty() || remotePort.isEmpty()</ID>
+    <ID>ConstructorParameterNaming:AirportsManager.kt$AirportsManager.Airport$val latitude_deg: Double</ID>
+    <ID>ConstructorParameterNaming:AirportsManager.kt$AirportsManager.Airport$val longitude_deg: Double</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$CloakClientConfig$val BrowserSig: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$CloakClientConfig$val CDNOriginHost: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$CloakClientConfig$val EncryptionMethod: String</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$CloakClientConfig$val NumConn: Int</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$CloakClientConfig$val ProxyMethod: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$CloakClientConfig$val PublicKey: String</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$CloakClientConfig$val RemoteHost: String</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$CloakClientConfig$val RemotePort: String</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$CloakClientConfig$val ServerName: String</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$CloakClientConfig$val StreamTimeout: Int? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$CloakClientConfig$val Transport: String</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$CloakClientConfig$val UID: String</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$CloakClientConfig$var CDNWsUrlPath: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$ExcludeIPsConfig$val IPs: List&lt;String&gt;</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val BrowserSig: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val CDNOriginHost: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val CDNWsUrlPath: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val Cloak: Boolean? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val Description: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val DisguisePrefix: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val EncryptionMethod: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val Method: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val NumConn: Int? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val Password: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val Port: Int? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val ProxyMethod: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val PublicKey: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val RemoteHost: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val RemotePort: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val Server: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val ServerName: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val StreamTimeout: Int? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val Transport: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val UID: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val WebSocket: Boolean? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$OutlineConfig$val WebSocketPath: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TelemetryConfig$val ApiToken: String</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TelemetryConfig$val Endpoint: String</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TomlConfigs$val Description: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TomlConfigs$val ExcludeIPs: ExcludeIPsConfig? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TomlConfigs$val Outline: List&lt;OutlineConfig&gt; = emptyList()</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TomlConfigs$val Telemetry: TelemetryConfig? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TomlConfigs$val TrustTunnel: List&lt;TrustTunnelConfig&gt; = emptyList()</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TomlConfigs$val Xray: List&lt;XrayClientConfig&gt; = emptyList()</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TrustTunnelConfig$val killswitch_allow_ports: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TrustTunnelConfig$val killswitch_enabled: Boolean? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TrustTunnelConfig$val post_quantum_group_enabled: Boolean? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TrustTunnelConfig$val vpn_mode: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TrustTunnelEndpointConfig$val anti_dpi: Boolean? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TrustTunnelEndpointConfig$val client_random: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TrustTunnelEndpointConfig$val custom_sni: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TrustTunnelEndpointConfig$val dns_upstreams: List&lt;String&gt; = emptyList()</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TrustTunnelEndpointConfig$val skip_verification: Boolean? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$TrustTunnelEndpointConfig$val upstream_protocol: String? = null</ID>
+    <ID>ConstructorParameterNaming:TomlConfigs.kt$XrayClientConfig$val Description: String? = null</ID>
+    <ID>ConstructorParameterNaming:TrustTunnelTomlApplier.kt$TrustTunnelTomlApplier.NestedEndpoint$val anti_dpi: Boolean? = null</ID>
+    <ID>ConstructorParameterNaming:TrustTunnelTomlApplier.kt$TrustTunnelTomlApplier.NestedEndpoint$val client_random: String? = null</ID>
+    <ID>ConstructorParameterNaming:TrustTunnelTomlApplier.kt$TrustTunnelTomlApplier.NestedEndpoint$val custom_sni: String? = null</ID>
+    <ID>ConstructorParameterNaming:TrustTunnelTomlApplier.kt$TrustTunnelTomlApplier.NestedEndpoint$val dns_upstreams: List&lt;String&gt;? = null</ID>
+    <ID>ConstructorParameterNaming:TrustTunnelTomlApplier.kt$TrustTunnelTomlApplier.NestedEndpoint$val skip_verification: Boolean? = null</ID>
+    <ID>ConstructorParameterNaming:TrustTunnelTomlApplier.kt$TrustTunnelTomlApplier.NestedEndpoint$val upstream_protocol: String? = null</ID>
+    <ID>ConstructorParameterNaming:TrustTunnelTomlApplier.kt$TrustTunnelTomlApplier.NestedTrustTunnelConfig$val killswitch_allow_ports: String? = null</ID>
+    <ID>ConstructorParameterNaming:TrustTunnelTomlApplier.kt$TrustTunnelTomlApplier.NestedTrustTunnelConfig$val killswitch_enabled: Boolean? = null</ID>
+    <ID>ConstructorParameterNaming:TrustTunnelTomlApplier.kt$TrustTunnelTomlApplier.NestedTrustTunnelConfig$val post_quantum_group_enabled: Boolean? = null</ID>
+    <ID>ConstructorParameterNaming:TrustTunnelTomlApplier.kt$TrustTunnelTomlApplier.NestedTrustTunnelConfig$val vpn_mode: String? = null</ID>
+    <ID>CyclomaticComplexMethod:DobbySocksScreen.kt$@Preview @Composable fun DobbySocksScreen( mainViewModel: MainViewModel, logsViewModel: LogsViewModel, modifier: Modifier = Modifier, )</ID>
+    <ID>EmptyDefaultConstructor:AuthenticationSettingsViewModel.kt$AuthenticationSettingsViewModel$()</ID>
+    <ID>FunctionParameterNaming:LogsRepository.kt$LogsRepository$_sentryLogger: SentryLogsRepository</ID>
+    <ID>LongMethod:App.kt$@Composable fun App(modifier: Modifier = Modifier)</ID>
+    <ID>LongMethod:CloakTomlApplier.kt$CloakTomlApplier$fun apply(outline: OutlineConfig, cloakEnabled: Boolean)</ID>
+    <ID>LongMethod:DobbySocksScreen.kt$@Preview @Composable fun DobbySocksScreen( mainViewModel: MainViewModel, logsViewModel: LogsViewModel, modifier: Modifier = Modifier, )</ID>
+    <ID>LongMethod:LogMessageScreen.kt$@Composable fun LogMessageScreen(message: String)</ID>
+    <ID>LongMethod:SettingsScreen.kt$@Composable fun SettingsScreen( modifier: Modifier = Modifier, authenticationSettingsViewModel: AuthenticationSettingsViewModel, settingsViewModel: SettingsViewModel )</ID>
+    <ID>LongParameterList:MainViewModel.kt$MainViewModel$( private val configsRepository: DobbyConfigsRepository, private val connectionStateRepository: ConnectionStateRepository, private val permissionEventsChannel: PermissionEventsChannel, private val vpnManager: VpnManager, private val loggerManager: LoggerManager, private val logger: Logger, private val logsRepository: LogsRepository, private val healthCheckManager: HealthCheckManager, private val configsProcessor: ConfigsProcessor, private val dnsPreflightResolver: DnsPreflightResolver, )</ID>
+    <ID>LongParameterList:MakeNativeModule.kt$( copyLogsInteractor: NativeInjectionFactory&lt;CopyLogsInteractor&gt;, logEventsChannel: NativeInjectionFactory&lt;LogEventsChannel&gt;, logsRepository: NativeInjectionFactory&lt;LogsRepository&gt;, configsRepository: NativeInjectionFactory&lt;DobbyConfigsRepository&gt;, connectionStateRepository: NativeInjectionFactory&lt;ConnectionStateRepository&gt;, vpnManager: NativeInjectionFactory&lt;VpnManager&gt;, authenticationManager: NativeInjectionFactory&lt;AuthenticationManager&gt;, healthCheckManager: NativeInjectionFactory&lt;HealthCheckManager&gt;, loggerManager: NativeInjectionFactory&lt;LoggerManager&gt;, dnsPreflightResolver: NativeInjectionFactory&lt;DnsPreflightResolver&gt;, )</ID>
+    <ID>LoopWithTooManyJumpStatements:LocationManager.kt$LocationManager$for</ID>
+    <ID>LoopWithTooManyJumpStatements:XrayTomlApplier.kt$XrayTomlApplier$for</ID>
+    <ID>MagicNumber:LocationManager.kt$LocationManager$0.5</ID>
+    <ID>MagicNumber:LocationManager.kt$LocationManager$1.5</ID>
+    <ID>MagicNumber:LocationManager.kt$LocationManager$1000.0</ID>
+    <ID>MagicNumber:LocationManager.kt$LocationManager$180.0</ID>
+    <ID>MagicNumber:LocationManager.kt$LocationManager$6.0</ID>
+    <ID>MagicNumber:LogsRepository.kt$LogsRepository$10</ID>
+    <ID>MagicNumber:LogsRepository.kt$LogsRepository$1000L</ID>
+    <ID>MagicNumber:LogsRepository.kt$LogsRepository$13</ID>
+    <ID>MagicNumber:LogsRepository.kt$LogsRepository$60L</ID>
+    <ID>MagicNumber:LogsRepository.kt$LogsRepository$7</ID>
+    <ID>MagicNumber:LogsViewModel.kt$LogsViewModel$500L</ID>
+    <ID>MagicNumber:TomlConfigApplier.kt$TomlConfigApplier$5</ID>
+    <ID>MaxLineLength:CloakTomlApplier.kt$CloakTomlApplier$logger.log("Invalid Cloak fields: EncryptionMethod/UID/PublicKey/ServerName/RemoteHost/RemotePort are required. Disabling Cloak.")</ID>
+    <ID>MaxLineLength:OutlineTomlApplier.kt$OutlineTomlApplier$logger.log("Cloak enabled: Outline will connect to local endpoint 127.0.0.1:$DEFAULT_CLOAK_LOCAL_PORT (ignoring Outline.Server/Port)")</ID>
+    <ID>MaxLineLength:TomlConfigApplier.kt$TomlConfigApplier$"headers=$headerCounts parsed={Outline=${root.Outline.size}, Xray=${root.Xray.size}, TrustTunnel=${root.TrustTunnel.size}}"</ID>
+    <ID>NewLineAtEndOfFile:AuthenticationManager.kt$com.dobby.feature.authentication.domain.AuthenticationManager.kt</ID>
+    <ID>NewLineAtEndOfFile:IsPermissionCheckNeeded.kt$com.dobby.feature.main.presentation.IsPermissionCheckNeeded.kt</ID>
+    <ID>NewLineAtEndOfFile:LoadingScreen.kt$com.dobby.feature.authentication.ui.LoadingScreen.kt</ID>
+    <ID>NewLineAtEndOfFile:Screens.kt$com.dobby.navigation.Screens.kt</ID>
+    <ID>NewLineAtEndOfFile:WebViewScreen.kt$com.dobby.feature.authentication.ui.WebViewScreen.kt</ID>
+    <ID>PackageNaming:CloakLibFacade.kt$package com.dobby.feature.vpn_service</ID>
+    <ID>PackageNaming:ExpectResourceCollectors.kt$package kmp_module.app.generated.resources</ID>
+    <ID>PackageNaming:OutlineLibFacade.kt$package com.dobby.feature.vpn_service</ID>
+    <ID>PackageNaming:Res.kt$package kmp_module.app.generated.resources</ID>
+    <ID>PackageNaming:TrustTunnelLibFacade.kt$package com.dobby.feature.vpn_service</ID>
+    <ID>PackageNaming:XrayLibFacade.kt$package com.dobby.feature.vpn_service</ID>
+    <ID>ReturnCount:LocationManager.kt$LocationManager$private suspend fun closeToBorder(currentLocation: AppLocation): Boolean?</ID>
+    <ID>ReturnCount:LocationManager.kt$LocationManager$suspend fun inRedZone(): RedZoneCheckResult</ID>
+    <ID>ReturnCount:XrayTomlApplier.kt$XrayTomlApplier$private fun convertTomlToJson(element: TomlElement): JsonElement</ID>
+    <ID>TooGenericExceptionCaught:MainViewModel.kt$MainViewModel$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:TomlConfigApplier.kt$TomlConfigApplier$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:TrustTunnelTomlApplier.kt$TrustTunnelTomlApplier$e: Exception</ID>
+    <ID>TooGenericExceptionThrown:MainViewModel.kt$MainViewModel$throw RuntimeException(errorMsg)</ID>
+    <ID>TooManyFunctions:DobbyConfigsRepository.kt$DobbyConfigsRepository : DobbyConfigsRepositoryOutlineDobbyConfigsRepositoryCloakDobbyConfigsRepositoryXrayDobbyConfigsRepositoryTrustTunnelDobbyConfigsRepositoryVpn</ID>
+    <ID>TooManyFunctions:DobbyConfigsRepositoryOutline.kt$DobbyConfigsRepositoryOutline</ID>
+    <ID>UnusedImports:DobbySocksScreen.kt$import androidx.compose.ui.text.SpanStyle</ID>
+    <ID>UnusedImports:DobbySocksScreen.kt$import androidx.compose.ui.text.buildAnnotatedString</ID>
+    <ID>UnusedImports:DobbySocksScreen.kt$import androidx.compose.ui.text.font.FontFamily</ID>
+    <ID>UnusedImports:DobbySocksScreen.kt$import androidx.compose.ui.text.withStyle</ID>
+    <ID>UnusedImports:DobbySocksScreen.kt$import com.dobby.util.koinViewModel</ID>
+    <ID>UnusedImports:DobbySocksScreen.kt$import kotlin.math.log</ID>
+    <ID>UnusedImports:LocationManager.kt$import kotlinx.coroutines.MainScope</ID>
+    <ID>UnusedImports:LocationManager.kt$import kotlinx.coroutines.launch</ID>
+    <ID>UnusedImports:LogsRepository.kt$import org.koin.compose.koinInject</ID>
+    <ID>UnusedImports:SettingsScreen.kt$import kotlinx.coroutines.flow.MutableStateFlow</ID>
+    <ID>UnusedImports:SettingsScreen.kt$import kotlinx.coroutines.flow.asStateFlow</ID>
+    <ID>UnusedParameter:ConnectionStateRepository.kt$ServiceStarted$generation: Long = 0L</ID>
+    <ID>WildcardImport:DobbySocksScreen.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:MainViewModel.kt$import com.dobby.feature.main.domain.*</ID>
+    <ID>WildcardImport:MainViewModel.kt$import io.ktor.client.*</ID>
+    <ID>WildcardImport:MainViewModel.kt$import io.ktor.client.request.*</ID>
+    <ID>WildcardImport:MainViewModel.kt$import io.ktor.client.statement.*</ID>
+    <ID>WildcardImport:MakeNativeModule.kt$import com.dobby.feature.main.domain.*</ID>
+    <ID>WildcardImport:TomlConfigApplier.kt$import com.dobby.feature.main.domain.*</ID>
+  </CurrentIssues>
+</SmellBaseline>
