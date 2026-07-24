@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Bump middle version component on each main push (ASC-safe x.y.z).
+  # Bump patch on each main push (ASC-safe x.y.z). Major/minor bumps are manual VERSION edits.
   # Persisted in VERSION (repo file) because GITHUB_TOKEN cannot update Actions variables.
   prepare_version:
     runs-on: ubuntu-latest
@@ -37,7 +37,7 @@ jobs:
         id: bump
         run: |
           set -euo pipefail
-          raw="$(tr -d '[:space:]' < VERSION 2>/dev/null || echo '1.3.0')"
+          raw="$(tr -d '[:space:]' < VERSION 2>/dev/null || echo '1.4.0')"
           IFS=. read -r major minor patch <<< "${raw}"
           major="${major:-1}"
           minor="${minor:-0}"
@@ -45,9 +45,8 @@ jobs:
 
           bumped=false
           if [[ "${{ github.ref }}" == "refs/heads/main" && "${{ github.event_name }}" != "pull_request" ]]; then
-            # Every main commit gets a new marketing-version train: MAJOR.(MINOR+1).0
-            minor=$((minor + 1))
-            patch=0
+            # Every main commit bumps patch only: x.y.z → x.y.(z+1)
+            patch=$((patch + 1))
             bumped=true
             printf '%s.%s.%s\n' "$major" "$minor" "$patch" > VERSION
           fi

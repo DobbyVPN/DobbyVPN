@@ -60,7 +60,7 @@ jobs:
 
       - name: Fastlane bump build and version
         env:
-          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          APPLE_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           bundle exec fastlane ios bump_build_and_version
 

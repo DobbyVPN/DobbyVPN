@@ -15,7 +15,7 @@ inputs:
   attempt_limit:
     description: Max upload attempts
     required: false
-    default: "8"
+    default: "10"
   attempt_delay:
     description: Delay between attempts in milliseconds
     required: false
