@@ -2,6 +2,16 @@ name: Desktop Build
 
 on:
   workflow_call:
+    inputs:
+      app_major_version:
+        type: string
+        required: true
+      app_minor_version:
+        type: string
+        required: true
+      app_maintenance_version:
+        type: string
+        required: true
 
 jobs:
   desktop_build:
@@ -56,9 +66,9 @@ jobs:
         run: |
           python .github/scripts/desktop_build.py app --skip-libs --require-all-services
         env:
-          APP_MAJOR_VERSION: ${{ vars.MAJOR }}
-          APP_MINOR_VERSION: ${{ vars.MINOR }}
-          APP_MAINTENANCE_VERSION: ${{ github.run_number }}
+          APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
+          APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
+          APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
 
@@ -99,25 +109,25 @@ jobs:
           cp "${{ env.WIN_ZIP_FILE }}" upload/dobbyVPN-windows.zip
 
       - name: Upload Debian
-        uses: actions/upload-artifact@v4
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: dobbyVPN-linux.deb
           path: upload/dobbyVPN-linux.deb
 
       - name: Upload zip for macOS aarch64
-        uses: actions/upload-artifact@v4
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: dobbyVPN-macos-aarch64.zip
           path: upload/dobbyVPN-macos-aarch64.zip
 
       - name: Upload zip for macOS amd64
-        uses: actions/upload-artifact@v4
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: dobbyVPN-macos-amd64.zip
           path: upload/dobbyVPN-macos-amd64.zip
 
       - name: Upload Windows zip
-        uses: actions/upload-artifact@v4
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: dobbyVPN-windows.zip
           path: upload/dobbyVPN-windows.zip

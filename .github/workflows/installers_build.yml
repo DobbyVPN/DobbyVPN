@@ -2,6 +2,16 @@ name: Build desktop installers
 
 on:
   workflow_call:
+    inputs:
+      app_major_version:
+        type: string
+        required: true
+      app_minor_version:
+        type: string
+        required: true
+      app_maintenance_version:
+        type: string
+        required: true
 
 jobs:
   build_desktop_installers:
@@ -70,9 +80,9 @@ jobs:
         run: |
           ./build.bat
         env:
-          APP_MAJOR_VERSION: ${{ vars.MAJOR }}
-          APP_MINOR_VERSION: ${{ vars.MINOR }}
-          APP_MAINTENANCE_VERSION: ${{ github.run_number }}
+          APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
+          APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
+          APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
 
@@ -88,38 +98,43 @@ jobs:
         run: |
           sh build.sh
         env:
-          APP_MAJOR_VERSION: ${{ vars.MAJOR }}
-          APP_MINOR_VERSION: ${{ vars.MINOR }}
-          APP_MAINTENANCE_VERSION: ${{ github.run_number }}
+          APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
+          APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
+          APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Upload Windows x86 installer
-        uses: actions/upload-artifact@v4
+        if: matrix.os == 'windows'
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: dobbyVPN-windows-x86.msi
           path: installer/windows/bin/x86/dobbyVPN-windows-x86.msi
 
       - name: Upload Windows amd64 installer
-        uses: actions/upload-artifact@v4
+        if: matrix.os == 'windows'
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: dobbyVPN-windows-amd64.msi
           path: installer/windows/bin/amd64/dobbyVPN-windows-amd64.msi
 
       - name: Upload Windows arm64 installer
-        uses: actions/upload-artifact@v4
+        if: matrix.os == 'windows'
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: dobbyVPN-windows-arm64.msi
           path: installer/windows/bin/arm64/dobbyVPN-windows-arm64.msi
 
       - name: Upload MacOS amd64 installer
-        uses: actions/upload-artifact@v4
+        if: matrix.os == 'macos'
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: dobbyVPN-macos-amd64.pkg
           path: installer/macos/bin/amd64/dobbyVPN-macos-amd64.pkg
 
       - name: Upload MacOS aarch64 installer
-        uses: actions/upload-artifact@v4
+        if: matrix.os == 'macos'
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: dobbyVPN-macos-aarch64.pkg
           path: installer/macos/bin/aarch64/dobbyVPN-macos-aarch64.pkg

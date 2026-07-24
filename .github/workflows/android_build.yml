@@ -2,15 +2,24 @@ name: Android Build
 
 on:
   workflow_call:
+    inputs:
+      app_major_version:
+        type: string
+        required: true
+      app_minor_version:
+        type: string
+        required: true
+      app_maintenance_version:
+        type: string
+        required: true
 
 jobs:
   android_build:
     runs-on: ubuntu-latest
     env:
-      APP_MAJOR_VERSION: ${{ vars.MAJOR }}
-      APP_MINOR_VERSION: ${{ vars.MINOR }}
-      # Patch = run_number so store versionName matches iOS/desktop release trains.
-      APP_MAINTENANCE_VERSION: ${{ github.run_number }}
+      APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
+      APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
+      APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
       GITHUB_SHA: ${{ github.sha }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       FDROID_COMPAT_SOURCE_ROOT: /home/vagrant/build/com.dobby.vpn
@@ -127,13 +136,13 @@ jobs:
           KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
 
       - name: Upload signed APK
-        uses: actions/upload-artifact@v4
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: dobbyvpn-android-sign.apk
-          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ github.run_number }}-sign.apk
+          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-sign.apk
 
       - name: Upload unsigned APK
-        uses: actions/upload-artifact@v4
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: dobbyvpn-android-unsign.apk
-          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ vars.MAJOR }}.${{ vars.MINOR }}.${{ github.run_number }}-unsign.apk
+          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk

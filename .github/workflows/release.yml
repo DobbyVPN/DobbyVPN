@@ -12,20 +12,90 @@ on:
 
 concurrency:
   group: release-${{ github.ref }}
+  # Serialize main releases so VERSION bumps cannot race; cancel only PR runs.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Bump middle version component on each main push (ASC-safe x.y.z).
+  # Persisted in VERSION (repo file) because GITHUB_TOKEN cannot update Actions variables.
+  prepare_version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      major: ${{ steps.bump.outputs.major }}
+      minor: ${{ steps.bump.outputs.minor }}
+      maintenance: ${{ steps.bump.outputs.maintenance }}
+      version_name: ${{ steps.bump.outputs.version_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need a token that can push VERSION on main.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve and bump VERSION
+        id: bump
+        run: |
+          set -euo pipefail
+          raw="$(tr -d '[:space:]' < VERSION 2>/dev/null || echo '1.3.0')"
+          IFS=. read -r major minor patch <<< "${raw}"
+          major="${major:-1}"
+          minor="${minor:-0}"
+          patch="${patch:-0}"
+
+          bumped=false
+          if [[ "${{ github.ref }}" == "refs/heads/main" && "${{ github.event_name }}" != "pull_request" ]]; then
+            # Every main commit gets a new marketing-version train: MAJOR.(MINOR+1).0
+            minor=$((minor + 1))
+            patch=0
+            bumped=true
+            printf '%s.%s.%s\n' "$major" "$minor" "$patch" > VERSION
+          fi
+
+          {
+            echo "major=$major"
+            echo "minor=$minor"
+            echo "maintenance=$patch"
+            echo "version_name=${major}.${minor}.${patch}"
+            echo "bumped=$bumped"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved version ${major}.${minor}.${patch} (bumped=${bumped})"
+
+      - name: Persist VERSION bump on main
+        if: steps.bump.outputs.bumped == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION
+          if git diff --staged --quiet; then
+            echo "VERSION unchanged"
+            exit 0
+          fi
+          git commit -m "chore: bump VERSION to ${{ steps.bump.outputs.version_name }} [skip ci]"
+          git push
+
   desktop_libs_build:
     uses: ./.github/workflows/desktop_libs_generate.yml
     secrets: inherit
 
   ios_libs_build:
     if: github.event_name != 'pull_request'
+    needs: prepare_version
     uses: ./.github/workflows/ios_libs_generate.yml
+    with:
+      app_major_version: ${{ needs.prepare_version.outputs.major }}
+      app_minor_version: ${{ needs.prepare_version.outputs.minor }}
+      app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
     secrets: inherit
 
   android_build:
+    needs: prepare_version
     uses: ./.github/workflows/android_build.yml
+    with:
+      app_major_version: ${{ needs.prepare_version.outputs.major }}
+      app_minor_version: ${{ needs.prepare_version.outputs.minor }}
+      app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
     secrets: inherit
 
   fdroid_check:
@@ -38,13 +108,21 @@ jobs:
 
   ios_build:
     if: github.event_name != 'pull_request'
-    needs: ios_libs_build
+    needs: [prepare_version, ios_libs_build]
     uses: ./.github/workflows/ios_build.yml
+    with:
+      app_major_version: ${{ needs.prepare_version.outputs.major }}
+      app_minor_version: ${{ needs.prepare_version.outputs.minor }}
+      app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
     secrets: inherit
 
   desktop_build:
-    needs: desktop_libs_build
+    needs: [prepare_version, desktop_libs_build]
     uses: ./.github/workflows/desktop_build.yml
+    with:
+      app_major_version: ${{ needs.prepare_version.outputs.major }}
+      app_minor_version: ${{ needs.prepare_version.outputs.minor }}
+      app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
     secrets: inherit
 
   desktop_cli_tests:
@@ -54,20 +132,23 @@ jobs:
 
   installers_build:
     if: github.event_name != 'pull_request'
-    needs: desktop_cli_tests
+    needs: [prepare_version, desktop_cli_tests]
     uses: ./.github/workflows/installers_build.yml
+    with:
+      app_major_version: ${{ needs.prepare_version.outputs.major }}
+      app_minor_version: ${{ needs.prepare_version.outputs.minor }}
+      app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
     secrets: inherit
 
   release:
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    needs: [installers_build, android_build, ios_build]
+    needs: [prepare_version, installers_build, android_build, ios_build]
     permissions: write-all
     env:
-      APP_MAJOR_VERSION: ${{ vars.MAJOR }}
-      APP_MINOR_VERSION: ${{ vars.MINOR }}
-      # Patch = run_number: unique GitHub Release tag / F-Droid version.txt per CI run.
-      APP_MAINTENANCE_VERSION: ${{ github.run_number }}
+      APP_MAJOR_VERSION: ${{ needs.prepare_version.outputs.major }}
+      APP_MINOR_VERSION: ${{ needs.prepare_version.outputs.minor }}
+      APP_MAINTENANCE_VERSION: ${{ needs.prepare_version.outputs.maintenance }}
 
     steps:
       - uses: actions/checkout@v4
@@ -145,4 +226,3 @@ jobs:
           files: release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

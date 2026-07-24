@@ -2,6 +2,16 @@ name: Build iOS VPN Libraries
 
 on:
   workflow_call:
+    inputs:
+      app_major_version:
+        type: string
+        required: true
+      app_minor_version:
+        type: string
+        required: true
+      app_maintenance_version:
+        type: string
+        required: true
 
 jobs:
   build_ios_lib:
@@ -88,9 +98,9 @@ jobs:
   build_ios_app_lib:
     runs-on: macos-15
     env:
-      APP_MAJOR_VERSION: ${{ vars.MAJOR }}
-      APP_MINOR_VERSION: ${{ vars.MINOR }}
-      APP_MAINTENANCE_VERSION: ${{ github.run_number }}
+      APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
+      APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
+      APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
       GITHUB_SHA: ${{ github.sha }}
       GITHUB_REPOSITORY: ${{ github.repository }}
     steps:

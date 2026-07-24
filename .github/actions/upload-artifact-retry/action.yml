@@ -1,0 +1,36 @@
+name: Upload artifact with retry
+description: Wrap actions/upload-artifact@v4 with retries for transient CreateArtifact timeouts.
+
+inputs:
+  name:
+    description: Artifact name
+    required: true
+  path:
+    description: Path to upload
+    required: true
+  if-no-files-found:
+    description: upload-artifact if-no-files-found behavior
+    required: false
+    default: warn
+  attempt_limit:
+    description: Max upload attempts
+    required: false
+    default: "8"
+  attempt_delay:
+    description: Delay between attempts in milliseconds
+    required: false
+    default: "15000"
+
+runs:
+  using: composite
+  steps:
+    - name: Upload artifact (retried)
+      uses: Wandalen/wretry.action@v3.8.0
+      with:
+        action: actions/upload-artifact@v4
+        attempt_limit: ${{ inputs.attempt_limit }}
+        attempt_delay: ${{ inputs.attempt_delay }}
+        with: |
+          name: ${{ inputs.name }}
+          path: ${{ inputs.path }}
+          if-no-files-found: ${{ inputs.if-no-files-found }}

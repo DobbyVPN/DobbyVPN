@@ -2,15 +2,24 @@ name: iOS Build
 
 on:
   workflow_call:
+    inputs:
+      app_major_version:
+        type: string
+        required: true
+      app_minor_version:
+        type: string
+        required: true
+      app_maintenance_version:
+        type: string
+        required: true
 
 jobs:
   ios_build:
     runs-on: macos-15
     env:
-      APP_MAJOR_VERSION: ${{ vars.MAJOR }}
-      APP_MINOR_VERSION: ${{ vars.MINOR }}
-      # Patch = run_number so each main push gets a unique ASC marketing-version train.
-      APP_MAINTENANCE_VERSION: ${{ github.run_number }}
+      APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
+      APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
+      APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
 
     steps:
@@ -76,7 +85,7 @@ jobs:
           bundle exec fastlane ios build_ios
 
       - name: Upload IPA as artifact
-        uses: actions/upload-artifact@v4
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: DobbyVPN.ipa
           path: swift_module/build/ipa/*.ipa
