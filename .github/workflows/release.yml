@@ -20,6 +20,7 @@ jobs:
     secrets: inherit
 
   ios_libs_build:
+    if: github.event_name != 'pull_request'
     uses: ./.github/workflows/ios_libs_generate.yml
     secrets: inherit
 
@@ -36,6 +37,7 @@ jobs:
     uses: ./.github/workflows/fdroid_scan_apk.yml
 
   ios_build:
+    if: github.event_name != 'pull_request'
     needs: ios_libs_build
     uses: ./.github/workflows/ios_build.yml
     secrets: inherit
@@ -51,6 +53,7 @@ jobs:
     secrets: inherit
 
   installers_build:
+    if: github.event_name != 'pull_request'
     needs: desktop_cli_tests
     uses: ./.github/workflows/installers_build.yml
     secrets: inherit
