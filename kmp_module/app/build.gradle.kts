@@ -188,6 +188,7 @@ kotlin {
         androidInstrumentedTest.dependencies {
             implementation(libs.androidx.junit)
             implementation(libs.androidx.test.runner)
+            implementation(libs.androidx.uiautomator)
             implementation(libs.junit)
         }
 

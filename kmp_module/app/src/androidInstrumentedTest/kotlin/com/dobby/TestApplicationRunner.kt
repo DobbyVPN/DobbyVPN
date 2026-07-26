@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.os.Bundle
 import androidx.test.runner.AndroidJUnitRunner
+import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
@@ -17,7 +18,11 @@ import org.koin.dsl.module
 class TestApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        DobbyVpnService.nativePlatformRegistrar = {}
+        DobbyVpnService.nativePlatformRegistrar = if (TestRuntimeOptions.realProfileEnabled) {
+            GoBackendWrapper::registerSessionPlatform
+        } else {
+            {}
+        }
         startKoin {
             modules(module {
                 single { LogEventsChannel() }
@@ -40,12 +45,26 @@ class TestApplication : Application() {
 }
 
 class TestApplicationRunner : AndroidJUnitRunner() {
+    override fun onCreate(arguments: Bundle?) {
+        TestRuntimeOptions.realProfileEnabled = arguments?.getString(REAL_PROFILE_ARGUMENT) == "1"
+        super.onCreate(arguments)
+    }
+
     override fun newApplication(cl: ClassLoader, className: String, context: Context): Application =
         super.newApplication(cl, TestApplication::class.java.name, context)
 
     override fun finish(resultCode: Int, results: Bundle?) {
+        TestRuntimeOptions.realProfileEnabled = false
         DobbyVpnService.resetNativePlatformRegistrar()
         stopKoin()
         super.finish(resultCode, results)
     }
+
+    private companion object {
+        const val REAL_PROFILE_ARGUMENT = "dobby.real_profile"
+    }
+}
+
+private object TestRuntimeOptions {
+    @Volatile var realProfileEnabled: Boolean = false
 }
