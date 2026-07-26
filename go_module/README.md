@@ -50,7 +50,7 @@ go install golang.org/x/mobile/cmd/gomobile@$(go list -m -f '{{.Version}}' golan
 gomobile init
 
 gomobile bind \
-  -target=android/arm64 \
+  -target=android/arm64,android/amd64 \
   -androidapi=26 \
   -tags=static \
   -javapkg=com.dobby.gomobile \
@@ -61,7 +61,16 @@ gomobile bind \
 
 The Gradle `:app` module runs this `gomobile bind` step automatically before
 Android compilation. The generated AAR replaces the previous manual
-`libbackend.so` + JNI bridge.
+`libbackend.so` + JNI bridge. It contains `arm64-v8a` and `x86_64` Go JNI
+libraries; the Android app also packages the matching `libc++_shared.so`
+runtime for both ABIs.
+
+To verify the generated AAR and debug APK ABI payloads locally, run:
+
+```bash
+cd kmp_module
+./gradlew :app:verifyDebugNativeAbiPayloads
+```
 
 ### IOS
 

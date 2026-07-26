@@ -110,7 +110,7 @@ jobs:
 
       - name: Run KMP and Android service tests
         working-directory: kmp_module
-        run: ./gradlew :grpcstub:test :app:jvmTest :app:testDebugUnitTest --stacktrace
+        run: ./gradlew :grpcstub:test :app:jvmTest :app:testDebugUnitTest :app:verifyDebugNativeAbiPayloads --stacktrace
 
   swift:
     name: Swift lifecycle seam tests
