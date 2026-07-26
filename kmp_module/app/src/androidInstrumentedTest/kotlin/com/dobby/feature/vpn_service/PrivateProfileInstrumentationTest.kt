@@ -109,9 +109,12 @@ class PrivateProfileInstrumentationTest {
     }
 
     private fun grantVpnConsentThroughSystemUi() {
-        val consentIntent = VpnService.prepare(context) ?: return
-        context.startActivity(consentIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        if (VpnService.prepare(context) == null) return
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.startActivitySync(
+            Intent(context, VpnConsentTestActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+        val device = UiDevice.getInstance(instrumentation)
         val approval = device.wait(
             Until.findObject(By.res(Pattern.compile(".+:id/button1"))),
             CONSENT_TIMEOUT_MILLIS,

@@ -21,9 +21,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -128,9 +125,12 @@ class DobbyVpnServiceInstrumentationTest {
         get() = requireNotNull(context.getSystemService(ConnectivityManager::class.java))
 
     private fun grantVpnConsentThroughSystemUi() {
-        val consentIntent = VpnService.prepare(context) ?: return
-        context.startActivity(consentIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        if (VpnService.prepare(context) == null) return
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.startActivitySync(
+            Intent(context, VpnConsentTestActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+        val device = UiDevice.getInstance(instrumentation)
         val approval = device.wait(
             Until.findObject(By.res(Pattern.compile(".+:id/button1"))),
             CONSENT_TIMEOUT_MILLIS,
@@ -177,10 +177,11 @@ class DobbyVpnServiceInstrumentationTest {
             found
         }
         try {
-            DatagramSocket().use { socket ->
-                val target = InetAddress.getByName(DOCUMENTATION_ROUTE_ADDRESS)
-                socket.send(DatagramPacket(byteArrayOf(0x44), 1, target, DOCUMENTATION_ROUTE_PORT))
-            }
+            InstrumentationRegistry.getInstrumentation().startActivitySync(
+                Intent(context, VpnConsentTestActivity::class.java)
+                    .setAction(VpnConsentTestActivity.ACTION_SEND_DOCUMENTATION_PACKET)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
             return packet.get(PACKET_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
         } finally {
             // Closing the owner unblocks AutoCloseInputStream.read before the worker is interrupted.
@@ -222,7 +223,6 @@ class DobbyVpnServiceInstrumentationTest {
         const val STABILITY_PACKET_COUNT = 3
         const val MAX_PACKET_SIZE = 32_767
         const val DOCUMENTATION_ROUTE_ADDRESS = "192.0.2.1"
-        const val DOCUMENTATION_ROUTE_PORT = 33_434
         const val IPV4_DESTINATION_OFFSET = 16
         const val IPV4_DESTINATION_END = 20
     }
