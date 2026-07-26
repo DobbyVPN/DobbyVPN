@@ -23,16 +23,29 @@ KMP_DIR = ROOT_DIR / "kmp_module"
 SERVICES_DIR = KMP_DIR / "services"
 TOOLS_DIR = ROOT_DIR / ".local-tools" / "desktop-build"
 
+ANDROID_NDK_VERSION = "27.2.12479018"
 ANDROID_PACKAGES = (
     "platforms;android-35",
     "platforms;android-36",
     "build-tools;36.0.0",
     "platform-tools",
+    f"ndk;{ANDROID_NDK_VERSION}",
 )
 ANDROID_TOOLS_VERSION = "11076708"
 WINTUN_VERSION = "0.14.1"
 TRUSTTUNNEL_LINUX_VERSION = "1.0.0"
 TRUSTTUNNEL_LINUX_ARCHIVE_SHA256 = "515c6993672e35d768477b3cd5c04ee7dfcbeaaeecd5abef5e03c1603486cbfe"
+LLVM_LIBCXX_VERSION = "21.1.8"
+LLVM_LIBCXX_PACKAGES = (
+    (
+        "libc++1_21.1.8~++20251221032922+2078da43e25a-1~exp1~20251221153059.70_amd64.deb",
+        "d9566cd347beb65bf2e0d504fbffc6ca38c29ac2752292cba515891c84ff0bbd",
+    ),
+    (
+        "libc++abi1_21.1.8~++20251221032922+2078da43e25a-1~exp1~20251221153059.70_amd64.deb",
+        "829f02714a9daafac0cc37c81c7d02ae5cb5b63707b524b93e36dcd7e7e5549c",
+    ),
+)
 TRUSTTUNNEL_MACOS_VERSION = "1.0.49"
 TRUSTTUNNEL_MACOS_ARCHIVE_SHA256 = "f2dab732d17a885dcc4c81831fa4b263db250f5bea8a151416b518e936979c64"
 
@@ -403,6 +416,7 @@ def android_packages_installed(sdk_root: Path) -> bool:
         (sdk_root / "platforms" / "android-35").is_dir()
         and (sdk_root / "platforms" / "android-36").is_dir()
         and (sdk_root / "build-tools" / "36.0.0").is_dir()
+        and (sdk_root / "ndk" / ANDROID_NDK_VERSION).is_dir()
     )
 
 
@@ -611,6 +625,76 @@ def install_linux_trusttunnel_bridge(skip_deps: bool) -> None:
     log(f"Staged checksum-pinned TrustTunnel Linux bridge: {staged}")
 
 
+def find_linux_libcxx_runtime() -> Path | None:
+    """Find a workspace-local LLVM runtime suitable for the Linux bridge."""
+
+    candidates = []
+    configured = os.environ.get("DOBBYVPN_LIBCXX_RUNTIME")
+    if configured:
+        candidates.append(Path(configured))
+    candidates.append(TOOLS_DIR / f"llvm-libcxx-{LLVM_LIBCXX_VERSION}")
+    for runtime in candidates:
+        if (runtime / "libc++.so").is_file() and (
+            runtime / "libc++abi.so"
+        ).is_file():
+            return runtime
+    return None
+
+
+def install_linux_libcxx_runtime(skip_deps: bool) -> Path:
+    """Stage pinned local C++ runtimes for linking and execution."""
+
+    runtime = find_linux_libcxx_runtime()
+    if runtime is None:
+        if skip_deps:
+            fail(
+                "LLVM libc++ and libc++abi are required for the Linux "
+                "TrustTunnel bridge"
+            )
+        if not command_exists("dpkg-deb"):
+            fail("dpkg-deb is required to extract workspace-local LLVM runtimes")
+        runtime = TOOLS_DIR / f"llvm-libcxx-{LLVM_LIBCXX_VERSION}"
+        extract_dir = Path(tempfile.mkdtemp(prefix="dobby-libcxx-"))
+        try:
+            for filename, expected_digest in LLVM_LIBCXX_PACKAGES:
+                archive = TOOLS_DIR / "downloads" / filename
+                if not archive.exists():
+                    download(
+                        "https://apt.llvm.org/noble/pool/main/l/"
+                        f"llvm-toolchain-21/{filename}",
+                        archive,
+                    )
+                if hashlib.sha256(archive.read_bytes()).hexdigest() != expected_digest:
+                    fail(f"LLVM runtime archive checksum mismatch: {filename}")
+                run(["dpkg-deb", "-x", str(archive), str(extract_dir)])
+
+            runtime.mkdir(parents=True, exist_ok=True)
+            for library in ("libc++", "libc++abi"):
+                matches = list(extract_dir.rglob(f"{library}.so.1.0"))
+                if len(matches) != 1:
+                    fail(f"LLVM runtime archive did not contain exactly one {library}")
+                for name in (f"{library}.so", f"{library}.so.1"):
+                    shutil.copyfile(matches[0], runtime / name)
+                    (runtime / name).chmod(0o755)
+        finally:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+        runtime = find_linux_libcxx_runtime()
+    if runtime is None:
+        fail("Workspace-local LLVM runtime bootstrap did not produce required files")
+
+    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    for name in ("libc++.so.1", "libc++abi.so.1"):
+        source = runtime / name
+        if not source.exists():
+            fail(f"Workspace-local LLVM runtime is missing {name}")
+        for directory in (GO_MODULE_DIR, SERVICES_DIR):
+            target = directory / name
+            shutil.copyfile(source.resolve(), target)
+            target.chmod(0o755)
+    log("Staged pinned workspace-local libc++ and libc++abi runtimes")
+    return runtime
+
+
 def ensure_build_dependencies(target_platform: str, skip_deps: bool, need_android: bool) -> None:
     install_linux_packages(skip_deps)
     install_go(skip_deps)
@@ -716,6 +800,9 @@ def build_service(
         if target_arch != "amd64":
             fail("The pinned TrustTunnel Linux bridge currently supports amd64 only")
         install_linux_trusttunnel_bridge(skip_deps)
+        linux_libcxx_runtime = install_linux_libcxx_runtime(skip_deps)
+    else:
+        linux_libcxx_runtime = None
     prepare_cloak_internal()
     go_mod_download(run_go_mod_tidy)
 
@@ -733,10 +820,23 @@ def build_service(
             }
         )
         if target_platform == "linux":
-            link_search_path = f"-L{GO_MODULE_DIR}"
+            bridge_search_path = f"-L{GO_MODULE_DIR}"
+            runtime_search_path = f"-L{linux_libcxx_runtime}"
+            # DT_RPATH is intentional here: the pinned bridge has indirect
+            # libc++ dependencies, and DT_RUNPATH is not transitive.
+            origin_runpath = "-Wl,--disable-new-dtags,-rpath,$ORIGIN"
+            retain_runtime_dependencies = "-Wl,--no-as-needed"
             existing_ldflags = env.get("CGO_LDFLAGS", "").strip()
             env["CGO_LDFLAGS"] = " ".join(
-                part for part in (existing_ldflags, link_search_path) if part
+                part
+                for part in (
+                    existing_ldflags,
+                    bridge_search_path,
+                    runtime_search_path,
+                    origin_runpath,
+                    retain_runtime_dependencies,
+                )
+                if part
             )
         run(
             [
