@@ -108,15 +108,11 @@ jobs:
       CONVEYOR_PASSPHRASE: ${{ secrets.CONVEYOR_PASSPHRASE }}
       CONVEYOR_SIGNING_KEY: ${{ secrets.CONVEYOR_SIGNING_KEY }}
 
-  desktop_cli_tests:
-    needs: [desktop_libs_build, desktop_build]
-    uses: ./.github/workflows/desktop_cli_tests.yml
-    secrets:
-      DOBBYVPN_CLI_TEST_CONFIG: ${{ secrets.DOBBYVPN_CLI_TEST_CONFIG }}
-
   installers_build:
     if: github.event_name != 'pull_request'
-    needs: [prepare_version, desktop_cli_tests]
+    # Real-profile and performance qualification is a separate maintainer
+    # release gate; it never exposes private endpoints to public CI.
+    needs: [prepare_version, desktop_build]
     uses: ./.github/workflows/installers_build.yml
     with:
       app_major_version: ${{ needs.prepare_version.outputs.major }}

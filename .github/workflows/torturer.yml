@@ -1,0 +1,19 @@
+name: Torturer
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  public-cross-platform-contract:
+    name: Public cross-platform contract
+    permissions:
+      contents: read
+    uses: DobbyVPN/Torturer/.github/workflows/verify.yml@47272c34d9486f4b9996b65527abc9a9bc8e80a4
+    with:
+      source_repository: ${{ github.event.pull_request.head.repo.full_name }}
+      commit_sha: ${{ github.event.pull_request.head.sha }}
+      pr_number: ${{ format('{0}', github.event.pull_request.number) }}

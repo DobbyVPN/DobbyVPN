@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / "workflows"
 PR_TRIGGER = re.compile(r"^\s{2}pull_request\s*:", re.MULTILINE)
 SECRET = re.compile(r"\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}")
+FULL_SHA = r"[0-9a-f]{40}"
 
 
 def main() -> int:
@@ -33,7 +34,41 @@ def main() -> int:
     release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
     if PR_TRIGGER.search(release):
         violations.append("release.yml: protected release workflow must not run on pull_request")
-    for name in ("android_build.yml", "desktop_build.yml", "ios_build.yml", "desktop_cli_tests.yml"):
+
+    torturer = (WORKFLOWS / "torturer.yml").read_text(encoding="utf-8")
+    if "pull_request_target" in torturer:
+        violations.append("torturer.yml: pull_request_target is forbidden for untrusted candidate execution")
+    if not PR_TRIGGER.search(torturer):
+        violations.append("torturer.yml: public verification must run on pull_request")
+    if SECRET.search(torturer) or "environment:" in torturer:
+        violations.append("torturer.yml: public verification must not consume secrets or environments")
+    if not re.search(
+        rf"uses:\s+DobbyVPN/Torturer/\.github/workflows/verify\.yml@{FULL_SHA}\s*$",
+        torturer,
+        re.MULTILINE,
+    ):
+        violations.append("torturer.yml: reusable Torturer workflow must be pinned to a full commit SHA")
+    for expected_input in (
+        "source_repository: ${{ github.event.pull_request.head.repo.full_name }}",
+        "commit_sha: ${{ github.event.pull_request.head.sha }}",
+        "pr_number: ${{ format('{0}', github.event.pull_request.number) }}",
+    ):
+        if expected_input not in torturer:
+            violations.append(f"torturer.yml: missing immutable candidate input: {expected_input}")
+    if not re.search(r"^permissions:\s*\n\s{2}contents:\s*read\s*$", torturer, re.MULTILINE):
+        violations.append("torturer.yml: top-level permissions must be contents: read only")
+    for legacy in (
+        WORKFLOWS / "desktop_cli_tests.yml",
+        ROOT / "scripts" / "prepare_cli_test_config.py",
+    ):
+        if legacy.exists():
+            violations.append(
+                f"{legacy.relative_to(ROOT)}: private real-profile orchestration must not live in public source"
+            )
+    if "desktop_cli_tests" in release or "DOBBYVPN_CLI_TEST_CONFIG" in release:
+        violations.append("release.yml: legacy private desktop profile workflow reference is forbidden")
+
+    for name in ("android_build.yml", "desktop_build.yml", "ios_build.yml"):
         text = (WORKFLOWS / name).read_text(encoding="utf-8")
         if not re.search(r"^\s{2}workflow_call\s*:", text, re.MULTILINE):
             violations.append(f"{name}: protected workflow must expose only an explicit workflow_call interface")
@@ -56,13 +91,6 @@ def main() -> int:
             )
     if "name: macos_grpcvpnserver-${{ matrix.arch }}" not in desktop_libs:
         violations.append("desktop_libs_generate.yml: macOS service artifact name must include matrix.arch")
-
-    desktop_cli = (WORKFLOWS / "desktop_cli_tests.yml").read_text(encoding="utf-8")
-    if not re.search(
-        r"os:\s*macos-15-intel\s+arch:\s*amd64\s+app_artifact:\s*dobbyVPN-macos-amd64\.zip\s+service_artifact:\s*macos_grpcvpnserver-amd64",
-        desktop_cli,
-    ):
-        violations.append("desktop_cli_tests.yml: Intel macOS lane must use matching amd64 app and service artifacts")
 
     installers = (WORKFLOWS / "installers_build.yml").read_text(encoding="utf-8")
     for arch in ("arm64", "amd64"):
