@@ -38,6 +38,8 @@ WINDOWS_RUNTIME_DLLS = (
     "libgcc_s_seh-1.dll",
     "libstdc++-6.dll",
 )
+WINDOWS_BRIDGE_VERSION = "1.0.0"
+WINDOWS_BRIDGE_ARCHIVE_SHA256 = "9c0d79401c3da26d922e58c5fc3317c75d800598e9cb91a31ce3aebbf71b4668"
 TRUSTTUNNEL_LINUX_VERSION = "1.0.0"
 TRUSTTUNNEL_LINUX_ARCHIVE_SHA256 = "515c6993672e35d768477b3cd5c04ee7dfcbeaaeecd5abef5e03c1603486cbfe"
 LLVM_LIBCXX_VERSION = "21.1.8"
@@ -598,6 +600,46 @@ def stage_windows_runtime_dlls() -> None:
         fail("MinGW runtime DLLs are required for the Windows gRPC VPN service: " + ", ".join(missing))
 
 
+def install_windows_bridge(skip_deps: bool) -> None:
+    """Install and stage the checksum-pinned Windows native bridge."""
+    if host_platform() != "windows":
+        return
+    bridge_dir = GO_MODULE_DIR / "lib" / "windows"
+    bridge_dir.mkdir(parents=True, exist_ok=True)
+    bridge = bridge_dir / "dobby_bridge.dll"
+    if not bridge.exists():
+        if skip_deps:
+            fail("dobby_bridge.dll is required for the Windows gRPC VPN service")
+        archive = TOOLS_DIR / "downloads" / f"dobby_bridge-windows-x86_64-v{WINDOWS_BRIDGE_VERSION}.zip"
+        download(
+            "https://github.com/DobbyVPN/go-go-tunnel/releases/download/"
+            f"v{WINDOWS_BRIDGE_VERSION}/dobby_bridge-windows-x86_64.zip",
+            archive,
+        )
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if digest != WINDOWS_BRIDGE_ARCHIVE_SHA256:
+            fail("Windows native bridge archive checksum mismatch")
+        with zipfile.ZipFile(archive) as zip_file:
+            for member in zip_file.infolist():
+                member_path = Path(member.filename)
+                if member.is_dir() or member_path.is_absolute() or ".." in member_path.parts:
+                    continue
+                if member_path.name not in {
+                    "dobby_bridge.dll",
+                    "dobby_bridge.lib",
+                    "dobby_bridge.a",
+                    "libdobby_bridge.a",
+                }:
+                    continue
+                with zip_file.open(member) as source, open(bridge_dir / member_path.name, "wb") as target:
+                    shutil.copyfileobj(source, target)
+    if not bridge.is_file():
+        fail("Windows native bridge archive did not contain dobby_bridge.dll")
+    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(bridge, SERVICES_DIR / bridge.name)
+    log(f"Staged checksum-pinned Windows native bridge: {bridge.name}")
+
+
 def append_cgo_ldflags(env: dict[str, str], *flags: str) -> None:
     """Append required native linker flags without discarding caller flags."""
     existing = env.get("CGO_LDFLAGS", "").strip()
@@ -831,6 +873,7 @@ def build_service(
         # built public service slice must stage it and MinGW's runtime DLLs.
         install_wintun(skip_deps)
         stage_windows_runtime_dlls()
+        install_windows_bridge(skip_deps)
     if target_platform == "linux":
         if target_arch != "amd64":
             fail("The pinned TrustTunnel Linux bridge currently supports amd64 only")
