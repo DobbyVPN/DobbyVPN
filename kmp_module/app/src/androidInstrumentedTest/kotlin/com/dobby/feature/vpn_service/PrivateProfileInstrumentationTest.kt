@@ -29,6 +29,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.TimeUnit
+import java.util.regex.Pattern
 
 /**
  * Private, owner-injected qualification for a real Android Go session. The host runner streams
@@ -111,7 +112,10 @@ class PrivateProfileInstrumentationTest {
         val consentIntent = VpnService.prepare(context) ?: return
         context.startActivity(consentIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-        val approval = device.wait(Until.findObject(By.res("android", "button1")), CONSENT_TIMEOUT_MILLIS)
+        val approval = device.wait(
+            Until.findObject(By.res(Pattern.compile(".+:id/button1"))),
+            CONSENT_TIMEOUT_MILLIS,
+        )
         assertNotNull("Android VPN consent dialog did not expose its approval button", approval)
         requireNotNull(approval).click()
 

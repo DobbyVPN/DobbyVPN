@@ -27,6 +27,7 @@ import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.regex.Pattern
 
 /**
  * Device coverage for the real Android shell on an API 35 emulator. This suite accepts Android's
@@ -130,7 +131,10 @@ class DobbyVpnServiceInstrumentationTest {
         val consentIntent = VpnService.prepare(context) ?: return
         context.startActivity(consentIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-        val approval = device.wait(Until.findObject(By.res("android", "button1")), CONSENT_TIMEOUT_MILLIS)
+        val approval = device.wait(
+            Until.findObject(By.res(Pattern.compile(".+:id/button1"))),
+            CONSENT_TIMEOUT_MILLIS,
+        )
         assertNotNull("Android VPN consent dialog did not expose its approval button", approval)
         requireNotNull(approval).click()
 
