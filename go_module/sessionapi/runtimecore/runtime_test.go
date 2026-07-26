@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"go_module/core/pkg"
-	"go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v1"
 )
 
 func profile() v1.RuntimeProfile {
@@ -460,7 +460,7 @@ func TestProbeOwnsTemporaryResourcesAndRuntimeDoesNotOverlap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Start(context.Background(), v1.SessionRef{Generation: 3}, profile()); err == nil {
+	if _, overlapErr := r.Start(context.Background(), v1.SessionRef{Generation: 3}, profile()); overlapErr == nil {
 		t.Fatal("overlapping Start succeeded")
 	}
 	_ = lease.Stop(context.Background())

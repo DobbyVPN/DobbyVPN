@@ -92,7 +92,7 @@ func protectFD(fd uintptr, network, address string) error {
 
 	log.Debugf(Category, "[Protect] protect_begin network=%s fd=%d destination_redacted=true protector=%T", network, fd, protector)
 	if err := protector.Protect(fd, network); err != nil {
-		return fmt.Errorf("%w: network=%s destination=%s: %v", ErrSocketProtectionUnavailable, network, address, err)
+		return fmt.Errorf("%w: network=%s destination=%s: %w", ErrSocketProtectionUnavailable, network, address, err)
 	}
 	log.Debugf(Category, "[Protect] protect_end network=%s fd=%d destination=%s protector=%T", network, fd, address, protector)
 	return nil

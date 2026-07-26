@@ -34,7 +34,8 @@ func TestLoopbackTCPDialDoesNotRequireProtection(t *testing.T) {
 	t.Cleanup(func() { protector = original })
 	protector = failingProtector{err: errors.New("must not be called")}
 
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listenConfig := net.ListenConfig{}
+	listener, err := listenConfig.Listen(context.Background(), "tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}

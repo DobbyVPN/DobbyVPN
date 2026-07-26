@@ -49,11 +49,11 @@ func TestLocalLogsRedactURLsCredentialsConfigurationAndMetadata(t *testing.T) {
 	}
 	defer file.Close()
 	handler := &simpleHandler{file: file}
-	if err := handler.Handle(context.Background(), slog.NewRecord(time.Time{}, slog.LevelInfo, "Password=handler-secret", 0)); err != nil {
-		t.Fatal(err)
+	if handleErr := handler.Handle(context.Background(), slog.NewRecord(time.Time{}, slog.LevelInfo, "Password=handler-secret", 0)); handleErr != nil {
+		t.Fatal(handleErr)
 	}
-	if err := file.Sync(); err != nil {
-		t.Fatal(err)
+	if syncErr := file.Sync(); syncErr != nil {
+		t.Fatal(syncErr)
 	}
 	output, err := os.ReadFile(file.Name())
 	if err != nil {

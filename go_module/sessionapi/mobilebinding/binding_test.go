@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v1"
 )
 
 const sensitiveConfig = `[[Outline]]
@@ -100,7 +100,7 @@ func TestOneShotOwnershipRejectsReuseUntilRelease(t *testing.T) {
 	}
 }
 
-type blockingRuntime struct{ done chan struct{} }
+type blockingRuntime struct{}
 
 func (r *blockingRuntime) Probe(context.Context, v1.SessionRef, v1.RuntimeProfile) (v1.ProbeResult, error) {
 	return v1.ProbeResult{}, nil

@@ -185,15 +185,15 @@ func TestAutoSelectionUsesLatencyThenSourceOrderAndEventsAreMonotonic(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again, err := m.Start(context.Background(), id, "start-1", StartTarget{Mode: AutoSelect}); err != nil || again != start {
-		t.Fatalf("idempotent start = %#v %v", again, err)
+	if again, duplicateErr := m.Start(context.Background(), id, "start-1", StartTarget{Mode: AutoSelect}); duplicateErr != nil || again != start {
+		t.Fatalf("idempotent start = %#v %v", again, duplicateErr)
 	}
 	s := waitState(t, m, id, StateConnected)
 	if s.ActiveProfile == nil || s.ActiveProfile.Index != 1 {
 		t.Fatalf("active = %#v", s.ActiveProfile)
 	}
-	if _, err := m.Stop(context.Background(), id, "wrong-generation", start.Generation+1); CodeOf(err) != FailureStaleGeneration {
-		t.Fatalf("stale stop = %v", err)
+	if _, stopErr := m.Stop(context.Background(), id, "wrong-generation", start.Generation+1); CodeOf(stopErr) != FailureStaleGeneration {
+		t.Fatalf("stale stop = %v", stopErr)
 	}
 	events, err := m.Observe(context.Background(), id, 0)
 	if err != nil {
@@ -287,8 +287,8 @@ func TestStopDuringProbePreventsLateConnectedAndAllowsRestartAfterCleanup(t *tes
 	case <-time.After(time.Second):
 		t.Fatal("probe did not start")
 	}
-	if _, err := m.Stop(context.Background(), id, "stop-1", first.Generation); err != nil {
-		t.Fatal(err)
+	if _, stopErr := m.Stop(context.Background(), id, "stop-1", first.Generation); stopErr != nil {
+		t.Fatal(stopErr)
 	}
 	waitState(t, m, id, StateIdle)
 	close(r.blockProbe)
@@ -348,8 +348,8 @@ func TestRuntimeOwnedHealthFailureCleansUpBeforeAutoFailover(t *testing.T) {
 		NormalizedFormat: ConfigTransportURL,
 		NormalizedConfig: []byte("ss://normalized"),
 	}
-	if _, err := m.ConfigureCompatibilityProfile(context.Background(), id, "configure", profile); err != nil {
-		t.Fatal(err)
+	if _, configureErr := m.ConfigureCompatibilityProfile(context.Background(), id, "configure", profile); configureErr != nil {
+		t.Fatal(configureErr)
 	}
 	first, err := m.Start(context.Background(), id, "start", StartTarget{Mode: ProfileIndex, Index: 0})
 	if err != nil {
@@ -537,8 +537,7 @@ func (r *fakeRuntime) Probe(ctx context.Context, _ SessionRef, p RuntimeProfile)
 		select {
 		case r.probeEntered <- struct{}{}:
 		default:
-			{
-			}
+			// A notification is already pending.
 		}
 	}
 	if r.blockProbe != nil {

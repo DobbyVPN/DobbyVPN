@@ -8,7 +8,7 @@ import (
 	"errors"
 
 	"go_module/grpcproto"
-	"go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v1"
 )
 
 func Protocol(protocol v1.Protocol) grpcproto.SessionProtocol {

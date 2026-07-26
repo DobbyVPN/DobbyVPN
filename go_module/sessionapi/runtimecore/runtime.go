@@ -15,7 +15,7 @@ import (
 	"go_module/dnscache"
 	"go_module/healthcheck"
 	"go_module/log"
-	"go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v1"
 	"go_module/tunnel"
 )
 
@@ -249,9 +249,9 @@ func (r *runtime) startLocked(ctx context.Context, ref v1.SessionRef, profile v1
 	owned.push(inputs.Release)
 
 	if profile.Summary.Protocol == v1.ProtocolOutline && outlineUsesCloak(profile.RawTOML) {
-		stop, err := r.options.StartCloak(ctx, ref, profile.RawTOML)
-		if err != nil {
-			return fail(fmt.Errorf("start Cloak for Outline: %w", err))
+		stop, cloakErr := r.options.StartCloak(ctx, ref, profile.RawTOML)
+		if cloakErr != nil {
+			return fail(fmt.Errorf("start Cloak for Outline: %w", cloakErr))
 		}
 		if stop == nil {
 			return fail(errors.New("start Cloak returned nil stop operation"))
@@ -263,8 +263,8 @@ func (r *runtime) startLocked(ctx context.Context, ref v1.SessionRef, profile v1
 		if r.options.Tunnel == nil {
 			return nil // desktop protocol devices use their existing routing path.
 		}
-		if err := r.options.Tunnel.ProtectSocket(protectCtx, ref, fd); err != nil {
-			return fmt.Errorf("protect socket for session generation %d: %w", ref.Generation, err)
+		if protectErr := r.options.Tunnel.ProtectSocket(protectCtx, ref, fd); protectErr != nil {
+			return fmt.Errorf("protect socket for session generation %d: %w", ref.Generation, protectErr)
 		}
 		return nil
 	}

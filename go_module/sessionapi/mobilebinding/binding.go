@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"math"
 
-	"go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v1"
 )
 
 // PlatformCallbacks is implemented by the Android service or iOS extension
@@ -40,11 +40,13 @@ type managerAPI interface {
 // It contains no configuration cache or VPN lifecycle state of its own.
 type Binding struct {
 	manager  managerAPI
-	platform platformControl
+	platform platformControl //nolint:unused // Used by the android/ios platform adapter build.
 }
 
 // platformControl keeps native adapter mechanics out of the public binding
 // surface while allowing mobile-tag files to install their one process bridge.
+//
+//nolint:unused // Implementations and calls are compiled only for android/ios.
 type platformControl interface {
 	setCallbacks(PlatformCallbacks)
 	queue(string, int32) error
@@ -153,7 +155,7 @@ func (b *Binding) Destroy(sessionID string) string {
 	return success(struct{}{})
 }
 
-func generationAsInt64(value uint64) (int64, bool) {
+func generationAsInt64(value uint64) (int64, bool) { //nolint:unparam // Mobile-tagged callers consume the validity result.
 	if value > math.MaxInt64 {
 		return 0, false
 	}
@@ -224,7 +226,11 @@ func capabilitiesDTO(in v1.Capabilities) capabilitiesResultDTO {
 	return out
 }
 func profileResultDTO(in v1.ProfileSummary) profileDTO {
-	return profileDTO{Index: int32(in.Index), Protocol: string(in.Protocol), Description: in.Description}
+	index := int32(-1)
+	if in.Index >= 0 && in.Index <= math.MaxInt32 {
+		index = int32(in.Index) // #nosec G115 -- bounds checked immediately above.
+	}
+	return profileDTO{Index: index, Protocol: string(in.Protocol), Description: in.Description}
 }
 func profileResultPtr(in *v1.ProfileSummary) *profileDTO {
 	if in == nil {

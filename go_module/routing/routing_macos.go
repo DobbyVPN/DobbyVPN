@@ -94,7 +94,7 @@ func isLoopbackIP(ip string) bool {
 	return parsed != nil && parsed.IsLoopback()
 }
 
-var ipv6DefaultSubnets = []string{"::/1", "8000::/1"}
+var ipv6DefaultSubnets = []string{ipv6LowerHalf, ipv6UpperHalf}
 
 func StartRouting(proxyIP, gatewayIP, tunName string) error {
 	_ = proxyIP

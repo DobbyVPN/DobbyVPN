@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"go_module/grpcproto"
-	"go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v1"
 )
 
 func TestMappingsCoverPublicDomainValues(t *testing.T) {
@@ -50,8 +50,8 @@ func TestManagerConfigureReceivesExactRawBytesAndKeepsOrderedEvents(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if duplicate, err := m.Start(context.Background(), id, "start", v1.StartTarget{Mode: v1.ProfileIndex, Index: 0}); err != nil || duplicate.Generation != started.Generation {
-		t.Fatalf("duplicate start = %#v, %v", duplicate, err)
+	if duplicate, duplicateErr := m.Start(context.Background(), id, "start", v1.StartTarget{Mode: v1.ProfileIndex, Index: 0}); duplicateErr != nil || duplicate.Generation != started.Generation {
+		t.Fatalf("duplicate start = %#v, %v", duplicate, duplicateErr)
 	}
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -61,8 +61,8 @@ func TestManagerConfigureReceivesExactRawBytesAndKeepsOrderedEvents(t *testing.T
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if _, err := m.Stop(context.Background(), id, "stale", started.Generation+1); v1.CodeOf(err) != v1.FailureStaleGeneration {
-		t.Fatalf("stale generation = %v", err)
+	if _, stopErr := m.Stop(context.Background(), id, "stale", started.Generation+1); v1.CodeOf(stopErr) != v1.FailureStaleGeneration {
+		t.Fatalf("stale generation = %v", stopErr)
 	}
 	observed, err := m.Observe(context.Background(), id, 0)
 	if err != nil {

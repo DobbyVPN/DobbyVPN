@@ -271,24 +271,29 @@ func preflightHosts(protocol Protocol, block map[string]interface{}) []string {
 	case ProtocolTrustTunnel:
 		if endpoint, ok := block["endpoint"].(map[string]interface{}); ok {
 			add(stringValue(endpoint, "hostname"))
-			if addresses, ok := endpoint["addresses"].([]map[string]interface{}); ok {
-				for _, address := range addresses {
-					add(stringValue(address, "address"))
-				}
-			}
-			if addresses, ok := endpoint["addresses"].([]interface{}); ok {
-				for _, address := range addresses {
-					if value, ok := address.(string); ok {
-						add(value)
-					}
-				}
-			}
-			if addresses, ok := endpoint["addresses"].([]string); ok {
-				for _, address := range addresses {
-					add(address)
-				}
-			}
+			addTrustTunnelAddresses(endpoint["addresses"], add)
 		}
+	case ProtocolXray:
+		// Xray endpoint extraction is handled from its normalized JSON form.
 	}
 	return hosts
+}
+
+func addTrustTunnelAddresses(raw any, add func(string)) {
+	switch addresses := raw.(type) {
+	case []map[string]interface{}:
+		for _, address := range addresses {
+			add(stringValue(address, "address"))
+		}
+	case []interface{}:
+		for _, address := range addresses {
+			if value, ok := address.(string); ok {
+				add(value)
+			}
+		}
+	case []string:
+		for _, address := range addresses {
+			add(address)
+		}
+	}
 }

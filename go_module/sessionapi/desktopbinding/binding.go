@@ -5,13 +5,14 @@ package desktopbinding
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"go_module/sessionapi/runtimebridge"
-	"go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v1"
 )
 
 type platform struct{}
@@ -165,6 +166,9 @@ func (c *controller) waitForStarted(ctx context.Context, generation uint64) erro
 			return &v1.Error{Code: code, Message: "legacy start failed"}
 		case v1.StateIdle:
 			return &v1.Error{Code: v1.FailureCanceled, Message: "legacy start stopped before connecting"}
+		case v1.StateDestroyed:
+			return &v1.Error{Code: v1.FailureCanceled, Message: "legacy session was destroyed while starting"}
+		case v1.StateConfigured, v1.StateProbing, v1.StatePreparing, v1.StateStopping:
 		}
 		select {
 		case <-ctx.Done():
@@ -179,7 +183,8 @@ func (c *controller) command(operation string) string {
 func (c *controller) remember(err error) error {
 	if err != nil {
 		c.lastError = "operation failed"
-		if domain, ok := err.(*v1.Error); ok {
+		var domain *v1.Error
+		if errors.As(err, &domain) {
 			c.lastError = domain.Message
 		}
 	}
@@ -191,6 +196,8 @@ func configFormat(protocol v1.Protocol) v1.ConfigFormat {
 		return v1.ConfigTransportURL
 	case v1.ProtocolXray:
 		return v1.ConfigJSON
+	case v1.ProtocolTrustTunnel:
+		return v1.ConfigTOML
 	default:
 		return v1.ConfigTOML
 	}

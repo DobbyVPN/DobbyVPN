@@ -63,7 +63,7 @@ func NewXrayDevice(vlessConfig string) (*XrayDevice, error) {
 func allocateLocalSocksPort() (int, error) {
 	const attempts = 100
 
-	var lastErr error = errors.New("no allocation attempts")
+	lastErr := errors.New("no allocation attempts")
 	listenConfig := net.ListenConfig{}
 	for attempt := 1; attempt <= attempts; attempt++ {
 		// Pick UDP first. On Windows a port can be free for TCP while UDP bind

@@ -116,7 +116,7 @@ func linuxDefaultRouteRestoreCommand(output string) (string, error) {
 // AcquireLinuxIPv6Block uses add, not replace, so pre-existing block routes
 // are preserved. Only routes created by this plan receive a cleanup lease.
 func (p *Plan) AcquireLinuxIPv6Block() error {
-	for _, subnet := range []string{"::/1", "8000::/1"} {
+	for _, subnet := range []string{ipv6LowerHalf, ipv6UpperHalf} {
 		subnet := subnet
 		created := false
 		_, err := p.Acquire("ipv6-block "+subnet, func() error {

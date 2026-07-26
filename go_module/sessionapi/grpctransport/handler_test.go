@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"go_module/grpcproto"
-	"go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v1"
 )
 
 func TestHandlerExactRawBytesOrderedObserveStaleAndIdempotentStart(t *testing.T) {

@@ -43,7 +43,7 @@ type probeEndpointResult struct {
 // dependency where proving the tunnel requires the tunnel's first DNS exchange
 // to have already succeeded. Failures remain best-effort because a platform may
 // still provide working DNS through the tunnel.
-func PreflightTunnelProbeDNS(ctx context.Context) (resolved int, total int) {
+func PreflightTunnelProbeDNS(ctx context.Context) (resolved, total int) {
 	hosts := tunnelProbeHosts(httpProbeURLs)
 	for _, host := range hosts {
 		if err := ctx.Err(); err != nil {
@@ -164,7 +164,7 @@ func MeasureTunnelProbeAverageLatencyMillisWithContext(ctx context.Context, time
 	return avg
 }
 
-func probeEndpoint(parent context.Context, url string, timeout time.Duration) probeEndpointResult {
+func probeEndpoint(parent context.Context, endpointURL string, timeout time.Duration) probeEndpointResult {
 	startedAt := time.Now()
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -181,9 +181,9 @@ func probeEndpoint(parent context.Context, url string, timeout time.Duration) pr
 	}
 	defer client.CloseIdleConnections()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpointURL, http.NoBody)
 	if err != nil {
-		return probeEndpointResult{url: url, err: err}
+		return probeEndpointResult{url: endpointURL, err: err}
 	}
 	req.Close = true
 	req.Header.Set("Cache-Control", "no-store")
@@ -192,7 +192,7 @@ func probeEndpoint(parent context.Context, url string, timeout time.Duration) pr
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return probeEndpointResult{url: url, err: err}
+		return probeEndpointResult{url: endpointURL, err: err}
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -202,14 +202,14 @@ func probeEndpoint(parent context.Context, url string, timeout time.Duration) pr
 
 	_, err = io.ReadAll(io.LimitReader(resp.Body, probeMaxBodyBytes))
 	if err != nil {
-		return probeEndpointResult{url: url, status: resp.StatusCode, err: err}
+		return probeEndpointResult{url: endpointURL, status: resp.StatusCode, err: err}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return probeEndpointResult{url: url, status: resp.StatusCode, err: fmt.Errorf("unexpected status %d", resp.StatusCode)}
+		return probeEndpointResult{url: endpointURL, status: resp.StatusCode, err: fmt.Errorf("unexpected status %d", resp.StatusCode)}
 	}
 
 	result := probeEndpointResult{
-		url:       url,
+		url:       endpointURL,
 		latencyMs: maxInt64(1, time.Since(startedAt).Milliseconds()),
 		status:    resp.StatusCode,
 	}

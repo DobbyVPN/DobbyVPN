@@ -189,20 +189,3 @@ func resolveHostToCIDRs(host string) []*net.IPNet {
 	}
 	return result
 }
-
-func addBypassHost(host string) {
-	cidrs := resolveHostToCIDRs(host)
-	if len(cidrs) == 0 {
-		log.Debugf(Category, "[Bypass] no IPs resolved for %s", host)
-		return
-	}
-
-	routesMu.Lock()
-	defer routesMu.Unlock()
-
-	defaultBypassCIDRs = append(defaultBypassCIDRs, cidrs...)
-
-	for _, c := range cidrs {
-		log.Debugf(Category, "[Bypass] added %s for host %s", c.String(), host)
-	}
-}

@@ -9,7 +9,7 @@ import (
 
 	"go_module/core/pkg"
 	"go_module/sessionapi/runtimecore"
-	"go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v1"
 	"go_module/vpnmanager"
 )
 

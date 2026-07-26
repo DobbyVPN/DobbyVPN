@@ -5,10 +5,11 @@ package grpctransport
 
 import (
 	"context"
+	"math"
 
 	"go_module/grpcproto"
 	"go_module/sessionapi/desktoptransport"
-	"go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v1"
 )
 
 type Handler struct{ Manager *v1.Manager }
@@ -96,8 +97,10 @@ func startTarget(mode grpcproto.SessionStartMode, index int32) (v1.StartTarget, 
 		return v1.StartTarget{Mode: v1.AutoSelect}, nil
 	case grpcproto.SessionStartMode_SESSION_START_MODE_PROFILE_INDEX:
 		return v1.StartTarget{Mode: v1.ProfileIndex, Index: int(index)}, nil
-	default:
+	case grpcproto.SessionStartMode_SESSION_START_MODE_UNSPECIFIED:
 		return v1.StartTarget{}, &v1.Error{Code: v1.FailureInvalidArgument, Message: "start mode must be AUTO_SELECT or PROFILE_INDEX"}
+	default:
+		return v1.StartTarget{}, &v1.Error{Code: v1.FailureInvalidArgument, Message: "unrecognized start mode"}
 	}
 }
 
@@ -109,7 +112,11 @@ func profiles(in []v1.ProfileSummary) []*grpcproto.SessionProfile {
 	return out
 }
 func profile(in v1.ProfileSummary) *grpcproto.SessionProfile {
-	return &grpcproto.SessionProfile{Index: int32(in.Index), Protocol: desktoptransport.Protocol(in.Protocol), Description: in.Description}
+	index := int32(-1)
+	if in.Index >= 0 && in.Index <= math.MaxInt32 {
+		index = int32(in.Index) // #nosec G115 -- bounds checked immediately above.
+	}
+	return &grpcproto.SessionProfile{Index: index, Protocol: desktoptransport.Protocol(in.Protocol), Description: in.Description}
 }
 func warnings(in []v1.Warning) []*grpcproto.SessionWarning {
 	out := make([]*grpcproto.SessionWarning, 0, len(in))

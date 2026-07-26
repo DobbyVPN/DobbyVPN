@@ -15,12 +15,12 @@ import (
 )
 
 func StartRoutingCloak(proxyIP string) error {
-	if gateway, iface, ok := protected_dialer.GetDefaultRoute(); ok {
-		if _, err := routing.EnsureProxyRoute(proxyIP, gateway, iface); err != nil {
-			return fmt.Errorf("failed to add Cloak route for %s via protected route %s/%s: %w", log.MaskStr(proxyIP), gateway, iface, err)
+	if gatewayAddress, iface, ok := protected_dialer.GetDefaultRoute(); ok {
+		if _, err := routing.EnsureProxyRoute(proxyIP, gatewayAddress, iface); err != nil {
+			return fmt.Errorf("failed to add Cloak route for %s via protected route %s/%s: %w", log.MaskStr(proxyIP), gatewayAddress, iface, err)
 		}
 		log.Debugf(Category, "cloak client: installed protected direct route for %s via %s dev %s",
-			log.MaskStr(proxyIP), gateway, iface)
+			log.MaskStr(proxyIP), gatewayAddress, iface)
 		return nil
 	}
 
@@ -28,31 +28,31 @@ func StartRoutingCloak(proxyIP string) error {
 	if err != nil {
 		return fmt.Errorf("failed to discover gateway: %w", err)
 	}
-	gateway := gatewayIP.String()
+	gatewayAddress := gatewayIP.String()
 
-	iface, err := routing.GetDefaultInterfaceNameLinux(gateway)
+	iface, err := routing.GetDefaultInterfaceNameLinux(gatewayAddress)
 	if err != nil {
-		return fmt.Errorf("failed to find uplink interface for gateway %s: %w", gateway, err)
+		return fmt.Errorf("failed to find uplink interface for gateway %s: %w", gatewayAddress, err)
 	}
 
-	if _, err := routing.EnsureProxyRoute(proxyIP, gateway, iface); err != nil {
-		return fmt.Errorf("failed to add specific route for %s via %s dev %s: %w", proxyIP, gateway, iface, err)
+	if _, err := routing.EnsureProxyRoute(proxyIP, gatewayAddress, iface); err != nil {
+		return fmt.Errorf("failed to add specific route for %s via %s dev %s: %w", proxyIP, gatewayAddress, iface, err)
 	}
 
 	log.Debugf(Category, "cloak client: installed direct route for %s via %s dev %s",
-		log.MaskStr(proxyIP), gateway, iface)
+		log.MaskStr(proxyIP), gatewayAddress, iface)
 	return nil
 }
 
 func StopRoutingCloak(proxyIP string) {
-	if gateway, iface, ok := protected_dialer.GetDefaultRoute(); ok {
-		if err := routing.DeleteProxyRoute(proxyIP, gateway, iface); err != nil {
+	if gatewayAddress, iface, ok := protected_dialer.GetDefaultRoute(); ok {
+		if err := routing.DeleteProxyRoute(proxyIP, gatewayAddress, iface); err != nil {
 			log.Debugf(Category, "failed to remove protected specific route for %s via %s dev %s: %v",
-				log.MaskStr(proxyIP), gateway, iface, err)
+				log.MaskStr(proxyIP), gatewayAddress, iface, err)
 			return
 		}
 		log.Debugf(Category, "cloak client: removed protected direct route for %s via %s dev %s",
-			log.MaskStr(proxyIP), gateway, iface)
+			log.MaskStr(proxyIP), gatewayAddress, iface)
 		return
 	}
 
@@ -62,21 +62,21 @@ func StopRoutingCloak(proxyIP string) {
 			log.MaskStr(proxyIP), err)
 		return
 	}
-	gateway := gatewayIP.String()
+	gatewayAddress := gatewayIP.String()
 
-	iface, err := routing.GetDefaultInterfaceNameLinux(gateway)
+	iface, err := routing.GetDefaultInterfaceNameLinux(gatewayAddress)
 	if err != nil {
 		log.Debugf(Category, "failed to find uplink interface while removing specific route for %s via %s: %v",
-			log.MaskStr(proxyIP), gateway, err)
+			log.MaskStr(proxyIP), gatewayAddress, err)
 		return
 	}
 
-	if err := routing.DeleteProxyRoute(proxyIP, gateway, iface); err != nil {
+	if err := routing.DeleteProxyRoute(proxyIP, gatewayAddress, iface); err != nil {
 		log.Debugf(Category, "failed to remove specific route for %s via %s dev %s: %v",
-			log.MaskStr(proxyIP), gateway, iface, err)
+			log.MaskStr(proxyIP), gatewayAddress, iface, err)
 		return
 	}
 
 	log.Debugf(Category, "cloak client: removed direct route for %s via %s dev %s",
-		log.MaskStr(proxyIP), gateway, iface)
+		log.MaskStr(proxyIP), gatewayAddress, iface)
 }

@@ -141,6 +141,8 @@ func (*logrusToSlogHook) Fire(entry *logrus.Entry) error {
 		level = slog.LevelWarn
 	case logrus.InfoLevel:
 		level = slog.LevelInfo
+	case logrus.DebugLevel, logrus.TraceLevel:
+		level = slog.LevelDebug
 	}
 	write(level, "LOGRUS", message, nil)
 	return nil
@@ -285,6 +287,8 @@ func write(level slog.Level, category, message string, arguments map[string]any)
 			lg.infoBuf = append(lg.infoBuf, entry)
 		case slog.LevelWarn:
 			lg.warnBuf = append(lg.warnBuf, entry)
+		case slog.LevelError:
+			lg.errorBuf = append(lg.errorBuf, entry)
 		default:
 			lg.errorBuf = append(lg.errorBuf, entry)
 		}

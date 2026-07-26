@@ -143,7 +143,9 @@ func StopCloakClient() {
 
 	log.Debugf(Category, "Start client disconnected")
 
-	common.Client.Disconnect(Name)
+	if err := common.Client.Disconnect(Name); err != nil {
+		log.Errorf(Category, "Cloak client disconnect failed: %v", err)
+	}
 	client = nil
 
 	log.Debugf(Category, "Client disconnected")

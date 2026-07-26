@@ -574,6 +574,12 @@ def install_wintun(skip_deps: bool) -> None:
     log(f"Installed {target}")
 
 
+def append_cgo_ldflags(env: dict[str, str], *flags: str) -> None:
+    """Append required native linker flags without discarding caller flags."""
+    existing = env.get("CGO_LDFLAGS", "").strip()
+    env["CGO_LDFLAGS"] = " ".join(part for part in (existing, *flags) if part)
+
+
 def install_linux_trusttunnel_bridge(skip_deps: bool) -> None:
     """Stage the checksum-pinned Linux bridge for linking and packaging."""
     if host_platform() != "linux":
@@ -796,6 +802,10 @@ def build_service(
 ) -> None:
     target_arch = arch or default_service_arch(target_platform)
     ensure_build_dependencies(target_platform, skip_deps, need_android=False)
+    if target_platform == "windows":
+        # The service loads Wintun at process startup, so every independently
+        # built public service slice must stage the DLL beside the executable.
+        install_wintun(skip_deps)
     if target_platform == "linux":
         if target_arch != "amd64":
             fail("The pinned TrustTunnel Linux bridge currently supports amd64 only")
@@ -826,18 +836,18 @@ def build_service(
             # libc++ dependencies, and DT_RUNPATH is not transitive.
             origin_runpath = "-Wl,--disable-new-dtags,-rpath,$ORIGIN"
             retain_runtime_dependencies = "-Wl,--no-as-needed"
-            existing_ldflags = env.get("CGO_LDFLAGS", "").strip()
-            env["CGO_LDFLAGS"] = " ".join(
-                part
-                for part in (
-                    existing_ldflags,
-                    bridge_search_path,
-                    runtime_search_path,
-                    origin_runpath,
-                    retain_runtime_dependencies,
-                )
-                if part
+            append_cgo_ldflags(
+                env,
+                bridge_search_path,
+                runtime_search_path,
+                origin_runpath,
+                retain_runtime_dependencies,
             )
+        elif target_platform == "macos":
+            # go-go-tunnel's static bridge contains C++ and uses the macOS
+            # SystemConfiguration APIs. cgo does not infer either dependency
+            # from a static archive.
+            append_cgo_ldflags(env, "-lc++", "-framework", "SystemConfiguration")
         run(
             [
                 "go",

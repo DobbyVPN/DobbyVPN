@@ -31,15 +31,19 @@ func signalInit(initResult chan<- error, err error) {
 	}
 }
 
-func (app *App) Run(ctx context.Context, initResult chan<- error) error {
-	log.Debugf(coreCommon.Category, "[Linux][Init] ===== VPN initialization started =====")
+func (app *App) validateRunInputs() error {
 	if app.ProtocolDevice == nil {
-		err := fmt.Errorf("protocol device is not initialized")
-		signalInit(initResult, err)
-		return err
+		return fmt.Errorf("protocol device is not initialized")
 	}
 	if app.RoutingConfig == nil {
-		err := fmt.Errorf("routing config is not initialized")
+		return fmt.Errorf("routing config is not initialized")
+	}
+	return nil
+}
+
+func (app *App) Run(ctx context.Context, initResult chan<- error) error {
+	log.Debugf(coreCommon.Category, "[Linux][Init] ===== VPN initialization started =====")
+	if err := app.validateRunInputs(); err != nil {
 		signalInit(initResult, err)
 		return err
 	}
@@ -283,5 +287,5 @@ func (app *App) SwitchProtocolDevice(device pkg.ProtocolDevice) error {
 	// A replacement would require a second server bypass lease while the
 	// existing TUN, engine, and routing plan remain live. Refuse it rather than
 	// partially changing a generation or deleting a route we do not own.
-	return fmt.Errorf("Linux protocol hot-switch is unavailable; stop the active session before starting another profile")
+	return fmt.Errorf("linux protocol hot-switch is unavailable; stop the active session before starting another profile")
 }

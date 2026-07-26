@@ -10,6 +10,11 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+const (
+	cloakTransportCDN    = "cdn"
+	cloakTransportDirect = "direct"
+)
+
 // cloakTOML is the compatibility subset embedded in an Outline profile.
 // It deliberately excludes Outline password and transport-url fields.
 type cloakTOML struct {
@@ -65,7 +70,7 @@ func NormalizeCloakProfile(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("parse Outline Cloak TOML: %w", err)
 	}
 	if !source.Cloak {
-		return nil, errors.New("Outline profile does not enable Cloak")
+		return nil, errors.New("outline profile does not enable Cloak")
 	}
 	remoteHost := defaultString(source.RemoteHost, source.Server)
 	remotePort := defaultString(portString(source.RemotePort), defaultString(portString(source.Port), "443"))
@@ -73,20 +78,20 @@ func NormalizeCloakProfile(raw []byte) ([]byte, error) {
 	transport := strings.ToLower(strings.TrimSpace(source.Transport))
 	if transport == "" {
 		if strings.TrimSpace(source.CDNWsURLPath) != "" {
-			transport = "cdn"
+			transport = cloakTransportCDN
 		} else {
-			transport = "direct"
+			transport = cloakTransportDirect
 		}
 	}
-	if transport != "cdn" && transport != "direct" {
-		return nil, errors.New("Cloak transport must be cdn or direct")
+	if transport != cloakTransportCDN && transport != cloakTransportDirect {
+		return nil, errors.New("cloak transport must be cdn or direct")
 	}
 	for _, required := range []struct{ field, value string }{
 		{"EncryptionMethod", source.EncryptionMethod}, {"UID", source.UID}, {"PublicKey", source.PublicKey},
 		{"ServerName", serverName}, {"RemoteHost", remoteHost}, {"RemotePort", remotePort},
 	} {
 		if strings.TrimSpace(required.value) == "" {
-			return nil, fmt.Errorf("Cloak %s is required", required.field)
+			return nil, fmt.Errorf("cloak %s is required", required.field)
 		}
 	}
 	streamTimeout := source.StreamTimeout
@@ -99,7 +104,7 @@ func NormalizeCloakProfile(raw []byte) ([]byte, error) {
 		numConn = *source.NumConn
 	}
 	config := cloakJSON{
-		Transport:        "direct",
+		Transport:        cloakTransportDirect,
 		ProxyMethod:      defaultString(source.ProxyMethod, "shadowsocks"),
 		EncryptionMethod: source.EncryptionMethod,
 		UID:              source.UID,
@@ -111,7 +116,7 @@ func NormalizeCloakProfile(raw []byte) ([]byte, error) {
 		RemoteHost:       remoteHost,
 		RemotePort:       remotePort,
 	}
-	if transport == "cdn" {
+	if transport == cloakTransportCDN {
 		config.Transport = "CDN"
 		config.CDNOriginHost = defaultString(source.CDNOriginHost, source.Server)
 		config.CDNWsURLPath = source.CDNWsURLPath

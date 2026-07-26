@@ -16,7 +16,13 @@ import (
 	"sync"
 )
 
-const APIVersion = "sessionapi/v1"
+const (
+	APIVersion                    = "sessionapi/v1"
+	commandConfigure              = "configure"
+	commandConfigureCompatibility = "configure-compatibility"
+	commandStart                  = "start"
+	commandStop                   = "stop"
+)
 
 // Protocol is intentionally a small stable vocabulary used by all bindings.
 type Protocol string
@@ -298,7 +304,7 @@ func (m *Manager) CreateSession(context.Context) (string, error) {
 	m.mu.Lock()
 	m.sessions[id] = s
 	m.mu.Unlock()
-	go m.publishEvents(s)
+	go m.publishEvents(s) // #nosec G118 -- the publisher intentionally owns the session lifetime, not one request.
 	return id, nil
 }
 
@@ -317,7 +323,7 @@ func (m *Manager) Configure(_ context.Context, sessionID, commandID string, rawC
 		return ConfigureResult{}, failure(FailureNotFound, "session has been destroyed")
 	}
 	if record, ok := s.commands[commandID]; ok {
-		if record.op != "configure" {
+		if record.op != commandConfigure {
 			s.mu.Unlock()
 			return ConfigureResult{}, failure(FailureConflict, "command ID was used by another operation")
 		}
@@ -327,13 +333,13 @@ func (m *Manager) Configure(_ context.Context, sessionID, commandID string, rawC
 	}
 	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping {
 		err := failure(FailureConflict, "cannot configure while a generation is active")
-		s.commands[commandID] = commandRecord{op: "configure", err: err}
+		s.commands[commandID] = commandRecord{op: commandConfigure, err: err}
 		s.mu.Unlock()
 		return ConfigureResult{}, err
 	}
 	parsed, parseErr := parseConfig(rawConfig)
 	if parseErr != nil {
-		s.commands[commandID] = commandRecord{op: "configure", err: parseErr}
+		s.commands[commandID] = commandRecord{op: commandConfigure, err: parseErr}
 		s.lastFailure = CodeOf(parseErr)
 		m.appendLocked(s, Event{State: StateFailed, Failure: CodeOf(parseErr)})
 		s.mu.Unlock()
@@ -342,7 +348,7 @@ func (m *Manager) Configure(_ context.Context, sessionID, commandID string, rawC
 	s.profiles, s.digest, s.warnings, s.configured = parsed.profiles, parsed.digest, parsed.warnings, true
 	s.active, s.lastFailure, s.state, s.cleanupDone = nil, "", StateConfigured, true
 	result := ConfigureResult{Digest: s.digest, Profiles: summaries(s.profiles), Warnings: cloneWarnings(s.warnings)}
-	s.commands[commandID] = commandRecord{op: "configure", config: result}
+	s.commands[commandID] = commandRecord{op: commandConfigure, config: result}
 	m.appendLocked(s, Event{State: StateConfigured})
 	for i := range s.warnings {
 		w := s.warnings[i]
@@ -377,7 +383,7 @@ func (m *Manager) ConfigureCompatibilityProfile(_ context.Context, sessionID, co
 		return ConfigureResult{}, failure(FailureNotFound, "session has been destroyed")
 	}
 	if record, ok := s.commands[commandID]; ok {
-		if record.op != "configure-compatibility" {
+		if record.op != commandConfigureCompatibility {
 			s.mu.Unlock()
 			return ConfigureResult{}, failure(FailureConflict, "command ID was used by another operation")
 		}
@@ -387,7 +393,7 @@ func (m *Manager) ConfigureCompatibilityProfile(_ context.Context, sessionID, co
 	}
 	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || !s.cleanupDone {
 		err := failure(FailureConflict, "cannot configure while a generation is active")
-		s.commands[commandID] = commandRecord{op: "configure-compatibility", err: err}
+		s.commands[commandID] = commandRecord{op: commandConfigureCompatibility, err: err}
 		s.mu.Unlock()
 		return ConfigureResult{}, err
 	}
@@ -399,13 +405,13 @@ func (m *Manager) ConfigureCompatibilityProfile(_ context.Context, sessionID, co
 	s.warnings, s.configured = nil, true
 	s.active, s.lastFailure, s.state, s.cleanupDone = nil, "", StateConfigured, true
 	result := ConfigureResult{Digest: s.digest, Profiles: []ProfileSummary{profile.Summary}}
-	s.commands[commandID] = commandRecord{op: "configure-compatibility", config: result}
+	s.commands[commandID] = commandRecord{op: commandConfigureCompatibility, config: result}
 	m.appendLocked(s, Event{State: StateConfigured})
 	s.mu.Unlock()
 	return cloneConfigure(result), nil
 }
 
-func (m *Manager) Start(_ context.Context, sessionID, commandID string, target StartTarget) (StartResult, error) {
+func (m *Manager) Start(requestCtx context.Context, sessionID, commandID string, target StartTarget) (StartResult, error) {
 	s, err := m.get(sessionID)
 	if err != nil {
 		return StartResult{}, err
@@ -419,7 +425,7 @@ func (m *Manager) Start(_ context.Context, sessionID, commandID string, target S
 		return StartResult{}, failure(FailureNotFound, "session has been destroyed")
 	}
 	if record, ok := s.commands[commandID]; ok {
-		if record.op != "start" {
+		if record.op != commandStart {
 			s.mu.Unlock()
 			return StartResult{}, failure(FailureConflict, "command ID was used by another operation")
 		}
@@ -429,39 +435,39 @@ func (m *Manager) Start(_ context.Context, sessionID, commandID string, target S
 	}
 	if !s.configured {
 		err := failure(FailureNotConfigured, "configure a session before starting it")
-		s.commands[commandID] = commandRecord{op: "start", err: err}
+		s.commands[commandID] = commandRecord{op: commandStart, err: err}
 		s.mu.Unlock()
 		return StartResult{}, err
 	}
 	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || !s.cleanupDone {
 		err := failure(FailureConflict, "previous generation has not completed cleanup")
-		s.commands[commandID] = commandRecord{op: "start", err: err}
+		s.commands[commandID] = commandRecord{op: commandStart, err: err}
 		s.mu.Unlock()
 		return StartResult{}, err
 	}
 	if target.Mode != AutoSelect && target.Mode != ProfileIndex {
 		err := failure(FailureInvalidArgument, "start mode must be AUTO_SELECT or PROFILE_INDEX")
-		s.commands[commandID] = commandRecord{op: "start", err: err}
+		s.commands[commandID] = commandRecord{op: commandStart, err: err}
 		s.mu.Unlock()
 		return StartResult{}, err
 	}
 	if target.Mode == ProfileIndex && (target.Index < 0 || target.Index >= len(s.profiles)) {
 		err := failure(FailureInvalidArgument, "profile index is out of range")
-		s.commands[commandID] = commandRecord{op: "start", err: err}
+		s.commands[commandID] = commandRecord{op: commandStart, err: err}
 		s.mu.Unlock()
 		return StartResult{}, err
 	}
 
 	s.generation++
 	generation := s.generation
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
 	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.active, s.lastFailure = cancel, &ledger{}, make(chan struct{}), false, nil, ""
 	s.state = StateProbing
 	result := StartResult{Generation: generation}
-	s.commands[commandID] = commandRecord{op: "start", start: result}
+	s.commands[commandID] = commandRecord{op: commandStart, start: result}
 	m.appendLocked(s, Event{Generation: generation, State: StateProbing})
 	s.mu.Unlock()
-	go m.runStart(ctx, s, generation, target)
+	go m.runStart(ctx, s, generation, target) // #nosec G118 -- generation work intentionally outlives the initiating request and owns its cancel function.
 	return result, nil
 }
 
@@ -479,23 +485,23 @@ func (m *Manager) Stop(_ context.Context, sessionID, commandID string, generatio
 		return StopResult{}, failure(FailureNotFound, "session has been destroyed")
 	}
 	if record, ok := s.commands[commandID]; ok {
-		if record.op != "stop" {
+		if record.op != commandStop {
 			return StopResult{}, failure(FailureConflict, "command ID was used by another operation")
 		}
 		return record.stop, record.err
 	}
 	if generation != s.generation || generation == 0 {
 		err := failure(FailureStaleGeneration, "generation is not active for this session")
-		s.commands[commandID] = commandRecord{op: "stop", err: err}
+		s.commands[commandID] = commandRecord{op: commandStop, err: err}
 		return StopResult{}, err
 	}
 	if s.state == StateIdle || s.state == StateConfigured || s.state == StateFailed {
 		err := failure(FailureStaleGeneration, "generation is no longer active")
-		s.commands[commandID] = commandRecord{op: "stop", err: err}
+		s.commands[commandID] = commandRecord{op: commandStop, err: err}
 		return StopResult{}, err
 	}
 	result := StopResult{Generation: generation}
-	s.commands[commandID] = commandRecord{op: "stop", stop: result}
+	s.commands[commandID] = commandRecord{op: commandStop, stop: result}
 	if s.state != StateStopping {
 		s.state = StateStopping
 		m.appendLocked(s, Event{Generation: generation, State: StateStopping})
@@ -670,7 +676,7 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 		return
 	}
 	if monitored, ok := runtimeLease.(HealthMonitoringLease); ok {
-		go m.watchRuntimeHealth(s, generation, monitored)
+		go m.watchRuntimeHealth(ctx, s, generation, monitored)
 	}
 }
 
@@ -678,13 +684,13 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 // threshold is reached. ReportHealth retains its public behavior and provides
 // the generation/state fence against a late result from a stopped or destroyed
 // lease.
-func (m *Manager) watchRuntimeHealth(s *session, generation uint64, lease HealthMonitoringLease) {
+func (m *Manager) watchRuntimeHealth(ctx context.Context, s *session, generation uint64, lease HealthMonitoringLease) {
 	failures := lease.HealthFailures()
 	if failures == nil {
 		return
 	}
 	for range failures {
-		_, _ = m.ReportHealth(context.Background(), s.id, generation, false)
+		_, _ = m.ReportHealth(ctx, s.id, generation, false)
 		return
 	}
 }
@@ -914,7 +920,8 @@ func wrapFailure(code FailureCode, err error) error {
 	if err == nil {
 		return nil
 	}
-	if _, ok := err.(*Error); ok {
+	var domain *Error
+	if errors.As(err, &domain) {
 		return err
 	}
 	return failure(code, "operation failed")
