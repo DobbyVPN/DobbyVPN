@@ -30,7 +30,7 @@ class DesktopBuildTests(unittest.TestCase):
             "-L/custom -lc++ -framework SystemConfiguration",
         )
 
-    def test_windows_service_stages_wintun_before_build(self) -> None:
+    def test_windows_service_stages_runtime_dlls_before_build(self) -> None:
         calls: list[str] = []
 
         with (
@@ -40,6 +40,11 @@ class DesktopBuildTests(unittest.TestCase):
                 "install_wintun",
                 side_effect=lambda skip_deps: calls.append(f"wintun:{skip_deps}"),
             ),
+            mock.patch.object(
+                desktop_build,
+                "stage_windows_runtime_dlls",
+                side_effect=lambda: calls.append("mingw-runtime"),
+            ),
             mock.patch.object(desktop_build, "prepare_cloak_internal"),
             mock.patch.object(desktop_build, "go_mod_download"),
             mock.patch.object(desktop_build, "run", side_effect=lambda *args, **kwargs: calls.append("build")),
@@ -48,7 +53,7 @@ class DesktopBuildTests(unittest.TestCase):
         ):
             desktop_build.build_service("windows", "amd64", True, False, False)
 
-        self.assertEqual(calls, ["wintun:True", "build"])
+        self.assertEqual(calls, ["wintun:True", "mingw-runtime", "build"])
 
     def test_macos_service_links_static_bridge_dependencies(self) -> None:
         build_environments: list[dict[str, str]] = []

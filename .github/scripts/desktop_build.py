@@ -33,6 +33,11 @@ ANDROID_PACKAGES = (
 )
 ANDROID_TOOLS_VERSION = "11076708"
 WINTUN_VERSION = "0.14.1"
+WINDOWS_RUNTIME_DLLS = (
+    "libwinpthread-1.dll",
+    "libgcc_s_seh-1.dll",
+    "libstdc++-6.dll",
+)
 TRUSTTUNNEL_LINUX_VERSION = "1.0.0"
 TRUSTTUNNEL_LINUX_ARCHIVE_SHA256 = "515c6993672e35d768477b3cd5c04ee7dfcbeaaeecd5abef5e03c1603486cbfe"
 LLVM_LIBCXX_VERSION = "21.1.8"
@@ -574,6 +579,25 @@ def install_wintun(skip_deps: bool) -> None:
     log(f"Installed {target}")
 
 
+def stage_windows_runtime_dlls() -> None:
+    """Copy MinGW runtime dependencies beside the Windows service executable."""
+    if host_platform() != "windows":
+        return
+    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    missing: list[str] = []
+    for dll_name in WINDOWS_RUNTIME_DLLS:
+        source_name = run_capture(["gcc", f"-print-file-name={dll_name}"])
+        source = Path(source_name) if source_name else Path()
+        if not source.is_file():
+            missing.append(dll_name)
+            continue
+        target = SERVICES_DIR / dll_name
+        shutil.copyfile(source, target)
+        log(f"Staged MinGW runtime DLL: {target.name}")
+    if missing:
+        fail("MinGW runtime DLLs are required for the Windows gRPC VPN service: " + ", ".join(missing))
+
+
 def append_cgo_ldflags(env: dict[str, str], *flags: str) -> None:
     """Append required native linker flags without discarding caller flags."""
     existing = env.get("CGO_LDFLAGS", "").strip()
@@ -804,8 +828,9 @@ def build_service(
     ensure_build_dependencies(target_platform, skip_deps, need_android=False)
     if target_platform == "windows":
         # The service loads Wintun at process startup, so every independently
-        # built public service slice must stage the DLL beside the executable.
+        # built public service slice must stage it and MinGW's runtime DLLs.
         install_wintun(skip_deps)
+        stage_windows_runtime_dlls()
     if target_platform == "linux":
         if target_arch != "amd64":
             fail("The pinned TrustTunnel Linux bridge currently supports amd64 only")
