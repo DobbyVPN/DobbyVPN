@@ -49,7 +49,7 @@ class PrivateProfileInstrumentationTest {
     }
 
     @Test
-    fun owner_injected_profile_proves_external_identity_stability_and_cleanup() = runBlocking {
+    fun owner_injected_profile_proves_external_identity_stability_and_cleanup(): Unit = runBlocking {
         val privateFiles = requirePrivateFiles()
         try {
             grantVpnConsentThroughSystemUi()

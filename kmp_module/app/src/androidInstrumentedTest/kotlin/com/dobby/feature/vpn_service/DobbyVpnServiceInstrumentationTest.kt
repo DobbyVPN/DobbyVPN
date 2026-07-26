@@ -52,7 +52,7 @@ class DobbyVpnServiceInstrumentationTest {
     }
 
     @Test
-    fun foreground_promotion_precedes_platform_ready_callback() = runBlocking {
+    fun foreground_promotion_precedes_platform_ready_callback(): Unit = runBlocking {
         val session = UUID.randomUUID().toString()
         sessionId = session
         DobbyVpnServiceTestEvents.beginCapture()
@@ -66,7 +66,7 @@ class DobbyVpnServiceInstrumentationTest {
     }
 
     @Test
-    fun real_service_rejects_stale_session_and_invalid_socket_protection_without_tun() = runBlocking {
+    fun real_service_rejects_stale_session_and_invalid_socket_protection_without_tun(): Unit = runBlocking {
         val session = UUID.randomUUID().toString()
         sessionId = session
         DobbyVpnServiceTestEvents.beginCapture()
@@ -84,7 +84,7 @@ class DobbyVpnServiceInstrumentationTest {
     }
 
     @Test
-    fun consented_service_establishes_routes_stable_traffic_and_cleans_up() = runBlocking {
+    fun consented_service_establishes_routes_stable_traffic_and_cleans_up(): Unit = runBlocking {
         grantVpnConsentThroughSystemUi()
 
         val session = UUID.randomUUID().toString()
