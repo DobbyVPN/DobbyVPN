@@ -10,6 +10,28 @@ permissions:
   contents: read
 
 jobs:
+  version_metadata:
+    name: Release-version metadata
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    env:
+      PR_TITLE: ${{ github.event.pull_request.title }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Match the PR release label to VERSION
+        run: |
+          set -euo pipefail
+          expected="$(tr -d '[:space:]' < VERSION)"
+          actual="$(printf '%s' "$PR_TITLE" | sed -nE 's/.*v([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')"
+          test -n "$actual" || {
+            echo "PR title must contain a release label such as v${expected}." >&2
+            exit 1
+          }
+          test "$actual" = "$expected" || {
+            echo "PR title declares v${actual}, but VERSION declares v${expected}." >&2
+            exit 1
+          }
+
   workflow-policy:
     name: Workflow secret-isolation policy
     runs-on: ubuntu-24.04
