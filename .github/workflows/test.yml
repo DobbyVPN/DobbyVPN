@@ -180,10 +180,10 @@ jobs:
             CODE_SIGN_IDENTITY=""
 
   swift:
-    name: Swift lifecycle seam tests
+    name: iOS lifecycle and shell policy tests
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Swift lifecycle seam tests
-        run: swift test --package-path swift_module/LifecycleSeamTests
+      - name: Run iOS lifecycle and shell policy tests
+        run: swift test --enable-code-coverage --package-path swift_module/LifecycleSeamTests
