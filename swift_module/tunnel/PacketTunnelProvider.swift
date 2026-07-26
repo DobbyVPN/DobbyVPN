@@ -584,6 +584,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         )
     }
 
+    private func elapsedMs(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
+    }
+
     private func startLoadSampler() {
         stopLoadSampler(reason: "restart")
 
