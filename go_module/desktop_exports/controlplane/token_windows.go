@@ -5,7 +5,6 @@ package controlplane
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -27,7 +26,15 @@ func secureControlTokenFile(path string) error {
 	if err != nil {
 		return err
 	}
-	return exec.Command("icacls", path, "/inheritance:r", "/grant:r", "*S-1-5-18:(F)", "/grant:r", account+":(R,W)").Run()
+	userSID, _, _, err := windows.LookupSID("", account)
+	if err != nil {
+		return fmt.Errorf("resolve installed-user SID: %w", err)
+	}
+	systemSID, err := windows.StringToSid("S-1-5-18")
+	if err != nil {
+		return err
+	}
+	return setExactACL(path, []*windows.SID{systemSID, userSID}, windows.GENERIC_READ|windows.GENERIC_WRITE)
 }
 
 // SecureInstalledUserPath replaces inherited permissions with an explicit ACL
@@ -38,21 +45,15 @@ func SecureInstalledUserPath(path string) error {
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(path)
+	userSID, _, _, err := windows.LookupSID("", account)
 	if err != nil {
 		return err
 	}
-	rights := "(F)"
-	if info.IsDir() {
-		rights = "(OI)(CI)(F)"
+	systemSID, err := windows.StringToSid("S-1-5-18")
+	if err != nil {
+		return err
 	}
-	return exec.Command(
-		"icacls",
-		path,
-		"/inheritance:r",
-		"/grant:r", "*S-1-5-18:"+rights,
-		"/grant:r", account+":"+rights,
-	).Run()
+	return setExactACL(path, []*windows.SID{systemSID, userSID}, windows.GENERIC_ALL)
 }
 
 // VerifyInstalledUserPathPermissions rejects inherited or unexpected ACL
@@ -71,11 +72,22 @@ func SecureExplicitUserPath(path string) error {
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(path)
+	systemSID, err := windows.StringToSid("S-1-5-18")
 	if err != nil {
 		return err
 	}
-	systemSID, err := windows.StringToSid("S-1-5-18")
+	allowed := []*windows.SID{systemSID}
+	if !currentSID.Equals(systemSID) {
+		allowed = append(allowed, currentSID)
+	}
+	return setExactACL(path, allowed, windows.GENERIC_ALL)
+}
+
+// setExactACL replaces the DACL atomically. In particular, it does not use
+// icacls /inheritance:r, which can preserve inherited ACEs as explicit entries
+// on hosted Windows runners.
+func setExactACL(path string, allowed []*windows.SID, permissions windows.ACCESS_MASK) error {
+	info, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
@@ -83,20 +95,10 @@ func SecureExplicitUserPath(path string) error {
 	if info.IsDir() {
 		inheritance = windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT
 	}
-	// Remove inherited ACEs before installing the exact DACL. Windows can
-	// otherwise preserve them as explicit entries when a protected DACL is
-	// applied to a newly inherited child.
-	if err := exec.Command("icacls", path, "/inheritance:r").Run(); err != nil {
-		return fmt.Errorf("disable explicit runtime path ACL inheritance: %w", err)
-	}
-	allowed := []*windows.SID{systemSID}
-	if !currentSID.Equals(systemSID) {
-		allowed = append(allowed, currentSID)
-	}
 	entries := make([]windows.EXPLICIT_ACCESS, 0, len(allowed))
 	for _, sid := range allowed {
 		entries = append(entries, windows.EXPLICIT_ACCESS{
-			AccessPermissions: windows.GENERIC_ALL,
+			AccessPermissions: permissions,
 			AccessMode:        windows.GRANT_ACCESS,
 			Inheritance:       inheritance,
 			Trustee: windows.TRUSTEE{

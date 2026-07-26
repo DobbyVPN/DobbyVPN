@@ -325,7 +325,11 @@ internal object PlatformServiceRegistry {
         if (!readySignal.isCompleted) readySignal.complete(candidate)
     }
     @Synchronized fun clear(candidate: DobbyVpnService) {
-        if (service === candidate) service = null
+        // An older service can finish destruction after its replacement has
+        // reached foreground-ready. It must not invalidate the replacement's
+        // session or wake-up signal.
+        if (service !== candidate) return
+        service = null
         preparedSession = null
         readySignal = CompletableDeferred()
     }

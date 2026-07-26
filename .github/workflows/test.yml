@@ -112,6 +112,51 @@ jobs:
         working-directory: kmp_module
         run: ./gradlew :grpcstub:test :app:jvmTest :app:testDebugUnitTest :app:verifyDebugNativeAbiPayloads --stacktrace
 
+  ios_libraries:
+    name: iOS native dependencies
+    uses: ./.github/workflows/ios_libs_generate.yml
+    with:
+      app_major_version: "0"
+      app_minor_version: "0"
+      app_maintenance_version: "0"
+
+  ios:
+    name: iOS unsigned build
+    needs: ios_libraries
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+
+      - name: Download iOS native dependencies
+        uses: actions/download-artifact@v4
+        with:
+          pattern: MyLibrary.xcframework
+          path: swift_module/MyLibrary.xcframework
+          merge-multiple: true
+
+      - name: Download Kotlin framework
+        uses: actions/download-artifact@v4
+        with:
+          pattern: app.framework
+          path: swift_module/app.framework
+          merge-multiple: true
+
+      - name: Build iOS app without signing
+        run: |
+          xcodebuild build \
+            -project swift_module/iosApp.xcodeproj \
+            -scheme iosApp \
+            -configuration Debug \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
   swift:
     name: Swift lifecycle seam tests
     runs-on: macos-15
