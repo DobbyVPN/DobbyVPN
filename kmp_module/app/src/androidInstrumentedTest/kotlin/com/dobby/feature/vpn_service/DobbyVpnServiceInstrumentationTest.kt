@@ -103,7 +103,7 @@ class DobbyVpnServiceInstrumentationTest {
 
         val vpn = awaitVpnNetwork(present = true)
         val linkProperties = requireNotNull(connectivityManager.getLinkProperties(vpn))
-        assertTrue(linkProperties.interfaceName.isNotBlank())
+        assertTrue(!linkProperties.interfaceName.isNullOrBlank())
         assertTrue(linkProperties.linkAddresses.any { it.address.hostAddress == "10.7.0.2" })
         assertTrue(linkProperties.routes.any { it.destination.toString() == "0.0.0.0/0" })
         assertTrue(linkProperties.dnsServers.any { it.hostAddress == "1.1.1.1" })
