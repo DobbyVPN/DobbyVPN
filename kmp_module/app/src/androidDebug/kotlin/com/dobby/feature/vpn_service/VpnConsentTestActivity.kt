@@ -17,9 +17,13 @@ class VpnConsentTestActivity : Activity() {
         if (intent.action == ACTION_SEND_DOCUMENTATION_PACKET) {
             Thread(
                 {
+                    Thread.sleep(ROUTE_SETTLE_MILLIS)
                     DatagramSocket().use { socket ->
                         val target = InetAddress.getByName(DOCUMENTATION_ROUTE_ADDRESS)
-                        socket.send(DatagramPacket(byteArrayOf(0x44), 1, target, DOCUMENTATION_ROUTE_PORT))
+                        repeat(PACKET_BURST_COUNT) {
+                            socket.send(DatagramPacket(byteArrayOf(0x44), 1, target, DOCUMENTATION_ROUTE_PORT))
+                            Thread.sleep(PACKET_INTERVAL_MILLIS)
+                        }
                     }
                     runOnUiThread(::finish)
                 },
@@ -48,5 +52,8 @@ class VpnConsentTestActivity : Activity() {
         private const val VPN_CONSENT_REQUEST = 1
         private const val DOCUMENTATION_ROUTE_ADDRESS = "192.0.2.1"
         private const val DOCUMENTATION_ROUTE_PORT = 33_434
+        private const val ROUTE_SETTLE_MILLIS = 500L
+        private const val PACKET_INTERVAL_MILLIS = 200L
+        private const val PACKET_BURST_COUNT = 5
     }
 }

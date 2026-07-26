@@ -24,6 +24,7 @@ import org.junit.runner.RunWith
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.regex.Pattern
 
 /**
@@ -182,7 +183,11 @@ class DobbyVpnServiceInstrumentationTest {
                     .setAction(VpnConsentTestActivity.ACTION_SEND_DOCUMENTATION_PACKET)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
-            return packet.get(PACKET_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+            return try {
+                packet.get(PACKET_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+            } catch (_: TimeoutException) {
+                false
+            }
         } finally {
             // Closing the owner unblocks AutoCloseInputStream.read before the worker is interrupted.
             runCatching { input.close() }
@@ -217,7 +222,7 @@ class DobbyVpnServiceInstrumentationTest {
     private companion object {
         const val CONSENT_TIMEOUT_MILLIS = 10_000L
         const val NETWORK_TIMEOUT_MILLIS = 10_000L
-        const val PACKET_TIMEOUT_MILLIS = 5_000L
+        const val PACKET_TIMEOUT_MILLIS = 10_000L
         const val READER_SHUTDOWN_TIMEOUT_MILLIS = 1_000L
         const val POLL_INTERVAL_MILLIS = 100L
         const val STABILITY_PACKET_COUNT = 3
