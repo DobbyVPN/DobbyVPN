@@ -106,7 +106,10 @@ public class VpnManagerImpl {
             case .connected:
                 self.suppressDisconnectedForPendingStart = false
                 self.connectionRepository.tryUpdateVpnNetworkReady(isReady: true)
-                self.connectionRepository.tryUpdateServiceStarted(isStarted: true)
+                self.connectionRepository.tryUpdateServiceStarted(
+                    isStarted: true,
+                    generation: Int64(self.activeGeneration)
+                )
                 self.logs.writeLog(log: "VPN connected")
 
             case .disconnected:
@@ -116,7 +119,10 @@ public class VpnManagerImpl {
                     return
                 }
                 self.connectionRepository.tryUpdateVpnNetworkReady(isReady: false)
-                self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
+                self.connectionRepository.tryUpdateServiceStarted(
+                    isStarted: false,
+                    generation: Int64(self.activeGeneration)
+                )
                 self.logs.writeLog(log: "VPN disconnected")
 
             case .connecting:
@@ -131,7 +137,10 @@ public class VpnManagerImpl {
             case .invalid:
                 self.suppressDisconnectedForPendingStart = false
                 self.connectionRepository.tryUpdateVpnNetworkReady(isReady: false)
-                self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
+                self.connectionRepository.tryUpdateServiceStarted(
+                    isStarted: false,
+                    generation: Int64(self.activeGeneration)
+                )
                 self.logs.writeLog(log: "VPN status is invalid")
 
             @unknown default:
@@ -174,7 +183,10 @@ public class VpnManagerImpl {
                 self.logs.writeLog(log: "[start] Give up: connection stayed disconnecting after \(retryAttempt) retries")
                 self.suppressDisconnectedForPendingStart = false
                 self.connectionRepository.tryUpdateVpnNetworkReady(isReady: false)
-                self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
+                self.connectionRepository.tryUpdateServiceStarted(
+                    isStarted: false,
+                    generation: Int64(generation)
+                )
                 return
             }
 
@@ -262,7 +274,10 @@ public class VpnManagerImpl {
                 self.logs.writeLog(log: "Error starting VPNTunnel \(error)")
                 self.suppressDisconnectedForPendingStart = false
                 self.connectionRepository.tryUpdateVpnNetworkReady(isReady: false)
-                self.connectionRepository.tryUpdateServiceStarted(isStarted: false)
+                self.connectionRepository.tryUpdateServiceStarted(
+                    isStarted: false,
+                    generation: Int64(generation)
+                )
             }
         }
     }
