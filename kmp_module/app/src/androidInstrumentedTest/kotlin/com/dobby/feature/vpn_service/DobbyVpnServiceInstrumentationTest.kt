@@ -178,10 +178,11 @@ class DobbyVpnServiceInstrumentationTest {
             found
         }
         try {
-            InstrumentationRegistry.getInstrumentation().startActivitySync(
-                Intent(context, VpnConsentTestActivity::class.java)
-                    .setAction(VpnConsentTestActivity.ACTION_SEND_DOCUMENTATION_PACKET)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val trafficComponent =
+                "${instrumentation.context.packageName}/${VpnTrafficTestActivity::class.java.name}"
+            UiDevice.getInstance(instrumentation).executeShellCommand(
+                "am start -W -n $trafficComponent",
             )
             return try {
                 packet.get(PACKET_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
