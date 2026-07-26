@@ -91,15 +91,17 @@ class CliClient(
 
     /** Connects one exact Go-provided profile index without interpreting the configuration. */
     fun connectProfile(options: List<String>): ExitCode {
-        if (options.size != 2) return ExitCode.INVALID_ARGS
-        val profileIndex = options[1].toIntOrNull()?.takeIf { it >= 0 } ?: return ExitCode.INVALID_ARGS
-        val rawConfig = readConnectionArgument(options[0]) ?: return ExitCode.INVALID_ARGS
-        if (!configure(rawConfig)) return ExitCode.CONFIG_FORMAT_ERROR
-
-        return if (runBlocking { startAndAwait(SessionStartTarget.ProfileIndex(profileIndex)) }) {
-            ExitCode.OK
+        return if (options.size != 2) {
+            ExitCode.INVALID_ARGS
         } else {
-            ExitCode.TUNNEL_START_ERROR
+            val profileIndex = options[1].toIntOrNull()?.takeIf { it >= 0 }
+            val rawConfig = readConnectionArgument(options[0])
+            when {
+                profileIndex == null || rawConfig == null -> ExitCode.INVALID_ARGS
+                !configure(rawConfig) -> ExitCode.CONFIG_FORMAT_ERROR
+                runBlocking { startAndAwait(SessionStartTarget.ProfileIndex(profileIndex)) } -> ExitCode.OK
+                else -> ExitCode.TUNNEL_START_ERROR
+            }
         }
     }
 
