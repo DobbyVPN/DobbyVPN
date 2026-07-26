@@ -105,8 +105,11 @@ class DobbyVpnService : VpnService() {
                 DobbyVpnServiceTestEvents.record("foreground")
                 if (!sessionId.isNullOrBlank()) activeSessionId = sessionId
                 if (!sessionId.isNullOrBlank()) {
-                    PlatformServiceRegistry.ready(this, sessionId)
+                    // Complete local preparation before waking clients waiting for readiness.
+                    // Otherwise an observer can see a ready service before this transition has
+                    // been fully recorded, making the lifecycle boundary racy.
                     DobbyVpnServiceTestEvents.record("prepared")
+                    PlatformServiceRegistry.ready(this, sessionId)
                 }
             }
             ACTION_STOP -> releaseForIntent(generation, startId)
