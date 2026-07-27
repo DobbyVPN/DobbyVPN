@@ -16,6 +16,7 @@ import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.SessionControllerResult
 import com.dobby.feature.main.domain.SessionStartTarget
 import com.dobby.feature.main.domain.SessionState
+import com.dobby.feature.main.domain.SessionSnapshot
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -72,7 +73,12 @@ class PrivateProfileInstrumentationTest {
             assertNotNull("owner-injected profile did not start", generation)
             runningSession = RunningSession(controller, requireNotNull(generation))
 
-            assertTrue("owner-injected profile did not reach CONNECTED", awaitSessionState(controller, SessionState.CONNECTED))
+            val connectionSnapshot = awaitSessionState(controller, SessionState.CONNECTED)
+            assertTrue(
+                "owner-injected profile did not reach CONNECTED " +
+                    "state=${connectionSnapshot?.state} failure=${connectionSnapshot?.lastFailureCode}",
+                connectionSnapshot?.state == SessionState.CONNECTED,
+            )
             val tunnelIdentity = fetchIdentity(privateFiles.probeUrlText)
             repeat(STABILITY_PROBE_COUNT - 1) {
                 assertTrue(
@@ -130,13 +136,20 @@ class PrivateProfileInstrumentationTest {
         assertNull("Android did not grant VPN consent after the system dialog was approved", VpnService.prepare(context))
     }
 
-    private suspend fun awaitSessionState(controller: SessionController, expected: SessionState): Boolean {
+    private suspend fun awaitSessionState(
+        controller: SessionController,
+        expected: SessionState,
+    ): SessionSnapshot? {
+        var latest: SessionSnapshot? = null
         repeat(SESSION_STATE_POLL_COUNT) {
             val snapshot = controller.snapshot()
-            if (snapshot is SessionControllerResult.Success && snapshot.value.state == expected) return true
+            if (snapshot is SessionControllerResult.Success) {
+                latest = snapshot.value
+                if (snapshot.value.state == expected || snapshot.value.state == SessionState.FAILED) return snapshot.value
+            }
             delay(SESSION_STATE_POLL_MILLIS)
         }
-        return false
+        return latest
     }
 
     private suspend fun stopRunningSession(): Boolean {
@@ -148,7 +161,7 @@ class PrivateProfileInstrumentationTest {
             // Destroy and the Android service stop below are still required cleanup attempts.
             false
         }
-        val disconnected = awaitSessionState(session.controller, SessionState.IDLE)
+        val disconnected = awaitSessionState(session.controller, SessionState.IDLE)?.state == SessionState.IDLE
         val snapshot = try {
             session.controller.snapshot()
         } catch (_: Exception) {
