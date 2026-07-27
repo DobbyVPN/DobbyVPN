@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import stat
 import unittest
 from unittest import mock
 
@@ -15,6 +16,78 @@ SPEC.loader.exec_module(desktop_build)
 
 
 class DesktopBuildTests(unittest.TestCase):
+    def test_wait_for_socket_accepts_unix_domain_socket(self) -> None:
+        path = Path("/tmp/dobbyvpn-test/control.sock")
+
+        with mock.patch.object(
+            desktop_build.Path,
+            "stat",
+            return_value=mock.Mock(st_mode=stat.S_IFSOCK | 0o600),
+        ):
+            self.assertTrue(desktop_build.wait_for_socket(path, timeout_seconds=1))
+
+    def test_unix_service_uses_private_control_socket_for_readiness(self) -> None:
+        process = mock.Mock()
+        socket_path = Path("/tmp/dobbyvpn-test/control.sock")
+
+        with (
+            mock.patch.object(desktop_build, "service_target_path", return_value=Path("/tmp/service")),
+            mock.patch.object(desktop_build.Path, "exists", return_value=True),
+            mock.patch.object(desktop_build, "sudo_prefix", return_value=["sudo"]),
+            mock.patch.object(desktop_build, "wait_for_socket", return_value=True) as wait_for_socket,
+            mock.patch.object(desktop_build, "wait_for_port") as wait_for_port,
+            mock.patch.object(desktop_build.subprocess, "Popen", return_value=process) as popen,
+            mock.patch("builtins.open", mock.mock_open()),
+        ):
+            started, _ = desktop_build.start_service("linux", 50151, socket_path)
+
+        self.assertIs(started, process)
+        wait_for_socket.assert_called_once_with(socket_path)
+        wait_for_port.assert_not_called()
+        command = popen.call_args.args[0]
+        self.assertIn(f"DOBBYVPN_CONTROL_SOCKET={socket_path}", command)
+        self.assertEqual(
+            popen.call_args.kwargs["env"]["DOBBYVPN_CONTROL_SOCKET"],
+            str(socket_path),
+        )
+
+    def test_cli_check_passes_control_socket_to_gradle_process(self) -> None:
+        socket_path = Path("/tmp/dobbyvpn-test/control.sock")
+
+        with (
+            mock.patch.object(desktop_build, "desktop_version_properties", return_value=[]),
+            mock.patch.object(desktop_build, "gradle_command", return_value="gradle"),
+            mock.patch.object(desktop_build, "run") as run,
+        ):
+            desktop_build.run_cli_check("/tmp/config.toml", 50151, socket_path)
+
+        self.assertEqual(
+            run.call_args.kwargs["env"]["DOBBYVPN_CONTROL_SOCKET"],
+            str(socket_path),
+        )
+
+    def test_control_socket_and_parent_are_removed_without_recursive_delete(self) -> None:
+        socket_path = Path("/tmp/dobbyvpn-test/service/control.sock")
+
+        with (
+            mock.patch.object(desktop_build, "sudo_prefix", return_value=["sudo"]),
+            mock.patch.object(
+                desktop_build.Path,
+                "lstat",
+                return_value=mock.Mock(st_mode=stat.S_IFSOCK | 0o600),
+            ),
+            mock.patch.object(desktop_build, "run") as run,
+        ):
+            desktop_build.remove_control_socket_parent(socket_path)
+
+        self.assertEqual(
+            run.call_args_list,
+            [
+                mock.call(["sudo", "unlink", str(socket_path)], check=False),
+                mock.call(["sudo", "rmdir", str(socket_path.parent)], check=False),
+            ],
+        )
+
     def test_append_cgo_ldflags_preserves_existing_flags(self) -> None:
         environment = {"CGO_LDFLAGS": "-L/custom"}
 

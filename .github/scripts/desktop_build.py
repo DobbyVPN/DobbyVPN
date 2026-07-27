@@ -8,6 +8,7 @@ import os
 import platform
 import shutil
 import socket
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -1098,6 +1099,18 @@ def wait_for_port(port: int, timeout_seconds: int = 30) -> bool:
     return False
 
 
+def wait_for_socket(path: Path, timeout_seconds: int = 30) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            if stat.S_ISSOCK(path.stat().st_mode):
+                return True
+        except FileNotFoundError:
+            pass
+        time.sleep(1)
+    return False
+
+
 def sudo_prefix() -> list[str]:
     if host_platform() == "windows":
         return []
@@ -1106,7 +1119,11 @@ def sudo_prefix() -> list[str]:
     return ["sudo"]
 
 
-def start_service(target_platform: str, port: int) -> tuple[subprocess.Popen[str], list[object]]:
+def start_service(
+    target_platform: str,
+    port: int,
+    control_socket: Path | None = None,
+) -> tuple[subprocess.Popen[str], list[object]]:
     service = service_target_path(target_platform)
     if not service.exists():
         fail(f"Missing service binary: {service}")
@@ -1116,23 +1133,40 @@ def start_service(target_platform: str, port: int) -> tuple[subprocess.Popen[str
         stdout = open(ROOT_DIR / "grpcvpnserver.out", "w", encoding="utf-8")
         stderr = open(ROOT_DIR / "grpcvpnserver.err", "w", encoding="utf-8")
         command = [str(service), "-port", str(port)]
+        environment = os.environ.copy()
     else:
         stdout = open(ROOT_DIR / "grpcvpnserver.log", "w", encoding="utf-8")
         stderr = subprocess.STDOUT
-        command = [*sudo_prefix(), str(service), "-port", str(port)]
+        if control_socket is None:
+            fail("A private control socket path is required for Unix CLI tests")
+        environment = os.environ.copy()
+        environment["DOBBYVPN_CONTROL_SOCKET"] = str(control_socket)
+        prefix = sudo_prefix()
+        command = [*prefix]
+        if prefix:
+            command.extend(["env", f"DOBBYVPN_CONTROL_SOCKET={control_socket}"])
+        command.extend([str(service), "-port", str(port)])
     handles.append(stdout)
     if hasattr(stderr, "close"):
         handles.append(stderr)
 
-    log(f"Starting gRPC VPN service on port {port}")
-    process = subprocess.Popen(command, cwd=str(ROOT_DIR), stdout=stdout, stderr=stderr, text=True)
-    if wait_for_port(port):
+    log("Starting VPN control service")
+    process = subprocess.Popen(
+        command,
+        cwd=str(ROOT_DIR),
+        env=environment,
+        stdout=stdout,
+        stderr=stderr,
+        text=True,
+    )
+    ready = wait_for_port(port) if target_platform == "windows" else wait_for_socket(control_socket)
+    if ready:
         log("gRPC VPN service is ready")
         return process, handles
 
     stop_service(process)
     print_service_logs()
-    fail(f"gRPC VPN service did not start on port {port}")
+    fail("gRPC VPN service did not become ready")
 
 
 def stop_service(process: subprocess.Popen[str]) -> None:
@@ -1153,10 +1187,27 @@ def print_service_logs() -> None:
             print(path.read_text(encoding="utf-8", errors="replace"))
 
 
-def run_cli_check(config_arg: str, port: int) -> None:
+def remove_control_socket_parent(control_socket: Path | None) -> None:
+    if control_socket is None:
+        return
+    try:
+        socket_mode = control_socket.lstat().st_mode
+    except FileNotFoundError:
+        socket_mode = None
+    if socket_mode is not None:
+        if not stat.S_ISSOCK(socket_mode):
+            log("Refusing to remove a non-socket control path")
+            return
+        run([*sudo_prefix(), "unlink", str(control_socket)], check=False)
+    run([*sudo_prefix(), "rmdir", str(control_socket.parent)], check=False)
+
+
+def run_cli_check(config_arg: str, port: int, control_socket: Path | None = None) -> None:
     props = desktop_version_properties()
     env = os.environ.copy()
     env["PORT"] = str(port)
+    if control_socket is not None:
+        env["DOBBYVPN_CONTROL_SOCKET"] = str(control_socket)
     run(
         [gradle_command(), "--quiet", ":app:run", f"--args=check-config {config_arg}", *props],
         cwd=KMP_DIR,
@@ -1191,17 +1242,24 @@ def cli_test(args: argparse.Namespace) -> None:
     config_arg = prepare_config_arg(config)
     process: subprocess.Popen[str] | None = None
     handles: list[object] = []
-    try:
-        process, handles = start_service(target_platform, args.port)
-        run_cli_check(config_arg, args.port)
-    finally:
-        if process:
-            stop_service(process)
-        for handle in handles:
-            close = getattr(handle, "close", None)
-            if close:
-                close()
-        print_service_logs()
+    with tempfile.TemporaryDirectory(prefix="dobbyvpn-cli-control-") as control_root:
+        control_socket = (
+            None
+            if target_platform == "windows"
+            else Path(control_root) / "service" / "control.sock"
+        )
+        try:
+            process, handles = start_service(target_platform, args.port, control_socket)
+            run_cli_check(config_arg, args.port, control_socket)
+        finally:
+            if process:
+                stop_service(process)
+            remove_control_socket_parent(control_socket)
+            for handle in handles:
+                close = getattr(handle, "close", None)
+                if close:
+                    close()
+            print_service_logs()
 
 
 def add_common_options(parser: argparse.ArgumentParser) -> None:
