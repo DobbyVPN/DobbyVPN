@@ -33,6 +33,7 @@ type TunnelProvider interface {
 
 type TunnelLease interface {
 	io.ReadWriteCloser
+	Fd() uintptr
 	Release(context.Context) error
 }
 

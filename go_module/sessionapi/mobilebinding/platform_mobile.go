@@ -239,6 +239,7 @@ type tunnelLease struct {
 
 func (l *tunnelLease) Read(p []byte) (int, error)  { return l.file.Read(p) }
 func (l *tunnelLease) Write(p []byte) (int, error) { return l.file.Write(p) }
+func (l *tunnelLease) Fd() uintptr                 { return l.file.Fd() }
 func (l *tunnelLease) Close() error {
 	l.once.Do(func() { l.adapter.release(l.ref, l.fd, l.callbacks) })
 	return nil

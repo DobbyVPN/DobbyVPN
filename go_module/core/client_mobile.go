@@ -13,7 +13,6 @@ import (
 	"go_module/tunnel/platform_engine"
 	"io"
 	"net"
-	"os"
 	"sync"
 
 	"golang.org/x/sys/unix"
@@ -80,15 +79,15 @@ func (c *CoreClient) Connect() (err error) {
 	releaseTun := ledger.Add(c.tun.Close)
 
 	var fd int
-	if f, ok := c.tun.(*os.File); ok {
+	if f, ok := c.tun.(interface{ Fd() uintptr }); ok {
 		fd = int(f.Fd())
 		err := unix.SetNonblock(fd, true)
 		if err != nil {
 			log.Debugf(coreCommon.Category, "Set unix.SetNonblock error: %v", err)
 		}
 	} else {
-		log.Debugf(coreCommon.Category, "failed to get FD from tun: not an *os.File")
-		return fail(fmt.Errorf("invalid tun device type"))
+		log.Debugf(coreCommon.Category, "failed to get FD from tun: descriptor unavailable")
+		return fail(fmt.Errorf("TUN device does not expose a descriptor"))
 	}
 
 	engineFD, err := unix.Dup(fd)
