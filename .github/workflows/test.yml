@@ -180,10 +180,38 @@ jobs:
             CODE_SIGN_IDENTITY=""
 
   swift:
-    name: iOS lifecycle and shell policy tests
+    name: iOS production lifecycle policy tests
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run iOS lifecycle and shell policy tests
-        run: swift test --enable-code-coverage --package-path swift_module/LifecycleSeamTests
+      - name: Run production-source iOS lifecycle policy tests
+        run: swift test --enable-code-coverage --package-path swift_module
+
+  ios_simulator_core:
+    name: iOS Simulator shared-core tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+          cache-dependency-path: |
+            kmp_module/**/*.gradle.kts
+            kmp_module/gradle/libs.versions.toml
+            kmp_module/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Compile and run the KMP tests on an iOS Simulator
+        working-directory: kmp_module
+        run: |
+          ./gradlew \
+            :app:linkDebugFrameworkIosSimulatorArm64 \
+            :app:iosSimulatorArm64Test \
+            --stacktrace

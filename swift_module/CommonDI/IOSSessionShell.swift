@@ -15,8 +15,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
     private let rawConfigurationKey = "sessionapi.v1.rawConfiguration"
     private let manager: VpnManagerImpl
     private var configured = false
-    private var sequence: Int64 = 0
-    private var lastState = "IDLE"
+    private var observation = IOSStateObservation()
 
     init(manager: VpnManagerImpl) {
         self.manager = manager
@@ -35,12 +34,17 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
     }
 
     func start(mode: String, index: Int32) -> String {
-        guard configured, secrets.data(for: rawConfigurationKey)?.isEmpty == false else {
-            return failure("NOT_CONFIGURED")
-        }
+        let hasConfiguration = configured &&
+            secrets.data(for: rawConfigurationKey)?.isEmpty == false
         // iOS intentionally has no UI-side profile selection. The extension
         // sends AUTO_SELECT to Go after NE creates its packet tunnel.
-        guard mode == "AUTO_SELECT", index == 0 else { return failure("UNSUPPORTED") }
+        if let error = IOSSessionRequestPolicy.validateStart(
+            configured: hasConfiguration,
+            mode: mode,
+            index: Int(index)
+        ) {
+            return failure(error.rawValue)
+        }
         manager.start(isProtocolProbe: false)
         let generation = Int64(IOSVpnConnectionAuthority.currentGeneration())
         return success(["generation": generation])
@@ -68,21 +72,24 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
 
     func observe(afterSequence: Int64) -> String {
         let state = extensionState()
-        if state != lastState {
-            sequence += 1
-            lastState = state
-        }
+        let next = observation.observe(
+            state: state,
+            afterSequence: afterSequence
+        )
         let events: [[String: Any]]
-        if sequence > afterSequence {
+        if next.emit {
             events = [[
                 "generation": Int64(IOSVpnConnectionAuthority.currentGeneration()),
-                "sequence": sequence,
+                "sequence": next.nextSequence,
                 "state": state,
             ]]
         } else {
             events = []
         }
-        return success(["events": events, "next_sequence": sequence])
+        return success([
+            "events": events,
+            "next_sequence": next.nextSequence,
+        ])
     }
 
     func destroy() -> String {

@@ -8,43 +8,57 @@ import MyLibrary
 /// packet tunnel is still connected.  NetworkExtension owns that fact.
 enum IOSVpnConnectionAuthority {
     private static let lock = NSLock()
-    private static var generation: UInt64 = 0
-    private static var status: NEVPNStatus = .disconnected
+    private static var lifecycle = IOSLifecycleState()
 
-    static func beginGeneration() -> UInt64 {
+    static func beginStart() -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
-        generation &+= 1
-        return generation
+        return lifecycle.beginStart()
+    }
+
+    static func beginStop() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return lifecycle.beginStop()
     }
 
     static func isCurrent(_ candidate: UInt64) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return generation == candidate
+        return lifecycle.isCurrent(candidate)
     }
 
     static func publish(_ newStatus: NEVPNStatus, generation candidate: UInt64) {
         lock.lock()
         defer { lock.unlock() }
-        guard generation == candidate else { return }
-        status = newStatus
+        _ = lifecycle.receive(lifecycleState(newStatus), generation: candidate)
     }
 
     static func currentGeneration() -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
-        return generation
+        return lifecycle.generation
     }
 
     static func connectionState() -> VpnConnectionState {
         lock.lock()
         defer { lock.unlock() }
-        switch status {
+        switch lifecycle.extensionState.presentedState {
         case .connected: return .connected
-        case .connecting, .reasserting, .disconnecting: return .connecting
-        case .invalid, .disconnected: return .disconnected
-        @unknown default: return .disconnected
+        case .connecting: return .connecting
+        case .disconnected: return .disconnected
+        }
+    }
+
+    private static func lifecycleState(_ status: NEVPNStatus) -> NetworkExtensionState {
+        switch status {
+        case .invalid: return .invalid
+        case .disconnected: return .disconnected
+        case .connecting: return .connecting
+        case .connected: return .connected
+        case .reasserting: return .reasserting
+        case .disconnecting: return .disconnecting
+        @unknown default: return .invalid
         }
     }
 }
@@ -57,6 +71,9 @@ public class VpnManagerImpl {
     private static let launchId = UUID().uuidString
     private static let disconnectingStartRetryDelay: TimeInterval = 0.5
     private static let disconnectingStartMaxRetries = 120
+    private static let startPolicy = IOSStartPolicy(
+        maximumRetries: disconnectingStartMaxRetries
+    )
     private var logs = NativeModuleHolder.logsRepository
 
     public static var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
@@ -156,7 +173,7 @@ public class VpnManagerImpl {
     }
 
     public func start(isProtocolProbe: Bool) {
-        let generation = IOSVpnConnectionAuthority.beginGeneration()
+        let generation = IOSVpnConnectionAuthority.beginStart()
         activeGeneration = generation
         self.logs.writeLog(log: "call start launchId=\(Self.launchId) isProtocolProbe=\(isProtocolProbe)")
         self.logs.writeLog(log: "Routing table without vpn:")
@@ -177,19 +194,9 @@ public class VpnManagerImpl {
         }
         let status = manager.connection.status
         self.logs.writeLog(log: "[start] manager loaded status=\(statusName(status)) raw=\(status.rawValue)")
-        if status == .disconnecting {
+        switch Self.startPolicy.action(for: lifecycleState(status), retryAttempt: retryAttempt) {
+        case .retry:
             self.suppressDisconnectedForPendingStart = true
-            guard retryAttempt < Self.disconnectingStartMaxRetries else {
-                self.logs.writeLog(log: "[start] Give up: connection stayed disconnecting after \(retryAttempt) retries")
-                self.suppressDisconnectedForPendingStart = false
-                self.connectionRepository.tryUpdateVpnNetworkReady(isReady: false)
-                self.connectionRepository.tryUpdateServiceStarted(
-                    isStarted: false,
-                    generation: Int64(generation)
-                )
-                return
-            }
-
             let nextAttempt = retryAttempt + 1
             self.logs.writeLog(log: "[start] Connection is disconnecting; retry start after 500ms (attempt \(nextAttempt)/\(Self.disconnectingStartMaxRetries))")
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.disconnectingStartRetryDelay) { [weak self] in
@@ -199,12 +206,12 @@ public class VpnManagerImpl {
                 }
             }
             return
-        }
-        if status == .connecting || status == .reasserting {
+
+        case .waitForTransition:
             self.logs.writeLog(log: "[start] Skip: connection is transitioning (\(status.rawValue))")
             return
-        }
-        if status == .connected {
+
+        case .stopThenRetry:
             // A probe/selected profile must never inherit a running packet tunnel.  Stop the
             // current NE generation and let the normal disconnecting retry path create a fresh
             // tunnel once NetworkExtension confirms cleanup.
@@ -223,6 +230,19 @@ public class VpnManagerImpl {
                 }
             }
             return
+
+        case .fail:
+            self.logs.writeLog(log: "[start] Give up: connection stayed \(statusName(status)) after \(retryAttempt) retries")
+            self.suppressDisconnectedForPendingStart = false
+            self.connectionRepository.tryUpdateVpnNetworkReady(isReady: false)
+            self.connectionRepository.tryUpdateServiceStarted(
+                isStarted: false,
+                generation: Int64(generation)
+            )
+            return
+
+        case .start:
+            break
         }
         if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
             self.logs.writeLog(log: "VPN Manager server address configured=\(proto.serverAddress != nil)")
@@ -284,7 +304,7 @@ public class VpnManagerImpl {
 
     public func stop(isUserInitiated: Bool) {
         // Invalidate any asynchronous preference/retry/restart completion before stopping.
-        activeGeneration = IOSVpnConnectionAuthority.beginGeneration()
+        activeGeneration = IOSVpnConnectionAuthority.beginStop()
         IOSVpnConnectionAuthority.publish(.disconnecting, generation: activeGeneration)
         if !isUserInitiated {
             DobbyConfigsRepositoryImpl.shared.setIsUserInitStop(isUserInitStop: false)
@@ -385,6 +405,18 @@ public class VpnManagerImpl {
             return "disconnecting"
         @unknown default:
             return "unknown"
+        }
+    }
+
+    private func lifecycleState(_ status: NEVPNStatus) -> NetworkExtensionState {
+        switch status {
+        case .invalid: return .invalid
+        case .disconnected: return .disconnected
+        case .connecting: return .connecting
+        case .connected: return .connected
+        case .reasserting: return .reasserting
+        case .disconnecting: return .disconnecting
+        @unknown default: return .invalid
         }
     }
 
