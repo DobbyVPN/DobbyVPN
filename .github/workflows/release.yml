@@ -59,8 +59,6 @@ jobs:
       app_major_version: ${{ needs.prepare_version.outputs.major }}
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
-      android_version_code: ${{ needs.prepare_version.outputs.android_version_code }}
-      source_sha: ${{ github.sha }}
 
   android_build:
     needs: [verification, prepare_version]
@@ -69,6 +67,8 @@ jobs:
       app_major_version: ${{ needs.prepare_version.outputs.major }}
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
+      android_version_code: ${{ needs.prepare_version.outputs.android_version_code }}
+      source_sha: ${{ github.sha }}
     secrets:
       KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
