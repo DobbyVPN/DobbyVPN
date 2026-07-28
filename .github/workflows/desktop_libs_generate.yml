@@ -80,7 +80,7 @@ jobs:
         shell: bash
         run: |
           curl -#fL -o trusttunnel_client-v1.0.49-macos-universal.tar.gz "https://github.com/TrustTunnel/TrustTunnelClient/releases/download/v1.0.49/trusttunnel_client-v1.0.49-macos-universal.tar.gz"
-          echo "f2dab732d17a885dcc4c81831fa4b263db250f5bea8a151416b518e936979c64 trusttunnel_client-v1.0.49-macos-universal.tar.gz" | shasum -a 256 -c -
+          echo "f2dab732d17a885dcc4c81831fa4b263db250f5bea8a151416b518e936979c64  trusttunnel_client-v1.0.49-macos-universal.tar.gz" | shasum -a 256 -c -
           tar -xzf trusttunnel_client-v1.0.49-macos-universal.tar.gz --strip-components=1 trusttunnel_client-v1.0.49-macos-universal/trusttunnel_client
           chmod 755 trusttunnel_client
           codesign --verify --strict --verbose=2 trusttunnel_client
