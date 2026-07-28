@@ -98,6 +98,9 @@ jobs:
       app_maintenance_version: ${{ needs.preflight.outputs.maintenance }}
       android_version_code: ${{ needs.preflight.outputs.android_version_code }}
       source_sha: ${{ needs.preflight.outputs.source_sha }}
+      # v1.4.3's tagged Fastfile predates ANDROID_VERSION_CODE and reads this
+      # legacy variable for Gradle's Android versionCode.
+      legacy_android_version_code: ${{ needs.preflight.outputs.android_version_code }}
     secrets:
       KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
