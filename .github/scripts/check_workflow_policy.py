@@ -96,6 +96,7 @@ def main() -> int:
         'test "$REPLACE_CONFIRMATION" = "replace-v$RELEASE_VERSION"',
         'test "$tag_sha" = "$RELEASE_SOURCE_SHA"',
         "source_sha: ${{ needs.preflight.outputs.source_sha }}",
+        "legacy_android_version_code: ${{ needs.preflight.outputs.android_version_code }}",
         "environment: release",
         "--clobber",
         "versionCode=$ANDROID_VERSION_CODE",

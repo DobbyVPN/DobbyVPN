@@ -27,6 +27,11 @@ on:
       source_sha:
         type: string
         required: true
+      legacy_android_version_code:
+        description: Compatibility override for tagged sources that used APPLE_BUILD_NUMBER as Android versionCode
+        type: string
+        required: false
+        default: ''
 
 jobs:
   android_build:
@@ -36,7 +41,7 @@ jobs:
       APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
       APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
       APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
-      APPLE_BUILD_NUMBER: ${{ github.run_number }}
+      APPLE_BUILD_NUMBER: ${{ inputs.legacy_android_version_code || github.run_number }}
       ANDROID_VERSION_CODE: ${{ inputs.android_version_code }}
       GITHUB_SHA: ${{ inputs.source_sha }}
       GITHUB_REPOSITORY: ${{ github.repository }}
