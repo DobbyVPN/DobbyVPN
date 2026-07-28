@@ -8,6 +8,8 @@ import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
+import com.dobby.feature.logging.domain.initLogFilePath
+import com.dobby.feature.logging.domain.initLogger
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.vpn_service.DobbyVpnService
 import okio.Path.Companion.toPath
@@ -18,6 +20,10 @@ import org.koin.dsl.module
 class TestApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        if (TestRuntimeOptions.realProfileEnabled) {
+            initLogFilePath(applicationContext)
+            initLogger()
+        }
         DobbyVpnService.nativePlatformRegistrar = if (TestRuntimeOptions.realProfileEnabled) {
             GoBackendWrapper::registerSessionPlatform
         } else {
