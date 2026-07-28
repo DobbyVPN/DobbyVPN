@@ -146,7 +146,6 @@ func (p *platformAdapter) release(ref v1.SessionRef, fd int32, callbacks Platfor
 	p.mu.Lock()
 	p.tunnels.release(fd, fdOwner{session: ref.SessionID, generation: ref.Generation})
 	p.mu.Unlock()
-	_ = closeFD(fd)
 	if callbacks != nil {
 		if generation, ok := generationAsInt64(ref.Generation); ok {
 			callbacks.ReleaseTunnel(ref.SessionID, generation, fd)
@@ -229,22 +228,32 @@ func (l platformLease) Release(context.Context) error {
 }
 
 type tunnelLease struct {
-	file      *os.File
-	fd        int32
-	ref       v1.SessionRef
-	adapter   *platformAdapter
-	callbacks PlatformCallbacks
-	once      sync.Once
+	file        *os.File
+	fd          int32
+	ref         v1.SessionRef
+	adapter     *platformAdapter
+	callbacks   PlatformCallbacks
+	closeOnce   sync.Once
+	closeErr    error
+	releaseOnce sync.Once
 }
 
 func (l *tunnelLease) Read(p []byte) (int, error)  { return l.file.Read(p) }
 func (l *tunnelLease) Write(p []byte) (int, error) { return l.file.Write(p) }
 func (l *tunnelLease) Fd() uintptr                 { return l.file.Fd() }
+// Close drops only Go's duplicated descriptor after tun2socks owns its copy.
+// Release keeps the platform generation active until the runtime lease ends.
 func (l *tunnelLease) Close() error {
-	l.once.Do(func() { l.adapter.release(l.ref, l.fd, l.callbacks) })
-	return nil
+	l.closeOnce.Do(func() { l.closeErr = l.file.Close() })
+	return l.closeErr
 }
-func (l *tunnelLease) Release(context.Context) error { return l.Close() }
+func (l *tunnelLease) Release(context.Context) error {
+	l.releaseOnce.Do(func() {
+		_ = l.Close()
+		l.adapter.release(l.ref, l.fd, l.callbacks)
+	})
+	return l.closeErr
+}
 
 func closeFD(fd int32) error {
 	if fd < 0 {
