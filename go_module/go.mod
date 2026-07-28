@@ -1,6 +1,6 @@
 module go_module
 
-go 1.25.1
+go 1.26.2
 
 replace github.com/cbeuw/Cloak => ./modules/Cloak
 
@@ -11,7 +11,7 @@ replace trusttunnel-go => github.com/DobbyVPN/go-go-tunnel v1.0.0
 require (
 	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c
 	github.com/cbeuw/Cloak v0.0.0-00010101000000-000000000000
-	github.com/jackpal/gateway v1.1.1
+	github.com/jackpal/gateway v1.2.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/things-go/go-socks5 v0.1.0
@@ -57,7 +57,7 @@ require (
 	github.com/sagernet/sing-shadowsocks v0.2.7 // indirect
 	github.com/seiflotfy/cuckoofilter v0.0.0-20240715131351-a2f2c23f1771 // indirect
 	github.com/shadowsocks/go-shadowsocks2 v0.1.5 // indirect
-	github.com/stretchr/objx v0.5.2 // indirect
+	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/v2fly/ss-bloomring v0.0.0-20210312155135-28617310f63e // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/xtls/reality v0.0.0-20251014195629-e4eec4520535 // indirect
