@@ -10,28 +10,36 @@ private final class TestClock: IOSSessionClock {
     }
 }
 
-private enum TestError: Error {
+private enum TestError: Error, Equatable {
     case rejected
 }
 
 private final class TestClient: IOSProviderSessionClient {
     var calls: [String] = []
     var snapshots: [IOSProviderSessionSnapshot] = []
+    var createResult = "session"
+    var createError: Error?
+    var configureError: Error?
+    var startResult: Int64 = 7
+    var startError: Error?
     var stopError: Error?
     var destroyError: Error?
 
     func create() throws -> String {
         calls.append("create")
-        return "session"
+        if let createError { throw createError }
+        return createResult
     }
 
     func configure(sessionID: String, rawConfiguration: Data) throws {
         calls.append("configure")
+        if let configureError { throw configureError }
     }
 
     func start(sessionID: String) throws -> Int64 {
         calls.append("start")
-        return 7
+        if let startError { throw startError }
+        return startResult
     }
 
     func snapshot(sessionID: String) throws -> IOSProviderSessionSnapshot {
@@ -58,6 +66,168 @@ private final class TestClient: IOSProviderSessionClient {
 }
 
 final class IOSProviderSessionCoordinatorTests: XCTestCase {
+    func testErrorDescriptionsMatchStableErrorCodes() {
+        XCTAssertEqual(
+            IOSProviderSessionError.cleanupPending.errorDescription,
+            "SESSIONAPI_CLEANUP_PENDING"
+        )
+        XCTAssertEqual(
+            IOSProviderSessionError.failed.errorDescription,
+            "SESSIONAPI_FAILED"
+        )
+        XCTAssertEqual(
+            IOSProviderSessionError.timeout.errorDescription,
+            "SESSIONAPI_TIMEOUT"
+        )
+        XCTAssertEqual(
+            IOSProviderSessionError.cleanupTimeout.errorDescription,
+            "SESSIONAPI_CLEANUP_TIMEOUT"
+        )
+        XCTAssertEqual(
+            IOSProviderSessionError.malformed.errorDescription,
+            "SESSIONAPI_MALFORMED"
+        )
+    }
+
+    func testSystemClockAcceptsZeroDurationSleep() async throws {
+        try await IOSSystemSessionClock().sleep(seconds: 0)
+    }
+
+    func testDuplicateStartReportsCleanupPendingWithoutTouchingSession() async throws {
+        let client = TestClient()
+        let coordinator = IOSProviderSessionCoordinator(
+            client: client,
+            clock: TestClock()
+        )
+        try await coordinator.start(rawConfiguration: Data([1]))
+        let callsBeforeDuplicateStart = client.calls
+
+        do {
+            try await coordinator.start(rawConfiguration: Data([2]))
+            XCTFail("duplicate start unexpectedly succeeded")
+        } catch {
+            XCTAssertEqual(error as? IOSProviderSessionError, .cleanupPending)
+        }
+
+        XCTAssertEqual(coordinator.sessionID, "session")
+        XCTAssertEqual(coordinator.generation, 7)
+        XCTAssertEqual(client.calls, callsBeforeDuplicateStart)
+    }
+
+    func testEmptyCreatedSessionIsMalformedWithoutCleanupAttempt() async {
+        let client = TestClient()
+        client.createResult = ""
+        let coordinator = IOSProviderSessionCoordinator(
+            client: client,
+            clock: TestClock()
+        )
+
+        do {
+            try await coordinator.start(rawConfiguration: Data([1]))
+            XCTFail("empty session unexpectedly succeeded")
+        } catch {
+            XCTAssertEqual(error as? IOSProviderSessionError, .malformed)
+        }
+
+        XCTAssertNil(coordinator.sessionID)
+        XCTAssertEqual(coordinator.generation, 0)
+        XCTAssertEqual(client.calls, ["create"])
+    }
+
+    func testCreateFailureLeavesCoordinatorEmpty() async {
+        let client = TestClient()
+        client.createError = TestError.rejected
+        let coordinator = IOSProviderSessionCoordinator(
+            client: client,
+            clock: TestClock()
+        )
+
+        do {
+            try await coordinator.start(rawConfiguration: Data([1]))
+            XCTFail("create failure unexpectedly succeeded")
+        } catch {
+            XCTAssertEqual(error as? TestError, .rejected)
+        }
+
+        XCTAssertNil(coordinator.sessionID)
+        XCTAssertEqual(coordinator.generation, 0)
+        XCTAssertEqual(client.calls, ["create"])
+    }
+
+    func testConfigureFailureDestroysUnstartedSession() async {
+        let client = TestClient()
+        client.configureError = TestError.rejected
+        let coordinator = IOSProviderSessionCoordinator(
+            client: client,
+            clock: TestClock()
+        )
+
+        do {
+            try await coordinator.start(rawConfiguration: Data([1]))
+            XCTFail("configure failure unexpectedly succeeded")
+        } catch {
+            XCTAssertEqual(error as? TestError, .rejected)
+        }
+
+        XCTAssertNil(coordinator.sessionID)
+        XCTAssertEqual(coordinator.generation, 0)
+        XCTAssertEqual(client.calls, ["create", "configure", "destroy"])
+    }
+
+    func testStartFailureDestroysUnstartedSession() async {
+        let client = TestClient()
+        client.startError = TestError.rejected
+        let coordinator = IOSProviderSessionCoordinator(
+            client: client,
+            clock: TestClock()
+        )
+
+        do {
+            try await coordinator.start(rawConfiguration: Data([1]))
+            XCTFail("start failure unexpectedly succeeded")
+        } catch {
+            XCTAssertEqual(error as? TestError, .rejected)
+        }
+
+        XCTAssertNil(coordinator.sessionID)
+        XCTAssertEqual(coordinator.generation, 0)
+        XCTAssertEqual(client.calls, ["create", "configure", "start", "destroy"])
+    }
+
+    func testZeroStartGenerationIsMalformedAndDestroysSession() async {
+        let client = TestClient()
+        client.startResult = 0
+        let coordinator = IOSProviderSessionCoordinator(
+            client: client,
+            clock: TestClock()
+        )
+
+        do {
+            try await coordinator.start(rawConfiguration: Data([1]))
+            XCTFail("zero generation unexpectedly succeeded")
+        } catch {
+            XCTAssertEqual(error as? IOSProviderSessionError, .malformed)
+        }
+
+        XCTAssertNil(coordinator.sessionID)
+        XCTAssertEqual(coordinator.generation, 0)
+        XCTAssertEqual(client.calls, ["create", "configure", "start", "destroy"])
+    }
+
+    func testStopWithoutSessionIsNoOp() async throws {
+        let client = TestClient()
+        let coordinator = IOSProviderSessionCoordinator(
+            client: client,
+            clock: TestClock()
+        )
+
+        try await coordinator.stop()
+
+        XCTAssertNil(coordinator.sessionID)
+        XCTAssertEqual(coordinator.generation, 0)
+        XCTAssertTrue(client.calls.isEmpty)
+    }
+
     func testStartWaitsForMatchingConnectedGeneration() async throws {
         let client = TestClient()
         client.snapshots = [
@@ -168,6 +338,57 @@ final class IOSProviderSessionCoordinatorTests: XCTestCase {
             client.calls,
             ["snapshot", "stop", "snapshot", "snapshot", "destroy"]
         )
+    }
+
+    func testRejectedStopRetainsSessionWhenCleanupIsNotVerified() async throws {
+        let client = TestClient()
+        let coordinator = IOSProviderSessionCoordinator(
+            client: client,
+            clock: TestClock()
+        )
+        try await coordinator.start(rawConfiguration: Data([1]))
+        client.calls.removeAll()
+        client.stopError = TestError.rejected
+        client.snapshots = [
+            .init(generation: 7, state: "CONNECTED", cleanupComplete: false),
+        ]
+
+        do {
+            try await coordinator.stop()
+            XCTFail("rejected stop unexpectedly succeeded")
+        } catch {
+            XCTAssertEqual(error as? TestError, .rejected)
+        }
+
+        XCTAssertEqual(coordinator.sessionID, "session")
+        XCTAssertEqual(coordinator.generation, 7)
+        XCTAssertEqual(client.calls, ["snapshot", "stop", "snapshot"])
+    }
+
+    func testStopCleanupTimeoutRetainsSessionForRetry() async throws {
+        let client = TestClient()
+        let coordinator = IOSProviderSessionCoordinator(
+            client: client,
+            clock: TestClock(),
+            pollInterval: 0.1,
+            timeout: 0.1
+        )
+        try await coordinator.start(rawConfiguration: Data([1]))
+        client.calls.removeAll()
+        client.snapshots = [
+            .init(generation: 7, state: "STOPPING", cleanupComplete: false),
+        ]
+
+        do {
+            try await coordinator.stop()
+            XCTFail("cleanup timeout unexpectedly succeeded")
+        } catch {
+            XCTAssertEqual(error as? IOSProviderSessionError, .cleanupTimeout)
+        }
+
+        XCTAssertEqual(coordinator.sessionID, "session")
+        XCTAssertEqual(coordinator.generation, 7)
+        XCTAssertEqual(client.calls, ["snapshot", "stop", "snapshot"])
     }
 
     func testFailedDestroyRetainsGenerationForRetry() async throws {

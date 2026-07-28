@@ -1,8 +1,9 @@
-// The bundled TrustTunnel native bridge currently has an Android arm64-v8a
-// archive only.  Keep the in-process implementation out of Android x86_64
-// gomobile builds: importing its CGO manager would otherwise leave the bridge
-// callbacks unresolved and prevent the whole app from loading.
-//go:build !(darwin && amd64) && (!android || arm64)
+// The bundled TrustTunnel native bridge is available only for supported
+// physical-device ABIs. Keep the in-process implementation out of Android
+// x86_64 and explicitly tagged iOS Simulator gomobile builds: importing its
+// CGO manager there would leave bridge callbacks unresolved and prevent the
+// whole app from loading.
+//go:build !simulator && !(darwin && amd64) && (!android || arm64)
 
 package trusttunnel
 
