@@ -1,0 +1,187 @@
+name: Repair F-Droid Release
+run-name: Repair F-Droid metadata for v${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing release version to repair (X.Y.Z)
+        required: true
+        type: string
+      source_sha:
+        description: Exact commit currently referenced by the release tag
+        required: true
+        type: string
+      confirm_replace:
+        description: Type replace-vX.Y.Z to authorize replacing only Android release assets
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: repair-fdroid-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      major: ${{ steps.validate.outputs.major }}
+      minor: ${{ steps.validate.outputs.minor }}
+      maintenance: ${{ steps.validate.outputs.maintenance }}
+      version_name: ${{ steps.validate.outputs.version_name }}
+      android_version_code: ${{ steps.validate.outputs.android_version_code }}
+      source_sha: ${{ steps.validate.outputs.source_sha }}
+      tag: ${{ steps.validate.outputs.tag }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+      REPLACE_CONFIRMATION: ${{ inputs.confirm_replace }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate trusted workflow and existing release
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          current_main="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq .commit.sha)"
+          test "$GITHUB_SHA" = "$current_main"
+          test "$RELEASE_SOURCE_SHA" != "$GITHUB_SHA"
+          test "$REPLACE_CONFIRMATION" = "replace-v$RELEASE_VERSION"
+          [[ "$RELEASE_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+          python3 .github/scripts/version_metadata.py \
+            --version "$RELEASE_VERSION" \
+            --github-output "$GITHUB_OUTPUT"
+          tag="v$RELEASE_VERSION"
+          tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)"
+          test "$tag_sha" = "$RELEASE_SOURCE_SHA"
+
+          encoded_version="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/contents/VERSION?ref=$RELEASE_SOURCE_SHA" \
+              --jq .content
+          )"
+          source_version="$(printf '%s' "$encoded_version" | base64 --decode | tr -d '[:space:]')"
+          test "$source_version" = "$RELEASE_VERSION"
+
+          release_json="$(
+            gh release view "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets,isDraft
+          )"
+          test "$(jq -r .isDraft <<<"$release_json")" = "false"
+          for asset in \
+            "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+            "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            "version.txt"; do
+            test "$(jq --arg asset "$asset" '[.assets[].name == $asset] | any' <<<"$release_json")" = "true"
+          done
+
+          {
+            echo "source_sha=$RELEASE_SOURCE_SHA"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
+
+  build_android:
+    needs: preflight
+    uses: ./.github/workflows/android_build.yml
+    with:
+      app_major_version: ${{ needs.preflight.outputs.major }}
+      app_minor_version: ${{ needs.preflight.outputs.minor }}
+      app_maintenance_version: ${{ needs.preflight.outputs.maintenance }}
+      android_version_code: ${{ needs.preflight.outputs.android_version_code }}
+      source_sha: ${{ needs.preflight.outputs.source_sha }}
+    secrets:
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
+
+  replace_android_assets:
+    needs: [preflight, build_android]
+    runs-on: ubuntu-latest
+    environment: release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ needs.preflight.outputs.version_name }}
+      ANDROID_VERSION_CODE: ${{ needs.preflight.outputs.android_version_code }}
+      RELEASE_SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+      RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: build-tools;36.0.0
+
+      - name: Download rebuilt signed APK
+        uses: actions/download-artifact@v4
+        with:
+          name: dobbyvpn-android-sign.apk
+          path: release
+
+      - name: Download rebuilt unsigned APK
+        uses: actions/download-artifact@v4
+        with:
+          name: dobbyvpn-android-unsign.apk
+          path: release
+
+      - name: Verify exact rebuilt APK metadata
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          signed="release/DobbyVPN-v$RELEASE_VERSION-sign.apk"
+          unsigned="release/DobbyVPN-v$RELEASE_VERSION-unsign.apk"
+          test -f "$signed"
+          test -f "$unsigned"
+          for apk in "$signed" "$unsigned"; do
+            test "$(apkanalyzer manifest application-id "$apk")" = "com.dobby.vpn"
+            test "$(apkanalyzer manifest version-name "$apk")" = "$RELEASE_VERSION"
+            test "$(apkanalyzer manifest version-code "$apk")" = "$ANDROID_VERSION_CODE"
+          done
+          {
+            echo "signed=$signed"
+            echo "unsigned=$unsigned"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "versionName=$RELEASE_VERSION"
+            echo "versionCode=$ANDROID_VERSION_CODE"
+          } > release/version.txt
+
+      - name: Replace only F-Droid-facing Android assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)" = "$RELEASE_SOURCE_SHA"
+          gh release upload "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber \
+            "${{ steps.apk.outputs.signed }}" \
+            "${{ steps.apk.outputs.unsigned }}" \
+            release/version.txt
+
+      - name: Confirm repaired public metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/version.txt"
+          test "$(
+            curl --fail --silent --show-error --location "$version_url"
+          )" = "$(printf 'versionName=%s\nversionCode=%s' "$RELEASE_VERSION" "$ANDROID_VERSION_CODE")"
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json url \
+            --jq .url

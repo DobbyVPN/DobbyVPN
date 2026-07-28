@@ -79,6 +79,18 @@ run and source commit, downloads its artifacts only to a GitHub-hosted runner,
 and creates `vX.Y.Z` plus the GitHub Release. That final tag is the sole signal
 for official F-Droid update processing.
 
+Android and F-Droid use a stable version code derived from the marketing
+version: `major * 1,000,000 + minor * 1,000 + maintenance`. For example,
+`1.4.3` is `1004003`. This is intentionally independent of the GitHub Actions
+run number, which remains Apple's monotonically increasing `CFBundleVersion`.
+The release workflow and APK scan both enforce this mapping.
+
+`repair_fdroid_release.yml` is a guarded recovery path for a release whose
+Android assets predate that enforcement. It rebuilds from the exact existing
+tag commit and replaces only the signed APK, unsigned APK, and `version.txt`
+after checking the protected `release` environment and an explicit
+`replace-vX.Y.Z` confirmation.
+
 The same operator command dispatches `submit_app_store.yml` for production
 App Review. Its secretless validation job binds the request to the exact
 successful `main` Release run, source version, iOS job, and build number.

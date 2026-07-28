@@ -75,6 +75,14 @@ jobs:
           )"
           source_version="$(printf '%s' "$encoded_version" | base64 --decode | tr -d '[:space:]')"
           test "$source_version" = "$RELEASE_VERSION"
+          android_version_code="$(
+            IFS=. read -r major minor maintenance <<< "$RELEASE_VERSION"
+            test "$minor" -lt 1000
+            test "$maintenance" -lt 1000
+            echo $((10#$major * 1000000 + 10#$minor * 1000 + 10#$maintenance))
+          )"
+          test "$android_version_code" -ge 1
+          test "$android_version_code" -le 2100000000
 
           tag="v$RELEASE_VERSION"
           run_number="$(jq -r .number <<<"$run_json")"
@@ -115,6 +123,7 @@ jobs:
           {
             echo "tag=$tag"
             echo "run_number=$run_number"
+            echo "android_version_code=$android_version_code"
             echo "release_state=$release_state"
           } >> "$GITHUB_OUTPUT"
           echo "Validated $tag from Release run $RELEASE_RUN_ID at $RELEASE_SOURCE_SHA"
@@ -207,7 +216,7 @@ jobs:
           set -euo pipefail
           {
             echo "versionName=$RELEASE_VERSION"
-            echo "versionCode=${{ steps.preflight.outputs.run_number }}"
+            echo "versionCode=${{ steps.preflight.outputs.android_version_code }}"
           } > release/version.txt
 
       - name: Create public GitHub release

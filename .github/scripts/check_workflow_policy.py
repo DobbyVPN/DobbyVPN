@@ -83,6 +83,28 @@ def main() -> int:
                 f"submit_app_store.yml: missing protected submission control: {expected}"
             )
 
+    fdroid_repair = (WORKFLOWS / "repair_fdroid_release.yml").read_text(encoding="utf-8")
+    if PR_TRIGGER.search(fdroid_repair):
+        violations.append(
+            "repair_fdroid_release.yml: protected repair must not run on pull_request"
+        )
+    for expected in (
+        "workflow_dispatch:",
+        "contents: write",
+        'test "$GITHUB_REF" = "refs/heads/main"',
+        'test "$GITHUB_SHA" = "$current_main"',
+        'test "$REPLACE_CONFIRMATION" = "replace-v$RELEASE_VERSION"',
+        'test "$tag_sha" = "$RELEASE_SOURCE_SHA"',
+        "source_sha: ${{ needs.preflight.outputs.source_sha }}",
+        "environment: release",
+        "--clobber",
+        "versionCode=$ANDROID_VERSION_CODE",
+    ):
+        if expected not in fdroid_repair:
+            violations.append(
+                f"repair_fdroid_release.yml: missing fail-closed repair control: {expected}"
+            )
+
     fastfile = (ROOT.parent / "fastlane" / "Fastfile").read_text(encoding="utf-8")
     for expected in (
         'lane :submit_app_store_review do',

@@ -24,6 +24,7 @@ jobs:
       minor: ${{ steps.version.outputs.minor }}
       maintenance: ${{ steps.version.outputs.maintenance }}
       version_name: ${{ steps.version.outputs.version_name }}
+      android_version_code: ${{ steps.version.outputs.android_version_code }}
     steps:
       - uses: actions/checkout@v4
 
@@ -31,19 +32,20 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          raw="$(tr -d '[:space:]' < VERSION 2>/dev/null || echo '1.4.0')"
-          IFS=. read -r major minor patch <<< "${raw}"
-          major="${major:-1}"
-          minor="${minor:-0}"
-          patch="${patch:-0}"
-
-          {
-            echo "major=$major"
-            echo "minor=$minor"
-            echo "maintenance=$patch"
-            echo "version_name=${major}.${minor}.${patch}"
-          } >> "$GITHUB_OUTPUT"
-          echo "Marketing version ${major}.${minor}.${patch} (from VERSION file)"
+          python3 .github/scripts/version_metadata.py \
+            --version-file VERSION \
+            --github-output "$GITHUB_OUTPUT"
+          version_name="$(
+            python3 .github/scripts/version_metadata.py \
+              --version-file VERSION \
+              --field version_name
+          )"
+          android_version_code="$(
+            python3 .github/scripts/version_metadata.py \
+              --version-file VERSION \
+              --field android_version_code
+          )"
+          echo "Marketing version $version_name; Android/F-Droid versionCode $android_version_code"
 
   desktop_libs_build:
     needs: verification
@@ -65,6 +67,8 @@ jobs:
       app_major_version: ${{ needs.prepare_version.outputs.major }}
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
+      android_version_code: ${{ needs.prepare_version.outputs.android_version_code }}
+      source_sha: ${{ github.sha }}
     secrets:
       KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -76,8 +80,11 @@ jobs:
     uses: ./.github/workflows/fdroid_check.yml
 
   fdroid_scan_apk:
-    needs: android_build
+    needs: [prepare_version, android_build]
     uses: ./.github/workflows/fdroid_scan_apk.yml
+    with:
+      version_name: ${{ needs.prepare_version.outputs.version_name }}
+      version_code: ${{ needs.prepare_version.outputs.android_version_code }}
 
   ios_build:
     if: github.event_name != 'pull_request'
