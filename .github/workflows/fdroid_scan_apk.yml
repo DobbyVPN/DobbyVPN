@@ -2,6 +2,13 @@ name: F-Droid APK Scan
 
 on:
   workflow_call:
+    inputs:
+      version_name:
+        type: string
+        required: true
+      version_code:
+        type: string
+        required: true
 
 jobs:
   scan-apk:
@@ -59,6 +66,9 @@ jobs:
             echo "::error::Unsigned APK artifact was not found"
             exit 1
           fi
+
+          test "$(apkanalyzer manifest version-name "$APK")" = "${{ inputs.version_name }}"
+          test "$(apkanalyzer manifest version-code "$APK")" = "${{ inputs.version_code }}"
 
           PACKAGES=$(apkanalyzer dex packages "$APK" 2>/dev/null | awk '{print $NF}')
 

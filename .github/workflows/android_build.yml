@@ -21,6 +21,12 @@ on:
       app_maintenance_version:
         type: string
         required: true
+      android_version_code:
+        type: string
+        required: true
+      source_sha:
+        type: string
+        required: true
 
 jobs:
   android_build:
@@ -31,13 +37,15 @@ jobs:
       APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
       APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
       APPLE_BUILD_NUMBER: ${{ github.run_number }}
-      GITHUB_SHA: ${{ github.sha }}
+      ANDROID_VERSION_CODE: ${{ inputs.android_version_code }}
+      GITHUB_SHA: ${{ inputs.source_sha }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       FDROID_COMPAT_SOURCE_ROOT: /home/vagrant/build/com.dobby.vpn
 
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_sha }}
           submodules: true
 
       - name: Set up bootstrap Go

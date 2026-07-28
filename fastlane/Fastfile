@@ -1,9 +1,17 @@
 default_platform(:android)
 
 # CI sets APP_* from the manual VERSION file (prepare_version reads x.y.z, no auto-bump).
-# versionCode / CFBundleVersion use APPLE_BUILD_NUMBER (GitHub Actions run number).
+# Android/F-Droid versionCode is stable for the marketing version. Apple's
+# CFBundleVersion remains the GitHub Actions run number.
 FULL_VERSION    = "#{ENV['APP_MAJOR_VERSION']}.#{ENV['APP_MINOR_VERSION']}.#{ENV['APP_MAINTENANCE_VERSION']}"
-VERSION_CODE    = ENV['APPLE_BUILD_NUMBER'].to_i
+SEMANTIC_ANDROID_VERSION_CODE =
+  ENV['APP_MAJOR_VERSION'].to_i * 1_000_000 +
+  ENV['APP_MINOR_VERSION'].to_i * 1_000 +
+  ENV['APP_MAINTENANCE_VERSION'].to_i
+VERSION_CODE    = ENV.fetch('ANDROID_VERSION_CODE', SEMANTIC_ANDROID_VERSION_CODE.to_s).to_i
+if VERSION_CODE != SEMANTIC_ANDROID_VERSION_CODE
+  raise "ANDROID_VERSION_CODE must equal #{SEMANTIC_ANDROID_VERSION_CODE} for #{FULL_VERSION}"
+end
 COMMIT          = ENV["GITHUB_SHA"]
 SHORT_SHA       = COMMIT && !COMMIT.empty? ? COMMIT[0, 7] : "unknown"
 REPO            = ENV["GITHUB_REPOSITORY"]
