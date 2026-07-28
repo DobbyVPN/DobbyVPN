@@ -23,6 +23,8 @@ var ipv4Subnets = []string{
 	"128.0.0.0/1",
 }
 
+const windowsOnLinkNextHop = "0.0.0.0"
+
 var ipv4ReservedSubnets = []string{
 	"0.0.0.0/8",
 	"10.0.0.0/8",
@@ -42,9 +44,10 @@ var ipv4ReservedSubnets = []string{
 	"240.0.0.0/4",
 }
 
-const ipv6BlockRuleName = "DobbyVPN Block IPv6"
-
 var (
+	windowsNetshCommand = executeNetshCommand
+	windowsRouteExists  = routeExistsInWindowsTable
+
 	interfaceChangeCallback = windows.NewCallback(onInterfaceChange)
 	interfaceWaitersMu      sync.Mutex
 	interfaceWaitersNextID  uintptr
@@ -100,116 +103,39 @@ func formatCommandForLog(name string, args ...string) string {
 	return strings.Join(parts, " ")
 }
 
-func startIPv6Block() error {
-	log.Debugf(Category, "Outline/routing: Installing IPv6 outbound block rule")
-
-	_, _ = ExecuteCommand(fmt.Sprintf("netsh advfirewall firewall delete rule name=\"%s\"", ipv6BlockRuleName))
-
-	ipv6RemoteRanges := []string{
-		"0000:0000:0000:0000:0000:0000:0000:0000-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
-		"0::/0",
-		"::/0",
-	}
-	var errs []string
-	for _, remoteIP := range ipv6RemoteRanges {
-		command := fmt.Sprintf(
-			"netsh advfirewall firewall add rule name=\"%s\" dir=out action=block enable=yes remoteip=%s",
-			ipv6BlockRuleName,
-			remoteIP,
-		)
-		if _, err := ExecuteCommand(command); err == nil {
-			log.Debugf(Category, "Outline/routing: IPv6 outbound block rule installed with remoteip=%s", remoteIP)
-			return nil
-		} else {
-			errs = append(errs, fmt.Sprintf("remoteip=%s: %v", remoteIP, err))
-		}
-	}
-
-	return fmt.Errorf("failed to install IPv6 outbound block rule: %s", strings.Join(errs, "; "))
+// windowsRoute is the exact identity used for both the route-table lookup and
+// its netsh lease.  A route owned by another process is intentionally not
+// changed or deleted.
+type windowsRoute struct {
+	prefix        string
+	nextHop       string
+	interfaceName string
 }
 
-func stopIPv6Block() error {
-	log.Debugf(Category, "Outline/routing: Removing IPv6 outbound block rule")
-
-	command := fmt.Sprintf("netsh advfirewall firewall delete rule name=\"%s\"", ipv6BlockRuleName)
-	if _, err := ExecuteCommand(command); err != nil {
-		return fmt.Errorf("failed to remove IPv6 outbound block rule: %w", err)
+func windowsRouteArgs(action string, route windowsRoute) []string {
+	args := []string{
+		"interface", "ipv4", action, "route", route.prefix,
+		"nexthop=" + route.nextHop,
+		"interface=" + route.interfaceName,
 	}
-
-	log.Debugf(Category, "Outline/routing: IPv6 outbound block rule removed")
-	return nil
+	// Windows can normalize the requested metric when it installs an
+	// off-link/gateway route. Supplying metric=0 during deletion then exits
+	// successfully without matching that exact route. Prefix, next hop and
+	// interface are the session-owned identity; omit metric only on delete.
+	if action == "add" {
+		args = append(args, "metric=0")
+	}
+	return append(args, "store=active")
 }
 
-func StartRouting(proxyIP string, GatewayIP string, TunDeviceName string, InterfaceName string, TunGateway string, TunDeviceIP string) error {
-	log.Debugf(Category, "Outline/routing: Starting routing configuration for Windows...")
-	log.Debugf(Category, "Outline/routing: Proxy IP: %s, Tun Device Name: %s, Tun Gateway: %s, Tun Device IP: %s, Gateway IP: %s, Interface Name: %s",
-		proxyIP, TunDeviceName, TunGateway, TunDeviceIP, GatewayIP, InterfaceName)
-	log.Debugf(Category, "Outline/routing: Setting up IP rule...")
-	if _, err := EnsureProxyRoute(proxyIP, GatewayIP, InterfaceName); err != nil {
-		return err
-	}
-	log.Debugf(Category, "Outline/routing: Added IP proxy rules via table")
-	if err := addOrUpdateReservedSubnetBypass(GatewayIP, InterfaceName); err != nil {
-		return err
-	}
-	log.Debugf(Category, "Outline/routing: Added IP reserved rules via table")
-	if err := addIpv4TunRedirect(TunGateway, TunDeviceName); err != nil {
-		return err
-	}
-	log.Debugf(Category, "Outline/routing: Added default IPv4 redirect routes via TUN")
-	if err := startIPv6Block(); err != nil {
-		log.Debugf(Category, "Outline/routing: IPv6 outbound block rule was not installed; continuing with IPv4 routing: %v", err)
-	}
-
-	log.Debugf(Category, "Outline/routing: Routing configuration completed successfully.")
-	return nil
-}
-
-func StopRouting(proxyIp string, TunDeviceName string, GatewayIP string, InterfaceName string, TunGateway string) {
-	log.Debugf(Category, "Outline/routing: Cleaning up routing table and rules...")
-	if err := stopIPv6Block(); err != nil {
-		log.Debugf(Category, "Outline/routing: Failed to remove IPv6 outbound block rule: %v", err)
-	}
-	if err := DeleteProxyRoute(proxyIp, GatewayIP, InterfaceName); err != nil {
-		log.Debugf(Category, "Outline/routing: Failed to delete proxy route for IP %s: %v", proxyIp, err)
-	}
-	if err := removeReservedSubnetBypass(); err != nil {
-		log.Debugf(Category, "Outline/routing: Failed to remove reserved subnet bypass routes: %v", err)
-	}
-	if err := stopRoutingIpv4(TunDeviceName); err != nil {
-		log.Debugf(Category, "Outline/routing: Failed to remove IPv4 TUN redirect routes: %v", err)
-	}
-	log.Debugf(Category, "Outline/routing: Cleaned up routing table and rules.")
-}
-
-func EnsureProxyRoute(proxyIp string, gatewayIp string, interfaceName string) (bool, error) {
-	if isLoopbackIP(proxyIp) {
-		log.Debugf(Category, "Outline/routing: Skipping proxy route for loopback server: %s", proxyIp)
+// AcquireProxyRoute adds the exact VPN-server bypass route only when it is
+// absent and registers its exact deletion with plan immediately.
+func AcquireProxyRoute(plan *Plan, proxyIP, gatewayIP, interfaceName string) (bool, error) {
+	if isLoopbackIP(proxyIP) {
+		log.Debugf(Category, "Outline/routing: Skipping proxy route for loopback server: %s", proxyIP)
 		return false, nil
 	}
-
-	// Try updating an existing route first (locale-independent duplicate handling)
-	if _, err := executeNetshCommand(
-		"interface", "ipv4", "set", "route", proxyIp+"/32",
-		"nexthop="+gatewayIp,
-		"interface="+interfaceName,
-		"metric=0",
-		"store=active",
-	); err == nil {
-		log.Debugf(Category, "Outline/routing: Proxy route already exists for IP %s; leaving it unchanged", proxyIp)
-		return false, nil
-	}
-
-	if _, err := executeNetshCommand(
-		"interface", "ipv4", "add", "route", proxyIp+"/32",
-		"nexthop="+gatewayIp,
-		"interface="+interfaceName,
-		"metric=0",
-		"store=active",
-	); err != nil {
-		return false, fmt.Errorf("failed to add proxy route for IP %s: %w", proxyIp, err)
-	}
-	return true, nil
+	return acquireWindowsRoute(plan, "proxy route "+proxyIP, windowsRoute{prefix: proxyIP + "/32", nextHop: gatewayIP, interfaceName: interfaceName})
 }
 
 func isLoopbackIP(ip string) bool {
@@ -217,97 +143,146 @@ func isLoopbackIP(ip string) bool {
 	return parsed != nil && parsed.IsLoopback()
 }
 
-func DeleteProxyRoute(proxyIp string, GatewayIP string, InterfaceName string) error {
-	if isLoopbackIP(proxyIp) {
-		log.Debugf(Category, "Outline/routing: Skipping proxy route removal for loopback server: %s", proxyIp)
-		return nil
-	}
-
-	command := fmt.Sprintf("netsh interface ipv4 delete route %s/32 \"%s\" %s", proxyIp, InterfaceName, GatewayIP)
-	_, err := ExecuteCommand(command)
+func acquireWindowsRoute(plan *Plan, name string, route windowsRoute) (bool, error) {
+	exists, err := windowsRouteExists(route)
 	if err != nil {
-		return fmt.Errorf("failed to delete proxy route for IP %s: %w", proxyIp, err)
+		return false, fmt.Errorf("query exact %s: %w", name, err)
 	}
-	return nil
+	if exists {
+		log.Debugf(Category, "Outline/routing: preserving pre-existing %s prefix=%s nexthop=%s interface=%s", name, route.prefix, route.nextHop, route.interfaceName)
+		return false, nil
+	}
+	if _, err := plan.Acquire(name,
+		func() error {
+			_, err := windowsNetshCommand(windowsRouteArgs("add", route)...)
+			return err
+		},
+		func() error {
+			_, err := windowsNetshCommand(windowsRouteArgs("delete", route)...)
+			return err
+		},
+	); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
-func addOrUpdateReservedSubnetBypass(gatewayIp string, interfaceName string) error {
-	var errs []string
+func routeExistsInWindowsTable(route windowsRoute) (bool, error) {
+	iface, err := net.InterfaceByName(route.interfaceName)
+	if err != nil {
+		return false, fmt.Errorf("resolve interface %q: %w", route.interfaceName, err)
+	}
+	prefixIP, prefix, err := net.ParseCIDR(route.prefix)
+	if err != nil || prefixIP.To4() == nil {
+		return false, fmt.Errorf("parse IPv4 prefix %q", route.prefix)
+	}
+	nextHop := net.ParseIP(route.nextHop).To4()
+	if nextHop == nil {
+		return false, fmt.Errorf("parse IPv4 next hop %q", route.nextHop)
+	}
+
+	var table *windows.MibIpForwardTable2
+	if err := windows.GetIpForwardTable2(windows.AF_INET, &table); err != nil {
+		return false, err
+	}
+	defer windows.FreeMibTable(unsafe.Pointer(table))
+	for _, row := range table.Rows() {
+		if row.InterfaceIndex != uint32(iface.Index) || row.DestinationPrefix.PrefixLength != uint8(prefixMaskSize(prefix)) {
+			continue
+		}
+		if routeRowIPv4(row.DestinationPrefix.Prefix) == prefixIP.To4().String() && routeRowIPv4(row.NextHop) == nextHop.String() {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func prefixMaskSize(prefix *net.IPNet) int {
+	ones, _ := prefix.Mask.Size()
+	return ones
+}
+
+func routeRowIPv4(raw windows.RawSockaddrInet) string {
+	if raw.Family != windows.AF_INET {
+		return ""
+	}
+	addr := (*windows.RawSockaddrInet4)(unsafe.Pointer(&raw))
+	return net.IP(addr.Addr[:]).String()
+}
+
+func acquireIPv6Block(plan *Plan) error {
+	ruleName := "DobbyVPN Block IPv6 " + plan.SessionID()
+	remoteRanges := []string{
+		"0000:0000:0000:0000:0000:0000:0000:0000-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+		"0::/0",
+		"::/0",
+	}
+	_, err := plan.Acquire("IPv6 firewall rule "+ruleName, func() error {
+		var errs []string
+		for _, remoteIP := range remoteRanges {
+			if _, err := windowsNetshCommand("advfirewall", "firewall", "add", "rule", "name="+ruleName, "dir=out", "action=block", "enable=yes", "remoteip="+remoteIP); err == nil {
+				return nil
+			} else {
+				errs = append(errs, err.Error())
+			}
+		}
+		return fmt.Errorf("install IPv6 block rule %q: %s", ruleName, strings.Join(errs, "; "))
+	}, func() error {
+		_, err := windowsNetshCommand("advfirewall", "firewall", "delete", "rule", "name="+ruleName)
+		return err
+	})
+	return err
+}
+
+// ConfigureWindowsRouting acquires all Windows routing resources into plan.
+// Any failure closes the plan, rolling back in LIFO order and leaving routes
+// that existed before this session untouched.
+func ConfigureWindowsRouting(plan *Plan, proxyIP, gatewayIP, tunDeviceName, interfaceName string) error {
+	fail := func(err error) error {
+		if rollbackErr := plan.Close(); rollbackErr != nil {
+			return fmt.Errorf("%w; routing rollback: %v", err, rollbackErr)
+		}
+		return err
+	}
+	if _, err := AcquireProxyRoute(plan, proxyIP, gatewayIP, interfaceName); err != nil {
+		return fail(err)
+	}
 	for _, subnet := range ipv4ReservedSubnets {
-		// Use netsh directly since it supports interface names
-		netshCommand := fmt.Sprintf("netsh interface ipv4 set route %s nexthop=%s interface=\"%s\" metric=0 store=active",
-			subnet, gatewayIp, interfaceName)
-		_, err := ExecuteCommand(netshCommand)
-		if err != nil {
-			// Route might not exist yet, try add
-			addCommand := fmt.Sprintf("netsh interface ipv4 add route %s nexthop=%s interface=\"%s\" metric=0 store=active",
-				subnet, gatewayIp, interfaceName)
-			_, err = ExecuteCommand(addCommand)
-			if err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", subnet, err))
-			}
+		if _, err := acquireWindowsRoute(plan, "reserved bypass "+subnet, windowsRoute{prefix: subnet, nextHop: gatewayIP, interfaceName: interfaceName}); err != nil {
+			return fail(err)
 		}
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("failed to add or update reserved subnet bypass routes: %s", strings.Join(errs, "; "))
-	}
-	return nil
-}
-
-func removeReservedSubnetBypass() error {
-	var errs []string
-	for _, subnet := range ipv4ReservedSubnets {
-		command := fmt.Sprintf("route delete %s", subnet)
-		_, err := ExecuteCommand(command)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", subnet, err))
-		}
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("%s", strings.Join(errs, "; "))
-	}
-	return nil
-}
-
-func addIpv4TunRedirect(tunGatewayIP string, tunDeviceName string) error {
-	var errs []string
 	for _, subnet := range ipv4Subnets {
-		command := fmt.Sprintf("netsh interface ipv4 add route %s nexthop=%s interface=\"%s\" metric=0 store=active",
-			subnet, tunGatewayIP, tunDeviceName)
-		_, err := ExecuteCommand(command)
-		if err != nil {
-			setCommand := fmt.Sprintf("netsh interface ipv4 set route %s nexthop=%s interface=\"%s\" metric=0 store=active",
-				subnet, tunGatewayIP, tunDeviceName)
-			_, err = ExecuteCommand(setCommand)
-			if err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", subnet, err))
-			}
+		// Wintun is a layer-3 adapter without a peer responding to ARP. Use an
+		// explicit on-link route instead of inventing a gateway which Windows
+		// can mark unreachable even though the route remains in ActiveStore.
+		if _, err := acquireWindowsRoute(plan, "TUN redirect "+subnet, windowsRoute{prefix: subnet, nextHop: windowsOnLinkNextHop, interfaceName: tunDeviceName}); err != nil {
+			return fail(err)
 		}
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("failed to add or set TUN redirect routes: %s", strings.Join(errs, "; "))
+	if err := acquireIPv6Block(plan); err != nil {
+		return fail(err)
 	}
 	return nil
 }
 
-func stopRoutingIpv4(tunDeviceName string) error {
-	var errs []string
-	for _, subnet := range ipv4Subnets {
-		command := fmt.Sprintf("netsh interface ipv4 delete route %s interface=\"%s\" store=active", subnet, tunDeviceName)
-		_, err := ExecuteCommand(command)
-		if err != nil {
-			// Fallback: try route delete
-			fallbackCmd := fmt.Sprintf("route delete %s", subnet)
-			_, err = ExecuteCommand(fallbackCmd)
-			if err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", subnet, err))
-			}
-		}
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("%s", strings.Join(errs, "; "))
-	}
-	return nil
+// StartRouting and StopRouting are retained for source compatibility. Windows
+// routing now requires a caller-owned Plan so cleanup can never affect another
+// VPN session.
+func StartRouting(string, string, string, string, string, string) error {
+	return fmt.Errorf("Windows routing requires ConfigureWindowsRouting with a session Plan")
+}
+
+func StopRouting(string, string, string, string, string) {
+	log.Debugf(Category, "Outline/routing: StopRouting ignored; caller-owned Plan releases only its leases")
+}
+
+func EnsureProxyRoute(string, string, string) (bool, error) {
+	return false, fmt.Errorf("Windows proxy routing requires AcquireProxyRoute with a session Plan")
+}
+
+func DeleteProxyRoute(string, string, string) error {
+	return fmt.Errorf("Windows proxy route deletion requires the acquiring session Plan")
 }
 
 func FindInterfaceIPByGateway(gatewayIP string) (string, error) {
@@ -463,6 +438,28 @@ func WaitForInterfaceNameContains(namePart string, timeout time.Duration) (*net.
 		}
 		return nil, fmt.Errorf("%s is not present", label)
 	})
+}
+
+// WaitForInterfaceName waits for the one adapter owned by the caller. It does
+// not use substring matching, which could select an unrelated Wintun adapter.
+func WaitForInterfaceName(name string, timeout time.Duration) (*net.Interface, error) {
+	label := fmt.Sprintf("interface named %q", name)
+	return waitForInterfaceChange(timeout, label, func() (*net.Interface, error) {
+		interfaces, err := net.Interfaces()
+		if err != nil {
+			return nil, err
+		}
+		return selectExactInterface(name, interfaces)
+	})
+}
+
+func selectExactInterface(name string, interfaces []net.Interface) (*net.Interface, error) {
+	for _, ifc := range interfaces {
+		if ifc.Name == name {
+			return &ifc, nil
+		}
+	}
+	return nil, fmt.Errorf("interface named %q is not present", name)
 }
 
 func GetNetworkInterfaceByIP(currentIP string) (*net.Interface, error) {

@@ -35,6 +35,8 @@ func Guard(category, fnName string) func() {
 }
 
 // GuardErr logs panics and assigns a formatted error to errp when non-nil.
+//
+//nolint:gocritic // Deferred recovery must update the caller's named error result.
 func GuardErr(category, fnName string, errp *error) func() {
 	return func() {
 		if recovered := recover(); recovered != nil {

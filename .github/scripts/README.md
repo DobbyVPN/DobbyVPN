@@ -47,8 +47,13 @@ Desktop service binaries are built with explicit platform and architecture:
 ```bash
 python .github/scripts/desktop_build.py libs --platform linux --arch amd64 --go-mod-tidy
 python .github/scripts/desktop_build.py libs --platform macos --arch arm64 --go-mod-tidy
+python .github/scripts/desktop_build.py libs --platform macos --arch amd64 --go-mod-tidy
 python .github/scripts/desktop_build.py libs --platform windows --arch amd64 --go-mod-tidy
 ```
+
+The macOS commands run on matching official GitHub-hosted runners: `macos-15`
+for arm64 and `macos-15-intel` for amd64. Their artifacts are kept separate so
+the installer and CLI lanes never combine architectures.
 
 The desktop app build uses service binaries downloaded into `kmp_module/services`:
 

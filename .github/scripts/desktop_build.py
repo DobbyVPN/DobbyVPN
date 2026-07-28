@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import os
 import platform
 import shutil
 import socket
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -22,14 +24,38 @@ KMP_DIR = ROOT_DIR / "kmp_module"
 SERVICES_DIR = KMP_DIR / "services"
 TOOLS_DIR = ROOT_DIR / ".local-tools" / "desktop-build"
 
+ANDROID_NDK_VERSION = "27.2.12479018"
 ANDROID_PACKAGES = (
     "platforms;android-35",
     "platforms;android-36",
     "build-tools;36.0.0",
     "platform-tools",
+    f"ndk;{ANDROID_NDK_VERSION}",
 )
 ANDROID_TOOLS_VERSION = "11076708"
 WINTUN_VERSION = "0.14.1"
+WINDOWS_RUNTIME_DLLS = (
+    "libwinpthread-1.dll",
+    "libgcc_s_seh-1.dll",
+    "libstdc++-6.dll",
+)
+WINDOWS_BRIDGE_VERSION = "1.0.0"
+WINDOWS_BRIDGE_ARCHIVE_SHA256 = "9c0d79401c3da26d922e58c5fc3317c75d800598e9cb91a31ce3aebbf71b4668"
+TRUSTTUNNEL_LINUX_VERSION = "1.0.0"
+TRUSTTUNNEL_LINUX_ARCHIVE_SHA256 = "515c6993672e35d768477b3cd5c04ee7dfcbeaaeecd5abef5e03c1603486cbfe"
+LLVM_LIBCXX_VERSION = "21.1.8"
+LLVM_LIBCXX_PACKAGES = (
+    (
+        "libc++1_21.1.8~++20251221032922+2078da43e25a-1~exp1~20251221153059.70_amd64.deb",
+        "d9566cd347beb65bf2e0d504fbffc6ca38c29ac2752292cba515891c84ff0bbd",
+    ),
+    (
+        "libc++abi1_21.1.8~++20251221032922+2078da43e25a-1~exp1~20251221153059.70_amd64.deb",
+        "829f02714a9daafac0cc37c81c7d02ae5cb5b63707b524b93e36dcd7e7e5549c",
+    ),
+)
+TRUSTTUNNEL_MACOS_VERSION = "1.0.49"
+TRUSTTUNNEL_MACOS_ARCHIVE_SHA256 = "f2dab732d17a885dcc4c81831fa4b263db250f5bea8a151416b518e936979c64"
 
 SERVICE_NAMES = {
     "linux": "ubuntu_grpcvpnserver",
@@ -398,6 +424,7 @@ def android_packages_installed(sdk_root: Path) -> bool:
         (sdk_root / "platforms" / "android-35").is_dir()
         and (sdk_root / "platforms" / "android-36").is_dir()
         and (sdk_root / "build-tools" / "36.0.0").is_dir()
+        and (sdk_root / "ndk" / ANDROID_NDK_VERSION).is_dir()
     )
 
 
@@ -555,6 +582,192 @@ def install_wintun(skip_deps: bool) -> None:
     log(f"Installed {target}")
 
 
+def stage_windows_runtime_dlls() -> None:
+    """Copy MinGW runtime dependencies beside the Windows service executable."""
+    if host_platform() != "windows":
+        return
+    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    missing: list[str] = []
+    for dll_name in WINDOWS_RUNTIME_DLLS:
+        source_name = run_capture(["gcc", f"-print-file-name={dll_name}"])
+        source = Path(source_name) if source_name else Path()
+        if not source.is_file():
+            missing.append(dll_name)
+            continue
+        target = SERVICES_DIR / dll_name
+        shutil.copyfile(source, target)
+        log(f"Staged MinGW runtime DLL: {target.name}")
+    if missing:
+        fail("MinGW runtime DLLs are required for the Windows gRPC VPN service: " + ", ".join(missing))
+
+
+def install_windows_bridge(skip_deps: bool) -> None:
+    """Install and stage the checksum-pinned Windows native bridge."""
+    if host_platform() != "windows":
+        return
+    bridge_dir = GO_MODULE_DIR / "lib" / "windows"
+    bridge_dir.mkdir(parents=True, exist_ok=True)
+    bridge = bridge_dir / "dobby_bridge.dll"
+    if not bridge.exists():
+        if skip_deps:
+            fail("dobby_bridge.dll is required for the Windows gRPC VPN service")
+        archive = TOOLS_DIR / "downloads" / f"dobby_bridge-windows-x86_64-v{WINDOWS_BRIDGE_VERSION}.zip"
+        download(
+            "https://github.com/DobbyVPN/go-go-tunnel/releases/download/"
+            f"v{WINDOWS_BRIDGE_VERSION}/dobby_bridge-windows-x86_64.zip",
+            archive,
+        )
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if digest != WINDOWS_BRIDGE_ARCHIVE_SHA256:
+            fail("Windows native bridge archive checksum mismatch")
+        with zipfile.ZipFile(archive) as zip_file:
+            for member in zip_file.infolist():
+                member_path = Path(member.filename)
+                if member.is_dir() or member_path.is_absolute() or ".." in member_path.parts:
+                    continue
+                if member_path.name not in {
+                    "dobby_bridge.dll",
+                    "dobby_bridge.lib",
+                    "dobby_bridge.a",
+                    "libdobby_bridge.a",
+                }:
+                    continue
+                with zip_file.open(member) as source, open(bridge_dir / member_path.name, "wb") as target:
+                    shutil.copyfileobj(source, target)
+    if not bridge.is_file():
+        fail("Windows native bridge archive did not contain dobby_bridge.dll")
+    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(bridge, SERVICES_DIR / bridge.name)
+    log(f"Staged checksum-pinned Windows native bridge: {bridge.name}")
+
+
+def append_cgo_ldflags(env: dict[str, str], *flags: str) -> None:
+    """Append required native linker flags without discarding caller flags."""
+    existing = env.get("CGO_LDFLAGS", "").strip()
+    env["CGO_LDFLAGS"] = " ".join(part for part in (existing, *flags) if part)
+
+
+def install_linux_trusttunnel_bridge(skip_deps: bool) -> None:
+    """Stage the checksum-pinned Linux bridge for linking and packaging."""
+    if host_platform() != "linux":
+        return
+
+    bridge = GO_MODULE_DIR / "libdobby_bridge.so"
+    if not bridge.exists():
+        if skip_deps:
+            fail("libdobby_bridge.so is required for the Linux gRPC VPN service")
+
+        archive = (
+            TOOLS_DIR
+            / "downloads"
+            / f"libdobby_bridge-linux-x86_64-v{TRUSTTUNNEL_LINUX_VERSION}.zip"
+        )
+        if not archive.exists():
+            download(
+                "https://github.com/DobbyVPN/go-go-tunnel/releases/download/"
+                f"v{TRUSTTUNNEL_LINUX_VERSION}/libdobby_bridge-linux-x86_64.zip",
+                archive,
+            )
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if digest != TRUSTTUNNEL_LINUX_ARCHIVE_SHA256:
+            fail("TrustTunnel Linux bridge archive checksum mismatch")
+
+        with zipfile.ZipFile(archive) as zip_file:
+            candidates = [
+                member
+                for member in zip_file.infolist()
+                if not member.is_dir() and Path(member.filename).name == bridge.name
+            ]
+            if len(candidates) != 1:
+                fail("TrustTunnel Linux bridge archive did not contain exactly one shared library")
+            member = candidates[0]
+            source = zip_file.open(member)
+            temporary = bridge.with_suffix(".so.tmp")
+            try:
+                with source, open(temporary, "wb") as handle:
+                    shutil.copyfileobj(source, handle)
+                temporary.chmod(0o755)
+                temporary.replace(bridge)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    staged = SERVICES_DIR / bridge.name
+    shutil.copyfile(bridge, staged)
+    staged.chmod(0o755)
+    log(f"Staged checksum-pinned TrustTunnel Linux bridge: {staged}")
+
+
+def find_linux_libcxx_runtime() -> Path | None:
+    """Find a workspace-local LLVM runtime suitable for the Linux bridge."""
+
+    candidates = []
+    configured = os.environ.get("DOBBYVPN_LIBCXX_RUNTIME")
+    if configured:
+        candidates.append(Path(configured))
+    candidates.append(TOOLS_DIR / f"llvm-libcxx-{LLVM_LIBCXX_VERSION}")
+    for runtime in candidates:
+        if (runtime / "libc++.so").is_file() and (
+            runtime / "libc++abi.so"
+        ).is_file():
+            return runtime
+    return None
+
+
+def install_linux_libcxx_runtime(skip_deps: bool) -> Path:
+    """Stage pinned local C++ runtimes for linking and execution."""
+
+    runtime = find_linux_libcxx_runtime()
+    if runtime is None:
+        if skip_deps:
+            fail(
+                "LLVM libc++ and libc++abi are required for the Linux "
+                "TrustTunnel bridge"
+            )
+        if not command_exists("dpkg-deb"):
+            fail("dpkg-deb is required to extract workspace-local LLVM runtimes")
+        runtime = TOOLS_DIR / f"llvm-libcxx-{LLVM_LIBCXX_VERSION}"
+        extract_dir = Path(tempfile.mkdtemp(prefix="dobby-libcxx-"))
+        try:
+            for filename, expected_digest in LLVM_LIBCXX_PACKAGES:
+                archive = TOOLS_DIR / "downloads" / filename
+                if not archive.exists():
+                    download(
+                        "https://apt.llvm.org/noble/pool/main/l/"
+                        f"llvm-toolchain-21/{filename}",
+                        archive,
+                    )
+                if hashlib.sha256(archive.read_bytes()).hexdigest() != expected_digest:
+                    fail(f"LLVM runtime archive checksum mismatch: {filename}")
+                run(["dpkg-deb", "-x", str(archive), str(extract_dir)])
+
+            runtime.mkdir(parents=True, exist_ok=True)
+            for library in ("libc++", "libc++abi"):
+                matches = list(extract_dir.rglob(f"{library}.so.1.0"))
+                if len(matches) != 1:
+                    fail(f"LLVM runtime archive did not contain exactly one {library}")
+                for name in (f"{library}.so", f"{library}.so.1"):
+                    shutil.copyfile(matches[0], runtime / name)
+                    (runtime / name).chmod(0o755)
+        finally:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+        runtime = find_linux_libcxx_runtime()
+    if runtime is None:
+        fail("Workspace-local LLVM runtime bootstrap did not produce required files")
+
+    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    for name in ("libc++.so.1", "libc++abi.so.1"):
+        source = runtime / name
+        if not source.exists():
+            fail(f"Workspace-local LLVM runtime is missing {name}")
+        for directory in (GO_MODULE_DIR, SERVICES_DIR):
+            target = directory / name
+            shutil.copyfile(source.resolve(), target)
+            target.chmod(0o755)
+    log("Staged pinned workspace-local libc++ and libc++abi runtimes")
+    return runtime
+
+
 def ensure_build_dependencies(target_platform: str, skip_deps: bool, need_android: bool) -> None:
     install_linux_packages(skip_deps)
     install_go(skip_deps)
@@ -592,6 +805,53 @@ def service_target_path(target_platform: str) -> Path:
     return SERVICES_DIR / SERVICE_NAMES[target_platform]
 
 
+def install_macos_amd64_trusttunnel_helper(skip_deps: bool) -> None:
+    """Stage the pinned official helper beside the Intel macOS service.
+
+    The in-process bridge remains the arm64 implementation. Intel macOS uses
+    this separate universal executable so it never links the arm64-only
+    go-go-tunnel archive.
+    """
+    if skip_deps:
+        helper = GO_MODULE_DIR / "trusttunnel_client"
+        if not helper.exists():
+            fail("official TrustTunnelClient helper is required for macOS amd64")
+    archive = TOOLS_DIR / "downloads" / f"trusttunnel_client-v{TRUSTTUNNEL_MACOS_VERSION}-macos-universal.tar.gz"
+    if not archive.exists() and not skip_deps:
+        download(
+            "https://github.com/TrustTunnel/TrustTunnelClient/releases/download/"
+            f"v{TRUSTTUNNEL_MACOS_VERSION}/trusttunnel_client-v{TRUSTTUNNEL_MACOS_VERSION}-macos-universal.tar.gz",
+            archive,
+        )
+    if archive.exists():
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if digest != TRUSTTUNNEL_MACOS_ARCHIVE_SHA256:
+            fail("official TrustTunnelClient archive checksum mismatch")
+        with tarfile.open(archive, "r:gz") as tar_file:
+            member_name = f"trusttunnel_client-v{TRUSTTUNNEL_MACOS_VERSION}-macos-universal/trusttunnel_client"
+            try:
+                member = tar_file.getmember(member_name)
+            except KeyError:
+                fail("official TrustTunnelClient archive did not contain the helper")
+            if not member.isfile():
+                fail("official TrustTunnelClient helper archive member is invalid")
+            source = tar_file.extractfile(member)
+            if source is None:
+                fail("official TrustTunnelClient helper could not be extracted")
+            target = GO_MODULE_DIR / "trusttunnel_client"
+            with source, open(target, "wb") as handle:
+                shutil.copyfileobj(source, handle)
+            target.chmod(0o755)
+    helper = GO_MODULE_DIR / "trusttunnel_client"
+    if not helper.exists():
+        fail("official TrustTunnelClient helper is unavailable")
+    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    staged = SERVICES_DIR / "trusttunnel_client"
+    shutil.copyfile(helper, staged)
+    staged.chmod(0o755)
+    log(f"Staged pinned TrustTunnelClient helper beside Intel macOS service: {staged}")
+
+
 def default_service_arch(target_platform: str) -> str:
     if os.environ.get("GITHUB_ACTIONS") == "true":
         return CI_ARCH_BY_PLATFORM[target_platform]
@@ -609,6 +869,19 @@ def build_service(
 ) -> None:
     target_arch = arch or default_service_arch(target_platform)
     ensure_build_dependencies(target_platform, skip_deps, need_android=False)
+    if target_platform == "windows":
+        # The service loads Wintun at process startup, so every independently
+        # built public service slice must stage it and MinGW's runtime DLLs.
+        install_wintun(skip_deps)
+        stage_windows_runtime_dlls()
+        install_windows_bridge(skip_deps)
+    if target_platform == "linux":
+        if target_arch != "amd64":
+            fail("The pinned TrustTunnel Linux bridge currently supports amd64 only")
+        install_linux_trusttunnel_bridge(skip_deps)
+        linux_libcxx_runtime = install_linux_libcxx_runtime(skip_deps)
+    else:
+        linux_libcxx_runtime = None
     prepare_cloak_internal()
     go_mod_download(run_go_mod_tidy)
 
@@ -625,6 +898,25 @@ def build_service(
                 "GOARCH": target_arch,
             }
         )
+        if target_platform == "linux":
+            bridge_search_path = f"-L{GO_MODULE_DIR}"
+            runtime_search_path = f"-L{linux_libcxx_runtime}"
+            # DT_RPATH is intentional here: the pinned bridge has indirect
+            # libc++ dependencies, and DT_RUNPATH is not transitive.
+            origin_runpath = "-Wl,--disable-new-dtags,-rpath,$ORIGIN"
+            retain_runtime_dependencies = "-Wl,--no-as-needed"
+            append_cgo_ldflags(
+                env,
+                bridge_search_path,
+                runtime_search_path,
+                origin_runpath,
+                retain_runtime_dependencies,
+            )
+        elif target_platform == "macos":
+            # go-go-tunnel's static bridge contains C++ and uses the macOS
+            # SystemConfiguration APIs. cgo does not infer either dependency
+            # from a static archive.
+            append_cgo_ldflags(env, "-lc++", "-framework", "SystemConfiguration")
         run(
             [
                 "go",
@@ -644,6 +936,8 @@ def build_service(
     shutil.copyfile(output, target)
     if target_platform != "windows":
         target.chmod(target.stat().st_mode | 0o111)
+    if target_platform == "macos" and target_arch == "amd64":
+        install_macos_amd64_trusttunnel_helper(skip_deps)
     log(f"Copied {output.name} to {target}")
 
 
@@ -805,6 +1099,18 @@ def wait_for_port(port: int, timeout_seconds: int = 30) -> bool:
     return False
 
 
+def wait_for_socket(path: Path, timeout_seconds: int = 30) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            if stat.S_ISSOCK(path.stat().st_mode):
+                return True
+        except FileNotFoundError:
+            pass
+        time.sleep(1)
+    return False
+
+
 def sudo_prefix() -> list[str]:
     if host_platform() == "windows":
         return []
@@ -813,7 +1119,11 @@ def sudo_prefix() -> list[str]:
     return ["sudo"]
 
 
-def start_service(target_platform: str, port: int) -> tuple[subprocess.Popen[str], list[object]]:
+def start_service(
+    target_platform: str,
+    port: int,
+    control_socket: Path | None = None,
+) -> tuple[subprocess.Popen[str], list[object]]:
     service = service_target_path(target_platform)
     if not service.exists():
         fail(f"Missing service binary: {service}")
@@ -823,23 +1133,40 @@ def start_service(target_platform: str, port: int) -> tuple[subprocess.Popen[str
         stdout = open(ROOT_DIR / "grpcvpnserver.out", "w", encoding="utf-8")
         stderr = open(ROOT_DIR / "grpcvpnserver.err", "w", encoding="utf-8")
         command = [str(service), "-port", str(port)]
+        environment = os.environ.copy()
     else:
         stdout = open(ROOT_DIR / "grpcvpnserver.log", "w", encoding="utf-8")
         stderr = subprocess.STDOUT
-        command = [*sudo_prefix(), str(service), "-port", str(port)]
+        if control_socket is None:
+            fail("A private control socket path is required for Unix CLI tests")
+        environment = os.environ.copy()
+        environment["DOBBYVPN_CONTROL_SOCKET"] = str(control_socket)
+        prefix = sudo_prefix()
+        command = [*prefix]
+        if prefix:
+            command.extend(["env", f"DOBBYVPN_CONTROL_SOCKET={control_socket}"])
+        command.extend([str(service), "-port", str(port)])
     handles.append(stdout)
     if hasattr(stderr, "close"):
         handles.append(stderr)
 
-    log(f"Starting gRPC VPN service on port {port}")
-    process = subprocess.Popen(command, cwd=str(ROOT_DIR), stdout=stdout, stderr=stderr, text=True)
-    if wait_for_port(port):
+    log("Starting VPN control service")
+    process = subprocess.Popen(
+        command,
+        cwd=str(ROOT_DIR),
+        env=environment,
+        stdout=stdout,
+        stderr=stderr,
+        text=True,
+    )
+    ready = wait_for_port(port) if target_platform == "windows" else wait_for_socket(control_socket)
+    if ready:
         log("gRPC VPN service is ready")
         return process, handles
 
     stop_service(process)
     print_service_logs()
-    fail(f"gRPC VPN service did not start on port {port}")
+    fail("gRPC VPN service did not become ready")
 
 
 def stop_service(process: subprocess.Popen[str]) -> None:
@@ -860,10 +1187,27 @@ def print_service_logs() -> None:
             print(path.read_text(encoding="utf-8", errors="replace"))
 
 
-def run_cli_check(config_arg: str, port: int) -> None:
+def remove_control_socket_parent(control_socket: Path | None) -> None:
+    if control_socket is None:
+        return
+    try:
+        socket_mode = control_socket.lstat().st_mode
+    except FileNotFoundError:
+        socket_mode = None
+    if socket_mode is not None:
+        if not stat.S_ISSOCK(socket_mode):
+            log("Refusing to remove a non-socket control path")
+            return
+        run([*sudo_prefix(), "unlink", str(control_socket)], check=False)
+    run([*sudo_prefix(), "rmdir", str(control_socket.parent)], check=False)
+
+
+def run_cli_check(config_arg: str, port: int, control_socket: Path | None = None) -> None:
     props = desktop_version_properties()
     env = os.environ.copy()
     env["PORT"] = str(port)
+    if control_socket is not None:
+        env["DOBBYVPN_CONTROL_SOCKET"] = str(control_socket)
     run(
         [gradle_command(), "--quiet", ":app:run", f"--args=check-config {config_arg}", *props],
         cwd=KMP_DIR,
@@ -898,17 +1242,24 @@ def cli_test(args: argparse.Namespace) -> None:
     config_arg = prepare_config_arg(config)
     process: subprocess.Popen[str] | None = None
     handles: list[object] = []
-    try:
-        process, handles = start_service(target_platform, args.port)
-        run_cli_check(config_arg, args.port)
-    finally:
-        if process:
-            stop_service(process)
-        for handle in handles:
-            close = getattr(handle, "close", None)
-            if close:
-                close()
-        print_service_logs()
+    with tempfile.TemporaryDirectory(prefix="dobbyvpn-cli-control-") as control_root:
+        control_socket = (
+            None
+            if target_platform == "windows"
+            else Path(control_root) / "service" / "control.sock"
+        )
+        try:
+            process, handles = start_service(target_platform, args.port, control_socket)
+            run_cli_check(config_arg, args.port, control_socket)
+        finally:
+            if process:
+                stop_service(process)
+            remove_control_socket_parent(control_socket)
+            for handle in handles:
+                close = getattr(handle, "close", None)
+                if close:
+                    close()
+            print_service_logs()
 
 
 def add_common_options(parser: argparse.ArgumentParser) -> None:

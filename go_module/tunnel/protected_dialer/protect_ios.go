@@ -13,13 +13,14 @@ const SO_NO_TC_NETPOLICY = 0x1101
 
 type iosProtector struct{}
 
-func (i *iosProtector) Protect(fd uintptr, network string) {
+func (i *iosProtector) Protect(fd uintptr, network string) error {
 	err := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, SO_NO_TC_NETPOLICY, 1)
 	if err != nil {
 		log.Debugf(Category, "[iOS-Protect] SO_NO_TC_NETPOLICY failed fd=%d network=%s err=%v interfaces=[%s]", fd, network, err, describeInterfacesForLog())
-		return
+		return err
 	}
 	log.Debugf(Category, "[iOS-Protect] SO_NO_TC_NETPOLICY success fd=%d network=%s interfaces=[%s]", fd, network, describeInterfacesForLog())
+	return nil
 }
 
 func describeInterfacesForLog() string {

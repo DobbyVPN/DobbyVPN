@@ -1,8 +1,39 @@
 #!/bin/bash
+set -euo pipefail
 
-mkdir "bin/"
-mkdir "bin/amd64"
-mkdir "bin/aarch64"
+mkdir -p "bin/amd64"
+mkdir -p "bin/aarch64"
+
+install_service() {
+  local service="$1"
+  local expected_arch="$2"
+  local destination="$3"
+  local actual_arches
+
+  actual_arches="$(lipo -archs "$service")"
+  if ! tr ' ' '\n' <<<"$actual_arches" | grep -Fxq "$expected_arch"; then
+    echo "[!] Refusing to package $service: expected $expected_arch, found $actual_arches" >&2
+    exit 1
+  fi
+
+  cp "$service" "$destination"
+  chmod +x "$destination"
+}
+
+install_trusttunnel_helper() {
+  local helper="$1"
+  local destination="$2"
+  local actual_arches
+
+  actual_arches="$(lipo -archs "$helper")"
+  if ! tr ' ' '\n' <<<"$actual_arches" | grep -Fxq "x86_64"; then
+    echo "[!] Refusing to package TrustTunnel helper: x86_64 slice is missing ($actual_arches)" >&2
+    exit 1
+  fi
+
+  cp "$helper" "$destination"
+  chmod 755 "$destination"
+}
 
 echo [+] Extracting dobbyVPN-macos-aarch64.zip
 unzip "dobbyVPN-macos-aarch64.zip" -d "bin/aarch64/"
@@ -18,9 +49,8 @@ chmod +x Scripts/postinstall
 echo [+] Inserting vpnservice.plist file
 cp ../../vpnservice.plist "Dobby Vpn.app/Contents/Resources/"
 
-echo [+] Inserting macos_grpcvpnserver file
-cp ../../macos_grpcvpnserver "Dobby Vpn.app/Contents/Resources/"
-chmod +x "Dobby Vpn.app/Contents/Resources/macos_grpcvpnserver"
+echo [+] Inserting arm64 macos_grpcvpnserver file
+install_service ../../services/arm64/macos_grpcvpnserver arm64 "Dobby Vpn.app/Contents/Resources/macos_grpcvpnserver"
 
 echo [+] Making Payload/ folder
 mkdir Payload
@@ -50,9 +80,11 @@ chmod +x Scripts/postinstall
 echo [+] Inserting vpnservice.plist file
 cp ../../vpnservice.plist "Dobby Vpn.app/Contents/Resources/"
 
-echo [+] Inserting macos_grpcvpnserver file
-cp ../../macos_grpcvpnserver "Dobby Vpn.app/Contents/Resources/"
-chmod +x "Dobby Vpn.app/Contents/Resources/macos_grpcvpnserver"
+echo [+] Inserting amd64 macos_grpcvpnserver file
+install_service ../../services/amd64/macos_grpcvpnserver x86_64 "Dobby Vpn.app/Contents/Resources/macos_grpcvpnserver"
+
+echo [+] Inserting verified TrustTunnel helper beside Intel service
+install_trusttunnel_helper ../../services/amd64/trusttunnel_client "Dobby Vpn.app/Contents/Resources/trusttunnel_client"
 
 echo [+] Making Payload/ folder
 mkdir Payload

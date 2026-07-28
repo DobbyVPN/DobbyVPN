@@ -4,11 +4,11 @@ import com.dobby.grpcproto.VpnGrpcKt
 import com.dobby.grpcproto.empty
 import com.dobby.grpcproto.measureTunnelProbeRequest
 import interop.exceptions.VpnServiceStatusException
-import io.grpc.ManagedChannel
+import io.grpc.Channel
 import io.grpc.StatusException
 import kotlinx.coroutines.runBlocking
 
-open class HealthCheckGrpcLibrary(channel: ManagedChannel) : HealthCheckLibrary {
+open class HealthCheckGrpcLibrary(channel: Channel) : HealthCheckLibrary {
     private val stub = VpnGrpcKt.VpnCoroutineStub(channel)
 
     override fun CouldStart(): Boolean {

@@ -1,3 +1,5 @@
+//go:build !(darwin && amd64)
+
 package internal
 
 import (
@@ -9,10 +11,10 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-var logLevel int32
+var logLevel atomic.Int64
 
 func LogFunc(level tt.LogLevel, message string) {
-	if int32(level) > atomic.LoadInt32(&logLevel) {
+	if int64(level) > logLevel.Load() {
 		return
 	}
 	switch level {
@@ -22,7 +24,7 @@ func LogFunc(level tt.LogLevel, message string) {
 		log.Warnf("trusttunnel", "[TrustTunnel] %s", message)
 	case tt.LogInfo:
 		log.Infof("trusttunnel", "[TrustTunnel] %s", message)
-	case tt.LogDebug:
+	case tt.LogDebug, tt.LogTrace:
 		log.Debugf("trusttunnel", "[TrustTunnel] %s", message)
 	default:
 		log.Debugf("trusttunnel", "[TrustTunnel] %s", message)
@@ -30,7 +32,7 @@ func LogFunc(level tt.LogLevel, message string) {
 }
 
 func SetLogLevel(level tt.LogLevel) {
-	atomic.StoreInt32(&logLevel, int32(level))
+	logLevel.Store(int64(level))
 }
 
 func ExtractLogLevel(configStr string) (tt.LogLevel, error) {

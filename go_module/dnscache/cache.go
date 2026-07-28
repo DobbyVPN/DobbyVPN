@@ -53,7 +53,7 @@ func SetIPv4(host, ipString, source string, ttl time.Duration) bool {
 		expiresAt: time.Now().Add(ttl),
 		source:    source,
 	}
-	log.Debugf(Category, "stored host=%s ip=%s source=%s ttl=%s", host, ip.To4().String(), source, ttl)
+	log.Debugf(Category, "stored source=%s ttl=%s", source, ttl)
 	return true
 }
 
@@ -66,7 +66,7 @@ func SetEntries(lines, source string, ttl time.Duration) int {
 		}
 		host, ip, ok := strings.Cut(line, "=")
 		if !ok {
-			log.Debugf(Category, "skip malformed preflight entry: %q", line)
+			log.Debugf(Category, "skip malformed preflight entry")
 			continue
 		}
 		if SetIPv4(host, ip, source, ttl) {
@@ -105,18 +105,18 @@ func ResolveIPv4(ctx context.Context, host string, timeout time.Duration, source
 	addrs, err := resolver.LookupIPAddr(ctx, host)
 	elapsed := time.Since(startedAt).Truncate(time.Millisecond)
 	if err != nil {
-		log.Debugf(Category, "lookup failed host=%s source=%s elapsed=%s err=%v", host, source, elapsed, err)
-		return nil, fmt.Errorf("DNS resolve failed for %q: %w", host, err)
+		log.Debugf(Category, "lookup failed source=%s elapsed=%s errorType=%T", source, elapsed, err)
+		return nil, fmt.Errorf("DNS resolve failed: %w", err)
 	}
 
 	for _, addr := range addrs {
 		if ip4 := addr.IP.To4(); ip4 != nil {
-			log.Debugf(Category, "lookup resolved host=%s ip=%s source=%s elapsed=%s", host, ip4.String(), source, elapsed)
+			log.Debugf(Category, "lookup resolved source=%s elapsed=%s", source, elapsed)
 			SetIPv4(host, ip4.String(), source, time.Minute)
 			return ip4, nil
 		}
 	}
-	log.Debugf(Category, "lookup returned no IPv4 host=%s source=%s elapsed=%s addresses=%d", host, source, elapsed, len(addrs))
+	log.Debugf(Category, "lookup returned no IPv4 source=%s elapsed=%s addresses=%d", source, elapsed, len(addrs))
 	return nil, errors.New("DNS resolved only IPv6, IPv4 required")
 }
 
@@ -133,7 +133,7 @@ func LookupIPv4(host, source string) (net.IP, bool) {
 	}
 
 	if ip, ok := lookup(host); ok {
-		log.Debugf(Category, "cache hit host=%s ip=%s source=%s", host, ip.String(), source)
+		log.Debugf(Category, "cache hit source=%s", source)
 		return ip, true
 	}
 	return nil, false

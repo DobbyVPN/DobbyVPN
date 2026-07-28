@@ -5,9 +5,9 @@ package executor
 import (
 	"flag"
 	"fmt"
-	"net"
 
 	"go_module/core/common"
+	"go_module/desktop_exports/controlplane"
 	"go_module/desktop_exports/proto"
 	"go_module/grpcproto"
 
@@ -17,7 +17,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-func run(port int) {
+func run(_ int) {
 	// Convert logrus.Fatal (os.Exit) into a panic so goroutines can recover from it
 	// instead of crashing the entire gRPC server process.
 	logrus.StandardLogger().ExitFunc = func(code int) {
@@ -25,12 +25,14 @@ func run(port int) {
 	}
 
 	flag.Parse()
-	lis, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	lis, err := controlplane.ListenControlSocket()
 	if err != nil {
 		panic(fmt.Sprintf("failed to listen: %v", err))
 	}
 	s := grpc.NewServer(
+		grpc.Creds(controlplane.UnixPeerCredentials{}),
 		grpc.ChainUnaryInterceptor(
+			proto.ControlAuthUnaryInterceptor(false, ""),
 			proto.PanicRecoveryUnaryInterceptor(),
 			proto.ErrorLoggingUnaryInterceptor(),
 		),
@@ -38,7 +40,7 @@ func run(port int) {
 
 	grpcproto.RegisterVpnServer(s, &proto.Server{})
 
-	log.Debugf(common.Category, "server listening at %v", lis.Addr())
+	log.Debugf(common.Category, "desktop control socket ready")
 	if err := s.Serve(lis); err != nil {
 		panic(fmt.Sprintf("failed to serve: %v", err))
 	}

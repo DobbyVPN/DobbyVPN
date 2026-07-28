@@ -16,23 +16,8 @@ expect val fileSystem: FileSystem
 expect fun provideLogFilePath(): Path
 expect fun platformLogInfo(): String
 
-interface SentryLogsRepository{
-    fun log(string: String) {
-        println(string)
-    }
-}
-
 fun maskStr(input: String): String {
-    val prefixes = listOf("http://", "https://")
-    val prefix = prefixes.firstOrNull { input.startsWith(it) } ?: ""
-
-    val rest = input.removePrefix(prefix)
-
-    if (rest.length <= 2) {
-        return prefix + rest
-    }
-
-    return prefix + "${rest.first()}***${rest.last()}"
+    return if (input.isEmpty()) "" else "[REDACTED]"
 }
 
 class LogsRepository(
@@ -48,8 +33,6 @@ class LogsRepository(
 
         private const val LOG_TIMESTAMP_LENGTH: Int = 19
     }
-
-    private var sentryLogger: SentryLogsRepository? = null
 
     init {
         if (!fileSystem.exists(logFilePath)) {
@@ -67,18 +50,9 @@ class LogsRepository(
         }
     }
 
-    fun setSentryLogger(_sentryLogger: SentryLogsRepository) : LogsRepository {
-        sentryLogger = _sentryLogger
-        return this
-    }
-
-    fun getSentryLogger(): SentryLogsRepository? {
-        return sentryLogger
-    }
-
     fun writeLog(log: String) {
         val now = DateTime.now().format("yyyy-MM-dd HH:mm:ss")
-        val logEntry = "[$now] $log"
+        val logEntry = "[$now] ${redactLog(log)}"
 
         runCatching {
             fileSystem.appendingSink(logFilePath).buffer().use { sink ->

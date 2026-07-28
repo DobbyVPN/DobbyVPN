@@ -3,6 +3,21 @@ import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.io.File
 import java.util.Properties
+import java.util.zip.ZipFile
+
+data class AndroidNativeAbi(
+    val androidName: String,
+    val gomobileArch: String,
+    val ndkTriple: String,
+    val hasTrustTunnelNativeBridge: Boolean
+)
+
+// Keep the gomobile AAR and the libc++ runtime payload in lockstep.  Torturer's
+// public Android emulator is x86_64, while production devices remain arm64.
+val androidNativeAbis = listOf(
+    AndroidNativeAbi("arm64-v8a", "arm64", "aarch64-linux-android", hasTrustTunnelNativeBridge = true),
+    AndroidNativeAbi("x86_64", "amd64", "x86_64-linux-android", hasTrustTunnelNativeBridge = false)
+)
 
 val repoRoot: File = rootProject.projectDir.parentFile
 val goModuleDir: File = repoRoot.resolve("go_module")
@@ -17,6 +32,7 @@ val gomobileExecutable = providers.gradleProperty("gomobileExecutable")
     })
 val goCacheDir = layout.buildDirectory.dir("go-cache")
 val goTmpDir = layout.buildDirectory.dir("go-tmp")
+val generatedJniLibsDir = layout.buildDirectory.dir("generated/jniLibs")
 val goRootDir = providers.gradleProperty("gomobileGoRoot")
     .orElse(providers.environmentVariable("GOROOT"))
 val androidSdkDir = providers.gradleProperty("gomobileAndroidSdkRoot")
@@ -62,7 +78,6 @@ plugins {
     alias(libs.plugins.hydraulic.conveyor)
 
     id("com.github.gmazzo.buildconfig") version "5.6.5"
-    id("io.sentry.kotlin.multiplatform.gradle") version "0.18.0" apply false
 }
 
 version = "1.0"
@@ -71,12 +86,6 @@ java {
     toolchain {
         languageVersion.set(JavaLanguageVersion.of(17))
     }
-}
-
-// Keep it enabled by default (CI/release), but allow disabling for local Xcode builds via: -PdisableSentry=true
-val disableSentry = providers.gradleProperty("disableSentry").orNull?.lowercase() in setOf("1", "true", "yes")
-if (!disableSentry) {
-    apply(plugin = "io.sentry.kotlin.multiplatform.gradle")
 }
 
 kotlin {
@@ -151,6 +160,10 @@ kotlin {
             implementation(compose.components.resources)
         }
 
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+        }
+
         jvmMain.dependencies {
             implementation(project(":grpcstub"))
             runtimeOnly(libs.grpc.netty)
@@ -165,6 +178,18 @@ kotlin {
             implementation(libs.jna)
             implementation(libs.gson)
             implementation(libs.ktor.client.cio)
+        }
+
+        androidUnitTest.dependencies {
+            implementation(kotlin("test-junit"))
+            implementation(libs.junit)
+        }
+
+        androidInstrumentedTest.dependencies {
+            implementation(libs.androidx.junit)
+            implementation(libs.androidx.test.runner)
+            implementation(libs.androidx.uiautomator)
+            implementation(libs.junit)
         }
 
         iosMain.dependencies {
@@ -202,6 +227,8 @@ android {
             .orElse(providers.gradleProperty("versionName"))
             .getOrElse("0.0.1")
 
+        testInstrumentationRunner = "com.dobby.TestApplicationRunner"
+
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -238,12 +265,12 @@ android {
 
     sourceSets {
         getByName("main") {
-            jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs"))
+            jniLibs.srcDir(generatedJniLibsDir)
         }
     }
 }
 
-val copyLibCxxTask = tasks.register<Copy>("copyLibCxx") {
+val copyLibCxxTask = tasks.register<Sync>("copyLibCxx") {
     val ndkDir = File(androidNdkDir.get())
     val osName = System.getProperty("os.name").lowercase()
     val osArch = System.getProperty("os.arch").lowercase()
@@ -259,10 +286,27 @@ val copyLibCxxTask = tasks.register<Copy>("copyLibCxx") {
         }
         else -> "linux-x86_64"
     }
-    val libcxxPath = ndkDir.resolve("toolchains/llvm/prebuilt/$hostTag/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so")
-    
-    from(libcxxPath)
-    into(layout.buildDirectory.dir("generated/jniLibs/arm64-v8a"))
+    val libcxxPaths = androidNativeAbis.associateWith { abi ->
+        ndkDir.resolve("toolchains/llvm/prebuilt/$hostTag/sysroot/usr/lib/${abi.ndkTriple}/libc++_shared.so")
+    }
+
+    androidNativeAbis.forEach { abi ->
+        from(libcxxPaths.getValue(abi)) {
+            into(abi.androidName)
+        }
+    }
+    into(generatedJniLibsDir)
+
+    doFirst {
+        check(ndkDir.isDirectory) {
+            "Android NDK is required to package native runtimes: ${ndkDir.absolutePath}"
+        }
+        libcxxPaths.forEach { (abi, path) ->
+            check(path.isFile) {
+                "Missing libc++_shared.so for ${abi.androidName}: ${path.absolutePath}"
+            }
+        }
+    }
 }
 
 tasks.named("preBuild") {
@@ -308,7 +352,7 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
     commandLine(
         gomobileExecutable.get(),
         "bind",
-        "-target=android/arm64",
+        "-target=${androidNativeAbis.joinToString(",") { "android/${it.gomobileArch}" }}",
         "-androidapi=26",
         "-tags=static",
         "-javapkg=com.dobby.gomobile",
@@ -351,8 +395,6 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         environment("ANDROID_NDK_HOME", ndkDir.absolutePath)
         environment("ANDROID_NDK_ROOT", ndkDir.absolutePath)
         environment("CGO_ENABLED", "1")
-        environment("CC", "aarch64-linux-android26-clang")
-        environment("CXX", "aarch64-linux-android26-clang++")
 
         val isWindows = System.getProperty("os.name").lowercase().contains("windows")
         val debugPrefixFlags = if (isWindows) {
@@ -388,6 +430,121 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
                 ).joinToString(File.pathSeparator)
             )
         }
+    }
+}
+
+val verifyDebugNativeAbiPayloads by tasks.registering {
+    group = "verification"
+    description = "Verifies arm64-v8a and x86_64 Go JNI libraries in the AAR and complete native payloads in the debug APK."
+
+    val debugApk = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk")
+    dependsOn(gomobileBindAndroid, copyLibCxxTask, "packageDebug")
+    inputs.file(gomobileAar)
+    inputs.dir(generatedJniLibsDir)
+    inputs.file(debugApk)
+
+    doLast {
+        val ndkDir = File(androidNdkDir.get())
+        val osName = System.getProperty("os.name").lowercase()
+        val hostTag = when {
+            osName.contains("windows") -> "windows-x86_64"
+            osName.contains("mac") && ndkDir.resolve("toolchains/llvm/prebuilt/darwin-arm64").isDirectory -> "darwin-arm64"
+            osName.contains("mac") -> "darwin-x86_64"
+            else -> "linux-x86_64"
+        }
+        val readElf = ndkDir.resolve(
+            "toolchains/llvm/prebuilt/$hostTag/bin/llvm-readelf" +
+                if (osName.contains("windows")) ".exe" else ""
+        )
+        check(readElf.canExecute()) {
+            "Android NDK llvm-readelf is required to verify Go JNI symbols: ${readElf.absolutePath}"
+        }
+
+        fun checkNativePayloads(
+            archive: File,
+            archiveLabel: String,
+            nativeDirectory: String,
+            requiresLibcxx: Boolean
+        ) {
+            ZipFile(archive).use { zip ->
+                val entries = zip.entries().asSequence()
+                    .filterNot { it.isDirectory }
+                    .map { it.name }
+                    .toSet()
+                androidNativeAbis.forEach { abi ->
+                    val nativePrefix = "$nativeDirectory/${abi.androidName}/"
+                    check(entries.contains("${nativePrefix}libgojni.so")) {
+                        "$archiveLabel is missing the Go JNI library for ${abi.androidName}"
+                    }
+                    if (requiresLibcxx) {
+                        check(entries.contains("${nativePrefix}libc++_shared.so")) {
+                            "$archiveLabel is missing libc++_shared.so for ${abi.androidName}"
+                        }
+                    }
+                }
+            }
+        }
+
+        fun verifyTrustTunnelBridgeSymbols(archive: File, abi: AndroidNativeAbi) {
+            val jniPath = "jni/${abi.androidName}/libgojni.so"
+            val extractedLibrary = File.createTempFile("dobbyvpn-${abi.androidName}-", ".so")
+            try {
+                ZipFile(archive).use { zip ->
+                    val entry = zip.getEntry(jniPath)
+                        ?: error("gomobile AAR is missing $jniPath")
+                    zip.getInputStream(entry).use { input ->
+                        extractedLibrary.outputStream().use(input::copyTo)
+                    }
+                }
+                val readElfProcess = ProcessBuilder(
+                    readElf.absolutePath,
+                    "--dyn-syms",
+                    "--wide",
+                    extractedLibrary.absolutePath
+                ).redirectErrorStream(true).start()
+                val symbols = readElfProcess.inputStream.bufferedReader().use { it.readText() }
+                check(readElfProcess.waitFor() == 0) {
+                    "llvm-readelf failed for ${abi.androidName}: $symbols"
+                }
+
+                val bridgeSymbols = setOf(
+                    "dobby_vpn_set_log_callback",
+                    "dobby_vpn_set_protect_callback",
+                    "dobby_vpn_start",
+                    "dobby_vpn_stop"
+                )
+                val undefinedBridgeSymbols = symbols.lineSequence()
+                    .filter { " UND " in it }
+                    .flatMap { line -> bridgeSymbols.filter(line::contains) }
+                    .toSet()
+                check(undefinedBridgeSymbols.isEmpty()) {
+                    "libgojni.so for ${abi.androidName} has unresolved TrustTunnel bridge symbols: " +
+                        undefinedBridgeSymbols.sorted().joinToString(", ")
+                }
+
+                val definedBridgeSymbols = symbols.lineSequence()
+                    .filterNot { " UND " in it }
+                    .flatMap { line -> bridgeSymbols.filter(line::contains) }
+                    .toSet()
+                if (abi.hasTrustTunnelNativeBridge) {
+                    check(definedBridgeSymbols.containsAll(bridgeSymbols)) {
+                        "libgojni.so for ${abi.androidName} is missing TrustTunnel bridge symbols: " +
+                            (bridgeSymbols - definedBridgeSymbols).sorted().joinToString(", ")
+                    }
+                } else {
+                    check(definedBridgeSymbols.isEmpty()) {
+                        "libgojni.so for ${abi.androidName} unexpectedly links TrustTunnel; " +
+                            "update the ABI policy only with a packaged x86_64 bridge"
+                    }
+                }
+            } finally {
+                extractedLibrary.delete()
+            }
+        }
+
+        checkNativePayloads(gomobileAar.get().asFile, "gomobile AAR", "jni", requiresLibcxx = false)
+        checkNativePayloads(debugApk.get().asFile, "debug APK", "lib", requiresLibcxx = true)
+        androidNativeAbis.forEach { abi -> verifyTrustTunnelBridgeSymbols(gomobileAar.get().asFile, abi) }
     }
 }
 
@@ -428,7 +585,6 @@ buildConfig {
 
 
 dependencies {
-    implementation(project(":grpcstub"))
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 }

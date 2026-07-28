@@ -16,10 +16,6 @@ Consume 'subscription' / 'dynamic keys' as TOML via HTTPS or inline:
 
 **Connection variants** (one or more, cyclic fallback)
 ```toml
-[Telemetry] # Optional
-Endpoint = "localhost:4318" # Telemetry host shared by all variants
-ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
-
 [[Outline]] # First variant
 Description = "My fast SS"
 Server = "1.1.1.1"
@@ -71,10 +67,6 @@ configuration contains only one variant.
 
 **Clean ShadowSocks** (best performance)
 ```toml
-[Telemetry] # Optional
-Endpoint = "localhost:4318" # Telemetry host
-ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
-
 [[Outline]] # Implementation library
 Description = "My fast SS" # description - whatever you like
 Server = "1.1.1.1" # IP or DNS name for the server
@@ -90,10 +82,6 @@ IPs = [
 
 **ShadowSocks via WebSocket** (caddy -> outline-ss-server) 
 ```toml
-[Telemetry] # Optional
-Endpoint = "localhost:4318" # Telemetry host
-ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
-
 [[Outline]] # Implementation library
 Description = "My beautiful SS in WS" # description - whatever you like
 WebSocket = true # flag to enable WebSocket
@@ -111,10 +99,6 @@ IPs = [
 **ShadowSocks over cloak** (caddy -> cloak -> outline-ss-server)
 
 ```toml
-[Telemetry] # Optional
-Endpoint = "localhost:4318" # Telemetry host
-ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
-
 [[Outline]] # Implementation library
 Description = "My sneaky SS in Cloak" # description - whatever you like
 Cloak = true # enables cloak (what is cloak? see ref # 2 below)
@@ -137,10 +121,6 @@ For direct Cloak mode, omit `CDNWsUrlPath` or set `Transport = "direct"` explici
 
 **VLESS + Reality over xray-core** ([more details](https://xtls.github.io/en/config/outbounds/vless.html))
 ```toml
-[Telemetry] # Optional
-Endpoint = "localhost:4318" # Telemetry host
-ApiToken = "qwerty-uiop-1234567890" # Ingestion API token
-
 [[Xray]] # Implementation library
 log = { loglevel = "info" } # Providing DobbyVPN and xray's log level
 # Warning: Inbound field will be modified due to custom tunneling settings
@@ -178,6 +158,13 @@ address = "127.0.0.1:10808"
 ```
 
 Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nicely expressed Issues accordingly.
+
+See [TESTING.md](TESTING.md) for contributor-local checks and independent
+public pull-request verification.
+
+Remote telemetry has been removed. Legacy `[Telemetry]` configuration blocks
+are accepted only for compatibility, produce a warning, and never initiate a
+network request; see [docs/Telemetry.md](docs/Telemetry.md).
 
 Windows and MacOS apps require manual intervention to be installed for now - notarization is a work in progress.
 

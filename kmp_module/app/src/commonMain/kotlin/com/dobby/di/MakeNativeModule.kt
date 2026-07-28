@@ -1,7 +1,6 @@
 package com.dobby.di
 
 import com.dobby.feature.authentication.domain.AuthenticationManager
-import com.dobby.feature.diagnostic.domain.HealthCheckManager
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.LoggerManager
 import com.dobby.feature.logging.domain.CopyLogsInteractor
@@ -20,15 +19,10 @@ fun makeNativeModule(
     logsRepository: NativeInjectionFactory<LogsRepository>,
     configsRepository: NativeInjectionFactory<DobbyConfigsRepository>,
     connectionStateRepository: NativeInjectionFactory<ConnectionStateRepository>,
-    vpnManager: NativeInjectionFactory<VpnManager>,
     authenticationManager: NativeInjectionFactory<AuthenticationManager>,
-    healthCheckManager: NativeInjectionFactory<HealthCheckManager>,
     loggerManager: NativeInjectionFactory<LoggerManager>,
-    dnsPreflightResolver: NativeInjectionFactory<DnsPreflightResolver>,
 ): Module {
     return module {
-        factory { vpnManager() }
-        factory { healthCheckManager() }
         factory { loggerManager() }
 
         single { copyLogsInteractor() }
@@ -38,11 +32,5 @@ fun makeNativeModule(
         single { connectionStateRepository() }
         single { configsRepository() }
         single { authenticationManager() }
-        single { dnsPreflightResolver() }
-
-        single<DobbyConfigsRepositoryOutline> { get<DobbyConfigsRepository>() }
-        single<DobbyConfigsRepositoryCloak> { get<DobbyConfigsRepository>() }
-        single<DobbyConfigsRepositoryXray> { get<DobbyConfigsRepository>() }
-        single<DobbyConfigsRepositoryTrustTunnel> { get<DobbyConfigsRepository>() }
     }
 }

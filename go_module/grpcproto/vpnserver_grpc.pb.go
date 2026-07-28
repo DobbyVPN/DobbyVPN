@@ -44,6 +44,14 @@ const (
 	Vpn_ClearGeoRoutingConf_FullMethodName                    = "/grpcproto.Vpn/ClearGeoRoutingConf"
 	Vpn_ClearDNSCache_FullMethodName                          = "/grpcproto.Vpn/ClearDNSCache"
 	Vpn_SetDNSCacheEntries_FullMethodName                     = "/grpcproto.Vpn/SetDNSCacheEntries"
+	Vpn_GetCapabilities_FullMethodName                        = "/grpcproto.Vpn/GetCapabilities"
+	Vpn_CreateSession_FullMethodName                          = "/grpcproto.Vpn/CreateSession"
+	Vpn_Configure_FullMethodName                              = "/grpcproto.Vpn/Configure"
+	Vpn_Start_FullMethodName                                  = "/grpcproto.Vpn/Start"
+	Vpn_Stop_FullMethodName                                   = "/grpcproto.Vpn/Stop"
+	Vpn_Snapshot_FullMethodName                               = "/grpcproto.Vpn/Snapshot"
+	Vpn_Observe_FullMethodName                                = "/grpcproto.Vpn/Observe"
+	Vpn_DestroySession_FullMethodName                         = "/grpcproto.Vpn/DestroySession"
 )
 
 // VpnClient is the client API for Vpn service.
@@ -83,6 +91,18 @@ type VpnClient interface {
 	// dns_cache.go
 	ClearDNSCache(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	SetDNSCacheEntries(ctx context.Context, in *SetDNSCacheEntriesRequest, opts ...grpc.CallOption) (*SetDNSCacheEntriesResponse, error)
+	// sessionapi/v1. These methods are intentionally separate from the legacy
+	// protocol-specific calls above. Session identifiers and command identifiers
+	// are opaque strings owned by the caller; configuration is transported as
+	// bytes and is never reflected in a response.
+	GetCapabilities(ctx context.Context, in *SessionGetCapabilitiesRequest, opts ...grpc.CallOption) (*SessionGetCapabilitiesResponse, error)
+	CreateSession(ctx context.Context, in *SessionCreateSessionRequest, opts ...grpc.CallOption) (*SessionCreateSessionResponse, error)
+	Configure(ctx context.Context, in *SessionConfigureRequest, opts ...grpc.CallOption) (*SessionConfigureResponse, error)
+	Start(ctx context.Context, in *SessionStartRequest, opts ...grpc.CallOption) (*SessionStartResponse, error)
+	Stop(ctx context.Context, in *SessionStopRequest, opts ...grpc.CallOption) (*SessionStopResponse, error)
+	Snapshot(ctx context.Context, in *SessionSnapshotRequest, opts ...grpc.CallOption) (*SessionSnapshotResponse, error)
+	Observe(ctx context.Context, in *SessionObserveRequest, opts ...grpc.CallOption) (*SessionObserveResponse, error)
+	DestroySession(ctx context.Context, in *SessionDestroySessionRequest, opts ...grpc.CallOption) (*SessionDestroySessionResponse, error)
 }
 
 type vpnClient struct {
@@ -343,6 +363,86 @@ func (c *vpnClient) SetDNSCacheEntries(ctx context.Context, in *SetDNSCacheEntri
 	return out, nil
 }
 
+func (c *vpnClient) GetCapabilities(ctx context.Context, in *SessionGetCapabilitiesRequest, opts ...grpc.CallOption) (*SessionGetCapabilitiesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SessionGetCapabilitiesResponse)
+	err := c.cc.Invoke(ctx, Vpn_GetCapabilities_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vpnClient) CreateSession(ctx context.Context, in *SessionCreateSessionRequest, opts ...grpc.CallOption) (*SessionCreateSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SessionCreateSessionResponse)
+	err := c.cc.Invoke(ctx, Vpn_CreateSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vpnClient) Configure(ctx context.Context, in *SessionConfigureRequest, opts ...grpc.CallOption) (*SessionConfigureResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SessionConfigureResponse)
+	err := c.cc.Invoke(ctx, Vpn_Configure_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vpnClient) Start(ctx context.Context, in *SessionStartRequest, opts ...grpc.CallOption) (*SessionStartResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SessionStartResponse)
+	err := c.cc.Invoke(ctx, Vpn_Start_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vpnClient) Stop(ctx context.Context, in *SessionStopRequest, opts ...grpc.CallOption) (*SessionStopResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SessionStopResponse)
+	err := c.cc.Invoke(ctx, Vpn_Stop_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vpnClient) Snapshot(ctx context.Context, in *SessionSnapshotRequest, opts ...grpc.CallOption) (*SessionSnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SessionSnapshotResponse)
+	err := c.cc.Invoke(ctx, Vpn_Snapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vpnClient) Observe(ctx context.Context, in *SessionObserveRequest, opts ...grpc.CallOption) (*SessionObserveResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SessionObserveResponse)
+	err := c.cc.Invoke(ctx, Vpn_Observe_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vpnClient) DestroySession(ctx context.Context, in *SessionDestroySessionRequest, opts ...grpc.CallOption) (*SessionDestroySessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SessionDestroySessionResponse)
+	err := c.cc.Invoke(ctx, Vpn_DestroySession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VpnServer is the server API for Vpn service.
 // All implementations must embed UnimplementedVpnServer
 // for forward compatibility.
@@ -380,6 +480,18 @@ type VpnServer interface {
 	// dns_cache.go
 	ClearDNSCache(context.Context, *Empty) (*Empty, error)
 	SetDNSCacheEntries(context.Context, *SetDNSCacheEntriesRequest) (*SetDNSCacheEntriesResponse, error)
+	// sessionapi/v1. These methods are intentionally separate from the legacy
+	// protocol-specific calls above. Session identifiers and command identifiers
+	// are opaque strings owned by the caller; configuration is transported as
+	// bytes and is never reflected in a response.
+	GetCapabilities(context.Context, *SessionGetCapabilitiesRequest) (*SessionGetCapabilitiesResponse, error)
+	CreateSession(context.Context, *SessionCreateSessionRequest) (*SessionCreateSessionResponse, error)
+	Configure(context.Context, *SessionConfigureRequest) (*SessionConfigureResponse, error)
+	Start(context.Context, *SessionStartRequest) (*SessionStartResponse, error)
+	Stop(context.Context, *SessionStopRequest) (*SessionStopResponse, error)
+	Snapshot(context.Context, *SessionSnapshotRequest) (*SessionSnapshotResponse, error)
+	Observe(context.Context, *SessionObserveRequest) (*SessionObserveResponse, error)
+	DestroySession(context.Context, *SessionDestroySessionRequest) (*SessionDestroySessionResponse, error)
 	mustEmbedUnimplementedVpnServer()
 }
 
@@ -464,6 +576,30 @@ func (UnimplementedVpnServer) ClearDNSCache(context.Context, *Empty) (*Empty, er
 }
 func (UnimplementedVpnServer) SetDNSCacheEntries(context.Context, *SetDNSCacheEntriesRequest) (*SetDNSCacheEntriesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetDNSCacheEntries not implemented")
+}
+func (UnimplementedVpnServer) GetCapabilities(context.Context, *SessionGetCapabilitiesRequest) (*SessionGetCapabilitiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCapabilities not implemented")
+}
+func (UnimplementedVpnServer) CreateSession(context.Context, *SessionCreateSessionRequest) (*SessionCreateSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateSession not implemented")
+}
+func (UnimplementedVpnServer) Configure(context.Context, *SessionConfigureRequest) (*SessionConfigureResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Configure not implemented")
+}
+func (UnimplementedVpnServer) Start(context.Context, *SessionStartRequest) (*SessionStartResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Start not implemented")
+}
+func (UnimplementedVpnServer) Stop(context.Context, *SessionStopRequest) (*SessionStopResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Stop not implemented")
+}
+func (UnimplementedVpnServer) Snapshot(context.Context, *SessionSnapshotRequest) (*SessionSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Snapshot not implemented")
+}
+func (UnimplementedVpnServer) Observe(context.Context, *SessionObserveRequest) (*SessionObserveResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Observe not implemented")
+}
+func (UnimplementedVpnServer) DestroySession(context.Context, *SessionDestroySessionRequest) (*SessionDestroySessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DestroySession not implemented")
 }
 func (UnimplementedVpnServer) mustEmbedUnimplementedVpnServer() {}
 func (UnimplementedVpnServer) testEmbeddedByValue()             {}
@@ -936,6 +1072,150 @@ func _Vpn_SetDNSCacheEntries_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Vpn_GetCapabilities_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SessionGetCapabilitiesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).GetCapabilities(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_GetCapabilities_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).GetCapabilities(ctx, req.(*SessionGetCapabilitiesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_CreateSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SessionCreateSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).CreateSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_CreateSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).CreateSession(ctx, req.(*SessionCreateSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_Configure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SessionConfigureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).Configure(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_Configure_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).Configure(ctx, req.(*SessionConfigureRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_Start_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SessionStartRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).Start(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_Start_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).Start(ctx, req.(*SessionStartRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_Stop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SessionStopRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).Stop(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_Stop_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).Stop(ctx, req.(*SessionStopRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_Snapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SessionSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).Snapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_Snapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).Snapshot(ctx, req.(*SessionSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_Observe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SessionObserveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).Observe(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_Observe_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).Observe(ctx, req.(*SessionObserveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_DestroySession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SessionDestroySessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).DestroySession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_DestroySession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).DestroySession(ctx, req.(*SessionDestroySessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Vpn_ServiceDesc is the grpc.ServiceDesc for Vpn service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1042,6 +1322,38 @@ var Vpn_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetDNSCacheEntries",
 			Handler:    _Vpn_SetDNSCacheEntries_Handler,
+		},
+		{
+			MethodName: "GetCapabilities",
+			Handler:    _Vpn_GetCapabilities_Handler,
+		},
+		{
+			MethodName: "CreateSession",
+			Handler:    _Vpn_CreateSession_Handler,
+		},
+		{
+			MethodName: "Configure",
+			Handler:    _Vpn_Configure_Handler,
+		},
+		{
+			MethodName: "Start",
+			Handler:    _Vpn_Start_Handler,
+		},
+		{
+			MethodName: "Stop",
+			Handler:    _Vpn_Stop_Handler,
+		},
+		{
+			MethodName: "Snapshot",
+			Handler:    _Vpn_Snapshot_Handler,
+		},
+		{
+			MethodName: "Observe",
+			Handler:    _Vpn_Observe_Handler,
+		},
+		{
+			MethodName: "DestroySession",
+			Handler:    _Vpn_DestroySession_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

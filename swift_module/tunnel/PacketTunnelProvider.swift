@@ -3,7 +3,6 @@ import MyLibrary
 import os
 import app
 import CommonDI
-import Sentry
 import Foundation
 import Darwin
 import SystemConfiguration
@@ -13,26 +12,20 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let launchId = UUID().uuidString
     private let tunnelId = String(UUID().uuidString.prefix(8))
 
-    private let outlineInteractor: OutlineInteractor = OutlineInteractor()
-    private let cloakInteractor: CloakInteractor = CloakInteractor()
-    private let xrayInteractor: XRayInteractor = XRayInteractor()
-    private let trustTunnelInteractor: TrustTunnelInteractor = TrustTunnelInteractor()
+    // The extension owns a sessionapi process of its own.  The containing app
+    // writes the opaque configuration bytes to the App Group before asking
+    // NetworkExtension to start; this process is the only one that interprets
+    // them (through Go's sessionapi/v1).
+    private let sessionRawConfigurationKey = "sessionapi.v1.rawConfiguration"
+    private var sessionID: String?
+    private var sessionGeneration: Int64 = 0
+    private var sessionSequence: Int64 = 0
 
     private var logs = NativeModuleHolder.logsRepository
-    private var userDefaults: UserDefaults = UserDefaults(suiteName: appGroupIdentifier)!
-    private let dnsPreflightHostsKey = "dnsPreflightHosts"
-    private let dnsPreflightEntriesKey = "dnsPreflightEntries"
-    private let dnsPreflightHostTimeoutMsKey = "dnsPreflightHostTimeoutMs"
-    private let dnsPreflightTotalTimeoutMsKey = "dnsPreflightTotalTimeoutMs"
-    private let dnsPreflightDefaultHostTimeoutMs = 2000
-    private let dnsPreflightDefaultTotalTimeoutMs = 2000
-    private var preparedDnsPreflightEntries = ""
-
+    private let secrets = SharedKeychainSecretStore.shared
     private var pathMonitor: Network.NWPathMonitor?
     private var lastPathSignature: String?
     private var loadSampler: DispatchSourceTimer?
-    private var healthCheckStateSampler: DispatchSourceTimer?
-    private var lastSharedHealthCheckState: Int32?
     private var isProtocolProbeStart = false
     private let memoryHighWaterLock = NSLock()
     private var memoryHighWaterMarkMB = 0.0
@@ -222,69 +215,25 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logSystemInfo(osVersionString: osVersionString)
         logs.writeLog(log: "[Interfaces] iOS version: \(osVersionString)")
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys) isProtocolProbe=\(isProtocolProbeStart)")
-        let connectionConfigLen = configsRepository.getConnectionConfig().count
-        let vpnInterface = configsRepository.getVpnInterface()
-        if connectionConfigLen == 0 || vpnInterface == VpnInterface.none {
-            logs.writeLog(
-                log: "[tunnel:\(tunnelId)] invalid start config: " +
-                    "connectionConfig.len=\(connectionConfigLen) vpnInterface=\(vpnInterface)"
-            )
-            throw NSError(
-                domain: "PacketTunnelProvider",
-                code: -6,
-                userInfo: [NSLocalizedDescriptionKey: "Missing VPN start configuration"]
-            )
+        guard let rawConfiguration = secrets.data(for: sessionRawConfigurationKey),
+              !rawConfiguration.isEmpty else {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] missing opaque sessionapi configuration bytes")
+            throw sessionError("CONFIGURATION_UNAVAILABLE")
         }
-        logs.writeLog(log: "Sentry is running in PacketTunnelProvider")
         logInterfacesDetailed(label: "BEFORE_VPN_TUNNEL")
 
         // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
         await teardownForStop(reason: "pre-start cleanup")
+        guard sessionID == nil else {
+            throw sessionError("SESSIONAPI_CLEANUP_PENDING")
+        }
 
         startPathLogging()
         logInitialNetworkPath(timeout: 1.0)
         startLoadSampler()
-        prepareDnsPreflightEntries()
-
-        let cloakConfig = configsRepository.getCloakConfig()
-        // Excluding the remote server route helps avoid routing loops (especially with WSS/domain hosts).
-        // DNS resolution at tunnel start can hang in offline/captive-portal cases, so we do it with a hard timeout.
-        var excludedRoutes: [NEIPv4Route] = []
-        if let hostOrIp = extractIP(from: configsRepository.getServerPort()) {
-            let trimmed = hostOrIp.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
-               let route = makeExcludedRoute(host: ip) {
-                excludedRoutes.append(route)
-                if ip == trimmed {
-                    logs.writeLog(log: "Excluded route for Outline host: \(maskStr(value: ip))/32")
-                } else {
-                    logs.writeLog(log: "Excluded route for Outline host resolved: \(maskStr(value: trimmed)) → \(maskStr(value: ip))/32")
-                }
-            } else {
-                logs.writeLog(log: "Excluded route for Outline host skipped (can't resolve to IPv4): \(trimmed)")
-            }
-        }
-        if let remoteHost = extractRemoteHost(from: cloakConfig) {
-            let trimmed = remoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let ip = resolveIPv4IfNeededWithTimeout(trimmed, timeout: 1.0),
-               let route = makeExcludedRoute(host: ip) {
-                excludedRoutes.append(route)
-                if ip == trimmed {
-                    logs.writeLog(log: "Excluded route for Cloak RemoteHost: \(maskStr(value: ip))/32")
-                } else {
-                    logs.writeLog(log: "Excluded route for Cloak RemoteHost resolved: \(maskStr(value: trimmed)) → \(maskStr(value: ip))/32")
-                }
-            } else {
-                logs.writeLog(log: "Excluded route for Cloak RemoteHost skipped (can't resolve to IPv4): \(maskStr(value: trimmed))")
-            }
-        }
-        if !excludedRoutes.isEmpty {
-            let list = excludedRoutes.map { "\($0.destinationAddress)/\($0.destinationSubnetMask)" }.joined(separator: ", ")
-            logs.writeLog(log: "Excluded IPv4 routes: \(list)")
-        } else {
-            logs.writeLog(log: "Excluded IPv4 routes: (none)")
-        }
-
+        // This is a fixed packet-tunnel policy. Go parses the opaque config and
+        // owns profile ordering, DNS/routing inputs, probing, failover and all
+        // protocol/tun2socks lifecycle decisions.
         let remoteAddress = "254.1.1.1"
         let localAddress = "198.18.0.1"
         let subnetMask = "255.255.0.0"
@@ -299,7 +248,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             subnetMasks: [subnetMask]
         )
         settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
-        settings.ipv4Settings?.excludedRoutes = excludedRoutes
         settings.ipv6Settings = NEIPv6Settings(
             addresses: [ipv6Address],
             networkPrefixLengths: [NSNumber(value: ipv6PrefixLength)]
@@ -309,7 +257,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.dnsSettings?.matchDomains = [""]
 
         logs.writeLog(log: "Settings are ready:")
-        logs.writeLog(log: "[tunnel:\(tunnelId)] settings mtu=\(settings.mtu?.stringValue ?? "nil") ipv4=\(localAddress)/\(subnetMask) ipv6=\(ipv6Address)/\(ipv6PrefixLength) ipv6DefaultRoute=true remote=\(remoteAddress) dns=\(dnsServers.joined(separator: ",")) excludedRoutes=\(excludedRoutes.count)")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] fixed TUN policy prepared mtu=\(settings.mtu?.stringValue ?? "nil") ipv4=\(localAddress)/\(subnetMask) ipv6=\(ipv6Address)/\(ipv6PrefixLength)")
         do {
             try await self.setTunnelNetworkSettings(settings)
         } catch {
@@ -325,183 +273,132 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "Start go logger init path = \(path)")
         Cloak_outlineInitLogger(path)
         logs.writeLog(log: "Finish go logger init")
-        Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
-        loadDnsPreflightEntries()
-
         do {
-            try await startActiveProtocol(
-                reason: "startTunnel",
-                teardownOnFailure: true,
-                startHealthCheckAfterStart: !isProtocolProbeStart
-            )
+            try await startGoSession(rawConfiguration)
         } catch {
+            await teardownForStop(reason: "sessionapi start failed")
             throw error
         }
-
-        logs.writeLog(log: "startTunnel: all packet loops started")
-        logInterfacesDetailed(label: "AFTER_PROTOCOL_STARTUP")
-        logResourceSnapshot(label: "AFTER_PROTOCOL_STARTUP")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi start accepted generation=\(sessionGeneration)")
+        logInterfacesDetailed(label: "AFTER_SESSIONAPI_START")
+        logResourceSnapshot(label: "AFTER_SESSIONAPI_START")
     }
 
-    private func loadDnsPreflightEntries() {
-        Cloak_outlineClearDNSCache()
-        let entries = preparedDnsPreflightEntries.isEmpty
-            ? (userDefaults.string(forKey: dnsPreflightEntriesKey) ?? "")
-            : preparedDnsPreflightEntries
-        if entries.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            logs.writeLog(log: "[DNSPreflight] No App Group entries available for tunnel process")
+    /// Commands are kept in the extension process: gomobile exports are
+    /// process-local, while the app process merely persists opaque bytes and
+    /// asks NetworkExtension to launch us.  This avoids accidentally creating
+    /// a second authoritative Go manager in the containing app.
+    private func startGoSession(_ rawConfiguration: Data) async throws {
+        let created = try sessionResult(Cloak_outlineCreateSession())
+        let session = try sessionString(created, key: "session_id")
+        sessionID = session
+        sessionGeneration = 0
+        _ = try sessionResult(Cloak_outlineConfigureSession(session, commandID("configure"), rawConfiguration))
+        let started = try sessionResult(Cloak_outlineStartSession(session, commandID("start"), "AUTO_SELECT", 0))
+        sessionGeneration = try sessionInt64(started, key: "generation")
+        sessionSequence = 0
+        try await waitForSession(session, generation: sessionGeneration, expected: "CONNECTED", timeout: 30)
+    }
+
+    private func stopGoSession(reason: String) async {
+        guard let sessionID else { return }
+        if sessionGeneration <= 0 {
+            do {
+                _ = try sessionResult(Cloak_outlineDestroySession(sessionID))
+                self.sessionID = nil
+            } catch {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi unstarted cleanup failed reason=\(reason) code=\(error.localizedDescription)")
+            }
             return
         }
-        let count = Cloak_outlineSetDNSCacheEntries(entries)
-        logs.writeLog(log: "[DNSPreflight] Loaded App Group entries into tunnel process cached=\(count)")
+        var destroyed = false
+        do {
+            let beforeStop = try sessionResult(Cloak_outlineSnapshotSession(sessionID))
+            let alreadyClean = ((beforeStop["generation"] as? NSNumber)?.int64Value == sessionGeneration) &&
+                (beforeStop["cleanup_complete"] as? Bool ?? false)
+            if !alreadyClean {
+                do {
+                    _ = try sessionResult(Cloak_outlineStopSession(sessionID, commandID("stop"), sessionGeneration))
+                } catch {
+                    // FAILED can already have completed its rollback, in which
+                    // case Stop correctly rejects the stale generation. Do not
+                    // strand that finished session: verify cleanup below.
+                    let afterRejectedStop = try sessionResult(Cloak_outlineSnapshotSession(sessionID))
+                    let cleaned = ((afterRejectedStop["generation"] as? NSNumber)?.int64Value == sessionGeneration) &&
+                        (afterRejectedStop["cleanup_complete"] as? Bool ?? false)
+                    if !cleaned { throw error }
+                }
+                try await waitForSessionCleanup(sessionID, generation: sessionGeneration, timeout: 30)
+            }
+            _ = try sessionResult(Cloak_outlineDestroySession(sessionID))
+            destroyed = true
+            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi stop accepted generation=\(sessionGeneration) reason=\(reason)")
+        } catch {
+            // Teardown still clears NetworkExtension settings. The Go manager
+            // has generation fencing, so a later process shutdown cannot turn
+            // this into a stale reconnect.
+            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi stop failed reason=\(reason) code=\(error.localizedDescription)")
+        }
+        // Retain the reference if cleanup did not complete: a restart must
+        // retry this exact generation rather than start another TUN session.
+        if destroyed {
+            self.sessionID = nil
+            self.sessionGeneration = 0
+            self.sessionSequence = 0
+        }
     }
 
-    private func prepareDnsPreflightEntries() {
-        preparedDnsPreflightEntries = ""
-        let hostsText = userDefaults.string(forKey: dnsPreflightHostsKey) ?? ""
-        let hosts = Array(Set(
-            hostsText
-                .split(whereSeparator: \.isNewline)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-                .filter { !$0.isEmpty }
-        ))
-        if hosts.isEmpty {
-            logs.writeLog(log: "[DNSPreflight] No App Group hosts available for tunnel pre-resolve")
-            return
+    private func waitForSession(_ session: String, generation: Int64, expected: String, timeout: TimeInterval) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let snapshot = try sessionResult(Cloak_outlineSnapshotSession(session))
+            let observedGeneration = (snapshot["generation"] as? NSNumber)?.int64Value ?? 0
+            let state = snapshot["state"] as? String ?? ""
+            if observedGeneration == generation && state == expected { return }
+            if observedGeneration == generation && state == "FAILED" { throw sessionError("SESSIONAPI_FAILED") }
+            try await Task.sleep(nanoseconds: 100_000_000)
         }
-
-        let hostTimeout = dnsPreflightTimeout(
-            key: dnsPreflightHostTimeoutMsKey,
-            defaultMs: dnsPreflightDefaultHostTimeoutMs
-        )
-        let totalTimeout = dnsPreflightTimeout(
-            key: dnsPreflightTotalTimeoutMsKey,
-            defaultMs: dnsPreflightDefaultTotalTimeoutMs
-        )
-        let start = Date()
-        let queue = DispatchQueue(label: "vpn.dobby.app.tunnel.dns-preflight.\(tunnelId)", qos: .userInitiated, attributes: .concurrent)
-        let group = DispatchGroup()
-        let lock = NSLock()
-        var accepting = true
-        var resolved: [(String, String)] = []
-
-        logs.writeLog(
-            log: "[DNSPreflight] Tunnel pre-resolve start hosts=\(hosts.count) " +
-                "hostTimeoutMs=\(Int(hostTimeout * 1000)) totalTimeoutMs=\(Int(totalTimeout * 1000))"
-        )
-        for host in hosts {
-            group.enter()
-            queue.async {
-                let ip = self.resolveIPv4IfNeededWithTimeout(host, timeout: hostTimeout)
-                lock.lock()
-                if accepting, let ip {
-                    resolved.append((host, ip))
-                }
-                lock.unlock()
-                group.leave()
-            }
-        }
-
-        let waitResult = group.wait(timeout: .now() + totalTimeout)
-        lock.lock()
-        accepting = false
-        let snapshot = resolved
-        lock.unlock()
-
-        let entries = snapshot.map { "\($0.0)=\($0.1)" }.joined(separator: "\n")
-        preparedDnsPreflightEntries = entries
-        userDefaults.set(entries, forKey: dnsPreflightEntriesKey)
-        let failed = hosts.count - snapshot.count
-        logs.writeLog(
-            log: "[DNSPreflight] Tunnel pre-resolve finished hosts=\(hosts.count) " +
-                "resolved=\(snapshot.count) failed=\(failed) timedOut=\(waitResult == .timedOut) " +
-                "elapsedMs=\(elapsedMs(since: start))"
-        )
+        throw sessionError("SESSIONAPI_TIMEOUT")
     }
 
-    private func dnsPreflightTimeout(key: String, defaultMs: Int) -> TimeInterval {
-        let raw = userDefaults.string(forKey: key)
-        guard let raw = raw, let timeoutMs = Double(raw), timeoutMs > 0 else {
-            return TimeInterval(defaultMs) / 1000.0
+    private func waitForSessionCleanup(_ session: String, generation: Int64, timeout: TimeInterval) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let snapshot = try sessionResult(Cloak_outlineSnapshotSession(session))
+            let observedGeneration = (snapshot["generation"] as? NSNumber)?.int64Value ?? 0
+            let cleanup = snapshot["cleanup_complete"] as? Bool ?? false
+            if observedGeneration == generation && cleanup { return }
+            try await Task.sleep(nanoseconds: 100_000_000)
         }
-        return timeoutMs / 1000.0
+        throw sessionError("SESSIONAPI_CLEANUP_TIMEOUT")
     }
 
-    private func startActiveProtocol(
-        reason: String,
-        teardownOnFailure: Bool,
-        startHealthCheckAfterStart: Bool
-    ) async throws {
-        let vpnInterface = configsRepository.getVpnInterface()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] selected vpnInterface=\(vpnInterface) reason=\(reason)")
-        Cloak_outlineSetGeoRoutingConf(configsRepository.getGeoRoutingConf())
+    private func commandID(_ operation: String) -> String {
+        "ios-\(launchId)-\(operation)-\(UUID().uuidString)"
+    }
 
-        if vpnInterface == VpnInterface.xray {
-            do {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startXRay begin reason=\(reason)")
-                try xrayInteractor.startXRay()
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startXRay success reason=\(reason)")
-            } catch {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startXRay failed reason=\(reason): \(error.localizedDescription)")
-                if teardownOnFailure {
-                    await teardownForStop(reason: "startXRay failure")
-                }
-                throw error
-            }
-        } else if vpnInterface == VpnInterface.trustTunnel {
-            do {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startTrustTunnel begin reason=\(reason)")
-                try trustTunnelInteractor.startTrustTunnel()
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startTrustTunnel success reason=\(reason)")
-            } catch {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startTrustTunnel failed reason=\(reason): \(error.localizedDescription)")
-                if teardownOnFailure {
-                    await teardownForStop(reason: "startTrustTunnel failure")
-                }
-                throw error
-            }
-        } else if vpnInterface == VpnInterface.none {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] no VPN protocol selected reason=\(reason)")
-            let error = NSError(
-                domain: "PacketTunnelProvider",
-                code: -4,
-                userInfo: [NSLocalizedDescriptionKey: "No VPN protocol selected"]
-            )
-            if teardownOnFailure {
-                await teardownForStop(reason: "no VPN protocol selected")
-            }
-            throw error
-        } else {
-            do {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline begin reason=\(reason)")
-                try outlineInteractor.startOutline()
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline success reason=\(reason)")
-            } catch {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startOutline failed reason=\(reason): \(error.localizedDescription)")
-                if teardownOnFailure {
-                    await teardownForStop(reason: "startOutline failure")
-                }
-                throw error
-            }
-            logs.writeLog(log: "[tunnel:\(tunnelId)] Device initialized OK")
-            do {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak begin reason=\(reason)")
-                try cloakInteractor.startCloak(outlineServerPort: configsRepository.getServerPort())
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak success reason=\(reason)")
-            } catch {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] startCloak failed reason=\(reason): \(error.localizedDescription)")
-                if teardownOnFailure {
-                    await teardownForStop(reason: "startCloak failure")
-                }
-                throw error
-            }
+    private func sessionResult(_ payload: String) throws -> [String: Any] {
+        guard let data = payload.data(using: .utf8),
+              let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              root["ok"] as? Bool == true,
+              let result = root["result"] as? [String: Any] else {
+            throw sessionError("SESSIONAPI_REJECTED")
         }
+        return result
+    }
 
-        if startHealthCheckAfterStart {
-            startHealthCheck()
-        } else {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] HEALTH_CHECK skipped for protocol probe reason=\(reason)")
-        }
+    private func sessionString(_ result: [String: Any], key: String) throws -> String {
+        guard let value = result[key] as? String, !value.isEmpty else { throw sessionError("SESSIONAPI_MALFORMED") }
+        return value
+    }
+
+    private func sessionInt64(_ result: [String: Any], key: String) throws -> Int64 {
+        guard let number = result[key] as? NSNumber, number.int64Value > 0 else { throw sessionError("SESSIONAPI_MALFORMED") }
+        return number.int64Value
+    }
+
+    private func sessionError(_ code: String) -> NSError {
+        NSError(domain: "PacketTunnelProvider.sessionapi", code: -7, userInfo: [NSLocalizedDescriptionKey: code])
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
@@ -516,9 +413,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         } else {
             logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel observed without app stop request")
         }
-        logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel clearing geo routing config")
-        Cloak_outlineClearGeoRoutingConf()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel geo routing clear returned")
         Task {
             await teardownForStop(reason: "stopTunnel(\(reason))")
             logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel teardown complete; calling completionHandler")
@@ -543,7 +437,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func wake() {
         logs.writeLog(log: "[tunnel:\(tunnelId)] wake()")
-        publishHealthCheckState(label: "wake")
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
@@ -562,43 +455,31 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory responseBytes=\(response?.count ?? -1)")
             completionHandler?(response)
         } else {
-            if let msg = String(data: messageData, encoding: .utf8) {
-                logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage unknown='\(msg)' echo bytes=\(messageData.count)")
-            } else {
-                logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage nonUtf8 echo bytes=\(messageData.count)")
-            }
+            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage unknown payload bytes=\(messageData.count)")
             completionHandler?(messageData)
         }
     }
 
     @MainActor
     private func restartActiveProtocolFromAppMessage(isProtocolProbe: Bool) async -> Bool {
-        logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart begin reason=appMessage restartActiveProtocol isProtocolProbe=\(isProtocolProbe)")
-        stopHealthCheck(reason: "appMessage restartActiveProtocol")
-        stopCloakSidecarForProtocolRestart()
-        do {
-            try await startActiveProtocol(
-                reason: "appMessage restartActiveProtocol",
-                teardownOnFailure: false,
-                startHealthCheckAfterStart: !isProtocolProbe
-            )
-            logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart success reason=appMessage restartActiveProtocol isProtocolProbe=\(isProtocolProbe)")
-            return true
-        } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] protocol restart failed reason=appMessage restartActiveProtocol isProtocolProbe=\(isProtocolProbe): \(error.localizedDescription)")
-            configsRepository.setHealthCheckState(state: 0)
+        guard let raw = secrets.data(for: sessionRawConfigurationKey), !raw.isEmpty else {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi restart rejected: no raw configuration")
             return false
         }
-    }
-
-    @MainActor
-    private func stopCloakSidecarForProtocolRestart() {
+        // Probe policy is intentionally not selected by Swift. Go receives an
+        // AUTO_SELECT command and serializes its own cleanup/failover.
+        await stopGoSession(reason: "appMessage restart")
+        guard sessionID == nil else {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi restart deferred until prior cleanup completes")
+            return false
+        }
         do {
-            try cloakInteractor.stopCloak()
+            try await startGoSession(raw)
+            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi restart accepted generation=\(sessionGeneration)")
+            return true
         } catch {
-            logs.writeLog(
-                log: "[tunnel:\(tunnelId)] stopCloak before protocol restart failed: \(error.localizedDescription)"
-            )
+            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi restart rejected code=\(error.localizedDescription)")
+            return false
         }
     }
 
@@ -703,6 +584,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         )
     }
 
+    private func elapsedMs(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
+    }
+
     private func startLoadSampler() {
         stopLoadSampler(reason: "restart")
 
@@ -723,51 +608,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         timer.setEventHandler {}
         timer.cancel()
         logs.writeLog(log: "[tunnel:\(tunnelId)] LOAD_SAMPLER stopped reason=\(reason)")
-    }
-
-    private func startHealthCheck() {
-        stopHealthCheck(reason: "restart", markDisconnected: false)
-
-        logs.writeLog(log: "[tunnel:\(tunnelId)] HEALTH_CHECK starting in packet tunnel extension")
-        configsRepository.setHealthCheckState(state: 1)
-        Cloak_outlineInitHealthCheck()
-        Cloak_outlineStartHealthCheck()
-        publishHealthCheckState(label: "start")
-
-        let queue = DispatchQueue(label: "vpn.dobby.app.tunnel.healthcheck.\(tunnelId)", qos: .utility)
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 1.0, repeating: 1.0, leeway: .milliseconds(100))
-        timer.setEventHandler { [weak self] in
-            self?.publishHealthCheckState(label: "periodic")
-        }
-        healthCheckStateSampler = timer
-        timer.resume()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] HEALTH_CHECK sampler started intervalMs=1000")
-    }
-
-    private func stopHealthCheck(reason: String, markDisconnected: Bool = true) {
-        if let timer = healthCheckStateSampler {
-            healthCheckStateSampler = nil
-            timer.setEventHandler {}
-            timer.cancel()
-            logs.writeLog(log: "[tunnel:\(tunnelId)] HEALTH_CHECK sampler stopped reason=\(reason)")
-        }
-
-        logs.writeLog(log: "[tunnel:\(tunnelId)] HEALTH_CHECK stop requested reason=\(reason)")
-        Cloak_outlineStopHealthCheck()
-        if markDisconnected {
-            configsRepository.setHealthCheckState(state: 0)
-            lastSharedHealthCheckState = 0
-        }
-    }
-
-    private func publishHealthCheckState(label: String) {
-        let state = Cloak_outlineGetConnectionState()
-        configsRepository.setHealthCheckState(state: state)
-        if lastSharedHealthCheckState != state || label != "periodic" {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] HEALTH_CHECK state=\(state) source=\(label)")
-        }
-        lastSharedHealthCheckState = state
     }
 
     private func loadSnapshotDetails() -> String {
@@ -921,33 +761,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     @MainActor
-    private func stopProtocols(reason: String) {
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] stop begin (\(reason))")
-        stopHealthCheck(reason: reason)
-
-        do {
-            try cloakInteractor.stopCloak()
-        } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] could not stop cloak: \(error.localizedDescription)")
-        }
-
-        do {
-            try outlineInteractor.stopOutline()
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] outline stopped")
-        } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] could not stop outline: \(error.localizedDescription)")
-        }
-
-        xrayInteractor.stopXRay()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] xray stop requested")
-
-        trustTunnelInteractor.stopTrustTunnel()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] trusttunnel stop requested")
-
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] clearing geo routing config")
-        Cloak_outlineClearGeoRoutingConf()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] geo routing clear returned")
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [protocols] stop end (\(reason))")
+    private func stopProtocols(reason: String) async {
+        // Do not dispatch per-protocol stops here. sessionapi owns protocol,
+        // tun2socks, DNS/routing and Cloak cleanup as one transactional lease.
+        await stopGoSession(reason: reason)
     }
 
     @MainActor
@@ -955,7 +772,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
         logResourceSnapshot(label: "TEARDOWN_BEGIN reason=\(reason)")
         stopLoadSampler(reason: reason)
-        stopProtocols(reason: reason)
+        await stopProtocols(reason: reason)
 
         do {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] clearing tunnel network settings")
@@ -973,126 +790,4 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason))")
     }
 
-    /// Extracts the host/IP part from a string like "ip:port" or "[ipv6]:port".
-    func extractIP(from serverPort: String) -> String? {
-        let host = OutlineInteractor.extractHost(from: serverPort).trimmingCharacters(in: .whitespacesAndNewlines)
-        if host.isEmpty {
-            logs.writeLog(log: "[DEBUG][Routing] Outline host extraction skipped: serverPort empty")
-            return nil
-        }
-        logs.writeLog(log: "[DEBUG][Routing] Outline host extracted host=\(maskStr(value: host))")
-        return host
-    }
-
-    /// Extracts `RemoteHost` from Cloak JSON
-    func extractRemoteHost(from cloakConfig: String) -> String? {
-        guard !cloakConfig.isEmpty else {
-            logs.writeLog(log: "[DEBUG][Routing] Cloak RemoteHost extraction skipped: config empty")
-            return nil
-        }
-        guard let data = cloakConfig.data(using: .utf8) else {
-            logs.writeLog(log: "[DEBUG][Routing] Cloak RemoteHost extraction failed: config is not UTF-8")
-            return nil
-        }
-        do {
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                logs.writeLog(log: "[DEBUG][Routing] Cloak RemoteHost extraction failed: JSON root is not object")
-                return nil
-            }
-            guard let remoteHost = json["RemoteHost"] as? String else {
-                logs.writeLog(log: "[DEBUG][Routing] Cloak RemoteHost extraction skipped: RemoteHost key missing")
-                return nil
-            }
-            let trimmed = remoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                logs.writeLog(log: "[DEBUG][Routing] Cloak RemoteHost extraction skipped: RemoteHost empty")
-                return nil
-            }
-            logs.writeLog(log: "[DEBUG][Routing] Cloak RemoteHost extracted host=\(maskStr(value: trimmed))")
-            return trimmed
-        } catch {
-            logs.writeLog(log: "[DEBUG][Routing] Cloak RemoteHost extraction failed: \(error.localizedDescription)")
-            return nil
-        }
-    }
-
-    /// Converts host/IP into an excluded /32 route
-    func makeExcludedRoute(host: String) -> NEIPv4Route? {
-        return NEIPv4Route(destinationAddress: host, subnetMask: "255.255.255.255")
-    }
-
-    private func isValidIPv4(_ s: String) -> Bool {
-        let parts = s.split(separator: ".")
-        guard parts.count == 4 else { return false }
-        for p in parts {
-            guard let n = Int(p), (0...255).contains(n) else { return false }
-        }
-        return true
-    }
-
-    /// If `host` is not an IPv4 literal, resolves it to IPv4 (first A record). Returns nil on error.
-    private func resolveIPv4IfNeeded(_ host: String) -> String? {
-        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        if isValidIPv4(trimmed) { return trimmed }
-        let start = Date()
-        logs.writeLog(log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: trimmed))")
-
-        var hints = addrinfo(
-            ai_flags: AI_ADDRCONFIG,
-            ai_family: AF_INET,
-            ai_socktype: SOCK_STREAM,
-            ai_protocol: 0,
-            ai_addrlen: 0,
-            ai_canonname: nil,
-            ai_addr: nil,
-            ai_next: nil
-        )
-        var res: UnsafeMutablePointer<addrinfo>?
-        let rc = getaddrinfo(trimmed, nil, &hints, &res)
-        guard rc == 0, let first = res else {
-            logs.writeLog(
-                log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: trimmed)) failed " +
-                    "rc=\(rc) error=\(String(cString: gai_strerror(rc))) elapsed=\(elapsedMs(since: start))ms"
-            )
-            return nil
-        }
-        defer { freeaddrinfo(res) }
-
-        var addr = first.pointee.ai_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
-        var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-        let ptr = inet_ntop(AF_INET, &addr, &buffer, socklen_t(INET_ADDRSTRLEN))
-        guard ptr != nil else {
-            let ntopErrno = errno
-            logs.writeLog(
-                log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: trimmed)) inet_ntop failed " +
-                    "errno=\(ntopErrno) \(String(cString: strerror(ntopErrno))) elapsed=\(elapsedMs(since: start))ms"
-            )
-            return nil
-        }
-        let value = String(cString: buffer)
-        logs.writeLog(
-            log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: trimmed)) ok " +
-                "ip=\(maskStr(value: value)) elapsed=\(elapsedMs(since: start))ms"
-        )
-        return value
-    }
-
-    private func elapsedMs(since start: Date) -> Int {
-        Int(Date().timeIntervalSince(start) * 1000)
-    }
-
-    private func resolveIPv4IfNeededWithTimeout(_ host: String, timeout: TimeInterval) -> String? {
-        var result: String?
-        let sema = DispatchSemaphore(value: 0)
-        DispatchQueue.global(qos: .userInitiated).async {
-            result = self.resolveIPv4IfNeeded(host)
-            sema.signal()
-        }
-        if sema.wait(timeout: .now() + timeout) == .timedOut {
-            logs.writeLog(log: "[DEBUG][Routing] resolving IPv4 host=\(maskStr(value: host)) timed out after \(Int(timeout * 1000))ms")
-            return nil
-        }
-        return result
-    }
 }

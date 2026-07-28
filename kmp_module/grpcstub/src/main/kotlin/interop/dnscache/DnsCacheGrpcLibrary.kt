@@ -4,11 +4,11 @@ import com.dobby.grpcproto.VpnGrpcKt
 import com.dobby.grpcproto.empty
 import com.dobby.grpcproto.setDNSCacheEntriesRequest
 import interop.exceptions.VpnServiceStatusException
-import io.grpc.ManagedChannel
+import io.grpc.Channel
 import io.grpc.StatusException
 import kotlinx.coroutines.runBlocking
 
-open class DnsCacheGrpcLibrary(channel: ManagedChannel) : DnsCacheLibrary {
+open class DnsCacheGrpcLibrary(channel: Channel) : DnsCacheLibrary {
     private val stub = VpnGrpcKt.VpnCoroutineStub(channel)
 
     override fun ClearDNSCache() {

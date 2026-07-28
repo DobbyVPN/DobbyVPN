@@ -33,8 +33,12 @@ CGO_LDFLAGS="-L." go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserve
 ### MacOS
 
 ```bash
-go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver ./desktop_exports/
+GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver-arm64 ./desktop_exports/
+GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver-amd64 ./desktop_exports/
 ```
+
+With CGO enabled, build each target on its matching macOS runner/toolchain. CI
+uses GitHub-hosted `macos-15` for arm64 and `macos-15-intel` for amd64.
 
 ### Android
 
@@ -46,7 +50,7 @@ go install golang.org/x/mobile/cmd/gomobile@$(go list -m -f '{{.Version}}' golan
 gomobile init
 
 gomobile bind \
-  -target=android/arm64 \
+  -target=android/arm64,android/amd64 \
   -androidapi=26 \
   -tags=static \
   -javapkg=com.dobby.gomobile \
@@ -57,7 +61,16 @@ gomobile bind \
 
 The Gradle `:app` module runs this `gomobile bind` step automatically before
 Android compilation. The generated AAR replaces the previous manual
-`libbackend.so` + JNI bridge.
+`libbackend.so` + JNI bridge. It contains `arm64-v8a` and `x86_64` Go JNI
+libraries; the Android app also packages the matching `libc++_shared.so`
+runtime for both ABIs.
+
+To verify the generated AAR and debug APK ABI payloads locally, run:
+
+```bash
+cd kmp_module
+./gradlew :app:verifyDebugNativeAbiPayloads
+```
 
 ### IOS
 
@@ -111,7 +124,22 @@ rpc ClearGeoRoutingConf (Empty)                   returns (Empty);
 // dns_cache.go
 rpc ClearDNSCache (Empty)                                  returns (Empty);
 rpc SetDNSCacheEntries (SetDNSCacheEntriesRequest)         returns (SetDNSCacheEntriesResponse);
+
+// sessionapi/v1 (versioned, protocol-neutral desktop transport)
+rpc GetCapabilities (SessionGetCapabilitiesRequest)         returns (SessionGetCapabilitiesResponse);
+rpc CreateSession (SessionCreateSessionRequest)             returns (SessionCreateSessionResponse);
+rpc Configure (SessionConfigureRequest)                     returns (SessionConfigureResponse);
+rpc Start (SessionStartRequest)                             returns (SessionStartResponse);
+rpc Stop (SessionStopRequest)                               returns (SessionStopResponse);
+rpc Snapshot (SessionSnapshotRequest)                       returns (SessionSnapshotResponse);
+rpc Observe (SessionObserveRequest)                         returns (SessionObserveResponse);
+rpc DestroySession (SessionDestroySessionRequest)           returns (SessionDestroySessionResponse);
 ```
+
+`sessionapi/v1` uses opaque session and command IDs, raw configuration bytes,
+generation-correlated start/stop operations, and ordered session events. Its
+responses contain only safe profile summaries, warnings, state, and typed
+failures; they never return the submitted configuration or credentials.
 
 Or see the canonical [vpnserver.proto](../kmp_module/grpcprotos/src/main/proto/com/dobby/vpnserver/vpnserver.proto) for the desktop gRPC API.
 
@@ -121,13 +149,14 @@ After editing that proto, regenerate stubs:
 
 ```bash
 cd go_module
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-chmod +x scripts/regenerate-grpcproto.sh
+export PATH="$PWD/../../tools/protoc/bin:$(go env GOPATH)/bin:$PATH"
 ./scripts/regenerate-grpcproto.sh
 ```
 
-The script copies the canonical proto into `grpcproto/` (gitignored) and runs `protoc`.
+The script copies the canonical proto into `grpcproto/` (gitignored) and runs
+the workspace-local `tools/protoc/bin/protoc`. It requires `protoc-gen-go` and
+`protoc-gen-go-grpc` in `$(go env GOPATH)/bin`; install those user-local plugins
+only when they are absent.
 
 **Kotlin** (from `kmp_module/`, uses Gradle/protobuf plugin — same canonical file):
 

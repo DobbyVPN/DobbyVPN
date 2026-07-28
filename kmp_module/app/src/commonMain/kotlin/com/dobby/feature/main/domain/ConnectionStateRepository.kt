@@ -21,12 +21,12 @@ class ConnectionStateRepository {
         _statusFlow.tryEmit(connectionState)
     }
 
-    suspend fun updateServiceStarted(isStarted: Boolean) {
-        serviceStartedFlow.emit(isStarted)
+    suspend fun updateServiceStarted(isStarted: Boolean, generation: Long = 0L) {
+        serviceStartedFlow.emit(isStarted, generation)
     }
 
-    fun tryUpdateServiceStarted(isStarted: Boolean) {
-        serviceStartedFlow.tryEmit(isStarted)
+    fun tryUpdateServiceStarted(isStarted: Boolean, generation: Long = 0L) {
+        serviceStartedFlow.tryEmit(isStarted, generation)
     }
 
     fun tryUpdateVpnNetworkReady(isReady: Boolean) {
@@ -40,29 +40,39 @@ class ConnectionStateRepository {
  *
  * **Expected usage**:
  *
- * [ServiceStarted.prepare] -> [VpnManager.start] -> [ServiceStarted.awaitResult] ->
+ * [ServiceStarted.prepare] -> generation-tagged platform request -> [ServiceStarted.awaitResult] ->
  * what will block coroutine scope until we receive the result from the VPN service.
  */
 class ServiceStarted {
-    private val result = Channel<Boolean>(capacity = Channel.CONFLATED)
+    private data class Result(val started: Boolean, val generation: Long)
+    private val result = Channel<Result>(capacity = Channel.UNLIMITED)
 
-    fun prepare() {
+    fun prepare(generation: Long = 0L) {
         while (!result.tryReceive().isFailure) {
             // Drain stale start results before a new launch attempt.
         }
     }
 
-    suspend fun emit(started: Boolean) {
-        result.send(started)
+    suspend fun emit(started: Boolean, generation: Long = 0L) {
+        result.send(Result(started, generation))
     }
 
-    fun tryEmit(started: Boolean) {
-        result.trySend(started)
+    fun tryEmit(started: Boolean, generation: Long = 0L) {
+        result.trySend(Result(started, generation))
     }
 
-    suspend fun awaitResult(timeoutMs: Long): Boolean {
+    suspend fun awaitResult(timeoutMs: Long, generation: Long = 0L): Boolean {
         return withTimeoutOrNull(timeoutMs) {
-            result.receive()
+            awaitGeneration(generation)
         } ?: false
+    }
+
+    private suspend fun awaitGeneration(generation: Long): Boolean {
+        while (true) {
+            val next = result.receive()
+            if (next.generation == generation) {
+                return next.started
+            }
+        }
     }
 }

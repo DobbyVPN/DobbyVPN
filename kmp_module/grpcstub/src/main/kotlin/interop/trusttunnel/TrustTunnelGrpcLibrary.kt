@@ -4,11 +4,11 @@ import com.dobby.grpcproto.VpnGrpcKt
 import com.dobby.grpcproto.empty
 import com.dobby.grpcproto.startTrustTunnelRequest
 import interop.exceptions.VpnServiceStatusException
-import io.grpc.ManagedChannel
+import io.grpc.Channel
 import io.grpc.StatusException
 import kotlinx.coroutines.runBlocking
 
-open class TrustTunnelGrpcLibrary(channel: ManagedChannel) : TrustTunnelLibrary {
+open class TrustTunnelGrpcLibrary(channel: Channel) : TrustTunnelLibrary {
     private val stub = VpnGrpcKt.VpnCoroutineStub(channel)
 
     override fun GetTrustTunnelLastError(): String {

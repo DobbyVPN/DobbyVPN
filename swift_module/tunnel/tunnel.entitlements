@@ -10,5 +10,9 @@
 	<array>
 		<string>group.vpn.dobby.app</string>
 	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)vpn.dobby.app</string>
+	</array>
 </dict>
 </plist>

@@ -247,7 +247,7 @@ func startIPv6Block() error {
 	log.Debugf(Category, "[Routing][IPv6] Installing IPv6 block routes")
 
 	var errs []string
-	for _, subnet := range []string{"::/1", "8000::/1"} {
+	for _, subnet := range []string{ipv6LowerHalf, ipv6UpperHalf} {
 		if _, err := ExecuteCommand(fmt.Sprintf("ip -6 route replace blackhole %s metric 1", subnet)); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", subnet, err))
 		}
@@ -265,7 +265,7 @@ func stopIPv6Block() error {
 	log.Debugf(Category, "[Routing][IPv6] Removing IPv6 block routes")
 
 	var errs []string
-	for _, subnet := range []string{"::/1", "8000::/1"} {
+	for _, subnet := range []string{ipv6LowerHalf, ipv6UpperHalf} {
 		if _, err := ExecuteCommand(fmt.Sprintf("ip -6 route del blackhole %s metric 1", subnet)); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", subnet, err))
 		}

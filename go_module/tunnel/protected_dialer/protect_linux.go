@@ -31,14 +31,15 @@ func GetDefaultRoute() (gatewayIP, interfaceName string, ok bool) {
 
 type linuxProtector struct{}
 
-func (l *linuxProtector) Protect(fdU uintptr, network string) {
+func (l *linuxProtector) Protect(fdU uintptr, network string) error {
 	if linuxSocketMark == 0 {
-		return
+		return ErrSocketProtectionUnavailable
 	}
 
 	fd, err := UintptrToInt(fdU)
 	if err != nil {
 		log.Debugf(Category, "[Linux-Protect] Protect fd err=%v", err)
+		return err
 	}
 
 	if err := syscall.SetsockoptInt(
@@ -48,7 +49,9 @@ func (l *linuxProtector) Protect(fdU uintptr, network string) {
 		linuxSocketMark,
 	); err != nil {
 		log.Debugf(Category, "[Linux-Protect] SO_MARK failed fd=%d mark=%d err=%v", fd, linuxSocketMark, err)
+		return err
 	}
+	return nil
 }
 
 func init() {

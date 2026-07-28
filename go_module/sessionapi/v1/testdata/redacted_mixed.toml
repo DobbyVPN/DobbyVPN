@@ -1,0 +1,33 @@
+# Safe fixture only: all endpoints and credentials are deliberately synthetic.
+[Telemetry]
+Endpoint = "https://telemetry.invalid"
+ApiToken = "redacted"
+
+[ExcludeIPs]
+IPs = ["203.0.113.0/24"]
+
+[[Outline]]
+Description = "outline-first"
+Server = "198.51.100.10"
+Port = 443
+Password = "redacted"
+
+[[Xray]]
+Description = "xray-second"
+outbounds = [{ tag = "proxy", protocol = "vless", settings = { vnext = [] } }]
+
+[[TrustTunnel]]
+vpn_mode = "general"
+|endpoint|
+hostname = "vpn.invalid"
+addresses = ["198.51.100.11:443"]
+username = "redacted"
+password = "redacted"
+|socks|
+address = "127.0.0.1:10808"
+
+[[Outline]]
+Description = "outline-last"
+Server = "198.51.100.12"
+Port = 8443
+Password = "redacted"

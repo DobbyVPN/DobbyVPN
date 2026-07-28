@@ -18,6 +18,8 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - uses: actions/setup-go@v5
         with:
@@ -29,7 +31,7 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           workdir: go_module
-          golangci_lint_flags: --config .golangci.yml ./common/... ./healthcheck/... ./log/... ./outline/... ./routing/... ./tunnel/...
+          golangci_lint_flags: --config .golangci.yml ./...
           reporter: github-pr-review
           filter_mode: nofilter
           level: warning
@@ -59,8 +61,11 @@ jobs:
 
       - name: Run detekt
         working-directory: kmp_module
-        run: ./gradlew detekt
-        continue-on-error: true
+        run: |
+          ./gradlew \
+            :app:detektMetadataCommonMain \
+            :app:detektJvmMain \
+            :grpcstub:detekt
 
       - name: Report detekt results with reviewdog
         env:

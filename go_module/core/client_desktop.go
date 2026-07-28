@@ -16,9 +16,11 @@ import (
 )
 
 type CoreClient struct {
-	app    *internal.App
-	cancel func()
-	done   chan struct{}
+	app        *internal.App
+	cancel     context.CancelFunc
+	done       chan struct{}
+	state      LifecycleState
+	generation uint64
 
 	mu sync.Mutex
 }
@@ -39,6 +41,7 @@ func NewClient(device pkg.ProtocolDevice) *CoreClient {
 				DNSServerIP:          "9.9.9.9",
 			},
 		},
+		state: StateIdle,
 	}
 	common.Client.SetVpnClient(coreCommon.Name, c)
 	return c
@@ -50,13 +53,19 @@ func (c *CoreClient) Connect() error {
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.cancel != nil {
-		c.cancel()
-		c.waitForShutdownLocked("before reconnect")
-		c.cancel = nil
+	if c.state != StateIdle && c.state != StateFailed {
+		state := c.state
+		c.mu.Unlock()
+		return lifecycleBusyError(state)
 	}
+	if c.app == nil {
+		c.state = StateFailed
+		c.mu.Unlock()
+		return errors.New("core desktop app is not initialized")
+	}
+	c.generation++
+	generation := c.generation
+	c.state = StatePreparing
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
@@ -65,9 +74,9 @@ func (c *CoreClient) Connect() error {
 	// Channel to receive initialization result from the goroutine
 	initResult := make(chan error, 1)
 	done := c.done
+	c.mu.Unlock()
 
 	go func() {
-		defer close(done)
 		defer func() {
 			if r := recover(); r != nil {
 				err := fmt.Errorf("core client crashed: %v", r)
@@ -76,23 +85,13 @@ func (c *CoreClient) Connect() error {
 				case initResult <- err:
 				default:
 				}
-				common.Client.MarkInactive(coreCommon.Name)
 			}
+			c.finishRun(generation)
+			close(done)
 		}()
-		if c.app == nil {
-			err := errors.New("core desktop app is not initialized")
-			log.Debugf(coreCommon.Category, "connect core client failed: %v", err)
-			common.Client.MarkInactive(coreCommon.Name)
-			select {
-			case initResult <- err:
-			default:
-			}
-			return
-		}
 		err := c.app.Run(ctx, initResult)
 		if err != nil {
 			log.Debugf(coreCommon.Category, "connect core client failed: %v", err)
-			common.Client.MarkInactive(coreCommon.Name)
 		}
 	}()
 
@@ -100,18 +99,32 @@ func (c *CoreClient) Connect() error {
 	select {
 	case err := <-initResult:
 		if err != nil {
-			c.cancel()
-			c.waitForShutdownLocked("after initialization error")
-			c.cancel = nil
+			c.stopAndWait("after initialization error")
+			c.mu.Lock()
+			if c.generation == generation {
+				c.state = StateFailed
+			}
+			c.mu.Unlock()
 			return fmt.Errorf("failed to initialize core client connection: %w", err)
 		}
+		c.mu.Lock()
+		if c.generation != generation || c.state != StatePreparing {
+			state := c.state
+			c.mu.Unlock()
+			return fmt.Errorf("core client start generation %d was cancelled while %s", generation, state)
+		}
+		c.state = StateConnected
+		c.mu.Unlock()
 		log.Debugf(coreCommon.Category, "Core client connection initialized successfully")
 		common.Client.MarkActive(coreCommon.Name)
 		return nil
 	case <-time.After(30 * time.Second):
-		c.cancel()
-		c.waitForShutdownLocked("after initialization timeout")
-		c.cancel = nil
+		c.stopAndWait("after initialization timeout")
+		c.mu.Lock()
+		if c.generation == generation {
+			c.state = StateFailed
+		}
+		c.mu.Unlock()
 		return fmt.Errorf("timeout waiting for core client connection initialization")
 	}
 }
@@ -121,20 +134,26 @@ func (c *CoreClient) Disconnect() error {
 		return errors.New("core desktop client is not initialized")
 	}
 
-	log.Debugf(coreCommon.Category, "Disconnect: try to lock c.mu")
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	log.Debugf(coreCommon.Category, "Disconnect: locked c.mu")
-
-	if c.cancel != nil {
-		log.Debugf(coreCommon.Category, "Disconnect: c.cancel != nil")
-		c.cancel()
-		c.waitForShutdownLocked("disconnect")
-		c.cancel = nil
+	if c.state == StateIdle {
+		c.mu.Unlock()
+		return nil
 	}
-	log.Debugf(coreCommon.Category, "Disconnect: common.Client.MarkInactive")
+	if c.state == StateStopping {
+		c.mu.Unlock()
+		return lifecycleBusyError(StateStopping)
+	}
+	c.state = StateStopping
+	cancel := c.cancel
+	done := c.done
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if err := c.waitForShutdown(done, "disconnect"); err != nil {
+		return err
+	}
 	common.Client.MarkInactive(coreCommon.Name)
-	log.Debugf(coreCommon.Category, "Disconnect: MarkedInactive")
 	return nil
 }
 
@@ -146,43 +165,77 @@ func (c *CoreClient) SwitchDevice(device pkg.ProtocolDevice) error {
 		return errors.New("protocol device is not initialized")
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.cancel == nil {
-		return errors.New("core desktop client is not connected")
-	}
-	if c.app == nil {
-		return errors.New("core desktop app is not initialized")
-	}
-	return c.app.SwitchProtocolDevice(device)
+	return fmt.Errorf("protocol changes require a completed disconnect before starting a new session")
 }
 
-func (c *CoreClient) waitForShutdownLocked(reason string) {
-	if c.done == nil {
-		return
+func (c *CoreClient) stopAndWait(reason string) {
+	c.mu.Lock()
+	if c.state != StateStopping {
+		c.state = StateStopping
 	}
-
+	cancel := c.cancel
 	done := c.done
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	_ = c.waitForShutdown(done, reason)
+}
+
+func (c *CoreClient) waitForShutdown(done <-chan struct{}, reason string) error {
+	if done == nil {
+		return nil
+	}
 	select {
 	case <-done:
 		log.Debugf(coreCommon.Category, "Core/app shutdown completed after %s", reason)
+		return nil
 	case <-time.After(10 * time.Second):
 		log.Debugf(coreCommon.Category, "Core/app shutdown wait timed out after %s", reason)
+		return fmt.Errorf("timeout waiting for core client shutdown after %s", reason)
 	}
-	c.done = nil
 }
 
 func (c *CoreClient) Refresh() error {
-	if err := c.Disconnect(); err != nil {
-		return fmt.Errorf("failed to refresh core client: disconnect failed: %w", err)
-	}
-	if err := c.Connect(); err != nil {
-		return fmt.Errorf("failed to refresh core client: connect failed: %w", err)
-	}
-	return nil
+	return fmt.Errorf("core client refresh is unsupported; stop and start a new session")
 }
 
 func (c *CoreClient) HealthCheck() error {
 	return nil
+}
+
+func (c *CoreClient) finishRun(generation uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation != generation {
+		return
+	}
+	if c.state == StateStopping {
+		c.state = StateIdle
+	} else {
+		c.state = StateFailed
+	}
+	c.cancel = nil
+	c.done = nil
+	common.Client.MarkInactive(coreCommon.Name)
+}
+
+// State returns the lifecycle state for the active generation.
+func (c *CoreClient) State() LifecycleState {
+	if c == nil {
+		return StateFailed
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.state
+}
+
+// Generation increments for every accepted Connect attempt.
+func (c *CoreClient) Generation() uint64 {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.generation
 }

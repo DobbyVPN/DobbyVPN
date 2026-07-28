@@ -46,6 +46,16 @@
 					ServiceName="DobbyVPN Server"
 					OnInstall="yes"
 					ServiceSid="unrestricted" />
+			<!-- The service runs as SYSTEM, but the control token must also be
+			     readable by the desktop user who performed the installation. -->
+			<RegistryValue
+					Root="HKLM"
+					Key="SYSTEM\CurrentControlSet\Services\DobbyVPN Server"
+					Name="Environment"
+					Type="multiString">
+				<MultiStringValue Value="DOBBYVPN_CONTROL_TOKEN_USER=[LogonUser]" />
+				<MultiStringValue Value="DOBBYVPN_CONTROL_TOKEN_VERSION=1" />
+			</RegistryValue>
 		</Component>
 		
 		<Files Directory="DobbyVPNFolderBin" Include="dobbyVPN-windows\bin\**.dll" />

@@ -1,0 +1,189 @@
+name: Test
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  version_metadata:
+    name: Release-version metadata
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    env:
+      PR_TITLE: ${{ github.event.pull_request.title }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Match the PR release label to VERSION
+        run: |
+          set -euo pipefail
+          expected="$(tr -d '[:space:]' < VERSION)"
+          actual="$(printf '%s' "$PR_TITLE" | sed -nE 's/.*v([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')"
+          test -n "$actual" || {
+            echo "PR title must contain a release label such as v${expected}." >&2
+            exit 1
+          }
+          test "$actual" = "$expected" || {
+            echo "PR title declares v${actual}, but VERSION declares v${expected}." >&2
+            exit 1
+          }
+
+  workflow-policy:
+    name: Workflow secret-isolation policy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce secretless PR workflow policy
+        run: python3 .github/scripts/check_workflow_policy.py
+
+  go:
+    name: Go tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go_module/go.sum
+
+      - name: Run Go test suite
+        working-directory: go_module
+        run: go test ./...
+
+      - name: Race-check lifecycle and routing
+        working-directory: go_module
+        run: go test -race ./core ./routing ./tunnel/...
+
+  kotlin:
+    name: Kotlin and Android service tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # gomobile currently needs a bootstrap toolchain to build the configured
+      # Android Go toolchain from source. Keep this aligned with android_build.
+      - name: Set up bootstrap Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.4'
+
+      - name: Read Android Go version
+        id: android_go
+        run: echo "version=$(cat .go-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Android Go toolchain
+        uses: actions/cache@v4
+        with:
+          path: .ci-cache/go-android
+          key: ${{ runner.os }}-android-go-${{ steps.android_go.outputs.version }}
+
+      - name: Build Go from source for Android
+        run: |
+          set -euo pipefail
+          GO_VERSION="${{ steps.android_go.outputs.version }}"
+          GO_SRC="$GITHUB_WORKSPACE/.ci-cache/go-android"
+
+          if [ ! -x "$GO_SRC/bin/go" ]; then
+            rm -rf "$GO_SRC"
+            git clone --depth 1 --branch "go${GO_VERSION}" https://github.com/golang/go.git "$GO_SRC"
+            pushd "$GO_SRC/src"
+            ./make.bash
+            popd
+          fi
+
+          echo "GOROOT=$GO_SRC" >> "$GITHUB_ENV"
+          echo "$GO_SRC/bin" >> "$GITHUB_PATH"
+          "$GO_SRC/bin/go" env GOROOT GOVERSION
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            kmp_module/**/*.gradle.kts
+            kmp_module/gradle/libs.versions.toml
+            kmp_module/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: >
+            platforms;android-35
+            build-tools;36.0.0
+            ndk;27.2.12479018
+
+      - name: Install gomobile
+        working-directory: go_module
+        run: |
+          set -euo pipefail
+          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+          "$HOME/go/bin/gomobile" init
+
+      - name: Run KMP and Android service tests
+        working-directory: kmp_module
+        run: ./gradlew :grpcstub:test :app:jvmTest :app:testDebugUnitTest :app:verifyDebugNativeAbiPayloads --stacktrace
+
+  ios_libraries:
+    name: iOS native dependencies
+    uses: ./.github/workflows/ios_libs_generate.yml
+    with:
+      app_major_version: "0"
+      app_minor_version: "0"
+      app_maintenance_version: "0"
+
+  ios:
+    name: iOS unsigned build
+    needs: ios_libraries
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+
+      - name: Download iOS native dependencies
+        uses: actions/download-artifact@v4
+        with:
+          pattern: MyLibrary.xcframework
+          path: swift_module/MyLibrary.xcframework
+          merge-multiple: true
+
+      - name: Download Kotlin framework
+        uses: actions/download-artifact@v4
+        with:
+          pattern: app.framework
+          path: swift_module/app.framework
+          merge-multiple: true
+
+      - name: Build iOS app without signing
+        run: |
+          xcodebuild build \
+            -project swift_module/iosApp.xcodeproj \
+            -scheme iosApp \
+            -configuration Debug \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+  swift:
+    name: iOS lifecycle and shell policy tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run iOS lifecycle and shell policy tests
+        run: swift test --enable-code-coverage --package-path swift_module/LifecycleSeamTests

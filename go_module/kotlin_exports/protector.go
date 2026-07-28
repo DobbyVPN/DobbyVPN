@@ -30,6 +30,15 @@ func RegisterSocketProtector(protector SocketProtector) {
 }
 
 func protectSocket(fd uintptr) bool {
+	if mobileSessions.ProtectActiveSocket(int32(fd)) {
+		return true
+	}
+	return false
+}
+
+// protectSocketFallback keeps RegisterSocketProtector source-compatible while
+// the legacy Android shell migrates to RegisterSessionPlatform.
+func protectSocketFallback(fd int32) bool {
 	socketProtectorMu.RLock()
 	protector := socketProtector
 	socketProtectorMu.RUnlock()
@@ -38,7 +47,7 @@ func protectSocket(fd uintptr) bool {
 		log.Debugf("kotlin_exports", "socket protect skipped: protector is not registered")
 		return false
 	}
-	if !protector.Protect(int32(fd)) {
+	if !protector.Protect(fd) {
 		log.Debugf("kotlin_exports", "socket protect failed for fd=%d", fd)
 		return false
 	}

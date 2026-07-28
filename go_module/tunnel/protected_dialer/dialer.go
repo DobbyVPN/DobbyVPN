@@ -2,6 +2,7 @@ package protected_dialer
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"syscall"
 	"time"
@@ -69,13 +70,43 @@ func resolveAddressForProtect(ctx context.Context, address string) string {
 
 	ip, err := dnscache.ResolveIPv4(ctx, host, dnscache.FastResolveTimeout, "protected-dialer")
 	if err != nil {
-		log.Debugf(Category, "[Protect] DNS resolve skipped dest=%s timeout=%s err=%v", address, dnscache.FastResolveTimeout, err)
+		log.Debugf(Category, "[Protect] DNS resolve skipped timeout=%s err=%v", dnscache.FastResolveTimeout, err)
 		return address
 	}
 
 	resolved := net.JoinHostPort(ip.String(), port)
-	log.Debugf(Category, "[Protect] DNS resolved dest=%s resolved=%s", address, resolved)
+	log.Debugf(Category, "[Protect] DNS resolved destination_redacted=true")
 	return resolved
+}
+
+// protectFD applies the platform's route-exclusion policy. It is deliberately
+// strict: a non-loopback connection without successful protection is unsafe,
+// because it can be sent back through the VPN tunnel it is trying to create.
+func protectFD(fd uintptr, network, address string) error {
+	if isLoopback(address) {
+		return nil
+	}
+	if protector == nil {
+		return ErrSocketProtectionUnavailable
+	}
+
+	log.Debugf(Category, "[Protect] protect_begin network=%s fd=%d destination_redacted=true protector=%T", network, fd, protector)
+	if err := protector.Protect(fd, network); err != nil {
+		return fmt.Errorf("%w: network=%s destination=%s: %w", ErrSocketProtectionUnavailable, network, address, err)
+	}
+	log.Debugf(Category, "[Protect] protect_end network=%s fd=%d destination=%s protector=%T", network, fd, address, protector)
+	return nil
+}
+
+func protectRawConn(network, address string, c syscall.RawConn) error {
+	var protectErr error
+	err := c.Control(func(fd uintptr) {
+		protectErr = protectFD(fd, network, address)
+	})
+	if err != nil {
+		return err
+	}
+	return protectErr
 }
 
 func DialContextWithProtect(ctx context.Context, network, address string) (net.Conn, error) {
@@ -83,13 +114,13 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 	dialAddress := resolveAddressForProtect(ctx, address)
 	realNet := normalizeTCP(dialAddress)
 	if deadline, ok := ctx.Deadline(); ok {
-		log.Debugf(Category, "[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s dialDest=%s deadline=%s protector=%T", network, realNet, address, dialAddress, deadline.Format(time.RFC3339Nano), protector)
+		log.Debugf(Category, "[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s destination_redacted=true deadline=%s protector=%T", network, realNet, deadline.Format(time.RFC3339Nano), protector)
 	} else {
-		log.Debugf(Category, "[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s dest=%s dialDest=%s deadline=(none) protector=%T", network, realNet, address, dialAddress, protector)
+		log.Debugf(Category, "[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s destination_redacted=true deadline=(none) protector=%T", network, realNet, protector)
 	}
 
 	if isLoopback(dialAddress) {
-		log.Debugf(Category, "[Protect] TCP BYPASS loopback: %s", dialAddress)
+		log.Debugf(Category, "[Protect] TCP BYPASS loopback")
 		var d net.Dialer
 		conn, err := d.DialContext(ctx, realNet, dialAddress)
 		if err != nil {
@@ -102,17 +133,9 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 
 	d := &net.Dialer{
 		Control: func(network, address string, c syscall.RawConn) error {
-			err := c.Control(func(fd uintptr) {
-				if protector == nil {
-					log.Debugf(Category, "[Protect] WARNING: no socket protector registered network=%s fd=%d destination=%s", realNet, fd, address)
-					return
-				}
-				log.Debugf(Category, "[Protect] protect_begin network=%s fd=%d destination=%s protector=%T", realNet, fd, address, protector)
-				protector.Protect(fd, realNet)
-				log.Debugf(Category, "[Protect] protect_end network=%s fd=%d destination=%s protector=%T", realNet, fd, address, protector)
-			})
+			err := protectRawConn(realNet, address, c)
 			if err != nil {
-				log.Debugf(Category, "[Protect] TCP control error network=%s dest=%s err=%v", realNet, address, err)
+				log.Debugf(Category, "[Protect] TCP protection failed network=%s dest=%s err=%v", realNet, address, err)
 			}
 			return err
 		},
@@ -156,15 +179,7 @@ func ProtectRawConn(network, address string, c syscall.RawConn) error {
 		realNet = normalizeTCP(address)
 	}
 
-	return c.Control(func(fd uintptr) {
-		if protector == nil {
-			log.Debugf(Category, "[Protect] WARNING: no raw socket protector registered network=%s fd=%d destination=%s", realNet, fd, address)
-			return
-		}
-		log.Debugf(Category, "[Protect] raw protect_begin network=%s fd=%d destination=%s protector=%T", realNet, fd, address, protector)
-		protector.Protect(fd, realNet)
-		log.Debugf(Category, "[Protect] raw protect_end network=%s fd=%d destination=%s protector=%T", realNet, fd, address, protector)
-	})
+	return protectRawConn(realNet, address, c)
 }
 
 func DialUDPWithProtect(ctx context.Context, network, address string) (net.PacketConn, error) {
@@ -206,17 +221,9 @@ func DialUDPWithProtect(ctx context.Context, network, address string) (net.Packe
 
 	lc := net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
-			err := c.Control(func(fd uintptr) {
-				if protector == nil {
-					log.Debugf(Category, "[Protect] WARNING: no socket protector registered network=%s fd=%d destination=%s", realNet, fd, address)
-					return
-				}
-				log.Debugf(Category, "[Protect] protect_begin network=%s fd=%d destination=%s protector=%T", realNet, fd, address, protector)
-				protector.Protect(fd, realNet)
-				log.Debugf(Category, "[Protect] protect_end network=%s fd=%d destination=%s protector=%T", realNet, fd, address, protector)
-			})
+			err := protectRawConn(realNet, address, c)
 			if err != nil {
-				log.Debugf(Category, "[Protect] UDP control error network=%s dest=%s err=%v", realNet, address, err)
+				log.Debugf(Category, "[Protect] UDP protection failed network=%s dest=%s err=%v", realNet, address, err)
 			}
 			return err
 		},
@@ -267,11 +274,23 @@ func (p *ProtectedDirectProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, er
 
 // ProtectSocketInt allows external modules (like C/C++ integrations) to apply socket protection
 // natively using DobbyVPN's cross-platform socket protector.
-func ProtectSocketInt(fd int) {
+// ProtectSocketIntErr is for integrations whose callback can signal an error
+// to their transport. Such callers must propagate this error instead of
+// claiming the socket was protected.
+func ProtectSocketIntErr(fd int) error {
 	if protector == nil {
-		log.Infof("protected_dialer", "[Protect] WARNING: no socket protector registered for ProtectSocketInt fd=%d", fd)
-		return
+		return ErrSocketProtectionUnavailable
 	}
-	log.Infof("protected_dialer", "[Protect] ProtectSocketInt protecting fd=%d", fd)
-	protector.Protect(uintptr(fd), "tcp")
+	return protectFD(uintptr(fd), networkTCP4, "external-socket")
+}
+
+// ProtectSocketInt remains source-compatible with existing native bindings.
+// New bindings should use ProtectSocketIntErr so failures are observable.
+func ProtectSocketInt(fd int) bool {
+	err := ProtectSocketIntErr(fd)
+	if err != nil {
+		log.Infof("protected_dialer", "[Protect] ProtectSocketInt failed fd=%d err=%v", fd, err)
+		return false
+	}
+	return true
 }

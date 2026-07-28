@@ -1,30 +1,18 @@
 package com.dobby.cli
 
-import com.dobby.domain.DobbyConfigsRepositoryImpl
-import com.dobby.feature.diagnostic.domain.HealthCheckManager
-import com.dobby.feature.diagnostic.domain.HealthCheckManagerImpl
-import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.logging.LoggerManager
-import com.dobby.feature.logging.LoggerManagerImpl
 import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
-import com.dobby.feature.main.domain.ConnectionProfile
-import com.dobby.feature.main.domain.ConnectionStateRepository
-import com.dobby.feature.main.domain.DobbyConfigsRepository
-import com.dobby.feature.main.domain.DnsPreflightResolverImpl
-import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.main.domain.ProtocolSelectionSettings
-import com.dobby.feature.main.domain.VpnManager
-import com.dobby.feature.main.domain.VpnManagerImpl
-import com.dobby.feature.main.domain.config.ConnectionProfileApplier
-import com.dobby.feature.main.domain.config.ConnectionProfileStore
-import com.dobby.feature.main.presentation.ConfigsProcessor
-import com.dobby.feature.main.presentation.MainViewModel
-import com.dobby.feature.vpn_service.DobbyVpnService
-import com.dobby.feature.vpn_service.grpc.*
-import korlibs.time.DateTime
-import korlibs.time.seconds
+import com.dobby.feature.main.domain.GrpcSessionController
+import com.dobby.feature.main.domain.SessionConfiguration
+import com.dobby.feature.main.domain.SessionController
+import com.dobby.feature.main.domain.SessionControllerResult
+import com.dobby.feature.main.domain.SessionFailureCode
+import com.dobby.feature.main.domain.SessionIdentityStore
+import com.dobby.feature.main.domain.SessionProfile
+import com.dobby.feature.main.domain.SessionStartTarget
+import com.dobby.feature.main.domain.SessionState
+import interop.GrpcVpnLibrary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -32,476 +20,467 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
-import java.nio.charset.Charset
 import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.PosixFilePermission
+import java.nio.file.attribute.PosixFilePermissions
 import java.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
-class CliClient {
-    private val healthCheckLibrary: RestartableHealthCheckGrpcLibrary
-    private val logsRepository: LogsRepository
-    private val logger: Logger
-    private val configsRepository: DobbyConfigsRepository
-    private val connectionStateRepository: ConnectionStateRepository
-    private val vpnManager: VpnManager
-    private val loggerManager: LoggerManager
-    private val healthCheckManager: HealthCheckManager
-    private val configsProcessor: ConfigsProcessor
-    private val profileStore: ConnectionProfileStore
-    private val profileApplier: ConnectionProfileApplier
-    private val mainViewModel: MainViewModel
+private const val configFetchTimeoutSeconds = 20L
+private const val externalIpTimeoutSeconds = 10L
+private const val millisPerSecond = 1_000L
+private val HTTP_SUCCESS_STATUS = 200..299
 
-    init {
-        val logEventsChannel = LogEventsChannel()
-        logsRepository = LogsRepository(logEventsChannel = logEventsChannel)
-        logger = Logger(logsRepository)
+/**
+ * JVM command-line shell for sessionapi/v1.
+ *
+ * This class deliberately never interprets a profile or runs a health check. It only acquires
+ * configuration bytes, sends explicit session commands, and waits for the ordered terminal
+ * events produced by Go. `check-config` is the one intentional explicit profile operation: it
+ * asks Go to start each Go-provided profile index independently for compatibility with the
+ * existing CLI command.
+ */
+class CliClient(
+    private val sessionController: SessionController = GrpcSessionController(
+        GrpcVpnLibrary.sessionGrpcLibrary,
+        CliSessionIdentityStore(),
+    ),
+    private val logsRepository: LogsRepository = LogsRepository(logEventsChannel = LogEventsChannel()),
+    private val logger: Logger = Logger(logsRepository),
+    private val externalIpLookup: () -> String? = ::fetchExternalIp,
+) {
+    private var observedSequence: ULong = 0u
 
-        healthCheckLibrary = RestartableHealthCheckGrpcLibrary(logger)
-        val outlineLibrary = RestartableOutlineGrpcLibrary(logger)
-        val xrayLibrary = RestartableXrayGrpcLibrary(logger)
-        val cloakLibrary = RestartableCloakGrpcLibrary(logger)
-        val dnsCacheLibrary = RestartableDnsCacheGrpcLibrary(logger)
-        val loggerLibrary = RestartableLoggerGrpcLibrary(logger)
-        val georoutingLibrary = RestartableGeoroutingGrpcLibrary(logger)
-        val trustTunnelLibrary = RestartableTrustTunnelGrpcLibrary(logger)
-
-        configsRepository = DobbyConfigsRepositoryImpl(healthCheckLibrary = healthCheckLibrary)
-        connectionStateRepository = ConnectionStateRepository()
-        val permissionEventsChannel = PermissionEventsChannel()
-        val dobbyVpnService = DobbyVpnService(
-            dobbyConfigsRepository = configsRepository,
-            logger = logger,
-            logsRepository = logsRepository,
-            outlineLibrary = outlineLibrary,
-            xrayLibrary = xrayLibrary,
-            cloakLibrary = cloakLibrary,
-            georoutingLibrary = georoutingLibrary,
-            trustTunnelLibrary = trustTunnelLibrary,
-        )
-        vpnManager = VpnManagerImpl(connectionStateRepository, dobbyVpnService)
-        loggerManager = LoggerManagerImpl(logger, loggerLibrary, configsRepository)
-        healthCheckManager = HealthCheckManagerImpl(logger, healthCheckLibrary)
-        configsProcessor = ConfigsProcessor(configsRepository)
-        profileStore = ConnectionProfileStore(configsRepository, logger)
-        profileApplier = ConnectionProfileApplier(configsRepository, logger)
-        mainViewModel = MainViewModel(
-            configsRepository = configsRepository,
-            connectionStateRepository = connectionStateRepository,
-            permissionEventsChannel = permissionEventsChannel,
-            vpnManager = vpnManager,
-            loggerManager = loggerManager,
-            logger = logger,
-            logsRepository = logsRepository,
-            healthCheckManager = healthCheckManager,
-            configsProcessor = configsProcessor,
-            dnsPreflightResolver = DnsPreflightResolverImpl(dnsCacheLibrary, logger),
-        )
-    }
-
-    fun logs(options: List<String>): ExitCode = if (options.isEmpty()) {
-        // Print logs
-        logsRepository.readUILogs().forEach {
-            println(it)
-        }
-        ExitCode.OK
-    } else if (options.size == 2 && options[0] == "-n") {
-        val count = options[1].toIntOrNull()
-        if (count == null || count <= 0) {
-            ExitCode.INVALID_ARGS
-        } else {
-            logsRepository.readLogs(count).forEach {
-                println(it)
-            }
+    fun logs(options: List<String>): ExitCode = when {
+        options.isEmpty() -> {
+            logsRepository.readUILogs().forEach(::println)
             ExitCode.OK
         }
-    } else if (options.size == 1 && options[0] == "clear") {
-        // Clear logs
-        logsRepository.clearLogs()
-        ExitCode.OK
-    } else {
-        ExitCode.INVALID_ARGS
-    }
-
-    private suspend fun awaitHealthCheck(timeoutSeconds: Int = DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS): Boolean {
-        val initialTime = DateTime.now()
-        var time = initialTime
-
-        while (time < initialTime + timeoutSeconds.seconds) {
-            time = DateTime.now()
-            when (healthCheckLibrary.GetConnectionState()) {
-                0, 1 -> delay(200.milliseconds)
-                2 -> return true
-                else -> return false
+        options.size == 2 && options[0] == "-n" -> {
+            val count = options[1].toIntOrNull()
+            if (count == null || count <= 0) ExitCode.INVALID_ARGS else {
+                logsRepository.readLogs(count).forEach(::println)
+                ExitCode.OK
             }
         }
-
-        return false
+        options.size == 1 && options[0] == "clear" -> {
+            logsRepository.clearLogs()
+            ExitCode.OK
+        }
+        else -> ExitCode.INVALID_ARGS
     }
 
     fun connect(options: List<String>): ExitCode {
-        val skipHealthCheck: Boolean = when (options.size) {
-            1 -> false
-            2 if options[1] == "--skip-healthcheck" -> true
-            else -> return ExitCode.INVALID_ARGS
+        if (options.isEmpty() || options.size > 2) return ExitCode.INVALID_ARGS
+        val skipHealthCheck = options.size == 2 && options[1] == "--skip-healthcheck"
+        if (options.size == 2 && !skipHealthCheck) return ExitCode.INVALID_ARGS
+
+        val rawConfig = readConnectionArgument(options[0]) ?: return ExitCode.INVALID_ARGS
+        if (!configure(rawConfig)) return ExitCode.CONFIG_FORMAT_ERROR
+
+        // Go owns health policy. A CONNECTED event is the authoritative replacement for the
+        // legacy health-check Boolean channel; the flag remains accepted for CLI compatibility.
+        return if (runBlocking { startAndAwait(SessionStartTarget.AutoSelect) }) {
+            ExitCode.OK
+        } else {
+            ExitCode.TUNNEL_START_ERROR
         }
+    }
 
-        val connectionUrl = readConnectionArgument(options[0]) ?: return ExitCode.INVALID_ARGS
-
-        val okConfig = runBlocking { mainViewModel.setConfig(connectionUrl) }
-        if (!okConfig) {
-            return ExitCode.CONFIG_FORMAT_ERROR
+    /** Connects one exact Go-provided profile index without interpreting the configuration. */
+    fun connectProfile(options: List<String>): ExitCode {
+        return if (options.size != 2) {
+            ExitCode.INVALID_ARGS
+        } else {
+            val profileIndex = options[1].toIntOrNull()?.takeIf { it >= 0 }
+            val rawConfig = readConnectionArgument(options[0])
+            when {
+                profileIndex == null || rawConfig == null -> ExitCode.INVALID_ARGS
+                !configure(rawConfig) -> ExitCode.CONFIG_FORMAT_ERROR
+                runBlocking { startAndAwait(SessionStartTarget.ProfileIndex(profileIndex)) } -> ExitCode.OK
+                else -> ExitCode.TUNNEL_START_ERROR
+            }
         }
-
-        val okVpn = runBlocking { mainViewModel.startVpnService() }
-        if (!okVpn) {
-            return ExitCode.TUNNEL_START_ERROR
-        }
-
-        if (skipHealthCheck) {
-            return ExitCode.OK
-        }
-
-        val okHC = runBlocking { awaitHealthCheck() }
-        if (!okHC) {
-            return ExitCode.HEALTHCHECK_CONFIG_ERROR
-        }
-
-        return ExitCode.OK
     }
 
     fun checkConfig(options: List<String>): ExitCode {
-        if (options.size != 1) {
-            return ExitCode.INVALID_ARGS
-        }
+        if (options.size != 1) return ExitCode.INVALID_ARGS
+        val rawConfig = readConnectionArgument(options[0]) ?: return ExitCode.INVALID_ARGS
+        val configuration = configureResult(rawConfig) ?: return ExitCode.CONFIG_FORMAT_ERROR
+        if (configuration.profiles.isEmpty()) return ExitCode.CONFIG_FORMAT_ERROR
 
-        val connectionUrl = readConnectionArgument(options[0]) ?: return ExitCode.INVALID_ARGS
-
-        val okConfig = runBlocking { mainViewModel.setConfig(connectionUrl) }
-        if (!okConfig) {
-            return ExitCode.CONFIG_FORMAT_ERROR
-        }
-
-        val profiles = profileStore.getProfiles()
-        if (profiles.isEmpty()) {
-            return ExitCode.CONFIG_FORMAT_ERROR
-        }
-
-        return runBlocking {
-            checkProfiles(profiles)
-        }
+        return runBlocking { checkProfiles(configuration.profiles) }
     }
 
-    private suspend fun checkProfiles(profiles: List<ConnectionProfile>): ExitCode {
+    private suspend fun checkProfiles(profiles: List<SessionProfile>): ExitCode {
         var failures = 0
-
-        for ((index, profile) in profiles.withIndex()) {
-            val label = profile.label(index, profiles.size)
+        for ((position, profile) in profiles.withIndex()) {
+            val label = profile.label(position, profiles.size)
             println("Checking $label")
             logger.log("[CLI] Checking $label")
 
-            configsRepository.setActiveConnectionProfileIndex(index)
-            val applied = runCatching {
-                profileApplier.apply(profile)
-            }.getOrElse { error ->
-                logger.log("[CLI] FAILED $label: profile config could not be applied: ${error.message}")
-                false
-            }
-            if (!applied) {
-                failures += 1
-                println("FAILED $label: profile config could not be applied")
-                logger.log("[CLI] FAILED $label: profile config could not be applied")
-                continue
-            }
-
-            configsRepository.setTelemetryAttributes(configsProcessor.buildConfigAttributesJson())
-
-            try {
-                val started = startVpnServiceOnce()
-                if (!started) {
+            val generation = when (val result = sessionController.start(SessionStartTarget.ProfileIndex(profile.index))) {
+                is SessionControllerResult.Success -> result.value
+                is SessionControllerResult.Failure -> {
                     failures += 1
                     println("FAILED $label: VPN tunnel did not start")
-                    logger.log("[CLI] FAILED $label: VPN tunnel did not start")
-                    printRecentLogs()
+                    logger.log(
+                        "[CLI] Session start rejected state=START_REJECTED generation=0 " +
+                            "failureCode=${result.code.safeFailureCode()}"
+                    )
                     continue
                 }
+            }
 
-                val healthy = awaitHealthCheck(PROFILE_HEALTHCHECK_TIMEOUT_SECONDS)
-                if (!healthy) {
+            try {
+                if (awaitTerminal(generation)) {
+                    println("OK $label")
+                    logger.log("[CLI] OK $label")
+                } else {
                     failures += 1
-                    val state = connectionStateDescription(healthCheckLibrary.GetConnectionState())
-                    println("FAILED $label: healthcheck did not report Connected, state=$state")
-                    logger.log("[CLI] FAILED $label: healthcheck did not report Connected, state=$state")
+                    println("FAILED $label: VPN tunnel did not reach Connected")
+                    logger.log("[CLI] FAILED $label: session did not reach Connected")
                     printRecentLogs()
-                    continue
                 }
-
-                println("OK $label")
-                logger.log("[CLI] OK $label")
             } finally {
-                stopVpnRuntime()
+                stopAndWait(generation)
             }
         }
 
         println("Checked ${profiles.size} profile(s), failures=$failures")
-
-        return if (failures > 0) {
-            ExitCode.PROTOCOL_CHECK_FAILED
-        } else {
-            ExitCode.OK
-        }
+        return if (failures == 0) ExitCode.OK else ExitCode.PROTOCOL_CHECK_FAILED
     }
 
-    private suspend fun startVpnServiceOnce(): Boolean {
-        connectionStateRepository.updateStatus(VpnConnectionState.CONNECTING)
-        healthCheckManager.initHealthCheck()
-        logsRepository.cleanupOldLogs()
-        loggerManager.initLogger()
-        connectionStateRepository.serviceStartedFlow.prepare()
-        vpnManager.start(isProtocolProbe = false)
-
-        val connected = connectionStateRepository.serviceStartedFlow.awaitResult(ProtocolSelectionSettings.SERVICE_START_TIMEOUT_MS)
-        if (connected) {
-            healthCheckManager.startHealthCheck()
-        }
-        return connected
-    }
-
-    private fun stopVpnRuntime() {
-        vpnManager.stop(isUserInitiated = false)
-        healthCheckManager.stopHealthCheck()
-        loggerManager.stopTelemetry()
-        connectionStateRepository.tryUpdateStatus(VpnConnectionState.DISCONNECTED)
-    }
-
-    private fun printRecentLogs() {
-        println("Recent logs:")
-        logsRepository.readLogs(20).forEach {
-            println(it)
-        }
-    }
-
-    private fun readConnectionArgument(value: String): String? {
-        if (value.isValidUrl()) {
-            return value
-        }
-
-        val path = File(value).toPath()
-        val charset = Charset.forName("utf-8")
-        return runCatching {
-            Files.readString(path, charset)
-        }.getOrNull()
-    }
-
-    private fun ConnectionProfile.label(index: Int, total: Int): String {
-        val descriptionPart = description
-            ?.replace(Regex("\\s+"), " ")
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?.let { "description=\"$it\", " }
-            .orEmpty()
-        return "profile ${index + 1}/$total: ${descriptionPart}protocol=$protocol, sourceIndex=$sourceIndex"
-    }
-
-    private fun connectionStateDescription(code: Int): String =
-        when (code) {
-            0 -> "Disconnected"
-            1 -> "Connecting"
-            2 -> "Connected"
-            else -> "Unknown($code)"
-        }
-
-    fun disconnect(options: List<String>): ExitCode = if (options.isNotEmpty()) {
-        ExitCode.INVALID_ARGS
-    } else {
-        runBlocking {
-            mainViewModel.stopVpnService()
-        }
-        ExitCode.OK
+    fun disconnect(options: List<String>): ExitCode {
+        if (options.isNotEmpty()) return ExitCode.INVALID_ARGS
+        val snapshot = runBlocking { sessionController.snapshot() }
+        if (snapshot !is SessionControllerResult.Success) return ExitCode.PROGRAM_FAILED
+        val generation = snapshot.value.generation
+        if (generation == 0uL || snapshot.value.cleanupComplete) return ExitCode.OK
+        return if (runBlocking { stopAndWait(generation) }) ExitCode.OK else ExitCode.PROGRAM_FAILED
     }
 
     fun externalIp(options: List<String>): ExitCode {
-        if (options.isNotEmpty()) {
-            return ExitCode.INVALID_ARGS
-        }
-        val ip = fetchExternalIp()
-            ?: return ExitCode.PROGRAM_FAILED
+        if (options.isNotEmpty()) return ExitCode.INVALID_ARGS
+        val ip = externalIpLookup() ?: return ExitCode.PROGRAM_FAILED
         println(ip)
         return ExitCode.OK
     }
 
-    private suspend fun connectFirstWorkingProfile(): Boolean {
-        val profiles = profileStore.getProfiles()
-        if (profiles.isEmpty()) {
-            return false
-        }
-
-        for ((index, profile) in profiles.withIndex()) {
-            configsRepository.setActiveConnectionProfileIndex(index)
-            val applied = runCatching {
-                profileApplier.apply(profile)
-            }.getOrElse { false }
-            if (!applied) {
-                continue
-            }
-
-            configsRepository.setTelemetryAttributes(configsProcessor.buildConfigAttributesJson())
-
-            if (!startVpnServiceOnce()) {
-                stopVpnRuntime()
-                continue
-            }
-            if (!awaitHealthCheck(PROFILE_HEALTHCHECK_TIMEOUT_SECONDS)) {
-                stopVpnRuntime()
-                continue
-            }
-            return true
-        }
-
-        return false
-    }
-
     fun verifySession(options: List<String>): ExitCode {
-        if (options.size != 1) {
-            return ExitCode.INVALID_ARGS
-        }
+        if (options.size != 1) return ExitCode.INVALID_ARGS
+        val rawConfig = readConnectionArgument(options[0]) ?: return ExitCode.INVALID_ARGS
 
-        val connectionUrl = readConnectionArgument(options[0]) ?: return ExitCode.INVALID_ARGS
-
-        val baselineIp = fetchExternalIp()
+        val baselineIp = externalIpLookup()
         if (baselineIp == null) {
             println("FAILED: could not determine baseline external IP")
             logger.log("[CLI] FAILED verify-session: baseline external IP unavailable")
             return ExitCode.SESSION_VERIFY_FAILED
         }
         println("Baseline IP: $baselineIp")
-        logger.log("[CLI] verify-session baseline IP=$baselineIp")
+        logger.log("[CLI] verify-session baseline IP acquired")
 
-        val okConfig = runBlocking { mainViewModel.setConfig(connectionUrl) }
-        if (!okConfig) {
-            return ExitCode.CONFIG_FORMAT_ERROR
+        if (!configure(rawConfig)) return ExitCode.CONFIG_FORMAT_ERROR
+        val generation = when (val result = runBlocking { sessionController.start(SessionStartTarget.AutoSelect) }) {
+            is SessionControllerResult.Success -> result.value
+            is SessionControllerResult.Failure -> return ExitCode.TUNNEL_START_ERROR
         }
 
-        val connected = runBlocking { connectFirstWorkingProfile() }
-        if (!connected) {
-            return ExitCode.TUNNEL_START_ERROR
+        try {
+            if (!runBlocking { awaitTerminal(generation) }) return ExitCode.TUNNEL_START_ERROR
+            val tunnelIp = waitForExternalIpChange(baselineIp, TUNNEL_IP_VERIFY_TIMEOUT_SECONDS)
+            if (tunnelIp == null) {
+                println(
+                    "FAILED: external IP did not change through tunnel " +
+                        "(baseline=$baselineIp tunnel=unchanged after ${TUNNEL_IP_VERIFY_TIMEOUT_SECONDS}s)"
+                )
+                logger.log("[CLI] FAILED verify-session: IP unchanged")
+                return ExitCode.SESSION_VERIFY_FAILED
+            }
+            println("Tunnel IP: $tunnelIp")
+            logger.log("[CLI] verify-session tunnel IP acquired")
+        } finally {
+            runBlocking { stopAndWait(generation) }
         }
 
-        val tunnelIp = waitForExternalIpChange(baselineIp, TUNNEL_IP_VERIFY_TIMEOUT_SECONDS)
-        if (tunnelIp == null) {
-            println(
-                "FAILED: external IP did not change through tunnel " +
-                    "(baseline=$baselineIp tunnel=unchanged after ${TUNNEL_IP_VERIFY_TIMEOUT_SECONDS}s)",
-            )
-            logger.log("[CLI] FAILED verify-session: IP unchanged baseline=$baselineIp")
-            stopVpnRuntime()
-            return ExitCode.SESSION_VERIFY_FAILED
-        }
-        println("Tunnel IP: $tunnelIp")
-        logger.log("[CLI] verify-session tunnel IP=$tunnelIp")
-
-        stopVpnRuntime()
-
-        val restoredIp = fetchExternalIp()
+        val restoredIp = externalIpLookup()
         if (restoredIp == null) {
             println("FAILED: could not determine external IP after disconnect")
-            logger.log("[CLI] FAILED verify-session: post-disconnect IP unavailable")
             return ExitCode.SESSION_VERIFY_FAILED
         }
         println("Restored IP: $restoredIp")
-        logger.log("[CLI] verify-session restored IP=$restoredIp")
-
         if (restoredIp != baselineIp) {
-            println(
-                "WARNING: restored IP differs from baseline " +
-                    "(baseline=$baselineIp restored=$restoredIp)",
-            )
-            logger.log("[CLI] verify-session warning: restored IP != baseline")
+            println("WARNING: restored IP differs from baseline (baseline=$baselineIp restored=$restoredIp)")
+            logger.log("[CLI] verify-session warning: restored IP differs from baseline")
         }
-
         println("OK verify-session")
         return ExitCode.OK
     }
 
-    private fun waitForExternalIpChange(baselineIp: String, timeoutSeconds: Int): String? {
-        val deadlineMs = System.currentTimeMillis() + timeoutSeconds * 1000L
-        while (System.currentTimeMillis() < deadlineMs) {
-            val ip = fetchExternalIp()
-            if (ip != null && ip != baselineIp) {
-                return ip
+    fun status(options: List<String>): ExitCode {
+        val snapshot = runBlocking { sessionController.snapshot() }
+        val state = (snapshot as? SessionControllerResult.Success)?.value?.state ?: return ExitCode.PROGRAM_FAILED
+        val display = state.displayState()
+        return when {
+            options.isEmpty() -> {
+                println(display)
+                ExitCode.OK
             }
-            Thread.sleep(TUNNEL_IP_POLL_INTERVAL_MS)
+            options.size == 1 && options[0] == "--json" -> {
+                println("{ \"code\": ${state.statusCode()}, \"state\": \"$display\" }")
+                ExitCode.OK
+            }
+            else -> ExitCode.INVALID_ARGS
         }
-        val last = fetchExternalIp()
-        return last?.takeIf { it != baselineIp }
     }
 
-    private fun fetchExternalIp(): String? {
-        val endpoints = listOf(
-            "https://api.ipify.org",
-            "https://ifconfig.me/ip",
-        )
-        for (endpoint in endpoints) {
-            val ip = fetchExternalIpViaHttpClient(endpoint)
-            if (!ip.isNullOrBlank()) return ip
+    private fun configure(rawConfig: ByteArray): Boolean = configureResult(rawConfig) != null
+
+    private fun configureResult(rawConfig: ByteArray): SessionConfiguration? = runBlocking {
+        when (val result = sessionController.configure(rawConfig)) {
+            is SessionControllerResult.Success -> {
+                observedSequence = 0u
+                logger.log("[CLI] Session configuration accepted: profiles=${result.value.profiles.size}")
+                result.value
+            }
+            is SessionControllerResult.Failure -> {
+                logger.log(
+                    "[CLI] Session configuration rejected " +
+                        "failureCode=${result.code.safeFailureCode()}"
+                )
+                null
+            }
         }
+    }
+
+    private suspend fun startAndAwait(target: SessionStartTarget): Boolean = when (val result = sessionController.start(target)) {
+        is SessionControllerResult.Success -> {
+            val connected = awaitTerminal(result.value)
+            if (!connected) stopAndWait(result.value)
+            connected
+        }
+        is SessionControllerResult.Failure -> {
+            logger.log(
+                "[CLI] Session start rejected state=START_REJECTED generation=0 " +
+                    "failureCode=${result.code.safeFailureCode()}"
+            )
+            false
+        }
+    }
+
+    /** Waits only on ordered Go events, with Snapshot as a lossless terminal-state fallback. */
+    private suspend fun awaitTerminal(generation: ULong): Boolean {
+        repeat(MAX_EVENT_POLLS) {
+            val terminal = pollEvents(generation) ?: pollSnapshot(generation)
+            if (terminal != null) return terminal
+            delay(EVENT_POLL_INTERVAL_MS.milliseconds)
+        }
+        logger.log("[CLI] Session start timed out waiting for generation=$generation")
+        return false
+    }
+
+    private suspend fun pollEvents(generation: ULong): Boolean? =
+        when (val observation = sessionController.observe(observedSequence)) {
+            is SessionControllerResult.Success -> {
+                observedSequence = observation.value.nextSequence
+                observation.value.events
+                    .asSequence()
+                    .filter { it.generation == generation }
+                    .mapNotNull { event ->
+                        event.state.terminalResult()?.also { connected ->
+                            if (!connected && event.state == SessionState.FAILED) {
+                                logTerminalFailure(generation, event.failureCode)
+                            }
+                        }
+                    }
+                    .firstOrNull()
+            }
+            is SessionControllerResult.Failure -> {
+                logger.log(
+                    "[CLI] Session event poll failed " +
+                        "failureCode=${observation.code.safeFailureCode()}"
+                )
+                false
+            }
+        }
+
+    private suspend fun pollSnapshot(generation: ULong): Boolean? =
+        when (val snapshot = sessionController.snapshot()) {
+            is SessionControllerResult.Success -> snapshot.value
+                .takeIf { it.generation == generation }
+                ?.let {
+                    it.state.terminalResult()?.also { connected ->
+                        if (!connected && it.state == SessionState.FAILED) {
+                            logTerminalFailure(generation, it.lastFailureCode)
+                        }
+                    }
+                }
+            is SessionControllerResult.Failure -> false
+        }
+
+    private suspend fun stopAndWait(generation: ULong): Boolean {
+        when (val result = sessionController.stop(generation)) {
+            is SessionControllerResult.Failure -> {
+                logger.log(
+                    "[CLI] Session stop rejected generation=$generation " +
+                        "failureCode=${result.code.safeFailureCode()}"
+                )
+                return false
+            }
+            is SessionControllerResult.Success -> Unit
+        }
+        repeat(MAX_EVENT_POLLS) {
+            when (val snapshot = sessionController.snapshot()) {
+                is SessionControllerResult.Success -> {
+                    if (snapshot.value.generation != generation || snapshot.value.cleanupComplete) return true
+                }
+                is SessionControllerResult.Failure -> return false
+            }
+            delay(EVENT_POLL_INTERVAL_MS.milliseconds)
+        }
+        logger.log("[CLI] Session stop timed out waiting for cleanup generation=$generation")
+        return false
+    }
+
+    private fun logTerminalFailure(generation: ULong, failureCode: SessionFailureCode?) {
+        logger.log(
+            "[CLI] Session terminal state=FAILED generation=$generation " +
+                "failureCode=${failureCode.safeFailureCode()}"
+        )
+    }
+
+    private fun printRecentLogs() {
+        println("Recent logs:")
+        logsRepository.readLogs(20).forEach(::println)
+    }
+
+    /** Acquires opaque bytes without decoding/reformatting a configuration. */
+    private fun readConnectionArgument(value: String): ByteArray? {
+        val uri = runCatching { URI(value) }.getOrNull()
+        if (uri?.scheme == "http" || uri?.scheme == "https") return fetchConfig(uri)
+        // A direct protocol URL (for example ss://) is configuration, not a local path.
+        if (value.isValidUrl()) return value.encodeToByteArray()
+        val path = File(value).toPath()
+        if (Files.isRegularFile(path)) return runCatching { Files.readAllBytes(path) }.getOrNull()
         return null
     }
 
-    private fun fetchExternalIpViaHttpClient(url: String): String? = runCatching {
-        val client = HttpClient.newBuilder()
-            .version(HttpClient.Version.HTTP_1_1)
-            .connectTimeout(Duration.ofSeconds(10))
-            .build()
-        // Note: HttpRequest forbids restricted headers like "Connection"; a fresh
-        // client per call already avoids keep-alive reuse across baseline/tunnel.
-        val request = HttpRequest.newBuilder(URI.create(url))
-            .timeout(Duration.ofSeconds(10))
-            .header("Cache-Control", "no-store")
-            .header("Pragma", "no-cache")
-            .GET()
-            .build()
-        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-        response.body().trim().takeIf { response.statusCode() in 200..299 && it.isNotBlank() }
+    private fun fetchConfig(uri: URI): ByteArray? = runCatching {
+        val request = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(configFetchTimeoutSeconds)).GET().build()
+        val response = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(configFetchTimeoutSeconds)).build()
+            .send(request, HttpResponse.BodyHandlers.ofByteArray())
+        response.body().takeIf { response.statusCode() in HTTP_SUCCESS_STATUS }
     }.getOrNull()
 
-    fun status(options: List<String>): ExitCode {
-        return if (options.isEmpty()) {
-            // Print status
-            when (healthCheckLibrary.GetConnectionState()) {
-                0 -> println("Disconnected")
-                1 -> println("Connecting")
-                2 -> println("Connected")
-                else -> return ExitCode.PROGRAM_FAILED
-            }
-            ExitCode.OK
-        } else if (options.size == 1 && options[0] == "--json") {
-            // Print json status
-            when (healthCheckLibrary.GetConnectionState()) {
-                0 -> println("{ \"code\": 0, \"state\": \"Disconnected\" }")
-                1 -> println("{ \"code\": 1, \"state\": \"Connecting\" }")
-                2 -> println("{ \"code\": 2, \"state\": \"Connected\" }")
-                else -> return ExitCode.PROGRAM_FAILED
-            }
-            ExitCode.OK
-        } else {
-            ExitCode.INVALID_ARGS
+    private fun SessionProfile.label(index: Int, total: Int): String {
+        val descriptionPart = description.replace(Regex("\\s+"), " ").trim()
+            .takeIf { it.isNotEmpty() }?.let { "description=\"$it\", " }.orEmpty()
+        return "profile ${index + 1}/$total: ${descriptionPart}protocol=$protocol, sourceIndex=${this.index}"
+    }
+
+    private fun waitForExternalIpChange(baselineIp: String, timeoutSeconds: Int): String? {
+        val deadlineMs = System.currentTimeMillis() + timeoutSeconds * millisPerSecond
+        while (System.currentTimeMillis() < deadlineMs) {
+            val ip = externalIpLookup()
+            if (ip != null && ip != baselineIp) return ip
+            Thread.sleep(TUNNEL_IP_POLL_INTERVAL_MS)
         }
+        return externalIpLookup()?.takeIf { it != baselineIp }
     }
 
     private companion object {
-        const val DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS = 15
-        const val PROFILE_HEALTHCHECK_TIMEOUT_SECONDS = 30
+        const val EVENT_POLL_INTERVAL_MS = 100L
+        const val MAX_EVENT_POLLS = 900 // 90 seconds, matching the historical service-start timeout.
         const val TUNNEL_IP_VERIFY_TIMEOUT_SECONDS = 30
         const val TUNNEL_IP_POLL_INTERVAL_MS = 1_000L
     }
 }
 
-fun String.isValidUrl(): Boolean {
-    return try {
-        val url = java.net.URL(this)
-        url.toURI() // Ensures proper URI format
-        true
-    } catch (_: Exception) {
-        false
+private fun SessionFailureCode?.safeFailureCode(): String =
+    (this ?: SessionFailureCode.UNSPECIFIED).name
+
+private fun SessionState.displayState(): String = when (this) {
+    SessionState.PROBING, SessionState.PREPARING, SessionState.STOPPING -> "Connecting"
+    SessionState.CONNECTED -> "Connected"
+    else -> "Disconnected"
+}
+
+private fun SessionState.terminalResult(): Boolean? = when (this) {
+    SessionState.CONNECTED -> true
+    SessionState.FAILED, SessionState.IDLE, SessionState.DESTROYED -> false
+    else -> null
+}
+
+private fun SessionState.statusCode(): Int = when (this) {
+    SessionState.CONNECTED -> 2
+    SessionState.PROBING, SessionState.PREPARING, SessionState.STOPPING -> 1
+    else -> 0
+}
+
+private fun fetchExternalIp(): String? {
+    val endpoints = listOf("https://api.ipify.org", "https://ifconfig.me/ip")
+    for (endpoint in endpoints) {
+        val response = runCatching {
+            val request = HttpRequest.newBuilder(URI.create(endpoint))
+                .timeout(Duration.ofSeconds(externalIpTimeoutSeconds))
+                .header("Cache-Control", "no-store")
+                .header("Pragma", "no-cache")
+                .GET().build()
+            HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(externalIpTimeoutSeconds)).build()
+                .send(request, HttpResponse.BodyHandlers.ofString())
+        }.getOrNull()
+        val ip = response?.body()?.trim()
+        if (response != null && response.statusCode() in HTTP_SUCCESS_STATUS && !ip.isNullOrBlank()) return ip
+    }
+    return null
+}
+
+fun String.isValidUrl(): Boolean = runCatching {
+    val url = java.net.URL(this)
+    url.toURI()
+}.isSuccess
+
+/**
+ * Persists only the opaque Go session ID so separate CLI processes can address the same tunnel.
+ * The ID is not logged and the containing directory/file are owner-only on POSIX file systems.
+ */
+internal class CliSessionIdentityStore(
+    private val path: Path = Path.of(System.getProperty("user.home"), ".dobbyvpn", "cli-session-id"),
+) : SessionIdentityStore {
+    override fun load(): String? = runCatching {
+        Files.readString(path).trim().takeIf { SESSION_ID.matches(it) }
+    }.getOrNull()
+
+    override fun save(sessionId: String) {
+        if (!SESSION_ID.matches(sessionId)) return
+        runCatching {
+            Files.createDirectories(path.parent)
+            setOwnerOnly(path.parent, DIRECTORY_PERMISSIONS)
+            Files.writeString(
+                path,
+                sessionId,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING,
+                StandardOpenOption.WRITE,
+            )
+            setOwnerOnly(path, FILE_PERMISSIONS)
+        }
+    }
+
+    override fun clear() {
+        runCatching { Files.deleteIfExists(path) }
+    }
+
+    private fun setOwnerOnly(target: Path, permissions: Set<PosixFilePermission>) {
+        runCatching { Files.setPosixFilePermissions(target, permissions) }
+    }
+
+    private companion object {
+        val SESSION_ID = Regex("[A-Za-z0-9_-]{1,256}")
+        val DIRECTORY_PERMISSIONS: Set<PosixFilePermission> = PosixFilePermissions.fromString("rwx------")
+        val FILE_PERMISSIONS: Set<PosixFilePermission> = PosixFilePermissions.fromString("rw-------")
     }
 }

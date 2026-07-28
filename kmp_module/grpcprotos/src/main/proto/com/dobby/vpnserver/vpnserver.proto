@@ -48,6 +48,19 @@ service Vpn {
   // dns_cache.go
   rpc ClearDNSCache (Empty)                                  returns (Empty);
   rpc SetDNSCacheEntries (SetDNSCacheEntriesRequest)         returns (SetDNSCacheEntriesResponse);
+
+  // sessionapi/v1. These methods are intentionally separate from the legacy
+  // protocol-specific calls above. Session identifiers and command identifiers
+  // are opaque strings owned by the caller; configuration is transported as
+  // bytes and is never reflected in a response.
+  rpc GetCapabilities(SessionGetCapabilitiesRequest) returns (SessionGetCapabilitiesResponse);
+  rpc CreateSession(SessionCreateSessionRequest) returns (SessionCreateSessionResponse);
+  rpc Configure(SessionConfigureRequest) returns (SessionConfigureResponse);
+  rpc Start(SessionStartRequest) returns (SessionStartResponse);
+  rpc Stop(SessionStopRequest) returns (SessionStopResponse);
+  rpc Snapshot(SessionSnapshotRequest) returns (SessionSnapshotResponse);
+  rpc Observe(SessionObserveRequest) returns (SessionObserveResponse);
+  rpc DestroySession(SessionDestroySessionRequest) returns (SessionDestroySessionResponse);
 }
 
 message GetOutlineLastErrorResponse {
@@ -136,4 +149,178 @@ message SetDNSCacheEntriesResponse {
 }
 
 message Empty {
+}
+
+// sessionapi/v1 transport contract ------------------------------------------------
+//
+// Keep these names and field numbers stable.  The Vpn service remains the
+// desktop transport endpoint for compatibility with the existing RPC API.
+
+enum SessionProtocol {
+  SESSION_PROTOCOL_UNSPECIFIED = 0;
+  SESSION_PROTOCOL_OUTLINE = 1;
+  SESSION_PROTOCOL_XRAY = 2;
+  SESSION_PROTOCOL_TRUST_TUNNEL = 3;
+}
+
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  SESSION_STATE_IDLE = 1;
+  SESSION_STATE_CONFIGURED = 2;
+  SESSION_STATE_PROBING = 3;
+  SESSION_STATE_PREPARING = 4;
+  SESSION_STATE_CONNECTED = 5;
+  SESSION_STATE_STOPPING = 6;
+  SESSION_STATE_FAILED = 7;
+  SESSION_STATE_DESTROYED = 8;
+}
+
+enum SessionFailureCode {
+  SESSION_FAILURE_CODE_UNSPECIFIED = 0;
+  SESSION_FAILURE_CODE_INVALID_ARGUMENT = 1;
+  SESSION_FAILURE_CODE_NOT_FOUND = 2;
+  SESSION_FAILURE_CODE_CONFLICT = 3;
+  SESSION_FAILURE_CODE_NOT_CONFIGURED = 4;
+  SESSION_FAILURE_CODE_STALE_GENERATION = 5;
+  SESSION_FAILURE_CODE_UNSUPPORTED = 6;
+  SESSION_FAILURE_CODE_MALFORMED_CONFIG = 7;
+  SESSION_FAILURE_CODE_PROBE_FAILED = 8;
+  SESSION_FAILURE_CODE_PLATFORM_FAILED = 9;
+  SESSION_FAILURE_CODE_RUNTIME_FAILED = 10;
+  SESSION_FAILURE_CODE_CANCELED = 11;
+  SESSION_FAILURE_CODE_INTERNAL = 12;
+}
+
+enum SessionStartMode {
+  SESSION_START_MODE_UNSPECIFIED = 0;
+  SESSION_START_MODE_AUTO_SELECT = 1;
+  SESSION_START_MODE_PROFILE_INDEX = 2;
+}
+
+// A failure is safe for display across the process boundary. Its message must
+// never include configuration text, a connection URL, or credentials.
+message SessionFailure {
+  SessionFailureCode code = 1;
+  string message = 2;
+}
+
+// A profile intentionally omits server, address, and configuration fields.
+message SessionProfile {
+  int32 index = 1;
+  SessionProtocol protocol = 2;
+  string description = 3;
+}
+
+message SessionWarning {
+  string code = 1;
+  string message = 2;
+}
+
+message SessionFeature {
+  string name = 1;
+  bool enabled = 2;
+}
+
+// An event is append-only and ordered by sequence within one session.
+message SessionEvent {
+  string session_id = 1;
+  uint64 generation = 2;
+  uint64 sequence = 3;
+  SessionState state = 4;
+  SessionProfile profile = 5;
+  SessionFailure failure = 6;
+  SessionWarning warning = 7;
+}
+
+message SessionSnapshot {
+  string session_id = 1;
+  uint64 generation = 2;
+  SessionState state = 3;
+  bool configured = 4;
+  SessionProfile active_profile = 5;
+  SessionFailure last_failure = 6;
+  bool cleanup_complete = 7;
+}
+
+message SessionGetCapabilitiesRequest {
+}
+
+message SessionGetCapabilitiesResponse {
+  string version = 1;
+  repeated SessionProtocol protocols = 2;
+  repeated SessionFeature features = 3;
+  bool telemetry_network_disabled = 4;
+}
+
+message SessionCreateSessionRequest {
+}
+
+message SessionCreateSessionResponse {
+  string session_id = 1;
+  SessionFailure failure = 100;
+}
+
+message SessionConfigureRequest {
+  string session_id = 1;
+  string command_id = 2;
+  bytes raw_config = 3;
+}
+
+message SessionConfigureResponse {
+  string digest = 1;
+  repeated SessionProfile profiles = 2;
+  repeated SessionWarning warnings = 3;
+  SessionFailure failure = 100;
+}
+
+message SessionStartRequest {
+  string session_id = 1;
+  string command_id = 2;
+  SessionStartMode mode = 3;
+  int32 profile_index = 4;
+}
+
+message SessionStartResponse {
+  uint64 generation = 1;
+  SessionFailure failure = 100;
+}
+
+message SessionStopRequest {
+  string session_id = 1;
+  string command_id = 2;
+  uint64 generation = 3;
+}
+
+message SessionStopResponse {
+  uint64 generation = 1;
+  SessionFailure failure = 100;
+}
+
+message SessionSnapshotRequest {
+  string session_id = 1;
+}
+
+message SessionSnapshotResponse {
+  SessionSnapshot snapshot = 1;
+  SessionFailure failure = 100;
+}
+
+message SessionObserveRequest {
+  string session_id = 1;
+  uint64 after_sequence = 2;
+}
+
+message SessionObserveResponse {
+  repeated SessionEvent events = 1;
+  uint64 next_sequence = 2;
+  SessionFailure failure = 100;
+}
+
+message SessionDestroySessionRequest {
+  string session_id = 1;
+}
+
+message SessionDestroySessionResponse {
+  bool destroyed = 1;
+  SessionFailure failure = 100;
 }

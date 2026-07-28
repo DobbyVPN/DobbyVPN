@@ -13,7 +13,13 @@ import (
 	"go_module/dnscache"
 )
 
-const defaultXrayLogLevelName = "debug"
+const (
+	defaultXrayLogLevelName = "debug"
+	xrayLogLevelInfo        = "info"
+	xrayLogLevelWarning     = "warning"
+	xrayLogLevelError       = "error"
+	xrayStreamSecurityTLS   = "tls"
+)
 
 func DefaultXrayLogLevel() xrayLog.Severity {
 	return xrayLog.Severity_Debug
@@ -26,13 +32,13 @@ func NoXrayLogLevel() xrayLog.Severity {
 func XrayLogLevelName(level xrayLog.Severity) string {
 	switch level {
 	case xrayLog.Severity_Debug:
-		return "debug"
+		return defaultXrayLogLevelName
 	case xrayLog.Severity_Info:
-		return "info"
+		return xrayLogLevelInfo
 	case xrayLog.Severity_Warning:
-		return "warning"
+		return xrayLogLevelWarning
 	case xrayLog.Severity_Error:
-		return "error"
+		return xrayLogLevelError
 	case xrayLog.Severity_Unknown:
 		return "none"
 	default:
@@ -48,20 +54,36 @@ func ExtractServerIP(configStr string) (string, error) {
 	}
 
 	// Assuming standard Xray config structure where outbound[0] is the proxy
-	if outbounds, ok := config["outbounds"].([]interface{}); ok && len(outbounds) > 0 {
-		if firstOut, ok := outbounds[0].(map[string]interface{}); ok {
-			if settings, ok := firstOut["settings"].(map[string]interface{}); ok {
-				if vnext, ok := settings["vnext"].([]interface{}); ok && len(vnext) > 0 {
-					if server, ok := vnext[0].(map[string]interface{}); ok {
-						if address, ok := server["address"].(string); ok {
-							return resolveIP(address)
-						}
-					}
-				}
-			}
-		}
+	address, ok := firstXrayServerAddress(config)
+	if ok {
+		return resolveIP(address)
 	}
 	return "", errors.New("could not find server address in config")
+}
+
+func firstXrayServerAddress(config map[string]interface{}) (string, bool) {
+	outbounds, ok := config["outbounds"].([]interface{})
+	if !ok || len(outbounds) == 0 {
+		return "", false
+	}
+	firstOut, ok := outbounds[0].(map[string]interface{})
+	if !ok {
+		return "", false
+	}
+	settings, ok := firstOut["settings"].(map[string]interface{})
+	if !ok {
+		return "", false
+	}
+	vnext, ok := settings["vnext"].([]interface{})
+	if !ok || len(vnext) == 0 {
+		return "", false
+	}
+	server, ok := vnext[0].(map[string]interface{})
+	if !ok {
+		return "", false
+	}
+	address, ok := server["address"].(string)
+	return address, ok
 }
 
 // ExtractLogLevel parses the generic VLESS JSON to find the log level.
@@ -75,13 +97,13 @@ func ExtractLogLevel(configStr string) (xrayLog.Severity, error) {
 	if log, ok := config["log"].(map[string]interface{}); ok && len(log) > 0 {
 		if loglevel, ok := log["loglevel"].(string); ok {
 			switch strings.ToLower(loglevel) {
-			case "debug":
+			case defaultXrayLogLevelName:
 				return xrayLog.Severity_Debug, nil
-			case "info":
+			case xrayLogLevelInfo:
 				return xrayLog.Severity_Info, nil
-			case "warning":
+			case xrayLogLevelWarning:
 				return xrayLog.Severity_Warning, nil
-			case "error":
+			case xrayLogLevelError:
 				return xrayLog.Severity_Error, nil
 			case "none":
 				return xrayLog.Severity_Unknown, nil

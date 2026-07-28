@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"go_module/core/pkg"
+	"go_module/tunnel"
 )
 
 type App struct {
@@ -31,6 +32,7 @@ type App struct {
 	tunIface      string
 	serverIP      string
 	running       bool
+	engine        *tunnel.Engine
 }
 
 type RoutingConfig struct {

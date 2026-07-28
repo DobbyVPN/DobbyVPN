@@ -1,7 +1,14 @@
+// The bundled TrustTunnel native bridge currently has an Android arm64-v8a
+// archive only.  Keep the in-process implementation out of Android x86_64
+// gomobile builds: importing its CGO manager would otherwise leave the bridge
+// callbacks unresolved and prevent the whole app from loading.
+//go:build !(darwin && amd64) && (!android || arm64)
+
 package trusttunnel
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -26,6 +33,16 @@ type TrustTunnelDevice struct {
 	socksPass           string
 }
 
+var protectSocket = protected_dialer.ProtectSocketIntErr
+
+func protectTrustTunnelSocket(fd int) int {
+	if err := protectSocket(fd); err != nil {
+		log.Errorf("trusttunnel", "[TrustTunnel] socket protection failed: %v", err)
+		return 1
+	}
+	return 0
+}
+
 func NewTrustTunnelDevice(trusttunnelConfig string) (*TrustTunnelDevice, error) {
 	serverIPStr, err := internal.ExtractServerIP(trusttunnelConfig)
 	if err != nil {
@@ -38,7 +55,8 @@ func NewTrustTunnelDevice(trusttunnelConfig string) (*TrustTunnelDevice, error) 
 	}
 
 	// Pick a free local port for the SOCKS inbound.
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	listenConfig := net.ListenConfig{}
+	l, err := listenConfig.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate local port: %w", err)
 	}
@@ -98,10 +116,7 @@ func NewTrustTunnelDevice(trusttunnelConfig string) (*TrustTunnelDevice, error) 
 
 	// Register the global socket protection callback
 	// This delegates TrustTunnel's OS-level socket protection back to DobbyVPN's `protected_dialer`
-	d.trusttunnelInstance.SetProtectSocketCallback(func(fd int) int {
-		protected_dialer.ProtectSocketInt(fd)
-		return 0 // return success
-	})
+	d.trusttunnelInstance.SetProtectSocketCallback(protectTrustTunnelSocket)
 
 	log.Infof("trusttunnel", "[TrustTunnel] SOCKS bridge started at %s (serverIP=%s)", d.proxyAddr, d.svrIP.String())
 	return d, nil

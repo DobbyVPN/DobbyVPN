@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"go_module/tunnel/platform_engine"
 	"go_module/tunnel/protected_dialer"
+	"sync/atomic"
 	"time"
 
 	"go_module/common"
@@ -20,6 +21,8 @@ import (
 
 	"github.com/jackpal/gateway"
 )
+
+var windowsRunSequence atomic.Uint64
 
 // signalInit sends the initialization result to the channel (if provided) exactly once.
 // After signaling, further calls are no-ops.
@@ -35,6 +38,13 @@ func signalInit(initResult chan<- error, err error) {
 
 func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	startedAt := time.Now()
+	routePlan := routing.NewPlan(fmt.Sprintf("windows-%d-%d", startedAt.UnixNano(), windowsRunSequence.Add(1)))
+	defer func() {
+		if cleanupErr := routePlan.Close(); cleanupErr != nil {
+			log.Debugf(coreCommon.Category, "[Windows][RoutingPlan][WARN] %v", cleanupErr)
+		}
+	}()
+
 	if app.ProtocolDevice == nil {
 		err := fmt.Errorf("protocol device is not initialized")
 		signalInit(initResult, err)
@@ -47,6 +57,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	}
 
 	cfg := common.GetNetworkConfig()
+	var ownedEngine *tunnel.Engine
 
 	stepStartedAt := time.Now()
 	gatewayIP, err := gateway.DiscoverGateway()
@@ -55,7 +66,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "[Windows] DiscoverGateway gateway=%s elapsed=%s total=%s", gatewayIP.String(), time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
+	log.Debugf(coreCommon.Category, "[Windows] DiscoverGateway ready=true elapsed=%s total=%s", time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	stepStartedAt = time.Now()
 	interfaceName, err := routing.FindInterfaceIPByGateway(gatewayIP.String())
@@ -83,16 +94,16 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "Server IP resolved: %s elapsed=%s total=%s", serverIP.String(), time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
+	log.Debugf(coreCommon.Category, "VPN server address resolved elapsed=%s total=%s", time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
-	// protect route to VPN server
-	earlyRouteInstalled := false
+	// Protect the VPN server before opening the protocol. The Plan records this
+	// exact route, and releases it only if this Run acquired it.
 	if serverIP.String() != "127.0.0.1" {
-		log.Debugf(coreCommon.Category, "Adding early route for server %s via %s", serverIP.String(), gatewayIP.String())
+		log.Debugf(coreCommon.Category, "Adding early VPN bypass route")
 		common.Client.MarkInCriticalSection(coreCommon.Name)
 		stepStartedAt = time.Now()
 		var routeChanged bool
-		routeChanged, err = routing.EnsureProxyRoute(serverIP.String(), gatewayIP.String(), netInterface.Name)
+		routeChanged, err = routing.AcquireProxyRoute(routePlan, serverIP.String(), gatewayIP.String(), netInterface.Name)
 		if err != nil {
 			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 			err = fmt.Errorf("failed to add early route for server: %w", err)
@@ -100,23 +111,10 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 			return err
 		}
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		earlyRouteInstalled = routeChanged
 		log.Debugf(coreCommon.Category, "Early server route added successfully changed=%v elapsed=%s total=%s", routeChanged, time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 	} else {
 		log.Debugf(coreCommon.Category, "Skipping early route for localhost (Cloak mode)")
 	}
-	cleanupEarlyRoute := func(reason string) {
-		if !earlyRouteInstalled {
-			return
-		}
-		common.Client.MarkInCriticalSection(coreCommon.Name)
-		log.Debugf(coreCommon.Category, "Removing early server route after %s", reason)
-		if cleanupErr := routing.DeleteProxyRoute(serverIP.String(), gatewayIP.String(), netInterface.Name); cleanupErr != nil {
-			log.Debugf(coreCommon.Category, "Failed to remove early server route after %s: %v", reason, cleanupErr)
-		}
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-	}
-
 	stepStartedAt = time.Now()
 	protected_dialer.SetDefaultRoute(gatewayIP.String(), netInterface.Name, netInterface.Index)
 	log.Debugf(coreCommon.Category, "[Windows] Default interface index=%d elapsed=%s total=%s", netInterface.Index, time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
@@ -125,19 +123,18 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	stepStartedAt = time.Now()
 	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, netInterface.Name)
 	if err != nil {
-		cleanupEarlyRoute("ProtocolDevice error")
 		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Open OK proxy=%s elapsed=%s total=%s", app.ProtocolDevice.GetProxyAddr(), time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
+	log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Open OK proxy_ready=true elapsed=%s total=%s", time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	log.Debugf(coreCommon.Category, "[Windows] Starting tun2socks in wintun mode")
 	log.Debugf(coreCommon.Category, "[Windows] Uplink interface: %s", netInterface.Name)
-	log.Debugf(coreCommon.Category, "[Windows] Proxy addr: %s", app.ProtocolDevice.GetProxyAddr())
+	log.Debugf(coreCommon.Category, "[Windows] Local protocol proxy ready")
 
 	stepStartedAt = time.Now()
-	err = tunnel.StartEngine(platform_engine.EngineConfig{
+	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{
 		ProxyAddr:   app.ProtocolDevice.GetProxyAddr(),
 		FD:          -1,
 		UplinkIface: netInterface.Name,
@@ -147,38 +144,62 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 		if closeErr := app.ProtocolDevice.Close(); closeErr != nil {
 			log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Close after tun2socks start error failed: %v", closeErr)
 		}
-		cleanupEarlyRoute("tun2socks start error")
 		return err
 	}
+	app.mu.Lock()
+	app.engine = ownedEngine
+	app.mu.Unlock()
 	log.Debugf(coreCommon.Category, "[Windows] tunnel.StartEngine OK elapsed=%s total=%s", time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	stepStartedAt = time.Now()
 	tunInterface, err := routing.WaitForInterfaceByIP(cfg.TunDevice, 5*time.Second)
 	if err != nil {
-		tunnel.StopEngine()
+		if cleanupErr := routePlan.Close(); cleanupErr != nil {
+			log.Debugf(coreCommon.Category, "[Windows][RoutingPlan][WARN] %v", cleanupErr)
+		}
+		ownedEngine.Stop()
+		app.mu.Lock()
+		app.engine = nil
+		app.mu.Unlock()
 		if closeErr := app.ProtocolDevice.Close(); closeErr != nil {
 			log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Close after TUN interface wait error failed: %v", closeErr)
 		}
-		cleanupEarlyRoute("TUN interface wait error")
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "[Windows] WaitForInterfaceByIP OK iface=%s elapsed=%s total=%s", tunInterface.Name, time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
+	if tunInterface.Name != platform_engine.WindowsAdapterName {
+		ownedEngine.Stop()
+		app.mu.Lock()
+		app.engine = nil
+		app.mu.Unlock()
+		if closeErr := app.ProtocolDevice.Close(); closeErr != nil {
+			log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Close after owned TUN mismatch failed: %v", closeErr)
+		}
+		err = fmt.Errorf(
+			"interface with TUN address is %q, expected owned adapter %q",
+			tunInterface.Name,
+			platform_engine.WindowsAdapterName,
+		)
+		signalInit(initResult, err)
+		return err
+	}
+	log.Debugf(coreCommon.Category, "[Windows] WaitForOwnedInterfaceByIP OK iface=%s elapsed=%s total=%s", tunInterface.Name, time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	// routing
 	common.Client.MarkInCriticalSection(coreCommon.Name)
 	stepStartedAt = time.Now()
-	if err := routing.StartRouting(
+	if err := routing.ConfigureWindowsRouting(
+		routePlan,
 		serverIP.String(),
 		gatewayIP.String(),
 		tunInterface.Name,
 		netInterface.Name,
-		cfg.TunGateway,
-		cfg.TunDevice,
 	); err != nil {
-		routing.StopRouting(serverIP.String(), tunInterface.Name, gatewayIP.String(), netInterface.Name, cfg.TunGateway)
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		tunnel.StopEngine()
+		ownedEngine.Stop()
+		app.mu.Lock()
+		app.engine = nil
+		app.mu.Unlock()
 		if closeErr := app.ProtocolDevice.Close(); closeErr != nil {
 			log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Close after routing error failed: %v", closeErr)
 		}
@@ -207,22 +228,23 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	defer func() {
 		app.mu.Lock()
 		currentDevice := app.currentDevice
-		currentServerIP := app.serverIP
-		currentGatewayIP := app.gatewayIP
-		currentUplinkIface := app.uplinkIface
-		currentTunIface := app.tunIface
 		app.currentDevice = nil
 		app.running = false
+		ownedEngine = app.engine
+		app.engine = nil
 		app.mu.Unlock()
 
 		common.Client.MarkInCriticalSection(coreCommon.Name)
-		log.Debugf(coreCommon.Category, "Cleaning up routes for %s...", currentServerIP)
-		routing.StopRouting(currentServerIP, currentTunIface, currentGatewayIP, currentUplinkIface, cfg.TunGateway)
-		log.Debugf(coreCommon.Category, "Routes cleaned up")
+		log.Debugf(coreCommon.Category, "Closing Windows routing plan before stopping tun2socks")
+		if cleanupErr := routePlan.Close(); cleanupErr != nil {
+			log.Debugf(coreCommon.Category, "[Windows][RoutingPlan][WARN] %v", cleanupErr)
+		}
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
 		log.Debugf(coreCommon.Category, "[Tunnel] Stopping tun2socks engine")
-		tunnel.StopEngine()
+		if ownedEngine != nil {
+			ownedEngine.Stop()
+		}
 		if currentDevice != nil {
 			if closeErr := currentDevice.Close(); closeErr != nil {
 				log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Close during shutdown failed: %v", closeErr)
@@ -239,99 +261,10 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 }
 
 func (app *App) SwitchProtocolDevice(device pkg.ProtocolDevice) error {
-	startedAt := time.Now()
-	if device == nil {
-		return fmt.Errorf("protocol device is not initialized")
-	}
-	replacementAdopted := false
-	defer func() {
-		if replacementAdopted {
-			return
-		}
-		if closeErr := device.Close(); closeErr != nil {
-			log.Debugf(coreCommon.Category, "[Windows] Failed to close replacement ProtocolDevice after failed hot-switch: %v", closeErr)
-		}
-	}()
-
-	if app == nil {
-		return fmt.Errorf("core app is not initialized")
-	}
-	if app.RoutingConfig == nil {
-		return fmt.Errorf("routing config is not initialized")
-	}
-
-	app.mu.Lock()
-	defer app.mu.Unlock()
-
-	if !app.running || app.currentDevice == nil {
-		return fmt.Errorf("core app is not running")
-	}
-
-	newServerIP := device.GetServerIP()
-	if newServerIP == nil {
-		return fmt.Errorf("server IP is nil")
-	}
-
-	oldDevice := app.currentDevice
-	oldServerIP := app.serverIP
-	gatewayIP := app.gatewayIP
-	uplinkIface := app.uplinkIface
-
-	log.Debugf(coreCommon.Category, "[Windows] Hot-switch protocol begin oldServer=%s newServer=%s", oldServerIP, newServerIP.String())
-
-	newRouteChanged := false
-	if newServerIP.String() != "127.0.0.1" {
-		common.Client.MarkInCriticalSection(coreCommon.Name)
-		routeChanged, err := routing.EnsureProxyRoute(newServerIP.String(), gatewayIP, uplinkIface)
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		if err != nil {
-			return fmt.Errorf("failed to add route for new server: %w", err)
-		}
-		newRouteChanged = routeChanged
-		log.Debugf(coreCommon.Category, "[Windows] Hot-switch route ready newServer=%s changed=%v elapsed=%s", newServerIP.String(), routeChanged, time.Since(startedAt).Truncate(time.Millisecond))
-	}
-
-	if err := device.Open(app.RoutingConfig.RoutingTableID, uplinkIface); err != nil {
-		if newRouteChanged {
-			common.Client.MarkInCriticalSection(coreCommon.Name)
-			if cleanupErr := routing.DeleteProxyRoute(newServerIP.String(), gatewayIP, uplinkIface); cleanupErr != nil {
-				log.Debugf(coreCommon.Category, "[Windows] Hot-switch cleanup new route failed after open error: %v", cleanupErr)
-			}
-			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		}
-		return fmt.Errorf("failed to open new protocol device: %w", err)
-	}
-	log.Debugf(coreCommon.Category, "[Windows] Hot-switch ProtocolDevice.Open OK proxy=%s elapsed=%s", device.GetProxyAddr(), time.Since(startedAt).Truncate(time.Millisecond))
-
-	if err := tunnel.SwitchVPNProxy(device.GetProxyAddr()); err != nil {
-		if newRouteChanged {
-			common.Client.MarkInCriticalSection(coreCommon.Name)
-			if cleanupErr := routing.DeleteProxyRoute(newServerIP.String(), gatewayIP, uplinkIface); cleanupErr != nil {
-				log.Debugf(coreCommon.Category, "[Windows] Hot-switch cleanup new route failed after switch error: %v", cleanupErr)
-			}
-			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		}
-		return fmt.Errorf("failed to switch tun2socks proxy: %w", err)
-	}
-
-	app.ProtocolDevice = device
-	app.currentDevice = device
-	app.serverIP = newServerIP.String()
-	replacementAdopted = true
-
-	if oldDevice != nil {
-		if err := oldDevice.Close(); err != nil {
-			log.Debugf(coreCommon.Category, "[Windows] Hot-switch old ProtocolDevice.Close failed: %v", err)
-		}
-	}
-	if oldServerIP != "" && oldServerIP != newServerIP.String() {
-		common.Client.MarkInCriticalSection(coreCommon.Name)
-		if err := routing.DeleteProxyRoute(oldServerIP, gatewayIP, uplinkIface); err != nil {
-			log.Debugf(coreCommon.Category, "[Windows] Hot-switch old server route cleanup failed oldServer=%s err=%v", oldServerIP, err)
-		}
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-	}
-
-	log.Debugf(coreCommon.Category, "[Windows] Hot-switch protocol done oldServer=%s newServer=%s proxy=%s elapsed=%s", oldServerIP, newServerIP.String(), device.GetProxyAddr(), time.Since(startedAt).Truncate(time.Millisecond))
-	return nil
+	_ = app
+	_ = device
+	// A replacement needs a second independently-owned server bypass lease. The
+	// current tunnel API does not retain that Plan, so refuse the transition
+	// instead of deleting a route that may predate this session.
+	return fmt.Errorf("Windows protocol hot-switch is unavailable while routing leases are session-owned")
 }

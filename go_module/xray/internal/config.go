@@ -15,12 +15,12 @@ import (
 
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
-	_ "github.com/xtls/xray-core/main/distro/all"
+	_ "github.com/xtls/xray-core/main/distro/all" // Register Xray's built-in protocol and transport modules.
 )
 
 // GenerateXrayConfig overwrites user's inbounds with a local SOCKS5 inbound
 // (TCP+UDP) for use by tun2socks.
-func GenerateXrayConfig(vlessConfigStr string, socksListen string, socksPort int, routingTableID int, uplinkIface string, user string, pass string) (*core.Config, error) {
+func GenerateXrayConfig(vlessConfigStr, socksListen string, socksPort, routingTableID int, uplinkIface, user, pass string) (*core.Config, error) {
 
 	var userConfig map[string]interface{}
 	if err := json.Unmarshal([]byte(vlessConfigStr), &userConfig); err != nil {
@@ -54,7 +54,7 @@ func GenerateXrayConfig(vlessConfigStr string, socksListen string, socksPort int
 		},
 		"sniffing": map[string]interface{}{
 			"enabled":      true,
-			"destOverride": []string{"http", "tls", "quic"},
+			"destOverride": []string{"http", xrayStreamSecurityTLS, "quic"},
 		},
 	}
 
@@ -64,12 +64,12 @@ func GenerateXrayConfig(vlessConfigStr string, socksListen string, socksPort int
 	applyResolvedOutboundAddresses(userConfig)
 	applyProtectedSockopt(userConfig, routingTableID, uplinkIface)
 
-	finalJson, err := json.Marshal(userConfig)
+	finalJSON, err := json.Marshal(userConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	jsonReader := bytes.NewReader(finalJson)
+	jsonReader := bytes.NewReader(finalJSON)
 	infraConfig, err := serial.DecodeJSONConfig(jsonReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode xray json config: %w", err)
@@ -88,7 +88,7 @@ func ensureXrayLogConfig(userConfig map[string]interface{}) {
 	level, _ := logConfig["loglevel"].(string)
 	normalizedLevel := strings.ToLower(level)
 	switch normalizedLevel {
-	case "debug", "info", "warning", "error":
+	case defaultXrayLogLevelName, xrayLogLevelInfo, xrayLogLevelWarning, xrayLogLevelError:
 		if level != normalizedLevel {
 			logConfig["loglevel"] = normalizedLevel
 		}
@@ -173,7 +173,7 @@ func applyOriginalServerName(outboundMap map[string]interface{}, originalAddress
 	}
 
 	applied := make([]string, 0, 4)
-	if streamSecurity(streamSettings) == "tls" {
+	if streamSecurity(streamSettings) == xrayStreamSecurityTLS {
 		tlsSettings := ensureMap(streamSettings, "tlsSettings")
 		if setStringIfMissing(tlsSettings, "serverName", originalAddress) {
 			applied = append(applied, "tlsSettings.serverName")
@@ -205,10 +205,10 @@ func applyOriginalServerName(outboundMap map[string]interface{}, originalAddress
 	return applied
 }
 
-func applyOriginalServerNameToStream(streamSettings map[string]interface{}, originalAddress string, prefix string) []string {
+func applyOriginalServerNameToStream(streamSettings map[string]interface{}, originalAddress, prefix string) []string {
 	applied := make([]string, 0, 2)
 	switch streamSecurity(streamSettings) {
-	case "tls":
+	case xrayStreamSecurityTLS:
 		tlsSettings := ensureMap(streamSettings, "tlsSettings")
 		if setStringIfMissing(tlsSettings, "serverName", originalAddress) {
 			applied = append(applied, prefix+".tlsSettings.serverName")
@@ -237,7 +237,7 @@ func ensureMap(parent map[string]interface{}, key string) map[string]interface{}
 	return value
 }
 
-func setStringIfMissing(settings map[string]interface{}, key string, value string) bool {
+func setStringIfMissing(settings map[string]interface{}, key, value string) bool {
 	existing, _ := settings[key].(string)
 	if existing != "" {
 		return false
@@ -285,7 +285,7 @@ func applyProtectedSockopt(userConfig map[string]interface{}, routingTableID int
 	)
 }
 
-func applySockoptToStreamSettings(streamSettings map[string]interface{}, protectedSockopt map[string]interface{}) {
+func applySockoptToStreamSettings(streamSettings, protectedSockopt map[string]interface{}) {
 	sockopt := ensureMap(streamSettings, "sockopt")
 	for key, value := range protectedSockopt {
 		sockopt[key] = value

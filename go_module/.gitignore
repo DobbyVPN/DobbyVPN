@@ -1,4 +1,6 @@
-/modules/Cloak/internal/
+# Only the Cloak client dependency closure is shipped with the application.
+/modules/Cloak/internal/server/
+/modules/Cloak/internal/test/
 
 # Backend executables/libraries
 windows_grpcvpnserver.exe

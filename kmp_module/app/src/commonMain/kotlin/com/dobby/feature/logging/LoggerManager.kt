@@ -2,10 +2,10 @@ package com.dobby.feature.logging
 
 interface LoggerManager {
     /**
-     * Platform dependent logger initiation. Setups logger path, telemetry settings and attributes.
+     * Platform dependent logger initiation. Logs remain local-only.
      */
     fun initLogger()
 
-    /** Tears down OTLP telemetry for the current VPN session. */
+    /** Compatibility no-op: there is no remote telemetry exporter. */
     fun stopTelemetry()
 }

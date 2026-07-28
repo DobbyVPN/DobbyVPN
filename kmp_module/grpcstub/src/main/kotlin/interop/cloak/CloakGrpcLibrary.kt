@@ -4,11 +4,11 @@ import com.dobby.grpcproto.VpnGrpcKt
 import com.dobby.grpcproto.empty
 import com.dobby.grpcproto.startCloakClientRequest
 import interop.exceptions.VpnServiceStatusException
-import io.grpc.ManagedChannel
+import io.grpc.Channel
 import io.grpc.StatusException
 import kotlinx.coroutines.runBlocking
 
-open class CloakGrpcLibrary(channel: ManagedChannel) : CloakLibrary {
+open class CloakGrpcLibrary(channel: Channel) : CloakLibrary {
     private val stub = VpnGrpcKt.VpnCoroutineStub(channel)
 
     override fun StartCloakClient(
