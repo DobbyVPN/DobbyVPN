@@ -66,3 +66,18 @@ workflow behavior; local service builds only run `go mod download` by default.
 
 Use `--skip-deps` to require dependencies to already exist and `--skip-build` to
 reuse existing build outputs where supported.
+
+## Release promotion
+
+Every `main` push produces candidate artifacts and uploads a successful iOS
+build to internal TestFlight. It does not create a final release tag.
+
+An operator promotes one qualified run with the private Harness
+`AppStore/publish_release.py` command. That command dispatches
+`promote_release.yml`, which revalidates the exact successful `main` Release
+run and source commit, downloads its artifacts only to a GitHub-hosted runner,
+and creates `vX.Y.Z` plus the GitHub Release. That final tag is the sole signal
+for official F-Droid update processing.
+
+A separate F-Droid candidate-testing repository is planned outside this
+public application repository; it is not part of the current workflow.
