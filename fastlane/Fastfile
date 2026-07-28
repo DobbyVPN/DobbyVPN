@@ -216,4 +216,43 @@ platform :ios do
       changelog: "Build #{FULL_VERSION} (#{SHORT_SHA})"
     )
   end
+
+  desc "Submit an existing exact build to production App Review"
+  lane :submit_app_store_review do
+    version = ENV.fetch("APP_STORE_VERSION")
+    selected_build = ENV.fetch("APP_STORE_BUILD_NUMBER")
+    release_notes = ENV["APP_STORE_RELEASE_NOTES"].to_s.strip
+
+    unless version.match?(/\A\d+\.\d+\.\d+\z/)
+      UI.user_error!("APP_STORE_VERSION must use X.Y.Z format")
+    end
+    unless selected_build.match?(/\A\d+\z/)
+      UI.user_error!("APP_STORE_BUILD_NUMBER must be numeric")
+    end
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("APP_STORE_KEY_ID"),
+      issuer_id: ENV.fetch("APP_STORE_ISSUER_ID"),
+      key_content: ENV.fetch("APP_STORE_API_KEY"),
+      duration: 1200
+    )
+
+    options = {
+      api_key: api_key,
+      app_identifier: BUNDLE_ID,
+      platform: "ios",
+      app_version: version,
+      build_number: selected_build,
+      skip_binary_upload: true,
+      skip_screenshots: true,
+      submit_for_review: true,
+      automatic_release: true,
+      force: true,
+      run_precheck_before_submit: true,
+      precheck_include_in_app_purchases: false
+    }
+    options[:release_notes] = { "en-US" => release_notes } unless release_notes.empty?
+
+    upload_to_app_store(**options)
+  end
 end

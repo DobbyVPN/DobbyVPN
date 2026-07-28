@@ -1,0 +1,136 @@
+name: Submit App Store Release
+run-name: Submit v${{ inputs.version }} build ${{ inputs.build_number }} to App Store
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Marketing version to submit (X.Y.Z)
+        required: true
+        type: string
+      build_number:
+        description: Exact CI and App Store Connect build number
+        required: true
+        type: string
+      run_id:
+        description: Successful Release workflow run that uploaded the build
+        required: true
+        type: string
+      commit_sha:
+        description: Exact main commit built by the selected run
+        required: true
+        type: string
+      whats_new:
+        description: Optional en-US App Store release notes
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: submit-app-store-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      validated_build: ${{ steps.preflight.outputs.validated_build }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_BUILD_NUMBER: ${{ inputs.build_number }}
+      RELEASE_RUN_ID: ${{ inputs.run_id }}
+      RELEASE_SOURCE_SHA: ${{ inputs.commit_sha }}
+    steps:
+      - name: Validate trusted workflow and selected release run
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REF" = "refs/heads/main"
+          current_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          test "$GITHUB_SHA" = "$current_main"
+
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "version must use X.Y.Z format" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "build_number must be numeric" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "run_id must be numeric" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "commit_sha must be a full commit SHA" >&2
+            exit 1
+          fi
+
+          run_json="$(
+            gh run view "$RELEASE_RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json conclusion,event,headBranch,headSha,jobs,number,status,workflowName
+          )"
+          test "$(jq -r .status <<<"$run_json")" = "completed"
+          test "$(jq -r .conclusion <<<"$run_json")" = "success"
+          test "$(jq -r .workflowName <<<"$run_json")" = "Release"
+          test "$(jq -r .event <<<"$run_json")" = "push"
+          test "$(jq -r .headBranch <<<"$run_json")" = "main"
+          test "$(jq -r .headSha <<<"$run_json")" = "$RELEASE_SOURCE_SHA"
+          test "$(jq -r .number <<<"$run_json")" = "$RELEASE_BUILD_NUMBER"
+
+          ios_success="$(
+            jq -r \
+              '[.jobs[] | select(.name == "ios_build / ios_build" and .conclusion == "success")] | length' \
+              <<<"$run_json"
+          )"
+          test "$ios_success" = "1"
+
+          encoded_version="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/contents/VERSION?ref=$RELEASE_SOURCE_SHA" \
+              --jq .content
+          )"
+          source_version="$(printf '%s' "$encoded_version" | base64 --decode | tr -d '[:space:]')"
+          test "$source_version" = "$RELEASE_VERSION"
+
+          echo "validated_build=$RELEASE_BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "Validated production submission for v$RELEASE_VERSION build $RELEASE_BUILD_NUMBER"
+
+  submit:
+    needs: validate
+    runs-on: macos-15
+    environment: release
+    timeout-minutes: 30
+    env:
+      APP_STORE_VERSION: ${{ inputs.version }}
+      APP_STORE_BUILD_NUMBER: ${{ needs.validate.outputs.validated_build }}
+      APP_STORE_RELEASE_NOTES: ${{ inputs.whats_new }}
+    steps:
+      - name: Check out trusted main submission tooling
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify trusted checkout identity
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+
+      - name: Submit exact build to production App Review
+        env:
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+        run: bundle exec fastlane ios submit_app_store_review

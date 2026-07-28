@@ -79,5 +79,16 @@ run and source commit, downloads its artifacts only to a GitHub-hosted runner,
 and creates `vX.Y.Z` plus the GitHub Release. That final tag is the sole signal
 for official F-Droid update processing.
 
+The same operator command dispatches `submit_app_store.yml` for production
+App Review. Its secretless validation job binds the request to the exact
+successful `main` Release run, source version, iOS job, and build number.
+Only then does a separate job enter the protected `release` environment and
+use its existing App Store Connect secrets. The selected build is submitted
+with automatic release after approval.
+
+Torturer remains the independent secretless gate for candidate code. Store
+credentials never enter Torturer or any pull-request job; production
+submission consumes the already-gated, successful Release result.
+
 A separate F-Droid candidate-testing repository is planned outside this
 public application repository; it is not part of the current workflow.

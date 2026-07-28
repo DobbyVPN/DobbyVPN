@@ -57,6 +57,47 @@ def main() -> int:
                 f"promote_release.yml: missing fail-closed promotion control: {expected}"
             )
 
+    app_store = (WORKFLOWS / "submit_app_store.yml").read_text(encoding="utf-8")
+    if PR_TRIGGER.search(app_store):
+        violations.append(
+            "submit_app_store.yml: production submission must not run on pull_request"
+        )
+    for expected in (
+        "workflow_dispatch:",
+        "actions: read",
+        "contents: read",
+        'test "$GITHUB_REF" = "refs/heads/main"',
+        'test "$GITHUB_SHA" = "$current_main"',
+        'test "$(jq -r .conclusion <<<"$run_json")" = "success"',
+        'test "$(jq -r .headSha <<<"$run_json")" = "$RELEASE_SOURCE_SHA"',
+        'test "$(jq -r .number <<<"$run_json")" = "$RELEASE_BUILD_NUMBER"',
+        '"ios_build / ios_build"',
+        'test "$source_version" = "$RELEASE_VERSION"',
+        "environment: release",
+        "APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}",
+        "APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}",
+        "APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}",
+    ):
+        if expected not in app_store:
+            violations.append(
+                f"submit_app_store.yml: missing protected submission control: {expected}"
+            )
+
+    fastfile = (ROOT.parent / "fastlane" / "Fastfile").read_text(encoding="utf-8")
+    for expected in (
+        'lane :submit_app_store_review do',
+        'ENV.fetch("APP_STORE_VERSION")',
+        'ENV.fetch("APP_STORE_BUILD_NUMBER")',
+        "build_number: selected_build",
+        "skip_binary_upload: true",
+        "submit_for_review: true",
+        "automatic_release: true",
+    ):
+        if expected not in fastfile:
+            violations.append(
+                f"fastlane/Fastfile: missing exact production submission control: {expected}"
+            )
+
     torturer = (WORKFLOWS / "torturer.yml").read_text(encoding="utf-8")
     if "pull_request_target" in torturer:
         violations.append("torturer.yml: pull_request_target is forbidden for untrusted candidate execution")
