@@ -119,5 +119,7 @@ jobs:
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
 
-  # GitHub Release (and thus F-Droid AutoUpdate) is intentional/manual.
-  # After a known-good build, run local AppStore/publish_public.py.
+  # Public GitHub/F-Droid promotion is intentional/manual. A maintainer selects
+  # one successful run with AppStore/publish_release.py; promote_release.yml
+  # then transfers these retained artifacts to the public release entirely on
+  # GitHub-hosted infrastructure and creates the sole F-Droid-visible tag.

@@ -35,6 +35,28 @@ def main() -> int:
     if PR_TRIGGER.search(release):
         violations.append("release.yml: protected release workflow must not run on pull_request")
 
+    promotion = (WORKFLOWS / "promote_release.yml").read_text(encoding="utf-8")
+    if PR_TRIGGER.search(promotion):
+        violations.append("promote_release.yml: public promotion must not run on pull_request")
+    if SECRET.search(promotion) or "environment:" in promotion:
+        violations.append(
+            "promote_release.yml: GitHub/F-Droid promotion must not consume release secrets"
+        )
+    for expected in (
+        "workflow_dispatch:",
+        "actions: read",
+        "contents: write",
+        'test "$(jq -r .conclusion <<<"$run_json")" = "success"',
+        'test "$(jq -r .headSha <<<"$run_json")" = "$RELEASE_SOURCE_SHA"',
+        'test "$source_version" = "$RELEASE_VERSION"',
+        "run-id: ${{ inputs.run_id }}",
+        '--target "$RELEASE_SOURCE_SHA"',
+    ):
+        if expected not in promotion:
+            violations.append(
+                f"promote_release.yml: missing fail-closed promotion control: {expected}"
+            )
+
     torturer = (WORKFLOWS / "torturer.yml").read_text(encoding="utf-8")
     if "pull_request_target" in torturer:
         violations.append("torturer.yml: pull_request_target is forbidden for untrusted candidate execution")

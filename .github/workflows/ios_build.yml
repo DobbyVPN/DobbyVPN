@@ -102,8 +102,9 @@ jobs:
           name: DobbyVPN.ipa
           path: swift_module/build/ipa/*.ipa
 
-      # Uploads IPA to TestFlight only (no external/public distribute).
-      # Public beta + F-Droid: local AppStore/publish_public.py after you trust the build.
+      # Every green main build is retained in internal TestFlight. Production
+      # App Review and GitHub/F-Droid promotion remain an explicit maintainer
+      # action through AppStore/publish_release.py.
       - name: Fastlane upload_testflight
         if: ${{ github.ref == 'refs/heads/main' }}
         env:
