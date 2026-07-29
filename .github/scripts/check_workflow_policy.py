@@ -46,11 +46,15 @@ def main() -> int:
         "workflow_dispatch:",
         "actions: read",
         "contents: write",
+        'test "$GITHUB_REF" = "refs/heads/main"',
+        'test "$GITHUB_SHA" = "$current_main"',
         'test "$(jq -r .conclusion <<<"$run_json")" = "success"',
         'test "$(jq -r .headSha <<<"$run_json")" = "$RELEASE_SOURCE_SHA"',
         'test "$source_version" = "$RELEASE_VERSION"',
         "run-id: ${{ inputs.run_id }}",
         '--target "$RELEASE_SOURCE_SHA"',
+        "dobbyvpn-android-provenance",
+        "Android provenance validation passed",
     ):
         if expected not in promotion:
             violations.append(
