@@ -66,10 +66,10 @@ func TestLocalLogsRedactURLsCredentialsConfigurationAndMetadata(t *testing.T) {
 
 func TestLocalLogsRedactVPNNetworkLocationsButKeepOperationalFacts(t *testing.T) {
 	message := prepareLog(
-		"stage=protocol_ready remote=vpn.example.invalid:443 proxy=127.0.0.1:1080 gateway=198.51.100.5 library_value=203.0.113.8 source=logger.go elapsed=42ms",
+		"stage=protocol_ready remote=vpn.example.invalid:443 proxy=random-user:random-password@127.0.0.1:1080 gateway=198.51.100.5 library_value=203.0.113.8 source=logger.go elapsed=42ms",
 		nil,
 	)
-	for _, location := range []string{"vpn.example.invalid", "127.0.0.1", "198.51.100.5", ":443", ":1080"} {
+	for _, location := range []string{"vpn.example.invalid", "random-user", "random-password", "127.0.0.1", "198.51.100.5", ":443", ":1080"} {
 		if strings.Contains(message, location) {
 			t.Fatalf("log leaked network location fragment %q: %s", location, message)
 		}

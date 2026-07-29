@@ -119,7 +119,7 @@ func NewTrustTunnelDevice(trusttunnelConfig string) (*TrustTunnelDevice, error) 
 	// This delegates TrustTunnel's OS-level socket protection back to DobbyVPN's `protected_dialer`
 	d.trusttunnelInstance.SetProtectSocketCallback(protectTrustTunnelSocket)
 
-	log.Infof("trusttunnel", "[TrustTunnel] SOCKS bridge started at %s (serverIP=%s)", d.proxyAddr, d.svrIP.String())
+	log.Infof("trusttunnel", "[TrustTunnel] SOCKS bridge started")
 	return d, nil
 }
 

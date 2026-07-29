@@ -26,7 +26,7 @@ var (
 	// Mask address literals wherever a dependency embeds them. Host names are
 	// masked only when they carry an endpoint-related key or an explicit port;
 	// masking every dotted word would also destroy useful source file names.
-	networkEndpointPattern = regexp.MustCompile(`(?i)(?:\[[0-9a-f:.]+\](?::\d{1,5})?|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b|\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|local):\d{1,5}\b)`)
+	networkEndpointPattern = regexp.MustCompile(`(?i)(?:[^\s:@]+:[^\s@]+@)?(?:\[[0-9a-f:.]+\](?::\d{1,5})?|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b|\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|local):\d{1,5}\b)`)
 	secretPattern          = regexp.MustCompile(`(?i)(["']?(?:token|api[_-]?key|password|secret|credential|authorization|auth|endpoint|url|config|server(?:ip|_ip)?|host|address|remote|proxy|gateway|dest(?:ination)?|resolved)["']?\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,}\]]+)`)
 	tomlPattern            = regexp.MustCompile(`(?m)^\s*\[{1,2}[A-Za-z0-9_.-]+\]{1,2}\s*$`)
 	jsonConfig             = regexp.MustCompile(`["'][A-Za-z0-9_.-]+["']\s*:`)
