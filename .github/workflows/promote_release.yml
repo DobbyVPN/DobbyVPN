@@ -55,6 +55,9 @@ jobs:
             echo "commit_sha must be a full commit SHA" >&2
             exit 1
           fi
+          test "$GITHUB_REF" = "refs/heads/main"
+          current_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          test "$GITHUB_SHA" = "$current_main"
 
           run_json="$(
             gh run view "$RELEASE_RUN_ID" \
@@ -105,6 +108,7 @@ jobs:
                 printf '%s\n' \
                   "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
                   "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+                  "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
                   "dobbyVPN-linux.deb" \
                   "dobbyVPN-macos-aarch64.pkg" \
                   "dobbyVPN-macos-amd64.pkg" \
@@ -208,6 +212,63 @@ jobs:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.run_id }}
+
+      - name: Download Android provenance
+        if: steps.preflight.outputs.release_state != 'published'
+        uses: actions/download-artifact@v4
+        with:
+          name: dobbyvpn-android-provenance
+          path: release
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.run_id }}
+
+      - name: Verify Android source and artifact provenance
+        if: steps.preflight.outputs.release_state != 'published'
+        env:
+          ANDROID_VERSION_CODE: ${{ steps.preflight.outputs.android_version_code }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          release = Path("release")
+          version = os.environ["RELEASE_VERSION"]
+          expected = {
+              "signed": release / f"DobbyVPN-v{version}-sign.apk",
+              "unsigned": release / f"DobbyVPN-v{version}-unsign.apk",
+          }
+          manifest_path = release / f"DobbyVPN-v{version}-android-provenance.json"
+          document = json.loads(manifest_path.read_text(encoding="utf-8"))
+          if document.get("schema") != 1:
+              raise SystemExit("Android provenance schema mismatch")
+          if document.get("source_sha") != os.environ["RELEASE_SOURCE_SHA"]:
+              raise SystemExit("Android provenance source mismatch")
+          if document.get("version_name") != version:
+              raise SystemExit("Android provenance version mismatch")
+          if document.get("version_code") != int(os.environ["ANDROID_VERSION_CODE"]):
+              raise SystemExit("Android provenance version code mismatch")
+          if document.get("application_id") != "com.dobby.vpn":
+              raise SystemExit("Android provenance application ID mismatch")
+
+          artifacts = document.get("artifacts")
+          if not isinstance(artifacts, list) or len(artifacts) != len(expected):
+              raise SystemExit("Android provenance artifact set mismatch")
+          by_kind = {item.get("kind"): item for item in artifacts if isinstance(item, dict)}
+          if set(by_kind) != set(expected):
+              raise SystemExit("Android provenance artifact kinds mismatch")
+          for kind, path in expected.items():
+              item = by_kind[kind]
+              if item.get("name") != path.name:
+                  raise SystemExit(f"Android provenance {kind} filename mismatch")
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              if item.get("sha256") != digest:
+                  raise SystemExit(f"Android provenance {kind} digest mismatch")
+          print("Android provenance validation passed")
+          PY
 
       - name: Create F-Droid version metadata
         if: steps.preflight.outputs.release_state != 'published'
