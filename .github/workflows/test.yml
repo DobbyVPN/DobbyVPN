@@ -180,10 +180,76 @@ jobs:
             CODE_SIGN_IDENTITY=""
 
   swift:
-    name: iOS lifecycle and shell policy tests
+    name: iOS production lifecycle policy tests
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run iOS lifecycle and shell policy tests
-        run: swift test --enable-code-coverage --package-path swift_module/LifecycleSeamTests
+      - name: Run production-source iOS lifecycle policy tests
+        run: swift test --enable-code-coverage --package-path swift_module
+
+  ios_simulator_core:
+    name: iOS Simulator shared-core and unsigned app checks
+    needs: ios_libraries
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+
+      - name: Download iOS native dependencies
+        uses: actions/download-artifact@v4
+        with:
+          pattern: MyLibrary.xcframework
+          path: swift_module/MyLibrary.xcframework
+          merge-multiple: true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+          cache-dependency-path: |
+            kmp_module/**/*.gradle.kts
+            kmp_module/gradle/libs.versions.toml
+            kmp_module/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Compile and run the KMP tests on an iOS Simulator
+        working-directory: kmp_module
+        run: |
+          ./gradlew \
+            :app:linkDebugFrameworkIosSimulatorArm64 \
+            :app:iosSimulatorArm64Test \
+            --stacktrace
+
+      - name: Build and install unsigned iOS Simulator app
+        run: |
+          rm -rf swift_module/app.framework
+          ditto \
+            kmp_module/app/build/bin/iosSimulatorArm64/debugFramework/app.framework \
+            swift_module/app.framework
+
+          SIMULATOR_UDID="$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.isAvailable and (.name | startswith("iPhone")))][0].udid')"
+          test -n "$SIMULATOR_UDID"
+          test "$SIMULATOR_UDID" != "null"
+          xcrun simctl boot "$SIMULATOR_UDID" || true
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+          DERIVED_DATA="$RUNNER_TEMP/dobbyvpn-ios-simulator"
+          xcodebuild build \
+            -project swift_module/iosApp.xcodeproj \
+            -scheme iosApp \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+          xcrun simctl install \
+            "$SIMULATOR_UDID" \
+            "$DERIVED_DATA/Build/Products/Debug-iphonesimulator/doBBYVPN.app"

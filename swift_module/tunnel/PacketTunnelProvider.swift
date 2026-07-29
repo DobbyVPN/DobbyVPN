@@ -8,6 +8,104 @@ import Darwin
 import SystemConfiguration
 import Network
 
+private final class GomobileProviderSessionClient: IOSProviderSessionClient {
+    private let launchID: String
+
+    init(launchID: String) {
+        self.launchID = launchID
+    }
+
+    func create() throws -> String {
+        try string(
+            result(Cloak_outlineCreateSession()),
+            key: "session_id"
+        )
+    }
+
+    func configure(sessionID: String, rawConfiguration: Data) throws {
+        _ = try result(
+            Cloak_outlineConfigureSession(
+                sessionID,
+                commandID("configure"),
+                rawConfiguration
+            )
+        )
+    }
+
+    func start(sessionID: String) throws -> Int64 {
+        try int64(
+            result(
+                Cloak_outlineStartSession(
+                    sessionID,
+                    commandID("start"),
+                    "AUTO_SELECT",
+                    0
+                )
+            ),
+            key: "generation"
+        )
+    }
+
+    func snapshot(sessionID: String) throws -> IOSProviderSessionSnapshot {
+        let snapshot = try result(Cloak_outlineSnapshotSession(sessionID))
+        return IOSProviderSessionSnapshot(
+            generation: (snapshot["generation"] as? NSNumber)?.int64Value ?? 0,
+            state: snapshot["state"] as? String ?? "",
+            cleanupComplete: snapshot["cleanup_complete"] as? Bool ?? false
+        )
+    }
+
+    func stop(sessionID: String, generation: Int64) throws {
+        _ = try result(
+            Cloak_outlineStopSession(
+                sessionID,
+                commandID("stop"),
+                generation
+            )
+        )
+    }
+
+    func destroy(sessionID: String) throws {
+        _ = try result(Cloak_outlineDestroySession(sessionID))
+    }
+
+    private func commandID(_ operation: String) -> String {
+        "ios-\(launchID)-\(operation)-\(UUID().uuidString)"
+    }
+
+    private func result(_ payload: String) throws -> [String: Any] {
+        guard let data = payload.data(using: .utf8),
+              let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              root["ok"] as? Bool == true,
+              let result = root["result"] as? [String: Any] else {
+            throw error("SESSIONAPI_REJECTED")
+        }
+        return result
+    }
+
+    private func string(_ result: [String: Any], key: String) throws -> String {
+        guard let value = result[key] as? String, !value.isEmpty else {
+            throw error("SESSIONAPI_MALFORMED")
+        }
+        return value
+    }
+
+    private func int64(_ result: [String: Any], key: String) throws -> Int64 {
+        guard let number = result[key] as? NSNumber, number.int64Value > 0 else {
+            throw error("SESSIONAPI_MALFORMED")
+        }
+        return number.int64Value
+    }
+
+    private func error(_ code: String) -> NSError {
+        NSError(
+            domain: "PacketTunnelProvider.sessionapi",
+            code: -7,
+            userInfo: [NSLocalizedDescriptionKey: code]
+        )
+    }
+}
+
 class PacketTunnelProvider: NEPacketTunnelProvider {
     private let launchId = UUID().uuidString
     private let tunnelId = String(UUID().uuidString.prefix(8))
@@ -17,9 +115,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     // NetworkExtension to start; this process is the only one that interprets
     // them (through Go's sessionapi/v1).
     private let sessionRawConfigurationKey = "sessionapi.v1.rawConfiguration"
-    private var sessionID: String?
-    private var sessionGeneration: Int64 = 0
-    private var sessionSequence: Int64 = 0
+    private lazy var sessionCoordinator = IOSProviderSessionCoordinator(
+        client: GomobileProviderSessionClient(launchID: launchId)
+    )
 
     private var logs = NativeModuleHolder.logsRepository
     private let secrets = SharedKeychainSecretStore.shared
@@ -224,7 +322,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
         await teardownForStop(reason: "pre-start cleanup")
-        guard sessionID == nil else {
+        guard sessionCoordinator.sessionID == nil else {
             throw sessionError("SESSIONAPI_CLEANUP_PENDING")
         }
 
@@ -279,7 +377,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             await teardownForStop(reason: "sessionapi start failed")
             throw error
         }
-        logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi start accepted generation=\(sessionGeneration)")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi start accepted generation=\(sessionCoordinator.generation)")
         logInterfacesDetailed(label: "AFTER_SESSIONAPI_START")
         logResourceSnapshot(label: "AFTER_SESSIONAPI_START")
     }
@@ -289,116 +387,30 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     /// asks NetworkExtension to launch us.  This avoids accidentally creating
     /// a second authoritative Go manager in the containing app.
     private func startGoSession(_ rawConfiguration: Data) async throws {
-        let created = try sessionResult(Cloak_outlineCreateSession())
-        let session = try sessionString(created, key: "session_id")
-        sessionID = session
-        sessionGeneration = 0
-        _ = try sessionResult(Cloak_outlineConfigureSession(session, commandID("configure"), rawConfiguration))
-        let started = try sessionResult(Cloak_outlineStartSession(session, commandID("start"), "AUTO_SELECT", 0))
-        sessionGeneration = try sessionInt64(started, key: "generation")
-        sessionSequence = 0
-        try await waitForSession(session, generation: sessionGeneration, expected: "CONNECTED", timeout: 30)
+        try await sessionCoordinator.start(
+            rawConfiguration: rawConfiguration
+        )
     }
 
     private func stopGoSession(reason: String) async {
-        guard let sessionID else { return }
-        if sessionGeneration <= 0 {
-            do {
-                _ = try sessionResult(Cloak_outlineDestroySession(sessionID))
-                self.sessionID = nil
-            } catch {
-                logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi unstarted cleanup failed reason=\(reason) code=\(error.localizedDescription)")
-            }
-            return
-        }
-        var destroyed = false
+        let generation = sessionCoordinator.generation
         do {
-            let beforeStop = try sessionResult(Cloak_outlineSnapshotSession(sessionID))
-            let alreadyClean = ((beforeStop["generation"] as? NSNumber)?.int64Value == sessionGeneration) &&
-                (beforeStop["cleanup_complete"] as? Bool ?? false)
-            if !alreadyClean {
-                do {
-                    _ = try sessionResult(Cloak_outlineStopSession(sessionID, commandID("stop"), sessionGeneration))
-                } catch {
-                    // FAILED can already have completed its rollback, in which
-                    // case Stop correctly rejects the stale generation. Do not
-                    // strand that finished session: verify cleanup below.
-                    let afterRejectedStop = try sessionResult(Cloak_outlineSnapshotSession(sessionID))
-                    let cleaned = ((afterRejectedStop["generation"] as? NSNumber)?.int64Value == sessionGeneration) &&
-                        (afterRejectedStop["cleanup_complete"] as? Bool ?? false)
-                    if !cleaned { throw error }
-                }
-                try await waitForSessionCleanup(sessionID, generation: sessionGeneration, timeout: 30)
-            }
-            _ = try sessionResult(Cloak_outlineDestroySession(sessionID))
-            destroyed = true
-            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi stop accepted generation=\(sessionGeneration) reason=\(reason)")
+            try await sessionCoordinator.stop()
+            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi stop accepted generation=\(generation) reason=\(reason)")
         } catch {
             // Teardown still clears NetworkExtension settings. The Go manager
             // has generation fencing, so a later process shutdown cannot turn
             // this into a stale reconnect.
             logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi stop failed reason=\(reason) code=\(error.localizedDescription)")
         }
-        // Retain the reference if cleanup did not complete: a restart must
-        // retry this exact generation rather than start another TUN session.
-        if destroyed {
-            self.sessionID = nil
-            self.sessionGeneration = 0
-            self.sessionSequence = 0
-        }
-    }
-
-    private func waitForSession(_ session: String, generation: Int64, expected: String, timeout: TimeInterval) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            let snapshot = try sessionResult(Cloak_outlineSnapshotSession(session))
-            let observedGeneration = (snapshot["generation"] as? NSNumber)?.int64Value ?? 0
-            let state = snapshot["state"] as? String ?? ""
-            if observedGeneration == generation && state == expected { return }
-            if observedGeneration == generation && state == "FAILED" { throw sessionError("SESSIONAPI_FAILED") }
-            try await Task.sleep(nanoseconds: 100_000_000)
-        }
-        throw sessionError("SESSIONAPI_TIMEOUT")
-    }
-
-    private func waitForSessionCleanup(_ session: String, generation: Int64, timeout: TimeInterval) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            let snapshot = try sessionResult(Cloak_outlineSnapshotSession(session))
-            let observedGeneration = (snapshot["generation"] as? NSNumber)?.int64Value ?? 0
-            let cleanup = snapshot["cleanup_complete"] as? Bool ?? false
-            if observedGeneration == generation && cleanup { return }
-            try await Task.sleep(nanoseconds: 100_000_000)
-        }
-        throw sessionError("SESSIONAPI_CLEANUP_TIMEOUT")
-    }
-
-    private func commandID(_ operation: String) -> String {
-        "ios-\(launchId)-\(operation)-\(UUID().uuidString)"
-    }
-
-    private func sessionResult(_ payload: String) throws -> [String: Any] {
-        guard let data = payload.data(using: .utf8),
-              let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              root["ok"] as? Bool == true,
-              let result = root["result"] as? [String: Any] else {
-            throw sessionError("SESSIONAPI_REJECTED")
-        }
-        return result
-    }
-
-    private func sessionString(_ result: [String: Any], key: String) throws -> String {
-        guard let value = result[key] as? String, !value.isEmpty else { throw sessionError("SESSIONAPI_MALFORMED") }
-        return value
-    }
-
-    private func sessionInt64(_ result: [String: Any], key: String) throws -> Int64 {
-        guard let number = result[key] as? NSNumber, number.int64Value > 0 else { throw sessionError("SESSIONAPI_MALFORMED") }
-        return number.int64Value
     }
 
     private func sessionError(_ code: String) -> NSError {
-        NSError(domain: "PacketTunnelProvider.sessionapi", code: -7, userInfo: [NSLocalizedDescriptionKey: code])
+        NSError(
+            domain: "PacketTunnelProvider.sessionapi",
+            code: -7,
+            userInfo: [NSLocalizedDescriptionKey: code]
+        )
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
@@ -469,13 +481,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // Probe policy is intentionally not selected by Swift. Go receives an
         // AUTO_SELECT command and serializes its own cleanup/failover.
         await stopGoSession(reason: "appMessage restart")
-        guard sessionID == nil else {
+        guard sessionCoordinator.sessionID == nil else {
             logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi restart deferred until prior cleanup completes")
             return false
         }
         do {
             try await startGoSession(raw)
-            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi restart accepted generation=\(sessionGeneration)")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi restart accepted generation=\(sessionCoordinator.generation)")
             return true
         } catch {
             logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi restart rejected code=\(error.localizedDescription)")

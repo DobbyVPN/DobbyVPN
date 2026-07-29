@@ -102,9 +102,15 @@ kotlin {
         }
     }
 
-    iosArm64().binaries.framework {
-        baseName = "app"
-        isStatic = true
+    listOf(
+        iosArm64(),
+        iosX64(),
+        iosSimulatorArm64(),
+    ).forEach { target ->
+        target.binaries.framework {
+            baseName = "app"
+            isStatic = true
+        }
     }
 
     sourceSets {

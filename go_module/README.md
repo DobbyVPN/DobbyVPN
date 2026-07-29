@@ -78,8 +78,13 @@ cd kmp_module
 go install golang.org/x/mobile/cmd/gomobile@latest
 gomobile init
 go get golang.org/x/mobile/bind@latest
-GO111MODULE=on gomobile bind -tags=static -target=ios -o MyLibrary.xcframework ./ios_exports
+./scripts/build_ios_xcframework.sh
 ```
+
+The script builds one physical-iOS slice and one universal Simulator slice,
+then combines them into `MyLibrary.xcframework`. The Simulator uses the same
+Go session/runtime code but deliberately reports TrustTunnel as unsupported:
+its supplied native bridge exists only for physical iOS.
 
 ## RPC API reference
 
