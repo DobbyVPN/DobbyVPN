@@ -120,6 +120,20 @@ def main() -> int:
             violations.append(
                 f"fastlane/Fastfile: missing exact production submission control: {expected}"
             )
+    upload_testflight_lane = fastfile.split("lane :upload_testflight do", 1)[-1].split("\n  end", 1)[0]
+    for expected in (
+        "skip_waiting_for_build_processing: true",
+        "distribute_external: false",
+        "notify_external_testers: false",
+    ):
+        if expected not in upload_testflight_lane:
+            violations.append(
+                f"fastlane/Fastfile: missing internal TestFlight upload control: {expected}"
+            )
+    if "changelog:" in upload_testflight_lane:
+        violations.append(
+            "fastlane/Fastfile: internal TestFlight upload must not wait to patch changelog metadata"
+        )
 
     torturer = (WORKFLOWS / "torturer.yml").read_text(encoding="utf-8")
     if "pull_request_target" in torturer:

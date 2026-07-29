@@ -218,10 +218,11 @@ platform :ios do
     upload_to_testflight(
       ipa: "#{EXPORT_DIR}/#{IPA_NAME}",
       api_key: api_key,
-      skip_waiting_for_build_processing: false,
+      # A changelog makes Fastlane wait partially and patch beta metadata.
+      # CI only needs the immutable binary parked for later promotion.
+      skip_waiting_for_build_processing: true,
       distribute_external: false,
-      notify_external_testers: false,
-      changelog: "Build #{FULL_VERSION} (#{SHORT_SHA})"
+      notify_external_testers: false
     )
   end
 
