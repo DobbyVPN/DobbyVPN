@@ -262,6 +262,21 @@ platform :ios do
     }
     options[:release_notes] = { "en-US" => release_notes } unless release_notes.empty?
 
-    upload_to_app_store(**options)
+    attempts_remaining = 6
+    begin
+      upload_to_app_store(**options)
+    rescue Spaceship::UnexpectedResponse => error
+      build_still_processing =
+        error.message.include?("specified pre-release build could not be added")
+      attempts_remaining -= 1
+      raise unless build_still_processing && attempts_remaining.positive?
+
+      UI.important(
+        "Exact build is still processing; retrying production attachment " \
+        "(#{attempts_remaining} attempts remain)"
+      )
+      sleep(240)
+      retry
+    end
   end
 end
