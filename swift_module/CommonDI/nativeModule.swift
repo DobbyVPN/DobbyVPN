@@ -3,18 +3,17 @@ import app
 
 public class NativeModuleHolder {
     private static let path = LogsRepository_iosKt.provideLogFilePath()
-    private static let chan = LogEventsChannel()
     public static let logsRepository = LogsRepository
-        .init(logFilePath: path, logEventsChannel: chan)
+        .init(
+            logFilePath: path,
+            additionalLogFilePaths: LogsRepository_iosKt.provideAdditionalLogFilePaths()
+        )
     private static let vpnManager = VpnManagerImpl(connectionRepository: connectionStateRepository)
     private static let sessionShell = IOSSessionShell(manager: vpnManager)
     
     public static let shared: Koin_coreModule = MakeNativeModuleKt.makeNativeModule(
         copyLogsInteractor: { _ in
             return CopyLogsInteractorImpl()
-        },
-        logEventsChannel: { _ in
-            return chan
         },
         logsRepository: { _ in
             return logsRepository

@@ -9,14 +9,19 @@ import com.dobby.backend.GoBackendWrapper
 actual val fileSystem = okio.FileSystem.SYSTEM
 
 private lateinit var appContext: Context
+private val logWriteLock = Any()
+
+actual fun <T> withLogWriteLock(block: () -> T): T = synchronized(logWriteLock, block)
 
 internal fun initLogFilePath(context: Context) {
     appContext = context.applicationContext
 }
 
-actual fun provideLogFilePath(): Path {
-    return "${appContext.filesDir.absolutePath}/app_logs.txt".toPath()
-}
+actual fun provideLogFilePath(): Path = "${appContext.filesDir.absolutePath}/app_logs.txt".toPath()
+
+actual fun provideGoLogFilePath(): Path = "${appContext.filesDir.absolutePath}/go_android_logs.jsonl".toPath()
+
+actual fun provideAdditionalLogFilePaths(): List<Path> = listOf(provideGoLogFilePath())
 
 actual fun platformLogInfo(): String {
     return "platform=android " +
@@ -30,9 +35,9 @@ actual fun platformLogInfo(): String {
         "device=${Build.DEVICE} " +
         "product=${Build.PRODUCT} " +
         "hardware=${Build.HARDWARE} " +
-        "abis=${Build.SUPPORTED_ABIS.joinToString(",")}"
+        "abis=${Build.SUPPORTED_ABIS?.joinToString(",").orEmpty()}"
 }
 
 fun initLogger() {
-    GoBackendWrapper.initLogger(provideLogFilePath().toString())
+    GoBackendWrapper.initLogger(provideGoLogFilePath().toString())
 }

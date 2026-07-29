@@ -80,9 +80,7 @@ class DobbyVpnService : VpnService() {
     val serviceId: String = UUID.randomUUID().toString().take(8)
 
     /** The service retains this original descriptor while Go owns a duplicated FD. */
-    @Deprecated("The v1 platform callback owns TUN descriptors")
     var vpnInterface: ParcelFileDescriptor? = null
-    @Deprecated("The v1 platform callback owns TUN descriptors")
     var goTunFd: Int? = null
     private var activeSessionId: String? = null
     private var activeGeneration: Long = -1L

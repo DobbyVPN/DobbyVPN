@@ -14,14 +14,14 @@ class CopyLogsInteractorImpl: CopyLogsInteractor {
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let dateString = formatter.string(from: Date())
 
-        let fileName = "DobbyVPN_logs_\(dateString).txt.gz"
+        let fileName = "DobbyVPN_logs_\(dateString).jsonl.gz"
         let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
 
         do {
             try writeGzip(logText, to: fileURL)
-            self.logs.writeLog(log: "Write gzip logs in temporary file: \(fileURL.path)")
+            self.logs.writeLog(log: "Log export archive written to owner-only temporary storage")
         } catch {
-            self.logs.writeLog(log: "Error in log saving: \(error.localizedDescription)")
+            self.logs.writeLog(log: "Log export failed failureType=\(String(describing: type(of: error)))")
             return
         }
 

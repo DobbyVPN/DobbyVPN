@@ -13,7 +13,8 @@ import java.util.zip.Deflater
 import java.util.zip.GZIPOutputStream
 
 class CopyLogsInteractorImpl(
-    private val context: Context
+    private val context: Context,
+    private val logger: Logger,
 ) : CopyLogsInteractor {
 
     override fun copy(logs: List<String>) {
@@ -24,7 +25,7 @@ class CopyLogsInteractorImpl(
                 "yyyy-MM-dd_HH-mm-ss",
                 Locale.getDefault()
             ).format(Date())
-            val fileName = "DobbyVPN_logs_$timestamp.txt.gz"
+            val fileName = "DobbyVPN_logs_$timestamp.jsonl.gz"
 
             val logFile = File(context.cacheDir, fileName)
             bestCompressionGzip(logFile).bufferedWriter(Charsets.UTF_8).use { writer ->
@@ -49,7 +50,7 @@ class CopyLogsInteractorImpl(
             )
 
         } catch (e: Exception) {
-            e.printStackTrace()
+            logger.error("Log export failed failureType=${e.javaClass.simpleName}")
             context.showToast("Can't send logs")
         }
     }

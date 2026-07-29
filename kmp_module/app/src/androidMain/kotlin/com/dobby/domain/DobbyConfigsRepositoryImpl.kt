@@ -206,9 +206,9 @@ internal class DobbyConfigsRepositoryImpl(
         }
     }
 
-    override fun setXrayConfig(newConfig: String) {
-        putSecret("xrayConfig", newConfig).also {
-            AndroidLog("DOBBY_TAG", "setXrayConfig, size = ${newConfig.length}")
+    override fun setXrayConfig(config: String) {
+        putSecret("xrayConfig", config).also {
+            AndroidLog("DOBBY_TAG", "setXrayConfig, size = ${config.length}")
         }
     }
 

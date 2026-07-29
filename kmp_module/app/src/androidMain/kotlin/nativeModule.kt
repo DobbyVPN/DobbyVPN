@@ -5,8 +5,8 @@ import com.dobby.feature.authentication.domain.AuthenticationManagerImpl
 import com.dobby.feature.logging.CopyLogsInteractorImpl
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.LoggerManagerImpl
-import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
+import com.dobby.feature.logging.domain.provideAdditionalLogFilePaths
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.AndroidSessionController
 import com.dobby.feature.main.domain.SessionController
@@ -14,9 +14,10 @@ import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
 val androidMainModule = makeNativeModule(
-    copyLogsInteractor = { CopyLogsInteractorImpl(get()) },
-    logEventsChannel = { LogEventsChannel() },
-    logsRepository = { LogsRepository(logEventsChannel = get()) },
+    copyLogsInteractor = { CopyLogsInteractorImpl(get(), get()) },
+    logsRepository = {
+        LogsRepository(additionalLogFilePaths = provideAdditionalLogFilePaths())
+    },
     configsRepository = {
         DobbyConfigsRepositoryImpl(
             prefs = androidContext().getSharedPreferences("DobbyPrefs", MODE_PRIVATE)

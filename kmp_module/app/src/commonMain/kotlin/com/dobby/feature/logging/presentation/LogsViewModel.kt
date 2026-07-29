@@ -3,7 +3,6 @@ package com.dobby.feature.logging.presentation
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dobby.feature.logging.domain.CopyLogsInteractor
-import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.ui.LogsUiState
 import kotlinx.coroutines.delay
@@ -15,7 +14,6 @@ import kotlinx.coroutines.launch
 
 class LogsViewModel(
     private val logsRepository: LogsRepository,
-    private val logEventsChannel: LogEventsChannel,
     private val copyLogsInteractor: CopyLogsInteractor
 ) : ViewModel() {
 
@@ -23,16 +21,6 @@ class LogsViewModel(
     val uiState: StateFlow<LogsUiState> = _uiState.asStateFlow()
 
     init {
-        viewModelScope.launch {
-            logEventsChannel.logEvents.collect { line ->
-                _uiState.update { state ->
-                    state.copy(
-                        logMessages = (state.logMessages + line)
-                            .takeLast(LogsRepository.UI_TAIL_LINES)
-                    )
-                }
-            }
-        }
         viewModelScope.launch {
             while (true) {
                 _uiState.update {
@@ -46,7 +34,6 @@ class LogsViewModel(
 
     fun clearLogs() {
         logsRepository.clearLogs()
-        logEventsChannel.clear()
         _uiState.value = LogsUiState(emptyList())
     }
 

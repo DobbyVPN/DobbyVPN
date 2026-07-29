@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -27,6 +29,9 @@ var (
 	// masked only when they carry an endpoint-related key or an explicit port;
 	// masking every dotted word would also destroy useful source file names.
 	networkEndpointPattern = regexp.MustCompile(`(?i)(?:[^\s:@]+:[^\s@]+@)?(?:\[[0-9a-f:.]+\](?::\d{1,5})?|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b|\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|local):\d{1,5}\b)`)
+	ipv6Pattern            = regexp.MustCompile(`(?i)\b[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){2,7}\b`)
+	hostnamePattern        = regexp.MustCompile(`(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|local|invalid)\b`)
+	stableEventPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
 	secretPattern          = regexp.MustCompile(`(?i)(["']?(?:token|api[_-]?key|password|secret|credential|authorization|auth|endpoint|url|config|server(?:ip|_ip)?|host|address|remote|proxy|gateway|dest(?:ination)?|resolved)["']?\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,}\]]+)`)
 	tomlPattern            = regexp.MustCompile(`(?m)^\s*\[{1,2}[A-Za-z0-9_.-]+\]{1,2}\s*$`)
 	jsonConfig             = regexp.MustCompile(`["'][A-Za-z0-9_.-]+["']\s*:`)
@@ -84,7 +89,31 @@ func redactText(message string) string {
 	message = urlPattern.ReplaceAllString(message, "[REDACTED URL]")
 	message = secretPattern.ReplaceAllString(message, "${1}[REDACTED]")
 	message = networkEndpointPattern.ReplaceAllString(message, "[REDACTED ENDPOINT]")
+	message = ipv6Pattern.ReplaceAllStringFunc(message, func(candidate string) string {
+		if strings.Contains(candidate, "::") || strings.IndexAny(strings.ToLower(candidate), "abcdef") >= 0 || strings.Count(candidate, ":") >= 3 {
+			return "[REDACTED ENDPOINT]"
+		}
+		return candidate
+	})
+	message = hostnamePattern.ReplaceAllStringFunc(message, func(candidate string) string {
+		lower := strings.ToLower(candidate)
+		for _, sourceSuffix := range []string{".go", ".swift", ".kt", ".kts", ".proto", ".json", ".toml", ".yaml", ".yml", ".xml", ".md"} {
+			if strings.HasSuffix(lower, sourceSuffix) {
+				return candidate
+			}
+		}
+		return "[REDACTED ENDPOINT]"
+	})
 	return message
+}
+
+type trustedVocabulary string
+
+func trustedEventName(event string) trustedVocabulary {
+	if stableEventPattern.MatchString(event) {
+		return trustedVocabulary(event)
+	}
+	return trustedVocabulary("log.message")
 }
 
 func redactValue(key string, value any) any {
@@ -92,11 +121,19 @@ func redactValue(key string, value any) any {
 		return "[REDACTED]"
 	}
 	switch typed := value.(type) {
+	case trustedVocabulary:
+		return string(typed)
 	case string:
 		return redactText(typed)
 	case []byte:
 		return "[REDACTED BINARY]"
 	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for nestedKey, nestedValue := range typed {
+			out[nestedKey] = redactValue(nestedKey, nestedValue)
+		}
+		return out
+	case map[string]string:
 		out := make(map[string]any, len(typed))
 		for nestedKey, nestedValue := range typed {
 			out[nestedKey] = redactValue(nestedKey, nestedValue)
@@ -108,6 +145,16 @@ func redactValue(key string, value any) any {
 			out[nestedKey] = redactValue(nestedKey, nestedValue)
 		}
 		return out
+	case []any:
+		out := make([]any, len(typed))
+		for index, nestedValue := range typed {
+			out[index] = redactValue(key, nestedValue)
+		}
+		return out
+	case error:
+		return "[REDACTED ERROR]"
+	case fmt.Stringer:
+		return "[REDACTED VALUE]"
 	default:
 		return value
 	}
@@ -129,10 +176,6 @@ type logrusToSlogHook struct{}
 
 func (*logrusToSlogHook) Levels() []logrus.Level { return logrus.AllLevels }
 func (*logrusToSlogHook) Fire(entry *logrus.Entry) error {
-	message := entry.Message
-	if len(entry.Data) > 0 {
-		message = fmt.Sprintf("%s | %v", message, redactValue("metadata", entry.Data))
-	}
 	level := slog.LevelDebug
 	switch entry.Level {
 	case logrus.PanicLevel, logrus.FatalLevel, logrus.ErrorLevel:
@@ -144,7 +187,11 @@ func (*logrusToSlogHook) Fire(entry *logrus.Entry) error {
 	case logrus.DebugLevel, logrus.TraceLevel:
 		level = slog.LevelDebug
 	}
-	write(level, "LOGRUS", message, nil)
+	arguments := make(map[string]any, len(entry.Data))
+	for key, value := range entry.Data {
+		arguments[key] = value
+	}
+	write(level, "LOGRUS", entry.Message, arguments)
 	return nil
 }
 
@@ -155,15 +202,23 @@ type TelemetryLogger struct{}
 type Logger struct {
 	file     *os.File
 	logger   *slog.Logger
-	debugBuf []string
-	infoBuf  []string
-	warnBuf  []string
-	errorBuf []string
+	pending  []pendingEntry
 	fallback bool
 }
 
+type pendingEntry struct {
+	occurredAt time.Time
+	level      slog.Level
+	event      string
+	category   string
+	message    string
+	arguments  map[string]any
+}
+
+var maxLocalLogBytes int64 = 4 << 20
+
 var (
-	lg     = &Logger{debugBuf: []string{}, infoBuf: []string{}, warnBuf: []string{}, errorBuf: []string{}}
+	lg     = &Logger{}
 	initMu sync.Mutex
 	bridge sync.Once
 )
@@ -180,22 +235,11 @@ func init() {
 func NewTelemetryLogger(_, _ string) (*TelemetryLogger, error) { return &TelemetryLogger{}, nil }
 
 func (logger *Logger) dumpBuffer() {
-	for _, message := range logger.debugBuf {
-		logger.logger.Debug(message)
+	for _, entry := range logger.pending {
+		emitAt(logger.logger, entry.occurredAt, entry.level, entry.event, entry.category, entry.message, entry.arguments)
 	}
-	for _, message := range logger.infoBuf {
-		logger.logger.Info(message)
-	}
-	for _, message := range logger.warnBuf {
-		logger.logger.Warn(message)
-	}
-	for _, message := range logger.errorBuf {
-		logger.logger.Error(message)
-	}
-	logger.debugBuf = nil
-	logger.infoBuf = nil
-	logger.warnBuf = nil
-	logger.errorBuf = nil
+	logger.pending = nil
+	logger.trimLocked()
 }
 
 func IsInitialized() bool {
@@ -237,7 +281,7 @@ func SetPath(path string) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Cannot open local log file; falling back to stderr logging")
-		lg.logger = slog.New(&simpleHandler{file: os.Stderr})
+		lg.logger = slog.New(newJSONLineHandler(os.Stderr))
 		lg.fallback = true
 		lg.dumpBuffer()
 		return fmt.Errorf("open local log file: %w", err)
@@ -247,10 +291,114 @@ func SetPath(path string) error {
 		return fmt.Errorf("secure log file: %w", err)
 	}
 	lg.file = f
-	lg.logger = slog.New(&simpleHandler{file: f})
+	lg.logger = slog.New(newJSONLineHandler(f))
 	lg.fallback = false
 	lg.dumpBuffer()
 	return nil
+}
+
+func retainNewestCompleteJSONLLines(data []byte, limit int64) []byte {
+	if limit <= 0 {
+		return nil
+	}
+	lastNewline := bytes.LastIndexByte(data, '\n')
+	if lastNewline < 0 {
+		return nil
+	}
+	complete := data[:lastNewline+1]
+	if int64(len(complete)) <= limit {
+		return complete
+	}
+	start := len(complete) - int(limit)
+	if start == 0 || complete[start-1] == '\n' {
+		return complete[start:]
+	}
+	nextNewline := bytes.IndexByte(complete[start:], '\n')
+	if nextNewline < 0 {
+		return nil
+	}
+	return complete[start+nextNewline+1:]
+}
+
+func (logger *Logger) trimLocked() {
+	if logger.file == nil || logger.fallback || maxLocalLogBytes <= 0 {
+		return
+	}
+	info, err := logger.file.Stat()
+	if err != nil || info.Size() <= maxLocalLogBytes {
+		return
+	}
+	path := logger.file.Name()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Cannot apply local log retention; continuing with the active log")
+		return
+	}
+	retained := retainNewestCompleteJSONLLines(data, maxLocalLogBytes)
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".dobby-log-retention-*")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Cannot apply local log retention; continuing with the active log")
+		return
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	rewriteOK := true
+	if err := temporary.Chmod(0o600); err != nil {
+		rewriteOK = false
+	}
+	if rewriteOK {
+		if _, err := temporary.Write(retained); err != nil {
+			rewriteOK = false
+		}
+	}
+	if rewriteOK {
+		if err := temporary.Sync(); err != nil {
+			rewriteOK = false
+		}
+	}
+	if err := temporary.Close(); err != nil {
+		rewriteOK = false
+	}
+	if !rewriteOK {
+		fmt.Fprintln(os.Stderr, "Cannot apply local log retention; continuing with the active log")
+		return
+	}
+	if err := logger.file.Close(); err != nil {
+		fmt.Fprintln(os.Stderr, "Cannot apply local log retention; continuing with the active log")
+	}
+	logger.file = nil
+	if err := os.Rename(temporaryPath, path); err != nil {
+		// Some supported filesystems cannot replace an existing destination.
+		// The producer is serialized here, so a bounded in-place fallback is
+		// safe; readers may observe an empty file for one polling interval.
+		file, openErr := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
+		if openErr == nil {
+			_, writeErr := file.Write(retained)
+			syncErr := file.Sync()
+			closeErr := file.Close()
+			if writeErr != nil || syncErr != nil || closeErr != nil {
+				fmt.Fprintln(os.Stderr, "Cannot apply local log retention; retained log may be incomplete")
+			}
+		} else {
+			fmt.Fprintln(os.Stderr, "Cannot apply local log retention; continuing with a fresh active log")
+		}
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		logger.logger = slog.New(newJSONLineHandler(os.Stderr))
+		logger.fallback = true
+		fmt.Fprintln(os.Stderr, "Cannot reopen local log after retention; falling back to stderr logging")
+		return
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		logger.logger = slog.New(newJSONLineHandler(os.Stderr))
+		logger.fallback = true
+		fmt.Fprintln(os.Stderr, "Cannot secure local log after retention; falling back to stderr logging")
+		return
+	}
+	logger.file = file
+	logger.logger = slog.New(newJSONLineHandler(file))
 }
 
 // InitTelemetry is intentionally local-only. Its parameters are discarded so
@@ -266,35 +414,68 @@ func SetupTelemetryAttributes(_ string) {
 
 func StopTelemetry() { Debugf("LOG", "Remote telemetry is disabled; no exporter to stop") }
 
-func prepareLog(message string, arguments map[string]any) string {
-	var out bytes.Buffer
-	out.WriteString(maskMessage(message))
-	for key, value := range arguments {
-		fmt.Fprintf(&out, " %q=%q", key, fmt.Sprint(redactValue(key, value)))
-	}
-	return maskMessage(out.String())
+func write(level slog.Level, category, message string, arguments map[string]any) {
+	writeEvent(level, "log.message", category, message, arguments)
 }
 
-func write(level slog.Level, category, message string, arguments map[string]any) {
-	entry := prepareLog(fmt.Sprintf("[%s] %s", category, message), arguments)
+func writeEvent(level slog.Level, event, category, message string, arguments map[string]any) {
+	writeEventAt(time.Now(), level, event, category, message, arguments)
+}
+
+func writeEventAt(occurredAt time.Time, level slog.Level, event, category, message string, arguments map[string]any) {
+	if occurredAt.IsZero() {
+		occurredAt = time.Now()
+	}
 	initMu.Lock()
 	defer initMu.Unlock()
 	if lg.logger == nil {
-		switch level {
-		case slog.LevelDebug:
-			lg.debugBuf = append(lg.debugBuf, entry)
-		case slog.LevelInfo:
-			lg.infoBuf = append(lg.infoBuf, entry)
-		case slog.LevelWarn:
-			lg.warnBuf = append(lg.warnBuf, entry)
-		case slog.LevelError:
-			lg.errorBuf = append(lg.errorBuf, entry)
-		default:
-			lg.errorBuf = append(lg.errorBuf, entry)
-		}
+		lg.pending = append(lg.pending, pendingEntry{
+			occurredAt: occurredAt, level: level, event: event, category: category,
+			message: message, arguments: cloneArguments(arguments),
+		})
 		return
 	}
-	lg.logger.Log(context.Background(), level, entry)
+	emitAt(lg.logger, occurredAt, level, event, category, message, arguments)
+	lg.trimLocked()
+}
+
+func cloneArguments(arguments map[string]any) map[string]any {
+	if arguments == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(arguments))
+	for key, value := range arguments {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func emit(logger *slog.Logger, level slog.Level, event, category, message string, arguments map[string]any) {
+	emitAt(logger, time.Now(), level, event, category, message, arguments)
+}
+
+func emitAt(logger *slog.Logger, occurredAt time.Time, level slog.Level, event, category, message string, arguments map[string]any) {
+	attrs := []slog.Attr{
+		slog.Any("schema", trustedVocabulary("dobby.log/v1")),
+		slog.Any("source", trustedVocabulary("go")),
+		slog.Any("event", trustedEventName(event)),
+		slog.String("category", category),
+	}
+	keys := make([]string, 0, len(arguments))
+	for key := range arguments {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		attrs = append(attrs, slog.Any(key, redactValue(key, arguments[key])))
+	}
+	ctx := context.Background()
+	if !logger.Enabled(ctx, level) {
+		return
+	}
+	record := slog.NewRecord(occurredAt, level, maskMessage(fmt.Sprintf("[%s] %s", category, message)), 0)
+	record.AddAttrs(attrs...)
+	_ = logger.Handler().Handle(ctx, record)
 }
 
 func Info(category, message string, arguments map[string]any) {
@@ -309,17 +490,82 @@ func Warn(category, message string, arguments map[string]any) {
 func Error(category, message string, arguments map[string]any) {
 	write(slog.LevelError, category, message, arguments)
 }
+func Trace(category, message string, arguments map[string]any) {
+	write(slog.LevelDebug-4, category, message, arguments)
+}
 func Infof(category, format string, args ...any)  { Info(category, fmt.Sprintf(format, args...), nil) }
 func Debugf(category, format string, args ...any) { Debug(category, fmt.Sprintf(format, args...), nil) }
 func Warnf(category, format string, args ...any)  { Warn(category, fmt.Sprintf(format, args...), nil) }
 func Errorf(category, format string, args ...any) { Error(category, fmt.Sprintf(format, args...), nil) }
+func Tracef(category, format string, args ...any) { Trace(category, fmt.Sprintf(format, args...), nil) }
 
-type simpleHandler struct{ file *os.File }
+type redactingHandler struct{ next slog.Handler }
 
-func (*simpleHandler) Enabled(context.Context, slog.Level) bool { return true }
-func (h *simpleHandler) Handle(_ context.Context, record slog.Record) error {
-	_, err := fmt.Fprintf(h.file, "[%s] [%s] %q [from go]\n", record.Time.Format("2006-01-02 15:04:05"), record.Level.String(), maskMessage(record.Message))
-	return err
+func newJSONLineHandler(writer io.Writer) slog.Handler {
+	next := slog.NewJSONHandler(writer, &slog.HandlerOptions{
+		Level: slog.LevelDebug - 4,
+		ReplaceAttr: func(_ []string, attribute slog.Attr) slog.Attr {
+			switch attribute.Key {
+			case slog.TimeKey:
+				attribute.Key = "timestamp"
+				if timestamp, ok := attribute.Value.Any().(time.Time); ok {
+					attribute.Value = slog.StringValue(timestamp.UTC().Format(time.RFC3339Nano))
+				}
+			case slog.MessageKey:
+				attribute.Key = "message"
+			case slog.LevelKey:
+				if attribute.Value.String() == "DEBUG-4" {
+					attribute.Value = slog.StringValue("TRACE")
+				}
+			}
+			return attribute
+		},
+	})
+	return &redactingHandler{next: next}
 }
-func (h *simpleHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
-func (h *simpleHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *redactingHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.next.Enabled(ctx, level)
+}
+
+func (h *redactingHandler) Handle(ctx context.Context, record slog.Record) error {
+	sanitized := slog.NewRecord(record.Time, record.Level, maskMessage(record.Message), record.PC)
+	record.Attrs(func(attribute slog.Attr) bool {
+		sanitized.AddAttrs(redactAttribute(attribute))
+		return true
+	})
+	return h.next.Handle(ctx, sanitized)
+}
+
+func (h *redactingHandler) WithAttrs(attributes []slog.Attr) slog.Handler {
+	redacted := make([]slog.Attr, len(attributes))
+	for index, attribute := range attributes {
+		redacted[index] = redactAttribute(attribute)
+	}
+	return &redactingHandler{next: h.next.WithAttrs(redacted)}
+}
+
+func (h *redactingHandler) WithGroup(name string) slog.Handler {
+	return &redactingHandler{next: h.next.WithGroup(name)}
+}
+
+func redactAttribute(attribute slog.Attr) slog.Attr {
+	attribute.Value = attribute.Value.Resolve()
+	if attribute.Value.Kind() == slog.KindGroup {
+		group := attribute.Value.Group()
+		redacted := make([]slog.Attr, len(group))
+		for index, nested := range group {
+			redacted[index] = redactAttribute(nested)
+		}
+		return slog.Group(attribute.Key, attrsToAny(redacted)...)
+	}
+	return slog.Any(attribute.Key, redactValue(attribute.Key, attribute.Value.Any()))
+}
+
+func attrsToAny(attributes []slog.Attr) []any {
+	values := make([]any, len(attributes))
+	for index := range attributes {
+		values[index] = attributes[index]
+	}
+	return values
+}

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	appLog "go_module/log"
 	"go_module/sessionapi/runtimebridge"
 	v1 "go_module/sessionapi/v1"
 )
@@ -43,7 +44,7 @@ var defaultBinding *Binding
 
 func Default() *Binding {
 	defaultOnce.Do(func() {
-		defaultBinding = New(v1.NewManager(v1.ManagerOptions{Runtime: runtimebridge.New(nil), Platform: platform{}}))
+		defaultBinding = New(v1.NewManager(v1.ManagerOptions{Runtime: runtimebridge.New(nil), Platform: platform{}, Audit: appLog.SessionAuditSink{}}))
 	})
 	return defaultBinding
 }
