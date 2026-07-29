@@ -66,7 +66,7 @@ jobs:
           ./scripts/build_ios_xcframework.sh
 
       - name: Upload iOS XCFramework
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MyLibrary.xcframework
           path: go_module/MyLibrary.xcframework
@@ -153,7 +153,7 @@ jobs:
             -Pandroid.injected.version.name="${VERSION_NAME}"
 
       - name: Upload app.framework
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: app.framework
           path: kmp_module/app/build/bin/iosArm64/releaseFramework/app.framework
