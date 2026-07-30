@@ -85,10 +85,10 @@ internal fun renderLogLine(line: String): String {
             .removeSuffix("Z")
             .take(ReadableTimestampLength)
         val attributes = buildList {
-            (event["fields"] as? JsonObject)?.toSortedMap()?.forEach { (key, value) ->
+            (event["fields"] as? JsonObject)?.entries?.sortedBy { it.key }?.forEach { (key, value) ->
                 add("$key=${value.jsonPrimitive.content}")
             }
-            event.toSortedMap().forEach { (key, value) ->
+            event.entries.sortedBy { it.key }.forEach { (key, value) ->
                 if (key !in setOf("schema", "timestamp", "level", "source", "event", "category", "message", "fields")) {
                     val readableValue = (value as? JsonPrimitive)?.content ?: value.toString()
                     add("$key=$readableValue")
