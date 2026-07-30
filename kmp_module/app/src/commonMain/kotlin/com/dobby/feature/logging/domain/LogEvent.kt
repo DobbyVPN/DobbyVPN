@@ -63,7 +63,7 @@ internal fun encodeLogEvent(
         put(
             "fields",
             buildJsonObject {
-                fields.toSortedMap().forEach { (key, value) ->
+                fields.entries.sortedBy { it.key }.forEach { (key, value) ->
                     put(key, redactLogField(key, value))
                 }
             },
