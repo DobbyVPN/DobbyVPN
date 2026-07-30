@@ -6,10 +6,10 @@ import android.os.Bundle
 import androidx.test.runner.AndroidJUnitRunner
 import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.domain.initLogFilePath
 import com.dobby.feature.logging.domain.initLogger
+import com.dobby.feature.logging.domain.provideGoLogFilePath
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.vpn_service.DobbyVpnService
 import okio.Path.Companion.toPath
@@ -20,8 +20,8 @@ import org.koin.dsl.module
 class TestApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        initLogFilePath(applicationContext)
         if (TestRuntimeOptions.realProfileEnabled) {
-            initLogFilePath(applicationContext)
             initLogger()
         }
         DobbyVpnService.nativePlatformRegistrar = if (TestRuntimeOptions.realProfileEnabled) {
@@ -31,11 +31,10 @@ class TestApplication : Application() {
         }
         startKoin {
             modules(module {
-                single { LogEventsChannel() }
                 single {
                     LogsRepository(
                         logFilePath = cacheDir.resolve("instrumentation.log").absolutePath.toPath(),
-                        logEventsChannel = get(),
+                        additionalLogFilePaths = listOf(provideGoLogFilePath()),
                     )
                 }
                 single { Logger(get()) }

@@ -119,6 +119,9 @@ def main() -> int:
         "skip_binary_upload: true",
         "submit_for_review: true",
         "automatic_release: true",
+        "rescue Spaceship::UnexpectedResponse",
+        "specified pre-release build could not be added",
+        "sleep(240)",
     ):
         if expected not in fastfile:
             violations.append(

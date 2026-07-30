@@ -229,12 +229,14 @@ type PlatformLease interface{ Release(context.Context) error }
 type ManagerOptions struct {
 	Runtime  Runtime
 	Platform PlatformAdapter
+	Audit    AuditSink
 }
 
 type Manager struct {
 	mu       sync.RWMutex
 	runtime  Runtime
 	platform PlatformAdapter
+	audit    *auditRecorder
 	sessions map[string]*session
 	newID    func() string
 }
@@ -269,6 +271,7 @@ type session struct {
 	events              []Event
 	sequence            uint64
 	destroyed           bool
+	auditState          State
 	publish             chan Event
 }
 
@@ -283,10 +286,15 @@ func NewManager(options ManagerOptions) *Manager {
 	if p == nil {
 		p = noopPlatform{}
 	}
-	return &Manager{runtime: r, platform: p, sessions: make(map[string]*session), newID: randomID}
+	return &Manager{
+		runtime: r, platform: p, audit: newAuditRecorder(options.Audit),
+		sessions: make(map[string]*session), newID: randomID,
+	}
 }
 
 func (m *Manager) GetCapabilities(context.Context) Capabilities {
+	operation := m.audit.begin("get_capabilities")
+	defer operation.end(nil)
 	return Capabilities{
 		Version:                  APIVersion,
 		Protocols:                []Protocol{ProtocolOutline, ProtocolXray, ProtocolTrustTunnel},
@@ -295,20 +303,28 @@ func (m *Manager) GetCapabilities(context.Context) Capabilities {
 	}
 }
 
-func (m *Manager) CreateSession(context.Context) (string, error) {
-	id := m.newID()
+func (m *Manager) CreateSession(context.Context) (id string, err error) {
+	operation := m.audit.begin("create_session")
+	defer func() { operation.end(err) }()
+	id = m.newID()
 	if id == "" {
 		return "", failure(FailureInternal, "could not allocate a session ID")
 	}
-	s := &session{id: id, state: StateIdle, cleanupDone: true, commands: make(map[string]commandRecord), publish: make(chan Event, 64)}
+	s := &session{
+		id: id, state: StateIdle, auditState: StateIdle, cleanupDone: true,
+		commands: make(map[string]commandRecord), publish: make(chan Event, 64),
+	}
 	m.mu.Lock()
 	m.sessions[id] = s
 	m.mu.Unlock()
 	go m.publishEvents(s) // #nosec G118 -- the publisher intentionally owns the session lifetime, not one request.
+	m.audit.snapshot(snapshotLocked(s), "create_session")
 	return id, nil
 }
 
-func (m *Manager) Configure(_ context.Context, sessionID, commandID string, rawConfig []byte) (ConfigureResult, error) {
+func (m *Manager) Configure(_ context.Context, sessionID, commandID string, rawConfig []byte) (result ConfigureResult, err error) {
+	operation := m.audit.begin("configure")
+	defer func() { operation.end(err) }()
 	s, err := m.get(sessionID)
 	if err != nil {
 		return ConfigureResult{}, err
@@ -327,9 +343,9 @@ func (m *Manager) Configure(_ context.Context, sessionID, commandID string, rawC
 			s.mu.Unlock()
 			return ConfigureResult{}, failure(FailureConflict, "command ID was used by another operation")
 		}
-		result, saved := cloneConfigure(record.config), record.err
+		cachedResult, saved := cloneConfigure(record.config), record.err
 		s.mu.Unlock()
-		return result, saved
+		return cachedResult, saved
 	}
 	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping {
 		err := failure(FailureConflict, "cannot configure while a generation is active")
@@ -347,7 +363,7 @@ func (m *Manager) Configure(_ context.Context, sessionID, commandID string, rawC
 	}
 	s.profiles, s.digest, s.warnings, s.configured = parsed.profiles, parsed.digest, parsed.warnings, true
 	s.active, s.lastFailure, s.state, s.cleanupDone = nil, "", StateConfigured, true
-	result := ConfigureResult{Digest: s.digest, Profiles: summaries(s.profiles), Warnings: cloneWarnings(s.warnings)}
+	result = ConfigureResult{Digest: s.digest, Profiles: summaries(s.profiles), Warnings: cloneWarnings(s.warnings)}
 	s.commands[commandID] = commandRecord{op: commandConfigure, config: result}
 	m.appendLocked(s, Event{State: StateConfigured})
 	for i := range s.warnings {
@@ -365,7 +381,9 @@ func (m *Manager) Configure(_ context.Context, sessionID, commandID string, rawC
 //
 // The profile stays private to the process; this method only returns the same
 // safe summary fields as Configure.
-func (m *Manager) ConfigureCompatibilityProfile(_ context.Context, sessionID, commandID string, profile RuntimeProfile) (ConfigureResult, error) {
+func (m *Manager) ConfigureCompatibilityProfile(_ context.Context, sessionID, commandID string, profile RuntimeProfile) (result ConfigureResult, err error) {
+	operation := m.audit.begin("configure_compatibility")
+	defer func() { operation.end(err) }()
 	s, err := m.get(sessionID)
 	if err != nil {
 		return ConfigureResult{}, err
@@ -387,9 +405,9 @@ func (m *Manager) ConfigureCompatibilityProfile(_ context.Context, sessionID, co
 			s.mu.Unlock()
 			return ConfigureResult{}, failure(FailureConflict, "command ID was used by another operation")
 		}
-		result, saved := cloneConfigure(record.config), record.err
+		cachedResult, saved := cloneConfigure(record.config), record.err
 		s.mu.Unlock()
-		return result, saved
+		return cachedResult, saved
 	}
 	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || !s.cleanupDone {
 		err := failure(FailureConflict, "cannot configure while a generation is active")
@@ -404,14 +422,16 @@ func (m *Manager) ConfigureCompatibilityProfile(_ context.Context, sessionID, co
 	s.digest = hex.EncodeToString(digest[:])
 	s.warnings, s.configured = nil, true
 	s.active, s.lastFailure, s.state, s.cleanupDone = nil, "", StateConfigured, true
-	result := ConfigureResult{Digest: s.digest, Profiles: []ProfileSummary{profile.Summary}}
+	result = ConfigureResult{Digest: s.digest, Profiles: []ProfileSummary{profile.Summary}}
 	s.commands[commandID] = commandRecord{op: commandConfigureCompatibility, config: result}
 	m.appendLocked(s, Event{State: StateConfigured})
 	s.mu.Unlock()
 	return cloneConfigure(result), nil
 }
 
-func (m *Manager) Start(requestCtx context.Context, sessionID, commandID string, target StartTarget) (StartResult, error) {
+func (m *Manager) Start(requestCtx context.Context, sessionID, commandID string, target StartTarget) (result StartResult, err error) {
+	operation := m.audit.begin("start")
+	defer func() { operation.end(err) }()
 	s, err := m.get(sessionID)
 	if err != nil {
 		return StartResult{}, err
@@ -429,9 +449,9 @@ func (m *Manager) Start(requestCtx context.Context, sessionID, commandID string,
 			s.mu.Unlock()
 			return StartResult{}, failure(FailureConflict, "command ID was used by another operation")
 		}
-		result, saved := record.start, record.err
+		cachedResult, saved := record.start, record.err
 		s.mu.Unlock()
-		return result, saved
+		return cachedResult, saved
 	}
 	if !s.configured {
 		err := failure(FailureNotConfigured, "configure a session before starting it")
@@ -463,7 +483,7 @@ func (m *Manager) Start(requestCtx context.Context, sessionID, commandID string,
 	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
 	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.active, s.lastFailure = cancel, &ledger{}, make(chan struct{}), false, nil, ""
 	s.state = StateProbing
-	result := StartResult{Generation: generation}
+	result = StartResult{Generation: generation}
 	s.commands[commandID] = commandRecord{op: commandStart, start: result}
 	m.appendLocked(s, Event{Generation: generation, State: StateProbing})
 	s.mu.Unlock()
@@ -471,7 +491,9 @@ func (m *Manager) Start(requestCtx context.Context, sessionID, commandID string,
 	return result, nil
 }
 
-func (m *Manager) Stop(_ context.Context, sessionID, commandID string, generation uint64) (StopResult, error) {
+func (m *Manager) Stop(_ context.Context, sessionID, commandID string, generation uint64) (result StopResult, err error) {
+	operation := m.audit.begin("stop")
+	defer func() { operation.end(err) }()
 	s, err := m.get(sessionID)
 	if err != nil {
 		return StopResult{}, err
@@ -500,7 +522,7 @@ func (m *Manager) Stop(_ context.Context, sessionID, commandID string, generatio
 		s.commands[commandID] = commandRecord{op: commandStop, err: err}
 		return StopResult{}, err
 	}
-	result := StopResult{Generation: generation}
+	result = StopResult{Generation: generation}
 	s.commands[commandID] = commandRecord{op: commandStop, stop: result}
 	if s.state != StateStopping {
 		s.state = StateStopping
@@ -520,7 +542,9 @@ func (m *Manager) Stop(_ context.Context, sessionID, commandID string, generatio
 // ProtectSocket is the session API path for platform socket protection.
 // Runtimes normally receive this as a closure from their binding before each
 // non-loopback protocol dial. A protection failure aborts that dial.
-func (m *Manager) ProtectSocket(ctx context.Context, ref SessionRef, fd int, loopback bool) error {
+func (m *Manager) ProtectSocket(ctx context.Context, ref SessionRef, fd int, loopback bool) (err error) {
+	operation := m.audit.begin("protect_socket")
+	defer func() { operation.end(err) }()
 	if fd < 0 {
 		return failure(FailureInvalidArgument, "socket descriptor must be non-negative")
 	}
@@ -546,7 +570,9 @@ func (m *Manager) ProtectSocket(ctx context.Context, ref SessionRef, fd int, loo
 // ReportHealth accepts a generation-correlated health result. It is the
 // deterministic failover policy: an unhealthy connected generation is fully
 // cleaned up before a new AUTO_SELECT generation is allowed to begin.
-func (m *Manager) ReportHealth(_ context.Context, sessionID string, generation uint64, healthy bool) (HealthResult, error) {
+func (m *Manager) ReportHealth(_ context.Context, sessionID string, generation uint64, healthy bool) (result HealthResult, err error) {
+	operation := m.audit.begin("report_health")
+	defer func() { operation.end(err) }()
 	s, err := m.get(sessionID)
 	if err != nil {
 		return HealthResult{}, err
@@ -559,7 +585,7 @@ func (m *Manager) ReportHealth(_ context.Context, sessionID string, generation u
 	if generation == 0 || generation != s.generation || s.state != StateConnected {
 		return HealthResult{}, failure(FailureStaleGeneration, "health result is not for the connected generation")
 	}
-	result := HealthResult{Generation: generation}
+	result = HealthResult{Generation: generation}
 	if healthy {
 		m.appendLocked(s, Event{Generation: generation, State: StateConnected, Profile: cloneSummaryPtr(s.active)})
 		return result, nil
@@ -579,7 +605,9 @@ func (m *Manager) ReportHealth(_ context.Context, sessionID string, generation u
 	return result, nil
 }
 
-func (m *Manager) Snapshot(_ context.Context, sessionID string) (SnapshotResult, error) {
+func (m *Manager) Snapshot(_ context.Context, sessionID string) (result SnapshotResult, err error) {
+	operation := m.audit.begin("snapshot")
+	defer func() { operation.end(err) }()
 	s, err := m.get(sessionID)
 	if err != nil {
 		return SnapshotResult{}, err
@@ -589,10 +617,14 @@ func (m *Manager) Snapshot(_ context.Context, sessionID string) (SnapshotResult,
 	if s.destroyed {
 		return SnapshotResult{}, failure(FailureNotFound, "session has been destroyed")
 	}
-	return snapshotLocked(s), nil
+	result = snapshotLocked(s)
+	m.audit.snapshot(result, "snapshot")
+	return result, nil
 }
 
-func (m *Manager) Observe(_ context.Context, sessionID string, afterSequence uint64) (ObserveResult, error) {
+func (m *Manager) Observe(_ context.Context, sessionID string, afterSequence uint64) (result ObserveResult, err error) {
+	operation := m.audit.begin("observe")
+	defer func() { operation.end(err) }()
 	s, err := m.get(sessionID)
 	if err != nil {
 		return ObserveResult{}, err
@@ -610,7 +642,11 @@ func (m *Manager) Observe(_ context.Context, sessionID string, afterSequence uin
 
 // DestroySession is only valid after cleanup.  Keeping an active session
 // addressable prevents an old callback from being mistaken for a new session.
-func (m *Manager) DestroySession(_ context.Context, sessionID string) error {
+func (m *Manager) DestroySession(_ context.Context, sessionID string) (err error) {
+	operation := m.audit.begin("destroy_session")
+	defer func() {
+		operation.endAndFlush(err, defaultAuditFlushTimeout)
+	}()
 	s, err := m.get(sessionID)
 	if err != nil {
 		return err
@@ -853,6 +889,27 @@ func (m *Manager) appendLocked(s *session, e Event) {
 	s.sequence++
 	e.SessionID, e.Sequence = s.id, s.sequence
 	s.events = append(s.events, e)
+
+	eventName := AuditEventStatusSnapshot
+	if s.auditState != e.State {
+		eventName = AuditEventStateTransition
+	}
+	auditEvent := AuditEvent{
+		Event: eventName, Generation: e.Generation, Sequence: e.Sequence,
+		PreviousState: s.auditState, State: e.State, Configured: s.configured,
+		CleanupComplete: s.cleanupDone, Failure: e.Failure,
+	}
+	if e.Profile != nil {
+		auditEvent.HasProfile = true
+		auditEvent.ProfileIndex = e.Profile.Index
+		auditEvent.Protocol = e.Profile.Protocol
+	}
+	if e.Warning != nil {
+		auditEvent.WarningCode = e.Warning.Code
+	}
+	s.auditState = e.State
+	m.audit.record(auditEvent)
+
 	// This channel has one consumer per session, so slow platform publication
 	// cannot reorder notifications relative to the authoritative event stream.
 	s.publish <- e

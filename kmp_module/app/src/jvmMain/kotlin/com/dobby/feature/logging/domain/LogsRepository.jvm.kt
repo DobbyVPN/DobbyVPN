@@ -8,11 +8,20 @@ import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermission
 
 actual val fileSystem: FileSystem = FileSystem.SYSTEM
+private val logWriteLock = Any()
 
-actual fun provideLogFilePath(): Path {
+actual fun <T> withLogWriteLock(block: () -> T): T = synchronized(logWriteLock, block)
+
+actual fun provideLogFilePath(): Path = provideLogFile("app_logs.txt")
+
+actual fun provideGoLogFilePath(): Path = provideLogFile("go_desktop_service_logs.jsonl")
+
+actual fun provideAdditionalLogFilePaths(): List<Path> = listOf(provideGoLogFilePath())
+
+private fun provideLogFile(name: String): Path {
     val userHome = System.getProperty("user.home") ?: error("Unable to get user home directory")
     val appDir = File(userHome, ".myapp")
-    val logFile = File(appDir, "app_logs.txt")
+    val logFile = File(appDir, name)
     Files.createDirectories(appDir.toPath())
     val posixSecured = runCatching {
         Files.setPosixFilePermissions(

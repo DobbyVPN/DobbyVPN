@@ -60,8 +60,10 @@ The Swift package compiles the exact platform-neutral production source from
 links the KMP Simulator framework and executes `commonTest` coverage inside an
 iOS Simulator. Its deterministic tests include the extension-process Go
 session transaction (create/configure/start/poll/stop/destroy), including
-virtual-time timeout and cleanup retry paths. `iosX64` is also declared for
-Intel macOS environments.
+virtual-time timeout and cleanup retry paths. It also executes the shared
+logging contract for legacy-record compatibility, full-timestamp ordering,
+multi-producer merge/clear, and durable retention of the latest clear marker.
+`iosX64` is also declared for Intel macOS environments.
 
 Simulator checks cover shared parsing, mapping, lifecycle generation fences,
 observation sequencing, retry decisions, framework linkage, and any future
@@ -81,13 +83,12 @@ Pull requests also call
 [`DobbyVPN/Torturer`](https://github.com/DobbyVPN/Torturer) at an immutable
 commit. Torturer source-builds the exact pull-request revision on hosted Linux,
 Windows, macOS ARM, macOS Intel, and Android runners, then exercises only
-secretless product-facing contracts and synthetic invalid input.
-
-Torturer's iOS Simulator helper is intentionally staged: its public evidence
-contract lands first, then a later immutable Torturer revision may add a
-secretless hosted Simulator job after this repository exposes a stable
-Simulator app/XCTest target. The workflow pin is never advanced in the same
-unreviewed change as the helper it executes.
+secretless product-facing contracts and synthetic invalid input. Its iOS
+Simulator lane builds the Go Simulator framework, runs the production Swift
+suite and KMP `iosSimulatorArm64Test`, then builds, installs, launches,
+and terminates the unsigned app. Shared `commonTest` additions therefore
+extend both DobbyVPN's own Simulator job and the independent Torturer lane
+without duplicating tests. A named app XCTest remains a separate future stage.
 
 The caller uses the unprivileged `pull_request` event, read-only permissions,
 no secrets, no protected environments, and no shared Actions cache.

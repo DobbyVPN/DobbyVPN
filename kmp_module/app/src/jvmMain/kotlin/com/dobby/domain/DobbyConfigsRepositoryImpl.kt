@@ -235,8 +235,8 @@ internal class DobbyConfigsRepositoryImpl(
         return readSecret("xrayConfig")
     }
 
-    override fun setXrayConfig(newConfig: String) {
-        writeSecret("xrayConfig", newConfig)
+    override fun setXrayConfig(config: String) {
+        writeSecret("xrayConfig", config)
     }
 
     override fun getIsXrayEnabled(): Boolean {

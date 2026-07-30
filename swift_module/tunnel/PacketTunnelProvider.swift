@@ -367,10 +367,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logInterfaces()
         logInterfacesDetailed(label: "AFTER_VPN_TUNNEL")
 
-        let path = LogsRepository_iosKt.provideLogFilePath().normalized().description()
-        logs.writeLog(log: "Start go logger init path = \(path)")
+        let path = LogsRepository_iosKt.provideGoLogFilePath().normalized().description()
+        logs.writeLog(log: "Starting Go tunnel logger using owner-only local storage")
         Cloak_outlineInitLogger(path)
-        logs.writeLog(log: "Finish go logger init")
+        logs.writeLog(log: "Go tunnel logger initialization returned")
         do {
             try await startGoSession(rawConfiguration)
         } catch {

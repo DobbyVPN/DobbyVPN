@@ -1,8 +1,8 @@
 package com.dobby.cli
 
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
+import com.dobby.feature.logging.domain.provideAdditionalLogFilePaths
 import com.dobby.feature.main.domain.GrpcSessionController
 import com.dobby.feature.main.domain.SessionConfiguration
 import com.dobby.feature.main.domain.SessionController
@@ -47,7 +47,9 @@ class CliClient(
         GrpcVpnLibrary.sessionGrpcLibrary,
         CliSessionIdentityStore(),
     ),
-    private val logsRepository: LogsRepository = LogsRepository(logEventsChannel = LogEventsChannel()),
+    private val logsRepository: LogsRepository = LogsRepository(
+        additionalLogFilePaths = provideAdditionalLogFilePaths(),
+    ),
     private val logger: Logger = Logger(logsRepository),
     private val externalIpLookup: () -> String? = ::fetchExternalIp,
 ) {

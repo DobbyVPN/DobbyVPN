@@ -1,6 +1,6 @@
 package com.dobby.feature.logging
 
-import com.dobby.feature.logging.domain.provideLogFilePath
+import com.dobby.feature.logging.domain.provideGoLogFilePath
 import interop.logger.LoggerLibrary
 
 class LoggerManagerImpl(
@@ -8,10 +8,11 @@ class LoggerManagerImpl(
     private val loggerLibrary: LoggerLibrary,
 ) : LoggerManager {
     override fun initLogger() {
-        val logFilePath = provideLogFilePath()
+        val logFilePath = provideGoLogFilePath()
 
-        logger.log("Init tunnel logging to the path: $logFilePath")
+        logger.log("Starting Go tunnel logger using owner-only local storage")
         loggerLibrary.InitLogger(logFilePath.toString())
+        logger.log("Go tunnel logger initialization returned")
         logger.log("Remote telemetry is disabled; tunnel logs remain local")
     }
 

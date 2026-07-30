@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	appLog "go_module/log"
 	"go_module/sessionapi/runtimebridge"
 	"go_module/sessionapi/runtimecore"
 	"go_module/sessionapi/v1"
@@ -20,7 +21,7 @@ import (
 // platform boundary for TUN, socket protection, and state publication.
 func New(callbacks PlatformCallbacks) *Binding {
 	platform := &platformAdapter{callbacks: callbacks, tunnels: newOneShotFDs(), active: make(map[string]v1.SessionRef)}
-	manager := v1.NewManager(v1.ManagerOptions{Runtime: runtimebridge.New(platform), Platform: platform})
+	manager := v1.NewManager(v1.ManagerOptions{Runtime: runtimebridge.New(platform), Platform: platform, Audit: appLog.SessionAuditSink{}})
 	return &Binding{manager: manager, platform: platform}
 }
 
@@ -241,6 +242,7 @@ type tunnelLease struct {
 func (l *tunnelLease) Read(p []byte) (int, error)  { return l.file.Read(p) }
 func (l *tunnelLease) Write(p []byte) (int, error) { return l.file.Write(p) }
 func (l *tunnelLease) Fd() uintptr                 { return l.file.Fd() }
+
 // Close drops only Go's duplicated descriptor after tun2socks owns its copy.
 // Release keeps the platform generation active until the runtime lease ends.
 func (l *tunnelLease) Close() error {

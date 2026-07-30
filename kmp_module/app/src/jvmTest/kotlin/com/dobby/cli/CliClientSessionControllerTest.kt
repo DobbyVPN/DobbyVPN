@@ -1,7 +1,6 @@
 package com.dobby.cli
 
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.logging.domain.LogEventsChannel
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.SessionConfiguration
 import com.dobby.feature.main.domain.SessionController
@@ -81,7 +80,7 @@ class CliClientSessionControllerTest {
         val config = Files.createTempFile("dobby-cli-failed-profile", ".toml")
         Files.write(config, byteArrayOf(1))
         val logPath = Files.createTempFile("dobby-cli-failure", ".log")
-        val logs = LogsRepository(logPath.toString().toPath(), LogEventsChannel())
+        val logs = LogsRepository(logPath.toString().toPath())
         val controller = RecordingSessionController(
             terminalState = SessionState.FAILED,
             terminalFailureCode = SessionFailureCode.PLATFORM_FAILED,
@@ -106,7 +105,7 @@ class CliClientSessionControllerTest {
         val config = Files.createTempFile("dobby-cli-rejected-profile", ".toml")
         Files.write(config, byteArrayOf(1))
         val logPath = Files.createTempFile("dobby-cli-rejected", ".log")
-        val logs = LogsRepository(logPath.toString().toPath(), LogEventsChannel())
+        val logs = LogsRepository(logPath.toString().toPath())
         val controller = RecordingSessionController(
             startFailure = SessionControllerResult.Failure(
                 message = "credential-value",

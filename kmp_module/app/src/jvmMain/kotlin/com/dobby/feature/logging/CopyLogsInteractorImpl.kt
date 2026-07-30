@@ -18,7 +18,7 @@ class CopyLogsInteractorImpl : CopyLogsInteractor {
             "yyyy-MM-dd_HH-mm-ss",
             Locale.getDefault()
         ).format(Date())
-        val fileName = "DobbyVPN_logs_$timestamp.txt.gz"
+        val fileName = "DobbyVPN_logs_$timestamp.jsonl.gz"
 
         val dialog = FileDialog(null as Frame?, "Save logs", FileDialog.SAVE).apply {
             file = fileName
