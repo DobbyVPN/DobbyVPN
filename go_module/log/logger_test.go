@@ -182,8 +182,8 @@ func TestJSONLinesRemainCompleteDuringConcurrentWrites(t *testing.T) {
 		}(index)
 	}
 	group.Wait()
-	if err := file.Sync(); err != nil {
-		t.Fatal(err)
+	if syncErr := file.Sync(); syncErr != nil {
+		t.Fatal(syncErr)
 	}
 	if _, err := file.Seek(0, 0); err != nil {
 		t.Fatal(err)
@@ -217,8 +217,8 @@ func TestTraceLevelIsStableAndReadable(t *testing.T) {
 	defer file.Close()
 	logger := slog.New(newJSONLineHandler(file))
 	emit(logger, slog.LevelDebug-4, "status.heartbeat", "SESSION", "still connected", nil)
-	if err := file.Sync(); err != nil {
-		t.Fatal(err)
+	if syncErr := file.Sync(); syncErr != nil {
+		t.Fatal(syncErr)
 	}
 	output, err := os.ReadFile(file.Name())
 	if err != nil {

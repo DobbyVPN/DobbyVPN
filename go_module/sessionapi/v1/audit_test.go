@@ -17,43 +17,14 @@ func TestAuditPreservesActionTransitionAndStatusContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Configure(context.Background(), sessionID, "configure", fixture(t)); err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := manager.Snapshot(context.Background(), sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snapshot.State != StateConfigured || !snapshot.Configured || !snapshot.CleanupComplete {
-		t.Fatalf("unexpected snapshot: %#v", snapshot)
-	}
-
-	var recorded []AuditEvent
-	deadline := time.After(2 * time.Second)
-	for len(recorded) < 10 {
-		select {
-		case event := <-events:
-			recorded = append(recorded, event)
-		case <-deadline:
-			t.Fatalf("timed out after %d audit events: %#v", len(recorded), recorded)
-		}
-	}
+	requireConfiguredSnapshot(t, manager, sessionID)
+	recorded := receiveAuditEvents(t, events, 10)
 
 	assertOperationPair(t, recorded, "create_session")
 	assertOperationPair(t, recorded, "configure")
 	assertOperationPair(t, recorded, "snapshot")
 
-	var transition *AuditEvent
-	var status *AuditEvent
-	for index := range recorded {
-		event := &recorded[index]
-		if event.Event == "state.transition" && event.State == StateConfigured {
-			transition = event
-		}
-		if event.Event == "status.snapshot" && event.Operation == "snapshot" {
-			status = event
-		}
-	}
+	transition, status := configuredAuditContext(recorded)
 	if transition == nil {
 		t.Fatalf("configured transition missing: %#v", recorded)
 	}
@@ -63,6 +34,48 @@ func TestAuditPreservesActionTransitionAndStatusContext(t *testing.T) {
 	if status == nil || status.State != StateConfigured || !status.Configured || !status.CleanupComplete {
 		t.Fatalf("interim status snapshot missing: %#v", recorded)
 	}
+}
+
+func requireConfiguredSnapshot(t *testing.T, manager *Manager, sessionID string) {
+	t.Helper()
+	if _, configureErr := manager.Configure(context.Background(), sessionID, "configure", fixture(t)); configureErr != nil {
+		t.Fatal(configureErr)
+	}
+	snapshot, snapshotErr := manager.Snapshot(context.Background(), sessionID)
+	if snapshotErr != nil {
+		t.Fatal(snapshotErr)
+	}
+	if snapshot.State != StateConfigured || !snapshot.Configured || !snapshot.CleanupComplete {
+		t.Fatalf("unexpected snapshot: %#v", snapshot)
+	}
+}
+
+func receiveAuditEvents(t *testing.T, events <-chan AuditEvent, count int) []AuditEvent {
+	t.Helper()
+	recorded := make([]AuditEvent, 0, count)
+	deadline := time.After(2 * time.Second)
+	for len(recorded) < count {
+		select {
+		case event := <-events:
+			recorded = append(recorded, event)
+		case <-deadline:
+			t.Fatalf("timed out after %d audit events: %#v", len(recorded), recorded)
+		}
+	}
+	return recorded
+}
+
+func configuredAuditContext(events []AuditEvent) (transition, status *AuditEvent) {
+	for index := range events {
+		event := &events[index]
+		if event.Event == AuditEventStateTransition && event.State == StateConfigured {
+			transition = event
+		}
+		if event.Event == AuditEventStatusSnapshot && event.Operation == "snapshot" {
+			status = event
+		}
+	}
+	return transition, status
 }
 
 func TestDestroyFlushesTerminalAuditEvents(t *testing.T) {
@@ -90,10 +103,10 @@ func TestDestroyFlushesTerminalAuditEvents(t *testing.T) {
 		if event.OccurredAt.IsZero() {
 			t.Fatalf("audit event lost occurrence time: %#v", event)
 		}
-		if event.Event == "state.transition" && event.State == StateDestroyed {
+		if event.Event == AuditEventStateTransition && event.State == StateDestroyed {
 			destroyedTransition = true
 		}
-		if event.Event == "operation" && event.Operation == "destroy_session" && event.Phase == "end" {
+		if event.Event == auditEventOperation && event.Operation == "destroy_session" && event.Phase == auditPhaseEnd {
 			destroyEnd = true
 		}
 	}
@@ -107,13 +120,13 @@ func assertOperationPair(t *testing.T, events []AuditEvent, operation string) {
 	begin := -1
 	end := -1
 	for index, event := range events {
-		if event.Event != "operation" || event.Operation != operation {
+		if event.Event != auditEventOperation || event.Operation != operation {
 			continue
 		}
 		switch event.Phase {
-		case "begin":
+		case auditPhaseBegin:
 			begin = index
-		case "end":
+		case auditPhaseEnd:
 			end = index
 			if event.Outcome != "success" || event.Failure != "" || event.DurationMillis < 0 {
 				t.Fatalf("invalid %s result: %#v", operation, event)

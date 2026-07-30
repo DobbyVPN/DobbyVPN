@@ -3,6 +3,7 @@ package log
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,13 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+)
+
+const (
+	redactedValue    = "[REDACTED]"
+	redactedEndpoint = "[REDACTED ENDPOINT]"
+	logSchema        = "dobby.log/v1"
+	logSource        = "go"
 )
 
 var (
@@ -67,7 +75,7 @@ func MaskStr(input string) string {
 	if input == "" {
 		return ""
 	}
-	return "[REDACTED]"
+	return redactedValue
 }
 
 func isSensitiveKey(key string) bool {
@@ -87,11 +95,11 @@ func redactText(message string) string {
 		return "[REDACTED CONFIGURATION]"
 	}
 	message = urlPattern.ReplaceAllString(message, "[REDACTED URL]")
-	message = secretPattern.ReplaceAllString(message, "${1}[REDACTED]")
-	message = networkEndpointPattern.ReplaceAllString(message, "[REDACTED ENDPOINT]")
+	message = secretPattern.ReplaceAllString(message, "${1}"+redactedValue)
+	message = networkEndpointPattern.ReplaceAllString(message, redactedEndpoint)
 	message = ipv6Pattern.ReplaceAllStringFunc(message, func(candidate string) string {
-		if strings.Contains(candidate, "::") || strings.IndexAny(strings.ToLower(candidate), "abcdef") >= 0 || strings.Count(candidate, ":") >= 3 {
-			return "[REDACTED ENDPOINT]"
+		if strings.Contains(candidate, "::") || strings.ContainsAny(strings.ToLower(candidate), "abcdef") || strings.Count(candidate, ":") >= 3 {
+			return redactedEndpoint
 		}
 		return candidate
 	})
@@ -102,7 +110,7 @@ func redactText(message string) string {
 				return candidate
 			}
 		}
-		return "[REDACTED ENDPOINT]"
+		return redactedEndpoint
 	})
 	return message
 }
@@ -118,7 +126,7 @@ func trustedEventName(event string) trustedVocabulary {
 
 func redactValue(key string, value any) any {
 	if isSensitiveKey(key) {
-		return "[REDACTED]"
+		return redactedValue
 	}
 	switch typed := value.(type) {
 	case trustedVocabulary:
@@ -166,7 +174,7 @@ func maskMessage(message string) string {
 	forbiddenMu.RUnlock()
 	for _, word := range words {
 		if word != "" {
-			message = strings.ReplaceAll(message, word, "[REDACTED]")
+			message = strings.ReplaceAll(message, word, redactedValue)
 		}
 	}
 	return redactText(message)
@@ -324,73 +332,41 @@ func (logger *Logger) trimLocked() {
 	if logger.file == nil || logger.fallback || maxLocalLogBytes <= 0 {
 		return
 	}
-	info, err := logger.file.Stat()
-	if err != nil || info.Size() <= maxLocalLogBytes {
+	info, statErr := logger.file.Stat()
+	if statErr != nil || info.Size() <= maxLocalLogBytes {
 		return
 	}
 	path := logger.file.Name()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot apply local log retention; continuing with the active log")
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
 		return
 	}
-	retained := retainNewestCompleteJSONLLines(data, maxLocalLogBytes)
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".dobby-log-retention-*")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot apply local log retention; continuing with the active log")
+	temporary, createErr := os.CreateTemp(filepath.Dir(path), ".dobby-log-retention-*")
+	if createErr != nil {
+		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
 		return
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	rewriteOK := true
-	if err := temporary.Chmod(0o600); err != nil {
-		rewriteOK = false
-	}
-	if rewriteOK {
-		if _, err := temporary.Write(retained); err != nil {
-			rewriteOK = false
-		}
-	}
-	if rewriteOK {
-		if err := temporary.Sync(); err != nil {
-			rewriteOK = false
-		}
-	}
-	if err := temporary.Close(); err != nil {
-		rewriteOK = false
-	}
-	if !rewriteOK {
-		fmt.Fprintln(os.Stderr, "Cannot apply local log retention; continuing with the active log")
+	defer removeTemporaryLog(temporaryPath)
+	retained := retainNewestCompleteJSONLLines(data, maxLocalLogBytes)
+	if !writeRetentionFile(temporary, retained) {
+		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
 		return
 	}
-	if err := logger.file.Close(); err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot apply local log retention; continuing with the active log")
+	if closeErr := logger.file.Close(); closeErr != nil {
+		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
 	}
 	logger.file = nil
-	if err := os.Rename(temporaryPath, path); err != nil {
-		// Some supported filesystems cannot replace an existing destination.
-		// The producer is serialized here, so a bounded in-place fallback is
-		// safe; readers may observe an empty file for one polling interval.
-		file, openErr := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
-		if openErr == nil {
-			_, writeErr := file.Write(retained)
-			syncErr := file.Sync()
-			closeErr := file.Close()
-			if writeErr != nil || syncErr != nil || closeErr != nil {
-				fmt.Fprintln(os.Stderr, "Cannot apply local log retention; retained log may be incomplete")
-			}
-		} else {
-			fmt.Fprintln(os.Stderr, "Cannot apply local log retention; continuing with a fresh active log")
-		}
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
+	replaceRetainedLog(temporaryPath, path, retained)
+	file, reopenErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if reopenErr != nil {
 		logger.logger = slog.New(newJSONLineHandler(os.Stderr))
 		logger.fallback = true
 		fmt.Fprintln(os.Stderr, "Cannot reopen local log after retention; falling back to stderr logging")
 		return
 	}
-	if err := file.Chmod(0o600); err != nil {
+	if chmodErr := file.Chmod(0o600); chmodErr != nil {
 		_ = file.Close()
 		logger.logger = slog.New(newJSONLineHandler(os.Stderr))
 		logger.fallback = true
@@ -399,6 +375,50 @@ func (logger *Logger) trimLocked() {
 	}
 	logger.file = file
 	logger.logger = slog.New(newJSONLineHandler(file))
+}
+
+func logRetentionFailure(message string) { fmt.Fprintln(os.Stderr, message) }
+
+func removeTemporaryLog(path string) {
+	if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		logRetentionFailure("Cannot remove temporary local log retention file")
+	}
+}
+
+func writeRetentionFile(file *os.File, retained []byte) bool {
+	if chmodErr := file.Chmod(0o600); chmodErr != nil {
+		_ = file.Close()
+		return false
+	}
+	if _, writeErr := file.Write(retained); writeErr != nil {
+		_ = file.Close()
+		return false
+	}
+	if syncErr := file.Sync(); syncErr != nil {
+		_ = file.Close()
+		return false
+	}
+	return file.Close() == nil
+}
+
+func replaceRetainedLog(temporaryPath, path string, retained []byte) {
+	if renameErr := os.Rename(temporaryPath, path); renameErr == nil {
+		return
+	}
+	// Some supported filesystems cannot replace an existing destination. The
+	// producer is serialized here, so a bounded in-place fallback is safe;
+	// readers may observe an empty file for one polling interval.
+	file, openErr := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
+	if openErr != nil {
+		logRetentionFailure("Cannot apply local log retention; continuing with a fresh active log")
+		return
+	}
+	_, writeErr := file.Write(retained)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if writeErr != nil || syncErr != nil || closeErr != nil {
+		logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
+	}
 }
 
 // InitTelemetry is intentionally local-only. Its parameters are discarded so
@@ -455,12 +475,13 @@ func emit(logger *slog.Logger, level slog.Level, event, category, message string
 }
 
 func emitAt(logger *slog.Logger, occurredAt time.Time, level slog.Level, event, category, message string, arguments map[string]any) {
-	attrs := []slog.Attr{
-		slog.Any("schema", trustedVocabulary("dobby.log/v1")),
-		slog.Any("source", trustedVocabulary("go")),
+	attrs := make([]slog.Attr, 0, 4+len(arguments))
+	attrs = append(attrs,
+		slog.Any("schema", trustedVocabulary(logSchema)),
+		slog.Any("source", trustedVocabulary(logSource)),
 		slog.Any("event", trustedEventName(event)),
 		slog.String("category", category),
-	}
+	)
 	keys := make([]string, 0, len(arguments))
 	for key := range arguments {
 		keys = append(keys, key)

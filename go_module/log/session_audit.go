@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v1"
 )
 
 // SessionAuditSink renders sessionapi/v1's configuration-free diagnostic
@@ -34,7 +34,7 @@ func (SessionAuditSink) RecordAudit(event v1.AuditEvent) {
 				fields["failure_code"] = event.Failure
 			}
 		}
-	case "state.transition":
+	case v1.AuditEventStateTransition:
 		level = slog.LevelInfo
 		message = fmt.Sprintf("session state changed %s -> %s", event.PreviousState, event.State)
 		fields["state_before"] = event.PreviousState
@@ -42,7 +42,7 @@ func (SessionAuditSink) RecordAudit(event v1.AuditEvent) {
 		if event.State == v1.StateFailed {
 			level = slog.LevelError
 		}
-	case "status.snapshot":
+	case v1.AuditEventStatusSnapshot:
 		message = fmt.Sprintf(
 			"session status state=%s generation=%d configured=%t cleanupComplete=%t",
 			event.State, event.Generation, event.Configured, event.CleanupComplete,
@@ -56,7 +56,7 @@ func (SessionAuditSink) RecordAudit(event v1.AuditEvent) {
 	if event.Sequence != 0 {
 		fields["sequence"] = event.Sequence
 	}
-	if event.Event == "state.transition" || event.Event == "status.snapshot" {
+	if event.Event == v1.AuditEventStateTransition || event.Event == v1.AuditEventStatusSnapshot {
 		fields["configured"] = event.Configured
 		fields["cleanup_complete"] = event.CleanupComplete
 	}

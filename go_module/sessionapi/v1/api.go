@@ -343,9 +343,9 @@ func (m *Manager) Configure(_ context.Context, sessionID, commandID string, rawC
 			s.mu.Unlock()
 			return ConfigureResult{}, failure(FailureConflict, "command ID was used by another operation")
 		}
-		result, saved := cloneConfigure(record.config), record.err
+		cachedResult, saved := cloneConfigure(record.config), record.err
 		s.mu.Unlock()
-		return result, saved
+		return cachedResult, saved
 	}
 	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping {
 		err := failure(FailureConflict, "cannot configure while a generation is active")
@@ -405,9 +405,9 @@ func (m *Manager) ConfigureCompatibilityProfile(_ context.Context, sessionID, co
 			s.mu.Unlock()
 			return ConfigureResult{}, failure(FailureConflict, "command ID was used by another operation")
 		}
-		result, saved := cloneConfigure(record.config), record.err
+		cachedResult, saved := cloneConfigure(record.config), record.err
 		s.mu.Unlock()
-		return result, saved
+		return cachedResult, saved
 	}
 	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || !s.cleanupDone {
 		err := failure(FailureConflict, "cannot configure while a generation is active")
@@ -449,9 +449,9 @@ func (m *Manager) Start(requestCtx context.Context, sessionID, commandID string,
 			s.mu.Unlock()
 			return StartResult{}, failure(FailureConflict, "command ID was used by another operation")
 		}
-		result, saved := record.start, record.err
+		cachedResult, saved := record.start, record.err
 		s.mu.Unlock()
-		return result, saved
+		return cachedResult, saved
 	}
 	if !s.configured {
 		err := failure(FailureNotConfigured, "configure a session before starting it")
@@ -890,9 +890,9 @@ func (m *Manager) appendLocked(s *session, e Event) {
 	e.SessionID, e.Sequence = s.id, s.sequence
 	s.events = append(s.events, e)
 
-	eventName := "status.snapshot"
+	eventName := AuditEventStatusSnapshot
 	if s.auditState != e.State {
-		eventName = "state.transition"
+		eventName = AuditEventStateTransition
 	}
 	auditEvent := AuditEvent{
 		Event: eventName, Generation: e.Generation, Sequence: e.Sequence,

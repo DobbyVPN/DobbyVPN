@@ -181,18 +181,8 @@ class LogsRepository(
                     var current: StoredRecord? = null
                     while (true) {
                         val line = source.readUtf8Line() ?: break
-                        if (line.isBlank()) continue
-                        val timestamp = comparableLogTimestamp(line)
-                        if (timestamp != null || current == null || line.startsWith("{")) {
-                            current = StoredRecord(
-                                timestamp = timestamp,
-                                producerIndex = producerIndex,
-                                recordIndex = records.size,
-                                lines = mutableListOf(line),
-                            )
-                            records += current
-                        } else {
-                            current.lines += line
+                        if (line.isNotBlank()) {
+                            current = appendRecord(records, current, line, producerIndex)
                         }
                     }
                     records
@@ -202,6 +192,25 @@ class LogsRepository(
             reportLogFailure("read", it)
             emptyList()
         }
+    }
+
+    private fun appendRecord(
+        records: MutableList<StoredRecord>,
+        current: StoredRecord?,
+        line: String,
+        producerIndex: Int,
+    ): StoredRecord {
+        val timestamp = comparableLogTimestamp(line)
+        if (timestamp == null && current != null && !line.startsWith("{")) {
+            current.lines += line
+            return current
+        }
+        return StoredRecord(
+            timestamp = timestamp,
+            producerIndex = producerIndex,
+            recordIndex = records.size,
+            lines = mutableListOf(line),
+        ).also(records::add)
     }
 
     private data class StoredRecord(

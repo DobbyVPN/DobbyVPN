@@ -42,6 +42,22 @@ class LogRedactionTest {
     }
 
     @Test
+    fun redacts_compound_sensitive_field_names() {
+        listOf(
+            "sessionToken",
+            "proxyUrl",
+            "serverHost",
+            "api_key_hash",
+            "command-id",
+            "configurationPath",
+        ).forEach { key ->
+            assertEquals("[REDACTED]", redactLogField(key, "opaque-secret"), key)
+        }
+        assertEquals("CONNECTED", redactLogField("sessionState", "CONNECTED"))
+        assertEquals("Logger.swift", redactLogField("source", "Logger.swift"))
+    }
+
+    @Test
     fun encodes_machine_json_and_renders_one_human_readable_line() {
         val encoded = encodeLogEvent(
             timestamp = "2026-07-29T12:34:56.789Z",
@@ -63,7 +79,6 @@ class LogRedactionTest {
             renderLogLine(encoded),
         )
     }
-
 
     @Test
     fun preserves_legacy_failure_and_warning_severity() {

@@ -7,6 +7,7 @@ private val sensitiveKeys = listOf(
     "remote", "proxy", "gateway", "dest(?:ination)?", "resolved", "path", "file",
     "directory", "session[_-]?id", "command[_-]?id",
 ).joinToString("|")
+private val sensitiveFieldKeyPattern = Regex("(?i)($sensitiveKeys)")
 private val secretPattern = Regex(
     """(?i)(["']?(?:$sensitiveKeys)["']?\s*[:=]\s*)""" +
         """(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,}\]]+)""",
@@ -46,4 +47,4 @@ fun redactLog(message: String): String {
 }
 
 internal fun redactLogField(key: String, value: String): String =
-    if (Regex("(?i)^($sensitiveKeys)$").matches(key)) "[REDACTED]" else redactLog(value)
+    if (sensitiveFieldKeyPattern.containsMatchIn(key)) "[REDACTED]" else redactLog(value)

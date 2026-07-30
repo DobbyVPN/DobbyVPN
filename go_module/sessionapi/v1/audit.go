@@ -6,8 +6,13 @@ import (
 )
 
 const (
-	defaultAuditBuffer       = 256
-	defaultAuditFlushTimeout = 2 * time.Second
+	defaultAuditBuffer        = 256
+	defaultAuditFlushTimeout  = 2 * time.Second
+	auditEventOperation       = "operation"
+	AuditEventStateTransition = "state.transition"
+	AuditEventStatusSnapshot  = "status.snapshot"
+	auditPhaseBegin           = "begin"
+	auditPhaseEnd             = "end"
 )
 
 // AuditEvent is a safe, configuration-free diagnostic fact. It deliberately
@@ -143,7 +148,7 @@ func (r *auditRecorder) begin(operation string) auditOperation {
 		return auditOperation{}
 	}
 	started := time.Now()
-	r.record(AuditEvent{OccurredAt: started, Event: "operation", Operation: operation, Phase: "begin"})
+	r.record(AuditEvent{OccurredAt: started, Event: auditEventOperation, Operation: operation, Phase: auditPhaseBegin})
 	return auditOperation{recorder: r, operation: operation, started: started}
 }
 
@@ -156,9 +161,9 @@ func (operation auditOperation) result(err error) AuditEvent {
 	}
 	return AuditEvent{
 		OccurredAt:     time.Now(),
-		Event:          "operation",
+		Event:          auditEventOperation,
 		Operation:      operation.operation,
-		Phase:          "end",
+		Phase:          auditPhaseEnd,
 		Outcome:        outcome,
 		DurationMillis: time.Since(operation.started).Milliseconds(),
 		Failure:        failureCode,
@@ -184,7 +189,7 @@ func (r *auditRecorder) snapshot(snapshot SnapshotResult, reason string) {
 		return
 	}
 	event := AuditEvent{
-		Event:           "status.snapshot",
+		Event:           AuditEventStatusSnapshot,
 		Operation:       reason,
 		Generation:      snapshot.Generation,
 		State:           snapshot.State,

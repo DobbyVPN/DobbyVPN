@@ -1,15 +1,19 @@
 package com.dobby.feature.logging.domain
 
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
-private const val LOG_SCHEMA = "dobby.log/v1"
+private const val LogSchema = "dobby.log/v1"
+private const val SortableTimestampLength = 19
+private const val ReadableTimestampLength = 23
+private const val RenderedLevelWidth = 5
 private val stableEventName = Regex("[a-z0-9][a-z0-9_.-]*")
+private val legacyTimestampPrefix = Regex("""^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})]""")
 private val logJson = Json { ignoreUnknownKeys = true }
 
 enum class LogLevel {
@@ -49,7 +53,7 @@ internal fun encodeLogEvent(
     message: String,
     fields: Map<String, String> = emptyMap(),
 ): String = buildJsonObject {
-    put("schema", LOG_SCHEMA)
+    put("schema", LogSchema)
     put("timestamp", timestamp)
     put("level", level.name)
     put("source", source.takeIf(stableEventName::matches) ?: "app")
@@ -71,7 +75,7 @@ internal fun renderLogLine(line: String): String {
     if (!line.startsWith("{")) return line
     return runCatching {
         val event = logJson.parseToJsonElement(line).jsonObject
-        if (event["schema"]?.jsonPrimitive?.content != LOG_SCHEMA) return@runCatching line
+        if (event["schema"]?.jsonPrimitive?.content != LogSchema) return@runCatching line
         val timestamp = event["timestamp"]?.jsonPrimitive?.content.orEmpty()
         val level = event["level"]?.jsonPrimitive?.content.orEmpty().ifEmpty { LogLevel.INFO.name }
         val source = event["source"]?.jsonPrimitive?.content.orEmpty()
@@ -79,7 +83,7 @@ internal fun renderLogLine(line: String): String {
         val readableTimestamp = timestamp
             .replace('T', ' ')
             .removeSuffix("Z")
-            .take(23)
+            .take(ReadableTimestampLength)
         val attributes = buildList {
             (event["fields"] as? JsonObject)?.toSortedMap()?.forEach { (key, value) ->
                 add("$key=${value.jsonPrimitive.content}")
@@ -93,7 +97,7 @@ internal fun renderLogLine(line: String): String {
         }
         val details = attributes.takeIf { it.isNotEmpty() }?.joinToString(prefix = " · ", separator = " · ").orEmpty()
         val readableSource = source.takeIf { it.isNotEmpty() }?.let { " [$it]" }.orEmpty()
-        "[$readableTimestamp] [${level.padEnd(5)}]$readableSource $message$details"
+        "[$readableTimestamp] [${level.padEnd(RenderedLevelWidth)}]$readableSource $message$details"
     }.getOrDefault(line)
 }
 
@@ -109,13 +113,8 @@ internal fun comparableLogTimestamp(line: String): String? {
         val timestamp = runCatching {
             logJson.parseToJsonElement(line).jsonObject["timestamp"]?.jsonPrimitive?.content
         }.getOrNull() ?: return null
-        if (timestamp.length < 19) return null
+        if (timestamp.length < SortableTimestampLength) return null
         return timestamp.replace('T', ' ')
     }
-    if (line.length < 21 || line.first() != '[' || line[20] != ']') return null
-    val timestamp = line.substring(1, 20)
-    val looksValid = timestamp.length == 19 &&
-        timestamp[4] == '-' && timestamp[7] == '-' && timestamp[10] == ' ' &&
-        timestamp[13] == ':' && timestamp[16] == ':'
-    return timestamp.takeIf { looksValid }
+    return legacyTimestampPrefix.find(line)?.groupValues?.get(1)
 }
