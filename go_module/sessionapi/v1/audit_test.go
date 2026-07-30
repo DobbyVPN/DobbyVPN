@@ -17,6 +17,11 @@ func TestAuditPreservesActionTransitionAndStatusContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if destroyErr := manager.DestroySession(context.Background(), sessionID); destroyErr != nil {
+			t.Errorf("destroy audit test session: %v", destroyErr)
+		}
+	})
 	requireConfiguredSnapshot(t, manager, sessionID)
 	recorded := receiveAuditEvents(t, events, 10)
 

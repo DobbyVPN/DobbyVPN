@@ -25,6 +25,10 @@ const (
 	logSource        = "go"
 )
 
+var sourceFileSuffixes = []string{
+	".go", ".swift", ".kt", ".kts", ".proto", ".json", ".toml", ".yaml", ".yml", ".xml", ".md",
+}
+
 var (
 	forbiddenMu    sync.RWMutex
 	forbiddenWords = make([]string, 0)
@@ -40,7 +44,7 @@ var (
 	ipv6Pattern            = regexp.MustCompile(`(?i)\b[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){2,7}\b`)
 	hostnamePattern        = regexp.MustCompile(`(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|local|invalid)\b`)
 	stableEventPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
-	secretPattern          = regexp.MustCompile(`(?i)(["']?(?:token|api[_-]?key|password|secret|credential|authorization|auth|endpoint|url|config|server(?:ip|_ip)?|host|address|remote|proxy|gateway|dest(?:ination)?|resolved)["']?\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,}\]]+)`)
+	secretPattern          = regexp.MustCompile(`(?i)(["']?(?:token|api[_-]?key|password|secret|credential|authorization|auth|endpoint|url|config|server(?:ip|_ip)?|host|address|remote|proxy|gateway|dest(?:ination)?|resolved|path|file|directory|session[_-]?id|command[_-]?id)["']?\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,}\]]+)`)
 	tomlPattern            = regexp.MustCompile(`(?m)^\s*\[{1,2}[A-Za-z0-9_.-]+\]{1,2}\s*$`)
 	jsonConfig             = regexp.MustCompile(`["'][A-Za-z0-9_.-]+["']\s*:`)
 )
@@ -80,7 +84,10 @@ func MaskStr(input string) string {
 
 func isSensitiveKey(key string) bool {
 	key = strings.ToLower(key)
-	for _, marker := range []string{"config", "url", "endpoint", "token", "password", "secret", "credential", "authorization", "auth", "api_key", "apikey", "server", "host", "address"} {
+	for _, marker := range []string{
+		"token", "api_key", "api-key", "apikey", "password", "secret", "credential", "authorization", "auth", "endpoint", "url", "config", "server", "host", "address",
+		"remote", "proxy", "gateway", "dest", "resolved", "path", "file", "directory", "session-id", "session_id", "command-id", "command_id",
+	} {
 		if strings.Contains(key, marker) {
 			return true
 		}
@@ -105,7 +112,7 @@ func redactText(message string) string {
 	})
 	message = hostnamePattern.ReplaceAllStringFunc(message, func(candidate string) string {
 		lower := strings.ToLower(candidate)
-		for _, sourceSuffix := range []string{".go", ".swift", ".kt", ".kts", ".proto", ".json", ".toml", ".yaml", ".yml", ".xml", ".md"} {
+		for _, sourceSuffix := range sourceFileSuffixes {
 			if strings.HasSuffix(lower, sourceSuffix) {
 				return candidate
 			}
@@ -160,9 +167,9 @@ func redactValue(key string, value any) any {
 		}
 		return out
 	case error:
-		return "[REDACTED ERROR]"
+		return maskMessage(typed.Error())
 	case fmt.Stringer:
-		return "[REDACTED VALUE]"
+		return maskMessage(typed.String())
 	default:
 		return value
 	}
@@ -475,6 +482,10 @@ func emit(logger *slog.Logger, level slog.Level, event, category, message string
 }
 
 func emitAt(logger *slog.Logger, occurredAt time.Time, level slog.Level, event, category, message string, arguments map[string]any) {
+	ctx := context.Background()
+	if !logger.Enabled(ctx, level) {
+		return
+	}
 	attrs := make([]slog.Attr, 0, 4+len(arguments))
 	attrs = append(attrs,
 		slog.Any("schema", trustedVocabulary(logSchema)),
@@ -489,10 +500,6 @@ func emitAt(logger *slog.Logger, occurredAt time.Time, level slog.Level, event, 
 	sort.Strings(keys)
 	for _, key := range keys {
 		attrs = append(attrs, slog.Any(key, redactValue(key, arguments[key])))
-	}
-	ctx := context.Background()
-	if !logger.Enabled(ctx, level) {
-		return
 	}
 	record := slog.NewRecord(occurredAt, level, maskMessage(fmt.Sprintf("[%s] %s", category, message)), 0)
 	record.AddAttrs(attrs...)

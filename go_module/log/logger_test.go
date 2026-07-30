@@ -16,6 +16,10 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+type diagnosticStringer string
+
+func (value diagnosticStringer) String() string { return string(value) }
+
 func TestLocalLogsRedactURLsCredentialsConfigurationAndMetadata(t *testing.T) {
 	message := maskMessage("connect https://user:password@example.invalid/path token=super-secret")
 	structured := fmt.Sprint(redactValue("metadata", map[string]any{
@@ -55,7 +59,7 @@ func TestLocalLogsRedactURLsCredentialsConfigurationAndMetadata(t *testing.T) {
 	record := slog.NewRecord(time.Now(), slog.LevelInfo, "Password=handler-secret", 0)
 	record.AddAttrs(
 		slog.String("endpoint", "vpn.example.invalid:443"),
-		slog.Any("failure", fmt.Errorf("dial vpn.example.invalid: nested-secret")),
+		slog.Any("failure", fmt.Errorf("dial vpn.example.invalid: token=nested-secret")),
 		slog.String("source", "https://source-secret@example.invalid/private"),
 		slog.String("event", "https://event-secret@example.invalid/private"),
 	)
@@ -82,6 +86,29 @@ func TestLocalLogsRedactURLsCredentialsConfigurationAndMetadata(t *testing.T) {
 	}
 	if decoded["message"] != "Password=[REDACTED]" || decoded["endpoint"] != "[REDACTED]" {
 		t.Fatalf("handler did not redact fields: %#v", decoded)
+	}
+}
+
+func TestDiagnosticValuesKeepSafeFactsAndRedactSensitiveText(t *testing.T) {
+	AddForbiddenWord("forbidden-diagnostic")
+	t.Cleanup(func() { RemoveForbiddenWord("forbidden-diagnostic") })
+	values := []any{
+		fmt.Errorf("state=connected duration=42ms remote=vpn.example.invalid:443 token=error-secret forbidden-diagnostic"),
+		diagnosticStringer("state=idle duration=7ms gateway=198.51.100.5 api-key=stringer-secret forbidden-diagnostic"),
+	}
+	for _, value := range values {
+		got, ok := redactValue("diagnostic", value).(string)
+		if !ok {
+			t.Fatalf("diagnostic value type = %T, want string", redactValue("diagnostic", value))
+		}
+		for _, secret := range []string{"vpn.example.invalid", "error-secret", "198.51.100.5", "stringer-secret", "forbidden-diagnostic"} {
+			if strings.Contains(got, secret) {
+				t.Fatalf("diagnostic leaked %q: %s", secret, got)
+			}
+		}
+		if !strings.Contains(got, "state=") || !strings.Contains(got, "duration=") || !strings.Contains(got, "[REDACTED") {
+			t.Fatalf("diagnostic lost safe facts or redaction: %s", got)
+		}
 	}
 }
 
