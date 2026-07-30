@@ -20,8 +20,8 @@ import org.koin.dsl.module
 class TestApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        initLogFilePath(applicationContext)
         if (TestRuntimeOptions.realProfileEnabled) {
-            initLogFilePath(applicationContext)
             initLogger()
         }
         DobbyVpnService.nativePlatformRegistrar = if (TestRuntimeOptions.realProfileEnabled) {
