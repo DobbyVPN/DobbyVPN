@@ -303,6 +303,28 @@ def main() -> int:
             violations.append(
                 f"installers_build.yml: macOS {arch} service must be downloaded into its architecture-specific path"
             )
+
+    # The Windows desktop archive, VPN service, and bridge are all amd64
+    # binaries. Publishing x86 or arm64 MSI wrappers around those payloads
+    # would create installers that cannot run on their advertised targets.
+    windows_installer = (ROOT.parent / "installer" / "windows" / "build.bat").read_text(
+        encoding="utf-8"
+    )
+    for unsupported in ("dobbyVPN-windows-x86.msi", "dobbyVPN-windows-arm64.msi"):
+        if unsupported in installers or unsupported in promotion:
+            violations.append(
+                f"Windows installer contract: {unsupported} must not be published without matching native payloads"
+            )
+    for expected in (
+        "call :msi amd64 x64",
+        '-d "DOBBYVPN_PLATFORM=%1"',
+        "cmd /c exit 1\n\t\t\tgoto :error",
+        ":error\n\techo [-] Failed.\n\texit /b 1",
+    ):
+        if expected not in windows_installer:
+            violations.append(
+                f"installer/windows/build.bat: missing fail-closed amd64 installer control: {expected}"
+            )
     if violations:
         print("Workflow secret-isolation policy failed:", file=sys.stderr)
         print("\n".join(f"- {item}" for item in violations), file=sys.stderr)

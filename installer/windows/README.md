@@ -41,11 +41,7 @@ Creates folders in this structure:
 
 ```
 .
-├── bin/
-│   ├── amd64/
-│   │   └── dobbyVPN-windows-amd64.msi
-│   │   x86/
-│   │   └── dobbyVPN-windows-x86.msi
-│   │   arm64/
-└── └── └── dobbyVPN-windows-arm64.msi
+└── bin/
+    └── amd64/
+        └── dobbyVPN-windows-amd64.msi
 ```

@@ -118,28 +118,12 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
 
-      - name: Upload Windows x86 installer
-        if: matrix.os == 'windows'
-        uses: actions/upload-artifact@v7
-        with:
-          name: dobbyVPN-windows-x86.msi
-          path: installer/windows/bin/x86/dobbyVPN-windows-x86.msi
-          if-no-files-found: error
-
       - name: Upload Windows amd64 installer
         if: matrix.os == 'windows'
         uses: actions/upload-artifact@v7
         with:
           name: dobbyVPN-windows-amd64.msi
           path: installer/windows/bin/amd64/dobbyVPN-windows-amd64.msi
-          if-no-files-found: error
-
-      - name: Upload Windows arm64 installer
-        if: matrix.os == 'windows'
-        uses: actions/upload-artifact@v7
-        with:
-          name: dobbyVPN-windows-arm64.msi
-          path: installer/windows/bin/arm64/dobbyVPN-windows-arm64.msi
           if-no-files-found: error
 
       - name: Upload MacOS amd64 installer

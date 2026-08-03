@@ -113,8 +113,6 @@ jobs:
                   "dobbyVPN-macos-aarch64.pkg" \
                   "dobbyVPN-macos-amd64.pkg" \
                   "dobbyVPN-windows-amd64.msi" \
-                  "dobbyVPN-windows-arm64.msi" \
-                  "dobbyVPN-windows-x86.msi" \
                   "version.txt" |
                   sort
               )"
@@ -143,31 +141,11 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ inputs.run_id }}
 
-      - name: Download Windows x86 package
-        if: steps.preflight.outputs.release_state != 'published'
-        uses: actions/download-artifact@v7
-        with:
-          name: dobbyVPN-windows-x86.msi
-          path: release
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.run_id }}
-
       - name: Download Windows amd64 package
         if: steps.preflight.outputs.release_state != 'published'
         uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-windows-amd64.msi
-          path: release
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.run_id }}
-
-      - name: Download Windows arm64 package
-        if: steps.preflight.outputs.release_state != 'published'
-        uses: actions/download-artifact@v7
-        with:
-          name: dobbyVPN-windows-arm64.msi
           path: release
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}

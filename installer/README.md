@@ -33,9 +33,7 @@ installers/
 
 | Platform | Output Format | Architecture | Status |
 | --- | --- | --- | --- |
-| Windows   | .msi | x86        | ✅ Supported | 
 | Windows   | .msi | amd64      | ✅ Supported | 
-| Windows   | .msi | arm64      | ✅ Supported | 
 | MacOS     | .pkg | amd64      | ✅ Supported | 
 | MacOS     | .pkg | aarch64    | ✅ Supported | 
 
@@ -63,14 +61,10 @@ cd windows/
 ### Output
 ```
 installers/
-├── windows/
-│   ├── bin/
-│   │   ├── x86/
-│   │   │   └── dobbyVPN-windows-x86.msi
-│   │   ├── amd64/
-│   │   │   └── dobbyVPN-windows-amd64.msi
-│   │   ├── arm64/
-└── └── └── └── dobbyVPN-windows-arm64.msi
+└── windows/
+    └── bin/
+        └── amd64/
+            └── dobbyVPN-windows-amd64.msi
 ```
 
 ## MacOS Installer
