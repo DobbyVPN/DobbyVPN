@@ -17,7 +17,9 @@ jobs:
     env:
       PR_TITLE: ${{ github.event.pull_request.title }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Match the PR release label to VERSION
         run: |
           set -euo pipefail
@@ -36,19 +38,25 @@ jobs:
     name: Workflow secret-isolation policy
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Enforce secretless PR workflow policy
-        run: python3 .github/scripts/check_workflow_policy.py
+        run: |
+          python3 .github/scripts/check_workflow_policy.py
+          python3 .github/scripts/test_select_ios_simulator.py
+          python3 .github/scripts/test_check_swift_coverage.py
 
   go:
     name: Go tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
+          persist-credentials: false
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: .go-version
           cache-dependency-path: go_module/go.sum
@@ -65,14 +73,15 @@ jobs:
     name: Kotlin and Android service tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
+          persist-credentials: false
 
       # gomobile currently needs a bootstrap toolchain to build the configured
       # Android Go toolchain from source. Keep this aligned with android_build.
       - name: Set up bootstrap Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.24.4'
 
@@ -81,7 +90,7 @@ jobs:
         run: echo "version=$(cat .go-version)" >> "$GITHUB_OUTPUT"
 
       - name: Cache Android Go toolchain
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .ci-cache/go-android
           key: ${{ runner.os }}-android-go-${{ steps.android_go.outputs.version }}
@@ -115,7 +124,7 @@ jobs:
             kmp_module/gradle/wrapper/gradle-wrapper.properties
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: >
             platforms;android-35
@@ -147,22 +156,23 @@ jobs:
     needs: ios_libraries
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
+          persist-credentials: false
 
       - name: Select Xcode 26.3
         run: sudo xcode-select -s /Applications/Xcode_26.3.app
 
       - name: Download iOS native dependencies
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: MyLibrary.xcframework
           path: swift_module/MyLibrary.xcframework
           merge-multiple: true
 
       - name: Download Kotlin framework
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: app.framework
           path: swift_module/app.framework
@@ -183,25 +193,65 @@ jobs:
     name: iOS production lifecycle policy tests
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
-      - name: Run production-source iOS lifecycle policy tests
-        run: swift test --enable-code-coverage --package-path swift_module
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+
+      - name: Run and ratchet production-source iOS lifecycle policy coverage
+        run: |
+          set -euo pipefail
+          swift test --enable-code-coverage --package-path swift_module
+          BUILD_PATH="$(swift build --show-bin-path --package-path swift_module)"
+          COVERAGE_PROFILE="$(find "$BUILD_PATH" -type f -path '*/codecov/default.profdata' -print -quit)"
+          TEST_EXECUTABLE="$(find "$BUILD_PATH" -type f -path '*.xctest/Contents/MacOS/*PackageTests' -perm -111 -print -quit)"
+          test -f "$COVERAGE_PROFILE"
+          test -x "$TEST_EXECUTABLE"
+
+          COVERAGE_LCOV="$RUNNER_TEMP/swift-lifecycle-core.lcov"
+          COVERAGE_SUMMARY="$RUNNER_TEMP/swift-lifecycle-core-coverage.md"
+          xcrun llvm-cov export \
+            "$TEST_EXECUTABLE" \
+            -instr-profile="$COVERAGE_PROFILE" \
+            -format=lcov > "$COVERAGE_LCOV"
+          set +e
+          python3 .github/scripts/check_swift_coverage.py \
+            --lcov "$COVERAGE_LCOV" \
+            --source-root "$GITHUB_WORKSPACE/swift_module/CommonDI" \
+            --baseline .github/swift-lifecycle-coverage-baseline.json \
+            --summary "$COVERAGE_SUMMARY"
+          coverage_status=$?
+          set -e
+          cat "$COVERAGE_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+          exit "$coverage_status"
+
+      - name: Upload Swift lifecycle-core coverage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: swift-lifecycle-core-coverage
+          path: |
+            ${{ runner.temp }}/swift-lifecycle-core.lcov
+            ${{ runner.temp }}/swift-lifecycle-core-coverage.md
+          if-no-files-found: error
 
   ios_simulator_core:
     name: iOS Simulator shared-core and unsigned app checks
     needs: ios_libraries
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
+          persist-credentials: false
 
       - name: Select Xcode 26.3
         run: sudo xcode-select -s /Applications/Xcode_26.3.app
 
       - name: Download iOS native dependencies
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: MyLibrary.xcframework
           path: swift_module/MyLibrary.xcframework
@@ -233,7 +283,7 @@ jobs:
             kmp_module/app/build/bin/iosSimulatorArm64/debugFramework/app.framework \
             swift_module/app.framework
 
-          SIMULATOR_UDID="$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.isAvailable and (.name | startswith("iPhone")))][0].udid')"
+          SIMULATOR_UDID="$(xcrun simctl list devices available -j | python3 .github/scripts/select_ios_simulator.py)"
           test -n "$SIMULATOR_UDID"
           test "$SIMULATOR_UDID" != "null"
           xcrun simctl boot "$SIMULATOR_UDID" || true

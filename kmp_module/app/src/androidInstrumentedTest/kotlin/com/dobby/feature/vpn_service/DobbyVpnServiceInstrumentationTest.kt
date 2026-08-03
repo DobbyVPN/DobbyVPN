@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
-import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -100,8 +99,12 @@ class DobbyVpnServiceInstrumentationTest {
         // releaseTunnel; this direct service test must faithfully take and close that ownership.
         acquiredTunnel = AcquiredTunnel(service, session, generation, fd, ParcelFileDescriptor.adoptFd(fd))
 
-        val vpn = awaitVpnNetwork(present = true)
-        val linkProperties = requireNotNull(connectivityManager.getLinkProperties(vpn))
+        val vpn = requireNotNull(connectivityManager.awaitVpnNetworkState(
+            present = true,
+            timeoutMillis = NETWORK_TIMEOUT_MILLIS,
+            pollIntervalMillis = POLL_INTERVAL_MILLIS
+        ))
+        val linkProperties = vpn.linkProperties
         assertTrue(!linkProperties.interfaceName.isNullOrBlank())
         assertTrue(linkProperties.linkAddresses.any { it.address.hostAddress == "10.7.0.2" })
         assertTrue(linkProperties.routes.any { it.destination.toString() == "0.0.0.0/0" })
@@ -148,17 +151,11 @@ class DobbyVpnServiceInstrumentationTest {
     }
 
     private fun awaitVpnNetwork(present: Boolean): Network? {
-        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(NETWORK_TIMEOUT_MILLIS)
-        while (System.nanoTime() < deadline) {
-            val vpn = connectivityManager.allNetworks.firstOrNull { network ->
-                connectivityManager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
-            }
-            if ((vpn != null) == present) return vpn
-            Thread.sleep(POLL_INTERVAL_MILLIS)
-        }
-        return connectivityManager.allNetworks.firstOrNull { network ->
-            connectivityManager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
-        }
+        return connectivityManager.awaitVpnNetwork(
+            present = present,
+            timeoutMillis = NETWORK_TIMEOUT_MILLIS,
+            pollIntervalMillis = POLL_INTERVAL_MILLIS
+        )
     }
 
     private fun sendAndObserveVpnPacket(service: DobbyVpnService): Boolean {

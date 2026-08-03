@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
-import android.net.NetworkCapabilities
 import android.net.VpnService
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -181,17 +180,11 @@ class PrivateProfileInstrumentationTest {
 
     private fun awaitVpnNetwork(present: Boolean): Network? {
         val manager = requireNotNull(context.getSystemService(ConnectivityManager::class.java))
-        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(NETWORK_TIMEOUT_MILLIS)
-        while (System.nanoTime() < deadline) {
-            val vpn = manager.allNetworks.firstOrNull { network ->
-                manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
-            }
-            if ((vpn != null) == present) return vpn
-            Thread.sleep(POLL_INTERVAL_MILLIS)
-        }
-        return manager.allNetworks.firstOrNull { network ->
-            manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
-        }
+        return manager.awaitVpnNetwork(
+            present = present,
+            timeoutMillis = NETWORK_TIMEOUT_MILLIS,
+            pollIntervalMillis = POLL_INTERVAL_MILLIS
+        )
     }
 
     private fun fetchIdentity(rawUrl: String): String = try {

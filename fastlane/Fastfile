@@ -252,6 +252,13 @@ platform :ios do
       platform: "ios",
       app_version: version,
       build_number: selected_build,
+      copyright: "#{Time.now.year} DobbyVPN contributors",
+      support_url: {
+        "en-US" => "https://github.com/DobbyVPN/DobbyVPN/issues"
+      },
+      privacy_url: {
+        "en-US" => "https://github.com/DobbyVPN/DobbyVPN/blob/main/docs/Privacy_Policy.md"
+      },
       skip_binary_upload: true,
       skip_screenshots: true,
       submit_for_review: true,

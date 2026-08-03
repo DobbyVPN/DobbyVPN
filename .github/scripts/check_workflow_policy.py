@@ -31,6 +31,32 @@ def main() -> int:
                 violations.append(
                     f"{workflow.name}: pull_request workflow references non-GITHUB_TOKEN secrets: {', '.join(exposed)}"
                 )
+
+    # GitHub retired the Node runtimes used by these major versions. Keep the
+    # official action-major policy explicit so a copied legacy step cannot
+    # silently reintroduce the warning (or depend on GitHub's compatibility shim).
+    for action_file in sorted((ROOT / "actions").rglob("*.yml")) + sorted(WORKFLOWS.glob("*.yml")):
+        action_text = action_file.read_text(encoding="utf-8")
+        relative = action_file.relative_to(ROOT)
+        for legacy, replacement in (
+            ("actions/checkout@v4", "actions/checkout@v5"),
+            ("actions/download-artifact@v4", "actions/download-artifact@v7"),
+            ("actions/download-artifact@v5", "actions/download-artifact@v7"),
+            ("actions/download-artifact@v6", "actions/download-artifact@v7"),
+            ("actions/upload-artifact@v4", "actions/upload-artifact@v7"),
+            ("actions/upload-artifact@v5", "actions/upload-artifact@v7"),
+            ("actions/upload-artifact@v6", "actions/upload-artifact@v7"),
+            ("actions/cache@v4", "actions/cache@v5"),
+            ("actions/setup-go@v5", "actions/setup-go@v6"),
+            ("actions/setup-java@v4", "actions/setup-java@v5"),
+            ("android-actions/setup-android@v3", "android-actions/setup-android@v4"),
+            ("peter-evans/create-pull-request@v7", "peter-evans/create-pull-request@v8"),
+            ("gradle/actions/setup-gradle@06832c7b30a0129d7fb559bcc6e43d26f6374244", "gradle/actions/setup-gradle@v5"),
+            ("microsoft/setup-msbuild@v1.1", "microsoft/setup-msbuild@v3"),
+            ("microsoft/setup-msbuild@v2", "microsoft/setup-msbuild@v3"),
+        ):
+            if legacy in action_text:
+                violations.append(f"{relative}: use {replacement}; {legacy} uses a retired Node runtime")
     release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
     if PR_TRIGGER.search(release):
         violations.append("release.yml: protected release workflow must not run on pull_request")
@@ -116,6 +142,9 @@ def main() -> int:
         'ENV.fetch("APP_STORE_VERSION")',
         'ENV.fetch("APP_STORE_BUILD_NUMBER")',
         "build_number: selected_build",
+        'copyright: "#{Time.now.year} DobbyVPN contributors"',
+        '"en-US" => "https://github.com/DobbyVPN/DobbyVPN/issues"',
+        '"en-US" => "https://github.com/DobbyVPN/DobbyVPN/blob/main/docs/Privacy_Policy.md"',
         "skip_binary_upload: true",
         "submit_for_review: true",
         "automatic_release: true",
@@ -183,6 +212,73 @@ def main() -> int:
             violations.append(f"{name}: protected workflow must not be directly PR-triggered")
         if "environment: release" not in text:
             violations.append(f"{name}: secret-consuming job must require the protected release environment")
+
+    for name in ("android_build.yml", "ios_build.yml", "submit_app_store.yml"):
+        text = (WORKFLOWS / name).read_text(encoding="utf-8")
+        ruby_version = re.search(
+            r"ruby-version:\s*['\"]?(\d+)\.(\d+)(?:\.\d+)?['\"]?(?![\d.])",
+            text,
+        )
+        if ruby_version is None or tuple(map(int, ruby_version.groups())) < (3, 3):
+            violations.append(f"{name}: protected Fastlane job must use supported Ruby 3.3+")
+
+    lint = (WORKFLOWS / "lint.yml").read_text(encoding="utf-8")
+    if "reviewdog/action-golangci-lint@c76cceaaab89abe74e649d2e34c6c9adc26662d2" not in lint:
+        violations.append("lint.yml: golangci-lint review action must use its Node 24 SHA pin")
+    for expected in (
+        "if-no-files-found: error",
+        "mapfile -d '' -t detekt_files",
+        "find kmp_module -path \"*/build/reports/detekt/*.xml\" -type f -print0 | sort -z",
+        "-fail-level=error",
+    ):
+        if expected not in lint:
+            violations.append(f"lint.yml: missing fail-closed Detekt reporting control: {expected}")
+
+    # None of these workflows pushes commits or tags. Avoid retaining the
+    # checkout token in their Git configuration after source retrieval.
+    for name in (
+        "actionlint.yml",
+        "android_build.yml",
+        "desktop_build.yml",
+        "desktop_libs_generate.yml",
+        "fdroid_scan_apk.yml",
+        "installers_build.yml",
+        "ios_build.yml",
+        "lint.yml",
+        "repair_fdroid_release.yml",
+        "security.yml",
+        "test.yml",
+    ):
+        text = (WORKFLOWS / name).read_text(encoding="utf-8")
+        checkouts = text.count("uses: actions/checkout@v5")
+        persisted = text.count("persist-credentials: false")
+        if persisted < checkouts:
+            violations.append(f"{name}: every checkout must disable persisted credentials")
+
+    for name in (
+        "android_build.yml",
+        "desktop_build.yml",
+        "desktop_libs_generate.yml",
+        "installers_build.yml",
+        "ios_build.yml",
+    ):
+        text = (WORKFLOWS / name).read_text(encoding="utf-8")
+        uploads = text.count("uses: actions/upload-artifact@v7")
+        required = text.count("if-no-files-found: error")
+        if required < uploads:
+            violations.append(f"{name}: every release artifact upload must fail when its output is missing")
+
+    test_workflow = (WORKFLOWS / "test.yml").read_text(encoding="utf-8")
+    for expected in (
+        "set +e\n          python3 .github/scripts/check_swift_coverage.py",
+        'cat "$COVERAGE_SUMMARY" >> "$GITHUB_STEP_SUMMARY"',
+        'exit "$coverage_status"',
+        "${{ runner.temp }}/swift-lifecycle-core.lcov",
+        "${{ runner.temp }}/swift-lifecycle-core-coverage.md",
+        "if-no-files-found: error",
+    ):
+        if expected not in test_workflow:
+            violations.append(f"test.yml: missing Swift coverage evidence control: {expected}")
 
     # macOS desktop artifacts are native binaries. Keep the two official runner
     # architectures and every consumer explicitly paired so an ARM service can

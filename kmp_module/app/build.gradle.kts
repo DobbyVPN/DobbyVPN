@@ -110,6 +110,7 @@ kotlin {
         target.binaries.framework {
             baseName = "app"
             isStatic = true
+            binaryOption("bundleId", "vpn.dobby.app.shared")
         }
     }
 

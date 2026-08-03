@@ -135,7 +135,7 @@ jobs:
 
       - name: Download Linux package
         if: steps.preflight.outputs.release_state != 'published'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-linux.deb
           path: release
@@ -145,7 +145,7 @@ jobs:
 
       - name: Download Windows x86 package
         if: steps.preflight.outputs.release_state != 'published'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-windows-x86.msi
           path: release
@@ -155,7 +155,7 @@ jobs:
 
       - name: Download Windows amd64 package
         if: steps.preflight.outputs.release_state != 'published'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-windows-amd64.msi
           path: release
@@ -165,7 +165,7 @@ jobs:
 
       - name: Download Windows arm64 package
         if: steps.preflight.outputs.release_state != 'published'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-windows-arm64.msi
           path: release
@@ -175,7 +175,7 @@ jobs:
 
       - name: Download macOS amd64 package
         if: steps.preflight.outputs.release_state != 'published'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-macos-amd64.pkg
           path: release
@@ -185,7 +185,7 @@ jobs:
 
       - name: Download macOS arm64 package
         if: steps.preflight.outputs.release_state != 'published'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-macos-aarch64.pkg
           path: release
@@ -195,7 +195,7 @@ jobs:
 
       - name: Download signed Android package
         if: steps.preflight.outputs.release_state != 'published'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyvpn-android-sign.apk
           path: release
@@ -205,7 +205,7 @@ jobs:
 
       - name: Download unsigned Android package
         if: steps.preflight.outputs.release_state != 'published'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyvpn-android-unsign.apk
           path: release
@@ -215,7 +215,7 @@ jobs:
 
       - name: Download Android provenance
         if: steps.preflight.outputs.release_state != 'published'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyvpn-android-provenance
           path: release

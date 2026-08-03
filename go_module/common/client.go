@@ -1,6 +1,14 @@
 package common
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
+
+var (
+	ErrClientBusy     = errors.New("VPN client lifecycle operation is still in progress")
+	ErrClientNotFound = errors.New("VPN client is not registered")
+)
 
 type vpnClientInterface interface {
 	Connect() error
@@ -10,8 +18,8 @@ type vpnClientInterface interface {
 }
 
 type vpnClientWithState struct {
-	connected         bool
-	inCriticalSection bool
+	connected     bool
+	criticalDepth uint
 	vpnClientInterface
 }
 
@@ -23,11 +31,19 @@ type CommonClient struct {
 func (c *CommonClient) Connect(clientName string) error {
 	c.mu.Lock()
 	clientState, ok := c.vpnClients[clientName]
-	if !ok || clientState.connected || clientState.inCriticalSection {
+	if !ok {
+		c.mu.Unlock()
+		return ErrClientNotFound
+	}
+	if clientState.criticalDepth != 0 {
+		c.mu.Unlock()
+		return ErrClientBusy
+	}
+	if clientState.connected {
 		c.mu.Unlock()
 		return nil
 	}
-	clientState.inCriticalSection = true
+	clientState.criticalDepth++
 	c.vpnClients[clientName] = clientState
 	conn := clientState.vpnClientInterface
 	c.mu.Unlock()
@@ -37,7 +53,9 @@ func (c *CommonClient) Connect(clientName string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if current, exists := c.vpnClients[clientName]; exists && current.vpnClientInterface == conn {
-		current.inCriticalSection = false
+		if current.criticalDepth > 0 {
+			current.criticalDepth--
+		}
 		if err == nil {
 			current.connected = true
 		}
@@ -49,11 +67,19 @@ func (c *CommonClient) Connect(clientName string) error {
 func (c *CommonClient) Disconnect(clientName string) error {
 	c.mu.Lock()
 	clientState, ok := c.vpnClients[clientName]
-	if !ok || !clientState.connected || clientState.inCriticalSection {
+	if !ok {
+		c.mu.Unlock()
+		return ErrClientNotFound
+	}
+	if clientState.criticalDepth != 0 {
+		c.mu.Unlock()
+		return ErrClientBusy
+	}
+	if !clientState.connected {
 		c.mu.Unlock()
 		return nil
 	}
-	clientState.inCriticalSection = true
+	clientState.criticalDepth++
 	c.vpnClients[clientName] = clientState
 	conn := clientState.vpnClientInterface
 	c.mu.Unlock()
@@ -63,7 +89,9 @@ func (c *CommonClient) Disconnect(clientName string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if current, exists := c.vpnClients[clientName]; exists && current.vpnClientInterface == conn {
-		current.inCriticalSection = false
+		if current.criticalDepth > 0 {
+			current.criticalDepth--
+		}
 		if err == nil {
 			current.connected = false
 		}
@@ -75,7 +103,7 @@ func (c *CommonClient) Disconnect(clientName string) error {
 func (c *CommonClient) Refresh(clientName string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if client, ok := c.vpnClients[clientName]; ok && client.connected && !client.inCriticalSection {
+	if client, ok := c.vpnClients[clientName]; ok && client.connected && client.criticalDepth == 0 {
 		return client.Refresh()
 	}
 	return nil
@@ -84,7 +112,7 @@ func (c *CommonClient) Refresh(clientName string) error {
 func (c *CommonClient) HealthCheck(clientName string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if client, ok := c.vpnClients[clientName]; ok && client.connected && !client.inCriticalSection {
+	if client, ok := c.vpnClients[clientName]; ok && client.connected && client.criticalDepth == 0 {
 		return client.HealthCheck()
 	}
 	return nil
@@ -121,7 +149,7 @@ func (c *CommonClient) MarkInCriticalSection(clientName string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if client, ok := c.vpnClients[clientName]; ok {
-		client.inCriticalSection = true
+		client.criticalDepth++
 		c.vpnClients[clientName] = client
 	}
 }
@@ -130,7 +158,9 @@ func (c *CommonClient) MarkOutOffCriticalSection(clientName string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if client, ok := c.vpnClients[clientName]; ok {
-		client.inCriticalSection = false
+		if client.criticalDepth > 0 {
+			client.criticalDepth--
+		}
 		c.vpnClients[clientName] = client
 	}
 }
@@ -139,7 +169,7 @@ func (c *CommonClient) CouldStart() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, client := range c.vpnClients {
-		if client.inCriticalSection {
+		if client.criticalDepth != 0 {
 			return false
 		}
 	}

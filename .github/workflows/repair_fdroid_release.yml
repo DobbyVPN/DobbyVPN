@@ -42,7 +42,9 @@ jobs:
       RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
       REPLACE_CONFIRMATION: ${{ inputs.confirm_replace }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Validate trusted workflow and existing release
         id: validate
@@ -118,25 +120,27 @@ jobs:
       RELEASE_SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
       RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-java@v5
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
         with:
           packages: build-tools;36.0.0
 
       - name: Download rebuilt signed APK
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyvpn-android-sign.apk
           path: release
 
       - name: Download rebuilt unsigned APK
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyvpn-android-unsign.apk
           path: release
