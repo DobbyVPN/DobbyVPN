@@ -144,7 +144,7 @@ def main() -> int:
         "build_number: selected_build",
         'copyright: "#{Time.now.year} DobbyVPN contributors"',
         '"en-US" => "https://github.com/DobbyVPN/DobbyVPN/issues"',
-        '"en-US" => "https://github.com/DobbyVPN/DobbyVPN/blob/main/docs/Privacy_Policy.md"',
+        '"en-US" => "https://dobbyvpn.com/privacy"',
         "skip_binary_upload: true",
         "submit_for_review: true",
         "automatic_release: true",

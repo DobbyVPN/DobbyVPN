@@ -15,6 +15,10 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 		echo [+] Application zip file exist
 		mkdir "dobbyVPN-windows"
 		tar -xf "dobbyVPN-windows.zip" -C "dobbyVPN-windows" || goto :error
+		if not exist "dobbyVPN-windows\bin\dobby-cli.exe" (
+			echo [+] dobby-cli.exe not found in application zip
+			goto :error
+		)
 	) else (
 		echo [+] Application zip file not exist
 		goto :error

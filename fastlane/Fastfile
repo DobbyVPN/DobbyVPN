@@ -257,7 +257,7 @@ platform :ios do
         "en-US" => "https://github.com/DobbyVPN/DobbyVPN/issues"
       },
       privacy_url: {
-        "en-US" => "https://github.com/DobbyVPN/DobbyVPN/blob/main/docs/Privacy_Policy.md"
+        "en-US" => "https://dobbyvpn.com/privacy"
       },
       skip_binary_upload: true,
       skip_screenshots: true,
