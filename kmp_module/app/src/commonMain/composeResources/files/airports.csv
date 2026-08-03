@@ -13,7 +13,6 @@ Aeroestación Yabotí,-27.180308,-54.107368
 [Duplicate] Aeropuerto Pergamino,-33.89603,-60.5748
 Concordia Skyway,-75.103278,123.35825
 Vostok Skiway,-78.466139,106.84825
-[Duplicate] Wolf's Fang Runway,-71.5264,8.799459
 Western Sydney International (Nancy-Bird Walton) Airport,-33.883461,150.712981
 Nackeroo Airfield,-15.578026,130.475993
 Alxa Left Banner Bayanhot Airport,38.748317,105.58416
@@ -879,7 +878,6 @@ Luleå Airport,65.5438,22.122
 Stockholm-Arlanda Airport,59.64849,17.928829
 Stockholm-Bromma Airport,59.354401,17.9417
 Dala Airport,60.422001,15.5152
-Gävle Sandviken Airport,60.5933,16.951401
 Linköping City Airport,58.404909,15.684499
 Norrköping Airport,58.586299896240234,16.250600814819336
 Torsby Airport,60.1576,12.9913
@@ -2650,7 +2648,6 @@ Engadin Airport,46.5341,9.88411
 Esenboğa International Airport,40.128101,32.995098
 Etimesgut Air Base,39.949798584,32.6885986328
 Akıncı Air Base,40.078899,32.565601
-Adana Şakirpaşa Airport,36.982201,35.280399
 İncirlik Air Base,37.002102,35.4259
 Afyon Air Base,38.726398,30.601101
 Antalya International Airport,36.898701,30.800501
@@ -3011,7 +3008,7 @@ Manapouri Airport,-45.5331,167.649994
 Hood Airport,-40.974634,175.63454
 New Plymouth Airport,-39.00859832763672,174.1790008544922
 Hawke's Bay Airport,-39.465801,176.869995
-Nelson Airport,-41.298302,173.220993
+Nelson Airport,-41.296709,173.224323
 Invercargill Airport,-46.41239929199219,168.31300354003906
 RNZAF Base Ohakea,-40.20600128173828,175.38800048828125
 Oamaru Airport,-44.970001,171.082001
@@ -3639,7 +3636,7 @@ Ivanovo North Air Base,57.0583,40.981701
 Lyambir Air Base,54.28499984741211,45.16830062866211
 Ulan-Ude East Airport,51.849998,107.737999
 Michurinsk Air Base,52.917455,40.365826
-Step Air Base,51.016701,115.432999
+Step Air Base,51.020051,115.431016
 Yugorsk Sovetsky Air Base,61.268299,63.138302
 Uprun Air Base,54.375,61.353298
 Voronezh Baltimore Air Base,51.62,39.14
@@ -4204,17 +4201,17 @@ Moma Airport,66.450861,143.261551
 Magan Airport,62.103484,129.545288
 Olyokminsk Airport,60.401833,120.476094
 Ust-Nera Airport,64.550003,143.115005
-Kyzyl-Syr Airport,63.8849983215332,122.7770004272461
+Kyzyl-Syr Airport,63.887303,122.775779
 Vilyuisk Airport,63.756668,121.693336
 Aykhal Airport,65.959198,111.546501
-Lensk Airport,60.7206001282,114.825996399
+Lensk Airport,60.723594,114.825319
 Polyarny Airport,66.400398,112.029999
 Mirny Airport,62.534698486328125,114.03900146484375
 Saskylakh Airport,71.927902,114.080002
 Belaya Gora Airport,68.556227,146.22784
 Srednekolymsk Airport,67.4805,153.7364
 Chokurdakh Airport,70.6231,147.901993
-Cherskiy Airport,68.7406005859375,161.33799743652344
+Cherskiy Airport,68.740601,161.337997
 Tiksi Airport,71.697700500488,128.90299987793
 Zyryanka Airport,65.7485,150.8889
 Zhigansk Airport,66.7965011597,123.361000061
@@ -4230,14 +4227,14 @@ David the Builder Kutaisi International Airport,42.177448,42.485353
 Alexander Kartveli Batumi International Airport,41.60939,41.600315
 Vladislav Ardzinba Sukhum International Airport,42.8582,41.128101
 Tbilisi International Airport,41.669201,44.9547
-Ignatyevo Airport,50.42539978027344,127.41200256347656
+Ignatyevo Airport,50.426723,127.415502
 Khabarovsk Novy Airport,48.528338,135.188588
 Dzemgi Airport,50.605625,137.081266
 Kamenny Ruchey Naval Air Base,49.235703,140.1931
-Komsomolsk-on-Amur Airport,50.409000396728516,136.9340057373047
+Komsomolsk-on-Amur Airport,50.409,136.934006
 Sovetskaya Gavan (Maygatka) Airport,48.925067,140.035348
 Ugolny Yuri Ryktheu Airport,64.734902,177.740997
-Provideniya Bay Airport,64.37809753417969,-173.2429962158203
+Provideniya Bay Airport,64.378098,-173.242996
 Omsukchan Airport,62.457001,155.744995
 Chaybukha Airport,61.834999,160.548004
 Keperveem Airport,67.845001,166.139999
@@ -4931,7 +4928,7 @@ Leonora Airport,-28.87809944152832,121.31500244140625
 Lockhart River Airport,-12.7869,143.304993
 Lismore Airport,-28.830689,153.258419
 Lightning Ridge Airport,-29.452857,147.977146
-Longreach Airport,-23.4342,144.279999
+Longreach Airport,-23.43202,144.277492
 Leinster Airport,-27.843299865722656,120.7030029296875
 Latrobe Valley Airport,-38.211004,146.470817
 Melbourne Avalon International Airport,-38.040269,144.467196
@@ -5019,8 +5016,7 @@ Whyalla Airport,-33.05889892578125,137.51400756835938
 Warracknabeal Airport,-36.32109832763672,142.41900634765625
 Walgett Airport,-30.032801,148.126007
 Newcastle Airport,-32.796114,151.835025
-Wiluna Airport,-26.629199981689453,120.22100067138672
-William Creek Aerodrome,-28.905854,136.3406
+Wiluna Airport,-26.632691,120.221906
 Warren Airport,-31.733299,147.802994
 West Sale Airport,-38.090827,146.965335
 Winton Airport,-22.36359977722168,143.08599853515625
