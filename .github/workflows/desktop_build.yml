@@ -167,8 +167,8 @@ jobs:
                   raise SystemExit(f"{path.name} has an invalid PE header")
               return struct.unpack_from("<H", data, offset + 4 + 20 + 68)[0]
 
-          if subsystem(single("Dobby VPN.exe")) != 2:
-              raise SystemExit("Dobby VPN.exe must remain a GUI launcher")
+          if subsystem(single("Dobby Vpn.exe")) != 2:
+              raise SystemExit("Dobby Vpn.exe must remain a GUI launcher")
           if subsystem(single("dobby-cli.exe")) != 3:
               raise SystemExit("dobby-cli.exe must be a console launcher")
           PY
