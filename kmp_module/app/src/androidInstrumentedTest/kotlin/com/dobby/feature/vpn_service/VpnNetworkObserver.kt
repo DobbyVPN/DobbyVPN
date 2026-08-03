@@ -84,8 +84,18 @@ internal fun ConnectivityManager.awaitVpnNetworkState(
             // onAvailable may precede both capability and link-property
             // publication. Return only a VPN whose route state is queryable.
             val vpn = matchingNetworks.firstNotNullOfOrNull { network ->
-                (linkPropertiesByNetwork[network] ?: getLinkProperties(network))
-                    ?.let { VpnNetworkState(network, it) }
+                val isStillVpn = getNetworkCapabilities(network)
+                    ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+                if (!isStillVpn) {
+                    if (!present) {
+                        matchingNetworks.remove(network)
+                        linkPropertiesByNetwork.remove(network)
+                    }
+                    null
+                } else {
+                    (linkPropertiesByNetwork[network] ?: getLinkProperties(network))
+                        ?.let { VpnNetworkState(network, it) }
+                }
             }
             if (vpn != null) observedVpn = true
             if (present && vpn != null) return vpn
@@ -93,6 +103,7 @@ internal fun ConnectivityManager.awaitVpnNetworkState(
             // registration does not prove absence; only a previously observed
             // VPN becoming absent, or the full observation window expiring, does.
             if (!present && observedVpn && vpn == null) return null
+            if (!present && matchingNetworks.isEmpty()) return null
             Thread.sleep(pollIntervalMillis)
         } while (System.nanoTime() < deadline)
         return matchingNetworks.firstNotNullOfOrNull { network ->
