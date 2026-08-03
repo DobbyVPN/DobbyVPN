@@ -163,7 +163,7 @@ jobs:
               if data[:2] != b"MZ" or len(data) < 0x40:
                   raise SystemExit(f"{path.name} is not a PE executable")
               offset = struct.unpack_from("<I", data, 0x3C)[0]
-              if data[offset:offset + 4] != b"PE\\0\\0":
+              if data[offset:offset + 4] != b"PE\0\0":
                   raise SystemExit(f"{path.name} has an invalid PE header")
               return struct.unpack_from("<H", data, offset + 4 + 20 + 68)[0]
 
