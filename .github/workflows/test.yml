@@ -165,14 +165,14 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_26.3.app
 
       - name: Download iOS native dependencies
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: MyLibrary.xcframework
           path: swift_module/MyLibrary.xcframework
           merge-multiple: true
 
       - name: Download Kotlin framework
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: app.framework
           path: swift_module/app.framework
@@ -251,7 +251,7 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_26.3.app
 
       - name: Download iOS native dependencies
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: MyLibrary.xcframework
           path: swift_module/MyLibrary.xcframework
