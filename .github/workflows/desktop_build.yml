@@ -120,6 +120,59 @@ jobs:
             echo "WIN_ZIP_FILE=$(find ./output -name '*-windows-amd64.zip' -type f)"
           } >> $GITHUB_ENV
 
+      - name: Verify Debian service runtime closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_root="$(mktemp -d)"
+          trap 'rm -rf "$package_root"' EXIT
+          dpkg-deb -x "${{ env.DEB_FILE }}" "$package_root"
+          service="$package_root/opt/dobbyvpn/lib/app/ubuntu_grpcvpnserver"
+          unit="$package_root/usr/local/lib/systemd/system/dobbyvpn.service"
+          test -x "$service"
+          test -f "$unit"
+          grep -Fx 'Environment=LD_LIBRARY_PATH=/opt/dobbyvpn/lib/runtime/lib' "$unit"
+          LD_LIBRARY_PATH="$package_root/opt/dobbyvpn/lib/runtime/lib" ldd "$service" > "$package_root/ldd.txt"
+          if grep -F 'not found' "$package_root/ldd.txt"; then
+            echo 'Debian service has an unresolved runtime library' >&2
+            exit 1
+          fi
+
+      - name: Verify Windows GUI and CLI launcher subsystems
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_root="$(mktemp -d)"
+          trap 'rm -rf "$package_root"' EXIT
+          unzip -q "${{ env.WIN_ZIP_FILE }}" -d "$package_root"
+          python3 - "$package_root" <<'PY'
+          from pathlib import Path
+          import struct
+          import sys
+
+          root = Path(sys.argv[1])
+
+          def single(name: str) -> Path:
+              matches = list(root.rglob(name))
+              if len(matches) != 1:
+                  raise SystemExit(f"expected exactly one {name}, found {len(matches)}")
+              return matches[0]
+
+          def subsystem(path: Path) -> int:
+              data = path.read_bytes()
+              if data[:2] != b"MZ" or len(data) < 0x40:
+                  raise SystemExit(f"{path.name} is not a PE executable")
+              offset = struct.unpack_from("<I", data, 0x3C)[0]
+              if data[offset:offset + 4] != b"PE\\0\\0":
+                  raise SystemExit(f"{path.name} has an invalid PE header")
+              return struct.unpack_from("<H", data, offset + 4 + 20 + 68)[0]
+
+          if subsystem(single("Dobby VPN.exe")) != 2:
+              raise SystemExit("Dobby VPN.exe must remain a GUI launcher")
+          if subsystem(single("dobby-cli.exe")) != 3:
+              raise SystemExit("dobby-cli.exe must be a console launcher")
+          PY
+
       - name: Rename files
         run: |
           mkdir upload

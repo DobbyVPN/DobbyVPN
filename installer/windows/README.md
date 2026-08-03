@@ -10,6 +10,10 @@ Requires theese file put in the current folder:
 * `dobbyVPN-windows.zip`
 * `windows_grpcvpnserver.exe`
 
+The application ZIP must include both `bin\Dobby Vpn.exe` (the GUI launcher)
+and `bin\dobby-cli.exe` (the console launcher used for machine-readable CLI
+commands). The MSI installs both, but creates shortcuts only for the GUI.
+
 ### Install wix
 
 #### Via command-line .NET tool
@@ -37,11 +41,7 @@ Creates folders in this structure:
 
 ```
 .
-├── bin/
-│   ├── amd64/
-│   │   └── dobbyVPN-windows-amd64.msi
-│   │   x86/
-│   │   └── dobbyVPN-windows-x86.msi
-│   │   arm64/
-└── └── └── dobbyVPN-windows-arm64.msi
+└── bin/
+    └── amd64/
+        └── dobbyVPN-windows-amd64.msi
 ```

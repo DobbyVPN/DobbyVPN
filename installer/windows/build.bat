@@ -15,6 +15,11 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 		echo [+] Application zip file exist
 		mkdir "dobbyVPN-windows"
 		tar -xf "dobbyVPN-windows.zip" -C "dobbyVPN-windows" || goto :error
+		if not exist "dobbyVPN-windows\bin\dobby-cli.exe" (
+			echo [-] dobby-cli.exe not found in application zip
+			cmd /c exit 1
+			goto :error
+		)
 	) else (
 		echo [+] Application zip file not exist
 		goto :error
@@ -23,7 +28,7 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 	echo [+] Checking windows_grpcvpnserver.exe
 	if exist "windows_grpcvpnserver.exe" (
 		echo [+] Inserting windows_grpcvpnserver.exe to the dobbyvpn application
-		xcopy "windows_grpcvpnserver.exe" ".\dobbyVPN-windows\bin\" /Y
+		xcopy "windows_grpcvpnserver.exe" ".\dobbyVPN-windows\bin\" /Y || goto :error
 	) else (
 		echo [+] windows_grpcvpnserver.exe not exist
 		goto :error
@@ -31,13 +36,13 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 
 	if exist "dobby_bridge.dll" (
 		echo [+] Inserting dobby_bridge.dll to the dobbyvpn application
-		xcopy "dobby_bridge.dll" ".\dobbyVPN-windows\bin\" /Y
+		xcopy "dobby_bridge.dll" ".\dobbyVPN-windows\bin\" /Y || goto :error
 	)
 
 :build
+	rem The desktop archive, VPN service, and bridge are built only for amd64.
+	rem Do not publish an MSI whose native payload cannot run on its target CPU.
 	call :msi amd64 x64 || goto :error
-	call :msi x86 x86 || goto :error
-	call :msi arm64 arm64 || goto :error
 
 :success
 	echo [+] Success.
@@ -61,5 +66,5 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 	goto :eof
 
 :error
-	echo [-] Failed with error #%errorlevel%.
-	cmd /c exit %errorlevel%
+	echo [-] Failed.
+	exit /b 1

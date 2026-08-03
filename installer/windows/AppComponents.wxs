@@ -18,6 +18,9 @@
 					WorkingDirectory="DobbyVPNFolderBin" />
 			</File>
 		</Component>
+		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNCliExecutable" Guid="31c65f0f-407e-4d7b-99cb-3b5de6d2ea2e">
+			<File Source="dobbyVPN-windows\bin\dobby-cli.exe" KeyPath="yes" />
+		</Component>
 		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNServerService" Guid="1ef0c193-dccb-41a5-ae7e-b1f0c214924d">
 			<File Source="dobbyVPN-windows\bin\windows_grpcvpnserver.exe" KeyPath="yes" />
 			<File Source="wintun\bin\$(var.DOBBYVPN_PLATFORM)\wintun.dll" />
