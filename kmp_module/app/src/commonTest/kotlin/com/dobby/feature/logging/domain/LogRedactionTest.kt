@@ -58,6 +58,23 @@ class LogRedactionTest {
     }
 
     @Test
+    fun preserves_structural_status_count_and_timing_fields() {
+        val fields = mapOf(
+            "state_before" to "PREPARING",
+            "state_after" to "CONNECTED",
+            "producer_count" to "3",
+            "duration_ms" to "42",
+            "cleanup_complete" to "true",
+        )
+
+        fields.forEach { (key, value) ->
+            assertEquals(value, redactLogField(key, value), key)
+        }
+        assertEquals("[REDACTED]", redactLogField("configurationPath", "/private/profile"))
+        assertEquals("[REDACTED]", redactLogField("serverHost", "vpn.example.invalid"))
+    }
+
+    @Test
     fun encodes_machine_json_and_renders_one_human_readable_line() {
         val encoded = encodeLogEvent(
             timestamp = "2026-07-29T12:34:56.789Z",

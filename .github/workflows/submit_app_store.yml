@@ -114,7 +114,7 @@ jobs:
       APP_STORE_RELEASE_NOTES: ${{ inputs.whats_new }}
     steps:
       - name: Check out trusted main submission tooling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -125,7 +125,7 @@ jobs:
 
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.2'
+          ruby-version: '3.3'
           bundler-cache: true
 
       - name: Submit exact build to production App Review

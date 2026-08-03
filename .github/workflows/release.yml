@@ -26,7 +26,7 @@ jobs:
       version_name: ${{ steps.version.outputs.version_name }}
       android_version_code: ${{ steps.version.outputs.android_version_code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Read VERSION
         id: version

@@ -78,6 +78,9 @@ public class VpnManagerImpl {
 
     public static var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
     public static var dobbyName = "Dobby_VPN_4"
+    // NetworkExtension requires a non-empty display address. It is not a VPN endpoint:
+    // the tunnel receives opaque configuration through the App Group instead.
+    private static let defaultServerAddress = "Dobby VPN"
 
     private var vpnManager: NETunnelProviderManager?
     private var connectionRepository: ConnectionStateRepository
@@ -354,28 +357,27 @@ public class VpnManagerImpl {
         let newVpnManager = NETunnelProviderManager()
         newVpnManager.localizedDescription = Self.dobbyName
 
-        let proto = NETunnelProviderProtocol()
-        proto.providerBundleIdentifier = Self.dobbyBundleIdentifier
-        proto.serverAddress = "159.69.19.209:443"
-        proto.providerConfiguration = [:]
-        proto.includeAllNetworks = true
-        proto.excludeLocalNetworks = true
-        if #available(iOS 16.4, *) {
-            proto.excludeCellularServices = false
-            proto.excludeAPNs = false
-        }
-        proto.enforceRoutes = false
-        if #available(iOS 17.4, *) {
-            proto.excludeDeviceCommunication = false
-        }
-        newVpnManager.protocolConfiguration = proto
+        newVpnManager.protocolConfiguration = makeDefaultProtocol()
         newVpnManager.isEnabled = true
         return newVpnManager
     }
 
     private func applyProtocolDefaults(manager: NETunnelProviderManager) {
         guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else { return }
+        applyProtocolDefaults(proto)
+        manager.protocolConfiguration = proto
+    }
+
+    private func makeDefaultProtocol() -> NETunnelProviderProtocol {
+        let proto = NETunnelProviderProtocol()
+        proto.providerConfiguration = [:]
+        applyProtocolDefaults(proto)
+        return proto
+    }
+
+    private func applyProtocolDefaults(_ proto: NETunnelProviderProtocol) {
         proto.providerBundleIdentifier = Self.dobbyBundleIdentifier
+        proto.serverAddress = Self.defaultServerAddress
         proto.includeAllNetworks = true
         proto.excludeLocalNetworks = true
         if #available(iOS 16.4, *) {
@@ -386,7 +388,6 @@ public class VpnManagerImpl {
         if #available(iOS 17.4, *) {
             proto.excludeDeviceCommunication = false
         }
-        manager.protocolConfiguration = proto
     }
 
     private func statusName(_ status: NEVPNStatus) -> String {

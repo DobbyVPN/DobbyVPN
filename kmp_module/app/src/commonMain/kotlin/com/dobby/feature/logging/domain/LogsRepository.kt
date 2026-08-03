@@ -40,7 +40,7 @@ class LogsRepository(
             source = "app",
             event = "logger.ready",
             message = "Owner-only local diagnostic storage is ready",
-            fields = mapOf("producer_files" to producerLogPaths.size.toString()),
+            fields = mapOf("producer_count" to producerLogPaths.size.toString()),
         )
         writeLog("[Platform] ${platformLogInfo()}")
         writeLog(

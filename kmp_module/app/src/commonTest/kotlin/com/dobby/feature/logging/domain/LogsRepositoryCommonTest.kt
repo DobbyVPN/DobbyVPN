@@ -40,14 +40,14 @@ class LogsRepositoryCommonTest {
         val primary = temporaryLogPath("primary")
         val goProducer = temporaryLogPath("go")
         val goLine = encodeLogEvent(
-            timestamp = "2026-07-29T00:00:01.000Z",
+            timestamp = recentTimestamp(-2_000),
             level = LogLevel.INFO,
             source = "go",
             event = "state.transition",
             message = "session state changed IDLE -> CONFIGURED",
         )
         val appLine = encodeLogEvent(
-            timestamp = "2026-07-29T00:00:02.000Z",
+            timestamp = recentTimestamp(-1_000),
             level = LogLevel.DEBUG,
             source = "app",
             event = "log.message",
@@ -74,14 +74,14 @@ class LogsRepositoryCommonTest {
         val primary = temporaryLogPath("primary-order")
         val goProducer = temporaryLogPath("go-order")
         val laterApp = encodeLogEvent(
-            timestamp = "2026-07-29T12:00:00.900Z",
+            timestamp = recentTimestamp(-100),
             level = LogLevel.INFO,
             source = "app",
             event = "action.end",
             message = "action completed",
         )
         val earlierGo = encodeLogEvent(
-            timestamp = "2026-07-29T12:00:00.100Z",
+            timestamp = recentTimestamp(-900),
             level = LogLevel.INFO,
             source = "go",
             event = "state.transition",
@@ -124,6 +124,10 @@ class LogsRepositoryCommonTest {
     private fun temporaryLogPath(label: String): Path =
         (FileSystem.SYSTEM_TEMPORARY_DIRECTORY / "dobby-$label-${Random.nextLong()}.jsonl")
             .also(temporaryPaths::add)
+
+    private fun recentTimestamp(offsetMillis: Long): String =
+        DateTime.fromUnixMillis(DateTime.now().unixMillisLong + offsetMillis)
+            .format("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
 
     private fun write(path: Path, line: String) {
         fileSystem.sink(path).buffer().use { sink ->

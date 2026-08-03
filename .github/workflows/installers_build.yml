@@ -26,24 +26,24 @@ jobs:
           - os: macos
             runner: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
 
       - name: Download Windows gRPC vpn service
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: windows_grpcvpnserver.exe
           path: installer/windows/
 
       - name: Download macOS arm64 gRPC vpn service
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: macos_grpcvpnserver-arm64
           path: installer/macos/services/arm64
 
       - name: Download macOS amd64 gRPC vpn service
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: macos_grpcvpnserver-amd64
           path: installer/macos/services/amd64
@@ -55,32 +55,32 @@ jobs:
           chmod +x services/amd64/macos_grpcvpnserver
 
       - name: Download Windows built application
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-windows.zip
           path: installer/windows/
 
       - name: Download Linux built application
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-linux.deb
           path: installer/linux/
 
       - name: Download MacOS amd64 built application
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-macos-amd64.zip
           path: installer/macos/
 
       - name: Download MacOS aarch64 built application
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-macos-aarch64.zip
           path: installer/macos/
 
       - name: Build Windows installer - Add msbuild to PATH
         if: matrix.os == 'windows'
-        uses: microsoft/setup-msbuild@v1.1
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
       
       - name: Build Windows installer - Install WiX
         if: matrix.os == 'windows'
@@ -119,35 +119,35 @@ jobs:
 
       - name: Upload Windows x86 installer
         if: matrix.os == 'windows'
-        uses: ./.github/actions/upload-artifact-retry
+        uses: actions/upload-artifact@v7
         with:
           name: dobbyVPN-windows-x86.msi
           path: installer/windows/bin/x86/dobbyVPN-windows-x86.msi
 
       - name: Upload Windows amd64 installer
         if: matrix.os == 'windows'
-        uses: ./.github/actions/upload-artifact-retry
+        uses: actions/upload-artifact@v7
         with:
           name: dobbyVPN-windows-amd64.msi
           path: installer/windows/bin/amd64/dobbyVPN-windows-amd64.msi
 
       - name: Upload Windows arm64 installer
         if: matrix.os == 'windows'
-        uses: ./.github/actions/upload-artifact-retry
+        uses: actions/upload-artifact@v7
         with:
           name: dobbyVPN-windows-arm64.msi
           path: installer/windows/bin/arm64/dobbyVPN-windows-arm64.msi
 
       - name: Upload MacOS amd64 installer
         if: matrix.os == 'macos'
-        uses: ./.github/actions/upload-artifact-retry
+        uses: actions/upload-artifact@v7
         with:
           name: dobbyVPN-macos-amd64.pkg
           path: installer/macos/bin/amd64/dobbyVPN-macos-amd64.pkg
 
       - name: Upload MacOS aarch64 installer
         if: matrix.os == 'macos'
-        uses: ./.github/actions/upload-artifact-retry
+        uses: actions/upload-artifact@v7
         with:
           name: dobbyVPN-macos-aarch64.pkg
           path: installer/macos/bin/aarch64/dobbyVPN-macos-aarch64.pkg

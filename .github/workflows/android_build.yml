@@ -48,13 +48,13 @@ jobs:
       FDROID_COMPAT_SOURCE_ROOT: /home/vagrant/build/com.dobby.vpn
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_sha }}
           submodules: true
 
       - name: Set up bootstrap Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.24.4'
 
@@ -63,7 +63,7 @@ jobs:
         run: echo "version=$(cat .go-version)" >> "$GITHUB_OUTPUT"
 
       - name: Cache Android Go toolchain
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .ci-cache/go-android
           key: ${{ runner.os }}-android-go-${{ steps.android_go.outputs.version }}
@@ -99,11 +99,11 @@ jobs:
       - name: Install Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.2'
+          ruby-version: '3.3'
           bundler-cache: true
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: >
             platforms;android-35
@@ -112,7 +112,7 @@ jobs:
             ndk;27.2.12479018
 
       - name: Cache gomobile
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/go/bin/gomobile
@@ -122,7 +122,7 @@ jobs:
 
       - name: Cache gomobile Android AAR
         id: gomobile_aar_cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: kmp_module/app/build/generated/gomobile
           key: gomobile-aar-${{ hashFiles('.go-version', 'go_module/go.sum', 'go_module/**/*.go', 'go_module/modules/**', 'kmp_module/app/build.gradle.kts') }}
@@ -210,19 +210,19 @@ jobs:
           PY
 
       - name: Upload signed APK
-        uses: ./.github/actions/upload-artifact-retry
+        uses: actions/upload-artifact@v7
         with:
           name: dobbyvpn-android-sign.apk
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-sign.apk
 
       - name: Upload unsigned APK
-        uses: ./.github/actions/upload-artifact-retry
+        uses: actions/upload-artifact@v7
         with:
           name: dobbyvpn-android-unsign.apk
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
 
       - name: Upload Android provenance
-        uses: ./.github/actions/upload-artifact-retry
+        uses: actions/upload-artifact@v7
         with:
           name: dobbyvpn-android-provenance
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-provenance.json

@@ -19,7 +19,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Run actionlint with reviewdog
         uses: reviewdog/action-actionlint@a499b807aed4af40b8f2f7b885b9e38c469a945c # v1.73.0
