@@ -65,6 +65,19 @@ internal fun ConnectivityManager.awaitVpnNetworkState(
 
     registerNetworkCallback(request, callback)
     try {
+        // A network callback is delivered asynchronously, including for VPNs
+        // that already exist. Seed the callback state from a snapshot taken
+        // after registration so an absence assertion does not have to wait for
+        // a callback that will never arrive.
+        val initialVpnNetwork = activeNetwork?.takeIf { network ->
+            getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        }
+        initialVpnNetwork?.let { network ->
+            matchingNetworks.add(network)
+            getLinkProperties(network)?.let { linkPropertiesByNetwork[network] = it }
+        }
+        if (!present && initialVpnNetwork == null && matchingNetworks.isEmpty()) return null
+
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
         var observedVpn = false
         do {

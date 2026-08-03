@@ -43,6 +43,8 @@ jobs:
       REPLACE_CONFIRMATION: ${{ inputs.confirm_replace }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Validate trusted workflow and existing release
         id: validate
@@ -119,6 +121,8 @@ jobs:
       RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-java@v5
         with:

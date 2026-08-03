@@ -52,6 +52,7 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           submodules: true
+          persist-credentials: false
 
       - name: Set up bootstrap Go
         uses: actions/setup-go@v6
@@ -214,15 +215,18 @@ jobs:
         with:
           name: dobbyvpn-android-sign.apk
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-sign.apk
+          if-no-files-found: error
 
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v7
         with:
           name: dobbyvpn-android-unsign.apk
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
+          if-no-files-found: error
 
       - name: Upload Android provenance
         uses: actions/upload-artifact@v7
         with:
           name: dobbyvpn-android-provenance
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-provenance.json
+          if-no-files-found: error

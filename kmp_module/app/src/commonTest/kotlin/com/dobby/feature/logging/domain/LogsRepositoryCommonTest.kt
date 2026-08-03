@@ -39,15 +39,16 @@ class LogsRepositoryCommonTest {
     fun merges_producers_by_timestamp_and_clear_hides_older_external_records() {
         val primary = temporaryLogPath("primary")
         val goProducer = temporaryLogPath("go")
+        val baseMillis = DateTime.now().unixMillisLong
         val goLine = encodeLogEvent(
-            timestamp = recentTimestamp(-2_000),
+            timestamp = timestampAt(baseMillis, -2_000),
             level = LogLevel.INFO,
             source = "go",
             event = "state.transition",
             message = "session state changed IDLE -> CONFIGURED",
         )
         val appLine = encodeLogEvent(
-            timestamp = recentTimestamp(-1_000),
+            timestamp = timestampAt(baseMillis, -1_000),
             level = LogLevel.DEBUG,
             source = "app",
             event = "log.message",
@@ -73,15 +74,16 @@ class LogsRepositoryCommonTest {
     fun same_second_records_keep_subsecond_cross_producer_order() {
         val primary = temporaryLogPath("primary-order")
         val goProducer = temporaryLogPath("go-order")
+        val baseMillis = DateTime.now().unixMillisLong
         val laterApp = encodeLogEvent(
-            timestamp = recentTimestamp(-100),
+            timestamp = timestampAt(baseMillis, -100),
             level = LogLevel.INFO,
             source = "app",
             event = "action.end",
             message = "action completed",
         )
         val earlierGo = encodeLogEvent(
-            timestamp = recentTimestamp(-900),
+            timestamp = timestampAt(baseMillis, -900),
             level = LogLevel.INFO,
             source = "go",
             event = "state.transition",
@@ -125,8 +127,8 @@ class LogsRepositoryCommonTest {
         (FileSystem.SYSTEM_TEMPORARY_DIRECTORY / "dobby-$label-${Random.nextLong()}.jsonl")
             .also(temporaryPaths::add)
 
-    private fun recentTimestamp(offsetMillis: Long): String =
-        DateTime.fromUnixMillis(DateTime.now().unixMillisLong + offsetMillis)
+    private fun timestampAt(baseMillis: Long, offsetMillis: Long): String =
+        DateTime.fromUnixMillis(baseMillis + offsetMillis)
             .format("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
 
     private fun write(path: Path, line: String) {

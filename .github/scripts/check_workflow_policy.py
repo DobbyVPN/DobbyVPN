@@ -215,12 +215,70 @@ def main() -> int:
 
     for name in ("android_build.yml", "ios_build.yml", "submit_app_store.yml"):
         text = (WORKFLOWS / name).read_text(encoding="utf-8")
-        if "ruby-version: '3.3'" not in text:
+        ruby_version = re.search(
+            r"ruby-version:\s*['\"]?(\d+)\.(\d+)(?:\.\d+)?['\"]?(?![\d.])",
+            text,
+        )
+        if ruby_version is None or tuple(map(int, ruby_version.groups())) < (3, 3):
             violations.append(f"{name}: protected Fastlane job must use supported Ruby 3.3+")
 
     lint = (WORKFLOWS / "lint.yml").read_text(encoding="utf-8")
     if "reviewdog/action-golangci-lint@c76cceaaab89abe74e649d2e34c6c9adc26662d2" not in lint:
         violations.append("lint.yml: golangci-lint review action must use its Node 24 SHA pin")
+    for expected in (
+        "if-no-files-found: error",
+        "mapfile -d '' -t detekt_files",
+        "find kmp_module -path \"*/build/reports/detekt/*.xml\" -type f -print0 | sort -z",
+        "-fail-level=error",
+    ):
+        if expected not in lint:
+            violations.append(f"lint.yml: missing fail-closed Detekt reporting control: {expected}")
+
+    # None of these workflows pushes commits or tags. Avoid retaining the
+    # checkout token in their Git configuration after source retrieval.
+    for name in (
+        "actionlint.yml",
+        "android_build.yml",
+        "desktop_build.yml",
+        "desktop_libs_generate.yml",
+        "fdroid_scan_apk.yml",
+        "installers_build.yml",
+        "ios_build.yml",
+        "lint.yml",
+        "repair_fdroid_release.yml",
+        "security.yml",
+        "test.yml",
+    ):
+        text = (WORKFLOWS / name).read_text(encoding="utf-8")
+        checkouts = text.count("uses: actions/checkout@v5")
+        persisted = text.count("persist-credentials: false")
+        if persisted < checkouts:
+            violations.append(f"{name}: every checkout must disable persisted credentials")
+
+    for name in (
+        "android_build.yml",
+        "desktop_build.yml",
+        "desktop_libs_generate.yml",
+        "installers_build.yml",
+        "ios_build.yml",
+    ):
+        text = (WORKFLOWS / name).read_text(encoding="utf-8")
+        uploads = text.count("uses: actions/upload-artifact@v7")
+        required = text.count("if-no-files-found: error")
+        if required < uploads:
+            violations.append(f"{name}: every release artifact upload must fail when its output is missing")
+
+    test_workflow = (WORKFLOWS / "test.yml").read_text(encoding="utf-8")
+    for expected in (
+        "set +e\n          python3 .github/scripts/check_swift_coverage.py",
+        'cat "$COVERAGE_SUMMARY" >> "$GITHUB_STEP_SUMMARY"',
+        'exit "$coverage_status"',
+        "${{ runner.temp }}/swift-lifecycle-core.lcov",
+        "${{ runner.temp }}/swift-lifecycle-core-coverage.md",
+        "if-no-files-found: error",
+    ):
+        if expected not in test_workflow:
+            violations.append(f"test.yml: missing Swift coverage evidence control: {expected}")
 
     # macOS desktop artifacts are native binaries. Keep the two official runner
     # architectures and every consumer explicitly paired so an ARM service can

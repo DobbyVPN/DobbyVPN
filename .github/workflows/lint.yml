@@ -19,6 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          persist-credentials: false
           submodules: true
 
       - uses: actions/setup-go@v6
@@ -45,6 +46,8 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-java@v5
         with:
@@ -73,22 +76,23 @@ jobs:
         with:
           name: detekt-reports
           path: kmp_module/**/build/reports/detekt/
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Report Detekt results on pull requests
         if: ${{ always() && github.event_name == 'pull_request' }}
-        continue-on-error: true
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           # The tracked Detekt baselines suppress only acknowledged findings.
           # New findings fail the Gradle task above and are also surfaced here.
-          DETEKT_FILES=$(find kmp_module -path "*/build/reports/detekt/*.xml" -type f 2>/dev/null)
-          test -n "$DETEKT_FILES"
-          for f in $DETEKT_FILES; do
+          mapfile -d '' -t detekt_files < <(
+            find kmp_module -path "*/build/reports/detekt/*.xml" -type f -print0 | sort -z
+          )
+          ((${#detekt_files[@]}))
+          for f in "${detekt_files[@]}"; do
             test -s "$f"
-            reviewdog -f=checkstyle -name="detekt" -reporter=github-pr-review -level=warning < "$f"
+            reviewdog -f=checkstyle -name="detekt" -reporter=github-pr-review -level=warning -fail-level=error < "$f"
           done
 
   lint-swift:
@@ -99,6 +103,8 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Setup reviewdog
         uses: reviewdog/action-setup@e04ffabe3898a0af8d0fb1af00c188831c4b5893 # v1.3.2

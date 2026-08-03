@@ -25,6 +25,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Download Windows gRPC vpn service
         uses: actions/download-artifact@v7
@@ -131,24 +133,28 @@ jobs:
         with:
           name: dobbyVPN-linux.deb
           path: upload/dobbyVPN-linux.deb
+          if-no-files-found: error
 
       - name: Upload zip for macOS aarch64
         uses: actions/upload-artifact@v7
         with:
           name: dobbyVPN-macos-aarch64.zip
           path: upload/dobbyVPN-macos-aarch64.zip
+          if-no-files-found: error
 
       - name: Upload zip for macOS amd64
         uses: actions/upload-artifact@v7
         with:
           name: dobbyVPN-macos-amd64.zip
           path: upload/dobbyVPN-macos-amd64.zip
+          if-no-files-found: error
 
       - name: Upload Windows zip
         uses: actions/upload-artifact@v7
         with:
           name: dobbyVPN-windows.zip
           path: upload/dobbyVPN-windows.zip
+          if-no-files-found: error
 
       - name: Display file tree with sizes after Windows build
         run: |
