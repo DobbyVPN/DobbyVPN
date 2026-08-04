@@ -78,6 +78,10 @@ def main() -> int:
         'test "$(jq -r .headSha <<<"$run_json")" = "$RELEASE_SOURCE_SHA"',
         'test "$source_version" = "$RELEASE_VERSION"',
         "run-id: ${{ inputs.run_id }}",
+        "QUALIFIED_LINUX_SHA256: ${{ inputs.linux_sha256 }}",
+        "QUALIFIED_WINDOWS_AMD64_SHA256: ${{ inputs.windows_amd64_sha256 }}",
+        "QUALIFIED_MACOS_AMD64_SHA256: ${{ inputs.macos_amd64_sha256 }}",
+        "Verify locally qualified desktop packages",
         '--target "$RELEASE_SOURCE_SHA"',
         "dobbyvpn-android-provenance",
         "Android provenance validation passed",
@@ -85,6 +89,24 @@ def main() -> int:
         if expected not in promotion:
             violations.append(
                 f"promote_release.yml: missing fail-closed promotion control: {expected}"
+            )
+    # A retry against an already-published tag must still fetch the exact
+    # selected Actions-run packages and compare them with the locally tested
+    # digests.  Otherwise a same-source but differently packaged run could be
+    # accepted merely because an older release asset happened to match.
+    for step in (
+        "Download Linux package",
+        "Download Windows amd64 package",
+        "Download macOS amd64 package",
+        "Verify locally qualified desktop packages",
+    ):
+        marker = f"      - name: {step}"
+        start = promotion.find(marker)
+        end = promotion.find("\n      - name:", start + len(marker)) if start >= 0 else -1
+        section = promotion[start:] if end < 0 else promotion[start:end]
+        if start < 0 or re.search(r"^\s*if:\s*", section, re.MULTILINE):
+            violations.append(
+                f"promote_release.yml: {step} must run for a published-release retry"
             )
 
     app_store = (WORKFLOWS / "submit_app_store.yml").read_text(encoding="utf-8")

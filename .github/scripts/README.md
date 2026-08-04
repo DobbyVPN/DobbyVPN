@@ -75,7 +75,10 @@ build to internal TestFlight. It does not create a final release tag.
 The authorized release process dispatches `promote_release.yml`, which
 revalidates the exact successful `main` Release run and source commit,
 downloads its artifacts only to a GitHub-hosted runner, and creates `vX.Y.Z`
-plus the GitHub Release. That final tag is the sole signal for official
+plus the GitHub Release. Promotion also receives the non-secret SHA-256 values
+of the exact Linux DEB, Windows amd64 MSI, and macOS amd64 PKG that passed the
+private local qualification gate, then re-hashes the selected run's downloaded
+files before publication. That final tag is the sole signal for official
 F-Droid update processing.
 
 Android and F-Droid use a stable version code derived from the marketing

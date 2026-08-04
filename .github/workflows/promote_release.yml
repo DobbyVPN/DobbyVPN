@@ -16,6 +16,18 @@ on:
         description: Exact main commit built by the selected run
         required: true
         type: string
+      linux_sha256:
+        description: SHA-256 of the exact locally qualified Linux DEB
+        required: true
+        type: string
+      windows_amd64_sha256:
+        description: SHA-256 of the exact locally qualified Windows amd64 MSI
+        required: true
+        type: string
+      macos_amd64_sha256:
+        description: SHA-256 of the exact locally qualified macOS amd64 PKG
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -36,6 +48,9 @@ jobs:
       RELEASE_VERSION: ${{ inputs.version }}
       RELEASE_RUN_ID: ${{ inputs.run_id }}
       RELEASE_SOURCE_SHA: ${{ inputs.commit_sha }}
+      QUALIFIED_LINUX_SHA256: ${{ inputs.linux_sha256 }}
+      QUALIFIED_WINDOWS_AMD64_SHA256: ${{ inputs.windows_amd64_sha256 }}
+      QUALIFIED_MACOS_AMD64_SHA256: ${{ inputs.macos_amd64_sha256 }}
     steps:
       - name: Validate selected release run
         id: preflight
@@ -55,6 +70,16 @@ jobs:
             echo "commit_sha must be a full commit SHA" >&2
             exit 1
           fi
+          for qualified_digest in \
+            "$QUALIFIED_LINUX_SHA256" \
+            "$QUALIFIED_WINDOWS_AMD64_SHA256" \
+            "$QUALIFIED_MACOS_AMD64_SHA256"; do
+            if [[ ! "$qualified_digest" =~ ^[0-9a-f]{64}$ ]] || \
+              [[ "$qualified_digest" = "$(printf '0%.0s' {1..64})" ]]; then
+              echo "qualified desktop SHA-256 inputs must be nonzero lowercase digests" >&2
+              exit 1
+            fi
+          done
           test "$GITHUB_REF" = "refs/heads/main"
           current_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
           test "$GITHUB_SHA" = "$current_main"
@@ -118,6 +143,12 @@ jobs:
               )"
               actual_assets="$(jq -r '.assets[].name' <<<"$release_json" | sort)"
               test "$actual_assets" = "$expected_assets"
+              test "$(jq -r '.assets[] | select(.name == "dobbyVPN-linux.deb") | .digest' <<<"$release_json")" = \
+                "sha256:$QUALIFIED_LINUX_SHA256"
+              test "$(jq -r '.assets[] | select(.name == "dobbyVPN-windows-amd64.msi") | .digest' <<<"$release_json")" = \
+                "sha256:$QUALIFIED_WINDOWS_AMD64_SHA256"
+              test "$(jq -r '.assets[] | select(.name == "dobbyVPN-macos-amd64.pkg") | .digest' <<<"$release_json")" = \
+                "sha256:$QUALIFIED_MACOS_AMD64_SHA256"
               release_state="published"
             fi
           fi
@@ -132,7 +163,6 @@ jobs:
           echo "Release state: $release_state"
 
       - name: Download Linux package
-        if: steps.preflight.outputs.release_state != 'published'
         uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-linux.deb
@@ -142,7 +172,6 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download Windows amd64 package
-        if: steps.preflight.outputs.release_state != 'published'
         uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-windows-amd64.msi
@@ -152,7 +181,6 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download macOS amd64 package
-        if: steps.preflight.outputs.release_state != 'published'
         uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-macos-amd64.pkg
@@ -200,6 +228,17 @@ jobs:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.run_id }}
+
+      - name: Verify locally qualified desktop packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(sha256sum release/dobbyVPN-linux.deb | awk '{print $1}')" = \
+            "$QUALIFIED_LINUX_SHA256"
+          test "$(sha256sum release/dobbyVPN-windows-amd64.msi | awk '{print $1}')" = \
+            "$QUALIFIED_WINDOWS_AMD64_SHA256"
+          test "$(sha256sum release/dobbyVPN-macos-amd64.pkg | awk '{print $1}')" = \
+            "$QUALIFIED_MACOS_AMD64_SHA256"
 
       - name: Verify Android source and artifact provenance
         if: steps.preflight.outputs.release_state != 'published'

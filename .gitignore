@@ -64,3 +64,7 @@ go.work.sum
 
 # Copied from canonical KMP proto during go_module/scripts/regenerate-grpcproto.sh
 go_module/grpcproto/vpnserver.proto
+
+# Local release qualification stages the exact downloaded Debian package here.
+# It is an ignored build artifact, never application source.
+/kmp_module/app/dobbyVPN-linux.deb
