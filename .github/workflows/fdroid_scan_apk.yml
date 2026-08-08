@@ -29,7 +29,7 @@ jobs:
           packages: build-tools;36.0.0
 
       - name: Download unsigned APK from android_build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dobbyvpn-android-unsign.apk
           path: apk
