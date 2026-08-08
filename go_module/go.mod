@@ -14,7 +14,7 @@ require (
 	github.com/jackpal/gateway v1.1.1
 	github.com/sirupsen/logrus v1.9.3
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
-	github.com/things-go/go-socks5 v0.1.0
+	github.com/things-go/go-socks5 v0.1.1
 	github.com/vishvananda/netlink v1.3.1
 	github.com/xjasonlyu/tun2socks/v2 v2.6.0
 	github.com/xtls/xray-core v1.251208.0
