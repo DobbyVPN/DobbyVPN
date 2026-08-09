@@ -371,6 +371,16 @@ func StartOwnedEngine(cfg platform_engine.EngineConfig) (*Engine, error) {
 	if activeEngine != nil {
 		return nil, ErrEngineBusy
 	}
+	handle, _, err := startOwnedEngineLocked(cfg)
+	return handle, err
+}
+
+// startOwnedEngineLocked reports whether the platform engine accepted its
+// configuration. Once accepted, that platform engine exclusively owns every
+// resource embedded in cfg, including an fd-backed device, and its stop path
+// releases those resources on both later startup failure and normal shutdown.
+// Before acceptance, ownership remains with the caller.
+func startOwnedEngineLocked(cfg platform_engine.EngineConfig) (*Engine, bool, error) {
 
 	handle := &Engine{stopPlatform: platform_engine.EngineStop}
 	// Reserve ownership before touching the platform engine. This closes the
@@ -381,7 +391,7 @@ func StartOwnedEngine(cfg platform_engine.EngineConfig) (*Engine, error) {
 	if err := platform_engine.StartPlatformEngine(cfg); err != nil {
 		activeEngine = nil
 		log.Debugf(Category, "[Engine] StartPlatformEngine failed: %v", err)
-		return nil, err
+		return nil, false, err
 	}
 	handle.ifaceName = platform_engine.InterfaceName()
 
@@ -389,14 +399,14 @@ func StartOwnedEngine(cfg platform_engine.EngineConfig) (*Engine, error) {
 	if t == nil {
 		cleanupErr := handle.stopPlatform()
 		activeEngine = nil
-		return nil, errors.Join(fmt.Errorf("tunnel not initialized after engine start"), cleanupErr)
+		return nil, true, errors.Join(fmt.Errorf("tunnel not initialized after engine start"), cleanupErr)
 	}
 
 	vpnOutbound, ok := t.Dialer().(proxy.Proxy)
 	if !ok {
 		cleanupErr := handle.stopPlatform()
 		activeEngine = nil
-		return nil, errors.Join(fmt.Errorf("current dialer is not a proxy (type=%T)", t.Dialer()), cleanupErr)
+		return nil, true, errors.Join(fmt.Errorf("current dialer is not a proxy (type=%T)", t.Dialer()), cleanupErr)
 	}
 
 	wrapper := &DobbyProxy{
@@ -412,7 +422,7 @@ func StartOwnedEngine(cfg platform_engine.EngineConfig) (*Engine, error) {
 	handle.ready = true
 	log.Debugf(Category, "[Engine] DobbyProxy installed; owner is ready")
 	go wrapper.logStatsLoop(handle.statsStop)
-	return handle, nil
+	return handle, true, nil
 }
 
 // Stop releases this handle's resources in reverse start order. A stale handle

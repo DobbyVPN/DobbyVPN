@@ -90,13 +90,6 @@ func (c *CoreClient) Connect() (err error) {
 		return fail(fmt.Errorf("TUN device does not expose a descriptor"))
 	}
 
-	engineFD, err := unix.Dup(fd)
-	if err != nil {
-		log.Debugf(coreCommon.Category, "failed to duplicate tun fd for tun2socks: %v", err)
-		return fail(fmt.Errorf("failed to duplicate tun fd for tun2socks: %w", err))
-	}
-	releaseFD := ledger.Add(func() error { return unix.Close(engineFD) })
-
 	err = c.device.Open(0, "")
 	if err != nil {
 		log.Debugf(coreCommon.Category, "failed to create protocol device: %v", err)
@@ -105,16 +98,15 @@ func (c *CoreClient) Connect() (err error) {
 	ledger.Add(c.device.Close)
 
 	log.Debugf(coreCommon.Category, "starting tun2socks engine proxy_ready=true")
-	c.engine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{
+	c.engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{
 		ProxyAddr:   c.device.GetProxyAddr(),
-		FD:          engineFD,
+		FD:          fd,
 		UplinkIface: "",
 	})
 	if err != nil {
 		log.Debugf(coreCommon.Category, "Can't start tun2socks: %v", err)
 		return fail(fmt.Errorf("failed to start tun2socks engine: %w", err))
 	}
-	releaseFD() // tun2socks now owns the duplicated descriptor.
 	ownedEngine := c.engine
 	ledger.Add(ownedEngine.Stop)
 
