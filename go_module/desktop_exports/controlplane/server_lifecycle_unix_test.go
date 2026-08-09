@@ -1,6 +1,6 @@
 //go:build !(windows || android || ios)
 
-package executor
+package controlplane
 
 import (
 	"net"
@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"go_module/desktop_exports/controlplane"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
@@ -19,7 +18,7 @@ import (
 func TestServeUntilSignalRemovesControlSocket(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runtime", "control.sock")
 	t.Setenv("DOBBYVPN_CONTROL_SOCKET", path)
-	listener, err := controlplane.ListenControlSocket()
+	listener, err := ListenControlSocket()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +49,7 @@ func TestServeUntilSignalRemovesControlSocket(t *testing.T) {
 func TestServeUntilSignalBoundsActiveRPCShutdown(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runtime", "control.sock")
 	t.Setenv("DOBBYVPN_CONTROL_SOCKET", path)
-	listener, err := controlplane.ListenControlSocket()
+	listener, err := ListenControlSocket()
 	if err != nil {
 		t.Fatal(err)
 	}
