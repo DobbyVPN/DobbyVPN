@@ -58,6 +58,8 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: '1.24.4'
+          # This Go only bootstraps make.bash; there is no root go.mod to cache.
+          cache: false
 
       - name: Read Android Go version
         id: android_go

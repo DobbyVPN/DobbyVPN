@@ -84,6 +84,9 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: '1.24.4'
+          # This Go only bootstraps make.bash; module downloads use the
+          # separately built Android toolchain from go_module below.
+          cache: false
 
       - name: Read Android Go version
         id: android_go
