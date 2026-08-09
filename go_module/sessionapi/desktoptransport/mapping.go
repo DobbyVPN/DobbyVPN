@@ -73,6 +73,8 @@ func FailureCode(code v1.FailureCode) grpcproto.SessionFailureCode {
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CANCELED
 	case v1.FailureInternal:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INTERNAL
+	case v1.FailureCleanup:
+		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CLEANUP_FAILED
 	default:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_UNSPECIFIED
 	}

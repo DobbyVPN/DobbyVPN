@@ -185,7 +185,7 @@ func (r *runtime) Start(ctx context.Context, ref v1.SessionRef, profile v1.Runti
 	return lease, nil
 }
 
-func (r *runtime) Probe(ctx context.Context, ref v1.SessionRef, profile v1.RuntimeProfile) (v1.ProbeResult, error) {
+func (r *runtime) Probe(ctx context.Context, ref v1.SessionRef, profile v1.RuntimeProfile) (result v1.ProbeResult, err error) {
 	if err := ctx.Err(); err != nil {
 		return v1.ProbeResult{}, err
 	}
@@ -210,7 +210,12 @@ func (r *runtime) Probe(ctx context.Context, ref v1.SessionRef, profile v1.Runti
 		r.mu.Unlock()
 	})
 	r.mu.Unlock()
-	defer func() { _ = lease.Stop(context.Background()) }()
+	defer func() {
+		if cleanupErr := lease.Stop(context.Background()); cleanupErr != nil {
+			result = v1.ProbeResult{}
+			err = errors.Join(err, fmt.Errorf("cleanup runtime probe: %w", cleanupErr))
+		}
+	}()
 
 	probeCtx, cancel := context.WithTimeout(ctx, r.options.ProbeTimeout)
 	defer cancel()
@@ -365,12 +370,12 @@ func connectContext(ctx context.Context, client coreClient) error {
 	case err := <-result:
 		return err
 	case <-ctx.Done():
-		_ = client.Disconnect()
+		disconnectErr := client.Disconnect()
 		// Do not return a failed start while Connect can still publish a late
 		// successful core. CoreClient's Disconnect cancels its bounded startup;
 		// waiting here makes cancellation ownership deterministic.
-		<-result
-		return ctx.Err()
+		connectErr := <-result
+		return errors.Join(ctx.Err(), disconnectErr, connectErr)
 	}
 }
 

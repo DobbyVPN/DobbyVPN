@@ -10,6 +10,7 @@ import com.dobby.feature.main.domain.SessionControllerResult
 import com.dobby.feature.main.domain.SessionFailureCode
 import com.dobby.feature.main.domain.SessionIdentityStore
 import com.dobby.feature.main.domain.SessionProfile
+import com.dobby.feature.main.domain.SessionSnapshot
 import com.dobby.feature.main.domain.SessionStartTarget
 import com.dobby.feature.main.domain.SessionState
 import interop.GrpcVpnLibrary
@@ -136,18 +137,22 @@ class CliClient(
                 }
             }
 
+            var connected = false
+            var cleanupSucceeded = false
             try {
-                if (awaitTerminal(generation)) {
-                    println("OK $label")
-                    logger.log("[CLI] OK $label")
-                } else {
-                    failures += 1
-                    println("FAILED $label: VPN tunnel did not reach Connected")
-                    logger.log("[CLI] FAILED $label: session did not reach Connected")
-                    printRecentLogs()
-                }
+                connected = awaitTerminal(generation)
             } finally {
-                stopAndWait(generation)
+                cleanupSucceeded = stopAndWait(generation)
+            }
+            if (connected && cleanupSucceeded) {
+                println("OK $label")
+                logger.log("[CLI] OK $label")
+            } else {
+                failures += 1
+                val reason = if (!connected) "VPN tunnel did not reach Connected" else "VPN cleanup failed"
+                println("FAILED $label: $reason")
+                logger.log("[CLI] FAILED $label: $reason")
+                printRecentLogs()
             }
         }
 
@@ -160,7 +165,10 @@ class CliClient(
         val snapshot = runBlocking { sessionController.snapshot() }
         if (snapshot !is SessionControllerResult.Success) return ExitCode.PROGRAM_FAILED
         val generation = snapshot.value.generation
-        if (generation == 0uL || snapshot.value.cleanupComplete) return ExitCode.OK
+        if (generation == 0uL) return ExitCode.OK
+        if (snapshot.value.cleanupComplete) {
+            return if (snapshot.value.cleanupSucceeded()) ExitCode.OK else ExitCode.PROGRAM_FAILED
+        }
         return if (runBlocking { stopAndWait(generation) }) ExitCode.OK else ExitCode.PROGRAM_FAILED
     }
 
@@ -190,22 +198,34 @@ class CliClient(
             is SessionControllerResult.Failure -> return ExitCode.TUNNEL_START_ERROR
         }
 
+        var outcome = ExitCode.OK
         try {
-            if (!runBlocking { awaitTerminal(generation) }) return ExitCode.TUNNEL_START_ERROR
-            val tunnelIp = waitForExternalIpChange(baselineIp, TUNNEL_IP_VERIFY_TIMEOUT_SECONDS)
-            if (tunnelIp == null) {
+            if (!runBlocking { awaitTerminal(generation) }) {
+                outcome = ExitCode.TUNNEL_START_ERROR
+            } else {
+                val tunnelIp = waitForExternalIpChange(baselineIp, TUNNEL_IP_VERIFY_TIMEOUT_SECONDS)
+                if (tunnelIp == null) {
+                    outcome = ExitCode.SESSION_VERIFY_FAILED
+                } else {
+                    println("Tunnel IP: $tunnelIp")
+                    logger.log("[CLI] verify-session tunnel IP acquired")
+                }
+            }
+            if (outcome == ExitCode.SESSION_VERIFY_FAILED) {
                 println(
                     "FAILED: external IP did not change through tunnel " +
                         "(baseline=$baselineIp tunnel=unchanged after ${TUNNEL_IP_VERIFY_TIMEOUT_SECONDS}s)"
                 )
                 logger.log("[CLI] FAILED verify-session: IP unchanged")
-                return ExitCode.SESSION_VERIFY_FAILED
             }
-            println("Tunnel IP: $tunnelIp")
-            logger.log("[CLI] verify-session tunnel IP acquired")
         } finally {
-            runBlocking { stopAndWait(generation) }
+            if (!runBlocking { stopAndWait(generation) }) {
+                println("FAILED: VPN cleanup did not complete successfully")
+                logger.log("[CLI] FAILED verify-session: cleanup failed")
+                outcome = ExitCode.SESSION_VERIFY_FAILED
+            }
         }
+        if (outcome != ExitCode.OK) return outcome
 
         val restoredIp = externalIpLookup()
         if (restoredIp == null) {
@@ -336,7 +356,8 @@ class CliClient(
         repeat(MAX_EVENT_POLLS) {
             when (val snapshot = sessionController.snapshot()) {
                 is SessionControllerResult.Success -> {
-                    if (snapshot.value.generation != generation || snapshot.value.cleanupComplete) return true
+                    if (snapshot.value.generation != generation) return true
+                    if (snapshot.value.cleanupComplete) return snapshot.value.cleanupSucceeded()
                 }
                 is SessionControllerResult.Failure -> return false
             }
@@ -352,6 +373,9 @@ class CliClient(
                 "failureCode=${failureCode.safeFailureCode()}"
         )
     }
+
+    private fun SessionSnapshot.cleanupSucceeded(): Boolean =
+        state != SessionState.FAILED && lastFailureCode != SessionFailureCode.CLEANUP_FAILED
 
     private fun printRecentLogs() {
         println("Recent logs:")

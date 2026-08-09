@@ -5,6 +5,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"go_module/core/pkg"
 	"go_module/tunnel/platform_engine"
@@ -41,7 +42,7 @@ func (app *App) validateRunInputs() error {
 	return nil
 }
 
-func (app *App) Run(ctx context.Context, initResult chan<- error) error {
+func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
 	log.Debugf(coreCommon.Category, "[Linux][Init] ===== VPN initialization started =====")
 	if err := app.validateRunInputs(); err != nil {
 		signalInit(initResult, err)
@@ -83,6 +84,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	defer func() {
 		if cleanupErr := routePlan.Close(); cleanupErr != nil {
 			log.Debugf(coreCommon.Category, "[Linux][RoutingPlan][WARN] %v", cleanupErr)
+			runErr = errors.Join(runErr, fmt.Errorf("Linux routing cleanup: %w", cleanupErr))
 		}
 	}()
 
@@ -152,27 +154,17 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 
 	log.Debugf(coreCommon.Category, "[Linux][Step 6][OK] TUN created: %s", app.RoutingConfig.TunDeviceName)
 
-	// 7. Protocol
-	log.Debugf(coreCommon.Category, "[Linux][Step 7] Creating Protocol SOCKS bridge...")
-	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, uplinkIface)
-	if err != nil {
-		_ = tun.Close()
-		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
-		log.Debugf(coreCommon.Category, "[Linux][Step 7][ERROR] %v", err)
-		signalInit(initResult, err)
-		return err
-	}
-	log.Debugf(coreCommon.Category, "[Linux][Step 7][OK] Protocol SOCKS bridge ready")
-
 	var ownedEngine *tunnel.Engine
+	protocolOpened := false
+	var cleanupErr error
 	var closeOnce sync.Once
-	closeAll := func() {
+	closeAll := func() error {
 		closeOnce.Do(func() {
 			log.Debugf(coreCommon.Category, "[Linux][Lifecycle] Shutting down...")
 
 			app.mu.Lock()
 			currentDevice := app.currentDevice
-			if currentDevice == nil {
+			if currentDevice == nil && protocolOpened {
 				currentDevice = app.ProtocolDevice
 			}
 			app.currentDevice = nil
@@ -182,26 +174,45 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 			app.mu.Unlock()
 
 			common.Client.MarkInCriticalSection(coreCommon.Name)
-			if cleanupErr := routePlan.Close(); cleanupErr != nil {
-				log.Debugf(coreCommon.Category, "[Linux][RoutingPlan][WARN] %v", cleanupErr)
-			}
+			routeErr := routePlan.Close()
 			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
+			var engineErr error
 			if ownedEngine != nil {
-				ownedEngine.Stop()
+				engineErr = ownedEngine.Stop()
 			}
-
+			var deviceErr error
 			if currentDevice != nil {
-				_ = currentDevice.Close()
+				deviceErr = currentDevice.Close()
 			}
-
-			_ = tun.Close()
-
-			log.Debugf(coreCommon.Category, "[Linux][Lifecycle] Shutdown complete")
+			tunErr := tun.Close()
+			cleanupErr = errors.Join(routeErr, engineErr, deviceErr, tunErr)
+			if cleanupErr != nil {
+				log.Debugf(coreCommon.Category, "[Linux][Cleanup][ERROR] %v", cleanupErr)
+			} else {
+				log.Debugf(coreCommon.Category, "[Linux][Lifecycle] Shutdown complete")
+			}
 		})
+		return cleanupErr
 	}
+	defer func() {
+		if err := closeAll(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("Linux session cleanup: %w", err))
+		}
+	}()
 
-	defer closeAll()
+	// 7. Protocol
+	log.Debugf(coreCommon.Category, "[Linux][Step 7] Creating Protocol SOCKS bridge...")
+	// Open may partially allocate protocol resources before returning an error.
+	protocolOpened = true
+	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, uplinkIface)
+	if err != nil {
+		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
+		log.Debugf(coreCommon.Category, "[Linux][Step 7][ERROR] %v", err)
+		signalInit(initResult, err)
+		return err
+	}
+	log.Debugf(coreCommon.Category, "[Linux][Step 7][OK] Protocol SOCKS bridge ready")
 
 	// 8. fd
 	t, ok := tun.(interface{ GetFd() int })

@@ -28,6 +28,10 @@ func startPlatformEngine(cfg interface{}) error {
 	return nil
 }
 
-func stopPlatformEngine() {
+func stopPlatformEngine(stopDevice func()) error {
 	log.Debugf(Category, "[Engine][FD] platform stop hook")
+	stopDevice()
+	return nil
 }
+
+func platformInterfaceName() string { return "" }

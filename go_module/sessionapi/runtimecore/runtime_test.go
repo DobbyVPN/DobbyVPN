@@ -62,11 +62,12 @@ type inputRelease struct{ record *recorded }
 func (l inputRelease) Release(context.Context) error { l.record.add("inputs-stop"); return nil }
 
 type fakeCore struct {
-	record      *recorded
-	connectErr  error
-	block       <-chan struct{}
-	stopBlock   <-chan struct{}
-	stopEntered chan<- struct{}
+	record        *recorded
+	connectErr    error
+	disconnectErr error
+	block         <-chan struct{}
+	stopBlock     <-chan struct{}
+	stopEntered   chan<- struct{}
 }
 
 func (c fakeCore) Connect() error {
@@ -84,7 +85,7 @@ func (c fakeCore) Disconnect() error {
 	if c.stopBlock != nil {
 		<-c.stopBlock
 	}
-	return nil
+	return c.disconnectErr
 }
 
 type fakeDevice struct{}
@@ -468,6 +469,22 @@ func TestProbeOwnsTemporaryResourcesAndRuntimeDoesNotOverlap(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = lease.Stop(context.Background())
+}
+
+func TestProbeReportsCleanupFailure(t *testing.T) {
+	record := &recorded{}
+	want := errors.New("probe cleanup failed")
+	o := options(record)
+	o.NewCore = func(pkg.ProtocolDevice, io.ReadWriteCloser) coreClient {
+		return fakeCore{record: record, disconnectErr: want}
+	}
+	result, err := New(o).Probe(context.Background(), v1.SessionRef{Generation: 1}, profile())
+	if !errors.Is(err, want) {
+		t.Fatalf("Probe error=%v, want %v", err, want)
+	}
+	if result != (v1.ProbeResult{}) {
+		t.Fatalf("Probe result=%#v, want empty result after cleanup failure", result)
+	}
 }
 
 func TestRuntimeRejectsStartUntilPriorCleanupFinishes(t *testing.T) {

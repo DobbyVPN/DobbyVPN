@@ -5,26 +5,62 @@ package platform_engine
 import (
 	"net"
 	"net/netip"
+	"regexp"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/xjasonlyu/tun2socks/v2/dialer"
 	"golang.org/x/sys/windows"
 )
 
-func TestWindowsAdapterNameIsExplicitAndStable(t *testing.T) {
-	if WindowsAdapterName != "wintun" {
-		t.Fatalf("unexpected owned adapter name: %q", WindowsAdapterName)
+func TestWindowsAdapterNamesAreUniqueAndOwnershipScoped(t *testing.T) {
+	pattern := regexp.MustCompile(`^DobbyVPN-[0-9a-f]{32}$`)
+	seen := make(map[string]bool)
+	for range 64 {
+		name, err := newWindowsAdapterName()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !pattern.MatchString(name) {
+			t.Fatalf("unexpected owned adapter name: %q", name)
+		}
+		if seen[name] {
+			t.Fatalf("duplicate owned adapter name: %q", name)
+		}
+		seen[name] = true
 	}
 }
 
 func TestWindowsEngineKeyLeavesLoopbackUDPRelayUnbound(t *testing.T) {
-	key := windowsEngineKey(EngineConfig{ProxyAddr: "127.0.0.1:1080", UplinkIface: "Ethernet"})
+	key := windowsEngineKey(EngineConfig{ProxyAddr: "127.0.0.1:1080", UplinkIface: "Ethernet"}, "DobbyVPN-test")
 	if key.Interface != "" {
 		t.Fatalf("engine key interface=%q, want empty so the local UDP relay can reach loopback", key.Interface)
 	}
 	if key.Proxy != "socks5://127.0.0.1:1080" {
 		t.Fatalf("engine key proxy=%q", key.Proxy)
+	}
+	if key.Device != "DobbyVPN-test" {
+		t.Fatalf("engine key device=%q", key.Device)
+	}
+}
+
+func TestWindowsAdapterRemovalWaitsForExactOwnedName(t *testing.T) {
+	previous := listWindowsInterfaces
+	t.Cleanup(func() { listWindowsInterfaces = previous })
+	calls := 0
+	listWindowsInterfaces = func() ([]net.Interface, error) {
+		calls++
+		if calls == 1 {
+			return []net.Interface{{Name: "unrelated-wintun"}, {Name: "DobbyVPN-owned"}}, nil
+		}
+		return []net.Interface{{Name: "unrelated-wintun"}}, nil
+	}
+	if err := waitForWindowsAdapterRemoval("DobbyVPN-owned", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if calls < 2 {
+		t.Fatalf("interface observations=%d, want at least 2", calls)
 	}
 }
 

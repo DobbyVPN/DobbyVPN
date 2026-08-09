@@ -379,6 +379,9 @@ func (c *LegacyClient) Disconnect() error {
 			return err
 		}
 		if snapshot.CleanupComplete {
+			if snapshot.LastFailure == v1.FailureCleanup {
+				return &v1.Error{Code: v1.FailureCleanup, Message: "session cleanup failed"}
+			}
 			break
 		}
 		if time.Now().After(deadline) {

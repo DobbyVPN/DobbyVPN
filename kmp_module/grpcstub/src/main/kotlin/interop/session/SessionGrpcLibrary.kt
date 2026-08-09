@@ -243,5 +243,6 @@ private fun com.dobby.grpcproto.SessionFailureCode.toTransport() = when (this) {
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_RUNTIME_FAILED -> SessionFailureCode.RUNTIME_FAILED
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_CANCELED -> SessionFailureCode.CANCELED
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_INTERNAL -> SessionFailureCode.INTERNAL
+    com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_CLEANUP_FAILED -> SessionFailureCode.CLEANUP_FAILED
     com.dobby.grpcproto.SessionFailureCode.UNRECOGNIZED -> SessionFailureCode.UNKNOWN
 }

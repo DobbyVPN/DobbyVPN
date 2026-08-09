@@ -125,12 +125,58 @@ class CliClientSessionControllerTest {
         assertTrue(output.contains("failureCode=RUNTIME_FAILED"))
         assertFalse(output.contains("credential-value"))
     }
+
+    @Test
+    fun disconnectFailsWhenCleanupCompletedWithFailure() = runBlocking {
+        val controller = RecordingSessionController(
+            snapshotState = SessionState.FAILED,
+            snapshotFailureCode = SessionFailureCode.CLEANUP_FAILED,
+        )
+        controller.start(SessionStartTarget.ProfileIndex(4))
+
+        val result = CliClient(sessionController = controller).disconnect(emptyList())
+
+        assertEquals(ExitCode.PROGRAM_FAILED, result)
+    }
+
+    @Test
+    fun checkConfigFailsWhenAProfileCleanupFails() {
+        val config = Files.createTempFile("dobby-cli-cleanup-config", ".toml")
+        Files.write(config, byteArrayOf(1))
+        val controller = RecordingSessionController(
+            snapshotState = SessionState.FAILED,
+            snapshotFailureCode = SessionFailureCode.CLEANUP_FAILED,
+        )
+
+        val result = CliClient(sessionController = controller).checkConfig(listOf(config.toString()))
+
+        assertEquals(ExitCode.PROTOCOL_CHECK_FAILED, result)
+    }
+
+    @Test
+    fun verifySessionFailsWhenCleanupFails() {
+        val config = Files.createTempFile("dobby-cli-cleanup-verify", ".toml")
+        Files.write(config, byteArrayOf(1))
+        val controller = RecordingSessionController(
+            snapshotState = SessionState.FAILED,
+            snapshotFailureCode = SessionFailureCode.CLEANUP_FAILED,
+        )
+        var lookups = 0
+        val client = CliClient(
+            sessionController = controller,
+            externalIpLookup = { if (lookups++ == 0) "192.0.2.1" else "198.51.100.2" },
+        )
+
+        assertEquals(ExitCode.SESSION_VERIFY_FAILED, client.verifySession(listOf(config.toString())))
+    }
 }
 
 private class RecordingSessionController(
     private val terminalState: SessionState = SessionState.CONNECTED,
     private val terminalFailureCode: SessionFailureCode? = null,
     private val startFailure: SessionControllerResult.Failure? = null,
+    private val snapshotState: SessionState = SessionState.IDLE,
+    private val snapshotFailureCode: SessionFailureCode? = null,
 ) : SessionController {
     var configuredBytes = byteArrayOf()
     val startTargets = mutableListOf<SessionStartTarget>()
@@ -165,7 +211,15 @@ private class RecordingSessionController(
     }
 
     override suspend fun snapshot(): SessionControllerResult<SessionSnapshot> =
-        SessionControllerResult.Success(SessionSnapshot(generation, SessionState.IDLE, configured = true, cleanupComplete = true))
+        SessionControllerResult.Success(
+            SessionSnapshot(
+                generation,
+                snapshotState,
+                configured = true,
+                cleanupComplete = true,
+                lastFailureCode = snapshotFailureCode,
+            ),
+        )
 
     override suspend fun observe(afterSequence: ULong): SessionControllerResult<SessionObservation> {
         if (afterSequence >= sequence) {

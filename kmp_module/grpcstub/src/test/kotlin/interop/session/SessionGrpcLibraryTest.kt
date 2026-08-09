@@ -72,4 +72,19 @@ class SessionGrpcLibraryTest {
         assertEquals(SessionFailureCode.RUNTIME_FAILED, mapped.failure?.code)
         assertEquals("RETRY", mapped.warning?.code)
     }
+
+    @Test
+    fun cleanupFailureCodeIsPreserved() {
+        val event = ProtoEvent.newBuilder()
+            .setState(ProtoState.SESSION_STATE_FAILED)
+            .setFailure(
+                ProtoFailure.newBuilder()
+                    .setCode(ProtoFailureCode.SESSION_FAILURE_CODE_CLEANUP_FAILED)
+                    .setMessage("session cleanup failed")
+                    .build(),
+            )
+            .build()
+
+        assertEquals(SessionFailureCode.CLEANUP_FAILED, event.toTransport().failure?.code)
+    }
 }

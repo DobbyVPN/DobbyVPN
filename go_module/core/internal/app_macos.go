@@ -5,6 +5,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"go_module/core/pkg"
 	"go_module/log"
@@ -30,7 +31,7 @@ func signalInit(initResult chan<- error, err error) {
 	}
 }
 
-func (app *App) Run(ctx context.Context, initResult chan<- error) error {
+func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
 	log.Debugf(coreCommon.Category, "[Darwin][Init] VPN initialization started")
 	if app.ProtocolDevice == nil {
 		err := fmt.Errorf("protocol device is not initialized")
@@ -71,9 +72,10 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	routePlan := routing.NewPlan(fmt.Sprintf("darwin:%p", app))
 	var ownedEngine *tunnel.Engine
 	var closeOnce sync.Once
+	var cleanupErr error
 	tunName := ""
 	protocolOpened := false
-	closeAll := func() {
+	closeAll := func() error {
 		closeOnce.Do(func() {
 			log.Debugf(coreCommon.Category, "[Darwin][Lifecycle] stopping generation-owned resources")
 			app.mu.Lock()
@@ -90,23 +92,31 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 			// exists. Stopping tun2socks first can make the default route vanish
 			// before the Plan can prove ownership and restore its baseline.
 			common.Client.MarkInCriticalSection(coreCommon.Name)
-			if cleanupErr := routePlan.Close(); cleanupErr != nil {
-				log.Debugf(coreCommon.Category, "[Darwin][RoutingPlan][WARN] %v", cleanupErr)
-			}
+			routeErr := routePlan.Close()
 			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+			var engineErr error
 			if ownedEngine != nil {
-				ownedEngine.Stop()
+				engineErr = ownedEngine.Stop()
 			}
+			var deviceErr error
 			if currentDevice != nil {
-				if closeErr := currentDevice.Close(); closeErr != nil {
-					log.Debugf(coreCommon.Category, "[Darwin][Lifecycle][WARN] ProtocolDevice.Close failed: %v", closeErr)
-				}
+				deviceErr = currentDevice.Close()
 			}
-			log.Debugf(coreCommon.Category, "[Darwin][Lifecycle] generation cleanup complete")
+			cleanupErr = errors.Join(routeErr, engineErr, deviceErr)
+			if cleanupErr != nil {
+				log.Debugf(coreCommon.Category, "[Darwin][Cleanup][ERROR] %v", cleanupErr)
+			} else {
+				log.Debugf(coreCommon.Category, "[Darwin][Lifecycle] generation cleanup complete")
+			}
 		})
+		return cleanupErr
 	}
 
-	defer closeAll()
+	defer func() {
+		if err := closeAll(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("macOS session cleanup: %w", err))
+		}
+	}()
 
 	if serverIP.String() != "127.0.0.1" {
 		log.Debugf(coreCommon.Category, "[Darwin][Routing] acquiring direct VPN bypass route")

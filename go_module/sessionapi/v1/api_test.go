@@ -215,6 +215,65 @@ func TestAutoSelectionUsesLatencyThenSourceOrderAndEventsAreMonotonic(t *testing
 	}
 }
 
+func TestStopReportsCleanupFailureAndBlocksRestart(t *testing.T) {
+	runtime := &cleanupErrorRuntime{err: errors.New("cleanup failed")}
+	m := NewManager(ManagerOptions{Runtime: runtime, Platform: &fakePlatform{}})
+	id := configured(t, m)
+	start, err := m.Start(context.Background(), id, "start", StartTarget{Mode: ProfileIndex, Index: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, m, id, StateConnected)
+	if _, err := m.Stop(context.Background(), id, "stop", start.Generation); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := waitState(t, m, id, StateFailed)
+	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
+		t.Fatalf("cleanup snapshot=%#v", snapshot)
+	}
+	if _, err := m.Start(context.Background(), id, "restart", StartTarget{Mode: ProfileIndex, Index: 0}); CodeOf(err) != FailureConflict {
+		t.Fatalf("restart error=%v, want %s", err, FailureConflict)
+	}
+	if _, err := m.Configure(context.Background(), id, "reconfigure", fixture(t)); CodeOf(err) != FailureConflict {
+		t.Fatalf("configure after cleanup failure error=%v, want %s", err, FailureConflict)
+	}
+	if err := m.DestroySession(context.Background(), id); CodeOf(err) != FailureConflict {
+		t.Fatalf("destroy after cleanup failure error=%v, want %s", err, FailureConflict)
+	}
+}
+
+func TestPlatformAcquisitionErrorStillOwnsAndReportsReturnedLeaseCleanup(t *testing.T) {
+	want := errors.New("platform rollback failed")
+	m := NewManager(ManagerOptions{
+		Runtime:  &fakeRuntime{latency: map[int]int64{0: 1}},
+		Platform: errorWithLeasePlatform{prepareErr: errors.New("prepare failed"), releaseErr: want},
+	})
+	id := configured(t, m)
+	if _, err := m.Start(context.Background(), id, "start", StartTarget{Mode: ProfileIndex, Index: 0}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := waitState(t, m, id, StateFailed)
+	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
+		t.Fatalf("cleanup snapshot=%#v", snapshot)
+	}
+}
+
+func TestRuntimeAcquisitionErrorStillOwnsAndReportsReturnedLeaseCleanup(t *testing.T) {
+	want := errors.New("runtime rollback failed")
+	m := NewManager(ManagerOptions{
+		Runtime:  errorWithLeaseRuntime{startErr: errors.New("start failed"), stopErr: want},
+		Platform: &fakePlatform{},
+	})
+	id := configured(t, m)
+	if _, err := m.Start(context.Background(), id, "start", StartTarget{Mode: ProfileIndex, Index: 0}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := waitState(t, m, id, StateFailed)
+	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
+		t.Fatalf("cleanup snapshot=%#v", snapshot)
+	}
+}
+
 func TestAutoSelectionProbesWithFreshPlatformLeaseBeforeEachRuntimeProbe(t *testing.T) {
 	order := &recordedOrder{}
 	runtime := &orderedProbeRuntime{order: order, latency: map[int]int64{0: 40, 1: 10, 2: 30, 3: 20}}
@@ -406,6 +465,78 @@ func TestStopWaitsForNonCooperativeStartBeforeCleanupAndRestart(t *testing.T) {
 	}
 }
 
+func TestStopReportsLateRuntimeLeaseCleanupFailure(t *testing.T) {
+	entered := make(chan struct{})
+	releaseStart := make(chan struct{})
+	stopped := make(chan struct{}, 1)
+	r := blockingStartRuntime{
+		entered: entered,
+		release: releaseStart,
+		stopped: stopped,
+		err:     errors.New("late runtime cleanup failed"),
+	}
+	m := NewManager(ManagerOptions{Runtime: r, Platform: &fakePlatform{}})
+	id := configured(t, m)
+	start, err := m.Start(context.Background(), id, "start", StartTarget{Mode: ProfileIndex, Index: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("runtime start did not begin")
+	}
+	if _, err := m.Stop(context.Background(), id, "stop", start.Generation); err != nil {
+		t.Fatal(err)
+	}
+	close(releaseStart)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("late runtime lease was not stopped")
+	}
+	snapshot := waitState(t, m, id, StateFailed)
+	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
+		t.Fatalf("cleanup snapshot=%#v", snapshot)
+	}
+}
+
+func TestStopReportsLatePlatformLeaseCleanupFailure(t *testing.T) {
+	entered := make(chan struct{})
+	releasePrepare := make(chan struct{})
+	released := make(chan struct{}, 1)
+	platform := blockingPreparePlatform{
+		entered:  entered,
+		release:  releasePrepare,
+		released: released,
+		err:      errors.New("late platform cleanup failed"),
+	}
+	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int]int64{0: 1}}, Platform: platform})
+	id := configured(t, m)
+	start, err := m.Start(context.Background(), id, "start", StartTarget{Mode: ProfileIndex, Index: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("platform preparation did not begin")
+	}
+	if _, err := m.Stop(context.Background(), id, "stop", start.Generation); err != nil {
+		t.Fatal(err)
+	}
+	close(releasePrepare)
+	select {
+	case <-released:
+	case <-time.After(time.Second):
+		t.Fatal("late platform lease was not released")
+	}
+	snapshot := waitState(t, m, id, StateFailed)
+	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
+		t.Fatalf("cleanup snapshot=%#v", snapshot)
+	}
+}
+
 func TestDefaultRuntimeFailsTypedUnsupported(t *testing.T) {
 	m := NewManager(ManagerOptions{})
 	id := configured(t, m)
@@ -566,6 +697,31 @@ func (l fakeRuntimeLease) Stop(context.Context) error {
 	return nil
 }
 
+type cleanupErrorRuntime struct{ err error }
+
+func (*cleanupErrorRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
+	return ProbeResult{LatencyMillis: 1}, nil
+}
+func (r *cleanupErrorRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
+	return cleanupErrorLease{err: r.err}, nil
+}
+
+type cleanupErrorLease struct{ err error }
+
+func (l cleanupErrorLease) Stop(context.Context) error { return l.err }
+
+type errorWithLeaseRuntime struct {
+	startErr error
+	stopErr  error
+}
+
+func (errorWithLeaseRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
+	return ProbeResult{LatencyMillis: 1}, nil
+}
+func (r errorWithLeaseRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
+	return cleanupErrorLease{err: r.stopErr}, r.startErr
+}
+
 type monitoringRuntime struct {
 	failures <-chan struct{}
 	stopped  chan uint64
@@ -640,6 +796,21 @@ func (l fakePlatformLease) Release(context.Context) error {
 	}
 	return nil
 }
+
+type errorWithLeasePlatform struct {
+	prepareErr error
+	releaseErr error
+}
+
+func (p errorWithLeasePlatform) PrepareTunnel(context.Context, SessionRef) (PlatformLease, error) {
+	return cleanupErrorPlatformLease{err: p.releaseErr}, p.prepareErr
+}
+func (errorWithLeasePlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
+func (errorWithLeasePlatform) PublishState(context.Context, Event) error            { return nil }
+
+type cleanupErrorPlatformLease struct{ err error }
+
+func (l cleanupErrorPlatformLease) Release(context.Context) error { return l.err }
 
 type recordedOrder struct {
 	mu    sync.Mutex
@@ -732,6 +903,7 @@ type blockingStartRuntime struct {
 	entered chan<- struct{}
 	release <-chan struct{}
 	stopped chan<- struct{}
+	err     error
 }
 
 func (r blockingStartRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
@@ -740,9 +912,37 @@ func (r blockingStartRuntime) Probe(context.Context, SessionRef, RuntimeProfile)
 func (r blockingStartRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
 	r.entered <- struct{}{}
 	<-r.release // deliberately ignores the context, as a misbehaving core could
-	return blockingStartLease{stopped: r.stopped}, nil
+	return blockingStartLease{stopped: r.stopped, err: r.err}, nil
 }
 
-type blockingStartLease struct{ stopped chan<- struct{} }
+type blockingStartLease struct {
+	stopped chan<- struct{}
+	err     error
+}
 
-func (l blockingStartLease) Stop(context.Context) error { l.stopped <- struct{}{}; return nil }
+func (l blockingStartLease) Stop(context.Context) error { l.stopped <- struct{}{}; return l.err }
+
+type blockingPreparePlatform struct {
+	entered  chan<- struct{}
+	release  <-chan struct{}
+	released chan<- struct{}
+	err      error
+}
+
+func (p blockingPreparePlatform) PrepareTunnel(context.Context, SessionRef) (PlatformLease, error) {
+	p.entered <- struct{}{}
+	<-p.release // deliberately ignores cancellation like a misbehaving platform adapter could
+	return blockingPrepareLease{released: p.released, err: p.err}, nil
+}
+func (blockingPreparePlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
+func (blockingPreparePlatform) PublishState(context.Context, Event) error            { return nil }
+
+type blockingPrepareLease struct {
+	released chan<- struct{}
+	err      error
+}
+
+func (l blockingPrepareLease) Release(context.Context) error {
+	l.released <- struct{}{}
+	return l.err
+}

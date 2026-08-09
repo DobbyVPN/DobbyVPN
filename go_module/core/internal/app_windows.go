@@ -5,6 +5,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"go_module/tunnel/platform_engine"
 	"go_module/tunnel/protected_dialer"
@@ -36,14 +37,9 @@ func signalInit(initResult chan<- error, err error) {
 	}
 }
 
-func (app *App) Run(ctx context.Context, initResult chan<- error) error {
+func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
 	startedAt := time.Now()
 	routePlan := routing.NewPlan(fmt.Sprintf("windows-%d-%d", startedAt.UnixNano(), windowsRunSequence.Add(1)))
-	defer func() {
-		if cleanupErr := routePlan.Close(); cleanupErr != nil {
-			log.Debugf(coreCommon.Category, "[Windows][RoutingPlan][WARN] %v", cleanupErr)
-		}
-	}()
 
 	if app.ProtocolDevice == nil {
 		err := fmt.Errorf("protocol device is not initialized")
@@ -58,6 +54,36 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 
 	cfg := common.GetNetworkConfig()
 	var ownedEngine *tunnel.Engine
+	protocolOpened := false
+	defer func() {
+		app.mu.Lock()
+		app.currentDevice = nil
+		app.running = false
+		app.engine = nil
+		app.mu.Unlock()
+
+		common.Client.MarkInCriticalSection(coreCommon.Name)
+		log.Debugf(coreCommon.Category, "Closing Windows routing plan before stopping tun2socks")
+		routeErr := routePlan.Close()
+		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
+
+		log.Debugf(coreCommon.Category, "[Tunnel] Stopping tun2socks engine")
+		var engineErr error
+		if ownedEngine != nil {
+			engineErr = ownedEngine.Stop()
+		}
+		var deviceErr error
+		if protocolOpened {
+			deviceErr = app.ProtocolDevice.Close()
+		}
+		cleanupErr := errors.Join(routeErr, engineErr, deviceErr)
+		if cleanupErr != nil {
+			log.Debugf(coreCommon.Category, "[Windows][Cleanup][ERROR] %v", cleanupErr)
+			runErr = errors.Join(runErr, fmt.Errorf("Windows session cleanup: %w", cleanupErr))
+		} else {
+			log.Debugf(coreCommon.Category, "[Windows][Cleanup] complete=true")
+		}
+	}()
 
 	stepStartedAt := time.Now()
 	gatewayIP, err := gateway.DiscoverGateway()
@@ -121,6 +147,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 
 	// SOCKS protocol device
 	stepStartedAt = time.Now()
+	// Open can partially acquire resources before returning an error, so the
+	// single owner defer must attempt Close on both success and failure.
+	protocolOpened = true
 	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, netInterface.Name)
 	if err != nil {
 		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
@@ -141,9 +170,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	})
 	if err != nil {
 		log.Debugf(coreCommon.Category, "Can't start tun2socks: %v", err)
-		if closeErr := app.ProtocolDevice.Close(); closeErr != nil {
-			log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Close after tun2socks start error failed: %v", closeErr)
-		}
+		signalInit(initResult, err)
 		return err
 	}
 	app.mu.Lock()
@@ -154,31 +181,15 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	stepStartedAt = time.Now()
 	tunInterface, err := routing.WaitForInterfaceByIP(cfg.TunDevice, 5*time.Second)
 	if err != nil {
-		if cleanupErr := routePlan.Close(); cleanupErr != nil {
-			log.Debugf(coreCommon.Category, "[Windows][RoutingPlan][WARN] %v", cleanupErr)
-		}
-		ownedEngine.Stop()
-		app.mu.Lock()
-		app.engine = nil
-		app.mu.Unlock()
-		if closeErr := app.ProtocolDevice.Close(); closeErr != nil {
-			log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Close after TUN interface wait error failed: %v", closeErr)
-		}
 		signalInit(initResult, err)
 		return err
 	}
-	if tunInterface.Name != platform_engine.WindowsAdapterName {
-		ownedEngine.Stop()
-		app.mu.Lock()
-		app.engine = nil
-		app.mu.Unlock()
-		if closeErr := app.ProtocolDevice.Close(); closeErr != nil {
-			log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Close after owned TUN mismatch failed: %v", closeErr)
-		}
+	expectedInterface := ownedEngine.InterfaceName()
+	if expectedInterface == "" || tunInterface.Name != expectedInterface {
 		err = fmt.Errorf(
 			"interface with TUN address is %q, expected owned adapter %q",
 			tunInterface.Name,
-			platform_engine.WindowsAdapterName,
+			expectedInterface,
 		)
 		signalInit(initResult, err)
 		return err
@@ -196,13 +207,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 		netInterface.Name,
 	); err != nil {
 		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-		ownedEngine.Stop()
-		app.mu.Lock()
-		app.engine = nil
-		app.mu.Unlock()
-		if closeErr := app.ProtocolDevice.Close(); closeErr != nil {
-			log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Close after routing error failed: %v", closeErr)
-		}
 		err = fmt.Errorf("failed to configure routing: %w", err)
 		log.Debugf(coreCommon.Category, "%v", err)
 		signalInit(initResult, err)
@@ -224,33 +228,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) error {
 	// Signal successful initialization - connection is ready
 	log.Debugf(coreCommon.Category, "[Windows] App initialization ready total=%s", time.Since(startedAt).Truncate(time.Millisecond))
 	signalInit(initResult, nil)
-
-	defer func() {
-		app.mu.Lock()
-		currentDevice := app.currentDevice
-		app.currentDevice = nil
-		app.running = false
-		ownedEngine = app.engine
-		app.engine = nil
-		app.mu.Unlock()
-
-		common.Client.MarkInCriticalSection(coreCommon.Name)
-		log.Debugf(coreCommon.Category, "Closing Windows routing plan before stopping tun2socks")
-		if cleanupErr := routePlan.Close(); cleanupErr != nil {
-			log.Debugf(coreCommon.Category, "[Windows][RoutingPlan][WARN] %v", cleanupErr)
-		}
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
-
-		log.Debugf(coreCommon.Category, "[Tunnel] Stopping tun2socks engine")
-		if ownedEngine != nil {
-			ownedEngine.Stop()
-		}
-		if currentDevice != nil {
-			if closeErr := currentDevice.Close(); closeErr != nil {
-				log.Debugf(coreCommon.Category, "[Windows] ProtocolDevice.Close during shutdown failed: %v", closeErr)
-			}
-		}
-	}()
 
 	<-ctx.Done()
 

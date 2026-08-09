@@ -156,6 +156,7 @@ const (
 	SessionFailureCode_SESSION_FAILURE_CODE_RUNTIME_FAILED   SessionFailureCode = 10
 	SessionFailureCode_SESSION_FAILURE_CODE_CANCELED         SessionFailureCode = 11
 	SessionFailureCode_SESSION_FAILURE_CODE_INTERNAL         SessionFailureCode = 12
+	SessionFailureCode_SESSION_FAILURE_CODE_CLEANUP_FAILED   SessionFailureCode = 13
 )
 
 // Enum value maps for SessionFailureCode.
@@ -174,6 +175,7 @@ var (
 		10: "SESSION_FAILURE_CODE_RUNTIME_FAILED",
 		11: "SESSION_FAILURE_CODE_CANCELED",
 		12: "SESSION_FAILURE_CODE_INTERNAL",
+		13: "SESSION_FAILURE_CODE_CLEANUP_FAILED",
 	}
 	SessionFailureCode_value = map[string]int32{
 		"SESSION_FAILURE_CODE_UNSPECIFIED":      0,
@@ -189,6 +191,7 @@ var (
 		"SESSION_FAILURE_CODE_RUNTIME_FAILED":   10,
 		"SESSION_FAILURE_CODE_CANCELED":         11,
 		"SESSION_FAILURE_CODE_INTERNAL":         12,
+		"SESSION_FAILURE_CODE_CLEANUP_FAILED":   13,
 	}
 )
 
@@ -2654,7 +2657,7 @@ const file_grpcproto_vpnserver_proto_rawDesc = "" +
 	"\x17SESSION_STATE_CONNECTED\x10\x05\x12\x1a\n" +
 	"\x16SESSION_STATE_STOPPING\x10\x06\x12\x18\n" +
 	"\x14SESSION_STATE_FAILED\x10\a\x12\x1b\n" +
-	"\x17SESSION_STATE_DESTROYED\x10\b*\x91\x04\n" +
+	"\x17SESSION_STATE_DESTROYED\x10\b*\xba\x04\n" +
 	"\x12SessionFailureCode\x12$\n" +
 	" SESSION_FAILURE_CODE_UNSPECIFIED\x10\x00\x12)\n" +
 	"%SESSION_FAILURE_CODE_INVALID_ARGUMENT\x10\x01\x12\"\n" +
@@ -2669,7 +2672,8 @@ const file_grpcproto_vpnserver_proto_rawDesc = "" +
 	"#SESSION_FAILURE_CODE_RUNTIME_FAILED\x10\n" +
 	"\x12!\n" +
 	"\x1dSESSION_FAILURE_CODE_CANCELED\x10\v\x12!\n" +
-	"\x1dSESSION_FAILURE_CODE_INTERNAL\x10\f*\x80\x01\n" +
+	"\x1dSESSION_FAILURE_CODE_INTERNAL\x10\f\x12'\n" +
+	"#SESSION_FAILURE_CODE_CLEANUP_FAILED\x10\r*\x80\x01\n" +
 	"\x10SessionStartMode\x12\"\n" +
 	"\x1eSESSION_START_MODE_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eSESSION_START_MODE_AUTO_SELECT\x10\x01\x12$\n" +

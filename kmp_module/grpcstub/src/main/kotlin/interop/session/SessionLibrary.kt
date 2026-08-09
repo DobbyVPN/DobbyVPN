@@ -53,6 +53,7 @@ enum class SessionFailureCode {
     RUNTIME_FAILED,
     CANCELED,
     INTERNAL,
+    CLEANUP_FAILED,
     UNKNOWN,
 }
 

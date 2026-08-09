@@ -3,6 +3,8 @@
 package platform_engine
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"go_module/common"
@@ -23,22 +25,25 @@ import (
 )
 
 var (
-	lastIface     string
-	lastLUID      winipcfg.LUID
-	luidKnown     bool
-	prevDNS       []netip.Addr
-	prevDNSStatic bool
-	dnsKnown      bool
-	dnsMutated    bool
-	prevDAD       uint32
-	dadMutated    bool
-	tunnelIPv4    netip.Prefix
-	ipv4Mutated   bool
+	ownedAdapterName string
+	lastIface        string
+	lastLUID         winipcfg.LUID
+	luidKnown        bool
+	prevDNS          []netip.Addr
+	prevDNSStatic    bool
+	dnsKnown         bool
+	dnsMutated       bool
+	prevDAD          uint32
+	dadMutated       bool
+	tunnelIPv4       netip.Prefix
+	ipv4Mutated      bool
 )
 
 const (
-	windowsTunMTU      = 1200
-	WindowsAdapterName = "wintun"
+	windowsTunMTU                = 1200
+	windowsAdapterPrefix         = "DobbyVPN-"
+	windowsAdapterRandomBytes    = 16
+	windowsAdapterRemovalTimeout = 60 * time.Second
 )
 
 func execAndLog(cmd string, context string) error {
@@ -61,14 +66,18 @@ func startPlatformEngine(cfg interface{}) error {
 	c := cfg.(EngineConfig)
 	uplinkIface := c.UplinkIface
 	resetWindowsState()
-
 	log.Debugf(Category, "[Engine][Windows] proxy_ready=true uplink_iface=%s", uplinkIface)
 	if routing.IsTunnelInterfaceName(uplinkIface) {
 		return fmt.Errorf("refusing to use tunnel interface %q as Windows uplink", uplinkIface)
 	}
+	adapterName, err := newWindowsAdapterName()
+	if err != nil {
+		return fmt.Errorf("create owned Wintun identity: %w", err)
+	}
+	ownedAdapterName = adapterName
 
 	resetTun2SocksInterfaceBinding()
-	key := windowsEngineKey(c)
+	key := windowsEngineKey(c, adapterName)
 
 	engine.Insert(key)
 	engineStartAt := time.Now()
@@ -76,25 +85,20 @@ func startPlatformEngine(cfg interface{}) error {
 	log.Debugf(Category, "[Engine][Windows] engine.Start returned elapsed=%s total=%s", time.Since(engineStartAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	waitStartedAt := time.Now()
-	ifName, err := waitForWintun(5 * time.Second)
+	ifName, err := waitForWintun(adapterName, 5*time.Second)
 	if err != nil {
-		engine.Stop()
-		return err
+		return failWindowsStart(err)
 	}
 	log.Debugf(Category, "[Engine][Windows] waitForWintun OK iface=%s elapsed=%s total=%s", ifName, time.Since(waitStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	lastIface = ifName
 	iface, err := net.InterfaceByName(ifName)
 	if err != nil {
-		resetWindowsState()
-		engine.Stop()
-		return fmt.Errorf("resolve interface %q: %w", ifName, err)
+		return failWindowsStart(fmt.Errorf("resolve interface %q: %w", ifName, err))
 	}
 	lastLUID, err = winipcfg.LUIDFromIndex(uint32(iface.Index))
 	if err != nil {
-		resetWindowsState()
-		engine.Stop()
-		return fmt.Errorf("resolve interface %q LUID: %w", ifName, err)
+		return failWindowsStart(fmt.Errorf("resolve interface %q LUID: %w", ifName, err))
 	}
 	luidKnown = true
 
@@ -152,19 +156,17 @@ func startPlatformEngine(cfg interface{}) error {
 }
 
 func failWindowsStart(cause error) error {
-	cleanupErr := cleanupWindowsState()
-	engine.Stop()
-	return errors.Join(cause, cleanupErr)
+	return errors.Join(cause, stopPlatformEngine(engine.Stop))
 }
 
-func windowsEngineKey(c EngineConfig) *engine.Key {
+func windowsEngineKey(c EngineConfig, adapterName string) *engine.Key {
 	// The proxy is loopback. Binding tun2socks' process-global dialer to the
 	// physical uplink also binds its address-less UDP relay socket on Windows;
 	// that socket then cannot send SOCKS5 UDP-associate datagrams to loopback.
 	// Real protocol sockets are protected independently by protected_dialer.
 	return &engine.Key{
 		Proxy:    fmt.Sprintf("socks5://%s", c.ProxyAddr),
-		Device:   WindowsAdapterName,
+		Device:   adapterName,
 		LogLevel: "info",
 		MTU:      windowsTunMTU,
 	}
@@ -178,17 +180,23 @@ func resetTun2SocksInterfaceBinding() {
 	dialer.DefaultDialer.InterfaceIndex.Store(0)
 }
 
-func stopPlatformEngine() {
-	if err := cleanupWindowsState(); err != nil {
+func stopPlatformEngine(stopDevice func()) error {
+	adapterName := ownedAdapterName
+	configurationErr := cleanupWindowsState()
+	stopDevice()
+	removalErr := waitForWindowsAdapterRemoval(adapterName, windowsAdapterRemovalTimeout)
+	resetWindowsState()
+	err := errors.Join(configurationErr, removalErr)
+	if err != nil {
 		log.Debugf(Category, "[Engine][Windows][ERROR] platform cleanup: %v", err)
 	}
+	return err
 }
 
 func cleanupWindowsState() error {
 	if lastIface == "" {
 		return nil
 	}
-	defer resetWindowsState()
 
 	var errs []error
 
@@ -222,6 +230,7 @@ func cleanupWindowsState() error {
 }
 
 func resetWindowsState() {
+	ownedAdapterName = ""
 	lastIface = ""
 	lastLUID = 0
 	luidKnown = false
@@ -235,13 +244,56 @@ func resetWindowsState() {
 	ipv4Mutated = false
 }
 
-func waitForWintun(timeout time.Duration) (string, error) {
-	iface, err := routing.WaitForInterfaceName(WindowsAdapterName, timeout)
+func newWindowsAdapterName() (string, error) {
+	random := make([]byte, windowsAdapterRandomBytes)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	return windowsAdapterPrefix + hex.EncodeToString(random), nil
+}
+
+func waitForWintun(name string, timeout time.Duration) (string, error) {
+	iface, err := routing.WaitForInterfaceName(name, timeout)
 	if err != nil {
-		return "", fmt.Errorf("owned Wintun adapter %q not found: %w", WindowsAdapterName, err)
+		return "", fmt.Errorf("owned Wintun adapter %q not found: %w", name, err)
 	}
 	return iface.Name, nil
 }
+
+var listWindowsInterfaces = net.Interfaces
+
+func waitForWindowsAdapterRemoval(name string, timeout time.Duration) error {
+	if name == "" {
+		return nil
+	}
+	startedAt := time.Now()
+	deadline := startedAt.Add(timeout)
+	for {
+		interfaces, err := listWindowsInterfaces()
+		if err == nil {
+			present := false
+			for _, iface := range interfaces {
+				if iface.Name == name {
+					present = true
+					break
+				}
+			}
+			if !present {
+				log.Debugf(Category, "[Engine][Windows] owned adapter removed elapsed=%s", time.Since(startedAt).Truncate(time.Millisecond))
+				return nil
+			}
+		}
+		if !time.Now().Before(deadline) {
+			if err != nil {
+				return fmt.Errorf("verify owned Wintun adapter removal: %w", err)
+			}
+			return fmt.Errorf("owned Wintun adapter was not removed within %s", timeout)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func platformInterfaceName() string { return lastIface }
 
 func windowsSetDADCommand(name string, transmits uint32) string {
 	return fmt.Sprintf(

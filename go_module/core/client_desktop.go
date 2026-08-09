@@ -19,6 +19,7 @@ type CoreClient struct {
 	app        *internal.App
 	cancel     context.CancelFunc
 	done       chan struct{}
+	runErr     error
 	state      LifecycleState
 	generation uint64
 
@@ -66,6 +67,7 @@ func (c *CoreClient) Connect() error {
 	c.generation++
 	generation := c.generation
 	c.state = StatePreparing
+	c.runErr = nil
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
@@ -77,21 +79,22 @@ func (c *CoreClient) Connect() error {
 	c.mu.Unlock()
 
 	go func() {
+		var runErr error
 		defer func() {
 			if r := recover(); r != nil {
-				err := fmt.Errorf("core client crashed: %v", r)
-				log.Debugf(coreCommon.Category, "core goroutine recovered from panic: %v", err)
+				runErr = fmt.Errorf("core client crashed: %v", r)
+				log.Debugf(coreCommon.Category, "core goroutine recovered from panic: %v", runErr)
 				select {
-				case initResult <- err:
+				case initResult <- runErr:
 				default:
 				}
 			}
-			c.finishRun(generation)
+			c.finishRun(generation, runErr)
 			close(done)
 		}()
-		err := c.app.Run(ctx, initResult)
-		if err != nil {
-			log.Debugf(coreCommon.Category, "connect core client failed: %v", err)
+		runErr = c.app.Run(ctx, initResult)
+		if runErr != nil {
+			log.Debugf(coreCommon.Category, "connect core client failed: %v", runErr)
 		}
 	}()
 
@@ -99,13 +102,13 @@ func (c *CoreClient) Connect() error {
 	select {
 	case err := <-initResult:
 		if err != nil {
-			c.stopAndWait("after initialization error")
+			shutdownErr := c.stopAndWait("after initialization error")
 			c.mu.Lock()
 			if c.generation == generation {
 				c.state = StateFailed
 			}
 			c.mu.Unlock()
-			return fmt.Errorf("failed to initialize core client connection: %w", err)
+			return errors.Join(fmt.Errorf("failed to initialize core client connection: %w", err), shutdownErr, c.terminalRunError(generation))
 		}
 		c.mu.Lock()
 		if c.generation != generation || c.state != StatePreparing {
@@ -119,13 +122,13 @@ func (c *CoreClient) Connect() error {
 		common.Client.MarkActive(coreCommon.Name)
 		return nil
 	case <-time.After(30 * time.Second):
-		c.stopAndWait("after initialization timeout")
+		shutdownErr := c.stopAndWait("after initialization timeout")
 		c.mu.Lock()
 		if c.generation == generation {
 			c.state = StateFailed
 		}
 		c.mu.Unlock()
-		return fmt.Errorf("timeout waiting for core client connection initialization")
+		return errors.Join(fmt.Errorf("timeout waiting for core client connection initialization"), shutdownErr, c.terminalRunError(generation))
 	}
 }
 
@@ -143,6 +146,14 @@ func (c *CoreClient) Disconnect() error {
 		c.mu.Unlock()
 		return lifecycleBusyError(StateStopping)
 	}
+	if c.state == StateFailed && c.done == nil {
+		runErr := c.runErr
+		c.mu.Unlock()
+		if runErr != nil {
+			return fmt.Errorf("core client cleanup failed: %w", runErr)
+		}
+		return nil
+	}
 	c.state = StateStopping
 	cancel := c.cancel
 	done := c.done
@@ -152,6 +163,9 @@ func (c *CoreClient) Disconnect() error {
 	}
 	if err := c.waitForShutdown(done, "disconnect"); err != nil {
 		return err
+	}
+	if err := c.terminalRunError(c.Generation()); err != nil {
+		return fmt.Errorf("core client cleanup failed: %w", err)
 	}
 	common.Client.MarkInactive(coreCommon.Name)
 	return nil
@@ -168,7 +182,7 @@ func (c *CoreClient) SwitchDevice(device pkg.ProtocolDevice) error {
 	return fmt.Errorf("protocol changes require a completed disconnect before starting a new session")
 }
 
-func (c *CoreClient) stopAndWait(reason string) {
+func (c *CoreClient) stopAndWait(reason string) error {
 	c.mu.Lock()
 	if c.state != StateStopping {
 		c.state = StateStopping
@@ -179,7 +193,7 @@ func (c *CoreClient) stopAndWait(reason string) {
 	if cancel != nil {
 		cancel()
 	}
-	_ = c.waitForShutdown(done, reason)
+	return c.waitForShutdown(done, reason)
 }
 
 func (c *CoreClient) waitForShutdown(done <-chan struct{}, reason string) error {
@@ -204,13 +218,14 @@ func (c *CoreClient) HealthCheck() error {
 	return nil
 }
 
-func (c *CoreClient) finishRun(generation uint64) {
+func (c *CoreClient) finishRun(generation uint64, runErr error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.generation != generation {
 		return
 	}
-	if c.state == StateStopping {
+	c.runErr = runErr
+	if c.state == StateStopping && runErr == nil {
 		c.state = StateIdle
 	} else {
 		c.state = StateFailed
@@ -218,6 +233,15 @@ func (c *CoreClient) finishRun(generation uint64) {
 	c.cancel = nil
 	c.done = nil
 	common.Client.MarkInactive(coreCommon.Name)
+}
+
+func (c *CoreClient) terminalRunError(generation uint64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation != generation {
+		return nil
+	}
+	return c.runErr
 }
 
 // State returns the lifecycle state for the active generation.

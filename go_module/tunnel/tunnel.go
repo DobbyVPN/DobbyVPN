@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -40,12 +41,14 @@ type Engine struct {
 	mu        sync.RWMutex
 	ready     bool
 	stopped   bool
+	stopErr   error
 	statsStop chan struct{}
 	proxy     *DobbyProxy
+	ifaceName string
 
 	// stopPlatform exists so ownership bookkeeping can be tested without a
 	// real TUN device. Production handles use platform_engine.EngineStop.
-	stopPlatform func()
+	stopPlatform func() error
 }
 
 // Ready reports whether this handle owns a fully initialized tun2socks engine.
@@ -380,19 +383,20 @@ func StartOwnedEngine(cfg platform_engine.EngineConfig) (*Engine, error) {
 		log.Debugf(Category, "[Engine] StartPlatformEngine failed: %v", err)
 		return nil, err
 	}
+	handle.ifaceName = platform_engine.InterfaceName()
 
 	t := tunnel.T()
 	if t == nil {
-		handle.stopPlatform()
+		cleanupErr := handle.stopPlatform()
 		activeEngine = nil
-		return nil, fmt.Errorf("tunnel not initialized after engine start")
+		return nil, errors.Join(fmt.Errorf("tunnel not initialized after engine start"), cleanupErr)
 	}
 
 	vpnOutbound, ok := t.Dialer().(proxy.Proxy)
 	if !ok {
-		handle.stopPlatform()
+		cleanupErr := handle.stopPlatform()
 		activeEngine = nil
-		return nil, fmt.Errorf("current dialer is not a proxy (type=%T)", t.Dialer())
+		return nil, errors.Join(fmt.Errorf("current dialer is not a proxy (type=%T)", t.Dialer()), cleanupErr)
 	}
 
 	wrapper := &DobbyProxy{
@@ -413,38 +417,47 @@ func StartOwnedEngine(cfg platform_engine.EngineConfig) (*Engine, error) {
 
 // Stop releases this handle's resources in reverse start order. A stale handle
 // cannot stop a newer owner.
-func (e *Engine) Stop() {
+func (e *Engine) Stop() error {
 	if e == nil {
-		return
+		return nil
 	}
 
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	if e.stopped {
-		e.mu.Unlock()
-		return
+		return e.stopErr
 	}
 	e.stopped = true
 	e.ready = false
 	statsStop := e.statsStop
 	e.statsStop = nil
 	stopPlatform := e.stopPlatform
-	e.mu.Unlock()
 
 	engineMu.Lock()
+	defer engineMu.Unlock()
 	if activeEngine != e {
-		engineMu.Unlock()
-		return
+		return nil
 	}
-	activeEngine = nil
 	if statsStop != nil {
 		close(statsStop)
 	}
 	log.Debugf(Category, "[Engine] stopping owned tun2socks engine")
 	if stopPlatform != nil {
-		stopPlatform()
+		e.stopErr = stopPlatform()
 	}
-	engineMu.Unlock()
+	activeEngine = nil
 	log.Debugf(Category, "[Engine] owned tun2socks engine stopped")
+	return e.stopErr
+}
+
+// InterfaceName is the exact platform interface owned by this engine.
+func (e *Engine) InterfaceName() string {
+	if e == nil {
+		return ""
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.ifaceName
 }
 
 // SwitchVPNProxy updates only this engine's outbound proxy. New lifecycle code

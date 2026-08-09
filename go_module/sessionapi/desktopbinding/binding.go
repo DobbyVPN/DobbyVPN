@@ -119,8 +119,11 @@ func (c *controller) stopAndWait(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if snapshot.Generation == 0 || snapshot.CleanupComplete {
+	if snapshot.Generation == 0 {
 		return nil
+	}
+	if snapshot.CleanupComplete {
+		return cleanupResult(snapshot)
 	}
 	if _, err := c.manager.Stop(ctx, c.sessionID, c.command("stop"), snapshot.Generation); err != nil && v1.CodeOf(err) != v1.FailureStaleGeneration {
 		return err
@@ -136,7 +139,7 @@ func (c *controller) waitForCleanup(ctx context.Context) error {
 			return err
 		}
 		if snapshot.CleanupComplete {
-			return nil
+			return cleanupResult(snapshot)
 		}
 		select {
 		case <-ctx.Done():
@@ -144,6 +147,13 @@ func (c *controller) waitForCleanup(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func cleanupResult(snapshot v1.SnapshotResult) error {
+	if snapshot.LastFailure == v1.FailureCleanup {
+		return &v1.Error{Code: v1.FailureCleanup, Message: "session cleanup failed"}
+	}
+	return nil
 }
 func (c *controller) waitForStarted(ctx context.Context, generation uint64) error {
 	ticker := time.NewTicker(5 * time.Millisecond)

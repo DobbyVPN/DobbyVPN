@@ -88,9 +88,10 @@ func startPlatformEngine(cfg interface{}) error {
 	return nil
 }
 
-func stopPlatformEngine() {
-	if LastIface == "" {
-		return
-	}
+func stopPlatformEngine(stopDevice func()) error {
+	stopDevice()
 	LastIface = ""
+	return nil
 }
+
+func platformInterfaceName() string { return LastIface }

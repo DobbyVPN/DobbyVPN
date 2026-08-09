@@ -115,7 +115,8 @@ func (c *CoreClient) Connect() (err error) {
 		return fail(fmt.Errorf("failed to start tun2socks engine: %w", err))
 	}
 	releaseFD() // tun2socks now owns the duplicated descriptor.
-	ledger.Add(func() error { c.engine.Stop(); return nil })
+	ownedEngine := c.engine
+	ledger.Add(ownedEngine.Stop)
 
 	if c.tun != nil {
 		if closeErr := c.tun.Close(); closeErr != nil {

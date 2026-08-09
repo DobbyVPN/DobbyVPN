@@ -61,6 +61,7 @@ const (
 	FailureRuntime         FailureCode = "RUNTIME_FAILED"
 	FailureCanceled        FailureCode = "CANCELED"
 	FailureInternal        FailureCode = "INTERNAL"
+	FailureCleanup         FailureCode = "CLEANUP_FAILED"
 )
 
 // Error is safe for UI/IPC use.  Message must never be populated with a raw
@@ -263,6 +264,7 @@ type session struct {
 	active              *ProfileSummary
 	lastFailure         FailureCode
 	cleanupDone         bool
+	cleanupFailed       bool
 	cancel              context.CancelFunc
 	ledger              *ledger
 	workerDone          chan struct{}
@@ -347,8 +349,8 @@ func (m *Manager) Configure(_ context.Context, sessionID, commandID string, rawC
 		s.mu.Unlock()
 		return cachedResult, saved
 	}
-	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping {
-		err := failure(FailureConflict, "cannot configure while a generation is active")
+	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || !s.cleanupDone || s.cleanupFailed {
+		err := failure(FailureConflict, "cannot configure until the previous generation cleaned up successfully")
 		s.commands[commandID] = commandRecord{op: commandConfigure, err: err}
 		s.mu.Unlock()
 		return ConfigureResult{}, err
@@ -362,7 +364,7 @@ func (m *Manager) Configure(_ context.Context, sessionID, commandID string, rawC
 		return ConfigureResult{}, parseErr
 	}
 	s.profiles, s.digest, s.warnings, s.configured = parsed.profiles, parsed.digest, parsed.warnings, true
-	s.active, s.lastFailure, s.state, s.cleanupDone = nil, "", StateConfigured, true
+	s.active, s.lastFailure, s.state, s.cleanupDone, s.cleanupFailed = nil, "", StateConfigured, true, false
 	result = ConfigureResult{Digest: s.digest, Profiles: summaries(s.profiles), Warnings: cloneWarnings(s.warnings)}
 	s.commands[commandID] = commandRecord{op: commandConfigure, config: result}
 	m.appendLocked(s, Event{State: StateConfigured})
@@ -409,7 +411,7 @@ func (m *Manager) ConfigureCompatibilityProfile(_ context.Context, sessionID, co
 		s.mu.Unlock()
 		return cachedResult, saved
 	}
-	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || !s.cleanupDone {
+	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || !s.cleanupDone || s.cleanupFailed {
 		err := failure(FailureConflict, "cannot configure while a generation is active")
 		s.commands[commandID] = commandRecord{op: commandConfigureCompatibility, err: err}
 		s.mu.Unlock()
@@ -421,7 +423,7 @@ func (m *Manager) ConfigureCompatibilityProfile(_ context.Context, sessionID, co
 	s.profiles = []RuntimeProfile{profile}
 	s.digest = hex.EncodeToString(digest[:])
 	s.warnings, s.configured = nil, true
-	s.active, s.lastFailure, s.state, s.cleanupDone = nil, "", StateConfigured, true
+	s.active, s.lastFailure, s.state, s.cleanupDone, s.cleanupFailed = nil, "", StateConfigured, true, false
 	result = ConfigureResult{Digest: s.digest, Profiles: []ProfileSummary{profile.Summary}}
 	s.commands[commandID] = commandRecord{op: commandConfigureCompatibility, config: result}
 	m.appendLocked(s, Event{State: StateConfigured})
@@ -459,7 +461,7 @@ func (m *Manager) Start(requestCtx context.Context, sessionID, commandID string,
 		s.mu.Unlock()
 		return StartResult{}, err
 	}
-	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || !s.cleanupDone {
+	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || !s.cleanupDone || s.cleanupFailed {
 		err := failure(FailureConflict, "previous generation has not completed cleanup")
 		s.commands[commandID] = commandRecord{op: commandStart, err: err}
 		s.mu.Unlock()
@@ -481,7 +483,7 @@ func (m *Manager) Start(requestCtx context.Context, sessionID, commandID string,
 	s.generation++
 	generation := s.generation
 	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
-	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.active, s.lastFailure = cancel, &ledger{}, make(chan struct{}), false, nil, ""
+	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure = cancel, &ledger{}, make(chan struct{}), false, false, nil, ""
 	s.state = StateProbing
 	result = StartResult{Generation: generation}
 	s.commands[commandID] = commandRecord{op: commandStart, start: result}
@@ -652,9 +654,9 @@ func (m *Manager) DestroySession(_ context.Context, sessionID string) (err error
 		return err
 	}
 	s.mu.Lock()
-	if !s.cleanupDone || s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping {
+	if !s.cleanupDone || s.cleanupFailed || s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping {
 		s.mu.Unlock()
-		return failure(FailureConflict, "stop and wait for cleanup before destroying a session")
+		return failure(FailureConflict, "successful cleanup is required before destroying a session")
 	}
 	s.destroyed, s.state = true, StateDestroyed
 	m.appendLocked(s, Event{Generation: s.generation, State: StateDestroyed})
@@ -681,13 +683,37 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 		err = failure(FailurePlatform, "platform returned an empty tunnel lease")
 	}
 	if err != nil {
+		if platformLease != nil {
+			s.mu.Lock()
+			if s.generation == generation && !s.destroyed && s.ledger != nil && (s.state == StatePreparing || s.state == StateStopping) {
+				s.ledger.push(func(c context.Context) error { return platformLease.Release(c) })
+				stopping := s.state == StateStopping
+				s.mu.Unlock()
+				if stopping {
+					return
+				}
+			} else {
+				s.mu.Unlock()
+				err = errors.Join(err, platformLease.Release(context.Background()))
+			}
+		}
 		m.finish(s, generation, nil, wrapFailure(FailurePlatform, err))
 		return
 	}
 	s.mu.Lock()
+	if s.generation == generation && s.state == StateStopping && !s.destroyed && s.ledger != nil {
+		// Stop waits for this worker before draining the ledger. Retaining a
+		// lease that arrived after cancellation makes its cleanup result part of
+		// the same generation instead of silently discarding a late failure.
+		s.ledger.push(func(c context.Context) error { return platformLease.Release(c) })
+		s.mu.Unlock()
+		return
+	}
 	if s.generation != generation || s.state != StatePreparing {
 		s.mu.Unlock()
-		_ = platformLease.Release(context.Background())
+		if releaseErr := platformLease.Release(context.Background()); releaseErr != nil {
+			m.finish(s, generation, nil, wrapFailure(FailureCleanup, releaseErr))
+		}
 		return
 	}
 	s.ledger.push(func(c context.Context) error { return platformLease.Release(c) })
@@ -697,13 +723,37 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 		err = failure(FailureRuntime, "runtime returned an empty lease")
 	}
 	if err != nil {
+		if runtimeLease != nil {
+			s.mu.Lock()
+			if s.generation == generation && !s.destroyed && s.ledger != nil && (s.state == StatePreparing || s.state == StateStopping) {
+				s.ledger.push(func(c context.Context) error { return runtimeLease.Stop(c) })
+				stopping := s.state == StateStopping
+				s.mu.Unlock()
+				if stopping {
+					return
+				}
+			} else {
+				s.mu.Unlock()
+				err = errors.Join(err, runtimeLease.Stop(context.Background()))
+			}
+		}
 		m.finish(s, generation, nil, wrapFailure(FailureRuntime, err))
 		return
 	}
 	s.mu.Lock()
+	if s.generation == generation && s.state == StateStopping && !s.destroyed && s.ledger != nil {
+		// A non-cooperative runtime may finish Start after cancellation. Stop's
+		// waiter owns the ledger until this worker exits, so retain the lease and
+		// report any Stop error through the normal cleanup failure contract.
+		s.ledger.push(func(c context.Context) error { return runtimeLease.Stop(c) })
+		s.mu.Unlock()
+		return
+	}
 	if s.generation != generation || s.state != StatePreparing {
 		s.mu.Unlock()
-		_ = runtimeLease.Stop(context.Background())
+		if stopErr := runtimeLease.Stop(context.Background()); stopErr != nil {
+			m.finish(s, generation, nil, wrapFailure(FailureCleanup, stopErr))
+		}
 		return
 	}
 	s.ledger.push(func(c context.Context) error { return runtimeLease.Stop(c) })
@@ -846,15 +896,22 @@ func (m *Manager) finishWithPolicy(s *session, generation uint64, profile *Profi
 	work := s.ledger
 	s.ledger = nil
 	s.mu.Unlock()
+	var cleanupErr error
 	if work != nil {
-		_ = work.release(context.Background())
+		cleanupErr = work.release(context.Background())
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.generation != generation || s.destroyed {
 		return
 	}
-	s.cleanupDone, s.cancel = true, nil
+	s.cleanupDone, s.cleanupFailed, s.cancel = true, cleanupErr != nil, nil
+	if cleanupErr != nil {
+		s.restartAfterCleanup = false
+		s.state, s.active, s.lastFailure = StateFailed, nil, FailureCleanup
+		m.appendLocked(s, Event{Generation: generation, State: StateFailed, Profile: cloneSummaryPtr(profile), Failure: FailureCleanup})
+		return
+	}
 	if wasStopping || cause != nil && CodeOf(cause) == FailureCanceled {
 		restart := s.restartAfterCleanup
 		s.restartAfterCleanup = false
@@ -878,7 +935,7 @@ func (m *Manager) startFailover(s *session) {
 	s.generation++
 	generation := s.generation
 	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.active, s.lastFailure = cancel, &ledger{}, make(chan struct{}), false, nil, ""
+	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure = cancel, &ledger{}, make(chan struct{}), false, false, nil, ""
 	s.state = StateProbing
 	m.appendLocked(s, Event{Generation: generation, State: StateProbing})
 	s.mu.Unlock()
