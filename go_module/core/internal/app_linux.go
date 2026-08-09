@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jackpal/gateway"
+	"golang.org/x/sys/unix"
 
 	"go_module/common"
 	coreCommon "go_module/core/common"
@@ -40,6 +41,17 @@ func (app *App) validateRunInputs() error {
 		return fmt.Errorf("routing config is not initialized")
 	}
 	return nil
+}
+
+// duplicateTunFD gives tun2socks its own descriptor. The fd-backed engine
+// closes the descriptor it receives during Stop, while the water TUN wrapper
+// must retain and close its original descriptor independently.
+func duplicateTunFD(fd int) (int, error) {
+	engineFD, err := unix.Dup(fd)
+	if err != nil {
+		return -1, fmt.Errorf("duplicate TUN descriptor for tun2socks: %w", err)
+	}
+	return engineFD, nil
 }
 
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
@@ -230,15 +242,25 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return err
 	}
 	log.Debugf(coreCommon.Category, "[Linux][Step 8][OK] fd=%d", fd)
+	engineFD, err := duplicateTunFD(fd)
+	if err != nil {
+		log.Debugf(coreCommon.Category, "[Linux][Step 8][ERROR] %v", err)
+		signalInit(initResult, err)
+		return err
+	}
 
 	// 9. tun2socks
-	log.Debugf(coreCommon.Category, "[Linux][Step 9] Starting tun2socks fd=%d proxy_ready=true", fd)
+	log.Debugf(coreCommon.Category, "[Linux][Step 9] Starting tun2socks with independently owned TUN descriptor proxy_ready=true")
 	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{
 		ProxyAddr:   app.ProtocolDevice.GetProxyAddr(),
-		FD:          fd,
+		FD:          engineFD,
 		UplinkIface: "",
 	})
 	if err != nil {
+		// StartOwnedEngine may already have stopped a partially initialized
+		// platform engine. A repeated close is deliberately ignored here; the
+		// startup error remains authoritative.
+		_ = unix.Close(engineFD)
 		log.Debugf(coreCommon.Category, "Can't start tun2socks: %v", err)
 		signalInit(initResult, err)
 		return err
