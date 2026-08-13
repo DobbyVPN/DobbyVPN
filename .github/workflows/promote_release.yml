@@ -39,7 +39,7 @@ concurrency:
 
 jobs:
   promote:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.preflight.outputs.tag }}
       release_state: ${{ steps.preflight.outputs.release_state }}
@@ -52,17 +52,24 @@ jobs:
       QUALIFIED_WINDOWS_AMD64_SHA256: ${{ inputs.windows_amd64_sha256 }}
       QUALIFIED_MACOS_AMD64_SHA256: ${{ inputs.macos_amd64_sha256 }}
     steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
       - name: Validate selected release run
         id: preflight
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [[ ! "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "version must use X.Y.Z format" >&2
             exit 1
           fi
-          if [[ ! "$RELEASE_RUN_ID" =~ ^[0-9]+$ ]]; then
+          if [[ ! "$RELEASE_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
             echo "run_id must be numeric" >&2
             exit 1
           fi
@@ -83,6 +90,8 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/main"
           current_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
           test "$GITHUB_SHA" = "$current_main"
+          test "$RELEASE_SOURCE_SHA" = "$current_main"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
 
           run_json="$(
             gh run view "$RELEASE_RUN_ID" \
@@ -114,41 +123,49 @@ jobs:
 
           tag="v$RELEASE_VERSION"
           run_number="$(jq -r .number <<<"$run_json")"
+          tag_ref="refs/tags/$tag"
+          tag_record="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" | \
+            jq -sc --arg ref "$tag_ref" '
+              [.[][] | select(.ref == $ref)] |
+              if length == 0 then empty
+              elif length == 1 then .[0]
+              else error("duplicate exact tag refs")
+              end')"
+          tag_state=absent
+          tag_ref_object=""
+          if [[ -n "$tag_record" ]]; then
+            tag_state=existing
+            object_type="$(jq -r .object.type <<<"$tag_record")"
+            object_sha="$(jq -r .object.sha <<<"$tag_record")"
+            tag_ref_object="$object_sha"
+            for _ in 1 2 3 4 5 6 7 8; do
+              if [[ "$object_type" != tag ]]; then
+                break
+              fi
+              tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+              object_type="$(jq -r .object.type <<<"$tag_object")"
+              object_sha="$(jq -r .object.sha <<<"$tag_object")"
+            done
+            test "$object_type" = commit
+            test "$object_sha" = "$RELEASE_SOURCE_SHA"
+          fi
+
           release_state="new"
-          if release_json="$(
-            gh release view "$tag" \
-              --repo "$GITHUB_REPOSITORY" \
-              --json assets,isDraft 2>/dev/null
-          )"; then
-            if [[ "$(jq -r .isDraft <<<"$release_json")" = "true" ]]; then
+          release_json="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" | \
+            jq -sc --arg tag "$tag" '
+              [.[][] | select(.tag_name == $tag)] |
+              if length == 0 then empty
+              elif length == 1 then .[0]
+              else error("duplicate releases for exact tag")
+              end')"
+          if [[ -n "$release_json" ]]; then
+            if [[ "$(jq -r .draft <<<"$release_json")" = "true" ]]; then
               echo "$tag already exists as a draft; inspect it before retrying" >&2
               exit 1
             else
-              tag_sha="$(
-                gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha
-              )"
-              test "$tag_sha" = "$RELEASE_SOURCE_SHA"
-
-              expected_assets="$(
-                printf '%s\n' \
-                  "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
-                  "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
-                  "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
-                  "dobbyVPN-linux.deb" \
-                  "dobbyVPN-macos-aarch64.pkg" \
-                  "dobbyVPN-macos-amd64.pkg" \
-                  "dobbyVPN-windows-amd64.msi" \
-                  "version.txt" |
-                  sort
-              )"
-              actual_assets="$(jq -r '.assets[].name' <<<"$release_json" | sort)"
-              test "$actual_assets" = "$expected_assets"
-              test "$(jq -r '.assets[] | select(.name == "dobbyVPN-linux.deb") | .digest' <<<"$release_json")" = \
-                "sha256:$QUALIFIED_LINUX_SHA256"
-              test "$(jq -r '.assets[] | select(.name == "dobbyVPN-windows-amd64.msi") | .digest' <<<"$release_json")" = \
-                "sha256:$QUALIFIED_WINDOWS_AMD64_SHA256"
-              test "$(jq -r '.assets[] | select(.name == "dobbyVPN-macos-amd64.pkg") | .digest' <<<"$release_json")" = \
-                "sha256:$QUALIFIED_MACOS_AMD64_SHA256"
+              test "$tag_state" = existing
               release_state="published"
             fi
           fi
@@ -158,6 +175,8 @@ jobs:
             echo "run_number=$run_number"
             echo "android_version_code=$android_version_code"
             echo "release_state=$release_state"
+            echo "tag_state=$tag_state"
+            echo "tag_ref_object=$tag_ref_object"
           } >> "$GITHUB_OUTPUT"
           echo "Validated $tag from Release run $RELEASE_RUN_ID at $RELEASE_SOURCE_SHA"
           echo "Release state: $release_state"
@@ -190,7 +209,6 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download macOS arm64 package
-        if: steps.preflight.outputs.release_state != 'published'
         uses: actions/download-artifact@v7
         with:
           name: dobbyVPN-macos-aarch64.pkg
@@ -200,7 +218,6 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download signed Android package
-        if: steps.preflight.outputs.release_state != 'published'
         uses: actions/download-artifact@v7
         with:
           name: dobbyvpn-android-sign.apk
@@ -210,7 +227,6 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download unsigned Android package
-        if: steps.preflight.outputs.release_state != 'published'
         uses: actions/download-artifact@v7
         with:
           name: dobbyvpn-android-unsign.apk
@@ -220,7 +236,6 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download Android provenance
-        if: steps.preflight.outputs.release_state != 'published'
         uses: actions/download-artifact@v7
         with:
           name: dobbyvpn-android-provenance
@@ -241,11 +256,14 @@ jobs:
             "$QUALIFIED_MACOS_AMD64_SHA256"
 
       - name: Verify Android source and artifact provenance
-        if: steps.preflight.outputs.release_state != 'published'
         env:
           ANDROID_VERSION_CODE: ${{ steps.preflight.outputs.android_version_code }}
         run: |
           set -euo pipefail
+          python3 .github/scripts/verify_android_apk_source.py \
+            --apk "release/DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+            --apk "release/DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            --source-sha "$RELEASE_SOURCE_SHA" --repository "$GITHUB_REPOSITORY"
           python3 - <<'PY'
           import hashlib
           import json
@@ -288,7 +306,6 @@ jobs:
           PY
 
       - name: Create F-Droid version metadata
-        if: steps.preflight.outputs.release_state != 'published'
         shell: bash
         run: |
           set -euo pipefail
@@ -297,23 +314,266 @@ jobs:
             echo "versionCode=${{ steps.preflight.outputs.android_version_code }}"
           } > release/version.txt
 
-      - name: Create public GitHub release
+      - name: Create and verify public release provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset_args=(
+            --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json"
+            --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk"
+            --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk"
+            --asset dobbyVPN-linux.deb
+            --asset dobbyVPN-macos-aarch64.pkg
+            --asset dobbyVPN-macos-amd64.pkg
+            --asset dobbyVPN-windows-amd64.msi
+            --asset version.txt
+          )
+          metadata_args=(
+            --directory release
+            --tag "${{ steps.preflight.outputs.tag }}"
+            --version "$RELEASE_VERSION"
+            --source-sha "$RELEASE_SOURCE_SHA"
+            --release-run-id "$RELEASE_RUN_ID"
+            --release-run-number "${{ steps.preflight.outputs.run_number }}"
+            --android-version-code "${{ steps.preflight.outputs.android_version_code }}"
+          )
+          python3 .github/scripts/release_provenance.py create \
+            "${metadata_args[@]}" "${asset_args[@]}"
+          python3 .github/scripts/release_provenance.py verify \
+            "${metadata_args[@]}" "${asset_args[@]}"
+
+      - name: Verify already-published release against selected run
+        if: steps.preflight.outputs.release_state == 'published'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir published
+          gh release download "${{ steps.preflight.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir published \
+            --pattern '*'
+          cmp release/release-provenance.json published/release-provenance.json
+          python3 .github/scripts/release_provenance.py verify \
+            --directory published \
+            --tag "${{ steps.preflight.outputs.tag }}" \
+            --version "$RELEASE_VERSION" \
+            --source-sha "$RELEASE_SOURCE_SHA" \
+            --release-run-id "$RELEASE_RUN_ID" \
+            --release-run-number "${{ steps.preflight.outputs.run_number }}" \
+            --android-version-code "${{ steps.preflight.outputs.android_version_code }}" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            --asset dobbyVPN-linux.deb \
+            --asset dobbyVPN-macos-aarch64.pkg \
+            --asset dobbyVPN-macos-amd64.pkg \
+            --asset dobbyVPN-windows-amd64.msi \
+            --asset version.txt
+
+      - name: Create verified draft and publish
         if: steps.preflight.outputs.release_state == 'new'
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "${{ steps.preflight.outputs.tag }}" \
+          release_tag="${{ steps.preflight.outputs.tag }}"
+          expected_tag_object="${{ steps.preflight.outputs.tag_ref_object }}"
+          tag_created=false
+          draft_created=false
+          owned_release_id=""
+          published=false
+          transaction="$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT:$RELEASE_SOURCE_SHA"
+          release_notes="DobbyVPN $RELEASE_VERSION (build ${{ steps.preflight.outputs.run_number }}); promotion=$transaction"
+
+          exact_tag_record() {
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$release_tag" | \
+              jq -sc --arg ref "refs/tags/$release_tag" '
+                [.[][] | select(.ref == $ref)] |
+                if length == 0 then empty
+                elif length == 1 then .[0]
+                else error("duplicate exact tag refs")
+                end'
+          }
+
+          verify_remote_tag() {
+            local expected_object="$1"
+            local record
+            local object_type
+            local object_sha
+            record="$(exact_tag_record)"
+            test -n "$record"
+            object_type="$(jq -r .object.type <<<"$record")"
+            object_sha="$(jq -r .object.sha <<<"$record")"
+            test "$object_sha" = "$expected_object"
+            for _ in 1 2 3 4 5 6 7 8; do
+              if [[ "$object_type" != tag ]]; then
+                break
+              fi
+              tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+              object_type="$(jq -r .object.type <<<"$tag_object")"
+              object_sha="$(jq -r .object.sha <<<"$tag_object")"
+            done
+            test "$object_type" = commit
+            test "$object_sha" = "$RELEASE_SOURCE_SHA"
+          }
+
+          exact_release() {
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" | \
+              jq -sc --arg tag "$release_tag" '
+                [.[][] | select(.tag_name == $tag)] |
+                if length == 0 then empty
+                elif length == 1 then .[0]
+                else error("duplicate releases for exact tag")
+                end'
+          }
+
+          wait_for_exact_release() {
+            local expected_draft="${1:-any}"
+            local record
+            for _ in {1..30}; do
+              if record="$(exact_release)" && [[ -n "$record" ]]; then
+                if [[ "$expected_draft" == any || "$(jq -r .draft <<<"$record")" == "$expected_draft" ]]; then
+                  printf '%s\n' "$record"
+                  return 0
+                fi
+              fi
+              sleep 1
+            done
+            return 1
+          }
+
+          rollback() {
+            status=$?
+            if (( status == 0 )) || [[ "$published" == true ]]; then
+              exit "$status"
+            fi
+            set +e
+            safe_to_delete_tag=false
+            if [[ "$draft_created" == true ]]; then
+              if [[ ! "$owned_release_id" =~ ^[1-9][0-9]*$ ]]; then
+                release_record="$(wait_for_exact_release any)"
+                release_query_status=$?
+                if (( release_query_status == 0 )); then
+                  owned_release_id="$(jq -r .id <<<"$release_record")"
+                fi
+              fi
+              if [[ "$owned_release_id" =~ ^[1-9][0-9]*$ ]]; then
+                release_record="$(gh api "repos/$GITHUB_REPOSITORY/releases/$owned_release_id")"
+              else
+                release_record=""
+              fi
+              if [[ "$owned_release_id" =~ ^[1-9][0-9]*$ ]] && \
+                 [[ "$(jq -r .tag_name <<<"$release_record")" == "$release_tag" ]] && \
+                 [[ "$(jq -r .draft <<<"$release_record")" == true ]] && \
+                 [[ "$(jq -r .body <<<"$release_record")" == "$release_notes" ]] && \
+                 gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$owned_release_id"; then
+                safe_to_delete_tag=true
+              else
+                echo "warning: failed to roll back owned draft release $release_tag" >&2
+              fi
+            else
+              release_record="$(exact_release)"
+              release_query_status=$?
+              if (( release_query_status != 0 )); then
+                echo "warning: could not determine rollback release ownership" >&2
+              elif [[ -z "$release_record" ]]; then
+                safe_to_delete_tag=true
+              else
+                echo "warning: refusing to roll back a release not created by this run" >&2
+              fi
+            fi
+
+            if [[ "$tag_created" == true && "$safe_to_delete_tag" == true ]]; then
+              remote_record="$(exact_tag_record)"
+              tag_query_status=$?
+              if (( tag_query_status != 0 )); then
+                echo "warning: could not determine rollback tag ownership" >&2
+              elif [[ -z "$remote_record" ]]; then
+                :
+              elif [[ "$(jq -r .object.sha <<<"$remote_record")" == "$expected_tag_object" ]]; then
+                gh api --method DELETE \
+                  "repos/$GITHUB_REPOSITORY/git/refs/tags/$release_tag" || \
+                  echo "warning: failed to roll back owned tag $release_tag" >&2
+              else
+                echo "warning: refusing to delete a tag object not owned by this run" >&2
+              fi
+            fi
+            exit "$status"
+          }
+          trap rollback EXIT
+
+          if [[ "${{ steps.preflight.outputs.tag_state }}" == absent ]]; then
+            test -z "$expected_tag_object"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag --annotate "$release_tag" "$RELEASE_SOURCE_SHA" --message "DobbyVPN $release_tag"
+            test "$(git rev-parse "$release_tag^{}")" = "$RELEASE_SOURCE_SHA"
+            expected_tag_object="$(git rev-parse "$release_tag^{tag}")"
+            [[ "$expected_tag_object" =~ ^[0-9a-f]{40}$ ]]
+            tag_created=true
+            git push origin "refs/tags/$release_tag"
+          else
+            test "${{ steps.preflight.outputs.tag_state }}" = existing
+            [[ "$expected_tag_object" =~ ^[0-9a-f]{40}$ ]]
+          fi
+          verify_remote_tag "$expected_tag_object"
+
+          gh release create "$release_tag" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$RELEASE_SOURCE_SHA" \
-            --title "${{ steps.preflight.outputs.tag }}" \
-            --notes "DobbyVPN $RELEASE_VERSION (build ${{ steps.preflight.outputs.run_number }})" \
-            --latest \
+            --draft \
+            --verify-tag \
+            --title "$release_tag" \
+            --notes "$release_notes" \
             release/*
+          draft_created=true
+          release_record="$(wait_for_exact_release true)"
+          owned_release_id="$(jq -r .id <<<"$release_record")"
+          [[ "$owned_release_id" =~ ^[1-9][0-9]*$ ]]
+          test "$(jq -r .draft <<<"$release_record")" = true
+          test "$(jq -r .tag_name <<<"$release_record")" = "$release_tag"
+          test "$(jq -r .body <<<"$release_record")" = "$release_notes"
+          verify_remote_tag "$expected_tag_object"
+
+          mkdir published
+          gh release download "$release_tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir published \
+            --pattern '*'
+          cmp release/release-provenance.json published/release-provenance.json
+          python3 .github/scripts/release_provenance.py verify \
+            --directory published \
+            --tag "$release_tag" \
+            --version "$RELEASE_VERSION" \
+            --source-sha "$RELEASE_SOURCE_SHA" \
+            --release-run-id "$RELEASE_RUN_ID" \
+            --release-run-number "${{ steps.preflight.outputs.run_number }}" \
+            --android-version-code "${{ steps.preflight.outputs.android_version_code }}" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            --asset dobbyVPN-linux.deb \
+            --asset dobbyVPN-macos-aarch64.pkg \
+            --asset dobbyVPN-macos-amd64.pkg \
+            --asset dobbyVPN-windows-amd64.msi \
+            --asset version.txt
+          verify_remote_tag "$expected_tag_object"
+          gh release edit "$release_tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false \
+            --latest
+          published=true
+          release_record="$(wait_for_exact_release false)"
+          test "$(jq -r .id <<<"$release_record")" = "$owned_release_id"
+          test "$(jq -r .draft <<<"$release_record")" = false
+          test "$(jq -r .tag_name <<<"$release_record")" = "$release_tag"
+          trap - EXIT
 
       - name: Confirm publication
         shell: bash
         run: |
           set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/${{ steps.preflight.outputs.tag }}" --jq .sha)" = \
+            "$RELEASE_SOURCE_SHA"
           gh release view "${{ steps.preflight.outputs.tag }}" \
             --repo "$GITHUB_REPOSITORY" \
             --json isDraft,tagName,url \

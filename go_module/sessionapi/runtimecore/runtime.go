@@ -132,9 +132,17 @@ func New(options Options) v1.Runtime {
 		r.options.HealthInterval = 10 * time.Second
 	}
 	if r.options.HealthFailureThreshold <= 0 {
-		r.options.HealthFailureThreshold = 2
+		r.options.HealthFailureThreshold = defaultHealthFailureThreshold()
 	}
 	return r
+}
+
+func defaultHealthFailureThreshold() int {
+	// A slow saturated link can briefly starve independent health requests even
+	// while the active transfer is still making progress. Require three complete
+	// failed cycles before teardown on every platform; successful checks still
+	// reset the consecutive-failure count immediately.
+	return 3
 }
 
 type runtime struct {
@@ -186,8 +194,8 @@ func (r *runtime) Start(ctx context.Context, ref v1.SessionRef, profile v1.Runti
 }
 
 func (r *runtime) Probe(ctx context.Context, ref v1.SessionRef, profile v1.RuntimeProfile) (result v1.ProbeResult, err error) {
-	if err := ctx.Err(); err != nil {
-		return v1.ProbeResult{}, err
+	if contextErr := ctx.Err(); contextErr != nil {
+		return v1.ProbeResult{}, contextErr
 	}
 	r.mu.Lock()
 	if r.active {
@@ -219,17 +227,65 @@ func (r *runtime) Probe(ctx context.Context, ref v1.SessionRef, profile v1.Runti
 
 	probeCtx, cancel := context.WithTimeout(ctx, r.options.ProbeTimeout)
 	defer cancel()
-	latency, err := r.options.Probe(probeCtx)
-	if err != nil {
-		return v1.ProbeResult{}, err
-	}
-	if err := probeCtx.Err(); err != nil {
-		return v1.ProbeResult{}, err
-	}
-	if latency < 0 {
-		return v1.ProbeResult{}, errors.New("runtime health probe did not reach quorum")
+	latency, probeErr := probeUntilReady(
+		probeCtx,
+		ref,
+		r.options.Probe,
+		r.options.ReadinessAttempts,
+		r.options.ReadinessRetryInterval,
+	)
+	if probeErr != nil {
+		return v1.ProbeResult{}, probeErr
 	}
 	return v1.ProbeResult{LatencyMillis: latency}, nil
+}
+
+// probeUntilReady gives Android's newly established VPN route the same bounded
+// readiness tolerance as the final session start. Fast protocol devices can
+// begin their first request a few milliseconds before ConnectivityService has
+// published the VPN network; a failed quorum is retried inside the existing
+// overall ProbeTimeout rather than being misclassified as a dead profile.
+func probeUntilReady(
+	ctx context.Context,
+	ref v1.SessionRef,
+	probe ProbeFunc,
+	attempts int,
+	retryInterval time.Duration,
+) (int64, error) {
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		startedAt := time.Now()
+		latency, err := probe(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if latency >= 0 {
+			log.Debugf(category, "runtime probe readiness succeeded generation=%d attempt=%d/%d elapsed=%s", ref.Generation, attempt, attempts, time.Since(startedAt).Truncate(time.Millisecond))
+			return latency, nil
+		}
+		log.Debugf(category, "runtime probe readiness failed generation=%d attempt=%d/%d elapsed=%s", ref.Generation, attempt, attempts, time.Since(startedAt).Truncate(time.Millisecond))
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, ctxErr
+		}
+		if attempt == attempts {
+			return 0, errors.New("runtime health probe did not reach quorum")
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return 0, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return 0, errors.New("runtime health probe did not reach quorum")
 }
 
 func (r *runtime) startLocked(ctx context.Context, ref v1.SessionRef, profile v1.RuntimeProfile) (*lease, error) {

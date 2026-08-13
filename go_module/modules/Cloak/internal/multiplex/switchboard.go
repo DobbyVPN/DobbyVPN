@@ -75,7 +75,7 @@ func (sb *switchboard) send(data []byte, assignedConn *net.Conn) (n int, err err
 		}
 		n, err = conn.Write(data)
 		if err != nil {
-			sb.session.SetTerminalMsg("failed to send to remote " + err.Error())
+			sb.session.SetTerminal(TerminalCauseTransportWriteFailed, "failed to send to remote "+err.Error())
 			sb.session.passiveClose()
 			return n, err
 		}
@@ -87,7 +87,7 @@ func (sb *switchboard) send(data []byte, assignedConn *net.Conn) (n int, err err
 		if conn == nil {
 			conn, err = sb.pickRandConn()
 			if err != nil {
-				sb.session.SetTerminalMsg("failed to pick a connection " + err.Error())
+				sb.session.SetTerminal(TerminalCauseSwitchboardFailed, "failed to pick a connection "+err.Error())
 				sb.session.passiveClose()
 				return 0, err
 			}
@@ -95,7 +95,7 @@ func (sb *switchboard) send(data []byte, assignedConn *net.Conn) (n int, err err
 		}
 		n, err = conn.Write(data)
 		if err != nil {
-			sb.session.SetTerminalMsg("failed to send to remote " + err.Error())
+			sb.session.SetTerminal(TerminalCauseTransportWriteFailed, "failed to send to remote "+err.Error())
 			sb.session.passiveClose()
 			return n, err
 		}
@@ -153,7 +153,7 @@ func (sb *switchboard) deplex(conn net.Conn) {
 		sb.valve.AddRx(int64(n))
 		if err != nil {
 			log.Debugf("a connection for session %v has closed: %v", sb.session.id, err)
-			sb.session.SetTerminalMsg("a connection has dropped unexpectedly")
+			sb.session.SetTerminal(TerminalCauseTransportReadClosed, "a connection has dropped unexpectedly")
 			sb.session.passiveClose()
 			return
 		}

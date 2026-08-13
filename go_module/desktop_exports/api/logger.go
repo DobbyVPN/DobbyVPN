@@ -6,8 +6,8 @@ import (
 	"go_module/log"
 )
 
-func InitLogger(path string) {
-	log.SetPath(path)
+func InitLogger(path string) error {
+	return log.SetPath(path)
 }
 
 func InitTelemetry(endpoint, token string) {

@@ -9,26 +9,43 @@ On mobile platforms this library is a `.so` library (on Android) or `.xcframewor
 ## Build
 
 ```bash
-cp -r Cloak/internal go_module/modules/Cloak/
 go mod tidy
 go mod download
 ```
 
+The app's reviewed Cloak client dependency closure is tracked under
+`go_module/modules/Cloak`. Builds use that source directly and never overwrite
+it from the upstream submodule.
+
+The reviewed tun2socks v2.6.0 dependency closure is likewise tracked under
+`go_module/modules/tun2socks`. It contains the upstream correction from
+`xjasonlyu/tun2socks#495`, backported without the unrelated post-v2.6.0
+networking changes: closing an FD-backed device is idempotent, so stack teardown
+cannot close a descriptor number after the operating system has reassigned it.
+
 ### Windows
 
 ```bash
-wget https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.0/dobby_bridge-windows-x86_64.zip
-unzip dobby_bridge-windows-x86_64.zip lib/windows
+wget https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.1/dobby_bridge-windows-x86_64.zip
+echo "a7e64db0568547d395bc45e33787f22c7303dca6f5c575c84439e73a70124331  dobby_bridge-windows-x86_64.zip" | sha256sum -c -
+mkdir -p lib/windows
+unzip -j dobby_bridge-windows-x86_64.zip dobby_bridge.dll dobby_bridge.lib -d lib/windows
 go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
 ```
 
 ### Linux
 
 ```bash
-wget https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.0/libdobby_bridge-linux-x86_64.zip
+wget https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.1/libdobby_bridge-linux-x86_64.zip
+echo "67536090d74212a5635739d297f5a78fbabda1966d161b12a16bfe487a8c68b9  libdobby_bridge-linux-x86_64.zip" | sha256sum -c -
 unzip libdobby_bridge-linux-x86_64.zip
 CGO_LDFLAGS="-L." go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
 ```
+
+Both archives and the Go module tag are bound to go-go-tunnel source commit
+`6115b0e372ecf6daed2ae6bf4afe56bef03ef45c`. The release's
+`release-assets.manifest.json` is the canonical machine-readable member and
+platform-run provenance record.
 
 ### MacOS
 

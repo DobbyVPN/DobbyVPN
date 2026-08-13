@@ -43,8 +43,8 @@ jobs:
       APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
       APPLE_BUILD_NUMBER: ${{ inputs.legacy_android_version_code || github.run_number }}
       ANDROID_VERSION_CODE: ${{ inputs.android_version_code }}
-      GITHUB_SHA: ${{ inputs.source_sha }}
-      GITHUB_REPOSITORY: ${{ github.repository }}
+      APP_SOURCE_SHA: ${{ inputs.source_sha }}
+      APP_SOURCE_REPOSITORY: ${{ github.repository }}
       FDROID_COMPAT_SOURCE_ROOT: /home/vagrant/build/com.dobby.vpn
 
     steps:
@@ -53,6 +53,14 @@ jobs:
           ref: ${{ inputs.source_sha }}
           submodules: true
           persist-credentials: false
+
+      - name: Verify exact source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Set up bootstrap Go
         uses: actions/setup-go@v6
@@ -147,15 +155,30 @@ jobs:
           sudo chown -R "$USER:$USER" /home/vagrant
           rsync -a --delete --exclude='.git' "$GITHUB_WORKSPACE/" "$FDROID_COMPAT_SOURCE_ROOT/"
 
+      # A legacy selected tag does not contain this newer verifier. Keep the
+      # trusted workflow implementation separate from the exact source tree
+      # copied above, and bind it to the workflow revision invoking this job.
+      - name: Check out trusted APK source verifier
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .trusted-workflow
+          sparse-checkout: .github/scripts/verify_android_apk_source.py
+          persist-credentials: false
+
       - name: Build unsigned via Fastlane
         working-directory: /home/vagrant/build/com.dobby.vpn
         run: |
-          bundle exec fastlane android build_android
+          # The inline override is required for legacy tagged Fastfiles that
+          # read GitHub's otherwise immutable workflow-event GITHUB_SHA.
+          GITHUB_SHA="$APP_SOURCE_SHA" GITHUB_REPOSITORY="$APP_SOURCE_REPOSITORY" \
+            bundle exec fastlane android build_android
 
       - name: Build & sign via Fastlane
         working-directory: /home/vagrant/build/com.dobby.vpn
         run: |
-          bundle exec fastlane android build_android_and_signing
+          GITHUB_SHA="$APP_SOURCE_SHA" GITHUB_REPOSITORY="$APP_SOURCE_REPOSITORY" \
+            bundle exec fastlane android build_android_and_signing
         env:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -180,6 +203,10 @@ jobs:
             test "$(apkanalyzer manifest version-name "$apk")" = "$VERSION_NAME"
             test "$(apkanalyzer manifest version-code "$apk")" = "$VERSION_CODE"
           done
+
+          python3 "$GITHUB_WORKSPACE/.trusted-workflow/.github/scripts/verify_android_apk_source.py" \
+            --apk "$signed" --apk "$unsigned" \
+            --source-sha "$SOURCE_SHA" --repository "$APP_SOURCE_REPOSITORY"
 
           SIGNED_APK="$signed" UNSIGNED_APK="$unsigned" MANIFEST="$manifest" python3 - <<'PY'
           import hashlib

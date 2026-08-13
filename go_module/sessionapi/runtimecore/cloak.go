@@ -99,7 +99,11 @@ func NormalizeCloakProfile(raw []byte) ([]byte, error) {
 		defaultTimeout := 300
 		streamTimeout = &defaultTimeout
 	}
-	numConn := 8
+	// Prefer one ordinary multiplexed transport unless the profile explicitly
+	// opts into more.  A multi-connection session is closed when any underlying
+	// transport drops, which made sustained Windows transfers unnecessarily
+	// fragile while providing no required protocol behavior.
+	numConn := 1
 	if source.NumConn != nil {
 		numConn = *source.NumConn
 	}

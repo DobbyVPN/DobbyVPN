@@ -3,6 +3,10 @@ name: Build desktop installers
 on:
   workflow_call:
     inputs:
+      source_sha:
+        description: Full lowercase 40-character source commit SHA to build.
+        type: string
+        required: true
       app_major_version:
         type: string
         required: true
@@ -28,8 +32,25 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.source_sha }}
           submodules: true
           persist-credentials: false
+
+      - name: Verify exact source commit
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be a full lowercase 40-character commit SHA" >&2
+            exit 1
+          fi
+          actual_sha="$(git rev-parse HEAD)"
+          if [[ "$actual_sha" != "$SOURCE_SHA" ]]; then
+            echo "Checked out $actual_sha, expected $SOURCE_SHA" >&2
+            exit 1
+          fi
 
       - name: Download Windows gRPC vpn service
         uses: actions/download-artifact@v7
@@ -100,6 +121,64 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
 
+      - name: Verify Windows installer version
+        if: matrix.os == 'windows'
+        working-directory: installer/windows
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $msi = (Resolve-Path "bin/amd64/dobbyVPN-windows-amd64.msi").Path
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $database = $installer.GetType().InvokeMember(
+            "OpenDatabase", "InvokeMethod", $null, $installer, @($msi, 0)
+          )
+          $view = $database.GetType().InvokeMember(
+            "OpenView", "InvokeMethod", $null, $database,
+            "SELECT Value FROM Property WHERE Property = 'ProductVersion'"
+          )
+          $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null)
+          $record = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
+          if ($null -eq $record) {
+            throw "MSI ProductVersion property is missing"
+          }
+          $actual = $record.GetType().InvokeMember(
+            "StringData", "GetProperty", $null, $record, 1
+          )
+          if ($actual -ne $env:EXPECTED_VERSION) {
+            throw "MSI ProductVersion $actual does not match $env:EXPECTED_VERSION"
+          }
+          $fileView = $database.GetType().InvokeMember(
+            "OpenView", "InvokeMethod", $null, $database,
+            'SELECT `FileName` FROM `File`'
+          )
+          $fileView.GetType().InvokeMember("Execute", "InvokeMethod", $null, $fileView, $null)
+          $installed = [Collections.Generic.HashSet[string]]::new(
+            [StringComparer]::OrdinalIgnoreCase
+          )
+          while ($true) {
+            $fileRecord = $fileView.GetType().InvokeMember(
+              "Fetch", "InvokeMethod", $null, $fileView, $null
+            )
+            if ($null -eq $fileRecord) {
+              break
+            }
+            $fileName = $fileRecord.GetType().InvokeMember(
+              "StringData", "GetProperty", $null, $fileRecord, 1
+            )
+            [void]$installed.Add(($fileName -split '\|')[-1])
+          }
+          foreach ($required in @(
+            "windows_grpcvpnserver.exe",
+            "dobby_bridge.dll",
+            "wintun.dll"
+          )) {
+            if (-not $installed.Contains($required)) {
+              throw "Windows MSI runtime closure is missing $required"
+            }
+          }
+
       - name: Build Linux installer
         if: matrix.os == 'ubuntu'
         working-directory: installer/linux/
@@ -117,6 +196,36 @@ jobs:
           APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Verify macOS installer versions
+        if: matrix.os == 'macos'
+        working-directory: installer/macos/
+        env:
+          EXPECTED_VERSION: ${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}
+        run: |
+          set -euo pipefail
+          temporary="$(mktemp -d)"
+          trap 'rm -rf "$temporary"' EXIT
+          for package in \
+            bin/amd64/dobbyVPN-macos-amd64.pkg \
+            bin/aarch64/dobbyVPN-macos-aarch64.pkg; do
+            expanded="$temporary/$(basename "$package").expanded"
+            pkgutil --expand-full "$package" "$expanded"
+            python3 - "$expanded" "$EXPECTED_VERSION" <<'PY'
+          import pathlib
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = pathlib.Path(sys.argv[1])
+          expected = sys.argv[2]
+          package_info = list(root.rglob("PackageInfo"))
+          if len(package_info) != 1:
+              raise SystemExit("expected exactly one PackageInfo in macOS package")
+          actual = ET.parse(package_info[0]).getroot().get("version")
+          if actual != expected:
+              raise SystemExit(f"macOS package version {actual!r} does not match {expected!r}")
+          PY
+          done
 
       - name: Upload Windows amd64 installer
         if: matrix.os == 'windows'

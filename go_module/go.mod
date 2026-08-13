@@ -4,9 +4,11 @@ go 1.25.1
 
 replace github.com/cbeuw/Cloak => ./modules/Cloak
 
-replace github.com/xjasonlyu/tun2socks/v2/log => ./go_module/log
+// Keep the v2.6.0 production closure local so the upstream Android FD
+// double-close correction remains reproducible on the project's Go toolchain.
+replace github.com/xjasonlyu/tun2socks/v2 => ./modules/tun2socks
 
-replace trusttunnel-go => github.com/DobbyVPN/go-go-tunnel v1.0.0
+replace trusttunnel-go => github.com/DobbyVPN/go-go-tunnel v1.0.1
 
 require (
 	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c

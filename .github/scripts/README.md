@@ -31,6 +31,11 @@ Build the desktop JVM app and generated Conveyor config:
 python3 .github/scripts/desktop_build.py app
 ```
 
+`kmp_module/conveyor.conf` generates its shared configuration through the
+paired `.github/scripts/conveyor-config` and `conveyor-config.bat` launchers.
+Keep the two launchers output-clean: stdout is reserved for HOCON, while
+diagnostics belong on stderr.
+
 Build and run the local CLI config check:
 
 ```bash
@@ -55,6 +60,12 @@ The macOS commands run on matching official GitHub-hosted runners: `macos-15`
 for arm64 and `macos-15-intel` for amd64. Their artifacts are kept separate so
 the installer and CLI lanes never combine architectures.
 
+The Windows service artifact is a minimal runtime closure. It contains
+`windows_grpcvpnserver.exe`, its checksum-pinned `dobby_bridge.dll` import,
+and checksum-pinned `wintun.dll`, which the service loads at startup. The
+installer build requires those files and verifies their names in the finished
+MSI before upload.
+
 The desktop app build uses service binaries downloaded into `kmp_module/services`:
 
 ```bash
@@ -77,8 +88,11 @@ revalidates the exact successful `main` Release run and source commit,
 downloads its artifacts only to a GitHub-hosted runner, and creates `vX.Y.Z`
 plus the GitHub Release. Promotion also receives authorized non-secret SHA-256
 values for the exact Linux DEB, Windows amd64 MSI, and macOS amd64 PKG, then
-re-hashes the selected run's downloaded files before publication. That final
-tag is the sole signal for official F-Droid update processing.
+re-hashes the selected run's downloaded files before publication. Every public
+asset is recorded in `release-provenance.json`; a draft is downloaded and
+verified byte-for-byte before publication, and retries re-download both the
+selected run and published release rather than trusting release state alone.
+That final tag is the sole signal for official F-Droid update processing.
 
 Android and F-Droid use a stable version code derived from the marketing
 version: `major * 1,000,000 + minor * 1,000 + maintenance`. For example,
@@ -86,11 +100,26 @@ version: `major * 1,000,000 + minor * 1,000 + maintenance`. For example,
 run number, which remains Apple's monotonically increasing `CFBundleVersion`.
 The release workflow and APK scan both enforce this mapping.
 
+Android builds also carry their exact selected source commit in BuildConfig.
+`verify_android_apk_source.py` reads that value back from both signed and
+unsigned APK bytecode with `apkanalyzer`; the build, legacy F-Droid repair, and
+public promotion all fail unless the embedded commit and repository link match
+the selected full source SHA. The explicit `APP_SOURCE_*` environment is used
+for current source. A command-local `GITHUB_SHA` override is retained only so a
+repair of an older tag—whose historical Fastfile reads that reserved name—also
+embeds the tag commit rather than the repair workflow's event commit. Because
+that old tag cannot contain a verifier added later, the reusable build checks
+out only the verifier from its trusted workflow revision after the tag source
+has already been copied to the F-Droid-compatible build directory. The trusted
+checkout is never mixed into the selected source tree.
+
 `repair_fdroid_release.yml` is a guarded recovery path for a release whose
 Android assets predate that enforcement. It rebuilds from the exact existing
-tag commit and replaces only the signed APK, unsigned APK, and `version.txt`
-after checking the protected `release` environment and an explicit
-`replace-vX.Y.Z` confirmation.
+tag commit and replaces only the signed APK, unsigned APK, their Android
+provenance, and `version.txt` after checking the protected `release`
+environment and an explicit `replace-vX.Y.Z` confirmation. Releases carrying
+the release-wide provenance manifest are immutable and cannot use this legacy
+repair path.
 
 The same operator command dispatches `submit_app_store.yml` for production
 App Review. Its secretless validation job binds the request to the exact
@@ -103,5 +132,49 @@ Torturer remains the independent secretless gate for candidate code. Store
 credentials never enter Torturer or any pull-request job; production
 submission consumes the already-gated, successful Release result.
 
+## iOS IPA provenance
+
+Before provenance is created, the iOS build extracts the signed IPA and
+verifies both the app and packet-tunnel signatures and provisioning profiles.
+`verify_ios_app_group.py` requires their exact bundle/application identifiers,
+Apple team, shared `group.vpn.dobby.app` App Group, and the tunnel's
+`packet-tunnel-provider` entitlement. This prevents a signed package that
+cannot open its shared container from reaching TestFlight.
+
+`ios_artifact_provenance.py` is a standard-library-only, fail-closed contract
+between the reusable iOS build and protected App Store submission workflows.
+The build creates one canonical JSON sidecar for exactly one regular IPA. It
+records the full lowercase source SHA, semantic version, positive Apple build
+number, IPA filename, byte size, and SHA-256. Submission downloads both
+artifacts from the selected successful Release run and verifies all of those
+fields before Fastlane is allowed to submit the already-uploaded TestFlight
+build. The sidecar carries no credentials, configuration, or private evidence.
+The successful Release iOS job proves that its named IPA upload command
+completed after both retained artifacts were created. App Store Connect does
+not expose a downloadable binary hash, so the sidecar cannot independently
+prove that Apple's retained TestFlight binary is byte-for-byte identical. It
+also intentionally does not prove Apple has finished processing that upload:
+`skip_waiting_for_build_processing` keeps normal release CI bounded, and the
+later protected submission lane retries only the documented still-processing
+attachment response for the selected version and build number.
+
 A separate F-Droid candidate-testing repository is planned outside this
 public application repository; it is not part of the current workflow.
+
+## Public release provenance
+
+`release_provenance.py` creates and verifies the deterministic public
+`release-provenance.json` beside the release assets. It accepts the exact tag,
+version, source SHA, release run ID/number, Android version code, and a sorted
+repeated asset allowlist. It fails closed if the directory contains anything
+else, any entry is not a regular file, or hashes, sizes, metadata, or canonical
+JSON disagree. The manifest deliberately contains public release metadata only.
+
+```bash
+python3 .github/scripts/release_provenance.py create --directory release \
+  --tag v1.4.7 --version 1.4.7 \
+  --source-sha 0123456789abcdef0123456789abcdef01234567 \
+  --release-run-id 12345 --release-run-number 678 \
+  --android-version-code 1004007 \
+  --asset DobbyVPN.apk --asset DobbyVPN.zip
+```

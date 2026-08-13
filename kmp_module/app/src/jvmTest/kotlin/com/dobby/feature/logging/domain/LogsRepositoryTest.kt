@@ -8,9 +8,80 @@ import okio.Path.Companion.toPath
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class LogsRepositoryTest {
+    @Test
+    fun discoversAnExistingLogFromItsDirectoryWithoutRecreatingIt() {
+        val directory = Files.createTempDirectory("dobby-existing-log")
+        val log = directory.resolve("app_logs.txt")
+        Files.writeString(log, "retained")
+
+        try {
+            ensureLogFileEntry(directory, log)
+
+            assertEquals("retained", Files.readString(log))
+        } finally {
+            Files.deleteIfExists(log)
+            Files.deleteIfExists(directory)
+        }
+    }
+
+    @Test
+    fun createsAMissingLogAndRejectsANonFileEntry() {
+        val directory = Files.createTempDirectory("dobby-new-log")
+        val log = directory.resolve("app_logs.txt")
+        val target = directory.resolve("target.txt")
+
+        try {
+            ensureLogFileEntry(directory, log)
+            assertTrue(Files.isRegularFile(log))
+
+            Files.delete(log)
+            Files.createDirectory(log)
+            assertFailsWith<IllegalStateException> { ensureLogFileEntry(directory, log) }
+            Files.delete(log)
+
+            Files.writeString(target, "target")
+            Files.createSymbolicLink(log, target.fileName)
+            assertFailsWith<IllegalStateException> { ensureLogFileEntry(directory, log) }
+        } finally {
+            Files.deleteIfExists(log)
+            Files.deleteIfExists(target)
+            Files.deleteIfExists(directory)
+        }
+    }
+
+    @Test
+    fun parsesOnlyOneBoundedEffectiveWindowsUserSid() {
+        assertEquals(
+            "S-1-5-21-1000-2000-3000-4000",
+            parseWindowsUserSid("\"WORKSTATION\\user\",\"S-1-5-21-1000-2000-3000-4000\"\r\n"),
+        )
+        listOf(
+            "S-1-5-21-1000",
+            "\"user\",\"S-1-5-21-1000\" trailing",
+            "\"user\",\"S-1-5-21-1000\"\n\"other\",\"S-1-5-18\"",
+            "\"user\",\"S-1-5-21-1000 & injected\"",
+        ).forEach { value ->
+            assertFailsWith<IllegalStateException> { parseWindowsUserSid(value) }
+        }
+    }
+
+    @Test
+    fun parsesLocalizedSystemAccountWithoutAcceptingControlOutput() {
+        assertEquals("NT-AUTORITÄT\\SYSTEM", parseWindowsAccountName("NT-AUTORITÄT\\SYSTEM"))
+        listOf(
+            "SYSTEM",
+            "NT AUTHORITY\\SYSTEM\nextra",
+            "",
+            "D\\${"x".repeat(256)}",
+        ).forEach { value ->
+            assertFailsWith<IllegalStateException> { parseWindowsAccountName(value) }
+        }
+    }
+
     @Test
     fun concurrent_writes_remain_complete_and_ui_is_human_readable() {
         val path = Files.createTempFile("dobby-jsonl", ".log")

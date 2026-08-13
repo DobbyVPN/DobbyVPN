@@ -1,6 +1,7 @@
 package com.dobby.cli
 
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.LoggerManager
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.SessionConfiguration
 import com.dobby.feature.main.domain.SessionController
@@ -24,6 +25,51 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class CliClientSessionControllerTest {
+    @Test
+    fun initServiceLoggerInvokesTheInjectedLoggerOnce() {
+        val serviceLogger = RecordingLoggerManager()
+        val client = CliClient(
+            sessionController = RecordingSessionController(),
+            serviceLogger = serviceLogger,
+        )
+
+        assertTrue(client.initServiceLogger())
+
+        assertEquals(1, serviceLogger.initCalls)
+    }
+
+    @Test
+    fun initServiceLoggerReportsInjectedFailure() {
+        val serviceLogger = RecordingLoggerManager(result = false)
+        val client = CliClient(
+            sessionController = RecordingSessionController(),
+            serviceLogger = serviceLogger,
+        )
+
+        assertFalse(client.initServiceLogger())
+        assertEquals(1, serviceLogger.initCalls)
+    }
+
+    @Test
+    fun logsClearReturnsFailureWhenTheLocalLogCannotBeOpened() {
+        val logPath = Files.createTempFile("dobby-cli-clear-failure", ".log")
+        val logs = LogsRepository(logPath.toString().toPath())
+        Files.delete(logPath)
+        Files.createDirectory(logPath)
+
+        try {
+            val result = CliClient(
+                sessionController = RecordingSessionController(),
+                logsRepository = logs,
+                logger = Logger(logs),
+            ).logs(listOf("clear"))
+
+            assertEquals(ExitCode.PROGRAM_FAILED, result)
+        } finally {
+            Files.deleteIfExists(logPath)
+        }
+    }
+
     @Test
     fun connectProfilePreservesRawBytesAndStartsRequestedProfile() = runBlocking {
         val config = byteArrayOf(0, 0xff.toByte(), 0x0a)
@@ -169,6 +215,19 @@ class CliClientSessionControllerTest {
 
         assertEquals(ExitCode.SESSION_VERIFY_FAILED, client.verifySession(listOf(config.toString())))
     }
+}
+
+private class RecordingLoggerManager(
+    private val result: Boolean = true,
+) : LoggerManager {
+    var initCalls = 0
+
+    override fun initLogger(): Boolean {
+        initCalls += 1
+        return result
+    }
+
+    override fun stopTelemetry() = Unit
 }
 
 private class RecordingSessionController(

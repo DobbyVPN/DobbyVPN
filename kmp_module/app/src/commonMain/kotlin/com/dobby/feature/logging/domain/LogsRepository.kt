@@ -2,6 +2,10 @@ package com.dobby.feature.logging.domain
 
 import com.dobby.vpn.BuildConfig
 import korlibs.time.DateTime
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import okio.Buffer
 import okio.FileSystem
 import okio.Path
 import okio.buffer
@@ -12,42 +16,63 @@ expect fun provideLogFilePath(): Path
 expect fun provideGoLogFilePath(): Path
 expect fun provideAdditionalLogFilePaths(): List<Path>
 expect fun platformLogInfo(): String
+expect fun platformLogStorageInitializationAvailable(): Boolean
 expect fun <T> withLogWriteLock(block: () -> T): T
 
 fun maskStr(input: String): String = if (input.isEmpty()) "" else "[REDACTED]"
 
-class LogsRepository(
+class LogsRepository private constructor(
     private val logFilePath: Path = provideLogFilePath(),
     additionalLogFilePaths: List<Path> = emptyList(),
+    private val storageFileSystem: FileSystem = fileSystem,
 ) {
+    constructor(
+        logFilePath: Path = provideLogFilePath(),
+        additionalLogFilePaths: List<Path> = emptyList(),
+    ) : this(logFilePath, additionalLogFilePaths, fileSystem)
+
     companion object {
         const val UI_TAIL_LINES: Int = 50
         const val EXPORT_TAIL_LINES: Int = -1
         private const val LOG_RETENTION_HOURS: Int = 48
+
+        internal fun withFileSystemForTesting(
+            logFilePath: Path,
+            storageFileSystem: FileSystem,
+        ): LogsRepository = LogsRepository(logFilePath, emptyList(), storageFileSystem)
     }
 
     private val producerLogPaths = (listOf(logFilePath) + additionalLogFilePaths).distinct()
+    private val _storageStatus = MutableStateFlow(LogStorageStatus.READY)
+    val storageStatus: StateFlow<LogStorageStatus> = _storageStatus.asStateFlow()
 
     init {
-        withLogWriteLock {
-            if (!fileSystem.exists(logFilePath)) {
-                fileSystem.sink(logFilePath).buffer().use { }
+        val initialized = platformLogStorageInitializationAvailable() && runCatching {
+            withLogWriteLock {
+                if (!storageFileSystem.exists(logFilePath)) {
+                    storageFileSystem.sink(logFilePath).buffer().use { }
+                }
             }
+        }.onFailure { degradeStorage("initialize", it) }.isSuccess
+        if (!initialized && _storageStatus.value == LogStorageStatus.READY) {
+            degradeStorage("initialize", IllegalStateException("platform log storage unavailable"))
         }
-        cleanupOldLogs(writeDiagnostic = false)
-        writeEvent(
-            level = LogLevel.INFO,
-            source = "app",
-            event = "logger.ready",
-            message = "Owner-only local diagnostic storage is ready",
-            fields = mapOf("producer_count" to producerLogPaths.size.toString()),
-        )
-        writeLog("[Platform] ${platformLogInfo()}")
-        writeLog(
-            "[Build] version=${BuildConfig.VERSION_NAME} " +
-                "versionCode=${BuildConfig.VERSION_CODE} " +
-                "commit=${BuildConfig.PROJECT_REPOSITORY_COMMIT}",
-        )
+        if (initialized) {
+            cleanupOldLogs(writeDiagnostic = false)
+            writeEvent(
+                level = LogLevel.INFO,
+                source = "app",
+                event = "logger.ready",
+                message = "Owner-only local diagnostic storage is ready",
+                fields = mapOf("producer_count" to producerLogPaths.size.toString()),
+            )
+            writeLog("[Platform] ${platformLogInfo()}")
+            writeLog(
+                "[Build] version=${BuildConfig.VERSION_NAME} " +
+                    "versionCode=${BuildConfig.VERSION_CODE} " +
+                    "commit=${BuildConfig.PROJECT_REPOSITORY_COMMIT}",
+            )
+        }
     }
 
     fun writeLog(log: String) {
@@ -76,35 +101,41 @@ class LogsRepository(
         )
         runCatching {
             withLogWriteLock {
-                fileSystem.appendingSink(logFilePath).buffer().use { sink ->
-                    sink.writeUtf8(logEntry)
-                    sink.writeUtf8("\n")
+                val record = Buffer().writeUtf8(logEntry).writeUtf8("\n")
+                storageFileSystem.appendingSink(logFilePath).use { sink ->
+                    sink.write(record, record.size)
+                    sink.flush()
                 }
             }
-        }.onFailure { reportLogFailure("write", it) }
+        }.onFailure { degradeStorage("write", it) }
     }
 
-    fun clearLogs() {
-        runCatching {
-            withLogWriteLock {
-                fileSystem.sink(logFilePath).buffer().use { }
-            }
-            writeEvent(
-                level = LogLevel.INFO,
-                source = "app",
-                event = "logs.cleared",
-                message = "Earlier diagnostic events were cleared from this view",
-            )
-        }.onFailure { reportLogFailure("clear", it) }
-    }
+    fun clearLogs(): Boolean = runCatching {
+        withLogWriteLock {
+            storageFileSystem.sink(logFilePath).buffer().use { }
+        }
+        writeEvent(
+            level = LogLevel.INFO,
+            source = "app",
+            event = "logs.cleared",
+            message = "Earlier diagnostic events were cleared from this view",
+        )
+        check(_storageStatus.value == LogStorageStatus.READY)
+    }.fold(
+        onSuccess = { true },
+        onFailure = {
+            degradeStorage("clear", it)
+            false
+        },
+    )
 
     fun cleanupOldLogs() {
         cleanupOldLogs(writeDiagnostic = true)
     }
 
     private fun cleanupOldLogs(writeDiagnostic: Boolean) {
-        if (!fileSystem.exists(logFilePath)) return
         runCatching {
+            if (!storageFileSystem.exists(logFilePath)) return
             val cutoff = DateTime
                 .fromUnixMillis(DateTime.now().unixMillisLong - LOG_RETENTION_HOURS.toLong() * 60L * 60L * 1000L)
                 .format("yyyy-MM-dd HH:mm:ss")
@@ -117,7 +148,7 @@ class LogsRepository(
             val retained = retainedRecords.flatMap { it.lines }
             if (retained.size != linesBefore) {
                 withLogWriteLock {
-                    fileSystem.sink(logFilePath).buffer().use { sink ->
+                    storageFileSystem.sink(logFilePath).buffer().use { sink ->
                         retained.forEach { line ->
                             sink.writeUtf8(line)
                             sink.writeUtf8("\n")
@@ -139,7 +170,7 @@ class LogsRepository(
                     ),
                 )
             }
-        }.onFailure { reportLogFailure("cleanup", it) }
+        }.onFailure { degradeStorage("cleanup", it) }
     }
 
     /** Raw JSONL/legacy records for support export. */
@@ -173,10 +204,10 @@ class LogsRepository(
     }
 
     private fun readRecords(path: Path, producerIndex: Int): List<StoredRecord> {
-        if (!fileSystem.exists(path)) return emptyList()
         return runCatching {
+            if (!storageFileSystem.exists(path)) return@runCatching emptyList()
             withLogWriteLock {
-                fileSystem.source(path).buffer().use { source ->
+                storageFileSystem.source(path).buffer().use { source ->
                     val records = mutableListOf<StoredRecord>()
                     var current: StoredRecord? = null
                     while (true) {
@@ -189,7 +220,7 @@ class LogsRepository(
                 }
             }
         }.getOrElse {
-            reportLogFailure("read", it)
+            degradeStorage("read", it)
             emptyList()
         }
     }
@@ -219,6 +250,16 @@ class LogsRepository(
         val recordIndex: Int,
         val lines: MutableList<String>,
     )
+
+    private fun degradeStorage(operation: String, failure: Throwable) {
+        _storageStatus.value = LogStorageStatus.UNAVAILABLE
+        reportLogFailure(operation, failure)
+    }
+}
+
+enum class LogStorageStatus {
+    READY,
+    UNAVAILABLE,
 }
 
 private fun reportLogFailure(operation: String, failure: Throwable) {

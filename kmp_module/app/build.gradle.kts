@@ -21,7 +21,6 @@ val androidNativeAbis = listOf(
 
 val repoRoot: File = rootProject.projectDir.parentFile
 val goModuleDir: File = repoRoot.resolve("go_module")
-val cloakInternalDir: File = repoRoot.resolve("Cloak/internal")
 val goModuleCloakInternalDir: File = goModuleDir.resolve("modules/Cloak/internal")
 val gomobileAar = layout.buildDirectory.file("generated/gomobile/backend.aar")
 val gomobileExecutable = providers.gradleProperty("gomobileExecutable")
@@ -329,7 +328,7 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         include("**/*.go")
         exclude("**/build/**")
     })
-    inputs.dir(cloakInternalDir).optional()
+    inputs.dir(goModuleCloakInternalDir)
     inputs.file(goModuleDir.resolve("go.mod"))
     inputs.file(goModuleDir.resolve("go.sum"))
     outputs.file(outputFile)
@@ -341,15 +340,11 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
     ).filter { it.isNotBlank() }.distinct().joinToString(File.pathSeparator)
 
     doFirst {
-        check(cloakInternalDir.isDirectory) {
-            "Cloak submodule is not initialized: missing ${cloakInternalDir.absolutePath}"
+        check(goModuleCloakInternalDir.resolve("client/connector.go").isFile) {
+            "Tracked embedded Cloak client source is incomplete: ${goModuleCloakInternalDir.absolutePath}"
         }
         outputFile.parentFile.mkdirs()
         goTmpDir.get().asFile.mkdirs()
-        copy {
-            from(cloakInternalDir)
-            into(goModuleCloakInternalDir)
-        }
         logger.lifecycle("gomobileBindAndroid: gomobile=${gomobileExecutable.get()}")
         logger.lifecycle("gomobileBindAndroid: GOROOT=${goRootDir.orNull.orEmpty()}")
         logger.lifecycle("gomobileBindAndroid: PATH=$gomobilePath")

@@ -129,6 +129,13 @@ public final class IOSProviderSessionCoordinator {
         clear()
     }
 
+    /// Applies the same strict cleanup path when NetworkExtension reports an
+    /// unexpected provider exit.  A subsequent start cannot overlap the old
+    /// generation or reuse its session handle.
+    public func cleanupAfterUnexpectedTermination() async throws {
+        try await stop()
+    }
+
     private func waitForConnected() async throws {
         guard let session = sessionID else {
             throw IOSProviderSessionError.malformed

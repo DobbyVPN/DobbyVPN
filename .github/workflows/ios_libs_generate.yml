@@ -12,6 +12,10 @@ on:
       app_maintenance_version:
         type: string
         required: true
+      source_sha:
+        description: Lowercase full source commit SHA to build.
+        type: string
+        required: true
 
 jobs:
   build_ios_lib:
@@ -19,14 +23,30 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.source_sha }}
           submodules: true
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Select Xcode 26.3
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+          test "$(xcodebuild -version | tr '\n' ' ')" = "Xcode 26.3 Build version 17C529 "
 
       - name: Cache iOS VPN library
         id: ios_lib_cache
         uses: actions/cache@v5
         with:
           path: go_module/MyLibrary.xcframework
-          key: ${{ runner.os }}-ios-vpn-lib-${{ hashFiles('.go-version', 'go_module/go.sum', 'go_module/**', 'Cloak/internal/**') }}
+          key: ${{ runner.os }}-xcode-26.3-ios-15.6-vpn-lib-${{ hashFiles('.github/workflows/ios_libs_generate.yml', '.go-version', 'go_module/go.sum', 'go_module/**') }}
 
       - name: Set up Go
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
@@ -35,10 +55,12 @@ jobs:
           go-version-file: .go-version
           cache-dependency-path: go_module/go.sum
 
-      - name: Vendor Cloak/internal
+      - name: Verify tracked embedded Cloak client source
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         run: |
-          cp -r Cloak/internal go_module/modules/Cloak/
+          test -f go_module/modules/Cloak/internal/client/connector.go
+          test -f go_module/modules/Cloak/internal/common/dialer.go
+          test -f go_module/modules/Cloak/internal/multiplex/session.go
 
       - name: Download Go modules & dependencies
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
@@ -70,6 +92,7 @@ jobs:
         with:
           name: MyLibrary.xcframework
           path: go_module/MyLibrary.xcframework
+          if-no-files-found: error
 
   build_ios_app_lib:
     runs-on: macos-15
@@ -78,15 +101,28 @@ jobs:
       APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
       APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
       APPLE_BUILD_NUMBER: ${{ github.run_number }}
-      GITHUB_SHA: ${{ github.sha }}
-      GITHUB_REPOSITORY: ${{ github.repository }}
+      APP_SOURCE_SHA: ${{ inputs.source_sha }}
+      APP_SOURCE_REPOSITORY: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.source_sha }}
           submodules: true
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Select Xcode 26.3
-        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+          test "$(xcodebuild -version | tr '\n' ' ')" = "Xcode 26.3 Build version 17C529 "
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -131,24 +167,16 @@ jobs:
           xcodebuild -resolvePackageDependencies \
             -project swift_module/iosApp.xcodeproj
 
-      - name: Cache KMP iOS release framework
-        id: kmp_ios_framework_cache
-        uses: actions/cache@v5
-        with:
-          path: kmp_module/app/build/bin/iosArm64/releaseFramework
-          key: kmp-ios-framework-${{ hashFiles('kmp_module/app/**', 'kmp_module/grpcstub/**', 'kmp_module/grpcprotos/**', 'kmp_module/gradle/libs.versions.toml') }}
-          restore-keys: |
-            kmp-ios-framework-
-
       - name: Build KMP iOS framework
-        if: steps.kmp_ios_framework_cache.outputs.cache-hit != 'true'
         working-directory: kmp_module
         run: |
+          set -euo pipefail
+          test "$APP_SOURCE_SHA" = "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
           VERSION_NAME="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
           VERSION_CODE="${APPLE_BUILD_NUMBER}"
           ./gradlew linkReleaseFrameworkIosArm64 --build-cache --parallel \
-            -PprojectRepositoryCommit="${GITHUB_SHA}" \
-            -PprojectRepositoryCommitLink="https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_SHA}" \
+            -PprojectRepositoryCommit="${APP_SOURCE_SHA}" \
+            -PprojectRepositoryCommitLink="https://github.com/${APP_SOURCE_REPOSITORY}/tree/${APP_SOURCE_SHA}" \
             -Pandroid.injected.version.code="${VERSION_CODE}" \
             -Pandroid.injected.version.name="${VERSION_NAME}"
 
@@ -157,3 +185,4 @@ jobs:
         with:
           name: app.framework
           path: kmp_module/app/build/bin/iosArm64/releaseFramework/app.framework
+          if-no-files-found: error

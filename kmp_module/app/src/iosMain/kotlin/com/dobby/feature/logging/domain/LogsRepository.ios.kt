@@ -6,12 +6,12 @@ import kotlinx.cinterop.useContents
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
-import okio.buffer
 import okio.use
 import platform.Foundation.NSBundle
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSProcessInfo
 import platform.Foundation.NSRecursiveLock
+import platform.Foundation.NSTemporaryDirectory
 import platform.posix.chmod
 
 actual val fileSystem: FileSystem = FileSystem.SYSTEM
@@ -27,6 +27,10 @@ actual fun <T> withLogWriteLock(block: () -> T): T {
 }
 
 private const val appGroupIdentifier = "group.vpn.dobby.app"
+private const val privateLogDirectoryName = "DobbyVPNLogs"
+private var logStorageInitializationAvailable = true
+
+actual fun platformLogStorageInitializationAvailable(): Boolean = logStorageInitializationAvailable
 
 @OptIn(ExperimentalForeignApi::class)
 actual fun provideLogFilePath(): Path = secureLogPath(
@@ -52,19 +56,30 @@ private fun isTunnelProcess(): Boolean = NSBundle.mainBundle.bundleIdentifier?.e
 private fun sharedLogPath(name: String): Path {
     val fileManager = NSFileManager.defaultManager
     val containerURL = fileManager.containerURLForSecurityApplicationGroupIdentifier(appGroupIdentifier)
-    val containerPath = containerURL?.path ?: error("Failed to get shared log container")
-    return "$containerPath/$name".toPath()
+    val containerPath = containerURL?.path ?: run {
+        logStorageInitializationAvailable = false
+        NSTemporaryDirectory().trimEnd('/')
+    }
+    // The App Group container root is owned and managed by iOS.  Changing its
+    // mode can fail on physical devices even when the entitlement is valid.
+    // Secure an app-created child directory instead.
+    return "$containerPath/$privateLogDirectoryName/$name".toPath()
 }
 
 @OptIn(ExperimentalForeignApi::class)
 private fun secureLogPath(name: String): Path {
     val logFilePath = sharedLogPath(name)
-    fileSystem.createDirectories(logFilePath.parent!!)
-    // appendingSink creates an absent file without truncating a file another
-    // app-group process may have created between the existence check and open.
-    fileSystem.appendingSink(logFilePath).buffer().use { }
-    check(chmod(logFilePath.parent.toString(), 448.convert()) == 0) { "Failed to secure iOS log directory" }
-    check(chmod(logFilePath.toString(), 384.convert()) == 0) { "Failed to secure iOS log file" }
+    logStorageInitializationAvailable = runCatching {
+        fileSystem.createDirectories(logFilePath.parent!!)
+        // appendingSink creates an absent file without truncating a file another
+        // app-group process may have created between the existence check and open.
+        fileSystem.appendingSink(logFilePath).use { }
+        val protectedDirectory = chmod(logFilePath.parent.toString(), 448.convert()) == 0
+        val protectedFile = chmod(logFilePath.toString(), 384.convert()) == 0
+        if (!protectedDirectory || !protectedFile) {
+            throw IllegalStateException("local diagnostic permissions unavailable")
+        }
+    }.isSuccess && logStorageInitializationAvailable
     return logFilePath
 }
 

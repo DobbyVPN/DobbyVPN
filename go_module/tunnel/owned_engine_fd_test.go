@@ -81,11 +81,11 @@ func TestFDEngineDoesNotRecloseAcceptedDescriptor(t *testing.T) {
 	_, err = startOwnedFDEngineLocked(
 		platform_engine.EngineConfig{FD: int(reader.Fd())},
 		func(cfg platform_engine.EngineConfig) (*Engine, bool, error) {
-			if err := unix.Close(cfg.FD); err != nil {
-				t.Fatal(err)
+			if closeErr := unix.Close(cfg.FD); closeErr != nil {
+				t.Fatal(closeErr)
 			}
-			if err := unix.Dup2(int(reuseSource.Fd()), cfg.FD); err != nil {
-				t.Fatal(err)
+			if dupErr := unix.Dup2(int(reuseSource.Fd()), cfg.FD); dupErr != nil {
+				t.Fatal(dupErr)
 			}
 			reusedFD = cfg.FD
 			return nil, true, want

@@ -74,9 +74,9 @@ tasks:
     desc: "Run detekt for Kotlin Multiplatform"
     dir: "{{.ROOT_DIR}}/kmp_module"
     cmds:
-      - cmd: ./gradlew detekt
+      - cmd: ./gradlew :app:detektMetadataCommonMain :app:detektJvmMain :grpcstub:detekt
         platforms: [linux, darwin]
-      - cmd: gradlew.bat detekt
+      - cmd: gradlew.bat :app:detektMetadataCommonMain :app:detektJvmMain :grpcstub:detekt
         platforms: [windows]
 
   lint:swift:
@@ -99,11 +99,12 @@ tasks:
   report:prepare:
     desc: "Create reports directory"
     cmds:
-      - cmd: mkdir -p {{.REPORTS_DIR}}/go {{.REPORTS_DIR}}/kotlin {{.REPORTS_DIR}}/swift
+      - cmd: mkdir -p {{.REPORTS_DIR}}/go {{.REPORTS_DIR}}/kotlin/app {{.REPORTS_DIR}}/kotlin/grpcstub {{.REPORTS_DIR}}/swift
         platforms: [linux, darwin]
       - cmd: |
           if not exist "{{.REPORTS_DIR}}\go" mkdir "{{.REPORTS_DIR}}\go"
-          if not exist "{{.REPORTS_DIR}}\kotlin" mkdir "{{.REPORTS_DIR}}\kotlin"
+          if not exist "{{.REPORTS_DIR}}\kotlin\app" mkdir "{{.REPORTS_DIR}}\kotlin\app"
+          if not exist "{{.REPORTS_DIR}}\kotlin\grpcstub" mkdir "{{.REPORTS_DIR}}\kotlin\grpcstub"
           if not exist "{{.REPORTS_DIR}}\swift" mkdir "{{.REPORTS_DIR}}\swift"
         platforms: [windows]
 
@@ -131,13 +132,17 @@ tasks:
     desc: "detekt reports (HTML + XML + SARIF)"
     dir: "{{.ROOT_DIR}}/kmp_module"
     cmds:
-      - cmd: ./gradlew detekt || true
+      - cmd: ./gradlew :app:detektMetadataCommonMain :app:detektJvmMain :grpcstub:detekt || true
         platforms: [linux, darwin]
-      - cmd: gradlew.bat detekt || true
+      - cmd: gradlew.bat :app:detektMetadataCommonMain :app:detektJvmMain :grpcstub:detekt || true
         platforms: [windows]
-      - cmd: cp -r app/build/reports/detekt/* "{{.REPORTS_DIR}}/kotlin/" 2>/dev/null || true
+      - cmd: cp -r app/build/reports/detekt/* "{{.REPORTS_DIR}}/kotlin/app/" 2>/dev/null || true
         platforms: [linux, darwin]
-      - cmd: xcopy /Y /E "app\build\reports\detekt\*" "{{.REPORTS_DIR}}\kotlin\" >nul 2>&1 || true
+      - cmd: cp -r grpcstub/build/reports/detekt/* "{{.REPORTS_DIR}}/kotlin/grpcstub/" 2>/dev/null || true
+        platforms: [linux, darwin]
+      - cmd: xcopy /Y /E "app\build\reports\detekt\*" "{{.REPORTS_DIR}}\kotlin\app\" >nul 2>&1 || true
+        platforms: [windows]
+      - cmd: xcopy /Y /E "grpcstub\build\reports\detekt\*" "{{.REPORTS_DIR}}\kotlin\grpcstub\" >nul 2>&1 || true
         platforms: [windows]
 
   report:swift:
@@ -158,11 +163,11 @@ tasks:
           echo "========================================="
           echo ""
           echo "Go (go_module): {{.REPORTS_DIR}}/go/go_module-checkstyle.xml"
-          echo "Kotlin (detekt): {{.REPORTS_DIR}}/kotlin/detekt.html"
+          echo "Kotlin (detekt): {{.REPORTS_DIR}}/kotlin/app/ and {{.REPORTS_DIR}}/kotlin/grpcstub/"
           echo "Swift:          {{.REPORTS_DIR}}/swift/swiftlint-checkstyle.xml"
           echo ""
           echo "Open detekt HTML report:"
-          echo "  {{.REPORTS_DIR}}/kotlin/detekt.html"
+          echo "  {{.REPORTS_DIR}}/kotlin/app/detekt.html"
           echo ""
         platforms: [linux, darwin]
       - cmd: |
@@ -172,7 +177,7 @@ tasks:
           echo =========================================
           echo.
           echo Go (go_module):  {{.REPORTS_DIR}}\go\go_module-checkstyle.xml
-          echo Kotlin (detekt): {{.REPORTS_DIR}}\kotlin\detekt.html
+          echo Kotlin (detekt): {{.REPORTS_DIR}}\kotlin\app\ and {{.REPORTS_DIR}}\kotlin\grpcstub\
           echo.
         platforms: [windows]
 

@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+EXTRACTED_APP_BUNDLE="Dobby Vpn.app"
+APP_BUNDLE="Dobby VPN.app"
+
 mkdir -p "bin/amd64"
 mkdir -p "bin/aarch64"
 
@@ -35,11 +38,22 @@ install_trusttunnel_helper() {
   chmod 755 "$destination"
 }
 
+write_fixed_payload_component_plist() {
+  cat >component.plist <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><array/></plist>
+PLIST
+}
+
 echo [+] Extracting dobbyVPN-macos-aarch64.zip
 unzip "dobbyVPN-macos-aarch64.zip" -d "bin/aarch64/"
 
 echo [+] Switching workdir to bin/aarch64/
 cd bin/aarch64/
+
+echo [+] Normalizing application bundle name
+mv "$EXTRACTED_APP_BUNDLE" "$APP_BUNDLE"
 
 echo [+] Making Scripts/ folder
 mkdir Scripts
@@ -47,17 +61,21 @@ cp ../../postinstall.sh Scripts/postinstall
 chmod +x Scripts/postinstall
 
 echo [+] Inserting vpnservice.plist file
-cp ../../vpnservice.plist "Dobby Vpn.app/Contents/Resources/"
+cp ../../vpnservice.plist "$APP_BUNDLE/Contents/Resources/"
 
 echo [+] Inserting arm64 macos_grpcvpnserver file
-install_service ../../services/arm64/macos_grpcvpnserver arm64 "Dobby Vpn.app/Contents/Resources/macos_grpcvpnserver"
+install_service ../../services/arm64/macos_grpcvpnserver arm64 "$APP_BUNDLE/Contents/Resources/macos_grpcvpnserver"
 
 echo [+] Making Payload/ folder
 mkdir Payload
-cp -R "Dobby Vpn.app" Payload/
+cp -R "$APP_BUNDLE" Payload/
+
+echo [+] Fixing payload to the package install location
+write_fixed_payload_component_plist
 
 echo [+] Building aarch64 PGK installer
 pkgbuild --root Payload \
+         --component-plist component.plist \
          --scripts Scripts \
          --identifier com.dobby.pkg \
          --version $APP_MAJOR_VERSION.$APP_MINOR_VERSION.$APP_MAINTENANCE_VERSION \
@@ -72,26 +90,33 @@ unzip "dobbyVPN-macos-amd64.zip" -d "bin/amd64/"
 echo [+] Switching workdir to bin/amd64/
 cd bin/amd64/
 
+echo [+] Normalizing application bundle name
+mv "$EXTRACTED_APP_BUNDLE" "$APP_BUNDLE"
+
 echo [+] Making Scripts/ folder
 mkdir Scripts
 cp ../../postinstall.sh Scripts/postinstall
 chmod +x Scripts/postinstall
 
 echo [+] Inserting vpnservice.plist file
-cp ../../vpnservice.plist "Dobby Vpn.app/Contents/Resources/"
+cp ../../vpnservice.plist "$APP_BUNDLE/Contents/Resources/"
 
 echo [+] Inserting amd64 macos_grpcvpnserver file
-install_service ../../services/amd64/macos_grpcvpnserver x86_64 "Dobby Vpn.app/Contents/Resources/macos_grpcvpnserver"
+install_service ../../services/amd64/macos_grpcvpnserver x86_64 "$APP_BUNDLE/Contents/Resources/macos_grpcvpnserver"
 
 echo [+] Inserting verified TrustTunnel helper beside Intel service
-install_trusttunnel_helper ../../services/amd64/trusttunnel_client "Dobby Vpn.app/Contents/Resources/trusttunnel_client"
+install_trusttunnel_helper ../../services/amd64/trusttunnel_client "$APP_BUNDLE/Contents/Resources/trusttunnel_client"
 
 echo [+] Making Payload/ folder
 mkdir Payload
-cp -R "Dobby Vpn.app" Payload/
+cp -R "$APP_BUNDLE" Payload/
+
+echo [+] Fixing payload to the package install location
+write_fixed_payload_component_plist
 
 echo [+] Building amd64 PGK installer
 pkgbuild --root Payload \
+         --component-plist component.plist \
          --scripts Scripts \
          --identifier com.dobby.pkg \
          --version $APP_MAJOR_VERSION.$APP_MINOR_VERSION.$APP_MAINTENANCE_VERSION \

@@ -12,9 +12,9 @@ VERSION_CODE    = ENV.fetch('ANDROID_VERSION_CODE', SEMANTIC_ANDROID_VERSION_COD
 if VERSION_CODE != SEMANTIC_ANDROID_VERSION_CODE
   raise "ANDROID_VERSION_CODE must equal #{SEMANTIC_ANDROID_VERSION_CODE} for #{FULL_VERSION}"
 end
-COMMIT          = ENV["GITHUB_SHA"]
+COMMIT          = ENV["APP_SOURCE_SHA"] || ENV["GITHUB_SHA"]
 SHORT_SHA       = COMMIT && !COMMIT.empty? ? COMMIT[0, 7] : "unknown"
-REPO            = ENV["GITHUB_REPOSITORY"]
+REPO            = ENV["APP_SOURCE_REPOSITORY"] || ENV["GITHUB_REPOSITORY"]
 COMMIT_LINK     = "https://github.com/#{REPO}/tree/#{COMMIT}"
 
 platform :android do
@@ -180,6 +180,9 @@ platform :ios do
 
   desc "Build IPA"
   lane :build_ios do
+    unless COMMIT&.match?(/\A[0-9a-f]{40}\z/)
+      raise "APP_SOURCE_SHA must be the exact lowercase 40-character source commit"
+    end
     export_options = {
       method: "app-store",
       signingStyle: "manual",
@@ -196,6 +199,7 @@ platform :ios do
       configuration: "Release",
       sdk: "iphoneos",
       clean: true,
+      xcargs: "DOBBY_SOURCE_COMMIT=#{COMMIT}",
       archive_path: ARCHIVE,
       export_method: "app-store",
       export_options: export_options,

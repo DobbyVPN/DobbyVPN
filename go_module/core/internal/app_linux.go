@@ -42,6 +42,10 @@ func (app *App) validateRunInputs() error {
 	return nil
 }
 
+// Run intentionally keeps the ordered Linux routing and lifecycle transaction
+// together so each acquired resource has one visible, reverse-order teardown.
+//
+//nolint:gocyclo // Splitting this transaction would obscure its cleanup ownership.
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
 	log.Debugf(coreCommon.Category, "[Linux][Init] ===== VPN initialization started =====")
 	if err := app.validateRunInputs(); err != nil {
@@ -84,7 +88,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	defer func() {
 		if cleanupErr := routePlan.Close(); cleanupErr != nil {
 			log.Debugf(coreCommon.Category, "[Linux][RoutingPlan][WARN] %v", cleanupErr)
-			runErr = errors.Join(runErr, fmt.Errorf("Linux routing cleanup: %w", cleanupErr))
+			runErr = errors.Join(runErr, fmt.Errorf("linux routing cleanup: %w", cleanupErr))
 		}
 	}()
 
@@ -196,8 +200,8 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return cleanupErr
 	}
 	defer func() {
-		if err := closeAll(); err != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("Linux session cleanup: %w", err))
+		if closeErr := closeAll(); closeErr != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("linux session cleanup: %w", closeErr))
 		}
 	}()
 

@@ -8,7 +8,7 @@
 set -euo pipefail
 
 readonly output="MyLibrary.xcframework"
-readonly expected_bridge_hash="cbf8a0937ca8a745be4629246f4f9b9aac06cffac85e67cd3dcab7b7d1fdf6e1"
+readonly expected_bridge_hash="ff9e5593a5c3218242338aca83db2432dded78d1748195302b363ddfddfd85e8"
 
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/dobbyvpn-ios-xcframework.XXXXXX")"
 trap 'rm -rf "$workdir"' EXIT
@@ -21,6 +21,7 @@ GO111MODULE=on gomobile bind \
   -tags=static \
   -trimpath \
   -ldflags="-buildid=" \
+  -iosversion=15.6 \
   -target=ios/arm64 \
   -o "$device_output" \
   ./ios_exports
@@ -29,6 +30,7 @@ GO111MODULE=on gomobile bind \
   -tags='static simulator' \
   -trimpath \
   -ldflags="-buildid=" \
+  -iosversion=15.6 \
   -target=iossimulator \
   -o "$simulator_output" \
   ./ios_exports

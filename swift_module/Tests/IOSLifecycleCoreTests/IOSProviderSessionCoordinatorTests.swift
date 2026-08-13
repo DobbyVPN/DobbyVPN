@@ -411,4 +411,51 @@ final class IOSProviderSessionCoordinatorTests: XCTestCase {
             XCTAssertEqual(coordinator.generation, 7)
         }
     }
+
+    func testCleanStopAllowsReconnectWithFreshSessionGeneration() async throws {
+        let client = TestClient()
+        let coordinator = IOSProviderSessionCoordinator(
+            client: client,
+            clock: TestClock()
+        )
+        try await coordinator.start(rawConfiguration: Data([1]))
+        client.snapshots = [
+            .init(generation: 7, state: "IDLE", cleanupComplete: true),
+        ]
+        try await coordinator.stop()
+
+        client.createResult = "replacement-session"
+        client.startResult = 8
+        client.snapshots = [
+            .init(generation: 8, state: "CONNECTED", cleanupComplete: false),
+        ]
+        try await coordinator.start(rawConfiguration: Data([2]))
+
+        XCTAssertEqual(coordinator.sessionID, "replacement-session")
+        XCTAssertEqual(coordinator.generation, 8)
+        XCTAssertEqual(
+            Array(client.calls.suffix(5)),
+            ["destroy", "create", "configure", "start", "snapshot"]
+        )
+    }
+
+    func testUnexpectedTerminationUsesStrictCleanupAndAllowsReconnect() async throws {
+        let client = TestClient()
+        let coordinator = IOSProviderSessionCoordinator(
+            client: client,
+            clock: TestClock()
+        )
+        try await coordinator.start(rawConfiguration: Data([1]))
+        client.calls.removeAll()
+        client.snapshots = [
+            .init(generation: 7, state: "FAILED", cleanupComplete: false),
+            .init(generation: 7, state: "FAILED", cleanupComplete: true),
+        ]
+
+        try await coordinator.cleanupAfterUnexpectedTermination()
+
+        XCTAssertNil(coordinator.sessionID)
+        XCTAssertEqual(coordinator.generation, 0)
+        XCTAssertEqual(client.calls, ["snapshot", "stop", "snapshot", "destroy"])
+    }
 }

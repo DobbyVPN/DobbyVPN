@@ -14,6 +14,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -23,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import com.dobby.feature.logging.presentation.LogsViewModel
+import com.dobby.feature.logging.domain.LogStorageStatus
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.util.koinViewModel
 import org.jetbrains.compose.ui.tooling.preview.Preview
@@ -46,13 +51,28 @@ fun DobbySocksScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(16.dp)
+            .testTag(AutomationSemantics.CONNECTION_SCREEN)
+            .semantics { contentDescription = AutomationSemantics.CONNECTION_SCREEN },
         verticalArrangement = Arrangement.Top
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.Top
         ) {
+            if (uiLogState.storageStatus == LogStorageStatus.UNAVAILABLE) {
+                Text(
+                    text = "Local diagnostics are unavailable (LOCAL_LOG_STORAGE_UNAVAILABLE). VPN controls remain available.",
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier
+                        .testTag(AutomationSemantics.LOG_STORAGE_STATUS)
+                        .semantics {
+                            contentDescription = AutomationSemantics.LOG_STORAGE_STATUS
+                            stateDescription = "LOCAL_LOG_STORAGE_UNAVAILABLE"
+                        },
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -73,6 +93,12 @@ fun DobbySocksScreen(
                         VpnConnectionState.STOPPING -> 0xFFFEFEDC
                         VpnConnectionState.CONNECTED -> 0xFFDCFCE7
                     },
+                    modifier = Modifier
+                        .testTag(AutomationSemantics.CONNECTION_STATUS)
+                        .semantics {
+                            contentDescription = AutomationSemantics.CONNECTION_STATUS
+                            stateDescription = AutomationSemantics.connectionState(uiMainState.connectionState)
+                        },
                 )
                 Spacer(modifier = Modifier.weight(1f))
             }
@@ -89,6 +115,8 @@ fun DobbySocksScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(6.dp))
+                    .testTag(AutomationSemantics.SUBSCRIPTION_INPUT)
+                    .semantics { contentDescription = AutomationSemantics.SUBSCRIPTION_INPUT }
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -102,7 +130,13 @@ fun DobbySocksScreen(
                     containerColor = Color.Black,
                     contentColor = Color.White
                 ),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(AutomationSemantics.CONNECTION_ACTION)
+                    .semantics {
+                        contentDescription = AutomationSemantics.CONNECTION_ACTION
+                        stateDescription = AutomationSemantics.connectionAction(uiMainState.connectionState)
+                    }
             ) {
                 Text(
                     when (uiMainState.connectionState) {
@@ -111,6 +145,20 @@ fun DobbySocksScreen(
                         VpnConnectionState.STOPPING -> "Stopping..."
                         VpnConnectionState.CONNECTED -> "Stop"
                     }
+                )
+            }
+
+            uiMainState.lastFailureCode?.let { failure ->
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Connection error: ${failure.name}",
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier
+                        .testTag(AutomationSemantics.FAILURE_STATUS)
+                        .semantics {
+                            contentDescription = AutomationSemantics.FAILURE_STATUS
+                            stateDescription = failure.name
+                        },
                 )
             }
         }
@@ -138,6 +186,8 @@ fun DobbySocksScreen(
                 .clip(RoundedCornerShape(6.dp))
                 .background(Color.Gray.copy(alpha = 0.1f))
                 .padding(8.dp)
+                .testTag(AutomationSemantics.LOGS)
+                .semantics { contentDescription = AutomationSemantics.LOGS }
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onDoubleTap = {

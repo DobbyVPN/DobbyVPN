@@ -24,6 +24,17 @@ var errRepeatSessionClosing = errors.New("trying to close a closed session")
 var errRepeatStreamClosing = errors.New("trying to close a closed stream")
 var errNoMultiplex = errors.New("a singleplexing session can have only one stream")
 
+type TerminalCause string
+
+const (
+	TerminalCauseUnknown              TerminalCause = "unknown"
+	TerminalCauseInactivity           TerminalCause = "inactivity"
+	TerminalCausePeerClosingFrame     TerminalCause = "peer_closing_frame"
+	TerminalCauseTransportReadClosed  TerminalCause = "transport_read_closed"
+	TerminalCauseTransportWriteFailed TerminalCause = "transport_write_failed"
+	TerminalCauseSwitchboardFailed    TerminalCause = "switchboard_failed"
+)
+
 type SessionConfig struct {
 	Obfuscator
 
@@ -76,6 +87,7 @@ type Session struct {
 
 	terminalMsgSetter sync.Once
 	terminalMsg       string
+	terminalCause     TerminalCause
 
 	// the max size passed to Write calls before it splits it into multiple frames
 	// i.e. the max size a piece of data can fit into a Frame.Payload
@@ -236,7 +248,7 @@ func (sesh *Session) recvDataFromRemote(data []byte) error {
 	}
 
 	if frame.Closing == closingSession {
-		sesh.SetTerminalMsg("Received a closing notification frame")
+		sesh.SetTerminal(TerminalCausePeerClosingFrame, "Received a closing notification frame")
 		return sesh.passiveClose()
 	}
 
@@ -265,14 +277,26 @@ func (sesh *Session) recvDataFromRemote(data []byte) error {
 }
 
 func (sesh *Session) SetTerminalMsg(msg string) {
+	sesh.SetTerminal(TerminalCauseUnknown, msg)
+}
+
+func (sesh *Session) SetTerminal(cause TerminalCause, msg string) {
 	log.Debug("terminal message set to " + msg)
 	sesh.terminalMsgSetter.Do(func() {
 		sesh.terminalMsg = msg
+		sesh.terminalCause = cause
 	})
 }
 
 func (sesh *Session) TerminalMsg() string {
 	return sesh.terminalMsg
+}
+
+func (sesh *Session) TerminalCause() TerminalCause {
+	if sesh.terminalCause == "" {
+		return TerminalCauseUnknown
+	}
+	return sesh.terminalCause
 }
 
 func (sesh *Session) closeSession() error {
@@ -344,7 +368,7 @@ func (sesh *Session) IsClosed() bool {
 
 func (sesh *Session) checkTimeout() {
 	if sesh.streamCount() == 0 && !sesh.IsClosed() {
-		sesh.SetTerminalMsg("timeout")
+		sesh.SetTerminal(TerminalCauseInactivity, "timeout")
 		sesh.Close()
 	}
 }

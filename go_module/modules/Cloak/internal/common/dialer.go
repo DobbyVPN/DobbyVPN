@@ -1,7 +1,10 @@
 package common
 
-import "net"
+import (
+	"context"
+	"net"
+)
 
 type Dialer interface {
-	Dial(network, address string) (net.Conn, error)
+	DialContext(context.Context, string, string) (net.Conn, error)
 }

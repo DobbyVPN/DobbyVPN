@@ -31,6 +31,30 @@ final class IOSLifecycleCoreTests: XCTestCase {
         XCTAssertEqual(state.extensionState.presentedState, .disconnected)
     }
 
+    func testStopDuringStartupCannotReconnectFromDelayedStartCallback() {
+        var state = IOSLifecycleState()
+        let startingGeneration = state.beginStart()
+        let stoppingGeneration = state.beginStop()
+
+        XCTAssertFalse(state.receive(.connected, generation: startingGeneration))
+        XCTAssertTrue(state.receive(.disconnected, generation: stoppingGeneration))
+        XCTAssertEqual(state.extensionState.presentedState, .disconnected)
+    }
+
+    func testReconnectOwnsNewGenerationAfterCleanDisconnect() {
+        var state = IOSLifecycleState()
+        let firstStart = state.beginStart()
+        XCTAssertTrue(state.receive(.connected, generation: firstStart))
+        let stop = state.beginStop()
+        XCTAssertTrue(state.receive(.disconnected, generation: stop))
+
+        let reconnect = state.beginStart()
+        XCTAssertNotEqual(reconnect, firstStart)
+        XCTAssertTrue(state.receive(.connected, generation: reconnect))
+        XCTAssertFalse(state.receive(.disconnected, generation: stop))
+        XCTAssertEqual(state.extensionState.presentedState, .connected)
+    }
+
     func testNewStartCannotTemporarilyPresentOldConnectedState() {
         var state = IOSLifecycleState()
         let first = state.beginStart()

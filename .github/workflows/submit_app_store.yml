@@ -54,16 +54,17 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/main"
           current_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
           test "$GITHUB_SHA" = "$current_main"
+          test "$RELEASE_SOURCE_SHA" = "$current_main"
 
-          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [[ ! "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "version must use X.Y.Z format" >&2
             exit 1
           fi
-          if [[ ! "$RELEASE_BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+          if [[ ! "$RELEASE_BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
             echo "build_number must be numeric" >&2
             exit 1
           fi
-          if [[ ! "$RELEASE_RUN_ID" =~ ^[0-9]+$ ]]; then
+          if [[ ! "$RELEASE_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
             echo "run_id must be numeric" >&2
             exit 1
           fi
@@ -111,6 +112,7 @@ jobs:
     env:
       APP_STORE_VERSION: ${{ inputs.version }}
       APP_STORE_BUILD_NUMBER: ${{ needs.validate.outputs.validated_build }}
+      APP_STORE_SOURCE_SHA: ${{ inputs.commit_sha }}
       APP_STORE_RELEASE_NOTES: ${{ inputs.whats_new }}
     steps:
       - name: Check out trusted main submission tooling
@@ -127,6 +129,33 @@ jobs:
         with:
           ruby-version: '3.3'
           bundler-cache: true
+
+      - name: Download exact IPA from selected Release run
+        uses: actions/download-artifact@v7
+        with:
+          name: DobbyVPN.ipa
+          path: selected-release/ipa
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download exact IPA provenance from selected Release run
+        uses: actions/download-artifact@v7
+        with:
+          name: DobbyVPN.ipa.provenance
+          path: selected-release/provenance
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify selected IPA provenance before submission
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/ios_artifact_provenance.py verify \
+            --ipa-dir selected-release/ipa \
+            --provenance selected-release/provenance/DobbyVPN.ipa.provenance.json \
+            --source-sha "$APP_STORE_SOURCE_SHA" \
+            --version "$APP_STORE_VERSION" \
+            --build-number "$APP_STORE_BUILD_NUMBER"
 
       - name: Submit exact build to production App Review
         env:
