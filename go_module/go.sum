@@ -1,5 +1,5 @@
-github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c h1:pxW6RcqyfI9/kWtOwnv/G+AzdKuy2ZrqINhenH4HyNs=
-github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
+github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
+github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/DobbyVPN/go-go-tunnel v1.0.1 h1:2uZY7cbkTqJTi9JvxNBPEEKfmdVO+aLNMVymTBU13XM=
 github.com/DobbyVPN/go-go-tunnel v1.0.1/go.mod h1:mnH3NaoLQC4CeQEqS24zaH6qkogk1nj0e5H1nl+rhHA=
 github.com/ajg/form v1.5.1 h1:t9c7v8JUKu/XxOGBU0yjNpaMloxGEJhUkqFRq0ibGeU=

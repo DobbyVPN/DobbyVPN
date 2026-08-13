@@ -11,7 +11,7 @@ replace github.com/xjasonlyu/tun2socks/v2 => ./modules/tun2socks
 replace trusttunnel-go => github.com/DobbyVPN/go-go-tunnel v1.0.1
 
 require (
-	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c
+	github.com/BurntSushi/toml v1.6.0
 	github.com/cbeuw/Cloak v0.0.0-00010101000000-000000000000
 	github.com/jackpal/gateway v1.1.1
 	github.com/sirupsen/logrus v1.9.3
