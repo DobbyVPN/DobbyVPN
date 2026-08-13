@@ -43,6 +43,7 @@ go.work.sum
 
 # KMP/Xcode integration output (frameworks produced for Xcode)
 **/app/build/xcode-frameworks/
+/swift_module/app.framework/
 
 # Generated XCFrameworks (project-local)
 **/*.xcframework
@@ -68,3 +69,8 @@ go_module/grpcproto/vpnserver.proto
 # Local release qualification stages the exact downloaded Debian package here.
 # It is an ignored build artifact, never application source.
 /kmp_module/app/dobbyVPN-linux.deb
+
+# Public desktop_build.py and Conveyor generate these local staging trees.
+# They are reproducible build outputs, never application source.
+/kmp_module/services/
+/output/

@@ -2,6 +2,7 @@ package healthcheck
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"go_module/dnscache"
 	hcCommon "go_module/healthcheck/common"
@@ -9,8 +10,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -32,11 +35,26 @@ var httpProbeURLs = []string{
 var probeDNSLookup = net.DefaultResolver.LookupIPAddr
 
 type probeEndpointResult struct {
-	url       string
-	latencyMs int64
-	status    int
-	err       error
+	url          string
+	latencyMs    int64
+	status       int
+	failureStage string
+	errorClass   string
+	err          error
 }
+
+const (
+	probeStageRequest  = "request"
+	probeStageConnect  = "connect"
+	probeStageTLS      = "tls"
+	probeStageResponse = "response"
+	probeStageBody     = "body"
+	probeStageStatus   = "status"
+	probeErrorTimeout  = "timeout"
+	probeErrorCanceled = "canceled"
+	probeErrorDNS      = "dns"
+	probeErrorProtocol = "protocol"
+)
 
 // PreflightTunnelProbeDNS resolves the fixed readiness hosts before a platform
 // redirects DNS into the new tunnel. The cached IPv4 answers remove a circular
@@ -130,9 +148,10 @@ func MeasureTunnelProbeAverageLatencyMillisWithContext(ctx context.Context, time
 		if result.err != nil {
 			log.Warnf(
 				hcCommon.Category,
-				"Tunnel probe endpoint failed endpoint=%d errorType=%T",
+				"Tunnel probe target failed targetOrdinal=%d stage=%s errorClass=%s",
 				index,
-				result.err,
+				result.failureStage,
+				result.errorClass,
 			)
 			continue
 		}
@@ -168,6 +187,15 @@ func probeEndpoint(parent context.Context, endpointURL string, timeout time.Dura
 	startedAt := time.Now()
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
+	var stage atomic.Int32
+	setStage := func(next int32) {
+		for {
+			current := stage.Load()
+			if next <= current || stage.CompareAndSwap(current, next) {
+				return
+			}
+		}
+	}
 
 	transport := &http.Transport{
 		DialContext:         cachedDialContext(timeout, "healthcheck-probe"),
@@ -183,8 +211,15 @@ func probeEndpoint(parent context.Context, endpointURL string, timeout time.Dura
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpointURL, http.NoBody)
 	if err != nil {
-		return probeEndpointResult{url: endpointURL, err: err}
+		return failedProbeEndpoint(endpointURL, 0, probeStageRequest, err)
 	}
+	trace := &httptrace.ClientTrace{
+		ConnectStart:         func(_, _ string) { setStage(1) },
+		TLSHandshakeStart:    func() { setStage(2) },
+		WroteRequest:         func(httptrace.WroteRequestInfo) { setStage(3) },
+		GotFirstResponseByte: func() { setStage(4) },
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 	req.Close = true
 	req.Header.Set("Cache-Control", "no-store")
 	req.Header.Set("Pragma", "no-cache")
@@ -192,7 +227,7 @@ func probeEndpoint(parent context.Context, endpointURL string, timeout time.Dura
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return probeEndpointResult{url: endpointURL, err: err}
+		return failedProbeEndpoint(endpointURL, 0, probeFailureStage(stage.Load()), err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -202,10 +237,10 @@ func probeEndpoint(parent context.Context, endpointURL string, timeout time.Dura
 
 	_, err = io.ReadAll(io.LimitReader(resp.Body, probeMaxBodyBytes))
 	if err != nil {
-		return probeEndpointResult{url: endpointURL, status: resp.StatusCode, err: err}
+		return failedProbeEndpoint(endpointURL, resp.StatusCode, probeStageBody, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return probeEndpointResult{url: endpointURL, status: resp.StatusCode, err: fmt.Errorf("unexpected status %d", resp.StatusCode)}
+		return failedProbeEndpoint(endpointURL, resp.StatusCode, probeStageStatus, fmt.Errorf("unexpected status %d", resp.StatusCode))
 	}
 
 	result := probeEndpointResult{
@@ -214,6 +249,49 @@ func probeEndpoint(parent context.Context, endpointURL string, timeout time.Dura
 		status:    resp.StatusCode,
 	}
 	return result
+}
+
+func failedProbeEndpoint(endpointURL string, status int, stage string, err error) probeEndpointResult {
+	return probeEndpointResult{
+		url: endpointURL, status: status, failureStage: stage,
+		errorClass: probeErrorClass(err), err: err,
+	}
+}
+
+func probeFailureStage(stage int32) string {
+	switch stage {
+	case 1:
+		return probeStageConnect
+	case 2:
+		return probeStageTLS
+	case 3:
+		return probeStageResponse
+	case 4:
+		return probeStageBody
+	default:
+		return probeStageRequest
+	}
+}
+
+func probeErrorClass(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return probeErrorTimeout
+	case errors.Is(err, context.Canceled):
+		return probeErrorCanceled
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return probeErrorDNS
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() {
+			return probeErrorTimeout
+		}
+		return "network"
+	}
+	return probeErrorProtocol
 }
 
 func maxInt64(a, b int64) int64 {

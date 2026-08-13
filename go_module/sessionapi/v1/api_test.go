@@ -333,7 +333,7 @@ func TestAutoSelectionReportsPlatformProbePreparationFailure(t *testing.T) {
 }
 
 func TestStopDuringProbePreventsLateConnectedAndAllowsRestartAfterCleanup(t *testing.T) {
-	r := &fakeRuntime{latency: map[int]int64{0: 1}, blockProbe: make(chan struct{}), probeEntered: make(chan struct{})}
+	r := &fakeRuntime{latency: map[int]int64{0: 1}, blockProbe: make(chan struct{}), probeEntered: make(chan struct{}, 1)}
 	p := &fakePlatform{}
 	m := NewManager(ManagerOptions{Runtime: r, Platform: p})
 	id := configured(t, m)
@@ -410,7 +410,7 @@ func TestRuntimeOwnedHealthFailureCleansUpBeforeAutoFailover(t *testing.T) {
 	if _, configureErr := m.ConfigureCompatibilityProfile(context.Background(), id, "configure", profile); configureErr != nil {
 		t.Fatal(configureErr)
 	}
-	first, err := m.Start(context.Background(), id, "start", StartTarget{Mode: ProfileIndex, Index: 0})
+	first, err := m.Start(context.Background(), id, "start", StartTarget{Mode: AutoSelect})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,6 +426,54 @@ func TestRuntimeOwnedHealthFailureCleansUpBeforeAutoFailover(t *testing.T) {
 		t.Fatalf("failover generation = %d, want %d", second.Generation, first.Generation+1)
 	}
 	waitForEvent(t, platform.events, first.Generation+1, StateConnected)
+}
+
+func TestRuntimeOwnedHealthFailureDoesNotReplaceExplicitProfile(t *testing.T) {
+	failures := make(chan struct{}, 1)
+	defer close(failures)
+	runtime := &monitoringRuntime{failures: failures, stopped: make(chan uint64, 2)}
+	platform := &eventPlatform{events: make(chan Event, 32)}
+	m := NewManager(ManagerOptions{Runtime: runtime, Platform: platform})
+	id, err := m.CreateSession(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := RuntimeProfile{
+		Summary:          ProfileSummary{Protocol: ProtocolOutline},
+		NormalizedFormat: ConfigTransportURL,
+		NormalizedConfig: []byte("ss://normalized"),
+	}
+	if _, configureErr := m.ConfigureCompatibilityProfile(context.Background(), id, "configure", profile); configureErr != nil {
+		t.Fatal(configureErr)
+	}
+	first, err := m.Start(context.Background(), id, "start", StartTarget{Mode: ProfileIndex, Index: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForEvent(t, platform.events, first.Generation, StateConnected)
+	failures <- struct{}{}
+	waitForEvent(t, platform.events, first.Generation, StateStopping)
+	failed := waitForEvent(t, platform.events, first.Generation, StateFailed)
+	if failed.Failure != FailureRuntime {
+		t.Fatalf("failure=%s, want %s", failed.Failure, FailureRuntime)
+	}
+	if stopped := <-runtime.stopped; stopped != first.Generation {
+		t.Fatalf("cleanup stopped generation %d, want %d", stopped, first.Generation)
+	}
+	snapshot, err := m.Snapshot(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Generation != first.Generation || snapshot.State != StateFailed || snapshot.LastFailure != FailureRuntime || !snapshot.CleanupComplete {
+		t.Fatalf("explicit-profile health failure snapshot=%#v", snapshot)
+	}
+	select {
+	case event := <-platform.events:
+		if event.Generation > first.Generation {
+			t.Fatalf("explicit profile was replaced by generation %d", event.Generation)
+		}
+	case <-time.After(25 * time.Millisecond):
+	}
 }
 
 func TestStopWaitsForNonCooperativeStartBeforeCleanupAndRestart(t *testing.T) {

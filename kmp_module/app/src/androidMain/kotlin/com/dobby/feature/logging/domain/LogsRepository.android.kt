@@ -23,6 +23,8 @@ actual fun provideGoLogFilePath(): Path = "${appContext.filesDir.absolutePath}/g
 
 actual fun provideAdditionalLogFilePaths(): List<Path> = listOf(provideGoLogFilePath())
 
+actual fun platformLogStorageInitializationAvailable(): Boolean = true
+
 actual fun platformLogInfo(): String {
     return "platform=android " +
         "sdk=${Build.VERSION.SDK_INT} " +
@@ -38,6 +40,4 @@ actual fun platformLogInfo(): String {
         "abis=${Build.SUPPORTED_ABIS?.joinToString(",").orEmpty()}"
 }
 
-fun initLogger() {
-    GoBackendWrapper.initLogger(provideGoLogFilePath().toString())
-}
+fun initLogger(): Boolean = GoBackendWrapper.initLogger(provideGoLogFilePath().toString())

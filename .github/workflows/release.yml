@@ -19,6 +19,8 @@ jobs:
   # Marketing version (x.y.z) is manual via the repo VERSION file.
   prepare_version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       major: ${{ steps.version.outputs.major }}
       minor: ${{ steps.version.outputs.minor }}
@@ -27,11 +29,23 @@ jobs:
       android_version_code: ${{ steps.version.outputs.android_version_code }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Read VERSION
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF" = "refs/heads/main"
+          current_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          test "$SOURCE_SHA" = "$current_main"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           python3 .github/scripts/version_metadata.py \
             --version-file VERSION \
             --github-output "$GITHUB_OUTPUT"
@@ -47,15 +61,46 @@ jobs:
           )"
           echo "Marketing version $version_name; Android/F-Droid versionCode $android_version_code"
 
+          release_tag="v$version_name"
+          tag_ref="refs/tags/$release_tag"
+          tag_record="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$release_tag" | \
+            jq -sc --arg ref "$tag_ref" '
+              [.[][] | select(.ref == $ref)] |
+              if length == 0 then empty
+              elif length == 1 then .[0]
+              else error("duplicate exact tag refs")
+              end')"
+          if [[ -n "$tag_record" ]]; then
+            object_type="$(jq -r .object.type <<<"$tag_record")"
+            object_sha="$(jq -r .object.sha <<<"$tag_record")"
+            for _ in 1 2 3 4 5 6 7 8; do
+              if [[ "$object_type" != tag ]]; then
+                break
+              fi
+              tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+              object_type="$(jq -r .object.type <<<"$tag_object")"
+              object_sha="$(jq -r .object.sha <<<"$tag_object")"
+            done
+            test "$object_type" = commit
+            if [[ "$object_sha" != "$SOURCE_SHA" ]]; then
+              echo "release tag $release_tag points to $object_sha, not candidate $SOURCE_SHA" >&2
+              exit 1
+            fi
+          fi
+
   desktop_libs_build:
-    needs: verification
+    needs: [verification, prepare_version]
     uses: ./.github/workflows/desktop_libs_generate.yml
+    with:
+      source_sha: ${{ github.sha }}
 
   ios_libs_build:
     if: github.event_name != 'pull_request'
     needs: [verification, prepare_version]
     uses: ./.github/workflows/ios_libs_generate.yml
     with:
+      source_sha: ${{ github.sha }}
       app_major_version: ${{ needs.prepare_version.outputs.major }}
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
@@ -64,11 +109,11 @@ jobs:
     needs: [verification, prepare_version]
     uses: ./.github/workflows/android_build.yml
     with:
+      source_sha: ${{ github.sha }}
       app_major_version: ${{ needs.prepare_version.outputs.major }}
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
       android_version_code: ${{ needs.prepare_version.outputs.android_version_code }}
-      source_sha: ${{ github.sha }}
     secrets:
       KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -91,6 +136,7 @@ jobs:
     needs: [prepare_version, ios_libs_build]
     uses: ./.github/workflows/ios_build.yml
     with:
+      source_sha: ${{ github.sha }}
       app_major_version: ${{ needs.prepare_version.outputs.major }}
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
@@ -108,6 +154,7 @@ jobs:
     needs: [prepare_version, desktop_libs_build]
     uses: ./.github/workflows/desktop_build.yml
     with:
+      source_sha: ${{ github.sha }}
       app_major_version: ${{ needs.prepare_version.outputs.major }}
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
@@ -122,6 +169,7 @@ jobs:
     needs: [prepare_version, desktop_build]
     uses: ./.github/workflows/installers_build.yml
     with:
+      source_sha: ${{ github.sha }}
       app_major_version: ${{ needs.prepare_version.outputs.major }}
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}

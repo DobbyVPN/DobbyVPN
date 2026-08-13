@@ -79,6 +79,10 @@ jobs:
               --json assets,isDraft
           )"
           test "$(jq -r .isDraft <<<"$release_json")" = "false"
+          if [[ "$(jq '[.assets[].name == "release-provenance.json"] | any' <<<"$release_json")" = true ]]; then
+            echo "manifest-bearing releases are immutable; publish a new version instead of repairing assets" >&2
+            exit 1
+          fi
           for asset in \
             "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
             "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
@@ -145,6 +149,12 @@ jobs:
           name: dobbyvpn-android-unsign.apk
           path: release
 
+      - name: Download rebuilt Android provenance
+        uses: actions/download-artifact@v7
+        with:
+          name: dobbyvpn-android-provenance
+          path: release
+
       - name: Verify exact rebuilt APK metadata
         id: apk
         shell: bash
@@ -152,16 +162,56 @@ jobs:
           set -euo pipefail
           signed="release/DobbyVPN-v$RELEASE_VERSION-sign.apk"
           unsigned="release/DobbyVPN-v$RELEASE_VERSION-unsign.apk"
+          provenance="release/DobbyVPN-v$RELEASE_VERSION-android-provenance.json"
           test -f "$signed"
           test -f "$unsigned"
+          test -f "$provenance"
           for apk in "$signed" "$unsigned"; do
             test "$(apkanalyzer manifest application-id "$apk")" = "com.dobby.vpn"
             test "$(apkanalyzer manifest version-name "$apk")" = "$RELEASE_VERSION"
             test "$(apkanalyzer manifest version-code "$apk")" = "$ANDROID_VERSION_CODE"
           done
+          python3 .github/scripts/verify_android_apk_source.py \
+            --apk "$signed" --apk "$unsigned" \
+            --source-sha "$RELEASE_SOURCE_SHA" --repository "$GITHUB_REPOSITORY"
+          SIGNED_APK="$signed" UNSIGNED_APK="$unsigned" PROVENANCE="$provenance" python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          document = json.loads(Path(os.environ["PROVENANCE"]).read_text(encoding="utf-8"))
+          if document.get("schema") != 1:
+              raise SystemExit("Android provenance schema mismatch")
+          if document.get("source_sha") != os.environ["RELEASE_SOURCE_SHA"]:
+              raise SystemExit("Android provenance source mismatch")
+          if document.get("version_name") != os.environ["RELEASE_VERSION"]:
+              raise SystemExit("Android provenance version mismatch")
+          if document.get("version_code") != int(os.environ["ANDROID_VERSION_CODE"]):
+              raise SystemExit("Android provenance version code mismatch")
+          if document.get("application_id") != "com.dobby.vpn":
+              raise SystemExit("Android provenance application ID mismatch")
+          expected = {
+              "signed": Path(os.environ["SIGNED_APK"]),
+              "unsigned": Path(os.environ["UNSIGNED_APK"]),
+          }
+          artifacts = document.get("artifacts")
+          if not isinstance(artifacts, list) or len(artifacts) != 2:
+              raise SystemExit("Android provenance artifact set mismatch")
+          by_kind = {item.get("kind"): item for item in artifacts if isinstance(item, dict)}
+          if set(by_kind) != set(expected):
+              raise SystemExit("Android provenance artifact kinds mismatch")
+          for kind, path in expected.items():
+              item = by_kind[kind]
+              if item.get("name") != path.name:
+                  raise SystemExit(f"Android provenance {kind} filename mismatch")
+              if item.get("sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
+                  raise SystemExit(f"Android provenance {kind} digest mismatch")
+          PY
           {
             echo "signed=$signed"
             echo "unsigned=$unsigned"
+            echo "provenance=$provenance"
           } >> "$GITHUB_OUTPUT"
           {
             echo "versionName=$RELEASE_VERSION"
@@ -173,17 +223,55 @@ jobs:
         run: |
           set -euo pipefail
           test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)" = "$RELEASE_SOURCE_SHA"
+          release_json="$(
+            gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets,isDraft,tagName
+          )"
+          test "$(jq -r .isDraft <<<"$release_json")" = "false"
+          test "$(jq -r .tagName <<<"$release_json")" = "$RELEASE_TAG"
+          if [[ "$(jq '[.assets[].name == "release-provenance.json"] | any' <<<"$release_json")" = true ]]; then
+            echo "manifest-bearing releases are immutable; refusing legacy Android asset repair" >&2
+            exit 1
+          fi
+          for asset in \
+            "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+            "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            "version.txt"; do
+            test "$(jq --arg asset "$asset" '[.assets[].name == $asset] | any' <<<"$release_json")" = "true"
+          done
           gh release upload "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --clobber \
             "${{ steps.apk.outputs.signed }}" \
             "${{ steps.apk.outputs.unsigned }}" \
+            "${{ steps.apk.outputs.provenance }}" \
             release/version.txt
 
       - name: Confirm repaired public metadata
         shell: bash
         run: |
           set -euo pipefail
+          mkdir published
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir published \
+            --pattern "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+            --pattern "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            --pattern "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
+            --pattern "version.txt"
+          cmp "${{ steps.apk.outputs.signed }}" "published/DobbyVPN-v$RELEASE_VERSION-sign.apk"
+          cmp "${{ steps.apk.outputs.unsigned }}" "published/DobbyVPN-v$RELEASE_VERSION-unsign.apk"
+          cmp "${{ steps.apk.outputs.provenance }}" "published/DobbyVPN-v$RELEASE_VERSION-android-provenance.json"
+          cmp release/version.txt published/version.txt
+          for apk in \
+            "published/DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+            "published/DobbyVPN-v$RELEASE_VERSION-unsign.apk"; do
+            test "$(apkanalyzer manifest application-id "$apk")" = "com.dobby.vpn"
+            test "$(apkanalyzer manifest version-name "$apk")" = "$RELEASE_VERSION"
+            test "$(apkanalyzer manifest version-code "$apk")" = "$ANDROID_VERSION_CODE"
+          done
+          test "$(cat published/version.txt)" = "$(printf 'versionName=%s\nversionCode=%s' "$RELEASE_VERSION" "$ANDROID_VERSION_CODE")"
           version_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/version.txt"
           test "$(
             curl --fail --silent --show-error --location "$version_url"

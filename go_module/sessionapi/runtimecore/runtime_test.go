@@ -324,6 +324,59 @@ func TestConnectedHealthMonitorAppliesThresholdWithoutSleeping(t *testing.T) {
 	}
 }
 
+func TestConnectedHealthMonitorSupportsThreeFailureThreshold(t *testing.T) {
+	record := &recorded{}
+	checks := make(chan error)
+	entered := make(chan struct{}, 4)
+	o := options(record)
+	o.HealthInterval = time.Nanosecond
+	o.HealthFailureThreshold = 3
+	o.ConnectedHealth = func(ctx context.Context, _ v1.SessionRef) error {
+		select {
+		case entered <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		select {
+		case err := <-checks:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	lease, err := New(o).Start(context.Background(), v1.SessionRef{Generation: 1}, profile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitored := lease.(v1.HealthMonitoringLease)
+	for attempt := 1; attempt <= 2; attempt++ {
+		<-entered
+		checks <- errors.New("transient failed check")
+		select {
+		case <-monitored.HealthFailures():
+			t.Fatalf("health monitor failed after only %d checks", attempt)
+		default:
+		}
+	}
+	<-entered
+	checks <- errors.New("third failed check")
+	select {
+	case <-monitored.HealthFailures():
+	case <-time.After(time.Second):
+		t.Fatal("health monitor did not reach its configured failure threshold")
+	}
+	if err := lease.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDefaultHealthFailureThresholdRequiresThreeConsecutiveFailures(t *testing.T) {
+	if got := defaultHealthFailureThreshold(); got != 3 {
+		t.Fatalf("default health failure threshold = %d, want 3", got)
+	}
+}
+
 func TestConnectedHealthMonitorStopsWithRuntimeLease(t *testing.T) {
 	record := &recorded{}
 	entered := make(chan struct{}, 1)
@@ -471,16 +524,169 @@ func TestProbeOwnsTemporaryResourcesAndRuntimeDoesNotOverlap(t *testing.T) {
 	_ = lease.Stop(context.Background())
 }
 
+func TestProbeRetriesTransientReadinessFailureWithinOneLease(t *testing.T) {
+	record := &recorded{}
+	o := options(record)
+	o.ReadinessAttempts = 3
+	o.ReadinessRetryInterval = time.Nanosecond
+	attempts := 0
+	o.Probe = func(context.Context) (int64, error) {
+		attempts++
+		record.add("probe")
+		if attempts < 3 {
+			return -1, nil
+		}
+		return 11, nil
+	}
+
+	result, err := New(o).Probe(context.Background(), v1.SessionRef{Generation: 7}, profile())
+	if err != nil || result.LatencyMillis != 11 {
+		t.Fatalf("Probe=%#v err=%v", result, err)
+	}
+	if attempts != 3 {
+		t.Fatalf("probe attempts=%d, want 3", attempts)
+	}
+	want := []string{"inputs", "cloak", "device", "connect", "probe", "probe", "probe", "core-stop", "cloak-stop", "inputs-stop"}
+	if got := record.got(); !same(got, want) {
+		t.Fatalf("probe order=%v, want=%v", got, want)
+	}
+}
+
+func TestProbeExhaustsReadinessRetriesAndCleansUp(t *testing.T) {
+	record := &recorded{}
+	o := options(record)
+	o.ReadinessAttempts = 2
+	o.ReadinessRetryInterval = time.Nanosecond
+	o.Probe = func(context.Context) (int64, error) {
+		record.add("probe")
+		return -1, nil
+	}
+
+	result, err := New(o).Probe(context.Background(), v1.SessionRef{Generation: 8}, profile())
+	if err == nil || err.Error() != "runtime health probe did not reach quorum" {
+		t.Fatalf("Probe error=%v", err)
+	}
+	if result != (v1.ProbeResult{}) {
+		t.Fatalf("Probe result=%#v, want empty result", result)
+	}
+	want := []string{"inputs", "cloak", "device", "connect", "probe", "probe", "core-stop", "cloak-stop", "inputs-stop"}
+	if got := record.got(); !same(got, want) {
+		t.Fatalf("probe order=%v, want=%v", got, want)
+	}
+}
+
+func TestProbeReturnsRealErrorWithoutRetry(t *testing.T) {
+	record := &recorded{}
+	o := options(record)
+	o.ReadinessAttempts = 3
+	want := errors.New("probe transport failed")
+	o.Probe = func(context.Context) (int64, error) {
+		record.add("probe")
+		return 0, want
+	}
+
+	_, err := New(o).Probe(context.Background(), v1.SessionRef{Generation: 9}, profile())
+	if !errors.Is(err, want) {
+		t.Fatalf("Probe error=%v, want %v", err, want)
+	}
+	wantOrder := []string{"inputs", "cloak", "device", "connect", "probe", "core-stop", "cloak-stop", "inputs-stop"}
+	if got := record.got(); !same(got, wantOrder) {
+		t.Fatalf("probe order=%v, want=%v", got, wantOrder)
+	}
+}
+
+func TestProbeCancellationDuringRetryWaitCleansUp(t *testing.T) {
+	record := &recorded{}
+	o := options(record)
+	o.ReadinessAttempts = 3
+	o.ReadinessRetryInterval = time.Hour
+	first := make(chan struct{})
+	o.Probe = func(context.Context) (int64, error) {
+		record.add("probe")
+		close(first)
+		return -1, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := New(o).Probe(ctx, v1.SessionRef{Generation: 10}, profile())
+		done <- err
+	}()
+	<-first
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Probe error=%v, want cancellation", err)
+	}
+	want := []string{"inputs", "cloak", "device", "connect", "probe", "core-stop", "cloak-stop", "inputs-stop"}
+	if got := record.got(); !same(got, want) {
+		t.Fatalf("probe order=%v, want=%v", got, want)
+	}
+}
+
+func TestProbeDeadlineDuringRetryWaitCleansUp(t *testing.T) {
+	record := &recorded{}
+	o := options(record)
+	o.ProbeTimeout = time.Millisecond
+	o.ReadinessAttempts = 3
+	o.ReadinessRetryInterval = time.Hour
+	o.Probe = func(context.Context) (int64, error) {
+		record.add("probe")
+		return -1, nil
+	}
+
+	_, err := New(o).Probe(context.Background(), v1.SessionRef{Generation: 11}, profile())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Probe error=%v, want deadline", err)
+	}
+	want := []string{"inputs", "cloak", "device", "connect", "probe", "core-stop", "cloak-stop", "inputs-stop"}
+	if got := record.got(); !same(got, want) {
+		t.Fatalf("probe order=%v, want=%v", got, want)
+	}
+}
+
+func TestProbeRejectsLatePositiveResultAfterDeadline(t *testing.T) {
+	record := &recorded{}
+	o := options(record)
+	o.ProbeTimeout = time.Millisecond
+	o.Probe = func(ctx context.Context) (int64, error) {
+		record.add("probe")
+		<-ctx.Done()
+		return 7, nil
+	}
+
+	_, err := New(o).Probe(context.Background(), v1.SessionRef{Generation: 12}, profile())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Probe error=%v, want deadline", err)
+	}
+	want := []string{"inputs", "cloak", "device", "connect", "probe", "core-stop", "cloak-stop", "inputs-stop"}
+	if got := record.got(); !same(got, want) {
+		t.Fatalf("probe order=%v, want=%v", got, want)
+	}
+}
+
 func TestProbeReportsCleanupFailure(t *testing.T) {
 	record := &recorded{}
 	want := errors.New("probe cleanup failed")
 	o := options(record)
+	o.ReadinessAttempts = 2
+	o.ReadinessRetryInterval = time.Nanosecond
+	attempts := 0
+	o.Probe = func(context.Context) (int64, error) {
+		attempts++
+		if attempts == 1 {
+			return -1, nil
+		}
+		return 7, nil
+	}
 	o.NewCore = func(pkg.ProtocolDevice, io.ReadWriteCloser) coreClient {
 		return fakeCore{record: record, disconnectErr: want}
 	}
 	result, err := New(o).Probe(context.Background(), v1.SessionRef{Generation: 1}, profile())
 	if !errors.Is(err, want) {
 		t.Fatalf("Probe error=%v, want %v", err, want)
+	}
+	if attempts != 2 {
+		t.Fatalf("probe attempts=%d, want 2", attempts)
 	}
 	if result != (v1.ProbeResult{}) {
 		t.Fatalf("Probe result=%#v, want empty result after cleanup failure", result)
@@ -579,7 +785,7 @@ CDNWsUrlPath = "/ws"`)
 		t.Fatal(err)
 	}
 	for key, want := range map[string]any{
-		"Transport": "CDN", "ProxyMethod": "shadowsocks", "NumConn": float64(8), "StreamTimeout": float64(300),
+		"Transport": "CDN", "ProxyMethod": "shadowsocks", "NumConn": float64(1), "StreamTimeout": float64(300),
 		"RemoteHost": "edge.invalid", "RemotePort": "444", "ServerName": "edge.invalid", "CDNOriginHost": "edge.invalid",
 	} {
 		if got[key] != want {
@@ -588,6 +794,46 @@ CDNWsUrlPath = "/ws"`)
 	}
 	if _, leaked := got["Password"]; leaked {
 		t.Fatalf("Cloak JSON leaked Outline password: %s", encoded)
+	}
+}
+
+func TestCloakTOMLPreservesExplicitNumConn(t *testing.T) {
+	raw := []byte(`Cloak = true
+Server = "edge.invalid"
+EncryptionMethod = "plain"
+UID = "dWlk"
+PublicKey = "cHVia2V5"
+NumConn = 2`)
+	encoded, err := NormalizeCloakProfile(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["NumConn"] != float64(2) {
+		t.Fatalf("NumConn=%#v, want explicit value 2", got["NumConn"])
+	}
+}
+
+func TestCloakTOMLPreservesExplicitZeroNumConn(t *testing.T) {
+	raw := []byte(`Cloak = true
+Server = "edge.invalid"
+EncryptionMethod = "plain"
+UID = "dWlk"
+PublicKey = "cHVia2V5"
+NumConn = 0`)
+	encoded, err := NormalizeCloakProfile(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["NumConn"] != float64(0) {
+		t.Fatalf("NumConn=%#v, want explicit value 0", got["NumConn"])
 	}
 }
 

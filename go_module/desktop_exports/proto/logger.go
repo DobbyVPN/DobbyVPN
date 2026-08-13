@@ -10,11 +10,16 @@ import (
 	"go_module/grpcproto"
 
 	"go_module/log"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func (c *Server) InitLogger(_ context.Context, in *grpcproto.InitLoggerRequest) (*grpcproto.Empty, error) {
 	log.Debugf(common.Category, "InitLogger")
-	api.InitLogger(in.Path)
+	if err := api.InitLogger(in.Path); err != nil {
+		return nil, status.Error(codes.Internal, "could not initialize local logger")
+	}
 	return &grpcproto.Empty{}, nil
 }
 

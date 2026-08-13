@@ -24,7 +24,10 @@ class LogsViewModel(
         viewModelScope.launch {
             while (true) {
                 _uiState.update {
-                    LogsUiState(logsRepository.readUILogs())
+                    LogsUiState(
+                        logMessages = logsRepository.readUILogs(),
+                        storageStatus = logsRepository.storageStatus.value,
+                    )
                 }
 
                 delay(500L) // 0.5 second
@@ -34,7 +37,12 @@ class LogsViewModel(
 
     fun clearLogs() {
         logsRepository.clearLogs()
-        _uiState.value = LogsUiState(emptyList())
+        // Re-read the actual storage state. If truncation failed, the UI must
+        // not pretend the retained diagnostic history disappeared.
+        _uiState.value = LogsUiState(
+            logMessages = logsRepository.readUILogs(),
+            storageStatus = logsRepository.storageStatus.value,
+        )
     }
 
     fun copyLogsToClipBoard() {

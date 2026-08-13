@@ -2,14 +2,18 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
+from dataclasses import dataclass
 import hashlib
 import os
 import platform
+import re
 import shutil
 import socket
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -34,15 +38,7 @@ ANDROID_PACKAGES = (
 )
 ANDROID_TOOLS_VERSION = "11076708"
 WINTUN_VERSION = "0.14.1"
-WINDOWS_RUNTIME_DLLS = (
-    "libwinpthread-1.dll",
-    "libgcc_s_seh-1.dll",
-    "libstdc++-6.dll",
-)
-WINDOWS_BRIDGE_VERSION = "1.0.0"
-WINDOWS_BRIDGE_ARCHIVE_SHA256 = "9c0d79401c3da26d922e58c5fc3317c75d800598e9cb91a31ce3aebbf71b4668"
-TRUSTTUNNEL_LINUX_VERSION = "1.0.0"
-TRUSTTUNNEL_LINUX_ARCHIVE_SHA256 = "515c6993672e35d768477b3cd5c04ee7dfcbeaaeecd5abef5e03c1603486cbfe"
+WINTUN_AMD64_DLL_SHA256 = "e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce"
 LLVM_LIBCXX_VERSION = "21.1.8"
 LLVM_LIBCXX_PACKAGES = (
     (
@@ -56,6 +52,33 @@ LLVM_LIBCXX_PACKAGES = (
 )
 TRUSTTUNNEL_MACOS_VERSION = "1.0.49"
 TRUSTTUNNEL_MACOS_ARCHIVE_SHA256 = "f2dab732d17a885dcc4c81831fa4b263db250f5bea8a151416b518e936979c64"
+
+
+@dataclass(frozen=True)
+class BridgeRelease:
+    version: str
+    asset_name: str
+    archive_sha256: str
+    member_name: str
+    member_sha256: str
+
+
+BRIDGE_RELEASES = {
+    "windows": BridgeRelease(
+        version="1.0.1",
+        asset_name="dobby_bridge-windows-x86_64.zip",
+        archive_sha256="a7e64db0568547d395bc45e33787f22c7303dca6f5c575c84439e73a70124331",
+        member_name="dobby_bridge.dll",
+        member_sha256="10e2f921aaa949060bed936e3c361b0967b2ad8b7a71dd983d36abd94c903063",
+    ),
+    "linux": BridgeRelease(
+        version="1.0.1",
+        asset_name="libdobby_bridge-linux-x86_64.zip",
+        archive_sha256="67536090d74212a5635739d297f5a78fbabda1966d161b12a16bfe487a8c68b9",
+        member_name="libdobby_bridge.so",
+        member_sha256="2fff96d2631df43168196e222bc2205157d23a2449475364c5b135fbf0aaa0ce",
+    ),
+}
 
 SERVICE_NAMES = {
     "linux": "ubuntu_grpcvpnserver",
@@ -80,6 +103,11 @@ def log(message: str) -> None:
 
 def fail(message: str) -> None:
     raise SystemExit(f"[!] {message}")
+
+
+def sha256_file(path: Path) -> str:
+    with path.open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def run(
@@ -162,6 +190,10 @@ def download(url: str, output: Path) -> None:
                 "2",
                 "--connect-timeout",
                 "60",
+                "--max-time",
+                "900",
+                "--retry-max-time",
+                "1200",
                 "--continue-at",
                 "-",
                 url,
@@ -542,63 +574,96 @@ def ensure_compiler(target_platform: str, skip_deps: bool) -> None:
             run(["xcode-select", "--install"], check=False)
         fail("Install Xcode Command Line Tools, then run the script again")
     elif target_platform == "windows":
-        if command_exists("gcc"):
-            return
         mingw_bin = Path("C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin")
+        # Common standalone WinLibs installations use C:/mingw64. Prefer that
+        # no-space path over WinGet's Program Files shim when it is available.
         prepend_path(mingw_bin)
-        if command_exists("gcc"):
+        prepend_path(Path("C:/mingw64/bin"))
+        usable, diagnostic = probe_windows_gcc()
+        if usable:
             return
         if skip_deps:
-            fail("MinGW gcc is required for the Windows gRPC VPN service")
+            fail(
+                "A working x86_64 MinGW gcc is required for the Windows gRPC VPN service "
+                f"({diagnostic})"
+            )
         if not command_exists("choco"):
-            fail("Install MinGW gcc manually or install Chocolatey")
+            fail(f"Install or repair MinGW gcc, or install Chocolatey ({diagnostic})")
         run(["choco", "install", "mingw", "-y"])
         prepend_path(mingw_bin)
-        if not command_exists("gcc"):
-            fail("MinGW gcc was not found after installation")
+        usable, diagnostic = probe_windows_gcc()
+        if not usable:
+            fail(f"MinGW gcc remained unusable after installation ({diagnostic})")
+
+
+def probe_windows_gcc() -> tuple[bool, str]:
+    candidate = shutil.which("gcc")
+    if candidate is None:
+        return False, "compiler=missing"
+    try:
+        executable = Path(candidate).resolve(strict=True)
+    except OSError:
+        return False, "compiler=unresolvable"
+    if any(character.isspace() for character in str(executable.parent)):
+        # Go/cgo passes GCC's derived linker paths through its external-link
+        # command. MinGW distributions rooted below "Program Files" split
+        # those paths at the space and fail during the final link.
+        return False, "compiler=unsupported_path_contains_whitespace"
+    # WinGet can expose a gcc symlink without placing the real executable's
+    # adjacent runtime DLLs on PATH. Prefer the resolved bin directory both for
+    # this probe and for the later Go/cgo process.
+    prepend_path(executable.parent)
+    try:
+        result = subprocess.run(
+            [str(executable), "-dumpmachine"],
+            cwd=str(ROOT_DIR),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as error:
+        return False, f"compiler=launch_failed errno={error.errno or 0}"
+    target = result.stdout.strip()
+    if result.returncode == 0 and target == "x86_64-w64-mingw32":
+        return True, f"compiler=ready target={target}"
+    safe_target = target if re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", target) else "invalid"
+    return False, f"compiler=unusable exit_code={result.returncode} target={safe_target}"
 
 
 def install_wintun(skip_deps: bool) -> None:
     if host_platform() != "windows":
         return
     SERVICES_DIR.mkdir(parents=True, exist_ok=True)
-    target = SERVICES_DIR / "wintun.dll"
-    if target.exists():
-        log("wintun.dll already available")
-        return
-    if skip_deps:
-        fail("wintun.dll is required for Windows CLI checks")
-
     arch = go_arch_from_machine()
-    archive = TOOLS_DIR / "downloads" / f"wintun-{WINTUN_VERSION}.zip"
-    extract_dir = Path(tempfile.mkdtemp(prefix="dobby-wintun-"))
-    download(f"https://www.wintun.net/builds/wintun-{WINTUN_VERSION}.zip", archive)
-    try:
-        with zipfile.ZipFile(archive) as zip_file:
-            zip_file.extractall(extract_dir)
-        shutil.copyfile(extract_dir / "wintun" / "bin" / arch / "wintun.dll", target)
-    finally:
-        shutil.rmtree(extract_dir, ignore_errors=True)
-    log(f"Installed {target}")
+    artifact = GO_MODULE_DIR / "wintun.dll"
+    staged = SERVICES_DIR / "wintun.dll"
+    source = artifact if artifact.is_file() else staged if staged.is_file() else None
+    if source is None:
+        if skip_deps:
+            fail("wintun.dll is required for Windows CLI checks")
+        source = artifact
+        archive = TOOLS_DIR / "downloads" / f"wintun-{WINTUN_VERSION}.zip"
+        member_name = f"wintun/bin/{arch}/wintun.dll"
+        temporary = artifact.with_suffix(".dll.tmp")
+        download(f"https://www.wintun.net/builds/wintun-{WINTUN_VERSION}.zip", archive)
+        try:
+            with zipfile.ZipFile(archive) as zip_file:
+                member = zip_file.getinfo(member_name)
+                if member.is_dir() or Path(member.filename).name != "wintun.dll":
+                    fail("Wintun archive member is invalid")
+                with zip_file.open(member) as input_file, open(temporary, "wb") as output_file:
+                    shutil.copyfileobj(input_file, output_file)
+            temporary.replace(artifact)
+        finally:
+            temporary.unlink(missing_ok=True)
 
-
-def stage_windows_runtime_dlls() -> None:
-    """Copy MinGW runtime dependencies beside the Windows service executable."""
-    if host_platform() != "windows":
-        return
-    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
-    missing: list[str] = []
-    for dll_name in WINDOWS_RUNTIME_DLLS:
-        source_name = run_capture(["gcc", f"-print-file-name={dll_name}"])
-        source = Path(source_name) if source_name else Path()
-        if not source.is_file():
-            missing.append(dll_name)
-            continue
-        target = SERVICES_DIR / dll_name
-        shutil.copyfile(source, target)
-        log(f"Staged MinGW runtime DLL: {target.name}")
-    if missing:
-        fail("MinGW runtime DLLs are required for the Windows gRPC VPN service: " + ", ".join(missing))
+    if arch == "amd64" and sha256_file(source) != WINTUN_AMD64_DLL_SHA256:
+        fail("Wintun amd64 DLL checksum mismatch")
+    if source != artifact:
+        shutil.copyfile(source, artifact)
+    if source != staged:
+        shutil.copyfile(source, staged)
+    log(f"Staged checksum-pinned Wintun DLL: {staged.name}")
 
 
 def install_windows_bridge(skip_deps: bool) -> None:
@@ -607,18 +672,18 @@ def install_windows_bridge(skip_deps: bool) -> None:
         return
     bridge_dir = GO_MODULE_DIR / "lib" / "windows"
     bridge_dir.mkdir(parents=True, exist_ok=True)
-    bridge = bridge_dir / "dobby_bridge.dll"
-    if not bridge.exists():
+    release = BRIDGE_RELEASES["windows"]
+    bridge = bridge_dir / release.member_name
+    if not bridge.is_file() or sha256_file(bridge) != release.member_sha256:
         if skip_deps:
             fail("dobby_bridge.dll is required for the Windows gRPC VPN service")
-        archive = TOOLS_DIR / "downloads" / f"dobby_bridge-windows-x86_64-v{WINDOWS_BRIDGE_VERSION}.zip"
+        archive = TOOLS_DIR / "downloads" / f"{Path(release.asset_name).stem}-v{release.version}.zip"
         download(
             "https://github.com/DobbyVPN/go-go-tunnel/releases/download/"
-            f"v{WINDOWS_BRIDGE_VERSION}/dobby_bridge-windows-x86_64.zip",
+            f"v{release.version}/{release.asset_name}",
             archive,
         )
-        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-        if digest != WINDOWS_BRIDGE_ARCHIVE_SHA256:
+        if sha256_file(archive) != release.archive_sha256:
             fail("Windows native bridge archive checksum mismatch")
         with zipfile.ZipFile(archive) as zip_file:
             for member in zip_file.infolist():
@@ -634,10 +699,11 @@ def install_windows_bridge(skip_deps: bool) -> None:
                     continue
                 with zip_file.open(member) as source, open(bridge_dir / member_path.name, "wb") as target:
                     shutil.copyfileobj(source, target)
-    if not bridge.is_file():
-        fail("Windows native bridge archive did not contain dobby_bridge.dll")
+    if not bridge.is_file() or sha256_file(bridge) != release.member_sha256:
+        fail("Windows native bridge archive did not contain the expected dobby_bridge.dll")
     SERVICES_DIR.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(bridge, SERVICES_DIR / bridge.name)
+    for directory in (GO_MODULE_DIR, SERVICES_DIR):
+        shutil.copyfile(bridge, directory / bridge.name)
     log(f"Staged checksum-pinned Windows native bridge: {bridge.name}")
 
 
@@ -652,24 +718,24 @@ def install_linux_trusttunnel_bridge(skip_deps: bool) -> None:
     if host_platform() != "linux":
         return
 
-    bridge = GO_MODULE_DIR / "libdobby_bridge.so"
-    if not bridge.exists():
+    release = BRIDGE_RELEASES["linux"]
+    bridge = GO_MODULE_DIR / release.member_name
+    if not bridge.is_file() or sha256_file(bridge) != release.member_sha256:
         if skip_deps:
             fail("libdobby_bridge.so is required for the Linux gRPC VPN service")
 
         archive = (
             TOOLS_DIR
             / "downloads"
-            / f"libdobby_bridge-linux-x86_64-v{TRUSTTUNNEL_LINUX_VERSION}.zip"
+            / f"{Path(release.asset_name).stem}-v{release.version}.zip"
         )
         if not archive.exists():
             download(
                 "https://github.com/DobbyVPN/go-go-tunnel/releases/download/"
-                f"v{TRUSTTUNNEL_LINUX_VERSION}/libdobby_bridge-linux-x86_64.zip",
+                f"v{release.version}/{release.asset_name}",
                 archive,
             )
-        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-        if digest != TRUSTTUNNEL_LINUX_ARCHIVE_SHA256:
+        if sha256_file(archive) != release.archive_sha256:
             fail("TrustTunnel Linux bridge archive checksum mismatch")
 
         with zipfile.ZipFile(archive) as zip_file:
@@ -690,6 +756,9 @@ def install_linux_trusttunnel_bridge(skip_deps: bool) -> None:
                 temporary.replace(bridge)
             finally:
                 temporary.unlink(missing_ok=True)
+
+    if not bridge.is_file() or sha256_file(bridge) != release.member_sha256:
+        fail("TrustTunnel Linux bridge archive did not contain the expected shared library")
 
     SERVICES_DIR.mkdir(parents=True, exist_ok=True)
     staged = SERVICES_DIR / bridge.name
@@ -777,18 +846,17 @@ def ensure_build_dependencies(target_platform: str, skip_deps: bool, need_androi
         install_android_sdk(skip_deps)
 
 
-def prepare_cloak_internal() -> None:
-    source_dir = ROOT_DIR / "Cloak" / "internal"
+def validate_embedded_cloak_source() -> None:
     target_dir = GO_MODULE_DIR / "modules" / "Cloak" / "internal"
-    if not source_dir.is_dir():
-        log("Initializing git submodules")
-        run(["git", "-C", str(ROOT_DIR), "submodule", "update", "--init", "--recursive"])
-    if not source_dir.is_dir():
-        fail(f"Missing {source_dir} after submodule initialization")
-
-    target_dir.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
-    log("Vendored Cloak/internal into go_module/modules/Cloak")
+    required = (
+        target_dir / "client" / "connector.go",
+        target_dir / "common" / "dialer.go",
+        target_dir / "multiplex" / "session.go",
+    )
+    missing = [path for path in required if not path.is_file() or path.is_symlink()]
+    if missing:
+        fail(f"Tracked embedded Cloak client source is incomplete: {missing[0]}")
+    log("Using tracked embedded Cloak client source")
 
 
 def go_mod_download(run_tidy: bool) -> None:
@@ -870,10 +938,9 @@ def build_service(
     target_arch = arch or default_service_arch(target_platform)
     ensure_build_dependencies(target_platform, skip_deps, need_android=False)
     if target_platform == "windows":
-        # The service loads Wintun at process startup, so every independently
-        # built public service slice must stage it and MinGW's runtime DLLs.
+        # The service imports the bridge and loads Wintun at process startup.
+        # Stage exactly that runtime closure for the public artifact and local CLI.
         install_wintun(skip_deps)
-        stage_windows_runtime_dlls()
         install_windows_bridge(skip_deps)
     if target_platform == "linux":
         if target_arch != "amd64":
@@ -882,7 +949,7 @@ def build_service(
         linux_libcxx_runtime = install_linux_libcxx_runtime(skip_deps)
     else:
         linux_libcxx_runtime = None
-    prepare_cloak_internal()
+    validate_embedded_cloak_source()
     go_mod_download(run_go_mod_tidy)
 
     output = service_output_path(target_platform)
@@ -1018,6 +1085,28 @@ def run_desktop_gradle(skip_deps: bool) -> None:
     run([gradle_command(), "--no-daemon", "-q", "printConveyorConfig", *props], cwd=KMP_DIR)
 
 
+def emit_conveyor_config() -> None:
+    """Print only Conveyor's generated HOCON on every supported host."""
+    with contextlib.redirect_stdout(sys.stderr):
+        install_jdk(skip_deps=False)
+    command = [gradle_command(), "--no-daemon", "-q", "printConveyorConfig", *desktop_version_properties()]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(KMP_DIR),
+            env=os.environ.copy(),
+            stdout=subprocess.PIPE,
+            stderr=sys.stderr,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError as error:
+        fail(f"Command was not found: {error.filename}")
+    if result.returncode != 0:
+        fail(f"Conveyor config generation failed with exit code {result.returncode}")
+    sys.stdout.write(result.stdout)
+
+
 def required_service_platforms(require_all: bool, platform_value: str) -> list[str]:
     if require_all:
         return ["linux", "macos", "windows"]
@@ -1044,9 +1133,11 @@ def run_conveyor(passphrase: str | None) -> None:
     conveyor = os.environ.get("CONVEYOR_CMD") or shutil.which("conveyor")
     if not conveyor:
         fail("Conveyor CLI was not found. Set CONVEYOR_CMD or run without --package.")
-    command = [conveyor, "make", "site", "-f", str(KMP_DIR / "conveyor.conf")]
+    command = [conveyor, "-f", str(KMP_DIR / "conveyor.conf")]
     if passphrase:
-        command.insert(3, f"--passphrase={passphrase}")
+        command.extend((f"--passphrase={passphrase}", "make", "site"))
+    else:
+        command.extend(("make", "site"))
     run(command)
 
 
@@ -1293,6 +1384,11 @@ def parse_args() -> argparse.Namespace:
     app.add_argument("--conveyor-passphrase", default=os.environ.get("CONVEYOR_PASSPHRASE"))
     app.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before service builds.")
 
+    subparsers.add_parser(
+        "conveyor-config",
+        help="Emit generated Conveyor HOCON without platform-specific wrapper assumptions.",
+    )
+
     cli = subparsers.add_parser("cli-test", help="Build current desktop target and run check-config.")
     add_common_options(cli)
     cli.add_argument("--config", help="Config URL, TOML file path, or inline TOML.")
@@ -1321,6 +1417,9 @@ def main() -> None:
         build_app(args)
     elif args.command == "cli-test":
         cli_test(args)
+    elif args.command == "conveyor-config":
+        emit_conveyor_config()
+        return
     else:
         fail(f"Unknown command: {args.command}")
 

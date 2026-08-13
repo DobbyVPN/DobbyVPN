@@ -8,6 +8,10 @@ on:
       CONVEYOR_SIGNING_KEY:
         required: true
     inputs:
+      source_sha:
+        description: Full lowercase 40-character source commit SHA to build.
+        type: string
+        required: true
       app_major_version:
         type: string
         required: true
@@ -26,7 +30,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.source_sha }}
           persist-credentials: false
+
+      - name: Verify exact source commit
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be a full lowercase 40-character commit SHA" >&2
+            exit 1
+          fi
+          actual_sha="$(git rev-parse HEAD)"
+          if [[ "$actual_sha" != "$SOURCE_SHA" ]]; then
+            echo "Checked out $actual_sha, expected $SOURCE_SHA" >&2
+            exit 1
+          fi
 
       - name: Download Windows gRPC vpn service
         uses: actions/download-artifact@v7
@@ -104,6 +125,9 @@ jobs:
         uses: hydraulic-software/conveyor/actions/build@v16.0
         env:
           OAUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
+          APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
+          APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
         with:
           command: make site
           extra_flags: "--passphrase=\"${{ secrets.CONVEYOR_PASSPHRASE }}\" -f kmp_module/conveyor.conf"
@@ -112,13 +136,24 @@ jobs:
 
       - name: Find files
         id: find_deb
+        env:
+          EXPECTED_VERSION: ${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}
         run: |
+          set -euo pipefail
+          deb_file="./output/dobby-vpn_${EXPECTED_VERSION}_amd64.deb"
+          mac_aarch64_file="./output/dobby-vpn-${EXPECTED_VERSION}-mac-aarch64.zip"
+          mac_amd64_file="./output/dobby-vpn-${EXPECTED_VERSION}-mac-amd64.zip"
+          win_zip_file="./output/dobby-vpn-${EXPECTED_VERSION}-windows-amd64.zip"
+          for artifact in "$deb_file" "$mac_aarch64_file" "$mac_amd64_file" "$win_zip_file"; do
+            test -f "$artifact"
+          done
+          test "$(dpkg-deb -f "$deb_file" Version)" = "$EXPECTED_VERSION"
           {
-            echo "DEB_FILE=$(find ./output -name '*.deb' -type f)"
-            echo "MAC_AARCH64_FILE=$(find ./output -name '*-mac-aarch64.zip' -type f)"
-            echo "MAC_AMD64_FILE=$(find ./output -name '*-mac-amd64.zip' -type f)"
-            echo "WIN_ZIP_FILE=$(find ./output -name '*-windows-amd64.zip' -type f)"
-          } >> $GITHUB_ENV
+            echo "DEB_FILE=$deb_file"
+            echo "MAC_AARCH64_FILE=$mac_aarch64_file"
+            echo "MAC_AMD64_FILE=$mac_amd64_file"
+            echo "WIN_ZIP_FILE=$win_zip_file"
+          } >> "$GITHUB_ENV"
 
       - name: Verify Debian service runtime closure
         shell: bash

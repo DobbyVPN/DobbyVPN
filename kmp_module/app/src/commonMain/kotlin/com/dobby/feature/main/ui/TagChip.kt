@@ -16,10 +16,11 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun TagChip(
     tagText: String,
-    color: Long
+    color: Long,
+    modifier: Modifier = Modifier,
 ) {
     Box(
-        modifier = Modifier
+        modifier = modifier
             .padding(4.dp)
             .background(Color(color), shape = RoundedCornerShape(24.dp))
             .padding(horizontal = 12.dp, vertical = 4.dp)

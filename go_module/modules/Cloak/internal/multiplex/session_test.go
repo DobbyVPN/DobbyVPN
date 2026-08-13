@@ -528,7 +528,26 @@ func TestSession_timeoutAfter(t *testing.T) {
 			assert.Eventually(t, func() bool {
 				return sesh.IsClosed()
 			}, 5*seshConfig.InactivityTimeout, seshConfig.InactivityTimeout, "session should have timed out")
+			if got := sesh.TerminalCause(); got != TerminalCauseInactivity {
+				t.Fatalf("TerminalCause()=%q, want %q", got, TerminalCauseInactivity)
+			}
 		})
+	}
+}
+
+func TestSessionTerminalCauseIsStableAndDefaultsSafe(t *testing.T) {
+	var sessionKey [32]byte
+	rand.Read(sessionKey[:])
+	obfuscator, _ := MakeObfuscator(EncryptionMethodPlain, sessionKey)
+	sesh := MakeSession(1, SessionConfig{Obfuscator: obfuscator})
+
+	if got := sesh.TerminalCause(); got != TerminalCauseUnknown {
+		t.Fatalf("initial TerminalCause()=%q, want %q", got, TerminalCauseUnknown)
+	}
+	sesh.SetTerminal(TerminalCauseTransportReadClosed, "private low-level detail")
+	sesh.SetTerminal(TerminalCauseTransportWriteFailed, "later detail")
+	if got := sesh.TerminalCause(); got != TerminalCauseTransportReadClosed {
+		t.Fatalf("TerminalCause()=%q, want first cause %q", got, TerminalCauseTransportReadClosed)
 	}
 }
 

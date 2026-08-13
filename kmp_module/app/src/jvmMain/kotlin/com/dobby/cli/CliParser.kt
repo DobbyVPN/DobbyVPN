@@ -1,5 +1,6 @@
 package com.dobby.cli
 
+import com.dobby.feature.logging.domain.LocalLogStorageInitializationException
 import kotlin.system.exitProcess
 
 fun properExit(exitCode: ExitCode) {
@@ -110,8 +111,21 @@ fun runCliClient(args: Array<String>) {
         return
     }
 
-    val cliClient = CliClient()
+    val cliClient = try {
+        CliClient()
+    } catch (error: LocalLogStorageInitializationException) {
+        System.err.println(formatCliInitializationFailure(error))
+        properExit(ExitCode.PROGRAM_FAILED)
+        return
+    } catch (_: Exception) {
+        properExit(ExitCode.PROGRAM_FAILED)
+        return
+    }
     val options = args.drop(1)
+    if (args[0] in serviceCommands && !cliClient.initServiceLogger()) {
+        properExit(ExitCode.PROGRAM_FAILED)
+        return
+    }
     when (args[0]) {
         "--help" -> printHelp(ExitCode.OK)
         "logs" -> {
@@ -157,3 +171,17 @@ fun runCliClient(args: Array<String>) {
         else -> printHelp(ExitCode.INVALID_ARGS)
     }
 }
+
+internal fun formatCliInitializationFailure(error: LocalLogStorageInitializationException): String {
+    val failure = (error.cause ?: error).javaClass.simpleName.ifEmpty { "Unknown" }
+    return "DobbyVPN local log storage initialization failed stage=${error.stage} failureType=$failure"
+}
+
+private val serviceCommands = setOf(
+    "connect",
+    "connect-profile",
+    "check-config",
+    "disconnect",
+    "verify-session",
+    "status",
+)

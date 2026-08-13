@@ -506,7 +506,9 @@ func StopEngine() {
 	e := activeEngine
 	engineMu.Unlock()
 	if e != nil {
-		e.Stop()
+		if err := e.Stop(); err != nil {
+			log.Warnf(Category, "[Engine] compatibility stop failed: %v", err)
+		}
 	}
 }
 

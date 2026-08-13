@@ -10,9 +10,7 @@ object GoBackendWrapper {
     fun stopSession(sessionId: String, commandId: String, generation: Long): String =
         Dobbyvpn.stopSession(sessionId, commandId, generation)
 
-    fun initLogger(path: String) {
-        Dobbyvpn.initLogger(path)
-    }
+    fun initLogger(path: String): Boolean = Dobbyvpn.initLogger(path)
 
     fun initTelemetry(endpoint: String, token: String) {
         Dobbyvpn.initTelemetry(endpoint, token)

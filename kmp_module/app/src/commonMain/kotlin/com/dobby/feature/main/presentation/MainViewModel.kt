@@ -12,6 +12,8 @@ import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.SessionControllerResult
 import com.dobby.feature.main.domain.SessionEvent
 import com.dobby.feature.main.domain.SessionStartTarget
+import com.dobby.feature.main.domain.SessionFailureCode
+import com.dobby.feature.main.domain.SessionState
 import com.dobby.feature.main.ui.MainUiState
 import com.dobby.vpn.BuildConfig
 import io.ktor.client.HttpClient
@@ -67,6 +69,7 @@ class MainViewModel(
     }
 
     fun onConnectionButtonClicked(connectionUrl: String) {
+        _uiState.value = _uiState.value.copy(lastFailureCode = null)
         logger.log("Connection button clicked for ${maskStr(connectionUrl)}")
         viewModelScope.launch {
             when (connectionStateRepository.statusFlow.value) {
@@ -82,7 +85,10 @@ class MainViewModel(
         logger.log("Acquiring connection configuration for ${maskStr(connectionUrl)}")
         val rawConfig = runCatching { getConfigBytes(connectionUrl) }
             .onFailure { logger.log("Configuration acquisition failed: type=${it::class.simpleName ?: "UNKNOWN"}") }
-            .getOrElse { return false }
+            .getOrElse {
+                publishFailure(SessionFailureCode.INTERNAL)
+                return false
+            }
 
         // Retain only the user-entered source and configuration acquisition record for migration.
         // The exact byte array above, not this decoded record, is what is configured in Go.
@@ -98,6 +104,7 @@ class MainViewModel(
             is SessionControllerResult.Failure -> {
                 configured = false
                 logger.log("Session configuration rejected: failureCode=${result.code.name}")
+                publishFailure(result.code)
                 false
             }
         }
@@ -117,6 +124,7 @@ class MainViewModel(
                     }
                     is SessionControllerResult.Failure -> {
                         logger.log("Session event poll failed: failureCode=${result.code.name}")
+                        publishFailure(result.code)
                     }
                 }
                 delay(250.milliseconds)
@@ -151,7 +159,7 @@ class MainViewModel(
                 startInFlight = false
                 lifecycle.failStart()
                 logger.log("Session start rejected: failureCode=${result.code.name}")
-                publish(VpnConnectionState.DISCONNECTED)
+                publish(VpnConnectionState.DISCONNECTED, result.code)
                 false
             }
         }
@@ -173,6 +181,7 @@ class MainViewModel(
                 is SessionControllerResult.Success -> logger.log("Session stop accepted for generation=$generation")
                 is SessionControllerResult.Failure ->
                     logger.log("Session stop rejected: generation=$generation failureCode=${result.code.name}")
+                        .also { publishFailure(result.code) }
             }
         }
     }
@@ -183,12 +192,12 @@ class MainViewModel(
             is SessionControllerResult.Success -> publish(VpnConnectionState.DISCONNECTED)
             is SessionControllerResult.Failure ->
                 logger.log("Session destroy failed: failureCode=${result.code.name}")
+                    .also { publishFailure(result.code) }
         }
     }
 
     private suspend fun connect(connectionUrl: String) {
         if (!setConfig(connectionUrl)) {
-            publish(VpnConnectionState.DISCONNECTED)
             return
         }
         pendingPermissionStart = true
@@ -214,14 +223,33 @@ class MainViewModel(
         lifecycleMutex.withLock {
             val state = lifecycle.render(event)
             if (state != null) {
-                publish(state)
+                publish(
+                    state,
+                    if (event.state == SessionState.FAILED) {
+                        event.failureCode ?: SessionFailureCode.UNKNOWN
+                    } else {
+                        null
+                    },
+                )
             }
         }
     }
 
-    private suspend fun publish(state: VpnConnectionState) {
-        _uiState.emit(_uiState.value.copy(connectionState = state))
+    private suspend fun publish(
+        state: VpnConnectionState,
+        failureCode: SessionFailureCode? = null,
+    ) {
+        _uiState.emit(
+            _uiState.value.copy(
+                connectionState = state,
+                lastFailureCode = failureCode,
+            ),
+        )
         connectionStateRepository.updateStatus(state)
+    }
+
+    private fun publishFailure(code: SessionFailureCode) {
+        _uiState.value = _uiState.value.copy(lastFailureCode = code)
     }
 
     private suspend fun getConfigBytes(connectionUrl: String): ByteArray =

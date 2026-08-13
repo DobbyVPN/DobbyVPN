@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"runtime/debug"
@@ -311,13 +312,16 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		log.Debugf(Category, "[SOCKS5 UDP BEGIN] attempt=%d dst=%s server=%s inFlight=%d stats={%s}", attempt, addr, serverIP, inFlight, d.dialStats())
 		defer d.udpDialInFlight.Add(-1)
 
-		// DNS fallback for Cloak
-		if d.useCloak && port == 53 {
+		// Android's resolver did not receive replies through otherwise healthy
+		// Outline UDP transports in qualification, while its TCP retry path was
+		// reliable. Cloak already needs the same standards-compliant truncated
+		// response to force TCP DNS. Keep other desktop UDP behavior unchanged.
+		if shouldForceTCPDNS(d.useCloak) && port == 53 {
 			d.udpDNSTruncated.Add(1)
 
 			log.Debugf(Category, "[SOCKS5 DNS] returning truncated DNS attempt=%d addr=%s cloak=%v stats={%s}", attempt, addr, d.useCloak, d.dialStats())
 
-			return newTruncatedDNSConn(host, port), nil
+			return newTruncatedDNSConn(), nil
 		}
 
 		conn, err := d.packetDialer.DialPacket(ctx, addr)
@@ -336,6 +340,10 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	d.unsupportedDial.Add(1)
 	log.Debugf(Category, "[SOCKS5 ERROR] dst=%s server=%s elapsed=%s err=%v", addr, serverIP, time.Since(start), err)
 	return nil, err
+}
+
+func shouldForceTCPDNS(useCloak bool) bool {
+	return useCloak || forceTCPDNSForPlatform
 }
 
 func updatePeakInt64(peak *atomic.Int64, current int64) {
@@ -664,42 +672,75 @@ func (c *outlineLoggedConn) dialStatsForLog() string {
 }
 
 type truncatedDNSConn struct {
-	req []byte
+	mu      sync.Mutex
+	ready   *sync.Cond
+	pending []byte
+	readErr error
+	closed  bool
 }
 
-func newTruncatedDNSConn(host string, port int) net.Conn {
-	return &truncatedDNSConn{}
+func newTruncatedDNSConn() net.Conn {
+	c := &truncatedDNSConn{}
+	c.ready = sync.NewCond(&c.mu)
+	return c
 }
 
 func (c *truncatedDNSConn) Read(b []byte) (int, error) {
-
-	if len(c.req) < 12 {
-		return 0, errors.New("invalid dns packet")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for len(c.pending) == 0 && c.readErr == nil && !c.closed {
+		c.ready.Wait()
 	}
-
-	resp := make([]byte, len(c.req))
-	copy(resp, c.req)
-
-	// response
-	resp[2] |= 0x80
-
-	// truncated
-	resp[2] |= 0x02
-
-	resp[6] = 0
-	resp[7] = 0
-
-	n := copy(b, resp)
+	if c.readErr != nil {
+		err := c.readErr
+		c.readErr = nil
+		return 0, err
+	}
+	if len(c.pending) == 0 && c.closed {
+		return 0, io.EOF
+	}
+	n := copy(b, c.pending)
+	c.pending = c.pending[n:]
+	if len(c.pending) == 0 {
+		c.ready.Broadcast()
+	}
 	return n, nil
 }
 
 func (c *truncatedDNSConn) Write(b []byte) (int, error) {
-	c.req = make([]byte, len(b))
-	copy(c.req, b)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for len(c.pending) != 0 && !c.closed {
+		c.ready.Wait()
+	}
+	if c.closed {
+		return 0, net.ErrClosed
+	}
+	if len(b) < 12 {
+		c.readErr = errors.New("invalid dns packet")
+		c.ready.Broadcast()
+		return len(b), nil
+	}
+	c.pending = append(c.pending[:0], b...)
+	// Return one synthetic DNS response for this request. The SOCKS UDP relay
+	// reads until EOF/error, so replaying the same response on every Read would
+	// create an unbounded local packet-feedback loop.
+	c.pending[2] |= 0x80 // response
+	c.pending[2] |= 0x02 // truncated: retry using TCP
+	c.pending[6] = 0
+	c.pending[7] = 0
+	c.ready.Broadcast()
 	return len(b), nil
 }
 
-func (c *truncatedDNSConn) Close() error                       { return nil }
+func (c *truncatedDNSConn) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	c.pending = nil
+	c.ready.Broadcast()
+	c.mu.Unlock()
+	return nil
+}
 func (c *truncatedDNSConn) LocalAddr() net.Addr                { return nil }
 func (c *truncatedDNSConn) RemoteAddr() net.Addr               { return nil }
 func (c *truncatedDNSConn) SetDeadline(t time.Time) error      { return nil }

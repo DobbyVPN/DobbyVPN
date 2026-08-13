@@ -60,6 +60,59 @@ def main() -> int:
     release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
     if PR_TRIGGER.search(release):
         violations.append("release.yml: protected release workflow must not run on pull_request")
+    if release.count("source_sha: ${{ github.sha }}") != 6:
+        violations.append("release.yml: every artifact-producing reusable workflow must receive github.sha")
+    for expected in (
+        "matching-refs/tags/$release_tag",
+        '[[ "$object_sha" != "$SOURCE_SHA" ]]',
+        "ref: ${{ github.sha }}",
+        'test "$GITHUB_REF" = "refs/heads/main"',
+        'test "$SOURCE_SHA" = "$current_main"',
+        'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"',
+    ):
+        if expected not in release:
+            violations.append(f"release.yml: missing exact source/tag guard: {expected}")
+
+    for name in (
+        "android_build.yml",
+        "desktop_libs_generate.yml",
+        "desktop_build.yml",
+        "installers_build.yml",
+        "ios_libs_generate.yml",
+        "ios_build.yml",
+    ):
+        source = (WORKFLOWS / name).read_text(encoding="utf-8")
+        for expected in (
+            "source_sha:",
+            "required: true",
+            "ref: ${{ inputs.source_sha }}",
+            "^[0-9a-f]{40}$",
+            "git rev-parse HEAD",
+        ):
+            if expected not in source:
+                violations.append(f"{name}: missing exact source checkout control: {expected}")
+        if re.search(r'test\s+"\$[A-Z_]*SOURCE_SHA"\s+=~', source):
+            violations.append(f"{name}: Bash regex validation must use [[ ... =~ ... ]], not test")
+
+    android_build = (WORKFLOWS / "android_build.yml").read_text(encoding="utf-8")
+    for expected in (
+        "APP_SOURCE_SHA: ${{ inputs.source_sha }}",
+        "APP_SOURCE_REPOSITORY: ${{ github.repository }}",
+        'GITHUB_SHA="$APP_SOURCE_SHA" GITHUB_REPOSITORY="$APP_SOURCE_REPOSITORY"',
+        "Check out trusted APK source verifier",
+        "ref: ${{ github.workflow_sha }}",
+        "path: .trusted-workflow",
+        'python3 "$GITHUB_WORKSPACE/.trusted-workflow/.github/scripts/verify_android_apk_source.py"',
+        '--source-sha "$SOURCE_SHA" --repository "$APP_SOURCE_REPOSITORY"',
+    ):
+        if expected not in android_build:
+            violations.append(
+                f"android_build.yml: missing embedded tagged-source control: {expected}"
+            )
+    if "GITHUB_SHA: ${{ inputs.source_sha }}" in android_build:
+        violations.append(
+            "android_build.yml: a job-level assignment cannot override GitHub's reserved GITHUB_SHA"
+        )
 
     promotion = (WORKFLOWS / "promote_release.yml").read_text(encoding="utf-8")
     if PR_TRIGGER.search(promotion):
@@ -74,6 +127,8 @@ def main() -> int:
         "contents: write",
         'test "$GITHUB_REF" = "refs/heads/main"',
         'test "$GITHUB_SHA" = "$current_main"',
+        'test "$RELEASE_SOURCE_SHA" = "$current_main"',
+        'test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"',
         'test "$(jq -r .conclusion <<<"$run_json")" = "success"',
         'test "$(jq -r .headSha <<<"$run_json")" = "$RELEASE_SOURCE_SHA"',
         'test "$source_version" = "$RELEASE_VERSION"',
@@ -82,9 +137,25 @@ def main() -> int:
         "QUALIFIED_WINDOWS_AMD64_SHA256: ${{ inputs.windows_amd64_sha256 }}",
         "QUALIFIED_MACOS_AMD64_SHA256: ${{ inputs.macos_amd64_sha256 }}",
         "Verify locally qualified desktop packages",
-        '--target "$RELEASE_SOURCE_SHA"',
+        'matching-refs/tags/$tag',
+        'gh release create "$release_tag"',
+        "--draft",
+        "--verify-tag",
+        'verify_remote_tag "$expected_tag_object"',
+        "draft_created=false",
+        "owned_release_id=\"\"",
+        "wait_for_exact_release()",
+        "for _ in {1..30}",
+        'release_record="$(wait_for_exact_release true)"',
+        'release_record="$(wait_for_exact_release false)"',
+        'gh api "repos/$GITHUB_REPOSITORY/releases/$owned_release_id"',
+        "release_provenance.py create",
+        "release_provenance.py verify",
+        "cmp release/release-provenance.json published/release-provenance.json",
+        "published=true",
         "dobbyvpn-android-provenance",
         "Android provenance validation passed",
+        "verify_android_apk_source.py",
     ):
         if expected not in promotion:
             violations.append(
@@ -98,7 +169,14 @@ def main() -> int:
         "Download Linux package",
         "Download Windows amd64 package",
         "Download macOS amd64 package",
+        "Download macOS arm64 package",
+        "Download signed Android package",
+        "Download unsigned Android package",
+        "Download Android provenance",
         "Verify locally qualified desktop packages",
+        "Verify Android source and artifact provenance",
+        "Create F-Droid version metadata",
+        "Create and verify public release provenance",
     ):
         marker = f"      - name: {step}"
         start = promotion.find(marker)
@@ -120,11 +198,16 @@ def main() -> int:
         "contents: read",
         'test "$GITHUB_REF" = "refs/heads/main"',
         'test "$GITHUB_SHA" = "$current_main"',
+        'test "$RELEASE_SOURCE_SHA" = "$current_main"',
         'test "$(jq -r .conclusion <<<"$run_json")" = "success"',
         'test "$(jq -r .headSha <<<"$run_json")" = "$RELEASE_SOURCE_SHA"',
         'test "$(jq -r .number <<<"$run_json")" = "$RELEASE_BUILD_NUMBER"',
         '"ios_build / ios_build"',
         'test "$source_version" = "$RELEASE_VERSION"',
+        "DobbyVPN.ipa.provenance",
+        "ios_artifact_provenance.py verify",
+        "APP_STORE_SOURCE_SHA: ${{ inputs.commit_sha }}",
+        "run-id: ${{ inputs.run_id }}",
         "environment: release",
         "APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}",
         "APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}",
@@ -149,9 +232,21 @@ def main() -> int:
         'test "$tag_sha" = "$RELEASE_SOURCE_SHA"',
         "source_sha: ${{ needs.preflight.outputs.source_sha }}",
         "legacy_android_version_code: ${{ needs.preflight.outputs.android_version_code }}",
+        'release-provenance.json',
+        "manifest-bearing releases are immutable",
+        "Download rebuilt Android provenance",
+        'echo "provenance=$provenance"',
+        "Replace only F-Droid-facing Android assets",
+        "Confirm repaired public metadata",
+        'gh release download "$RELEASE_TAG"',
+        'cmp "${{ steps.apk.outputs.signed }}" "published/DobbyVPN-v$RELEASE_VERSION-sign.apk"',
+        'cmp "${{ steps.apk.outputs.unsigned }}" "published/DobbyVPN-v$RELEASE_VERSION-unsign.apk"',
+        'cmp "${{ steps.apk.outputs.provenance }}" "published/DobbyVPN-v$RELEASE_VERSION-android-provenance.json"',
+        "manifest-bearing releases are immutable; refusing legacy Android asset repair",
         "environment: release",
         "--clobber",
         "versionCode=$ANDROID_VERSION_CODE",
+        "verify_android_apk_source.py",
     ):
         if expected not in fdroid_repair:
             violations.append(
@@ -160,6 +255,8 @@ def main() -> int:
 
     fastfile = (ROOT.parent / "fastlane" / "Fastfile").read_text(encoding="utf-8")
     for expected in (
+        'COMMIT          = ENV["APP_SOURCE_SHA"] || ENV["GITHUB_SHA"]',
+        'REPO            = ENV["APP_SOURCE_REPOSITORY"] || ENV["GITHUB_REPOSITORY"]',
         'lane :submit_app_store_review do',
         'ENV.fetch("APP_STORE_VERSION")',
         'ENV.fetch("APP_STORE_BUILD_NUMBER")',
@@ -180,6 +277,7 @@ def main() -> int:
             )
     upload_testflight_lane = fastfile.split("lane :upload_testflight do", 1)[-1].split("\n  end", 1)[0]
     for expected in (
+        'ipa: "#{EXPORT_DIR}/#{IPA_NAME}"',
         "skip_waiting_for_build_processing: true",
         "distribute_external: false",
         "notify_external_testers: false",
@@ -244,6 +342,60 @@ def main() -> int:
         if ruby_version is None or tuple(map(int, ruby_version.groups())) < (3, 3):
             violations.append(f"{name}: protected Fastlane job must use supported Ruby 3.3+")
 
+    ios_build = (WORKFLOWS / "ios_build.yml").read_text(encoding="utf-8")
+    for expected in (
+        "ios_artifact_provenance.py create",
+        "Verify signed IPA App Group and packet tunnel entitlements",
+        "verify_ios_app_group.py",
+        'codesign --display --entitlements :- "${apps[0]}"',
+        'security cms -D -i "${tunnels[0]}/embedded.mobileprovision"',
+        "name: DobbyVPN.ipa.provenance",
+        "retention-days: 90",
+        "- name: Fastlane upload_testflight",
+        "if: ${{ github.ref == 'refs/heads/main' }}",
+        "bundle exec fastlane ios upload_testflight",
+    ):
+        if expected not in ios_build:
+            violations.append(f"ios_build.yml: missing IPA provenance control: {expected}")
+    ipa_upload = ios_build.find("      - name: Upload IPA as artifact")
+    provenance_upload = ios_build.find("      - name: Upload IPA provenance as artifact")
+    testflight_upload = ios_build.find("      - name: Fastlane upload_testflight")
+    if min(ipa_upload, provenance_upload, testflight_upload) < 0 or not (
+        ipa_upload < testflight_upload and provenance_upload < testflight_upload
+    ):
+        violations.append(
+            "ios_build.yml: TestFlight upload must run only after the IPA and its provenance are retained"
+        )
+
+    ios_libraries = (WORKFLOWS / "ios_libs_generate.yml").read_text(encoding="utf-8")
+    for expected in (
+        "APP_SOURCE_SHA: ${{ inputs.source_sha }}",
+        "APP_SOURCE_REPOSITORY: ${{ github.repository }}",
+        'test "$APP_SOURCE_SHA" = "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"',
+        '-PprojectRepositoryCommit="${APP_SOURCE_SHA}"',
+        '-PprojectRepositoryCommitLink="https://github.com/${APP_SOURCE_REPOSITORY}/tree/${APP_SOURCE_SHA}"',
+    ):
+        if expected not in ios_libraries:
+            violations.append(f"ios_libs_generate.yml: missing exact KMP framework-source control: {expected}")
+    for forbidden in (
+        "GITHUB_SHA: ${{ inputs.source_sha }}",
+        "Cache KMP iOS release framework",
+        "steps.kmp_ios_framework_cache.outputs.cache-hit",
+    ):
+        if forbidden in ios_libraries:
+            violations.append(
+                f"ios_libs_generate.yml: stale final-framework cache/source override is forbidden: {forbidden}"
+            )
+    for artifact_name in ("MyLibrary.xcframework", "app.framework"):
+        marker = f"          name: {artifact_name}"
+        start = ios_libraries.find(marker)
+        end = ios_libraries.find("\n      - name:", start + len(marker)) if start >= 0 else -1
+        section = ios_libraries[start:] if end < 0 else ios_libraries[start:end]
+        if start < 0 or "if-no-files-found: error" not in section:
+            violations.append(
+                f"ios_libs_generate.yml: {artifact_name} producer upload must fail when output is missing"
+            )
+
     lint = (WORKFLOWS / "lint.yml").read_text(encoding="utf-8")
     if "reviewdog/action-golangci-lint@c76cceaaab89abe74e649d2e34c6c9adc26662d2" not in lint:
         violations.append("lint.yml: golangci-lint review action must use its Node 24 SHA pin")
@@ -292,6 +444,7 @@ def main() -> int:
 
     test_workflow = (WORKFLOWS / "test.yml").read_text(encoding="utf-8")
     for expected in (
+        "python3 -m unittest discover -s .github/scripts -p 'test_*.py'",
         "set +e\n          python3 .github/scripts/check_swift_coverage.py",
         'cat "$COVERAGE_SUMMARY" >> "$GITHUB_STEP_SUMMARY"',
         'exit "$coverage_status"',
@@ -316,6 +469,10 @@ def main() -> int:
             )
     if "name: macos_grpcvpnserver-${{ matrix.arch }}" not in desktop_libs:
         violations.append("desktop_libs_generate.yml: macOS service artifact name must include matrix.arch")
+    if "go-go-tunnel/releases/download/" in desktop_libs:
+        violations.append(
+            "desktop_libs_generate.yml: go-go-tunnel downloads must use desktop_build.py's single pinned release table"
+        )
 
     installers = (WORKFLOWS / "installers_build.yml").read_text(encoding="utf-8")
     for arch in ("arm64", "amd64"):
@@ -332,6 +489,7 @@ def main() -> int:
     windows_installer = (ROOT.parent / "installer" / "windows" / "build.bat").read_text(
         encoding="utf-8"
     )
+    desktop_build = (ROOT / "scripts" / "desktop_build.py").read_text(encoding="utf-8")
     for unsupported in ("dobbyVPN-windows-x86.msi", "dobbyVPN-windows-arm64.msi"):
         if unsupported in installers or unsupported in promotion:
             violations.append(
@@ -347,6 +505,47 @@ def main() -> int:
             violations.append(
                 f"installer/windows/build.bat: missing fail-closed amd64 installer control: {expected}"
             )
+    for runtime_file in (
+        "windows_grpcvpnserver.exe",
+        "dobby_bridge.dll",
+        "wintun.dll",
+    ):
+        if desktop_libs.count(f"go_module/{runtime_file}") != 2:
+            violations.append(
+                "desktop_libs_generate.yml: Windows runtime closure must be cached and uploaded: "
+                + runtime_file
+            )
+        if runtime_file not in windows_installer:
+            violations.append(
+                "installer/windows/build.bat: Windows runtime closure must require " + runtime_file
+            )
+        if f'"{runtime_file}"' not in installers:
+            violations.append(
+                "installers_build.yml: finished MSI must be checked for " + runtime_file
+            )
+    if "WINTUN_AMD64_DLL_SHA256" not in desktop_build:
+        violations.append("desktop_build.py: Windows Wintun payload must be checksum-pinned")
+    for digest in (
+        "10e2f921aaa949060bed936e3c361b0967b2ad8b7a71dd983d36abd94c903063",
+        "e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce",
+    ):
+        if digest not in desktop_libs:
+            violations.append(
+                "desktop_libs_generate.yml: cached Windows runtime closure must be checksum-verified"
+            )
+    if "curl -#fLo wintun.zip" in windows_installer:
+        violations.append("installer/windows/build.bat: Wintun must come from the verified artifact")
+    for expected in (
+        "Verify Windows service runtime closure",
+        "Windows service runtime closure is missing a regular $file",
+    ):
+        if expected not in desktop_libs:
+            violations.append(
+                "desktop_libs_generate.yml: missing fail-closed Windows runtime control: "
+                + expected
+            )
+    if "SELECT `FileName` FROM `File`" not in installers:
+        violations.append("installers_build.yml: finished MSI File table must be verified")
     if violations:
         print("Workflow secret-isolation policy failed:", file=sys.stderr)
         print("\n".join(f"- {item}" for item in violations), file=sys.stderr)

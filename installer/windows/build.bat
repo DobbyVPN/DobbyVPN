@@ -6,9 +6,6 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 :checkdeps
 	echo [+] Checking wix
 	wix --version || goto :error
-	
-	if exist "wintun\" echo [+] Wintun installed
-	if not exist "wintun\" call :wintun
 
 	echo [+] Checking dobby-vpn
 	if exist "dobbyVPN-windows.zip" (
@@ -25,19 +22,18 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 		goto :error
 	)
 
-	echo [+] Checking windows_grpcvpnserver.exe
-	if exist "windows_grpcvpnserver.exe" (
-		echo [+] Inserting windows_grpcvpnserver.exe to the dobbyvpn application
-		xcopy "windows_grpcvpnserver.exe" ".\dobbyVPN-windows\bin\" /Y || goto :error
-	) else (
-		echo [+] windows_grpcvpnserver.exe not exist
-		goto :error
+	for %%F in (windows_grpcvpnserver.exe dobby_bridge.dll wintun.dll) do (
+		if not exist "%%F" (
+			echo [-] Required Windows service runtime %%F not found
+			goto :error
+		)
 	)
-
-	if exist "dobby_bridge.dll" (
-		echo [+] Inserting dobby_bridge.dll to the dobbyvpn application
-		xcopy "dobby_bridge.dll" ".\dobbyVPN-windows\bin\" /Y || goto :error
-	)
+	echo [+] Inserting windows_grpcvpnserver.exe and dobby_bridge.dll to the dobbyvpn application
+	xcopy "windows_grpcvpnserver.exe" ".\dobbyVPN-windows\bin\" /Y || goto :error
+	xcopy "dobby_bridge.dll" ".\dobbyVPN-windows\bin\" /Y || goto :error
+	if not exist "wintun\bin\amd64\" mkdir "wintun\bin\amd64\" || goto :error
+	echo [+] Inserting staged wintun.dll to the installer payload
+	xcopy "wintun.dll" ".\wintun\bin\amd64\" /Y || goto :error
 
 :build
 	rem The desktop archive, VPN service, and bridge are built only for amd64.
@@ -54,15 +50,6 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 
 	echo [+] Compiling %1
 	wix build -src .\Package.wxs -src .\Folders.wxs -src .\AppComponents.wxs -b .\ -d "DOBBYVPN_PLATFORM=%1" -d "DOBBYVPN_VERSION=%DOBBYVPN_VERSION%" -arch %2 -o bin/%1/dobbyVPN-windows-%1.msi || goto :error
-	goto :eof
-
-:wintun
-	echo [+] Downloading wintun
-	curl -#fLo wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip || goto :error
-	echo [+] Unzip wintun
-	tar -xvzf wintun.zip || goto :error
-	echo [+] Clear wintun.zip
-	del wintun.zip
 	goto :eof
 
 :error

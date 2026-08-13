@@ -131,7 +131,8 @@ type StartResult struct{ Generation uint64 }
 type StopResult struct{ Generation uint64 }
 
 // HealthResult reports the generation which was evaluated. An unhealthy
-// generation is released before a deterministic AUTO_SELECT failover starts.
+// AUTO_SELECT generation is released before deterministic failover starts;
+// an explicitly selected profile fails without substituting another profile.
 type HealthResult struct{ Generation uint64 }
 
 // Event is an append-only, monotonically sequenced transition.  A failure is
@@ -268,7 +269,9 @@ type session struct {
 	cancel              context.CancelFunc
 	ledger              *ledger
 	workerDone          chan struct{}
+	activeTarget        StartTarget
 	restartAfterCleanup bool
+	failureAfterCleanup FailureCode
 	commands            map[string]commandRecord
 	events              []Event
 	sequence            uint64
@@ -484,6 +487,7 @@ func (m *Manager) Start(requestCtx context.Context, sessionID, commandID string,
 	generation := s.generation
 	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
 	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure = cancel, &ledger{}, make(chan struct{}), false, false, nil, ""
+	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = target, false, ""
 	s.state = StateProbing
 	result = StartResult{Generation: generation}
 	s.commands[commandID] = commandRecord{op: commandStart, start: result}
@@ -569,9 +573,10 @@ func (m *Manager) ProtectSocket(ctx context.Context, ref SessionRef, fd int, loo
 	return nil
 }
 
-// ReportHealth accepts a generation-correlated health result. It is the
-// deterministic failover policy: an unhealthy connected generation is fully
-// cleaned up before a new AUTO_SELECT generation is allowed to begin.
+// ReportHealth accepts a generation-correlated health result. An unhealthy
+// connected generation is fully cleaned up before AUTO_SELECT failover. A
+// PROFILE_INDEX generation fails in place so its requested profile identity
+// cannot silently change beneath a caller.
 func (m *Manager) ReportHealth(_ context.Context, sessionID string, generation uint64, healthy bool) (result HealthResult, err error) {
 	operation := m.audit.begin("report_health")
 	defer func() { operation.end(err) }()
@@ -593,7 +598,11 @@ func (m *Manager) ReportHealth(_ context.Context, sessionID string, generation u
 		return result, nil
 	}
 	m.appendLocked(s, Event{Generation: generation, State: StateConnected, Profile: cloneSummaryPtr(s.active), Failure: FailureRuntime})
-	s.restartAfterCleanup = true
+	if s.activeTarget.Mode == AutoSelect {
+		s.restartAfterCleanup = true
+	} else {
+		s.failureAfterCleanup = FailureRuntime
+	}
 	s.state = StateStopping
 	m.appendLocked(s, Event{Generation: generation, State: StateStopping})
 	if s.cancel != nil {
@@ -668,11 +677,15 @@ func (m *Manager) DestroySession(_ context.Context, sessionID string) (err error
 	return nil
 }
 
+// runStart is one lifecycle transaction whose branches all preserve generation
+// fencing and late-lease cleanup; keeping those checks together is deliberate.
+//
+//nolint:gocyclo,nestif // Refactoring the transaction would risk cleanup races.
 func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, target StartTarget) {
 	defer m.signalWorkerDone(s, generation)
 	profile, err := m.selectProfile(ctx, s, generation, target)
 	if err != nil {
-		m.finish(s, generation, nil, err)
+		m.finish(s, generation, err)
 		return
 	}
 	if !m.advance(s, generation, StatePreparing, &profile.Summary) {
@@ -697,7 +710,7 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 				err = errors.Join(err, platformLease.Release(context.Background()))
 			}
 		}
-		m.finish(s, generation, nil, wrapFailure(FailurePlatform, err))
+		m.finish(s, generation, wrapFailure(FailurePlatform, err))
 		return
 	}
 	s.mu.Lock()
@@ -712,7 +725,7 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 	if s.generation != generation || s.state != StatePreparing {
 		s.mu.Unlock()
 		if releaseErr := platformLease.Release(context.Background()); releaseErr != nil {
-			m.finish(s, generation, nil, wrapFailure(FailureCleanup, releaseErr))
+			m.finish(s, generation, wrapFailure(FailureCleanup, releaseErr))
 		}
 		return
 	}
@@ -737,7 +750,7 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 				err = errors.Join(err, runtimeLease.Stop(context.Background()))
 			}
 		}
-		m.finish(s, generation, nil, wrapFailure(FailureRuntime, err))
+		m.finish(s, generation, wrapFailure(FailureRuntime, err))
 		return
 	}
 	s.mu.Lock()
@@ -752,7 +765,7 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 	if s.generation != generation || s.state != StatePreparing {
 		s.mu.Unlock()
 		if stopErr := runtimeLease.Stop(context.Background()); stopErr != nil {
-			m.finish(s, generation, nil, wrapFailure(FailureCleanup, stopErr))
+			m.finish(s, generation, wrapFailure(FailureCleanup, stopErr))
 		}
 		return
 	}
@@ -871,8 +884,8 @@ func (m *Manager) advance(s *session, generation uint64, state State, profile *P
 	return true
 }
 
-func (m *Manager) finish(s *session, generation uint64, profile *ProfileSummary, cause error) {
-	m.finishWithPolicy(s, generation, profile, cause, false)
+func (m *Manager) finish(s *session, generation uint64, cause error) {
+	m.finishWithPolicy(s, generation, nil, cause, false)
 }
 
 // finishAfterStop is only called after workerDone closes. It is the sole path
@@ -907,14 +920,20 @@ func (m *Manager) finishWithPolicy(s *session, generation uint64, profile *Profi
 	}
 	s.cleanupDone, s.cleanupFailed, s.cancel = true, cleanupErr != nil, nil
 	if cleanupErr != nil {
-		s.restartAfterCleanup = false
+		s.restartAfterCleanup, s.failureAfterCleanup = false, ""
 		s.state, s.active, s.lastFailure = StateFailed, nil, FailureCleanup
 		m.appendLocked(s, Event{Generation: generation, State: StateFailed, Profile: cloneSummaryPtr(profile), Failure: FailureCleanup})
 		return
 	}
 	if wasStopping || cause != nil && CodeOf(cause) == FailureCanceled {
 		restart := s.restartAfterCleanup
-		s.restartAfterCleanup = false
+		terminalFailure := s.failureAfterCleanup
+		s.restartAfterCleanup, s.failureAfterCleanup = false, ""
+		if terminalFailure != "" {
+			s.state, s.active, s.lastFailure = StateFailed, nil, terminalFailure
+			m.appendLocked(s, Event{Generation: generation, State: StateFailed, Profile: cloneSummaryPtr(profile), Failure: terminalFailure})
+			return
+		}
 		s.state, s.active, s.lastFailure = StateIdle, nil, ""
 		m.appendLocked(s, Event{Generation: generation, State: StateIdle})
 		if restart {
@@ -936,6 +955,7 @@ func (m *Manager) startFailover(s *session) {
 	generation := s.generation
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure = cancel, &ledger{}, make(chan struct{}), false, false, nil, ""
+	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = StartTarget{Mode: AutoSelect}, false, ""
 	s.state = StateProbing
 	m.appendLocked(s, Event{Generation: generation, State: StateProbing})
 	s.mu.Unlock()

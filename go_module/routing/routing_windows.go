@@ -4,6 +4,7 @@ package routing
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net"
 	"os/exec"
@@ -158,13 +159,32 @@ func acquireWindowsRoute(plan *Plan, name string, route windowsRoute) (bool, err
 			return err
 		},
 		func() error {
-			_, err := windowsNetshCommand(windowsRouteArgs("delete", route)...)
-			return err
+			return releaseWindowsRoute(route, 2*time.Second)
 		},
 	); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func releaseWindowsRoute(route windowsRoute, timeout time.Duration) error {
+	if _, err := windowsNetshCommand(windowsRouteArgs("delete", route)...); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		exists, err := windowsRouteExists(route)
+		if err == nil && !exists {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			if err != nil {
+				return fmt.Errorf("verify session-owned Windows route deletion: %w", err)
+			}
+			return errors.New("session-owned Windows route remained after deletion")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 func routeExistsInWindowsTable(route windowsRoute) (bool, error) {

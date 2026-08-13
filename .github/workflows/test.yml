@@ -44,8 +44,7 @@ jobs:
       - name: Enforce secretless PR workflow policy
         run: |
           python3 .github/scripts/check_workflow_policy.py
-          python3 .github/scripts/test_select_ios_simulator.py
-          python3 .github/scripts/test_check_swift_coverage.py
+          python3 -m unittest discover -s .github/scripts -p 'test_*.py'
 
   go:
     name: Go tests
@@ -63,11 +62,17 @@ jobs:
 
       - name: Run Go test suite
         working-directory: go_module
-        run: go test ./...
+        run: |
+          go test ./...
+          # go_module/modules/Cloak is a replaced nested module, so ./...
+          # does not discover its embedded-client regression tests.
+          go test github.com/cbeuw/Cloak/exported_client github.com/cbeuw/Cloak/internal/client
 
       - name: Race-check lifecycle and routing
         working-directory: go_module
-        run: go test -race ./core ./routing ./tunnel/...
+        run: |
+          go test -race ./core ./routing ./tunnel/...
+          go test -race github.com/cbeuw/Cloak/exported_client github.com/cbeuw/Cloak/internal/client
 
   kotlin:
     name: Kotlin and Android service tests
@@ -150,6 +155,7 @@ jobs:
     name: iOS native dependencies
     uses: ./.github/workflows/ios_libs_generate.yml
     with:
+      source_sha: ${{ github.sha }}
       app_major_version: "0"
       app_minor_version: "0"
       app_maintenance_version: "0"
@@ -188,6 +194,7 @@ jobs:
             -scheme iosApp \
             -configuration Debug \
             -sdk iphoneos \
+            -destination "generic/platform=iOS" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
@@ -303,6 +310,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
-          xcrun simctl install \
-            "$SIMULATOR_UDID" \
-            "$DERIVED_DATA/Build/Products/Debug-iphonesimulator/doBBYVPN.app"
+          python3 .github/scripts/run_ios_simulator_app_lifecycle.py \
+            --device "$SIMULATOR_UDID" \
+            --app "$DERIVED_DATA/Build/Products/Debug-iphonesimulator/doBBYVPN.app" \
+            --result "$RUNNER_TEMP/dobbyvpn-ios-simulator-lifecycle.json"

@@ -158,6 +158,57 @@ func TestTunnelProbeContextDeadlineOverridesEndpointTimeout(t *testing.T) {
 	}
 }
 
+func TestProbeEndpointReportsSafeFailureStages(t *testing.T) {
+	t.Run("connect", func(t *testing.T) {
+		result := probeEndpoint(context.Background(), closedLocalHTTPURL(t), time.Second)
+		if result.err == nil || result.failureStage != probeStageConnect || result.errorClass != "network" {
+			t.Fatalf("result=%+v, want connect/network failure", result)
+		}
+	})
+
+	t.Run("response timeout", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			time.Sleep(100 * time.Millisecond)
+		}))
+		defer server.Close()
+		result := probeEndpoint(context.Background(), server.URL, 25*time.Millisecond)
+		if result.err == nil || result.failureStage != probeStageResponse || result.errorClass != "timeout" {
+			t.Fatalf("result=%+v, want response/timeout failure", result)
+		}
+	})
+
+	t.Run("status", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		defer server.Close()
+		result := probeEndpoint(context.Background(), server.URL, time.Second)
+		if result.err == nil || result.failureStage != probeStageStatus || result.errorClass != "protocol" {
+			t.Fatalf("result=%+v, want status/protocol failure", result)
+		}
+	})
+}
+
+func TestProbeErrorClassUsesOnlyStableCategories(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "deadline", err: context.DeadlineExceeded, want: "timeout"},
+		{name: "canceled", err: context.Canceled, want: "canceled"},
+		{name: "dns", err: &net.DNSError{Err: "private detail", Name: "private.invalid"}, want: "dns"},
+		{name: "protocol", err: http.ErrNotSupported, want: "protocol"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := probeErrorClass(test.err); got != test.want {
+				t.Fatalf("probeErrorClass()=%q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func closedLocalHTTPURL(t *testing.T) string {
 	t.Helper()
 

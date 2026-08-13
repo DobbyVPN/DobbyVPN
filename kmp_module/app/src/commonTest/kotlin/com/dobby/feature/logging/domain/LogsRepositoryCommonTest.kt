@@ -8,7 +8,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import okio.FileSystem
+import okio.ForwardingFileSystem
 import okio.Path
+import okio.Sink
 import okio.buffer
 import okio.use
 
@@ -63,7 +65,7 @@ class LogsRepositoryCommonTest {
         assertEquals(appLine, merged[1])
         assertTrue(repository.readLogs(10).first().contains("IDLE -> CONFIGURED"))
 
-        repository.clearLogs()
+        assertTrue(repository.clearLogs())
         val afterClear = repository.readAllLogs()
         assertTrue(afterClear.any { it.contains("\"event\":\"logs.cleared\"") })
         assertFalse(afterClear.any { it.contains("IDLE -> CONFIGURED") })
@@ -123,6 +125,59 @@ class LogsRepositoryCommonTest {
         assertFalse(repository.readAllLogs().any { it.contains("old external diagnostic") })
     }
 
+    @Test
+    fun missing_storage_is_created_without_degrading_diagnostics() {
+        val path = temporaryLogPath("missing")
+        val repository = LogsRepository(path)
+
+        assertEquals(LogStorageStatus.READY, repository.storageStatus.value)
+        assertTrue(fileSystem.exists(path))
+    }
+
+    @Test
+    fun corrupt_directory_entry_degrades_without_crashing_startup() {
+        val path = temporaryLogPath("corrupt")
+        fileSystem.createDirectory(path)
+
+        val repository = LogsRepository(path)
+
+        assertEquals(LogStorageStatus.UNAVAILABLE, repository.storageStatus.value)
+    }
+
+    @Test
+    fun unwritable_storage_degrades_without_crashing_startup() {
+        val path = temporaryLogPath("unwritable")
+        val repository = LogsRepository.withFileSystemForTesting(
+            path,
+            FailingSinkFileSystem(fileSystem, "permission denied"),
+        )
+
+        assertEquals(LogStorageStatus.UNAVAILABLE, repository.storageStatus.value)
+    }
+
+    @Test
+    fun full_storage_degrades_without_crashing_startup() {
+        val path = temporaryLogPath("full")
+        val repository = LogsRepository.withFileSystemForTesting(
+            path,
+            FailingSinkFileSystem(fileSystem, "no space left"),
+        )
+
+        assertEquals(LogStorageStatus.UNAVAILABLE, repository.storageStatus.value)
+    }
+
+    @Test
+    fun unreadable_storage_queries_degrade_without_crashing_startup() {
+        val path = temporaryLogPath("unreadable-query")
+        val repository = LogsRepository.withFileSystemForTesting(
+            path,
+            FailingMetadataFileSystem(fileSystem),
+        )
+
+        assertEquals(LogStorageStatus.UNAVAILABLE, repository.storageStatus.value)
+        assertEquals(emptyList(), repository.readAllLogs())
+    }
+
     private fun temporaryLogPath(label: String): Path =
         (FileSystem.SYSTEM_TEMPORARY_DIRECTORY / "dobby-$label-${Random.nextLong()}.jsonl")
             .also(temporaryPaths::add)
@@ -140,4 +195,16 @@ class LogsRepositoryCommonTest {
 
     private fun read(path: Path): String =
         fileSystem.source(path).buffer().use { source -> source.readUtf8() }
+
+    private class FailingSinkFileSystem(
+        delegate: FileSystem,
+        private val reason: String,
+    ) : ForwardingFileSystem(delegate) {
+        override fun sink(file: Path, mustCreate: Boolean): Sink = error(reason)
+        override fun appendingSink(file: Path, mustExist: Boolean): Sink = error(reason)
+    }
+
+    private class FailingMetadataFileSystem(delegate: FileSystem) : ForwardingFileSystem(delegate) {
+        override fun metadataOrNull(path: Path) = error("metadata unavailable")
+    }
 }

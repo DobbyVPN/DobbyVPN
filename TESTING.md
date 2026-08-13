@@ -9,14 +9,26 @@ From `go_module/`:
 
 ```bash
 go test ./...
+go test github.com/cbeuw/Cloak/exported_client github.com/cbeuw/Cloak/internal/client
 go test -race ./core/... ./routing/... ./sessionapi/... ./tunnel/...
+go test -race github.com/cbeuw/Cloak/exported_client github.com/cbeuw/Cloak/internal/client
 ```
+
+The explicit Cloak command is required because `go_module/modules/Cloak` is a
+replaced nested module and is not included in the parent module's `./...`
+pattern. It covers the embedded client integration used by every DobbyVPN
+platform; the standalone Cloak server packages are outside this app's test
+scope.
 
 From `kmp_module/` with JDK 17 and the Android SDK configured:
 
 ```bash
-./gradlew test detekt :app:testDebugUnitTest
+./gradlew :grpcstub:test :app:jvmTest :app:testDebugUnitTest :app:verifyDebugNativeAbiPayloads
+./gradlew :app:detektMetadataCommonMain :app:detektJvmMain :grpcstub:detekt
 ```
+
+Use the source-set-specific Detekt tasks above. The root KMP aggregate
+`detekt` task has no sources and is not lint evidence.
 
 On an Apple-silicon Mac with Xcode 26.3 and an installed iOS runtime:
 
@@ -48,9 +60,15 @@ xcodebuild build -project ../swift_module/iosApp.xcodeproj -scheme iosApp \
   -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
   -derivedDataPath /tmp/dobbyvpn-ios-simulator \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
-xcrun simctl install "$SIMULATOR_UDID" \
-  /tmp/dobbyvpn-ios-simulator/Build/Products/Debug-iphonesimulator/doBBYVPN.app
+python3 .github/scripts/run_ios_simulator_app_lifecycle.py \
+  --device "$SIMULATOR_UDID" \
+  --app /tmp/dobbyvpn-ios-simulator/Build/Products/Debug-iphonesimulator/doBBYVPN.app \
+  --screenshots /tmp/dobbyvpn-ios-simulator-screenshots \
+  --result /tmp/dobbyvpn-ios-simulator-lifecycle.json
 ```
+
+`--screenshots` is deliberately an owner-local option. Public GitHub workflows
+run the same lifecycle assertions without retaining or uploading screenshots.
 
 For an Intel Mac, replace `iosSimulatorArm64` with `iosX64` in the Gradle task
 and framework path. The hosted public workflow runs the Apple-silicon variant.
@@ -66,10 +84,20 @@ multi-producer merge/clear, and durable retention of the latest clear marker.
 `iosX64` is also declared for Intel macOS environments.
 
 Simulator checks cover shared parsing, mapping, lifecycle generation fences,
-observation sequencing, retry decisions, framework linkage, and any future
-synthetic app tests. They cannot prove Packet Tunnel Provider execution,
-NetworkExtension routing/DNS, real traffic, entitlements, signing, sleep/wake,
-or device resource cleanup. Those assertions require a physical iPhone.
+observation sequencing, retry decisions, framework linkage, fresh install,
+retained-data reinstall, cold and repeated launch, background/foreground,
+forced termination/relaunch, and (owner-locally) real foreground app
+screenshots. The lifecycle helper verifies that every launched process remains
+alive after the startup window, not merely that launchd accepted a request.
+Shared storage tests cover missing, corrupt, unwritable, and full diagnostic
+storage and require controlled degradation rather than startup failure.
+
+The signed-IPA workflow separately inspects the app and packet-tunnel extension,
+signatures, exact entitlements, App Group, source commit, version/build,
+provisioning expiry, and release debugger policy. Simulator cannot execute the
+production NetworkExtension data plane, real traffic, sleep/wake, or physical
+device resource cleanup. Those remain optional physical-hardware strengthening
+tests, not prerequisites for contributors or maintainers without an iPhone.
 
 The Go XCFramework intentionally includes a Simulator slice. It shares all
 session/runtime code with the device slice, but TrustTunnel returns a typed

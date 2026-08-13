@@ -106,7 +106,7 @@ func (s *Stream) obfuscateAndSend(buf []byte, payloadOffsetInBuf int) error {
 	_, err = s.session.sb.send(buf[:cipherTextLen], &s.assignedConn)
 	if err != nil {
 		if err == errBrokenSwitchboard {
-			s.session.SetTerminalMsg(err.Error())
+			s.session.SetTerminal(TerminalCauseSwitchboardFailed, err.Error())
 			s.session.passiveClose()
 		}
 		return err

@@ -292,12 +292,16 @@ func TestActiveLogRetentionIsBoundedAndKeepsFinalEvent(t *testing.T) {
 	if err := SetPath(path); err != nil {
 		t.Fatal(err)
 	}
+	beforeRetention, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for index := 0; index < 80; index++ {
 		Info("RETENTION", strings.Repeat("status ", 12), map[string]any{"index": index})
 	}
 	Info("RETENTION", "final retention marker", nil)
-	if err := lg.file.Sync(); err != nil {
-		t.Fatal(err)
+	if syncErr := lg.file.Sync(); syncErr != nil {
+		t.Fatal(syncErr)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -308,6 +312,9 @@ func TestActiveLogRetentionIsBoundedAndKeepsFinalEvent(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("retained log permissions = %o, want 600", info.Mode().Perm())
+	}
+	if !os.SameFile(beforeRetention, info) {
+		t.Fatal("retention replaced the shared log file instead of preserving its owner and ACL")
 	}
 	file, err := os.Open(path)
 	if err != nil {

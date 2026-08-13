@@ -1,8 +1,11 @@
 package com.dobby.cli
 
 import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.LoggerManager
+import com.dobby.feature.logging.LoggerManagerImpl
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.domain.provideAdditionalLogFilePaths
+import com.dobby.feature.vpn_service.grpc.RestartableLoggerGrpcLibrary
 import com.dobby.feature.main.domain.GrpcSessionController
 import com.dobby.feature.main.domain.SessionConfiguration
 import com.dobby.feature.main.domain.SessionController
@@ -53,8 +56,17 @@ class CliClient(
     ),
     private val logger: Logger = Logger(logsRepository),
     private val externalIpLookup: () -> String? = ::fetchExternalIp,
+    private val serviceLogger: LoggerManager? = null,
 ) {
     private var observedSequence: ULong = 0u
+
+    /**
+     * Binds the privileged desktop service to the owner-only Go log before a
+     * command sends it session traffic. The command-line entry point invokes
+     * this exactly once per service-facing command; tests can supply a fake.
+     */
+    fun initServiceLogger(): Boolean =
+        (serviceLogger ?: LoggerManagerImpl(logger, RestartableLoggerGrpcLibrary(logger))).initLogger()
 
     fun logs(options: List<String>): ExitCode = when {
         options.isEmpty() -> {
@@ -69,8 +81,7 @@ class CliClient(
             }
         }
         options.size == 1 && options[0] == "clear" -> {
-            logsRepository.clearLogs()
-            ExitCode.OK
+            if (logsRepository.clearLogs()) ExitCode.OK else ExitCode.PROGRAM_FAILED
         }
         else -> ExitCode.INVALID_ARGS
     }
@@ -354,13 +365,15 @@ class CliClient(
             is SessionControllerResult.Success -> Unit
         }
         repeat(MAX_EVENT_POLLS) {
-            when (val snapshot = sessionController.snapshot()) {
-                is SessionControllerResult.Success -> {
-                    if (snapshot.value.generation != generation) return true
-                    if (snapshot.value.cleanupComplete) return snapshot.value.cleanupSucceeded()
+            val completion = when (val snapshot = sessionController.snapshot()) {
+                is SessionControllerResult.Success -> when {
+                    snapshot.value.generation != generation -> true
+                    snapshot.value.cleanupComplete -> snapshot.value.cleanupSucceeded()
+                    else -> null
                 }
-                is SessionControllerResult.Failure -> return false
+                is SessionControllerResult.Failure -> false
             }
+            if (completion != null) return completion
             delay(EVENT_POLL_INTERVAL_MS.milliseconds)
         }
         logger.log("[CLI] Session stop timed out waiting for cleanup generation=$generation")

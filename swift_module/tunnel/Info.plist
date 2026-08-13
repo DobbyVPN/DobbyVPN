@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>DobbySourceCommit</key>
+	<string>$(DOBBY_SOURCE_COMMIT)</string>
 	<key>DobbyKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)vpn.dobby.app</string>
 	<key>NSExtension</key>

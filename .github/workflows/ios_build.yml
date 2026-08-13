@@ -29,6 +29,10 @@ on:
       app_maintenance_version:
         type: string
         required: true
+      source_sha:
+        description: Lowercase full source commit SHA to build.
+        type: string
+        required: true
 
 jobs:
   ios_build:
@@ -38,13 +42,22 @@ jobs:
       APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
       APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
       APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
+      APP_SOURCE_SHA: ${{ inputs.source_sha }}
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
 
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.source_sha }}
           submodules: true
           persist-credentials: false
+
+      - name: Verify exact source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$APP_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$APP_SOURCE_SHA"
 
       - name: Select Xcode 26.3
         run: sudo xcode-select -s /Applications/Xcode_26.3.app
@@ -97,12 +110,67 @@ jobs:
         run: |
           bundle exec fastlane ios build_ios
 
+      - name: Verify signed IPA App Group and packet tunnel entitlements
+        env:
+          APPLE_BUILD_NUMBER: ${{ github.run_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          ipas=(swift_module/build/ipa/*.ipa)
+          test "${#ipas[@]}" -eq 1
+          work="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-ios-entitlements.XXXXXX")"
+          trap 'rm -rf "$work"' EXIT
+          ditto -x -k "${ipas[0]}" "$work/extracted"
+          apps=("$work"/extracted/Payload/*.app)
+          test "${#apps[@]}" -eq 1
+          tunnels=("${apps[0]}"/PlugIns/*.appex)
+          test "${#tunnels[@]}" -eq 1
+          codesign --verify --strict "${apps[0]}"
+          codesign --verify --strict "${tunnels[0]}"
+          codesign --display --entitlements :- "${apps[0]}" > "$work/app-entitlements.plist"
+          codesign --display --entitlements :- "${tunnels[0]}" > "$work/tunnel-entitlements.plist"
+          security cms -D -i "${apps[0]}/embedded.mobileprovision" > "$work/app-profile.plist"
+          security cms -D -i "${tunnels[0]}/embedded.mobileprovision" > "$work/tunnel-profile.plist"
+          python3 .github/scripts/verify_ios_app_group.py \
+            --app-entitlements "$work/app-entitlements.plist" \
+            --app-profile "$work/app-profile.plist" \
+            --tunnel-entitlements "$work/tunnel-entitlements.plist" \
+            --tunnel-profile "$work/tunnel-profile.plist" \
+            --app-info "${apps[0]}/Info.plist" \
+            --tunnel-info "${tunnels[0]}/Info.plist" \
+            --team-id "$APPLE_TEAM_ID" \
+            --source-sha "$APP_SOURCE_SHA" \
+            --version "$APP_MAJOR_VERSION.$APP_MINOR_VERSION.$APP_MAINTENANCE_VERSION" \
+            --build-number "$APPLE_BUILD_NUMBER"
+
+      - name: Create exact IPA provenance sidecar
+        env:
+          APPLE_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/ios_artifact_provenance.py create \
+            --ipa-dir swift_module/build/ipa \
+            --provenance swift_module/build/ipa/DobbyVPN.ipa.provenance.json \
+            --source-sha "$APP_SOURCE_SHA" \
+            --version "$APP_MAJOR_VERSION.$APP_MINOR_VERSION.$APP_MAINTENANCE_VERSION" \
+            --build-number "$APPLE_BUILD_NUMBER"
+
       - name: Upload IPA as artifact
         uses: actions/upload-artifact@v7
         with:
           name: DobbyVPN.ipa
           path: swift_module/build/ipa/*.ipa
           if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload IPA provenance as artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: DobbyVPN.ipa.provenance
+          path: swift_module/build/ipa/DobbyVPN.ipa.provenance.json
+          if-no-files-found: error
+          retention-days: 90
 
       # Every green main build is retained in internal TestFlight. Production
       # App Review and GitHub/F-Droid promotion remain an explicit maintainer

@@ -3,7 +3,6 @@ package log
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -349,84 +348,21 @@ func (logger *Logger) trimLocked() {
 		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
 		return
 	}
-	temporary, createErr := os.CreateTemp(filepath.Dir(path), ".dobby-log-retention-*")
-	if createErr != nil {
-		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
-		return
-	}
-	temporaryPath := temporary.Name()
-	defer removeTemporaryLog(temporaryPath)
 	retained := retainNewestCompleteJSONLLines(data, maxLocalLogBytes)
-	if !writeRetentionFile(temporary, retained) {
+	if truncateErr := logger.file.Truncate(0); truncateErr != nil {
 		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
 		return
 	}
-	if closeErr := logger.file.Close(); closeErr != nil {
-		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
-	}
-	logger.file = nil
-	replaceRetainedLog(temporaryPath, path, retained)
-	file, reopenErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if reopenErr != nil {
-		logger.logger = slog.New(newJSONLineHandler(os.Stderr))
-		logger.fallback = true
-		fmt.Fprintln(os.Stderr, "Cannot reopen local log after retention; falling back to stderr logging")
+	if written, writeErr := logger.file.Write(retained); writeErr != nil || written != len(retained) {
+		logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
 		return
 	}
-	if chmodErr := file.Chmod(0o600); chmodErr != nil {
-		_ = file.Close()
-		logger.logger = slog.New(newJSONLineHandler(os.Stderr))
-		logger.fallback = true
-		fmt.Fprintln(os.Stderr, "Cannot secure local log after retention; falling back to stderr logging")
-		return
-	}
-	logger.file = file
-	logger.logger = slog.New(newJSONLineHandler(file))
-}
-
-func logRetentionFailure(message string) { fmt.Fprintln(os.Stderr, message) }
-
-func removeTemporaryLog(path string) {
-	if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-		logRetentionFailure("Cannot remove temporary local log retention file")
-	}
-}
-
-func writeRetentionFile(file *os.File, retained []byte) bool {
-	if chmodErr := file.Chmod(0o600); chmodErr != nil {
-		_ = file.Close()
-		return false
-	}
-	if _, writeErr := file.Write(retained); writeErr != nil {
-		_ = file.Close()
-		return false
-	}
-	if syncErr := file.Sync(); syncErr != nil {
-		_ = file.Close()
-		return false
-	}
-	return file.Close() == nil
-}
-
-func replaceRetainedLog(temporaryPath, path string, retained []byte) {
-	if renameErr := os.Rename(temporaryPath, path); renameErr == nil {
-		return
-	}
-	// Some supported filesystems cannot replace an existing destination. The
-	// producer is serialized here, so a bounded in-place fallback is safe;
-	// readers may observe an empty file for one polling interval.
-	file, openErr := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
-	if openErr != nil {
-		logRetentionFailure("Cannot apply local log retention; continuing with a fresh active log")
-		return
-	}
-	_, writeErr := file.Write(retained)
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	if writeErr != nil || syncErr != nil || closeErr != nil {
+	if syncErr := logger.file.Sync(); syncErr != nil {
 		logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
 	}
 }
+
+func logRetentionFailure(message string) { fmt.Fprintln(os.Stderr, message) }
 
 // InitTelemetry is intentionally local-only. Its parameters are discarded so
 // legacy callers cannot cause a remote request or leave secrets in memory.

@@ -61,6 +61,8 @@
 			</RegistryValue>
 		</Component>
 		
+		<!-- build.bat admits the import-derived service runtime closure; this glob
+		     keeps the checksum-pinned bridge beside the installed service binary. -->
 		<Files Directory="DobbyVPNFolderBin" Include="dobbyVPN-windows\bin\**.dll" />
 		<Files Directory="DobbyVPNFolderApp" Include="dobbyVPN-windows\app\**" />
 		<Files Directory="DobbyVPNFolderLib" Include="dobbyVPN-windows\lib\**" />

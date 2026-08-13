@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWindowsRouteLeaseUsesExactAddAndDeleteArguments(t *testing.T) {
@@ -51,6 +52,43 @@ func TestWindowsRouteLeaseUsesExactAddAndDeleteArguments(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(commands[1], " "), "metric=") {
 		t.Fatal("route deletion must match by prefix, next hop, and interface after Windows normalizes metrics")
+	}
+}
+
+func TestWindowsRouteLeaseFailsWhenDeletedRouteRemains(t *testing.T) {
+	originalExists := windowsRouteExists
+	originalCommand := windowsNetshCommand
+	t.Cleanup(func() {
+		windowsRouteExists = originalExists
+		windowsNetshCommand = originalCommand
+	})
+	windowsNetshCommand = func(...string) (string, error) { return "", nil }
+	windowsRouteExists = func(windowsRoute) (bool, error) { return true, nil }
+
+	err := releaseWindowsRoute(
+		windowsRoute{prefix: "198.51.100.7/32", nextHop: "192.0.2.1", interfaceName: "Ethernet"},
+		5*time.Millisecond,
+	)
+	if err == nil || !strings.Contains(err.Error(), "remained after deletion") {
+		t.Fatalf("release error=%v", err)
+	}
+}
+
+func TestWindowsRouteLeaseAcceptsVerifiedDeletion(t *testing.T) {
+	originalExists := windowsRouteExists
+	originalCommand := windowsNetshCommand
+	t.Cleanup(func() {
+		windowsRouteExists = originalExists
+		windowsNetshCommand = originalCommand
+	})
+	windowsNetshCommand = func(...string) (string, error) { return "", nil }
+	windowsRouteExists = func(windowsRoute) (bool, error) { return false, nil }
+
+	if err := releaseWindowsRoute(
+		windowsRoute{prefix: "198.51.100.7/32", nextHop: "192.0.2.1", interfaceName: "Ethernet"},
+		5*time.Millisecond,
+	); err != nil {
+		t.Fatalf("release route: %v", err)
 	}
 }
 
