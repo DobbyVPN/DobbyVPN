@@ -66,10 +66,13 @@ reviews:
         not removed or weakened.
 
         Android build: build-tools version must be pinned explicitly
-        (currently 34.0.0 — do NOT use >=35.0.0 due to apksigner
-        reproducibility regression). JDK distribution and version must be
-        pinned (temurin 17). The workflow must produce both signed and unsigned
-        APKs for independent verification.
+        (currently 36.0.0). The reproducibility gate compares two complete
+        unsigned APKs byte-for-byte; the signed APK is separately required to
+        have the same logical payload and established signer certificate, so
+        signer-block byte stability is not claimed. Any build-tools bump must
+        repeat both checks. JDK distribution and version must be pinned
+        (temurin 17). The workflow must produce both signed and unsigned APKs
+        for independent verification.
 
         General: warn if timestamps, non-deterministic sort orders, or
         environment-dependent values are introduced. Warn if build-tools,

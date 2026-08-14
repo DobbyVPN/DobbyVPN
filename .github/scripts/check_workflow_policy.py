@@ -106,6 +106,8 @@ def main() -> int:
         "EXPECTED_ANDROID_SIGNER_SHA256: c3f0414a74012060d7c6aa3a3d9dac0aa13c1bd23b7512eefd860fb865e67933",
         "ndk;27.3.13750724",
         'GO_SRC="$FDROID_COMPAT_GO_ROOT"',
+        'ANDROID_GO_VERSION: ${{ steps.android_go.outputs.version }}',
+        'GO_VERSION="$ANDROID_GO_VERSION"',
         'GO_COMMIT="56ebf80e57db9f61981fc0636fc6419dc6f68eda"',
         'git -C "$GO_SRC" rev-parse HEAD',
         "Check out trusted APK source verifier",
@@ -155,6 +157,10 @@ def main() -> int:
     if '"$GOPATH/bin/gomobile" init' in android_build:
         violations.append(
             "android_build.yml: gomobile init is forbidden because it resolves an unpinned gobind"
+        )
+    if 'GO_VERSION="${{ steps.android_go.outputs.version }}"' in android_build:
+        violations.append(
+            "android_build.yml: Go version output must enter shell through the step environment"
         )
 
     test_workflow = (WORKFLOWS / "test.yml").read_text(encoding="utf-8")
@@ -221,7 +227,9 @@ def main() -> int:
     for expected in (
         'environmentVariable("DOBBYVPN_GOMOBILE_GOCACHE")',
         'environmentVariable("DOBBYVPN_GOMOBILE_GOTMPDIR")',
-        'listOf("-trimpath", "-buildvcs=false") +',
+        'inheritedGoFlags + listOf("-trimpath", "-buildvcs=false")',
+        'flag.startsWith("-trimpath=")',
+        'flag.startsWith("-buildvcs=")',
         ').distinct().joinToString(" ")',
     ):
         if expected not in gradle_build:
@@ -513,7 +521,6 @@ def main() -> int:
         if required < uploads:
             violations.append(f"{name}: every release artifact upload must fail when its output is missing")
 
-    test_workflow = (WORKFLOWS / "test.yml").read_text(encoding="utf-8")
     for expected in (
         "python3 -m unittest discover -s .github/scripts -p 'test_*.py'",
         "set +e\n          python3 .github/scripts/check_swift_coverage.py",

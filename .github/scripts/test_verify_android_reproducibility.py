@@ -46,6 +46,31 @@ class AndroidReproducibilityTests(unittest.TestCase):
             self.assertEqual(document["builds"][0], document["builds"][1] | {"id": "first"})
             REPRO.verify_document(document, second, SOURCE_SHA, VERSION_NAME, VERSION_CODE)
 
+    def test_invalid_release_metadata_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "app.apk"
+            write_apk(apk)
+            cases = (
+                ("BAD", VERSION_NAME, VERSION_CODE, "source SHA"),
+                (SOURCE_SHA, "1.4", VERSION_CODE, "version name"),
+                (SOURCE_SHA, VERSION_NAME, 0, "version code"),
+                (SOURCE_SHA, VERSION_NAME, 2_100_000_001, "version code"),
+            )
+            for source_sha, version_name, version_code, message in cases:
+                with self.subTest(source_sha=source_sha, version_name=version_name, version_code=version_code):
+                    with self.assertRaisesRegex(REPRO.VerificationError, message):
+                        REPRO.verify_document({}, apk, source_sha, version_name, version_code)
+
+    def test_symlink_apk_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            apk = root / "app.apk"
+            link = root / "linked.apk"
+            write_apk(apk)
+            link.symlink_to(apk.name)
+            with self.assertRaisesRegex(REPRO.VerificationError, "non-symlink"):
+                REPRO.create_document(link, apk, SOURCE_SHA, VERSION_NAME, VERSION_CODE)
+
     def test_non_native_apk_difference_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

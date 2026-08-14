@@ -342,9 +342,15 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         "/usr/local/go/bin",
         System.getenv("PATH").orEmpty()
     ).filter { it.isNotBlank() }.distinct().joinToString(File.pathSeparator)
+    val inheritedGoFlags = System.getenv("GOFLAGS").orEmpty()
+        .split(Regex("\\s+"))
+        .filter { it.isNotBlank() }
+        .filterNot { flag ->
+            flag == "-trimpath" || flag.startsWith("-trimpath=") ||
+                flag == "-buildvcs" || flag.startsWith("-buildvcs=")
+        }
     val canonicalGoFlags = (
-        listOf("-trimpath", "-buildvcs=false") +
-            System.getenv("GOFLAGS").orEmpty().split(Regex("\\s+")).filter { it.isNotBlank() }
+        inheritedGoFlags + listOf("-trimpath", "-buildvcs=false")
         ).distinct().joinToString(" ")
 
     doFirst {

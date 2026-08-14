@@ -87,9 +87,12 @@ jobs:
           sudo chown -R "$USER:$USER" /home/vagrant
 
       - name: Build Go from source for Android
+        env:
+          ANDROID_GO_VERSION: ${{ steps.android_go.outputs.version }}
         run: |
           set -euo pipefail
-          GO_VERSION="${{ steps.android_go.outputs.version }}"
+          GO_VERSION="$ANDROID_GO_VERSION"
+          [[ "$GO_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
           GO_SRC="$FDROID_COMPAT_GO_ROOT"
           GO_COMMIT="56ebf80e57db9f61981fc0636fc6419dc6f68eda"
 

@@ -125,6 +125,11 @@ signing certificate so an otherwise valid but upgrade-incompatible key cannot
 be published. Together these gates prevent another tagged-source versus
 F-Droid-build mismatch.
 
+Android build-tools `36.0.0` is pinned for packaging, signing, and verification.
+The gate does not claim that signature-block bytes are reproducible: it proves
+the complete unsigned APK byte-for-byte, then separately proves that signing
+changed only signature metadata and used the established certificate.
+
 `repair_fdroid_release.yml` is a guarded recovery path for a release whose
 Android assets predate that enforcement. It rebuilds from the exact existing
 tag commit and replaces only the signed APK, unsigned APK, their Android
