@@ -59,6 +59,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Set up Android APK inspection tools
+        uses: android-actions/setup-android@v4
+        with:
+          packages: build-tools;36.0.0
+
       - name: Validate selected release run
         id: preflight
         shell: bash
@@ -87,9 +92,22 @@ jobs:
               exit 1
             fi
           done
-          test "$GITHUB_REF" = "refs/heads/main"
           current_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
-          test "$GITHUB_SHA" = "$current_main"
+          if [[ "$GITHUB_REF" = "refs/heads/main" ]]; then
+            test "$GITHUB_REF" = "refs/heads/main"
+            test "$GITHUB_SHA" = "$current_main"
+          else
+            test "$GITHUB_REF" = "refs/heads/release/v1.4.7-promotion-recovery"
+            recovery_compare="$(
+              gh api \
+                "repos/$GITHUB_REPOSITORY/compare/$current_main...$GITHUB_SHA"
+            )"
+            test "$(jq -r .status <<<"$recovery_compare")" = ahead
+            test "$(jq -r .ahead_by <<<"$recovery_compare")" = 1
+            test "$(jq -r '.files | length' <<<"$recovery_compare")" = 1
+            test "$(jq -r '.files[0].filename' <<<"$recovery_compare")" = \
+              .github/workflows/promote_release.yml
+          fi
           test "$RELEASE_SOURCE_SHA" = "$current_main"
           test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
 
