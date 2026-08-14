@@ -17,6 +17,35 @@ WORKFLOWS = ROOT / "workflows"
 PR_TRIGGER = re.compile(r"^\s{2}pull_request\s*:", re.MULTILINE)
 SECRET = re.compile(r"\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}")
 FULL_SHA = r"[0-9a-f]{40}"
+STEP_NAME = re.compile(
+    r"^\s*-\s+name:\s*(?:"
+    r'"(?P<double>[^"]+)"|'
+    r"'(?P<single>[^']+)'|"
+    r"(?P<plain>[^#]+?))\s*$"
+)
+
+
+def _workflow_step_lines(source: str) -> dict[str, list[int]]:
+    steps: dict[str, list[int]] = {}
+    for line_number, line in enumerate(source.splitlines(), start=1):
+        match = STEP_NAME.match(line)
+        if match is None:
+            continue
+        name = next(
+            value for value in match.groupdict().values() if value is not None
+        ).strip()
+        steps.setdefault(name, []).append(line_number)
+    return steps
+
+
+def _step_order_violation(source: str, before: str, after: str) -> str | None:
+    steps = _workflow_step_lines(source)
+    for name in (before, after):
+        if len(steps.get(name, ())) != 1:
+            return f"expected exactly one actual workflow step named {name!r}"
+    if steps[before][0] > steps[after][0]:
+        return f"workflow step {before!r} must run before {after!r}"
+    return None
 
 
 def main() -> int:
@@ -104,8 +133,6 @@ def main() -> int:
         "GOMOBILE: /home/vagrant/go/bin/gomobile",
         "GOFLAGS: -trimpath -buildvcs=false",
         "EXPECTED_ANDROID_SIGNER_SHA256: c3f0414a74012060d7c6aa3a3d9dac0aa13c1bd23b7512eefd860fb865e67933",
-        "Prepare F-Droid-compatible tool paths",
-        "Set up bootstrap Go",
         "ndk;27.3.13750724",
         'GO_SRC="$FDROID_COMPAT_GO_ROOT"',
         'ANDROID_GO_VERSION: ${{ steps.android_go.outputs.version }}',
@@ -152,16 +179,13 @@ def main() -> int:
             violations.append(
                 f"android_build.yml: {forbidden_cache} is forbidden for reproducible release inputs"
             )
-    fdroid_paths_position = android_build.find("Prepare F-Droid-compatible tool paths")
-    setup_go_position = android_build.find("Set up bootstrap Go")
-    if (
-        fdroid_paths_position >= 0
-        and setup_go_position >= 0
-        and fdroid_paths_position > setup_go_position
-    ):
-        violations.append(
-            "android_build.yml: F-Droid-compatible GOPATH must exist before setup-go runs"
-        )
+    step_order_violation = _step_order_violation(
+        android_build,
+        "Prepare F-Droid-compatible tool paths",
+        "Set up bootstrap Go",
+    )
+    if step_order_violation is not None:
+        violations.append(f"android_build.yml: {step_order_violation}")
     if "GITHUB_SHA: ${{ inputs.source_sha }}" in android_build:
         violations.append(
             "android_build.yml: a job-level assignment cannot override GitHub's reserved GITHUB_SHA"
