@@ -79,7 +79,7 @@ jobs:
             ${{ runner.os }}-xcode-spm-
 
       - name: Download iOS lib
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: MyLibrary.xcframework
           path: swift_module/MyLibrary.xcframework
@@ -91,7 +91,7 @@ jobs:
           bundle exec fastlane ios bump_build_and_version
 
       - name: Download KMP framework
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: app.framework
           path: swift_module/app.framework

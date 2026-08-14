@@ -192,7 +192,7 @@ jobs:
           packages: build-tools;36.0.0
 
       - name: Download Linux package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dobbyVPN-linux.deb
           path: release
@@ -201,7 +201,7 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download Windows amd64 package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dobbyVPN-windows-amd64.msi
           path: release
@@ -210,7 +210,7 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download macOS amd64 package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dobbyVPN-macos-amd64.pkg
           path: release
@@ -219,7 +219,7 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download macOS arm64 package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dobbyVPN-macos-aarch64.pkg
           path: release
@@ -228,7 +228,7 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download signed Android package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dobbyvpn-android-sign.apk
           path: release
@@ -237,7 +237,7 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download unsigned Android package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dobbyvpn-android-unsign.apk
           path: release
@@ -246,7 +246,7 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download Android provenance
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dobbyvpn-android-provenance
           path: release
