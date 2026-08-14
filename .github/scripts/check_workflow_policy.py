@@ -98,20 +98,75 @@ def main() -> int:
     for expected in (
         "APP_SOURCE_SHA: ${{ inputs.source_sha }}",
         "APP_SOURCE_REPOSITORY: ${{ github.repository }}",
-        'GITHUB_SHA="$APP_SOURCE_SHA" GITHUB_REPOSITORY="$APP_SOURCE_REPOSITORY"',
+        "FDROID_COMPAT_SOURCE_ROOT: /home/vagrant/build/com.dobby.vpn",
+        "FDROID_COMPAT_GO_ROOT: /home/vagrant/build/srclib/go",
+        "GOPATH: /home/vagrant/go",
+        "GOMOBILE: /home/vagrant/go/bin/gomobile",
+        "GOFLAGS: -trimpath -buildvcs=false",
+        "EXPECTED_ANDROID_SIGNER_SHA256: c3f0414a74012060d7c6aa3a3d9dac0aa13c1bd23b7512eefd860fb865e67933",
+        "ndk;27.3.13750724",
+        'GO_SRC="$FDROID_COMPAT_GO_ROOT"',
+        'ANDROID_GO_VERSION: ${{ steps.android_go.outputs.version }}',
+        'GO_VERSION="$ANDROID_GO_VERSION"',
+        'GO_COMMIT="56ebf80e57db9f61981fc0636fc6419dc6f68eda"',
+        'git -C "$GO_SRC" rev-parse HEAD',
         "Check out trusted APK source verifier",
         "ref: ${{ github.workflow_sha }}",
         "path: .trusted-workflow",
         'python3 "$GITHUB_WORKSPACE/.trusted-workflow/.github/scripts/verify_android_apk_source.py"',
+        ".github/scripts/verify_android_reproducibility.py",
+        "Verify reproducible Android toolchain",
+        "Build first isolated unsigned APK",
+        "Remove first-build outputs",
+        "Build second isolated unsigned APK",
+        "Verify complete unsigned APK reproducibility",
+        "--no-build-cache --no-daemon --rerun-tasks",
+        ":app:assembleRelease",
+        "DOBBYVPN_GOMOBILE_GOCACHE:",
+        "DOBBYVPN_GOMOBILE_GOTMPDIR:",
+        "dobbyvpn-android-repro/first.apk",
+        "android-reproducibility.json",
+        "golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d",
+        "Sign the verified unsigned APK",
+        "apksigner\" sign",
+        "Verify signed APK payload binding",
+        "verify-signed-payload",
+        "certificate SHA-256 digest",
+        '"signer_certificate_sha256": os.environ["EXPECTED_ANDROID_SIGNER_SHA256"]',
+        '"signed_payload_matches_unsigned": True',
+        '"reproducibility": json.loads(',
         '--source-sha "$SOURCE_SHA" --repository "$APP_SOURCE_REPOSITORY"',
     ):
         if expected not in android_build:
             violations.append(
                 f"android_build.yml: missing embedded tagged-source control: {expected}"
             )
+    if "Cache gomobile Android AAR" in android_build or "gomobile-aar-" in android_build:
+        violations.append(
+            "android_build.yml: final gomobile AAR caching is forbidden because toolchain and environment paths affect native bytes"
+        )
+    for forbidden_cache in ("Cache Android Go toolchain", "Cache gomobile"):
+        if forbidden_cache in android_build:
+            violations.append(
+                f"android_build.yml: {forbidden_cache} is forbidden for reproducible release inputs"
+            )
     if "GITHUB_SHA: ${{ inputs.source_sha }}" in android_build:
         violations.append(
             "android_build.yml: a job-level assignment cannot override GitHub's reserved GITHUB_SHA"
+        )
+    if '"$GOPATH/bin/gomobile" init' in android_build:
+        violations.append(
+            "android_build.yml: gomobile init is forbidden because it resolves an unpinned gobind"
+        )
+    if 'GO_VERSION="${{ steps.android_go.outputs.version }}"' in android_build:
+        violations.append(
+            "android_build.yml: Go version output must enter shell through the step environment"
+        )
+
+    test_workflow = (WORKFLOWS / "test.yml").read_text(encoding="utf-8")
+    if '"$HOME/go/bin/gomobile" init' in test_workflow:
+        violations.append(
+            "test.yml: gomobile init is forbidden because it resolves an unpinned gobind"
         )
 
     promotion = (WORKFLOWS / "promote_release.yml").read_text(encoding="utf-8")
@@ -156,11 +211,32 @@ def main() -> int:
         "dobbyvpn-android-provenance",
         "Android provenance validation passed",
         "verify_android_apk_source.py",
+        "verify_android_reproducibility.py verify-provenance",
+        "verify_android_reproducibility.py verify-signed-payload",
+        "Android signed-payload binding is missing",
+        "Android signer certificate mismatch",
     ):
         if expected not in promotion:
             violations.append(
                 f"promote_release.yml: missing fail-closed promotion control: {expected}"
             )
+
+    gradle_build = (ROOT.parent / "kmp_module" / "app" / "build.gradle.kts").read_text(
+        encoding="utf-8"
+    )
+    for expected in (
+        'environmentVariable("DOBBYVPN_GOMOBILE_GOCACHE")',
+        'environmentVariable("DOBBYVPN_GOMOBILE_GOTMPDIR")',
+        'inheritedGoFlags + listOf("-trimpath", "-buildvcs=false")',
+        'flag.startsWith("-trimpath=")',
+        'flag.startsWith("-buildvcs=")',
+        ').distinct().joinToString(" ")',
+    ):
+        if expected not in gradle_build:
+            violations.append(
+                f"build.gradle.kts: missing Android reproducibility control: {expected}"
+            )
+
     # A retry against an already-published tag must still fetch the exact
     # selected Actions-run packages and compare them with the locally tested
     # digests.  Otherwise a same-source but differently packaged run could be
@@ -247,6 +323,9 @@ def main() -> int:
         "--clobber",
         "versionCode=$ANDROID_VERSION_CODE",
         "verify_android_apk_source.py",
+        "verify_android_reproducibility.py verify-provenance",
+        "verify_android_reproducibility.py verify-signed-payload",
+        "Android signer certificate mismatch",
     ):
         if expected not in fdroid_repair:
             violations.append(
@@ -333,7 +412,7 @@ def main() -> int:
         if "environment: release" not in text:
             violations.append(f"{name}: secret-consuming job must require the protected release environment")
 
-    for name in ("android_build.yml", "ios_build.yml", "submit_app_store.yml"):
+    for name in ("ios_build.yml", "submit_app_store.yml"):
         text = (WORKFLOWS / name).read_text(encoding="utf-8")
         ruby_version = re.search(
             r"ruby-version:\s*['\"]?(\d+)\.(\d+)(?:\.\d+)?['\"]?(?![\d.])",
@@ -442,7 +521,6 @@ def main() -> int:
         if required < uploads:
             violations.append(f"{name}: every release artifact upload must fail when its output is missing")
 
-    test_workflow = (WORKFLOWS / "test.yml").read_text(encoding="utf-8")
     for expected in (
         "python3 -m unittest discover -s .github/scripts -p 'test_*.py'",
         "set +e\n          python3 .github/scripts/check_swift_coverage.py",

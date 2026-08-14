@@ -137,15 +137,15 @@ jobs:
           packages: >
             platforms;android-35
             build-tools;36.0.0
-            ndk;27.2.12479018
+            ndk;27.3.13750724
 
       - name: Install gomobile
         working-directory: go_module
         run: |
           set -euo pipefail
           go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
+          go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
-          "$HOME/go/bin/gomobile" init
 
       - name: Run KMP and Android service tests
         working-directory: kmp_module

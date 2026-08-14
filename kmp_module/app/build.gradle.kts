@@ -29,8 +29,12 @@ val gomobileExecutable = providers.gradleProperty("gomobileExecutable")
         val userHomeExecutable = File(System.getProperty("user.home"), "go/bin/gomobile")
         if (userHomeExecutable.canExecute()) userHomeExecutable.absolutePath else "gomobile"
     })
-val goCacheDir = layout.buildDirectory.dir("go-cache")
-val goTmpDir = layout.buildDirectory.dir("go-tmp")
+val goCacheDir = providers.environmentVariable("DOBBYVPN_GOMOBILE_GOCACHE")
+    .map(::File)
+    .orElse(layout.buildDirectory.dir("go-cache").map { it.asFile })
+val goTmpDir = providers.environmentVariable("DOBBYVPN_GOMOBILE_GOTMPDIR")
+    .map(::File)
+    .orElse(layout.buildDirectory.dir("go-tmp").map { it.asFile })
 val generatedJniLibsDir = layout.buildDirectory.dir("generated/jniLibs")
 val goRootDir = providers.gradleProperty("gomobileGoRoot")
     .orElse(providers.environmentVariable("GOROOT"))
@@ -338,13 +342,23 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         "/usr/local/go/bin",
         System.getenv("PATH").orEmpty()
     ).filter { it.isNotBlank() }.distinct().joinToString(File.pathSeparator)
+    val inheritedGoFlags = System.getenv("GOFLAGS").orEmpty()
+        .split(Regex("\\s+"))
+        .filter { it.isNotBlank() }
+        .filterNot { flag ->
+            flag == "-trimpath" || flag.startsWith("-trimpath=") ||
+                flag == "-buildvcs" || flag.startsWith("-buildvcs=")
+        }
+    val canonicalGoFlags = (
+        inheritedGoFlags + listOf("-trimpath", "-buildvcs=false")
+        ).distinct().joinToString(" ")
 
     doFirst {
         check(goModuleCloakInternalDir.resolve("client/connector.go").isFile) {
             "Tracked embedded Cloak client source is incomplete: ${goModuleCloakInternalDir.absolutePath}"
         }
         outputFile.parentFile.mkdirs()
-        goTmpDir.get().asFile.mkdirs()
+        goTmpDir.get().mkdirs()
         logger.lifecycle("gomobileBindAndroid: gomobile=${gomobileExecutable.get()}")
         logger.lifecycle("gomobileBindAndroid: GOROOT=${goRootDir.orNull.orEmpty()}")
         logger.lifecycle("gomobileBindAndroid: PATH=$gomobilePath")
@@ -370,17 +384,15 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         environment("GOROOT", it)
     }
     environment("GO111MODULE", "on")
-    environment("GOCACHE", goCacheDir.get().asFile.absolutePath)
-    environment("GOTMPDIR", goTmpDir.get().asFile.absolutePath)
+    environment("GOCACHE", goCacheDir.get().absolutePath)
+    environment("GOTMPDIR", goTmpDir.get().absolutePath)
     environment("SOURCE_DATE_EPOCH", "0")
     environment("CGO_CFLAGS_ALLOW", ".*")
     environment("CGO_CXXFLAGS_ALLOW", ".*")
     environment("CGO_LDFLAGS_ALLOW", ".*")
     environment(
         "GOFLAGS",
-        listOf("-buildvcs=false", System.getenv("GOFLAGS").orEmpty())
-            .joinToString(" ")
-            .trim()
+        canonicalGoFlags
     )
     if (androidSdkDir.get().isNotBlank()) {
         environment("ANDROID_HOME", androidSdkDir.get())
@@ -405,12 +417,12 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
             listOf(
                 "-fdebug-prefix-map=${repoRoot.absolutePath}=/src/DobbyVPN",
                 "-fdebug-prefix-map=${goModuleDir.absolutePath}=/src/DobbyVPN/go_module",
-                "-fdebug-prefix-map=${goTmpDir.get().asFile.absolutePath}=/tmp/go-build",
+                "-fdebug-prefix-map=${goTmpDir.get().absolutePath}=/tmp/go-build",
                 "-fdebug-prefix-map=${androidSdkDir.get()}=/android-sdk",
                 "-fdebug-prefix-map=${ndkDir.absolutePath}=/android-ndk",
                 "-ffile-prefix-map=${repoRoot.absolutePath}=/src/DobbyVPN",
                 "-ffile-prefix-map=${goModuleDir.absolutePath}=/src/DobbyVPN/go_module",
-                "-ffile-prefix-map=${goTmpDir.get().asFile.absolutePath}=/tmp/go-build",
+                "-ffile-prefix-map=${goTmpDir.get().absolutePath}=/tmp/go-build",
                 "-ffile-prefix-map=${androidSdkDir.get()}=/android-sdk",
                 "-ffile-prefix-map=${ndkDir.absolutePath}=/android-ndk"
             ).joinToString(" ")
