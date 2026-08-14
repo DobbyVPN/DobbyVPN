@@ -50,13 +50,13 @@ jobs:
           fi
 
       - name: Download Windows gRPC vpn service
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: windows_grpcvpnserver.exe
           path: kmp_module/services
 
       - name: Download Linux gRPC vpn service
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ubuntu_grpcvpnserver
           path: kmp_module/services
@@ -67,13 +67,13 @@ jobs:
           chmod +x ubuntu_grpcvpnserver
 
       - name: Download macOS arm64 gRPC vpn service
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: macos_grpcvpnserver-arm64
           path: kmp_module/services
 
       - name: Download macOS amd64 gRPC vpn service
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: macos_grpcvpnserver-amd64
           path: kmp_module/services/macos-amd64

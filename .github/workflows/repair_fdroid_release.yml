@@ -139,19 +139,19 @@ jobs:
           packages: build-tools;36.0.0
 
       - name: Download rebuilt signed APK
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dobbyvpn-android-sign.apk
           path: release
 
       - name: Download rebuilt unsigned APK
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dobbyvpn-android-unsign.apk
           path: release
 
       - name: Download rebuilt Android provenance
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dobbyvpn-android-provenance
           path: release

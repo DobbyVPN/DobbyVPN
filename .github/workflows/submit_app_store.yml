@@ -131,7 +131,7 @@ jobs:
           bundler-cache: true
 
       - name: Download exact IPA from selected Release run
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: DobbyVPN.ipa
           path: selected-release/ipa
@@ -139,7 +139,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download exact IPA provenance from selected Release run
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: DobbyVPN.ipa.provenance
           path: selected-release/provenance
