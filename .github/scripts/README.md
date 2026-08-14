@@ -104,14 +104,26 @@ Android builds also carry their exact selected source commit in BuildConfig.
 `verify_android_apk_source.py` reads that value back from both signed and
 unsigned APK bytecode with `apkanalyzer`; the build, legacy F-Droid repair, and
 public promotion all fail unless the embedded commit and repository link match
-the selected full source SHA. The explicit `APP_SOURCE_*` environment is used
-for current source. A command-local `GITHUB_SHA` override is retained only so a
-repair of an older tag—whose historical Fastfile reads that reserved name—also
-embeds the tag commit rather than the repair workflow's event commit. Because
-that old tag cannot contain a verifier added later, the reusable build checks
-out only the verifier from its trusted workflow revision after the tag source
-has already been copied to the F-Droid-compatible build directory. The trusted
-checkout is never mixed into the selected source tree.
+the selected full source SHA. The explicit `APP_SOURCE_*` values are passed to
+Gradle as build properties for both current source and a legacy-tag repair.
+Because an old tag cannot contain a verifier added later, the reusable build
+checks out only the verifier from its trusted workflow revision after the tag
+source has already been copied to the F-Droid-compatible build directory. The
+trusted checkout is never mixed into the selected source tree.
+
+The current Android release job also performs two clean, uncached unsigned APK
+builds with distinct Go build caches and temporary directories. Both builds use
+the F-Droid canonical source, Go, and GOPATH locations, the pinned Go/JDK/NDK/
+Gradle/gomobile toolchain, and path-normalizing compiler flags. Promotion calls
+`verify_android_reproducibility.py` and fails unless the complete APKs are
+byte-identical and the retained provenance matches the published unsigned APK,
+including both packaged `libgojni.so` payloads. The developer signature is
+applied directly to that proven unsigned APK; a second verifier compares every
+logical ZIP payload entry after signing and promotion repeats both checks. This
+check also pins the public SHA-256 fingerprint of the established Android
+signing certificate so an otherwise valid but upgrade-incompatible key cannot
+be published. Together these gates prevent another tagged-source versus
+F-Droid-build mismatch.
 
 `repair_fdroid_release.yml` is a guarded recovery path for a release whose
 Android assets predate that enforcement. It rebuilds from the exact existing

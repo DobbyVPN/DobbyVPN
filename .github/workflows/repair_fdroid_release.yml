@@ -123,6 +123,7 @@ jobs:
       ANDROID_VERSION_CODE: ${{ needs.preflight.outputs.android_version_code }}
       RELEASE_SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
       RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+      EXPECTED_ANDROID_SIGNER_SHA256: c3f0414a74012060d7c6aa3a3d9dac0aa13c1bd23b7512eefd860fb865e67933
     steps:
       - uses: actions/checkout@v5
         with:
@@ -174,6 +175,19 @@ jobs:
           python3 .github/scripts/verify_android_apk_source.py \
             --apk "$signed" --apk "$unsigned" \
             --source-sha "$RELEASE_SOURCE_SHA" --repository "$GITHUB_REPOSITORY"
+          python3 .github/scripts/verify_android_reproducibility.py verify-provenance \
+            --apk "$unsigned" --provenance "$provenance" \
+            --source-sha "$RELEASE_SOURCE_SHA" \
+            --version-name "$RELEASE_VERSION" \
+            --version-code "$ANDROID_VERSION_CODE"
+          python3 .github/scripts/verify_android_reproducibility.py verify-signed-payload \
+            --unsigned-apk "$unsigned" --signed-apk "$signed"
+          mapfile -t signer_digests < <(
+            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$signed" | \
+              sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p'
+          )
+          test "${#signer_digests[@]}" -eq 1
+          test "${signer_digests[0]}" = "$EXPECTED_ANDROID_SIGNER_SHA256"
           SIGNED_APK="$signed" UNSIGNED_APK="$unsigned" PROVENANCE="$provenance" python3 - <<'PY'
           import hashlib
           import json
@@ -191,6 +205,10 @@ jobs:
               raise SystemExit("Android provenance version code mismatch")
           if document.get("application_id") != "com.dobby.vpn":
               raise SystemExit("Android provenance application ID mismatch")
+          if document.get("signer_certificate_sha256") != os.environ["EXPECTED_ANDROID_SIGNER_SHA256"]:
+              raise SystemExit("Android signer certificate mismatch")
+          if document.get("signed_payload_matches_unsigned") is not True:
+              raise SystemExit("Android signed-payload binding is missing")
           expected = {
               "signed": Path(os.environ["SIGNED_APK"]),
               "unsigned": Path(os.environ["UNSIGNED_APK"]),
