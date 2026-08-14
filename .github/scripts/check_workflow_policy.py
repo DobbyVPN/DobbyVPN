@@ -104,6 +104,8 @@ def main() -> int:
         "GOMOBILE: /home/vagrant/go/bin/gomobile",
         "GOFLAGS: -trimpath -buildvcs=false",
         "EXPECTED_ANDROID_SIGNER_SHA256: c3f0414a74012060d7c6aa3a3d9dac0aa13c1bd23b7512eefd860fb865e67933",
+        "Prepare F-Droid-compatible tool paths",
+        "Set up bootstrap Go",
         "ndk;27.3.13750724",
         'GO_SRC="$FDROID_COMPAT_GO_ROOT"',
         'ANDROID_GO_VERSION: ${{ steps.android_go.outputs.version }}',
@@ -150,6 +152,16 @@ def main() -> int:
             violations.append(
                 f"android_build.yml: {forbidden_cache} is forbidden for reproducible release inputs"
             )
+    fdroid_paths_position = android_build.find("Prepare F-Droid-compatible tool paths")
+    setup_go_position = android_build.find("Set up bootstrap Go")
+    if (
+        fdroid_paths_position >= 0
+        and setup_go_position >= 0
+        and fdroid_paths_position > setup_go_position
+    ):
+        violations.append(
+            "android_build.yml: F-Droid-compatible GOPATH must exist before setup-go runs"
+        )
     if "GITHUB_SHA: ${{ inputs.source_sha }}" in android_build:
         violations.append(
             "android_build.yml: a job-level assignment cannot override GitHub's reserved GITHUB_SHA"

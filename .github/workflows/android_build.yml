@@ -67,6 +67,16 @@ jobs:
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
+      # setup-go consults the job-level GOPATH. Create the F-Droid-compatible
+      # owner-controlled path before the action attempts to use it.
+      - name: Prepare F-Droid-compatible tool paths
+        run: |
+          sudo mkdir -p \
+            "$(dirname "$FDROID_COMPAT_SOURCE_ROOT")" \
+            "$(dirname "$FDROID_COMPAT_GO_ROOT")" \
+            "$GOPATH"
+          sudo chown -R "$USER:$USER" /home/vagrant
+
       - name: Set up bootstrap Go
         uses: actions/setup-go@v6
         with:
@@ -77,14 +87,6 @@ jobs:
       - name: Read Android Go version
         id: android_go
         run: echo "version=$(cat .go-version)" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare F-Droid-compatible tool paths
-        run: |
-          sudo mkdir -p \
-            "$(dirname "$FDROID_COMPAT_SOURCE_ROOT")" \
-            "$(dirname "$FDROID_COMPAT_GO_ROOT")" \
-            "$GOPATH"
-          sudo chown -R "$USER:$USER" /home/vagrant
 
       - name: Build Go from source for Android
         env:
