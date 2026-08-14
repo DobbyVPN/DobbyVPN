@@ -2,7 +2,7 @@
 agp = "8.13.2"
 biometricKtx = "1.4.0-alpha02"
 compiler = "1.5.15"
-kotlin = "2.2.0"
+kotlin = "2.4.10"
 coreKtx = "1.15.0"
 kotlinScriptRuntime = "2.0.20"
 kotlinxSerializationJson = "1.6.3"
