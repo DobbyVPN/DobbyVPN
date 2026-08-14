@@ -24,6 +24,11 @@ on:
         description: Optional en-US App Store release notes
         required: false
         type: string
+      inspect_only:
+        description: Read the active App Review version/build/state without changing it
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -51,9 +56,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          test "$GITHUB_REF" = "refs/heads/main"
           current_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
-          test "$GITHUB_SHA" = "$current_main"
+          if [[ "${{ inputs.inspect_only }}" = "true" ]]; then
+            test "$GITHUB_REF" = "refs/heads/release/v1.4.7-appstore-review-inspection"
+            comparison="$(gh api "repos/$GITHUB_REPOSITORY/compare/$current_main...$GITHUB_SHA")"
+            test "$(jq -r .ahead_by <<<"$comparison")" = "1"
+            test "$(jq -r .behind_by <<<"$comparison")" = "0"
+            test "$(jq -r '.files | length' <<<"$comparison")" = "1"
+            test "$(jq -r '.files[0].filename' <<<"$comparison")" = ".github/workflows/submit_app_store.yml"
+          else
+            test "$GITHUB_REF" = "refs/heads/main"
+            test "$GITHUB_SHA" = "$current_main"
+          fi
           test "$RELEASE_SOURCE_SHA" = "$current_main"
 
           if [[ ! "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
@@ -131,6 +145,7 @@ jobs:
           bundler-cache: true
 
       - name: Download exact IPA from selected Release run
+        if: ${{ !inputs.inspect_only }}
         uses: actions/download-artifact@v7
         with:
           name: DobbyVPN.ipa
@@ -139,6 +154,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download exact IPA provenance from selected Release run
+        if: ${{ !inputs.inspect_only }}
         uses: actions/download-artifact@v7
         with:
           name: DobbyVPN.ipa.provenance
@@ -147,6 +163,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Verify selected IPA provenance before submission
+        if: ${{ !inputs.inspect_only }}
         shell: bash
         run: |
           set -euo pipefail
@@ -158,8 +175,57 @@ jobs:
             --build-number "$APP_STORE_BUILD_NUMBER"
 
       - name: Submit exact build to production App Review
+        if: ${{ !inputs.inspect_only }}
         env:
           APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
           APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
           APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
         run: bundle exec fastlane ios submit_app_store_review
+
+      - name: Inspect active production App Review
+        if: ${{ inputs.inspect_only }}
+        env:
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle exec ruby <<'RUBY'
+          require "spaceship"
+
+          token = Spaceship::ConnectAPI::Token.create(
+            key_id: ENV.fetch("APP_STORE_KEY_ID"),
+            issuer_id: ENV.fetch("APP_STORE_ISSUER_ID"),
+            key: ENV.fetch("APP_STORE_API_KEY"),
+            duration: 1200
+          )
+          Spaceship::ConnectAPI.token = token
+
+          app = Spaceship::ConnectAPI::App.find("vpn.dobby.app")
+          raise "App Store application was not found" if app.nil?
+
+          submission = app.get_in_progress_review_submission(
+            platform: "IOS",
+            includes: "appStoreVersionForReview"
+          )
+          raise "No in-progress iOS review submission was found" if submission.nil?
+
+          version = submission.app_store_version_for_review
+          raise "The in-progress submission has no App Store version" if version.nil?
+          build = version.get_build
+          raise "The in-progress App Store version has no selected build" if build.nil?
+
+          puts "active_review_state=#{submission.state}"
+          puts "active_review_version=#{version.version_string}"
+          puts "active_review_build=#{build.version}"
+          puts "active_app_version_state=#{version.app_version_state}"
+
+          items = Spaceship::ConnectAPI::ReviewSubmissionItem.all(
+            review_submission_id: submission.id,
+            includes: "appStoreVersion"
+          )
+          raise "The in-progress submission has no review items" if items.empty?
+          item_states = items.map(&:state).compact.uniq.sort
+          puts "active_review_item_states=#{item_states.join(',')}"
+          RUBY
