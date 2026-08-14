@@ -43,7 +43,7 @@ jobs:
 
       - name: Cache iOS VPN library
         id: ios_lib_cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: go_module/MyLibrary.xcframework
           key: ${{ runner.os }}-xcode-26.3-ios-15.6-vpn-lib-${{ hashFiles('.github/workflows/ios_libs_generate.yml', '.go-version', 'go_module/go.sum', 'go_module/**') }}
@@ -136,7 +136,7 @@ jobs:
             kmp_module/gradle/wrapper/gradle-wrapper.properties
 
       - name: Cache Kotlin/Native compiler data
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.konan
           key: ${{ runner.os }}-konan-${{ hashFiles('kmp_module/gradle/libs.versions.toml', 'kmp_module/gradle/wrapper/gradle-wrapper.properties') }}
@@ -144,7 +144,7 @@ jobs:
             ${{ runner.os }}-konan-
 
       - name: Cache Gradle build outputs
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.gradle/caches/build-cache-*
           key: ${{ runner.os }}-gradle-build-cache-${{ hashFiles('kmp_module/**/*.gradle.kts', 'kmp_module/gradle/libs.versions.toml', 'kmp_module/gradle/wrapper/gradle-wrapper.properties') }}
@@ -152,7 +152,7 @@ jobs:
             ${{ runner.os }}-gradle-build-cache-
 
       - name: Cache Swift packages
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/Library/Caches/org.swift.swiftpm
