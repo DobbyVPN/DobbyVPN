@@ -13,7 +13,6 @@ Aeroestación Yabotí,-27.180308,-54.107368
 [Duplicate] Aeropuerto Pergamino,-33.89603,-60.5748
 Concordia Skyway,-75.103278,123.35825
 Vostok Skiway,-78.466139,106.84825
-[Duplicate] Wolf's Fang Runway,-71.5264,8.799459
 Western Sydney International (Nancy-Bird Walton) Airport,-33.883461,150.712981
 Nackeroo Airfield,-15.578026,130.475993
 Alxa Left Banner Bayanhot Airport,38.748317,105.58416
@@ -181,7 +180,7 @@ Ali Pulan Airport,30.397898,81.13317
 Shaodong Airport,27.2235,111.6741
 Ningxiang Airport,27.987589,112.604971
 Hohhot Shengle International Airport (under construction),40.480965,111.575174
-Zhaotong Zhaoyang Airport （Not fully opened),27.205843,103.691511
+Zhaotong Zhaoyang Airport,27.205843,103.691511
 Bengbu Tenghu Airport,33.166292,117.058344
 [Duplicate] Beijing Xijiao Airport,39.958592,116.256765
 Hancheng Heyang Airport,35.329133,110.3829
@@ -444,7 +443,7 @@ Illizi Takhamalt Airport,26.723499,8.62265
 Ain Arnat Airport,36.178488,5.329909
 Aguenar – Hadj Bey Akhamok Airport,22.810992,5.450832
 Jijel Ferhat Abbas Airport,36.794125,5.873652
-Mecheria Airport,33.535900116,-0.242353007197
+Mecheria Airport,33.5359,-0.242353
 Relizane Airport,35.752955,0.625877
 Annaba Rabah Bitat Airport,36.826781,7.81334
 Mohamed Boudiaf International Airport,36.276001,6.62039
@@ -526,7 +525,7 @@ Enfidha - Hammamet International Airport,36.075833,10.438611
 Tunis Carthage International Airport,36.851002,10.2272
 Bizerte Sidi Ahmed Air Base,37.242356,9.787016
 Remada Air Base,32.306198,10.3821
-Gafsa Ksar International Airport,34.422000885009766,8.822500228881836
+Gafsa Ksar International Airport,34.422001,8.8225
 Gabès Matmata International Airport,33.733691,9.91941
 Djerba Zarzis International Airport,33.873719,10.7773
 El Borma Airport,31.7043,9.25462
@@ -879,7 +878,6 @@ Luleå Airport,65.5438,22.122
 Stockholm-Arlanda Airport,59.64849,17.928829
 Stockholm-Bromma Airport,59.354401,17.9417
 Dala Airport,60.422001,15.5152
-Gävle Sandviken Airport,60.5933,16.951401
 Linköping City Airport,58.404909,15.684499
 Norrköping Airport,58.586299896240234,16.250600814819336
 Torsby Airport,60.1576,12.9913
@@ -1313,7 +1311,7 @@ Matan al-Sarra Air Base,21.6877,21.8309
 Bombah Airport,32.4529,23.118601
 Okba Ibn Nafa Air Base,32.473400116,11.897899627700001
 Sirt International Airport / Ghardabiya Airbase,31.058578,16.597095
-Ghat Airport,25.1455993652,10.142600059500001
+Ghat Airport,25.145599,10.1426
 Kufra Airport,24.178699493408203,23.31399917602539
 Benina International Airport,32.096802,20.269501
 Mitiga International Airport,32.89177,13.287878
@@ -1362,6 +1360,7 @@ Tabing Airport,-0.874989,100.351997
 Susilo Airport,0.063851,111.473572
 Bilorai Airport,-3.739503,137.031183
 Maharshi Valmiki International Airport,26.747736,82.163664
+Amravati  Airport,20.814608,77.717765
 Sindhudurg Airport,16.002552,73.529846
 Navi Mumbai International Airport,18.984597,73.065253
 Rashtrakavi Kuvempu Airport,13.858024,75.618868
@@ -1855,7 +1854,7 @@ Southern Illinois Airport,37.778099,-89.251999
 Harrisburg International Airport,40.192838,-76.762333
 Chicago Midway International Airport,41.785999,-87.752403
 Key Field / Meridian Regional Airport,32.3326,-88.7519
-Memphis International Airport,35.043845,-89.97634
+Frederick W. Smith International Airport,35.043845,-89.97634
 Castle Airport,37.38050079,-120.5680008
 Mansfield Lahm Regional Airport,40.82139968869999,-82.5166015625
 McAllen Miller International Airport,26.176141,-98.237965
@@ -2101,7 +2100,7 @@ St George Regional Airport,37.036389,-113.510306
 Shenandoah Valley Regional Airport,38.263802,-78.8964
 Sheridan County Airport,44.76919937133789,-106.9800033569336
 Shreveport Regional Airport,32.444747,-93.826741
-Norman Y. Mineta San Jose International Airport,37.362452,-121.929188
+Mineta San Jose International Airport,37.362452,-121.929188
 San Angelo Regional Mathis Field,31.35770034790039,-100.49600219726562
 Fairchild Air Force Base,47.615101,-117.655998
 Lackland Air Force Base,29.38419914,-98.58110046
@@ -2238,7 +2237,7 @@ Sofia Airport,42.696357,23.417671
 Balchik Airfield,43.423801,28.181299
 Varna Airport,43.232101,27.8251
 Ercan International Airport,35.153064,33.507352
-Lefkoniko Airport / Geçitkale Air Base,35.23591,33.720088
+Geçitkale Airbase,35.23591,33.720088
 Larnaca International Airport,34.875099,33.624901
 Paphos International Airport,34.717999,32.485699
 RAF Akrotiri,34.590401,32.9879
@@ -2650,13 +2649,13 @@ Engadin Airport,46.5341,9.88411
 Esenboğa International Airport,40.128101,32.995098
 Etimesgut Air Base,39.949798584,32.6885986328
 Akıncı Air Base,40.078899,32.565601
-Adana Şakirpaşa Airport,36.982201,35.280399
 İncirlik Air Base,37.002102,35.4259
 Afyon Air Base,38.726398,30.601101
 Antalya International Airport,36.898701,30.800501
 Gaziantep Oğuzeli International Airport,36.947201,37.478699
 Kastamonu Airport,41.314201,33.795799
 Konya Airport,37.979,32.561901
+Sivas Nuri Demirağ Airport,39.813801,36.9035
 Zonguldak Çaycuma Airport,41.506401,32.0886
 Malatya Erhaç Airport,38.435298919699996,38.0909996033
 Kayseri Erkilet International Airport,38.770401,35.495399
@@ -3011,7 +3010,7 @@ Manapouri Airport,-45.5331,167.649994
 Hood Airport,-40.974634,175.63454
 New Plymouth Airport,-39.00859832763672,174.1790008544922
 Hawke's Bay Airport,-39.465801,176.869995
-Nelson Airport,-41.298302,173.220993
+Nelson Airport,-41.296709,173.224323
 Invercargill Airport,-46.41239929199219,168.31300354003906
 RNZAF Base Ohakea,-40.20600128173828,175.38800048828125
 Oamaru Airport,-44.970001,171.082001
@@ -3582,7 +3581,7 @@ Borisoglebsk Air Base,51.366699,42.178299
 Khotilovo Air Base,57.654999,34.099998
 Lipetsk Air Base,52.634998,39.445
 Buturlinovka Air Base,50.79221,40.606155
-Chindant Air Base,50.396702,116.347
+Chindant Air Base,50.396823,116.346114
 Kaliningrad Chkalovsk Naval Air Base,54.766556,20.396819
 Irkutsk Northwest Airport,52.367642,104.183335
 Mius Airport,54.958332,43.311668
@@ -3597,7 +3596,7 @@ Budyonnovsk Air Base,44.830002,44.013
 Chernigovka Air Base,44.32239,132.545289
 Mozdok Air Base,43.78499984741211,44.599998474121094
 Taganrog Tsentralny Air Base,47.24645,38.8403
-Sormovo Airfield,56.31999969482422,43.79999923706055
+Sormovo Airfield,56.32,43.799999
 Seshcha Air Base,53.715258,33.339083
 Millerovo Air Base,48.955177,40.296356
 Privolzhskiy Air Base,46.395726,47.887688
@@ -3639,7 +3638,7 @@ Ivanovo North Air Base,57.0583,40.981701
 Lyambir Air Base,54.28499984741211,45.16830062866211
 Ulan-Ude East Airport,51.849998,107.737999
 Michurinsk Air Base,52.917455,40.365826
-Step Air Base,51.016701,115.432999
+Step Air Base,51.020051,115.431016
 Yugorsk Sovetsky Air Base,61.268299,63.138302
 Uprun Air Base,54.375,61.353298
 Voronezh Baltimore Air Base,51.62,39.14
@@ -4132,7 +4131,6 @@ Princess Juliana International Airport,18.041,-63.108898
 Juancho E. Yrausquin Airport,17.64533,-63.220514
 Clayton J. Lloyd International Airport,18.204773,-63.05383
 Temelli Air Base,39.73885726928711,32.378639221191406
-Çukurhisar Airport,39.84389877319336,30.968000411987305
 Keşan Air Base,40.787068,26.606655
 John A. Osborne Airport,16.791835,-62.193204
 A.N.R. Robinson International Airport,11.149571,-60.831298
@@ -4204,17 +4202,17 @@ Moma Airport,66.450861,143.261551
 Magan Airport,62.103484,129.545288
 Olyokminsk Airport,60.401833,120.476094
 Ust-Nera Airport,64.550003,143.115005
-Kyzyl-Syr Airport,63.8849983215332,122.7770004272461
+Kyzyl-Syr Airport,63.887303,122.775779
 Vilyuisk Airport,63.756668,121.693336
 Aykhal Airport,65.959198,111.546501
-Lensk Airport,60.7206001282,114.825996399
+Lensk Airport,60.723594,114.825319
 Polyarny Airport,66.400398,112.029999
 Mirny Airport,62.534698486328125,114.03900146484375
 Saskylakh Airport,71.927902,114.080002
 Belaya Gora Airport,68.556227,146.22784
 Srednekolymsk Airport,67.4805,153.7364
 Chokurdakh Airport,70.6231,147.901993
-Cherskiy Airport,68.7406005859375,161.33799743652344
+Cherskiy Airport,68.740601,161.337997
 Tiksi Airport,71.697700500488,128.90299987793
 Zyryanka Airport,65.7485,150.8889
 Zhigansk Airport,66.7965011597,123.361000061
@@ -4230,14 +4228,14 @@ David the Builder Kutaisi International Airport,42.177448,42.485353
 Alexander Kartveli Batumi International Airport,41.60939,41.600315
 Vladislav Ardzinba Sukhum International Airport,42.8582,41.128101
 Tbilisi International Airport,41.669201,44.9547
-Ignatyevo Airport,50.42539978027344,127.41200256347656
+Ignatyevo Airport,50.426723,127.415502
 Khabarovsk Novy Airport,48.528338,135.188588
 Dzemgi Airport,50.605625,137.081266
 Kamenny Ruchey Naval Air Base,49.235703,140.1931
-Komsomolsk-on-Amur Airport,50.409000396728516,136.9340057373047
+Komsomolsk-on-Amur Airport,50.409,136.934006
 Sovetskaya Gavan (Maygatka) Airport,48.925067,140.035348
 Ugolny Yuri Ryktheu Airport,64.734902,177.740997
-Provideniya Bay Airport,64.37809753417969,-173.2429962158203
+Provideniya Bay Airport,64.378098,-173.242996
 Omsukchan Airport,62.457001,155.744995
 Chaybukha Airport,61.834999,160.548004
 Keperveem Airport,67.845001,166.139999
@@ -4439,7 +4437,7 @@ Penza Airport,53.1106,45.021099
 Saransk International Airport,54.12513,45.212257
 Balakovo Airport,51.858299,47.745602
 Gagarin International Airport,51.712778,46.171111
-Ufa International Airport,54.557498931885,55.874401092529
+Ufa International Airport,54.557499,55.874401
 Buguruslan Severny Airport,53.718399,52.371899
 Bezymyanka Airfield,53.220001,50.325001
 Kurumoch International Airport,53.504902,50.164299
@@ -4525,7 +4523,7 @@ Birsa Munda Airport,23.314300537100003,85.3217010498
 Rourkela Airport,22.256571,84.815193
 Tezpur Airport,26.7091007232666,92.78469848632812
 Utkela Airport,20.097778,83.183333
-Visakhapatnam International Airport,17.723506,83.227729
+INS Dega Airport (visakhapatnam international airport),17.723506,83.227729
 Ziro Airport,27.588301,93.828102
 Barisal Airport,22.801001,90.301201
 Cox's Bazar Airport,21.457517,91.963263
@@ -4568,7 +4566,7 @@ Moradabad Airport,28.81746,78.92187
 Pathankot Airport,32.233611,75.634444
 Pantnagar Airport,29.0334,79.473701
 Sirsa Air Force Station,29.5606,75.006104
-Sheikh ul Alam International Airport,33.987099,74.7742
+Srinagar International Airport,33.987099,74.7742
 Udhampur Air Force Station,32.902152,75.155709
 Luang Phabang International Airport,19.904273,102.167191
 Pakse International Airport,15.133973,105.779871
@@ -4617,6 +4615,7 @@ Salem Airport,11.78330039978,78.06559753418
 Tirupati International Airport,13.631988,79.539869
 Tiruchirappalli International Airport,10.762915,78.717741
 Thiruvananthapuram International Airport,8.481889,76.920029
+Alluri Sitarama Raju International Airport (Vizag),17.971512,83.503617
 Gelephu Airport,26.88456,90.46412
 Paro International Airport,27.4032,89.424599
 Maafaru International Airport,5.817407,73.468404
@@ -4721,7 +4720,7 @@ Denpasar I Gusti Ngurah Rai International Airport,-8.748409,115.167123
 Lombok International Airport,-8.759962,116.278169
 Sultan Babullah Airport,0.831012,127.381611
 Pitu Airport,2.04599,128.324997
-Toraja Airport,-3.185833,119.91775
+Toraja Airport,-3.184359,119.919104
 Mutiara - SIS Al-Jufrie Airport,-0.916462,119.908647
 Kasiguncu Airport,-1.414121,120.659241
 Syukuran Aminuddin Amir Airport,-1.035893,122.773934
@@ -4931,7 +4930,7 @@ Leonora Airport,-28.87809944152832,121.31500244140625
 Lockhart River Airport,-12.7869,143.304993
 Lismore Airport,-28.830689,153.258419
 Lightning Ridge Airport,-29.452857,147.977146
-Longreach Airport,-23.4342,144.279999
+Longreach Airport,-23.43202,144.277492
 Leinster Airport,-27.843299865722656,120.7030029296875
 Latrobe Valley Airport,-38.211004,146.470817
 Melbourne Avalon International Airport,-38.040269,144.467196
@@ -5019,8 +5018,7 @@ Whyalla Airport,-33.05889892578125,137.51400756835938
 Warracknabeal Airport,-36.32109832763672,142.41900634765625
 Walgett Airport,-30.032801,148.126007
 Newcastle Airport,-32.796114,151.835025
-Wiluna Airport,-26.629199981689453,120.22100067138672
-William Creek Aerodrome,-28.905854,136.3406
+Wiluna Airport,-26.632691,120.221906
 Warren Airport,-31.733299,147.802994
 West Sale Airport,-38.090827,146.965335
 Winton Airport,-22.36359977722168,143.08599853515625
@@ -5149,7 +5147,6 @@ Lijiang Sanyi International Airport,26.677483,100.244944
 Dehong Mangshi International Airport,24.4011,98.5317
 Kunming Changshui International Airport,25.110313,102.936743
 Yuanmou Air Base,25.737499,101.882004
-Zhaotong Airport,27.327549,103.75617
 Xiamen Gaoqi International Airport,24.543889,118.127454
 Anqing Tianzhushan Airport / Anqing North Air Base,30.582199,117.050003
 Bengbu Renheji Airport,32.847733,117.320244
