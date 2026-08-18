@@ -15,7 +15,9 @@ import java.util.UUID
 /** Android gomobile transport for the versioned Go session API. */
 internal class AndroidSessionController(
     private val context: Context,
-    private val connectionState: ConnectionStateRepository,
+    // Keep a self-contained default for owner-injected instrumentation callers;
+    // production DI still supplies the shared callback repository.
+    private val connectionState: ConnectionStateRepository = ConnectionStateRepository(),
 ) : SessionController {
     private val mutex = Mutex()
     private var sessionId: String? = null
