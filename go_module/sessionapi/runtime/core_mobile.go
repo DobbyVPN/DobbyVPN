@@ -12,5 +12,5 @@ import (
 const mobileRuntime = true
 
 func newPlatformCore(device pkg.ProtocolDevice, tun io.ReadWriteCloser) sessionCore {
-	return core.NewSession(device, tun)
+	return core.NewNativeRuntime(device, tun)
 }

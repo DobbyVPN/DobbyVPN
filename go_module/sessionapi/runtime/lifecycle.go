@@ -335,13 +335,13 @@ func (r *runtime) startLocked(ctx context.Context, ref v2.SessionRef, profile v2
 	if client == nil {
 		return fail(errors.New("create native session runtime returned nil"))
 	}
-	// A partially connected SessionRuntime can own a device/engine, so register its
+	// A partially connected native runtime can own a device/engine, so register its
 	// rollback before Connect rather than only after Connect reports success.
 	owned.push(func(context.Context) error { return client.Disconnect() })
 	if err := connectContext(ctx, client); err != nil {
 		return fail(fmt.Errorf("connect transactional native session runtime: %w", err))
 	}
-	// SessionRuntime is stopped before the input lease and mobile TUN in strict LIFO
+	// The native runtime is stopped before the input lease and mobile TUN in strict LIFO
 	// order. This preserves the tun2socks/device dependency chain.
 	log.Debugf(category, "runtime connected protocol=%s generation=%d", profile.Summary.Protocol, ref.Generation)
 	return owned, nil
@@ -405,7 +405,7 @@ func connectContext(ctx context.Context, client sessionCore) error {
 	case <-ctx.Done():
 		disconnectErr := client.Disconnect()
 		// Do not return a failed start while Connect can still publish a late
-		// successful core. SessionRuntime's Disconnect cancels its bounded startup;
+		// successful core. The native runtime's Disconnect cancels its bounded startup;
 		// waiting here makes cancellation ownership deterministic.
 		connectErr := <-result
 		return errors.Join(ctx.Err(), disconnectErr, connectErr)
