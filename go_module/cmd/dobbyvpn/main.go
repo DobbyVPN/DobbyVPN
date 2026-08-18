@@ -276,14 +276,19 @@ func readSource(source string) ([]byte, error) {
 	if len([]byte(source)) > maxSource {
 		return nil, fmt.Errorf("source too large")
 	}
-	if parsed, err := url.Parse(source); err == nil && parsed.Scheme != "" {
-		if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" {
-			return nil, fmt.Errorf("source URL must use HTTP or HTTPS")
+	// A Windows drive path such as C:\\path\\config.toml parses as a URL
+	// with scheme "c". Recognize it as a filesystem path before URL parsing;
+	// otherwise the Windows desktop harness cannot pass a config file path.
+	if !isWindowsPath(source) {
+		if parsed, err := url.Parse(source); err == nil && parsed.Scheme != "" {
+			if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" {
+				return nil, fmt.Errorf("source URL must use HTTP or HTTPS")
+			}
+			if len(source) > maxSource {
+				return nil, fmt.Errorf("source too large")
+			}
+			return []byte(source), nil
 		}
-		if len(source) > maxSource {
-			return nil, fmt.Errorf("source too large")
-		}
-		return []byte(source), nil
 	}
 	cleanPath := filepath.Clean(source)
 	if data, err := os.ReadFile(cleanPath); err == nil {
@@ -295,6 +300,15 @@ func readSource(source string) ([]byte, error) {
 		return nil, fmt.Errorf("cannot read source")
 	}
 	return []byte(source), nil
+}
+
+func isWindowsPath(source string) bool {
+	if len(source) < 3 || source[1] != ':' {
+		return false
+	}
+	letter := source[0]
+	return (letter >= 'A' && letter <= 'Z' || letter >= 'a' && letter <= 'z') &&
+		(source[2] == '\\' || source[2] == '/')
 }
 
 // cleanupSession is best-effort but bounded. A CLI command which fails after

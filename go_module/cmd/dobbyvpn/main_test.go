@@ -32,6 +32,19 @@ func TestReadSourceAcceptsInlineURLAndFileWithoutReadingURL(t *testing.T) {
 	}
 }
 
+func TestIsWindowsPathPreventsDriveLetterURLClassification(t *testing.T) {
+	for _, source := range []string{`C:\\Users\\dobbytest\\config.toml`, `z:/vpn/config.toml`} {
+		if !isWindowsPath(source) {
+			t.Fatalf("isWindowsPath(%q) = false", source)
+		}
+	}
+	for _, source := range []string{"C:relative.toml", "/tmp/config.toml", "https://example.invalid/config"} {
+		if isWindowsPath(source) {
+			t.Fatalf("isWindowsPath(%q) = true", source)
+		}
+	}
+}
+
 func TestReadSourceRejectsUnsupportedURLAndOversize(t *testing.T) {
 	for _, source := range []string{"ftp://example.invalid/config", "file:///tmp/config"} {
 		if _, err := readSource(source); err == nil {
