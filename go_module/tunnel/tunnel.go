@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/url"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -43,7 +42,6 @@ type Engine struct {
 	stopped   bool
 	stopErr   error
 	statsStop chan struct{}
-	proxy     *DobbyProxy
 	ifaceName string
 
 	// stopPlatform exists so ownership bookkeeping can be tested without a
@@ -340,27 +338,6 @@ func (p *DobbyProxy) currentVPNProxy() proxy.Proxy {
 	return p.vpn
 }
 
-func (p *DobbyProxy) updateVPNProxy(px proxy.Proxy) {
-	p.vpnMu.Lock()
-	defer p.vpnMu.Unlock()
-	p.vpn = px
-}
-
-func newSocks5Proxy(proxyAddr string) (proxy.Proxy, error) {
-	parsed, err := url.Parse("socks5://" + proxyAddr)
-	if err != nil {
-		return nil, fmt.Errorf("parse SOCKS5 proxy address %q: %w", proxyAddr, err)
-	}
-	host := parsed.Host
-	user := ""
-	pass := ""
-	if parsed.User != nil {
-		user = parsed.User.Username()
-		pass, _ = parsed.User.Password()
-	}
-	return proxy.NewSocks5(host, user, pass)
-}
-
 // StartOwnedEngine starts tun2socks and returns the handle which exclusively
 // owns the resulting process-global engine. A second start is rejected rather
 // than stopping or reconfiguring the current session.
@@ -417,7 +394,6 @@ func startOwnedEngineLocked(cfg platform_engine.EngineConfig) (*Engine, bool, er
 	}
 	t.SetDialer(wrapper)
 
-	handle.proxy = wrapper
 	handle.statsStop = make(chan struct{})
 	handle.ready = true
 	log.Debugf(Category, "[Engine] DobbyProxy installed; owner is ready")
@@ -468,60 +444,6 @@ func (e *Engine) InterfaceName() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.ifaceName
-}
-
-// SwitchVPNProxy updates only this engine's outbound proxy. New lifecycle code
-// deliberately does not use hot switching; this method is retained for older
-// callers while they move to stop-before-start orchestration.
-func (e *Engine) SwitchVPNProxy(proxyAddr string) error {
-	if e == nil || !e.Ready() {
-		return fmt.Errorf("tun2socks engine is not running")
-	}
-	px, err := newSocks5Proxy(proxyAddr)
-	if err != nil {
-		return err
-	}
-	e.mu.RLock()
-	wrapper := e.proxy
-	e.mu.RUnlock()
-	if wrapper == nil {
-		return fmt.Errorf("tun2socks engine proxy is not initialized")
-	}
-	wrapper.updateVPNProxy(px)
-	log.Debugf(Category, "[Engine] switched owned VPN outbound proxy to %s", proxyAddr)
-	return nil
-}
-
-// StartEngine is retained for source compatibility. New callers must retain
-// and stop the Engine returned by StartOwnedEngine.
-func StartEngine(cfg platform_engine.EngineConfig) error {
-	_, err := StartOwnedEngine(cfg)
-	return err
-}
-
-// StopEngine is a compatibility shim for legacy callers. It never replaces an
-// owner, but cannot provide stale-owner protection because it has no handle.
-func StopEngine() {
-	engineMu.Lock()
-	e := activeEngine
-	engineMu.Unlock()
-	if e != nil {
-		if err := e.Stop(); err != nil {
-			log.Warnf(Category, "[Engine] compatibility stop failed: %v", err)
-		}
-	}
-}
-
-// SwitchVPNProxy is a compatibility shim for legacy callers. New code must
-// use Engine.SwitchVPNProxy so it is bound to the owning lifecycle.
-func SwitchVPNProxy(proxyAddr string) error {
-	engineMu.Lock()
-	e := activeEngine
-	engineMu.Unlock()
-	if e == nil {
-		return fmt.Errorf("tun2socks engine is not running")
-	}
-	return e.SwitchVPNProxy(proxyAddr)
 }
 
 func (p *DobbyProxy) flowStats() string {

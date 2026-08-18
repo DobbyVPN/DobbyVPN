@@ -171,7 +171,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	app.mu.Lock()
 	app.engine = ownedEngine
 	app.mu.Unlock()
-	log.Debugf(coreCommon.Category, "[Windows] tunnel.StartEngine OK elapsed=%s total=%s", time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
+	log.Debugf(coreCommon.Category, "[Windows] tunnel.StartOwnedEngine OK elapsed=%s total=%s", time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	stepStartedAt = time.Now()
 	tunInterface, err := routing.WaitForInterfaceByIP(cfg.TunDevice, 5*time.Second)
