@@ -209,10 +209,6 @@ func (*logrusToSlogHook) Fire(entry *logrus.Entry) error {
 	return nil
 }
 
-// TelemetryLogger remains as an empty compatibility type. It cannot transport
-// data and intentionally stores neither endpoint nor token.
-type TelemetryLogger struct{}
-
 type Logger struct {
 	file     *os.File
 	logger   *slog.Logger
@@ -245,8 +241,6 @@ func init() {
 		logrus.AddHook(&logrusToSlogHook{})
 	})
 }
-
-func NewTelemetryLogger(_, _ string) (*TelemetryLogger, error) { return &TelemetryLogger{}, nil }
 
 func (logger *Logger) dumpBuffer() {
 	for _, entry := range logger.pending {
@@ -363,19 +357,6 @@ func (logger *Logger) trimLocked() {
 }
 
 func logRetentionFailure(message string) { fmt.Fprintln(os.Stderr, message) }
-
-// InitTelemetry is intentionally local-only. Its parameters are discarded so
-// legacy callers cannot cause a remote request or leave secrets in memory.
-func InitTelemetry(_, _ string) error {
-	Warnf("LOG", "Remote telemetry is disabled; logs remain on this device")
-	return nil
-}
-
-func SetupTelemetryAttributes(_ string) {
-	Debugf("LOG", "Telemetry attributes ignored because remote telemetry is disabled")
-}
-
-func StopTelemetry() { Debugf("LOG", "Remote telemetry is disabled; no exporter to stop") }
 
 func write(level slog.Level, category, message string, arguments map[string]any) {
 	writeEvent(level, "log.message", category, message, arguments)

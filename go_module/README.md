@@ -1,10 +1,16 @@
-# Go Library
+# Go product/runtime
 
-VPN protocols multiplatform library.
+This module owns configuration acquisition and parsing, SessionV2 policy and
+generation state, protocol-device construction, routing/TUN/tun2socks
+resources, probes, cleanup, local diagnostics, and the native desktop CLI.
+The shared Compose UI talks to this layer through the authenticated desktop
+SessionV2 transport or the one protocol-neutral mobile binding. Platform code
+only supplies the OS VPN callbacks and permission/lifecycle hooks it cannot
+provide in Go.
 
-On desktop platfotms this lirary is a gRPC server, to run with super user privileges in service to use go code via RPC.
-
-On mobile platforms this library is a `.so` library (on Android) or `.xcframework` library (on IOS) to import into the application to use go code via JNI.
+The supported configuration sections are Outline, Outline WebSocket, Xray, and
+TrustTunnel. Unsupported sections are reported in the SessionV2 diagnostics
+and never reach protocol-device construction.
 
 ## Build
 
@@ -12,10 +18,6 @@ On mobile platforms this library is a `.so` library (on Android) or `.xcframewor
 go mod tidy
 go mod download
 ```
-
-The app's reviewed Cloak client dependency closure is tracked under
-`go_module/modules/Cloak`. Builds use that source directly and never overwrite
-it from the upstream submodule.
 
 The reviewed tun2socks v2.6.0 dependency closure is likewise tracked under
 `go_module/modules/tun2socks`. It contains the upstream correction from
@@ -30,7 +32,7 @@ wget https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.1/dobby_bri
 echo "a7e64db0568547d395bc45e33787f22c7303dca6f5c575c84439e73a70124331  dobby_bridge-windows-x86_64.zip" | sha256sum -c -
 mkdir -p lib/windows
 unzip -j dobby_bridge-windows-x86_64.zip dobby_bridge.dll dobby_bridge.lib -d lib/windows
-go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_exports/
+  go build -trimpath -ldflags="-buildid=" -o dobby-cli.exe ./cmd/dobbyvpn/
 ```
 
 ### Linux
@@ -39,7 +41,7 @@ go build -trimpath -ldflags="-buildid=" -o windows_grpcvpnserver.exe ./desktop_e
 wget https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.1/libdobby_bridge-linux-x86_64.zip
 echo "67536090d74212a5635739d297f5a78fbabda1966d161b12a16bfe487a8c68b9  libdobby_bridge-linux-x86_64.zip" | sha256sum -c -
 unzip libdobby_bridge-linux-x86_64.zip
-CGO_LDFLAGS="-L." go build -trimpath -ldflags="-buildid=" -o ubuntu_grpcvpnserver ./desktop_exports/
+CGO_LDFLAGS="-L." go build -trimpath -ldflags="-buildid=" -o dobby-cli ./cmd/dobbyvpn/
 ```
 
 Both archives and the Go module tag are bound to go-go-tunnel source commit
@@ -50,8 +52,8 @@ platform-run provenance record.
 ### MacOS
 
 ```bash
-GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver-arm64 ./desktop_exports/
-GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-buildid=" -o macos_grpcvpnserver-amd64 ./desktop_exports/
+GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-buildid=" -o dobby-cli-macos-arm64 ./cmd/dobbyvpn/
+GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-buildid=" -o dobby-cli-macos-amd64 ./cmd/dobbyvpn/
 ```
 
 With CGO enabled, build each target on its matching macOS runner/toolchain. CI
@@ -72,15 +74,14 @@ gomobile bind \
   -tags=static \
   -javapkg=com.dobby.gomobile \
   -ldflags="-s -w -buildid=" \
-  -o backend.aar \
+  -o dobbyvpn-runtime.aar \
   ./kotlin_exports
 ```
 
 The Gradle `:app` module runs this `gomobile bind` step automatically before
-Android compilation. The generated AAR replaces the previous manual
-`libbackend.so` + JNI bridge. It contains `arm64-v8a` and `x86_64` Go JNI
-libraries; the Android app also packages the matching `libc++_shared.so`
-runtime for both ABIs.
+Android compilation. The generated AAR contains `arm64-v8a` and `x86_64` Go
+JNI libraries; the Android app also packages the matching
+`libc++_shared.so` runtime for both ABIs.
 
 To verify the generated AAR and debug APK ABI payloads locally, run:
 
@@ -98,72 +99,26 @@ go get golang.org/x/mobile/bind@latest
 ./scripts/build_ios_xcframework.sh
 ```
 
-The script builds one physical-iOS slice and one universal Simulator slice,
-then combines them into `MyLibrary.xcframework`. The Simulator uses the same
-Go session/runtime code but deliberately reports TrustTunnel as unsupported:
-its supplied native bridge exists only for physical iOS.
+The script builds one physical-iOS slice and one universal Simulator slice.
+Physical packet-tunnel qualification is intentionally not claimed until a real
+iPhone is available; the Simulator remains a package/build check. The output
+artifact is `DobbyVPNRuntime.xcframework`.
 
-## RPC API reference
+## SessionV2 API
 
-```
-// outline.go
-rpc GetOutlineLastError(Empty)          returns (GetOutlineLastErrorResponse);
-rpc StartOutline (StartOutlineRequest)  returns (StartOutlineResponse);
-rpc StopOutline (Empty)                 returns (Empty);
+The only product lifecycle surface is SessionV2: capabilities, create/recover,
+configure, start, stop, snapshot, ordered `Watch` events, and destroy. It uses
+opaque session and command IDs, generation-correlated operations, typed
+warnings/failures, and safe profile summaries. Configuration URLs and bytes,
+credentials, and endpoints never appear in responses or diagnostics.
 
-// xray.go
-rpc GetXrayLastError(Empty)        returns (GetXrayLastErrorResponse);
-rpc StartXray (StartXrayRequest)   returns (StartXrayResponse);
-rpc StopXray (Empty)               returns (Empty);
+The native `dobby-cli` shares this authenticated control channel with the
+Compose GUI. It supports `connect`, `connect-profile`, `check-config`,
+`disconnect`, `status`, `logs`, `external-ip`, and `verify-session` without
+starting a JVM.
 
-// health_check.go
-rpc CouldStart (Empty)                        returns (CouldStartResponce);
-rpc GetConnectionState (Empty)                returns (GetConnectionStateResponce);
-rpc InitHealthCheck (Empty)                   returns (Empty);
-rpc StartHealthCheck (Empty)                  returns (Empty);
-rpc StopHealthCheck (Empty)                   returns (Empty);
-rpc MeasureTunnelProbeAverageLatencyMillis (MeasureTunnelProbeRequest) returns (MeasureTunnelProbeResponse);
-
-// cloak.go
-rpc StartCloakClient (StartCloakClientRequest)    returns (Empty);
-rpc StopCloakClient (Empty)                       returns (Empty);
-
-// trusttunnel.go
-rpc GetTrustTunnelLastError(Empty)                returns (GetTrustTunnelLastErrorResponse);
-rpc StartTrustTunnel (StartTrustTunnelRequest)    returns (StartTrustTunnelResponse);
-rpc StopTrustTunnel (Empty)                       returns (Empty);
-
-// logger.go
-rpc InitLogger (InitLoggerRequest)                              returns (Empty);
-rpc InitTelemetry (InitTelemetryRequest)                        returns (Empty);
-rpc StopTelemetry (Empty)                                       returns (Empty);
-rpc SetupTelemetryAttributes (SetupTelemetryAttributesRequest)  returns (Empty);
-
-// georouting.go
-rpc SetGeoRoutingConf (SetGeoRoutingConfRequest)  returns (Empty);
-rpc ClearGeoRoutingConf (Empty)                   returns (Empty);
-
-// dns_cache.go
-rpc ClearDNSCache (Empty)                                  returns (Empty);
-rpc SetDNSCacheEntries (SetDNSCacheEntriesRequest)         returns (SetDNSCacheEntriesResponse);
-
-// sessionapi/v1 (versioned, protocol-neutral desktop transport)
-rpc GetCapabilities (SessionGetCapabilitiesRequest)         returns (SessionGetCapabilitiesResponse);
-rpc CreateSession (SessionCreateSessionRequest)             returns (SessionCreateSessionResponse);
-rpc Configure (SessionConfigureRequest)                     returns (SessionConfigureResponse);
-rpc Start (SessionStartRequest)                             returns (SessionStartResponse);
-rpc Stop (SessionStopRequest)                               returns (SessionStopResponse);
-rpc Snapshot (SessionSnapshotRequest)                       returns (SessionSnapshotResponse);
-rpc Observe (SessionObserveRequest)                         returns (SessionObserveResponse);
-rpc DestroySession (SessionDestroySessionRequest)           returns (SessionDestroySessionResponse);
-```
-
-`sessionapi/v1` uses opaque session and command IDs, raw configuration bytes,
-generation-correlated start/stop operations, and ordered session events. Its
-responses contain only safe profile summaries, warnings, state, and typed
-failures; they never return the submitted configuration or credentials.
-
-Or see the canonical [vpnserver.proto](../kmp_module/grpcprotos/src/main/proto/com/dobby/vpnserver/vpnserver.proto) for the desktop gRPC API.
+See the canonical [vpnserver.proto](../kmp_module/grpcprotos/src/main/proto/com/dobby/vpnserver/vpnserver.proto)
+for the authenticated SessionV2 and local Diagnostics transport.
 
 After editing that proto, regenerate stubs:
 

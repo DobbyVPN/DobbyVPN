@@ -15,7 +15,6 @@ import (
 
 	"github.com/jackpal/gateway"
 
-	"go_module/common"
 	coreCommon "go_module/core/common"
 	"go_module/log"
 	"go_module/routing"
@@ -96,20 +95,17 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	if serverIP.String() != "127.0.0.1" {
 		log.Debugf(coreCommon.Category, "[Linux][Step 4] Installing early VPN bypass route uplink=%s", uplinkIface)
 
-		common.Client.MarkInCriticalSection(coreCommon.Name)
 		_, err = routePlan.AcquireLinuxProxyRoute(serverIP.String(), gatewayIP.String(), uplinkIface)
 		if err != nil {
-			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 			err = fmt.Errorf("failed to add early route: %w", err)
 			log.Debugf(coreCommon.Category, "[Linux][Step 4][ERROR] %v", err)
 			signalInit(initResult, err)
 			return err
 		}
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
 		log.Debugf(coreCommon.Category, "[Linux][Step 4][OK] Early route installed")
 	} else {
-		log.Debugf(coreCommon.Category, "[Linux][Step 4] Skipped (localhost / Cloak)")
+		log.Debugf(coreCommon.Category, "[Linux][Step 4] Skipped (localhost endpoint)")
 	}
 
 	// 5. marked routing
@@ -119,20 +115,17 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		app.RoutingConfig.RoutingTablePriority,
 	)
 
-	common.Client.MarkInCriticalSection(coreCommon.Name)
 	if err = routePlan.AcquireLinuxMarkedRouting(
 		app.RoutingConfig.RoutingTableID,
 		app.RoutingConfig.RoutingTablePriority,
 		uplinkIface,
 		gatewayIP.String(),
 	); err != nil {
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		err = fmt.Errorf("failed to setup marked routing: %w", err)
 		log.Debugf(coreCommon.Category, "[Linux][Step 5][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
-	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
 	log.Debugf(coreCommon.Category, "[Linux][Step 5][OK] Policy routing configured")
 
@@ -177,9 +170,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			app.engine = nil
 			app.mu.Unlock()
 
-			common.Client.MarkInCriticalSection(coreCommon.Name)
 			routeErr := routePlan.Close()
-			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
 			var engineErr error
 			if ownedEngine != nil {
@@ -258,18 +249,15 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	// 10. routing switch
 	log.Debugf(coreCommon.Category, "[Linux][Step 10] Switching default route → TUN (%s)", app.RoutingConfig.TunDeviceName)
 
-	common.Client.MarkInCriticalSection(coreCommon.Name)
 	if _, err = routePlan.AcquireLinuxTunnelDefault(app.RoutingConfig.TunDeviceName); err == nil {
 		err = routePlan.AcquireLinuxIPv6Block()
 	}
 	if err != nil {
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		err = fmt.Errorf("failed to configure routing: %w", err)
 		log.Debugf(coreCommon.Category, "[Linux][Step 10][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
-	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
 	app.mu.Lock()
 	app.currentDevice = app.ProtocolDevice

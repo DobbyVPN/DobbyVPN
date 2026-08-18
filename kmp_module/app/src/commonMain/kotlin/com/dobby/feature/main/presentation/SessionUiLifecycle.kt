@@ -2,6 +2,7 @@ package com.dobby.feature.main.presentation
 
 import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import com.dobby.feature.main.domain.SessionEvent
+import com.dobby.feature.main.domain.SessionSnapshot
 import com.dobby.feature.main.domain.SessionState
 
 /** Keeps UI rendering monotonic while the Go session owns connection policy. */
@@ -58,6 +59,29 @@ internal class SessionUiLifecycle {
     fun failStart() {
         activeGeneration = null
         stopRequested = false
+    }
+
+    /** Reconciles a retained process snapshot after a dropped event stream. */
+    fun reconcile(snapshot: SessionSnapshot): VpnConnectionState? {
+        if (snapshot.generation > 0uL && snapshot.state in setOf(
+                SessionState.PROBING,
+                SessionState.PREPARING,
+                SessionState.CONNECTED,
+                SessionState.STOPPING,
+            )) {
+            if (activeGeneration == null || snapshot.generation > activeGeneration!!) {
+                activeGeneration = snapshot.generation
+                stopRequested = snapshot.state == SessionState.STOPPING
+            }
+            if (snapshot.generation != activeGeneration) return null
+            return snapshot.state.toConnectionState()
+        }
+        if (snapshot.state in setOf(SessionState.IDLE, SessionState.CONFIGURED, SessionState.FAILED, SessionState.DESTROYED)) {
+            activeGeneration = null
+            stopRequested = false
+            return snapshot.state.toConnectionState()
+        }
+        return null
     }
 }
 

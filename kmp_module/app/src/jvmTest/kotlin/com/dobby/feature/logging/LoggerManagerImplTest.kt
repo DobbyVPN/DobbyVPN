@@ -72,7 +72,4 @@ private class RecordingLoggerLibrary(private val fail: Boolean = false) : Logger
         if (fail) error("sensitive service detail")
     }
 
-    override fun InitTelemetry(endpoint: String, token: String) = Unit
-    override fun StopTelemetry() = Unit
-    override fun SetupTelemetryAttributes(config: String) = Unit
 }

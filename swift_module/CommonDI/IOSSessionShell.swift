@@ -12,7 +12,7 @@ import app
 final class IOSSessionShell: NSObject, IosSessionBridge {
     private let defaults = UserDefaults(suiteName: appGroupIdentifier) ?? .standard
     private let secrets = SharedKeychainSecretStore.shared
-    private let rawConfigurationKey = "sessionapi.v1.rawConfiguration"
+    private let rawConfigurationKey = "sessionapi.v2.rawConfiguration"
     private let manager: VpnManagerImpl
     private var configured = false
     private var observation = IOSStateObservation()

@@ -15,15 +15,10 @@ class LoggerManagerImpl(
                 return false
             }
             logger.log("service_logger_init result=success state=ready")
-            logger.log("Remote telemetry is disabled; tunnel logs remain local")
             true
         } catch (_: Exception) {
             logger.log("[ERROR] service_logger_init result=failed failure_code=LOCAL_LOGGER_UNAVAILABLE")
             false
         }
-    }
-
-    override fun stopTelemetry() {
-        logger.log("Remote telemetry is disabled; no tunnel exporter to stop")
     }
 }

@@ -501,7 +501,7 @@ def main() -> int:
             violations.append(
                 f"ios_libs_generate.yml: stale final-framework cache/source override is forbidden: {forbidden}"
             )
-    for artifact_name in ("MyLibrary.xcframework", "app.framework"):
+    for artifact_name in ("DobbyVPNRuntime.xcframework", "app.framework"):
         marker = f"          name: {artifact_name}"
         start = ios_libraries.find(marker)
         end = ios_libraries.find("\n      - name:", start + len(marker)) if start >= 0 else -1

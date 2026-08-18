@@ -7,6 +7,7 @@ import com.dobby.grpcproto.SessionFailure as ProtoFailure
 import com.dobby.grpcproto.SessionFeature as ProtoFeature
 import com.dobby.grpcproto.SessionGetCapabilitiesRequest
 import com.dobby.grpcproto.SessionObserveRequest
+import com.dobby.grpcproto.Empty
 import com.dobby.grpcproto.SessionProfile as ProtoProfile
 import com.dobby.grpcproto.SessionProtocol as ProtoProtocol
 import com.dobby.grpcproto.SessionSnapshot as ProtoSnapshot
@@ -20,9 +21,11 @@ import com.dobby.grpcproto.VpnGrpcKt
 import com.google.protobuf.ByteString
 import io.grpc.Channel
 import io.grpc.StatusException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 /**
- * Thin sessionapi/v1 RPC client for desktop callers. It performs no TOML
+ * Thin sessionapi/v2 RPC client for desktop callers. It performs no TOML
  * parsing, decoding, or logging, so configuration text and credentials stay out of this
  * layer's errors and diagnostics.
  */
@@ -42,6 +45,13 @@ open class SessionGrpcLibrary(channel: Channel) : SessionLibrary {
         unavailable()
     }
 
+    override suspend fun recoverActiveSession(): SessionResult<String> = try {
+        val response = stub.recoverActiveSession(Empty.getDefaultInstance())
+        response.result { response.sessionId }
+    } catch (_: StatusException) {
+        unavailable()
+    }
+
     override suspend fun configure(
         sessionId: String,
         commandId: String,
@@ -53,6 +63,7 @@ open class SessionGrpcLibrary(channel: Channel) : SessionLibrary {
                 digest = response.digest,
                 profiles = response.profilesList.map(ProtoProfile::toTransport),
                 warnings = response.warningsList.map(ProtoWarning::toTransport),
+                sourceKind = response.sourceKind.toTransport(),
             )
         }
     } catch (_: StatusException) {
@@ -105,6 +116,14 @@ open class SessionGrpcLibrary(channel: Channel) : SessionLibrary {
         unavailable()
     }
 
+    override fun watch(sessionId: String, afterSequence: ULong): Flow<SessionEvent> =
+        stub.watch(
+            SessionObserveRequest.newBuilder()
+                .setSessionId(sessionId)
+                .setAfterSequence(afterSequence.toLong())
+                .build(),
+        ).map { it.toTransport() }
+
     override suspend fun destroySession(sessionId: String): SessionResult<Unit> = try {
         val response = stub.destroySession(
             SessionDestroySessionRequest.newBuilder().setSessionId(sessionId).build(),
@@ -155,6 +174,9 @@ private fun unavailable(): SessionResult.Failure =
 private fun com.dobby.grpcproto.SessionCreateSessionResponse.result(value: () -> String) =
     result(hasFailure(), failure, value)
 
+private fun com.dobby.grpcproto.SessionRecoverActiveSessionResponse.result(value: () -> String) =
+    result(hasFailure(), failure, value)
+
 private fun com.dobby.grpcproto.SessionConfigureResponse.result(value: () -> SessionConfiguration) =
     result(hasFailure(), failure, value)
 
@@ -173,6 +195,13 @@ private fun com.dobby.grpcproto.SessionObserveResponse.result(value: () -> Sessi
 private fun com.dobby.grpcproto.SessionDestroySessionResponse.result(value: () -> Unit) =
     result(hasFailure(), failure, value)
 
+private fun com.dobby.grpcproto.SessionSourceKind.toTransport() = when (this) {
+    com.dobby.grpcproto.SessionSourceKind.SESSION_SOURCE_KIND_UNSPECIFIED -> SessionSourceKind.UNSPECIFIED
+    com.dobby.grpcproto.SessionSourceKind.SESSION_SOURCE_KIND_INLINE -> SessionSourceKind.INLINE
+    com.dobby.grpcproto.SessionSourceKind.SESSION_SOURCE_KIND_URL -> SessionSourceKind.URL
+    com.dobby.grpcproto.SessionSourceKind.UNRECOGNIZED -> SessionSourceKind.UNSPECIFIED
+}
+
 internal fun ProtoFailure.toTransport() = SessionFailure(code.toTransport(), message)
 
 internal fun ProtoProfile.toTransport() = SessionProfile(index, protocol.toTransport(), description)
@@ -185,7 +214,6 @@ private fun com.dobby.grpcproto.SessionGetCapabilitiesResponse.toTransport() = S
     version = version,
     protocols = protocolsList.map(ProtoProtocol::toTransport),
     features = featuresList.map(ProtoFeature::toTransport),
-    telemetryNetworkDisabled = telemetryNetworkDisabled,
 )
 
 internal fun com.dobby.grpcproto.SessionEvent.toTransport() = SessionEvent(

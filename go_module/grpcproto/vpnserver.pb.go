@@ -222,6 +222,55 @@ func (SessionFailureCode) EnumDescriptor() ([]byte, []int) {
 	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{2}
 }
 
+type SessionSourceKind int32
+
+const (
+	SessionSourceKind_SESSION_SOURCE_KIND_UNSPECIFIED SessionSourceKind = 0
+	SessionSourceKind_SESSION_SOURCE_KIND_INLINE      SessionSourceKind = 1
+	SessionSourceKind_SESSION_SOURCE_KIND_URL         SessionSourceKind = 2
+)
+
+// Enum value maps for SessionSourceKind.
+var (
+	SessionSourceKind_name = map[int32]string{
+		0: "SESSION_SOURCE_KIND_UNSPECIFIED",
+		1: "SESSION_SOURCE_KIND_INLINE",
+		2: "SESSION_SOURCE_KIND_URL",
+	}
+	SessionSourceKind_value = map[string]int32{
+		"SESSION_SOURCE_KIND_UNSPECIFIED": 0,
+		"SESSION_SOURCE_KIND_INLINE":      1,
+		"SESSION_SOURCE_KIND_URL":         2,
+	}
+)
+
+func (x SessionSourceKind) Enum() *SessionSourceKind {
+	p := new(SessionSourceKind)
+	*p = x
+	return p
+}
+
+func (x SessionSourceKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SessionSourceKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_grpcproto_vpnserver_proto_enumTypes[3].Descriptor()
+}
+
+func (SessionSourceKind) Type() protoreflect.EnumType {
+	return &file_grpcproto_vpnserver_proto_enumTypes[3]
+}
+
+func (x SessionSourceKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SessionSourceKind.Descriptor instead.
+func (SessionSourceKind) EnumDescriptor() ([]byte, []int) {
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{3}
+}
+
 type SessionStartMode int32
 
 const (
@@ -255,11 +304,11 @@ func (x SessionStartMode) String() string {
 }
 
 func (SessionStartMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_grpcproto_vpnserver_proto_enumTypes[3].Descriptor()
+	return file_grpcproto_vpnserver_proto_enumTypes[4].Descriptor()
 }
 
 func (SessionStartMode) Type() protoreflect.EnumType {
-	return &file_grpcproto_vpnserver_proto_enumTypes[3]
+	return &file_grpcproto_vpnserver_proto_enumTypes[4]
 }
 
 func (x SessionStartMode) Number() protoreflect.EnumNumber {
@@ -268,515 +317,7 @@ func (x SessionStartMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SessionStartMode.Descriptor instead.
 func (SessionStartMode) EnumDescriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{3}
-}
-
-type GetOutlineLastErrorResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Error         string                 `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetOutlineLastErrorResponse) Reset() {
-	*x = GetOutlineLastErrorResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetOutlineLastErrorResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetOutlineLastErrorResponse) ProtoMessage() {}
-
-func (x *GetOutlineLastErrorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetOutlineLastErrorResponse.ProtoReflect.Descriptor instead.
-func (*GetOutlineLastErrorResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *GetOutlineLastErrorResponse) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
-type StartOutlineRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Config        string                 `protobuf:"bytes,1,opt,name=config,proto3" json:"config,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StartOutlineRequest) Reset() {
-	*x = StartOutlineRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StartOutlineRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StartOutlineRequest) ProtoMessage() {}
-
-func (x *StartOutlineRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StartOutlineRequest.ProtoReflect.Descriptor instead.
-func (*StartOutlineRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *StartOutlineRequest) GetConfig() string {
-	if x != nil {
-		return x.Config
-	}
-	return ""
-}
-
-type StartOutlineResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Result        int32                  `protobuf:"varint,1,opt,name=result,proto3" json:"result,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StartOutlineResponse) Reset() {
-	*x = StartOutlineResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StartOutlineResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StartOutlineResponse) ProtoMessage() {}
-
-func (x *StartOutlineResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StartOutlineResponse.ProtoReflect.Descriptor instead.
-func (*StartOutlineResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *StartOutlineResponse) GetResult() int32 {
-	if x != nil {
-		return x.Result
-	}
-	return 0
-}
-
-type GetXrayLastErrorResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Error         string                 `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetXrayLastErrorResponse) Reset() {
-	*x = GetXrayLastErrorResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetXrayLastErrorResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetXrayLastErrorResponse) ProtoMessage() {}
-
-func (x *GetXrayLastErrorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetXrayLastErrorResponse.ProtoReflect.Descriptor instead.
-func (*GetXrayLastErrorResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *GetXrayLastErrorResponse) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
-type StartXrayRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Config        string                 `protobuf:"bytes,1,opt,name=config,proto3" json:"config,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StartXrayRequest) Reset() {
-	*x = StartXrayRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StartXrayRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StartXrayRequest) ProtoMessage() {}
-
-func (x *StartXrayRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StartXrayRequest.ProtoReflect.Descriptor instead.
-func (*StartXrayRequest) Descriptor() ([]byte, []int) {
 	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *StartXrayRequest) GetConfig() string {
-	if x != nil {
-		return x.Config
-	}
-	return ""
-}
-
-type StartXrayResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Result        int32                  `protobuf:"varint,1,opt,name=result,proto3" json:"result,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StartXrayResponse) Reset() {
-	*x = StartXrayResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StartXrayResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StartXrayResponse) ProtoMessage() {}
-
-func (x *StartXrayResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StartXrayResponse.ProtoReflect.Descriptor instead.
-func (*StartXrayResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *StartXrayResponse) GetResult() int32 {
-	if x != nil {
-		return x.Result
-	}
-	return 0
-}
-
-type CouldStartResponce struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Result        bool                   `protobuf:"varint,1,opt,name=result,proto3" json:"result,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CouldStartResponce) Reset() {
-	*x = CouldStartResponce{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CouldStartResponce) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CouldStartResponce) ProtoMessage() {}
-
-func (x *CouldStartResponce) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CouldStartResponce.ProtoReflect.Descriptor instead.
-func (*CouldStartResponce) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *CouldStartResponce) GetResult() bool {
-	if x != nil {
-		return x.Result
-	}
-	return false
-}
-
-type GetConnectionStateResponce struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	ConnectionState int32                  `protobuf:"varint,1,opt,name=connectionState,proto3" json:"connectionState,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *GetConnectionStateResponce) Reset() {
-	*x = GetConnectionStateResponce{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetConnectionStateResponce) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetConnectionStateResponce) ProtoMessage() {}
-
-func (x *GetConnectionStateResponce) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetConnectionStateResponce.ProtoReflect.Descriptor instead.
-func (*GetConnectionStateResponce) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *GetConnectionStateResponce) GetConnectionState() int32 {
-	if x != nil {
-		return x.ConnectionState
-	}
-	return 0
-}
-
-type MeasureTunnelProbeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TimeoutMillis int64                  `protobuf:"varint,1,opt,name=timeoutMillis,proto3" json:"timeoutMillis,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *MeasureTunnelProbeRequest) Reset() {
-	*x = MeasureTunnelProbeRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *MeasureTunnelProbeRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*MeasureTunnelProbeRequest) ProtoMessage() {}
-
-func (x *MeasureTunnelProbeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use MeasureTunnelProbeRequest.ProtoReflect.Descriptor instead.
-func (*MeasureTunnelProbeRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *MeasureTunnelProbeRequest) GetTimeoutMillis() int64 {
-	if x != nil {
-		return x.TimeoutMillis
-	}
-	return 0
-}
-
-type MeasureTunnelProbeResponse struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	AverageLatencyMillis int64                  `protobuf:"varint,1,opt,name=averageLatencyMillis,proto3" json:"averageLatencyMillis,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
-}
-
-func (x *MeasureTunnelProbeResponse) Reset() {
-	*x = MeasureTunnelProbeResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[9]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *MeasureTunnelProbeResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*MeasureTunnelProbeResponse) ProtoMessage() {}
-
-func (x *MeasureTunnelProbeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[9]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use MeasureTunnelProbeResponse.ProtoReflect.Descriptor instead.
-func (*MeasureTunnelProbeResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{9}
-}
-
-func (x *MeasureTunnelProbeResponse) GetAverageLatencyMillis() int64 {
-	if x != nil {
-		return x.AverageLatencyMillis
-	}
-	return 0
-}
-
-type StartCloakClientRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	LocalHost     string                 `protobuf:"bytes,1,opt,name=localHost,proto3" json:"localHost,omitempty"`
-	LocalPort     string                 `protobuf:"bytes,2,opt,name=localPort,proto3" json:"localPort,omitempty"`
-	Config        string                 `protobuf:"bytes,3,opt,name=config,proto3" json:"config,omitempty"`
-	Udp           bool                   `protobuf:"varint,4,opt,name=udp,proto3" json:"udp,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StartCloakClientRequest) Reset() {
-	*x = StartCloakClientRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[10]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StartCloakClientRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StartCloakClientRequest) ProtoMessage() {}
-
-func (x *StartCloakClientRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[10]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StartCloakClientRequest.ProtoReflect.Descriptor instead.
-func (*StartCloakClientRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{10}
-}
-
-func (x *StartCloakClientRequest) GetLocalHost() string {
-	if x != nil {
-		return x.LocalHost
-	}
-	return ""
-}
-
-func (x *StartCloakClientRequest) GetLocalPort() string {
-	if x != nil {
-		return x.LocalPort
-	}
-	return ""
-}
-
-func (x *StartCloakClientRequest) GetConfig() string {
-	if x != nil {
-		return x.Config
-	}
-	return ""
-}
-
-func (x *StartCloakClientRequest) GetUdp() bool {
-	if x != nil {
-		return x.Udp
-	}
-	return false
 }
 
 type InitLoggerRequest struct {
@@ -788,7 +329,7 @@ type InitLoggerRequest struct {
 
 func (x *InitLoggerRequest) Reset() {
 	*x = InitLoggerRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[11]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -800,7 +341,7 @@ func (x *InitLoggerRequest) String() string {
 func (*InitLoggerRequest) ProtoMessage() {}
 
 func (x *InitLoggerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[11]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -813,7 +354,7 @@ func (x *InitLoggerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitLoggerRequest.ProtoReflect.Descriptor instead.
 func (*InitLoggerRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{11}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *InitLoggerRequest) GetPath() string {
@@ -821,374 +362,6 @@ func (x *InitLoggerRequest) GetPath() string {
 		return x.Path
 	}
 	return ""
-}
-
-type InitTelemetryRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Endpoint      string                 `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
-	Token         string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *InitTelemetryRequest) Reset() {
-	*x = InitTelemetryRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[12]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *InitTelemetryRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*InitTelemetryRequest) ProtoMessage() {}
-
-func (x *InitTelemetryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[12]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use InitTelemetryRequest.ProtoReflect.Descriptor instead.
-func (*InitTelemetryRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{12}
-}
-
-func (x *InitTelemetryRequest) GetEndpoint() string {
-	if x != nil {
-		return x.Endpoint
-	}
-	return ""
-}
-
-func (x *InitTelemetryRequest) GetToken() string {
-	if x != nil {
-		return x.Token
-	}
-	return ""
-}
-
-type SetGeoRoutingConfRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Cidrs         string                 `protobuf:"bytes,1,opt,name=cidrs,proto3" json:"cidrs,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetGeoRoutingConfRequest) Reset() {
-	*x = SetGeoRoutingConfRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[13]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetGeoRoutingConfRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetGeoRoutingConfRequest) ProtoMessage() {}
-
-func (x *SetGeoRoutingConfRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[13]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetGeoRoutingConfRequest.ProtoReflect.Descriptor instead.
-func (*SetGeoRoutingConfRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{13}
-}
-
-func (x *SetGeoRoutingConfRequest) GetCidrs() string {
-	if x != nil {
-		return x.Cidrs
-	}
-	return ""
-}
-
-type SetupTelemetryAttributesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Config        string                 `protobuf:"bytes,1,opt,name=config,proto3" json:"config,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetupTelemetryAttributesRequest) Reset() {
-	*x = SetupTelemetryAttributesRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[14]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetupTelemetryAttributesRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetupTelemetryAttributesRequest) ProtoMessage() {}
-
-func (x *SetupTelemetryAttributesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[14]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetupTelemetryAttributesRequest.ProtoReflect.Descriptor instead.
-func (*SetupTelemetryAttributesRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{14}
-}
-
-func (x *SetupTelemetryAttributesRequest) GetConfig() string {
-	if x != nil {
-		return x.Config
-	}
-	return ""
-}
-
-type GetTrustTunnelLastErrorResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Error         string                 `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetTrustTunnelLastErrorResponse) Reset() {
-	*x = GetTrustTunnelLastErrorResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[15]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetTrustTunnelLastErrorResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetTrustTunnelLastErrorResponse) ProtoMessage() {}
-
-func (x *GetTrustTunnelLastErrorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[15]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetTrustTunnelLastErrorResponse.ProtoReflect.Descriptor instead.
-func (*GetTrustTunnelLastErrorResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{15}
-}
-
-func (x *GetTrustTunnelLastErrorResponse) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
-type StartTrustTunnelRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Config        string                 `protobuf:"bytes,1,opt,name=config,proto3" json:"config,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StartTrustTunnelRequest) Reset() {
-	*x = StartTrustTunnelRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[16]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StartTrustTunnelRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StartTrustTunnelRequest) ProtoMessage() {}
-
-func (x *StartTrustTunnelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[16]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StartTrustTunnelRequest.ProtoReflect.Descriptor instead.
-func (*StartTrustTunnelRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{16}
-}
-
-func (x *StartTrustTunnelRequest) GetConfig() string {
-	if x != nil {
-		return x.Config
-	}
-	return ""
-}
-
-type StartTrustTunnelResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Result        int32                  `protobuf:"varint,1,opt,name=result,proto3" json:"result,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StartTrustTunnelResponse) Reset() {
-	*x = StartTrustTunnelResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[17]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StartTrustTunnelResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StartTrustTunnelResponse) ProtoMessage() {}
-
-func (x *StartTrustTunnelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[17]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StartTrustTunnelResponse.ProtoReflect.Descriptor instead.
-func (*StartTrustTunnelResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{17}
-}
-
-func (x *StartTrustTunnelResponse) GetResult() int32 {
-	if x != nil {
-		return x.Result
-	}
-	return 0
-}
-
-type SetDNSCacheEntriesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Entries       string                 `protobuf:"bytes,1,opt,name=entries,proto3" json:"entries,omitempty"`
-	Source        string                 `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetDNSCacheEntriesRequest) Reset() {
-	*x = SetDNSCacheEntriesRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[18]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetDNSCacheEntriesRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetDNSCacheEntriesRequest) ProtoMessage() {}
-
-func (x *SetDNSCacheEntriesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[18]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetDNSCacheEntriesRequest.ProtoReflect.Descriptor instead.
-func (*SetDNSCacheEntriesRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{18}
-}
-
-func (x *SetDNSCacheEntriesRequest) GetEntries() string {
-	if x != nil {
-		return x.Entries
-	}
-	return ""
-}
-
-func (x *SetDNSCacheEntriesRequest) GetSource() string {
-	if x != nil {
-		return x.Source
-	}
-	return ""
-}
-
-type SetDNSCacheEntriesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CachedCount   int32                  `protobuf:"varint,1,opt,name=cachedCount,proto3" json:"cachedCount,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetDNSCacheEntriesResponse) Reset() {
-	*x = SetDNSCacheEntriesResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[19]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetDNSCacheEntriesResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetDNSCacheEntriesResponse) ProtoMessage() {}
-
-func (x *SetDNSCacheEntriesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[19]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetDNSCacheEntriesResponse.ProtoReflect.Descriptor instead.
-func (*SetDNSCacheEntriesResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{19}
-}
-
-func (x *SetDNSCacheEntriesResponse) GetCachedCount() int32 {
-	if x != nil {
-		return x.CachedCount
-	}
-	return 0
 }
 
 type Empty struct {
@@ -1199,7 +372,7 @@ type Empty struct {
 
 func (x *Empty) Reset() {
 	*x = Empty{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[20]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1211,7 +384,7 @@ func (x *Empty) String() string {
 func (*Empty) ProtoMessage() {}
 
 func (x *Empty) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[20]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1224,7 +397,7 @@ func (x *Empty) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Empty.ProtoReflect.Descriptor instead.
 func (*Empty) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{20}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{1}
 }
 
 // A failure is safe for display across the process boundary. Its message must
@@ -1239,7 +412,7 @@ type SessionFailure struct {
 
 func (x *SessionFailure) Reset() {
 	*x = SessionFailure{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[21]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1251,7 +424,7 @@ func (x *SessionFailure) String() string {
 func (*SessionFailure) ProtoMessage() {}
 
 func (x *SessionFailure) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[21]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1264,7 +437,7 @@ func (x *SessionFailure) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionFailure.ProtoReflect.Descriptor instead.
 func (*SessionFailure) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{21}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *SessionFailure) GetCode() SessionFailureCode {
@@ -1293,7 +466,7 @@ type SessionProfile struct {
 
 func (x *SessionProfile) Reset() {
 	*x = SessionProfile{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[22]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1305,7 +478,7 @@ func (x *SessionProfile) String() string {
 func (*SessionProfile) ProtoMessage() {}
 
 func (x *SessionProfile) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[22]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1318,7 +491,7 @@ func (x *SessionProfile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionProfile.ProtoReflect.Descriptor instead.
 func (*SessionProfile) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{22}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SessionProfile) GetIndex() int32 {
@@ -1352,7 +525,7 @@ type SessionWarning struct {
 
 func (x *SessionWarning) Reset() {
 	*x = SessionWarning{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[23]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1364,7 +537,7 @@ func (x *SessionWarning) String() string {
 func (*SessionWarning) ProtoMessage() {}
 
 func (x *SessionWarning) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[23]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1377,7 +550,7 @@ func (x *SessionWarning) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionWarning.ProtoReflect.Descriptor instead.
 func (*SessionWarning) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{23}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SessionWarning) GetCode() string {
@@ -1404,7 +577,7 @@ type SessionFeature struct {
 
 func (x *SessionFeature) Reset() {
 	*x = SessionFeature{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[24]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1416,7 +589,7 @@ func (x *SessionFeature) String() string {
 func (*SessionFeature) ProtoMessage() {}
 
 func (x *SessionFeature) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[24]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1429,7 +602,7 @@ func (x *SessionFeature) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionFeature.ProtoReflect.Descriptor instead.
 func (*SessionFeature) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{24}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *SessionFeature) GetName() string {
@@ -1462,7 +635,7 @@ type SessionEvent struct {
 
 func (x *SessionEvent) Reset() {
 	*x = SessionEvent{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[25]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1474,7 +647,7 @@ func (x *SessionEvent) String() string {
 func (*SessionEvent) ProtoMessage() {}
 
 func (x *SessionEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[25]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1487,7 +660,7 @@ func (x *SessionEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEvent.ProtoReflect.Descriptor instead.
 func (*SessionEvent) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{25}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SessionEvent) GetSessionId() string {
@@ -1554,7 +727,7 @@ type SessionSnapshot struct {
 
 func (x *SessionSnapshot) Reset() {
 	*x = SessionSnapshot{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[26]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1566,7 +739,7 @@ func (x *SessionSnapshot) String() string {
 func (*SessionSnapshot) ProtoMessage() {}
 
 func (x *SessionSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[26]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1579,7 +752,7 @@ func (x *SessionSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionSnapshot.ProtoReflect.Descriptor instead.
 func (*SessionSnapshot) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{26}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SessionSnapshot) GetSessionId() string {
@@ -1639,7 +812,7 @@ type SessionGetCapabilitiesRequest struct {
 
 func (x *SessionGetCapabilitiesRequest) Reset() {
 	*x = SessionGetCapabilitiesRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[27]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1651,7 +824,7 @@ func (x *SessionGetCapabilitiesRequest) String() string {
 func (*SessionGetCapabilitiesRequest) ProtoMessage() {}
 
 func (x *SessionGetCapabilitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[27]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1664,22 +837,21 @@ func (x *SessionGetCapabilitiesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionGetCapabilitiesRequest.ProtoReflect.Descriptor instead.
 func (*SessionGetCapabilitiesRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{27}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{8}
 }
 
 type SessionGetCapabilitiesResponse struct {
-	state                    protoimpl.MessageState `protogen:"open.v1"`
-	Version                  string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
-	Protocols                []SessionProtocol      `protobuf:"varint,2,rep,packed,name=protocols,proto3,enum=grpcproto.SessionProtocol" json:"protocols,omitempty"`
-	Features                 []*SessionFeature      `protobuf:"bytes,3,rep,name=features,proto3" json:"features,omitempty"`
-	TelemetryNetworkDisabled bool                   `protobuf:"varint,4,opt,name=telemetry_network_disabled,json=telemetryNetworkDisabled,proto3" json:"telemetry_network_disabled,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Version       string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
+	Protocols     []SessionProtocol      `protobuf:"varint,2,rep,packed,name=protocols,proto3,enum=grpcproto.SessionProtocol" json:"protocols,omitempty"`
+	Features      []*SessionFeature      `protobuf:"bytes,3,rep,name=features,proto3" json:"features,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SessionGetCapabilitiesResponse) Reset() {
 	*x = SessionGetCapabilitiesResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[28]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1691,7 +863,7 @@ func (x *SessionGetCapabilitiesResponse) String() string {
 func (*SessionGetCapabilitiesResponse) ProtoMessage() {}
 
 func (x *SessionGetCapabilitiesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[28]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1704,7 +876,7 @@ func (x *SessionGetCapabilitiesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionGetCapabilitiesResponse.ProtoReflect.Descriptor instead.
 func (*SessionGetCapabilitiesResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{28}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *SessionGetCapabilitiesResponse) GetVersion() string {
@@ -1728,13 +900,6 @@ func (x *SessionGetCapabilitiesResponse) GetFeatures() []*SessionFeature {
 	return nil
 }
 
-func (x *SessionGetCapabilitiesResponse) GetTelemetryNetworkDisabled() bool {
-	if x != nil {
-		return x.TelemetryNetworkDisabled
-	}
-	return false
-}
-
 type SessionCreateSessionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1743,7 +908,7 @@ type SessionCreateSessionRequest struct {
 
 func (x *SessionCreateSessionRequest) Reset() {
 	*x = SessionCreateSessionRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[29]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1755,7 +920,7 @@ func (x *SessionCreateSessionRequest) String() string {
 func (*SessionCreateSessionRequest) ProtoMessage() {}
 
 func (x *SessionCreateSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[29]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1768,7 +933,7 @@ func (x *SessionCreateSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionCreateSessionRequest.ProtoReflect.Descriptor instead.
 func (*SessionCreateSessionRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{29}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{10}
 }
 
 type SessionCreateSessionResponse struct {
@@ -1781,7 +946,7 @@ type SessionCreateSessionResponse struct {
 
 func (x *SessionCreateSessionResponse) Reset() {
 	*x = SessionCreateSessionResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[30]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1793,7 +958,7 @@ func (x *SessionCreateSessionResponse) String() string {
 func (*SessionCreateSessionResponse) ProtoMessage() {}
 
 func (x *SessionCreateSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[30]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1806,7 +971,7 @@ func (x *SessionCreateSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionCreateSessionResponse.ProtoReflect.Descriptor instead.
 func (*SessionCreateSessionResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{30}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *SessionCreateSessionResponse) GetSessionId() string {
@@ -1823,18 +988,71 @@ func (x *SessionCreateSessionResponse) GetFailure() *SessionFailure {
 	return nil
 }
 
+type SessionRecoverActiveSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Failure       *SessionFailure        `protobuf:"bytes,100,opt,name=failure,proto3" json:"failure,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionRecoverActiveSessionResponse) Reset() {
+	*x = SessionRecoverActiveSessionResponse{}
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionRecoverActiveSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionRecoverActiveSessionResponse) ProtoMessage() {}
+
+func (x *SessionRecoverActiveSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionRecoverActiveSessionResponse.ProtoReflect.Descriptor instead.
+func (*SessionRecoverActiveSessionResponse) Descriptor() ([]byte, []int) {
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *SessionRecoverActiveSessionResponse) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SessionRecoverActiveSessionResponse) GetFailure() *SessionFailure {
+	if x != nil {
+		return x.Failure
+	}
+	return nil
+}
+
 type SessionConfigureRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	CommandId     string                 `protobuf:"bytes,2,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
 	RawConfig     []byte                 `protobuf:"bytes,3,opt,name=raw_config,json=rawConfig,proto3" json:"raw_config,omitempty"`
+	SourceKind    SessionSourceKind      `protobuf:"varint,4,opt,name=source_kind,json=sourceKind,proto3,enum=grpcproto.SessionSourceKind" json:"source_kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SessionConfigureRequest) Reset() {
 	*x = SessionConfigureRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[31]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1846,7 +1064,7 @@ func (x *SessionConfigureRequest) String() string {
 func (*SessionConfigureRequest) ProtoMessage() {}
 
 func (x *SessionConfigureRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[31]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1859,7 +1077,7 @@ func (x *SessionConfigureRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionConfigureRequest.ProtoReflect.Descriptor instead.
 func (*SessionConfigureRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{31}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *SessionConfigureRequest) GetSessionId() string {
@@ -1883,11 +1101,19 @@ func (x *SessionConfigureRequest) GetRawConfig() []byte {
 	return nil
 }
 
+func (x *SessionConfigureRequest) GetSourceKind() SessionSourceKind {
+	if x != nil {
+		return x.SourceKind
+	}
+	return SessionSourceKind_SESSION_SOURCE_KIND_UNSPECIFIED
+}
+
 type SessionConfigureResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Digest        string                 `protobuf:"bytes,1,opt,name=digest,proto3" json:"digest,omitempty"`
 	Profiles      []*SessionProfile      `protobuf:"bytes,2,rep,name=profiles,proto3" json:"profiles,omitempty"`
 	Warnings      []*SessionWarning      `protobuf:"bytes,3,rep,name=warnings,proto3" json:"warnings,omitempty"`
+	SourceKind    SessionSourceKind      `protobuf:"varint,4,opt,name=source_kind,json=sourceKind,proto3,enum=grpcproto.SessionSourceKind" json:"source_kind,omitempty"`
 	Failure       *SessionFailure        `protobuf:"bytes,100,opt,name=failure,proto3" json:"failure,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1895,7 +1121,7 @@ type SessionConfigureResponse struct {
 
 func (x *SessionConfigureResponse) Reset() {
 	*x = SessionConfigureResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[32]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1907,7 +1133,7 @@ func (x *SessionConfigureResponse) String() string {
 func (*SessionConfigureResponse) ProtoMessage() {}
 
 func (x *SessionConfigureResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[32]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1920,7 +1146,7 @@ func (x *SessionConfigureResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionConfigureResponse.ProtoReflect.Descriptor instead.
 func (*SessionConfigureResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{32}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *SessionConfigureResponse) GetDigest() string {
@@ -1944,6 +1170,13 @@ func (x *SessionConfigureResponse) GetWarnings() []*SessionWarning {
 	return nil
 }
 
+func (x *SessionConfigureResponse) GetSourceKind() SessionSourceKind {
+	if x != nil {
+		return x.SourceKind
+	}
+	return SessionSourceKind_SESSION_SOURCE_KIND_UNSPECIFIED
+}
+
 func (x *SessionConfigureResponse) GetFailure() *SessionFailure {
 	if x != nil {
 		return x.Failure
@@ -1963,7 +1196,7 @@ type SessionStartRequest struct {
 
 func (x *SessionStartRequest) Reset() {
 	*x = SessionStartRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[33]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1975,7 +1208,7 @@ func (x *SessionStartRequest) String() string {
 func (*SessionStartRequest) ProtoMessage() {}
 
 func (x *SessionStartRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[33]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1988,7 +1221,7 @@ func (x *SessionStartRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionStartRequest.ProtoReflect.Descriptor instead.
 func (*SessionStartRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{33}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *SessionStartRequest) GetSessionId() string {
@@ -2029,7 +1262,7 @@ type SessionStartResponse struct {
 
 func (x *SessionStartResponse) Reset() {
 	*x = SessionStartResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[34]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2041,7 +1274,7 @@ func (x *SessionStartResponse) String() string {
 func (*SessionStartResponse) ProtoMessage() {}
 
 func (x *SessionStartResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[34]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2054,7 +1287,7 @@ func (x *SessionStartResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionStartResponse.ProtoReflect.Descriptor instead.
 func (*SessionStartResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{34}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *SessionStartResponse) GetGeneration() uint64 {
@@ -2082,7 +1315,7 @@ type SessionStopRequest struct {
 
 func (x *SessionStopRequest) Reset() {
 	*x = SessionStopRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[35]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2094,7 +1327,7 @@ func (x *SessionStopRequest) String() string {
 func (*SessionStopRequest) ProtoMessage() {}
 
 func (x *SessionStopRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[35]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2107,7 +1340,7 @@ func (x *SessionStopRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionStopRequest.ProtoReflect.Descriptor instead.
 func (*SessionStopRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{35}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *SessionStopRequest) GetSessionId() string {
@@ -2141,7 +1374,7 @@ type SessionStopResponse struct {
 
 func (x *SessionStopResponse) Reset() {
 	*x = SessionStopResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[36]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2153,7 +1386,7 @@ func (x *SessionStopResponse) String() string {
 func (*SessionStopResponse) ProtoMessage() {}
 
 func (x *SessionStopResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[36]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2166,7 +1399,7 @@ func (x *SessionStopResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionStopResponse.ProtoReflect.Descriptor instead.
 func (*SessionStopResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{36}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SessionStopResponse) GetGeneration() uint64 {
@@ -2192,7 +1425,7 @@ type SessionSnapshotRequest struct {
 
 func (x *SessionSnapshotRequest) Reset() {
 	*x = SessionSnapshotRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[37]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2204,7 +1437,7 @@ func (x *SessionSnapshotRequest) String() string {
 func (*SessionSnapshotRequest) ProtoMessage() {}
 
 func (x *SessionSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[37]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2217,7 +1450,7 @@ func (x *SessionSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*SessionSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{37}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *SessionSnapshotRequest) GetSessionId() string {
@@ -2237,7 +1470,7 @@ type SessionSnapshotResponse struct {
 
 func (x *SessionSnapshotResponse) Reset() {
 	*x = SessionSnapshotResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[38]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2249,7 +1482,7 @@ func (x *SessionSnapshotResponse) String() string {
 func (*SessionSnapshotResponse) ProtoMessage() {}
 
 func (x *SessionSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[38]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2262,7 +1495,7 @@ func (x *SessionSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*SessionSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{38}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SessionSnapshotResponse) GetSnapshot() *SessionSnapshot {
@@ -2289,7 +1522,7 @@ type SessionObserveRequest struct {
 
 func (x *SessionObserveRequest) Reset() {
 	*x = SessionObserveRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[39]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2301,7 +1534,7 @@ func (x *SessionObserveRequest) String() string {
 func (*SessionObserveRequest) ProtoMessage() {}
 
 func (x *SessionObserveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[39]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2314,7 +1547,7 @@ func (x *SessionObserveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionObserveRequest.ProtoReflect.Descriptor instead.
 func (*SessionObserveRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{39}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SessionObserveRequest) GetSessionId() string {
@@ -2342,7 +1575,7 @@ type SessionObserveResponse struct {
 
 func (x *SessionObserveResponse) Reset() {
 	*x = SessionObserveResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[40]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2354,7 +1587,7 @@ func (x *SessionObserveResponse) String() string {
 func (*SessionObserveResponse) ProtoMessage() {}
 
 func (x *SessionObserveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[40]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2367,7 +1600,7 @@ func (x *SessionObserveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionObserveResponse.ProtoReflect.Descriptor instead.
 func (*SessionObserveResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{40}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SessionObserveResponse) GetEvents() []*SessionEvent {
@@ -2400,7 +1633,7 @@ type SessionDestroySessionRequest struct {
 
 func (x *SessionDestroySessionRequest) Reset() {
 	*x = SessionDestroySessionRequest{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[41]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2412,7 +1645,7 @@ func (x *SessionDestroySessionRequest) String() string {
 func (*SessionDestroySessionRequest) ProtoMessage() {}
 
 func (x *SessionDestroySessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[41]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2425,7 +1658,7 @@ func (x *SessionDestroySessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionDestroySessionRequest.ProtoReflect.Descriptor instead.
 func (*SessionDestroySessionRequest) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{41}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SessionDestroySessionRequest) GetSessionId() string {
@@ -2445,7 +1678,7 @@ type SessionDestroySessionResponse struct {
 
 func (x *SessionDestroySessionResponse) Reset() {
 	*x = SessionDestroySessionResponse{}
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[42]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2457,7 +1690,7 @@ func (x *SessionDestroySessionResponse) String() string {
 func (*SessionDestroySessionResponse) ProtoMessage() {}
 
 func (x *SessionDestroySessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_grpcproto_vpnserver_proto_msgTypes[42]
+	mi := &file_grpcproto_vpnserver_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2470,7 +1703,7 @@ func (x *SessionDestroySessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionDestroySessionResponse.ProtoReflect.Descriptor instead.
 func (*SessionDestroySessionResponse) Descriptor() ([]byte, []int) {
-	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{42}
+	return file_grpcproto_vpnserver_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SessionDestroySessionResponse) GetDestroyed() bool {
@@ -2491,52 +1724,9 @@ var File_grpcproto_vpnserver_proto protoreflect.FileDescriptor
 
 const file_grpcproto_vpnserver_proto_rawDesc = "" +
 	"\n" +
-	"\x19grpcproto/vpnserver.proto\x12\tgrpcproto\"3\n" +
-	"\x1bGetOutlineLastErrorResponse\x12\x14\n" +
-	"\x05error\x18\x01 \x01(\tR\x05error\"-\n" +
-	"\x13StartOutlineRequest\x12\x16\n" +
-	"\x06config\x18\x01 \x01(\tR\x06config\".\n" +
-	"\x14StartOutlineResponse\x12\x16\n" +
-	"\x06result\x18\x01 \x01(\x05R\x06result\"0\n" +
-	"\x18GetXrayLastErrorResponse\x12\x14\n" +
-	"\x05error\x18\x01 \x01(\tR\x05error\"*\n" +
-	"\x10StartXrayRequest\x12\x16\n" +
-	"\x06config\x18\x01 \x01(\tR\x06config\"+\n" +
-	"\x11StartXrayResponse\x12\x16\n" +
-	"\x06result\x18\x01 \x01(\x05R\x06result\",\n" +
-	"\x12CouldStartResponce\x12\x16\n" +
-	"\x06result\x18\x01 \x01(\bR\x06result\"F\n" +
-	"\x1aGetConnectionStateResponce\x12(\n" +
-	"\x0fconnectionState\x18\x01 \x01(\x05R\x0fconnectionState\"A\n" +
-	"\x19MeasureTunnelProbeRequest\x12$\n" +
-	"\rtimeoutMillis\x18\x01 \x01(\x03R\rtimeoutMillis\"P\n" +
-	"\x1aMeasureTunnelProbeResponse\x122\n" +
-	"\x14averageLatencyMillis\x18\x01 \x01(\x03R\x14averageLatencyMillis\"\x7f\n" +
-	"\x17StartCloakClientRequest\x12\x1c\n" +
-	"\tlocalHost\x18\x01 \x01(\tR\tlocalHost\x12\x1c\n" +
-	"\tlocalPort\x18\x02 \x01(\tR\tlocalPort\x12\x16\n" +
-	"\x06config\x18\x03 \x01(\tR\x06config\x12\x10\n" +
-	"\x03udp\x18\x04 \x01(\bR\x03udp\"'\n" +
+	"\x19grpcproto/vpnserver.proto\x12\tgrpcproto\"'\n" +
 	"\x11InitLoggerRequest\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\"H\n" +
-	"\x14InitTelemetryRequest\x12\x1a\n" +
-	"\bendpoint\x18\x01 \x01(\tR\bendpoint\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"0\n" +
-	"\x18SetGeoRoutingConfRequest\x12\x14\n" +
-	"\x05cidrs\x18\x01 \x01(\tR\x05cidrs\"9\n" +
-	"\x1fSetupTelemetryAttributesRequest\x12\x16\n" +
-	"\x06config\x18\x01 \x01(\tR\x06config\"7\n" +
-	"\x1fGetTrustTunnelLastErrorResponse\x12\x14\n" +
-	"\x05error\x18\x01 \x01(\tR\x05error\"1\n" +
-	"\x17StartTrustTunnelRequest\x12\x16\n" +
-	"\x06config\x18\x01 \x01(\tR\x06config\"2\n" +
-	"\x18StartTrustTunnelResponse\x12\x16\n" +
-	"\x06result\x18\x01 \x01(\x05R\x06result\"M\n" +
-	"\x19SetDNSCacheEntriesRequest\x12\x18\n" +
-	"\aentries\x18\x01 \x01(\tR\aentries\x12\x16\n" +
-	"\x06source\x18\x02 \x01(\tR\x06source\">\n" +
-	"\x1aSetDNSCacheEntriesResponse\x12 \n" +
-	"\vcachedCount\x18\x01 \x01(\x05R\vcachedCount\"\a\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"\a\n" +
 	"\x05Empty\"]\n" +
 	"\x0eSessionFailure\x121\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x1d.grpcproto.SessionFailureCodeR\x04code\x12\x18\n" +
@@ -2575,28 +1765,35 @@ const file_grpcproto_vpnserver_proto_rawDesc = "" +
 	"\x0eactive_profile\x18\x05 \x01(\v2\x19.grpcproto.SessionProfileR\ractiveProfile\x12<\n" +
 	"\flast_failure\x18\x06 \x01(\v2\x19.grpcproto.SessionFailureR\vlastFailure\x12)\n" +
 	"\x10cleanup_complete\x18\a \x01(\bR\x0fcleanupComplete\"\x1f\n" +
-	"\x1dSessionGetCapabilitiesRequest\"\xe9\x01\n" +
+	"\x1dSessionGetCapabilitiesRequest\"\xb1\x01\n" +
 	"\x1eSessionGetCapabilitiesResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x128\n" +
 	"\tprotocols\x18\x02 \x03(\x0e2\x1a.grpcproto.SessionProtocolR\tprotocols\x125\n" +
-	"\bfeatures\x18\x03 \x03(\v2\x19.grpcproto.SessionFeatureR\bfeatures\x12<\n" +
-	"\x1atelemetry_network_disabled\x18\x04 \x01(\bR\x18telemetryNetworkDisabled\"\x1d\n" +
+	"\bfeatures\x18\x03 \x03(\v2\x19.grpcproto.SessionFeatureR\bfeaturesJ\x04\b\x04\x10\x05\"\x1d\n" +
 	"\x1bSessionCreateSessionRequest\"r\n" +
 	"\x1cSessionCreateSessionResponse\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x123\n" +
-	"\afailure\x18d \x01(\v2\x19.grpcproto.SessionFailureR\afailure\"v\n" +
+	"\afailure\x18d \x01(\v2\x19.grpcproto.SessionFailureR\afailure\"y\n" +
+	"#SessionRecoverActiveSessionResponse\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x123\n" +
+	"\afailure\x18d \x01(\v2\x19.grpcproto.SessionFailureR\afailure\"\xb5\x01\n" +
 	"\x17SessionConfigureRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\x02 \x01(\tR\tcommandId\x12\x1d\n" +
 	"\n" +
-	"raw_config\x18\x03 \x01(\fR\trawConfig\"\xd5\x01\n" +
+	"raw_config\x18\x03 \x01(\fR\trawConfig\x12=\n" +
+	"\vsource_kind\x18\x04 \x01(\x0e2\x1c.grpcproto.SessionSourceKindR\n" +
+	"sourceKind\"\x94\x02\n" +
 	"\x18SessionConfigureResponse\x12\x16\n" +
 	"\x06digest\x18\x01 \x01(\tR\x06digest\x125\n" +
 	"\bprofiles\x18\x02 \x03(\v2\x19.grpcproto.SessionProfileR\bprofiles\x125\n" +
-	"\bwarnings\x18\x03 \x03(\v2\x19.grpcproto.SessionWarningR\bwarnings\x123\n" +
+	"\bwarnings\x18\x03 \x03(\v2\x19.grpcproto.SessionWarningR\bwarnings\x12=\n" +
+	"\vsource_kind\x18\x04 \x01(\x0e2\x1c.grpcproto.SessionSourceKindR\n" +
+	"sourceKind\x123\n" +
 	"\afailure\x18d \x01(\v2\x19.grpcproto.SessionFailureR\afailure\"\xa9\x01\n" +
 	"\x13SessionStartRequest\x12\x1d\n" +
 	"\n" +
@@ -2673,46 +1870,27 @@ const file_grpcproto_vpnserver_proto_rawDesc = "" +
 	"\x12!\n" +
 	"\x1dSESSION_FAILURE_CODE_CANCELED\x10\v\x12!\n" +
 	"\x1dSESSION_FAILURE_CODE_INTERNAL\x10\f\x12'\n" +
-	"#SESSION_FAILURE_CODE_CLEANUP_FAILED\x10\r*\x80\x01\n" +
+	"#SESSION_FAILURE_CODE_CLEANUP_FAILED\x10\r*u\n" +
+	"\x11SessionSourceKind\x12#\n" +
+	"\x1fSESSION_SOURCE_KIND_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aSESSION_SOURCE_KIND_INLINE\x10\x01\x12\x1b\n" +
+	"\x17SESSION_SOURCE_KIND_URL\x10\x02*\x80\x01\n" +
 	"\x10SessionStartMode\x12\"\n" +
 	"\x1eSESSION_START_MODE_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eSESSION_START_MODE_AUTO_SELECT\x10\x01\x12$\n" +
-	" SESSION_START_MODE_PROFILE_INDEX\x10\x022\x9f\x13\n" +
-	"\x03Vpn\x12O\n" +
-	"\x13GetOutlineLastError\x12\x10.grpcproto.Empty\x1a&.grpcproto.GetOutlineLastErrorResponse\x12O\n" +
-	"\fStartOutline\x12\x1e.grpcproto.StartOutlineRequest\x1a\x1f.grpcproto.StartOutlineResponse\x121\n" +
-	"\vStopOutline\x12\x10.grpcproto.Empty\x1a\x10.grpcproto.Empty\x12I\n" +
-	"\x10GetXrayLastError\x12\x10.grpcproto.Empty\x1a#.grpcproto.GetXrayLastErrorResponse\x12F\n" +
-	"\tStartXray\x12\x1b.grpcproto.StartXrayRequest\x1a\x1c.grpcproto.StartXrayResponse\x12.\n" +
-	"\bStopXray\x12\x10.grpcproto.Empty\x1a\x10.grpcproto.Empty\x12W\n" +
-	"\x17GetTrustTunnelLastError\x12\x10.grpcproto.Empty\x1a*.grpcproto.GetTrustTunnelLastErrorResponse\x12[\n" +
-	"\x10StartTrustTunnel\x12\".grpcproto.StartTrustTunnelRequest\x1a#.grpcproto.StartTrustTunnelResponse\x125\n" +
-	"\x0fStopTrustTunnel\x12\x10.grpcproto.Empty\x1a\x10.grpcproto.Empty\x12=\n" +
+	" SESSION_START_MODE_PROFILE_INDEX\x10\x022\x9c\a\n" +
+	"\x03Vpn\x12<\n" +
 	"\n" +
-	"CouldStart\x12\x10.grpcproto.Empty\x1a\x1d.grpcproto.CouldStartResponce\x12M\n" +
-	"\x12GetConnectionState\x12\x10.grpcproto.Empty\x1a%.grpcproto.GetConnectionStateResponce\x125\n" +
-	"\x0fInitHealthCheck\x12\x10.grpcproto.Empty\x1a\x10.grpcproto.Empty\x126\n" +
-	"\x10StartHealthCheck\x12\x10.grpcproto.Empty\x1a\x10.grpcproto.Empty\x125\n" +
-	"\x0fStopHealthCheck\x12\x10.grpcproto.Empty\x1a\x10.grpcproto.Empty\x12u\n" +
-	"&MeasureTunnelProbeAverageLatencyMillis\x12$.grpcproto.MeasureTunnelProbeRequest\x1a%.grpcproto.MeasureTunnelProbeResponse\x12H\n" +
-	"\x10StartCloakClient\x12\".grpcproto.StartCloakClientRequest\x1a\x10.grpcproto.Empty\x125\n" +
-	"\x0fStopCloakClient\x12\x10.grpcproto.Empty\x1a\x10.grpcproto.Empty\x12<\n" +
-	"\n" +
-	"InitLogger\x12\x1c.grpcproto.InitLoggerRequest\x1a\x10.grpcproto.Empty\x12B\n" +
-	"\rInitTelemetry\x12\x1f.grpcproto.InitTelemetryRequest\x1a\x10.grpcproto.Empty\x123\n" +
-	"\rStopTelemetry\x12\x10.grpcproto.Empty\x1a\x10.grpcproto.Empty\x12X\n" +
-	"\x18SetupTelemetryAttributes\x12*.grpcproto.SetupTelemetryAttributesRequest\x1a\x10.grpcproto.Empty\x12J\n" +
-	"\x11SetGeoRoutingConf\x12#.grpcproto.SetGeoRoutingConfRequest\x1a\x10.grpcproto.Empty\x129\n" +
-	"\x13ClearGeoRoutingConf\x12\x10.grpcproto.Empty\x1a\x10.grpcproto.Empty\x123\n" +
-	"\rClearDNSCache\x12\x10.grpcproto.Empty\x1a\x10.grpcproto.Empty\x12a\n" +
-	"\x12SetDNSCacheEntries\x12$.grpcproto.SetDNSCacheEntriesRequest\x1a%.grpcproto.SetDNSCacheEntriesResponse\x12f\n" +
+	"InitLogger\x12\x1c.grpcproto.InitLoggerRequest\x1a\x10.grpcproto.Empty\x12f\n" +
 	"\x0fGetCapabilities\x12(.grpcproto.SessionGetCapabilitiesRequest\x1a).grpcproto.SessionGetCapabilitiesResponse\x12`\n" +
-	"\rCreateSession\x12&.grpcproto.SessionCreateSessionRequest\x1a'.grpcproto.SessionCreateSessionResponse\x12T\n" +
+	"\rCreateSession\x12&.grpcproto.SessionCreateSessionRequest\x1a'.grpcproto.SessionCreateSessionResponse\x12X\n" +
+	"\x14RecoverActiveSession\x12\x10.grpcproto.Empty\x1a..grpcproto.SessionRecoverActiveSessionResponse\x12T\n" +
 	"\tConfigure\x12\".grpcproto.SessionConfigureRequest\x1a#.grpcproto.SessionConfigureResponse\x12H\n" +
 	"\x05Start\x12\x1e.grpcproto.SessionStartRequest\x1a\x1f.grpcproto.SessionStartResponse\x12E\n" +
 	"\x04Stop\x12\x1d.grpcproto.SessionStopRequest\x1a\x1e.grpcproto.SessionStopResponse\x12Q\n" +
 	"\bSnapshot\x12!.grpcproto.SessionSnapshotRequest\x1a\".grpcproto.SessionSnapshotResponse\x12N\n" +
-	"\aObserve\x12 .grpcproto.SessionObserveRequest\x1a!.grpcproto.SessionObserveResponse\x12c\n" +
+	"\aObserve\x12 .grpcproto.SessionObserveRequest\x1a!.grpcproto.SessionObserveResponse\x12D\n" +
+	"\x05Watch\x12 .grpcproto.SessionObserveRequest\x1a\x17.grpcproto.SessionEvent0\x01\x12c\n" +
 	"\x0eDestroySession\x12'.grpcproto.SessionDestroySessionRequest\x1a(.grpcproto.SessionDestroySessionResponseB7\n" +
 	"\x13com.dobby.grpcprotoB\tGrpcProtoP\x01Z\x13go_module/grpcprotob\x06proto3"
 
@@ -2728,152 +1906,94 @@ func file_grpcproto_vpnserver_proto_rawDescGZIP() []byte {
 	return file_grpcproto_vpnserver_proto_rawDescData
 }
 
-var file_grpcproto_vpnserver_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_grpcproto_vpnserver_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
+var file_grpcproto_vpnserver_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_grpcproto_vpnserver_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_grpcproto_vpnserver_proto_goTypes = []any{
-	(SessionProtocol)(0),                    // 0: grpcproto.SessionProtocol
-	(SessionState)(0),                       // 1: grpcproto.SessionState
-	(SessionFailureCode)(0),                 // 2: grpcproto.SessionFailureCode
-	(SessionStartMode)(0),                   // 3: grpcproto.SessionStartMode
-	(*GetOutlineLastErrorResponse)(nil),     // 4: grpcproto.GetOutlineLastErrorResponse
-	(*StartOutlineRequest)(nil),             // 5: grpcproto.StartOutlineRequest
-	(*StartOutlineResponse)(nil),            // 6: grpcproto.StartOutlineResponse
-	(*GetXrayLastErrorResponse)(nil),        // 7: grpcproto.GetXrayLastErrorResponse
-	(*StartXrayRequest)(nil),                // 8: grpcproto.StartXrayRequest
-	(*StartXrayResponse)(nil),               // 9: grpcproto.StartXrayResponse
-	(*CouldStartResponce)(nil),              // 10: grpcproto.CouldStartResponce
-	(*GetConnectionStateResponce)(nil),      // 11: grpcproto.GetConnectionStateResponce
-	(*MeasureTunnelProbeRequest)(nil),       // 12: grpcproto.MeasureTunnelProbeRequest
-	(*MeasureTunnelProbeResponse)(nil),      // 13: grpcproto.MeasureTunnelProbeResponse
-	(*StartCloakClientRequest)(nil),         // 14: grpcproto.StartCloakClientRequest
-	(*InitLoggerRequest)(nil),               // 15: grpcproto.InitLoggerRequest
-	(*InitTelemetryRequest)(nil),            // 16: grpcproto.InitTelemetryRequest
-	(*SetGeoRoutingConfRequest)(nil),        // 17: grpcproto.SetGeoRoutingConfRequest
-	(*SetupTelemetryAttributesRequest)(nil), // 18: grpcproto.SetupTelemetryAttributesRequest
-	(*GetTrustTunnelLastErrorResponse)(nil), // 19: grpcproto.GetTrustTunnelLastErrorResponse
-	(*StartTrustTunnelRequest)(nil),         // 20: grpcproto.StartTrustTunnelRequest
-	(*StartTrustTunnelResponse)(nil),        // 21: grpcproto.StartTrustTunnelResponse
-	(*SetDNSCacheEntriesRequest)(nil),       // 22: grpcproto.SetDNSCacheEntriesRequest
-	(*SetDNSCacheEntriesResponse)(nil),      // 23: grpcproto.SetDNSCacheEntriesResponse
-	(*Empty)(nil),                           // 24: grpcproto.Empty
-	(*SessionFailure)(nil),                  // 25: grpcproto.SessionFailure
-	(*SessionProfile)(nil),                  // 26: grpcproto.SessionProfile
-	(*SessionWarning)(nil),                  // 27: grpcproto.SessionWarning
-	(*SessionFeature)(nil),                  // 28: grpcproto.SessionFeature
-	(*SessionEvent)(nil),                    // 29: grpcproto.SessionEvent
-	(*SessionSnapshot)(nil),                 // 30: grpcproto.SessionSnapshot
-	(*SessionGetCapabilitiesRequest)(nil),   // 31: grpcproto.SessionGetCapabilitiesRequest
-	(*SessionGetCapabilitiesResponse)(nil),  // 32: grpcproto.SessionGetCapabilitiesResponse
-	(*SessionCreateSessionRequest)(nil),     // 33: grpcproto.SessionCreateSessionRequest
-	(*SessionCreateSessionResponse)(nil),    // 34: grpcproto.SessionCreateSessionResponse
-	(*SessionConfigureRequest)(nil),         // 35: grpcproto.SessionConfigureRequest
-	(*SessionConfigureResponse)(nil),        // 36: grpcproto.SessionConfigureResponse
-	(*SessionStartRequest)(nil),             // 37: grpcproto.SessionStartRequest
-	(*SessionStartResponse)(nil),            // 38: grpcproto.SessionStartResponse
-	(*SessionStopRequest)(nil),              // 39: grpcproto.SessionStopRequest
-	(*SessionStopResponse)(nil),             // 40: grpcproto.SessionStopResponse
-	(*SessionSnapshotRequest)(nil),          // 41: grpcproto.SessionSnapshotRequest
-	(*SessionSnapshotResponse)(nil),         // 42: grpcproto.SessionSnapshotResponse
-	(*SessionObserveRequest)(nil),           // 43: grpcproto.SessionObserveRequest
-	(*SessionObserveResponse)(nil),          // 44: grpcproto.SessionObserveResponse
-	(*SessionDestroySessionRequest)(nil),    // 45: grpcproto.SessionDestroySessionRequest
-	(*SessionDestroySessionResponse)(nil),   // 46: grpcproto.SessionDestroySessionResponse
+	(SessionProtocol)(0),                        // 0: grpcproto.SessionProtocol
+	(SessionState)(0),                           // 1: grpcproto.SessionState
+	(SessionFailureCode)(0),                     // 2: grpcproto.SessionFailureCode
+	(SessionSourceKind)(0),                      // 3: grpcproto.SessionSourceKind
+	(SessionStartMode)(0),                       // 4: grpcproto.SessionStartMode
+	(*InitLoggerRequest)(nil),                   // 5: grpcproto.InitLoggerRequest
+	(*Empty)(nil),                               // 6: grpcproto.Empty
+	(*SessionFailure)(nil),                      // 7: grpcproto.SessionFailure
+	(*SessionProfile)(nil),                      // 8: grpcproto.SessionProfile
+	(*SessionWarning)(nil),                      // 9: grpcproto.SessionWarning
+	(*SessionFeature)(nil),                      // 10: grpcproto.SessionFeature
+	(*SessionEvent)(nil),                        // 11: grpcproto.SessionEvent
+	(*SessionSnapshot)(nil),                     // 12: grpcproto.SessionSnapshot
+	(*SessionGetCapabilitiesRequest)(nil),       // 13: grpcproto.SessionGetCapabilitiesRequest
+	(*SessionGetCapabilitiesResponse)(nil),      // 14: grpcproto.SessionGetCapabilitiesResponse
+	(*SessionCreateSessionRequest)(nil),         // 15: grpcproto.SessionCreateSessionRequest
+	(*SessionCreateSessionResponse)(nil),        // 16: grpcproto.SessionCreateSessionResponse
+	(*SessionRecoverActiveSessionResponse)(nil), // 17: grpcproto.SessionRecoverActiveSessionResponse
+	(*SessionConfigureRequest)(nil),             // 18: grpcproto.SessionConfigureRequest
+	(*SessionConfigureResponse)(nil),            // 19: grpcproto.SessionConfigureResponse
+	(*SessionStartRequest)(nil),                 // 20: grpcproto.SessionStartRequest
+	(*SessionStartResponse)(nil),                // 21: grpcproto.SessionStartResponse
+	(*SessionStopRequest)(nil),                  // 22: grpcproto.SessionStopRequest
+	(*SessionStopResponse)(nil),                 // 23: grpcproto.SessionStopResponse
+	(*SessionSnapshotRequest)(nil),              // 24: grpcproto.SessionSnapshotRequest
+	(*SessionSnapshotResponse)(nil),             // 25: grpcproto.SessionSnapshotResponse
+	(*SessionObserveRequest)(nil),               // 26: grpcproto.SessionObserveRequest
+	(*SessionObserveResponse)(nil),              // 27: grpcproto.SessionObserveResponse
+	(*SessionDestroySessionRequest)(nil),        // 28: grpcproto.SessionDestroySessionRequest
+	(*SessionDestroySessionResponse)(nil),       // 29: grpcproto.SessionDestroySessionResponse
 }
 var file_grpcproto_vpnserver_proto_depIdxs = []int32{
 	2,  // 0: grpcproto.SessionFailure.code:type_name -> grpcproto.SessionFailureCode
 	0,  // 1: grpcproto.SessionProfile.protocol:type_name -> grpcproto.SessionProtocol
 	1,  // 2: grpcproto.SessionEvent.state:type_name -> grpcproto.SessionState
-	26, // 3: grpcproto.SessionEvent.profile:type_name -> grpcproto.SessionProfile
-	25, // 4: grpcproto.SessionEvent.failure:type_name -> grpcproto.SessionFailure
-	27, // 5: grpcproto.SessionEvent.warning:type_name -> grpcproto.SessionWarning
+	8,  // 3: grpcproto.SessionEvent.profile:type_name -> grpcproto.SessionProfile
+	7,  // 4: grpcproto.SessionEvent.failure:type_name -> grpcproto.SessionFailure
+	9,  // 5: grpcproto.SessionEvent.warning:type_name -> grpcproto.SessionWarning
 	1,  // 6: grpcproto.SessionSnapshot.state:type_name -> grpcproto.SessionState
-	26, // 7: grpcproto.SessionSnapshot.active_profile:type_name -> grpcproto.SessionProfile
-	25, // 8: grpcproto.SessionSnapshot.last_failure:type_name -> grpcproto.SessionFailure
+	8,  // 7: grpcproto.SessionSnapshot.active_profile:type_name -> grpcproto.SessionProfile
+	7,  // 8: grpcproto.SessionSnapshot.last_failure:type_name -> grpcproto.SessionFailure
 	0,  // 9: grpcproto.SessionGetCapabilitiesResponse.protocols:type_name -> grpcproto.SessionProtocol
-	28, // 10: grpcproto.SessionGetCapabilitiesResponse.features:type_name -> grpcproto.SessionFeature
-	25, // 11: grpcproto.SessionCreateSessionResponse.failure:type_name -> grpcproto.SessionFailure
-	26, // 12: grpcproto.SessionConfigureResponse.profiles:type_name -> grpcproto.SessionProfile
-	27, // 13: grpcproto.SessionConfigureResponse.warnings:type_name -> grpcproto.SessionWarning
-	25, // 14: grpcproto.SessionConfigureResponse.failure:type_name -> grpcproto.SessionFailure
-	3,  // 15: grpcproto.SessionStartRequest.mode:type_name -> grpcproto.SessionStartMode
-	25, // 16: grpcproto.SessionStartResponse.failure:type_name -> grpcproto.SessionFailure
-	25, // 17: grpcproto.SessionStopResponse.failure:type_name -> grpcproto.SessionFailure
-	30, // 18: grpcproto.SessionSnapshotResponse.snapshot:type_name -> grpcproto.SessionSnapshot
-	25, // 19: grpcproto.SessionSnapshotResponse.failure:type_name -> grpcproto.SessionFailure
-	29, // 20: grpcproto.SessionObserveResponse.events:type_name -> grpcproto.SessionEvent
-	25, // 21: grpcproto.SessionObserveResponse.failure:type_name -> grpcproto.SessionFailure
-	25, // 22: grpcproto.SessionDestroySessionResponse.failure:type_name -> grpcproto.SessionFailure
-	24, // 23: grpcproto.Vpn.GetOutlineLastError:input_type -> grpcproto.Empty
-	5,  // 24: grpcproto.Vpn.StartOutline:input_type -> grpcproto.StartOutlineRequest
-	24, // 25: grpcproto.Vpn.StopOutline:input_type -> grpcproto.Empty
-	24, // 26: grpcproto.Vpn.GetXrayLastError:input_type -> grpcproto.Empty
-	8,  // 27: grpcproto.Vpn.StartXray:input_type -> grpcproto.StartXrayRequest
-	24, // 28: grpcproto.Vpn.StopXray:input_type -> grpcproto.Empty
-	24, // 29: grpcproto.Vpn.GetTrustTunnelLastError:input_type -> grpcproto.Empty
-	20, // 30: grpcproto.Vpn.StartTrustTunnel:input_type -> grpcproto.StartTrustTunnelRequest
-	24, // 31: grpcproto.Vpn.StopTrustTunnel:input_type -> grpcproto.Empty
-	24, // 32: grpcproto.Vpn.CouldStart:input_type -> grpcproto.Empty
-	24, // 33: grpcproto.Vpn.GetConnectionState:input_type -> grpcproto.Empty
-	24, // 34: grpcproto.Vpn.InitHealthCheck:input_type -> grpcproto.Empty
-	24, // 35: grpcproto.Vpn.StartHealthCheck:input_type -> grpcproto.Empty
-	24, // 36: grpcproto.Vpn.StopHealthCheck:input_type -> grpcproto.Empty
-	12, // 37: grpcproto.Vpn.MeasureTunnelProbeAverageLatencyMillis:input_type -> grpcproto.MeasureTunnelProbeRequest
-	14, // 38: grpcproto.Vpn.StartCloakClient:input_type -> grpcproto.StartCloakClientRequest
-	24, // 39: grpcproto.Vpn.StopCloakClient:input_type -> grpcproto.Empty
-	15, // 40: grpcproto.Vpn.InitLogger:input_type -> grpcproto.InitLoggerRequest
-	16, // 41: grpcproto.Vpn.InitTelemetry:input_type -> grpcproto.InitTelemetryRequest
-	24, // 42: grpcproto.Vpn.StopTelemetry:input_type -> grpcproto.Empty
-	18, // 43: grpcproto.Vpn.SetupTelemetryAttributes:input_type -> grpcproto.SetupTelemetryAttributesRequest
-	17, // 44: grpcproto.Vpn.SetGeoRoutingConf:input_type -> grpcproto.SetGeoRoutingConfRequest
-	24, // 45: grpcproto.Vpn.ClearGeoRoutingConf:input_type -> grpcproto.Empty
-	24, // 46: grpcproto.Vpn.ClearDNSCache:input_type -> grpcproto.Empty
-	22, // 47: grpcproto.Vpn.SetDNSCacheEntries:input_type -> grpcproto.SetDNSCacheEntriesRequest
-	31, // 48: grpcproto.Vpn.GetCapabilities:input_type -> grpcproto.SessionGetCapabilitiesRequest
-	33, // 49: grpcproto.Vpn.CreateSession:input_type -> grpcproto.SessionCreateSessionRequest
-	35, // 50: grpcproto.Vpn.Configure:input_type -> grpcproto.SessionConfigureRequest
-	37, // 51: grpcproto.Vpn.Start:input_type -> grpcproto.SessionStartRequest
-	39, // 52: grpcproto.Vpn.Stop:input_type -> grpcproto.SessionStopRequest
-	41, // 53: grpcproto.Vpn.Snapshot:input_type -> grpcproto.SessionSnapshotRequest
-	43, // 54: grpcproto.Vpn.Observe:input_type -> grpcproto.SessionObserveRequest
-	45, // 55: grpcproto.Vpn.DestroySession:input_type -> grpcproto.SessionDestroySessionRequest
-	4,  // 56: grpcproto.Vpn.GetOutlineLastError:output_type -> grpcproto.GetOutlineLastErrorResponse
-	6,  // 57: grpcproto.Vpn.StartOutline:output_type -> grpcproto.StartOutlineResponse
-	24, // 58: grpcproto.Vpn.StopOutline:output_type -> grpcproto.Empty
-	7,  // 59: grpcproto.Vpn.GetXrayLastError:output_type -> grpcproto.GetXrayLastErrorResponse
-	9,  // 60: grpcproto.Vpn.StartXray:output_type -> grpcproto.StartXrayResponse
-	24, // 61: grpcproto.Vpn.StopXray:output_type -> grpcproto.Empty
-	19, // 62: grpcproto.Vpn.GetTrustTunnelLastError:output_type -> grpcproto.GetTrustTunnelLastErrorResponse
-	21, // 63: grpcproto.Vpn.StartTrustTunnel:output_type -> grpcproto.StartTrustTunnelResponse
-	24, // 64: grpcproto.Vpn.StopTrustTunnel:output_type -> grpcproto.Empty
-	10, // 65: grpcproto.Vpn.CouldStart:output_type -> grpcproto.CouldStartResponce
-	11, // 66: grpcproto.Vpn.GetConnectionState:output_type -> grpcproto.GetConnectionStateResponce
-	24, // 67: grpcproto.Vpn.InitHealthCheck:output_type -> grpcproto.Empty
-	24, // 68: grpcproto.Vpn.StartHealthCheck:output_type -> grpcproto.Empty
-	24, // 69: grpcproto.Vpn.StopHealthCheck:output_type -> grpcproto.Empty
-	13, // 70: grpcproto.Vpn.MeasureTunnelProbeAverageLatencyMillis:output_type -> grpcproto.MeasureTunnelProbeResponse
-	24, // 71: grpcproto.Vpn.StartCloakClient:output_type -> grpcproto.Empty
-	24, // 72: grpcproto.Vpn.StopCloakClient:output_type -> grpcproto.Empty
-	24, // 73: grpcproto.Vpn.InitLogger:output_type -> grpcproto.Empty
-	24, // 74: grpcproto.Vpn.InitTelemetry:output_type -> grpcproto.Empty
-	24, // 75: grpcproto.Vpn.StopTelemetry:output_type -> grpcproto.Empty
-	24, // 76: grpcproto.Vpn.SetupTelemetryAttributes:output_type -> grpcproto.Empty
-	24, // 77: grpcproto.Vpn.SetGeoRoutingConf:output_type -> grpcproto.Empty
-	24, // 78: grpcproto.Vpn.ClearGeoRoutingConf:output_type -> grpcproto.Empty
-	24, // 79: grpcproto.Vpn.ClearDNSCache:output_type -> grpcproto.Empty
-	23, // 80: grpcproto.Vpn.SetDNSCacheEntries:output_type -> grpcproto.SetDNSCacheEntriesResponse
-	32, // 81: grpcproto.Vpn.GetCapabilities:output_type -> grpcproto.SessionGetCapabilitiesResponse
-	34, // 82: grpcproto.Vpn.CreateSession:output_type -> grpcproto.SessionCreateSessionResponse
-	36, // 83: grpcproto.Vpn.Configure:output_type -> grpcproto.SessionConfigureResponse
-	38, // 84: grpcproto.Vpn.Start:output_type -> grpcproto.SessionStartResponse
-	40, // 85: grpcproto.Vpn.Stop:output_type -> grpcproto.SessionStopResponse
-	42, // 86: grpcproto.Vpn.Snapshot:output_type -> grpcproto.SessionSnapshotResponse
-	44, // 87: grpcproto.Vpn.Observe:output_type -> grpcproto.SessionObserveResponse
-	46, // 88: grpcproto.Vpn.DestroySession:output_type -> grpcproto.SessionDestroySessionResponse
-	56, // [56:89] is the sub-list for method output_type
-	23, // [23:56] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	10, // 10: grpcproto.SessionGetCapabilitiesResponse.features:type_name -> grpcproto.SessionFeature
+	7,  // 11: grpcproto.SessionCreateSessionResponse.failure:type_name -> grpcproto.SessionFailure
+	7,  // 12: grpcproto.SessionRecoverActiveSessionResponse.failure:type_name -> grpcproto.SessionFailure
+	3,  // 13: grpcproto.SessionConfigureRequest.source_kind:type_name -> grpcproto.SessionSourceKind
+	8,  // 14: grpcproto.SessionConfigureResponse.profiles:type_name -> grpcproto.SessionProfile
+	9,  // 15: grpcproto.SessionConfigureResponse.warnings:type_name -> grpcproto.SessionWarning
+	3,  // 16: grpcproto.SessionConfigureResponse.source_kind:type_name -> grpcproto.SessionSourceKind
+	7,  // 17: grpcproto.SessionConfigureResponse.failure:type_name -> grpcproto.SessionFailure
+	4,  // 18: grpcproto.SessionStartRequest.mode:type_name -> grpcproto.SessionStartMode
+	7,  // 19: grpcproto.SessionStartResponse.failure:type_name -> grpcproto.SessionFailure
+	7,  // 20: grpcproto.SessionStopResponse.failure:type_name -> grpcproto.SessionFailure
+	12, // 21: grpcproto.SessionSnapshotResponse.snapshot:type_name -> grpcproto.SessionSnapshot
+	7,  // 22: grpcproto.SessionSnapshotResponse.failure:type_name -> grpcproto.SessionFailure
+	11, // 23: grpcproto.SessionObserveResponse.events:type_name -> grpcproto.SessionEvent
+	7,  // 24: grpcproto.SessionObserveResponse.failure:type_name -> grpcproto.SessionFailure
+	7,  // 25: grpcproto.SessionDestroySessionResponse.failure:type_name -> grpcproto.SessionFailure
+	5,  // 26: grpcproto.Vpn.InitLogger:input_type -> grpcproto.InitLoggerRequest
+	13, // 27: grpcproto.Vpn.GetCapabilities:input_type -> grpcproto.SessionGetCapabilitiesRequest
+	15, // 28: grpcproto.Vpn.CreateSession:input_type -> grpcproto.SessionCreateSessionRequest
+	6,  // 29: grpcproto.Vpn.RecoverActiveSession:input_type -> grpcproto.Empty
+	18, // 30: grpcproto.Vpn.Configure:input_type -> grpcproto.SessionConfigureRequest
+	20, // 31: grpcproto.Vpn.Start:input_type -> grpcproto.SessionStartRequest
+	22, // 32: grpcproto.Vpn.Stop:input_type -> grpcproto.SessionStopRequest
+	24, // 33: grpcproto.Vpn.Snapshot:input_type -> grpcproto.SessionSnapshotRequest
+	26, // 34: grpcproto.Vpn.Observe:input_type -> grpcproto.SessionObserveRequest
+	26, // 35: grpcproto.Vpn.Watch:input_type -> grpcproto.SessionObserveRequest
+	28, // 36: grpcproto.Vpn.DestroySession:input_type -> grpcproto.SessionDestroySessionRequest
+	6,  // 37: grpcproto.Vpn.InitLogger:output_type -> grpcproto.Empty
+	14, // 38: grpcproto.Vpn.GetCapabilities:output_type -> grpcproto.SessionGetCapabilitiesResponse
+	16, // 39: grpcproto.Vpn.CreateSession:output_type -> grpcproto.SessionCreateSessionResponse
+	17, // 40: grpcproto.Vpn.RecoverActiveSession:output_type -> grpcproto.SessionRecoverActiveSessionResponse
+	19, // 41: grpcproto.Vpn.Configure:output_type -> grpcproto.SessionConfigureResponse
+	21, // 42: grpcproto.Vpn.Start:output_type -> grpcproto.SessionStartResponse
+	23, // 43: grpcproto.Vpn.Stop:output_type -> grpcproto.SessionStopResponse
+	25, // 44: grpcproto.Vpn.Snapshot:output_type -> grpcproto.SessionSnapshotResponse
+	27, // 45: grpcproto.Vpn.Observe:output_type -> grpcproto.SessionObserveResponse
+	11, // 46: grpcproto.Vpn.Watch:output_type -> grpcproto.SessionEvent
+	29, // 47: grpcproto.Vpn.DestroySession:output_type -> grpcproto.SessionDestroySessionResponse
+	37, // [37:48] is the sub-list for method output_type
+	26, // [26:37] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_grpcproto_vpnserver_proto_init() }
@@ -2886,8 +2006,8 @@ func file_grpcproto_vpnserver_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_grpcproto_vpnserver_proto_rawDesc), len(file_grpcproto_vpnserver_proto_rawDesc)),
-			NumEnums:      4,
-			NumMessages:   43,
+			NumEnums:      5,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -1,27 +1,22 @@
 //go:build ios
 
-package cloak_outline
+package dobbyvpn
 
 import (
-	"fmt"
 	"sync"
 	"syscall"
 
-	"go_module/log"
 	"go_module/sessionapi/mobilebinding"
-	"go_module/vpnmanager"
 
 	"golang.org/x/sys/unix"
 )
 
 const utunControlName = "com.apple.net.utun_control"
-const logCategory = "ios_exports"
 const soNoTCNetPolicy = 0x1101
 
 var (
 	iosCallbacks   iosPlatformCallbacks
 	mobileSessions = mobilebinding.New(&iosCallbacks)
-	legacySession  = mobileSessions.NewLegacyClient()
 )
 
 // PlatformCallbacks is declared in the bound package so gobind emits the
@@ -51,6 +46,7 @@ func RegisterSessionPlatform(callbacks PlatformCallbacks) {
 
 func GetSessionCapabilities() string { return mobileSessions.GetCapabilities() }
 func CreateSession() string          { return mobileSessions.CreateSession() }
+func RecoverActiveSession() string   { return mobileSessions.RecoverActiveSession() }
 func ConfigureSession(sessionID, commandID string, rawConfig []byte) string {
 	return mobileSessions.Configure(sessionID, commandID, rawConfig)
 }
@@ -65,51 +61,6 @@ func ObserveSession(sessionID string, afterSequence int64) string {
 	return mobileSessions.Observe(sessionID, afterSequence)
 }
 func DestroySession(sessionID string) string { return mobileSessions.Destroy(sessionID) }
-
-// NewVpnClient remains an iOS compatibility wrapper. It creates a v1 legacy
-// profile; actual utun discovery and duplication happen only when it starts.
-func NewVpnClient(transportConfig string, protocol string) (err error) {
-	defer vpnmanager.GuardErr(logCategory, "NewVpnClient", &err)()
-	if err := legacySession.Configure(transportConfig, protocol, -1); err != nil {
-		log.Debugf(logCategory, "legacy configure failed")
-		return fmt.Errorf("NewVpnClient: %w", err)
-	}
-	log.Debugf(logCategory, "legacy session configured")
-	return nil
-}
-
-func VpnConnect() (err error) {
-	defer vpnmanager.GuardErr(logCategory, "VpnConnect", &err)()
-	if err := legacySession.Connect(); err != nil {
-		log.Debugf(logCategory, "legacy start rejected")
-		return fmt.Errorf("VpnConnect: %w", err)
-	}
-	log.Debugf(logCategory, "legacy start requested")
-	return nil
-}
-
-func VpnDisconnect() (err error) {
-	defer vpnmanager.GuardErr(logCategory, "VpnDisconnect", &err)()
-	if err := legacySession.Disconnect(); err != nil {
-		log.Debugf(logCategory, "legacy stop failed")
-		return fmt.Errorf("VpnDisconnect: %w", err)
-	}
-	log.Debugf(logCategory, "legacy session stopped")
-	return nil
-}
-
-func NewOutlineClient(transportConfig string) (err error) {
-	defer vpnmanager.GuardErr(logCategory, "NewOutlineClient", &err)()
-	return NewVpnClient(transportConfig, "outline")
-}
-func OutlineConnect() (err error) {
-	defer vpnmanager.GuardErr(logCategory, "OutlineConnect", &err)()
-	return VpnConnect()
-}
-func OutlineDisconnect() (err error) {
-	defer vpnmanager.GuardErr(logCategory, "OutlineDisconnect", &err)()
-	return VpnDisconnect()
-}
 
 type iosPlatformCallbacks struct {
 	mu       sync.RWMutex

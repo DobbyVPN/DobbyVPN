@@ -62,10 +62,8 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		app.engine = nil
 		app.mu.Unlock()
 
-		common.Client.MarkInCriticalSection(coreCommon.Name)
 		log.Debugf(coreCommon.Category, "Closing Windows routing plan before stopping tun2socks")
 		routeErr := routePlan.Close()
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
 		log.Debugf(coreCommon.Category, "[Tunnel] Stopping tun2socks engine")
 		var engineErr error
@@ -126,20 +124,17 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	// exact route, and releases it only if this Run acquired it.
 	if serverIP.String() != "127.0.0.1" {
 		log.Debugf(coreCommon.Category, "Adding early VPN bypass route")
-		common.Client.MarkInCriticalSection(coreCommon.Name)
 		stepStartedAt = time.Now()
 		var routeChanged bool
 		routeChanged, err = routing.AcquireProxyRoute(routePlan, serverIP.String(), gatewayIP.String(), netInterface.Name)
 		if err != nil {
-			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 			err = fmt.Errorf("failed to add early route for server: %w", err)
 			signalInit(initResult, err)
 			return err
 		}
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		log.Debugf(coreCommon.Category, "Early server route added successfully changed=%v elapsed=%s total=%s", routeChanged, time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 	} else {
-		log.Debugf(coreCommon.Category, "Skipping early route for localhost (Cloak mode)")
+		log.Debugf(coreCommon.Category, "Skipping early route for localhost endpoint")
 	}
 	stepStartedAt = time.Now()
 	protected_dialer.SetDefaultRoute(gatewayIP.String(), netInterface.Name, netInterface.Index)
@@ -197,7 +192,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	log.Debugf(coreCommon.Category, "[Windows] WaitForOwnedInterfaceByIP OK iface=%s elapsed=%s total=%s", tunInterface.Name, time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	// routing
-	common.Client.MarkInCriticalSection(coreCommon.Name)
 	stepStartedAt = time.Now()
 	if err := routing.ConfigureWindowsRouting(
 		routePlan,
@@ -206,13 +200,11 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		tunInterface.Name,
 		netInterface.Name,
 	); err != nil {
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		err = fmt.Errorf("failed to configure routing: %w", err)
 		log.Debugf(coreCommon.Category, "%v", err)
 		signalInit(initResult, err)
 		return err
 	}
-	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 
 	log.Debugf(coreCommon.Category, "Routing successfully configured elapsed=%s total=%s", time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 

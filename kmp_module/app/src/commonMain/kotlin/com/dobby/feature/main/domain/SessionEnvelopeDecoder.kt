@@ -89,6 +89,7 @@ internal fun JsonObject.toSessionObservation(): SessionObservation = SessionObse
             sequence = event.sessionLong("sequence").toULong(),
             state = event.sessionString("state").toSessionState(),
             failureCode = event.sessionOptionalString("failure")?.toSessionFailureCode(),
+            sessionId = event.sessionString("session_id"),
         )
     },
     nextSequence = sessionLong("next_sequence").toULong(),

@@ -2,7 +2,7 @@ package core
 
 import "fmt"
 
-// LifecycleState is the authoritative state of one CoreClient generation.
+// LifecycleState is the authoritative state of one SessionRuntime generation.
 // Exported values make platform shells able to distinguish an in-progress stop
 // from a disconnected client without inferring it from logs or health probes.
 type LifecycleState string
@@ -19,5 +19,5 @@ const (
 func (s LifecycleState) String() string { return string(s) }
 
 func lifecycleBusyError(state LifecycleState) error {
-	return fmt.Errorf("core client lifecycle is %s", state)
+	return fmt.Errorf("native session runtime lifecycle is %s", state)
 }

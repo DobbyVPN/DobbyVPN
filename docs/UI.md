@@ -1,78 +1,87 @@
-# UI Behavior
+# UI behavior
 
-This document describes the sequence of operations executed by the VPN client during different lifecycle events.
+The Compose UI is a shared presentation layer. It renders safe SessionV2
+snapshots and push events; it does not parse configuration or own VPN
+resources.
 
-## Turn On
+## Startup and reattachment
 
-When the VPN feature is turned on, the client performs the following step:
+On startup the UI creates an authenticated, protocol-neutral SessionV2 client
+and attempts `RecoverActiveSession`.
 
-1. `StartConnectionStateDetector` _(only if VPN tunnel is enabled)_
+- If a live session exists, apply its safe snapshot and resume `Watch` after
+  the returned sequence.
+- If no session exists, render `DISCONNECTED` and wait for user input.
+- If the service is unavailable, render a typed unavailable/error state; never
+  infer `CONNECTED` from a stale local flag or platform-service liveness.
 
-### Flow
+The UI does not run a timer-based connection detector. Android and iOS receive
+the same ordered state model through the native callback/Flow boundary.
 
-```text
-Turn On
-└── StartConnectionStateDetector [VPN tunnel enabled only]
-```
+## Connect
 
----
+The shared UI sends one source to Go:
 
-## Connect (for single connection)
+1. Recover the active session, if any.
+2. If no session exists, call `CreateSession`.
+3. Call `Configure` with either the entered HTTP(S) URL or transient inline
+   bytes.
+4. Render safe profile summaries, digest, source kind, and typed warnings.
+5. Call `Start` and render ordered generation events.
+6. Persist only an accepted connection URL; never persist raw configuration or
+   parsed profiles.
 
-When a connection is initiated, the following steps are executed in order:
-
-1. `InitTelemetry`
-2. `SetConfig`
-3. `SaveTelemetry`
-4. `StartTunnel`
-5. `StartHealthCheck` _(only if VPN tunnel is enabled)_
-6. `StartConnectionStateDetector` _(only if VPN tunnel is enabled)_
-
-### Flow
+Go fetches and parses the configuration, selects supported protocols, probes
+  variants, and owns the runtime lease. A Cloak-bearing section is skipped in
+  v1.5.0 with `CLOAK_PROFILE_SKIPPED`; it is never started.
 
 ```text
 Connect
-├── InitTelemetry
-├── SetConfig
-├── SaveTelemetry
-├── StartTunnel
-├── StartHealthCheck              [VPN tunnel enabled only]
-└── StartConnectionStateDetector  [VPN tunnel enabled only]
+  -> RecoverActiveSession or CreateSession
+  -> Configure(URL | INLINE)
+  -> safe snapshot/warnings
+  -> Start
+  -> ordered Watch/native callback events
 ```
 
----
+If another live session exists, `CreateSession` returns typed `CONFLICT`; the
+UI must not stop or replace that session implicitly. The UI instead recovers
+and renders the existing session.
 
 ## Disconnect
 
-When disconnecting, the client performs cleanup in the following order:
-
-1. `StopTunnel`
-2. `StopHealthCheck`
-3. `StopConnectionStateDetector`
-4. `StopTelemetry`
-
-### Flow
+Disconnect is explicit and owned by SessionV2:
 
 ```text
 Disconnect
-├── StopTunnel
-├── StopHealthCheck
-├── StopConnectionStateDetector
-└── StopTelemetry
+  -> Stop
+  -> await terminal cleanup outcome
+  -> Destroy
+  -> render DISCONNECTED
 ```
 
----
+Go releases protocol, routing, TUN, tun2socks, probe, DNS, and child-process
+resources in reverse acquisition order. The UI reports a cleanup failure as a
+failure; it does not silently render a clean disconnect.
 
-## Summary
+## UI loss and recovery
 
-| Event          | Steps                                                                                                                                                         |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Turn On**    | `StartConnectionStateDetector` _(VPN tunnel only)_                                                                                                            |
-| **Connect**    | `InitTelemetry` → `SetConfig` → `SaveTelemetry` → `StartTunnel` → `StartHealthCheck` _(VPN tunnel only)_ → `StartConnectionStateDetector` _(VPN tunnel only)_ |
-| **Disconnect** | `StopTunnel` → `StopHealthCheck` → `StopConnectionStateDetector` → `StopTelemetry`                                                                            |
+- Closing or crashing a desktop GUI does not stop a healthy service-owned
+  tunnel. Reopening the GUI recovers the same session and generation.
+- Swiping an Android task removes only the UI. The foreground VPN service
+  remains responsible for a healthy tunnel, and the reopened UI recovers it.
+- If the service/process dies, OS TUN closure and the next startup
+  reconciliation must yield `DISCONNECTED` with no stale resource owner.
+- iOS follows the NetworkExtension lifecycle and uses the same shared state
+  model; Simulator/build evidence is not physical packet-tunnel evidence.
 
-## Notes
+## Safety rules
 
-- `StartConnectionStateDetector` and `StartHealthCheck` are executed only when the VPN tunnel feature is enabled.
-- Telemetry initialization and persistence always occur before tunnel startup with standard user network.
-- During disconnect, monitoring components are stopped after the tunnel shutdown to ensure proper cleanup.
+- No UI code parses protocol configuration or chooses a protocol.
+- No UI code logs URLs, configuration, endpoints, credentials, or auth
+  metadata.
+- No UI code polls session state on a timer.
+- No per-protocol start/stop path or platform-specific session manager may be
+  added.
+- Diagnostics are local-only. Remote telemetry initialization, persistence, and
+  network upload are not part of the product lifecycle.

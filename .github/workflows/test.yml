@@ -64,15 +64,11 @@ jobs:
         working-directory: go_module
         run: |
           go test ./...
-          # go_module/modules/Cloak is a replaced nested module, so ./...
-          # does not discover its embedded-client regression tests.
-          go test github.com/cbeuw/Cloak/exported_client github.com/cbeuw/Cloak/internal/client
 
       - name: Race-check lifecycle and routing
         working-directory: go_module
         run: |
           go test -race ./core ./routing ./tunnel/...
-          go test -race github.com/cbeuw/Cloak/exported_client github.com/cbeuw/Cloak/internal/client
 
   kotlin:
     name: Kotlin and Android service tests
@@ -176,8 +172,8 @@ jobs:
       - name: Download iOS native dependencies
         uses: actions/download-artifact@v7
         with:
-          pattern: MyLibrary.xcframework
-          path: swift_module/MyLibrary.xcframework
+          pattern: DobbyVPNRuntime.xcframework
+          path: swift_module/DobbyVPNRuntime.xcframework
           merge-multiple: true
 
       - name: Download Kotlin framework
@@ -263,8 +259,8 @@ jobs:
       - name: Download iOS native dependencies
         uses: actions/download-artifact@v7
         with:
-          pattern: MyLibrary.xcframework
-          path: swift_module/MyLibrary.xcframework
+          pattern: DobbyVPNRuntime.xcframework
+          path: swift_module/DobbyVPNRuntime.xcframework
           merge-multiple: true
 
       - name: Set up JDK 17

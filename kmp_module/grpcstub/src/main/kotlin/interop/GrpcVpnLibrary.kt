@@ -1,14 +1,7 @@
 package interop
 
-import interop.cloak.CloakGrpcLibrary
-import interop.dnscache.DnsCacheGrpcLibrary
-import interop.georouting.GeoroutingGrpcLibrary
-import interop.healthcheck.HealthCheckGrpcLibrary
 import interop.logger.LoggerGrpcLibrary
-import interop.outline.OutlineGrpcLibrary
 import interop.session.SessionGrpcLibrary
-import interop.trusttunnel.TrustTunnelGrpcLibrary
-import interop.xray.XrayGrpcLibrary
 import io.grpc.ClientInterceptors
 import io.grpc.Metadata
 import io.grpc.stub.MetadataUtils
@@ -31,14 +24,7 @@ object GrpcVpnLibrary: Closeable {
         ClientInterceptors.intercept(baseChannel, MetadataUtils.newAttachHeadersInterceptor(headers))
     } else baseChannel
 
-    val outlineGrpcLibrary = OutlineGrpcLibrary(channel)
-    val xrayGrpcLibrary = XrayGrpcLibrary(channel)
-    val trustTunnelGrpcLibrary = TrustTunnelGrpcLibrary(channel)
-    val cloakGrpcLibrary = CloakGrpcLibrary(channel)
-    val healthCheckGrpcLibrary = HealthCheckGrpcLibrary(channel)
-    val dnsCacheGrpcLibrary = DnsCacheGrpcLibrary(channel)
     val loggerGrpcLibrary = LoggerGrpcLibrary(channel)
-    val georoutingGrpcLibrary = GeoroutingGrpcLibrary(channel)
     val sessionGrpcLibrary = SessionGrpcLibrary(channel)
 
     override fun close() {

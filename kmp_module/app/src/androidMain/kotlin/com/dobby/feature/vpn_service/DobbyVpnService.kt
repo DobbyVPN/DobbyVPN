@@ -193,14 +193,19 @@ class DobbyVpnService : VpnService() {
     fun teardownVpn() = synchronized(this) { closeTunnel("legacy platform cleanup") }
 
     @Synchronized
-    fun publishState(sessionId: String, generation: Long, state: String, failureCode: String) {
+    fun publishState(sessionId: String, generation: Long, sequence: Long, state: String, failureCode: String) {
         if (sessionId != activeSessionId || generation < activeGeneration) {
             logger.log("[svc:$serviceId] ignore stale Go state=$state generation=$generation")
             return
         }
-        if (state == "CONNECTED") connectionState.tryUpdateServiceStarted(true, generation)
+        connectionState.tryPublishSessionEvent(
+            sessionId = sessionId,
+            generation = generation,
+            sequence = sequence,
+            state = state,
+            failureCode = failureCode,
+        )
         if (state == "IDLE" || state == "FAILED" || state == "DESTROYED") {
-            connectionState.tryUpdateServiceStarted(false, generation)
             if (vpnInterface == null) stopForeground(STOP_FOREGROUND_REMOVE)
         }
         logger.log("[svc:$serviceId] Go state=$state generation=$generation failure=$failureCode")
@@ -251,7 +256,6 @@ class DobbyVpnService : VpnService() {
             }
         }
         synchronized(this) { closeTunnel("generation-tagged stop intent") }
-        connectionState.tryUpdateServiceStarted(false, generation)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelfResult(startId)
     }

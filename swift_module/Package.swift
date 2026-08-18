@@ -15,7 +15,6 @@ let package = Package(
             name: "IOSLifecycleCore",
             path: "CommonDI",
             exclude: [
-                "AuthenticationManagerImpl.swift",
                 "CommonDI.h",
                 "CopyLogsInteractorImpl.swift",
                 "DobbyConfigsRepositoryImpl.swift",

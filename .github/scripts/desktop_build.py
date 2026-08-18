@@ -85,6 +85,11 @@ SERVICE_NAMES = {
     "macos": "macos_grpcvpnserver",
     "windows": "windows_grpcvpnserver.exe",
 }
+CLI_NAMES = {
+    "linux": "dobby-cli",
+    "macos": "dobby-cli",
+    "windows": "dobby-cli.exe",
+}
 GOOS_BY_PLATFORM = {
     "linux": "linux",
     "macos": "darwin",
@@ -846,19 +851,6 @@ def ensure_build_dependencies(target_platform: str, skip_deps: bool, need_androi
         install_android_sdk(skip_deps)
 
 
-def validate_embedded_cloak_source() -> None:
-    target_dir = GO_MODULE_DIR / "modules" / "Cloak" / "internal"
-    required = (
-        target_dir / "client" / "connector.go",
-        target_dir / "common" / "dialer.go",
-        target_dir / "multiplex" / "session.go",
-    )
-    missing = [path for path in required if not path.is_file() or path.is_symlink()]
-    if missing:
-        fail(f"Tracked embedded Cloak client source is incomplete: {missing[0]}")
-    log("Using tracked embedded Cloak client source")
-
-
 def go_mod_download(run_tidy: bool) -> None:
     if run_tidy:
         run(["go", "mod", "tidy"], cwd=GO_MODULE_DIR)
@@ -871,6 +863,26 @@ def service_output_path(target_platform: str) -> Path:
 
 def service_target_path(target_platform: str) -> Path:
     return SERVICES_DIR / SERVICE_NAMES[target_platform]
+
+
+def build_cli(target_platform: str, arch: str | None = None) -> Path:
+    """Build the native operator CLI without invoking the JVM launcher."""
+    target_arch = arch or default_service_arch(target_platform)
+    output = GO_MODULE_DIR / CLI_NAMES[target_platform]
+    env = os.environ.copy()
+    env.update({"CGO_ENABLED": "0", "GOOS": GOOS_BY_PLATFORM[target_platform], "GOARCH": target_arch})
+    run(
+        ["go", "build", "-trimpath", "-ldflags=-buildid=", "-o", output.name, "./cmd/dobbyvpn/"],
+        cwd=GO_MODULE_DIR,
+        env=env,
+    )
+    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    target = SERVICES_DIR / CLI_NAMES[target_platform]
+    shutil.copyfile(output, target)
+    if target_platform != "windows":
+        target.chmod(target.stat().st_mode | 0o111)
+    log(f"Built native Go CLI {target}")
+    return target
 
 
 def install_macos_amd64_trusttunnel_helper(skip_deps: bool) -> None:
@@ -949,7 +961,6 @@ def build_service(
         linux_libcxx_runtime = install_linux_libcxx_runtime(skip_deps)
     else:
         linux_libcxx_runtime = None
-    validate_embedded_cloak_source()
     go_mod_download(run_go_mod_tidy)
 
     output = service_output_path(target_platform)
@@ -1294,16 +1305,12 @@ def remove_control_socket_parent(control_socket: Path | None) -> None:
 
 
 def run_cli_check(config_arg: str, port: int, control_socket: Path | None = None) -> None:
-    props = desktop_version_properties()
     env = os.environ.copy()
     env["PORT"] = str(port)
     if control_socket is not None:
         env["DOBBYVPN_CONTROL_SOCKET"] = str(control_socket)
-    run(
-        [gradle_command(), "--quiet", ":app:run", f"--args=check-config {config_arg}", *props],
-        cwd=KMP_DIR,
-        env=env,
-    )
+    target = SERVICES_DIR / CLI_NAMES[host_platform()]
+    run([str(target), "check-config", config_arg], cwd=KMP_DIR, env=env)
 
 
 def cli_test(args: argparse.Namespace) -> None:
@@ -1326,9 +1333,12 @@ def cli_test(args: argparse.Namespace) -> None:
             skip_build=False,
             run_go_mod_tidy=args.go_mod_tidy,
         )
+        build_cli(target_platform, go_arch_from_machine())
         run_desktop_gradle(args.skip_deps)
     else:
         require_services(False, "current")
+        if not (SERVICES_DIR / CLI_NAMES[target_platform]).exists():
+            build_cli(target_platform, go_arch_from_machine())
 
     config_arg = prepare_config_arg(config)
     process: subprocess.Popen[str] | None = None

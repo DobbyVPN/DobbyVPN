@@ -9,7 +9,7 @@ import (
 )
 
 func TestFinishRunIgnoresStaleGenerationCompletion(t *testing.T) {
-	c := &CoreClient{state: StatePreparing, generation: 12}
+	c := &SessionRuntime{state: StatePreparing, generation: 12}
 
 	c.finishRun(11, nil)
 	if got := c.State(); got != StatePreparing {
@@ -24,7 +24,7 @@ func TestDisconnectReturnsRunCleanupFailure(t *testing.T) {
 	want := errors.New("cleanup failed")
 	cancelled := make(chan struct{})
 	done := make(chan struct{})
-	c := &CoreClient{state: StatePreparing, generation: 3, cancel: func() { close(cancelled) }, done: done}
+	c := &SessionRuntime{state: StatePreparing, generation: 3, cancel: func() { close(cancelled) }, done: done}
 	disconnected := make(chan error, 1)
 	go func() { disconnected <- c.Disconnect() }()
 
@@ -50,7 +50,7 @@ func TestDisconnectReturnsRunCleanupFailure(t *testing.T) {
 
 func TestDisconnectFromTerminalFailureDoesNotRemainStopping(t *testing.T) {
 	want := errors.New("run failed")
-	c := &CoreClient{state: StateFailed, generation: 8, runErr: want}
+	c := &SessionRuntime{state: StateFailed, generation: 8, runErr: want}
 
 	if err := c.Disconnect(); !errors.Is(err, want) {
 		t.Fatalf("Disconnect error=%v, want %v", err, want)
@@ -61,7 +61,7 @@ func TestDisconnectFromTerminalFailureDoesNotRemainStopping(t *testing.T) {
 }
 
 func TestFinishRunReturnsStoppingGenerationToIdle(t *testing.T) {
-	c := &CoreClient{state: StateStopping, generation: 4, done: make(chan struct{})}
+	c := &SessionRuntime{state: StateStopping, generation: 4, done: make(chan struct{})}
 
 	c.finishRun(4, nil)
 	if got := c.State(); got != StateIdle {
@@ -72,7 +72,7 @@ func TestFinishRunReturnsStoppingGenerationToIdle(t *testing.T) {
 func TestDisconnectRemainsStoppingUntilRunCleanupCompletes(t *testing.T) {
 	cancelled := make(chan struct{})
 	done := make(chan struct{})
-	c := &CoreClient{
+	c := &SessionRuntime{
 		state:      StatePreparing,
 		generation: 9,
 		cancel:     func() { close(cancelled) },

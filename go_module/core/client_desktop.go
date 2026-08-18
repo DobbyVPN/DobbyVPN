@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-type CoreClient struct {
+type SessionRuntime struct {
 	app        *internal.App
 	cancel     context.CancelFunc
 	done       chan struct{}
@@ -26,10 +26,10 @@ type CoreClient struct {
 	mu sync.Mutex
 }
 
-func NewClient(device pkg.ProtocolDevice) *CoreClient {
+func NewSession(device pkg.ProtocolDevice) *SessionRuntime {
 	cfg := common.GetNetworkConfig()
 
-	c := &CoreClient{
+	c := &SessionRuntime{
 		app: &internal.App{
 			ProtocolDevice: device,
 			RoutingConfig: &internal.RoutingConfig{
@@ -44,11 +44,10 @@ func NewClient(device pkg.ProtocolDevice) *CoreClient {
 		},
 		state: StateIdle,
 	}
-	common.Client.SetVpnClient(coreCommon.Name, c)
 	return c
 }
 
-func (c *CoreClient) Connect() error {
+func (c *SessionRuntime) Connect() error {
 	if c == nil {
 		return errors.New("core desktop client is not initialized")
 	}
@@ -82,8 +81,8 @@ func (c *CoreClient) Connect() error {
 		var runErr error
 		defer func() {
 			if r := recover(); r != nil {
-				runErr = fmt.Errorf("core client crashed: %v", r)
-				log.Debugf(coreCommon.Category, "core goroutine recovered from panic: %v", runErr)
+				runErr = fmt.Errorf("native session runtime crashed: %v", r)
+				log.Debugf(coreCommon.Category, "native session runtime goroutine recovered from panic: %v", runErr)
 				select {
 				case initResult <- runErr:
 				default:
@@ -94,7 +93,7 @@ func (c *CoreClient) Connect() error {
 		}()
 		runErr = c.app.Run(ctx, initResult)
 		if runErr != nil {
-			log.Debugf(coreCommon.Category, "connect core client failed: %v", runErr)
+			log.Debugf(coreCommon.Category, "connect native session runtime failed: %v", runErr)
 		}
 	}()
 
@@ -108,18 +107,17 @@ func (c *CoreClient) Connect() error {
 				c.state = StateFailed
 			}
 			c.mu.Unlock()
-			return errors.Join(fmt.Errorf("failed to initialize core client connection: %w", err), shutdownErr, c.terminalRunError(generation))
+			return errors.Join(fmt.Errorf("failed to initialize native session runtime: %w", err), shutdownErr, c.terminalRunError(generation))
 		}
 		c.mu.Lock()
 		if c.generation != generation || c.state != StatePreparing {
 			state := c.state
 			c.mu.Unlock()
-			return fmt.Errorf("core client start generation %d was cancelled while %s", generation, state)
+			return fmt.Errorf("native session runtime start generation %d was cancelled while %s", generation, state)
 		}
 		c.state = StateConnected
 		c.mu.Unlock()
 		log.Debugf(coreCommon.Category, "Core client connection initialized successfully")
-		common.Client.MarkActive(coreCommon.Name)
 		return nil
 	case <-time.After(30 * time.Second):
 		shutdownErr := c.stopAndWait("after initialization timeout")
@@ -128,11 +126,11 @@ func (c *CoreClient) Connect() error {
 			c.state = StateFailed
 		}
 		c.mu.Unlock()
-		return errors.Join(fmt.Errorf("timeout waiting for core client connection initialization"), shutdownErr, c.terminalRunError(generation))
+		return errors.Join(fmt.Errorf("timeout waiting for native session runtime initialization"), shutdownErr, c.terminalRunError(generation))
 	}
 }
 
-func (c *CoreClient) Disconnect() error {
+func (c *SessionRuntime) Disconnect() error {
 	if c == nil {
 		return errors.New("core desktop client is not initialized")
 	}
@@ -150,7 +148,7 @@ func (c *CoreClient) Disconnect() error {
 		runErr := c.runErr
 		c.mu.Unlock()
 		if runErr != nil {
-			return fmt.Errorf("core client cleanup failed: %w", runErr)
+			return fmt.Errorf("native session runtime cleanup failed: %w", runErr)
 		}
 		return nil
 	}
@@ -165,13 +163,12 @@ func (c *CoreClient) Disconnect() error {
 		return err
 	}
 	if err := c.terminalRunError(c.Generation()); err != nil {
-		return fmt.Errorf("core client cleanup failed: %w", err)
+		return fmt.Errorf("native session runtime cleanup failed: %w", err)
 	}
-	common.Client.MarkInactive(coreCommon.Name)
 	return nil
 }
 
-func (c *CoreClient) SwitchDevice(device pkg.ProtocolDevice) error {
+func (c *SessionRuntime) SwitchDevice(device pkg.ProtocolDevice) error {
 	if c == nil {
 		return errors.New("core desktop client is not initialized")
 	}
@@ -182,7 +179,7 @@ func (c *CoreClient) SwitchDevice(device pkg.ProtocolDevice) error {
 	return fmt.Errorf("protocol changes require a completed disconnect before starting a new session")
 }
 
-func (c *CoreClient) stopAndWait(reason string) error {
+func (c *SessionRuntime) stopAndWait(reason string) error {
 	c.mu.Lock()
 	if c.state != StateStopping {
 		c.state = StateStopping
@@ -196,7 +193,7 @@ func (c *CoreClient) stopAndWait(reason string) error {
 	return c.waitForShutdown(done, reason)
 }
 
-func (c *CoreClient) waitForShutdown(done <-chan struct{}, reason string) error {
+func (c *SessionRuntime) waitForShutdown(done <-chan struct{}, reason string) error {
 	if done == nil {
 		return nil
 	}
@@ -206,19 +203,15 @@ func (c *CoreClient) waitForShutdown(done <-chan struct{}, reason string) error 
 		return nil
 	case <-time.After(10 * time.Second):
 		log.Debugf(coreCommon.Category, "Core/app shutdown wait timed out after %s", reason)
-		return fmt.Errorf("timeout waiting for core client shutdown after %s", reason)
+		return fmt.Errorf("timeout waiting for native session runtime shutdown after %s", reason)
 	}
 }
 
-func (c *CoreClient) Refresh() error {
-	return fmt.Errorf("core client refresh is unsupported; stop and start a new session")
+func (c *SessionRuntime) Refresh() error {
+	return fmt.Errorf("native session runtime refresh is unsupported; stop and start a new session")
 }
 
-func (c *CoreClient) HealthCheck() error {
-	return nil
-}
-
-func (c *CoreClient) finishRun(generation uint64, runErr error) {
+func (c *SessionRuntime) finishRun(generation uint64, runErr error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.generation != generation {
@@ -232,10 +225,9 @@ func (c *CoreClient) finishRun(generation uint64, runErr error) {
 	}
 	c.cancel = nil
 	c.done = nil
-	common.Client.MarkInactive(coreCommon.Name)
 }
 
-func (c *CoreClient) terminalRunError(generation uint64) error {
+func (c *SessionRuntime) terminalRunError(generation uint64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.generation != generation {
@@ -245,7 +237,7 @@ func (c *CoreClient) terminalRunError(generation uint64) error {
 }
 
 // State returns the lifecycle state for the active generation.
-func (c *CoreClient) State() LifecycleState {
+func (c *SessionRuntime) State() LifecycleState {
 	if c == nil {
 		return StateFailed
 	}
@@ -255,7 +247,7 @@ func (c *CoreClient) State() LifecycleState {
 }
 
 // Generation increments for every accepted Connect attempt.
-func (c *CoreClient) Generation() uint64 {
+func (c *SessionRuntime) Generation() uint64 {
 	if c == nil {
 		return 0
 	}

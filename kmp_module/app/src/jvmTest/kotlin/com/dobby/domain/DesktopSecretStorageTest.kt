@@ -1,6 +1,5 @@
 package com.dobby.domain
 
-import interop.healthcheck.HealthCheckLibrary
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermission
@@ -17,7 +16,7 @@ class DesktopSecretStorageTest {
         val node = Preferences.userRoot().node("dobby-secret-test-${System.nanoTime()}")
         try {
             node.put("connectionURL", "legacy-secret")
-            val repository = DobbyConfigsRepositoryImpl(node, NoopHealthCheck, directory)
+            val repository = DobbyConfigsRepositoryImpl(node, directory)
 
             assertEquals("legacy-secret", repository.getConnectionURL())
             assertNull(node.get("connectionURL", null))
@@ -26,7 +25,7 @@ class DesktopSecretStorageTest {
             // A stale plaintext preference is removed during the idempotent
             // next start and is never consulted by reads.
             node.put("connectionURL", "stale-plaintext")
-            val restarted = DobbyConfigsRepositoryImpl(node, NoopHealthCheck, directory)
+            val restarted = DobbyConfigsRepositoryImpl(node, directory)
             assertEquals("legacy-secret", restarted.getConnectionURL())
             assertNull(node.get("connectionURL", null))
         } finally {
@@ -46,13 +45,4 @@ class DesktopSecretStorageTest {
         assertFalse(permissions.contains(PosixFilePermission.GROUP_WRITE))
         assertFalse(permissions.contains(PosixFilePermission.OTHERS_WRITE))
     }
-}
-
-private object NoopHealthCheck : HealthCheckLibrary {
-    override fun CouldStart() = true
-    override fun GetConnectionState() = 0
-    override fun InitHealthCheck() = Unit
-    override fun StartHealthCheck() = Unit
-    override fun StopHealthCheck() = Unit
-    override fun MeasureTunnelProbeAverageLatencyMillis(timeoutMillis: Long) = 0L
 }

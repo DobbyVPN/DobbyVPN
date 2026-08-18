@@ -2,7 +2,7 @@ import app
 import NetworkExtension
 import Foundation
 import SystemConfiguration
-import MyLibrary
+import DobbyVPNRuntime
 
 /// Shared health state is useful for post-mortem diagnostics, but it is not proof that an iOS
 /// packet tunnel is still connected.  NetworkExtension owns that fact.
@@ -125,11 +125,7 @@ public class VpnManagerImpl {
             switch connection.status {
             case .connected:
                 self.suppressDisconnectedForPendingStart = false
-                self.connectionRepository.tryUpdateVpnNetworkReady(isReady: true)
-                self.connectionRepository.tryUpdateServiceStarted(
-                    isStarted: true,
-                    generation: Int64(self.activeGeneration)
-                )
+                self.publishSessionEvent(state: "CONNECTED")
                 self.logs.writeLog(log: "VPN connected")
 
             case .disconnected:
@@ -138,11 +134,7 @@ public class VpnManagerImpl {
                     self.logs.writeLog(log: "[NEVPNStatusDidChange] disconnected belongs to previous stop; waiting for pending start retry")
                     return
                 }
-                self.connectionRepository.tryUpdateVpnNetworkReady(isReady: false)
-                self.connectionRepository.tryUpdateServiceStarted(
-                    isStarted: false,
-                    generation: Int64(self.activeGeneration)
-                )
+                self.publishSessionEvent(state: "IDLE")
                 self.logs.writeLog(log: "VPN disconnected")
 
             case .connecting:
@@ -156,11 +148,7 @@ public class VpnManagerImpl {
 
             case .invalid:
                 self.suppressDisconnectedForPendingStart = false
-                self.connectionRepository.tryUpdateVpnNetworkReady(isReady: false)
-                self.connectionRepository.tryUpdateServiceStarted(
-                    isStarted: false,
-                    generation: Int64(self.activeGeneration)
-                )
+                self.publishSessionEvent(state: "IDLE")
                 self.logs.writeLog(log: "VPN status is invalid")
 
             @unknown default:
@@ -178,6 +166,7 @@ public class VpnManagerImpl {
     public func start(isProtocolProbe: Bool) {
         let generation = IOSVpnConnectionAuthority.beginStart()
         activeGeneration = generation
+        publishSessionEvent(state: "PREPARING")
         self.logs.writeLog(log: "call start launchId=\(Self.launchId) isProtocolProbe=\(isProtocolProbe)")
         self.logs.writeLog(log: "Routing table without vpn:")
         getOrCreateManager { manager, _ in
@@ -237,11 +226,7 @@ public class VpnManagerImpl {
         case .fail:
             self.logs.writeLog(log: "[start] Give up: connection stayed \(statusName(status)) after \(retryAttempt) retries")
             self.suppressDisconnectedForPendingStart = false
-            self.connectionRepository.tryUpdateVpnNetworkReady(isReady: false)
-            self.connectionRepository.tryUpdateServiceStarted(
-                isStarted: false,
-                generation: Int64(generation)
-            )
+            self.publishSessionEvent(state: "FAILED", failureCode: "PLATFORM_FAILED")
             return
 
         case .start:
@@ -296,11 +281,7 @@ public class VpnManagerImpl {
             } catch {
                 self.logs.writeLog(log: "Error starting VPNTunnel \(error)")
                 self.suppressDisconnectedForPendingStart = false
-                self.connectionRepository.tryUpdateVpnNetworkReady(isReady: false)
-                self.connectionRepository.tryUpdateServiceStarted(
-                    isStarted: false,
-                    generation: Int64(generation)
-                )
+                self.publishSessionEvent(state: "FAILED", failureCode: "PLATFORM_FAILED")
             }
         }
     }
@@ -309,6 +290,7 @@ public class VpnManagerImpl {
         // Invalidate any asynchronous preference/retry/restart completion before stopping.
         activeGeneration = IOSVpnConnectionAuthority.beginStop()
         IOSVpnConnectionAuthority.publish(.disconnecting, generation: activeGeneration)
+        publishSessionEvent(state: "STOPPING")
         if !isUserInitiated {
             DobbyConfigsRepositoryImpl.shared.setIsUserInitStop(isUserInitStop: false)
         }
@@ -351,6 +333,16 @@ public class VpnManagerImpl {
                 }
             }
         }
+    }
+
+    private func publishSessionEvent(state: String, failureCode: String = "") {
+        connectionRepository.tryPublishSessionEvent(
+            sessionId: "ios",
+            generation: Int64(activeGeneration),
+            sequence: 0,
+            state: state,
+            failureCode: failureCode
+        )
     }
 
     private func makeManager() -> NETunnelProviderManager {

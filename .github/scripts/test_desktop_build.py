@@ -49,16 +49,17 @@ class DesktopBuildTests(unittest.TestCase):
             "/Applications/Dobby VPN.app/Contents/Resources/",
         )
 
-    def test_builds_use_tracked_embedded_cloak_source_without_overwriting_it(self) -> None:
+    def test_builds_do_not_package_removed_cloak_runtime(self) -> None:
         script = SCRIPT_PATH.read_text(encoding="utf-8")
         android = (SCRIPT_PATH.parents[2] / "kmp_module" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
         ios = (SCRIPT_PATH.parents[1] / "workflows" / "ios_libs_generate.yml").read_text(encoding="utf-8")
         desktop = (SCRIPT_PATH.parents[1] / "workflows" / "desktop_libs_generate.yml").read_text(encoding="utf-8")
 
-        self.assertIn("Using tracked embedded Cloak client source", script)
+        self.assertNotIn("Using tracked embedded Cloak client source", script)
+        self.assertNotIn("validate_embedded_cloak_source", script)
         self.assertNotIn("copytree(source_dir, target_dir", script)
         self.assertNotIn("from(cloakInternalDir)", android)
-        self.assertIn("inputs.dir(goModuleCloakInternalDir)", android)
+        self.assertNotIn("inputs.dir(goModuleCloakInternalDir)", android)
         self.assertNotIn("cp -r Cloak/internal", ios)
         self.assertNotIn("'Cloak/internal/**'", ios)
         self.assertNotIn("'Cloak/internal/**'", desktop)
@@ -397,7 +398,6 @@ class DesktopBuildTests(unittest.TestCase):
                 "install_windows_bridge",
                 side_effect=lambda skip_deps: calls.append(f"bridge:{skip_deps}"),
             ),
-            mock.patch.object(desktop_build, "validate_embedded_cloak_source"),
             mock.patch.object(desktop_build, "go_mod_download"),
             mock.patch.object(desktop_build, "run", side_effect=lambda *args, **kwargs: calls.append("build")),
             mock.patch.object(desktop_build.shutil, "copyfile"),
@@ -480,7 +480,6 @@ class DesktopBuildTests(unittest.TestCase):
 
         with (
             mock.patch.object(desktop_build, "ensure_build_dependencies"),
-            mock.patch.object(desktop_build, "validate_embedded_cloak_source"),
             mock.patch.object(desktop_build, "go_mod_download"),
             mock.patch.object(desktop_build, "run", side_effect=record_run),
             mock.patch.object(desktop_build.shutil, "copyfile"),

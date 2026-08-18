@@ -45,7 +45,7 @@ jobs:
         id: ios_lib_cache
         uses: actions/cache@v5
         with:
-          path: go_module/MyLibrary.xcframework
+          path: go_module/DobbyVPNRuntime.xcframework
           key: ${{ runner.os }}-xcode-26.3-ios-15.6-vpn-lib-${{ hashFiles('.github/workflows/ios_libs_generate.yml', '.go-version', 'go_module/go.sum', 'go_module/**') }}
 
       - name: Set up Go
@@ -54,13 +54,6 @@ jobs:
         with:
           go-version-file: .go-version
           cache-dependency-path: go_module/go.sum
-
-      - name: Verify tracked embedded Cloak client source
-        if: steps.ios_lib_cache.outputs.cache-hit != 'true'
-        run: |
-          test -f go_module/modules/Cloak/internal/client/connector.go
-          test -f go_module/modules/Cloak/internal/common/dialer.go
-          test -f go_module/modules/Cloak/internal/multiplex/session.go
 
       - name: Download Go modules & dependencies
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
@@ -90,8 +83,8 @@ jobs:
       - name: Upload iOS XCFramework
         uses: actions/upload-artifact@v7
         with:
-          name: MyLibrary.xcframework
-          path: go_module/MyLibrary.xcframework
+          name: DobbyVPNRuntime.xcframework
+          path: go_module/DobbyVPNRuntime.xcframework
           if-no-files-found: error
 
   build_ios_app_lib:

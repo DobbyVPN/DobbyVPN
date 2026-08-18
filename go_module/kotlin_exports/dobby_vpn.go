@@ -3,21 +3,14 @@
 package dobbyvpn
 
 import (
-	"strings"
 	"sync"
 
-	"go_module/log"
 	"go_module/sessionapi/mobilebinding"
-	"go_module/vpnmanager"
 )
 
-const logCategory = "kotlin_exports"
-
 var (
-	lastError        = vpnmanager.NewLastError(logCategory)
 	androidCallbacks androidPlatformCallbacks
 	mobileSessions   = mobilebinding.New(&androidCallbacks)
-	legacySession    = mobileSessions.NewLegacyClient()
 )
 
 // PlatformCallbacks is declared in the bound package so gobind emits the Java
@@ -49,6 +42,7 @@ func RegisterSessionPlatform(callbacks PlatformCallbacks) {
 // a raw configuration, URL, or credential.
 func GetSessionCapabilities() string { return mobileSessions.GetCapabilities() }
 func CreateSession() string          { return mobileSessions.CreateSession() }
+func RecoverActiveSession() string   { return mobileSessions.RecoverActiveSession() }
 func ConfigureSession(sessionID, commandID string, rawConfig []byte) string {
 	return mobileSessions.Configure(sessionID, commandID, rawConfig)
 }
@@ -63,48 +57,6 @@ func ObserveSession(sessionID string, afterSequence int64) string {
 	return mobileSessions.Observe(sessionID, afterSequence)
 }
 func DestroySession(sessionID string) string { return mobileSessions.Destroy(sessionID) }
-
-func GetVpnLastError() string { return lastError.Get() }
-
-// NewVpnClient is retained for source compatibility only. It prepares a v1
-// compatibility profile and transfers fd to exactly one future generation; it
-// never switches a live protocol client.
-func NewVpnClient(config string, protocol string, fd int32) {
-	defer vpnmanager.GuardExport(logCategory, "NewVpnClient", lastError)()
-	lastError.Clear()
-	if err := legacySession.Configure(strings.Clone(config), strings.Clone(protocol), fd); err != nil {
-		lastError.Set(err.Error())
-		log.Debugf(logCategory, "legacy configure failed")
-		return
-	}
-	log.Debugf(logCategory, "legacy session configured")
-}
-
-func VpnConnect() int32 {
-	defer vpnmanager.GuardExport(logCategory, "VpnConnect", lastError)()
-	if pendingErr := lastError.Get(); pendingErr != "" {
-		return -1
-	}
-	lastError.Clear()
-	if err := legacySession.Connect(); err != nil {
-		lastError.Set(err.Error())
-		log.Debugf(logCategory, "legacy start rejected")
-		return -1
-	}
-	log.Debugf(logCategory, "legacy start requested")
-	return 0
-}
-
-func VpnDisconnect() {
-	defer vpnmanager.GuardExport(logCategory, "VpnDisconnect", lastError)()
-	if err := legacySession.Disconnect(); err != nil {
-		lastError.Set(err.Error())
-		log.Debugf(logCategory, "legacy stop failed")
-		return
-	}
-	lastError.Clear()
-	log.Debugf(logCategory, "legacy session stopped")
-}
 
 type androidPlatformCallbacks struct {
 	mu       sync.RWMutex

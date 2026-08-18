@@ -2,6 +2,10 @@ package com.dobby.feature.main.domain
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.flow
 
 /**
  * Swift owns the app/NetworkExtension process boundary.  In particular, it
@@ -33,6 +37,7 @@ object IosSessionBridgeRegistry {
 /** A thin KMP adapter; no TOML/profile/failover decision exists on iOS. */
 internal class IosSessionController(
     private val bridge: IosSessionBridge,
+    private val connectionState: ConnectionStateRepository,
 ) : SessionController {
     private val mutex = Mutex()
 
@@ -56,6 +61,25 @@ internal class IosSessionController(
 
     override suspend fun observe(afterSequence: ULong): SessionControllerResult<SessionObservation> = mutex.withLock {
         SessionEnvelopeDecoder.decode(bridge.observe(afterSequence.toLong())) { it.toSessionObservation() }
+    }
+
+    /**
+     * NetworkExtension status callbacks are published by the Swift shell into
+     * the shared repository. The bridge observation is read once first so a UI
+     * recreated while the extension is already connected receives current
+     * state without a timer or a second lifecycle owner.
+     */
+    override fun watch(afterSequence: ULong): Flow<SessionEvent> = flow {
+        val observed = observe(afterSequence)
+        var cursor = afterSequence
+        if (observed is SessionControllerResult.Success) {
+            observed.value.events.forEach { event ->
+                emit(event)
+                if (event.sequence > cursor) cursor = event.sequence
+            }
+            if (observed.value.nextSequence > cursor) cursor = observed.value.nextSequence
+        }
+        emitAll(connectionState.sessionEvents.filter { event -> event.sequence > cursor })
     }
 
     override suspend fun destroy(): SessionControllerResult<Unit> = mutex.withLock {

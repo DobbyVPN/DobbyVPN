@@ -8,7 +8,7 @@ import (
 	"go_module/grpcproto"
 	"go_module/sessionapi/desktopbinding"
 	"go_module/sessionapi/grpctransport"
-	"go_module/sessionapi/v1"
+	v2 "go_module/sessionapi/v2"
 )
 
 type sessionHost struct {
@@ -16,7 +16,7 @@ type sessionHost struct {
 	transport *grpctransport.Handler
 }
 
-func newSessionHost(manager *v1.Manager) *sessionHost {
+func newSessionHost(manager *v2.Manager) *sessionHost {
 	binding := desktopbinding.New(manager)
 	return &sessionHost{binding: binding, transport: grpctransport.New(binding.Manager)}
 }
@@ -41,6 +41,9 @@ func (s *Server) GetCapabilities(ctx context.Context, in *grpcproto.SessionGetCa
 func (s *Server) CreateSession(ctx context.Context, in *grpcproto.SessionCreateSessionRequest) (*grpcproto.SessionCreateSessionResponse, error) {
 	return s.sessionHost().transport.CreateSession(ctx, in)
 }
+func (s *Server) RecoverActiveSession(ctx context.Context, in *grpcproto.Empty) (*grpcproto.SessionRecoverActiveSessionResponse, error) {
+	return s.sessionHost().transport.RecoverActiveSession(ctx, in)
+}
 func (s *Server) Configure(ctx context.Context, in *grpcproto.SessionConfigureRequest) (*grpcproto.SessionConfigureResponse, error) {
 	return s.sessionHost().transport.Configure(ctx, in)
 }
@@ -55,6 +58,9 @@ func (s *Server) Snapshot(ctx context.Context, in *grpcproto.SessionSnapshotRequ
 }
 func (s *Server) Observe(ctx context.Context, in *grpcproto.SessionObserveRequest) (*grpcproto.SessionObserveResponse, error) {
 	return s.sessionHost().transport.Observe(ctx, in)
+}
+func (s *Server) Watch(in *grpcproto.SessionObserveRequest, stream grpcproto.Vpn_WatchServer) error {
+	return s.sessionHost().transport.Watch(in, stream)
 }
 func (s *Server) DestroySession(ctx context.Context, in *grpcproto.SessionDestroySessionRequest) (*grpcproto.SessionDestroySessionResponse, error) {
 	return s.sessionHost().transport.DestroySession(ctx, in)

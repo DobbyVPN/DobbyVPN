@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	v1 "go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v2"
 )
 
 const sensitiveConfig = `[[Outline]]

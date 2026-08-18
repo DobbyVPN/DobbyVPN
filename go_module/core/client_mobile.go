@@ -5,7 +5,6 @@ package core
 import (
 	"errors"
 	"fmt"
-	"go_module/common"
 	coreCommon "go_module/core/common"
 	"go_module/core/pkg"
 	"go_module/log"
@@ -18,7 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type CoreClient struct {
+type SessionRuntime struct {
 	device     pkg.ProtocolDevice
 	tun        io.ReadWriteCloser
 	engine     *tunnel.Engine
@@ -28,18 +27,17 @@ type CoreClient struct {
 	mu         sync.Mutex
 }
 
-func NewClient(device pkg.ProtocolDevice, tun io.ReadWriteCloser) *CoreClient {
-	c := &CoreClient{
+func NewSession(device pkg.ProtocolDevice, tun io.ReadWriteCloser) *SessionRuntime {
+	c := &SessionRuntime{
 		device: device,
 		tun:    tun,
 		state:  StateIdle,
 	}
 	log.Debugf(coreCommon.Category, "core mobile client created (tun2socks version)")
-	common.Client.SetVpnClient(coreCommon.Name, c)
 	return c
 }
 
-func (c *CoreClient) Connect() (err error) {
+func (c *SessionRuntime) Connect() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Debugf(coreCommon.Category, "RECOVERED from fail in Connect: %v", r)
@@ -66,7 +64,6 @@ func (c *CoreClient) Connect() (err error) {
 		c.engine = nil
 		c.tun = nil
 		c.device = nil
-		common.Client.MarkInactive(coreCommon.Name)
 		return errors.Join(cause, cleanupErr)
 	}
 
@@ -121,12 +118,11 @@ func (c *CoreClient) Connect() (err error) {
 	releaseTun()
 
 	c.state = StateConnected
-	common.Client.MarkActive(coreCommon.Name)
-	log.Debugf(coreCommon.Category, "core client connected successfully via tun2socks")
+	log.Debugf(coreCommon.Category, "native session runtime connected successfully via tun2socks")
 	return nil
 }
 
-func (c *CoreClient) Disconnect() error {
+func (c *SessionRuntime) Disconnect() error {
 	if c == nil {
 		return errors.New("core mobile client is not initialized")
 	}
@@ -144,12 +140,11 @@ func (c *CoreClient) Disconnect() error {
 	c.device = nil
 	c.state = StateIdle
 
-	log.Debugf(coreCommon.Category, "core client disconnected")
-	common.Client.MarkInactive(coreCommon.Name)
+	log.Debugf(coreCommon.Category, "native session runtime disconnected")
 	return err
 }
 
-func (c *CoreClient) SwitchDevice(device pkg.ProtocolDevice) error {
+func (c *SessionRuntime) SwitchDevice(device pkg.ProtocolDevice) error {
 	if c == nil {
 		return errors.New("core mobile client is not initialized")
 	}
@@ -160,15 +155,11 @@ func (c *CoreClient) SwitchDevice(device pkg.ProtocolDevice) error {
 	return fmt.Errorf("protocol changes require a completed disconnect before starting a new session")
 }
 
-func (c *CoreClient) Refresh() error {
-	return fmt.Errorf("core client refresh is unsupported; stop and start a new session")
+func (c *SessionRuntime) Refresh() error {
+	return fmt.Errorf("native session runtime refresh is unsupported; stop and start a new session")
 }
 
-func (c *CoreClient) HealthCheck() error {
-	return nil
-}
-
-func (c *CoreClient) GetServerIP() net.IP {
+func (c *SessionRuntime) GetServerIP() net.IP {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c == nil || c.device == nil {
@@ -178,7 +169,7 @@ func (c *CoreClient) GetServerIP() net.IP {
 }
 
 // State returns the current lifecycle state without exposing mutable resources.
-func (c *CoreClient) State() LifecycleState {
+func (c *SessionRuntime) State() LifecycleState {
 	if c == nil {
 		return StateFailed
 	}
@@ -188,7 +179,7 @@ func (c *CoreClient) State() LifecycleState {
 }
 
 // Generation changes for every accepted start attempt.
-func (c *CoreClient) Generation() uint64 {
+func (c *SessionRuntime) Generation() uint64 {
 	if c == nil {
 		return 0
 	}

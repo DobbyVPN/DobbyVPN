@@ -13,7 +13,6 @@ import (
 	"go_module/tunnel/protected_dialer"
 	"sync"
 
-	"go_module/common"
 	coreCommon "go_module/core/common"
 	"go_module/routing"
 	"go_module/tunnel"
@@ -91,9 +90,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			// Restore the captured system routes while the owned utun still
 			// exists. Stopping tun2socks first can make the default route vanish
 			// before the Plan can prove ownership and restore its baseline.
-			common.Client.MarkInCriticalSection(coreCommon.Name)
 			routeErr := routePlan.Close()
-			common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 			var engineErr error
 			if ownedEngine != nil {
 				engineErr = ownedEngine.Stop()
@@ -120,9 +117,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 
 	if serverIP.String() != "127.0.0.1" {
 		log.Debugf(coreCommon.Category, "[Darwin][Routing] acquiring direct VPN bypass route")
-		common.Client.MarkInCriticalSection(coreCommon.Name)
 		_, err = routePlan.AcquireMacOSProxyRoute(serverIP.String(), gatewayIP.String())
-		common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 		if err != nil {
 			err = fmt.Errorf("failed to acquire server bypass route: %w", err)
 			signalInit(initResult, err)
@@ -166,7 +161,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 	log.Debugf(coreCommon.Category, "[Darwin][Tunnel] tun2socks engine ready interface=%s", tunName)
 
-	common.Client.MarkInCriticalSection(coreCommon.Name)
 	_, err = routePlan.AcquireMacOSTunnelDefault(tunName)
 	if err == nil {
 		err = routePlan.AcquireMacOSIPv6Block(tunName)
@@ -174,7 +168,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	if err == nil && ifaceName != "" {
 		_, err = routePlan.AcquireMacOSScopedDefault(ifaceName, gatewayIP.String())
 	}
-	common.Client.MarkOutOffCriticalSection(coreCommon.Name)
 	if err != nil {
 		err = fmt.Errorf("failed to acquire generation-owned routing: %w", err)
 		signalInit(initResult, err)

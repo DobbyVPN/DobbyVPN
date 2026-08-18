@@ -82,7 +82,7 @@ private class RecordingSessionLibrary : SessionLibrary {
     private val sessions = mutableSetOf<String>()
 
     override suspend fun getCapabilities(): SessionResult<TransportCapabilities> =
-        SessionResult.Success(TransportCapabilities("v1", emptyList(), emptyList(), true))
+        SessionResult.Success(TransportCapabilities("sessionapi/v2", emptyList(), emptyList()))
 
     override suspend fun createSession(): SessionResult<String> {
         createCalls += 1

@@ -1,5 +1,5 @@
 import NetworkExtension
-import MyLibrary
+import DobbyVPNRuntime
 import os
 import app
 import CommonDI
@@ -16,15 +16,20 @@ private final class GomobileProviderSessionClient: IOSProviderSessionClient {
     }
 
     func create() throws -> String {
+        if let recovered = try? result(DobbyvpnRecoverActiveSession()),
+           let sessionID = recovered["session_id"] as? String,
+           !sessionID.isEmpty {
+            return sessionID
+        }
         try string(
-            result(Cloak_outlineCreateSession()),
+            result(DobbyvpnCreateSession()),
             key: "session_id"
         )
     }
 
     func configure(sessionID: String, rawConfiguration: Data) throws {
         _ = try result(
-            Cloak_outlineConfigureSession(
+            DobbyvpnConfigureSession(
                 sessionID,
                 commandID("configure"),
                 rawConfiguration
@@ -35,7 +40,7 @@ private final class GomobileProviderSessionClient: IOSProviderSessionClient {
     func start(sessionID: String) throws -> Int64 {
         try int64(
             result(
-                Cloak_outlineStartSession(
+                DobbyvpnStartSession(
                     sessionID,
                     commandID("start"),
                     "AUTO_SELECT",
@@ -47,7 +52,7 @@ private final class GomobileProviderSessionClient: IOSProviderSessionClient {
     }
 
     func snapshot(sessionID: String) throws -> IOSProviderSessionSnapshot {
-        let snapshot = try result(Cloak_outlineSnapshotSession(sessionID))
+        let snapshot = try result(DobbyvpnSnapshotSession(sessionID))
         return IOSProviderSessionSnapshot(
             generation: (snapshot["generation"] as? NSNumber)?.int64Value ?? 0,
             state: snapshot["state"] as? String ?? "",
@@ -57,7 +62,7 @@ private final class GomobileProviderSessionClient: IOSProviderSessionClient {
 
     func stop(sessionID: String, generation: Int64) throws {
         _ = try result(
-            Cloak_outlineStopSession(
+            DobbyvpnStopSession(
                 sessionID,
                 commandID("stop"),
                 generation
@@ -66,7 +71,7 @@ private final class GomobileProviderSessionClient: IOSProviderSessionClient {
     }
 
     func destroy(sessionID: String) throws {
-        _ = try result(Cloak_outlineDestroySession(sessionID))
+        _ = try result(DobbyvpnDestroySession(sessionID))
     }
 
     private func commandID(_ operation: String) -> String {
@@ -113,8 +118,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     // The extension owns a sessionapi process of its own.  The containing app
     // writes the opaque configuration bytes to the App Group before asking
     // NetworkExtension to start; this process is the only one that interprets
-    // them (through Go's sessionapi/v1).
-    private let sessionRawConfigurationKey = "sessionapi.v1.rawConfiguration"
+    // them (through Go's sessionapi/v2).
+    private let sessionRawConfigurationKey = "sessionapi.v2.rawConfiguration"
     private lazy var sessionCoordinator = IOSProviderSessionCoordinator(
         client: GomobileProviderSessionClient(launchID: launchId)
     )
@@ -369,7 +374,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         let path = LogsRepository_iosKt.provideGoLogFilePath().normalized().description()
         logs.writeLog(log: "Starting Go tunnel logger using owner-only local storage")
-        guard Cloak_outlineInitLogger(path) else {
+        guard DobbyvpnInitLogger(path) else {
             logs.writeLog(log: "[ERROR] service_logger_init result=failed failure_code=LOCAL_LOGGER_REJECTED")
             throw sessionError("LOGGER_INITIALIZATION_FAILED")
         }
@@ -778,7 +783,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     @MainActor
     private func stopProtocols(reason: String) async {
         // Do not dispatch per-protocol stops here. sessionapi owns protocol,
-        // tun2socks, DNS/routing and Cloak cleanup as one transactional lease.
+        // tun2socks, DNS/routing cleanup remains one transactional lease.
         await stopGoSession(reason: reason)
     }
 

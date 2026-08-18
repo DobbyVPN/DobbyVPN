@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"math"
 
-	v1 "go_module/sessionapi/v1"
+	v2 "go_module/sessionapi/v2"
 )
 
 // PlatformCallbacks is implemented by the Android service or iOS extension
@@ -26,13 +26,14 @@ type PlatformCallbacks interface {
 }
 
 type managerAPI interface {
-	GetCapabilities(context.Context) v1.Capabilities
+	GetCapabilities(context.Context) v2.Capabilities
 	CreateSession(context.Context) (string, error)
-	Configure(context.Context, string, string, []byte) (v1.ConfigureResult, error)
-	Start(context.Context, string, string, v1.StartTarget) (v1.StartResult, error)
-	Stop(context.Context, string, string, uint64) (v1.StopResult, error)
-	Snapshot(context.Context, string) (v1.SnapshotResult, error)
-	Observe(context.Context, string, uint64) (v1.ObserveResult, error)
+	RecoverActiveSession(context.Context) (string, error)
+	Configure(context.Context, string, string, []byte) (v2.ConfigureResult, error)
+	Start(context.Context, string, string, v2.StartTarget) (v2.StartResult, error)
+	Stop(context.Context, string, string, uint64) (v2.StopResult, error)
+	Snapshot(context.Context, string) (v2.SnapshotResult, error)
+	Observe(context.Context, string, uint64) (v2.ObserveResult, error)
 	DestroySession(context.Context, string) error
 }
 
@@ -54,7 +55,7 @@ type platformControl interface {
 	protectActive(int32) bool
 }
 
-// NewForTest permits pure tests to inject a v1 manager without constructing
+// NewForTest permits pure tests to inject a SessionV2 manager without constructing
 // native protocol implementations. Production mobile builds use New.
 func NewForTest(manager managerAPI) *Binding { return &Binding{manager: manager} }
 
@@ -70,7 +71,7 @@ type safeError struct {
 
 func success(value interface{}) string { return encode(envelope{OK: true, Result: value}) }
 func failed(err error) string {
-	return encode(envelope{OK: false, Error: &safeError{Code: string(v1.CodeOf(err))}})
+	return encode(envelope{OK: false, Error: &safeError{Code: string(v2.CodeOf(err))}})
 }
 func encode(value interface{}) string {
 	data, err := json.Marshal(value)
@@ -96,7 +97,19 @@ func (b *Binding) CreateSession() string {
 	}{id})
 }
 
-// Configure forwards the exact supplied bytes to v1's raw configuration
+// RecoverActiveSession returns the process-owned session that a restarted UI
+// should reattach to, without creating a competing lifecycle owner.
+func (b *Binding) RecoverActiveSession() string {
+	id, err := b.manager.RecoverActiveSession(context.Background())
+	if err != nil {
+		return failed(err)
+	}
+	return success(struct {
+		SessionID string `json:"session_id"`
+	}{id})
+}
+
+// Configure forwards the exact supplied bytes to SessionV2's configuration
 // parser. The result contains only digest, profile summaries, and warnings.
 func (b *Binding) Configure(sessionID, commandID string, rawConfig []byte) string {
 	result, err := b.manager.Configure(context.Background(), sessionID, commandID, append([]byte(nil), rawConfig...))
@@ -106,12 +119,12 @@ func (b *Binding) Configure(sessionID, commandID string, rawConfig []byte) strin
 	return success(configureDTO(result))
 }
 
-// Start accepts only v1's stable modes and profile indexes.
+// Start accepts only SessionV2's stable modes and profile indexes.
 func (b *Binding) Start(sessionID, commandID, mode string, index int32) string {
-	if index < 0 && mode != string(v1.AutoSelect) {
-		return failed(&v1.Error{Code: v1.FailureInvalidArgument})
+	if index < 0 && mode != string(v2.AutoSelect) {
+		return failed(&v2.Error{Code: v2.FailureInvalidArgument})
 	}
-	result, err := b.manager.Start(context.Background(), sessionID, commandID, v1.StartTarget{Mode: v1.StartMode(mode), Index: int(index)})
+	result, err := b.manager.Start(context.Background(), sessionID, commandID, v2.StartTarget{Mode: v2.StartMode(mode), Index: int(index)})
 	if err != nil {
 		return failed(err)
 	}
@@ -120,7 +133,7 @@ func (b *Binding) Start(sessionID, commandID, mode string, index int32) string {
 
 func (b *Binding) Stop(sessionID, commandID string, generation int64) string {
 	if generation <= 0 {
-		return failed(&v1.Error{Code: v1.FailureStaleGeneration})
+		return failed(&v2.Error{Code: v2.FailureStaleGeneration})
 	}
 	result, err := b.manager.Stop(context.Background(), sessionID, commandID, uint64(generation))
 	if err != nil {
@@ -139,7 +152,7 @@ func (b *Binding) Snapshot(sessionID string) string {
 
 func (b *Binding) Observe(sessionID string, afterSequence int64) string {
 	if afterSequence < 0 {
-		return failed(&v1.Error{Code: v1.FailureInvalidArgument})
+		return failed(&v2.Error{Code: v2.FailureInvalidArgument})
 	}
 	result, err := b.manager.Observe(context.Background(), sessionID, uint64(afterSequence))
 	if err != nil {
@@ -167,10 +180,9 @@ type capabilityDTO struct {
 	Enabled bool   `json:"enabled"`
 }
 type capabilitiesResultDTO struct {
-	Version                  string          `json:"version"`
-	Protocols                []string        `json:"protocols"`
-	Features                 []capabilityDTO `json:"features"`
-	TelemetryNetworkDisabled bool            `json:"telemetry_network_disabled"`
+	Version   string          `json:"version"`
+	Protocols []string        `json:"protocols"`
+	Features  []capabilityDTO `json:"features"`
 }
 type profileDTO struct {
 	Index       int32  `json:"index"`
@@ -215,8 +227,8 @@ type observeResultDTO struct {
 	NextSequence int64      `json:"next_sequence"`
 }
 
-func capabilitiesDTO(in v1.Capabilities) capabilitiesResultDTO {
-	out := capabilitiesResultDTO{Version: in.Version, TelemetryNetworkDisabled: in.TelemetryNetworkDisabled, Protocols: make([]string, len(in.Protocols)), Features: make([]capabilityDTO, len(in.Features))}
+func capabilitiesDTO(in v2.Capabilities) capabilitiesResultDTO {
+	out := capabilitiesResultDTO{Version: in.Version, Protocols: make([]string, len(in.Protocols)), Features: make([]capabilityDTO, len(in.Features))}
 	for i := range in.Protocols {
 		out.Protocols[i] = string(in.Protocols[i])
 	}
@@ -225,21 +237,21 @@ func capabilitiesDTO(in v1.Capabilities) capabilitiesResultDTO {
 	}
 	return out
 }
-func profileResultDTO(in v1.ProfileSummary) profileDTO {
+func profileResultDTO(in v2.ProfileSummary) profileDTO {
 	index := int32(-1)
 	if in.Index >= 0 && in.Index <= math.MaxInt32 {
 		index = int32(in.Index) // #nosec G115 -- bounds checked immediately above.
 	}
 	return profileDTO{Index: index, Protocol: string(in.Protocol), Description: in.Description}
 }
-func profileResultPtr(in *v1.ProfileSummary) *profileDTO {
+func profileResultPtr(in *v2.ProfileSummary) *profileDTO {
 	if in == nil {
 		return nil
 	}
 	out := profileResultDTO(*in)
 	return &out
 }
-func configureDTO(in v1.ConfigureResult) configureResultDTO {
+func configureDTO(in v2.ConfigureResult) configureResultDTO {
 	out := configureResultDTO{Digest: in.Digest, Profiles: make([]profileDTO, len(in.Profiles)), Warnings: make([]warningDTO, len(in.Warnings))}
 	for i := range in.Profiles {
 		out.Profiles[i] = profileResultDTO(in.Profiles[i])
@@ -249,19 +261,19 @@ func configureDTO(in v1.ConfigureResult) configureResultDTO {
 	}
 	return out
 }
-func startDTO(in v1.StartResult) startResultDTO {
+func startDTO(in v2.StartResult) startResultDTO {
 	generation, _ := generationAsInt64(in.Generation)
 	return startResultDTO{Generation: generation}
 }
-func stopDTO(in v1.StopResult) stopResultDTO {
+func stopDTO(in v2.StopResult) stopResultDTO {
 	generation, _ := generationAsInt64(in.Generation)
 	return stopResultDTO{Generation: generation}
 }
-func snapshotDTO(in v1.SnapshotResult) snapshotResultDTO {
+func snapshotDTO(in v2.SnapshotResult) snapshotResultDTO {
 	generation, _ := generationAsInt64(in.Generation)
 	return snapshotResultDTO{SessionID: in.SessionID, Generation: generation, State: string(in.State), Configured: in.Configured, ActiveProfile: profileResultPtr(in.ActiveProfile), LastFailure: string(in.LastFailure), CleanupComplete: in.CleanupComplete}
 }
-func observeDTO(in v1.ObserveResult) observeResultDTO {
+func observeDTO(in v2.ObserveResult) observeResultDTO {
 	next, _ := generationAsInt64(in.NextSequence)
 	out := observeResultDTO{Events: make([]eventDTO, len(in.Events)), NextSequence: next}
 	for i := range in.Events {

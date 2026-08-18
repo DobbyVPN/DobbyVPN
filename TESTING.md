@@ -9,16 +9,8 @@ From `go_module/`:
 
 ```bash
 go test ./...
-go test github.com/cbeuw/Cloak/exported_client github.com/cbeuw/Cloak/internal/client
 go test -race ./core/... ./routing/... ./sessionapi/... ./tunnel/...
-go test -race github.com/cbeuw/Cloak/exported_client github.com/cbeuw/Cloak/internal/client
 ```
-
-The explicit Cloak command is required because `go_module/modules/Cloak` is a
-replaced nested module and is not included in the parent module's `./...`
-pattern. It covers the embedded client integration used by every DobbyVPN
-platform; the standalone Cloak server packages are outside this app's test
-scope.
 
 From `kmp_module/` with JDK 17 and the Android SDK configured:
 
@@ -45,7 +37,7 @@ framework before invoking Xcode:
 ```bash
 cd go_module
 ./scripts/build_ios_xcframework.sh
-ditto MyLibrary.xcframework ../swift_module/MyLibrary.xcframework
+ditto DobbyVPNRuntime.xcframework ../swift_module/DobbyVPNRuntime.xcframework
 
 cd ../kmp_module
 ./gradlew :app:linkDebugFrameworkIosSimulatorArm64 :app:iosSimulatorArm64Test
@@ -96,8 +88,9 @@ The signed-IPA workflow separately inspects the app and packet-tunnel extension,
 signatures, exact entitlements, App Group, source commit, version/build,
 provisioning expiry, and release debugger policy. Simulator cannot execute the
 production NetworkExtension data plane, real traffic, sleep/wake, or physical
-device resource cleanup. Those remain optional physical-hardware strengthening
-tests, not prerequisites for contributors or maintainers without an iPhone.
+device resource cleanup. No physical-iPhone lane is part of v1.5.0 because the
+owner does not have a device; this remains a named coverage gap rather than a
+substituted pass.
 
 The Go XCFramework intentionally includes a Simulator slice. It shares all
 session/runtime code with the device slice, but TrustTunnel returns a typed

@@ -81,8 +81,8 @@ jobs:
       - name: Download iOS lib
         uses: actions/download-artifact@v7
         with:
-          name: MyLibrary.xcframework
-          path: swift_module/MyLibrary.xcframework
+          name: DobbyVPNRuntime.xcframework
+          path: swift_module/DobbyVPNRuntime.xcframework
 
       - name: Fastlane bump build and version
         env:

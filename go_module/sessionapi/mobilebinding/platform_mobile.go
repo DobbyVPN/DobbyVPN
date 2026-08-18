@@ -4,24 +4,22 @@ package mobilebinding
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"sync"
-	"time"
 
 	appLog "go_module/log"
+	"go_module/sessionapi/runtime"
 	"go_module/sessionapi/runtimebridge"
-	"go_module/sessionapi/runtimecore"
-	"go_module/sessionapi/v1"
+	v2 "go_module/sessionapi/v2"
 )
 
 // New creates the single authoritative session manager for a mobile process.
 // The manager owns protocol/runtime lifecycle; the callback is only the narrow
 // platform boundary for TUN, socket protection, and state publication.
 func New(callbacks PlatformCallbacks) *Binding {
-	platform := &platformAdapter{callbacks: callbacks, tunnels: newOneShotFDs(), active: make(map[string]v1.SessionRef)}
-	manager := v1.NewManager(v1.ManagerOptions{Runtime: runtimebridge.New(platform), Platform: platform, Audit: appLog.SessionAuditSink{}})
+	platform := &platformAdapter{callbacks: callbacks, tunnels: newOneShotFDs(), active: make(map[string]v2.SessionRef)}
+	manager := v2.NewManager(v2.ManagerOptions{Runtime: runtimebridge.New(platform), Platform: platform, Audit: appLog.SessionAuditSink{}})
 	return &Binding{manager: manager, platform: platform}
 }
 
@@ -61,7 +59,7 @@ type platformAdapter struct {
 	mu        sync.Mutex
 	callbacks PlatformCallbacks
 	tunnels   oneShotFDs
-	active    map[string]v1.SessionRef
+	active    map[string]v2.SessionRef
 }
 
 func (p *platformAdapter) setCallbacks(callbacks PlatformCallbacks) {
@@ -85,7 +83,7 @@ func (p *platformAdapter) discard(sessionID string) {
 	}
 }
 
-func (p *platformAdapter) PrepareTunnel(_ context.Context, ref v1.SessionRef) (v1.PlatformLease, error) {
+func (p *platformAdapter) PrepareTunnel(_ context.Context, ref v2.SessionRef) (v2.PlatformLease, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if existing, ok := p.active[ref.SessionID]; ok && existing != ref {
@@ -95,7 +93,7 @@ func (p *platformAdapter) PrepareTunnel(_ context.Context, ref v1.SessionRef) (v
 	return platformLease{adapter: p, ref: ref}, nil
 }
 
-func (p *platformAdapter) Acquire(_ context.Context, ref v1.SessionRef) (runtimecore.TunnelLease, error) {
+func (p *platformAdapter) Acquire(_ context.Context, ref v2.SessionRef) (runtime.TunnelLease, error) {
 	fd, callbacks, err := p.acquire(ref)
 	if err != nil {
 		return nil, err
@@ -108,7 +106,7 @@ func (p *platformAdapter) Acquire(_ context.Context, ref v1.SessionRef) (runtime
 	return &tunnelLease{file: file, fd: fd, ref: ref, adapter: p, callbacks: callbacks}, nil
 }
 
-func (p *platformAdapter) acquire(ref v1.SessionRef) (int32, PlatformCallbacks, error) {
+func (p *platformAdapter) acquire(ref v2.SessionRef) (int32, PlatformCallbacks, error) {
 	p.mu.Lock()
 	if fd, ok := p.tunnels.take(ref.SessionID); ok {
 		if !p.tunnels.reserve(fd, fdOwner{session: ref.SessionID, generation: ref.Generation}) {
@@ -143,7 +141,7 @@ func (p *platformAdapter) acquire(ref v1.SessionRef) (int32, PlatformCallbacks, 
 	return fd, callbacks, nil
 }
 
-func (p *platformAdapter) release(ref v1.SessionRef, fd int32, callbacks PlatformCallbacks) {
+func (p *platformAdapter) release(ref v2.SessionRef, fd int32, callbacks PlatformCallbacks) {
 	p.mu.Lock()
 	p.tunnels.release(fd, fdOwner{session: ref.SessionID, generation: ref.Generation})
 	p.mu.Unlock()
@@ -154,7 +152,7 @@ func (p *platformAdapter) release(ref v1.SessionRef, fd int32, callbacks Platfor
 	}
 }
 
-func (p *platformAdapter) ProtectSocket(_ context.Context, ref v1.SessionRef, fd int) error {
+func (p *platformAdapter) ProtectSocket(_ context.Context, ref v2.SessionRef, fd int) error {
 	if fd < 0 {
 		return fmt.Errorf("invalid socket descriptor")
 	}
@@ -180,7 +178,7 @@ func (p *platformAdapter) protectActive(fd int32) bool {
 		p.mu.Unlock()
 		return false
 	}
-	var ref v1.SessionRef
+	var ref v2.SessionRef
 	for _, candidate := range p.active {
 		ref = candidate
 	}
@@ -193,7 +191,7 @@ func (p *platformAdapter) protectActive(fd int32) bool {
 	return ok && callbacks.ProtectSocket(ref.SessionID, generation, fd)
 }
 
-func (p *platformAdapter) PublishState(_ context.Context, event v1.Event) error {
+func (p *platformAdapter) PublishState(_ context.Context, event v2.Event) error {
 	p.mu.Lock()
 	callbacks := p.callbacks
 	p.mu.Unlock()
@@ -216,7 +214,7 @@ func (p *platformAdapter) PublishState(_ context.Context, event v1.Event) error 
 
 type platformLease struct {
 	adapter *platformAdapter
-	ref     v1.SessionRef
+	ref     v2.SessionRef
 }
 
 func (l platformLease) Release(context.Context) error {
@@ -231,7 +229,7 @@ func (l platformLease) Release(context.Context) error {
 type tunnelLease struct {
 	file        *os.File
 	fd          int32
-	ref         v1.SessionRef
+	ref         v2.SessionRef
 	adapter     *platformAdapter
 	callbacks   PlatformCallbacks
 	closeOnce   sync.Once
@@ -262,163 +260,4 @@ func closeFD(fd int32) error {
 		return nil
 	}
 	return os.NewFile(uintptr(fd), "mobile-tun-close").Close()
-}
-
-// LegacyClient is a temporary bridge for the old NewVpnClient/VpnConnect API.
-// It owns only command/session references; v1 remains the VPN lifecycle owner.
-type LegacyClient struct {
-	binding    *Binding
-	mu         sync.Mutex
-	session    string
-	generation uint64
-	command    uint64
-}
-
-func (b *Binding) NewLegacyClient() *LegacyClient { return &LegacyClient{binding: b} }
-
-// Configure installs one legacy protocol payload as a compatibility profile.
-// fd must be an already-owned duplicated Android TUN, or -1 on iOS. It is
-// consumed by exactly one generation and closed on every unsuccessful path.
-func (c *LegacyClient) Configure(config, protocol string, fd int32) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	closeInput := func() {
-		if fd >= 0 {
-			_ = closeFD(fd)
-		}
-	}
-	if c.session != "" {
-		closeInput()
-		return errors.New("a legacy session is already prepared; disconnect before changing protocol")
-	}
-	manager, ok := c.binding.manager.(*v1.Manager)
-	if !ok {
-		closeInput()
-		return errors.New("mobile session manager is unavailable")
-	}
-	sessionID, err := manager.CreateSession(context.Background())
-	if err != nil {
-		closeInput()
-		return err
-	}
-	cleanup := func() {
-		c.binding.DiscardOneShotTunnel(sessionID)
-		_ = manager.DestroySession(context.Background(), sessionID)
-	}
-	if fd >= 0 {
-		if err := c.binding.QueueOneShotTunnel(sessionID, fd); err != nil {
-			_ = manager.DestroySession(context.Background(), sessionID)
-			closeInput()
-			return err
-		}
-	}
-	profile, err := legacyProfile(config, protocol)
-	if err != nil {
-		cleanup()
-		return err
-	}
-	c.command++
-	if _, err := manager.ConfigureCompatibilityProfile(context.Background(), sessionID, c.commandID("configure"), profile); err != nil {
-		cleanup()
-		return err
-	}
-	c.session, c.generation = sessionID, 0
-	return nil
-}
-
-// Connect starts the configured profile. It intentionally does not hot-switch:
-// a second call while a generation is active is a v1 conflict.
-func (c *LegacyClient) Connect() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.session == "" {
-		return errors.New("legacy session is not configured")
-	}
-	manager, ok := c.binding.manager.(*v1.Manager)
-	if !ok {
-		return errors.New("mobile session manager is unavailable")
-	}
-	c.command++
-	result, err := manager.Start(context.Background(), c.session, c.commandID("start"), v1.StartTarget{Mode: v1.ProfileIndex, Index: 0})
-	if err != nil {
-		return err
-	}
-	c.generation = result.Generation
-	return nil
-}
-
-// Disconnect asks v1 to stop the exact recorded generation, waits for its
-// cleanup, and then removes the session. A stale terminal generation is safe
-// to destroy and is treated as an idempotent disconnect.
-func (c *LegacyClient) Disconnect() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.session == "" {
-		return nil
-	}
-	manager, ok := c.binding.manager.(*v1.Manager)
-	if !ok {
-		return errors.New("mobile session manager is unavailable")
-	}
-	sessionID, generation := c.session, c.generation
-	defer func() {
-		c.binding.DiscardOneShotTunnel(sessionID)
-		c.session, c.generation = "", 0
-	}()
-	if generation != 0 {
-		c.command++
-		_, err := manager.Stop(context.Background(), sessionID, c.commandID("stop"), generation)
-		if err != nil && v1.CodeOf(err) != v1.FailureStaleGeneration {
-			return err
-		}
-	}
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		snapshot, err := manager.Snapshot(context.Background(), sessionID)
-		if err != nil {
-			return err
-		}
-		if snapshot.CleanupComplete {
-			if snapshot.LastFailure == v1.FailureCleanup {
-				return &v1.Error{Code: v1.FailureCleanup, Message: "session cleanup failed"}
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			return errors.New("legacy session cleanup did not complete")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if err := manager.DestroySession(context.Background(), sessionID); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (c *LegacyClient) commandID(operation string) string {
-	return fmt.Sprintf("legacy-%s-%d", operation, c.command)
-}
-
-func legacyProfile(config, protocol string) (v1.RuntimeProfile, error) {
-	var kind v1.Protocol
-	var format v1.ConfigFormat
-	switch protocol {
-	case "outline":
-		kind, format = v1.ProtocolOutline, v1.ConfigTransportURL
-	case "xray":
-		kind, format = v1.ProtocolXray, v1.ConfigJSON
-	case "trusttunnel":
-		kind, format = v1.ProtocolTrustTunnel, v1.ConfigTOML
-	default:
-		return v1.RuntimeProfile{}, errors.New("unsupported legacy protocol")
-	}
-	if config == "" {
-		return v1.RuntimeProfile{}, errors.New("legacy protocol configuration is empty")
-	}
-	return v1.RuntimeProfile{
-		Summary:          v1.ProfileSummary{Index: 0, Protocol: kind},
-		RawTOML:          []byte(config),
-		NormalizedFormat: format,
-		NormalizedConfig: []byte(config),
-	}, nil
 }

@@ -202,7 +202,7 @@ jobs:
         run: |
           set -euo pipefail
           ./kmp_module/gradlew -p kmp_module clean --no-daemon --no-build-cache
-          test ! -e kmp_module/app/build/generated/gomobile/backend.aar
+          test ! -e kmp_module/app/build/generated/gomobile/dobbyvpn-runtime.aar
 
       - name: Build second isolated unsigned APK
         working-directory: /home/vagrant/build/com.dobby.vpn

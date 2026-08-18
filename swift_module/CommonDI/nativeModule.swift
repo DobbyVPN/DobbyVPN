@@ -24,9 +24,6 @@ public class NativeModuleHolder {
         connectionStateRepository: { _ in
             return connectionStateRepository
         },
-        authenticationManager: { _ in
-            return AuthenticationManagerImpl()
-        },
         loggerManager: { _ in 
             return LoggerManagerImpl()
         }
