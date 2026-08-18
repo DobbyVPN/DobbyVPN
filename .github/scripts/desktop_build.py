@@ -1153,8 +1153,9 @@ def run_conveyor(passphrase: str | None) -> None:
 
 
 def build_app(args: argparse.Namespace) -> None:
+    platforms = selected_platforms(args.platform)
     if not args.skip_libs:
-        for target_platform in selected_platforms(args.platform):
+        for target_platform in platforms:
             build_service(
                 target_platform,
                 args.arch,
@@ -1162,6 +1163,15 @@ def build_app(args: argparse.Namespace) -> None:
                 args.skip_build,
                 args.go_mod_tidy,
             )
+
+    # The native operator CLI is a packaging input, not a JVM application
+    # output.  A source/package build may deliberately reuse already-built
+    # service binaries via --skip-libs, but it must still materialize the CLI
+    # for the selected target before Conveyor resolves conveyor.conf.
+    for target_platform in platforms:
+        cli_target = service_target_path(target_platform).parent / CLI_NAMES[target_platform]
+        if not cli_target.exists():
+            build_cli(target_platform, args.arch)
 
     if args.require_all_services:
         require_services(True, args.platform)
