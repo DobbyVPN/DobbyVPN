@@ -238,12 +238,34 @@ func status(ctx context.Context, client grpcproto.VpnClient, jsonOutput bool) in
 		state, generation = snapshot.GetSnapshot().GetState(), snapshot.GetSnapshot().GetGeneration()
 	}
 	if jsonOutput {
-		encoded, _ := json.Marshal(map[string]interface{}{"state": state.String(), "generation": generation})
+		code, label := publicStatus(state)
+		encoded, _ := json.Marshal(struct {
+			Code  int    `json:"code"`
+			State string `json:"state"`
+		}{Code: code, State: label})
 		fmt.Println(string(encoded))
 	} else {
 		fmt.Printf("state=%s generation=%d\n", state.String(), generation)
 	}
 	return exitOK
+}
+
+// publicStatus is the stable, machine-readable CLI contract consumed by the
+// desktop qualification adapters. Keep the wire vocabulary independent from
+// protobuf enum names so separate CLI processes can recover the same simple
+// lifecycle contract across operating systems.
+func publicStatus(state grpcproto.SessionState) (int, string) {
+	switch state {
+	case grpcproto.SessionState_SESSION_STATE_PROBING,
+		grpcproto.SessionState_SESSION_STATE_PREPARING,
+		grpcproto.SessionState_SESSION_STATE_CONFIGURED,
+		grpcproto.SessionState_SESSION_STATE_STOPPING:
+		return 1, "Connecting"
+	case grpcproto.SessionState_SESSION_STATE_CONNECTED:
+		return 2, "Connected"
+	default:
+		return 0, "Disconnected"
+	}
 }
 
 func verifySession(ctx context.Context, client grpcproto.VpnClient) int {

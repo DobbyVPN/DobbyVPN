@@ -53,3 +53,28 @@ func TestReportFailureUsesConflictExitCodeOnlyForConflict(t *testing.T) {
 		t.Fatalf("unsupported exit=%d, want %d", got, exitRuntime)
 	}
 }
+
+func TestPublicStatusUsesStableMachineReadableContract(t *testing.T) {
+	tests := []struct {
+		name  string
+		state grpcproto.SessionState
+		code  int
+		label string
+	}{
+		{name: "idle", state: grpcproto.SessionState_SESSION_STATE_IDLE, code: 0, label: "Disconnected"},
+		{name: "configured", state: grpcproto.SessionState_SESSION_STATE_CONFIGURED, code: 1, label: "Connecting"},
+		{name: "probing", state: grpcproto.SessionState_SESSION_STATE_PROBING, code: 1, label: "Connecting"},
+		{name: "preparing", state: grpcproto.SessionState_SESSION_STATE_PREPARING, code: 1, label: "Connecting"},
+		{name: "connected", state: grpcproto.SessionState_SESSION_STATE_CONNECTED, code: 2, label: "Connected"},
+		{name: "stopping", state: grpcproto.SessionState_SESSION_STATE_STOPPING, code: 1, label: "Connecting"},
+		{name: "failed", state: grpcproto.SessionState_SESSION_STATE_FAILED, code: 0, label: "Disconnected"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			code, label := publicStatus(test.state)
+			if code != test.code || label != test.label {
+				t.Fatalf("publicStatus(%s) = (%d, %q), want (%d, %q)", test.state, code, label, test.code, test.label)
+			}
+		})
+	}
+}
