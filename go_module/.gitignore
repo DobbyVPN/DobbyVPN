@@ -5,6 +5,7 @@
 # Backend executables/libraries
 windows_grpcvpnserver.exe
 ubuntu_grpcvpnserver
+dobby-cli
 macos_grpcvpnserver
 libbackend.so
 libbackend.h
