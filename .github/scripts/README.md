@@ -189,9 +189,9 @@ JSON disagree. The manifest deliberately contains public release metadata only.
 
 ```bash
 python3 .github/scripts/release_provenance.py create --directory release \
-  --tag v1.4.7 --version 1.4.7 \
+  --tag v1.5.0 --version 1.5.0 \
   --source-sha 0123456789abcdef0123456789abcdef01234567 \
   --release-run-id 12345 --release-run-number 678 \
-  --android-version-code 1004007 \
+  --android-version-code 1005000 \
   --asset DobbyVPN.apk --asset DobbyVPN.zip
 ```

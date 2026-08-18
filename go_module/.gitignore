@@ -5,6 +5,6 @@ dobby-cli
 macos_grpcvpnserver
 libbackend.so
 libbackend.h
-MyLibrary.xcframework
+DobbyVPNRuntime.xcframework
 libc++.so.1
 libc++abi.so.1
