@@ -1,66 +1,47 @@
 ---
 name: add-new-protocol
-description: Step-by-step instructions on how to add a new VPN protocol (engine) into DobbyVPN across all platforms (Go backend, Android/Desktop KMP frontend, iOS Swift).
+description: Add a protocol engine through the neutral Go runtime while preserving the shared UI and thin platform shells.
 ---
 
-# Add New Protocol
+# Add a new protocol
 
-This guide outlines the architecture and exact steps to add a new VPN protocol to DobbyVPN. 
+This guide is intentionally protocol-neutral. DobbyVPN has one shared Compose
+UI, one Go product/runtime layer, and thin operating-system shells only where
+the platform VPN API requires them. A new protocol must not create a second
+session manager, protocol-specific RPC, KMP repository, Swift lifecycle owner,
+or UI toggle.
 
-## App Architecture Review
+## Required implementation sequence
 
-### go_module (Core Protocol Logic)
-The core VPN engine logic resides in `go_module`. There are two integration patterns:
-1. **ProtocolDevice Pattern (Standard)**: For protocols that provide a local SOCKS5 proxy (like Outline, Xray). You implement `core/pkg.ProtocolDevice` and return the proxy address. The `core` package handles `tun2socks` automatically.
-2. **Standalone Pattern**: For protocols that manage the TUN interface themselves (like AmneziaWG).
+1. Add one configuration section and a safe profile summary in Go. Keep raw
+   configuration, URLs, endpoints, credentials, and authentication metadata
+   inside the Go boundary.
+2. Implement the neutral `core/pkg.ProtocolDevice` interface for the engine:
+   open/start, proxy-address (when applicable), server identity, and close.
+   Make cancellation, startup failure, and reverse-order cleanup explicit.
+3. Register one factory in the Go runtime composition root and route all
+   control through SessionV2. Do not add a protocol-specific RPC or lifecycle
+   export; desktop, Android, and iOS all use the existing SessionV2 contract.
+4. Add parser, runtime, cleanup, and integration tests, including cancellation,
+   failed startup, stale callbacks, and reconnect/recovery behavior.
+5. Update the supported-protocol documentation and sanitized examples. Keep
+   the shared Compose presentation flow unchanged.
+6. Add matching SessionV2, Harness, and Torturer contract coverage only after
+   the application behavior is complete. Preserve the existing test suite and
+   its evidence norms.
 
-Exports for different platforms:
-- **Desktop (Windows, macOS, Linux)**: Uses gRPC. Handlers are in `desktop_exports/proto/` which call `desktop_exports/api/protocols_core.go`.
-- **Android**: Uses `gomobile`. Exports are in `kotlin_exports/dobby_vpn.go`.
-- **iOS**: Uses `gomobile`. Exports are in `ios_exports/dobby_vpn.go`.
+## Platform boundary checklist
 
-### kmp_module (Android & Desktop Frontend)
-Written in Kotlin Multiplatform (KMP).
-- **Domain**: Config parsing (`TomlConfigApplier`), repositories (`DobbyConfigsRepository`), and the `VpnInterface` enum.
-- **Facades**: Protocol integration uses `LibFacade` interfaces in `com.dobby.feature.vpn_service`.
+- Desktop shells provide authenticated local transport, service installation,
+  and local diagnostics only.
+- Android owns VPN permission, foreground-service lifetime, TUN allocation,
+  socket protection, and native callback publication.
+- iOS owns NetworkExtension/Packet Tunnel lifetime, TUN/socket callbacks, and
+  native callback publication.
+- Shared Compose code renders safe SessionV2 snapshots/events and never parses
+  protocol configuration or owns VPN resources.
 
-### swift_module (iOS Frontend & Tunnel)
-- The Network Extension (`tunnel/` target) handles VPN lifecycle.
-- Protocol dispatch is in `PacketTunnelProvider.swift`.
-- Each protocol has an Interactor (e.g., `XRayInteractor.swift`) that calls the gomobile-generated `Cloak_outline` framework functions.
-- Configs are read from shared `UserDefaults` via `DobbyConfigsRepositoryImpl.swift`.
-
----
-
-## How to Add a New Protocol (ProtocolDevice Pattern)
-
-Follow these steps precisely:
-
-### Step 1: Implement the Go Backend (`go_module`)
-1. Create a new package (e.g., `go_module/newproto/newproto_device.go`).
-2. Implement the `pkg.ProtocolDevice` interface:
-   - `Open(routingTableID int, uplinkIface string) error` (starts engine)
-   - `GetProxyAddr() string` (returns local SOCKS5 bridge address)
-   - `GetServerIP() net.IP` (returns remote VPN server IP for routing)
-   - `Close() error` (stops engine)
-3. **Desktop Exports**: 
-   - Update `kmp_module/grpcprotos/src/main/proto/com/dobby/vpnserver/vpnserver.proto` with new RPCs (e.g., `StartNewProto`, `StopNewProto`). Run `go_module/scripts/regenerate-grpcproto.sh` and `./gradlew :grpcstub:generateProto`.
-   - Create `desktop_exports/proto/newproto.go` to implement the gRPC handlers.
-   - Update `desktop_exports/api/protocols_core.go` inside the `startVpn()` switch statement.
-4. **Android Exports**: Update `kotlin_exports/dobby_vpn.go` inside the `NewVpnClient()` switch statement.
-5. **iOS Exports**: Update `ios_exports/dobby_vpn.go` inside the `NewVpnClient()` switch statement.
-
-### Step 2: Implement the Kotlin Multiplatform Frontend (`kmp_module`)
-1. Update `VpnInterface` enum in `com.dobby.feature.main.domain.DobbyConfigsRepository.kt`.
-2. Create config data classes and a `NewProtoTomlApplier.kt` in `com.dobby.feature.main.domain.config`.
-3. Register the new applier in `TomlConfigApplier.kt`.
-4. Create a repository interface `DobbyConfigsRepositoryNewProto` and implement it where needed.
-5. Create a facade (e.g., `NewProtoLibFacade.kt`) in `com.dobby.feature.vpn_service` for Android/Desktop platform-specific wiring.
-
-### Step 3: Implement the iOS Frontend (`swift_module`)
-1. Update `swift_module/CommonDI/DobbyConfigsRepositoryImpl.swift` to map the new protocol string to the `VpnInterface` enum.
-2. Create `swift_module/tunnel/NewProtoInteractor.swift` to handle starting/stopping the protocol via `Cloak_outline...` gomobile calls.
-3. Update `swift_module/tunnel/PacketTunnelProvider.swift`:
-   - Add the new interactor as a class property.
-   - In `startTunnel()`, add an `else if vpnInterface == VpnInterface.newProto` branch to dispatch to your interactor.
-   - In `teardownForStop()`, ensure your interactor's stop method is called.
+Before merging, prove that SessionV2 remains the sole externally meaningful
+session/state/generation owner, that the Go module graph contains only the
+intended engine dependencies, and that no per-protocol lifecycle path or
+credential-bearing diagnostic output was introduced.
