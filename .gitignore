@@ -74,3 +74,7 @@ go_module/grpcproto/vpnserver.proto
 # They are reproducible build outputs, never application source.
 /kmp_module/services/
 /output/
+
+# Owner-local Harness/runtime worktrees and qualification artefacts.
+# These are private generated state, never application source.
+/runtime/
