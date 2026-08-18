@@ -76,17 +76,10 @@ func run(args []string) int {
 		}
 		return status(ctx, client, len(args) == 2)
 	case "logs":
-		// The Windows service runs as SYSTEM and cannot infer the interactive
-		// user's local log path. The desktop normally initializes it, but the
-		// native CLI is also used by headless qualification and recovery flows.
-		// Reuse the existing authenticated RPC rather than creating another
-		// logging transport; other platforms keep their existing no-op contract.
-		if runtime.GOOS == "windows" {
-			if err := initWindowsServiceLogger(ctx, client, os.UserHomeDir); err != nil {
-				fmt.Fprintln(os.Stderr, "dobby-cli: local service logging unavailable")
-				return exitRuntime
-			}
-		}
+		// Diagnostics remain local to the service; this command is deliberately
+		// safe and does not invent a second logging transport. Windows logging is
+		// initialized immediately before the first connection instead, after a
+		// caller has had a chance to clear the existing local history.
 		fmt.Fprintln(os.Stderr, "dobby-cli: use the application log viewer for local logs")
 		return exitOK
 	case "external-ip":
@@ -125,6 +118,12 @@ func connect(ctx context.Context, client grpcproto.VpnClient, source string, pro
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "dobby-cli: configuration source rejected")
 		return exitArgs
+	}
+	if runtime.GOOS == "windows" {
+		if err := initWindowsServiceLogger(ctx, client, os.UserHomeDir); err != nil {
+			fmt.Fprintln(os.Stderr, "dobby-cli: local service logging unavailable")
+			return exitRuntime
+		}
 	}
 	created, err := client.CreateSession(ctx, &grpcproto.SessionCreateSessionRequest{})
 	if err != nil || created == nil || created.GetFailure() != nil {
