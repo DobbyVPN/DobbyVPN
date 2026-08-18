@@ -282,7 +282,7 @@ type session struct {
 	done                chan struct{}
 	destroyed           bool
 	auditState          State
-	publish             chan Event
+	publisher           *eventPublisher
 }
 
 // NewManager never starts a real core.  Its default runtime fails with the
@@ -325,7 +325,7 @@ func (m *Manager) CreateSession(context.Context) (id string, err error) {
 	}
 	s := &session{
 		id: id, state: StateIdle, auditState: StateIdle, cleanupDone: true,
-		commands: make(map[string]commandRecord), publish: make(chan Event, 64), watchers: make(map[chan Event]struct{}), done: make(chan struct{}),
+		commands: make(map[string]commandRecord), watchers: make(map[chan Event]struct{}), done: make(chan struct{}), publisher: newEventPublisher(),
 	}
 	m.mu.Lock()
 	if m.activeID != "" {
@@ -334,7 +334,7 @@ func (m *Manager) CreateSession(context.Context) (id string, err error) {
 	}
 	m.sessions[id] = s
 	m.mu.Unlock()
-	go m.publishEvents(s) // #nosec G118 -- the publisher intentionally owns the session lifetime, not one request.
+	go m.publishEvents(s.publisher) // #nosec G118 -- the publisher intentionally owns the session lifetime, not one request.
 	m.audit.snapshot(snapshotLocked(s), "create_session")
 	return id, nil
 }
@@ -757,7 +757,7 @@ func (m *Manager) DestroySession(_ context.Context, sessionID string) (err error
 		delete(s.watchers, ch)
 		close(ch)
 	}
-	close(s.publish)
+	s.publisher.close()
 	s.mu.Unlock()
 	m.mu.Lock()
 	delete(m.sessions, sessionID)
@@ -1086,9 +1086,11 @@ func (m *Manager) appendLocked(s *session, e Event) {
 	s.auditState = e.State
 	m.audit.record(auditEvent)
 
-	// This channel has one consumer per session, so slow platform publication
-	// cannot reorder notifications relative to the authoritative event stream.
-	s.publish <- e
+	// Queueing is deliberately non-blocking while the session mutex is held.
+	// Platform callbacks are advisory delivery; Observe/Subscribe retain the
+	// authoritative ordered ledger for reconnect and gap recovery. A slow
+	// callback must never stall lifecycle ownership or cleanup.
+	s.publisher.enqueue(e)
 	for ch := range s.watchers {
 		select {
 		case ch <- cloneEvent(e):
@@ -1101,8 +1103,12 @@ func (m *Manager) appendLocked(s *session, e Event) {
 	}
 }
 
-func (m *Manager) publishEvents(s *session) {
-	for event := range s.publish {
+func (m *Manager) publishEvents(publisher *eventPublisher) {
+	for {
+		event, ok := publisher.next()
+		if !ok {
+			return
+		}
 		_ = m.platform.PublishState(context.Background(), event)
 	}
 }
@@ -1184,6 +1190,56 @@ func (l *ledger) release(ctx context.Context) error {
 		}
 	}
 	return first
+}
+
+// eventPublisher is an ordered, unbounded hand-off between the authoritative
+// session ledger and the platform callback. It intentionally never invokes a
+// platform implementation while holding the session mutex: a slow callback
+// must not block Configure/Start/Stop or prevent cleanup. Closing drains all
+// already-enqueued events before the publisher exits, so Destroyed remains the
+// final callback in sequence order.
+type eventPublisher struct {
+	mu     sync.Mutex
+	cond   *sync.Cond
+	queue  []Event
+	closed bool
+}
+
+func newEventPublisher() *eventPublisher {
+	publisher := &eventPublisher{}
+	publisher.cond = sync.NewCond(&publisher.mu)
+	return publisher
+}
+
+func (p *eventPublisher) enqueue(event Event) {
+	p.mu.Lock()
+	if !p.closed {
+		p.queue = append(p.queue, event)
+		p.cond.Signal()
+	}
+	p.mu.Unlock()
+}
+
+func (p *eventPublisher) next() (Event, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for len(p.queue) == 0 && !p.closed {
+		p.cond.Wait()
+	}
+	if len(p.queue) == 0 {
+		return Event{}, false
+	}
+	event := p.queue[0]
+	p.queue[0] = Event{}
+	p.queue = p.queue[1:]
+	return event, true
+}
+
+func (p *eventPublisher) close() {
+	p.mu.Lock()
+	p.closed = true
+	p.cond.Broadcast()
+	p.mu.Unlock()
 }
 
 type unsupportedRuntime struct{}

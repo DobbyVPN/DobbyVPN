@@ -230,6 +230,55 @@ func TestSlowPlatformPublicationPreservesEventOrder(t *testing.T) {
 	}
 }
 
+func TestSlowPlatformPublicationCannotBlockTheSessionMutex(t *testing.T) {
+	p := &orderedPlatform{firstEntered: make(chan struct{}), releaseFirst: make(chan struct{})}
+	m := NewManager(ManagerOptions{Platform: p})
+	id, err := m.CreateSession(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := m.get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appended := make(chan struct{})
+	go func() {
+		s.mu.Lock()
+		for i := 0; i < 256; i++ {
+			m.appendLocked(s, Event{State: StateIdle})
+		}
+		s.mu.Unlock()
+		close(appended)
+	}()
+	select {
+	case <-p.firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first publication did not begin")
+	}
+	select {
+	case <-appended:
+	case <-time.After(time.Second):
+		t.Fatal("slow platform publication blocked the session mutex")
+	}
+	close(p.releaseFirst)
+	if err := m.DestroySession(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		p.mu.Lock()
+		count := len(p.events)
+		p.mu.Unlock()
+		if count >= 257 { // 256 synthetic events plus Destroyed.
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	t.Fatalf("slow publisher dropped queued events: got %d", len(p.events))
+}
+
 func TestDestroyDoesNotRaceACommandThatAlreadyResolvedSession(t *testing.T) {
 	raw := fixture(t)
 	for i := 0; i < 50; i++ {
