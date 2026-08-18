@@ -45,6 +45,14 @@ func TestIsWindowsPathPreventsDriveLetterURLClassification(t *testing.T) {
 	}
 }
 
+func TestWindowsServiceLogPathMatchesDesktopContract(t *testing.T) {
+	home := filepath.FromSlash(`C:/Users/dobbytest`)
+	want := filepath.FromSlash(`C:/Users/dobbytest/.myapp/go_desktop_service_logs.jsonl`)
+	if got := windowsServiceLogPath(home); got != want {
+		t.Fatalf("windowsServiceLogPath(%q) = %q, want %q", home, got, want)
+	}
+}
+
 func TestReadSourceRejectsUnsupportedURLAndOversize(t *testing.T) {
 	for _, source := range []string{"ftp://example.invalid/config", "file:///tmp/config"} {
 		if _, err := readSource(source); err == nil {

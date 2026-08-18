@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -75,8 +76,17 @@ func run(args []string) int {
 		}
 		return status(ctx, client, len(args) == 2)
 	case "logs":
-		// Diagnostics remain local to the service; this command is deliberately
-		// safe and does not invent a second logging transport.
+		// The Windows service runs as SYSTEM and cannot infer the interactive
+		// user's local log path. The desktop normally initializes it, but the
+		// native CLI is also used by headless qualification and recovery flows.
+		// Reuse the existing authenticated RPC rather than creating another
+		// logging transport; other platforms keep their existing no-op contract.
+		if runtime.GOOS == "windows" {
+			if err := initWindowsServiceLogger(ctx, client, os.UserHomeDir); err != nil {
+				fmt.Fprintln(os.Stderr, "dobby-cli: local service logging unavailable")
+				return exitRuntime
+			}
+		}
 		fmt.Fprintln(os.Stderr, "dobby-cli: use the application log viewer for local logs")
 		return exitOK
 	case "external-ip":
@@ -86,6 +96,28 @@ func run(args []string) int {
 	default:
 		return usage("unknown command")
 	}
+}
+
+func initWindowsServiceLogger(
+	ctx context.Context,
+	client grpcproto.VpnClient,
+	homeDirectory func() (string, error),
+) error {
+	home, err := homeDirectory()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(home) == "" {
+		return fmt.Errorf("user home directory is empty")
+	}
+	_, err = client.InitLogger(ctx, &grpcproto.InitLoggerRequest{
+		Path: windowsServiceLogPath(home),
+	})
+	return err
+}
+
+func windowsServiceLogPath(home string) string {
+	return filepath.Join(home, ".myapp", "go_desktop_service_logs.jsonl")
 }
 
 func connect(ctx context.Context, client grpcproto.VpnClient, source string, profileIndex *int) int {
