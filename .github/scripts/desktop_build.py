@@ -90,6 +90,7 @@ CLI_NAMES = {
     "macos": "dobby-cli",
     "windows": "dobby-cli.exe",
 }
+MACOS_MINIMUM_SYSTEM_VERSION = "11.0"
 GOOS_BY_PLATFORM = {
     "linux": "linux",
     "macos": "darwin",
@@ -871,8 +872,15 @@ def build_cli(target_platform: str, arch: str | None = None) -> Path:
     output = GO_MODULE_DIR / CLI_NAMES[target_platform]
     env = os.environ.copy()
     env.update({"CGO_ENABLED": "0", "GOOS": GOOS_BY_PLATFORM[target_platform], "GOARCH": target_arch})
+    ldflags = "-buildid="
+    if target_platform == "macos":
+        # Go's internal Darwin linker emits a macOS 12 load command even when
+        # the app declares macOS 11 support.  Use the host external linker so
+        # the native CLI remains honest about the product's minimum version.
+        env["CGO_ENABLED"] = "1"
+        ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
     run(
-        ["go", "build", "-trimpath", "-ldflags=-buildid=", "-o", output.name, "./cmd/dobbyvpn/"],
+        ["go", "build", "-trimpath", f"-ldflags={ldflags}", "-o", output.name, "./cmd/dobbyvpn/"],
         cwd=GO_MODULE_DIR,
         env=env,
     )
@@ -976,6 +984,11 @@ def build_service(
                 "GOARCH": target_arch,
             }
         )
+        ldflags = "-buildid="
+        if target_platform == "macos":
+            # Keep the Intel package's declared macOS 11 floor valid for both
+            # the gRPC service and the native operator CLI.
+            ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
         if target_platform == "linux":
             bridge_search_path = f"-L{GO_MODULE_DIR}"
             runtime_search_path = f"-L{linux_libcxx_runtime}"
@@ -1000,7 +1013,7 @@ def build_service(
                 "go",
                 "build",
                 "-trimpath",
-                "-ldflags=-buildid=",
+                f"-ldflags={ldflags}",
                 "-o",
                 output.name,
                 "./desktop_exports/",
