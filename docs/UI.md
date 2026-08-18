@@ -32,8 +32,9 @@ The shared UI sends one source to Go:
    parsed profiles.
 
 Go fetches and parses the configuration, selects supported protocols, probes
-  variants, and owns the runtime lease. A Cloak-bearing section is skipped in
-  v1.5.0 with `CLOAK_PROFILE_SKIPPED`; it is never started.
+variants, and owns the runtime lease. Unsupported legacy sections are skipped
+with a typed warning and are never started; if no supported section remains,
+the request fails with a typed unsupported result.
 
 ```text
 Connect
