@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"go_module/core/common"
@@ -20,7 +22,59 @@ import (
 	"google.golang.org/grpc"
 )
 
+func initExplicitLocalLog() error {
+	requested := strings.TrimSpace(os.Getenv("DOBBY_LOG_PATH"))
+	if requested == "" {
+		return nil
+	}
+	root, err := filepath.Abs(os.TempDir())
+	if err != nil {
+		return err
+	}
+	path, err := filepath.Abs(requested)
+	if err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return fmt.Errorf("explicit log path is outside the local temporary directory")
+	}
+	parent := filepath.Dir(path)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(parent, 0o700); err != nil {
+		return err
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	resolvedParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return err
+	}
+	relative, err = filepath.Rel(resolvedRoot, resolvedParent)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return fmt.Errorf("explicit log path traverses outside the local temporary directory")
+	}
+	if info, statErr := os.Lstat(path); statErr == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("explicit log target must be a regular file")
+		}
+	} else if !os.IsNotExist(statErr) {
+		return statErr
+	}
+	if err := log.SetPath(path); err != nil {
+		return err
+	}
+	return nil
+}
+
 func run(_ int) {
+	if err := initExplicitLocalLog(); err != nil {
+		panic(fmt.Sprintf("failed to initialize secure local logging: %v", err))
+	}
 	// Convert logrus.Fatal (os.Exit) into a panic so goroutines can recover from it
 	// instead of crashing the entire gRPC server process.
 	logrus.StandardLogger().ExitFunc = func(code int) {

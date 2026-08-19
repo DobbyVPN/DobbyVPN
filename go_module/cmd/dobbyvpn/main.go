@@ -113,6 +113,15 @@ func windowsServiceLogPath(home string) string {
 	return filepath.Join(home, ".myapp", "go_desktop_service_logs.jsonl")
 }
 
+func initOptInServiceLogger(ctx context.Context, client grpcproto.VpnClient) error {
+	path := strings.TrimSpace(os.Getenv("DOBBY_LOG_PATH"))
+	if path == "" {
+		return nil
+	}
+	_, err := client.InitLogger(ctx, &grpcproto.InitLoggerRequest{Path: path})
+	return err
+}
+
 func connect(ctx context.Context, client grpcproto.VpnClient, source string, profileIndex *int) int {
 	raw, err := readSource(source)
 	if err != nil {
@@ -124,6 +133,9 @@ func connect(ctx context.Context, client grpcproto.VpnClient, source string, pro
 			fmt.Fprintln(os.Stderr, "dobby-cli: local service logging unavailable")
 			return exitRuntime
 		}
+	} else if err := initOptInServiceLogger(ctx, client); err != nil {
+		fmt.Fprintln(os.Stderr, "dobby-cli: local service logging unavailable")
+		return exitRuntime
 	}
 	created, err := client.CreateSession(ctx, &grpcproto.SessionCreateSessionRequest{})
 	if err != nil || created == nil || created.GetFailure() != nil {
