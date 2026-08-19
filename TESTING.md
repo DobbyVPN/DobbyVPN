@@ -69,7 +69,7 @@ The Swift package compiles the exact platform-neutral production source from
 `swift_module/CommonDI`; it is not a copied lifecycle model. The Gradle command
 links the KMP Simulator framework and executes `commonTest` coverage inside an
 iOS Simulator. Its deterministic tests include the extension-process Go
-session transaction (create/configure/start/poll/stop/destroy), including
+session transaction (create/configure/start/observe/stop/destroy), including
 virtual-time timeout and cleanup retry paths. It also executes the shared
 logging contract for legacy-record compatibility, full-timestamp ordering,
 multi-producer merge/clear, and durable retention of the latest clear marker.
