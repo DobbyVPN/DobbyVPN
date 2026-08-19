@@ -21,7 +21,7 @@ private final class GomobileProviderSessionClient: IOSProviderSessionClient {
            !sessionID.isEmpty {
             return sessionID
         }
-        try string(
+        return try string(
             result(DobbyvpnCreateSession()),
             key: "session_id"
         )
