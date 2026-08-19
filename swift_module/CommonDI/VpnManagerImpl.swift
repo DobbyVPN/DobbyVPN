@@ -291,9 +291,6 @@ public class VpnManagerImpl {
         activeGeneration = IOSVpnConnectionAuthority.beginStop()
         IOSVpnConnectionAuthority.publish(.disconnecting, generation: activeGeneration)
         publishSessionEvent(state: "STOPPING")
-        if !isUserInitiated {
-            DobbyConfigsRepositoryImpl.shared.setIsUserInitStop(isUserInitStop: false)
-        }
         self.logs.writeLog(log: "Actually vpnManager is \(String(describing: vpnManager))")
         guard let manager = vpnManager else {
             self.logs.writeLog(log: "[stop] Skip: vpnManager is nil")
@@ -304,9 +301,6 @@ public class VpnManagerImpl {
         if status == .disconnected || status == .invalid {
             self.logs.writeLog(log: "[stop] Skip: tunnel is already \(statusName(status))")
             return
-        }
-        if isUserInitiated {
-            DobbyConfigsRepositoryImpl.shared.setIsUserInitStop(isUserInitStop: true)
         }
         manager.connection.stopVPNTunnel()
         self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")

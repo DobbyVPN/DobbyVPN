@@ -422,17 +422,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        let appStopRequested = configsRepository.getIsUserInitStop()
-        logs.writeLog(
-            log: "[tunnel:\(tunnelId)] stopTunnel reason=\(reason.rawValue) (\(reason)) " +
-                "appStopRequested=\(appStopRequested)"
-        )
-        configsRepository.setIsUserInitStop(isUserInitStop: false)
-        if appStopRequested {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel observed after app stop request")
-        } else {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel observed without app stop request")
-        }
+        logs.writeLog(log: "[tunnel] stopTunnel teardown=begin")
         Task {
             await teardownForStop(reason: "stopTunnel(\(reason))")
             logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel teardown complete; calling completionHandler")
