@@ -12,6 +12,7 @@ import (
 )
 
 const utunControlName = "com.apple.net.utun_control"
+const logCategory = "ios_exports"
 const soNoTCNetPolicy = 0x1101
 
 var (
