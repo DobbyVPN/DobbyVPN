@@ -60,6 +60,14 @@ jobs:
           go-version-file: .go-version
           cache-dependency-path: go_module/go.sum
 
+      - name: Stage pinned Linux native dependencies for Go tests
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/desktop_build.py prepare-go-test-deps --go-mod-tidy
+          test -f go_module/libdobby_bridge.so
+          test -f go_module/libc++.so.1
+          test -f go_module/libc++abi.so.1
+
       - name: Run Go test suite
         working-directory: go_module
         run: |

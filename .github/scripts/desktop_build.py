@@ -858,6 +858,41 @@ def go_mod_download(run_tidy: bool) -> None:
     run(["go", "mod", "download"], cwd=GO_MODULE_DIR)
 
 
+def prepare_go_test_dependencies(skip_deps: bool, run_go_mod_tidy: bool) -> None:
+    """Materialize the exact native closure required by Linux Go tests.
+
+    The pinned go-go-tunnel module embeds its Linux cgo search path in the
+    module cache. The public bridge and libc++ runtimes are therefore staged
+    in the checkout and added through CGO_LDFLAGS/LD_LIBRARY_PATH before the
+    test process starts. This keeps hosted CI on the same dependency contract
+    as the desktop service build without compiling a service as a side effect.
+    """
+    if host_platform() != "linux":
+        fail("prepare-go-test-deps is supported only on Linux CI runners")
+
+    ensure_build_dependencies("linux", skip_deps, need_android=False)
+    install_linux_trusttunnel_bridge(skip_deps)
+    runtime = install_linux_libcxx_runtime(skip_deps)
+    go_mod_download(run_go_mod_tidy)
+
+    environment = os.environ.copy()
+    append_cgo_ldflags(
+        environment,
+        f"-L{GO_MODULE_DIR}",
+        f"-L{runtime}",
+        "-Wl,--no-as-needed",
+    )
+    set_env("CGO_ENABLED", "1")
+    set_env("CGO_LDFLAGS", environment["CGO_LDFLAGS"])
+    existing_library_path = os.environ.get("LD_LIBRARY_PATH", "").strip()
+    library_path = os.pathsep.join(
+        part for part in (str(GO_MODULE_DIR), str(runtime), existing_library_path) if part
+    )
+    set_env("LD_LIBRARY_PATH", library_path)
+    log(f"Prepared Linux Go-test native dependencies with CGO_LDFLAGS={environment['CGO_LDFLAGS']}")
+    log(f"Prepared Linux Go-test runtime path: {library_path}")
+
+
 def service_output_path(target_platform: str) -> Path:
     return GO_MODULE_DIR / SERVICE_NAMES[target_platform]
 
@@ -1403,6 +1438,13 @@ def parse_args() -> argparse.Namespace:
     libs.add_argument("--arch", help="Override GOARCH for the service build.")
     libs.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before go mod download.")
 
+    go_test_deps = subparsers.add_parser(
+        "prepare-go-test-deps",
+        help="Stage pinned Linux native dependencies and environment for Go tests.",
+    )
+    add_common_options(go_test_deps)
+    go_test_deps.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before go mod download.")
+
     app = subparsers.add_parser("app", help="Build the desktop JVM app and Conveyor config.")
     add_common_options(app)
     app.add_argument(
@@ -1446,6 +1488,8 @@ def main() -> None:
                 args.skip_build,
                 args.go_mod_tidy,
             )
+    elif args.command == "prepare-go-test-deps":
+        prepare_go_test_dependencies(args.skip_deps, args.go_mod_tidy)
     elif args.command == "app":
         build_app(args)
     elif args.command == "cli-test":

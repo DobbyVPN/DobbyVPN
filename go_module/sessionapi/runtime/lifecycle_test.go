@@ -369,6 +369,34 @@ func TestDefaultHealthFailureThresholdRequiresThreeConsecutiveFailures(t *testin
 	}
 }
 
+func TestHardeningHealthFaultIsExplicitAndLeavesInitialReadinessUntouched(t *testing.T) {
+	t.Setenv(hardeningTestHealthAfterEnv, "1")
+	o := options(&recorded{})
+	initialCalls := 0
+	o.InitialReadiness = func(context.Context, v1.SessionRef) error {
+		initialCalls++
+		return nil
+	}
+	o.ConnectedHealth = func(context.Context, v1.SessionRef) error { return nil }
+	r := New(o).(*runtime)
+
+	if err := r.options.InitialReadiness(context.Background(), v1.SessionRef{Generation: 1}); err != nil {
+		t.Fatalf("initial readiness was faulted: %v", err)
+	}
+	if initialCalls != 1 {
+		t.Fatalf("initial readiness calls=%d, want 1", initialCalls)
+	}
+	if err := r.options.ConnectedHealth(context.Background(), v1.SessionRef{Generation: 1}); err != nil {
+		t.Fatalf("first monitored check failed: %v", err)
+	}
+	if err := r.options.ConnectedHealth(context.Background(), v1.SessionRef{Generation: 1}); err == nil {
+		t.Fatal("second monitored check unexpectedly succeeded")
+	}
+	if r.options.HealthInterval != time.Second || r.options.HealthFailureThreshold != 1 {
+		t.Fatalf("hardening timing=%s threshold=%d, want 1s/1", r.options.HealthInterval, r.options.HealthFailureThreshold)
+	}
+}
+
 func TestConnectedHealthMonitorStopsWithRuntimeLease(t *testing.T) {
 	record := &recorded{}
 	entered := make(chan struct{}, 1)

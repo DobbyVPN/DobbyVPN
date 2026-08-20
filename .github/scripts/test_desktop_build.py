@@ -368,6 +368,51 @@ class DesktopBuildTests(unittest.TestCase):
             "-L/custom -lc++ -framework SystemConfiguration",
         )
 
+    def test_prepare_go_test_dependencies_stages_bridge_runtime_and_environment(self) -> None:
+        calls: list[object] = []
+        environment_updates: dict[str, str] = {}
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary) / "llvm-libcxx"
+            runtime.mkdir()
+            with (
+                mock.patch.object(desktop_build, "host_platform", return_value="linux"),
+                mock.patch.object(
+                    desktop_build,
+                    "ensure_build_dependencies",
+                    side_effect=lambda *args, **kwargs: calls.append(("deps", args, kwargs)),
+                ),
+                mock.patch.object(
+                    desktop_build,
+                    "install_linux_trusttunnel_bridge",
+                    side_effect=lambda skip: calls.append(("bridge", skip)),
+                ),
+                mock.patch.object(
+                    desktop_build,
+                    "install_linux_libcxx_runtime",
+                    side_effect=lambda skip: calls.append(("libcxx", skip)) or runtime,
+                ),
+                mock.patch.object(
+                    desktop_build,
+                    "go_mod_download",
+                    side_effect=lambda tidy: calls.append(("modules", tidy)),
+                ),
+                mock.patch.object(
+                    desktop_build,
+                    "set_env",
+                    side_effect=lambda name, value: environment_updates.__setitem__(name, value),
+                ),
+                mock.patch.dict(desktop_build.os.environ, {"CGO_LDFLAGS": "-L/custom"}, clear=False),
+            ):
+                desktop_build.prepare_go_test_dependencies(True, True)
+
+        self.assertEqual(calls[0], ("deps", ("linux", True), {"need_android": False}))
+        self.assertEqual(calls[1:], [("bridge", True), ("libcxx", True), ("modules", True)])
+        self.assertEqual(environment_updates["CGO_ENABLED"], "1")
+        self.assertIn(f"-L{desktop_build.GO_MODULE_DIR}", environment_updates["CGO_LDFLAGS"])
+        self.assertIn(f"-L{runtime}", environment_updates["CGO_LDFLAGS"])
+        self.assertIn(str(desktop_build.GO_MODULE_DIR), environment_updates["LD_LIBRARY_PATH"])
+        self.assertIn(str(runtime), environment_updates["LD_LIBRARY_PATH"])
+
     def test_local_conveyor_options_precede_make_task(self) -> None:
         with (
             mock.patch.dict(desktop_build.os.environ, {"CONVEYOR_CMD": "/tool/conveyor"}),
