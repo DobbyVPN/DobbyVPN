@@ -343,15 +343,38 @@ func (logger *Logger) trimLocked() {
 		return
 	}
 	retained := retainNewestCompleteJSONLLines(data, maxLocalLogBytes)
-	if truncateErr := logger.file.Truncate(0); truncateErr != nil {
+	// Rewrite the retained prefix before truncating the suffix.  A direct
+	// Truncate(0) followed by Write briefly exposes an empty log file to
+	// readers, which can make a concurrent diagnostic snapshot report that
+	// runtime statistics are missing.  Keep the existing inode/permissions
+	// contract, but make compaction observable as retained-or-old content,
+	// never as an empty interval.
+	compacted, openErr := os.OpenFile(path, os.O_WRONLY, 0)
+	if openErr != nil {
 		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
 		return
 	}
-	if written, writeErr := logger.file.Write(retained); writeErr != nil || written != len(retained) {
+	writeOffset := 0
+	for writeOffset < len(retained) {
+		written, writeErr := compacted.Write(retained[writeOffset:])
+		if writeErr != nil || written <= 0 {
+			_ = compacted.Close()
+			logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
+			return
+		}
+		writeOffset += written
+	}
+	if truncateErr := compacted.Truncate(int64(len(retained))); truncateErr != nil {
+		_ = compacted.Close()
 		logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
 		return
 	}
-	if syncErr := logger.file.Sync(); syncErr != nil {
+	if syncErr := compacted.Sync(); syncErr != nil {
+		_ = compacted.Close()
+		logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
+		return
+	}
+	if closeErr := compacted.Close(); closeErr != nil {
 		logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
 	}
 }
