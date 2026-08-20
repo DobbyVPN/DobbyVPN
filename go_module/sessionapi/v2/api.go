@@ -1050,6 +1050,18 @@ func (m *Manager) startFailover(s *session) {
 		s.mu.Unlock()
 		return
 	}
+	// The failed generation has already cleared the manager's active-session
+	// pointer as part of cleanup. Reclaim it before launching the replacement
+	// generation so status/recovery calls continue to address the same session
+	// while AUTO_SELECT failover is probing and reconnecting.
+	m.mu.Lock()
+	if m.activeID != "" && m.activeID != s.id {
+		m.mu.Unlock()
+		s.mu.Unlock()
+		return
+	}
+	m.activeID = s.id
+	m.mu.Unlock()
 	s.generation++
 	generation := s.generation
 	ctx, cancel := context.WithCancel(context.Background())
