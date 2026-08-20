@@ -11,6 +11,10 @@ import (
 // existing command executor; callers must not replace it.
 var linuxRunCommand = ExecuteCommand
 
+func linuxRouteAlreadyGone(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "no such process")
+}
+
 // AcquireLinuxProxyRoute installs a host bypass only when this session added
 // it. Existing routes are left untouched and therefore are never removed by
 // the lease.
@@ -36,6 +40,9 @@ func (p *Plan) AcquireLinuxProxyRoute(proxyIP, gatewayIP, iface string) (*Lease,
 			return nil
 		}
 		_, err := linuxRunCommand(fmt.Sprintf("ip route del %s/32 via %s dev %s", proxyIP, gatewayIP, iface))
+		if linuxRouteAlreadyGone(err) {
+			return nil
+		}
 		return err
 	})
 }
@@ -52,6 +59,9 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 		return err
 	}, func() error {
 		_, err := linuxRunCommand(routeDelete)
+		if linuxRouteAlreadyGone(err) {
+			return nil
+		}
 		return err
 	})
 	if err != nil {

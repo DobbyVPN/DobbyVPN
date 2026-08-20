@@ -37,6 +37,44 @@ func TestLinuxProxyRouteLeasePreservesExistingRoute(t *testing.T) {
 	}
 }
 
+func TestLinuxProxyRouteCleanupToleratesLinkRemovedRoute(t *testing.T) {
+	original := linuxRunCommand
+	t.Cleanup(func() { linuxRunCommand = original })
+	linuxRunCommand = func(command string) (string, error) {
+		if strings.Contains(command, "route del") {
+			return "", fmt.Errorf("RTNETLINK answers: No such process")
+		}
+		return "", nil
+	}
+
+	plan := NewPlan("generation-proxy-link-loss")
+	if _, err := plan.AcquireLinuxProxyRoute("198.51.100.8", "192.0.2.1", "eth0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Close(); err != nil {
+		t.Fatalf("cleanup should be idempotent after link removal: %v", err)
+	}
+}
+
+func TestLinuxMarkedRoutingCleanupToleratesLinkRemovedRoute(t *testing.T) {
+	original := linuxRunCommand
+	t.Cleanup(func() { linuxRunCommand = original })
+	linuxRunCommand = func(command string) (string, error) {
+		if strings.Contains(command, "ip route del table") {
+			return "", fmt.Errorf("RTNETLINK answers: No such process")
+		}
+		return "", nil
+	}
+
+	plan := NewPlan("generation-mark-link-loss")
+	if err := plan.AcquireLinuxMarkedRouting(233, 23333, "eth0", "192.0.2.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Close(); err != nil {
+		t.Fatalf("cleanup should be idempotent after link removal: %v", err)
+	}
+}
+
 func TestLinuxTunnelDefaultRestoresCapturedBaseline(t *testing.T) {
 	original := linuxRunCommand
 	t.Cleanup(func() { linuxRunCommand = original })
