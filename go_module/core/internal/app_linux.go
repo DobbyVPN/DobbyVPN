@@ -274,7 +274,31 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 
 	signalInit(initResult, nil)
 
+	// A physical uplink flap removes link-bound routes from the kernel while
+	// the TUN session and policy rule remain alive. Reconcile only this
+	// session's endpoint and marked-table routes until shutdown; do not alter
+	// the shared UI/runtime contract or guess at another actor's routes.
+	reconcileDone := make(chan struct{})
+	go func() {
+		defer close(reconcileDone)
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if reconcileErr := routing.ReconcileLinuxSessionRoutes(
+					serverIP.String(), gatewayIP.String(), uplinkIface, app.RoutingConfig.RoutingTableID,
+				); reconcileErr != nil {
+					log.Debugf(coreCommon.Category, "[Linux][Routing][WARN] route reconciliation pending: %v", reconcileErr)
+				}
+			}
+		}
+	}()
+
 	<-ctx.Done()
+	<-reconcileDone
 
 	log.Debugf(coreCommon.Category, "[Linux][Lifecycle] Context cancelled — stopping engine")
 	return nil

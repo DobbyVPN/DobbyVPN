@@ -148,6 +148,23 @@ func parseProcRouteIPv4(hexGateway string) (net.IP, error) {
 	return net.IPv4(decoded[3], decoded[2], decoded[1], decoded[0]).To4(), nil
 }
 
+// ReconcileLinuxSessionRoutes restores the two routes owned by an active
+// Linux session after an uplink link flap removes link-bound routes. The
+// session's policy rule and TUN default remain managed by the routing plan;
+// this helper only replaces the endpoint bypass and marked-table default
+// that must exist for protected tunnel traffic to recover.
+func ReconcileLinuxSessionRoutes(proxyIP, gatewayIP, iface string, tableID int) error {
+	if !isLoopbackIP(proxyIP) {
+		if _, err := ExecuteCommand(fmt.Sprintf("ip route replace %s/32 via %s dev %s", proxyIP, gatewayIP, iface)); err != nil {
+			return fmt.Errorf("restore proxy route: %w", err)
+		}
+	}
+	if _, err := ExecuteCommand(fmt.Sprintf("ip route replace table %d default via %s dev %s", tableID, gatewayIP, iface)); err != nil {
+		return fmt.Errorf("restore marked default route: %w", err)
+	}
+	return nil
+}
+
 func EnsureProxyRoute(proxyIP, gatewayIP, iface string) (bool, error) {
 	if isLoopbackIP(proxyIP) {
 		log.Debugf(Category, "[Routing][ProxyRoute] Skipping proxy route for loopback server: %s", proxyIP)
