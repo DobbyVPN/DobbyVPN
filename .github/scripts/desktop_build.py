@@ -625,7 +625,7 @@ def probe_windows_gcc() -> tuple[bool, str]:
             cwd=str(ROOT_DIR),
             text=True,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=None,
         )
     except OSError as error:
         return False, f"compiler=launch_failed errno={error.errno or 0}"

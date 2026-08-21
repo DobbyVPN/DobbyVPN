@@ -49,7 +49,7 @@ def verify_apk(apkanalyzer: str, apk: Path, source_sha: str, repository: str) ->
         [apkanalyzer, "dex", "code", "--class", BUILD_CONFIG, str(apk)],
         check=False,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=None,
         text=True,
         timeout=120,
     )

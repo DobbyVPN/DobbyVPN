@@ -72,7 +72,7 @@ jobs:
           test "$(apkanalyzer manifest version-name "$APK")" = "${{ inputs.version_name }}"
           test "$(apkanalyzer manifest version-code "$APK")" = "${{ inputs.version_code }}"
 
-          PACKAGES=$(apkanalyzer dex packages "$APK" 2>/dev/null | awk '{print $NF}')
+          PACKAGES=$(apkanalyzer dex packages "$APK" | awk '{print $NF}')
 
           FOUND=0
           for p in "${BLOCKED[@]}"; do

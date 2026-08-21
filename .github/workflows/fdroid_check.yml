@@ -14,7 +14,7 @@ jobs:
 
       - name: Find executable binaries in repo
         run: |
-          BINS=$(git ls-files | xargs file --mime-type 2>/dev/null \
+          BINS=$(git ls-files | xargs file --mime-type \
             | grep -E 'application/java-archive|application/x-executable|application/x-sharedlib|application/x-mach-binary|application/x-pie-executable' \
             | grep -v 'gradle-wrapper.jar' \
             | cut -d: -f1)
