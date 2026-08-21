@@ -489,6 +489,11 @@ def main() -> int:
         'test "$APP_SOURCE_SHA" = "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"',
         '-PprojectRepositoryCommit="${APP_SOURCE_SHA}"',
         '-PprojectRepositoryCommitLink="https://github.com/${APP_SOURCE_REPOSITORY}/tree/${APP_SOURCE_SHA}"',
+        "name: Install pinned gomobile toolchain",
+        "go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d",
+        "go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d",
+        'mkdir -p "$gopath/pkg/gomobile"',
+        'grep -F "$mobile_version"',
     ):
         if expected not in ios_libraries:
             violations.append(f"ios_libs_generate.yml: missing exact KMP framework-source control: {expected}")
@@ -496,6 +501,7 @@ def main() -> int:
         "GITHUB_SHA: ${{ inputs.source_sha }}",
         "Cache KMP iOS release framework",
         "steps.kmp_ios_framework_cache.outputs.cache-hit",
+        "gomobile init",
     ):
         if forbidden in ios_libraries:
             violations.append(

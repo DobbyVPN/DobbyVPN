@@ -62,11 +62,23 @@ jobs:
           go mod download
           go mod tidy
 
-      - name: Install gomobile & init
+      - name: Install pinned gomobile toolchain
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
+          mobile_version='v0.0.0-20260520154334-0e4426e1883d'
           go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
-          gomobile init
+          go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d
+          gopath="$(go env GOPATH)"
+          tool_dir="$gopath/bin"
+          mkdir -p "$gopath/pkg/gomobile"
+          echo "$tool_dir" >> "$GITHUB_PATH"
+          for tool in gomobile gobind; do
+            test -x "$tool_dir/$tool"
+            go version -m "$tool_dir/$tool" | \
+              grep -F 'golang.org/x/mobile' | \
+              grep -F "$mobile_version"
+          done
 
       - name: Fetch gomobile runtime
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
