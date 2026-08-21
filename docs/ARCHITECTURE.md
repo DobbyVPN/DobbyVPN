@@ -42,10 +42,8 @@ session. A UI restart recovers that session and resumes events after the last
 accepted sequence; it does not create a competing tunnel.
 
 Supported configuration sections are Outline, Outline WebSocket, Xray, and
-TrustTunnel. Cloak is not a runtime or supported protocol. During v1.5.0 only,
-a Cloak-bearing section is skipped with the safe
-`CLOAK_PROFILE_SKIPPED` warning; an input containing no supported section is a
-typed `UNSUPPORTED` failure.
+TrustTunnel. Cloak is removed: a Cloak-bearing section is rejected with the
+safe typed `UNSUPPORTED` failure, without returning any source fields.
 
 ### Thin platform shells
 

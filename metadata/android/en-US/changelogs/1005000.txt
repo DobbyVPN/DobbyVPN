@@ -1,4 +1,4 @@
 * Simplify the VPN runtime around SessionV2 and a native Go desktop CLI.
 * Preserve one shared Compose UI across desktop, Android, and iOS.
-* Remove Hide Configs and the Cloak runtime; legacy Cloak profiles are skipped
-  with an explicit compatibility warning.
+* Remove Hide Configs and the Cloak runtime; Cloak-bearing profiles are
+  rejected as unsupported.

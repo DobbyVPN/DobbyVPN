@@ -55,7 +55,7 @@ func TestConfigurePreservesMixedSourceOrderAndTelemetryIsLocalOnly(t *testing.T)
 	}
 }
 
-func TestConfigureSkipsCloakProfilesWithContiguousSupportedIndices(t *testing.T) {
+func TestConfigureRejectsRemovedCloakProfiles(t *testing.T) {
 	raw := strings.Join([]string{
 		"[[Outline]]", `Description = "supported-before"`, `Server = "198.51.100.20"`, "Port = 443", `Password = "redacted"`,
 		"", "[[Xray]]", `Description = "legacy-cloak"`, "Cloak = true", `Server = "cloak.invalid"`, `Password = "do-not-return"`,
@@ -66,62 +66,12 @@ func TestConfigureSkipsCloakProfilesWithContiguousSupportedIndices(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := m.Configure(context.Background(), id, "cloak-mixed", []byte(raw))
-	if err != nil {
-		t.Fatal(err)
+	_, err = m.Configure(context.Background(), id, "cloak-removed", []byte(raw))
+	if CodeOf(err) != FailureUnsupported || err.Error() != "UNSUPPORTED: configuration contains a removed Cloak profile" {
+		t.Fatalf("removed Cloak result = %v", err)
 	}
-	if len(result.Profiles) != 2 {
-		t.Fatalf("profiles = %#v", result.Profiles)
-	}
-	wantProtocols := []Protocol{ProtocolOutline, ProtocolTrustTunnel}
-	for i, want := range wantProtocols {
-		if result.Profiles[i].Index != i || result.Profiles[i].Protocol != want {
-			t.Fatalf("profile %d = %#v", i, result.Profiles[i])
-		}
-	}
-	if len(result.Warnings) != 1 || result.Warnings[0].Code != "CLOAK_PROFILE_SKIPPED" {
-		t.Fatalf("warnings = %#v", result.Warnings)
-	}
-	if !strings.Contains(result.Warnings[0].Message, "ordinal 2") || strings.Contains(result.Warnings[0].Message, "cloak.invalid") || strings.Contains(result.Warnings[0].Message, "do-not-return") {
-		t.Fatalf("unsafe Cloak warning = %#v", result.Warnings[0])
-	}
-}
-
-func TestConfigureReportsEveryCloakOrdinalAndRejectsAllCloak(t *testing.T) {
-	mixed := strings.Join([]string{
-		"[[Outline]]", `Description = "legacy-one"`, "Cloak = true", `Server = "cloak-one.invalid"`,
-		"", "[[Outline]]", `Description = "supported-middle"`, `Server = "198.51.100.22"`, "Port = 443", `Password = "redacted"`,
-		"", "[[Xray]]", `Description = "legacy-three"`, "Cloak = true", `Server = "cloak-three.invalid"`,
-	}, "\n")
-	m := NewManager(ManagerOptions{})
-	id, err := m.CreateSession(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := m.Configure(context.Background(), id, "cloak-ordinals", []byte(mixed))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Profiles) != 1 || result.Profiles[0].Index != 0 || result.Profiles[0].Protocol != ProtocolOutline {
-		t.Fatalf("profiles = %#v", result.Profiles)
-	}
-	if len(result.Warnings) != 2 || !strings.Contains(result.Warnings[0].Message, "ordinal 1") || !strings.Contains(result.Warnings[1].Message, "ordinal 3") {
-		t.Fatalf("warnings = %#v", result.Warnings)
-	}
-	allCloak := strings.Join([]string{
-		"[[Outline]]", `Description = "legacy-one"`, "Cloak = true", `Server = "cloak-one.invalid"`,
-		"", "[[Xray]]", `Description = "legacy-two"`, "Cloak = true", `Server = "cloak-two.invalid"`,
-	}, "\n")
-	id, err = m.CreateSession(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = m.Configure(context.Background(), id, "cloak-all", []byte(allCloak))
-	if CodeOf(err) != FailureUnsupported || err.Error() != "UNSUPPORTED: configuration contains only unsupported Cloak profiles" {
-		t.Fatalf("all-Cloak result = %v", err)
-	}
-	if strings.Contains(err.Error(), "cloak-one.invalid") || strings.Contains(err.Error(), "cloak-two.invalid") {
-		t.Fatalf("all-Cloak error leaked source: %v", err)
+	if strings.Contains(err.Error(), "cloak.invalid") || strings.Contains(err.Error(), "do-not-return") {
+		t.Fatalf("removed Cloak error leaked source: %v", err)
 	}
 }
 

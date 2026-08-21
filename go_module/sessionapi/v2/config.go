@@ -81,13 +81,7 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 		}
 		next[name]++
 		if boolValue(block, "Cloak") {
-			ordinal := len(profiles) + len(warnings) + 1
-			warnings = append(warnings, Warning{
-				Code:    "CLOAK_PROFILE_SKIPPED",
-				Message: "legacy profile ordinal " + strconv.Itoa(ordinal) + " was skipped; direct Outline, Xray, and TrustTunnel profiles are supported",
-			})
-			// TODO(first release after 1.5.0): make Cloak-bearing input a hard failure.
-			continue
+			return parsedConfig{}, failure(FailureUnsupported, "configuration contains a removed Cloak profile")
 		}
 		payload, err := encodeProfile(block)
 		if err != nil {
@@ -106,9 +100,6 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 			ExcludeCIDRs:     append([]string(nil), root.ExcludeIPs.IPs...),
 			PreflightHosts:   preflightHosts(protocol, block),
 		})
-	}
-	if len(profiles) == 0 && len(warnings) > 0 {
-		return parsedConfig{}, failure(FailureUnsupported, "configuration contains only unsupported Cloak profiles")
 	}
 	if len(profiles) == 0 {
 		return parsedConfig{}, failure(FailureMalformedConfig, "configuration contains no protocol profiles")
