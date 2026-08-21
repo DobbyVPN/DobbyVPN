@@ -136,13 +136,13 @@ tasks:
         platforms: [linux, darwin]
       - cmd: gradlew.bat :app:detektMetadataCommonMain :app:detektJvmMain :grpcstub:detekt || true
         platforms: [windows]
-      - cmd: cp -r app/build/reports/detekt/* "{{.REPORTS_DIR}}/kotlin/app/" 2>/dev/null || true
+      - cmd: cp -r app/build/reports/detekt/* "{{.REPORTS_DIR}}/kotlin/app/" || true
         platforms: [linux, darwin]
-      - cmd: cp -r grpcstub/build/reports/detekt/* "{{.REPORTS_DIR}}/kotlin/grpcstub/" 2>/dev/null || true
+      - cmd: cp -r grpcstub/build/reports/detekt/* "{{.REPORTS_DIR}}/kotlin/grpcstub/" || true
         platforms: [linux, darwin]
-      - cmd: xcopy /Y /E "app\build\reports\detekt\*" "{{.REPORTS_DIR}}\kotlin\app\" >nul 2>&1 || true
+      - cmd: xcopy /Y /E "app\build\reports\detekt\*" "{{.REPORTS_DIR}}\kotlin\app\" || true
         platforms: [windows]
-      - cmd: xcopy /Y /E "grpcstub\build\reports\detekt\*" "{{.REPORTS_DIR}}\kotlin\grpcstub\" >nul 2>&1 || true
+      - cmd: xcopy /Y /E "grpcstub\build\reports\detekt\*" "{{.REPORTS_DIR}}\kotlin\grpcstub\" || true
         platforms: [windows]
 
   report:swift:
