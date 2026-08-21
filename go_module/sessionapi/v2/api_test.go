@@ -432,6 +432,31 @@ func TestStopReportsCleanupFailureAndBlocksRestart(t *testing.T) {
 	}
 }
 
+func TestStopAcknowledgesAlreadyCleanedTerminalGeneration(t *testing.T) {
+	runtime := &monitoringRuntime{failures: make(chan struct{}, 1), stopped: make(chan uint64, 2)}
+	platform := &eventPlatform{events: make(chan Event, 32)}
+	m := NewManager(ManagerOptions{Runtime: runtime, Platform: platform})
+	id := configured(t, m)
+	start, err := m.Start(context.Background(), id, "start", StartTarget{Mode: ProfileIndex, Index: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, m, id, StateConnected)
+	if _, err := m.ReportHealth(context.Background(), id, start.Generation, false); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := waitState(t, m, id, StateFailed)
+	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureRuntime {
+		t.Fatalf("health-failure snapshot=%#v", snapshot)
+	}
+	if _, err := m.Stop(context.Background(), id, "stop-after-health-failure", start.Generation); err != nil {
+		t.Fatalf("already-cleaned terminal stop: %v", err)
+	}
+	if _, err := m.Stop(context.Background(), id, "stop-after-health-failure", start.Generation); err != nil {
+		t.Fatalf("repeated already-cleaned terminal stop: %v", err)
+	}
+}
+
 func TestPlatformAcquisitionErrorStillOwnsAndReportsReturnedLeaseCleanup(t *testing.T) {
 	want := errors.New("platform rollback failed")
 	m := NewManager(ManagerOptions{

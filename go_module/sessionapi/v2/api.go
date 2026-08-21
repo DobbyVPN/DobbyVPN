@@ -607,6 +607,16 @@ func (m *Manager) Stop(_ context.Context, sessionID, commandID string, generatio
 		return StopResult{}, err
 	}
 	if s.state == StateIdle || s.state == StateConfigured || s.state == StateFailed {
+		// A runtime-owned health failure can finish cleanup before the mobile
+		// caller gets to issue its ordinary stop request. Once this exact
+		// generation is fully cleaned, stop is an idempotent acknowledgement;
+		// it must not turn a clean terminal state into a misleading stale-stop
+		// failure. Cleanup failures remain errors and still block restart.
+		if s.generation == generation && s.cleanupDone && !s.cleanupFailed && s.state != StateConfigured {
+			result = StopResult{Generation: generation}
+			s.commands[commandID] = commandRecord{op: commandStop, stop: result}
+			return result, nil
+		}
 		err := failure(FailureStaleGeneration, "generation is no longer active")
 		s.commands[commandID] = commandRecord{op: commandStop, err: err}
 		return StopResult{}, err
