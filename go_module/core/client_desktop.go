@@ -30,6 +30,13 @@ type nativeRuntime struct {
 	mu sync.Mutex
 }
 
+// desktopShutdownTimeout bounds the wait for platform cleanup after a
+// disconnect. Windows removes a generation's owned routes one at a time, so
+// the old ten-second bound could expire while cleanup was still progressing.
+// The bound remains finite: a genuinely hung native runtime is still reported
+// as a cleanup failure.
+const desktopShutdownTimeout = 30 * time.Second
+
 func newNativeRuntime(device pkg.ProtocolDevice) *nativeRuntime {
 	cfg := common.GetNetworkConfig()
 
@@ -198,7 +205,7 @@ func (c *nativeRuntime) waitForShutdown(done <-chan struct{}, reason string) err
 	case <-done:
 		log.Debugf(coreCommon.Category, "Core/app shutdown completed after %s", reason)
 		return nil
-	case <-time.After(10 * time.Second):
+	case <-time.After(desktopShutdownTimeout):
 		log.Debugf(coreCommon.Category, "Core/app shutdown wait timed out after %s", reason)
 		return fmt.Errorf("timeout waiting for native session runtime shutdown after %s", reason)
 	}
