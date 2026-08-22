@@ -31,6 +31,23 @@ func signalInit(initResult chan<- error, err error) {
 	}
 }
 
+var discoverLinuxUplink = routing.DiscoverLinuxDefaultRoute
+var reconcileLinuxRoutes = routing.ReconcileLinuxSessionRoutesWithRule
+
+func reconcileLinuxUplink(serverIP string, tableID, priority int) error {
+	gatewayIP, uplinkIface, err := discoverLinuxUplink()
+	if err != nil {
+		return fmt.Errorf("discover restored uplink: %w", err)
+	}
+	if err := reconcileLinuxRoutes(serverIP, gatewayIP, uplinkIface, tableID, priority); err != nil {
+		return err
+	}
+	// Only publish the new protected-dialer route after all owned routes and
+	// the policy rule are restored successfully.
+	protected_dialer.SetDefaultRoute(gatewayIP, uplinkIface, 0)
+	return nil
+}
+
 func (app *App) validateRunInputs() error {
 	if app.ProtocolDevice == nil {
 		return fmt.Errorf("protocol device is not initialized")
@@ -288,8 +305,8 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if reconcileErr := routing.ReconcileLinuxSessionRoutes(
-					serverIP.String(), gatewayIP.String(), uplinkIface, app.RoutingConfig.RoutingTableID,
+				if reconcileErr := reconcileLinuxUplink(
+					serverIP.String(), app.RoutingConfig.RoutingTableID, app.RoutingConfig.RoutingTablePriority,
 				); reconcileErr != nil {
 					log.Debugf(coreCommon.Category, "[Linux][Routing][WARN] route reconciliation pending: %v", reconcileErr)
 				}

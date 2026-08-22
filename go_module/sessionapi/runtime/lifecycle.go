@@ -147,7 +147,6 @@ func configureHardeningTestHealth(options *Options) {
 		return
 	}
 
-	original := options.ConnectedHealth
 	var successful atomic.Int64
 	options.ConnectedHealth = func(ctx context.Context, ref v2.SessionRef) error {
 		if err := ctx.Err(); err != nil {
@@ -156,7 +155,12 @@ func configureHardeningTestHealth(options *Options) {
 		if successful.Add(1) > int64(after) {
 			return fmt.Errorf("hardening test health fault after %d successful checks", after)
 		}
-		return original(ctx, ref)
+		// The initial readiness check remains the real probe because it is held
+		// separately in InitialReadiness. Once the session is connected, this
+		// private fault seam must not enter that expensive live probe before the
+		// synthetic failure; doing so makes reconnect qualification depend on
+		// network timing instead of deterministically exercising failover.
+		return nil
 	}
 	// Qualification must reach the fault and the manager's cleanup path within
 	// its bounded scenario window. These overrides exist only with the explicit

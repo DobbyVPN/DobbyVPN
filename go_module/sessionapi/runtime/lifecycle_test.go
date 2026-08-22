@@ -377,7 +377,11 @@ func TestHardeningHealthFaultIsExplicitAndLeavesInitialReadinessUntouched(t *tes
 		initialCalls++
 		return nil
 	}
-	o.ConnectedHealth = func(context.Context, v1.SessionRef) error { return nil }
+	healthCalls := 0
+	o.ConnectedHealth = func(context.Context, v1.SessionRef) error {
+		healthCalls++
+		return nil
+	}
 	r := New(o).(*runtime)
 
 	if err := r.options.InitialReadiness(context.Background(), v1.SessionRef{Generation: 1}); err != nil {
@@ -391,6 +395,9 @@ func TestHardeningHealthFaultIsExplicitAndLeavesInitialReadinessUntouched(t *tes
 	}
 	if err := r.options.ConnectedHealth(context.Background(), v1.SessionRef{Generation: 1}); err == nil {
 		t.Fatal("second monitored check unexpectedly succeeded")
+	}
+	if healthCalls != 0 {
+		t.Fatalf("hardening seam invoked the live health probe %d times", healthCalls)
 	}
 	if r.options.HealthInterval != time.Second || r.options.HealthFailureThreshold != 1 {
 		t.Fatalf("hardening timing=%s threshold=%d, want 1s/1", r.options.HealthInterval, r.options.HealthFailureThreshold)

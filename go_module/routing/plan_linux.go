@@ -7,10 +7,6 @@ import (
 	"strings"
 )
 
-// linuxRunCommand is a narrow seam for route-plan tests. Production uses the
-// existing command executor; callers must not replace it.
-var linuxRunCommand = ExecuteCommand
-
 func linuxRouteAlreadyGone(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "no such process")
 }
