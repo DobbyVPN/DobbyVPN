@@ -69,6 +69,19 @@ class AndroidHostedProfileTestDriverTest {
     }
 
     @Test
+    fun command_validation_rejects_operations_whose_total_timeout_exceeds_thirty_minutes() {
+        val command = JSONObject(commandJson(operations = listOf("configure", "connect")))
+        val operations = command.getJSONArray("operations")
+        operations.getJSONObject(0).put("timeout_seconds", 901)
+        operations.getJSONObject(1).put("timeout_seconds", 900)
+
+        assertInputRejected(command)
+
+        operations.getJSONObject(0).put("timeout_seconds", 900)
+        AndroidHostedCommandContract.parse("command.json", command.toString())
+    }
+
+    @Test
     fun private_file_validation_rejects_traversal_and_symlink() {
         try {
             AndroidHostedCommandContract.privateFile(context.filesDir, "../outside.json")

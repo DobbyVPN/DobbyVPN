@@ -72,6 +72,7 @@ internal object AndroidHostedCommandContract {
     private const val MAX_COMMAND_BYTES = 256 * 1024
     private const val MAX_PROFILE_BYTES = 8 * 1024 * 1024
     private const val MAX_OPERATIONS = 64
+    private const val MAX_COMMAND_TIMEOUT_SECONDS = 1_800
     private const val MAX_OPERATION_TIMEOUT_SECONDS = 1_800
     private val SHA = Regex("[0-9a-f]{40}")
     private val FILE_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
@@ -139,6 +140,7 @@ internal object AndroidHostedCommandContract {
                 add(AndroidHostedOperation(id, operation, timeoutSeconds))
             }
         }
+        if (operations.sumOf(AndroidHostedOperation::timeoutSeconds) > MAX_COMMAND_TIMEOUT_SECONDS) invalid()
         return AndroidHostedCommand(sourceSha, profileFile, outputFile, endpoints, operations)
     }
 
