@@ -188,7 +188,6 @@ def download(url: str, output: Path) -> None:
                 "--fail",
                 "--location",
                 "--show-error",
-                "--silent",
                 "--http1.1",
                 "--retry",
                 "5",

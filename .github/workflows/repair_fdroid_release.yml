@@ -42,7 +42,7 @@ jobs:
       RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
       REPLACE_CONFIRMATION: ${{ inputs.confirm_replace }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
@@ -125,33 +125,33 @@ jobs:
       RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
       EXPECTED_ANDROID_SIGNER_SHA256: c3f0414a74012060d7c6aa3a3d9dac0aa13c1bd23b7512eefd860fb865e67933
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - uses: android-actions/setup-android@v4
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
         with:
           packages: build-tools;36.0.0
 
       - name: Download rebuilt signed APK
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyvpn-android-sign.apk
           path: release
 
       - name: Download rebuilt unsigned APK
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyvpn-android-unsign.apk
           path: release
 
       - name: Download rebuilt Android provenance
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyvpn-android-provenance
           path: release
@@ -292,7 +292,7 @@ jobs:
           test "$(cat published/version.txt)" = "$(printf 'versionName=%s\nversionCode=%s' "$RELEASE_VERSION" "$ANDROID_VERSION_CODE")"
           version_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/version.txt"
           test "$(
-            curl --fail --silent --show-error --location "$version_url"
+            curl --fail --show-error --location "$version_url"
           )" = "$(printf 'versionName=%s\nversionCode=%s' "$RELEASE_VERSION" "$ANDROID_VERSION_CODE")"
           gh release view "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \

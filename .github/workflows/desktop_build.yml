@@ -28,7 +28,7 @@ jobs:
     environment: release
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
@@ -50,13 +50,13 @@ jobs:
           fi
 
       - name: Download Windows gRPC vpn service
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: windows_grpcvpnserver.exe
           path: kmp_module/services
 
       - name: Download Linux gRPC vpn service
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: ubuntu_grpcvpnserver
           path: kmp_module/services
@@ -67,13 +67,13 @@ jobs:
           chmod +x ubuntu_grpcvpnserver
 
       - name: Download macOS arm64 gRPC vpn service
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: macos_grpcvpnserver-arm64
           path: kmp_module/services
 
       - name: Download macOS amd64 gRPC vpn service
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: macos_grpcvpnserver-amd64
           path: kmp_module/services/macos-amd64
@@ -84,7 +84,7 @@ jobs:
           chmod +x macos_grpcvpnserver macos-amd64/macos_grpcvpnserver
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -95,7 +95,7 @@ jobs:
             kmp_module/gradle/wrapper/gradle-wrapper.properties
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
         with:
           packages: >
             platforms;android-35
@@ -114,7 +114,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Cache Conveyor downloads
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .conveyor/cache
           key: conveyor-${{ runner.os }}-${{ hashFiles('kmp_module/conveyor.conf', 'kmp_module/**/*.gradle.kts', 'kmp_module/gradle/libs.versions.toml') }}
@@ -122,7 +122,7 @@ jobs:
             conveyor-${{ runner.os }}-
 
       - name: Conveyor build site
-        uses: hydraulic-software/conveyor/actions/build@v16.0
+        uses: hydraulic-software/conveyor/actions/build@3fd1c206e213cbc01d0b0343ddb120fdde074165 # v16.0
         env:
           OAUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
@@ -217,28 +217,28 @@ jobs:
           cp "${{ env.WIN_ZIP_FILE }}" upload/dobbyVPN-windows.zip
 
       - name: Upload Debian
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyVPN-linux.deb
           path: upload/dobbyVPN-linux.deb
           if-no-files-found: error
 
       - name: Upload zip for macOS aarch64
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyVPN-macos-aarch64.zip
           path: upload/dobbyVPN-macos-aarch64.zip
           if-no-files-found: error
 
       - name: Upload zip for macOS amd64
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyVPN-macos-amd64.zip
           path: upload/dobbyVPN-macos-amd64.zip
           if-no-files-found: error
 
       - name: Upload Windows zip
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyVPN-windows.zip
           path: upload/dobbyVPN-windows.zip

@@ -17,6 +17,10 @@ WORKFLOWS = ROOT / "workflows"
 PR_TRIGGER = re.compile(r"^\s{2}pull_request\s*:", re.MULTILINE)
 SECRET = re.compile(r"\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}")
 FULL_SHA = r"[0-9a-f]{40}"
+EXTERNAL_ACTION = re.compile(
+    r"^\s*(?:-\s*)?uses:\s*(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)@(?P<ref>[^\s#]+)",
+    re.MULTILINE,
+)
 STEP_NAME = re.compile(
     r"^\s*-\s+name:\s*(?:"
     r'"(?P<double>[^"]+)"|'
@@ -67,6 +71,13 @@ def main() -> int:
     for action_file in sorted((ROOT / "actions").rglob("*.yml")) + sorted(WORKFLOWS.glob("*.yml")):
         action_text = action_file.read_text(encoding="utf-8")
         relative = action_file.relative_to(ROOT)
+        for action_match in EXTERNAL_ACTION.finditer(action_text):
+            action_name = action_match.group("action")
+            action_ref = action_match.group("ref")
+            if not re.fullmatch(FULL_SHA, action_ref):
+                violations.append(
+                    f"{relative}: external action {action_name}@{action_ref} must use a full commit SHA"
+                )
         for legacy, replacement in (
             ("actions/checkout@v4", "actions/checkout@v5"),
             ("actions/download-artifact@v4", "actions/download-artifact@v7"),
@@ -545,7 +556,7 @@ def main() -> int:
         "test.yml",
     ):
         text = (WORKFLOWS / name).read_text(encoding="utf-8")
-        checkouts = text.count("uses: actions/checkout@v5")
+        checkouts = len(re.findall(rf"^\s*(?:-\s*)?uses:\s*actions/checkout@{FULL_SHA}\b", text, re.MULTILINE))
         persisted = text.count("persist-credentials: false")
         if persisted < checkouts:
             violations.append(f"{name}: every checkout must disable persisted credentials")
@@ -558,7 +569,7 @@ def main() -> int:
         "ios_build.yml",
     ):
         text = (WORKFLOWS / name).read_text(encoding="utf-8")
-        uploads = text.count("uses: actions/upload-artifact@v7")
+        uploads = len(re.findall(rf"^\s*(?:-\s*)?uses:\s*actions/upload-artifact@{FULL_SHA}\b", text, re.MULTILINE))
         required = text.count("if-no-files-found: error")
         if required < uploads:
             violations.append(f"{name}: every release artifact upload must fail when its output is missing")

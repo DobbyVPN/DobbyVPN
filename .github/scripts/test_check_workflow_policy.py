@@ -62,5 +62,19 @@ class WorkflowStepOrderTests(unittest.TestCase):
         )
 
 
+class ImmutableActionReferenceTests(unittest.TestCase):
+    def test_rejects_mutable_external_action_reference(self) -> None:
+        match = policy.EXTERNAL_ACTION.search("      - uses: hydraulic-software/conveyor/actions/build@v16.0\n")
+        self.assertIsNotNone(match)
+        self.assertIsNone(policy.re.fullmatch(policy.FULL_SHA, match.group("ref")))
+
+    def test_accepts_full_commit_action_reference(self) -> None:
+        match = policy.EXTERNAL_ACTION.search(
+            "      - uses: actions/checkout@" + "a" * 40 + " # v5\n"
+        )
+        self.assertIsNotNone(match)
+        self.assertIsNotNone(policy.re.fullmatch(policy.FULL_SHA, match.group("ref")))
+
+
 if __name__ == "__main__":
     unittest.main()

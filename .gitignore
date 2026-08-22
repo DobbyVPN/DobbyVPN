@@ -78,3 +78,8 @@ go_module/grpcproto/vpnserver.proto
 # Owner-local Harness/runtime worktrees and qualification artefacts.
 # These are private generated state, never application source.
 /runtime/
+
+# Module-local qualification runs must stay owner-only Harness evidence.
+# They are never application source or stageable public-repository files.
+/go_module/runtime/
+/kmp_module/runtime/

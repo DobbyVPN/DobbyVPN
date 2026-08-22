@@ -54,7 +54,7 @@ jobs:
       EXPECTED_ANDROID_SIGNER_SHA256: c3f0414a74012060d7c6aa3a3d9dac0aa13c1bd23b7512eefd860fb865e67933
     steps:
       - name: Checkout exact release source
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.commit_sha }}
           fetch-depth: 0
@@ -182,17 +182,17 @@ jobs:
           echo "Validated $tag from Release run $RELEASE_RUN_ID at $RELEASE_SOURCE_SHA"
           echo "Release state: $release_state"
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - uses: android-actions/setup-android@v4
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
         with:
           packages: build-tools;36.0.0
 
       - name: Download Linux package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyVPN-linux.deb
           path: release
@@ -201,7 +201,7 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download Windows amd64 package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyVPN-windows-amd64.msi
           path: release
@@ -210,7 +210,7 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download macOS amd64 package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyVPN-macos-amd64.pkg
           path: release
@@ -219,7 +219,7 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download macOS arm64 package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyVPN-macos-aarch64.pkg
           path: release
@@ -228,7 +228,7 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download signed Android package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyvpn-android-sign.apk
           path: release
@@ -237,7 +237,7 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download unsigned Android package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyvpn-android-unsign.apk
           path: release
@@ -246,7 +246,7 @@ jobs:
           run-id: ${{ inputs.run_id }}
 
       - name: Download Android provenance
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyvpn-android-provenance
           path: release
