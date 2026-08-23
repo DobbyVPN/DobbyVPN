@@ -86,11 +86,7 @@ storage and require controlled degradation rather than startup failure.
 
 The signed-IPA workflow separately inspects the app and packet-tunnel extension,
 signatures, exact entitlements, App Group, source commit, version/build,
-provisioning expiry, and release debugger policy. Simulator cannot execute the
-production NetworkExtension data plane, real traffic, sleep/wake, or physical
-device resource cleanup. No physical-iPhone lane is part of v1.5.0 because the
-owner does not have a device; this remains a named coverage gap rather than a
-substituted pass.
+provisioning expiry, and release debugger policy.
 
 The Go XCFramework intentionally includes a Simulator slice. It shares all
 session/runtime code with the device slice, but TrustTunnel returns a typed
@@ -113,9 +109,26 @@ without duplicating tests. A named app XCTest remains a separate future stage.
 
 The caller uses the unprivileged `pull_request` event, read-only permissions,
 no secrets, no protected environments, and no shared Actions cache.
+It invokes Torturer's secretless verification workflow only; it cannot create
+provider resources or access the trusted functional environment.
+
+Torturer separately owns manually dispatched, trusted hosted functional lanes
+for Linux, Windows, macOS, and Android. Those lanes source-build an exact
+DobbyVPN commit, stage a strict runtime allow-list, and run Torturer's canonical
+scenario engine against one disposable Render-hosted Outline WebSocket server
+per platform. The provider credential and plaintext profile remain confined to
+Torturer's protected server-lease job. Candidate build jobs never receive
+provider credentials, and DobbyVPN does not import or depend on Torturer.
+
+Hosted results contain only the canonical assertions, bounded safe metrics,
+exact source/runtime provenance, and verified cleanup state. They do not upload
+screenshots, raw profiles, credentials, endpoint URLs, or literal external-IP
+observations. Owner-local qualification remains responsible for complete raw
+evidence, screenshots, private profile coverage, and OS-specific diagnostics.
 
 ## Scope boundary
 
-Public tests intentionally use no provider credentials or real endpoint
-configuration. They do not claim real external-network identity, sustained
-throughput, or physical-device NetworkExtension qualification.
+Pull-request tests intentionally use no provider credentials or real endpoint
+configuration. Trusted hosted functional lanes use only a run-scoped disposable
+profile and server, and publish no credential-bearing evidence. Private profile
+coverage and complete local diagnostics remain outside this public repository.
