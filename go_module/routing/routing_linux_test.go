@@ -58,8 +58,8 @@ func TestReconcileLinuxSessionRoutesWithRuleRestoresAllOwnedEntries(t *testing.T
 		t.Fatal(err)
 	}
 	want := []string{
-		"ip route replace 198.51.100.9/32 via 192.0.2.1 dev eth0",
-		"ip route replace table 233 default via 192.0.2.1 dev eth0",
+		"ip route replace 198.51.100.9/32 via 192.0.2.1 dev eth0 proto 233 metric 233",
+		"ip route replace table 233 default via 192.0.2.1 dev eth0 proto 233",
 		"ip rule add fwmark 233 lookup 233 priority 23333",
 	}
 	if !reflect.DeepEqual(commands, want) {

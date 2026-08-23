@@ -210,11 +210,17 @@ func ReconcileLinuxSessionRoutesWithRule(proxyIP, gatewayIP, iface string, table
 
 func reconcileLinuxSessionRoutes(proxyIP, gatewayIP, iface string, tableID, priority int) error {
 	if !isLoopbackIP(proxyIP) {
-		if _, err := linuxRunCommand(fmt.Sprintf("ip route replace %s/32 via %s dev %s", proxyIP, gatewayIP, iface)); err != nil {
+		if _, err := linuxRunCommand(fmt.Sprintf(
+			"ip route replace %s/32 via %s dev %s proto %d metric %d",
+			proxyIP, gatewayIP, iface, linuxOwnedRouteProtocol, linuxOwnedProxyMetric,
+		)); err != nil {
 			return fmt.Errorf("restore proxy route: %w", err)
 		}
 	}
-	if _, err := linuxRunCommand(fmt.Sprintf("ip route replace table %d default via %s dev %s", tableID, gatewayIP, iface)); err != nil {
+	if _, err := linuxRunCommand(fmt.Sprintf(
+		"ip route replace table %d default via %s dev %s proto %d",
+		tableID, gatewayIP, iface, linuxOwnedRouteProtocol,
+	)); err != nil {
 		return fmt.Errorf("restore marked default route: %w", err)
 	}
 	if priority <= 0 {

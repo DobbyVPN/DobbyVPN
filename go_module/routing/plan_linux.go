@@ -8,7 +8,12 @@ import (
 )
 
 func linuxRouteAlreadyGone(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "no such process")
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no such process") ||
+		strings.Contains(message, "no such file or directory") || strings.Contains(message, "cannot find")
 }
 
 // AcquireLinuxProxyRoute installs a host bypass only when this session added
@@ -19,7 +24,10 @@ func (p *Plan) AcquireLinuxProxyRoute(proxyIP, gatewayIP, iface string) (*Lease,
 		return nil, nil
 	}
 
-	command := fmt.Sprintf("ip route add %s/32 via %s dev %s", proxyIP, gatewayIP, iface)
+	command := fmt.Sprintf(
+		"ip route add %s/32 via %s dev %s proto %d metric %d",
+		proxyIP, gatewayIP, iface, linuxOwnedRouteProtocol, linuxOwnedProxyMetric,
+	)
 	var created bool
 	return p.Acquire("proxy-route "+proxyIP, func() error {
 		_, err := linuxRunCommand(command)
@@ -35,7 +43,10 @@ func (p *Plan) AcquireLinuxProxyRoute(proxyIP, gatewayIP, iface string) (*Lease,
 		if !created {
 			return nil
 		}
-		_, err := linuxRunCommand(fmt.Sprintf("ip route del %s/32 via %s dev %s", proxyIP, gatewayIP, iface))
+		_, err := linuxRunCommand(fmt.Sprintf(
+			"ip route del %s/32 via %s dev %s proto %d metric %d",
+			proxyIP, gatewayIP, iface, linuxOwnedRouteProtocol, linuxOwnedProxyMetric,
+		))
 		if linuxRouteAlreadyGone(err) {
 			return nil
 		}
@@ -48,8 +59,14 @@ func (p *Plan) AcquireLinuxProxyRoute(proxyIP, gatewayIP, iface string) (*Lease,
 // rule. If either resource already exists, acquisition fails rather than
 // claiming ownership of it.
 func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP string) error {
-	routeCommand := fmt.Sprintf("ip route add table %d default via %s dev %s", tableID, gatewayIP, iface)
-	routeDelete := fmt.Sprintf("ip route del table %d default via %s dev %s", tableID, gatewayIP, iface)
+	routeCommand := fmt.Sprintf(
+		"ip route add table %d default via %s dev %s proto %d",
+		tableID, gatewayIP, iface, linuxOwnedRouteProtocol,
+	)
+	routeDelete := fmt.Sprintf(
+		"ip route del table %d default via %s dev %s proto %d",
+		tableID, gatewayIP, iface, linuxOwnedRouteProtocol,
+	)
 	routeLease, err := p.Acquire(fmt.Sprintf("mark-route table=%d", tableID), func() error {
 		_, err := linuxRunCommand(routeCommand)
 		return err
@@ -93,12 +110,16 @@ func (p *Plan) AcquireLinuxTunnelDefault(tunName string) (*Lease, error) {
 		if err != nil {
 			return err
 		}
-		_, err = linuxRunCommand(fmt.Sprintf("ip route replace default dev %s", tunName))
+		_, err = linuxRunCommand(fmt.Sprintf(
+			"ip route replace default dev %s proto %d", tunName, linuxOwnedRouteProtocol,
+		))
 		return err
 	}, func() error {
 		// Specify the TUN device so a changed default owned by another actor is
 		// never removed. Do not restore the snapshot if that deletion fails.
-		if _, err := linuxRunCommand(fmt.Sprintf("ip route del default dev %s", tunName)); err != nil {
+		if _, err := linuxRunCommand(fmt.Sprintf(
+			"ip route del default dev %s proto %d", tunName, linuxOwnedRouteProtocol,
+		)); err != nil {
 			return err
 		}
 		_, err := linuxRunCommand(baseline)
@@ -126,7 +147,9 @@ func (p *Plan) AcquireLinuxIPv6Block() error {
 		subnet := subnet
 		created := false
 		_, err := p.Acquire("ipv6-block "+subnet, func() error {
-			_, err := linuxRunCommand(fmt.Sprintf("ip -6 route add blackhole %s metric 1", subnet))
+			_, err := linuxRunCommand(fmt.Sprintf(
+				"ip -6 route add blackhole %s proto %d metric 1", subnet, linuxOwnedRouteProtocol,
+			))
 			if err != nil {
 				if strings.Contains(err.Error(), "File exists") {
 					return nil
@@ -139,7 +162,9 @@ func (p *Plan) AcquireLinuxIPv6Block() error {
 			if !created {
 				return nil
 			}
-			_, err := linuxRunCommand(fmt.Sprintf("ip -6 route del blackhole %s metric 1", subnet))
+			_, err := linuxRunCommand(fmt.Sprintf(
+				"ip -6 route del blackhole %s proto %d metric 1", subnet, linuxOwnedRouteProtocol,
+			))
 			return err
 		})
 		if err != nil {

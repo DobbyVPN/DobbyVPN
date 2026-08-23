@@ -33,6 +33,7 @@ func signalInit(initResult chan<- error, err error) {
 
 var discoverLinuxUplink = routing.DiscoverLinuxDefaultRoute
 var reconcileLinuxRoutes = routing.ReconcileLinuxSessionRoutesWithRule
+var recoverLinuxOwnedRoutes = routing.RecoverLinuxOwnedRoutes
 
 func reconcileLinuxUplink(serverIP string, tableID, priority int) error {
 	gatewayIP, uplinkIface, err := discoverLinuxUplink()
@@ -99,6 +100,19 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return err
 	}
 	log.Debugf(coreCommon.Category, "[Linux][Step 3][OK] Uplink interface=%s", uplinkIface)
+
+	log.Debugf(coreCommon.Category, "[Linux][Recovery] Checking for routes tagged by an interrupted DobbyVPN process")
+	if err = recoverLinuxOwnedRoutes(
+		app.RoutingConfig.RoutingTableID,
+		app.RoutingConfig.RoutingTablePriority,
+		app.RoutingConfig.TunDeviceName,
+	); err != nil {
+		err = fmt.Errorf("failed to recover interrupted Linux routing state: %w", err)
+		log.Debugf(coreCommon.Category, "[Linux][Recovery][ERROR] %v", err)
+		signalInit(initResult, err)
+		return err
+	}
+	log.Debugf(coreCommon.Category, "[Linux][Recovery][OK] Tagged routing state is clean")
 	protected_dialer.SetDefaultRoute(gatewayIP.String(), uplinkIface, 0)
 	routePlan := routing.NewPlan(fmt.Sprintf("%s:%s", app.RoutingConfig.TunDeviceName, serverIP.String()))
 	defer func() {
