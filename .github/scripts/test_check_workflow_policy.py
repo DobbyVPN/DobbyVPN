@@ -76,5 +76,22 @@ class ImmutableActionReferenceTests(unittest.TestCase):
         self.assertIsNotNone(policy.re.fullmatch(policy.FULL_SHA, match.group("ref")))
 
 
+class AndroidBuildSurfaceTests(unittest.TestCase):
+    def test_android_workflow_uses_the_public_driver_and_closure(self) -> None:
+        source = (policy.WORKFLOWS / "android_build.yml").read_text(encoding="utf-8")
+        self.assertIn("Build and verify isolated unsigned APKs through the public driver", source)
+        self.assertIn("android_build_driver.sh", source)
+        self.assertIn("--dependency-closure", source)
+        self.assertIn(".github/android/dependency-closure.json", source)
+
+    def test_android_driver_retains_fresh_non_overwriting_originals(self) -> None:
+        source = (SCRIPT.parent / "android_build_driver.sh").read_text(encoding="utf-8")
+        self.assertIn('stdout.original.XXXXXX.log', source)
+        self.assertIn('stderr.original.XXXXXX.log', source)
+        self.assertIn('chmod 600 "$stdout_original" "$stderr_original"', source)
+        self.assertNotIn('tee -- "$evidence_dir/stdout.original.log"', source)
+        self.assertNotIn('tee -- "$evidence_dir/stderr.original.log"', source)
+
+
 if __name__ == "__main__":
     unittest.main()

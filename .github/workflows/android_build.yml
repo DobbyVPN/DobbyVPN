@@ -36,6 +36,7 @@ on:
 jobs:
   android_build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: release
     env:
       APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
@@ -149,23 +150,26 @@ jobs:
           test "$(readlink -f "$GOMOBILE")" = "$GOPATH/bin/gomobile"
           test -x "$GOMOBILE"
           for tool in gomobile gobind; do
-            go version -m "$GOPATH/bin/$tool" | \
+            go version -m "$GOPATH/bin/$tool" | tee /dev/stderr | \
               grep -F 'golang.org/x/mobile' | \
               grep -F 'v0.0.0-20260520154334-0e4426e1883d'
           done
-          java_version="$(java -version 2>&1)"
+          java_version="$(java -version 2>&1 | tee /dev/stderr)"
           grep -F 'version "17.' <<<"$java_version"
           ndk_revision="$(sed -n 's/^Pkg.Revision *= *//p' \
             "$ANDROID_SDK_ROOT/ndk/27.3.13750724/source.properties")"
           test "$ndk_revision" = "27.3.13750724"
           test -x "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
           gradle_version="$(./kmp_module/gradlew -p kmp_module --version --no-daemon | \
-            awk '/^Gradle / {print $2}')"
+            tee /dev/stderr | awk '/^Gradle / {print $2}')"
           test "$gradle_version" = "8.13"
 
       - name: Prepare F-Droid-compatible source path
         run: |
-          rsync -a --delete --exclude='.git' "$GITHUB_WORKSPACE/" "$FDROID_COMPAT_SOURCE_ROOT/"
+          # Keep the exact detached Git objects with the source copy.  The
+          # shared public driver proves that the checkout bytes still equal
+          # HEAD^{tree} before it creates any build output.
+          rsync -a --delete "$GITHUB_WORKSPACE/" "$FDROID_COMPAT_SOURCE_ROOT/"
 
       # A legacy selected tag does not contain this newer verifier. Keep the
       # trusted workflow implementation separate from the exact source tree
@@ -176,64 +180,28 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: .trusted-workflow
           sparse-checkout: |
+            .github/scripts/public_output.py
             .github/scripts/verify_android_apk_source.py
             .github/scripts/verify_android_reproducibility.py
           persist-credentials: false
 
-      - name: Build first isolated unsigned APK
+      - name: Build and verify isolated unsigned APKs through the public driver
         working-directory: /home/vagrant/build/com.dobby.vpn
         env:
           DOBBYVPN_GOMOBILE_GOCACHE: ${{ runner.temp }}/dobbyvpn-android-repro/first/go-cache
           DOBBYVPN_GOMOBILE_GOTMPDIR: ${{ runner.temp }}/dobbyvpn-android-repro/first/go-tmp
         run: |
           set -euo pipefail
-          mkdir -p "$DOBBYVPN_GOMOBILE_GOCACHE" "$DOBBYVPN_GOMOBILE_GOTMPDIR"
-          ./kmp_module/gradlew -p kmp_module :app:assembleRelease \
-            --no-build-cache --no-daemon --rerun-tasks --stacktrace \
-            -PprojectRepositoryCommit="$APP_SOURCE_SHA" \
-            -PprojectRepositoryCommitLink="https://github.com/$APP_SOURCE_REPOSITORY/tree/$APP_SOURCE_SHA" \
-            -Pandroid.injected.version.code="$ANDROID_VERSION_CODE" \
-            -Pandroid.injected.version.name="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          mv "kmp_module/app/build/outputs/apk/release/app-release-unsigned.apk" \
-            "$RUNNER_TEMP/dobbyvpn-android-repro/first.apk"
-
-      - name: Remove first-build outputs
-        working-directory: /home/vagrant/build/com.dobby.vpn
-        run: |
-          set -euo pipefail
-          ./kmp_module/gradlew -p kmp_module clean --no-daemon --no-build-cache
-          test ! -e kmp_module/app/build/generated/gomobile/dobbyvpn-runtime.aar
-
-      - name: Build second isolated unsigned APK
-        working-directory: /home/vagrant/build/com.dobby.vpn
-        env:
-          DOBBYVPN_GOMOBILE_GOCACHE: ${{ runner.temp }}/dobbyvpn-android-repro/second/go-cache
-          DOBBYVPN_GOMOBILE_GOTMPDIR: ${{ runner.temp }}/dobbyvpn-android-repro/second/go-tmp
-        run: |
-          set -euo pipefail
-          mkdir -p "$DOBBYVPN_GOMOBILE_GOCACHE" "$DOBBYVPN_GOMOBILE_GOTMPDIR"
-          ./kmp_module/gradlew -p kmp_module :app:assembleRelease \
-            --no-build-cache --no-daemon --rerun-tasks --stacktrace \
-            -PprojectRepositoryCommit="$APP_SOURCE_SHA" \
-            -PprojectRepositoryCommitLink="https://github.com/$APP_SOURCE_REPOSITORY/tree/$APP_SOURCE_SHA" \
-            -Pandroid.injected.version.code="$ANDROID_VERSION_CODE" \
-            -Pandroid.injected.version.name="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          mkdir -p fastlane
-          mv "kmp_module/app/build/outputs/apk/release/app-release-unsigned.apk" \
-            "fastlane/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-unsign.apk"
-
-      - name: Verify complete unsigned APK reproducibility
-        working-directory: /home/vagrant/build/com.dobby.vpn
-        run: |
-          set -euo pipefail
           version="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          python3 "$GITHUB_WORKSPACE/.trusted-workflow/.github/scripts/verify_android_reproducibility.py" create \
-            --first-apk "$RUNNER_TEMP/dobbyvpn-android-repro/first.apk" \
-            --second-apk "fastlane/DobbyVPN-v${version}-unsign.apk" \
-            --output "fastlane/DobbyVPN-v${version}-android-reproducibility.json" \
-            --source-sha "$APP_SOURCE_SHA" \
-            --version-name "$version" \
-            --version-code "$ANDROID_VERSION_CODE"
+          test -f .github/android/dependency-closure.json
+          "$FDROID_COMPAT_SOURCE_ROOT/.github/scripts/android_build_driver.sh" \
+            --source-root "$FDROID_COMPAT_SOURCE_ROOT" \
+            --output "$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v${version}-unsign.apk" \
+            --manifest "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-build-driver-manifest.json" \
+            --first-output "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-repro-first.apk" \
+            --reproducibility "$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v${version}-android-reproducibility.json" \
+            --dependency-closure "$FDROID_COMPAT_SOURCE_ROOT/.github/android/dependency-closure.json" \
+            --source-repository "$APP_SOURCE_REPOSITORY"
 
       - name: Sign the verified unsigned APK
         working-directory: /home/vagrant/build/com.dobby.vpn
@@ -287,6 +255,7 @@ jobs:
           signed="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-sign.apk"
           unsigned="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-unsign.apk"
           reproducibility="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-android-reproducibility.json"
+          driver_manifest="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-build-driver-manifest.json"
           manifest="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-android-provenance.json"
 
           for apk in "$signed" "$unsigned"; do
@@ -299,7 +268,7 @@ jobs:
             --apk "$signed" --apk "$unsigned" \
             --source-sha "$SOURCE_SHA" --repository "$APP_SOURCE_REPOSITORY"
 
-          SIGNED_APK="$signed" UNSIGNED_APK="$unsigned" REPRODUCIBILITY="$reproducibility" MANIFEST="$manifest" python3 - <<'PY'
+          SIGNED_APK="$signed" UNSIGNED_APK="$unsigned" REPRODUCIBILITY="$reproducibility" DRIVER_MANIFEST="$driver_manifest" MANIFEST="$manifest" python3 - <<'PY'
           import hashlib
           import json
           import os
@@ -321,6 +290,9 @@ jobs:
               "application_id": "com.dobby.vpn",
               "signer_certificate_sha256": os.environ["EXPECTED_ANDROID_SIGNER_SHA256"],
               "signed_payload_matches_unsigned": True,
+              "build_driver": json.loads(
+                  Path(os.environ["DRIVER_MANIFEST"]).read_text(encoding="utf-8")
+              ),
               "reproducibility": json.loads(
                   Path(os.environ["REPRODUCIBILITY"]).read_text(encoding="utf-8")
               ),
@@ -341,7 +313,6 @@ jobs:
           name: dobbyvpn-android-sign.apk
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-sign.apk
           if-no-files-found: error
-
       - name: Upload unsigned APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

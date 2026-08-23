@@ -135,6 +135,13 @@ def main() -> int:
             violations.append(f"{name}: Bash regex validation must use [[ ... =~ ... ]], not test")
 
     android_build = (WORKFLOWS / "android_build.yml").read_text(encoding="utf-8")
+    android_driver = ROOT.parent / ".github" / "scripts" / "android_build_driver.sh"
+    if not android_driver.is_file() or android_driver.is_symlink():
+        violations.append("android_build.yml: public Android build driver is missing")
+        android_driver_text = ""
+    else:
+        android_driver_text = android_driver.read_text(encoding="utf-8")
+    android_contract = android_build + "\n" + android_driver_text
     for expected in (
         "APP_SOURCE_SHA: ${{ inputs.source_sha }}",
         "APP_SOURCE_REPOSITORY: ${{ github.repository }}",
@@ -156,15 +163,16 @@ def main() -> int:
         'python3 "$GITHUB_WORKSPACE/.trusted-workflow/.github/scripts/verify_android_apk_source.py"',
         ".github/scripts/verify_android_reproducibility.py",
         "Verify reproducible Android toolchain",
-        "Build first isolated unsigned APK",
-        "Remove first-build outputs",
-        "Build second isolated unsigned APK",
-        "Verify complete unsigned APK reproducibility",
-        "--no-build-cache --no-daemon --rerun-tasks",
-        ":app:assembleRelease",
+        "Build and verify isolated unsigned APKs through the public driver",
+        "android_build_driver.sh",
+        "--dependency-closure",
+        "--first-output",
+        "--reproducibility",
+        "android_dependency_provenance.py",
+        "source checkout has tracked worktree modifications",
         "DOBBYVPN_GOMOBILE_GOCACHE:",
         "DOBBYVPN_GOMOBILE_GOTMPDIR:",
-        "dobbyvpn-android-repro/first.apk",
+        "android-repro-first.apk",
         "android-reproducibility.json",
         "golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d",
         "Sign the verified unsigned APK",
@@ -177,7 +185,7 @@ def main() -> int:
         '"reproducibility": json.loads(',
         '--source-sha "$SOURCE_SHA" --repository "$APP_SOURCE_REPOSITORY"',
     ):
-        if expected not in android_build:
+        if expected not in android_contract:
             violations.append(
                 f"android_build.yml: missing embedded tagged-source control: {expected}"
             )
