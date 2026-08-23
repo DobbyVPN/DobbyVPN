@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -35,14 +37,21 @@ def _source(root: Path) -> None:
             path.write_bytes(relative.encode("utf-8"))
 
 
-def _closure(root: Path, *, artifacts: list[dict[str, object]] | None = None) -> Path:
-    log = root / "resolver.log"
+def _closure(
+    root: Path,
+    *,
+    artifacts: list[dict[str, object]] | None = None,
+    staged: bool = False,
+) -> Path:
+    base = root / "closure-staging" if staged else root
+    log = base / "resolver.log"
+    base.mkdir(parents=True, exist_ok=True)
     log.write_bytes(b"pinned resolver evidence\n")
-    verification = root / "verification.json"
+    verification = base / "verification.json"
     verification.write_bytes(b'{"status":"present","method":"owner-pinned-verifier-v1"}\n')
-    artifact_root = root / "resolved-artifacts"
+    artifact_root = base / "resolved-artifacts"
     artifact_root.mkdir()
-    closure = root / "dependency-closure.json"
+    closure = base / "dependency-closure.json"
     records = list(artifacts) if artifacts is not None else [
         {
             "coordinate": "com.example:demo:1.0",
@@ -245,3 +254,69 @@ def test_dependency_manifest_requires_byte_bound_verification_metadata(tmp_path:
     closure.write_text(json.dumps(document, sort_keys=True), encoding="utf-8")
     with pytest.raises(ValueError, match="verification metadata identity"):
         MODULE.create_manifest(tmp_path, COMMIT, TREE, closure)
+
+
+def test_closure_staging_paths_are_exact_and_dedicated(tmp_path: Path) -> None:
+    _source(tmp_path)
+    closure = _closure(tmp_path, staged=True)
+    (closure.parent / "undeclared.log").write_bytes(b"must not be admitted\n")
+    paths = set(MODULE.closure_staging_paths(tmp_path, closure))
+    assert paths == {
+        "closure-staging/dependency-closure.json",
+        "closure-staging/resolver.log",
+        "closure-staging/verification.json",
+        "closure-staging/resolved-artifacts/com/example/demo/1.0/demo-1.0.pom",
+    }
+    assert "closure-staging/undeclared.log" not in paths
+
+
+def test_closure_staging_cli_prints_only_declared_paths(tmp_path: Path) -> None:
+    _source(tmp_path)
+    closure = _closure(tmp_path, staged=True)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(MODULE.__file__)),
+            "--source-root",
+            str(tmp_path),
+            "--closure-evidence",
+            str(closure),
+            "--print-staged-paths",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert set(result.stdout.splitlines()) == set(MODULE.closure_staging_paths(tmp_path, closure))
+
+
+def test_closure_staging_paths_rejects_closure_at_source_root(tmp_path: Path) -> None:
+    _source(tmp_path)
+    closure = _closure(tmp_path)
+    with pytest.raises(ValueError, match="dedicated source directory"):
+        MODULE.closure_staging_paths(tmp_path, closure)
+
+
+def test_closure_staging_paths_rejects_declared_path_collision(tmp_path: Path) -> None:
+    _source(tmp_path)
+    closure = _closure(tmp_path, staged=True)
+    document = json.loads(closure.read_text(encoding="utf-8"))
+    document["verification_metadata"]["path"] = "resolver.log"
+    closure.write_text(json.dumps(document, sort_keys=True), encoding="utf-8")
+    with pytest.raises(ValueError, match="same path twice"):
+        MODULE.closure_staging_paths(tmp_path, closure)
+
+
+def test_closure_staging_paths_rejects_artifact_root_symlink(tmp_path: Path) -> None:
+    _source(tmp_path)
+    closure = _closure(tmp_path, staged=True)
+    import shutil
+
+    artifact_root = closure.parent / "resolved-artifacts"
+    shutil.rmtree(artifact_root)
+    outside = tmp_path / "outside-artifacts"
+    outside.mkdir()
+    artifact_root.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="artifact_root.*(real directory|symlink)"):
+        MODULE.closure_staging_paths(tmp_path, closure)

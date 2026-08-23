@@ -20,6 +20,15 @@ source_verifier=''
 reproducibility_verifier=''
 source_repository='DobbyVPN/DobbyVPN'
 tool_closure_manifest=${DOBBYVPN_ANDROID_TOOL_CLOSURE:-}
+git_bin=${GIT_BIN:-git}
+closure_allowlist_file=''
+
+cleanup_closure_allowlist() {
+  if [[ -n "$closure_allowlist_file" && -e "$closure_allowlist_file" ]]; then
+    rm -f -- "$closure_allowlist_file"
+  fi
+}
+trap cleanup_closure_allowlist EXIT
 while (($#)); do
   case "$1" in
     --source-root)
@@ -269,8 +278,6 @@ PY
 }
 
 validate_tool_closure
-
-git_bin=${GIT_BIN:-git}
 gradle_bin=${GRADLE_BIN:-"$source_root/kmp_module/gradlew"}
 
 source_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit})
@@ -279,10 +286,40 @@ source_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree})
   echo 'source checkout did not yield canonical Git identities' >&2
   exit 2
 }
+
+# Resolve the helper through the exact source checkout before using it to
+# inspect owner-staged state.  A lexical prefix such as /source/../outside is
+# not an acceptable trust boundary.
+SOURCE_ROOT="$source_root" DEPENDENCY_HELPER="$dependency_helper" python3 - <<'PY'
+import os
+from pathlib import Path
+
+source = Path(os.environ["SOURCE_ROOT"]).resolve(strict=True)
+helper = Path(os.environ["DEPENDENCY_HELPER"])
+if not helper.is_absolute() or helper.is_symlink() or not helper.is_file():
+    raise SystemExit("dependency helper must be a regular source-checkout file")
+try:
+    helper.resolve(strict=True).relative_to(source)
+except ValueError as error:
+    raise SystemExit("dependency helper must be inside the exact source checkout") from error
+PY
+
+# The closure parser emits only the closure file and its declared evidence and
+# artifact paths.  Git state is checked against that exact allowlist below;
+# the complete byte/digest binding still runs through the helper before any
+# product build is started.
+closure_allowlist_file=$(mktemp "${TMPDIR:-/tmp}/dobbyvpn-android-closure-allowlist.XXXXXX")
+chmod 600 "$closure_allowlist_file"
+python3 "$dependency_helper" \
+  --source-root "$source_root" \
+  --closure-evidence "$dependency_closure" \
+  --print-staged-paths > "$closure_allowlist_file"
+
 # The commit/tree pair is only meaningful when the checkout bytes are still
-# exactly those objects.  Refuse both tracked edits and unexpected untracked
-# files before creating any build output; the runner's detached bundle
-# materialization and the workflow source copy are expected to be clean.
+# exactly those objects.  Refuse tracked edits and every untracked/ignored
+# path outside the declared owner closure before creating any build output;
+# the runner's detached bundle materialization and workflow source copy are
+# expected to be clean apart from this request-bound closure.
 if ! "$git_bin" -C "$source_root" diff --quiet --no-ext-diff HEAD --; then
   echo 'source checkout has tracked worktree modifications' >&2
   exit 2
@@ -291,14 +328,62 @@ if ! "$git_bin" -C "$source_root" diff --cached --quiet --no-ext-diff HEAD --; t
   echo 'source checkout has staged modifications' >&2
   exit 2
 fi
-if [[ -n $("$git_bin" -C "$source_root" ls-files --others --exclude-standard) ]]; then
-  echo 'source checkout has unexpected untracked files' >&2
-  exit 2
-fi
-if [[ -n $("$git_bin" -C "$source_root" status --porcelain=v2 --ignored | awk '$1 == "!" || $1 == "!!" {print; exit}') ]]; then
-  echo 'source checkout contains ignored build state' >&2
-  exit 2
-fi
+SOURCE_ROOT="$source_root" GIT_BIN="$git_bin" DEPENDENCY_CLOSURE="$dependency_closure" CLOSURE_ALLOWLIST="$closure_allowlist_file" python3 - <<'PY'
+import os
+import subprocess
+from pathlib import Path
+
+source = Path(os.environ["SOURCE_ROOT"]).resolve(strict=True)
+git_bin = os.environ["GIT_BIN"]
+allowlist_path = Path(os.environ["CLOSURE_ALLOWLIST"])
+closure_path = Path(os.environ["DEPENDENCY_CLOSURE"])
+allowed = set()
+for line in allowlist_path.read_text(encoding="utf-8").splitlines():
+    if not line or "\x00" in line or "\n" in line:
+        raise SystemExit("closure allowlist contains an invalid path")
+    relative = Path(line)
+    if relative.is_absolute() or relative.as_posix() != line or any(part in {"", ".", ".."} for part in relative.parts):
+        raise SystemExit("closure allowlist contains a non-canonical path")
+    allowed.add(line)
+
+def git_paths(*args: str) -> set[str]:
+    completed = subprocess.run(
+        [git_bin, "-C", str(source), "ls-files", "-z", *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode:
+        raise SystemExit(completed.stderr.decode("utf-8", "replace"))
+    raw = completed.stdout
+    if raw and not raw.endswith(b"\x00"):
+        raise SystemExit("Git returned a non-NUL-terminated path list")
+    return {item.decode("utf-8") for item in raw.rstrip(b"\x00").split(b"\x00") if item}
+
+untracked = git_paths("--others", "--exclude-standard")
+ignored = git_paths("--others", "--ignored", "--exclude-standard")
+staged = (untracked | ignored) & allowed
+unexpected = sorted((untracked | ignored) - allowed)
+if unexpected:
+    raise SystemExit("source checkout contains undeclared untracked/ignored state: " + ", ".join(unexpected[:5]))
+if staged:
+    closure_relative = closure_path.relative_to(source)
+    closure_directory = source / closure_relative.parent
+    directories = [closure_directory]
+    for relative in staged:
+        path = source / relative
+        current = path.parent
+        while current != closure_directory:
+            directories.append(current)
+            current = current.parent
+        info = path.lstat()
+        if path.is_symlink() or not path.is_file() or (info.st_mode & 0o077):
+            raise SystemExit("owner-staged closure files must be regular owner-only files: " + relative)
+    for directory in directories:
+        info = directory.lstat()
+        if directory.is_symlink() or not directory.is_dir() or (info.st_mode & 0o077):
+            raise SystemExit("owner-staged closure directories must be real owner-only directories: " + str(directory))
+PY
 for helper in "$dependency_helper" "$source_verifier" "$reproducibility_verifier"; do
   case "$helper" in
     "$source_root"/*) [[ -f "$helper" && ! -L "$helper" ]] || { echo "source helper is missing or symlinked: $helper" >&2; exit 2; } ;;

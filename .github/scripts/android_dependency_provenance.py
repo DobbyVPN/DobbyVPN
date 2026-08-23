@@ -69,12 +69,139 @@ def _strict_json_loads(raw: str, label: str) -> object:
 
 
 def _safe_relative(value: object, label: str) -> Path:
-    if not isinstance(value, str) or not value or "\x00" in value or "\\" in value:
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\x00" in value
+        or "\n" in value
+        or "\\" in value
+    ):
         raise ValueError(f"{label} must be a canonical relative path")
     path = Path(value)
     if path.is_absolute() or path.as_posix() != value or any(part in {"", ".", ".."} for part in path.parts):
         raise ValueError(f"{label} must be a canonical relative path")
     return path
+
+
+def _source_relative(source_root: Path, path: Path, label: str) -> Path:
+    """Return a canonical source-relative path without following symlinks."""
+
+    if not path.is_absolute():
+        raise ValueError(f"{label} must be an absolute path")
+    root = source_root.resolve(strict=True)
+    if any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"{label} must not contain dot components")
+    try:
+        relative = path.relative_to(root)
+    except ValueError as error:
+        raise ValueError(f"{label} must be beneath the exact source root") from error
+    if not relative.parts:
+        raise ValueError(f"{label} must be beneath a dedicated source directory")
+    current = root
+    for part in relative.parts:
+        current /= part
+        try:
+            if stat.S_ISLNK(current.lstat().st_mode):
+                raise ValueError(f"{label} must not traverse a symlink")
+        except FileNotFoundError:
+            # The full closure validator will reject missing declared files;
+            # the staging allowlist may inspect a checkout before all bytes
+            # have arrived, so only existing ancestors are checked here.
+            break
+    return relative
+
+
+def closure_staging_paths(source_root: Path, closure_path: Path) -> tuple[str, ...]:
+    """Return the only owner-staged paths allowed during checkout validation.
+
+    A request-bound closure is a regular file plus its declared resolver log,
+    verification metadata, and artifact files.  All of them must live below
+    the closure file's dedicated directory; no other untracked or ignored
+    checkout state is admissible.  Byte and digest validation remains in
+    ``_closure_evidence`` immediately before the build.
+    """
+
+    root = source_root.resolve(strict=True)
+    closure = closure_path
+    closure_relative = _source_relative(root, closure, "dependency closure")
+    if len(closure_relative.parts) < 2:
+        raise ValueError("dependency closure must be inside a dedicated source directory")
+    try:
+        closure_info = closure.lstat()
+    except OSError as error:
+        raise ValueError("dependency closure evidence is unavailable") from error
+    if stat.S_ISLNK(closure_info.st_mode) or not stat.S_ISREG(closure_info.st_mode):
+        raise ValueError("dependency closure evidence must be a regular file")
+    try:
+        document = _strict_json_loads(closure.read_text(encoding="utf-8"), "dependency closure evidence")
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("dependency closure evidence is not valid JSON") from error
+    if not isinstance(document, dict):
+        raise ValueError("dependency closure evidence must be an object")
+    if document.get("schema") != 1 or document.get("kind") != "dobbyvpn.android.dependency-closure":
+        raise ValueError("dependency closure evidence has an unsupported schema")
+
+    closure_directory = root / closure_relative.parent
+    try:
+        directory_info = closure_directory.lstat()
+    except OSError as error:
+        raise ValueError("dependency closure directory is unavailable") from error
+    if stat.S_ISLNK(directory_info.st_mode) or not stat.S_ISDIR(directory_info.st_mode):
+        raise ValueError("dependency closure directory must be a real directory")
+
+    allowed: set[str] = set()
+
+    def add_declared(path: Path, label: str) -> None:
+        relative = _source_relative(root, path, label)
+        try:
+            relative.relative_to(closure_relative.parent)
+        except ValueError as error:
+            raise ValueError(f"{label} must remain beneath the dedicated closure directory") from error
+        key = relative.as_posix()
+        if key in allowed:
+            raise ValueError(f"dependency closure declares the same path twice: {key}")
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            info = None
+        except OSError as error:
+            raise ValueError(f"{label} is unavailable") from error
+        if info is not None and (stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode)):
+            raise ValueError(f"{label} must be a regular non-symlink file")
+        allowed.add(key)
+
+    add_declared(closure, "dependency closure")
+    artifact_root_relative = _safe_relative(document.get("artifact_root"), "dependency artifact_root")
+    artifact_root = closure_directory / artifact_root_relative
+    _source_relative(root, artifact_root, "dependency artifact_root")
+    try:
+        root_info = artifact_root.lstat()
+    except FileNotFoundError:
+        root_info = None
+    except OSError as error:
+        raise ValueError("dependency artifact_root is unavailable") from error
+    if root_info is not None and (stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode)):
+        raise ValueError("dependency artifact_root must be a real directory")
+
+    artifacts = document.get("resolved_artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        raise ValueError("dependency closure evidence must enumerate resolved artifacts")
+    for item in artifacts:
+        if not isinstance(item, dict):
+            raise ValueError("resolved dependency entries must be objects")
+        relative_artifact = _safe_relative(item.get("path"), "resolved dependency artifact")
+        add_declared(artifact_root / relative_artifact, "resolved dependency artifact")
+
+    for field, label in (
+        ("resolution_evidence", "dependency resolver log"),
+        ("verification_metadata", "dependency verification metadata"),
+    ):
+        record = document.get(field)
+        if not isinstance(record, dict):
+            raise ValueError(f"{label} declaration is missing")
+        add_declared(closure_directory / _safe_relative(record.get("path"), f"{label}.path"), label)
+
+    return tuple(sorted(allowed))
 
 
 def _regular_file_beneath(root: Path, relative: object, label: str) -> tuple[Path, str, int]:
@@ -348,16 +475,24 @@ def _write_json(path: Path, document: dict[str, object]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", type=Path, required=True)
-    parser.add_argument("--source-commit", required=True)
-    parser.add_argument("--source-tree", required=True)
+    parser.add_argument("--source-commit")
+    parser.add_argument("--source-tree")
     parser.add_argument("--closure-evidence", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--print-staged-paths",
+        action="store_true",
+        help="print the exact owner-staged closure paths and do not write a manifest",
+    )
     args = parser.parse_args(argv)
     try:
-        _write_json(
-            args.output,
-            create_manifest(args.source_root, args.source_commit, args.source_tree, args.closure_evidence),
-        )
+        if args.print_staged_paths:
+            for path in closure_staging_paths(args.source_root, args.closure_evidence):
+                print(path)
+            return 0
+        if not args.source_commit or not args.source_tree or not args.output:
+            parser.error("--source-commit, --source-tree, and --output are required unless --print-staged-paths is used")
+        _write_json(args.output, create_manifest(args.source_root, args.source_commit, args.source_tree, args.closure_evidence))
     except (OSError, ValueError) as error:
         parser.error(str(error))
     return 0
