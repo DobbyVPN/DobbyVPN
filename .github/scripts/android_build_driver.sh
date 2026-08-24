@@ -1055,6 +1055,16 @@ reproducibility = Path(os.environ["REPRODUCIBILITY"])
 dependency_manifest = Path(os.environ["DEPENDENCY_MANIFEST"])
 maximum = int(os.environ["MAX_ARTIFACT_BYTES"])
 
+dependency_provenance_classification = os.environ["DEPENDENCY_PROVENANCE_CLASSIFICATION"]
+if dependency_provenance_classification not in {
+    "tracked_dependency_spec",
+    "complete_owner_evidence",
+}:
+    raise SystemExit(
+        "unsupported dependency provenance classification: "
+        f"{dependency_provenance_classification}"
+    )
+
 def descriptor(path: Path) -> dict[str, object]:
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
@@ -1073,6 +1083,13 @@ def descriptor(path: Path) -> dict[str, object]:
         "bytes": size,
     }
 
+dependency_provenance = {
+    "classification": "tracked_dependency_spec",
+    **descriptor(dependency_manifest),
+}
+if dependency_provenance_classification == "complete_owner_evidence":
+    dependency_provenance["classification"] = "complete_owner_evidence"
+
 document = {
     "schema": 1,
     "repository": "DobbyVPN/DobbyVPN",
@@ -1084,10 +1101,7 @@ document = {
     "signing_classification": "unsigned",
     "signer_certificate_sha256": None,
     "reproducibility": descriptor(reproducibility),
-    "dependency_provenance": {
-        "classification": os.environ["DEPENDENCY_PROVENANCE_CLASSIFICATION"],
-        **descriptor(dependency_manifest),
-    },
+    "dependency_provenance": dependency_provenance,
     "builds": {
         "first": descriptor(first_output),
         "second": descriptor(output),
