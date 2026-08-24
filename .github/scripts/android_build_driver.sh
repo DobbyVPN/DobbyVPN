@@ -945,6 +945,15 @@ allowed_prefixes = (
     "kmp_module/.gradle/",
     "kmp_module/.kotlin/",
 )
+
+def is_allowed_generated_module_state(relative: str) -> bool:
+    parts = Path(relative).parts
+    return (
+        len(parts) >= 3
+        and parts[0] == "kmp_module"
+        and parts[2] in {"build", ".gradle", ".kotlin"}
+    )
+
 def git_paths(*args: str) -> set[str]:
     completed = subprocess.run(
         [git_bin, "-C", str(source), "ls-files", "-z", *args],
@@ -962,7 +971,11 @@ def git_paths(*args: str) -> set[str]:
 paths = git_paths("--others", "--exclude-standard") | git_paths("--others", "--ignored", "--exclude-standard")
 unexpected = []
 for relative in sorted(paths):
-    if relative in allowed or any(relative.startswith(prefix) for prefix in allowed_prefixes):
+    if (
+        relative in allowed
+        or any(relative.startswith(prefix) for prefix in allowed_prefixes)
+        or is_allowed_generated_module_state(relative)
+    ):
         continue
     if relative.endswith("/") and relative[:-1] in allowed:
         continue
