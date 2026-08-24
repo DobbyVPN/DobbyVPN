@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 # This is a deliberately thin public-source entry point.  The Android build
 # contract remains in kmp_module's Gradle project; this file only supplies the
@@ -944,6 +945,7 @@ allowed_prefixes = (
     "kmp_module/build/",
     "kmp_module/.gradle/",
     "kmp_module/.kotlin/",
+    "runtime/android-apk-source-diagnostics/",
 )
 
 def is_allowed_generated_module_state(relative: str) -> bool:
