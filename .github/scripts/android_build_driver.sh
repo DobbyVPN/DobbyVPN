@@ -17,6 +17,7 @@ first_output=''
 reproducibility=''
 dependency_manifest=''
 dependency_spec=''
+dependency_closure=''
 dependency_helper=''
 source_verifier=''
 reproducibility_verifier=''
@@ -31,6 +32,14 @@ source_verifier_explicit=''
 reproducibility_verifier_explicit=''
 gradle_archive=''
 gradle_root=''
+closure_allowlist_file=''
+
+cleanup_closure_allowlist() {
+  if [[ -n "$closure_allowlist_file" && -e "$closure_allowlist_file" ]]; then
+    rm -f -- "$closure_allowlist_file"
+  fi
+}
+trap cleanup_closure_allowlist EXIT
 while (($#)); do
   case "$1" in
     --source-root)
@@ -73,6 +82,11 @@ while (($#)); do
       (($# >= 2)) || { echo 'missing --dependency-spec value' >&2; exit 2; }
       dependency_spec=$2
       dependency_spec_explicit=$2
+      shift 2
+      ;;
+    --dependency-closure)
+      (($# >= 2)) || { echo 'missing --dependency-closure value' >&2; exit 2; }
+      dependency_closure=$2
       shift 2
       ;;
     --source-verifier)
@@ -143,9 +157,14 @@ first_output=${first_output:-"$source_root/.android-build/first.apk"}
 reproducibility=${reproducibility:-"$source_root/runtime/android-reproducibility.json"}
 dependency_manifest=${dependency_manifest:-"$source_root/runtime/android-dependency-provenance.json"}
 dependency_spec=${dependency_spec:-"${DOBBYVPN_ANDROID_DEPENDENCY_SPEC:-$source_root/.github/android/dependency-spec.json}"}
+dependency_closure=${dependency_closure:-"${DOBBYVPN_ANDROID_DEPENDENCY_CLOSURE:-}"}
 dependency_helper=${dependency_helper:-"$source_root/.github/scripts/android_dependency_provenance.py"}
 source_verifier=${source_verifier:-"$source_root/.github/scripts/verify_android_apk_source.py"}
 reproducibility_verifier=${reproducibility_verifier:-"$source_root/.github/scripts/verify_android_reproducibility.py"}
+closure_mode=0
+if [[ -n "$dependency_closure" ]]; then
+  closure_mode=1
+fi
 
 git_bin=${GIT_BIN:-git}
 gradle_bin=${GRADLE_BIN:-"$source_root/kmp_module/gradlew"}
@@ -221,6 +240,75 @@ validate_source_checkout() {
     echo "source checkout contains unexpected ignored build state: $root" >&2
     exit 2
   fi
+}
+
+validate_source_checkout_with_closure() {
+  local root=$1
+  local allowlist=$2
+  local closure=$3
+  SOURCE_ROOT="$root" GIT_BIN="$git_bin" CLOSURE_ALLOWLIST="$allowlist" CLOSURE_PATH="$closure" python3 - <<'PY'
+import os
+import stat
+import subprocess
+from pathlib import Path
+
+source = Path(os.environ["SOURCE_ROOT"]).resolve(strict=True)
+git_bin = os.environ["GIT_BIN"]
+allowlist_path = Path(os.environ["CLOSURE_ALLOWLIST"])
+closure_path = Path(os.environ["CLOSURE_PATH"]).resolve(strict=True)
+try:
+    closure_directory = closure_path.parent.relative_to(source)
+except ValueError as error:
+    raise SystemExit("dependency closure is outside the exact source root") from error
+closure_directory = source / closure_directory
+allowed = set()
+for line in allowlist_path.read_text(encoding="utf-8").splitlines():
+    relative = Path(line)
+    if not line or "\x00" in line or relative.is_absolute() or relative.as_posix() != line or any(part in {"", ".", ".."} for part in relative.parts):
+        raise SystemExit("closure allowlist contains a non-canonical path")
+    allowed.add(line)
+
+def git_paths(*args: str) -> set[str]:
+    completed = subprocess.run(
+        [git_bin, "-C", str(source), "ls-files", "-z", *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode:
+        raise SystemExit(completed.stderr.decode("utf-8", "replace"))
+    raw = completed.stdout
+    if raw and not raw.endswith(b"\x00"):
+        raise SystemExit("Git returned a non-NUL-terminated path list")
+    return {item.decode("utf-8") for item in raw.rstrip(b"\x00").split(b"\x00") if item}
+
+if subprocess.run([git_bin, "-C", str(source), "diff", "--quiet", "--no-ext-diff", "HEAD", "--"], check=False).returncode:
+    raise SystemExit("source checkout has tracked worktree modifications")
+if subprocess.run([git_bin, "-C", str(source), "diff", "--cached", "--quiet", "--no-ext-diff", "HEAD", "--"], check=False).returncode:
+    raise SystemExit("source checkout has staged modifications")
+untracked = git_paths("--others", "--exclude-standard")
+ignored = git_paths("--others", "--ignored", "--exclude-standard")
+unexpected = sorted((untracked | ignored) - allowed)
+if unexpected:
+    raise SystemExit("source checkout contains undeclared untracked/ignored build state: " + ", ".join(unexpected[:5]))
+
+for relative in sorted(untracked | ignored):
+    if relative not in allowed:
+        continue
+    path = source / relative
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or (info.st_mode & 0o077):
+        raise SystemExit("owner-staged closure files must be regular owner-only files: " + relative)
+    current = path.parent
+    while current != closure_directory:
+        info = current.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or (info.st_mode & 0o077):
+            raise SystemExit("owner-staged closure directories must be real owner-only directories: " + str(current))
+        current = current.parent
+info = closure_directory.lstat()
+if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or (info.st_mode & 0o077):
+    raise SystemExit("owner-staged closure directory must be a real owner-only directory")
+PY
 }
 
 trusted_helper_file() {
@@ -299,8 +387,14 @@ validate_trusted_helper_root() {
   reproducibility_verifier="$trusted_helper_root/.github/scripts/verify_android_reproducibility.py"
 }
 
-validate_source_checkout "$source_root"
+if [[ "$closure_mode" == 0 ]]; then
+  validate_source_checkout "$source_root"
+fi
 if [[ -n "$trusted_helper_root" || -n "$trusted_helper_sha" ]]; then
+  [[ "$closure_mode" == 0 ]] || {
+    echo 'trusted helper checkout is not compatible with an owner dependency closure' >&2
+    exit 2
+  }
   validate_trusted_helper_root
 fi
 
@@ -463,12 +557,35 @@ source_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree})
   exit 2
 }
 if [[ -z "$trusted_helper_root" ]]; then
-  for helper in "$dependency_helper" "$source_verifier" "$reproducibility_verifier" "$dependency_spec"; do
+  helper_paths=("$dependency_helper" "$source_verifier" "$reproducibility_verifier")
+  if [[ "$closure_mode" == 0 ]]; then
+    helper_paths+=("$dependency_spec")
+  fi
+  for helper in "${helper_paths[@]}"; do
     case "$helper" in
       "$source_root"/*) [[ -f "$helper" && ! -L "$helper" ]] || { echo "source helper is missing or symlinked: $helper" >&2; exit 2; } ;;
       *) echo "source helper must be inside the exact source checkout: $helper" >&2; exit 2 ;;
     esac
   done
+fi
+helper_contract_args=()
+if [[ -n "$trusted_helper_root" ]]; then
+  helper_contract_args=(--trusted-helper-root "$trusted_helper_root" --trusted-helper-sha "$trusted_helper_sha")
+fi
+if [[ "$closure_mode" == 1 ]]; then
+  [[ -z "$dependency_spec_explicit" ]] || {
+    echo 'dependency specification cannot be combined with an owner dependency closure' >&2
+    exit 2
+  }
+  [[ "$dependency_closure" = /* && ! -L "$dependency_closure" && -f "$dependency_closure" ]] || {
+    echo 'owner dependency closure must be an absolute regular non-symlink file' >&2
+    exit 2
+  }
+  closure_allowlist_file=$(mktemp "${TMPDIR:-/tmp}/dobbyvpn-android-closure-allowlist.XXXXXX")
+  chmod 600 "$closure_allowlist_file"
+  python3 "$dependency_helper" --source-root "$source_root" \
+    --closure-evidence "$dependency_closure" --print-staged-paths > "$closure_allowlist_file"
+  validate_source_checkout_with_closure "$source_root" "$closure_allowlist_file" "$dependency_closure"
 fi
 gradle_proof_args=()
 if [[ -n "$gradle_archive" || -n "$gradle_root" ]]; then
@@ -478,6 +595,10 @@ if [[ -n "$gradle_archive" || -n "$gradle_root" ]]; then
   }
   [[ "$gradle_archive" = /* && "$gradle_root" = /* ]] || {
     echo 'external Gradle archive and root proof paths must be absolute' >&2
+    exit 2
+  }
+  [[ "$closure_mode" == 0 ]] || {
+    echo 'external Gradle proof is not accepted with an owner dependency closure' >&2
     exit 2
   }
   python3 "$dependency_helper" --spec "$dependency_spec" "${helper_contract_args[@]}" \
@@ -542,7 +663,11 @@ done <<< "$java_version_output"
   echo "Java runtime must have major version 17; observed $java_version" >&2
   exit 2
 }
-mobile_pin=$(python3 "$dependency_helper" --spec "$dependency_spec" "${helper_contract_args[@]}" --print-mobile-version)
+if [[ "$closure_mode" == 1 ]]; then
+  mobile_pin=$(python3 "$dependency_helper" --closure-evidence "$dependency_closure" --print-mobile-version)
+else
+  mobile_pin=$(python3 "$dependency_helper" --spec "$dependency_spec" "${helper_contract_args[@]}" --print-mobile-version)
+fi
 mobile_module=${mobile_pin%@*}
 mobile_version=${mobile_pin#*@}
 [[ "$mobile_module" == 'golang.org/x/mobile' && "$mobile_version" == 'v0.0.0-20260520154334-0e4426e1883d' ]] || {
@@ -559,6 +684,14 @@ tool_metadata_matches_pin() {
 ensure_mobile_tool() {
   local name=$1
   local path="$go_path/bin/$name"
+  if [[ "$closure_mode" == 1 ]]; then
+    [[ -x "$path" ]] || { echo "owner-pinned $name is missing at $path" >&2; exit 2; }
+    tool_metadata_matches_pin "$path" || {
+      echo "owner-pinned $name is not built from $mobile_module@$mobile_version" >&2
+      exit 2
+    }
+    return 0
+  fi
   if [[ ! -x "$path" ]] || ! tool_metadata_matches_pin "$path"; then
     echo "building pinned $name from $mobile_module@$mobile_version" >&2
     GOBIN="$go_path/bin" "$go_bin" install "$mobile_module/cmd/$name@$mobile_version"
@@ -587,7 +720,7 @@ gradle_version=$("$gradle_bin" --version --no-daemon | tee /dev/stderr | awk '/^
 [[ "$gradle_version" == '8.13' ]] || { echo 'Gradle version is not 8.13' >&2; exit 2; }
 
 gradle_offline=${DOBBYVPN_GRADLE_OFFLINE:-0}
-if [[ "${DOBBYVPN_REQUIRE_TOOL_CLOSURE:-0}" == 1 ]]; then
+if [[ "$closure_mode" == 1 || "${DOBBYVPN_REQUIRE_TOOL_CLOSURE:-0}" == 1 ]]; then
   [[ "$gradle_offline" == 1 ]] || { echo 'request-bound source builds must use Gradle offline mode' >&2; exit 2; }
   [[ -n "${GRADLE_USER_HOME:-}" && -d "$GRADLE_USER_HOME" && ! -L "$GRADLE_USER_HOME" ]] || {
     echo 'isolated Gradle user home is required for request-bound source builds' >&2
@@ -603,9 +736,150 @@ mkdir -p "$build_cache" "$build_tmp" "$(dirname -- "$first_output")" "$(dirname 
 # refuses an injected symlink before any build bytes are written.
 validate_destinations
 
-python3 "$dependency_helper" --source-root "$source_root" --source-commit "$source_commit" \
-  --source-tree "$source_tree" --spec "$dependency_spec" "${helper_contract_args[@]}" \
-  --java-version "$java_version" "${gradle_proof_args[@]}" --output "$dependency_manifest"
+write_dependency_manifest() {
+  if [[ "$closure_mode" == 1 ]]; then
+    python3 "$dependency_helper" --source-root "$source_root" --source-commit "$source_commit" \
+      --source-tree "$source_tree" --closure-evidence "$dependency_closure" \
+      --output "$dependency_manifest"
+  else
+    python3 "$dependency_helper" --source-root "$source_root" --source-commit "$source_commit" \
+      --source-tree "$source_tree" --spec "$dependency_spec" "${helper_contract_args[@]}" \
+      --java-version "$java_version" "${gradle_proof_args[@]}" --output "$dependency_manifest"
+  fi
+}
+
+verify_dependency_manifest() {
+  if [[ "$closure_mode" == 1 ]]; then
+    python3 "$dependency_helper" --verify-manifest --source-root "$source_root" \
+      --source-commit "$source_commit" --source-tree "$source_tree" \
+      --closure-evidence "$dependency_closure" --manifest "$dependency_manifest"
+  else
+    python3 "$dependency_helper" --verify-manifest --source-root "$source_root" \
+      --source-commit "$source_commit" --source-tree "$source_tree" --spec "$dependency_spec" \
+      "${helper_contract_args[@]}" --java-version "$java_version" "${gradle_proof_args[@]}" \
+      --manifest "$dependency_manifest"
+  fi
+}
+
+materialize_dependency_cache() {
+  [[ "$closure_mode" == 1 ]] || return 0
+  [[ -n "${GRADLE_USER_HOME:-}" && "$GRADLE_USER_HOME" = /* && ! -L "$GRADLE_USER_HOME" && -d "$GRADLE_USER_HOME" ]] || {
+    echo 'owner dependency closure requires an empty real GRADLE_USER_HOME' >&2
+    exit 2
+  }
+  SOURCE_ROOT="$source_root" CLOSURE="$dependency_closure" GRADLE_HOME="$GRADLE_USER_HOME" python3 - <<'PY'
+import hashlib
+import json
+import os
+import stat
+from pathlib import Path
+
+source = Path(os.environ["SOURCE_ROOT"]).resolve(strict=True)
+closure_path = Path(os.environ["CLOSURE"])
+gradle_home = Path(os.environ["GRADLE_HOME"])
+if closure_path.is_symlink() or not closure_path.is_file():
+    raise SystemExit("owner dependency closure is not a regular file")
+if gradle_home.is_symlink() or not gradle_home.is_dir():
+    raise SystemExit("GRADLE_USER_HOME must be a real directory")
+try:
+    closure_relative = closure_path.resolve(strict=True).relative_to(source)
+except (OSError, ValueError) as error:
+    raise SystemExit("owner dependency closure must be beneath the exact source root") from error
+try:
+    document = json.loads(closure_path.read_text(encoding="utf-8"))
+except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    raise SystemExit("owner dependency closure is not valid JSON") from error
+if not isinstance(document, dict) or document.get("schema") != 1:
+    raise SystemExit("owner dependency closure has an unsupported schema")
+
+def digest(path: Path) -> str:
+    value = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            value.update(chunk)
+    return value.hexdigest()
+
+def safe_relative(value: object, label: str) -> Path:
+    if not isinstance(value, str) or not value or "\x00" in value or "\n" in value or "\\" in value:
+        raise SystemExit(f"{label} is not a canonical relative path")
+    path = Path(value)
+    if path.is_absolute() or path.as_posix() != value or any(part in {"", ".", ".."} for part in path.parts):
+        raise SystemExit(f"{label} is not a canonical relative path")
+    return path
+
+def source_file(path: Path, label: str, expected_sha: str, expected_size: int) -> None:
+    current = path.parent
+    while current != source:
+        if current.is_symlink() or not current.is_dir():
+            raise SystemExit(f"{label} traverses an invalid directory")
+        current = current.parent
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or (info.st_mode & 0o077):
+        raise SystemExit(f"{label} must be a regular owner-only file")
+    if info.st_size != expected_size or digest(path) != expected_sha:
+        raise SystemExit(f"{label} bytes do not match the closure identity")
+
+def destination_file(path: Path, source_path: Path, label: str) -> None:
+    current = gradle_home
+    try:
+        relative = path.relative_to(gradle_home)
+    except ValueError as error:
+        raise SystemExit(f"{label} escapes GRADLE_USER_HOME") from error
+    for part in relative.parts[:-1]:
+        current /= part
+        if current.exists() and (current.is_symlink() or not current.is_dir()):
+            raise SystemExit(f"{label} destination traverses an invalid directory")
+        current.mkdir(mode=0o700, exist_ok=True)
+        current.chmod(0o700)
+    if path.exists() or path.is_symlink():
+        raise SystemExit(f"{label} destination is already occupied")
+    with source_path.open("rb") as source_stream, path.open("xb") as destination_stream:
+        while True:
+            chunk = source_stream.read(1024 * 1024)
+            if not chunk:
+                break
+            destination_stream.write(chunk)
+        destination_stream.flush()
+        os.fchmod(destination_stream.fileno(), 0o600)
+        os.fsync(destination_stream.fileno())
+
+closure_directory = source / closure_relative.parent
+artifact_root = closure_directory / safe_relative(document.get("artifact_root"), "artifact_root")
+cache_root = closure_directory / safe_relative(document.get("cache_root"), "cache_root")
+counts = {"artifacts": 0, "cache": 0}
+bytes_copied = {"artifacts": 0, "cache": 0}
+for item in document.get("resolved_artifacts", []):
+    if not isinstance(item, dict):
+        raise SystemExit("resolved artifact entry is not an object")
+    relative = safe_relative(item.get("path"), "resolved artifact path")
+    sha = item.get("sha256")
+    size = item.get("size_bytes")
+    if not isinstance(sha, str) or not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        raise SystemExit("resolved artifact identity is invalid")
+    source_path = artifact_root / relative
+    source_file(source_path, "resolved artifact", sha, size)
+    destination_file(gradle_home / "caches/modules-2/files-2.1" / relative, source_path, "resolved artifact")
+    counts["artifacts"] += 1
+    bytes_copied["artifacts"] += size
+for item in document.get("cache_entries", []):
+    if not isinstance(item, dict):
+        raise SystemExit("Gradle cache entry is not an object")
+    relative = safe_relative(item.get("path"), "Gradle cache path")
+    sha = item.get("sha256")
+    size = item.get("size_bytes")
+    if not isinstance(sha, str) or not isinstance(size, int) or isinstance(size, bool) or size < 0:
+        raise SystemExit("Gradle cache identity is invalid")
+    source_path = cache_root / relative
+    source_file(source_path, "Gradle cache entry", sha, size)
+    destination_file(gradle_home / "caches/modules-2" / relative, source_path, "Gradle cache entry")
+    counts["cache"] += 1
+    bytes_copied["cache"] += size
+print(f"dependency_cache_materialized artifacts={counts['artifacts']} artifact_bytes={bytes_copied['artifacts']} cache_entries={counts['cache']} cache_bytes={bytes_copied['cache']}")
+PY
+}
+
+write_dependency_manifest
+materialize_dependency_cache
 
 gradle_flags=(--no-build-cache --no-daemon --rerun-tasks --stacktrace)
 if [[ "$gradle_offline" == 1 ]]; then
@@ -651,6 +925,51 @@ verify_source_integrity_after_build() {
     echo 'Android build staged source modifications' >&2
     exit 2
   fi
+  if [[ "$closure_mode" == 1 ]]; then
+    SOURCE_ROOT="$source_root" GIT_BIN="$git_bin" CLOSURE_ALLOWLIST="$closure_allowlist_file" \
+      OUTPUT_REL="${output#"$source_root/"}" FIRST_OUTPUT_REL="${first_output#"$source_root/"}" \
+      REPRO_REL="${reproducibility#"$source_root/"}" python3 - <<'PY'
+import os
+import subprocess
+from pathlib import Path
+
+source = Path(os.environ["SOURCE_ROOT"]).resolve(strict=True)
+git_bin = os.environ["GIT_BIN"]
+allowed = set(Path(os.environ["CLOSURE_ALLOWLIST"]).read_text(encoding="utf-8").splitlines())
+allowed.update({os.environ["OUTPUT_REL"], os.environ["FIRST_OUTPUT_REL"], os.environ["REPRO_REL"]})
+allowed_prefixes = (
+    ".android-build/",
+    "kmp_module/build/",
+    "kmp_module/.gradle/",
+    "kmp_module/.kotlin/",
+)
+def git_paths(*args: str) -> set[str]:
+    completed = subprocess.run(
+        [git_bin, "-C", str(source), "ls-files", "-z", *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode:
+        raise SystemExit(completed.stderr.decode("utf-8", "replace"))
+    raw = completed.stdout
+    if raw and not raw.endswith(b"\x00"):
+        raise SystemExit("Git returned a non-NUL-terminated path list")
+    return {item.decode("utf-8") for item in raw.rstrip(b"\x00").split(b"\x00") if item}
+
+paths = git_paths("--others", "--exclude-standard") | git_paths("--others", "--ignored", "--exclude-standard")
+unexpected = []
+for relative in sorted(paths):
+    if relative in allowed or any(relative.startswith(prefix) for prefix in allowed_prefixes):
+        continue
+    if relative.endswith("/") and relative[:-1] in allowed:
+        continue
+    unexpected.append(relative)
+if unexpected:
+    raise SystemExit("Android build created undeclared source state: " + ", ".join(unexpected[:5]))
+PY
+    return 0
+  fi
   while IFS= read -r -d '' relative; do
     case "$relative" in
       "${output#"$source_root/"}"|"${reproducibility#"$source_root/"}") ;;
@@ -675,10 +994,7 @@ verify_source_integrity_after_build() {
 
 run_unsigned_build "$build_cache/first" "$build_tmp/first" "$first_output"
 verify_source_integrity_after_build
-python3 "$dependency_helper" --verify-manifest --source-root "$source_root" \
-  --source-commit "$source_commit" --source-tree "$source_tree" --spec "$dependency_spec" \
-  "${helper_contract_args[@]}" --java-version "$java_version" "${gradle_proof_args[@]}" \
-  --manifest "$dependency_manifest"
+verify_dependency_manifest
 (
   cd -- "$source_root"
   "$gradle_bin" -p kmp_module clean --no-daemon --no-build-cache
@@ -686,10 +1002,7 @@ python3 "$dependency_helper" --verify-manifest --source-root "$source_root" \
 run_unsigned_build "$build_cache/second" "$build_tmp/second" "$output"
 verify_source_integrity_after_build
 
-python3 "$dependency_helper" --verify-manifest --source-root "$source_root" \
-  --source-commit "$source_commit" --source-tree "$source_tree" --spec "$dependency_spec" \
-  "${helper_contract_args[@]}" --java-version "$java_version" "${gradle_proof_args[@]}" \
-  --manifest "$dependency_manifest"
+verify_dependency_manifest
 
 [[ -f "$reproducibility_verifier" && ! -L "$reproducibility_verifier" ]] || { echo 'reproducibility verifier is missing' >&2; exit 2; }
 python3 "$reproducibility_verifier" create \
@@ -701,9 +1014,14 @@ apkanalyzer_bin=${APKANALYZER:-"$(command -v apkanalyzer || true)"}
 python3 "$source_verifier" --apk "$first_output" --apk "$output" --source-sha "$source_commit" --repository "$source_repository" --apkanalyzer "$apkanalyzer_bin"
 verify_source_integrity_after_build
 
+dependency_provenance_classification=tracked_dependency_spec
+if [[ "$closure_mode" == 1 ]]; then
+  dependency_provenance_classification=complete_owner_evidence
+fi
 SOURCE_ROOT="$source_root" OUTPUT="$output" MANIFEST="$manifest" FIRST_OUTPUT="$first_output" \
   REPRODUCIBILITY="$reproducibility" DEPENDENCY_MANIFEST="$dependency_manifest" \
   SOURCE_COMMIT="$source_commit" SOURCE_TREE="$source_tree" \
+  DEPENDENCY_PROVENANCE_CLASSIFICATION="$dependency_provenance_classification" \
   VERSION_NAME="$version_name" VERSION_CODE="$version_code" MAX_ARTIFACT_BYTES="${DOBBYVPN_MAX_ARTIFACT_BYTES:-536870912}" \
   python3 - <<'PY'
 import hashlib
@@ -750,7 +1068,7 @@ document = {
     "signer_certificate_sha256": None,
     "reproducibility": descriptor(reproducibility),
     "dependency_provenance": {
-        "classification": "tracked_dependency_spec",
+        "classification": os.environ["DEPENDENCY_PROVENANCE_CLASSIFICATION"],
         **descriptor(dependency_manifest),
     },
     "builds": {

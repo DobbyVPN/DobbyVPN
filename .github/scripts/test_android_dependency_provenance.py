@@ -58,6 +58,63 @@ def _source(root: Path, *, wrapper_checksum: bool = True) -> Path:
     return spec
 
 
+def _closure(root: Path) -> Path:
+    _source(root)
+    directory = root / ".github/android/closure-staging"
+    artifacts = directory / "resolved-artifacts"
+    cache = directory / "gradle-cache"
+    artifacts.mkdir(parents=True, mode=0o700)
+    cache.mkdir(parents=True, mode=0o700)
+    artifact = artifacts / "com/example/sample/1.0/sample-1.0.jar"
+    artifact.parent.mkdir(parents=True, mode=0o700)
+    artifact.write_bytes(b"sample artifact\n")
+    marker = cache / "gc.properties"
+    marker.write_bytes(b"")
+    resolver = directory / "gradle-resolution.original.log"
+    resolver.write_bytes(b"resolver complete\n")
+    verification = directory / "verification-metadata.xml"
+    verification.write_bytes(b"<verification-metadata/>\n")
+    for path in (artifact, marker, resolver, verification):
+        path.chmod(0o600)
+    document = {
+        "schema": 1,
+        "kind": MODULE.CLOSURE_KIND,
+        "source_commit": COMMIT,
+        "source_tree": TREE,
+        "mode": "pinned_network_or_cache",
+        "offline_verified": False,
+        "artifact_root": "resolved-artifacts",
+        "resolved_artifacts": [{
+            "coordinate": "com.example:sample:1.0@sample-1.0.jar",
+            "url": "https://repo.maven.apache.org/maven2/com/example/sample/1.0/sample-1.0.jar",
+            "path": artifact.relative_to(artifacts).as_posix(),
+            "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            "size_bytes": artifact.stat().st_size,
+        }],
+        "cache_root": "gradle-cache",
+        "cache_entries": [{
+            "path": "gc.properties",
+            "sha256": hashlib.sha256(b"").hexdigest(),
+            "size_bytes": 0,
+        }],
+        "resolution_evidence": {
+            "path": resolver.name,
+            "sha256": hashlib.sha256(resolver.read_bytes()).hexdigest(),
+            "size_bytes": resolver.stat().st_size,
+        },
+        "verification_metadata": {
+            "status": "present",
+            "path": verification.name,
+            "sha256": hashlib.sha256(verification.read_bytes()).hexdigest(),
+            "size_bytes": verification.stat().st_size,
+        },
+    }
+    closure = directory / "dependency-closure.json"
+    closure.write_text(json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+    closure.chmod(0o600)
+    return closure
+
+
 def _gradle_distribution(root: Path) -> tuple[Path, Path]:
     root.mkdir(parents=True, exist_ok=True)
     archive = root / "gradle-8.13-bin.zip"
@@ -145,6 +202,21 @@ def test_dependency_manifest_is_deterministic_from_tracked_spec(tmp_path: Path) 
         {"module": MODULE.MOBILE_MODULE, "version": MODULE.MOBILE_VERSION, "commands": ["gomobile", "gobind"]}
     ]
     assert first["spec"]["path"] == ".github/android/dependency-spec.json"
+
+
+def test_owner_closure_manifest_binds_zero_byte_cache_markers(tmp_path: Path) -> None:
+    closure = _closure(tmp_path)
+    manifest = MODULE.create_closure_manifest(tmp_path, COMMIT, TREE, closure)
+    assert manifest["dependency_provenance"] == "complete_owner_evidence"
+    assert manifest["resolution"]["cache_entries"] == [{
+        "path": "gc.properties",
+        "sha256": hashlib.sha256(b"").hexdigest(),
+        "size_bytes": 0,
+    }]
+    assert len(MODULE.closure_staging_paths(tmp_path, closure)) == 5
+    manifest_path = tmp_path / "closure-manifest.json"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
+    MODULE.verify_closure_manifest(tmp_path, COMMIT, TREE, closure, manifest_path)
 
 
 def test_v1_4_8_legacy_wrapper_without_checksum_accepts_verified_distribution(
@@ -433,10 +505,12 @@ def test_driver_rejects_symlink_dirty_and_wrong_sha_helper_roots(tmp_path: Path)
 def test_public_driver_uses_spec_and_builds_missing_pinned_tools() -> None:
     driver = Path(__file__).with_name("android_build_driver.sh").read_text(encoding="utf-8")
     assert "--dependency-spec" in driver
-    assert "--closure-evidence" not in driver
+    assert "--dependency-closure" in driver
+    assert "--closure-evidence" in driver
     assert "ensure_mobile_tool" in driver
     assert 'GOBIN="$go_path/bin" "$go_bin" install' in driver
     assert "tracked_dependency_spec" in driver
+    assert "complete_owner_evidence" in driver
     assert "--trusted-helper-root" in driver
     assert "--trusted-helper-sha" in driver
     assert "verify_source_integrity_after_build" in driver

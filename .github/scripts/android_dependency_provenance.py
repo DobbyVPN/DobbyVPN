@@ -28,6 +28,7 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 SCHEMA = 1
 KIND = "dobbyvpn.android.dependency-spec"
+CLOSURE_KIND = "dobbyvpn.android.dependency-closure"
 MOBILE_MODULE = "golang.org/x/mobile"
 MOBILE_VERSION = "v0.0.0-20260520154334-0e4426e1883d"
 GO_VERSION = "1.25.1"
@@ -94,12 +95,113 @@ def _strict_json_loads(raw: str, label: str) -> object:
 
 
 def _safe_relative(value: object, label: str) -> Path:
-    if not isinstance(value, str) or not value or "\x00" in value or "\\" in value:
+    if not isinstance(value, str) or not value or "\x00" in value or "\n" in value or "\\" in value:
         raise ValueError(f"{label} must be a canonical relative path")
     path = Path(value)
     if path.is_absolute() or path.as_posix() != value or any(part in {"", ".", ".."} for part in path.parts):
         raise ValueError(f"{label} must be a canonical relative path")
     return path
+
+
+def _source_relative(source_root: Path, path: Path, label: str) -> Path:
+    """Return a canonical source-relative path without following links."""
+
+    if not path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"{label} must be an absolute path without dot components")
+    root = source_root.resolve(strict=True)
+    try:
+        relative = path.relative_to(root)
+    except ValueError as error:
+        raise ValueError(f"{label} must be beneath the exact source root") from error
+    if not relative.parts:
+        raise ValueError(f"{label} must be beneath a dedicated source directory")
+    current = root
+    for part in relative.parts:
+        current /= part
+        try:
+            if stat.S_ISLNK(current.lstat().st_mode):
+                raise ValueError(f"{label} must not traverse a symlink")
+        except FileNotFoundError:
+            # The allowlist is also used while a caller is materializing a
+            # closure. Missing leaf bytes are checked by _closure_evidence.
+            break
+    return relative
+
+
+def closure_staging_paths(source_root: Path, closure_path: Path) -> tuple[str, ...]:
+    """Return the exact owner-staged files permitted in a clean checkout."""
+
+    root = source_root.resolve(strict=True)
+    closure_relative = _source_relative(root, closure_path, "dependency closure")
+    if len(closure_relative.parts) < 2:
+        raise ValueError("dependency closure must be inside a dedicated source directory")
+    info = closure_path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise ValueError("dependency closure evidence must be a regular file")
+    try:
+        document = _strict_json_loads(closure_path.read_text(encoding="utf-8"), "dependency closure evidence")
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("dependency closure evidence is not valid JSON") from error
+    if not isinstance(document, dict) or document.get("schema") != SCHEMA or document.get("kind") != CLOSURE_KIND:
+        raise ValueError("dependency closure evidence has an unsupported schema")
+    closure_directory = root / closure_relative.parent
+    directory_info = closure_directory.lstat()
+    if stat.S_ISLNK(directory_info.st_mode) or not stat.S_ISDIR(directory_info.st_mode):
+        raise ValueError("dependency closure directory must be a real directory")
+    allowed: set[str] = set()
+
+    def add_declared(path: Path, label: str) -> None:
+        relative = _source_relative(root, path, label)
+        try:
+            relative.relative_to(closure_relative.parent)
+        except ValueError as error:
+            raise ValueError(f"{label} must remain beneath the dedicated closure directory") from error
+        key = relative.as_posix()
+        if key in allowed:
+            raise ValueError(f"dependency closure declares the same path twice: {key}")
+        try:
+            item = path.lstat()
+        except FileNotFoundError:
+            item = None
+        except OSError as error:
+            raise ValueError(f"{label} is unavailable") from error
+        if item is not None and (stat.S_ISLNK(item.st_mode) or not stat.S_ISREG(item.st_mode)):
+            raise ValueError(f"{label} must be a regular non-symlink file")
+        allowed.add(key)
+
+    add_declared(closure_path, "dependency closure")
+    artifact_root_relative = _safe_relative(document.get("artifact_root"), "dependency artifact_root")
+    artifact_root = closure_directory / artifact_root_relative
+    artifact_root_info = artifact_root.lstat()
+    if stat.S_ISLNK(artifact_root_info.st_mode) or not stat.S_ISDIR(artifact_root_info.st_mode):
+        raise ValueError("dependency artifact_root must be a real directory")
+    artifacts = document.get("resolved_artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        raise ValueError("dependency closure evidence must enumerate resolved artifacts")
+    for item in artifacts:
+        if not isinstance(item, dict):
+            raise ValueError("resolved dependency entries must be objects")
+        add_declared(artifact_root / _safe_relative(item.get("path"), "resolved dependency artifact"), "resolved dependency artifact")
+
+    cache_root_relative = _safe_relative(document.get("cache_root"), "dependency cache_root")
+    cache_root = closure_directory / cache_root_relative
+    cache_info = cache_root.lstat()
+    if stat.S_ISLNK(cache_info.st_mode) or not stat.S_ISDIR(cache_info.st_mode):
+        raise ValueError("dependency cache_root must be a real directory")
+    cache_entries = document.get("cache_entries")
+    if not isinstance(cache_entries, list) or not cache_entries:
+        raise ValueError("dependency closure evidence must enumerate Gradle cache metadata")
+    for item in cache_entries:
+        if not isinstance(item, dict):
+            raise ValueError("Gradle cache entries must be objects")
+        add_declared(cache_root / _safe_relative(item.get("path"), "Gradle cache entry"), "Gradle cache entry")
+
+    for field, label in (("resolution_evidence", "dependency resolver log"), ("verification_metadata", "dependency verification metadata")):
+        record = document.get(field)
+        if not isinstance(record, dict):
+            raise ValueError(f"{label} declaration is missing")
+        add_declared(closure_directory / _safe_relative(record.get("path"), f"{label}.path"), label)
+    return tuple(sorted(allowed))
 
 
 def _regular_file_beneath(root: Path, relative: object, label: str) -> tuple[Path, str, int]:
@@ -129,6 +231,135 @@ def _regular_file_beneath(root: Path, relative: object, label: str) -> tuple[Pat
     except ValueError as error:
         raise ValueError(f"{label} escapes its source root") from error
     return path, _sha256(path), info.st_size
+
+
+def _evidence_file(base: Path, relative: object, label: str) -> tuple[Path, str, int, str]:
+    path, digest, size = _regular_file_beneath(base, relative, label)
+    canonical = _safe_relative(relative, f"{label}.path").as_posix()
+    return path, digest, size, canonical
+
+
+def _closure_evidence(path: Path, source_commit: str, source_tree: str) -> dict[str, object]:
+    """Validate every byte in an owner-captured Android dependency closure."""
+
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise ValueError("dependency closure evidence must be a regular file")
+    try:
+        document = _strict_json_loads(path.read_text(encoding="utf-8"), "dependency closure evidence")
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("dependency closure evidence is not valid JSON") from error
+    if not isinstance(document, dict) or document.get("schema") != SCHEMA or document.get("kind") != CLOSURE_KIND:
+        raise ValueError("dependency closure evidence has an unsupported schema")
+    if document.get("source_commit") != source_commit or document.get("source_tree") != source_tree:
+        raise ValueError("dependency closure evidence is not bound to this source tree")
+    mode = document.get("mode")
+    offline = document.get("offline_verified")
+    if mode not in {"offline", "pinned_network_or_cache"} or not isinstance(offline, bool):
+        raise ValueError("dependency closure evidence has an invalid resolution mode")
+    if offline and mode != "offline":
+        raise ValueError("offline dependency evidence must use offline mode")
+
+    artifact_root_relative = _safe_relative(document.get("artifact_root"), "dependency artifact_root")
+    artifact_root = path.parent / artifact_root_relative
+    artifacts = document.get("resolved_artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        raise ValueError("dependency closure evidence must enumerate resolved artifacts")
+    normalized_artifacts: list[dict[str, object]] = []
+    seen_coordinates: set[str] = set()
+    seen_urls: set[str] = set()
+    seen_paths: set[str] = set()
+    for item in artifacts:
+        if not isinstance(item, dict):
+            raise ValueError("resolved dependency entries must be objects")
+        coordinate = item.get("coordinate")
+        url = item.get("url")
+        relative_artifact = item.get("path")
+        digest = item.get("sha256")
+        size = item.get("size_bytes")
+        if (
+            not isinstance(coordinate, str) or not coordinate or "\n" in coordinate or coordinate in seen_coordinates
+            or not isinstance(url, str) or not url.startswith("https://") or url != url.strip() or url in seen_urls
+            or not isinstance(relative_artifact, str) or not SHA256.fullmatch(str(digest))
+            or not isinstance(size, int) or isinstance(size, bool) or size <= 0
+        ):
+            raise ValueError("resolved dependency entries must bind unique HTTPS URL, path, SHA-256, and size")
+        _artifact_path, observed_digest, observed_size, canonical_path = _evidence_file(
+            artifact_root, relative_artifact, "resolved dependency artifact"
+        )
+        if canonical_path in seen_paths or observed_digest != digest or observed_size != size:
+            raise ValueError(f"resolved dependency artifact bytes do not match their advertised identity: {canonical_path}")
+        seen_coordinates.add(coordinate)
+        seen_urls.add(url)
+        seen_paths.add(canonical_path)
+        normalized_artifacts.append({
+            "coordinate": coordinate,
+            "url": url,
+            "path": canonical_path,
+            "sha256": digest,
+            "size_bytes": size,
+        })
+    normalized_artifacts.sort(key=lambda item: (str(item["coordinate"]), str(item["url"])))
+
+    cache_root_relative = _safe_relative(document.get("cache_root"), "dependency cache_root")
+    cache_root = path.parent / cache_root_relative
+    cache_entries = document.get("cache_entries")
+    if not isinstance(cache_entries, list) or not cache_entries:
+        raise ValueError("dependency closure evidence must enumerate Gradle cache metadata")
+    normalized_cache: list[dict[str, object]] = []
+    seen_cache_paths: set[str] = set()
+    for item in cache_entries:
+        if not isinstance(item, dict):
+            raise ValueError("Gradle cache entries must be objects")
+        relative_cache = item.get("path")
+        digest = item.get("sha256")
+        size = item.get("size_bytes")
+        if not isinstance(relative_cache, str) or not SHA256.fullmatch(str(digest)) or not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            raise ValueError("Gradle cache entries must bind path, SHA-256, and size")
+        _cache_path, observed_digest, observed_size, canonical_path = _evidence_file(
+            cache_root, relative_cache, "Gradle cache entry"
+        )
+        if canonical_path in seen_cache_paths or observed_digest != digest or observed_size != size:
+            raise ValueError(f"Gradle cache bytes do not match their advertised identity: {canonical_path}")
+        seen_cache_paths.add(canonical_path)
+        normalized_cache.append({"path": canonical_path, "sha256": digest, "size_bytes": size})
+    normalized_cache.sort(key=lambda item: str(item["path"]))
+
+    def evidence_record(field: str, label: str) -> dict[str, object]:
+        record = document.get(field)
+        if not isinstance(record, dict):
+            raise ValueError(f"{label} declaration is missing")
+        digest = record.get("sha256")
+        size = record.get("size_bytes")
+        if not isinstance(digest, str) or not SHA256.fullmatch(digest) or not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+            raise ValueError(f"{label} identity is invalid")
+        _path, observed_digest, observed_size, canonical_path = _evidence_file(
+            path.parent, record.get("path"), label
+        )
+        if observed_digest != digest or observed_size != size:
+            raise ValueError(f"{label} bytes do not match their advertised identity")
+        return {"path": canonical_path, "sha256": digest, "size_bytes": size}
+
+    resolver = evidence_record("resolution_evidence", "dependency resolver log")
+    verification = document.get("verification_metadata")
+    if not isinstance(verification, dict) or verification.get("status") != "present":
+        raise ValueError("dependency evidence requires byte-bound verification metadata")
+    verification_identity = evidence_record("verification_metadata", "dependency verification metadata")
+    if resolver["path"] == verification_identity["path"]:
+        raise ValueError("dependency resolver log and verification metadata must be distinct files")
+    return {
+        "path": path.name,
+        "sha256": _sha256(path),
+        "size_bytes": info.st_size,
+        "mode": mode,
+        "offline_verified": offline,
+        "artifact_root": artifact_root_relative.as_posix(),
+        "resolved_artifacts": normalized_artifacts,
+        "cache_root": cache_root_relative.as_posix(),
+        "cache_entries": normalized_cache,
+        "resolution_evidence": resolver,
+        "verification_metadata": {"status": "present", **verification_identity},
+    }
 
 
 def _read_spec(path: Path) -> dict[str, Any]:
@@ -514,6 +745,98 @@ def verify_manifest(
         raise ValueError("dependency provenance or declared input hashes changed after the build")
 
 
+def create_closure_manifest(
+    source_root: Path, source_commit: str, source_tree: str, closure_path: Path
+) -> dict[str, object]:
+    if not SHA40.fullmatch(source_commit) or not SHA40.fullmatch(source_tree):
+        raise ValueError("source commit/tree must be full lowercase Git identities")
+    source_root = source_root.absolute()
+    _source_go_version(source_root)
+    inputs: list[dict[str, object]] = []
+    for relative in DECLARED_INPUTS:
+        _path, digest, size = _regular_file_beneath(source_root, relative, "dependency input")
+        inputs.append({"path": relative, "sha256": digest, "size_bytes": size})
+    wrapper = _wrapper_values(source_root / "kmp_module/gradle/wrapper/gradle-wrapper.properties")
+    closure = _closure_evidence(closure_path, source_commit, source_tree)
+    try:
+        closure_relative = closure_path.resolve(strict=True).relative_to(source_root.resolve(strict=True)).as_posix()
+    except (OSError, ValueError) as error:
+        raise ValueError("dependency closure must be beneath the exact source root") from error
+    closure_inputs = [
+        {"path": f"dependency-closure/{closure_relative}", "sha256": closure["sha256"], "size_bytes": closure["size_bytes"]},
+        {"path": f"dependency-closure/{closure['resolution_evidence']['path']}", "sha256": closure["resolution_evidence"]["sha256"], "size_bytes": closure["resolution_evidence"]["size_bytes"]},
+        {"path": f"dependency-closure/{closure['verification_metadata']['path']}", "sha256": closure["verification_metadata"]["sha256"], "size_bytes": closure["verification_metadata"]["size_bytes"]},
+    ]
+    closure_inputs.extend(
+        {
+            "path": f"dependency-closure/{closure['artifact_root']}/{item['path']}",
+            "sha256": item["sha256"],
+            "size_bytes": item["size_bytes"],
+        }
+        for item in closure["resolved_artifacts"]
+    )
+    closure_inputs.extend(
+        {
+            "path": f"dependency-closure/{closure['cache_root']}/{item['path']}",
+            "sha256": item["sha256"],
+            "size_bytes": item["size_bytes"],
+        }
+        for item in closure["cache_entries"]
+    )
+    inputs.extend(closure_inputs)
+    return {
+        "schema": SCHEMA,
+        "kind": "dobbyvpn.android.dependency-provenance",
+        "repository": "DobbyVPN/DobbyVPN",
+        "source": {"commit": source_commit, "tree": source_tree},
+        "closure": {
+            "path": closure_relative,
+            "sha256": closure["sha256"],
+            "size_bytes": closure["size_bytes"],
+            "artifact_root": closure["artifact_root"],
+            "cache_root": closure["cache_root"],
+        },
+        "dependency_provenance": "complete_owner_evidence",
+        "resolution": {
+            "mode": closure["mode"],
+            "offline_verified": closure["offline_verified"],
+            "evidence": "owner-captured-resolved-artifact-digests-and-complete-gradle-cache-metadata",
+            "cache_policy": "Only the byte-addressed artifacts and Gradle module cache entries enumerated in the owner closure are admissible.",
+            "repositories": REPOSITORIES,
+            "gradle_distribution": wrapper,
+            "artifact_root": closure["artifact_root"],
+            "resolved_artifacts": closure["resolved_artifacts"],
+            "cache_root": closure["cache_root"],
+            "cache_entries": closure["cache_entries"],
+            "resolution_evidence": closure["resolution_evidence"],
+            "verification_metadata": closure["verification_metadata"],
+        },
+        "toolchain": {
+            "java_major": JAVA_MAJOR,
+            "android_build_tools": ANDROID_BUILD_TOOLS,
+            "android_ndk": ANDROID_NDK,
+            "go_version": GO_VERSION,
+            "go_source_commit": GO_SOURCE_COMMIT,
+        },
+        "go_modules": [{"module": MOBILE_MODULE, "version": MOBILE_VERSION, "commands": ["gomobile", "gobind"]}],
+        "inputs": inputs,
+    }
+
+
+def verify_closure_manifest(
+    source_root: Path, source_commit: str, source_tree: str, closure_path: Path, manifest_path: Path
+) -> None:
+    try:
+        info = manifest_path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            raise ValueError("dependency provenance manifest must be a regular file")
+        actual = _strict_json_loads(manifest_path.read_text(encoding="utf-8"), "dependency provenance manifest")
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("dependency provenance manifest is not valid JSON") from error
+    if actual != create_closure_manifest(source_root, source_commit, source_tree, closure_path):
+        raise ValueError("dependency provenance or closure input hashes changed after the build")
+
+
 def _write_json(path: Path, document: dict[str, object]) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -534,7 +857,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-root", type=Path)
     parser.add_argument("--source-commit")
     parser.add_argument("--source-tree")
-    parser.add_argument("--spec", type=Path, required=True)
+    parser.add_argument("--spec", type=Path)
+    parser.add_argument("--closure-evidence", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--verify-manifest", action="store_true")
@@ -549,29 +873,55 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--print-go-source-commit", action="store_true")
     parser.add_argument("--print-gradle-url", action="store_true")
     parser.add_argument("--print-gradle-sha256", action="store_true")
+    parser.add_argument("--print-staged-paths", action="store_true")
     args = parser.parse_args(argv)
     try:
+        if args.print_staged_paths:
+            if not args.source_root or not args.closure_evidence:
+                parser.error("--source-root and --closure-evidence are required with --print-staged-paths")
+            for staged in closure_staging_paths(args.source_root, args.closure_evidence):
+                print(staged)
+            return 0
+        if bool(args.spec) == bool(args.closure_evidence):
+            parser.error("exactly one of --spec or --closure-evidence is required")
         if args.print_mobile_version:
+            if args.spec is None:
+                print(f"{MOBILE_MODULE}@{MOBILE_VERSION}")
+                return 0
             _read_spec(args.spec)
             print(f"{MOBILE_MODULE}@{MOBILE_VERSION}")
             return 0
         if args.print_go_source_commit:
+            if args.spec is None:
+                print(GO_SOURCE_COMMIT)
+                return 0
             _read_spec(args.spec)
             print(GO_SOURCE_COMMIT)
             return 0
         if args.print_go_version:
+            if args.spec is None:
+                print(GO_VERSION)
+                return 0
             _read_spec(args.spec)
             print(GO_VERSION)
             return 0
         if args.print_gradle_url:
+            if args.spec is None:
+                print(GRADLE_URL)
+                return 0
             _read_spec(args.spec)
             print(GRADLE_URL)
             return 0
         if args.print_gradle_sha256:
+            if args.spec is None:
+                print(GRADLE_SHA256)
+                return 0
             _read_spec(args.spec)
             print(GRADLE_SHA256)
             return 0
         if args.verify_gradle_distribution:
+            if args.spec is None:
+                parser.error("--spec is required for distribution verification")
             if args.gradle_archive is None or args.gradle_root is None:
                 parser.error("--gradle-archive and --gradle-root are required for distribution verification")
             _read_spec(args.spec)
@@ -583,6 +933,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.verify_manifest:
             if not args.manifest:
                 parser.error("--manifest is required with --verify-manifest")
+            if args.closure_evidence is not None:
+                verify_closure_manifest(
+                    args.source_root, args.source_commit, args.source_tree,
+                    args.closure_evidence, args.manifest,
+                )
+                print("android dependency provenance verification passed")
+                return 0
             verify_manifest(
                 args.source_root,
                 args.source_commit,
@@ -599,6 +956,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if not args.output:
             parser.error("--output is required unless verifying a manifest")
+        if args.closure_evidence is not None:
+            _write_json(
+                args.output,
+                create_closure_manifest(
+                    args.source_root, args.source_commit, args.source_tree, args.closure_evidence,
+                ),
+            )
+            return 0
         _write_json(
             args.output,
             create_manifest(
