@@ -46,7 +46,15 @@ jobs:
       - name: Enforce secretless PR workflow policy
         run: |
           python3 .github/scripts/check_workflow_policy.py
-          python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+          # The helper suite covers both owner-local complete-output behavior
+          # and the explicit public Actions redaction path.  Run the default
+          # suite in local mode so the former keeps its complete diagnostics;
+          # the public-mode tests set GITHUB_ACTIONS themselves.
+          python3 -m venv "$RUNNER_TEMP/policy-test-venv"
+          "$RUNNER_TEMP/policy-test-venv/bin/pip" install --disable-pip-version-check --no-input "pytest==9.0.2"
+          export PATH="$RUNNER_TEMP/policy-test-venv/bin:$PATH"
+          GITHUB_ACTIONS= python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+          GITHUB_ACTIONS= python3 -m pytest -q .github/scripts
 
   go:
     name: Go tests
