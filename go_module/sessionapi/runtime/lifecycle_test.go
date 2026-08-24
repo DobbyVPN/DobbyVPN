@@ -5,18 +5,20 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"go_module/core/pkg"
+	"go_module/protocol"
 	v1 "go_module/sessionapi/v2"
 )
 
 func profile() v1.RuntimeProfile {
 	return v1.RuntimeProfile{
 		Summary:          v1.ProfileSummary{Protocol: v1.ProtocolOutline},
-		RawTOML:          []byte("Server = 'example.invalid'\n"),
 		NormalizedFormat: v1.ConfigTransportURL,
 		NormalizedConfig: []byte("normalized-only"),
 		ExcludeCIDRs:     []string{"203.0.113.0/24"},
@@ -97,14 +99,14 @@ func (fakeDevice) Close() error           { return nil }
 func options(record *recorded) Options {
 	return Options{
 		Inputs: fakeInputs{record: record},
-		NewDevice: func(_ context.Context, _ v1.SessionRef, got v1.RuntimeProfile, _ SocketProtector) (pkg.ProtocolDevice, error) {
+		NewDevice: func(_ context.Context, _ v1.SessionRef, got v1.RuntimeProfile, _ SocketProtector) (protocol.ProtocolDevice, error) {
 			if string(got.NormalizedConfig) != "normalized-only" {
 				return nil, errors.New("device did not receive normalized config")
 			}
 			record.add("device")
 			return fakeDevice{}, nil
 		},
-		NewCore: func(pkg.ProtocolDevice, io.ReadWriteCloser) sessionCore {
+		NewCore: func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore {
 			return fakeCore{record: record}
 		},
 		Probe: func(context.Context) (int64, error) { record.add("probe"); return 7, nil },
@@ -229,7 +231,7 @@ func TestSecondStartWaitsUntilReadinessRollbackCleanupCompletes(t *testing.T) {
 		}
 		return nil
 	}
-	o.NewCore = func(pkg.ProtocolDevice, io.ReadWriteCloser) sessionCore {
+	o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore {
 		return fakeCore{
 			record:      record,
 			stopBlock:   cleanupRelease,
@@ -369,8 +371,56 @@ func TestDefaultHealthFailureThresholdRequiresThreeConsecutiveFailures(t *testin
 	}
 }
 
-func TestHardeningHealthFaultIsExplicitAndLeavesInitialReadinessUntouched(t *testing.T) {
-	t.Setenv(hardeningTestHealthAfterEnv, "1")
+func TestProductRuntimeHasNoHarnessHealthFaultCoupling(t *testing.T) {
+	legacyName := strings.Join([]string{
+		"DOBBYVPN", "HARDENING", "TEST", "FAIL", "HEALTH", "AFTER", "SUCCESSFUL", "CHECKS",
+	}, "_")
+	paths, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(".", path))
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(content)
+		if strings.Contains(text, legacyName) {
+			t.Fatalf("product runtime file %s retains legacy environment name", path)
+		}
+		if strings.Contains(text, "Harness") || strings.Contains(text, "Torturer") {
+			t.Fatalf("product runtime file %s contains private test-harness coupling", path)
+		}
+	}
+}
+
+func TestLegacyHarnessHealthFaultVariableIsIgnored(t *testing.T) {
+	legacyName := strings.Join([]string{
+		"DOBBYVPN", "HARDENING", "TEST", "FAIL", "HEALTH", "AFTER", "SUCCESSFUL", "CHECKS",
+	}, "_")
+	t.Setenv(legacyName, "1")
+	checks := 0
+	o := options(&recorded{})
+	o.ConnectedHealth = func(context.Context, v1.SessionRef) error {
+		checks++
+		return nil
+	}
+	r := New(o).(*runtime)
+	if r.options.HealthInterval != 10*time.Second || r.options.HealthFailureThreshold != 3 {
+		t.Fatalf("legacy environment changed product defaults: interval=%s threshold=%d", r.options.HealthInterval, r.options.HealthFailureThreshold)
+	}
+	if err := r.options.ConnectedHealth(context.Background(), v1.SessionRef{Generation: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if checks != 1 {
+		t.Fatalf("custom health seam calls=%d, want 1", checks)
+	}
+}
+
+func TestExplicitHealthFaultSeamLeavesInitialReadinessUntouched(t *testing.T) {
 	o := options(&recorded{})
 	initialCalls := 0
 	o.InitialReadiness = func(context.Context, v1.SessionRef) error {
@@ -380,8 +430,13 @@ func TestHardeningHealthFaultIsExplicitAndLeavesInitialReadinessUntouched(t *tes
 	healthCalls := 0
 	o.ConnectedHealth = func(context.Context, v1.SessionRef) error {
 		healthCalls++
+		if healthCalls > 1 {
+			return errors.New("test health fault after 1 successful check")
+		}
 		return nil
 	}
+	o.HealthInterval = time.Second
+	o.HealthFailureThreshold = 1
 	r := New(o).(*runtime)
 
 	if err := r.options.InitialReadiness(context.Background(), v1.SessionRef{Generation: 1}); err != nil {
@@ -396,11 +451,11 @@ func TestHardeningHealthFaultIsExplicitAndLeavesInitialReadinessUntouched(t *tes
 	if err := r.options.ConnectedHealth(context.Background(), v1.SessionRef{Generation: 1}); err == nil {
 		t.Fatal("second monitored check unexpectedly succeeded")
 	}
-	if healthCalls != 0 {
-		t.Fatalf("hardening seam invoked the live health probe %d times", healthCalls)
+	if healthCalls != 2 {
+		t.Fatalf("explicit health fault seam calls=%d, want 2", healthCalls)
 	}
 	if r.options.HealthInterval != time.Second || r.options.HealthFailureThreshold != 1 {
-		t.Fatalf("hardening timing=%s threshold=%d, want 1s/1", r.options.HealthInterval, r.options.HealthFailureThreshold)
+		t.Fatalf("explicit fault timing=%s threshold=%d, want 1s/1", r.options.HealthInterval, r.options.HealthFailureThreshold)
 	}
 }
 
@@ -457,7 +512,7 @@ func TestFailureRollsBackEachAcquiredResource(t *testing.T) {
 	}{
 		{"inputs", func(o *Options) { o.Inputs = fakeInputs{record: &recorded{}, err: errors.New("inputs")} }, nil},
 		{"device", func(o *Options) {
-			o.NewDevice = func(context.Context, v1.SessionRef, v1.RuntimeProfile, SocketProtector) (pkg.ProtocolDevice, error) {
+			o.NewDevice = func(context.Context, v1.SessionRef, v1.RuntimeProfile, SocketProtector) (protocol.ProtocolDevice, error) {
 				return nil, errors.New("device")
 			}
 		}, []string{"inputs", "inputs-stop"}},
@@ -473,7 +528,7 @@ func TestFailureRollsBackEachAcquiredResource(t *testing.T) {
 				tc.edit(&o)
 			}
 			if tc.name == "core" {
-				o.NewCore = func(pkg.ProtocolDevice, io.ReadWriteCloser) sessionCore {
+				o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore {
 					return fakeCore{record: record, connectErr: errors.New("core")}
 				}
 			}
@@ -493,7 +548,7 @@ func TestProtectionFailureIsFatal(t *testing.T) {
 	record := &recorded{}
 	o := options(record)
 	o.Tunnel = protectionProvider{err: errors.New("denied")}
-	o.NewDevice = func(ctx context.Context, ref v1.SessionRef, _ v1.RuntimeProfile, protect SocketProtector) (pkg.ProtocolDevice, error) {
+	o.NewDevice = func(ctx context.Context, ref v1.SessionRef, _ v1.RuntimeProfile, protect SocketProtector) (protocol.ProtocolDevice, error) {
 		return nil, protect(ctx, 41)
 	}
 	if _, err := New(o).Start(context.Background(), v1.SessionRef{Generation: 9}, profile()); err == nil {
@@ -700,7 +755,7 @@ func TestProbeReportsCleanupFailure(t *testing.T) {
 		}
 		return 7, nil
 	}
-	o.NewCore = func(pkg.ProtocolDevice, io.ReadWriteCloser) sessionCore {
+	o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore {
 		return fakeCore{record: record, disconnectErr: want}
 	}
 	result, err := New(o).Probe(context.Background(), v1.SessionRef{Generation: 1}, profile())
@@ -719,7 +774,7 @@ func TestRuntimeRejectsStartUntilPriorCleanupFinishes(t *testing.T) {
 	record := &recorded{}
 	block := make(chan struct{})
 	o := options(record)
-	o.NewCore = func(pkg.ProtocolDevice, io.ReadWriteCloser) sessionCore {
+	o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore {
 		return fakeCore{record: record, stopBlock: block}
 	}
 	r := New(o)

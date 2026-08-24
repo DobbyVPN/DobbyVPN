@@ -11,6 +11,29 @@ import kotlin.test.assertNull
 
 class DesktopSecretStorageTest {
     @Test
+    fun migratesLegacyStorageRootBeforeReadingTheRetainedSource() {
+        val root = Files.createTempDirectory("dobby-secret-migration-test-")
+        val legacy = root.resolve(".myapp").resolve("configs")
+        val current = root.resolve(".dobbyvpn").resolve("configs")
+        val node = Preferences.userRoot().node("dobby-secret-migration-test-${System.nanoTime()}")
+        try {
+            Files.createDirectories(legacy)
+            Files.writeString(legacy.resolve("connection-url.txt"), "legacy-file-source")
+
+            val repository = DobbyConfigsRepositoryImpl(node, current, legacy)
+
+            assertEquals("legacy-file-source", repository.getConnectionURL())
+            assertFalse(Files.exists(legacy.resolve("connection-url.txt")))
+            assertOwnerOnly(current.resolve("connection-url.txt"))
+        } finally {
+            node.removeNode()
+            Files.walk(root).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
+        }
+    }
+
+    @Test
     fun migratesLegacyPreferenceThenUsesOwnerOnlyFileWithoutFallback() {
         val directory = Files.createTempDirectory("dobby-secret-test-")
         val node = Preferences.userRoot().node("dobby-secret-test-${System.nanoTime()}")

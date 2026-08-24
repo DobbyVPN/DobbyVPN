@@ -6,6 +6,7 @@ import kotlinx.cinterop.useContents
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
+import okio.buffer
 import okio.use
 import platform.Foundation.NSBundle
 import platform.Foundation.NSFileManager
@@ -31,6 +32,10 @@ private const val privateLogDirectoryName = "DobbyVPNLogs"
 private var logStorageInitializationAvailable = true
 
 actual fun platformLogStorageInitializationAvailable(): Boolean = logStorageInitializationAvailable
+
+actual fun clearLogFile(path: Path, storageFileSystem: FileSystem) {
+    storageFileSystem.sink(path).buffer().use { }
+}
 
 @OptIn(ExperimentalForeignApi::class)
 actual fun provideLogFilePath(): Path = secureLogPath(

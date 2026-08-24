@@ -37,6 +37,7 @@ on:
 jobs:
   ios_build:
     runs-on: macos-15
+    timeout-minutes: 30
     environment: release
     env:
       APP_MAJOR_VERSION: ${{ inputs.app_major_version }}

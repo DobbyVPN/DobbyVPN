@@ -28,6 +28,48 @@ STEP_NAME = re.compile(
     r"(?P<plain>[^#]+?))\s*$"
 )
 
+# Developer-facing tool entry points are part of the reproducible product
+# toolchain, even when they are not GitHub Actions. Keep these versions in the
+# same reviewable policy surface as workflow pins. The versions are derived
+# from checked-in workflow/module provenance and generated-stub headers; a
+# change requires deliberate provenance review.
+ACTIVE_TOOL_PINS = {
+    ROOT.parent / "Taskfile.yml": (
+        "go install github.com/evilmartians/lefthook/v2@v2.1.10",
+        "go install github.com/trufflesecurity/trufflehog/v3@v3.93.3",
+    ),
+    ROOT.parent / "go_module" / "README.md": (
+        "go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d",
+        "go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d",
+        "go mod download golang.org/x/mobile",
+    ),
+    ROOT.parent / "go_module" / "scripts" / "regenerate-grpcproto.sh": (
+        "go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11",
+        "go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2",
+    ),
+}
+MUTABLE_GO_TOOL_COMMAND = re.compile(r"\bgo\s+(?:install|get)\b[^\n#]*@latest")
+
+
+def _active_tool_pin_violations() -> list[str]:
+    violations: list[str] = []
+    for path, expected_commands in ACTIVE_TOOL_PINS.items():
+        if not path.is_file():
+            violations.append(f"{path.relative_to(ROOT.parent)}: active tool entry point is missing")
+            continue
+        source = path.read_text(encoding="utf-8")
+        for line_number, line in enumerate(source.splitlines(), start=1):
+            if MUTABLE_GO_TOOL_COMMAND.search(line):
+                violations.append(
+                    f"{path.relative_to(ROOT.parent)}:{line_number}: mutable @latest Go tool reference"
+                )
+        for command in expected_commands:
+            if command not in source:
+                violations.append(
+                    f"{path.relative_to(ROOT.parent)}: missing reviewed tool pin: {command}"
+                )
+    return violations
+
 
 def _workflow_step_lines(source: str) -> dict[str, list[int]]:
     steps: dict[str, list[int]] = {}
@@ -54,6 +96,7 @@ def _step_order_violation(source: str, before: str, after: str) -> str | None:
 
 def main() -> int:
     violations: list[str] = []
+    violations.extend(_active_tool_pin_violations())
     for workflow in sorted(WORKFLOWS.glob("*.yml")):
         text = workflow.read_text(encoding="utf-8")
         if "secrets: inherit" in text:
@@ -135,6 +178,19 @@ def main() -> int:
             violations.append(f"{name}: Bash regex validation must use [[ ... =~ ... ]], not test")
 
     android_build = (WORKFLOWS / "android_build.yml").read_text(encoding="utf-8")
+    android_driver = ROOT.parent / ".github" / "scripts" / "android_build_driver.sh"
+    if not android_driver.is_file() or android_driver.is_symlink():
+        violations.append("android_build.yml: public Android build driver is missing")
+        android_driver_text = ""
+    else:
+        android_driver_text = android_driver.read_text(encoding="utf-8")
+    android_dependency_helper = ROOT.parent / ".github" / "scripts" / "android_dependency_provenance.py"
+    if not android_dependency_helper.is_file() or android_dependency_helper.is_symlink():
+        violations.append("android_build.yml: Android dependency provenance helper is missing")
+        android_dependency_helper_text = ""
+    else:
+        android_dependency_helper_text = android_dependency_helper.read_text(encoding="utf-8")
+    android_contract = android_build + "\n" + android_driver_text + "\n" + android_dependency_helper_text
     for expected in (
         "APP_SOURCE_SHA: ${{ inputs.source_sha }}",
         "APP_SOURCE_REPOSITORY: ${{ github.repository }}",
@@ -148,25 +204,55 @@ def main() -> int:
         'GO_SRC="$FDROID_COMPAT_GO_ROOT"',
         'ANDROID_GO_VERSION: ${{ steps.android_go.outputs.version }}',
         'GO_VERSION="$ANDROID_GO_VERSION"',
-        'GO_COMMIT="56ebf80e57db9f61981fc0636fc6419dc6f68eda"',
+        'GO_COMMIT="$(python3 "$TRUSTED_HELPER_ROOT/.github/scripts/android_dependency_provenance.py"',
         'git -C "$GO_SRC" rev-parse HEAD',
-        "Check out trusted APK source verifier",
+        "Check out trusted Android build helpers",
+        "Verify trusted Android helper checkout before any trusted helper use",
         "ref: ${{ github.workflow_sha }}",
         "path: .trusted-workflow",
+        "--exclude='.trusted-workflow'",
+        "TRUSTED_HELPER_ROOT: ${{ github.workspace }}/.trusted-workflow",
+        "TRUSTED_HELPER_SHA: ${{ github.workflow_sha }}",
+        "Cache trusted Gradle distribution archive",
+        "Download and verify trusted Gradle distribution",
+        "--verify-gradle-distribution",
+        "--gradle-archive",
+        "--gradle-root",
+        "GRADLE_BIN",
+        "--print-gradle-url",
+        "--print-gradle-sha256",
+        "trusted helper checkout is not clean",
+        "trusted helper checkout contains a symlink",
+        "trusted helper file is missing or not a regular non-symlink file",
+        ".github/scripts/android_build_driver.sh",
+        ".github/scripts/android_dependency_provenance.py",
+        ".github/android/dependency-spec.json",
         'python3 "$GITHUB_WORKSPACE/.trusted-workflow/.github/scripts/verify_android_apk_source.py"',
         ".github/scripts/verify_android_reproducibility.py",
         "Verify reproducible Android toolchain",
-        "Build first isolated unsigned APK",
-        "Remove first-build outputs",
-        "Build second isolated unsigned APK",
-        "Verify complete unsigned APK reproducibility",
-        "--no-build-cache --no-daemon --rerun-tasks",
-        ":app:assembleRelease",
+        "Build and verify isolated unsigned APKs through the public driver",
+        "android_build_driver.sh",
+        "--dependency-spec",
+        "--first-output",
+        "--reproducibility",
+        "android_dependency_provenance.py",
+        "--trusted-helper-root",
+        "--trusted-helper-sha",
+        "source checkout has tracked worktree modifications",
+        "verify_source_integrity_after_build",
+        "--verify-manifest",
+        "--print-go-version",
+        "--print-go-source-commit",
+        '"java_version": java_version',
         "DOBBYVPN_GOMOBILE_GOCACHE:",
         "DOBBYVPN_GOMOBILE_GOTMPDIR:",
-        "dobbyvpn-android-repro/first.apk",
+        "android-repro-first.apk",
         "android-reproducibility.json",
-        "golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d",
+        ".github/android/dependency-spec.json",
+        "--print-mobile-version",
+        'GOBIN="$go_path/bin" "$go_bin" install',
+        "ensure_mobile_tool",
+        '"classification": "tracked_dependency_spec"',
         "Sign the verified unsigned APK",
         "apksigner\" sign",
         "Verify signed APK payload binding",
@@ -177,10 +263,31 @@ def main() -> int:
         '"reproducibility": json.loads(',
         '--source-sha "$SOURCE_SHA" --repository "$APP_SOURCE_REPOSITORY"',
     ):
-        if expected not in android_build:
+        if expected not in android_contract:
             violations.append(
                 f"android_build.yml: missing embedded tagged-source control: {expected}"
             )
+    if '--dependency-spec "$FDROID_COMPAT_SOURCE_ROOT/.github/android/dependency-spec.json"' in android_build:
+        violations.append(
+            "android_build.yml: legacy-compatible build must not bind the dependency spec to the selected source checkout"
+        )
+    if android_driver_text.count("verify_source_integrity_after_build") < 4:
+        violations.append(
+            "android_build.yml: Android driver must recheck source integrity after each build and before final manifest creation"
+        )
+    for after in (
+        "Build Go from source for Android",
+        "Download and verify trusted Gradle distribution",
+        "Install gomobile",
+        "Verify reproducible Android toolchain",
+    ):
+        step_order_violation = _step_order_violation(
+            android_build,
+            "Verify trusted Android helper checkout before any trusted helper use",
+            after,
+        )
+        if step_order_violation is not None:
+            violations.append(f"android_build.yml: {step_order_violation}")
     if "Cache gomobile Android AAR" in android_build or "gomobile-aar-" in android_build:
         violations.append(
             "android_build.yml: final gomobile AAR caching is forbidden because toolchain and environment paths affect native bytes"
@@ -253,6 +360,11 @@ def main() -> int:
         'gh api "repos/$GITHUB_REPOSITORY/releases/$owned_release_id"',
         "release_provenance.py create",
         "release_provenance.py verify",
+        "release_provenance.py typed-create",
+        "release_provenance.py typed-verify",
+        "release-artifact-provenance-v2.json",
+        "--typed-asset \"DobbyVPN-v$RELEASE_VERSION-sign.apk|android|arm64-v8a|apk-signed\"",
+        "--typed-asset \"dobbyVPN-windows-amd64.msi|windows|amd64|msi\"",
         "cmp release/release-provenance.json published/release-provenance.json",
         "published=true",
         "dobbyvpn-android-provenance",
@@ -468,6 +580,23 @@ def main() -> int:
         if ruby_version is None or tuple(map(int, ruby_version.groups())) < (3, 3):
             violations.append(f"{name}: protected Fastlane job must use supported Ruby 3.3+")
 
+    # Every product/platform reusable workflow has one bounded hosted job (or
+    # one bounded matrix entry per platform). Keep the hard 30-minute ceiling
+    # at the producer so callers cannot accidentally remove it.
+    for name in (
+        "android_build.yml",
+        "desktop_build.yml",
+        "desktop_libs_generate.yml",
+        "installers_build.yml",
+        "ios_build.yml",
+    ):
+        text = (WORKFLOWS / name).read_text(encoding="utf-8")
+        timeouts = re.findall(r"^\s{4}timeout-minutes:\s*(\d+)\s*$", text, re.MULTILINE)
+        if timeouts != ["30"]:
+            violations.append(
+                f"{name}: every hosted platform job must have exactly timeout-minutes: 30 (found {timeouts})"
+            )
+
     ios_build = (WORKFLOWS / "ios_build.yml").read_text(encoding="utf-8")
     for expected in (
         "ios_artifact_provenance.py create",
@@ -494,6 +623,24 @@ def main() -> int:
         )
 
     ios_libraries = (WORKFLOWS / "ios_libs_generate.yml").read_text(encoding="utf-8")
+    ios_timeouts = re.findall(r"^\s{4}timeout-minutes:\s*(\d+)\s*$", ios_libraries, re.MULTILINE)
+    if ios_timeouts != ["30", "30"]:
+        violations.append(
+            f"ios_libs_generate.yml: every iOS hosted job must have exactly timeout-minutes: 30 (found {ios_timeouts})"
+        )
+
+    # The pull-request functional matrix is also a platform surface. Keep its
+    # per-job ceiling machine-enforced so a newly added runner cannot silently
+    # reintroduce an unbounded test.
+    test_timeouts = re.findall(
+        r"^\s{4}timeout-minutes:\s*(\d+)\s*$", test_workflow, re.MULTILINE
+    )
+    test_runners = re.findall(r"^\s{4}runs-on:\s*.+$", test_workflow, re.MULTILINE)
+    if test_timeouts != ["30"] * len(test_runners):
+        violations.append(
+            "test.yml: every hosted functional job must have exactly "
+            f"timeout-minutes: 30 (found {test_timeouts}; jobs={len(test_runners)})"
+        )
     for expected in (
         "APP_SOURCE_SHA: ${{ inputs.source_sha }}",
         "APP_SOURCE_REPOSITORY: ${{ github.repository }}",
@@ -504,7 +651,16 @@ def main() -> int:
         "go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d",
         "go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d",
         'mkdir -p "$gopath/pkg/gomobile"',
-        'grep -F "$mobile_version"',
+        'tool_metadata="$(go version -m "$tool_dir/$tool" 2>&1 | tee /dev/stderr)"',
+        "tee /dev/stderr",
+        'if [[ "$tool_metadata" != *\'golang.org/x/mobile\'* || "$tool_metadata" != *"$mobile_version"* ]]; then',
+        'echo "tool metadata is not pinned to golang.org/x/mobile@$mobile_version: $tool" >&2',
+        "name: Verify Go bootstrap preserved candidate source",
+        'source_status="$(git status --porcelain --untracked-files=all)"',
+        'git diff --no-ext-diff --binary',
+        'echo "candidate source changed during iOS Go bootstrap" >&2',
+        "name: Verify KMP iOS build preserved candidate source",
+        'echo "candidate source changed during KMP iOS build" >&2',
     ):
         if expected not in ios_libraries:
             violations.append(f"ios_libs_generate.yml: missing exact KMP framework-source control: {expected}")

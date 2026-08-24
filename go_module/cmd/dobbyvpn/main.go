@@ -36,6 +36,15 @@ func run(args []string) int {
 		printHelp()
 		return exitOK
 	}
+	// Log clearing is a local file operation. Keep it independent from the
+	// control service so the reset remains usable before a service starts or
+	// after one has failed, as required by the desktop qualification runners.
+	if args[0] == "logs" {
+		if len(args) != 2 || args[1] != "clear" {
+			return usage("logs accepts only clear")
+		}
+		return clearApplicationLog()
+	}
 	conn, err := dialService()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "dobby-cli: service unavailable")
@@ -75,13 +84,6 @@ func run(args []string) int {
 			return usage("status accepts only --json")
 		}
 		return status(ctx, client, len(args) == 2)
-	case "logs":
-		// Diagnostics remain local to the service; this command is deliberately
-		// safe and does not invent a second logging transport. Windows logging is
-		// initialized immediately before the first connection instead, after a
-		// caller has had a chance to clear the existing local history.
-		fmt.Fprintln(os.Stderr, "dobby-cli: use the application log viewer for local logs")
-		return exitOK
 	case "external-ip":
 		return externalIP()
 	case "verify-session":
@@ -103,14 +105,36 @@ func initWindowsServiceLogger(
 	if strings.TrimSpace(home) == "" {
 		return fmt.Errorf("user home directory is empty")
 	}
+	path := windowsServiceLogPath(home)
 	_, err = client.InitLogger(ctx, &grpcproto.InitLoggerRequest{
-		Path: windowsServiceLogPath(home),
+		Path: path,
 	})
 	return err
 }
 
 func windowsServiceLogPath(home string) string {
-	return filepath.Join(home, ".myapp", "go_desktop_service_logs.jsonl")
+	return filepath.Join(home, ".dobbyvpn", "go_desktop_service_logs.jsonl")
+}
+
+func applicationLogPath(home string) string {
+	// The current log is deliberately independent from the retired .myapp tree;
+	// clearing or creating it never reads, moves, or deletes legacy diagnostics.
+	return filepath.Join(home, ".dobbyvpn", "app_logs.txt")
+}
+
+func clearApplicationLog() int {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		fmt.Fprintln(os.Stderr, "dobby-cli: local application log unavailable")
+		return exitRuntime
+	}
+	path := applicationLogPath(home)
+	if err := clearLocalLogFileAtBase(path, home); err != nil {
+		fmt.Fprintf(os.Stderr, "dobby-cli: local application log clear failed: %v\n", err)
+		return exitRuntime
+	}
+	fmt.Println("LOGS_CLEARED")
+	return exitOK
 }
 
 func initOptInServiceLogger(ctx context.Context, client grpcproto.VpnClient) error {
@@ -440,5 +464,5 @@ func usage(message string) int {
 }
 
 func printHelp() {
-	fmt.Println("dobby-cli connect <source> | connect-profile <source> <index> | check-config <source> | disconnect | status [--json] | logs | external-ip | verify-session")
+	fmt.Println("dobby-cli connect <source> | connect-profile <source> <index> | check-config <source> | disconnect | status [--json] | logs clear | external-ip | verify-session")
 }

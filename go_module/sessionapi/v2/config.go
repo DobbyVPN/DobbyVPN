@@ -94,7 +94,6 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 		}
 		profiles = append(profiles, RuntimeProfile{
 			Summary:          ProfileSummary{Index: len(profiles), Protocol: protocol, Description: description},
-			RawTOML:          payload,
 			NormalizedFormat: format,
 			NormalizedConfig: normalized,
 			ExcludeCIDRs:     append([]string(nil), root.ExcludeIPs.IPs...),

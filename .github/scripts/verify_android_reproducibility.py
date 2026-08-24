@@ -12,6 +12,8 @@ import stat
 import sys
 import zipfile
 
+from android_dependency_provenance import GO_SOURCE_COMMIT, GO_VERSION
+
 
 SCHEMA = 1
 KIND = "dobbyvpn_android_reproducibility"
@@ -25,8 +27,8 @@ NATIVE_PATHS = (
 TOOLCHAIN = {
     "android_build_tools": "36.0.0",
     "android_ndk": "27.3.13750724",
-    "go": "go1.25.1",
-    "go_source_commit": "56ebf80e57db9f61981fc0636fc6419dc6f68eda",
+    "go": f"go{GO_VERSION}",
+    "go_source_commit": GO_SOURCE_COMMIT,
     "gomobile": "golang.org/x/mobile@v0.0.0-20260520154334-0e4426e1883d",
     "gradle": "8.13",
     "java": "17",

@@ -818,7 +818,7 @@ func extractSSHost(transportConfig string) (string, error) {
 	return "", errors.New("ss:// not found")
 }
 
-// Open implements pkg.ProtocolDevice. The SOCKS5 server is already started
+// Open implements protocol.ProtocolDevice. The SOCKS5 server is already started
 // by NewOutlineDevice, so this is a no-op.
 func (d *OutlineDevice) Open(routingTableID int, uplinkIface string) error {
 	if d == nil {

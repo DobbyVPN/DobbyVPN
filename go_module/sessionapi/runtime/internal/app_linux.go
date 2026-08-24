@@ -7,7 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go_module/core/pkg"
+	"go_module/protocol"
 	"go_module/tunnel/platform_engine"
 	"go_module/tunnel/protected_dialer"
 	"sync"
@@ -15,7 +15,6 @@ import (
 
 	"github.com/jackpal/gateway"
 
-	coreCommon "go_module/core/common"
 	"go_module/log"
 	"go_module/routing"
 	"go_module/tunnel"
@@ -43,9 +42,6 @@ func reconcileLinuxUplink(serverIP string, tableID, priority int) error {
 	if err := reconcileLinuxRoutes(serverIP, gatewayIP, uplinkIface, tableID, priority); err != nil {
 		return err
 	}
-	// Only publish the new protected-dialer route after all owned routes and
-	// the policy rule are restored successfully.
-	protected_dialer.SetDefaultRoute(gatewayIP, uplinkIface, 0)
 	return nil
 }
 
@@ -64,22 +60,22 @@ func (app *App) validateRunInputs() error {
 //
 //nolint:gocyclo // Splitting this transaction would obscure its cleanup ownership.
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
-	log.Debugf(coreCommon.Category, "[Linux][Init] ===== VPN initialization started =====")
+	log.Debugf(Category, "[Linux][Init] ===== VPN initialization started =====")
 	if err := app.validateRunInputs(); err != nil {
 		signalInit(initResult, err)
 		return err
 	}
 
 	// 1. discover gateway
-	log.Debugf(coreCommon.Category, "[Linux][Step 1] Discovering default gateway...")
+	log.Debugf(Category, "[Linux][Step 1] Discovering default gateway...")
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
 		err = fmt.Errorf("failed to discover gateway: %w", err)
-		log.Debugf(coreCommon.Category, "[Linux][Step 1][ERROR] %v", err)
+		log.Debugf(Category, "[Linux][Step 1][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "[Linux][Step 1][OK] Default gateway discovered")
+	log.Debugf(Category, "[Linux][Step 1][OK] Default gateway discovered")
 
 	// 2. resolve VPN server IP
 	serverIP := app.ProtocolDevice.GetServerIP()
@@ -88,59 +84,58 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "[Routing] VPN server address resolved")
+	log.Debugf(Category, "[Routing] VPN server address resolved")
 
 	// 3. detect physical default interface
-	log.Debugf(coreCommon.Category, "[Linux][Step 3] Detecting uplink interface...")
+	log.Debugf(Category, "[Linux][Step 3] Detecting uplink interface...")
 	uplinkIface, err := routing.GetDefaultInterfaceNameLinux(gatewayIP.String())
 	if err != nil {
 		err = fmt.Errorf("failed to detect uplink interface: %w", err)
-		log.Debugf(coreCommon.Category, "[Linux][Step 3][ERROR] %v", err)
+		log.Debugf(Category, "[Linux][Step 3][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "[Linux][Step 3][OK] Uplink interface=%s", uplinkIface)
+	log.Debugf(Category, "[Linux][Step 3][OK] Uplink interface=%s", uplinkIface)
 
-	log.Debugf(coreCommon.Category, "[Linux][Recovery] Checking for routes tagged by an interrupted DobbyVPN process")
+	log.Debugf(Category, "[Linux][Recovery] Checking for routes tagged by an interrupted DobbyVPN process")
 	if err = recoverLinuxOwnedRoutes(
 		app.RoutingConfig.RoutingTableID,
 		app.RoutingConfig.RoutingTablePriority,
 		app.RoutingConfig.TunDeviceName,
 	); err != nil {
 		err = fmt.Errorf("failed to recover interrupted Linux routing state: %w", err)
-		log.Debugf(coreCommon.Category, "[Linux][Recovery][ERROR] %v", err)
+		log.Debugf(Category, "[Linux][Recovery][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "[Linux][Recovery][OK] Tagged routing state is clean")
-	protected_dialer.SetDefaultRoute(gatewayIP.String(), uplinkIface, 0)
+	log.Debugf(Category, "[Linux][Recovery][OK] Tagged routing state is clean")
 	routePlan := routing.NewPlan(fmt.Sprintf("%s:%s", app.RoutingConfig.TunDeviceName, serverIP.String()))
 	defer func() {
 		if cleanupErr := routePlan.Close(); cleanupErr != nil {
-			log.Debugf(coreCommon.Category, "[Linux][RoutingPlan][WARN] %v", cleanupErr)
+			log.Debugf(Category, "[Linux][RoutingPlan][WARN] %v", cleanupErr)
 			runErr = errors.Join(runErr, fmt.Errorf("linux routing cleanup: %w", cleanupErr))
 		}
 	}()
 
 	// 4. early route
 	if serverIP.String() != "127.0.0.1" {
-		log.Debugf(coreCommon.Category, "[Linux][Step 4] Installing early VPN bypass route uplink=%s", uplinkIface)
+		log.Debugf(Category, "[Linux][Step 4] Installing early VPN bypass route uplink=%s", uplinkIface)
 
 		_, err = routePlan.AcquireLinuxProxyRoute(serverIP.String(), gatewayIP.String(), uplinkIface)
 		if err != nil {
 			err = fmt.Errorf("failed to add early route: %w", err)
-			log.Debugf(coreCommon.Category, "[Linux][Step 4][ERROR] %v", err)
+			log.Debugf(Category, "[Linux][Step 4][ERROR] %v", err)
 			signalInit(initResult, err)
 			return err
 		}
 
-		log.Debugf(coreCommon.Category, "[Linux][Step 4][OK] Early route installed")
+		log.Debugf(Category, "[Linux][Step 4][OK] Early route installed")
 	} else {
-		log.Debugf(coreCommon.Category, "[Linux][Step 4] Skipped (localhost endpoint)")
+		log.Debugf(Category, "[Linux][Step 4] Skipped (localhost endpoint)")
 	}
 
 	// 5. marked routing
-	log.Debugf(coreCommon.Category, "[Linux][Step 5] Setting up policy routing (fwmark=%d table=%d priority=%d)",
+	log.Debugf(Category, "[Linux][Step 5] Setting up policy routing (fwmark=%d table=%d priority=%d)",
 		app.RoutingConfig.RoutingTableID,
 		app.RoutingConfig.RoutingTableID,
 		app.RoutingConfig.RoutingTablePriority,
@@ -153,21 +148,21 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		gatewayIP.String(),
 	); err != nil {
 		err = fmt.Errorf("failed to setup marked routing: %w", err)
-		log.Debugf(coreCommon.Category, "[Linux][Step 5][ERROR] %v", err)
+		log.Debugf(Category, "[Linux][Step 5][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
 
-	log.Debugf(coreCommon.Category, "[Linux][Step 5][OK] Policy routing configured")
+	log.Debugf(Category, "[Linux][Step 5][OK] Policy routing configured")
 
 	// protected sockets
 	protected_dialer.SetLinuxSocketMark(app.RoutingConfig.RoutingTableID)
 	defer protected_dialer.SetLinuxSocketMark(0)
 
-	log.Debugf(coreCommon.Category, "[Linux][Step 5] Protected dialers installed (SO_MARK=%d)", app.RoutingConfig.RoutingTableID)
+	log.Debugf(Category, "[Linux][Step 5] Protected dialers installed (SO_MARK=%d)", app.RoutingConfig.RoutingTableID)
 
 	// 6. create TUN
-	log.Debugf(coreCommon.Category, "[Linux][Step 6] Creating TUN: name=%s ip=%s",
+	log.Debugf(Category, "[Linux][Step 6] Creating TUN: name=%s ip=%s",
 		app.RoutingConfig.TunDeviceName,
 		app.RoutingConfig.TunDeviceIP,
 	)
@@ -175,12 +170,12 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
 	if err != nil {
 		err = fmt.Errorf("failed to create TUN device: %w", err)
-		log.Debugf(coreCommon.Category, "[Linux][Step 6][ERROR] %v", err)
+		log.Debugf(Category, "[Linux][Step 6][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
 
-	log.Debugf(coreCommon.Category, "[Linux][Step 6][OK] TUN created: %s", app.RoutingConfig.TunDeviceName)
+	log.Debugf(Category, "[Linux][Step 6][OK] TUN created: %s", app.RoutingConfig.TunDeviceName)
 
 	var ownedEngine *tunnel.Engine
 	protocolOpened := false
@@ -188,7 +183,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	var closeOnce sync.Once
 	closeAll := func() error {
 		closeOnce.Do(func() {
-			log.Debugf(coreCommon.Category, "[Linux][Lifecycle] Shutting down...")
+			log.Debugf(Category, "[Linux][Lifecycle] Shutting down...")
 
 			app.mu.Lock()
 			currentDevice := app.currentDevice
@@ -214,9 +209,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			tunErr := tun.Close()
 			cleanupErr = errors.Join(routeErr, engineErr, deviceErr, tunErr)
 			if cleanupErr != nil {
-				log.Debugf(coreCommon.Category, "[Linux][Cleanup][ERROR] %v", cleanupErr)
+				log.Debugf(Category, "[Linux][Cleanup][ERROR] %v", cleanupErr)
 			} else {
-				log.Debugf(coreCommon.Category, "[Linux][Lifecycle] Shutdown complete")
+				log.Debugf(Category, "[Linux][Lifecycle] Shutdown complete")
 			}
 		})
 		return cleanupErr
@@ -228,44 +223,44 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}()
 
 	// 7. Protocol
-	log.Debugf(coreCommon.Category, "[Linux][Step 7] Creating Protocol SOCKS bridge...")
+	log.Debugf(Category, "[Linux][Step 7] Creating Protocol SOCKS bridge...")
 	// Open may partially allocate protocol resources before returning an error.
 	protocolOpened = true
 	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, uplinkIface)
 	if err != nil {
 		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
-		log.Debugf(coreCommon.Category, "[Linux][Step 7][ERROR] %v", err)
+		log.Debugf(Category, "[Linux][Step 7][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "[Linux][Step 7][OK] Protocol SOCKS bridge ready")
+	log.Debugf(Category, "[Linux][Step 7][OK] Protocol SOCKS bridge ready")
 
 	// 8. fd
 	t, ok := tun.(interface{ GetFd() int })
 	if !ok {
 		err = fmt.Errorf("TUN has no fd")
-		log.Debugf(coreCommon.Category, "[Linux][Step 8][ERROR] %v", err)
+		log.Debugf(Category, "[Linux][Step 8][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
 	fd := t.GetFd()
 	if fd < 0 {
 		err = fmt.Errorf("invalid fd=%d", fd)
-		log.Debugf(coreCommon.Category, "[Linux][Step 8][ERROR] %v", err)
+		log.Debugf(Category, "[Linux][Step 8][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "[Linux][Step 8][OK] fd=%d", fd)
+	log.Debugf(Category, "[Linux][Step 8][OK] fd=%d", fd)
 
 	// 9. tun2socks
-	log.Debugf(coreCommon.Category, "[Linux][Step 9] Starting tun2socks with independently owned TUN descriptor proxy_ready=true")
+	log.Debugf(Category, "[Linux][Step 9] Starting tun2socks with independently owned TUN descriptor proxy_ready=true")
 	ownedEngine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{
 		ProxyAddr:   app.ProtocolDevice.GetProxyAddr(),
 		FD:          fd,
 		UplinkIface: "",
 	})
 	if err != nil {
-		log.Debugf(coreCommon.Category, "Can't start tun2socks: %v", err)
+		log.Debugf(Category, "Can't start tun2socks: %v", err)
 		signalInit(initResult, err)
 		return err
 	}
@@ -273,19 +268,19 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	app.engine = ownedEngine
 	app.mu.Unlock()
 
-	log.Debugf(coreCommon.Category, "[Linux][Step 9][OK] tun2socks started — waiting for readiness...")
+	log.Debugf(Category, "[Linux][Step 9][OK] tun2socks started — waiting for readiness...")
 
 	time.Sleep(300 * time.Millisecond)
 
 	// 10. routing switch
-	log.Debugf(coreCommon.Category, "[Linux][Step 10] Switching default route → TUN (%s)", app.RoutingConfig.TunDeviceName)
+	log.Debugf(Category, "[Linux][Step 10] Switching default route → TUN (%s)", app.RoutingConfig.TunDeviceName)
 
 	if _, err = routePlan.AcquireLinuxTunnelDefault(app.RoutingConfig.TunDeviceName); err == nil {
 		err = routePlan.AcquireLinuxIPv6Block()
 	}
 	if err != nil {
 		err = fmt.Errorf("failed to configure routing: %w", err)
-		log.Debugf(coreCommon.Category, "[Linux][Step 10][ERROR] %v", err)
+		log.Debugf(Category, "[Linux][Step 10][ERROR] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
@@ -299,9 +294,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	app.running = true
 	app.mu.Unlock()
 
-	log.Debugf(coreCommon.Category, "[Linux][Step 10][OK] Default route switched to VPN")
+	log.Debugf(Category, "[Linux][Step 10][OK] Default route switched to VPN")
 
-	log.Debugf(coreCommon.Category, "[Linux][Init] ===== VPN started successfully =====")
+	log.Debugf(Category, "[Linux][Init] ===== VPN started successfully =====")
 
 	signalInit(initResult, nil)
 
@@ -322,7 +317,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 				if reconcileErr := reconcileLinuxUplink(
 					serverIP.String(), app.RoutingConfig.RoutingTableID, app.RoutingConfig.RoutingTablePriority,
 				); reconcileErr != nil {
-					log.Debugf(coreCommon.Category, "[Linux][Routing][WARN] route reconciliation pending: %v", reconcileErr)
+					log.Debugf(Category, "[Linux][Routing][WARN] route reconciliation pending: %v", reconcileErr)
 				}
 			}
 		}
@@ -331,15 +326,15 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	<-ctx.Done()
 	<-reconcileDone
 
-	log.Debugf(coreCommon.Category, "[Linux][Lifecycle] Context cancelled — stopping engine")
+	log.Debugf(Category, "[Linux][Lifecycle] Context cancelled — stopping engine")
 	return nil
 }
 
-func (app *App) SwitchProtocolDevice(device pkg.ProtocolDevice) error {
+func (app *App) SwitchProtocolDevice(device protocol.ProtocolDevice) error {
 	_ = app
 	if device != nil {
 		if closeErr := device.Close(); closeErr != nil {
-			log.Debugf(coreCommon.Category, "[Linux][Lifecycle] replacement device close after rejected switch failed: %v", closeErr)
+			log.Debugf(Category, "[Linux][Lifecycle] replacement device close after rejected switch failed: %v", closeErr)
 		}
 	}
 	// A replacement would require a second server bypass lease while the

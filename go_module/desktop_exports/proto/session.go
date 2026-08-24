@@ -21,8 +21,8 @@ func newSessionHost(manager *v2.Manager) *sessionHost {
 	return &sessionHost{binding: binding, transport: grpctransport.New(binding.Manager)}
 }
 
-// The zero-value Server and direct legacy API exports share this exact
-// Binding, including its compatibility session ID and serialization lock.
+// The zero-value Server uses this exact SessionV2 binding, including its
+// process-local session manager and serialization lock.
 var defaultSessionHost = func() *sessionHost {
 	binding := desktopbinding.Default()
 	return &sessionHost{binding: binding, transport: grpctransport.New(binding.Manager)}

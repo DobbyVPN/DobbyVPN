@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from ios_artifact_provenance import (
     SCHEMA,
@@ -24,6 +27,30 @@ VERSION = "1.4.7"
 BUILD_NUMBER = "2143"
 
 
+def run_and_surface(
+    command: list[str], *, check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """retain both command streams in the complete visible test output."""
+    completed = subprocess.run(
+        command,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if completed.stdout:
+        sys.stdout.write(completed.stdout)
+        sys.stdout.flush()
+    if completed.stderr:
+        sys.stderr.write(completed.stderr)
+        sys.stderr.flush()
+    if check and completed.returncode:
+        raise subprocess.CalledProcessError(
+            completed.returncode, command, output=completed.stdout, stderr=completed.stderr
+        )
+    return completed
+
+
 class IosArtifactProvenanceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -36,6 +63,21 @@ class IosArtifactProvenanceTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def test_cli_runner_surfaces_complete_stdout_and_stderr(self) -> None:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        completed = subprocess.CompletedProcess(
+            ["fixture"], 7, stdout="complete stdout\n", stderr="complete stderr\n"
+        )
+        with (
+            mock.patch.object(subprocess, "run", return_value=completed),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            observed = run_and_surface(["fixture"], check=False)
+        self.assertEqual(observed.returncode, 7)
+        self.assertEqual(stdout.getvalue(), "complete stdout\n")
+        self.assertEqual(stderr.getvalue(), "complete stderr\n")
 
     def create_sidecar(self) -> dict[str, object]:
         provenance = make_provenance(self.ipa_dir, SOURCE_SHA, VERSION, BUILD_NUMBER)
@@ -128,19 +170,19 @@ class IosArtifactProvenanceTests(unittest.TestCase):
             "--build-number",
             BUILD_NUMBER,
         ]
-        subprocess.run(command, check=True)
+        run_and_surface(command)
         command[2] = "verify"
-        subprocess.run(command, check=True)
+        run_and_surface(command)
 
         command[command.index("--build-number") + 1] = "2144"
-        failed = subprocess.run(command, check=False, capture_output=True, text=True)
+        failed = run_and_surface(command, check=False)
         self.assertNotEqual(failed.returncode, 0)
         self.assertIn("does not match", failed.stderr)
 
     def test_create_rejects_dangling_provenance_symlink(self) -> None:
         self.sidecar.symlink_to(self.root / "missing-target.json")
         script = Path(__file__).with_name("ios_artifact_provenance.py")
-        failed = subprocess.run(
+        failed = run_and_surface(
             [
                 sys.executable,
                 str(script),
@@ -157,8 +199,6 @@ class IosArtifactProvenanceTests(unittest.TestCase):
                 BUILD_NUMBER,
             ],
             check=False,
-            capture_output=True,
-            text=True,
         )
         self.assertNotEqual(failed.returncode, 0)
         self.assertIn("must not be a symlink", failed.stderr)

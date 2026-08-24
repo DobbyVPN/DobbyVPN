@@ -21,21 +21,28 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
+import java.nio.file.FileAlreadyExistsException
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 import java.util.Arrays
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 
-/** One semantic operation supplied by Torturer; this app does not own scenarios. */
+/** One semantic operation supplied by an external canonical runner; this app owns no scenarios. */
 internal data class AndroidHostedOperation(
     val id: String,
     val operation: String,
     val timeoutSeconds: Int,
+    val controlFile: String? = null,
+    val controlToken: String? = null,
 )
 
 /** Owner-injected network settings. They are input-only and never appear in observations. */
@@ -58,7 +65,7 @@ internal data class AndroidHostedCommand(
 internal class AndroidHostedInputException : IllegalArgumentException("INPUT_INVALID")
 
 /**
- * The public product seam is deliberately a small data contract. Torturer supplies the ordered
+ * The product seam is deliberately a small data contract. An external runner supplies the ordered
  * operations and owns scenario meaning/assertions; Dobby only executes observations.
  */
 internal object AndroidHostedCommandContract {
@@ -77,6 +84,8 @@ internal object AndroidHostedCommandContract {
     private val SHA = Regex("[0-9a-f]{40}")
     private val FILE_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
     private val OPERATION_ID = Regex("[a-z][a-z0-9._-]{2,95}")
+    private val CONTROL_TOKEN = Regex("[0-9a-f]{64}")
+    internal val EXTERNAL_CONTROL_OPERATIONS = setOf("network_transition", "sleep_wake", "process_loss")
     private val OPERATIONS = setOf(
         "configure",
         "connect",
@@ -87,6 +96,7 @@ internal object AndroidHostedCommandContract {
         "disconnect",
         "reconnect",
         "inspect_cleanup",
+        *EXTERNAL_CONTROL_OPERATIONS.toTypedArray(),
     )
 
     fun parse(commandFileName: String, jsonText: String): AndroidHostedCommand {
@@ -96,13 +106,12 @@ internal object AndroidHostedCommandContract {
         } catch (_: Exception) {
             invalid()
         }
-        requireKeys(
-            json,
-            setOf(
-                "schema", "kind", "platform", "source_sha", "profile_file", "output_file",
-                "endpoints", "operations",
-            ),
+        val requiredKeys = setOf(
+            "schema", "kind", "platform", "source_sha", "profile_file", "output_file",
+            "endpoints", "operations",
         )
+        val commandKeys = json.keys().asSequence().toSet()
+        if (!requiredKeys.all(commandKeys::contains) || (commandKeys - requiredKeys).isNotEmpty()) invalid()
         if (exactInt(json.opt("schema")) != SCHEMA ||
             requiredString(json, "kind") != COMMAND_KIND ||
             requiredString(json, "platform") != PLATFORM
@@ -114,7 +123,10 @@ internal object AndroidHostedCommandContract {
         val outputFile = requiredString(json, "output_file")
         requireFileName(profileFile)
         requireFileName(outputFile)
-        if (profileFile == outputFile || profileFile == commandFileName || outputFile == commandFileName) invalid()
+        val outputTemporary = "$outputFile.tmp"
+        requireFileName(outputTemporary)
+        val reservedNames = linkedSetOf(commandFileName, profileFile, outputFile, outputTemporary)
+        if (reservedNames.size != 4) invalid()
 
         val endpoints = parseEndpoints(json.optJSONObject("endpoints") ?: invalid())
         val rawOperations = try {
@@ -131,28 +143,55 @@ internal object AndroidHostedCommandContract {
                 } catch (_: Exception) {
                     invalid()
                 }
-                requireKeys(item, setOf("id", "operation", "timeout_seconds"))
                 val id = requiredString(item, "id")
                 val operation = requiredString(item, "operation")
                 if (!OPERATION_ID.matches(id) || !seenIds.add(id) || operation !in OPERATIONS) invalid()
+                val external = operation in EXTERNAL_CONTROL_OPERATIONS
+                val expectedKeys = buildSet {
+                    addAll(setOf("id", "operation", "timeout_seconds"))
+                    if (external) addAll(setOf("control_file", "control_token"))
+                }
+                requireKeys(item, expectedKeys)
                 val timeoutSeconds = positiveInt(item, "timeout_seconds")
                 if (timeoutSeconds > MAX_OPERATION_TIMEOUT_SECONDS) invalid()
-                add(AndroidHostedOperation(id, operation, timeoutSeconds))
+                val controlFile = if (external) {
+                    val value = requiredString(item, "control_file")
+                    if (value.length > 70) invalid()
+                    requireFileName(value)
+                    val readyName = "$value.ready"
+                    val temporaryName = "$value.tmp"
+                    requireFileName(readyName)
+                    requireFileName(temporaryName)
+                    if (!reservedNames.add(value) ||
+                        !reservedNames.add(readyName) ||
+                        !reservedNames.add(temporaryName)
+                    ) invalid()
+                    value
+                } else {
+                    null
+                }
+                val controlToken = if (external) {
+                    val value = requiredString(item, "control_token")
+                    if (!CONTROL_TOKEN.matches(value)) invalid()
+                    value
+                } else {
+                    null
+                }
+                add(AndroidHostedOperation(id, operation, timeoutSeconds, controlFile, controlToken))
             }
         }
         if (operations.sumOf(AndroidHostedOperation::timeoutSeconds) > MAX_COMMAND_TIMEOUT_SECONDS) invalid()
+        val tokens = operations.mapNotNull(AndroidHostedOperation::controlToken)
+        if (tokens.size != tokens.toSet().size) invalid()
         return AndroidHostedCommand(sourceSha, profileFile, outputFile, endpoints, operations)
     }
 
     fun privateFile(filesDir: File, fileName: String): File {
         requireFileName(fileName)
-        val root = filesDir.canonicalFile
-        val candidate = File(root, fileName)
-        if (candidate.absoluteFile.parentFile?.canonicalFile != root ||
-            candidate.canonicalFile.parentFile?.canonicalFile != root ||
-            java.nio.file.Files.isSymbolicLink(candidate.toPath())
-        ) invalid()
-        return candidate
+        val root = filesDir.toPath().toRealPath()
+        val candidate = root.resolve(fileName).normalize()
+        if (candidate.parent != root || Files.isSymbolicLink(candidate)) invalid()
+        return candidate.toFile()
     }
 
     fun readCommand(file: File): String {
@@ -165,6 +204,27 @@ internal object AndroidHostedCommandContract {
     }
 
     fun readProfile(file: File): ByteArray = readBounded(file, MAX_PROFILE_BYTES)
+
+    internal fun readControl(file: File): ByteArray = readBounded(file, 512)
+
+    internal fun createReady(file: File): Boolean {
+        return try {
+            FileChannel.open(
+                file.toPath(),
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE,
+                LinkOption.NOFOLLOW_LINKS,
+            ).use { channel ->
+                channel.write(ByteBuffer.wrap("ready\n".toByteArray(Charsets.US_ASCII)))
+                channel.force(true)
+            }
+            true
+        } catch (_: FileAlreadyExistsException) {
+            false
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     private fun parseEndpoints(json: JSONObject): AndroidHostedEndpoints {
         requireKeys(json, setOf("identity_url", "latency_url", "download_url", "upload_url"))
@@ -187,21 +247,29 @@ internal object AndroidHostedCommandContract {
     }
 
     private fun readBounded(file: File, maximumBytes: Int): ByteArray {
-        if (!file.isFile || java.nio.file.Files.isSymbolicLink(file.toPath())) invalid()
-        FileInputStream(file).use { input ->
-            val result = ByteArray(maximumBytes + 1)
-            var offset = 0
-            while (offset < result.size) {
-                val count = input.read(result, offset, result.size - offset)
-                if (count < 0) break
-                offset += count
+        val result = ByteArray(maximumBytes + 1)
+        val buffer = ByteBuffer.wrap(result)
+        try {
+            Files.newByteChannel(
+                file.toPath(),
+                StandardOpenOption.READ,
+                LinkOption.NOFOLLOW_LINKS,
+            ).use { channel ->
+                while (buffer.hasRemaining()) {
+                    val count = channel.read(buffer)
+                    if (count < 0) break
+                }
             }
-            if (offset > maximumBytes) {
-                Arrays.fill(result, 0)
-                invalid()
-            }
-            return result.copyOf(offset).also { Arrays.fill(result, 0) }
+        } catch (_: Exception) {
+            Arrays.fill(result, 0)
+            invalid()
         }
+        val size = buffer.position()
+        if (size > maximumBytes) {
+            Arrays.fill(result, 0)
+            invalid()
+        }
+        return result.copyOf(size).also { Arrays.fill(result, 0) }
     }
 
     private fun requiredString(json: JSONObject, key: String): String {
@@ -250,7 +318,7 @@ internal interface AndroidHostedPlatform {
     suspend fun awaitDisconnected(): Boolean
 }
 
-/** Exact safe JSON shape consumed by Torturer's AndroidProfileObservation contract. */
+/** Exact safe JSON shape consumed by the canonical Android profile-observation contract. */
 internal data class AndroidHostedObservation(
     val sourceSha: String,
     var configured: Boolean = false,
@@ -263,6 +331,9 @@ internal data class AndroidHostedObservation(
     var secondTunnelInterface: Boolean = false,
     var secondRoutingIdentityChanged: Boolean = false,
     var stabilityVerified: Boolean = false,
+    var networkTransitionVerified: Boolean = false,
+    var sleepWakeVerified: Boolean = false,
+    var processLossVerified: Boolean = false,
     var latencyMs: Double = 0.0,
     var downloadMbps: Double = 0.0,
     var uploadMbps: Double = 0.0,
@@ -285,6 +356,9 @@ internal data class AndroidHostedObservation(
         .put("second_tunnel_interface", secondTunnelInterface)
         .put("second_routing_identity_changed", secondRoutingIdentityChanged)
         .put("stability_verified", stabilityVerified)
+        .put("network_transition_verified", networkTransitionVerified)
+        .put("sleep_wake_verified", sleepWakeVerified)
+        .put("process_loss_verified", processLossVerified)
         .put("latency_ms", safeMetric(latencyMs))
         .put("download_mbps", safeMetric(downloadMbps))
         .put("upload_mbps", safeMetric(uploadMbps))
@@ -439,7 +513,106 @@ internal class AndroidHostedProfileTestDriver(
                 observation.cleanupVerified = value.state == SessionState.IDLE && value.cleanupComplete && disconnected
                 if (!observation.cleanupVerified) throw AndroidHostedOperationFailure("CLEANUP_INSPECTION_FAILED")
             }
+            "network_transition" -> {
+                awaitExternalControl(operation)
+                val tunnel = platform.observeTunnel()
+                val identity = platform.observeRoutingIdentity()
+                observation.networkTransitionVerified = tunnel && identity
+                if (!observation.networkTransitionVerified) {
+                    throw AndroidHostedOperationFailure("NETWORK_TRANSITION_UNVERIFIED")
+                }
+            }
+            "sleep_wake" -> {
+                awaitExternalControl(operation)
+                val tunnel = platform.observeTunnel()
+                val identity = platform.observeRoutingIdentity()
+                observation.sleepWakeVerified = tunnel && identity
+                if (!observation.sleepWakeVerified) {
+                    throw AndroidHostedOperationFailure("SLEEP_WAKE_UNVERIFIED")
+                }
+            }
+            "process_loss" -> {
+                awaitExternalControl(operation)
+                val disconnected = platform.awaitDisconnected()
+                if (!disconnected) throw AndroidHostedOperationFailure("PROCESS_LOSS_UNVERIFIED")
+
+                // The target service process was intentionally terminated by the owner-side
+                // control. The old generation belongs to that process and must never be used
+                // for the replacement session. Keep the controller/session identity so its
+                // configured profile remains available, but clear the driver-owned generation
+                // before asking the controller to start a fresh generation.
+                setGeneration(null)
+
+                try {
+                    connect(controller, platform, observation, setGeneration)
+                    val tunnel = platform.observeTunnel()
+                    observation.secondTunnelInterface = tunnel
+                    if (!tunnel) {
+                        throw AndroidHostedOperationFailure("PROCESS_LOSS_RECOVERY_TUNNEL_UNVERIFIED")
+                    }
+                    val identity = platform.observeRoutingIdentity()
+                    observation.secondRoutingIdentityChanged = identity
+                    if (!identity) {
+                        throw AndroidHostedOperationFailure("PROCESS_LOSS_RECOVERY_IDENTITY_UNVERIFIED")
+                    }
+                    observation.processLossVerified = true
+                } catch (failure: AndroidHostedOperationFailure) {
+                    observation.processLossVerified = false
+                    throw failure
+                }
+            }
             else -> throw AndroidHostedOperationFailure("INPUT_INVALID")
+        }
+    }
+
+    /**
+     * Waits for one owner-authenticated external emulator action. The action itself is deliberately
+     * outside this APK: an owner-side controller performs the platform action and only signals
+     * completion through this one-use, token-bound file rendezvous. No token or input bytes are
+     * included in the observation or an exception message.
+     */
+    private suspend fun awaitExternalControl(operation: AndroidHostedOperation) {
+        val controlName = operation.controlFile ?: throw AndroidHostedOperationFailure("CONTROL_UNAVAILABLE")
+        val controlToken = operation.controlToken ?: throw AndroidHostedOperationFailure("CONTROL_UNAVAILABLE")
+        val control = AndroidHostedCommandContract.privateFile(context.filesDir, controlName)
+        val ready = AndroidHostedCommandContract.privateFile(context.filesDir, "$controlName.ready")
+        if (control.exists() || ready.exists() || !AndroidHostedCommandContract.createReady(ready)) {
+            throw AndroidHostedOperationFailure("CONTROL_UNAVAILABLE")
+        }
+        try {
+            while (true) {
+                if (control.exists()) {
+                    val payload = readControlPayload(control)
+                    val json = try {
+                        JSONObject(payload.toString(Charsets.UTF_8))
+                    } catch (_: Exception) {
+                        throw AndroidHostedOperationFailure("CONTROL_INPUT_INVALID")
+                    } finally {
+                        Arrays.fill(payload, 0)
+                    }
+                    if (json.keys().asSequence().toSet() != setOf("operation", "token") ||
+                        json.opt("operation") != operation.operation || json.opt("token") != controlToken
+                    ) {
+                        throw AndroidHostedOperationFailure("CONTROL_INPUT_INVALID")
+                    }
+                    if (!control.delete() && control.exists()) {
+                        throw AndroidHostedOperationFailure("CONTROL_CLEANUP_FAILED")
+                    }
+                    return
+                }
+                delay(100L)
+            }
+        } finally {
+            runCatching { control.delete() }
+            runCatching { ready.delete() }
+        }
+    }
+
+    private fun readControlPayload(file: File): ByteArray {
+        return try {
+            AndroidHostedCommandContract.readControl(file)
+        } catch (_: AndroidHostedInputException) {
+            throw AndroidHostedOperationFailure("CONTROL_INPUT_INVALID")
         }
     }
 
@@ -686,7 +859,7 @@ internal class RealAndroidHostedPlatform(
     }
 }
 
-/** Instrumentation entrypoint used by the Torturer runner. */
+/** Instrumentation entrypoint used by the canonical external runner. */
 @org.junit.runner.RunWith(androidx.test.ext.junit.runners.AndroidJUnit4::class)
 class AndroidHostedProfileInstrumentationTest {
     @org.junit.Test

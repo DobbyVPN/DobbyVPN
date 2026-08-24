@@ -40,7 +40,7 @@ jobs:
       - name: Select Xcode 26.3
         run: |
           sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
-          test "$(xcodebuild -version | tr '\n' ' ')" = "Xcode 26.3 Build version 17C529 "
+          test "$(xcodebuild -version | tee /dev/stderr | tr '\n' ' ')" = "Xcode 26.3 Build version 17C529 "
 
       - name: Cache iOS VPN library
         id: ios_lib_cache
@@ -61,7 +61,6 @@ jobs:
         working-directory: go_module
         run: |
           go mod download
-          go mod tidy
 
       - name: Install pinned gomobile toolchain
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
@@ -76,16 +75,32 @@ jobs:
           echo "$tool_dir" >> "$GITHUB_PATH"
           for tool in gomobile gobind; do
             test -x "$tool_dir/$tool"
-            go version -m "$tool_dir/$tool" | \
-              grep -F 'golang.org/x/mobile' | \
-              grep -F "$mobile_version"
+            tool_metadata="$(go version -m "$tool_dir/$tool" 2>&1 | tee /dev/stderr)"
+            if [[ "$tool_metadata" != *'golang.org/x/mobile'* || "$tool_metadata" != *"$mobile_version"* ]]; then
+              echo "tool metadata is not pinned to golang.org/x/mobile@$mobile_version: $tool" >&2
+              exit 1
+            fi
           done
 
-      - name: Fetch gomobile runtime
+      - name: Verify pinned gomobile runtime dependency
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
-          go get "golang.org/x/mobile/bind@$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
+          test "$(go list -m -f '{{.Version}}' golang.org/x/mobile)" = 'v0.0.0-20260520154334-0e4426e1883d'
+          go mod download golang.org/x/mobile
+
+      - name: Verify Go bootstrap preserved candidate source
+        if: steps.ios_lib_cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_status="$(git status --porcelain --untracked-files=all)"
+          if [[ -n "$source_status" ]]; then
+            printf '%s\n' "$source_status"
+            git diff --no-ext-diff --binary
+            echo "candidate source changed during iOS Go bootstrap" >&2
+            exit 1
+          fi
 
       - name: Build iOS XCFramework
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
@@ -186,6 +201,18 @@ jobs:
             -PprojectRepositoryCommitLink="https://github.com/${APP_SOURCE_REPOSITORY}/tree/${APP_SOURCE_SHA}" \
             -Pandroid.injected.version.code="${VERSION_CODE}" \
             -Pandroid.injected.version.name="${VERSION_NAME}"
+
+      - name: Verify KMP iOS build preserved candidate source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_status="$(git status --porcelain --untracked-files=all)"
+          if [[ -n "$source_status" ]]; then
+            printf '%s\n' "$source_status"
+            git diff --no-ext-diff --binary
+            echo "candidate source changed during KMP iOS build" >&2
+            exit 1
+          fi
 
       - name: Upload app.framework
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

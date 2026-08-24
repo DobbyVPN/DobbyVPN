@@ -16,7 +16,7 @@ or UI toggle.
 1. Add one configuration section and a safe profile summary in Go. Keep raw
    configuration, URLs, endpoints, credentials, and authentication metadata
    inside the Go boundary.
-2. Implement the neutral `core/pkg.ProtocolDevice` interface for the engine:
+2. Implement the neutral `protocol.ProtocolDevice` interface for the engine:
    open/start, proxy-address (when applicable), server identity, and close.
    Make cancellation, startup failure, and reverse-order cleanup explicit.
 3. Register one factory in the Go runtime composition root and route all

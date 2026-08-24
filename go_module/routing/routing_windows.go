@@ -286,25 +286,6 @@ func ConfigureWindowsRouting(plan *Plan, proxyIP, gatewayIP, tunDeviceName, inte
 	return nil
 }
 
-// StartRouting and StopRouting are retained for source compatibility. Windows
-// routing now requires a caller-owned Plan so cleanup can never affect another
-// VPN session.
-func StartRouting(string, string, string, string, string, string) error {
-	return fmt.Errorf("Windows routing requires ConfigureWindowsRouting with a session Plan")
-}
-
-func StopRouting(string, string, string, string, string) {
-	log.Debugf(Category, "Outline/routing: StopRouting ignored; caller-owned Plan releases only its leases")
-}
-
-func EnsureProxyRoute(string, string, string) (bool, error) {
-	return false, fmt.Errorf("Windows proxy routing requires AcquireProxyRoute with a session Plan")
-}
-
-func DeleteProxyRoute(string, string, string) error {
-	return fmt.Errorf("Windows proxy route deletion requires the acquiring session Plan")
-}
-
 func FindInterfaceIPByGateway(gatewayIP string) (string, error) {
 	cmd := exec.Command("route", "print")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -441,23 +422,6 @@ func waitForInterfacePolling(timeout time.Duration, label string, match func() (
 		time.Sleep(50 * time.Millisecond)
 	}
 	return nil, fmt.Errorf("%s not found after %s", label, time.Since(startedAt).Truncate(time.Millisecond))
-}
-
-func WaitForInterfaceNameContains(namePart string, timeout time.Duration) (*net.Interface, error) {
-	label := fmt.Sprintf("interface name containing %q", namePart)
-	needle := strings.ToLower(namePart)
-	return waitForInterfaceChange(timeout, label, func() (*net.Interface, error) {
-		interfaces, err := net.Interfaces()
-		if err != nil {
-			return nil, err
-		}
-		for _, ifc := range interfaces {
-			if strings.Contains(strings.ToLower(ifc.Name), needle) {
-				return &ifc, nil
-			}
-		}
-		return nil, fmt.Errorf("%s is not present", label)
-	})
 }
 
 // WaitForInterfaceName waits for the one adapter owned by the caller. It does

@@ -356,7 +356,18 @@ jobs:
             --asset dobbyVPN-macos-aarch64.pkg
             --asset dobbyVPN-macos-amd64.pkg
             --asset dobbyVPN-windows-amd64.msi
+            --asset release-artifact-provenance-v2.json
             --asset version.txt
+          )
+          typed_asset_args=(
+            --typed-asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json|android|arm64-v8a|provenance-json"
+            --typed-asset "DobbyVPN-v$RELEASE_VERSION-sign.apk|android|arm64-v8a|apk-signed"
+            --typed-asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk|android|arm64-v8a|apk-unsigned"
+            --typed-asset "dobbyVPN-linux.deb|linux|amd64|deb"
+            --typed-asset "dobbyVPN-macos-aarch64.pkg|macos|arm64|pkg"
+            --typed-asset "dobbyVPN-macos-amd64.pkg|macos|amd64|pkg"
+            --typed-asset "dobbyVPN-windows-amd64.msi|windows|amd64|msi"
+            --typed-asset "version.txt|metadata|none|version-metadata"
           )
           metadata_args=(
             --directory release
@@ -367,6 +378,10 @@ jobs:
             --release-run-number "${{ steps.preflight.outputs.run_number }}"
             --android-version-code "${{ steps.preflight.outputs.android_version_code }}"
           )
+          python3 .github/scripts/release_provenance.py typed-create \
+            "${metadata_args[@]}" "${typed_asset_args[@]}"
+          python3 .github/scripts/release_provenance.py typed-verify \
+            "${metadata_args[@]}" "${typed_asset_args[@]}"
           python3 .github/scripts/release_provenance.py create \
             "${metadata_args[@]}" "${asset_args[@]}"
           python3 .github/scripts/release_provenance.py verify \
@@ -398,7 +413,24 @@ jobs:
             --asset dobbyVPN-macos-aarch64.pkg \
             --asset dobbyVPN-macos-amd64.pkg \
             --asset dobbyVPN-windows-amd64.msi \
+            --asset release-artifact-provenance-v2.json \
             --asset version.txt
+          python3 .github/scripts/release_provenance.py typed-verify \
+            --directory published \
+            --tag "${{ steps.preflight.outputs.tag }}" \
+            --version "$RELEASE_VERSION" \
+            --source-sha "$RELEASE_SOURCE_SHA" \
+            --release-run-id "$RELEASE_RUN_ID" \
+            --release-run-number "${{ steps.preflight.outputs.run_number }}" \
+            --android-version-code "${{ steps.preflight.outputs.android_version_code }}" \
+            --typed-asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json|android|arm64-v8a|provenance-json" \
+            --typed-asset "DobbyVPN-v$RELEASE_VERSION-sign.apk|android|arm64-v8a|apk-signed" \
+            --typed-asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk|android|arm64-v8a|apk-unsigned" \
+            --typed-asset "dobbyVPN-linux.deb|linux|amd64|deb" \
+            --typed-asset "dobbyVPN-macos-aarch64.pkg|macos|arm64|pkg" \
+            --typed-asset "dobbyVPN-macos-amd64.pkg|macos|amd64|pkg" \
+            --typed-asset "dobbyVPN-windows-amd64.msi|windows|amd64|msi" \
+            --typed-asset "version.txt|metadata|none|version-metadata"
 
       - name: Create verified draft and publish
         if: steps.preflight.outputs.release_state == 'new'
@@ -585,7 +617,24 @@ jobs:
             --asset dobbyVPN-macos-aarch64.pkg \
             --asset dobbyVPN-macos-amd64.pkg \
             --asset dobbyVPN-windows-amd64.msi \
+            --asset release-artifact-provenance-v2.json \
             --asset version.txt
+          python3 .github/scripts/release_provenance.py typed-verify \
+            --directory published \
+            --tag "$release_tag" \
+            --version "$RELEASE_VERSION" \
+            --source-sha "$RELEASE_SOURCE_SHA" \
+            --release-run-id "$RELEASE_RUN_ID" \
+            --release-run-number "${{ steps.preflight.outputs.run_number }}" \
+            --android-version-code "${{ steps.preflight.outputs.android_version_code }}" \
+            --typed-asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json|android|arm64-v8a|provenance-json" \
+            --typed-asset "DobbyVPN-v$RELEASE_VERSION-sign.apk|android|arm64-v8a|apk-signed" \
+            --typed-asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk|android|arm64-v8a|apk-unsigned" \
+            --typed-asset "dobbyVPN-linux.deb|linux|amd64|deb" \
+            --typed-asset "dobbyVPN-macos-aarch64.pkg|macos|arm64|pkg" \
+            --typed-asset "dobbyVPN-macos-amd64.pkg|macos|amd64|pkg" \
+            --typed-asset "dobbyVPN-windows-amd64.msi|windows|amd64|msi" \
+            --typed-asset "version.txt|metadata|none|version-metadata"
           verify_remote_tag "$expected_tag_object"
           gh release edit "$release_tag" \
             --repo "$GITHUB_REPOSITORY" \

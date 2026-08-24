@@ -38,7 +38,6 @@ var ErrEngineBusy = fmt.Errorf("tun2socks engine is busy")
 // or stop request to affect a different lifecycle generation.
 type Engine struct {
 	mu        sync.RWMutex
-	ready     bool
 	stopped   bool
 	stopErr   error
 	statsStop chan struct{}
@@ -47,16 +46,6 @@ type Engine struct {
 	// stopPlatform exists so ownership bookkeeping can be tested without a
 	// real TUN device. Production handles use platform_engine.EngineStop.
 	stopPlatform func() error
-}
-
-// Ready reports whether this handle owns a fully initialized tun2socks engine.
-func (e *Engine) Ready() bool {
-	if e == nil {
-		return false
-	}
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.ready && !e.stopped
 }
 
 const (
@@ -395,8 +384,7 @@ func startOwnedEngineLocked(cfg platform_engine.EngineConfig) (*Engine, bool, er
 	t.SetDialer(wrapper)
 
 	handle.statsStop = make(chan struct{})
-	handle.ready = true
-	log.Debugf(Category, "[Engine] DobbyProxy installed; owner is ready")
+	log.Debugf(Category, "[Engine] DobbyProxy installed; owner is active")
 	go wrapper.logStatsLoop(handle.statsStop)
 	return handle, true, nil
 }
@@ -414,7 +402,6 @@ func (e *Engine) Stop() error {
 		return e.stopErr
 	}
 	e.stopped = true
-	e.ready = false
 	statsStop := e.statsStop
 	e.statsStop = nil
 	stopPlatform := e.stopPlatform

@@ -11,6 +11,7 @@ on:
 jobs:
   build_desktop_libs:
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       matrix:
         include:
@@ -89,7 +90,9 @@ jobs:
           tar -xzf trusttunnel_client-v1.0.49-macos-universal.tar.gz --strip-components=1 trusttunnel_client-v1.0.49-macos-universal/trusttunnel_client
           chmod 755 trusttunnel_client
           codesign --verify --strict --verbose=2 trusttunnel_client
-          codesign -dv --verbose=2 trusttunnel_client 2>&1 | grep -F "TeamIdentifier=TC3Q7MAJXF"
+          # Preserve the complete codesign diagnostic before deriving the
+          # stable TeamIdentifier assertion.
+          codesign -dv --verbose=2 trusttunnel_client 2>&1 | tee /dev/stderr | grep -F "TeamIdentifier=TC3Q7MAJXF"
           rm trusttunnel_client-v1.0.49-macos-universal.tar.gz
 
       - name: Build desktop VPN library

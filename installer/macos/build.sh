@@ -14,7 +14,7 @@ install_service() {
   local actual_arches
 
   actual_arches="$(lipo -archs "$service")"
-  if ! tr ' ' '\n' <<<"$actual_arches" | grep -Fxq "$expected_arch"; then
+  if ! tr ' ' '\n' <<<"$actual_arches" | grep -Fx "$expected_arch"; then
     echo "[!] Refusing to package $service: expected $expected_arch, found $actual_arches" >&2
     exit 1
   fi
@@ -29,7 +29,7 @@ install_trusttunnel_helper() {
   local actual_arches
 
   actual_arches="$(lipo -archs "$helper")"
-  if ! tr ' ' '\n' <<<"$actual_arches" | grep -Fxq "x86_64"; then
+  if ! tr ' ' '\n' <<<"$actual_arches" | grep -Fx "x86_64"; then
     echo "[!] Refusing to package TrustTunnel helper: x86_64 slice is missing ($actual_arches)" >&2
     exit 1
   fi

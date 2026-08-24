@@ -4,15 +4,15 @@ package native
 import (
 	"fmt"
 
-	"go_module/core/pkg"
 	"go_module/log"
 	"go_module/outline"
+	vpnprotocol "go_module/protocol"
 	"go_module/trusttunnel"
 	"go_module/xray"
 )
 
 // NewProtocolDevice creates one protocol engine for one owned runtime lease.
-func NewProtocolDevice(config, protocol, logCategory string) (pkg.ProtocolDevice, error) {
+func NewProtocolDevice(config, protocol, logCategory string) (vpnprotocol.ProtocolDevice, error) {
 	switch protocol {
 	case "xray":
 		return xray.NewXrayDevice(config)

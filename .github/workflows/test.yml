@@ -79,7 +79,7 @@ jobs:
       - name: Race-check lifecycle and routing
         working-directory: go_module
         run: |
-          go test -race ./core ./routing ./tunnel/...
+          go test -race ./routing/... ./sessionapi/... ./tunnel/...
 
   kotlin:
     name: Kotlin and Android service tests
@@ -307,8 +307,14 @@ jobs:
           SIMULATOR_UDID="$(xcrun simctl list devices available -j | python3 .github/scripts/select_ios_simulator.py)"
           test -n "$SIMULATOR_UDID"
           test "$SIMULATOR_UDID" != "null"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
-          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+          boot_capture_status=0
+          python3 .github/scripts/public_output.py \
+            --kind ios-simulator-boot -- \
+            xcrun simctl boot "$SIMULATOR_UDID" || boot_capture_status=$?
+          test "$boot_capture_status" != "125"
+          python3 .github/scripts/public_output.py \
+            --kind ios-simulator-bootstatus -- \
+            xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
           DERIVED_DATA="$RUNNER_TEMP/dobbyvpn-ios-simulator"
           xcodebuild build \

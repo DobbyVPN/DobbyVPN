@@ -76,7 +76,7 @@ jobs:
 
           FOUND=0
           for p in "${BLOCKED[@]}"; do
-            if echo "$PACKAGES" | grep -q "^${p}"; then
+            if echo "$PACKAGES" | grep "^${p}"; then
               echo "::error::Proprietary package in APK: $p"
               FOUND=1
             fi

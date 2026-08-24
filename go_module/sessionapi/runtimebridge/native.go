@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	"go_module/core/pkg"
+	vpnprotocol "go_module/protocol"
 	"go_module/sessionapi/native"
 	"go_module/sessionapi/runtime"
 	v2 "go_module/sessionapi/v2"
@@ -24,7 +24,7 @@ func New(tunnel runtime.TunnelProvider) v2.Runtime {
 	})
 }
 
-func newDevice(_ context.Context, _ v2.SessionRef, profile v2.RuntimeProfile, _ runtime.SocketProtector) (pkg.ProtocolDevice, error) {
+func newDevice(_ context.Context, _ v2.SessionRef, profile v2.RuntimeProfile, _ runtime.SocketProtector) (vpnprotocol.ProtocolDevice, error) {
 	protocol, ok := map[v2.Protocol]string{
 		v2.ProtocolOutline:     "outline",
 		v2.ProtocolXray:        "xray",

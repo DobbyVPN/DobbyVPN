@@ -1,6 +1,6 @@
-// Package desktopbinding owns the one desktop session manager and the
-// compatibility protocol lifecycle. Both the legacy API exports and gRPC
-// server use this package, so neither can retain an independent runtime owner.
+// Package desktopbinding owns the one desktop SessionV2 manager used by the
+// gRPC server. Keeping construction here prevents transports from creating
+// independent runtime owners.
 package desktopbinding
 
 import (

@@ -1,16 +1,15 @@
 //go:build !(android || ios)
 
-package core
+package runtime
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"go_module/common"
-	coreCommon "go_module/core/common"
-	"go_module/core/internal"
-	"go_module/core/pkg"
 	"go_module/log"
+	"go_module/protocol"
+	"go_module/sessionapi/runtime/internal"
 	"sync"
 	"time"
 )
@@ -37,7 +36,7 @@ type nativeRuntime struct {
 // as a cleanup failure.
 const desktopShutdownTimeout = 30 * time.Second
 
-func newNativeRuntime(device pkg.ProtocolDevice) *nativeRuntime {
+func newNativeRuntime(device protocol.ProtocolDevice) *nativeRuntime {
 	cfg := common.GetNetworkConfig()
 
 	c := &nativeRuntime{
@@ -58,13 +57,9 @@ func newNativeRuntime(device pkg.ProtocolDevice) *nativeRuntime {
 	return c
 }
 
-// NewNativeRuntime exposes only the narrow resource boundary needed by the
-// SessionV2 runtime; the concrete lifecycle type remains package-private.
-func NewNativeRuntime(device pkg.ProtocolDevice) Runtime { return newNativeRuntime(device) }
-
 func (c *nativeRuntime) Connect() error {
 	if c == nil {
-		return errors.New("core desktop client is not initialized")
+		return errors.New("desktop session runtime is not initialized")
 	}
 
 	c.mu.Lock()
@@ -76,7 +71,7 @@ func (c *nativeRuntime) Connect() error {
 	if c.app == nil {
 		c.state = stateFailed
 		c.mu.Unlock()
-		return errors.New("core desktop app is not initialized")
+		return errors.New("desktop session runtime app is not initialized")
 	}
 	c.generation++
 	generation := c.generation
@@ -97,7 +92,7 @@ func (c *nativeRuntime) Connect() error {
 		defer func() {
 			if r := recover(); r != nil {
 				runErr = fmt.Errorf("native session runtime crashed: %v", r)
-				log.Debugf(coreCommon.Category, "native session runtime goroutine recovered from panic: %v", runErr)
+				log.Debugf(nativeLogCategory, "native session runtime goroutine recovered from panic: %v", runErr)
 				select {
 				case initResult <- runErr:
 				default:
@@ -108,7 +103,7 @@ func (c *nativeRuntime) Connect() error {
 		}()
 		runErr = c.app.Run(ctx, initResult)
 		if runErr != nil {
-			log.Debugf(coreCommon.Category, "connect native session runtime failed: %v", runErr)
+			log.Debugf(nativeLogCategory, "connect native session runtime failed: %v", runErr)
 		}
 	}()
 
@@ -132,7 +127,7 @@ func (c *nativeRuntime) Connect() error {
 		}
 		c.state = stateConnected
 		c.mu.Unlock()
-		log.Debugf(coreCommon.Category, "Core client connection initialized successfully")
+		log.Debugf(nativeLogCategory, "Desktop session runtime initialized successfully")
 		return nil
 	case <-time.After(30 * time.Second):
 		shutdownErr := c.stopAndWait("after initialization timeout")
@@ -147,7 +142,7 @@ func (c *nativeRuntime) Connect() error {
 
 func (c *nativeRuntime) Disconnect() error {
 	if c == nil {
-		return errors.New("core desktop client is not initialized")
+		return errors.New("desktop session runtime is not initialized")
 	}
 
 	c.mu.Lock()
@@ -203,10 +198,10 @@ func (c *nativeRuntime) waitForShutdown(done <-chan struct{}, reason string) err
 	}
 	select {
 	case <-done:
-		log.Debugf(coreCommon.Category, "Core/app shutdown completed after %s", reason)
+		log.Debugf(nativeLogCategory, "Desktop session runtime shutdown completed after %s", reason)
 		return nil
 	case <-time.After(desktopShutdownTimeout):
-		log.Debugf(coreCommon.Category, "Core/app shutdown wait timed out after %s", reason)
+		log.Debugf(nativeLogCategory, "Desktop session runtime shutdown wait timed out after %s", reason)
 		return fmt.Errorf("timeout waiting for native session runtime shutdown after %s", reason)
 	}
 }

@@ -46,28 +46,31 @@ class DobbyVpnServiceInstrumentationTest {
         sessionId?.let { id ->
             PlatformServiceRegistry.current(id)?.let(PlatformServiceRegistry::clear)
         }
-        DobbyVpnServiceTestEvents.endCapture()
     }
 
     @Test
     fun foreground_promotion_precedes_platform_ready_callback(): Unit = runBlocking {
         val session = UUID.randomUUID().toString()
         sessionId = session
-        DobbyVpnServiceTestEvents.beginCapture()
+        resetInstrumentationLog()
         PlatformServiceRegistry.expect(session)
 
         context.startForegroundService(DobbyVpnService.createPrepareIntent(context, session))
 
         assertEquals(true, PlatformServiceRegistry.awaitReady(10_000))
         assertNotNull(PlatformServiceRegistry.current(session))
-        assertEquals(listOf("foreground", "prepared"), DobbyVpnServiceTestEvents.snapshot())
+        val log = context.cacheDir.resolve(INSTRUMENTATION_LOG_FILE).readText()
+        val foreground = log.indexOf("foreground promotion complete")
+        val prepared = log.indexOf("platform preparation complete")
+        assertTrue("service did not record foreground promotion", foreground >= 0)
+        assertTrue("service did not record platform preparation", prepared >= 0)
+        assertTrue("service became ready before foreground promotion", foreground < prepared)
     }
 
     @Test
     fun real_service_rejects_stale_session_and_invalid_socket_protection_without_tun(): Unit = runBlocking {
         val session = UUID.randomUUID().toString()
         sessionId = session
-        DobbyVpnServiceTestEvents.beginCapture()
         PlatformServiceRegistry.expect(session)
         context.startForegroundService(DobbyVpnService.createPrepareIntent(context, session))
         assertEquals(true, PlatformServiceRegistry.awaitReady(10_000))
@@ -127,6 +130,10 @@ class DobbyVpnServiceInstrumentationTest {
 
     private val connectivityManager: ConnectivityManager
         get() = requireNotNull(context.getSystemService(ConnectivityManager::class.java))
+
+    private fun resetInstrumentationLog() {
+        context.cacheDir.resolve(INSTRUMENTATION_LOG_FILE).writeText("")
+    }
 
     private fun grantVpnConsentThroughSystemUi() {
         if (VpnService.prepare(context) == null) return
@@ -228,5 +235,6 @@ class DobbyVpnServiceInstrumentationTest {
         const val DOCUMENTATION_ROUTE_ADDRESS = "192.0.2.1"
         const val IPV4_DESTINATION_OFFSET = 16
         const val IPV4_DESTINATION_END = 20
+        const val INSTRUMENTATION_LOG_FILE = "instrumentation.log"
     }
 }

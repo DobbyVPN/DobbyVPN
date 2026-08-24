@@ -75,6 +75,62 @@ func TestConfigureRejectsRemovedCloakProfiles(t *testing.T) {
 	}
 }
 
+func TestConfigureRejectsMultipleAndAllCloakInputsBeforeExecution(t *testing.T) {
+	const sensitiveURL = "https://cloak.example.invalid/private/profile"
+	const sensitiveEndpoint = "198.51.100.99:8443"
+	const sensitiveCredential = "cloak-secret-token"
+	tests := map[string]string{
+		"multiple Cloak sections": strings.Join([]string{
+			"[[Xray]]", "Cloak = true", `outbounds = [{"address" = "` + sensitiveEndpoint + `"}]`,
+			"", "[[Outline]]", "Cloak = true", `Server = "` + sensitiveURL + `"`, `Password = "` + sensitiveCredential + `"`, "Port = 443",
+		}, "\n"),
+		"all Cloak sections": strings.Join([]string{
+			"[[Outline]]", "Cloak = true", `Server = "` + sensitiveURL + `"`, `Password = "` + sensitiveCredential + `"`, "Port = 443",
+			"", "[[TrustTunnel]]", "Cloak = true", `hostname = "` + sensitiveEndpoint + `"`, `password = "` + sensitiveCredential + `"`, "|endpoint|", `addresses = ["` + sensitiveEndpoint + `"]`,
+		}, "\n"),
+	}
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			runtime := &countingRuntime{}
+			m := NewManager(ManagerOptions{Runtime: runtime, Platform: &fakePlatform{}})
+			id, err := m.CreateSession(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, configureErr := m.Configure(context.Background(), id, "cloak-boundary", []byte(raw))
+			if CodeOf(configureErr) != FailureUnsupported || configureErr.Error() != "UNSUPPORTED: configuration contains a removed Cloak profile" {
+				t.Fatalf("Cloak result = %#v, %v", result, configureErr)
+			}
+			if result.Digest != "" || len(result.Profiles) != 0 || len(result.Warnings) != 0 {
+				t.Fatalf("rejected input returned configuration data: %#v", result)
+			}
+			if _, startErr := m.Start(context.Background(), id, "must-not-start", StartTarget{Mode: AutoSelect}); CodeOf(startErr) != FailureNotConfigured {
+				t.Fatalf("start after rejected configure = %v", startErr)
+			}
+			if runtime.probeCalls != 0 || runtime.startCalls != 0 {
+				t.Fatalf("runtime executed for rejected input: probes=%d starts=%d", runtime.probeCalls, runtime.startCalls)
+			}
+			snapshot, err := m.Snapshot(context.Background(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Configured || snapshot.State != StateFailed || snapshot.LastFailure != FailureUnsupported {
+				t.Fatalf("rejected input changed session state: %#v", snapshot)
+			}
+			events, err := m.Observe(context.Background(), id, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			public := fmt.Sprintf("%#v %#v %#v", configureErr, snapshot, events)
+			for _, secret := range []string{sensitiveURL, sensitiveEndpoint, sensitiveCredential, raw} {
+				if strings.Contains(public, secret) {
+					t.Fatalf("rejected-input boundary leaked %q: %s", secret, public)
+				}
+			}
+		})
+	}
+}
+
 func TestSubscribeReplaysAndPublishesOrderedEvents(t *testing.T) {
 	m := NewManager(ManagerOptions{})
 	id, err := m.CreateSession(context.Background())
@@ -567,12 +623,7 @@ func TestRuntimeOwnedHealthFailureCleansUpBeforeAutoFailover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile := RuntimeProfile{
-		Summary:          ProfileSummary{Protocol: ProtocolOutline},
-		NormalizedFormat: ConfigTransportURL,
-		NormalizedConfig: []byte("ss://normalized"),
-	}
-	if _, configureErr := m.ConfigureNormalized(context.Background(), id, "configure", profile); configureErr != nil {
+	if _, configureErr := m.Configure(context.Background(), id, "configure", fixture(t)); configureErr != nil {
 		t.Fatal(configureErr)
 	}
 	first, err := m.Start(context.Background(), id, "start", StartTarget{Mode: AutoSelect})
@@ -603,12 +654,7 @@ func TestRuntimeOwnedHealthFailureDoesNotReplaceExplicitProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile := RuntimeProfile{
-		Summary:          ProfileSummary{Protocol: ProtocolOutline},
-		NormalizedFormat: ConfigTransportURL,
-		NormalizedConfig: []byte("ss://normalized"),
-	}
-	if _, configureErr := m.ConfigureNormalized(context.Background(), id, "configure", profile); configureErr != nil {
+	if _, configureErr := m.Configure(context.Background(), id, "configure", fixture(t)); configureErr != nil {
 		t.Fatal(configureErr)
 	}
 	first, err := m.Start(context.Background(), id, "start", StartTarget{Mode: ProfileIndex, Index: 0})
@@ -762,83 +808,6 @@ func TestDefaultRuntimeFailsTypedUnsupported(t *testing.T) {
 	}
 }
 
-func TestConfigureNormalizedClonesAndIsIdempotent(t *testing.T) {
-	m := NewManager(ManagerOptions{})
-	id, err := m.CreateSession(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw := []byte("legacy outline input")
-	normalized := []byte("ss://normalized")
-	cidrs := []string{"203.0.113.0/24"}
-	hosts := []string{"vpn.invalid"}
-	profile := RuntimeProfile{
-		Summary:          ProfileSummary{Index: 99, Protocol: ProtocolOutline},
-		RawTOML:          raw,
-		NormalizedFormat: ConfigTransportURL,
-		NormalizedConfig: normalized,
-		ExcludeCIDRs:     cidrs,
-		PreflightHosts:   hosts,
-	}
-	result, err := m.ConfigureNormalized(context.Background(), id, "legacy-configure", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Profiles) != 1 || result.Profiles[0].Index != 99 {
-		t.Fatalf("result = %#v", result)
-	}
-	raw[0], normalized[0], cidrs[0], hosts[0] = 'X', 'X', "changed", "changed"
-	s, err := m.get(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.mu.Lock()
-	installed := s.profiles[0]
-	s.mu.Unlock()
-	if string(installed.RawTOML) != "legacy outline input" || string(installed.NormalizedConfig) != "ss://normalized" || installed.ExcludeCIDRs[0] != "203.0.113.0/24" || installed.PreflightHosts[0] != "vpn.invalid" {
-		t.Fatalf("profile was not cloned: %#v", installed)
-	}
-	again, err := m.ConfigureNormalized(context.Background(), id, "legacy-configure", RuntimeProfile{Summary: ProfileSummary{Protocol: ProtocolOutline}, NormalizedFormat: ConfigTransportURL, NormalizedConfig: []byte("different")})
-	if err != nil || again.Digest != result.Digest {
-		t.Fatalf("idempotent compatibility configure = %#v, %v", again, err)
-	}
-}
-
-func TestConfigureNormalizedValidatesFormatAndActiveGeneration(t *testing.T) {
-	for _, profile := range []RuntimeProfile{
-		{Summary: ProfileSummary{Protocol: ProtocolOutline}, NormalizedFormat: ConfigJSON, NormalizedConfig: []byte("x")},
-		{Summary: ProfileSummary{Protocol: ProtocolXray}, NormalizedFormat: ConfigTOML, NormalizedConfig: []byte("x")},
-		{Summary: ProfileSummary{Protocol: ProtocolTrustTunnel}, NormalizedFormat: ConfigTransportURL, NormalizedConfig: []byte("x")},
-		{Summary: ProfileSummary{Protocol: Protocol("unknown")}, NormalizedFormat: ConfigTOML, NormalizedConfig: []byte("x")},
-	} {
-		m := NewManager(ManagerOptions{})
-		id, err := m.CreateSession(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := m.ConfigureNormalized(context.Background(), id, "bad", profile); CodeOf(err) != FailureInvalidArgument {
-			t.Fatalf("invalid profile error = %v", err)
-		}
-	}
-
-	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int]int64{0: 1}}, Platform: &fakePlatform{}})
-	id, err := m.CreateSession(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile := RuntimeProfile{Summary: ProfileSummary{Protocol: ProtocolOutline}, NormalizedFormat: ConfigTransportURL, NormalizedConfig: []byte("ss://normalized")}
-	if _, err := m.ConfigureNormalized(context.Background(), id, "configure", profile); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.Start(context.Background(), id, "start", StartTarget{Mode: ProfileIndex, Index: 0}); err != nil {
-		t.Fatal(err)
-	}
-	waitState(t, m, id, StateConnected)
-	if _, err := m.ConfigureNormalized(context.Background(), id, "configure-active", profile); CodeOf(err) != FailureConflict {
-		t.Fatalf("configure while active = %v", err)
-	}
-}
-
 func configured(t *testing.T, m *Manager) string {
 	t.Helper()
 	id, err := m.CreateSession(context.Background())
@@ -874,6 +843,21 @@ type fakeRuntime struct {
 	blockProbe   chan struct{}
 	probeEntered chan struct{}
 	stopHook     func()
+}
+
+type countingRuntime struct {
+	probeCalls int
+	startCalls int
+}
+
+func (r *countingRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
+	r.probeCalls++
+	return ProbeResult{LatencyMillis: 1}, nil
+}
+
+func (r *countingRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
+	r.startCalls++
+	return fakeRuntimeLease{}, nil
 }
 
 func (r *fakeRuntime) Probe(ctx context.Context, _ SessionRef, p RuntimeProfile) (ProbeResult, error) {

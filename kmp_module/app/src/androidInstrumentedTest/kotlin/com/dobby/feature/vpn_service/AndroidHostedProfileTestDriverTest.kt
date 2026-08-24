@@ -16,6 +16,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -66,6 +67,58 @@ class AndroidHostedProfileTestDriverTest {
             getJSONObject("endpoints").put("secret", "do-not-accept")
         }
         assertInputRejected(endpointExtra)
+
+        val missingControl = JSONObject(commandJson(operations = listOf("network_transition"))).apply {
+            getJSONArray("operations").getJSONObject(0).remove("control_token")
+        }
+        assertInputRejected(missingControl)
+
+        val malformedControlToken = JSONObject(commandJson(operations = listOf("sleep_wake"))).apply {
+            getJSONArray("operations").getJSONObject(0).put("control_token", "not-a-token")
+        }
+        assertInputRejected(malformedControlToken)
+
+        val ordinaryControlFields = JSONObject(commandJson()).apply {
+            put("control_file", "unexpected-control")
+            put("control_token", "b".repeat(64))
+        }
+        assertInputRejected(ordinaryControlFields)
+
+        val duplicateControlFile = JSONObject(
+            commandJson(operations = listOf("network_transition", "sleep_wake")),
+        ).apply {
+            val operations = getJSONArray("operations")
+            operations.getJSONObject(1).put(
+                "control_file",
+                operations.getJSONObject(0).getString("control_file"),
+            )
+        }
+        assertInputRejected(duplicateControlFile)
+
+        val duplicateControlToken = JSONObject(
+            commandJson(operations = listOf("network_transition", "sleep_wake")),
+        ).apply {
+            val operations = getJSONArray("operations")
+            operations.getJSONObject(1).put(
+                "control_token",
+                operations.getJSONObject(0).getString("control_token"),
+            )
+        }
+        assertInputRejected(duplicateControlToken)
+
+        val controlAliasesProfile = JSONObject(
+            commandJson(operations = listOf("network_transition")),
+        ).apply {
+            getJSONArray("operations").getJSONObject(0).put("control_file", getString("profile_file"))
+        }
+        assertInputRejected(controlAliasesProfile)
+
+        val controlAliasesCommand = JSONObject(
+            commandJson(operations = listOf("network_transition")),
+        ).apply {
+            getJSONArray("operations").getJSONObject(0).put("control_file", "command.json")
+        }
+        assertInputRejected(controlAliasesCommand)
     }
 
     @Test
@@ -99,6 +152,13 @@ class AndroidHostedProfileTestDriverTest {
             throw AssertionError("symlink input was accepted")
         } catch (_: AndroidHostedInputException) {
             // Expected.
+        }
+
+        try {
+            AndroidHostedCommandContract.readProfile(link)
+            throw AssertionError("symlink was opened as profile input")
+        } catch (_: AndroidHostedInputException) {
+            // Expected: the open itself uses NOFOLLOW_LINKS, closing the check/open race.
         }
     }
 
@@ -146,7 +206,7 @@ class AndroidHostedProfileTestDriverTest {
                 "tunnel_interface", "routing_identity_changed", "disconnect_clean",
                 "restart_verified", "reconnect_bounded", "second_tunnel_interface", "second_routing_identity_changed",
                 "stability_verified", "latency_ms", "download_mbps", "upload_mbps", "final_disconnect_clean",
-                "cleanup_verified",
+                "network_transition_verified", "sleep_wake_verified", "process_loss_verified", "cleanup_verified",
             ),
             keys,
         )
@@ -245,6 +305,131 @@ class AndroidHostedProfileTestDriverTest {
         assertFalse(outputFile.readText().contains("opaque-profile"))
     }
 
+    @Test
+    fun external_controls_are_token_bound_and_observe_each_real_transition_boundary() = runBlocking {
+        val externalOperations = listOf("network_transition", "sleep_wake", "process_loss")
+        val operations = listOf("configure", "connect") + externalOperations + listOf("disconnect", "inspect_cleanup")
+        val commandFile = writeInput(
+            "command-external.json",
+            commandJson(operations = operations, profileFile = "profile-external.bin"),
+        )
+        writeInput("profile-external.bin", "opaque-profile")
+        val outputFile = context.filesDir.resolve("observation-${operations.size}.json")
+        files += outputFile
+        val command = JSONObject(commandFile.readText())
+        val responder = Thread {
+            externalOperations.forEach { operation ->
+                val operationJson = command.getJSONArray("operations").let { items ->
+                    (0 until items.length()).asSequence()
+                        .map(items::getJSONObject)
+                        .first { it.getString("operation") == operation }
+                }
+                val controlFile = context.filesDir.resolve(operationJson.getString("control_file"))
+                val token = operationJson.getString("control_token")
+                val ready = context.filesDir.resolve("${controlFile.name}.ready")
+                val deadline = System.currentTimeMillis() + 10_000L
+                while (!ready.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+                check(ready.exists())
+                while (controlFile.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+                check(!controlFile.exists())
+                val temporary = context.filesDir.resolve("${controlFile.name}.tmp")
+                temporary.writeText(JSONObject().put("operation", operation).put("token", token).toString())
+                check(temporary.renameTo(controlFile))
+                while (controlFile.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+                check(!controlFile.exists())
+                while (ready.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+                check(!ready.exists())
+            }
+        }
+        responder.isDaemon = true
+        responder.start()
+        val controller = FakeSessionController()
+        val result = AndroidHostedProfileTestDriver(
+            context = context,
+            controllerFactory = { controller },
+            platformFactory = { _ -> FakePlatform() },
+        ).run(commandFile.name)
+        responder.join(2_000)
+
+        assertFalse("external control responder did not finish", responder.isAlive)
+        assertEquals(null, result.errorCode)
+        assertTrue(result.networkTransitionVerified)
+        assertTrue(result.sleepWakeVerified)
+        assertTrue(result.processLossVerified)
+        assertTrue(result.cleanupVerified)
+        externalOperations.forEach { operation ->
+            val operationJson = command.getJSONArray("operations").let { items ->
+                (0 until items.length()).asSequence()
+                    .map(items::getJSONObject)
+                    .first { it.getString("operation") == operation }
+            }
+            val controlFile = context.filesDir.resolve(operationJson.getString("control_file"))
+            assertFalse(outputFile.readText().contains(operationJson.getString("control_token")))
+            assertFalse(controlFile.exists())
+            assertFalse(context.filesDir.resolve("${controlFile.name}.ready").exists())
+        }
+    }
+
+    @Test
+    fun process_loss_proves_recovery_before_reporting_success_and_keeps_new_generation() = runBlocking {
+        val operations = listOf("configure", "connect", "process_loss", "disconnect", "inspect_cleanup")
+        val commandFile = writeInput(
+            "command-process-loss-recovery.json",
+            commandJson(operations = operations, profileFile = "profile-process-loss-recovery.bin"),
+        )
+        writeInput("profile-process-loss-recovery.bin", "opaque-profile")
+        val responder = startExternalResponder(commandFile, "process_loss")
+        val controller = FakeSessionController()
+        val result = AndroidHostedProfileTestDriver(
+            context = context,
+            controllerFactory = { controller },
+            platformFactory = { _ -> FakePlatform() },
+        ).run(commandFile.name)
+        responder.join(2_000)
+
+        assertFalse("process-loss responder did not finish", responder.isAlive)
+        assertEquals(null, result.errorCode)
+        assertTrue(result.processLossVerified)
+        assertFalse(result.restartVerified)
+        assertFalse(result.reconnectBounded)
+        assertTrue(result.secondTunnelInterface)
+        assertTrue(result.secondRoutingIdentityChanged)
+        assertTrue(result.disconnectClean)
+        assertFalse(result.finalDisconnectClean)
+        assertTrue(result.cleanupVerified)
+        assertEquals(2, controller.startCalls)
+        assertEquals(listOf(1uL, 2uL), controller.startGenerations)
+        assertNotEquals(controller.startGenerations[0], controller.startGenerations[1])
+        assertEquals(1, controller.stopCalls)
+    }
+
+    @Test
+    fun process_loss_recovery_failure_is_not_reported_as_recovered() = runBlocking {
+        val operations = listOf("configure", "connect", "process_loss")
+        val commandFile = writeInput(
+            "command-process-loss-failure.json",
+            commandJson(operations = operations, profileFile = "profile-process-loss-failure.bin"),
+        )
+        writeInput("profile-process-loss-failure.bin", "opaque-profile")
+        val responder = startExternalResponder(commandFile, "process_loss")
+        val controller = FakeSessionController()
+        val result = AndroidHostedProfileTestDriver(
+            context = context,
+            controllerFactory = { controller },
+            platformFactory = { _ -> FakePlatform(tunnelResults = listOf(false)) },
+        ).run(commandFile.name)
+        responder.join(2_000)
+
+        assertFalse("process-loss responder did not finish", responder.isAlive)
+        assertEquals("PROCESS_LOSS_RECOVERY_TUNNEL_UNVERIFIED", result.errorCode)
+        assertFalse(result.processLossVerified)
+        assertFalse(result.secondTunnelInterface)
+        assertFalse(result.secondRoutingIdentityChanged)
+        assertTrue(result.cleanupVerified)
+        assertEquals(2, controller.startCalls)
+        assertEquals(1, controller.stopCalls)
+    }
+
     private fun assertInputRejected(json: JSONObject) {
         try {
             AndroidHostedCommandContract.parse("command.json", json.toString())
@@ -261,6 +446,37 @@ class AndroidHostedProfileTestDriverTest {
         return file
     }
 
+    private fun startExternalResponder(commandFile: File, operation: String): Thread {
+        val command = JSONObject(commandFile.readText())
+        val operationJson = command.getJSONArray("operations").let { items ->
+            (0 until items.length()).asSequence()
+                .map(items::getJSONObject)
+                .first { it.getString("operation") == operation }
+        }
+        val controlFile = context.filesDir.resolve(operationJson.getString("control_file"))
+        val token = operationJson.getString("control_token")
+        val ready = context.filesDir.resolve("${controlFile.name}.ready")
+        files += controlFile
+        files += ready
+        val responder = Thread {
+            val deadline = System.currentTimeMillis() + 10_000L
+            while (!ready.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+            check(ready.exists())
+            while (controlFile.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+            check(!controlFile.exists())
+            val temporary = context.filesDir.resolve("${controlFile.name}.tmp")
+            temporary.writeText(JSONObject().put("operation", operation).put("token", token).toString())
+            check(temporary.renameTo(controlFile))
+            while (controlFile.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+            check(!controlFile.exists())
+            while (ready.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+            check(!ready.exists())
+        }
+        responder.isDaemon = true
+        responder.start()
+        return responder
+    }
+
     private fun commandJson(
         operations: List<String> = listOf(
             "configure", "connect", "observe_tunnel", "observe_routing_identity", "measure_stability",
@@ -275,7 +491,13 @@ class AndroidHostedProfileTestDriverTest {
                 JSONObject()
                     .put("id", "step-$index")
                     .put("operation", operation)
-                    .put("timeout_seconds", 30),
+                    .put("timeout_seconds", 30)
+                    .apply {
+                        if (operation in AndroidHostedCommandContract.EXTERNAL_CONTROL_OPERATIONS) {
+                            put("control_file", "control-${operations.size}-$index.json")
+                            put("control_token", "b".repeat(62) + index.toString(16).padStart(2, '0'))
+                        }
+                    },
             )
         }
         return JSONObject()
@@ -326,6 +548,8 @@ class AndroidHostedProfileTestDriverTest {
     private class FakeSessionController(val events: MutableList<String> = mutableListOf()) : SessionController {
 
         var stopCalls = 0
+        var startCalls = 0
+        val startGenerations = mutableListOf<ULong>()
         private var state = SessionState.IDLE
         override suspend fun configure(rawConfig: ByteArray): SessionControllerResult<SessionConfiguration> {
             events += "configure"
@@ -333,8 +557,11 @@ class AndroidHostedProfileTestDriverTest {
         }
         override suspend fun start(target: SessionStartTarget): SessionControllerResult<ULong> {
             events += "start"
+            startCalls += 1
             state = SessionState.CONNECTED
-            return SessionControllerResult.Success((stopCalls + 1L).toULong())
+            val generation = startCalls.toULong()
+            startGenerations += generation
+            return SessionControllerResult.Success(generation)
         }
         override suspend fun stop(generation: ULong): SessionControllerResult<ULong> {
             events += "stop"

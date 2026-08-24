@@ -129,7 +129,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var pathMonitor: Network.NWPathMonitor?
     private var lastPathSignature: String?
     private var loadSampler: DispatchSourceTimer?
-    private var isProtocolProbeStart = false
     private let memoryHighWaterLock = NSLock()
     private var memoryHighWaterMarkMB = 0.0
     private var tunnelStartedAt = Date()
@@ -307,7 +306,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func startTunnel(options: [String : NSObject]?) async throws {
-        isProtocolProbeStart = (options?["dobbyProtocolProbe"] as? NSNumber)?.boolValue == true
         tunnelStartedAt = Date()
         memoryHighWaterLock.withLock { memoryHighWaterMarkMB = 0 }
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
@@ -317,7 +315,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.cleanupOldLogs()
         logSystemInfo(osVersionString: osVersionString)
         logs.writeLog(log: "[Interfaces] iOS version: \(osVersionString)")
-        logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys) isProtocolProbe=\(isProtocolProbeStart)")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
         guard let rawConfiguration = secrets.data(for: sessionRawConfigurationKey),
               !rawConfiguration.isEmpty else {
             logs.writeLog(log: "[tunnel:\(tunnelId)] missing opaque sessionapi configuration bytes")
@@ -451,15 +449,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage bytes=\(messageData.count)")
-        if let msg = String(data: messageData, encoding: .utf8), msg == "restartActiveProtocol" || msg == "restartActiveProtocol:probe" {
-            let isProtocolProbe = msg == "restartActiveProtocol:probe"
-            logs.writeLog(log: "[tunnel:\(tunnelId)] handleAppMessage restartActiveProtocol isProtocolProbe=\(isProtocolProbe)")
-            Task { @MainActor in
-                let ok = await self.restartActiveProtocolFromAppMessage(isProtocolProbe: isProtocolProbe)
-                let response = (ok ? "ok" : "error").data(using: .utf8)
-                completionHandler?(response)
-            }
-        } else if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
+        if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory")
             let response = "Memory:\(reportMemoryUsageMB())".data(using: .utf8)
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory responseBytes=\(response?.count ?? -1)")
@@ -467,29 +457,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         } else {
             logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage unknown payload bytes=\(messageData.count)")
             completionHandler?(messageData)
-        }
-    }
-
-    @MainActor
-    private func restartActiveProtocolFromAppMessage(isProtocolProbe: Bool) async -> Bool {
-        guard let raw = secrets.data(for: sessionRawConfigurationKey), !raw.isEmpty else {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi restart rejected: no raw configuration")
-            return false
-        }
-        // Probe policy is intentionally not selected by Swift. Go receives an
-        // AUTO_SELECT command and serializes its own cleanup/failover.
-        await stopGoSession(reason: "appMessage restart")
-        guard sessionCoordinator.sessionID == nil else {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi restart deferred until prior cleanup completes")
-            return false
-        }
-        do {
-            try await startGoSession(raw)
-            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi restart accepted generation=\(sessionCoordinator.generation)")
-            return true
-        } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi restart rejected code=\(error.localizedDescription)")
-            return false
         }
     }
 
@@ -771,18 +738,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     @MainActor
-    private func stopProtocols(reason: String) async {
-        // Do not dispatch per-protocol stops here. sessionapi owns protocol,
-        // tun2socks, DNS/routing cleanup remains one transactional lease.
-        await stopGoSession(reason: reason)
-    }
-
-    @MainActor
     private func teardownForStop(reason: String) async {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
         logResourceSnapshot(label: "TEARDOWN_BEGIN reason=\(reason)")
         stopLoadSampler(reason: reason)
-        await stopProtocols(reason: reason)
+        await stopGoSession(reason: reason)
 
         do {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] clearing tunnel network settings")

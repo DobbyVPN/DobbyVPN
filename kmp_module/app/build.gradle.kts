@@ -12,8 +12,8 @@ data class AndroidNativeAbi(
     val hasTrustTunnelNativeBridge: Boolean
 )
 
-// Keep the gomobile AAR and the libc++ runtime payload in lockstep.  Torturer's
-// public Android emulator is x86_64, while production devices remain arm64.
+// Keep the gomobile AAR and the libc++ runtime payload in lockstep. The hosted
+// Android emulator is x86_64, while production devices remain arm64.
 val androidNativeAbis = listOf(
     AndroidNativeAbi("arm64-v8a", "arm64", "aarch64-linux-android", hasTrustTunnelNativeBridge = true),
     AndroidNativeAbi("x86_64", "amd64", "x86_64-linux-android", hasTrustTunnelNativeBridge = false)

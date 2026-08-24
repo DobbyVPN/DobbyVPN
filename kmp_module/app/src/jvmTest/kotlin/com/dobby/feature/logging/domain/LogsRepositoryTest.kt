@@ -1,6 +1,7 @@
 package com.dobby.feature.logging.domain
 
 import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermission
 import kotlin.concurrent.thread
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -12,6 +13,125 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class LogsRepositoryTest {
+    @Test
+    fun freshCurrentStorageLeavesLegacyLogUntouched() {
+        val root = Files.createTempDirectory("dobby-log-fresh-current")
+        val legacyDirectory = root.resolve(".myapp")
+        val currentDirectory = root.resolve(".dobbyvpn")
+        val legacy = legacyDirectory.resolve("app_logs.txt")
+        val current = currentDirectory.resolve("app_logs.txt")
+        try {
+            Files.createDirectories(legacyDirectory)
+            Files.writeString(legacy, "legacy remains")
+            Files.createDirectories(currentDirectory)
+
+            val previousHome = System.getProperty("user.home")
+            try {
+                System.setProperty("user.home", root.toString())
+                assertEquals(current.toString(), provideLogFilePath().toString())
+            } finally {
+                if (previousHome == null) {
+                    System.clearProperty("user.home")
+                } else {
+                    System.setProperty("user.home", previousHome)
+                }
+            }
+
+            assertTrue(Files.exists(current))
+            assertEquals("", Files.readString(current))
+            assertEquals("legacy remains", Files.readString(legacy))
+            try {
+                assertEquals(
+                    setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
+                    Files.getPosixFilePermissions(current),
+                )
+            } catch (_: UnsupportedOperationException) {
+                // Windows uses its ACL path instead of POSIX mode bits.
+            }
+        } finally {
+            Files.walk(root).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
+        }
+    }
+
+    @Test
+    fun activeJvmClearRejectsFinalAlias() {
+        val root = Files.createTempDirectory("dobby-log-clear-alias")
+        val target = root.resolve("target.log")
+        val link = root.resolve("app_logs.txt")
+        try {
+            Files.writeString(target, "must remain")
+            Files.createSymbolicLink(link, target.fileName)
+
+            assertFailsWith<IllegalStateException> {
+                clearLogFile(link.toString().toPath(), fileSystem)
+            }
+            assertEquals("must remain", Files.readString(target))
+        } finally {
+            Files.walk(root).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
+        }
+    }
+
+    @Test
+    fun activeLogCreationRejectsAliasedParent() {
+        val root = Files.createTempDirectory("dobby-log-parent-alias")
+        val target = root.resolve("real-current")
+        val alias = root.resolve(".dobbyvpn")
+        val previousHome = System.getProperty("user.home")
+        try {
+            Files.createDirectories(target)
+            Files.createSymbolicLink(alias, target.fileName)
+            System.setProperty("user.home", root.toString())
+
+            assertFailsWith<LocalLogStorageInitializationException> {
+                provideLogFilePath()
+            }
+            assertTrue(Files.notExists(target.resolve("app_logs.txt")))
+        } finally {
+            if (previousHome == null) {
+                System.clearProperty("user.home")
+            } else {
+                System.setProperty("user.home", previousHome)
+            }
+            Files.walk(root).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
+        }
+    }
+
+    @Test
+    fun groupWritableHomeIsRejectedBeforeCurrentStorageCreation() {
+        val root = Files.createTempDirectory("dobby-log-group-writable-home")
+        val posix = Files.getFileAttributeView(
+            root,
+            java.nio.file.attribute.PosixFileAttributeView::class.java,
+        ) ?: return
+        val originalPermissions = posix.readAttributes().permissions()
+        val previousHome = System.getProperty("user.home")
+        try {
+            posix.setPermissions(originalPermissions + PosixFilePermission.GROUP_WRITE)
+            System.setProperty("user.home", root.toString())
+
+            assertFailsWith<LocalLogStorageInitializationException> {
+                provideLogFilePath()
+            }
+            assertTrue(Files.notExists(root.resolve(".dobbyvpn")))
+        } finally {
+            posix.setPermissions(originalPermissions)
+            if (previousHome == null) {
+                System.clearProperty("user.home")
+            } else {
+                System.setProperty("user.home", previousHome)
+            }
+            Files.walk(root).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
+        }
+    }
+
     @Test
     fun discoversAnExistingLogFromItsDirectoryWithoutRecreatingIt() {
         val directory = Files.createTempDirectory("dobby-existing-log")
@@ -46,6 +166,7 @@ class LogsRepositoryTest {
             Files.writeString(target, "target")
             Files.createSymbolicLink(log, target.fileName)
             assertFailsWith<IllegalStateException> { ensureLogFileEntry(directory, log) }
+            assertEquals("target", Files.readString(target))
         } finally {
             Files.deleteIfExists(log)
             Files.deleteIfExists(target)

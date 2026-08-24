@@ -16,31 +16,29 @@ plugins {
     id("com.github.gmazzo.buildconfig") version "5.6.5" apply false
 }
 
-// detekt for all subprojects except vendored/ported modules
-val detektExcluded = setOf("outline")
+// Detekt covers every project declared by settings.gradle.kts. There are no
+// vendored/ported modules in this build that should bypass the baseline.
 allprojects {
-    if (project.name !in detektExcluded) {
-        apply(plugin = "io.gitlab.arturbosch.detekt")
+    apply(plugin = "io.gitlab.arturbosch.detekt")
 
-        detekt {
-            buildUponDefaultConfig = true
-            config.setFrom(files("${rootProject.projectDir}/detekt.yml"))
-            parallel = true
-            // detekt-baseline.xml and source-set-specific variants are tracked
-            // with the code. With maxIssues=0 they suppress only recorded debt;
-            // every new finding fails CI until it is fixed or explicitly reviewed.
-        }
+    detekt {
+        buildUponDefaultConfig = true
+        config.setFrom(files("${rootProject.projectDir}/detekt.yml"))
+        parallel = true
+        // detekt-baseline.xml and source-set-specific variants are tracked
+        // with the code. With maxIssues=0 they suppress only recorded debt;
+        // every new finding fails CI until it is fixed or explicitly reviewed.
+    }
 
-        tasks.withType<Detekt>().configureEach {
-            val reportName = name
-            reports {
-                html.required.set(true)
-                html.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/$reportName.html"))
-                xml.required.set(true)
-                xml.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/$reportName.xml"))
-                sarif.required.set(true)
-                sarif.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/$reportName.sarif"))
-            }
+    tasks.withType<Detekt>().configureEach {
+        val reportName = name
+        reports {
+            html.required.set(true)
+            html.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/$reportName.html"))
+            xml.required.set(true)
+            xml.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/$reportName.xml"))
+            sarif.required.set(true)
+            sarif.outputLocation.set(file("${project.layout.buildDirectory.get()}/reports/detekt/$reportName.sarif"))
         }
     }
 }

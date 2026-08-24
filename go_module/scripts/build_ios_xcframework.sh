@@ -8,7 +8,34 @@
 set -euo pipefail
 
 readonly output="DobbyVPNRuntime.xcframework"
+readonly mobile_version="v0.0.0-20260520154334-0e4426e1883d"
 readonly expected_bridge_hash="ff9e5593a5c3218242338aca83db2432dded78d1748195302b363ddfddfd85e8"
+
+gopath="$(go env GOPATH)"
+tool_dir="$gopath/bin"
+gomobile_bin="${GOMOBILE_BIN:-$tool_dir/gomobile}"
+gobind_bin="${GOBIND_BIN:-$tool_dir/gobind}"
+if [[ ! -x "$gomobile_bin" || ! -x "$gobind_bin" ]]; then
+  echo "pinned gomobile and gobind are required; install both at $mobile_version" >&2
+  exit 2
+fi
+for tool in "$gomobile_bin" "$gobind_bin"; do
+  tool_metadata="$(go version -m "$tool" 2>&1)"
+  printf '%s\n' "$tool_metadata"
+  if ! grep -F 'golang.org/x/mobile' <<<"$tool_metadata" | grep -F "$mobile_version" >/dev/null; then
+    echo "tool module closure is not pinned to golang.org/x/mobile@$mobile_version: $tool" >&2
+    exit 2
+  fi
+done
+export GOMOBILE="${GOMOBILE:-$gopath/pkg/gomobile}"
+mkdir -p "$GOMOBILE"
+export PATH="$(dirname "$gomobile_bin"):$(dirname "$gobind_bin"):$PATH"
+
+module_version="$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
+if [[ "$module_version" != "$mobile_version" ]]; then
+  echo "go.mod resolves golang.org/x/mobile@$module_version; expected $mobile_version" >&2
+  exit 2
+fi
 
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/dobbyvpn-ios-xcframework.XXXXXX")"
 trap 'rm -rf "$workdir"' EXIT

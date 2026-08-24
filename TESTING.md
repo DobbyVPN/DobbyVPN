@@ -9,7 +9,7 @@ From `go_module/`:
 
 ```bash
 go test ./...
-go test -race ./core/... ./routing/... ./sessionapi/... ./tunnel/...
+go test -race ./routing/... ./sessionapi/... ./tunnel/...
 ```
 
 From `kmp_module/` with JDK 17 and the Android SDK configured:
@@ -93,6 +93,18 @@ session/runtime code with the device slice, but TrustTunnel returns a typed
 unsupported error because its vendor-supplied native bridge is physical-iOS
 only. This keeps the Simulator app loadable without pretending to validate a
 VPN protocol it cannot execute.
+
+## Owner-controlled Android transition seam
+
+The instrumentation-only hosted-profile driver also accepts the canonical
+`network_transition`, `sleep_wake`, and `process_loss` operations. These are
+not production controls and do not add a Harness or Torturer dependency to the
+application: an owner-side adapter performs the emulator action, then signals
+the test APK through a one-use, token-bound private-file rendezvous. The app
+reports only the resulting tunnel, routing, or disconnection facts; the adapter
+retains the complete control command diagnostics and proves the emulator state
+change. Missing or malformed control input fails closed, and ordinary commands
+cannot include the control fields.
 
 ## Independent public verification
 

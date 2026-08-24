@@ -65,8 +65,12 @@ uses GitHub-hosted `macos-15` for arm64 and `macos-15-intel` for amd64.
 export ANDROID_HOME=<ANDROID_SDK_PATH>
 export ANDROID_SDK_ROOT=$ANDROID_HOME
 
-go install golang.org/x/mobile/cmd/gomobile@$(go list -m -f '{{.Version}}' golang.org/x/mobile)
-gomobile init
+go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
+go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d
+gopath="$(go env GOPATH)"
+mkdir -p "$gopath/pkg/gomobile"
+export PATH="$gopath/bin:$PATH"
+go mod download golang.org/x/mobile
 
 gomobile bind \
   -target=android/arm64,android/amd64 \
@@ -93,11 +97,20 @@ cd kmp_module
 ### IOS
 
 ```bash
-go install golang.org/x/mobile/cmd/gomobile@latest
-gomobile init
-go get golang.org/x/mobile/bind@latest
+go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
+go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d
+gopath="$(go env GOPATH)"
+mkdir -p "$gopath/pkg/gomobile"
+export PATH="$gopath/bin:$PATH"
+go mod download golang.org/x/mobile
 ./scripts/build_ios_xcframework.sh
 ```
+
+Do not run `gomobile init` here. It deletes and recreates the shared
+`$GOPATH/pkg/gomobile` directory and installs an unpinned gobind tool; the pinned
+bootstrap above creates only the required directory and installs both tools at
+the exact revision recorded by `go.mod`. The build therefore does not mutate
+the module files or resolve an unpinned tool.
 
 The script builds one physical-iOS slice and one universal Simulator slice.
 Physical packet-tunnel qualification is intentionally not claimed until a real
@@ -114,8 +127,9 @@ credentials, and endpoints never appear in responses or diagnostics.
 
 The native `dobby-cli` shares this authenticated control channel with the
 Compose GUI. It supports `connect`, `connect-profile`, `check-config`,
-`disconnect`, `status`, `logs`, `external-ip`, and `verify-session` without
-starting a JVM.
+`disconnect`, `status`, `logs clear`, `external-ip`, and `verify-session`
+without starting a JVM. `logs clear` is a local file reset and does not need
+the VPN service to be running.
 
 See the canonical [vpnserver.proto](../kmp_module/grpcprotos/src/main/proto/com/dobby/vpnserver/vpnserver.proto)
 for the authenticated SessionV2 and local Diagnostics transport.
@@ -141,7 +155,3 @@ only when they are absent.
 cd kmp_module
 ./gradlew :grpcstub:generateProto
 ```
-
-## Additional documentation
-
-- [How to manage services on different platforms](./SERVICES.md)

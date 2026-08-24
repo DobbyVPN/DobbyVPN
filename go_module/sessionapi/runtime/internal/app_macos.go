@@ -7,13 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go_module/core/pkg"
 	"go_module/log"
+	"go_module/protocol"
 	"go_module/tunnel/platform_engine"
 	"go_module/tunnel/protected_dialer"
 	"sync"
 
-	coreCommon "go_module/core/common"
 	"go_module/routing"
 	"go_module/tunnel"
 
@@ -31,7 +30,8 @@ func signalInit(initResult chan<- error, err error) {
 }
 
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
-	log.Debugf(coreCommon.Category, "[Darwin][Init] VPN initialization started")
+	log.Debugf(Category, "[Darwin][Init] VPN initialization started")
+	defer protected_dialer.ResetDefaultRoute()
 	if app.ProtocolDevice == nil {
 		err := fmt.Errorf("protocol device is not initialized")
 		signalInit(initResult, err)
@@ -50,7 +50,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return err
 	}
 
-	log.Debugf(coreCommon.Category, "[Network] Default gateway detected")
+	log.Debugf(Category, "[Network] Default gateway detected")
 
 	serverIP := app.ProtocolDevice.GetServerIP()
 	if serverIP == nil {
@@ -58,13 +58,13 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "[Routing] VPN server address resolved")
+	log.Debugf(Category, "[Routing] VPN server address resolved")
 
 	ifaceName, idx, err := protected_dialer.GetDefaultInterfaceNameDarwin(gatewayIP)
 	if err != nil {
-		log.Debugf(coreCommon.Category, "[Darwin-Protect] ERROR: failed to detect default interface for protected sockets: %v", err)
+		log.Debugf(Category, "[Darwin-Protect] ERROR: failed to detect default interface for protected sockets: %v", err)
 	} else {
-		log.Debugf(coreCommon.Category, "[Darwin-Protect] Selected interface for direct traffic: %s (index=%d)", ifaceName, idx)
+		log.Debugf(Category, "[Darwin-Protect] Selected interface for direct traffic: %s (index=%d)", ifaceName, idx)
 		protected_dialer.SetDefaultRoute(gatewayIP.String(), ifaceName, idx)
 	}
 
@@ -76,7 +76,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	protocolOpened := false
 	closeAll := func() error {
 		closeOnce.Do(func() {
-			log.Debugf(coreCommon.Category, "[Darwin][Lifecycle] stopping generation-owned resources")
+			log.Debugf(Category, "[Darwin][Lifecycle] stopping generation-owned resources")
 			app.mu.Lock()
 			currentDevice := app.currentDevice
 			if currentDevice == nil && protocolOpened {
@@ -101,9 +101,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			}
 			cleanupErr = errors.Join(routeErr, engineErr, deviceErr)
 			if cleanupErr != nil {
-				log.Debugf(coreCommon.Category, "[Darwin][Cleanup][ERROR] %v", cleanupErr)
+				log.Debugf(Category, "[Darwin][Cleanup][ERROR] %v", cleanupErr)
 			} else {
-				log.Debugf(coreCommon.Category, "[Darwin][Lifecycle] generation cleanup complete")
+				log.Debugf(Category, "[Darwin][Lifecycle] generation cleanup complete")
 			}
 		})
 		return cleanupErr
@@ -116,7 +116,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}()
 
 	if serverIP.String() != "127.0.0.1" {
-		log.Debugf(coreCommon.Category, "[Darwin][Routing] acquiring direct VPN bypass route")
+		log.Debugf(Category, "[Darwin][Routing] acquiring direct VPN bypass route")
 		_, err = routePlan.AcquireMacOSProxyRoute(serverIP.String(), gatewayIP.String())
 		if err != nil {
 			err = fmt.Errorf("failed to acquire server bypass route: %w", err)
@@ -124,10 +124,10 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			return err
 		}
 	} else {
-		log.Debugf(coreCommon.Category, "[Darwin][Routing] loopback server bypass not required")
+		log.Debugf(Category, "[Darwin][Routing] loopback server bypass not required")
 	}
 
-	log.Debugf(coreCommon.Category, "[Darwin][Protocol] opening protocol SOCKS bridge")
+	log.Debugf(Category, "[Darwin][Protocol] opening protocol SOCKS bridge")
 	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, ifaceName)
 	if err != nil {
 		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
@@ -135,9 +135,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return err
 	}
 	protocolOpened = true
-	log.Debugf(coreCommon.Category, "[Darwin][Protocol] protocol SOCKS bridge ready")
+	log.Debugf(Category, "[Darwin][Protocol] protocol SOCKS bridge ready")
 
-	log.Debugf(coreCommon.Category, "[Darwin][Tunnel] starting tun2socks engine")
+	log.Debugf(Category, "[Darwin][Tunnel] starting tun2socks engine")
 
 	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{
 		ProxyAddr:   app.ProtocolDevice.GetProxyAddr(),
@@ -159,7 +159,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "[Darwin][Tunnel] tun2socks engine ready interface=%s", tunName)
+	log.Debugf(Category, "[Darwin][Tunnel] tun2socks engine ready interface=%s", tunName)
 
 	_, err = routePlan.AcquireMacOSTunnelDefault(tunName)
 	if err == nil {
@@ -173,7 +173,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(coreCommon.Category, "[Darwin][Routing] generation-owned default, IPv6, and protected routes ready")
+	log.Debugf(Category, "[Darwin][Routing] generation-owned default, IPv6, and protected routes ready")
 
 	app.mu.Lock()
 	app.currentDevice = app.ProtocolDevice
@@ -184,22 +184,22 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	app.running = true
 	app.mu.Unlock()
 
-	log.Debugf(coreCommon.Category, "[Darwin][Lifecycle] VPN initialization completed successfully")
+	log.Debugf(Category, "[Darwin][Lifecycle] VPN initialization completed successfully")
 
 	signalInit(initResult, nil)
 
 	<-ctx.Done()
 
-	log.Debugf(coreCommon.Category, "[Darwin][Lifecycle] context cancelled — stopping generation")
+	log.Debugf(Category, "[Darwin][Lifecycle] context cancelled — stopping generation")
 
 	return nil
 }
 
-func (app *App) SwitchProtocolDevice(device pkg.ProtocolDevice) error {
+func (app *App) SwitchProtocolDevice(device protocol.ProtocolDevice) error {
 	_ = app
 	if device != nil {
 		if closeErr := device.Close(); closeErr != nil {
-			log.Debugf(coreCommon.Category, "[Darwin][Lifecycle] replacement device close after rejected switch failed: %v", closeErr)
+			log.Debugf(Category, "[Darwin][Lifecycle] replacement device close after rejected switch failed: %v", closeErr)
 		}
 	}
 	// macOS routing is a generation-owned transaction. Changing protocol while

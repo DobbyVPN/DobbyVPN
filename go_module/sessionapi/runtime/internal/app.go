@@ -17,16 +17,16 @@ package internal
 import (
 	"sync"
 
-	"go_module/core/pkg"
+	"go_module/protocol"
 	"go_module/tunnel"
 )
 
 type App struct {
-	ProtocolDevice pkg.ProtocolDevice
+	ProtocolDevice protocol.ProtocolDevice
 	RoutingConfig  *RoutingConfig
 
 	mu            sync.Mutex
-	currentDevice pkg.ProtocolDevice
+	currentDevice protocol.ProtocolDevice
 	gatewayIP     string
 	uplinkIface   string
 	tunIface      string

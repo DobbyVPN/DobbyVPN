@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go_module/core/common"
 	"go_module/desktop_exports/controlplane"
 	"go_module/desktop_exports/proto"
 	"go_module/grpcproto"
@@ -148,7 +147,7 @@ func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest
 	}
 	lis, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", service.serverPort))
 	if err != nil {
-		log.Debugf(common.Category, "[ERROR] failed to listen: %v", err)
+		log.Debugf(desktopLogCategory, "[ERROR] failed to listen: %v", err)
 		return true, 1
 	}
 	grpcServer := grpc.NewServer(
@@ -163,9 +162,9 @@ func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest
 	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptSessionChange}
 
 	go func() {
-		log.Debugf(common.Category, "server listening at %v", lis.Addr())
+		log.Debugf(desktopLogCategory, "server listening at %v", lis.Addr())
 		if err := grpcServer.Serve(lis); err != nil {
-			log.Debugf(common.Category, "[ERROR] failed to serve: %v", err)
+			log.Debugf(desktopLogCategory, "[ERROR] failed to serve: %v", err)
 		}
 	}()
 
@@ -176,7 +175,7 @@ loop:
 			grpcServer.GracefulStop()
 			break loop
 		default:
-			log.Debugf(common.Category, "Unexpected service control request #%d", c)
+			log.Debugf(desktopLogCategory, "Unexpected service control request #%d", c)
 		}
 	}
 
@@ -208,7 +207,7 @@ func run(port int) {
 
 	grpcproto.RegisterVpnServer(s, &proto.Server{})
 
-	log.Debugf(common.Category, "desktop control listener ready")
+	log.Debugf(desktopLogCategory, "desktop control listener ready")
 	if err := s.Serve(lis); err != nil {
 		panic(fmt.Sprintf("failed to serve: %v", err))
 	}
@@ -219,7 +218,7 @@ func (c *Executor) Execute(port int, mode string) {
 		fmt.Fprintln(os.Stderr, "failed to initialize secure local logging")
 		return
 	}
-	log.Debugf(common.Category, "Executing with mode: %v", mode)
+	log.Debugf(desktopLogCategory, "Executing with mode: %v", mode)
 
 	switch mode {
 	case "normal":
@@ -227,6 +226,6 @@ func (c *Executor) Execute(port int, mode string) {
 	case "service":
 		runService(port)
 	default:
-		log.Debugf(common.Category, "[ERROR] Invalid run mode")
+		log.Debugf(desktopLogCategory, "[ERROR] Invalid run mode")
 	}
 }

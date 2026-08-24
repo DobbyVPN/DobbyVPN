@@ -25,6 +25,7 @@ on:
 jobs:
   desktop_build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: release
     steps:
       - name: Checkout
@@ -179,7 +180,7 @@ jobs:
           set -euo pipefail
           package_root="$(mktemp -d)"
           trap 'rm -rf "$package_root"' EXIT
-          unzip -q "${{ env.WIN_ZIP_FILE }}" -d "$package_root"
+          unzip "${{ env.WIN_ZIP_FILE }}" -d "$package_root"
           python3 - "$package_root" <<'PY'
           from pathlib import Path
           import struct

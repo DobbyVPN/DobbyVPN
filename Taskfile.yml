@@ -25,7 +25,7 @@ tasks:
     status:
       - lefthook version
     cmds:
-      - go install github.com/evilmartians/lefthook@latest
+      - go install github.com/evilmartians/lefthook/v2@v2.1.10
     silent: true
 
   install-trufflehog:
@@ -33,7 +33,7 @@ tasks:
     status:
       - trufflehog --version
     cmds:
-      - go install github.com/trufflesecurity/trufflehog/v3@latest
+      - go install github.com/trufflesecurity/trufflehog/v3@v3.93.3
     silent: true
 
   hooks:

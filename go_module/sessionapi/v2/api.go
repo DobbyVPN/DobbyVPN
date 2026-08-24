@@ -9,7 +9,6 @@ package v2
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"sort"
@@ -17,11 +16,10 @@ import (
 )
 
 const (
-	APIVersion                 = "sessionapi/v2"
-	commandConfigure           = "configure"
-	commandConfigureNormalized = "configure-normalized"
-	commandStart               = "start"
-	commandStop                = "stop"
+	APIVersion       = "sessionapi/v2"
+	commandConfigure = "configure"
+	commandStart     = "start"
+	commandStop      = "stop"
 )
 
 // Protocol is intentionally a small stable vocabulary used by all bindings.
@@ -173,7 +171,6 @@ type SessionRef struct {
 // supplied inside the trusted process to the protocol runtime.
 type RuntimeProfile struct {
 	Summary          ProfileSummary
-	RawTOML          []byte
 	NormalizedFormat ConfigFormat
 	NormalizedConfig []byte
 	// ExcludeCIDRs and PreflightHosts are interpreted once by Go and remain
@@ -184,8 +181,6 @@ type RuntimeProfile struct {
 }
 
 // ConfigFormat identifies the representation a protocol runtime should use.
-// RawTOML remains available only in-process for compatibility helpers; new
-// bindings should consume the normalized representation where possible.
 type ConfigFormat string
 
 const (
@@ -456,54 +451,6 @@ func (m *Manager) Configure(ctx context.Context, sessionID, commandID string, ra
 		m.appendLocked(s, Event{State: StateConfigured, Warning: &w})
 	}
 	s.mu.Unlock()
-	return cloneConfigure(result), nil
-}
-
-// ConfigureNormalized is an internal bridge for native platform adapters that
-// already hold a Go-normalized profile. It is not a public transport operation:
-// desktop and mobile callers use Configure so parsing and protocol selection
-// remain owned by this package.
-func (m *Manager) ConfigureNormalized(_ context.Context, sessionID, commandID string, profile RuntimeProfile) (result ConfigureResult, err error) {
-	operation := m.audit.begin(commandConfigureNormalized)
-	defer func() { operation.end(err) }()
-	s, err := m.get(sessionID)
-	if err != nil {
-		return ConfigureResult{}, err
-	}
-	if commandID == "" || len(profile.NormalizedConfig) == 0 {
-		return ConfigureResult{}, failure(FailureInvalidArgument, "normalized profile and command ID are required")
-	}
-	validFormat := (profile.Summary.Protocol == ProtocolOutline && profile.NormalizedFormat == ConfigTransportURL) ||
-		(profile.Summary.Protocol == ProtocolXray && profile.NormalizedFormat == ConfigJSON) ||
-		(profile.Summary.Protocol == ProtocolTrustTunnel && profile.NormalizedFormat == ConfigTOML)
-	if !validFormat {
-		return ConfigureResult{}, failure(FailureInvalidArgument, "normalized profile format does not match protocol")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.destroyed {
-		return ConfigureResult{}, failure(FailureNotFound, "session has been destroyed")
-	}
-	if record, ok := s.commands[commandID]; ok {
-		if record.op != commandConfigureNormalized {
-			return ConfigureResult{}, failure(FailureConflict, "command ID was used by another operation")
-		}
-		return cloneConfigure(record.config), record.err
-	}
-	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || !s.cleanupDone || s.cleanupFailed {
-		err := failure(FailureConflict, "cannot configure while a generation is active")
-		s.commands[commandID] = commandRecord{op: commandConfigureNormalized, err: err}
-		return ConfigureResult{}, err
-	}
-	profile = cloneRuntimeProfile(profile)
-	digest := sha256.Sum256(profile.NormalizedConfig)
-	s.profiles = []RuntimeProfile{profile}
-	s.digest = hex.EncodeToString(digest[:])
-	s.warnings, s.configured = nil, true
-	s.active, s.lastFailure, s.state, s.cleanupDone, s.cleanupFailed = nil, "", StateConfigured, true, false
-	result = ConfigureResult{Digest: s.digest, Profiles: []ProfileSummary{profile.Summary}, SourceKind: ConfigSourceInline}
-	s.commands[commandID] = commandRecord{op: commandConfigureNormalized, config: result}
-	m.appendLocked(s, Event{State: StateConfigured})
 	return cloneConfigure(result), nil
 }
 
@@ -1158,7 +1105,6 @@ func cloneConfigure(in ConfigureResult) ConfigureResult {
 	return ConfigureResult{Digest: in.Digest, Profiles: append([]ProfileSummary(nil), in.Profiles...), Warnings: cloneWarnings(in.Warnings), SourceKind: in.SourceKind}
 }
 func cloneRuntimeProfile(in RuntimeProfile) RuntimeProfile {
-	in.RawTOML = append([]byte(nil), in.RawTOML...)
 	in.NormalizedConfig = append([]byte(nil), in.NormalizedConfig...)
 	in.ExcludeCIDRs = append([]string(nil), in.ExcludeCIDRs...)
 	in.PreflightHosts = append([]string(nil), in.PreflightHosts...)

@@ -88,7 +88,7 @@ func (p *androidPlatformCallbacks) ProtectSocket(sessionID string, generation in
 	if callback := p.callback(); callback != nil {
 		return callback.ProtectSocket(sessionID, generation, fd)
 	}
-	return protectSocketFallback(fd)
+	return false
 }
 func (p *androidPlatformCallbacks) PublishState(sessionID string, generation int64, sequence int64, state string, profileIndex int32, profileProtocol string, failureCode string) {
 	if callback := p.callback(); callback != nil {

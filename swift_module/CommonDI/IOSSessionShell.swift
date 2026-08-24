@@ -45,7 +45,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         ) {
             return failure(error.rawValue)
         }
-        manager.start(isProtocolProbe: false)
+        manager.start()
         let generation = Int64(IOSVpnConnectionAuthority.currentGeneration())
         return success(["generation": generation])
     }

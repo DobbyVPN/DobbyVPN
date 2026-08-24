@@ -11,7 +11,6 @@ import (
 	"strings"
 	"syscall"
 
-	"go_module/core/common"
 	"go_module/desktop_exports/controlplane"
 	"go_module/desktop_exports/proto"
 	"go_module/grpcproto"
@@ -97,7 +96,7 @@ func run(_ int) {
 
 	grpcproto.RegisterVpnServer(s, &proto.Server{})
 
-	log.Debugf(common.Category, "desktop control socket ready")
+	log.Debugf(desktopLogCategory, "desktop control socket ready")
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
@@ -111,6 +110,6 @@ func (c *Executor) Execute(port int, mode string) {
 	case "normal":
 		run(port)
 	default:
-		log.Debugf(common.Category, "[ERROR] Invalid run mode")
+		log.Debugf(desktopLogCategory, "[ERROR] Invalid run mode")
 	}
 }

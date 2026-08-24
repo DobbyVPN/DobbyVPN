@@ -50,8 +50,6 @@ type Binding struct {
 //nolint:unused // Implementations and calls are compiled only for android/ios.
 type platformControl interface {
 	setCallbacks(PlatformCallbacks)
-	queue(string, int32) error
-	discard(string)
 	protectActive(int32) bool
 }
 

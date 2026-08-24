@@ -36,6 +36,7 @@ on:
 jobs:
   android_build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: release
     env:
       APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
@@ -49,6 +50,8 @@ jobs:
       FDROID_COMPAT_GO_ROOT: /home/vagrant/build/srclib/go
       GOPATH: /home/vagrant/go
       GOMOBILE: /home/vagrant/go/bin/gomobile
+      TRUSTED_HELPER_ROOT: ${{ github.workspace }}/.trusted-workflow
+      TRUSTED_HELPER_SHA: ${{ github.workflow_sha }}
       GOFLAGS: -trimpath -buildvcs=false
       EXPECTED_ANDROID_SIGNER_SHA256: c3f0414a74012060d7c6aa3a3d9dac0aa13c1bd23b7512eefd860fb865e67933
 
@@ -88,6 +91,125 @@ jobs:
         id: android_go
         run: echo "version=$(cat .go-version)" >> "$GITHUB_OUTPUT"
 
+      # The selected release tag may predate the current build driver and
+      # dependency specification. Keep those helpers in a separate exact
+      # checkout bound to this workflow revision; never copy them into the
+      # selected source tree.
+      - name: Check out trusted Android build helpers
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .trusted-workflow
+          sparse-checkout: |
+            .github/android/dependency-spec.json
+            .github/scripts/android_build_driver.sh
+            .github/scripts/android_dependency_provenance.py
+            .github/scripts/public_output.py
+            .github/scripts/verify_android_apk_source.py
+            .github/scripts/verify_android_reproducibility.py
+          persist-credentials: false
+
+      - name: Verify trusted Android helper checkout before any trusted helper use
+        run: |
+          set -euo pipefail
+          [[ "$TRUSTED_HELPER_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "trusted helper SHA is not a full lowercase commit identity: $TRUSTED_HELPER_SHA" >&2
+            exit 2
+          }
+          [[ -d "$TRUSTED_HELPER_ROOT" && ! -L "$TRUSTED_HELPER_ROOT" ]] || {
+            echo "trusted helper root is not a real directory: $TRUSTED_HELPER_ROOT" >&2
+            exit 2
+          }
+          observed_sha="$(git -C "$TRUSTED_HELPER_ROOT" rev-parse --verify HEAD^{commit})"
+          echo "trusted helper observed SHA: $observed_sha"
+          test "$observed_sha" = "$TRUSTED_HELPER_SHA" || {
+            echo "trusted helper checkout SHA mismatch: expected $TRUSTED_HELPER_SHA got $observed_sha" >&2
+            exit 2
+          }
+          status_output="$(git -C "$TRUSTED_HELPER_ROOT" status --porcelain=v2 --untracked-files=all --ignored)"
+          if [[ -n "$status_output" ]]; then
+            echo "trusted helper checkout is not clean; complete status follows:" >&2
+            printf '%s\n' "$status_output" >&2
+            exit 2
+          fi
+          while IFS= read -r -d '' path; do
+            if [[ -L "$path" ]]; then
+              echo "trusted helper checkout contains a symlink: $path" >&2
+              exit 2
+            fi
+          done < <(find "$TRUSTED_HELPER_ROOT" -mindepth 1 -print0)
+          for relative in \
+            .github/android/dependency-spec.json \
+            .github/scripts/android_build_driver.sh \
+            .github/scripts/android_dependency_provenance.py \
+            .github/scripts/public_output.py \
+            .github/scripts/verify_android_apk_source.py \
+            .github/scripts/verify_android_reproducibility.py; do
+            path="$TRUSTED_HELPER_ROOT/$relative"
+            [[ -f "$path" && ! -L "$path" ]] || {
+              echo "trusted helper file is missing or not a regular non-symlink file: $path" >&2
+              exit 2
+            }
+          done
+          test -x "$TRUSTED_HELPER_ROOT/.github/scripts/android_build_driver.sh" || {
+            echo "trusted Android build driver is not executable" >&2
+            exit 2
+          }
+          echo 'trusted Android helper checkout passed exact SHA, cleanliness, symlink, and file contract'
+
+      - name: Cache trusted Gradle distribution archive
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/dobbyvpn-gradle-cache
+          key: android-gradle-8.13-${{ hashFiles('.trusted-workflow/.github/android/dependency-spec.json') }}
+
+      - name: Download and verify trusted Gradle distribution
+        run: |
+          set -euo pipefail
+          cache_root="$RUNNER_TEMP/dobbyvpn-gradle-cache"
+          mkdir -p "$cache_root"
+          archive="$cache_root/gradle-8.13-bin.zip"
+          gradle_url="$(python3 "$TRUSTED_HELPER_ROOT/.github/scripts/android_dependency_provenance.py" \
+            --spec "$TRUSTED_HELPER_ROOT/.github/android/dependency-spec.json" --print-gradle-url)"
+          gradle_sha="$(python3 "$TRUSTED_HELPER_ROOT/.github/scripts/android_dependency_provenance.py" \
+            --spec "$TRUSTED_HELPER_ROOT/.github/android/dependency-spec.json" --print-gradle-sha256)"
+          test "$gradle_url" = 'https://services.gradle.org/distributions/gradle-8.13-bin.zip'
+          [[ "$gradle_sha" =~ ^[0-9a-f]{64}$ ]]
+          if [[ -e "$archive" || -L "$archive" ]]; then
+            [[ -f "$archive" && ! -L "$archive" ]] || {
+              echo "cached Gradle archive is not a regular non-symlink file: $archive" >&2
+              exit 2
+            }
+          else
+            temporary_archive="$(mktemp "$cache_root/gradle-8.13-bin.zip.XXXXXX")"
+            curl --fail --show-error --location --retry 3 --output "$temporary_archive" "$gradle_url"
+            chmod 600 "$temporary_archive"
+            mv "$temporary_archive" "$archive"
+          fi
+          observed_sha="$(sha256sum "$archive" | awk '{print $1}')"
+          echo "trusted Gradle archive SHA-256: $observed_sha"
+          test "$observed_sha" = "$gradle_sha" || {
+            echo "trusted Gradle archive SHA-256 mismatch: expected $gradle_sha got $observed_sha" >&2
+            exit 2
+          }
+          extraction_root="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-gradle-root.XXXXXX")"
+          unzip "$archive" -d "$extraction_root"
+          gradle_root="$extraction_root/gradle-8.13"
+          [[ -d "$gradle_root" && ! -L "$gradle_root" ]] || {
+            echo "verified Gradle archive did not produce gradle-8.13 root" >&2
+            exit 2
+          }
+          python3 "$TRUSTED_HELPER_ROOT/.github/scripts/android_dependency_provenance.py" \
+            --spec "$TRUSTED_HELPER_ROOT/.github/android/dependency-spec.json" \
+            --verify-gradle-distribution --gradle-archive "$archive" --gradle-root "$gradle_root"
+          gradle_version="$("$gradle_root/bin/gradle" --version | tee /dev/stderr | awk '/^Gradle / {print $2; exit}')"
+          test "$gradle_version" = '8.13'
+          {
+            echo "GRADLE_ARCHIVE=$archive"
+            echo "GRADLE_ROOT=$gradle_root"
+            echo "GRADLE_BIN=$gradle_root/bin/gradle"
+          } >> "$GITHUB_ENV"
+
       - name: Build Go from source for Android
         env:
           ANDROID_GO_VERSION: ${{ steps.android_go.outputs.version }}
@@ -95,8 +217,15 @@ jobs:
           set -euo pipefail
           GO_VERSION="$ANDROID_GO_VERSION"
           [[ "$GO_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
+          SPEC_GO_VERSION="$(python3 "$TRUSTED_HELPER_ROOT/.github/scripts/android_dependency_provenance.py" \
+            --spec "$TRUSTED_HELPER_ROOT/.github/android/dependency-spec.json" \
+            --print-go-version)"
+          test "$GO_VERSION" = "$SPEC_GO_VERSION"
           GO_SRC="$FDROID_COMPAT_GO_ROOT"
-          GO_COMMIT="56ebf80e57db9f61981fc0636fc6419dc6f68eda"
+          GO_COMMIT="$(python3 "$TRUSTED_HELPER_ROOT/.github/scripts/android_dependency_provenance.py" \
+            --spec "$TRUSTED_HELPER_ROOT/.github/android/dependency-spec.json" \
+            --print-go-source-commit)"
+          [[ "$GO_COMMIT" =~ ^[0-9a-f]{40}$ ]]
 
           test ! -e "$GO_SRC"
           git clone --depth 1 --branch "go${GO_VERSION}" https://github.com/golang/go.git "$GO_SRC"
@@ -132,10 +261,14 @@ jobs:
       - name: Install gomobile
         run: |
           set -euo pipefail
-          cd go_module
-          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
-          go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d
-          cd ..
+          mobile_pin="$(python3 "$TRUSTED_HELPER_ROOT/.github/scripts/android_dependency_provenance.py" \
+            --spec "$TRUSTED_HELPER_ROOT/.github/android/dependency-spec.json" --print-mobile-version)"
+          mobile_module="${mobile_pin%@*}"
+          mobile_version="${mobile_pin#*@}"
+          test "$mobile_module" = 'golang.org/x/mobile'
+          test "$mobile_version" = 'v0.0.0-20260520154334-0e4426e1883d'
+          GOBIN="$GOPATH/bin" go install "$mobile_module/cmd/gomobile@$mobile_version"
+          GOBIN="$GOPATH/bin" go install "$mobile_module/cmd/gobind@$mobile_version"
           echo "$GOPATH/bin" >> "$GITHUB_PATH"
           go env GOROOT GOVERSION GOFLAGS
 
@@ -148,92 +281,52 @@ jobs:
           test "$(go env GOFLAGS)" = '-trimpath -buildvcs=false'
           test "$(readlink -f "$GOMOBILE")" = "$GOPATH/bin/gomobile"
           test -x "$GOMOBILE"
+          mobile_pin="$(python3 "$TRUSTED_HELPER_ROOT/.github/scripts/android_dependency_provenance.py" \
+            --spec "$TRUSTED_HELPER_ROOT/.github/android/dependency-spec.json" --print-mobile-version)"
+          mobile_module="${mobile_pin%@*}"
+          mobile_version="${mobile_pin#*@}"
           for tool in gomobile gobind; do
-            go version -m "$GOPATH/bin/$tool" | \
-              grep -F 'golang.org/x/mobile' | \
-              grep -F 'v0.0.0-20260520154334-0e4426e1883d'
+            go version -m "$GOPATH/bin/$tool" | tee /dev/stderr | \
+              grep -F "$mobile_module" | grep -F "$mobile_version"
           done
-          java_version="$(java -version 2>&1)"
+          java_version="$(java -version 2>&1 | tee /dev/stderr)"
           grep -F 'version "17.' <<<"$java_version"
           ndk_revision="$(sed -n 's/^Pkg.Revision *= *//p' \
             "$ANDROID_SDK_ROOT/ndk/27.3.13750724/source.properties")"
           test "$ndk_revision" = "27.3.13750724"
           test -x "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
-          gradle_version="$(./kmp_module/gradlew -p kmp_module --version --no-daemon | \
-            awk '/^Gradle / {print $2}')"
+          test "$GRADLE_BIN" = "$GRADLE_ROOT/bin/gradle"
+          test -x "$GRADLE_BIN"
+          gradle_version="$("$GRADLE_BIN" -p kmp_module --version --no-daemon | \
+            tee /dev/stderr | awk '/^Gradle / {print $2}')"
           test "$gradle_version" = "8.13"
 
       - name: Prepare F-Droid-compatible source path
         run: |
-          rsync -a --delete --exclude='.git' "$GITHUB_WORKSPACE/" "$FDROID_COMPAT_SOURCE_ROOT/"
+          # Keep the exact detached Git objects with the source copy.  The
+          # shared public driver proves that the checkout bytes still equal
+          # HEAD^{tree} before it creates any build output.
+          rsync -a --delete --delete-excluded --exclude='.trusted-workflow' "$GITHUB_WORKSPACE/" "$FDROID_COMPAT_SOURCE_ROOT/"
 
-      # A legacy selected tag does not contain this newer verifier. Keep the
-      # trusted workflow implementation separate from the exact source tree
-      # copied above, and bind it to the workflow revision invoking this job.
-      - name: Check out trusted APK source verifier
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: .trusted-workflow
-          sparse-checkout: |
-            .github/scripts/verify_android_apk_source.py
-            .github/scripts/verify_android_reproducibility.py
-          persist-credentials: false
-
-      - name: Build first isolated unsigned APK
+      - name: Build and verify isolated unsigned APKs through the public driver
         working-directory: /home/vagrant/build/com.dobby.vpn
         env:
           DOBBYVPN_GOMOBILE_GOCACHE: ${{ runner.temp }}/dobbyvpn-android-repro/first/go-cache
           DOBBYVPN_GOMOBILE_GOTMPDIR: ${{ runner.temp }}/dobbyvpn-android-repro/first/go-tmp
         run: |
           set -euo pipefail
-          mkdir -p "$DOBBYVPN_GOMOBILE_GOCACHE" "$DOBBYVPN_GOMOBILE_GOTMPDIR"
-          ./kmp_module/gradlew -p kmp_module :app:assembleRelease \
-            --no-build-cache --no-daemon --rerun-tasks --stacktrace \
-            -PprojectRepositoryCommit="$APP_SOURCE_SHA" \
-            -PprojectRepositoryCommitLink="https://github.com/$APP_SOURCE_REPOSITORY/tree/$APP_SOURCE_SHA" \
-            -Pandroid.injected.version.code="$ANDROID_VERSION_CODE" \
-            -Pandroid.injected.version.name="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          mv "kmp_module/app/build/outputs/apk/release/app-release-unsigned.apk" \
-            "$RUNNER_TEMP/dobbyvpn-android-repro/first.apk"
-
-      - name: Remove first-build outputs
-        working-directory: /home/vagrant/build/com.dobby.vpn
-        run: |
-          set -euo pipefail
-          ./kmp_module/gradlew -p kmp_module clean --no-daemon --no-build-cache
-          test ! -e kmp_module/app/build/generated/gomobile/dobbyvpn-runtime.aar
-
-      - name: Build second isolated unsigned APK
-        working-directory: /home/vagrant/build/com.dobby.vpn
-        env:
-          DOBBYVPN_GOMOBILE_GOCACHE: ${{ runner.temp }}/dobbyvpn-android-repro/second/go-cache
-          DOBBYVPN_GOMOBILE_GOTMPDIR: ${{ runner.temp }}/dobbyvpn-android-repro/second/go-tmp
-        run: |
-          set -euo pipefail
-          mkdir -p "$DOBBYVPN_GOMOBILE_GOCACHE" "$DOBBYVPN_GOMOBILE_GOTMPDIR"
-          ./kmp_module/gradlew -p kmp_module :app:assembleRelease \
-            --no-build-cache --no-daemon --rerun-tasks --stacktrace \
-            -PprojectRepositoryCommit="$APP_SOURCE_SHA" \
-            -PprojectRepositoryCommitLink="https://github.com/$APP_SOURCE_REPOSITORY/tree/$APP_SOURCE_SHA" \
-            -Pandroid.injected.version.code="$ANDROID_VERSION_CODE" \
-            -Pandroid.injected.version.name="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          mkdir -p fastlane
-          mv "kmp_module/app/build/outputs/apk/release/app-release-unsigned.apk" \
-            "fastlane/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-unsign.apk"
-
-      - name: Verify complete unsigned APK reproducibility
-        working-directory: /home/vagrant/build/com.dobby.vpn
-        run: |
-          set -euo pipefail
           version="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          python3 "$GITHUB_WORKSPACE/.trusted-workflow/.github/scripts/verify_android_reproducibility.py" create \
-            --first-apk "$RUNNER_TEMP/dobbyvpn-android-repro/first.apk" \
-            --second-apk "fastlane/DobbyVPN-v${version}-unsign.apk" \
-            --output "fastlane/DobbyVPN-v${version}-android-reproducibility.json" \
-            --source-sha "$APP_SOURCE_SHA" \
-            --version-name "$version" \
-            --version-code "$ANDROID_VERSION_CODE"
+          "$TRUSTED_HELPER_ROOT/.github/scripts/android_build_driver.sh" \
+            --source-root "$FDROID_COMPAT_SOURCE_ROOT" \
+            --trusted-helper-root "$TRUSTED_HELPER_ROOT" \
+            --trusted-helper-sha "$TRUSTED_HELPER_SHA" \
+            --output "$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v${version}-unsign.apk" \
+            --manifest "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-build-driver-manifest.json" \
+            --first-output "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-repro-first.apk" \
+            --reproducibility "$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v${version}-android-reproducibility.json" \
+            --gradle-archive "$GRADLE_ARCHIVE" \
+            --gradle-root "$GRADLE_ROOT" \
+            --source-repository "$APP_SOURCE_REPOSITORY"
 
       - name: Sign the verified unsigned APK
         working-directory: /home/vagrant/build/com.dobby.vpn
@@ -287,6 +380,7 @@ jobs:
           signed="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-sign.apk"
           unsigned="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-unsign.apk"
           reproducibility="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-android-reproducibility.json"
+          driver_manifest="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-build-driver-manifest.json"
           manifest="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-android-provenance.json"
 
           for apk in "$signed" "$unsigned"; do
@@ -299,7 +393,7 @@ jobs:
             --apk "$signed" --apk "$unsigned" \
             --source-sha "$SOURCE_SHA" --repository "$APP_SOURCE_REPOSITORY"
 
-          SIGNED_APK="$signed" UNSIGNED_APK="$unsigned" REPRODUCIBILITY="$reproducibility" MANIFEST="$manifest" python3 - <<'PY'
+          SIGNED_APK="$signed" UNSIGNED_APK="$unsigned" REPRODUCIBILITY="$reproducibility" DRIVER_MANIFEST="$driver_manifest" MANIFEST="$manifest" python3 - <<'PY'
           import hashlib
           import json
           import os
@@ -321,6 +415,9 @@ jobs:
               "application_id": "com.dobby.vpn",
               "signer_certificate_sha256": os.environ["EXPECTED_ANDROID_SIGNER_SHA256"],
               "signed_payload_matches_unsigned": True,
+              "build_driver": json.loads(
+                  Path(os.environ["DRIVER_MANIFEST"]).read_text(encoding="utf-8")
+              ),
               "reproducibility": json.loads(
                   Path(os.environ["REPRODUCIBILITY"]).read_text(encoding="utf-8")
               ),

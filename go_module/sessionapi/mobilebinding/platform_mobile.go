@@ -18,7 +18,7 @@ import (
 // The manager owns protocol/runtime lifecycle; the callback is only the narrow
 // platform boundary for TUN, socket protection, and state publication.
 func New(callbacks PlatformCallbacks) *Binding {
-	platform := &platformAdapter{callbacks: callbacks, tunnels: newOneShotFDs(), active: make(map[string]v2.SessionRef)}
+	platform := &platformAdapter{callbacks: callbacks, tunnels: newTunnelFDs(), active: make(map[string]v2.SessionRef)}
 	manager := v2.NewManager(v2.ManagerOptions{Runtime: runtimebridge.New(platform), Platform: platform, Audit: appLog.SessionAuditSink{}})
 	return &Binding{manager: manager, platform: platform}
 }
@@ -31,24 +31,6 @@ func (b *Binding) SetPlatformCallbacks(callbacks PlatformCallbacks) {
 	}
 }
 
-// QueueOneShotTunnel transfers an already duplicated Android descriptor to
-// exactly one pending legacy session. On error the caller still owns fd and
-// must close it. New APIs should use AcquireTunnel callbacks instead.
-func (b *Binding) QueueOneShotTunnel(sessionID string, fd int32) error {
-	if b.platform == nil {
-		return fmt.Errorf("mobile platform is unavailable")
-	}
-	return b.platform.queue(sessionID, fd)
-}
-
-// DiscardOneShotTunnel closes a queued descriptor that can no longer belong to
-// a generation (for example a failed legacy configure or a stopped session).
-func (b *Binding) DiscardOneShotTunnel(sessionID string) {
-	if b.platform != nil {
-		b.platform.discard(sessionID)
-	}
-}
-
 // ProtectActiveSocket is installed into Android's protected dialer. A dial is
 // accepted only while exactly one manager-prepared generation is active.
 func (b *Binding) ProtectActiveSocket(fd int32) bool {
@@ -58,7 +40,7 @@ func (b *Binding) ProtectActiveSocket(fd int32) bool {
 type platformAdapter struct {
 	mu        sync.Mutex
 	callbacks PlatformCallbacks
-	tunnels   oneShotFDs
+	tunnels   tunnelFDs
 	active    map[string]v2.SessionRef
 }
 
@@ -66,21 +48,6 @@ func (p *platformAdapter) setCallbacks(callbacks PlatformCallbacks) {
 	p.mu.Lock()
 	p.callbacks = callbacks
 	p.mu.Unlock()
-}
-
-func (p *platformAdapter) queue(sessionID string, fd int32) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.tunnels.queue(sessionID, fd)
-}
-
-func (p *platformAdapter) discard(sessionID string) {
-	p.mu.Lock()
-	fd, ok := p.tunnels.take(sessionID)
-	p.mu.Unlock()
-	if ok {
-		_ = closeFD(fd)
-	}
 }
 
 func (p *platformAdapter) PrepareTunnel(_ context.Context, ref v2.SessionRef) (v2.PlatformLease, error) {
@@ -108,16 +75,6 @@ func (p *platformAdapter) Acquire(_ context.Context, ref v2.SessionRef) (runtime
 
 func (p *platformAdapter) acquire(ref v2.SessionRef) (int32, PlatformCallbacks, error) {
 	p.mu.Lock()
-	if fd, ok := p.tunnels.take(ref.SessionID); ok {
-		if !p.tunnels.reserve(fd, fdOwner{session: ref.SessionID, generation: ref.Generation}) {
-			p.mu.Unlock()
-			_ = closeFD(fd)
-			return 0, nil, fmt.Errorf("one-shot tunnel descriptor is already active")
-		}
-		callbacks := p.callbacks
-		p.mu.Unlock()
-		return fd, callbacks, nil
-	}
 	callbacks := p.callbacks
 	p.mu.Unlock()
 	if callbacks == nil {

@@ -32,9 +32,10 @@ The shared UI sends one source to Go:
    parsed profiles.
 
 Go fetches and parses the configuration, selects supported protocols, probes
-variants, and owns the runtime lease. Unsupported legacy sections are skipped
-with a typed warning and are never started; if no supported section remains,
-the request fails with a typed unsupported result.
+variants, and owns the runtime lease. A configuration containing a removed
+legacy section such as Cloak is rejected in full with a safe typed `UNSUPPORTED`
+result before profile selection or scenario execution; supported sections from
+the same input are never partially started.
 
 ```text
 Connect

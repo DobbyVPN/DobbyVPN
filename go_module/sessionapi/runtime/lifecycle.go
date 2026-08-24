@@ -8,27 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"strconv"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"go_module/core/pkg"
 	"go_module/dnscache"
 	"go_module/log"
 	"go_module/probe"
+	"go_module/protocol"
 	v2 "go_module/sessionapi/v2"
 	"go_module/tunnel"
 )
 
 const category = "sessionapi/runtime"
-
-// hardeningTestHealthAfterEnv is intentionally test-only. It is consumed only
-// by the private Linux qualification harness and has no effect unless an owner
-// explicitly enables it in the service environment.
-const hardeningTestHealthAfterEnv = "DOBBYVPN_HARDENING_TEST_FAIL_HEALTH_AFTER_SUCCESSFUL_CHECKS"
 
 // TunnelProvider is the deliberately narrow mobile boundary. Acquire must
 // return a newly allocated TUN for this exact SessionRef; a provider must not
@@ -57,11 +48,11 @@ type InputProvider interface {
 type InputLease interface{ Release(context.Context) error }
 
 // DeviceFactory receives only the normalized config for every protocol.
-type DeviceFactory func(context.Context, v2.SessionRef, v2.RuntimeProfile, SocketProtector) (pkg.ProtocolDevice, error)
+type DeviceFactory func(context.Context, v2.SessionRef, v2.RuntimeProfile, SocketProtector) (protocol.ProtocolDevice, error)
 
 type SocketProtector func(context.Context, int) error
 
-type CoreFactory func(pkg.ProtocolDevice, io.ReadWriteCloser) sessionCore
+type CoreFactory func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore
 
 type sessionCore interface {
 	Connect() error
@@ -132,41 +123,8 @@ func New(options Options) v2.Runtime {
 	if r.options.HealthFailureThreshold <= 0 {
 		r.options.HealthFailureThreshold = defaultHealthFailureThreshold()
 	}
-	configureHardeningTestHealth(&r.options)
+	configureTestSeams(&r.options)
 	return r
-}
-
-func configureHardeningTestHealth(options *Options) {
-	raw := strings.TrimSpace(os.Getenv(hardeningTestHealthAfterEnv))
-	if raw == "" {
-		return
-	}
-	after, err := strconv.Atoi(raw)
-	if err != nil || after < 0 {
-		log.Debugf(category, "ignoring invalid %s value=%q", hardeningTestHealthAfterEnv, raw)
-		return
-	}
-
-	var successful atomic.Int64
-	options.ConnectedHealth = func(ctx context.Context, ref v2.SessionRef) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if successful.Add(1) > int64(after) {
-			return fmt.Errorf("hardening test health fault after %d successful checks", after)
-		}
-		// The initial readiness check remains the real probe because it is held
-		// separately in InitialReadiness. Once the session is connected, this
-		// private fault seam must not enter that expensive live probe before the
-		// synthetic failure; doing so makes reconnect qualification depend on
-		// network timing instead of deterministically exercising failover.
-		return nil
-	}
-	// Qualification must reach the fault and the manager's cleanup path within
-	// its bounded scenario window. These overrides exist only with the explicit
-	// private harness variable above; normal sessions retain their defaults.
-	options.HealthInterval = time.Second
-	options.HealthFailureThreshold = 1
 }
 
 func defaultHealthFailureThreshold() int {
@@ -601,7 +559,7 @@ type routingInputs struct{ routes *tunnel.GeoRoutingLease }
 
 func (l routingInputs) Release(context.Context) error { l.routes.Release(); return nil }
 
-func unsupportedDevice(_ context.Context, _ v2.SessionRef, _ v2.RuntimeProfile, _ SocketProtector) (pkg.ProtocolDevice, error) {
+func unsupportedDevice(_ context.Context, _ v2.SessionRef, _ v2.RuntimeProfile, _ SocketProtector) (protocol.ProtocolDevice, error) {
 	return nil, errors.New("native protocol device factory is not installed")
 }
 

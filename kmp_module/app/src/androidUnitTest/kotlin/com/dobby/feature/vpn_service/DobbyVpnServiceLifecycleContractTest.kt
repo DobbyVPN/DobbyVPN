@@ -16,22 +16,22 @@ class DobbyVpnServiceLifecycleContractTest {
     fun foreground_promotion_precedes_tun_acquisition() {
         val service = AndroidServiceBoundaryModel()
 
-        assertTrue(service.start(generation = 1, protocol = Protocol.OUTLINE))
+        assertTrue(service.start(generation = 1))
 
-        assertEquals(listOf("foreground", "tun:1", "start:outline:1"), service.events)
+        assertEquals(listOf("foreground", "tun:1", "start:1"), service.events)
     }
 
     @Test
-    fun protocol_transition_closes_old_descriptor_before_new_tun_is_acquired() {
+    fun generation_replacement_closes_old_descriptor_before_new_tun_is_acquired() {
         val service = AndroidServiceBoundaryModel()
-        service.start(generation = 1, protocol = Protocol.TRUST_TUNNEL)
+        service.start(generation = 1)
 
-        assertTrue(service.start(generation = 2, protocol = Protocol.XRAY))
+        assertTrue(service.start(generation = 2))
 
         assertEquals(
             listOf(
-                "foreground", "tun:1", "start:trust_tunnel:1",
-                "foreground", "stop:trust_tunnel:1", "close:1", "tun:2", "start:xray:2",
+                "foreground", "tun:1", "start:1",
+                "foreground", "stop:1", "close:1", "tun:2", "start:2",
             ),
             service.events,
         )
@@ -39,38 +39,21 @@ class DobbyVpnServiceLifecycleContractTest {
     }
 
     @Test
-    fun trust_tunnel_to_outline_also_uses_a_fresh_tun() {
-        val service = AndroidServiceBoundaryModel()
-        service.start(generation = 1, protocol = Protocol.TRUST_TUNNEL)
-
-        assertTrue(service.start(generation = 2, protocol = Protocol.OUTLINE))
-
-        assertEquals(
-            listOf(
-                "foreground", "tun:1", "start:trust_tunnel:1",
-                "foreground", "stop:trust_tunnel:1", "close:1", "tun:2", "start:outline:2",
-            ),
-            service.events,
-        )
-    }
-
-    @Test
     fun stale_intents_cannot_stop_or_replace_active_tun() {
         val service = AndroidServiceBoundaryModel()
-        service.start(generation = 4, protocol = Protocol.OUTLINE)
+        service.start(generation = 4)
 
-        assertFalse(service.start(generation = 3, protocol = Protocol.XRAY))
+        assertFalse(service.start(generation = 3))
         assertFalse(service.stop(generation = 3))
 
         assertEquals(4L, service.openDescriptorGeneration)
-        assertEquals(Protocol.OUTLINE, service.activeProtocol)
     }
 
     @Test
     fun protection_failure_aborts_start_and_closes_descriptor() {
         val service = AndroidServiceBoundaryModel(protectionSucceeds = false)
 
-        assertFalse(service.start(generation = 1, protocol = Protocol.TRUST_TUNNEL))
+        assertFalse(service.start(generation = 1))
 
         assertEquals(listOf("foreground", "tun:1", "protect_failed:1", "close:1"), service.events)
         assertEquals(null, service.openDescriptorGeneration)
@@ -82,24 +65,21 @@ class DobbyVpnServiceLifecycleContractTest {
         service.restoreAfterProcessRecreation()
 
         assertEquals(null, service.openDescriptorGeneration)
-        assertTrue(service.start(generation = 9, protocol = Protocol.OUTLINE))
+        assertTrue(service.start(generation = 9))
         assertEquals(9L, service.openDescriptorGeneration)
     }
 }
-
-private enum class Protocol { OUTLINE, XRAY, TRUST_TUNNEL }
 
 private class AndroidServiceBoundaryModel(
     private val protectionSucceeds: Boolean = true,
 ) {
     val events = mutableListOf<String>()
-    var activeProtocol: Protocol? = null
-        private set
     var openDescriptorGeneration: Long? = null
         private set
     private var activeGeneration = -1L
+    private var started = false
 
-    fun start(generation: Long, protocol: Protocol): Boolean {
+    fun start(generation: Long): Boolean {
         if (generation < activeGeneration) return false
         events += "foreground"
         if (generation == activeGeneration && openDescriptorGeneration != null) return false
@@ -112,8 +92,8 @@ private class AndroidServiceBoundaryModel(
             teardown()
             return false
         }
-        activeProtocol = protocol
-        events += "start:${protocol.name.lowercase()}:$generation"
+        started = true
+        events += "start:$generation"
         return true
     }
 
@@ -126,14 +106,14 @@ private class AndroidServiceBoundaryModel(
 
     fun restoreAfterProcessRecreation() {
         activeGeneration = -1L
-        activeProtocol = null
+        started = false
         openDescriptorGeneration = null
     }
 
     private fun teardown() {
-        activeProtocol?.let { events += "stop:${it.name.lowercase()}:$activeGeneration" }
+        if (started) events += "stop:$activeGeneration"
         openDescriptorGeneration?.let { events += "close:$it" }
-        activeProtocol = null
+        started = false
         openDescriptorGeneration = null
     }
 }

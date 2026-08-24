@@ -163,22 +163,22 @@ public class VpnManagerImpl {
         }
     }
 
-    public func start(isProtocolProbe: Bool) {
+    public func start() {
         let generation = IOSVpnConnectionAuthority.beginStart()
         activeGeneration = generation
         publishSessionEvent(state: "PREPARING")
-        self.logs.writeLog(log: "call start launchId=\(Self.launchId) isProtocolProbe=\(isProtocolProbe)")
+        self.logs.writeLog(log: "call start launchId=\(Self.launchId)")
         self.logs.writeLog(log: "Routing table without vpn:")
         getOrCreateManager { manager, _ in
             guard IOSVpnConnectionAuthority.isCurrent(generation) else {
                 self.logs.writeLog(log: "[start] stale generation=\(generation) ignored before manager start")
                 return
             }
-            self.handleStart(manager: manager, isProtocolProbe: isProtocolProbe, generation: generation)
+            self.handleStart(manager: manager, generation: generation)
         }
     }
 
-    private func handleStart(manager: NETunnelProviderManager?, retryAttempt: Int = 0, isProtocolProbe: Bool, generation: UInt64) {
+    private func handleStart(manager: NETunnelProviderManager?, retryAttempt: Int = 0, generation: UInt64) {
         guard IOSVpnConnectionAuthority.isCurrent(generation) else { return }
         guard let manager = manager else {
             self.logs.writeLog(log: "Created VPNManager is nil")
@@ -194,7 +194,7 @@ public class VpnManagerImpl {
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.disconnectingStartRetryDelay) { [weak self] in
                 guard let self else { return }
                 self.getOrCreateManager { manager, _ in
-                    self.handleStart(manager: manager, retryAttempt: nextAttempt, isProtocolProbe: isProtocolProbe, generation: generation)
+                    self.handleStart(manager: manager, retryAttempt: nextAttempt, generation: generation)
                 }
             }
             return
@@ -216,7 +216,6 @@ public class VpnManagerImpl {
                     self.handleStart(
                         manager: nextManager,
                         retryAttempt: retryAttempt + 1,
-                        isProtocolProbe: isProtocolProbe,
                         generation: generation
                     )
                 }
@@ -242,12 +241,12 @@ public class VpnManagerImpl {
                 self.logs.writeLog(log: "Failed to save VPN configuration: \(saveError)")
             } else {
                 self.logs.writeLog(log: "VPN configuration saved successfully!")
-                self.reloadManagerAndStartTunnel(fallbackManager: manager, isProtocolProbe: isProtocolProbe, generation: generation)
+                self.reloadManagerAndStartTunnel(fallbackManager: manager, generation: generation)
             }
         }
     }
 
-    private func reloadManagerAndStartTunnel(fallbackManager: NETunnelProviderManager, isProtocolProbe: Bool, generation: UInt64) {
+    private func reloadManagerAndStartTunnel(fallbackManager: NETunnelProviderManager, generation: UInt64) {
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, loadError in
             guard let self else { return }
             guard IOSVpnConnectionAuthority.isCurrent(generation) else {
@@ -274,9 +273,7 @@ public class VpnManagerImpl {
             do {
                 self.logs.writeLog(log: "self.vpnManager = \(managerToStart)")
                 self.logs.writeLog(log: "starting tunnel status=\(self.statusName(managerToStart.connection.status)) raw=\(managerToStart.connection.status.rawValue)")
-                try managerToStart.connection.startVPNTunnel(options: [
-                    "dobbyProtocolProbe": NSNumber(value: isProtocolProbe)
-                ])
+                try managerToStart.connection.startVPNTunnel(options: nil)
                 self.logs.writeLog(log: "startVPNTunnel returned; manager.connection.status = \(self.statusName(managerToStart.connection.status)) raw=\(managerToStart.connection.status.rawValue)")
             } catch {
                 self.logs.writeLog(log: "Error starting VPNTunnel \(error)")

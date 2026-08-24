@@ -47,9 +47,141 @@ func TestIsWindowsPathPreventsDriveLetterURLClassification(t *testing.T) {
 
 func TestWindowsServiceLogPathMatchesDesktopContract(t *testing.T) {
 	home := filepath.FromSlash(`C:/Users/dobbytest`)
-	want := filepath.FromSlash(`C:/Users/dobbytest/.myapp/go_desktop_service_logs.jsonl`)
+	want := filepath.FromSlash(`C:/Users/dobbytest/.dobbyvpn/go_desktop_service_logs.jsonl`)
 	if got := windowsServiceLogPath(home); got != want {
 		t.Fatalf("windowsServiceLogPath(%q) = %q, want %q", home, got, want)
+	}
+}
+
+func TestFreshCurrentLogLeavesLegacyLogUntouched(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Chmod(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(home, ".myapp", "app_logs.txt")
+	current := applicationLogPath(home)
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("legacy remains\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := clearLocalLogFile(current); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != localLogClearMarker {
+		t.Fatalf("fresh current log = %q, want marker %q", data, localLogClearMarker)
+	}
+	legacyData, err := os.ReadFile(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(legacyData) != "legacy remains\n" {
+		t.Fatalf("legacy log changed = %q", legacyData)
+	}
+}
+
+func TestClearLocalLogFileRemovesHistoryAndWritesBoundaryMarker(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Chmod(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".dobbyvpn", "app_logs.txt")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("old diagnostic\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := clearLocalLogFile(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != localLogClearMarker {
+		t.Fatalf("cleared log = %q, want marker %q", data, localLogClearMarker)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("cleared log permissions = %v, %v", info, err)
+	}
+}
+
+func TestClearLocalLogFileRejectsSymlink(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target.log")
+	link := filepath.Join(root, "app_logs.txt")
+	if err := os.WriteFile(target, []byte("must remain\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := clearLocalLogFile(link); err == nil {
+		t.Fatal("symlink log path unexpectedly cleared")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "must remain\n" {
+		t.Fatalf("symlink target changed: %q", data)
+	}
+}
+
+func TestClearLocalLogFileRejectsSymlinkedParent(t *testing.T) {
+	root := t.TempDir()
+	targetDir := filepath.Join(root, "target")
+	if err := os.MkdirAll(targetDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(targetDir, "app_logs.txt")
+	if err := os.WriteFile(target, []byte("must remain\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	aliasDir := filepath.Join(root, ".dobbyvpn")
+	if err := os.Symlink(targetDir, aliasDir); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := clearLocalLogFile(filepath.Join(aliasDir, "app_logs.txt")); err == nil {
+		t.Fatal("clear accepted a symlinked parent")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "must remain\n" {
+		t.Fatalf("symlink target changed after parent rejection: %q", data)
+	}
+}
+
+func TestLogsClearDoesNotRequireControlService(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Chmod(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	path := applicationLogPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("old application diagnostic\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := run([]string{"logs", "clear"}); got != exitOK {
+		t.Fatalf("logs clear exit=%d, want %d", got, exitOK)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != localLogClearMarker {
+		t.Fatalf("logs clear wrote %q, want marker %q", data, localLogClearMarker)
 	}
 }
 

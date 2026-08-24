@@ -63,7 +63,7 @@ class LogsRepositoryCommonTest {
         val merged = repository.readAllLogs()
         assertEquals(goLine, merged.first())
         assertEquals(appLine, merged[1])
-        assertTrue(repository.readLogs(10).first().contains("IDLE -> CONFIGURED"))
+        assertTrue(repository.readUILogs().first().contains("IDLE -> CONFIGURED"))
 
         assertTrue(repository.clearLogs())
         val afterClear = repository.readAllLogs()
