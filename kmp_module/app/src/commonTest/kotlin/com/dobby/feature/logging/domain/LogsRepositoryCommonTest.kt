@@ -58,7 +58,11 @@ class LogsRepositoryCommonTest {
         )
         write(primary, appLine)
         write(goProducer, goLine)
-        val repository = LogsRepository(primary, additionalLogFilePaths = listOf(goProducer))
+        val repository = LogsRepository.withFileSystemForTesting(
+            primary,
+            NonIdenticalFileSystem(fileSystem),
+            additionalLogFilePaths = listOf(goProducer),
+        )
 
         val merged = repository.readAllLogs()
         assertEquals(goLine, merged.first())
@@ -206,5 +210,11 @@ class LogsRepositoryCommonTest {
 
     private class FailingMetadataFileSystem(delegate: FileSystem) : ForwardingFileSystem(delegate) {
         override fun metadataOrNull(path: Path) = error("metadata unavailable")
+    }
+
+    private class NonIdenticalFileSystem(
+        private val delegateFs: FileSystem,
+    ) : ForwardingFileSystem(delegateFs) {
+        override fun metadataOrNull(path: Path) = delegateFs.metadataOrNull(path)
     }
 }

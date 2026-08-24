@@ -40,7 +40,8 @@ class LogsRepository private constructor(
         internal fun withFileSystemForTesting(
             logFilePath: Path,
             storageFileSystem: FileSystem,
-        ): LogsRepository = LogsRepository(logFilePath, emptyList(), storageFileSystem)
+            additionalLogFilePaths: List<Path> = emptyList(),
+        ): LogsRepository = LogsRepository(logFilePath, additionalLogFilePaths, storageFileSystem)
     }
 
     private val producerLogPaths = (listOf(logFilePath) + additionalLogFilePaths).distinct()
