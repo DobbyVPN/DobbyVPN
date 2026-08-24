@@ -718,7 +718,7 @@ grep -F 'Pkg.Revision = 27.3.13750724' "$ANDROID_NDK_HOME/source.properties" >/d
   echo 'Android NDK revision is not 27.3.13750724' >&2
   exit 2
 }
-gradle_version=$("$gradle_bin" --version --no-daemon | tee /dev/stderr | awk '/^Gradle / {print $2; exit}')
+gradle_version=$("$gradle_bin" --version --no-daemon | tee /dev/stderr | awk '/^Gradle / && !seen {version=$2; seen=1} END {if (seen) print version}')
 [[ "$gradle_version" == '8.13' ]] || { echo 'Gradle version is not 8.13' >&2; exit 2; }
 
 gradle_offline=${DOBBYVPN_GRADLE_OFFLINE:-0}
