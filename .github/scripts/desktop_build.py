@@ -684,7 +684,11 @@ def run_capture(command: list[str], cwd: Path = ROOT_DIR) -> str | None:
         return None
     if result.stderr:
         emit_process_diagnostic(f"[!] Probe diagnostics: {printable}", result.stderr)
-    return result.stdout.strip()
+    # Some version probes (notably ``java -version``) write their successful
+    # version banner to stderr rather than stdout.  Keep the complete stderr
+    # visible above, but use it as the probe value when stdout is empty so a
+    # valid tool is not misclassified as unavailable.
+    return (result.stdout or result.stderr or "").strip()
 
 
 def set_env(name: str, value: str) -> None:
