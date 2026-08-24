@@ -406,7 +406,7 @@ fi
 evidence_dir=${DOBBYVPN_BUILD_EVIDENCE_DIR:-}
 stdout_original=''
 stderr_original=''
-if [[ -n "$evidence_dir" ]]; then
+start_evidence_capture() {
   [[ "$evidence_dir" = /* && ! -L "$evidence_dir" ]] || {
     echo 'Android build evidence directory must be an absolute non-symlink path' >&2
     exit 2
@@ -421,7 +421,7 @@ if [[ -n "$evidence_dir" ]]; then
   chmod 600 "$stdout_original" "$stderr_original"
   exec > >(tee -- "$stdout_original") \
     2> >(tee -- "$stderr_original" >&2)
-fi
+}
 
 validate_destinations
 
@@ -548,8 +548,6 @@ for path_key, digest_key in executables.items():
 PY
 }
 
-validate_tool_closure
-
 source_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit})
 source_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree})
 [[ "$source_commit" =~ ^[0-9a-f]{40}$ && "$source_tree" =~ ^[0-9a-f]{40}$ ]] || {
@@ -587,6 +585,10 @@ if [[ "$closure_mode" == 1 ]]; then
     --closure-evidence "$dependency_closure" --print-staged-paths > "$closure_allowlist_file"
   validate_source_checkout_with_closure "$source_root" "$closure_allowlist_file" "$dependency_closure"
 fi
+if [[ -n "$evidence_dir" ]]; then
+  start_evidence_capture
+fi
+validate_tool_closure
 gradle_proof_args=()
 if [[ -n "$gradle_archive" || -n "$gradle_root" ]]; then
   [[ -n "$gradle_archive" && -n "$gradle_root" ]] || {
