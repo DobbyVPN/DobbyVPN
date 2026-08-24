@@ -287,6 +287,18 @@ source_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree})
   exit 2
 }
 
+# Report source-integrity failures before resolving optional owner-staged
+# dependency helpers. This preserves the request-bound diagnostic contract and
+# ensures a tampered checkout cannot be obscured by a missing helper fixture.
+if ! "$git_bin" -C "$source_root" diff --quiet --no-ext-diff HEAD --; then
+  echo 'source checkout has tracked worktree modifications' >&2
+  exit 2
+fi
+if ! "$git_bin" -C "$source_root" diff --cached --quiet --no-ext-diff HEAD --; then
+  echo 'source checkout has staged modifications' >&2
+  exit 2
+fi
+
 # Resolve the helper through the exact source checkout before using it to
 # inspect owner-staged state.  A lexical prefix such as /source/../outside is
 # not an acceptable trust boundary.
@@ -320,14 +332,6 @@ python3 "$dependency_helper" \
 # path outside the declared owner closure before creating any build output;
 # the runner's detached bundle materialization and workflow source copy are
 # expected to be clean apart from this request-bound closure.
-if ! "$git_bin" -C "$source_root" diff --quiet --no-ext-diff HEAD --; then
-  echo 'source checkout has tracked worktree modifications' >&2
-  exit 2
-fi
-if ! "$git_bin" -C "$source_root" diff --cached --quiet --no-ext-diff HEAD --; then
-  echo 'source checkout has staged modifications' >&2
-  exit 2
-fi
 SOURCE_ROOT="$source_root" GIT_BIN="$git_bin" DEPENDENCY_CLOSURE="$dependency_closure" CLOSURE_ALLOWLIST="$closure_allowlist_file" python3 - <<'PY'
 import os
 import subprocess
@@ -365,7 +369,7 @@ ignored = git_paths("--others", "--ignored", "--exclude-standard")
 staged = (untracked | ignored) & allowed
 unexpected = sorted((untracked | ignored) - allowed)
 if unexpected:
-    raise SystemExit("source checkout contains undeclared untracked/ignored state: " + ", ".join(unexpected[:5]))
+    raise SystemExit("source checkout contains undeclared untracked/ignored build state: " + ", ".join(unexpected[:5]))
 if staged:
     closure_relative = closure_path.relative_to(source)
     closure_directory = source / closure_relative.parent
