@@ -61,6 +61,7 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
             apk.write(b"apk")
             apk.flush()
             with (
+                mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}, clear=False),
                 mock.patch.object(VERIFY, "run_apkanalyzer", return_value=completed),
                 mock.patch.object(VERIFY.sys, "stderr", diagnostics),
             ):
@@ -78,6 +79,7 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
             apk.write(b"apk")
             apk.flush()
             with (
+                mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}, clear=False),
                 mock.patch.object(VERIFY, "run_apkanalyzer", side_effect=timeout),
                 mock.patch.object(VERIFY.sys, "stderr", diagnostics),
             ):

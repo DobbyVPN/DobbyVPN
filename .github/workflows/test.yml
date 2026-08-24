@@ -45,8 +45,10 @@ jobs:
           persist-credentials: false
       - name: Enforce secretless PR workflow policy
         run: |
+          python3 -m pip install --disable-pip-version-check --no-input --user pytest==8.3.5
           python3 .github/scripts/check_workflow_policy.py
           python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+          python3 -m pytest .github/scripts/test_android_dependency_provenance.py
 
   go:
     name: Go tests
