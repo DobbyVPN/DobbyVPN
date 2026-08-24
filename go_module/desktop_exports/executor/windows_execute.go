@@ -140,6 +140,10 @@ func initExplicitLocalLog() error {
 
 func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (svcSpecificEC bool, exitCode uint32) {
 	changes <- svc.Status{State: svc.StartPending}
+	if err := recoverInterruptedState(); err != nil {
+		log.Debugf(desktopLogCategory, "[ERROR] failed to recover interrupted product state: %v", err)
+		return true, 1
+	}
 
 	token, err := controlplane.LoadOrCreateControlToken()
 	if err != nil {
@@ -189,6 +193,9 @@ func runService(port int) error {
 }
 
 func run(port int) {
+	if err := recoverInterruptedState(); err != nil {
+		panic(fmt.Sprintf("failed to recover interrupted product state: %v", err))
+	}
 	token, err := controlplane.LoadOrCreateControlToken()
 	if err != nil {
 		panic(fmt.Sprintf("failed to prepare control authentication: %v", err))

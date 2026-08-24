@@ -43,12 +43,12 @@ func newNativeRuntime(device protocol.ProtocolDevice) *nativeRuntime {
 		app: &internal.App{
 			ProtocolDevice: device,
 			RoutingConfig: &internal.RoutingConfig{
-				TunDeviceName:        "dobby233",
+				TunDeviceName:        ownedTunName,
 				TunDeviceIP:          cfg.TunDevice,
 				TunDeviceMTU:         1500,
 				TunGatewayCIDR:       cfg.TunGateway + "/32",
-				RoutingTableID:       233,
-				RoutingTablePriority: 23333,
+				RoutingTableID:       ownedRoutingTableID,
+				RoutingTablePriority: ownedRoutingPriority,
 				DNSServerIP:          "9.9.9.9",
 			},
 		},

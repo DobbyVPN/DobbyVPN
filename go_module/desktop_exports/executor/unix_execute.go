@@ -79,6 +79,9 @@ func run(_ int) {
 	logrus.StandardLogger().ExitFunc = func(code int) {
 		panic(fmt.Sprintf("fatal error (exit code %d)", code))
 	}
+	if err := recoverInterruptedState(); err != nil {
+		panic(fmt.Sprintf("failed to recover interrupted product state: %v", err))
+	}
 
 	flag.Parse()
 	lis, err := controlplane.ListenControlSocket()
