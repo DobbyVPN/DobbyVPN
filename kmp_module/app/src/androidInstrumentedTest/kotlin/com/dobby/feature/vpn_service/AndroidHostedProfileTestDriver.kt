@@ -94,6 +94,11 @@ internal object AndroidHostedCommandContract {
         "observe_routing_identity",
         "measure_stability",
         "measure_throughput",
+        // Private local Harness extension.  The public hosted Torturer
+        // adapter deliberately does not advertise this capability; the
+        // owner-only Android lane has a bounded combined seam instead of
+        // pretending that several unrelated wire operations are endurance.
+        "measure_endurance",
         "disconnect",
         "reconnect",
         "inspect_cleanup",
@@ -316,6 +321,8 @@ internal interface AndroidHostedPlatform {
     suspend fun observeRoutingIdentity(): Boolean
     suspend fun measureStability(): Boolean
     suspend fun measureThroughput(): AndroidHostedMetrics
+    /** Bounded local-Harness stability plus throughput proof. */
+    suspend fun measureEndurance(): AndroidHostedMetrics = measureThroughput()
     suspend fun awaitDisconnected(): Boolean
 }
 
@@ -499,6 +506,16 @@ internal class AndroidHostedProfileTestDriver(
                 observation.latencyMs = metrics.latencyMs
                 observation.downloadMbps = metrics.downloadMbps
                 observation.uploadMbps = metrics.uploadMbps
+            }
+            "measure_endurance" -> {
+                val metrics = platform.measureEndurance()
+                observation.stabilityVerified = true
+                observation.latencyMs = metrics.latencyMs
+                observation.downloadMbps = metrics.downloadMbps
+                observation.uploadMbps = metrics.uploadMbps
+                if (metrics.latencyMs <= 0.0 || metrics.downloadMbps <= 0.0 || metrics.uploadMbps <= 0.0) {
+                    throw AndroidHostedOperationFailure("ENDURANCE_METRICS_INVALID")
+                }
             }
             "disconnect" -> {
                 if (!stopCurrentSession(controller, getGeneration, setGeneration)) {
@@ -818,6 +835,18 @@ internal class RealAndroidHostedPlatform(
         } finally {
             Arrays.fill(payload, 0)
         }
+    }
+
+    override suspend fun measureEndurance(): AndroidHostedMetrics = withContext(Dispatchers.IO) {
+        // Keep the local endurance proof inside the canonical 60-second step:
+        // stability performs bounded repeated identity requests, then the
+        // complete latency/download/upload transfer is measured once.  The
+        // public hosted adapter intentionally keeps this private extension
+        // unavailable until it has an equivalent public seam.
+        if (!measureStability()) {
+            throw AndroidHostedOperationFailure("STABILITY_UNVERIFIED")
+        }
+        measureThroughput()
     }
 
     private fun measureLatency(rawUrl: String): TransferMeasurement = withNetworkConnection(rawUrl, upload = false) { connection ->
