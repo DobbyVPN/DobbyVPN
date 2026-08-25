@@ -765,7 +765,7 @@ internal class RealAndroidHostedPlatform(
         // object.  Latency only needs the time to the first response byte; it
         // must not be treated as a bounded complete-body transfer (which would
         // reject a valid 1 MiB response as NETWORK_BODY_INVALID).
-        val latency = measureLatency(endpoints.latencyUrl)
+        val latency = measureLatency(endpoints.latencyUrl).elapsedMs
         val download = measureTransfer(endpoints.downloadUrl, upload = false, maximumBytes = THROUGHPUT_BYTES).rateMbps
         val payload = ByteArray(THROUGHPUT_BYTES)
         try {
