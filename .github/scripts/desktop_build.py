@@ -825,6 +825,23 @@ def local_go_root() -> Path:
     return TOOLS_DIR / f"go-{go_version()}"
 
 
+def configure_go_root(go_executable: Path) -> None:
+    """Bind Go's runtime root to the installation that owns the executable.
+
+    Go distributions extracted below ``.local-tools`` are relocatable, but
+    the ``go`` launcher cannot infer ``GOROOT`` when its installation is not
+    under a standard system prefix.  This is especially visible on Windows:
+    the initial version probe may succeed only after the root is explicit,
+    and later module commands can otherwise fail inside the Go runtime.
+    """
+    try:
+        root = go_executable.resolve().parent.parent
+    except OSError:
+        return
+    if (root / "bin").is_dir():
+        set_env("GOROOT", str(root))
+
+
 def find_go() -> Path | None:
     version = go_version()
     candidates: list[Path] = []
@@ -834,6 +851,7 @@ def find_go() -> Path | None:
 
     for candidate in candidates:
         if candidate.exists():
+            configure_go_root(candidate)
             output = run_capture([str(candidate), "version"])
             if output and f"go{version}" in output:
                 return candidate.parent
@@ -870,6 +888,7 @@ def install_go(skip_deps: bool) -> None:
     finally:
         shutil.rmtree(extract_dir, ignore_errors=True)
 
+    configure_go_root(go_root / "bin" / ("go.exe" if current == "windows" else "go"))
     prepend_path(go_root / "bin")
     log(f"Installed Go {go_version()} into {go_root}")
 
