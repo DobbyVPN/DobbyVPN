@@ -843,6 +843,12 @@ internal class RealAndroidHostedPlatform(
         connection.connectTimeout = NETWORK_TIMEOUT_MILLIS
         connection.readTimeout = NETWORK_TIMEOUT_MILLIS
         connection.instanceFollowRedirects = false
+        // Keep the canonical identity/throughput probes on the same bounded
+        // request contract as the private and signed-release Android checks.
+        // The identity endpoint may return a challenge body for the default
+        // Android client header; treating that as a VPN result would hide a
+        // request-contract mismatch as NETWORK_BODY_INVALID.
+        connection.setRequestProperty("User-Agent", "DobbyVPN-Harness/1")
         if (upload) connection.setRequestProperty("Content-Type", "application/octet-stream")
         return try {
             block(connection)
