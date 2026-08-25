@@ -705,7 +705,11 @@ internal class RealAndroidHostedPlatform(
     private var baselineFingerprint: ByteArray? = null
     private var lastTunnelFingerprint: ByteArray? = null
 
-    override suspend fun requestConsent() = withContext(Dispatchers.Main) {
+    // Instrumentation's synchronous activity launcher must not run on Android's
+    // application-main thread.  The canonical driver is already a suspendable
+    // instrumentation worker, so keep the UI interaction off Main while the
+    // system dialog itself is still driven through the real Android APIs.
+    override suspend fun requestConsent() = withContext(Dispatchers.Default) {
         if (VpnService.prepare(context) == null) return@withContext
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.startActivitySync(
