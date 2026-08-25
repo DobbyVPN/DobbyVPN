@@ -16,15 +16,18 @@ import com.dobby.feature.main.domain.SessionFailureCode
 import com.dobby.feature.main.domain.SessionState
 import com.dobby.feature.main.ui.MainUiState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * A deliberately thin UI adapter around sessionapi/v2. Go owns config parsing, profile
@@ -85,7 +88,11 @@ class MainViewModel(
         val rawConfig = connectionUrl.encodeToByteArray()
         configsRepository.setConnectionURL(connectionUrl)
 
-        return when (val result = sessionController.configure(rawConfig)) {
+        // SessionController bridges into synchronous Go/platform calls that may wait for
+        // VPN service readiness or network probes; keep those calls off the UI dispatcher.
+        return when (val result = withContext(Dispatchers.Default) {
+            sessionController.configure(rawConfig)
+        }) {
             is SessionControllerResult.Success -> {
                 configured = true
                 logger.log("Session configuration accepted: profiles=${result.value.profiles.size}")
@@ -114,7 +121,9 @@ class MainViewModel(
                     // a recreated UI without introducing timer polling.
                     reconcileSession()
                     val afterSequence = lifecycleMutex.withLock { lifecycle.lastSequence }
-                    sessionController.watch(afterSequence).collect(::renderEvent)
+                    sessionController.watch(afterSequence)
+                        .flowOn(Dispatchers.Default)
+                        .collect(::renderEvent)
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Exception) {
@@ -147,7 +156,9 @@ class MainViewModel(
             return@withLock false
         }
         startInFlight = true
-        when (val result = sessionController.start(SessionStartTarget.AutoSelect)) {
+        when (val result = withContext(Dispatchers.Default) {
+            sessionController.start(SessionStartTarget.AutoSelect)
+        }) {
             is SessionControllerResult.Success -> {
                 startInFlight = false
                 val state = lifecycle.begin(result.value)
@@ -179,7 +190,9 @@ class MainViewModel(
                 activeGeneration
             } ?: return@launch
 
-            when (val result = sessionController.stop(generation)) {
+            when (val result = withContext(Dispatchers.Default) {
+                sessionController.stop(generation)
+            }) {
                 is SessionControllerResult.Success -> logger.log("Session stop accepted for generation=$generation")
                 is SessionControllerResult.Failure ->
                     logger.log("Session stop rejected: generation=$generation failureCode=${result.code.name}")
@@ -190,7 +203,9 @@ class MainViewModel(
 
     suspend fun destroySession() {
         stopSessionObservation()
-        when (val result = sessionController.destroy()) {
+        when (val result = withContext(Dispatchers.Default) {
+            sessionController.destroy()
+        }) {
             is SessionControllerResult.Success -> publish(VpnConnectionState.DISCONNECTED)
             is SessionControllerResult.Failure ->
                 logger.log("Session destroy failed: failureCode=${result.code.name}")
@@ -239,11 +254,15 @@ class MainViewModel(
 
     private suspend fun reconcileSession() {
         val afterSequence = lifecycleMutex.withLock { lifecycle.lastSequence }
-        when (val result = sessionController.observe(afterSequence)) {
+        when (val result = withContext(Dispatchers.Default) {
+            sessionController.observe(afterSequence)
+        }) {
             is SessionControllerResult.Success -> {
                 for (event in result.value.events) renderEvent(event)
                 if (result.value.events.isEmpty()) {
-                    when (val snapshot = sessionController.snapshot()) {
+                    when (val snapshot = withContext(Dispatchers.Default) {
+                        sessionController.snapshot()
+                    }) {
                         is SessionControllerResult.Success -> {
                             lifecycleMutex.withLock {
                                 lifecycle.reconcile(snapshot.value)?.let { state -> publish(state, snapshot.value.lastFailureCode) }
