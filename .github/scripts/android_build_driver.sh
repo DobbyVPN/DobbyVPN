@@ -931,7 +931,8 @@ verify_source_integrity_after_build() {
   if [[ "$closure_mode" == 1 ]]; then
     SOURCE_ROOT="$source_root" GIT_BIN="$git_bin" CLOSURE_ALLOWLIST="$closure_allowlist_file" \
       OUTPUT_REL="${output#"$source_root/"}" FIRST_OUTPUT_REL="${first_output#"$source_root/"}" \
-      REPRO_REL="${reproducibility#"$source_root/"}" python3 - <<'PY'
+      REPRO_REL="${reproducibility#"$source_root/"}" \
+      DEPENDENCY_REL="${dependency_manifest#"$source_root/"}" python3 - <<'PY'
 import os
 import subprocess
 from pathlib import Path
@@ -939,7 +940,12 @@ from pathlib import Path
 source = Path(os.environ["SOURCE_ROOT"]).resolve(strict=True)
 git_bin = os.environ["GIT_BIN"]
 allowed = set(Path(os.environ["CLOSURE_ALLOWLIST"]).read_text(encoding="utf-8").splitlines())
-allowed.update({os.environ["OUTPUT_REL"], os.environ["FIRST_OUTPUT_REL"], os.environ["REPRO_REL"]})
+allowed.update({
+    os.environ["OUTPUT_REL"],
+    os.environ["FIRST_OUTPUT_REL"],
+    os.environ["REPRO_REL"],
+    os.environ["DEPENDENCY_REL"],
+})
 allowed_prefixes = (
     ".android-build/",
     "kmp_module/build/",
@@ -989,7 +995,7 @@ PY
   fi
   while IFS= read -r -d '' relative; do
     case "$relative" in
-      "${output#"$source_root/"}"|"${reproducibility#"$source_root/"}") ;;
+      "${output#"$source_root/"}"|"${reproducibility#"$source_root/"}"|"${dependency_manifest#"$source_root/"}") ;;
       *)
         echo "Android build created an unexpected untracked source path: $relative" >&2
         exit 2
