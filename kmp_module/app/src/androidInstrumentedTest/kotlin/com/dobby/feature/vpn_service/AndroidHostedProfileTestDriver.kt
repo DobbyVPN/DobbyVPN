@@ -761,7 +761,11 @@ internal class RealAndroidHostedPlatform(
     }
 
     override suspend fun measureThroughput(): AndroidHostedMetrics = withContext(Dispatchers.IO) {
-        val latency = measureTransfer(endpoints.latencyUrl, upload = false, maximumBytes = 64 * 1024).elapsedMs
+        // The canonical latency endpoint is intentionally a reusable download
+        // object.  Latency only needs the time to the first response byte; it
+        // must not be treated as a bounded complete-body transfer (which would
+        // reject a valid 1 MiB response as NETWORK_BODY_INVALID).
+        val latency = measureLatency(endpoints.latencyUrl)
         val download = measureTransfer(endpoints.downloadUrl, upload = false, maximumBytes = THROUGHPUT_BYTES).rateMbps
         val payload = ByteArray(THROUGHPUT_BYTES)
         try {
@@ -770,6 +774,19 @@ internal class RealAndroidHostedPlatform(
         } finally {
             Arrays.fill(payload, 0)
         }
+    }
+
+    private fun measureLatency(rawUrl: String): TransferMeasurement = withNetworkConnection(rawUrl, upload = false) { connection ->
+        val started = System.nanoTime()
+        requireSuccess(connection)
+        connection.inputStream.use { input ->
+            if (input.read() < 0) throw AndroidHostedOperationFailure("NETWORK_BODY_INVALID")
+        }
+        val elapsedNanos = System.nanoTime() - started
+        if (elapsedNanos <= 0L || elapsedNanos > TimeUnit.SECONDS.toNanos(THROUGHPUT_TIMEOUT_SECONDS)) {
+            throw AndroidHostedOperationFailure("THROUGHPUT_TIMEOUT")
+        }
+        TransferMeasurement(rateMbps = 0.0, elapsedMs = elapsedNanos / NANOS_PER_MILLISECOND)
     }
 
     override suspend fun awaitDisconnected(): Boolean = withContext(Dispatchers.IO) {
