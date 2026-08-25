@@ -425,12 +425,15 @@ internal class AndroidHostedProfileTestDriver(
                 cleanupSucceeded = stopSession(controller, active) && cleanupSucceeded
                 generation = null
             }
-            val cleanupSnapshot = runCatching { controller.snapshot() }.getOrNull()?.let { result ->
-                result is SessionControllerResult.Success &&
-                    (result.value.state == SessionState.IDLE ||
-                        (!hadActiveGeneration && result.value.state == SessionState.CONFIGURED)) &&
-                    result.value.cleanupComplete
-            } == true
+            // Stop is deliberately asynchronous: the Go API acknowledges the
+            // transition to STOPPING before the platform callbacks finish and
+            // publish IDLE.  Reading one snapshot immediately after stop can
+            // therefore report a transient STOPPING state and make destroy
+            // return CONFLICT even though the tunnel is already draining.
+            // Poll the authoritative snapshot until the lifecycle is actually
+            // clean, retaining any transport exception in the instrumentation
+            // output instead of silently discarding it.
+            val cleanupSnapshot = awaitCleanSnapshot(controller, hadActiveGeneration)
             cleanupSucceeded = runCatching { controller.destroy() is SessionControllerResult.Success }
                 .getOrDefault(false) && cleanupSucceeded
             runCatching { context.stopService(DobbyVpnService.createStopIntent(context, 0, false)) }
@@ -685,6 +688,36 @@ internal class AndroidHostedProfileTestDriver(
 
     private suspend fun stopSession(controller: SessionController, generation: ULong): Boolean =
         runCatching { controller.stop(generation) is SessionControllerResult.Success }.getOrDefault(false)
+
+    private suspend fun awaitCleanSnapshot(
+        controller: SessionController,
+        hadActiveGeneration: Boolean,
+    ): Boolean {
+        var lastFailure: Throwable? = null
+        repeat(80) { attempt ->
+            val result = try {
+                controller.snapshot()
+            } catch (failure: Throwable) {
+                if (failure is CancellationException) throw failure
+                lastFailure = failure
+                failure.printStackTrace()
+                null
+            }
+            val clean = (result as? SessionControllerResult.Success)?.value?.let { snapshot ->
+                (snapshot.state == SessionState.IDLE ||
+                    (!hadActiveGeneration && snapshot.state == SessionState.CONFIGURED)) &&
+                    snapshot.cleanupComplete
+            } == true
+            if (clean) return true
+            if (attempt < 79) delay(250L)
+        }
+        lastFailure?.let { failure ->
+            System.err.println(
+                "android_hosted_cleanup_snapshot_failed exception=${failure::class.java.name}",
+            )
+        }
+        return false
+    }
 
     private fun writeObservation(file: File, observation: AndroidHostedObservation) {
         val temporary = File(file.parentFile, "${file.name}.tmp")
