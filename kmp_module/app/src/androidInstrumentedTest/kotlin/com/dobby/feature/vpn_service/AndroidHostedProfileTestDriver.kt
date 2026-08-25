@@ -519,11 +519,16 @@ internal class AndroidHostedProfileTestDriver(
                 observation.reconnectBounded = observation.connected
             }
             "inspect_cleanup" -> {
-                val snapshot = controller.snapshot()
-                val value = (snapshot as? SessionControllerResult.Success)?.value
-                    ?: throw AndroidHostedOperationFailure("CLEANUP_INSPECTION_FAILED")
+                // Stop is acknowledged before the asynchronous platform
+                // teardown necessarily publishes IDLE/cleanupComplete.  A
+                // single snapshot creates a timing race in the canonical
+                // disconnect-cleanup scenario, so use the same bounded
+                // authoritative poll as finalization.
+                if (!awaitCleanSnapshot(controller, hadActiveGeneration = true)) {
+                    throw AndroidHostedOperationFailure("CLEANUP_INSPECTION_FAILED")
+                }
                 val disconnected = platform.awaitDisconnected()
-                observation.cleanupVerified = value.state == SessionState.IDLE && value.cleanupComplete && disconnected
+                observation.cleanupVerified = disconnected
                 if (!observation.cleanupVerified) throw AndroidHostedOperationFailure("CLEANUP_INSPECTION_FAILED")
             }
             "network_transition" -> {
