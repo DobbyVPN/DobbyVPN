@@ -995,7 +995,7 @@ PY
   fi
   while IFS= read -r -d '' relative; do
     case "$relative" in
-      "${output#"$source_root/"}"|"${reproducibility#"$source_root/"}"|"${dependency_manifest#"$source_root/"}") ;;
+      "${output#"$source_root/"}"|"${first_output#"$source_root/"}"|"${reproducibility#"$source_root/"}"|"${dependency_manifest#"$source_root/"}") ;;
       *)
         echo "Android build created an unexpected untracked source path: $relative" >&2
         exit 2
