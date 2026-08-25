@@ -842,6 +842,19 @@ def configure_go_root(go_executable: Path) -> None:
         set_env("GOROOT", str(root))
 
 
+def configure_go_module_proxy() -> None:
+    """Keep Go's normal module proxy when a stale blank setting is present.
+
+    Go also reads the per-user ``go env`` file.  A previously persisted
+    ``GOPROXY=`` therefore survives the runner's environment sanitization and
+    makes ``go mod download`` fail with an empty proxy list.  Preserve every
+    explicit non-empty policy (including ``off``), while making the default
+    behavior explicit and equivalent to an untouched Go installation.
+    """
+    if not os.environ.get("GOPROXY", "").strip():
+        set_env("GOPROXY", "https://proxy.golang.org,direct")
+
+
 def find_go() -> Path | None:
     version = go_version()
     candidates: list[Path] = []
@@ -1408,6 +1421,7 @@ def install_linux_libcxx_runtime(skip_deps: bool) -> Path:
 def ensure_build_dependencies(target_platform: str, skip_deps: bool, need_android: bool) -> None:
     install_linux_packages(skip_deps)
     install_go(skip_deps)
+    configure_go_module_proxy()
     ensure_compiler(target_platform, skip_deps)
     if need_android:
         install_jdk(skip_deps)
