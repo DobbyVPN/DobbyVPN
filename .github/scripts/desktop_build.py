@@ -825,6 +825,12 @@ def local_go_root() -> Path:
     return TOOLS_DIR / f"go-{go_version()}"
 
 
+def go_root_is_complete(root: Path) -> bool:
+    """Return whether a local Go tree contains its executable and stdlib."""
+    executable = root / "bin" / ("go.exe" if host_platform() == "windows" else "go")
+    return executable.is_file() and (root / "src" / "runtime").is_dir()
+
+
 def configure_go_root(go_executable: Path) -> None:
     """Bind Go's runtime root to the installation that owns the executable.
 
@@ -864,6 +870,12 @@ def find_go() -> Path | None:
 
     for candidate in candidates:
         if candidate.exists():
+            try:
+                candidate_root = candidate.resolve().parent.parent
+            except OSError:
+                continue
+            if not go_root_is_complete(candidate_root):
+                continue
             configure_go_root(candidate)
             output = run_capture([str(candidate), "version"])
             if output and f"go{version}" in output:
@@ -897,7 +909,16 @@ def install_go(skip_deps: bool) -> None:
         else:
             with tarfile.open(archive) as tar_file:
                 tar_file.extractall(extract_dir)
-        shutil.move(str(extract_dir / "go"), go_root)
+        extracted_root = extract_dir / "go"
+        if not go_root_is_complete(extracted_root):
+            fail(f"Go archive does not contain a complete standard-library tree: {archive}")
+        try:
+            shutil.rmtree(go_root)
+        except OSError as error:
+            fail(f"cannot replace incomplete Go installation {go_root}: {error}")
+        if go_root.exists():
+            fail(f"cannot replace incomplete Go installation {go_root}: path remains after removal")
+        shutil.move(str(extracted_root), go_root)
     finally:
         shutil.rmtree(extract_dir, ignore_errors=True)
 

@@ -24,6 +24,33 @@ SPEC.loader.exec_module(desktop_build)
 
 
 class DesktopBuildTests(unittest.TestCase):
+    def test_go_root_requires_the_standard_library_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "bin").mkdir()
+            (root / "bin" / "go.exe").write_bytes(b"go")
+            (root / "go" / "src" / "runtime").mkdir(parents=True)
+            with mock.patch.object(desktop_build, "host_platform", return_value="windows"):
+                self.assertFalse(desktop_build.go_root_is_complete(root))
+                (root / "src" / "runtime").mkdir(parents=True)
+                self.assertTrue(desktop_build.go_root_is_complete(root))
+
+    def test_find_go_skips_a_malformed_cached_installation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "go-1.25.1"
+            (root / "bin").mkdir(parents=True)
+            (root / "bin" / "go.exe").write_bytes(b"go")
+            with (
+                mock.patch.object(desktop_build, "ROOT_DIR", Path(temporary)),
+                mock.patch.object(desktop_build, "TOOLS_DIR", Path(temporary)),
+                mock.patch.object(desktop_build, "host_platform", return_value="windows"),
+                mock.patch.object(desktop_build.shutil, "which", return_value=str(root / "bin" / "go.exe")),
+                mock.patch.object(desktop_build, "run_capture") as run_capture,
+            ):
+                (Path(temporary) / ".go-version").write_text("1.25.1\n", encoding="utf-8")
+                self.assertIsNone(desktop_build.find_go())
+            run_capture.assert_not_called()
+
     @unittest.skipIf(os.name == "nt", "POSIX process identity assertion")
     def test_process_state_change_is_not_pid_reuse(self) -> None:
         with mock.patch.object(desktop_build, "_proc_identity", return_value=("S", "123")):
