@@ -415,6 +415,11 @@ internal class AndroidHostedProfileTestDriver(
             failure.printStackTrace()
             observation.errorCode = "DRIVER_ERROR"
         } finally {
+            // A configure-only command has no generation to stop.  The Go
+            // session is therefore legitimately left in CONFIGURED while its
+            // profile is still clean; once a generation has started, cleanup
+            // must return to IDLE so the tunnel lifecycle is proven closed.
+            val hadActiveGeneration = generation != null
             var cleanupSucceeded = true
             generation?.let { active ->
                 cleanupSucceeded = stopSession(controller, active) && cleanupSucceeded
@@ -422,7 +427,8 @@ internal class AndroidHostedProfileTestDriver(
             }
             val cleanupSnapshot = runCatching { controller.snapshot() }.getOrNull()?.let { result ->
                 result is SessionControllerResult.Success &&
-                    result.value.state == SessionState.IDLE &&
+                    (result.value.state == SessionState.IDLE ||
+                        (!hadActiveGeneration && result.value.state == SessionState.CONFIGURED)) &&
                     result.value.cleanupComplete
             } == true
             cleanupSucceeded = runCatching { controller.destroy() is SessionControllerResult.Success }
