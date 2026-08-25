@@ -14,6 +14,7 @@ import com.dobby.feature.main.domain.SessionControllerResult
 import com.dobby.feature.main.domain.SessionSnapshot
 import com.dobby.feature.main.domain.SessionStartTarget
 import com.dobby.feature.main.domain.SessionState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
@@ -408,7 +409,10 @@ internal class AndroidHostedProfileTestDriver(
             }
         } catch (failure: AndroidHostedOperationFailure) {
             observation.errorCode = failure.code
-        } catch (_: Exception) {
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (failure: Exception) {
+            failure.printStackTrace()
             observation.errorCode = "DRIVER_ERROR"
         } finally {
             var cleanupSucceeded = true
@@ -622,20 +626,31 @@ internal class AndroidHostedProfileTestDriver(
         observation: AndroidHostedObservation,
         setGeneration: (ULong?) -> Unit,
     ) {
+        var stage = "request_consent"
         try {
             platform.requestConsent()
+            stage = "capture_baseline"
             platform.captureBaseline()
+            stage = "start_session"
             val started = controller.start(SessionStartTarget.AutoSelect)
             val value = (started as? SessionControllerResult.Success)?.value
                 ?: throw AndroidHostedOperationFailure("CONNECT_REJECTED")
             setGeneration(value)
+            stage = "await_connected"
             if (awaitState(controller, SessionState.CONNECTED)?.state != SessionState.CONNECTED) {
                 throw AndroidHostedOperationFailure("CONNECT_FAILED")
             }
             observation.connected = true
         } catch (failure: AndroidHostedOperationFailure) {
             throw failure
-        } catch (_: Exception) {
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (failure: Exception) {
+            System.err.println(
+                "android_hosted_connect_failed stage=$stage " +
+                    "exception=${failure::class.java.name}",
+            )
+            failure.printStackTrace()
             throw AndroidHostedOperationFailure("CONNECT_FAILED")
         }
     }
@@ -711,7 +726,7 @@ internal class RealAndroidHostedPlatform(
 
     override suspend fun captureBaseline() = withContext(Dispatchers.IO) {
         baselineFingerprint?.fill(0)
-        baselineFingerprint = fetchFingerprint()
+        baselineFingerprint = fetchFingerprintWithRetry("baseline")
     }
 
     override suspend fun observeTunnel(): Boolean = withContext(Dispatchers.IO) {
@@ -724,17 +739,17 @@ internal class RealAndroidHostedPlatform(
 
     override suspend fun observeRoutingIdentity(): Boolean = withContext(Dispatchers.IO) {
         val baseline = baselineFingerprint ?: throw AndroidHostedOperationFailure("IDENTITY_BASELINE_MISSING")
-        val current = fetchFingerprint()
+        val current = fetchFingerprintWithRetry("routing")
         lastTunnelFingerprint?.fill(0)
         lastTunnelFingerprint = current
         !MessageDigest.isEqual(baseline, current)
     }
 
     override suspend fun measureStability(): Boolean = withContext(Dispatchers.IO) {
-        val first = lastTunnelFingerprint ?: fetchFingerprint()
+        val first = lastTunnelFingerprint ?: fetchFingerprintWithRetry("stability")
         repeat(STABILITY_SAMPLE_COUNT - 1) {
             delay(STABILITY_INTERVAL_MILLIS)
-            val current = fetchFingerprint()
+            val current = fetchFingerprintWithRetry("stability")
             if (!MessageDigest.isEqual(first, current)) return@withContext false
             current.fill(0)
         }
@@ -764,6 +779,27 @@ internal class RealAndroidHostedPlatform(
     private fun fetchFingerprint(): ByteArray = withNetworkConnection(endpoints.identityUrl, upload = false) { connection ->
         val bytes = readAtMost(connection, MAX_IDENTITY_BYTES)
         MessageDigest.getInstance("SHA-256").digest(bytes).also { Arrays.fill(bytes, 0) }
+    }
+
+    private suspend fun fetchFingerprintWithRetry(phase: String): ByteArray {
+        var lastFailure: Exception? = null
+        repeat(IDENTITY_PROBE_ATTEMPTS) { index ->
+            try {
+                return fetchFingerprint()
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (failure: Exception) {
+                lastFailure = failure
+                System.err.println(
+                    "android_hosted_identity_probe_failed phase=$phase " +
+                        "attempt=${index + 1}/$IDENTITY_PROBE_ATTEMPTS " +
+                        "exception=${failure::class.java.name}",
+                )
+                failure.printStackTrace()
+                if (index + 1 < IDENTITY_PROBE_ATTEMPTS) delay(IDENTITY_RETRY_INTERVAL_MILLIS)
+            }
+        }
+        throw requireNotNull(lastFailure)
     }
 
     private data class TransferMeasurement(val rateMbps: Double, val elapsedMs: Double)
@@ -852,6 +888,8 @@ internal class RealAndroidHostedPlatform(
         const val POLL_INTERVAL_MILLIS = 100L
         const val STABILITY_SAMPLE_COUNT = 3
         const val STABILITY_INTERVAL_MILLIS = 1_000L
+        const val IDENTITY_PROBE_ATTEMPTS = 3
+        const val IDENTITY_RETRY_INTERVAL_MILLIS = 1_000L
         const val MAX_IDENTITY_BYTES = 128
         const val MAX_UPLOAD_RESPONSE_BYTES = 64 * 1024
         const val THROUGHPUT_BYTES = 1024 * 1024
