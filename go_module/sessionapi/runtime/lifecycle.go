@@ -21,6 +21,13 @@ import (
 
 const category = "sessionapi/runtime"
 
+// defaultProbeTimeout gives a newly-created mobile tunnel enough time for the
+// operating system to publish its VPN route and for tun2socks to establish the
+// first protected TCP flows.  The probe still requires the same two-of-three
+// endpoint quorum; this is only a bounded startup allowance.  Steady-state
+// health checks continue to use their own context deadlines.
+const defaultProbeTimeout = 15 * time.Second
+
 // TunnelProvider is the deliberately narrow mobile boundary. Acquire must
 // return a newly allocated TUN for this exact SessionRef; a provider must not
 // retain or reuse a TUN from an earlier generation. ProtectSocket is passed to
@@ -100,7 +107,7 @@ func New(options Options) v2.Runtime {
 		r.options.Probe = defaultProbe
 	}
 	if r.options.ProbeTimeout <= 0 {
-		r.options.ProbeTimeout = 5 * time.Second
+		r.options.ProbeTimeout = defaultProbeTimeout
 	}
 	if r.options.ConnectedHealth == nil {
 		r.options.ConnectedHealth = defaultConnectedHealth
