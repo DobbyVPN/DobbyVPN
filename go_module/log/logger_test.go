@@ -260,23 +260,10 @@ func TestTraceLevelIsStableAndReadable(t *testing.T) {
 	}
 }
 
-func TestRetentionKeepsNewestCompleteJSONLines(t *testing.T) {
-	input := []byte("{\"id\":1}\n{\"id\":2}\n{\"id\":3}\nincomplete")
-	retained := retainNewestCompleteJSONLLines(input, int64(len("{\"id\":2}\n{\"id\":3}\n")))
-	if got, want := string(retained), "{\"id\":2}\n{\"id\":3}\n"; got != want {
-		t.Fatalf("retained = %q, want %q", got, want)
-	}
-	if strings.Contains(string(retained), "incomplete") {
-		t.Fatalf("retention kept an incomplete record: %q", retained)
-	}
-}
-
-func TestActiveLogRetentionIsBoundedAndKeepsFinalEvent(t *testing.T) {
+func TestActiveLogIsNotTruncated(t *testing.T) {
 	initMu.Lock()
 	previousLogger := lg
-	previousLimit := maxLocalLogBytes
 	lg = &Logger{}
-	maxLocalLogBytes = 1024
 	initMu.Unlock()
 	defer func() {
 		initMu.Lock()
@@ -284,58 +271,37 @@ func TestActiveLogRetentionIsBoundedAndKeepsFinalEvent(t *testing.T) {
 			_ = lg.file.Close()
 		}
 		lg = previousLogger
-		maxLocalLogBytes = previousLimit
 		initMu.Unlock()
 	}()
 
-	path := filepath.Join(t.TempDir(), "private", "bounded.jsonl")
+	path := filepath.Join(t.TempDir(), "private", "complete.jsonl")
 	if err := SetPath(path); err != nil {
 		t.Fatal(err)
 	}
-	beforeRetention, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
+	payload := strings.Repeat("diagnostic-data ", 1024)
+	for index := 0; index < 500; index++ {
+		Info("FULL_LOG", payload, map[string]any{"index": index})
 	}
-	for index := 0; index < 80; index++ {
-		Info("RETENTION", strings.Repeat("status ", 12), map[string]any{"index": index})
-	}
-	Info("RETENTION", "final retention marker", nil)
-	if syncErr := lg.file.Sync(); syncErr != nil {
+	Info("FULL_LOG", "final complete retention marker", nil)
+
+	initMu.Lock()
+	syncErr := lg.file.Sync()
+	initMu.Unlock()
+	if syncErr != nil {
 		t.Fatal(syncErr)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Size() > maxLocalLogBytes {
-		t.Fatalf("bounded log size = %d, limit = %d", info.Size(), maxLocalLogBytes)
+	if info.Size() <= 4<<20 {
+		t.Fatalf("active log size = %d, want more than the former 4 MiB retention threshold", info.Size())
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("retained log permissions = %o, want 600", info.Mode().Perm())
-	}
-	if !os.SameFile(beforeRetention, info) {
-		t.Fatal("retention replaced the shared log file instead of preserving its owner and ACL")
-	}
-	file, err := os.Open(path)
+	output, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	finalSeen := false
-	for scanner.Scan() {
-		var event map[string]any
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			t.Fatalf("retained line is not complete JSON: %v: %s", err, scanner.Text())
-		}
-		if event["message"] == "[RETENTION] final retention marker" {
-			finalSeen = true
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if !finalSeen {
-		t.Fatal("final event was lost during retention")
+	if !strings.Contains(string(output), "final complete retention marker") {
+		t.Fatal("final event was lost from the complete active log")
 	}
 }

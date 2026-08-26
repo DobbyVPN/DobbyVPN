@@ -1,7 +1,6 @@
 package log
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -225,8 +224,6 @@ type pendingEntry struct {
 	arguments  map[string]any
 }
 
-var maxLocalLogBytes int64 = 4 << 20
-
 var (
 	lg     = &Logger{}
 	initMu sync.Mutex
@@ -247,7 +244,6 @@ func (logger *Logger) dumpBuffer() {
 		emitAt(logger.logger, entry.occurredAt, entry.level, entry.event, entry.category, entry.message, entry.arguments)
 	}
 	logger.pending = nil
-	logger.trimLocked()
 }
 
 func IsInitialized() bool {
@@ -305,82 +301,6 @@ func SetPath(path string) error {
 	return nil
 }
 
-func retainNewestCompleteJSONLLines(data []byte, limit int64) []byte {
-	if limit <= 0 {
-		return nil
-	}
-	lastNewline := bytes.LastIndexByte(data, '\n')
-	if lastNewline < 0 {
-		return nil
-	}
-	complete := data[:lastNewline+1]
-	if int64(len(complete)) <= limit {
-		return complete
-	}
-	start := len(complete) - int(limit)
-	if start == 0 || complete[start-1] == '\n' {
-		return complete[start:]
-	}
-	nextNewline := bytes.IndexByte(complete[start:], '\n')
-	if nextNewline < 0 {
-		return nil
-	}
-	return complete[start+nextNewline+1:]
-}
-
-func (logger *Logger) trimLocked() {
-	if logger.file == nil || logger.fallback || maxLocalLogBytes <= 0 {
-		return
-	}
-	info, statErr := logger.file.Stat()
-	if statErr != nil || info.Size() <= maxLocalLogBytes {
-		return
-	}
-	path := logger.file.Name()
-	data, readErr := os.ReadFile(path)
-	if readErr != nil {
-		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
-		return
-	}
-	retained := retainNewestCompleteJSONLLines(data, maxLocalLogBytes)
-	// Rewrite the retained prefix before truncating the suffix.  A direct
-	// Truncate(0) followed by Write briefly exposes an empty log file to
-	// readers, which can make a concurrent diagnostic snapshot report that
-	// runtime statistics are missing.  Keep the existing inode/permissions
-	// contract, but make compaction observable as retained-or-old content,
-	// never as an empty interval.
-	compacted, openErr := os.OpenFile(path, os.O_WRONLY, 0)
-	if openErr != nil {
-		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
-		return
-	}
-	writeOffset := 0
-	for writeOffset < len(retained) {
-		written, writeErr := compacted.Write(retained[writeOffset:])
-		if writeErr != nil || written <= 0 {
-			_ = compacted.Close()
-			logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
-			return
-		}
-		writeOffset += written
-	}
-	if truncateErr := compacted.Truncate(int64(len(retained))); truncateErr != nil {
-		_ = compacted.Close()
-		logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
-		return
-	}
-	if syncErr := compacted.Sync(); syncErr != nil {
-		_ = compacted.Close()
-		logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
-		return
-	}
-	if closeErr := compacted.Close(); closeErr != nil {
-		logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
-	}
-}
-
-func logRetentionFailure(message string) { fmt.Fprintln(os.Stderr, message) }
-
 func write(level slog.Level, category, message string, arguments map[string]any) {
 	writeEvent(level, "log.message", category, message, arguments)
 }
@@ -403,7 +323,6 @@ func writeEventAt(occurredAt time.Time, level slog.Level, event, category, messa
 		return
 	}
 	emitAt(lg.logger, occurredAt, level, event, category, message, arguments)
-	lg.trimLocked()
 }
 
 func cloneArguments(arguments map[string]any) map[string]any {
