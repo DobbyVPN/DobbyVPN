@@ -121,86 +121,110 @@ private fun ensureSecurePosixLogFile(
         val base = rawBase.asSecureDirectory("local log base")
         val baseBefore = secureDirectoryAttributes(base)
         if (!sameActiveFile(homeBefore, baseBefore)) error("Local log base changed while opening")
-
-        val appDirBefore = secureBasicAttributes(base, appDirPath.fileName)
-        if (appDirBefore == null) {
-            try {
-                Files.createDirectory(appDirPath, *ownerOnlyDirectoryAttributes())
-            } catch (_: FileAlreadyExistsException) {
-                // A concurrent local producer won creation; validate below.
-            }
-        }
-        val baseAfterDirectoryCreate = secureDirectoryAttributes(base)
-        if (!sameActiveFile(baseBefore, baseAfterDirectoryCreate)) {
-            error("Local log base changed during directory creation")
-        }
-
-        base.newDirectoryStream(appDirPath.fileName, LinkOption.NOFOLLOW_LINKS).use { rawDirectory ->
-            val directory = rawDirectory.asSecureDirectory("current local log directory")
-            val directoryBefore = secureDirectoryAttributes(directory)
-            if (appDirBefore != null && !sameActiveFile(appDirBefore, directoryBefore)) {
-                error("Current local log directory changed while opening")
-            }
-            val directoryView = directory.getFileAttributeView(PosixFileAttributeView::class.java)
-                ?: error("POSIX local log directory attributes are unavailable")
-            if (directoryView.readAttributes().permissions() != ownerOnlyDirectoryPermissions) {
-                directoryView.setPermissions(ownerOnlyDirectoryPermissions)
-            }
-            if (directoryView.readAttributes().permissions() != ownerOnlyDirectoryPermissions) {
-                error("Local log directory is not owner-only")
-            }
-            secureOptionalAcl(appDirPath, directoryBefore, isDirectory = true, parentDirectory = directory)
-
-            val fileName = logFilePath.fileName
-            val before = secureBasicAttributes(directory, fileName)
-            if (before != null && (before.isSymbolicLink || !before.isRegularFile)) {
-                error("Local log path is not a regular file")
-            }
-            if (before == null) {
-                directory.newByteChannel(
-                    fileName,
-                    setOf(StandardOpenOption.WRITE, StandardOpenOption.CREATE_NEW, LinkOption.NOFOLLOW_LINKS),
-                    *ownerOnlyFileAttributes(),
-                ).use { }
-            }
-            val afterCreate = secureBasicAttributes(directory, fileName)
-                ?: error("Local log file disappeared during creation")
-            if (before != null && !sameActiveFile(before, afterCreate)) {
-                error("Local log path changed during creation")
-            }
-            val fileView = directory.getFileAttributeView(
-                fileName,
-                PosixFileAttributeView::class.java,
-                LinkOption.NOFOLLOW_LINKS,
-            ) ?: error("POSIX local log file attributes are unavailable")
-            if (fileView.readAttributes().permissions() != ownerOnlyFilePermissions) {
-                fileView.setPermissions(ownerOnlyFilePermissions)
-            }
-            val afterPermissions = secureBasicAttributes(directory, fileName)
-                ?: error("Local log file disappeared while securing permissions")
-            if (!sameActiveFile(afterCreate, afterPermissions)) {
-                error("Local log path changed while securing permissions")
-            }
-            if (fileView.readAttributes().permissions() != ownerOnlyFilePermissions) {
-                error("Local log file is not owner-only")
-            }
-            secureOptionalAcl(
-                logFilePath,
-                afterPermissions,
-                isDirectory = false,
-                parentDirectory = directory,
-                entryName = fileName,
-            )
-            if (!sameActiveFile(directoryBefore, secureDirectoryAttributes(directory))) {
-                error("Local log directory changed while securing permissions")
-            }
-        }
+        ensureSecurePosixLogDirectory(base, appDirPath, logFilePath, baseBefore)
         if (!sameActiveFile(baseBefore, secureDirectoryAttributes(base))) {
             error("Local log base changed while securing the current log")
         }
     }
     val homeAfter = Files.readAttributes(homePath, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
     if (!sameActiveFile(homeBefore, homeAfter)) error("Local log base changed after initialization")
+}
+
+private fun ensureSecurePosixLogDirectory(
+    base: SecureDirectoryStream<java.nio.file.Path>,
+    appDirPath: java.nio.file.Path,
+    logFilePath: java.nio.file.Path,
+    baseBefore: BasicFileAttributes,
+) {
+    val appDirBefore = secureBasicAttributes(base, appDirPath.fileName)
+    if (appDirBefore == null) {
+        try {
+            Files.createDirectory(appDirPath, ownerOnlyDirectoryAttribute())
+        } catch (_: FileAlreadyExistsException) {
+            // A concurrent local producer won creation; validate below.
+        }
+    }
+    val baseAfterDirectoryCreate = secureDirectoryAttributes(base)
+    if (!sameActiveFile(baseBefore, baseAfterDirectoryCreate)) {
+        error("Local log base changed during directory creation")
+    }
+
+    base.newDirectoryStream(appDirPath.fileName, LinkOption.NOFOLLOW_LINKS).use { rawDirectory ->
+        val directory = rawDirectory.asSecureDirectory("current local log directory")
+        val directoryBefore = secureDirectoryAttributes(directory)
+        if (appDirBefore != null && !sameActiveFile(appDirBefore, directoryBefore)) {
+            error("Current local log directory changed while opening")
+        }
+        ensureSecurePosixLogDirectoryEntry(directory, appDirPath, logFilePath, directoryBefore)
+    }
+}
+
+private fun ensureSecurePosixLogDirectoryEntry(
+    directory: SecureDirectoryStream<java.nio.file.Path>,
+    appDirPath: java.nio.file.Path,
+    logFilePath: java.nio.file.Path,
+    directoryBefore: BasicFileAttributes,
+) {
+    val directoryView = directory.getFileAttributeView(PosixFileAttributeView::class.java)
+        ?: error("POSIX local log directory attributes are unavailable")
+    if (directoryView.readAttributes().permissions() != ownerOnlyDirectoryPermissions) {
+        directoryView.setPermissions(ownerOnlyDirectoryPermissions)
+    }
+    if (directoryView.readAttributes().permissions() != ownerOnlyDirectoryPermissions) {
+        error("Local log directory is not owner-only")
+    }
+    secureOptionalAcl(appDirPath, directoryBefore, isDirectory = true, parentDirectory = directory)
+    ensureSecurePosixLogEntry(directory, logFilePath, directoryBefore)
+}
+
+private fun ensureSecurePosixLogEntry(
+    directory: SecureDirectoryStream<java.nio.file.Path>,
+    logFilePath: java.nio.file.Path,
+    directoryBefore: BasicFileAttributes,
+) {
+    val fileName = logFilePath.fileName
+    val before = secureBasicAttributes(directory, fileName)
+    if (before != null && (before.isSymbolicLink || !before.isRegularFile)) {
+        error("Local log path is not a regular file")
+    }
+    if (before == null) {
+        directory.newByteChannel(
+            fileName,
+            setOf(StandardOpenOption.WRITE, StandardOpenOption.CREATE_NEW, LinkOption.NOFOLLOW_LINKS),
+            ownerOnlyFileAttribute(),
+        ).use { }
+    }
+    val afterCreate = secureBasicAttributes(directory, fileName)
+        ?: error("Local log file disappeared during creation")
+    if (before != null && !sameActiveFile(before, afterCreate)) {
+        error("Local log path changed during creation")
+    }
+    val fileView = directory.getFileAttributeView(
+        fileName,
+        PosixFileAttributeView::class.java,
+        LinkOption.NOFOLLOW_LINKS,
+    ) ?: error("POSIX local log file attributes are unavailable")
+    if (fileView.readAttributes().permissions() != ownerOnlyFilePermissions) {
+        fileView.setPermissions(ownerOnlyFilePermissions)
+    }
+    val afterPermissions = secureBasicAttributes(directory, fileName)
+        ?: error("Local log file disappeared while securing permissions")
+    if (!sameActiveFile(afterCreate, afterPermissions)) {
+        error("Local log path changed while securing permissions")
+    }
+    if (fileView.readAttributes().permissions() != ownerOnlyFilePermissions) {
+        error("Local log file is not owner-only")
+    }
+    secureOptionalAcl(
+        logFilePath,
+        afterPermissions,
+        isDirectory = false,
+        parentDirectory = directory,
+        entryName = fileName,
+    )
+    if (!sameActiveFile(directoryBefore, secureDirectoryAttributes(directory))) {
+        error("Local log directory changed while securing permissions")
+    }
 }
 
 private fun ensureAclProtectedLogFile(
@@ -256,9 +280,8 @@ private fun ensureAclProtectedLogFile(
     }
 }
 
-private fun ownerOnlyDirectoryAttributes(): Array<FileAttribute<*>> = arrayOf(
-    PosixFilePermissions.asFileAttribute(ownerOnlyDirectoryPermissions),
-)
+private fun ownerOnlyDirectoryAttribute(): FileAttribute<*> =
+    PosixFilePermissions.asFileAttribute(ownerOnlyDirectoryPermissions)
 
 private fun secureOptionalAcl(
     path: java.nio.file.Path,
@@ -267,15 +290,17 @@ private fun secureOptionalAcl(
     parentDirectory: SecureDirectoryStream<java.nio.file.Path>,
     entryName: java.nio.file.Path? = null,
 ) {
-    val view = if (entryName == null) {
+    val view: java.nio.file.attribute.AclFileAttributeView? = if (entryName == null) {
         parentDirectory.getFileAttributeView(java.nio.file.attribute.AclFileAttributeView::class.java)
+            as? java.nio.file.attribute.AclFileAttributeView
     } else {
         parentDirectory.getFileAttributeView(
             entryName,
             java.nio.file.attribute.AclFileAttributeView::class.java,
             LinkOption.NOFOLLOW_LINKS,
-        )
-    } ?: return
+        ) as? java.nio.file.attribute.AclFileAttributeView
+    }
+    if (view == null) return
     restrictWithAclView(path, view, isDirectory)
     val after = if (entryName == null) {
         secureDirectoryAttributes(parentDirectory)
@@ -287,9 +312,8 @@ private fun secureOptionalAcl(
     }
 }
 
-private fun ownerOnlyFileAttributes(): Array<FileAttribute<*>> = arrayOf(
-    PosixFilePermissions.asFileAttribute(ownerOnlyFilePermissions),
-)
+private fun ownerOnlyFileAttribute(): FileAttribute<*> =
+    PosixFilePermissions.asFileAttribute(ownerOnlyFilePermissions)
 
 private fun DirectoryStream<java.nio.file.Path>.asSecureDirectory(description: String): SecureDirectoryStream<java.nio.file.Path> {
     @Suppress("UNCHECKED_CAST")
@@ -468,7 +492,7 @@ private fun clearActiveJvmLogFileDescriptorRelative(
             parent.newByteChannel(
                 fileName,
                 setOf(StandardOpenOption.WRITE, StandardOpenOption.CREATE_NEW, LinkOption.NOFOLLOW_LINKS),
-                *ownerOnlyFileAttributes(),
+                ownerOnlyFileAttribute(),
             ).use { }
         } catch (_: FileAlreadyExistsException) {
             // The active entry was created by another local producer.
@@ -512,11 +536,13 @@ private fun clearActiveJvmLogFilePathFallback(
     }
     if (!Files.exists(absolute, LinkOption.NOFOLLOW_LINKS)) {
         try {
-            FileChannel.open(
-                absolute,
-                setOf(StandardOpenOption.WRITE, StandardOpenOption.CREATE_NEW, LinkOption.NOFOLLOW_LINKS),
-                *ownerOnlyFileAttributesIfSupported(parent),
-            ).use { }
+            val createOptions = setOf(StandardOpenOption.WRITE, StandardOpenOption.CREATE_NEW, LinkOption.NOFOLLOW_LINKS)
+            val ownerOnlyAttribute = ownerOnlyFileAttributeIfSupported(parent)
+            if (ownerOnlyAttribute == null) {
+                FileChannel.open(absolute, createOptions).use { }
+            } else {
+                FileChannel.open(absolute, createOptions, ownerOnlyAttribute).use { }
+            }
         } catch (_: FileAlreadyExistsException) {
             // The active entry was created by another local producer.
         }
@@ -548,11 +574,11 @@ private fun clearActiveJvmLogFilePathFallback(
     }
 }
 
-private fun ownerOnlyFileAttributesIfSupported(path: java.nio.file.Path): Array<FileAttribute<*>> =
+private fun ownerOnlyFileAttributeIfSupported(path: java.nio.file.Path): FileAttribute<*>? =
     if (Files.getFileAttributeView(path, PosixFileAttributeView::class.java) != null) {
-        ownerOnlyFileAttributes()
+        ownerOnlyFileAttribute()
     } else {
-        emptyArray()
+        null
     }
 
 private fun secureActiveJvmLogEntry(path: java.nio.file.Path, expected: BasicFileAttributes) {
