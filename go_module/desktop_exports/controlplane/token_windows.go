@@ -34,7 +34,7 @@ func secureControlTokenFile(path string) error {
 	if err != nil {
 		return err
 	}
-	return setExactACL(path, []*windows.SID{systemSID, userSID}, windows.GENERIC_READ|windows.GENERIC_WRITE)
+	return setExactACL(path, []*windows.SID{systemSID, userSID}, fileControlTokenAccess)
 }
 
 // SecureInstalledUserPath replaces inherited permissions with an explicit ACL
@@ -53,7 +53,7 @@ func SecureInstalledUserPath(path string) error {
 	if err != nil {
 		return err
 	}
-	return setExactACL(path, []*windows.SID{systemSID, userSID}, windows.GENERIC_ALL)
+	return setExactACL(path, []*windows.SID{systemSID, userSID}, fileAllAccess)
 }
 
 // VerifyInstalledUserPathPermissions rejects inherited or unexpected ACL
@@ -80,7 +80,7 @@ func SecureExplicitUserPath(path string) error {
 	if !currentSID.Equals(systemSID) {
 		allowed = append(allowed, currentSID)
 	}
-	return setExactACL(path, allowed, windows.GENERIC_ALL)
+	return setExactACL(path, allowed, fileAllAccess)
 }
 
 // setExactACL replaces the DACL atomically. In particular, it does not use
@@ -141,7 +141,7 @@ func VerifyExplicitUserPathPermissions(path string) error {
 	if !currentSID.Equals(systemSID) {
 		allowed = append(allowed, currentSID)
 	}
-	return verifyExactACL(path, allowed, currentSID, windows.GENERIC_ALL, "explicit runtime path")
+	return verifyExactACL(path, allowed, currentSID, fileAllAccess, "explicit runtime path")
 }
 
 // VerifyUserConfigBasePermissions verifies the existing user-home/config base
@@ -244,7 +244,7 @@ func verifyInstalledUserACL(path string) error {
 	if err != nil {
 		return err
 	}
-	return verifyExactACL(path, []*windows.SID{systemSID, userSID}, userSID, windows.GENERIC_ALL, "protected path")
+	return verifyExactACL(path, []*windows.SID{systemSID, userSID}, userSID, fileAllAccess, "protected path")
 }
 
 func verifyControlTokenPermissions(path string) error {
@@ -260,14 +260,14 @@ func verifyControlTokenPermissions(path string) error {
 	if err != nil {
 		return err
 	}
-	// The control token is intentionally read/write, while installed runtime
-	// paths use GENERIC_ALL. Keep the expected mask explicit per path so a
-	// broader ACL cannot satisfy this verifier by accident.
+	// SetEntriesInAcl maps generic rights to the file-specific mask stored in
+	// the ACE. Keep the expected mask explicit per path so a broader ACL cannot
+	// satisfy this verifier by accident.
 	return verifyExactACL(
 		path,
 		[]*windows.SID{systemSID, userSID},
 		userSID,
-		windows.GENERIC_READ|windows.GENERIC_WRITE,
+		fileControlTokenAccess,
 		"control token",
 	)
 }
@@ -396,6 +396,13 @@ func containsSID(identities []*windows.SID, candidate *windows.SID) bool {
 }
 
 const (
+	// SetEntriesInAcl expands GENERIC_* rights into the corresponding
+	// file-specific masks when it builds an ACL. Use those masks for both
+	// writing and verification; comparing the generic bits would reject a
+	// correctly secured file on Windows.
+	fileControlTokenAccess windows.ACCESS_MASK = windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE
+	fileAllAccess          windows.ACCESS_MASK = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | windows.SPECIFIC_RIGHTS_ALL
+
 	fileDeleteChild windows.ACCESS_MASK = 0x00000040
 
 	// Windows exposes a 32-bit access mask. Every bit is classified here so
