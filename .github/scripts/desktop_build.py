@@ -100,6 +100,11 @@ MACOS_MINIMUM_SYSTEM_VERSION = "11.0"
 PROBE_TIMEOUT_SECONDS = 30
 PROCESS_CLEANUP_GRACE_SECONDS = 5
 PROCESS_TREE_POLL_INTERVAL_SECONDS = 0.01
+# Windows hosted runners can take several seconds to enumerate the complete
+# WMI process table.  Keep the proof bounded, but do not mistake normal WMI
+# startup latency for an unverifiable process tree.
+PROCESS_TREE_QUERY_TIMEOUT_SECONDS = 10
+PROCESS_TREE_WATCHER_JOIN_TIMEOUT_SECONDS = PROCESS_TREE_QUERY_TIMEOUT_SECONDS + 2
 GOOS_BY_PLATFORM = {
     "linux": "linux",
     "macos": "darwin",
@@ -234,7 +239,7 @@ def _ps_descendants(root_pid: int) -> set[int]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=False,
-        timeout=2,
+        timeout=PROCESS_TREE_QUERY_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
         raise ProcessTreeProofError(
@@ -281,7 +286,7 @@ def _windows_descendants(root_pid: int) -> set[int]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=False,
-        timeout=2,
+        timeout=PROCESS_TREE_QUERY_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
         raise ProcessTreeProofError(
@@ -384,7 +389,7 @@ class ProcessTreeTracker:
 
     def prove_gone(self, group_id: int) -> str:
         self._stop.set()
-        self._thread.join(timeout=2)
+        self._thread.join(timeout=PROCESS_TREE_WATCHER_JOIN_TIMEOUT_SECONDS)
         if self._thread.is_alive():
             raise ProcessTreeProofError("process-tree watcher did not stop")
         self._sample()
@@ -912,12 +917,14 @@ def install_go(skip_deps: bool) -> None:
         extracted_root = extract_dir / "go"
         if not go_root_is_complete(extracted_root):
             fail(f"Go archive does not contain a complete standard-library tree: {archive}")
-        try:
-            shutil.rmtree(go_root)
-        except OSError as error:
-            fail(f"cannot replace incomplete Go installation {go_root}: {error}")
+        if go_root.exists():
+            try:
+                shutil.rmtree(go_root)
+            except OSError as error:
+                fail(f"cannot replace incomplete Go installation {go_root}: {error}")
         if go_root.exists():
             fail(f"cannot replace incomplete Go installation {go_root}: path remains after removal")
+        go_root.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(extracted_root), go_root)
     finally:
         shutil.rmtree(extract_dir, ignore_errors=True)
