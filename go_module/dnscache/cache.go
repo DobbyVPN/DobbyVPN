@@ -16,6 +16,13 @@ const (
 	Category           = "DNSCache"
 	PreflightCacheTTL  = 12 * time.Hour
 	FastResolveTimeout = 750 * time.Millisecond
+	// ServerResolveTimeout bounds the mandatory bootstrap lookup used to
+	// establish the VPN server route.  It is intentionally longer than the
+	// opportunistic fast lookup used for protected per-flow sockets: a cold
+	// Android resolver can legitimately need more than one round trip after a
+	// network transition, and failing the whole session at 750 ms would turn a
+	// reachable server into a false connection failure.
+	ServerResolveTimeout = 2 * time.Second
 )
 
 type entry struct {
