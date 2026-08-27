@@ -29,6 +29,43 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
         with mock.patch.object(VERIFY, "_proc_identity", return_value=("S", "456")):
             self.assertFalse(VERIFY._pid_is_alive(123, ("R", "123")))
 
+    def test_windows_process_liveness_uses_read_only_census(self):
+        with (
+            mock.patch.object(VERIFY.os, "name", "nt"),
+            mock.patch.object(
+                VERIFY,
+                "windows_process_census",
+                return_value=(set(), {123}),
+            ) as census,
+            mock.patch.object(VERIFY.os, "kill") as kill,
+        ):
+            self.assertTrue(VERIFY._pid_is_alive(123))
+        census.assert_called_once_with(123, timeout_seconds=2)
+        kill.assert_not_called()
+
+    def test_windows_process_liveness_proves_absence_from_census(self):
+        with (
+            mock.patch.object(VERIFY.os, "name", "nt"),
+            mock.patch.object(
+                VERIFY,
+                "windows_process_census",
+                return_value=(set(), {456}),
+            ),
+        ):
+            self.assertFalse(VERIFY._pid_is_alive(123))
+
+    def test_windows_process_liveness_query_error_fails_closed(self):
+        with (
+            mock.patch.object(VERIFY.os, "name", "nt"),
+            mock.patch.object(
+                VERIFY,
+                "windows_process_census",
+                side_effect=VERIFY.WindowsProcessCensusError("query failed"),
+            ),
+            self.assertRaisesRegex(VERIFY.ProcessTreeProofError, "query failed"),
+        ):
+            VERIFY._pid_is_alive(123)
+
     def code(self, sha=None, link=None):
         sha = self.sha if sha is None else sha
         link = f"https://github.com/{self.repo}/tree/{self.sha}" if link is None else link
@@ -230,7 +267,7 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             with (
                 mock.patch.object(VERIFY, "ROOT_DIR", Path(temporary)),
-                mock.patch.object(VERIFY, "APK_ANALYZER_TIMEOUT_SECONDS", 0.1),
+                mock.patch.object(VERIFY, "APK_ANALYZER_TIMEOUT_SECONDS", 1),
                 mock.patch.object(VERIFY, "PROCESS_CLEANUP_GRACE_SECONDS", 0.1),
             ):
                 with self.assertRaises(subprocess.TimeoutExpired) as raised:

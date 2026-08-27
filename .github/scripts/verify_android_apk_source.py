@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from pathlib import Path
 import re
@@ -17,6 +16,7 @@ import time
 
 from public_output import emit_diagnostic as emit_public_diagnostic
 from public_output import public_actions
+from windows_process_census import WindowsProcessCensusError, windows_process_census
 
 
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
@@ -100,6 +100,12 @@ def _active_proc_group_members(group_id: int) -> list[int]:
 
 
 def _pid_is_alive(pid: int, expected_identity: tuple[str, str] | None = None) -> bool:
+    if os.name == "nt":
+        try:
+            _, active_pids = windows_process_census(pid, timeout_seconds=2)
+        except WindowsProcessCensusError as error:
+            raise ProcessTreeProofError(str(error)) from error
+        return pid in active_pids
     if Path("/proc").is_dir():
         identity = _proc_identity(pid)
         # The process state (the first field) changes during normal execution;
@@ -192,66 +198,20 @@ def _ps_descendants(root_pid: int) -> set[int]:
     return descendants
 
 
-def _windows_descendants(root_pid: int) -> set[int]:
-    command = [
-        "powershell.exe",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "Get-CimInstance Win32_Process | "
-        "Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress",
-    ]
-    result = subprocess.run(
-        command,
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=False,
-        timeout=2,
-    )
-    if result.returncode != 0:
-        raise ProcessTreeProofError(
-            f"PowerShell process-tree query failed exit={result.returncode} "
-            f"stderr={output_text(result.stderr).strip()}"
-        )
-    if result.stderr:
-        raise ProcessTreeProofError(
-            "PowerShell process-tree query emitted stderr="
-            + output_text(result.stderr).strip()
-        )
+def _windows_process_snapshot(root_pid: int) -> tuple[set[int], set[int]]:
     try:
-        records = json.loads(output_text(result.stdout) or "[]")
-    except json.JSONDecodeError as error:
-        raise ProcessTreeProofError("PowerShell process-tree query returned invalid JSON") from error
-    if isinstance(records, dict):
-        records = [records]
-    children_by_parent: dict[int, set[int]] = {}
-    for record in records:
-        if not isinstance(record, dict):
-            continue
-        try:
-            pid = int(record["ProcessId"])
-            parent_pid = int(record["ParentProcessId"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        children_by_parent.setdefault(parent_pid, set()).add(pid)
-    descendants: set[int] = set()
-    pending = list(children_by_parent.get(root_pid, set()))
-    while pending:
-        pid = pending.pop()
-        if pid in descendants:
-            continue
-        descendants.add(pid)
-        pending.extend(children_by_parent.get(pid, set()))
-    return descendants
+        return windows_process_census(root_pid, timeout_seconds=2)
+    except WindowsProcessCensusError as error:
+        raise ProcessTreeProofError(str(error)) from error
 
 
-def _process_tree_snapshot(root_pid: int) -> tuple[set[int], str]:
+def _process_tree_snapshot(root_pid: int) -> tuple[set[int], str, set[int] | None]:
     if os.name == "nt":
-        return _windows_descendants(root_pid), "powershell-cim"
+        descendants, active_pids = _windows_process_snapshot(root_pid)
+        return descendants, "powershell-cim", active_pids
     if Path("/proc").is_dir():
-        return _proc_descendants(root_pid), "procfs"
-    return _ps_descendants(root_pid), "ps"
+        return _proc_descendants(root_pid), "procfs", None
+    return _ps_descendants(root_pid), "ps", None
 
 
 class ProcessTreeTracker:
@@ -259,6 +219,7 @@ class ProcessTreeTracker:
         self.root_pid = root_pid
         self.observed: set[int] = {root_pid}
         self.identities: dict[int, tuple[str, str]] = {}
+        self.active_pids: set[int] | None = None
         self.source = "unknown"
         self.error: ProcessTreeProofError | None = None
         self._lock = threading.Lock()
@@ -271,7 +232,7 @@ class ProcessTreeTracker:
 
     def _sample(self) -> None:
         try:
-            descendants, source = _process_tree_snapshot(self.root_pid)
+            descendants, source, active_pids = _process_tree_snapshot(self.root_pid)
         except (ProcessTreeProofError, OSError, ValueError, subprocess.SubprocessError) as error:
             with self._lock:
                 self.error = error if isinstance(error, ProcessTreeProofError) else ProcessTreeProofError(str(error))
@@ -283,6 +244,7 @@ class ProcessTreeTracker:
                 if identity is not None:
                     self.identities.setdefault(pid, identity)
             self.source = source
+            self.active_pids = active_pids
 
     def _poll(self) -> None:
         while not self._stop.wait(PROCESS_TREE_POLL_INTERVAL_SECONDS):
@@ -322,13 +284,21 @@ class ProcessTreeTracker:
             error = self.error
             observed = tuple(sorted(self.observed))
             source = self.source
+            active_pids = self.active_pids
         if error is not None:
             raise error
-        survivors = [
-            pid
-            for pid in observed
-            if pid != self.root_pid and _pid_is_alive(pid, self.identities.get(pid))
-        ]
+        if os.name == "nt":
+            if active_pids is None:
+                raise ProcessTreeProofError("Windows process census is unavailable")
+            survivors = [
+                pid for pid in observed if pid != self.root_pid and pid in active_pids
+            ]
+        else:
+            survivors = [
+                pid
+                for pid in observed
+                if pid != self.root_pid and _pid_is_alive(pid, self.identities.get(pid))
+            ]
         if survivors:
             raise ProcessTreeProofError(f"descendant survivors={survivors}")
         if os.name != "nt":

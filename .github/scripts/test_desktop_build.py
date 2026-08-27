@@ -58,6 +58,110 @@ class DesktopBuildTests(unittest.TestCase):
         with mock.patch.object(desktop_build, "_proc_identity", return_value=("S", "456")):
             self.assertFalse(desktop_build._pid_is_alive(123, ("R", "123")))
 
+    def test_windows_process_liveness_uses_read_only_census(self) -> None:
+        with (
+            mock.patch.object(desktop_build.os, "name", "nt"),
+            mock.patch.object(
+                desktop_build,
+                "windows_process_census",
+                return_value=(set(), {123}),
+            ) as census,
+            mock.patch.object(desktop_build.os, "kill") as kill,
+        ):
+            self.assertTrue(desktop_build._pid_is_alive(123))
+        census.assert_called_once_with(
+            123,
+            timeout_seconds=desktop_build.PROCESS_TREE_QUERY_TIMEOUT_SECONDS,
+        )
+        kill.assert_not_called()
+
+    def test_windows_process_liveness_proves_absence_from_census(self) -> None:
+        with (
+            mock.patch.object(desktop_build.os, "name", "nt"),
+            mock.patch.object(
+                desktop_build,
+                "windows_process_census",
+                return_value=(set(), {456}),
+            ),
+        ):
+            self.assertFalse(desktop_build._pid_is_alive(123))
+
+    def test_windows_process_liveness_query_error_fails_closed(self) -> None:
+        with (
+            mock.patch.object(desktop_build.os, "name", "nt"),
+            mock.patch.object(
+                desktop_build,
+                "windows_process_census",
+                side_effect=desktop_build.WindowsProcessCensusError("query failed"),
+            ),
+            self.assertRaisesRegex(desktop_build.ProcessTreeProofError, "query failed"),
+        ):
+            desktop_build._pid_is_alive(123)
+
+    def test_windows_tree_proof_uses_final_census_without_signalling(self) -> None:
+        sample_count = 0
+
+        def snapshot(_root_pid: int) -> tuple[set[int], str, set[int]]:
+            nonlocal sample_count
+            sample_count += 1
+            if sample_count == 1:
+                return {200}, "powershell-cim", {100, 200}
+            return set(), "powershell-cim", {999}
+
+        with (
+            mock.patch.object(desktop_build.os, "name", "nt"),
+            mock.patch.object(
+                desktop_build,
+                "_process_tree_snapshot",
+                side_effect=snapshot,
+            ),
+            mock.patch.object(
+                desktop_build,
+                "_pid_is_alive",
+                side_effect=AssertionError("Windows proof must use the census"),
+            ),
+            mock.patch.object(
+                desktop_build,
+                "PROCESS_TREE_POLL_INTERVAL_SECONDS",
+                60,
+            ),
+        ):
+            tracker = desktop_build.ProcessTreeTracker(100)
+            tracker.start()
+            proof = tracker.prove_gone(100)
+        self.assertEqual(proof, "tree=gone source=powershell-cim observed_pids=2")
+
+    def test_windows_tree_proof_rejects_census_survivor(self) -> None:
+        sample_count = 0
+
+        def snapshot(_root_pid: int) -> tuple[set[int], str, set[int]]:
+            nonlocal sample_count
+            sample_count += 1
+            if sample_count == 1:
+                return {200}, "powershell-cim", {100, 200}
+            return set(), "powershell-cim", {200}
+
+        with (
+            mock.patch.object(desktop_build.os, "name", "nt"),
+            mock.patch.object(
+                desktop_build,
+                "_process_tree_snapshot",
+                side_effect=snapshot,
+            ),
+            mock.patch.object(
+                desktop_build,
+                "PROCESS_TREE_POLL_INTERVAL_SECONDS",
+                60,
+            ),
+            self.assertRaisesRegex(
+                desktop_build.ProcessTreeProofError,
+                r"descendant survivors=\[200\]",
+            ),
+        ):
+            tracker = desktop_build.ProcessTreeTracker(100)
+            tracker.start()
+            tracker.prove_gone(100)
+
     def test_literal_config_uses_fresh_owner_only_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -391,10 +495,12 @@ class DesktopBuildTests(unittest.TestCase):
             mock.patch.object(desktop_build, "wait_for_socket", return_value=True) as wait_for_socket,
             mock.patch.object(desktop_build, "wait_for_port") as wait_for_port,
             mock.patch.object(desktop_build.subprocess, "Popen", return_value=process) as popen,
+            mock.patch.object(desktop_build, "attach_process_tree_tracker") as attach_tracker,
         ):
             started, _ = desktop_build.start_service("linux", 50151, socket_path)
 
         self.assertIs(started, process)
+        attach_tracker.assert_called_once_with(process)
         wait_for_socket.assert_called_once_with(socket_path)
         wait_for_port.assert_not_called()
         command = popen.call_args.args[0]
@@ -577,7 +683,7 @@ class DesktopBuildTests(unittest.TestCase):
             ):
                 with self.assertRaises(subprocess.TimeoutExpired) as raised:
                     desktop_build.run_bounded_capture(
-                        [sys.executable, "-c", parent_code], cwd=root, timeout_seconds=0.1,
+                        [sys.executable, "-c", parent_code], cwd=root, timeout_seconds=1,
                     )
             output = raised.exception.stdout or raised.exception.output or ""
             child_pid = int(desktop_build.output_text(output).split("childpid=", 1)[1].splitlines()[0])
