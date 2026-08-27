@@ -34,6 +34,20 @@ reproducibility_verifier_explicit=''
 gradle_archive=''
 gradle_root=''
 closure_allowlist_file=''
+canonical_instrumentation=0
+canonical_test_apk_relative='kmp_module/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk'
+
+case "${DOBBYVPN_BUILD_CANONICAL_INSTRUMENTATION:-0}" in
+  ''|0)
+    ;;
+  1)
+    canonical_instrumentation=1
+    ;;
+  *)
+    echo 'DOBBYVPN_BUILD_CANONICAL_INSTRUMENTATION must be 0 or 1' >&2
+    exit 2
+    ;;
+esac
 
 cleanup_closure_allowlist() {
   if [[ -n "$closure_allowlist_file" && -e "$closure_allowlist_file" ]]; then
@@ -1025,6 +1039,37 @@ verify_dependency_manifest
 run_unsigned_build "$build_cache/second" "$build_tmp/second" "$output"
 verify_source_integrity_after_build
 
+canonical_test_apk=''
+canonical_test_apk_sha256=''
+canonical_test_apk_size_bytes=''
+if [[ "$canonical_instrumentation" == 1 ]]; then
+  canonical_test_apk="$source_root/$canonical_test_apk_relative"
+  (
+    cd -- "$source_root"
+    "$gradle_bin" -p kmp_module :app:assembleReleaseAndroidTest \
+      "${gradle_flags[@]}" \
+      -PprojectRepositoryCommit="$source_commit" \
+      -PprojectRepositoryCommitLink="https://github.com/DobbyVPN/DobbyVPN/tree/$source_commit" \
+      -Pandroid.injected.version.code="$version_code" \
+      -Pandroid.injected.version.name="$version_name"
+  )
+  [[ -f "$canonical_test_apk" && ! -L "$canonical_test_apk" ]] || {
+    echo "Gradle did not produce the canonical release instrumentation APK: $canonical_test_apk" >&2
+    exit 1
+  }
+  [[ "$(realpath -e -- "$canonical_test_apk")" == "$canonical_test_apk" ]] || {
+    echo "canonical release instrumentation APK path traverses a symlink: $canonical_test_apk" >&2
+    exit 2
+  }
+  canonical_test_apk_sha256=$(sha256sum -- "$canonical_test_apk" | awk '{print $1}')
+  canonical_test_apk_size_bytes=$(stat -c '%s' -- "$canonical_test_apk")
+  [[ "$canonical_test_apk_sha256" =~ ^[0-9a-f]{64}$ && "$canonical_test_apk_size_bytes" =~ ^[1-9][0-9]*$ ]] || {
+    echo "canonical release instrumentation APK identity is invalid: $canonical_test_apk" >&2
+    exit 2
+  }
+  verify_source_integrity_after_build
+fi
+
 verify_dependency_manifest
 
 [[ -f "$reproducibility_verifier" && ! -L "$reproducibility_verifier" ]] || { echo 'reproducibility verifier is missing' >&2; exit 2; }
@@ -1045,7 +1090,12 @@ SOURCE_ROOT="$source_root" OUTPUT="$output" MANIFEST="$manifest" FIRST_OUTPUT="$
   REPRODUCIBILITY="$reproducibility" DEPENDENCY_MANIFEST="$dependency_manifest" \
   SOURCE_COMMIT="$source_commit" SOURCE_TREE="$source_tree" \
   DEPENDENCY_PROVENANCE_CLASSIFICATION="$dependency_provenance_classification" \
-  VERSION_NAME="$version_name" VERSION_CODE="$version_code" MAX_ARTIFACT_BYTES="${DOBBYVPN_MAX_ARTIFACT_BYTES:-536870912}" \
+  VERSION_NAME="$version_name" VERSION_CODE="$version_code" \
+  CANONICAL_INSTRUMENTATION="$canonical_instrumentation" \
+  CANONICAL_TEST_APK_RELATIVE="$canonical_test_apk_relative" \
+  CANONICAL_TEST_APK_SHA256="$canonical_test_apk_sha256" \
+  CANONICAL_TEST_APK_SIZE_BYTES="$canonical_test_apk_size_bytes" \
+  MAX_ARTIFACT_BYTES="${DOBBYVPN_MAX_ARTIFACT_BYTES:-536870912}" \
   python3 - <<'PY'
 import hashlib
 import json
@@ -1060,6 +1110,7 @@ first_output = Path(os.environ["FIRST_OUTPUT"])
 reproducibility = Path(os.environ["REPRODUCIBILITY"])
 dependency_manifest = Path(os.environ["DEPENDENCY_MANIFEST"])
 maximum = int(os.environ["MAX_ARTIFACT_BYTES"])
+canonical_instrumentation = os.environ["CANONICAL_INSTRUMENTATION"] == "1"
 
 dependency_provenance_classification = os.environ["DEPENDENCY_PROVENANCE_CLASSIFICATION"]
 if dependency_provenance_classification not in {
@@ -1119,6 +1170,22 @@ document = {
         "package": "com.dobby.vpn",
     },
 }
+if canonical_instrumentation:
+    canonical_test_apk = source_root / os.environ["CANONICAL_TEST_APK_RELATIVE"]
+    if canonical_test_apk.is_symlink() or not canonical_test_apk.is_file():
+        raise SystemExit(f"canonical instrumentation APK is not a regular file: {canonical_test_apk}")
+    canonical_descriptor = descriptor(canonical_test_apk)
+    if (
+        canonical_descriptor["path"] != os.environ["CANONICAL_TEST_APK_RELATIVE"]
+        or canonical_descriptor["sha256"] != os.environ["CANONICAL_TEST_APK_SHA256"]
+        or canonical_descriptor["bytes"] != int(os.environ["CANONICAL_TEST_APK_SIZE_BYTES"])
+    ):
+        raise SystemExit("canonical instrumentation APK identity changed before manifest creation")
+    document["canonical_test_apk"] = {
+        "path": canonical_descriptor["path"],
+        "sha256": canonical_descriptor["sha256"],
+        "size_bytes": canonical_descriptor["bytes"],
+    }
 encoded = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
 descriptor = os.open(manifest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 try:
@@ -1147,3 +1214,6 @@ if [[ -n "$evidence_dir" ]]; then
 fi
 
 echo "android_build_driver status=passed source_commit=$source_commit source_tree=$source_tree artifact=$output"
+if [[ "$canonical_instrumentation" == 1 ]]; then
+  echo "canonical_test_apk path=$canonical_test_apk_relative sha256=$canonical_test_apk_sha256 size_bytes=$canonical_test_apk_size_bytes"
+fi

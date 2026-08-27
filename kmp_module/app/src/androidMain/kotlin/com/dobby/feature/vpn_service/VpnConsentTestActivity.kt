@@ -5,8 +5,9 @@ import android.net.VpnService
 import android.os.Bundle
 
 /**
- * Debug-only foreground host for instrumentation that exercises Android's real VPN consent UI.
- * Release APKs do not contain this activity.
+ * Product-owned foreground host for instrumentation that exercises Android's real VPN consent UI.
+ * It has no launcher entry point and is not exported; release instrumentation uses this same
+ * target-application activity because the Android VPN consent dialog is scoped to that package.
  */
 class VpnConsentTestActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {

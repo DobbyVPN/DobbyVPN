@@ -46,6 +46,14 @@
             </intent-filter>
         </activity>
 
+        <!-- Product-owned, non-exported host used by release instrumentation to request the
+             real Android VPN consent dialog from the target application package. -->
+        <activity
+            android:name="com.dobby.feature.vpn_service.VpnConsentTestActivity"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
