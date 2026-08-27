@@ -1752,27 +1752,82 @@ def desktop_version_properties() -> list[str]:
     ]
 
 
-def gradle_command() -> str:
+def validate_gradle_executable(value: str | os.PathLike[str]) -> str:
+    """Validate and return a trusted caller's fixed Gradle executable path.
+
+    A fixed tool path is deliberately an explicit opt-in.  It must identify a
+    regular, executable, non-symlink file without dot components or symlinked
+    parent directories.  Keeping the path as one argv item means spaces and
+    other ordinary filename characters never become shell syntax.
+    """
+    try:
+        raw = os.fspath(value)
+    except TypeError as error:
+        raise ValueError("fixed Gradle executable must be a path string") from error
+    if isinstance(raw, bytes):
+        raise ValueError("fixed Gradle executable must be a text path")
+    if not raw or "\x00" in raw or "\r" in raw or "\n" in raw:
+        raise ValueError("fixed Gradle executable contains unsafe characters")
+
+    path = Path(raw)
+    if not path.is_absolute():
+        raise ValueError("fixed Gradle executable must be an absolute path")
+    if any(part in {".", ".."} for part in path.parts):
+        raise ValueError("fixed Gradle executable must not contain dot components")
+
+    current = Path(path.anchor)
+    try:
+        for part in path.parts[1:-1]:
+            current /= part
+            info = current.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                raise ValueError("fixed Gradle executable must not traverse symlinks")
+        info = path.lstat()
+    except FileNotFoundError as error:
+        raise ValueError("fixed Gradle executable does not exist") from error
+    except OSError as error:
+        raise ValueError("fixed Gradle executable cannot be inspected") from error
+
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise ValueError("fixed Gradle executable must be a regular non-symlink file")
+    if os.name != "nt" and not info.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
+        raise ValueError("fixed Gradle executable is not executable")
+    return str(path)
+
+
+def gradle_command(fixed_gradle_executable: str | os.PathLike[str] | None = None) -> str:
+    if fixed_gradle_executable is not None:
+        try:
+            return validate_gradle_executable(fixed_gradle_executable)
+        except ValueError as error:
+            fail(str(error))
     if host_platform() == "windows":
         return str(KMP_DIR / "gradlew.bat")
     return "./gradlew"
 
 
-def run_desktop_gradle(skip_deps: bool) -> None:
+def run_desktop_gradle(
+    skip_deps: bool,
+    fixed_gradle_executable: str | os.PathLike[str] | None = None,
+) -> None:
+    gradle = gradle_command(fixed_gradle_executable)
     install_jdk(skip_deps)
     install_android_sdk(skip_deps)
 
     props = desktop_version_properties()
-    run([gradle_command(), "--build-cache", "--parallel", ":app:jvmJar", *props], cwd=KMP_DIR)
-    run([gradle_command(), "--no-daemon", "dependencies", *props], cwd=KMP_DIR)
-    run([gradle_command(), "--no-daemon", "printConveyorConfig", *props], cwd=KMP_DIR)
+    run([gradle, "--build-cache", "--parallel", ":app:jvmJar", *props], cwd=KMP_DIR)
+    run([gradle, "--no-daemon", "dependencies", *props], cwd=KMP_DIR)
+    run([gradle, "--no-daemon", "printConveyorConfig", *props], cwd=KMP_DIR)
 
 
-def emit_conveyor_config() -> None:
+def emit_conveyor_config(
+    fixed_gradle_executable: str | os.PathLike[str] | None = None,
+) -> None:
     """Print only Conveyor's generated HOCON on every supported host."""
+    gradle = gradle_command(fixed_gradle_executable)
     with contextlib.redirect_stdout(sys.stderr):
         install_jdk(skip_deps=False)
-    command = [gradle_command(), "--no-daemon", "printConveyorConfig", *desktop_version_properties()]
+    command = [gradle, "--no-daemon", "printConveyorConfig", *desktop_version_properties()]
     try:
         result = subprocess.run(
             command,
@@ -1869,7 +1924,7 @@ def build_app(args: argparse.Namespace) -> None:
 
     if args.require_all_services:
         require_services(True, args.platform)
-    run_desktop_gradle(args.skip_deps)
+    run_desktop_gradle(args.skip_deps, args.gradle_executable)
     if args.package:
         run_conveyor(args.conveyor_passphrase)
 
@@ -2116,7 +2171,7 @@ def cli_test(args: argparse.Namespace) -> None:
             run_go_mod_tidy=args.go_mod_tidy,
         )
         build_cli(target_platform, go_arch_from_machine())
-        run_desktop_gradle(args.skip_deps)
+        run_desktop_gradle(args.skip_deps, args.gradle_executable)
     else:
         require_services(False, "current")
         if not (SERVICES_DIR / CLI_NAMES[target_platform]).exists():
@@ -2147,6 +2202,19 @@ def add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skip-build", action="store_true", help="Reuse existing build outputs when possible.")
 
 
+def add_gradle_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--gradle-bin",
+        "--gradle-executable",
+        dest="gradle_executable",
+        metavar="ABSOLUTE_PATH",
+        help=(
+            "Use this fixed absolute Gradle executable. It must be a regular, "
+            "executable, non-symlink file."
+        ),
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build DobbyVPN desktop services/app in the same shape used by CI."
@@ -2168,6 +2236,7 @@ def parse_args() -> argparse.Namespace:
 
     app = subparsers.add_parser("app", help="Build the desktop JVM app and Conveyor config.")
     add_common_options(app)
+    add_gradle_option(app)
     app.add_argument(
         "--platform",
         default="current",
@@ -2180,13 +2249,15 @@ def parse_args() -> argparse.Namespace:
     app.add_argument("--conveyor-passphrase", default=os.environ.get("CONVEYOR_PASSPHRASE"))
     app.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before service builds.")
 
-    subparsers.add_parser(
+    conveyor_config = subparsers.add_parser(
         "conveyor-config",
         help="Emit generated Conveyor HOCON without platform-specific wrapper assumptions.",
     )
+    add_gradle_option(conveyor_config)
 
     cli = subparsers.add_parser("cli-test", help="Build current desktop target and run check-config.")
     add_common_options(cli)
+    add_gradle_option(cli)
     cli.add_argument("--config", help="Config URL, TOML file path, or inline TOML.")
     cli.add_argument("--port", type=int, default=int(os.environ.get("PORT", "50151")))
     cli.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the service build.")
@@ -2229,7 +2300,7 @@ def main() -> None:
     elif args.command == "test-seams-service":
         build_test_seams_service(args)
     elif args.command == "conveyor-config":
-        emit_conveyor_config()
+        emit_conveyor_config(args.gradle_executable)
         return
     else:
         fail(f"Unknown command: {args.command}")
