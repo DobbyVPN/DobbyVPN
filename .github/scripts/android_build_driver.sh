@@ -166,6 +166,10 @@ closure_mode=0
 if [[ -n "$dependency_closure" ]]; then
   closure_mode=1
 fi
+if [[ "${DOBBYVPN_REQUIRE_TOOL_CLOSURE:-0}" == 1 && -z "$tool_closure_manifest" ]]; then
+  echo 'request-bound tool closure manifest is required' >&2
+  exit 2
+fi
 
 git_bin=${GIT_BIN:-git}
 gradle_bin=${GRADLE_BIN:-"$source_root/kmp_module/gradlew"}
@@ -211,6 +215,13 @@ if len(set(normalized)) != len(normalized):
     raise SystemExit("all output paths must be distinct")
 PY
 }
+
+# Reject output aliases before touching source/build validation.  A malformed
+# destination is a caller error and must not be masked by unrelated checkout
+# state (for example, a generated parent that Git reports as untracked).
+if [[ "$trusted_helper_validation_only" != 1 ]]; then
+  validate_destinations
+fi
 
 validate_source_checkout() {
   local root=$1
@@ -423,8 +434,6 @@ start_evidence_capture() {
   exec > >(tee -- "$stdout_original") \
     2> >(tee -- "$stderr_original" >&2)
 }
-
-validate_destinations
 
 sync_path() {
   python3 - "$1" <<'PY'

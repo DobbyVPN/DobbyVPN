@@ -469,7 +469,8 @@ def _validate_driver_contract(source: Path, trusted: Path, sha: str, *extra: str
     ).returncode
 
 
-def test_driver_accepts_legacy_source_with_trusted_helper_checkout(tmp_path: Path) -> None:
+def test_driver_helper_contract_validation_skips_build_destination_validation(tmp_path: Path) -> None:
+    """Contract validation intentionally supplies no build output paths."""
     source = tmp_path / "legacy-source"
     trusted = tmp_path / "trusted"
     _git_repository(source)
