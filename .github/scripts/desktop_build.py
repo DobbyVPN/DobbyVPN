@@ -380,8 +380,13 @@ class ProcessTreeTracker:
                     continue
             try:
                 os.kill(pid, signum)
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
+            except ProcessLookupError:
+                continue
+            except OSError as error:
+                with self._lock:
+                    self.error = ProcessTreeProofError(
+                        f"could not signal descendant pid={pid} value={signum}: {error}"
+                    )
 
     def observed_pids(self) -> tuple[int, ...]:
         with self._lock:
@@ -490,13 +495,19 @@ def terminate_process_group(
     if os.name == "nt":
         try:
             process.send_signal(signal.CTRL_BREAK_EVENT)
-        except (AttributeError, OSError, ValueError):
+        except ProcessLookupError:
             pass
+        except (AttributeError, OSError, ValueError) as error:
+            raise ProcessTreeProofError(f"could not signal process: {error}") from error
     else:
         try:
             os.killpg(group_id, signal.SIGTERM)
-        except (ProcessLookupError, OSError):
+        except ProcessLookupError:
             pass
+        except OSError as error:
+            raise ProcessTreeProofError(
+                f"could not terminate process group={group_id}: {error}"
+            ) from error
         tracker.signal_descendants(signal.SIGTERM)
     try:
         process.wait(timeout=grace_seconds)
@@ -545,14 +556,20 @@ def terminate_process_group(
             emit_process_diagnostic("[!] Windows descendant cleanup failed:", str(error))
         try:
             process.kill()
-        except OSError:
+        except ProcessLookupError:
             pass
+        except OSError as error:
+            raise ProcessTreeProofError(f"could not kill process: {error}") from error
     else:
         tracker.signal_descendants(signal.SIGKILL)
         try:
             os.killpg(group_id, signal.SIGKILL)
-        except (ProcessLookupError, OSError):
+        except ProcessLookupError:
             pass
+        except OSError as error:
+            raise ProcessTreeProofError(
+                f"could not kill process group={group_id}: {error}"
+            ) from error
     try:
         process.wait(timeout=grace_seconds)
     except subprocess.TimeoutExpired:
