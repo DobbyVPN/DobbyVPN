@@ -70,6 +70,32 @@ func TestControlTokenOwnerPolicyAcceptsOnlyTrustedOwners(t *testing.T) {
 	}
 }
 
+func TestExactACLControlPolicyIgnoresDefaultedProvenance(t *testing.T) {
+	for name, control := range map[string]windows.SECURITY_DESCRIPTOR_CONTROL{
+		"neither defaulted":    windows.SE_DACL_PRESENT | windows.SE_DACL_PROTECTED,
+		"owner defaulted only": windows.SE_OWNER_DEFAULTED | windows.SE_DACL_PRESENT | windows.SE_DACL_PROTECTED,
+		"DACL defaulted only":  windows.SE_DACL_DEFAULTED | windows.SE_DACL_PRESENT | windows.SE_DACL_PROTECTED,
+		"both defaulted":       windows.SE_OWNER_DEFAULTED | windows.SE_DACL_DEFAULTED | windows.SE_DACL_PRESENT | windows.SE_DACL_PROTECTED,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateExactACLControl(control, "test ACL"); err != nil {
+				t.Fatalf("control policy rejected valid descriptor: %v", err)
+			}
+		})
+	}
+
+	for name, control := range map[string]windows.SECURITY_DESCRIPTOR_CONTROL{
+		"absent DACL":      windows.SE_OWNER_DEFAULTED | windows.SE_DACL_DEFAULTED | windows.SE_DACL_PROTECTED,
+		"unprotected DACL": windows.SE_OWNER_DEFAULTED | windows.SE_DACL_DEFAULTED | windows.SE_DACL_PRESENT,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateExactACLControl(control, "test ACL"); err == nil {
+				t.Fatal("control policy accepted an invalid descriptor")
+			}
+		})
+	}
+}
+
 func TestUntrustedBaseAccessMaskClassification(t *testing.T) {
 	for _, mask := range []windows.ACCESS_MASK{
 		windows.GENERIC_WRITE,

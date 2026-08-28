@@ -179,9 +179,6 @@ func VerifyUserConfigBasePermissions(path string) error {
 	if err != nil {
 		return fmt.Errorf("read user config base security descriptor control: %w", err)
 	}
-	if control&windows.SE_OWNER_DEFAULTED != 0 {
-		return fmt.Errorf("user config base owner is defaulted")
-	}
 	if control&windows.SE_DACL_PRESENT == 0 {
 		return fmt.Errorf("user config base has no DACL")
 	}
@@ -298,14 +295,8 @@ func verifyExactACLWithOwners(path string, allowed, expectedOwners []*windows.SI
 	if err != nil {
 		return fmt.Errorf("read %s security descriptor control: %w", description, err)
 	}
-	if control&windows.SE_OWNER_DEFAULTED != 0 {
-		return fmt.Errorf("%s owner is defaulted", description)
-	}
-	if control&windows.SE_DACL_DEFAULTED != 0 {
-		return fmt.Errorf("%s DACL is defaulted", description)
-	}
-	if control&windows.SE_DACL_PRESENT == 0 {
-		return fmt.Errorf("%s has no DACL", description)
+	if err := validateExactACLControl(control, description); err != nil {
+		return err
 	}
 	owner, _, err := sd.Owner()
 	if err != nil || !matchesExpectedOwner(owner, expectedOwners) {
@@ -313,9 +304,6 @@ func verifyExactACLWithOwners(path string, allowed, expectedOwners []*windows.SI
 			return fmt.Errorf("read %s owner: %w", description, err)
 		}
 		return fmt.Errorf("%s owner is not the expected identity", description)
-	}
-	if control&windows.SE_DACL_PROTECTED == 0 {
-		return fmt.Errorf("%s ACL inheritance is not disabled", description)
 	}
 	acl, _, err := sd.DACL()
 	if err != nil || acl == nil || int(acl.AceCount) != len(allowed) {
@@ -373,6 +361,19 @@ func verifyExactACLWithOwners(path string, allowed, expectedOwners []*windows.SI
 		if !present {
 			return fmt.Errorf("%s ACL is missing an expected identity", description)
 		}
+	}
+	return nil
+}
+
+func validateExactACLControl(control windows.SECURITY_DESCRIPTOR_CONTROL, description string) error {
+	// OWNER_DEFAULTED and DACL_DEFAULTED describe descriptor provenance, not
+	// access semantics. The owner identity and exact protected DACL below are
+	// the security policy; defaulted provenance does not weaken either check.
+	if control&windows.SE_DACL_PRESENT == 0 {
+		return fmt.Errorf("%s has no DACL", description)
+	}
+	if control&windows.SE_DACL_PROTECTED == 0 {
+		return fmt.Errorf("%s ACL inheritance is not disabled", description)
 	}
 	return nil
 }
