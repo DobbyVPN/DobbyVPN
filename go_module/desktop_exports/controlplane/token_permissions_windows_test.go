@@ -37,6 +37,39 @@ func TestInstalledUserPathPolicyRemainsStrict(t *testing.T) {
 	}
 }
 
+func TestControlTokenOwnerPolicyAcceptsOnlyTrustedOwners(t *testing.T) {
+	systemSID, err := windows.StringToSid("S-1-5-18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	installedUserSID, err := windows.StringToSid("S-1-5-21-1111111111-2222222222-3333333333-1001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	thirdPartySID, err := windows.StringToSid("S-1-1-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedOwners := []*windows.SID{systemSID, installedUserSID}
+
+	for name, owner := range map[string]*windows.SID{
+		"SYSTEM":         systemSID,
+		"installed user": installedUserSID,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !matchesExpectedOwner(owner, trustedOwners) {
+				t.Fatalf("trusted owner %v was rejected", owner)
+			}
+		})
+	}
+	if matchesExpectedOwner(thirdPartySID, trustedOwners) {
+		t.Fatal("third-party owner was accepted")
+	}
+	if matchesExpectedOwner(nil, trustedOwners) {
+		t.Fatal("missing owner was accepted")
+	}
+}
+
 func TestUntrustedBaseAccessMaskClassification(t *testing.T) {
 	for _, mask := range []windows.ACCESS_MASK{
 		windows.GENERIC_WRITE,

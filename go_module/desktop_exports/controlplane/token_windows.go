@@ -263,16 +263,23 @@ func verifyControlTokenPermissions(path string) error {
 	// SetEntriesInAcl maps generic rights to the file-specific mask stored in
 	// the ACE. Keep the expected mask explicit per path so a broader ACL cannot
 	// satisfy this verifier by accident.
-	return verifyExactACL(
+	// The service can create the token as SYSTEM, while the desktop process can
+	// create it as the configured installed user. These are the same two
+	// identities already required by the exact token DACL.
+	return verifyExactACLWithOwners(
 		path,
 		[]*windows.SID{systemSID, userSID},
-		userSID,
+		[]*windows.SID{systemSID, userSID},
 		fileControlTokenAccess,
 		"control token",
 	)
 }
 
 func verifyExactACL(path string, allowed []*windows.SID, expectedOwner *windows.SID, expectedMask windows.ACCESS_MASK, description string) error {
+	return verifyExactACLWithOwners(path, allowed, []*windows.SID{expectedOwner}, expectedMask, description)
+}
+
+func verifyExactACLWithOwners(path string, allowed, expectedOwners []*windows.SID, expectedMask windows.ACCESS_MASK, description string) error {
 	sd, err := windows.GetNamedSecurityInfo(
 		path,
 		windows.SE_FILE_OBJECT,
@@ -301,7 +308,7 @@ func verifyExactACL(path string, allowed []*windows.SID, expectedOwner *windows.
 		return fmt.Errorf("%s has no DACL", description)
 	}
 	owner, _, err := sd.Owner()
-	if err != nil || owner == nil || expectedOwner == nil || !owner.Equals(expectedOwner) {
+	if err != nil || !matchesExpectedOwner(owner, expectedOwners) {
 		if err != nil {
 			return fmt.Errorf("read %s owner: %w", description, err)
 		}
@@ -368,6 +375,10 @@ func verifyExactACL(path string, allowed []*windows.SID, expectedOwner *windows.
 		}
 	}
 	return nil
+}
+
+func matchesExpectedOwner(owner *windows.SID, expectedOwners []*windows.SID) bool {
+	return containsSID(expectedOwners, owner)
 }
 
 func trustedBaseWriterSIDs() ([]*windows.SID, error) {
