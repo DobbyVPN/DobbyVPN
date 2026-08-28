@@ -23,15 +23,15 @@ func TestLocalLogDirectoryDescriptorSurvivesParentReplacement(t *testing.T) {
 	defer directory.Close()
 
 	retained := filepath.Join(root, "retained-parent")
-	if err := os.Rename(parent, retained); err != nil {
-		t.Fatal(err)
+	if renameErr := os.Rename(parent, retained); renameErr != nil {
+		t.Fatal(renameErr)
 	}
 	redirect := filepath.Join(root, "redirect-parent")
-	if err := os.Mkdir(redirect, 0o700); err != nil {
-		t.Fatal(err)
+	if mkdirErr := os.Mkdir(redirect, 0o700); mkdirErr != nil {
+		t.Fatal(mkdirErr)
 	}
-	if err := os.Symlink(redirect, parent); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
+	if symlinkErr := os.Symlink(redirect, parent); symlinkErr != nil {
+		t.Skipf("symlinks unavailable: %v", symlinkErr)
 	}
 
 	fd, err := unix.Openat(int(directory.Fd()), "app_logs.txt", unix.O_WRONLY|unix.O_CREAT|unix.O_TRUNC|unix.O_NOFOLLOW, 0o600)
@@ -43,12 +43,12 @@ func TestLocalLogDirectoryDescriptorSurvivesParentReplacement(t *testing.T) {
 		_ = unix.Close(fd)
 		t.Fatal("Openat returned an invalid descriptor")
 	}
-	if _, err := file.WriteString("descriptor-owned\n"); err != nil {
+	if _, writeErr := file.WriteString("descriptor-owned\n"); writeErr != nil {
 		_ = file.Close()
-		t.Fatal(err)
+		t.Fatal(writeErr)
 	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := file.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	data, err := os.ReadFile(filepath.Join(retained, "app_logs.txt"))

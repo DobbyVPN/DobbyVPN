@@ -337,7 +337,7 @@ func (m *Manager) CreateSession(context.Context) (id string, err error) {
 // Subscribe provides a push event stream for platform bindings. The returned
 // channel is preloaded with retained events after afterSequence and then
 // receives every later transition. Close must be called by the subscriber.
-func (m *Manager) Subscribe(ctx context.Context, sessionID string, afterSequence uint64) (<-chan Event, func(), error) {
+func (m *Manager) Subscribe(ctx context.Context, sessionID string, afterSequence uint64) (events <-chan Event, closeSubscription func(), err error) {
 	s, err := m.get(sessionID)
 	if err != nil {
 		return nil, func() {}, err
@@ -356,7 +356,7 @@ func (m *Manager) Subscribe(ctx context.Context, sessionID string, afterSequence
 	s.watchers[ch] = struct{}{}
 	s.mu.Unlock()
 	var once sync.Once
-	closeSubscription := func() {
+	closeSubscription = func() {
 		once.Do(func() {
 			s.mu.Lock()
 			if _, ok := s.watchers[ch]; ok {
@@ -1103,12 +1103,6 @@ func summaries(in []RuntimeProfile) []ProfileSummary {
 }
 func cloneConfigure(in ConfigureResult) ConfigureResult {
 	return ConfigureResult{Digest: in.Digest, Profiles: append([]ProfileSummary(nil), in.Profiles...), Warnings: cloneWarnings(in.Warnings), SourceKind: in.SourceKind}
-}
-func cloneRuntimeProfile(in RuntimeProfile) RuntimeProfile {
-	in.NormalizedConfig = append([]byte(nil), in.NormalizedConfig...)
-	in.ExcludeCIDRs = append([]string(nil), in.ExcludeCIDRs...)
-	in.PreflightHosts = append([]string(nil), in.PreflightHosts...)
-	return in
 }
 func cloneWarnings(in []Warning) []Warning { return append([]Warning(nil), in...) }
 func cloneSummaryPtr(in *ProfileSummary) *ProfileSummary {

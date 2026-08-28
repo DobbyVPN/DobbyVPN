@@ -1,13 +1,38 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"go_module/grpcproto"
+
+	"google.golang.org/grpc"
 )
+
+type disconnectClientStub struct {
+	grpcproto.VpnClient
+	stopResponse     *grpcproto.SessionStopResponse
+	snapshotResponse *grpcproto.SessionSnapshotResponse
+}
+
+func (stub disconnectClientStub) Stop(
+	context.Context,
+	*grpcproto.SessionStopRequest,
+	...grpc.CallOption,
+) (*grpcproto.SessionStopResponse, error) {
+	return stub.stopResponse, nil
+}
+
+func (stub disconnectClientStub) Snapshot(
+	context.Context,
+	*grpcproto.SessionSnapshotRequest,
+	...grpc.CallOption,
+) (*grpcproto.SessionSnapshotResponse, error) {
+	return stub.snapshotResponse, nil
+}
 
 func TestReadSourceAcceptsInlineURLAndFileWithoutReadingURL(t *testing.T) {
 	inline := "[[Outline]]\nServer='vpn.invalid'\n"
@@ -23,8 +48,8 @@ func TestReadSourceAcceptsInlineURLAndFileWithoutReadingURL(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	file := []byte("[[Xray]]\noutbounds=[]\n")
-	if err := os.WriteFile(path, file, 0o600); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(path, file, 0o600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	got, err = readSource(path)
 	if err != nil || string(got) != string(file) {
@@ -193,6 +218,46 @@ func TestReadSourceRejectsUnsupportedURLAndOversize(t *testing.T) {
 	}
 	if _, err := readSource(strings.Repeat("x", maxSource+1)); err == nil {
 		t.Fatal("oversize source unexpectedly succeeded")
+	}
+}
+
+func TestParseProfileIndexRejectsValuesOutsideProtoRange(t *testing.T) {
+	if got, err := parseProfileIndex("2147483647"); err != nil || got != 2147483647 {
+		t.Fatalf("parseProfileIndex(max int32) = %d, %v", got, err)
+	}
+	for _, value := range []string{"-1", "2147483648", "not-an-index"} {
+		if _, err := parseProfileIndex(value); err == nil {
+			t.Fatalf("parseProfileIndex(%q) unexpectedly succeeded", value)
+		}
+	}
+}
+
+func TestStopAndWaitRejectsEmptyServiceResponses(t *testing.T) {
+	initial := &grpcproto.SessionSnapshotResponse{
+		Snapshot: &grpcproto.SessionSnapshot{Generation: 1},
+	}
+	tests := []struct {
+		name   string
+		client disconnectClientStub
+	}{
+		{name: "stop", client: disconnectClientStub{}},
+		{
+			name: "snapshot",
+			client: disconnectClientStub{
+				stopResponse: &grpcproto.SessionStopResponse{Generation: 1},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, failure, err := stopAndWaitForDisconnect(context.Background(), test.client, "session", initial)
+			if err == nil {
+				t.Fatal("empty service response unexpectedly succeeded")
+			}
+			if failure != nil {
+				t.Fatalf("empty service response returned protocol failure: %v", failure)
+			}
+		})
 	}
 }
 

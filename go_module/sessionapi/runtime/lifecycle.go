@@ -245,7 +245,7 @@ func (r *runtime) Probe(ctx context.Context, ref v2.SessionRef, profile v2.Runti
 func probeUntilReady(
 	ctx context.Context,
 	ref v2.SessionRef,
-	probe ProbeFunc,
+	probeFn ProbeFunc,
 	attempts int,
 	retryInterval time.Duration,
 ) (int64, error) {
@@ -254,7 +254,7 @@ func probeUntilReady(
 			return 0, err
 		}
 		startedAt := time.Now()
-		latency, err := probe(ctx)
+		latency, err := probeFn(ctx)
 		if err != nil {
 			return 0, err
 		}

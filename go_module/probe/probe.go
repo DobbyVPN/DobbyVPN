@@ -132,7 +132,11 @@ func pingHostCheck(host string) error {
 	if err != nil {
 		return fmt.Errorf("probe request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warnf("PROBE", "HTTP probe response body close failed errorType=%T", closeErr)
+		}
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		return fmt.Errorf("probe returned status %d", resp.StatusCode)
 	}

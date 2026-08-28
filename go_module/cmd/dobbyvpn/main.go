@@ -6,8 +6,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -32,7 +34,7 @@ const (
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+	if isHelpCommand(args) {
 		printHelp()
 		return exitOK
 	}
@@ -50,10 +52,18 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "dobby-cli: service unavailable")
 		return exitConnect
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	client := grpcproto.NewVpnClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	return runServiceCommand(ctx, client, args)
+}
+
+func isHelpCommand(args []string) bool {
+	return len(args) == 0 || args[0] == "--help" || args[0] == "-h"
+}
+
+func runServiceCommand(ctx context.Context, client grpcproto.VpnClient, args []string) int {
 	switch args[0] {
 	case "connect":
 		if len(args) != 2 {
@@ -64,8 +74,8 @@ func run(args []string) int {
 		if len(args) != 3 {
 			return usage("connect-profile requires a source and profile index")
 		}
-		index, parseErr := strconv.Atoi(args[2])
-		if parseErr != nil || index < 0 {
+		index, parseErr := parseProfileIndex(args[2])
+		if parseErr != nil {
 			return usage("profile index must be a non-negative integer")
 		}
 		return connect(ctx, client, args[1], &index)
@@ -91,6 +101,14 @@ func run(args []string) int {
 	default:
 		return usage("unknown command")
 	}
+}
+
+func parseProfileIndex(value string) (int, error) {
+	index, err := strconv.Atoi(value)
+	if err != nil || index < 0 || index > math.MaxInt32 {
+		return 0, fmt.Errorf("profile index must fit in int32")
+	}
+	return index, nil
 }
 
 func initWindowsServiceLogger(
@@ -152,18 +170,18 @@ func connect(ctx context.Context, client grpcproto.VpnClient, source string, pro
 		fmt.Fprintln(os.Stderr, "dobby-cli: configuration source rejected")
 		return exitArgs
 	}
-	if runtime.GOOS == "windows" {
-		if err := initWindowsServiceLogger(ctx, client, os.UserHomeDir); err != nil {
-			fmt.Fprintln(os.Stderr, "dobby-cli: local service logging unavailable")
-			return exitRuntime
-		}
-	} else if err := initOptInServiceLogger(ctx, client); err != nil {
+	if loggerErr := initServiceLogger(ctx, client); loggerErr != nil {
 		fmt.Fprintln(os.Stderr, "dobby-cli: local service logging unavailable")
 		return exitRuntime
 	}
-	created, err := client.CreateSession(ctx, &grpcproto.SessionCreateSessionRequest{})
-	if err != nil || created == nil || created.GetFailure() != nil {
-		return reportFailure(err, failureOf(created))
+	profileValue, profileErr := profileIndexAsInt32(profileIndex)
+	if profileErr != nil {
+		fmt.Fprintln(os.Stderr, "dobby-cli: profile index rejected")
+		return exitArgs
+	}
+	created, createErr := client.CreateSession(ctx, &grpcproto.SessionCreateSessionRequest{})
+	if createErr != nil || created == nil || created.GetFailure() != nil {
+		return reportFailure(createErr, failureOf(created))
 	}
 	sessionID := created.GetSessionId()
 	keepSession := false
@@ -173,44 +191,84 @@ func connect(ctx context.Context, client grpcproto.VpnClient, source string, pro
 			cleanupSession(client, sessionID, startedGeneration)
 		}
 	}()
-	configured, err := client.Configure(ctx, &grpcproto.SessionConfigureRequest{
+	configured, configureErr := client.Configure(ctx, &grpcproto.SessionConfigureRequest{
 		SessionId: sessionID, CommandId: commandID("configure"), RawConfig: raw,
 	})
-	if err != nil || configured == nil || configured.GetFailure() != nil {
-		return reportFailure(err, failureOf(configured))
+	if configureErr != nil || configured == nil || configured.GetFailure() != nil {
+		return reportFailure(configureErr, failureOf(configured))
 	}
+	started, startErr := startSession(ctx, client, sessionID, profileValue)
+	if startErr != nil || started == nil || started.GetFailure() != nil {
+		return reportFailure(startErr, failureOf(started))
+	}
+	startedGeneration = started.GetGeneration()
+	result, connected := waitForConnection(ctx, client, sessionID)
+	keepSession = connected
+	return result
+}
+
+func initServiceLogger(ctx context.Context, client grpcproto.VpnClient) error {
+	if runtime.GOOS == "windows" {
+		return initWindowsServiceLogger(ctx, client, os.UserHomeDir)
+	}
+	return initOptInServiceLogger(ctx, client)
+}
+
+func profileIndexAsInt32(index *int) (*int32, error) {
+	if index == nil {
+		return nil, nil
+	}
+	if *index < 0 || *index > math.MaxInt32 {
+		return nil, fmt.Errorf("profile index must fit in int32")
+	}
+	value := int32(*index)
+	return &value, nil
+}
+
+func startSession(
+	ctx context.Context,
+	client grpcproto.VpnClient,
+	sessionID string,
+	profileIndex *int32,
+) (*grpcproto.SessionStartResponse, error) {
 	start := &grpcproto.SessionStartRequest{SessionId: sessionID, CommandId: commandID("start")}
 	if profileIndex == nil {
 		start.Mode = grpcproto.SessionStartMode_SESSION_START_MODE_AUTO_SELECT
 	} else {
 		start.Mode = grpcproto.SessionStartMode_SESSION_START_MODE_PROFILE_INDEX
-		start.ProfileIndex = int32(*profileIndex)
+		start.ProfileIndex = *profileIndex
 	}
-	started, err := client.Start(ctx, start)
-	if err != nil || started == nil || started.GetFailure() != nil {
-		return reportFailure(err, failureOf(started))
-	}
-	startedGeneration = started.GetGeneration()
+	return client.Start(ctx, start)
+}
+
+func waitForConnection(ctx context.Context, client grpcproto.VpnClient, sessionID string) (int, bool) {
 	stream, err := client.Watch(ctx, &grpcproto.SessionObserveRequest{SessionId: sessionID})
 	if err != nil {
-		return reportFailure(err, nil)
+		return reportFailure(err, nil), false
 	}
 	for {
 		event, recvErr := stream.Recv()
-		if recvErr == io.EOF {
-			return exitRuntime
+		if errors.Is(recvErr, io.EOF) {
+			return exitRuntime, false
 		}
 		if recvErr != nil {
-			return reportFailure(recvErr, nil)
+			return reportFailure(recvErr, nil), false
 		}
 		switch event.GetState() {
+		case grpcproto.SessionState_SESSION_STATE_UNSPECIFIED,
+			grpcproto.SessionState_SESSION_STATE_IDLE,
+			grpcproto.SessionState_SESSION_STATE_CONFIGURED,
+			grpcproto.SessionState_SESSION_STATE_PROBING,
+			grpcproto.SessionState_SESSION_STATE_PREPARING,
+			grpcproto.SessionState_SESSION_STATE_STOPPING,
+			grpcproto.SessionState_SESSION_STATE_DESTROYED:
+			continue
 		case grpcproto.SessionState_SESSION_STATE_CONNECTED:
-			keepSession = true
 			fmt.Println("CONNECTED")
-			return exitOK
+			return exitOK, true
 		case grpcproto.SessionState_SESSION_STATE_FAILED:
 			fmt.Fprintln(os.Stderr, "dobby-cli: tunnel did not connect")
-			return exitRuntime
+			return exitRuntime, false
 		}
 	}
 }
@@ -245,42 +303,83 @@ func disconnect(ctx context.Context, client grpcproto.VpnClient) int {
 		return reportFailure(nil, nil)
 	}
 	if recovered.GetFailure() != nil {
-		if recovered.GetFailure().GetCode() == grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_NOT_FOUND {
-			fmt.Println("DISCONNECTED")
-			return exitOK
-		}
-		return reportFailure(nil, failureOf(recovered))
+		return reportRecoveredFailure(recovered.GetFailure())
 	}
 	id := recovered.GetSessionId()
 	snapshot, err := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: id})
 	if err != nil || snapshot == nil || snapshot.GetFailure() != nil {
 		return reportFailure(err, failureOf(snapshot))
 	}
-	if generation := snapshot.GetSnapshot().GetGeneration(); generation != 0 && !snapshot.GetSnapshot().GetCleanupComplete() {
-		stopped, stopErr := client.Stop(ctx, &grpcproto.SessionStopRequest{SessionId: id, CommandId: commandID("stop"), Generation: generation})
-		if stopErr != nil || stopped == nil || stopped.GetFailure() != nil {
-			return reportFailure(stopErr, failureOf(stopped))
-		}
-		for {
-			current, getErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: id})
-			if getErr != nil || current == nil || current.GetFailure() != nil {
-				return reportFailure(getErr, failureOf(current))
-			}
-			if current.GetSnapshot().GetCleanupComplete() {
-				break
-			}
-			select {
-			case <-ctx.Done():
-				return exitRuntime
-			case <-time.After(100 * time.Millisecond):
-			}
-		}
+	timedOut, stopFailure, stopErr := stopAndWaitForDisconnect(ctx, client, id, snapshot)
+	if timedOut {
+		return exitRuntime
 	}
-	if _, err := client.DestroySession(ctx, &grpcproto.SessionDestroySessionRequest{SessionId: id}); err != nil {
-		return reportFailure(err, nil)
+	if stopErr != nil || stopFailure != nil {
+		return reportFailure(stopErr, stopFailure)
+	}
+	if destroyErr := destroySession(ctx, client, id); destroyErr != nil {
+		return reportFailure(destroyErr, nil)
 	}
 	fmt.Println("DISCONNECTED")
 	return exitOK
+}
+
+func reportRecoveredFailure(failure *grpcproto.SessionFailure) int {
+	if failure.GetCode() == grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_NOT_FOUND {
+		fmt.Println("DISCONNECTED")
+		return exitOK
+	}
+	return reportFailure(nil, failure)
+}
+
+func stopAndWaitForDisconnect(
+	ctx context.Context,
+	client grpcproto.VpnClient,
+	sessionID string,
+	snapshot *grpcproto.SessionSnapshotResponse,
+) (bool, *grpcproto.SessionFailure, error) {
+	current := snapshot.GetSnapshot()
+	if current == nil || current.GetGeneration() == 0 || current.GetCleanupComplete() {
+		return false, nil, nil
+	}
+	generation := current.GetGeneration()
+	stopped, stopErr := client.Stop(ctx, &grpcproto.SessionStopRequest{
+		SessionId: sessionID, CommandId: commandID("stop"), Generation: generation,
+	})
+	if stopErr != nil {
+		return false, nil, stopErr
+	}
+	if stopped == nil {
+		return false, nil, fmt.Errorf("service returned an empty stop response")
+	}
+	if stopped.GetFailure() != nil {
+		return false, failureOf(stopped), stopErr
+	}
+	for {
+		current, getErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: sessionID})
+		if getErr != nil {
+			return false, nil, getErr
+		}
+		if current == nil {
+			return false, nil, fmt.Errorf("service returned an empty snapshot response")
+		}
+		if current.GetFailure() != nil {
+			return false, failureOf(current), getErr
+		}
+		if current.GetSnapshot().GetCleanupComplete() {
+			return false, nil, nil
+		}
+		select {
+		case <-ctx.Done():
+			return true, nil, nil
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func destroySession(ctx context.Context, client grpcproto.VpnClient, sessionID string) error {
+	_, err := client.DestroySession(ctx, &grpcproto.SessionDestroySessionRequest{SessionId: sessionID})
+	return err
 }
 
 func status(ctx context.Context, client grpcproto.VpnClient, jsonOutput bool) int {
@@ -321,18 +420,22 @@ func status(ctx context.Context, client grpcproto.VpnClient, jsonOutput bool) in
 // desktop qualification adapters. Keep the wire vocabulary independent from
 // protobuf enum names so separate CLI processes can recover the same simple
 // lifecycle contract across operating systems.
-func publicStatus(state grpcproto.SessionState) (int, string) {
+func publicStatus(state grpcproto.SessionState) (code int, label string) {
+	code, label = 0, "Disconnected"
 	switch state {
 	case grpcproto.SessionState_SESSION_STATE_PROBING,
 		grpcproto.SessionState_SESSION_STATE_PREPARING,
 		grpcproto.SessionState_SESSION_STATE_CONFIGURED,
 		grpcproto.SessionState_SESSION_STATE_STOPPING:
-		return 1, "Connecting"
+		code, label = 1, "Connecting"
 	case grpcproto.SessionState_SESSION_STATE_CONNECTED:
-		return 2, "Connected"
-	default:
-		return 0, "Disconnected"
+		code, label = 2, "Connected"
+	case grpcproto.SessionState_SESSION_STATE_UNSPECIFIED,
+		grpcproto.SessionState_SESSION_STATE_IDLE,
+		grpcproto.SessionState_SESSION_STATE_FAILED,
+		grpcproto.SessionState_SESSION_STATE_DESTROYED:
 	}
+	return code, label
 }
 
 func verifySession(ctx context.Context, client grpcproto.VpnClient) int {
@@ -346,17 +449,33 @@ func readSource(source string) ([]byte, error) {
 	// A Windows drive path such as C:\\path\\config.toml parses as a URL
 	// with scheme "c". Recognize it as a filesystem path before URL parsing;
 	// otherwise the Windows desktop harness cannot pass a config file path.
-	if !isWindowsPath(source) {
-		if parsed, err := url.Parse(source); err == nil && parsed.Scheme != "" {
-			if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" {
-				return nil, fmt.Errorf("source URL must use HTTP or HTTPS")
-			}
-			if len(source) > maxSource {
-				return nil, fmt.Errorf("source too large")
-			}
-			return []byte(source), nil
+	if sourceURL, isURL, err := parseSourceURL(source); isURL {
+		if err != nil {
+			return nil, err
 		}
+		return sourceURL, nil
 	}
+	return readSourceFileOrInline(source)
+}
+
+func parseSourceURL(source string) (urlSource []byte, isURL bool, err error) {
+	if isWindowsPath(source) {
+		return nil, false, nil
+	}
+	parsed, parseErr := url.Parse(source)
+	if parseErr != nil {
+		return nil, false, parseErr
+	}
+	if parsed.Scheme == "" {
+		return nil, false, nil
+	}
+	if (!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https")) || parsed.Host == "" {
+		return nil, true, fmt.Errorf("source URL must use HTTP or HTTPS")
+	}
+	return []byte(source), true, nil
+}
+
+func readSourceFileOrInline(source string) ([]byte, error) {
 	cleanPath := filepath.Clean(source)
 	if data, err := os.ReadFile(cleanPath); err == nil {
 		if len(data) > maxSource {
@@ -385,42 +504,65 @@ func isWindowsPath(source string) bool {
 func cleanupSession(client grpcproto.VpnClient, sessionID string, generation uint64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if snapshot, err := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: sessionID}); err == nil && snapshot != nil && snapshot.GetFailure() == nil {
-		current := snapshot.GetSnapshot()
-		if current != nil && generation == 0 {
-			generation = current.GetGeneration()
-		}
-		if current != nil && !current.GetCleanupComplete() && generation != 0 {
-			_, _ = client.Stop(ctx, &grpcproto.SessionStopRequest{SessionId: sessionID, CommandId: commandID("cleanup-stop"), Generation: generation})
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(100 * time.Millisecond):
-				}
-				currentSnapshot, snapshotErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: sessionID})
-				if snapshotErr != nil || currentSnapshot == nil || currentSnapshot.GetFailure() != nil || currentSnapshot.GetSnapshot() == nil {
-					return
-				}
-				if currentSnapshot.GetSnapshot().GetCleanupComplete() {
-					break
-				}
-			}
-		}
+	snapshot, snapshotErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: sessionID})
+	if snapshotErr == nil && snapshot != nil && snapshot.GetFailure() == nil {
+		cleanupActiveSession(ctx, client, sessionID, snapshot, generation)
 	}
 	_, _ = client.DestroySession(ctx, &grpcproto.SessionDestroySessionRequest{SessionId: sessionID})
+}
+
+func cleanupActiveSession(
+	ctx context.Context,
+	client grpcproto.VpnClient,
+	sessionID string,
+	snapshot *grpcproto.SessionSnapshotResponse,
+	generation uint64,
+) {
+	current := snapshot.GetSnapshot()
+	if current == nil {
+		return
+	}
+	if generation == 0 {
+		generation = current.GetGeneration()
+	}
+	if current.GetCleanupComplete() || generation == 0 {
+		return
+	}
+	_, _ = client.Stop(ctx, &grpcproto.SessionStopRequest{
+		SessionId: sessionID, CommandId: commandID("cleanup-stop"), Generation: generation,
+	})
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+		currentSnapshot, snapshotErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: sessionID})
+		if snapshotErr != nil || currentSnapshot == nil || currentSnapshot.GetFailure() != nil || currentSnapshot.GetSnapshot() == nil {
+			return
+		}
+		if currentSnapshot.GetSnapshot().GetCleanupComplete() {
+			return
+		}
+	}
 }
 
 func externalIP() int {
 	client := &http.Client{Timeout: 10 * time.Second}
 	for _, endpoint := range []string{"https://api.ipify.org", "https://ifconfig.me/ip"} {
-		request, _ := http.NewRequest(http.MethodGet, endpoint, nil)
+		request, requestErr := http.NewRequestWithContext(context.Background(), http.MethodGet, endpoint, http.NoBody)
+		if requestErr != nil {
+			continue
+		}
 		response, err := client.Do(request)
 		if err != nil {
 			continue
 		}
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, 256))
-		response.Body.Close()
+		closeErr := response.Body.Close()
+		if closeErr != nil {
+			continue
+		}
 		if readErr == nil && response.StatusCode >= 200 && response.StatusCode < 300 && strings.TrimSpace(string(body)) != "" {
 			fmt.Println(strings.TrimSpace(string(body)))
 			return exitOK

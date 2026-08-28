@@ -59,7 +59,7 @@ func (l DefaultConfigLoader) Load(ctx context.Context, source []byte) (LoadedCon
 }
 
 func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (LoadedConfig, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, http.NoBody)
 	if err != nil {
 		return LoadedConfig{}, failure(FailureInvalidArgument, "configuration URL is invalid")
 	}
@@ -88,7 +88,7 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 	if err != nil {
 		return LoadedConfig{}, failure(FailureInvalidArgument, "configuration URL could not be fetched")
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return LoadedConfig{}, failure(FailureInvalidArgument, "configuration URL returned a non-success response")
 	}

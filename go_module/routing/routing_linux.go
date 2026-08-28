@@ -157,7 +157,7 @@ func parseProcRouteIPv4(hexGateway string) (net.IP, error) {
 // may point at the TUN device, so a route without a gateway is deliberately
 // ignored. This lets recovery find a newly restored uplink instead of reusing
 // the stale gateway/interface captured before a link flap.
-func DiscoverLinuxDefaultRoute() (string, string, error) {
+func DiscoverLinuxDefaultRoute() (gatewayIP, iface string, err error) {
 	output, err := linuxRunCommand("ip -4 route show table main")
 	if err != nil {
 		return "", "", fmt.Errorf("discover main-table default route: %w", err)
@@ -169,23 +169,23 @@ func DiscoverLinuxDefaultRoute() (string, string, error) {
 	return gatewayIP, iface, nil
 }
 
-func parseLinuxDefaultRoute(output string) (string, string, error) {
+func parseLinuxDefaultRoute(output string) (gatewayIP, iface string, err error) {
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) == 0 || fields[0] != "default" {
+		if len(fields) == 0 || fields[0] != linuxDefaultRoute {
 			continue
 		}
-		var gatewayIP, iface string
+		var candidateGatewayIP, candidateIface string
 		for i := 1; i+1 < len(fields); i++ {
 			switch fields[i] {
 			case "via":
-				gatewayIP = fields[i+1]
+				candidateGatewayIP = fields[i+1]
 			case "dev":
-				iface = fields[i+1]
+				candidateIface = fields[i+1]
 			}
 		}
-		if net.ParseIP(gatewayIP).To4() != nil && iface != "" {
-			return gatewayIP, iface, nil
+		if net.ParseIP(candidateGatewayIP).To4() != nil && candidateIface != "" {
+			return candidateGatewayIP, candidateIface, nil
 		}
 	}
 	return "", "", fmt.Errorf("main IPv4 table has no gateway-backed default route")
@@ -209,8 +209,8 @@ func reconcileLinuxSessionRoutes(proxyIP, gatewayIP, iface string, tableID, prio
 		}
 	}
 	if _, err := linuxRunCommand(fmt.Sprintf(
-		"ip route replace table %d default via %s dev %s proto %d",
-		tableID, gatewayIP, iface, linuxOwnedRouteProtocol,
+		"ip route replace table %d %s via %s dev %s proto %d",
+		tableID, linuxDefaultRoute, gatewayIP, iface, linuxOwnedRouteProtocol,
 	)); err != nil {
 		return fmt.Errorf("restore marked default route: %w", err)
 	}

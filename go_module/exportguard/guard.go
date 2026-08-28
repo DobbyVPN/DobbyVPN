@@ -9,6 +9,20 @@ import (
 	"go_module/log"
 )
 
+type errorResultPointer interface {
+	*error
+}
+
+type errorResultSetter[T errorResultPointer] struct {
+	target T
+}
+
+func (setter errorResultSetter[T]) set(value error) {
+	if setter.target != nil {
+		*setter.target = value
+	}
+}
+
 func recoveredMessage(fnName string, recovered any) string {
 	switch value := recovered.(type) {
 	case string:
@@ -36,13 +50,12 @@ func Guard(category, fnName string) func() {
 }
 
 // GuardErr catches a panic and assigns a safe error to the named result.
-func GuardErr(category, fnName string, errp *error) func() {
+func GuardErr[T errorResultPointer](category, fnName string, errp T) func() {
+	setter := errorResultSetter[T]{target: errp}
 	return func() {
 		if recovered := recover(); recovered != nil {
 			message := report(category, fnName, recovered)
-			if errp != nil {
-				*errp = fmt.Errorf("%s", message)
-			}
+			setter.set(fmt.Errorf("%s", message))
 		}
 	}
 }

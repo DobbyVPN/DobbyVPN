@@ -58,7 +58,7 @@ func linuxOwnedProxyRouteDelete(line string) (string, bool) {
 
 func linuxOwnedMarkedRouteDelete(line string, tableID int) (string, bool) {
 	fields := strings.Fields(line)
-	if len(fields) < 7 || fields[0] != "default" {
+	if len(fields) < 7 || fields[0] != linuxDefaultRoute {
 		return "", false
 	}
 	gateway, hasGateway := linuxRouteField(fields, "via")
@@ -69,14 +69,14 @@ func linuxOwnedMarkedRouteDelete(line string, tableID int) (string, bool) {
 		return "", false
 	}
 	return fmt.Sprintf(
-		"ip -4 route del table %d default via %s dev %s proto %d",
-		tableID, gateway, iface, linuxOwnedRouteProtocol,
+		"ip -4 route del table %d %s via %s dev %s proto %d",
+		tableID, linuxDefaultRoute, gateway, iface, linuxOwnedRouteProtocol,
 	), true
 }
 
 func linuxOwnedTunnelRouteDelete(line, tunName string) (string, bool) {
 	fields := strings.Fields(line)
-	if len(fields) < 5 || fields[0] != "default" {
+	if len(fields) < 5 || fields[0] != linuxDefaultRoute {
 		return "", false
 	}
 	iface, hasIface := linuxRouteField(fields, "dev")
@@ -85,8 +85,8 @@ func linuxOwnedTunnelRouteDelete(line, tunName string) (string, bool) {
 		return "", false
 	}
 	return fmt.Sprintf(
-		"ip -4 route del table main default dev %s proto %d",
-		tunName, linuxOwnedRouteProtocol,
+		"ip -4 route del table main %s dev %s proto %d",
+		linuxDefaultRoute, tunName, linuxOwnedRouteProtocol,
 	), true
 }
 
@@ -132,7 +132,6 @@ func RecoverLinuxOwnedRoutes(tableID, priority int, tunName string) error {
 	))
 	if linuxRoutingTableAbsent(markedOutput, err) {
 		markedOutput = ""
-		err = nil
 	} else if err != nil {
 		return fmt.Errorf("inspect owned marked-table routes: %w", err)
 	}

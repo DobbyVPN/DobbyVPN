@@ -32,22 +32,9 @@ func clearLocalLogFileAtBase(path, base string) error {
 	localLogPathMu.Lock()
 	defer localLogPathMu.Unlock()
 
-	if !filepath.IsAbs(path) {
-		return fmt.Errorf("local log path must be absolute")
-	}
-	if !filepath.IsAbs(base) {
-		return fmt.Errorf("local log base must be absolute")
-	}
-	absBase := filepath.Clean(base)
-	cleanPath := filepath.Clean(path)
-	relativePath, err := filepath.Rel(absBase, cleanPath)
-	if err != nil || relativePath == "." || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) || filepath.IsAbs(relativePath) {
-		return fmt.Errorf("local log path is outside pinned base")
-	}
-	parentPath := filepath.Dir(cleanPath)
-	relativeParent := filepath.Dir(relativePath)
-	if parentPath == absBase {
-		relativeParent = "."
+	absBase, cleanPath, relativeParent, err := localLogPathParts(path, base)
+	if err != nil {
+		return err
 	}
 
 	// The base is an existing trust boundary. It is never created through the
@@ -58,83 +45,134 @@ func clearLocalLogFileAtBase(path, base string) error {
 	if err != nil {
 		return fmt.Errorf("open local log base: %w", err)
 	}
-	defer baseFile.Close()
+	defer func() { _ = baseFile.Close() }()
 	directories := []*os.File{baseFile}
 	defer func() {
 		for _, directory := range directories[1:] {
 			_ = directory.Close()
 		}
 	}()
-	parent := baseFile
-	if relativeParent != "." {
-		for _, component := range splitLocalLogPath(relativeParent) {
-			directory, openErr := openPinnedLocalLogChild(parent, component, true)
-			if openErr != nil {
-				return fmt.Errorf("open local log directory component %q: %w", component, openErr)
-			}
-			directories = append(directories, directory)
-			parent = directory
-		}
-	}
-	if _, err := verifyPinnedLocalLogDirectory(baseFile, baseInfo, absBase); err != nil {
-		return fmt.Errorf("verify local log base before file mutation: %w", err)
-	}
-
-	name := filepath.Base(cleanPath)
-	exists, regular, err := localLogEntry(parent, name)
+	parent, err := openPinnedLocalLogParent(baseFile, relativeParent, &directories)
 	if err != nil {
-		return fmt.Errorf("inspect local log path: %w", err)
+		return err
 	}
-	if exists && !regular {
-		return fmt.Errorf("local log path is not a regular file")
+	if _, verifyErr := verifyPinnedLocalLogDirectory(baseFile, baseInfo, absBase); verifyErr != nil {
+		return fmt.Errorf("verify local log base before file mutation: %w", verifyErr)
 	}
+	return clearPinnedLocalLogFile(baseFile, baseInfo, absBase, parent, cleanPath)
+}
 
-	var expectedInfo os.FileInfo
-	if exists {
-		expectedInfo, err = openLocalLogEntryInfo(parent, name)
+func localLogPathParts(path, base string) (absBase, cleanPath, relativeParent string, err error) {
+	if !filepath.IsAbs(path) {
+		return "", "", "", fmt.Errorf("local log path must be absolute")
+	}
+	if !filepath.IsAbs(base) {
+		return "", "", "", fmt.Errorf("local log base must be absolute")
+	}
+	absBase = filepath.Clean(base)
+	cleanPath = filepath.Clean(path)
+	relativePath, relErr := filepath.Rel(absBase, cleanPath)
+	if relErr != nil || relativePath == "." || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) || filepath.IsAbs(relativePath) {
+		return "", "", "", fmt.Errorf("local log path is outside pinned base")
+	}
+	relativeParent = filepath.Dir(relativePath)
+	if filepath.Dir(cleanPath) == absBase {
+		relativeParent = "."
+	}
+	return absBase, cleanPath, relativeParent, nil
+}
+
+func openPinnedLocalLogParent(baseFile *os.File, relativeParent string, directories *[]*os.File) (*os.File, error) {
+	parent := baseFile
+	for _, component := range splitLocalLogPath(relativeParent) {
+		directory, err := openPinnedLocalLogChild(parent, component, true)
 		if err != nil {
-			return fmt.Errorf("pin local log path: %w", err)
+			return nil, fmt.Errorf("open local log directory component %q: %w", component, err)
 		}
+		*directories = append(*directories, directory)
+		parent = directory
 	}
-	flags := unix.O_WRONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
-	if !exists {
-		flags |= unix.O_CREAT | unix.O_EXCL
+	return parent, nil
+}
+
+func clearPinnedLocalLogFile(baseFile *os.File, baseInfo unix.Stat_t, absBase string, parent *os.File, cleanPath string) error {
+	name := filepath.Base(cleanPath)
+	exists, expectedInfo, err := inspectLocalLogEntry(parent, name)
+	if err != nil {
+		return err
 	}
-	fd, err := unix.Openat(int(parent.Fd()), name, flags, 0o600)
+	file, err := openWritableLocalLogFile(parent, name, exists)
 	if err != nil {
 		return fmt.Errorf("open local log path: %w", err)
 	}
-	file := os.NewFile(uintptr(fd), cleanPath)
-	if file == nil {
-		_ = unix.Close(fd)
-		return fmt.Errorf("open local log path: invalid file descriptor")
-	}
-	closeFile := func() error { return file.Close() }
-	defer func() { _ = closeFile() }()
+	defer func() { _ = file.Close() }()
 
-	info, err := file.Stat()
+	info, err := validatePinnedLocalLogFile(file, expectedInfo)
 	if err != nil {
-		return fmt.Errorf("verify local log path: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("local log path is not a regular file")
-	}
-	if expectedInfo != nil && !os.SameFile(expectedInfo, info) {
-		return fmt.Errorf("local log path changed between inspection and open")
-	}
-	verifyActiveEntry := func(stage string) error {
-		currentInfo, verifyErr := openLocalLogEntryInfo(parent, name)
-		if verifyErr != nil {
-			return fmt.Errorf("%s local log path: %w", stage, verifyErr)
-		}
-		if !os.SameFile(info, currentInfo) {
-			return fmt.Errorf("%s local log path changed", stage)
-		}
-		return nil
-	}
-	if err := verifyActiveEntry("recheck before truncate"); err != nil {
 		return err
 	}
+	if err := verifyActiveLocalLogEntry(parent, name, info, "recheck before truncate"); err != nil {
+		return err
+	}
+	if err := rewriteLocalLogFile(file); err != nil {
+		return err
+	}
+	if err := verifyActiveLocalLogEntry(parent, name, info, "recheck after sync"); err != nil {
+		return err
+	}
+	if _, err := verifyPinnedLocalLogDirectory(baseFile, baseInfo, absBase); err != nil {
+		return fmt.Errorf("verify local log base after file mutation: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close local log path: %w", err)
+	}
+	return nil
+}
+
+func inspectLocalLogEntry(parent *os.File, name string) (exists bool, expectedInfo os.FileInfo, err error) {
+	exists, regular, err := localLogEntry(parent, name)
+	if err != nil {
+		return false, nil, fmt.Errorf("inspect local log path: %w", err)
+	}
+	if exists && !regular {
+		return false, nil, fmt.Errorf("local log path is not a regular file")
+	}
+	if !exists {
+		return false, nil, nil
+	}
+	expectedInfo, err = openLocalLogEntryInfo(parent, name)
+	if err != nil {
+		return false, nil, fmt.Errorf("pin local log path: %w", err)
+	}
+	return true, expectedInfo, nil
+}
+
+func validatePinnedLocalLogFile(file *os.File, expectedInfo os.FileInfo) (os.FileInfo, error) {
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("verify local log path: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("local log path is not a regular file")
+	}
+	if expectedInfo != nil && !os.SameFile(expectedInfo, info) {
+		return nil, fmt.Errorf("local log path changed between inspection and open")
+	}
+	return info, nil
+}
+
+func verifyActiveLocalLogEntry(parent *os.File, name string, expected os.FileInfo, stage string) error {
+	currentInfo, err := openLocalLogEntryInfo(parent, name)
+	if err != nil {
+		return fmt.Errorf("%s local log path: %w", stage, err)
+	}
+	if !os.SameFile(expected, currentInfo) {
+		return fmt.Errorf("%s local log path changed", stage)
+	}
+	return nil
+}
+
+func rewriteLocalLogFile(file *os.File) error {
 	if err := file.Chmod(0o600); err != nil {
 		return fmt.Errorf("secure local log path: %w", err)
 	}
@@ -147,16 +185,15 @@ func clearLocalLogFileAtBase(path, base string) error {
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("sync local log clear marker: %w", err)
 	}
-	if err := verifyActiveEntry("recheck after sync"); err != nil {
-		return err
-	}
-	if _, err := verifyPinnedLocalLogDirectory(baseFile, baseInfo, absBase); err != nil {
-		return fmt.Errorf("verify local log base after file mutation: %w", err)
-	}
-	if err := closeFile(); err != nil {
-		return fmt.Errorf("close local log path: %w", err)
-	}
 	return nil
+}
+
+func openWritableLocalLogFile(parent *os.File, name string, exists bool) (*os.File, error) {
+	flags := unix.O_WRONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
+	if !exists {
+		flags |= unix.O_CREAT | unix.O_EXCL
+	}
+	return openLocalLogFile(parent, name, flags, 0o600)
 }
 
 func splitLocalLogPath(relative string) []string {
@@ -264,79 +301,16 @@ func verifyPinnedLocalLogDirectory(file *os.File, expected unix.Stat_t, path str
 	if info.Mode&unix.S_IFMT != unix.S_IFDIR {
 		return unix.Stat_t{}, fmt.Errorf("%q is not a directory", path)
 	}
-	if uint32(info.Uid) != uint32(os.Geteuid()) {
+	if int64(info.Uid) != int64(os.Geteuid()) {
 		return unix.Stat_t{}, fmt.Errorf("%q is not owned by the effective user", path)
 	}
-	if uint32(info.Mode)&0o022 != 0 {
+	if info.Mode&0o022 != 0 {
 		return unix.Stat_t{}, fmt.Errorf("%q is group/other writable", path)
 	}
 	if expected.Mode != 0 && (info.Dev != expected.Dev || info.Ino != expected.Ino) {
 		return unix.Stat_t{}, fmt.Errorf("%q changed while pinned", path)
 	}
 	return info, nil
-}
-
-func openLocalLogDirectory(path string, create bool) (*os.File, error) {
-	if !filepath.IsAbs(path) {
-		return nil, fmt.Errorf("directory path must be absolute")
-	}
-	path = filepath.Clean(path)
-	fd, err := unix.Open(string(filepath.Separator), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-	if err != nil {
-		return nil, err
-	}
-	current := os.NewFile(uintptr(fd), string(filepath.Separator))
-	if current == nil {
-		_ = unix.Close(fd)
-		return nil, fmt.Errorf("open directory: invalid file descriptor")
-	}
-	if _, verifyErr := verifyPinnedLocalLogDirectory(current, unix.Stat_t{}, string(filepath.Separator)); verifyErr != nil {
-		_ = current.Close()
-		return nil, verifyErr
-	}
-
-	components := strings.Split(strings.TrimPrefix(path, string(filepath.Separator)), string(filepath.Separator))
-	if len(components) == 1 && components[0] == "" {
-		return current, nil
-	}
-	for _, component := range components {
-		if component == "" || component == "." {
-			continue
-		}
-		nextFD, openErr := unix.Openat(
-			int(current.Fd()), component,
-			unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW,
-			0,
-		)
-		if errors.Is(openErr, unix.ENOENT) && create {
-			if mkdirErr := unix.Mkdirat(int(current.Fd()), component, 0o700); mkdirErr != nil && !errors.Is(mkdirErr, unix.EEXIST) {
-				_ = current.Close()
-				return nil, mkdirErr
-			}
-			nextFD, openErr = unix.Openat(
-				int(current.Fd()), component,
-				unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW,
-				0,
-			)
-		}
-		if openErr != nil {
-			_ = current.Close()
-			return nil, openErr
-		}
-		next := os.NewFile(uintptr(nextFD), filepath.Join(filepath.Dir(current.Name()), component))
-		if next == nil {
-			_ = unix.Close(nextFD)
-			_ = current.Close()
-			return nil, fmt.Errorf("open directory: invalid file descriptor")
-		}
-		_ = current.Close()
-		current = next
-		if _, verifyErr := verifyPinnedLocalLogDirectory(current, unix.Stat_t{}, current.Name()); verifyErr != nil {
-			_ = current.Close()
-			return nil, verifyErr
-		}
-	}
-	return current, nil
 }
 
 func localLogEntry(parent *os.File, name string) (exists, regular bool, err error) {
@@ -388,6 +362,6 @@ func openLocalLogEntryInfo(parent *os.File, name string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	return regularLogFileInfo(file)
 }

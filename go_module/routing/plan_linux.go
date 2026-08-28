@@ -60,12 +60,12 @@ func (p *Plan) AcquireLinuxProxyRoute(proxyIP, gatewayIP, iface string) (*Lease,
 // claiming ownership of it.
 func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP string) error {
 	routeCommand := fmt.Sprintf(
-		"ip route add table %d default via %s dev %s proto %d",
-		tableID, gatewayIP, iface, linuxOwnedRouteProtocol,
+		"ip route add table %d %s via %s dev %s proto %d",
+		tableID, linuxDefaultRoute, gatewayIP, iface, linuxOwnedRouteProtocol,
 	)
 	routeDelete := fmt.Sprintf(
-		"ip route del table %d default via %s dev %s proto %d",
-		tableID, gatewayIP, iface, linuxOwnedRouteProtocol,
+		"ip route del table %d %s via %s dev %s proto %d",
+		tableID, linuxDefaultRoute, gatewayIP, iface, linuxOwnedRouteProtocol,
 	)
 	routeLease, err := p.Acquire(fmt.Sprintf("mark-route table=%d", tableID), func() error {
 		_, err := linuxRunCommand(routeCommand)
@@ -102,7 +102,7 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 func (p *Plan) AcquireLinuxTunnelDefault(tunName string) (*Lease, error) {
 	var baseline string
 	return p.Acquire("tun-default "+tunName, func() error {
-		output, err := linuxRunCommand("ip -o -4 route show default")
+		output, err := linuxRunCommand("ip -o -4 route show " + linuxDefaultRoute)
 		if err != nil {
 			return fmt.Errorf("capture default route: %w", err)
 		}
@@ -111,14 +111,14 @@ func (p *Plan) AcquireLinuxTunnelDefault(tunName string) (*Lease, error) {
 			return err
 		}
 		_, err = linuxRunCommand(fmt.Sprintf(
-			"ip route replace default dev %s proto %d", tunName, linuxOwnedRouteProtocol,
+			"ip route replace %s dev %s proto %d", linuxDefaultRoute, tunName, linuxOwnedRouteProtocol,
 		))
 		return err
 	}, func() error {
 		// Specify the TUN device so a changed default owned by another actor is
 		// never removed. Do not restore the snapshot if that deletion fails.
 		if _, err := linuxRunCommand(fmt.Sprintf(
-			"ip route del default dev %s proto %d", tunName, linuxOwnedRouteProtocol,
+			"ip route del %s dev %s proto %d", linuxDefaultRoute, tunName, linuxOwnedRouteProtocol,
 		)); err != nil {
 			return err
 		}
@@ -133,7 +133,7 @@ func linuxDefaultRouteRestoreCommand(output string) (string, error) {
 		if len(fields) == 0 {
 			continue
 		}
-		if fields[0] == "default" {
+		if fields[0] == linuxDefaultRoute {
 			return "ip route replace " + strings.Join(fields, " "), nil
 		}
 	}

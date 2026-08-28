@@ -41,7 +41,9 @@ func TestRunLockedWithPanicRecoveryIsBoundedAndUsesLockHeldCleanup(t *testing.T)
 	if cleanupCalls != 1 {
 		t.Fatalf("cleanup calls = %d, want 1", cleanupCalls)
 	}
-	mu.Lock()
+	if !mu.TryLock() {
+		t.Fatal("panic recovery did not release lifecycle mutex")
+	}
 	mu.Unlock()
 }
 

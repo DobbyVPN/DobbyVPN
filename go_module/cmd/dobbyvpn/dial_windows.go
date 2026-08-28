@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"go_module/desktop_exports/controlplane"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -55,7 +56,7 @@ func dialService() (*grpc.ClientConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return grpc.Dial(address,
+	return grpc.NewClient(address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithPerRPCCredentials(controlTokenCredentials{token: token}),
 	)
