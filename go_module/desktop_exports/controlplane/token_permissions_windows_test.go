@@ -46,15 +46,20 @@ func TestControlTokenOwnerPolicyAcceptsOnlyTrustedOwners(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	administratorsSID, err := windows.StringToSid("S-1-5-32-544")
+	if err != nil {
+		t.Fatal(err)
+	}
 	thirdPartySID, err := windows.StringToSid("S-1-1-0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	trustedOwners := []*windows.SID{systemSID, installedUserSID}
+	trustedOwners := []*windows.SID{systemSID, installedUserSID, administratorsSID}
 
 	for name, owner := range map[string]*windows.SID{
 		"SYSTEM":         systemSID,
 		"installed user": installedUserSID,
+		"Administrators": administratorsSID,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !matchesExpectedOwner(owner, trustedOwners) {

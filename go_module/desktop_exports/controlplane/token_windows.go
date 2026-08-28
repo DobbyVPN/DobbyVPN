@@ -257,16 +257,23 @@ func verifyControlTokenPermissions(path string) error {
 	if err != nil {
 		return err
 	}
+	administratorsSID, err := windows.StringToSid("S-1-5-32-544")
+	if err != nil {
+		return err
+	}
 	// SetEntriesInAcl maps generic rights to the file-specific mask stored in
 	// the ACE. Keep the expected mask explicit per path so a broader ACL cannot
 	// satisfy this verifier by accident.
 	// The service can create the token as SYSTEM, while the desktop process can
 	// create it as the configured installed user. These are the same two
-	// identities already required by the exact token DACL.
+	// identities already required by the exact token DACL. An elevated Windows
+	// process may inherit BUILTIN\\Administrators as the descriptor owner even
+	// when its effective user is the configured account; that trusted owner does
+	// not become an ACL principal and therefore does not widen token access.
 	return verifyExactACLWithOwners(
 		path,
 		[]*windows.SID{systemSID, userSID},
-		[]*windows.SID{systemSID, userSID},
+		[]*windows.SID{systemSID, userSID, administratorsSID},
 		fileControlTokenAccess,
 		"control token",
 	)
