@@ -48,7 +48,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
             CFNotificationCenterRemoveObserver(
                 CFNotificationCenterGetDarwinNotifyCenter(),
                 darwinObserverPointer,
-                darwinEventName.rawValue,
+                darwinEventName,
                 nil
             )
         }
