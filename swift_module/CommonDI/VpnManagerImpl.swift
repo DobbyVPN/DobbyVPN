@@ -117,11 +117,16 @@ public final class VpnManagerImpl: NSObject {
         let semaphore = DispatchSemaphore(value: 0)
         let responseLock = NSLock()
         var response: Data?
-        session.sendProviderMessage(messageData) { value in
-            responseLock.lock()
-            response = value
-            responseLock.unlock()
-            semaphore.signal()
+        do {
+            try session.sendProviderMessage(messageData) { value in
+                responseLock.lock()
+                response = value
+                responseLock.unlock()
+                semaphore.signal()
+            }
+        } catch {
+            logs.writeLog(log: "[provider] sendProviderMessage failed: \(error.localizedDescription)")
+            return nil
         }
         guard semaphore.wait(timeout: .now() + timeout) == .success else {
             return nil

@@ -706,9 +706,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.ipv6Settings?.includedRoutes = [NEIPv6Route.default()]
         settings.dnsSettings = NEDNSSettings(servers: ["1.1.1.1", "8.8.8.8"])
         settings.dnsSettings?.matchDomains = [""]
-        guard runSettingsOperation {
+        guard runSettingsOperation({
             try await self.setTunnelNetworkSettings(settings)
-        } else {
+        }) else {
             markSettingsCleanupFailed()
             logs.writeLog(log: "[tunnel:\(tunnelId)] failed to apply fixed settings before AcquireTunnel generation=\(generation)")
             return false
