@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.UUID
@@ -37,11 +38,11 @@ internal class AndroidSessionController(
         }
         val mode = if (target is SessionStartTarget.AutoSelect) "AUTO_SELECT" else "PROFILE_INDEX"
         val index = (target as? SessionStartTarget.ProfileIndex)?.index ?: 0
-        SessionEnvelopeDecoder.decode(Dobbyvpn.startSession(id, commandId(), mode, index)) { it.sessionLong("generation").toULong() }
+        SessionEnvelopeDecoder.decode(Dobbyvpn.startSession(id, commandId(), mode, index)) { it.requiredPositiveSessionLong("generation").toULong() }
     }
 
     override suspend fun stop(generation: ULong): SessionControllerResult<ULong> = withSession { id ->
-        SessionEnvelopeDecoder.decode(Dobbyvpn.stopSession(id, commandId(), generation.toLong())) { it.sessionLong("generation").toULong() }
+        SessionEnvelopeDecoder.decode(Dobbyvpn.stopSession(id, commandId(), generation.toLong())) { it.requiredPositiveSessionLong("generation").toULong() }
     }
 
     override suspend fun snapshot(): SessionControllerResult<SessionSnapshot> = withSession { id ->
@@ -61,17 +62,43 @@ internal class AndroidSessionController(
         val observed = observe(afterSequence)
         var cursor = afterSequence
         if (observed is SessionControllerResult.Success) {
-            observed.value.events.forEach { event ->
+            val ordered = observed.value.events.sortedBy { it.sequence }
+            val contiguous = mutableListOf<SessionEvent>()
+            var expected = cursor + 1uL
+            var gap = false
+            ordered.forEach { event ->
+                if (gap) return@forEach
+                when {
+                    event.sequence < expected -> Unit
+                    event.sequence > expected -> gap = true
+                    else -> {
+                        contiguous += event
+                        expected = event.sequence + 1uL
+                    }
+                }
+            }
+            if (!gap && observed.value.nextSequence >= expected) gap = true
+            if (gap) return@flow
+            contiguous.forEach { event ->
                 emit(event)
                 if (event.sequence > cursor) cursor = event.sequence
             }
-            if (observed.value.nextSequence > cursor) cursor = observed.value.nextSequence
         }
         val observedSession = mutex.withLock { sessionId }
         emitAll(
             connectionState.sessionEvents.filter { event ->
                 event.sequence > cursor &&
-                    (observedSession.isNullOrBlank() || event.sessionId.isBlank() || event.sessionId == observedSession)
+                    !observedSession.isNullOrBlank() && event.sessionId == observedSession
+            }.transformWhile { event ->
+                when {
+                    event.sequence <= cursor -> true
+                    event.sequence > cursor + 1uL -> false
+                    else -> {
+                        cursor = event.sequence
+                        emit(event)
+                        true
+                    }
+                }
             },
         )
     }

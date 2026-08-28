@@ -16,11 +16,12 @@ import (
 // shell.  Every callback carries both the session and its generation, so a
 // delayed platform result cannot be applied to a later connection attempt.
 // AcquireTunnel must return a newly duplicated descriptor owned by Go.  A
-// negative result is an acquisition failure.  ReleaseTunnel is notification
-// only: Go closes the owned descriptor before invoking it.
+// negative result is an acquisition failure. Go closes the owned descriptor
+// before invoking ReleaseTunnel; its result is part of the cleanup contract,
+// so a false result prevents Go from publishing cleanup-complete IDLE.
 type PlatformCallbacks interface {
 	AcquireTunnel(sessionID string, generation int64) int32
-	ReleaseTunnel(sessionID string, generation int64, fd int32)
+	ReleaseTunnel(sessionID string, generation int64, fd int32) bool
 	ProtectSocket(sessionID string, generation int64, fd int32) bool
 	PublishState(sessionID string, generation int64, sequence int64, state string, profileIndex int32, profileProtocol string, failureCode string)
 }

@@ -9,7 +9,7 @@ import org.koin.dsl.module
 
 actual val sharedModule = module {
     single<SessionController> {
-        IosSessionController(IosSessionBridgeRegistry.requireBridge(), get())
+        IosSessionController(IosSessionBridgeRegistry.requireBridge())
     }
     singleOf(::PermissionEventsChannel)
     singleOf(::LogsViewModel)

@@ -25,7 +25,7 @@ var (
 // Go package.
 type PlatformCallbacks interface {
 	AcquireTunnel(sessionID string, generation int64) int32
-	ReleaseTunnel(sessionID string, generation int64, fd int32)
+	ReleaseTunnel(sessionID string, generation int64, fd int32) bool
 	ProtectSocket(sessionID string, generation int64, fd int32) bool
 	PublishState(
 		sessionID string,
@@ -92,10 +92,13 @@ func (p *iosPlatformCallbacks) AcquireTunnel(sessionID string, generation int64)
 	}
 	return int32(dup)
 }
-func (p *iosPlatformCallbacks) ReleaseTunnel(sessionID string, generation int64, fd int32) {
+func (p *iosPlatformCallbacks) ReleaseTunnel(sessionID string, generation int64, fd int32) bool {
 	if callback := p.callback(); callback != nil {
-		callback.ReleaseTunnel(sessionID, generation, fd)
+		return callback.ReleaseTunnel(sessionID, generation, fd)
 	}
+	// The fallback owns no NetworkExtension settings; Go already closed its
+	// duplicate before this callback, so there is no remaining native cleanup.
+	return true
 }
 func (p *iosPlatformCallbacks) ProtectSocket(sessionID string, generation int64, fd int32) bool {
 	if callback := p.callback(); callback != nil {

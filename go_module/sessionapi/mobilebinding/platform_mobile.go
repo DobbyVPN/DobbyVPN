@@ -4,6 +4,7 @@ package mobilebinding
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -92,21 +93,31 @@ func (p *platformAdapter) acquire(ref v2.SessionRef) (int32, PlatformCallbacks, 
 	if !p.tunnels.reserve(fd, fdOwner{session: ref.SessionID, generation: ref.Generation}) {
 		p.mu.Unlock()
 		_ = closeFD(fd)
+		releaseErr := callbacks.ReleaseTunnel(ref.SessionID, generation, fd)
+		if !releaseErr {
+			return 0, nil, errors.Join(fmt.Errorf("platform reused an active tunnel descriptor"), fmt.Errorf("platform tunnel cleanup failed"))
+		}
 		return 0, nil, fmt.Errorf("platform reused an active tunnel descriptor")
 	}
 	p.mu.Unlock()
 	return fd, callbacks, nil
 }
 
-func (p *platformAdapter) release(ref v2.SessionRef, fd int32, callbacks PlatformCallbacks) {
+func (p *platformAdapter) release(ref v2.SessionRef, fd int32, callbacks PlatformCallbacks) error {
 	p.mu.Lock()
 	p.tunnels.release(fd, fdOwner{session: ref.SessionID, generation: ref.Generation})
 	p.mu.Unlock()
-	if callbacks != nil {
-		if generation, ok := generationAsInt64(ref.Generation); ok {
-			callbacks.ReleaseTunnel(ref.SessionID, generation, fd)
-		}
+	if callbacks == nil {
+		return fmt.Errorf("platform tunnel cleanup callback is unavailable")
 	}
+	generation, ok := generationAsInt64(ref.Generation)
+	if !ok {
+		return fmt.Errorf("generation exceeds mobile binding range during tunnel cleanup")
+	}
+	if !callbacks.ReleaseTunnel(ref.SessionID, generation, fd) {
+		return fmt.Errorf("platform tunnel cleanup failed")
+	}
+	return nil
 }
 
 func (p *platformAdapter) ProtectSocket(_ context.Context, ref v2.SessionRef, fd int) error {
@@ -206,8 +217,9 @@ func (l *tunnelLease) Close() error {
 }
 func (l *tunnelLease) Release(context.Context) error {
 	l.releaseOnce.Do(func() {
-		_ = l.Close()
-		l.adapter.release(l.ref, l.fd, l.callbacks)
+		closeErr := l.Close()
+		releaseErr := l.adapter.release(l.ref, l.fd, l.callbacks)
+		l.closeErr = errors.Join(closeErr, releaseErr)
 	})
 	return l.closeErr
 }

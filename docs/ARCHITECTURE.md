@@ -51,8 +51,13 @@ Platform code owns only operating-system responsibilities that Go cannot own:
 
 - Android: VPN permission, foreground `VpnService` lifetime, TUN allocation,
   socket protection, and publication of native state to shared code.
-- iOS: NetworkExtension/Packet Tunnel lifetime, TUN/socket callbacks, and
-  publication of native state to shared code.
+- iOS: NetworkExtension/Packet Tunnel lifetime, TUN/socket callbacks, and the
+  authenticated opaque command handoff between the app and provider. The
+  provider starts in control mode without routes. Go enters the generation
+  lifecycle first; its `AcquireTunnel` callback is the point where the
+  provider applies fixed tunnel settings immediately before duplicating the
+  requested TUN. A one-shot encrypted Keychain mailbox carries raw
+  configuration; no configuration bytes enter an app message.
 - Desktop: authenticated local control transport, service installation/start,
   and local diagnostics. The desktop shell does not own protocol-specific
   lifecycle or configuration parsing.
@@ -71,22 +76,42 @@ Shared Compose UI
                 -> routing/TUN/tun2socks/probe resources
 
 Android shell: permission + foreground service + TUN/socket callbacks
-iOS shell: NetworkExtension lifecycle + TUN/socket callbacks
+iOS shell: NetworkExtension lifecycle + authenticated control messages + TUN/socket callbacks
 Desktop shell: authenticated transport + local diagnostics
 ```
 
-Session events are push-based. Desktop uses the authenticated gRPC `Watch`
-stream; Android and iOS use the generation-correlated native callback exposed
-to shared code as a flow. Clients apply a snapshot first, then accept events
+Session events remain Go-owned and ordered. Desktop uses the authenticated gRPC
+`Watch` stream; Android uses the generation-correlated native callback. iOS
+uses a content-free provider wake signal and fetches the real event ledger via
+authenticated Go `Observe`; the iOS KMP bridge waits for the cross-process
+wake and performs those reads off the UI dispatcher. Clients apply a snapshot first, then accept events
 strictly after its sequence. Duplicate events are ignored; a sequence gap
-causes snapshot/resubscribe rather than inferred state. No UI path polls on a
-timer.
+causes snapshot/resubscribe rather than inferred state. No UI path owns a
+timer or manufactures an event.
 
-An explicit Disconnect stops and destroys the session. Closing or crashing a
-desktop GUI, or swiping an Android task, is UI loss only: a healthy service
-session remains active and a reopened UI recovers it. If the service/process
-dies, the next launch must reconcile stale Dobby-owned resources and never
-show a false `CONNECTED` state.
+### iOS command-boundary exception
+
+NetworkExtension places the Go runtime in a separate packet-tunnel process, so
+iOS has one narrow opaque handoff exception: the containing app creates or
+recovers the Go session by sending authenticated fixed commands through
+`NETunnelProviderSession.sendProviderMessage`. The per-install Keychain HMAC
+secret authenticates canonical envelopes with bounded size and request IDs.
+Provider replies are likewise authenticated envelopes containing the request ID
+and the exact Go response bytes (base64 inside the envelope); the app validates
+the wrapper and returns the inner Go JSON unchanged. Swift retains only its
+NetworkExtension readiness/request fence; SessionV2 remains the sole owner of
+configuration, generation, state, event sequence, and cleanup.
+
+An ordinary Disconnect sends Go `Stop`: it releases the active generation and
+its runtime resources while retaining the accepted configuration and
+recoverable SessionV2 session for reconnect. It does not call `Destroy` or
+stop the iOS control provider. `Destroy` is a separate terminal disposal path;
+the app stops the control provider and consumes the one-shot mailbox only after
+Go has returned a successful Destroy result. A failed or timed-out Destroy
+retains recovery data. Closing or crashing a desktop GUI, or swiping an
+Android task, is UI loss only: a healthy service session remains active and a
+reopened UI recovers it. If the service/process dies, the next launch must
+reconcile stale Dobby-owned resources and never show a false `CONNECTED` state.
 
 ## Adding a future protocol
 

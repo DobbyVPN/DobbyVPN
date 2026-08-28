@@ -18,7 +18,7 @@ var (
 // gomobile even when all of their methods use supported types.
 type PlatformCallbacks interface {
 	AcquireTunnel(sessionID string, generation int64) int32
-	ReleaseTunnel(sessionID string, generation int64, fd int32)
+	ReleaseTunnel(sessionID string, generation int64, fd int32) bool
 	ProtectSocket(sessionID string, generation int64, fd int32) bool
 	PublishState(
 		sessionID string,
@@ -79,10 +79,11 @@ func (p *androidPlatformCallbacks) AcquireTunnel(sessionID string, generation in
 	}
 	return -1
 }
-func (p *androidPlatformCallbacks) ReleaseTunnel(sessionID string, generation int64, fd int32) {
+func (p *androidPlatformCallbacks) ReleaseTunnel(sessionID string, generation int64, fd int32) bool {
 	if callback := p.callback(); callback != nil {
-		callback.ReleaseTunnel(sessionID, generation, fd)
+		return callback.ReleaseTunnel(sessionID, generation, fd)
 	}
+	return false
 }
 func (p *androidPlatformCallbacks) ProtectSocket(sessionID string, generation int64, fd int32) bool {
 	if callback := p.callback(); callback != nil {

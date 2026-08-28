@@ -25,8 +25,7 @@ let package = Package(
                 "nativeModule.swift",
             ],
             sources: [
-                "IOSLifecycleCore.swift",
-                "IOSProviderSessionCoordinator.swift",
+                "IOSProviderMessageProtocol.swift",
             ]
         ),
         .testTarget(

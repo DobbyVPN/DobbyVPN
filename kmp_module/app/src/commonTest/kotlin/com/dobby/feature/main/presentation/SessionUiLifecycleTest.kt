@@ -49,6 +49,10 @@ class SessionUiLifecycleTest {
         assertEquals(VpnConnectionState.CONNECTED, lifecycle.render(event(1uL, 1uL, SessionState.CONNECTED)))
         assertEquals(VpnConnectionState.STOPPING, lifecycle.render(event(1uL, 2uL, SessionState.STOPPING)))
         assertEquals(VpnConnectionState.DISCONNECTED, lifecycle.render(event(1uL, 3uL, SessionState.IDLE)))
+        // Stop clears only the active generation. The Go sequence remains the
+        // cursor for a reconnect, proving that ordinary Disconnect is not
+        // terminal Destroy semantics.
+        assertEquals(3uL, lifecycle.lastSequence)
         assertEquals(VpnConnectionState.CONNECTING, lifecycle.render(event(2uL, 4uL, SessionState.PROBING)))
         assertEquals(VpnConnectionState.CONNECTED, lifecycle.render(event(2uL, 5uL, SessionState.CONNECTED)))
     }
@@ -90,6 +94,35 @@ class SessionUiLifecycleTest {
         assertNull(lifecycle.activeGeneration)
     }
 
-    private fun event(generation: ULong, sequence: ULong, state: SessionState) =
-        SessionEvent(generation = generation, sequence = sequence, state = state)
+    @Test
+    fun reset_starts_a_new_session_scope_without_a_stale_cursor() {
+        val lifecycle = SessionUiLifecycle()
+        lifecycle.begin(11uL)
+        assertEquals(VpnConnectionState.CONNECTED, lifecycle.render(event(11uL, 7uL, SessionState.CONNECTED)))
+
+        lifecycle.reset()
+
+        assertNull(lifecycle.activeGeneration)
+        assertEquals(0uL, lifecycle.lastSequence)
+        assertEquals(VpnConnectionState.CONNECTING, lifecycle.render(event(1uL, 1uL, SessionState.PROBING)))
+    }
+
+    @Test
+    fun a_different_go_session_identity_resets_the_cursor_during_snapshot_reconcile() {
+        val lifecycle = SessionUiLifecycle()
+        assertEquals(
+            VpnConnectionState.CONNECTED,
+            lifecycle.reconcile(SessionSnapshot(4uL, SessionState.CONNECTED, true, false, sessionId = "old")),
+        )
+        assertEquals(
+            VpnConnectionState.CONNECTING,
+            lifecycle.reconcile(SessionSnapshot(1uL, SessionState.PROBING, true, false, sessionId = "new")),
+        )
+        assertEquals(0uL, lifecycle.lastSequence)
+        assertEquals(VpnConnectionState.CONNECTED, lifecycle.render(event(1uL, 1uL, SessionState.CONNECTED, "new")))
+        assertEquals(VpnConnectionState.DISCONNECTED, lifecycle.render(event(1uL, 2uL, SessionState.FAILED, "new")))
+    }
+
+    private fun event(generation: ULong, sequence: ULong, state: SessionState, sessionId: String = "") =
+        SessionEvent(generation = generation, sequence = sequence, state = state, sessionId = sessionId)
 }

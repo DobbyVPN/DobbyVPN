@@ -98,6 +98,7 @@ data class SessionSnapshot(
     val configured: Boolean,
     val cleanupComplete: Boolean,
     val lastFailureCode: SessionFailureCode? = null,
+    val sessionId: String = "",
 )
 
 data class SessionObservation(val events: List<SessionEvent>, val nextSequence: ULong)

@@ -146,6 +146,7 @@ private fun GrpcSnapshot.toDomain() = SessionSnapshot(
     configured = configured,
     cleanupComplete = cleanupComplete,
     lastFailureCode = lastFailure?.code?.name?.toSessionFailureCode(),
+    sessionId = sessionId,
 )
 
 private fun GrpcObservation.toDomain() = SessionObservation(

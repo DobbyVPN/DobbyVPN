@@ -7,11 +7,20 @@ import com.dobby.feature.main.domain.SessionState
 
 /** Keeps UI rendering monotonic while the Go session owns connection policy. */
 internal class SessionUiLifecycle {
+    private var activeSessionId: String? = null
     var activeGeneration: ULong? = null
         private set
     var lastSequence: ULong = 0u
         private set
     private var stopRequested = false
+
+    /** Starts a new UI session scope without inventing Go state or a sequence. */
+    fun reset() {
+        activeSessionId = null
+        activeGeneration = null
+        lastSequence = 0uL
+        stopRequested = false
+    }
 
     fun begin(generation: ULong): VpnConnectionState? {
         if (activeGeneration != null) return null
@@ -27,6 +36,20 @@ internal class SessionUiLifecycle {
     }
 
     fun render(event: SessionEvent): VpnConnectionState? {
+        if (event.sessionId.isNotBlank()) {
+            when (val knownSession = activeSessionId) {
+                null -> activeSessionId = event.sessionId
+                event.sessionId -> Unit
+                else -> {
+                    // Go starts its ordered ledger at sequence 1 for each
+                    // session identity. Scope the UI cursor to that identity;
+                    // never compare a new session's sequence with an old
+                    // session's high-water mark.
+                    reset()
+                    activeSessionId = event.sessionId
+                }
+            }
+        }
         if (event.sequence <= lastSequence) return null
         lastSequence = event.sequence
         if (event.generation != activeGeneration) {
@@ -63,6 +86,12 @@ internal class SessionUiLifecycle {
 
     /** Reconciles a retained process snapshot after a dropped event stream. */
     fun reconcile(snapshot: SessionSnapshot): VpnConnectionState? {
+        if (snapshot.sessionId.isNotBlank()) {
+            if (activeSessionId != null && activeSessionId != snapshot.sessionId) {
+                reset()
+            }
+            activeSessionId = snapshot.sessionId
+        }
         if (snapshot.generation > 0uL && snapshot.state in setOf(
                 SessionState.PROBING,
                 SessionState.PREPARING,

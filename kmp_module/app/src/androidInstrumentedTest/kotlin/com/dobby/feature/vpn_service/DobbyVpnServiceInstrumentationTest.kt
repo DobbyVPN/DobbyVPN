@@ -78,8 +78,8 @@ class DobbyVpnServiceInstrumentationTest {
 
         assertEquals(-1, service.acquireTunnel("stale-$session", 1))
         assertFalse(service.protectProtocolSocket(session, 1, -1))
-        service.releaseTunnel("stale-$session", 1, 42)
-        service.releaseTunnel(session, 1, 42)
+        assertFalse(service.releaseTunnel("stale-$session", 1, 42))
+        assertFalse(service.releaseTunnel(session, 1, 42))
         assertNull(service.vpnInterface)
         assertNull(service.goTunFd)
     }
@@ -207,7 +207,9 @@ class DobbyVpnServiceInstrumentationTest {
         // Clear first so an assertion failure or @After re-entry cannot close or release twice.
         acquiredTunnel = null
         runCatching { tunnel.goOwnedDescriptor.close() }
-        runCatching { tunnel.service.releaseTunnel(tunnel.sessionId, tunnel.generation, tunnel.fd) }
+        check(tunnel.service.releaseTunnel(tunnel.sessionId, tunnel.generation, tunnel.fd)) {
+            "Android service failed to release the Go-owned generation"
+        }
     }
 
     private fun packetTargetsDocumentationAddress(packet: ByteArray, count: Int): Boolean =

@@ -30,7 +30,24 @@ internal fun JsonObject.sessionString(name: String): String = this[name]?.jsonPr
 internal fun JsonObject.sessionOptionalString(name: String): String? =
     this[name]?.jsonPrimitive?.content?.takeIf(String::isNotBlank)
 
-internal fun JsonObject.sessionLong(name: String): Long = this[name]?.jsonPrimitive?.longOrNull ?: 0L
+internal fun JsonObject.requiredSessionIdentifier(name: String): String =
+    sessionString(name).also { value ->
+        require(value.isNotEmpty() && value.all { it.isLetterOrDigit() || it == '-' || it == '.' || it == '_' })
+    }
+
+/** Required for Go-owned monotonic values; never manufacture a zero cursor. */
+internal fun JsonObject.requiredSessionLong(name: String): Long =
+    this[name]?.jsonPrimitive?.longOrNull ?: error("missing or invalid $name")
+
+internal fun JsonObject.requiredSessionSequence(): Long =
+    requiredSessionLong("sequence").also { require(it > 0) }
+
+/** Allows the initial zero cursor but never accepts a negative Go value. */
+internal fun JsonObject.requiredNonNegativeSessionLong(name: String): Long =
+    requiredSessionLong(name).also { require(it >= 0) }
+
+internal fun JsonObject.requiredPositiveSessionLong(name: String): Long =
+    requiredSessionLong(name).also { require(it > 0) }
 
 internal fun JsonObject.sessionInt(name: String): Int = this[name]?.jsonPrimitive?.intOrNull ?: -1
 
@@ -74,23 +91,44 @@ internal fun JsonObject.toSessionConfiguration(): SessionConfiguration = Session
     },
 )
 
-internal fun JsonObject.toSessionSnapshot(): SessionSnapshot = SessionSnapshot(
-    generation = sessionLong("generation").toULong(),
-    state = sessionString("state").toSessionState(),
-    configured = sessionBool("configured"),
-    cleanupComplete = sessionBool("cleanup_complete"),
-    lastFailureCode = sessionOptionalString("last_failure")?.toSessionFailureCode(),
-)
+internal fun JsonObject.toSessionSnapshot(): SessionSnapshot {
+    val state = sessionString("state").toSessionState()
+    return SessionSnapshot(
+        generation = requiredNonNegativeSessionLong("generation").toULong(),
+        state = state,
+        configured = sessionBool("configured"),
+        cleanupComplete = sessionBool("cleanup_complete"),
+        lastFailureCode = sessionOptionalString("last_failure")?.toSessionFailureCode(),
+        sessionId = requiredSessionIdentifier("session_id"),
+    )
+}
 
-internal fun JsonObject.toSessionObservation(): SessionObservation = SessionObservation(
-    events = sessionArray("events").map { event ->
+internal fun JsonObject.toSessionObservation(): SessionObservation {
+    val events = sessionArray("events").map { event ->
+        val state = event.sessionString("state").toSessionState()
+        val generation = event.requiredNonNegativeSessionLong("generation")
+        if (state in setOf(
+                SessionState.PROBING,
+                SessionState.PREPARING,
+                SessionState.CONNECTED,
+                SessionState.STOPPING,
+            )) {
+            require(generation > 0)
+        }
         SessionEvent(
-            generation = event.sessionLong("generation").toULong(),
-            sequence = event.sessionLong("sequence").toULong(),
-            state = event.sessionString("state").toSessionState(),
+            sessionId = event.requiredSessionIdentifier("session_id"),
+            generation = generation.toULong(),
+            sequence = event.requiredSessionSequence().toULong(),
+            state = state,
             failureCode = event.sessionOptionalString("failure")?.toSessionFailureCode(),
-            sessionId = event.sessionString("session_id"),
         )
-    },
-    nextSequence = sessionLong("next_sequence").toULong(),
-)
+    }
+    // One Observe response is scoped to one Go session. Reject a mixed
+    // response instead of allowing a foreign sequence to advance the cursor
+    // before the UI can notice the identity mismatch.
+    require(events.map { it.sessionId }.distinct().size <= 1)
+    return SessionObservation(
+        events = events,
+        nextSequence = requiredNonNegativeSessionLong("next_sequence").toULong(),
+    )
+}

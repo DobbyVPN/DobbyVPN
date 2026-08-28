@@ -19,9 +19,8 @@ object GoBackendWrapper {
             override fun acquireTunnel(sessionId: String, generation: Long): Int =
                 PlatformServiceRegistry.current(sessionId)?.acquireTunnel(sessionId, generation) ?: -1
 
-            override fun releaseTunnel(sessionId: String, generation: Long, fd: Int) {
-                PlatformServiceRegistry.current(sessionId)?.releaseTunnel(sessionId, generation, fd)
-            }
+            override fun releaseTunnel(sessionId: String, generation: Long, fd: Int): Boolean =
+                PlatformServiceRegistry.current(sessionId)?.releaseTunnel(sessionId, generation, fd) ?: false
 
             override fun protectSocket(sessionId: String, generation: Long, fd: Int): Boolean =
                 PlatformServiceRegistry.current(sessionId)?.protectProtocolSocket(sessionId, generation, fd) ?: false

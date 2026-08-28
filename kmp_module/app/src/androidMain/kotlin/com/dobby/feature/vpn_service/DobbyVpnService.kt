@@ -153,12 +153,12 @@ class DobbyVpnService : VpnService() {
 
     /** Go has already closed [fd]; close exactly the service-owned matching descriptor. */
     @Synchronized
-    fun releaseTunnel(sessionId: String, generation: Long, fd: Int) {
+    fun releaseTunnel(sessionId: String, generation: Long, fd: Int): Boolean {
         if (sessionId != activeSessionId || generation != activeGeneration || fd != goTunFd) {
             logger.log("[svc:$serviceId] ignore stale TUN release generation=$generation active=$activeGeneration")
-            return
+            return false
         }
-        closeTunnel("Go released generation=$generation")
+        return closeTunnel("Go released generation=$generation")
     }
 
     @Synchronized
@@ -240,13 +240,14 @@ class DobbyVpnService : VpnService() {
         stopSelfResult(startId)
     }
 
-    private fun closeTunnel(reason: String) {
+    private fun closeTunnel(reason: String): Boolean {
         val fd = goTunFd
         goTunFd = null
-        runCatching { vpnInterface?.close() }
+        val closed = runCatching { vpnInterface?.close() }.isSuccess
         vpnInterface = null
         activeGeneration = -1L
         logger.log("[svc:$serviceId] closed service-owned TUN descriptorPresent=${fd != null} reason=$reason")
+        return closed
     }
 
     private fun sessionStopSucceeded(payload: String): Boolean = runCatching {

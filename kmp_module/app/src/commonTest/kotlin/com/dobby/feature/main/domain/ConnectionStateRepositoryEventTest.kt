@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class ConnectionStateRepositoryEventTest {
     @Test
@@ -20,14 +21,22 @@ class ConnectionStateRepositoryEventTest {
     }
 
     @Test
-    fun zero_sequence_callbacks_get_a_local_monotonic_cursor() = runBlocking {
+    fun zero_sequence_callbacks_are_rejected_without_synthesis() = runBlocking {
         val repository = ConnectionStateRepository()
         repository.tryPublishSessionEvent("ios", 1, 0, "PREPARING", "")
         repository.tryPublishSessionEvent("ios", 1, 0, "CONNECTED", "")
 
-        val first = repository.sessionEvents.first()
-        assertEquals(1uL, first.sequence)
-        val second = repository.sessionEvents.first { it.sequence == 2uL }
-        assertEquals(SessionState.CONNECTED, second.state)
+        assertTrue(repository.sessionEvents.replayCache.isEmpty())
+    }
+
+    @Test
+    fun sequence_cursors_are_scoped_to_the_go_session_identity() = runBlocking {
+        val repository = ConnectionStateRepository()
+        repository.tryPublishSessionEvent("old-session", 4, 12, "CONNECTED", "")
+        repository.tryPublishSessionEvent("new-session", 1, 1, "PROBING", "")
+        repository.tryPublishSessionEvent("old-session", 4, 11, "FAILED", "")
+
+        assertEquals(listOf("old-session", "new-session"), repository.sessionEvents.replayCache.map { it.sessionId })
+        assertEquals(1uL, repository.sessionEvents.replayCache.last().sequence)
     }
 }

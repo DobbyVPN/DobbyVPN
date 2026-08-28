@@ -10,12 +10,15 @@ class ConnectionStateRepository {
     private val _statusFlow = MutableStateFlow(VpnConnectionState.DISCONNECTED)
     val statusFlow = _statusFlow.asStateFlow()
 
-    // Platform callbacks are the mobile equivalent of the desktop SessionV2
-    // stream. Keep a bounded replay so a UI process can reattach after it was
-    // recreated without starting a polling loop or losing a terminal event.
+    // Android platform callbacks are an optional wake/stream equivalent of the
+    // desktop SessionV2 stream. iOS fetches its Go-owned ledger through its
+    // authenticated provider bridge instead of publishing local events here.
     private val _sessionEvents = MutableSharedFlow<SessionEvent>(replay = 64, extraBufferCapacity = 64)
     val sessionEvents = _sessionEvents.asSharedFlow()
-    private var lastSessionSequence = 0uL
+    // Go sequences restart with a new SessionV2 identity. Keep one cursor per
+    // identity so a late event from an older session cannot suppress sequence 1
+    // of the current one, and a new session cannot rewind the old cursor.
+    private val lastSessionSequences = mutableMapOf<String, ULong>()
 
     suspend fun updateStatus(connectionState: VpnConnectionState) {
         _statusFlow.emit(connectionState)
@@ -26,9 +29,9 @@ class ConnectionStateRepository {
     }
 
     /**
-     * Publishes a safe generation-correlated platform event. Go supplies its
-     * authoritative sequence; NetworkExtension uses sequence 0 and receives a
-     * local monotonic sequence. Older or duplicate callbacks are ignored.
+     * Publishes a safe generation-correlated Android platform event. Go
+     * supplies the authoritative sequence; older or duplicate callbacks are
+     * ignored.
      */
     fun tryPublishSessionEvent(
         sessionId: String,
@@ -37,10 +40,11 @@ class ConnectionStateRepository {
         state: String,
         failureCode: String,
     ) {
-        if (generation < 0L) return
-        val candidate = if (sequence > 0L) sequence.toULong() else lastSessionSequence + 1uL
-        if (candidate <= lastSessionSequence) return
-        lastSessionSequence = candidate
+        if (sessionId.isBlank() || generation < 0L || sequence <= 0L) return
+        val candidate = sequence.toULong()
+        val previous = lastSessionSequences[sessionId] ?: 0uL
+        if (candidate <= previous) return
+        lastSessionSequences[sessionId] = candidate
         _sessionEvents.tryEmit(
             SessionEvent(
                 generation = generation.toULong(),

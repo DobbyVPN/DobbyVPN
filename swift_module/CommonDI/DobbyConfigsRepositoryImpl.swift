@@ -19,6 +19,7 @@ public final class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
             "telemetryApiTokenKey", "telemetryAttributesKey", "xrayConfigKey",
             "trustTunnelConfigKey", "ServerPortOutlineKey", "MethodPasswordOutlineKey",
             "PrefixOutlineKey", "TcpPathOutlineKey", "UdpPathOutlineKey",
+            "sessionapi.v2.rawConfiguration",
         ]
         obsolete.forEach { userDefaults.removeObject(forKey: $0) }
         obsolete.forEach { secrets.remove($0) }

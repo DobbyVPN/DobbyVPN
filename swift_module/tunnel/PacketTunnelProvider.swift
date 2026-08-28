@@ -7,107 +7,93 @@ import Foundation
 import Darwin
 import SystemConfiguration
 import Network
+import CryptoKit
+import CoreFoundation
 
-private final class GomobileProviderSessionClient: IOSProviderSessionClient {
-    private let launchID: String
-
-    init(launchID: String) {
-        self.launchID = launchID
+private enum GomobileProviderSessionClient {
+    static func configured(sessionID: String, rawConfiguration: Data, requestID: String) -> Data {
+        Data(DobbyvpnConfigureSession(sessionID, requestID, rawConfiguration).utf8)
     }
 
-    func create() throws -> String {
-        if let recovered = try? result(DobbyvpnRecoverActiveSession()),
-           let sessionID = recovered["session_id"] as? String,
-           !sessionID.isEmpty {
-            return sessionID
+    static func started(sessionID: String, requestID: String, mode: String, index: Int32) -> Data {
+        Data(DobbyvpnStartSession(sessionID, requestID, mode, index).utf8)
+    }
+}
+
+/// The Go callback is deliberately content-free. The ordered event payload is
+/// retained by Go and is fetched through Observe; this signal only wakes any
+/// extension-local observer and cannot leak profile or configuration data.
+private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacks {
+    private let acquireHandler: (_ sessionID: String?, _ generation: Int64) -> Int32
+    private let releaseHandler: (_ sessionID: String?, _ generation: Int64) -> Bool
+    private let stateHandler: (
+        _ sessionID: String?,
+        _ generation: Int64,
+        _ sequence: Int64,
+        _ state: String?,
+        _ failureCode: String?
+    ) -> Void
+
+    init(
+        acquireHandler: @escaping (_ sessionID: String?, _ generation: Int64) -> Int32,
+        releaseHandler: @escaping (_ sessionID: String?, _ generation: Int64) -> Bool,
+        stateHandler: @escaping (
+            _ sessionID: String?,
+            _ generation: Int64,
+            _ sequence: Int64,
+            _ state: String?,
+            _ failureCode: String?
+        ) -> Void
+    ) {
+        self.acquireHandler = acquireHandler
+        self.releaseHandler = releaseHandler
+        self.stateHandler = stateHandler
+        super.init()
+    }
+
+    func acquireTunnel(_ sessionID: String?, generation: Int64) -> Int32 {
+        acquireHandler(sessionID, generation)
+    }
+
+    func releaseTunnel(_ sessionID: String?, generation: Int64, fd: Int32) -> Bool {
+        // Go owns and closes the duplicated descriptor before this callback.
+        // The callback remains synchronous so OS routes are removed before Go
+        // can publish cleanup-complete IDLE.
+        return releaseHandler(sessionID, generation)
+    }
+
+    func protectSocket(_ sessionID: String?, generation: Int64, fd: Int32) -> Bool {
+        var enabled: Int32 = 1
+        return withUnsafePointer(to: &enabled) { value in
+            setsockopt(
+                fd,
+                SOL_SOCKET,
+                0x1101,
+                value,
+                socklen_t(MemoryLayout<Int32>.size)
+            ) == 0
         }
-        return try string(
-            result(DobbyvpnCreateSession()),
-            key: "session_id"
+    }
+
+    func publishState(
+        _ sessionID: String?,
+        generation: Int64,
+        sequence: Int64,
+        state: String?,
+        profileIndex: Int32,
+        profileProtocol: String?,
+        failureCode: String?
+    ) {
+        NotificationCenter.default.post(name: .iosSessionEventAvailable, object: nil)
+        let name = CFNotificationName(rawValue: IOSDarwinEventSink.notificationName as CFString)
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            name,
+            nil,
+            nil,
+            true
         )
-    }
-
-    func configure(sessionID: String, rawConfiguration: Data) throws {
-        _ = try result(
-            DobbyvpnConfigureSession(
-                sessionID,
-                commandID("configure"),
-                rawConfiguration
-            )
-        )
-    }
-
-    func start(sessionID: String) throws -> Int64 {
-        try int64(
-            result(
-                DobbyvpnStartSession(
-                    sessionID,
-                    commandID("start"),
-                    "AUTO_SELECT",
-                    0
-                )
-            ),
-            key: "generation"
-        )
-    }
-
-    func snapshot(sessionID: String) throws -> IOSProviderSessionSnapshot {
-        let snapshot = try result(DobbyvpnSnapshotSession(sessionID))
-        return IOSProviderSessionSnapshot(
-            generation: (snapshot["generation"] as? NSNumber)?.int64Value ?? 0,
-            state: snapshot["state"] as? String ?? "",
-            cleanupComplete: snapshot["cleanup_complete"] as? Bool ?? false
-        )
-    }
-
-    func stop(sessionID: String, generation: Int64) throws {
-        _ = try result(
-            DobbyvpnStopSession(
-                sessionID,
-                commandID("stop"),
-                generation
-            )
-        )
-    }
-
-    func destroy(sessionID: String) throws {
-        _ = try result(DobbyvpnDestroySession(sessionID))
-    }
-
-    private func commandID(_ operation: String) -> String {
-        "ios-\(launchID)-\(operation)-\(UUID().uuidString)"
-    }
-
-    private func result(_ payload: String) throws -> [String: Any] {
-        guard let data = payload.data(using: .utf8),
-              let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              root["ok"] as? Bool == true,
-              let result = root["result"] as? [String: Any] else {
-            throw error("SESSIONAPI_REJECTED")
-        }
-        return result
-    }
-
-    private func string(_ result: [String: Any], key: String) throws -> String {
-        guard let value = result[key] as? String, !value.isEmpty else {
-            throw error("SESSIONAPI_MALFORMED")
-        }
-        return value
-    }
-
-    private func int64(_ result: [String: Any], key: String) throws -> Int64 {
-        guard let number = result[key] as? NSNumber, number.int64Value > 0 else {
-            throw error("SESSIONAPI_MALFORMED")
-        }
-        return number.int64Value
-    }
-
-    private func error(_ code: String) -> NSError {
-        NSError(
-            domain: "PacketTunnelProvider.sessionapi",
-            code: -7,
-            userInfo: [NSLocalizedDescriptionKey: code]
-        )
+        stateHandler(sessionID, generation, sequence, state, failureCode)
     }
 }
 
@@ -115,17 +101,49 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let launchId = UUID().uuidString
     private let tunnelId = String(UUID().uuidString.prefix(8))
 
-    // The extension owns a sessionapi process of its own.  The containing app
-    // writes the opaque configuration bytes to the App Group before asking
-    // NetworkExtension to start; this process is the only one that interprets
-    // them (through Go's sessionapi/v2).
-    private let sessionRawConfigurationKey = "sessionapi.v2.rawConfiguration"
-    private lazy var sessionCoordinator = IOSProviderSessionCoordinator(
-        client: GomobileProviderSessionClient(launchID: launchId)
-    )
+    // The containing app writes opaque configuration bytes to this shared
+    // encrypted Keychain mailbox before asking NetworkExtension to start; the
+    // provider is the only process that hands them to Go's SessionV2 parser.
+    private let sessionRawConfigurationKey = SharedKeychainSecretStore.sessionConfigurationMailboxKey
 
     private var logs = NativeModuleHolder.logsRepository
     private let secrets = SharedKeychainSecretStore.shared
+    private let commandQueue = DispatchQueue(label: "vpn.dobby.app.tunnel.session-command")
+    private let settingsQueue = DispatchQueue(label: "vpn.dobby.app.tunnel.settings")
+    private static let settingsOperationTimeout: TimeInterval = 10
+    private let settingsFence = IOSSettingsOperationFence()
+    private lazy var callbackBridge = IOSPlatformCallbacks(
+        acquireHandler: { [weak self] sessionID, generation in
+            self?.acquireTunnel(sessionID: sessionID, generation: generation) ?? -1
+        },
+        releaseHandler: { [weak self] sessionID, generation in
+            self?.releaseTunnel(sessionID: sessionID, generation: generation) ?? false
+        },
+        stateHandler: { [weak self] sessionID, generation, sequence, state, failureCode in
+            self?.handleGoPublishedState(
+                sessionID: sessionID,
+                generation: generation,
+                sequence: sequence,
+                state: state,
+                failureCode: failureCode
+            )
+        }
+    )
+    private let responseLock = NSLock()
+    private var responseCache: [String: Data] = [:]
+    private var responseOperations: [String: String] = [:]
+    private var responseDigests: [String: Data] = [:]
+    private var responseOrder: [String] = []
+    private var inFlightRequests: [String: (operation: String, digest: Data)] = [:]
+    private let settingsLock = NSLock()
+    private var settingsEpoch: UInt64 = 0
+    private var activeSettingsEpoch: UInt64?
+    private var activeSettingsGeneration: Int64?
+    private var settingsCleanupFailed = false
+
+    private final class DataBox {
+        var value: Data?
+    }
     private var pathMonitor: Network.NWPathMonitor?
     private var lastPathSignature: String?
     private var loadSampler: DispatchSourceTimer?
@@ -316,60 +334,27 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logSystemInfo(osVersionString: osVersionString)
         logs.writeLog(log: "[Interfaces] iOS version: \(osVersionString)")
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
-        guard let rawConfiguration = secrets.data(for: sessionRawConfigurationKey),
-              !rawConfiguration.isEmpty else {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] missing opaque sessionapi configuration bytes")
-            throw sessionError("CONFIGURATION_UNAVAILABLE")
-        }
         logInterfacesDetailed(label: "BEFORE_VPN_TUNNEL")
 
-        // Defensive: if the system retries start without a proper stop, ensure we teardown previous state.
-        await teardownForStop(reason: "pre-start cleanup")
-        guard sessionCoordinator.sessionID == nil else {
-            throw sessionError("SESSIONAPI_CLEANUP_PENDING")
+        // The provider first starts in control mode. No routes, DNS settings,
+        // or Go session are installed here, so configure cannot black-hole
+        // traffic and NetworkExtension status cannot become product state.
+        let clearedStaleSettings = settingsQueue.sync {
+            runSettingsOperation {
+                try await self.setTunnelNetworkSettings(nil)
+            }
         }
+        guard clearedStaleSettings else {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] failed to clear stale control-mode settings; refusing provider readiness")
+            throw sessionError("NETWORK_SETTINGS_CLEANUP_FAILED")
+        }
+        markSettingsCleared()
+        DobbyvpnRegisterSessionPlatform(callbackBridge)
+        logs.writeLog(log: "[tunnel:\(tunnelId)] control mode ready; waiting for authenticated SessionV2 command")
 
         startPathLogging()
         logInitialNetworkPath(timeout: 1.0)
         startLoadSampler()
-        // This is a fixed packet-tunnel policy. Go parses the opaque config and
-        // owns profile ordering, DNS/routing inputs, probing, failover and all
-        // protocol/tun2socks lifecycle decisions.
-        let remoteAddress = "254.1.1.1"
-        let localAddress = "198.18.0.1"
-        let subnetMask = "255.255.0.0"
-        let ipv6Address = "fd00:dbb::1"
-        let ipv6PrefixLength = 128
-        let dnsServers = ["1.1.1.1", "8.8.8.8"]
-
-        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddress)
-        settings.mtu = 1200
-        settings.ipv4Settings = NEIPv4Settings(
-            addresses: [localAddress],
-            subnetMasks: [subnetMask]
-        )
-        settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
-        settings.ipv6Settings = NEIPv6Settings(
-            addresses: [ipv6Address],
-            networkPrefixLengths: [NSNumber(value: ipv6PrefixLength)]
-        )
-        settings.ipv6Settings?.includedRoutes = [NEIPv6Route.default()]
-        settings.dnsSettings = NEDNSSettings(servers: dnsServers)
-        settings.dnsSettings?.matchDomains = [""]
-
-        logs.writeLog(log: "Settings are ready:")
-        logs.writeLog(log: "[tunnel:\(tunnelId)] fixed TUN policy prepared mtu=\(settings.mtu?.stringValue ?? "nil") ipv4=\(localAddress)/\(subnetMask) ipv6=\(ipv6Address)/\(ipv6PrefixLength)")
-        do {
-            try await self.setTunnelNetworkSettings(settings)
-        } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] setTunnelNetworkSettings failed: \(error.localizedDescription)")
-            throw error
-        }
-        logs.writeLog(log: "Tunnel settings applied")
-
-        logInterfaces()
-        logInterfacesDetailed(label: "AFTER_VPN_TUNNEL")
-
         let path = LogsRepository_iosKt.provideGoLogFilePath().normalized().description()
         logs.writeLog(log: "Starting Go tunnel logger using owner-only local storage")
         guard DobbyvpnInitLogger(path) else {
@@ -377,38 +362,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             throw sessionError("LOGGER_INITIALIZATION_FAILED")
         }
         logs.writeLog(log: "service_logger_init result=success state=ready")
-        do {
-            try await startGoSession(rawConfiguration)
-        } catch {
-            await teardownForStop(reason: "sessionapi start failed")
-            throw error
-        }
-        logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi start accepted generation=\(sessionCoordinator.generation)")
-        logInterfacesDetailed(label: "AFTER_SESSIONAPI_START")
-        logResourceSnapshot(label: "AFTER_SESSIONAPI_START")
-    }
-
-    /// Commands are kept in the extension process: gomobile exports are
-    /// process-local, while the app process merely persists opaque bytes and
-    /// asks NetworkExtension to launch us.  This avoids accidentally creating
-    /// a second authoritative Go manager in the containing app.
-    private func startGoSession(_ rawConfiguration: Data) async throws {
-        try await sessionCoordinator.start(
-            rawConfiguration: rawConfiguration
-        )
+        logs.writeLog(log: "[tunnel:\(tunnelId)] control-mode logger ready")
     }
 
     private func stopGoSession(reason: String) async {
-        let generation = sessionCoordinator.generation
-        do {
-            try await sessionCoordinator.stop()
-            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi stop accepted generation=\(generation) reason=\(reason)")
-        } catch {
-            // Teardown still clears NetworkExtension settings. The Go manager
-            // has generation fencing, so a later process shutdown cannot turn
-            // this into a stale reconnect.
-            logs.writeLog(log: "[tunnel:\(tunnelId)] sessionapi stop failed reason=\(reason) code=\(error.localizedDescription)")
-        }
+        // Ordinary Stop and Destroy are sent by the app before the provider is
+        // stopped. An unexpected provider stop has no safe generation to
+        // invent, so it only tears down NetworkExtension state.
+        logs.writeLog(log: "[tunnel:\(tunnelId)] provider stop reason=\(reason); Go owns any recorded cleanup")
     }
 
     private func sessionError(_ code: String) -> NSError {
@@ -448,16 +409,378 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
-        logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage bytes=\(messageData.count)")
-        if let msg = String(data: messageData, encoding: .utf8), msg == "getMemory" {
-            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory")
-            let response = "Memory:\(reportMemoryUsageMB())".data(using: .utf8)
-            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage getMemory responseBytes=\(response?.count ?? -1)")
-            completionHandler?(response)
-        } else {
-            logs.writeLog(log: "[DEBUG][tunnel:\(tunnelId)] handleAppMessage unknown payload bytes=\(messageData.count)")
-            completionHandler?(messageData)
+        // Keep the provider message path fixed and authenticated. The command
+        // bytes themselves are never logged because they may contain request
+        // identifiers and are a control credential boundary.
+        commandQueue.async { [weak self] in
+            guard let self else { completionHandler?(nil); return }
+            let semaphore = DispatchSemaphore(value: 0)
+            let box = DataBox()
+            Task {
+                box.value = await self.dispatchProviderCommand(messageData)
+                semaphore.signal()
+            }
+            if semaphore.wait(timeout: .now() + IOSProviderTiming.providerCommandCompletionTimeout) == .timedOut {
+                self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] provider command completion timed out after \(Int(IOSProviderTiming.providerCommandCompletionTimeout))s")
+                completionHandler?(self.timeoutResponse(for: messageData))
+                return
+            }
+            completionHandler?(box.value)
         }
+    }
+
+    private func timeoutResponse(for messageData: Data) -> Data {
+        guard let secret = secrets.data(for: SharedKeychainSecretStore.sessionBridgeHMACKey),
+              let command = try? IOSProviderCommand.decode(messageData, using: secret) else {
+            return VpnManagerImpl.transportFailure("SESSIONAPI_TIMEOUT")
+        }
+        return authenticatedProviderResponse(
+            requestID: command.requestID,
+            kind: .transport,
+            goResponse: VpnManagerImpl.transportFailure("SESSIONAPI_TIMEOUT")
+        )
+    }
+
+    private func dispatchProviderCommand(_ messageData: Data) async -> Data {
+        guard let secret = secrets.data(for: SharedKeychainSecretStore.sessionBridgeHMACKey) else {
+            return VpnManagerImpl.transportFailure(IOSProviderMessageError.unauthenticated.rawValue)
+        }
+        guard let command = try? IOSProviderCommand.decode(messageData, using: secret) else {
+            return VpnManagerImpl.transportFailure(IOSProviderMessageError.malformed.rawValue)
+        }
+        guard !settingsFence.isPoisoned else {
+            return authenticatedProviderResponse(
+                requestID: command.requestID,
+                kind: .transport,
+                goResponse: VpnManagerImpl.transportFailure("SESSIONAPI_PROVIDER_POISONED")
+            )
+        }
+        let requestDigest = Data(SHA256.hash(data: messageData))
+
+        responseLock.lock()
+        if let cached = responseCache[command.requestID] {
+            let sameCommand = responseOperations[command.requestID] == command.operation.rawValue &&
+                responseDigests[command.requestID] == requestDigest
+            responseLock.unlock()
+            return sameCommand ? cached : authenticatedProviderResponse(
+                requestID: command.requestID,
+                kind: .transport,
+                goResponse: VpnManagerImpl.transportFailure("CONFLICT")
+            )
+        }
+        if let inFlight = inFlightRequests[command.requestID] {
+            responseLock.unlock()
+            let sameCommand = inFlight.operation == command.operation.rawValue && inFlight.digest == requestDigest
+            return authenticatedProviderResponse(
+                requestID: command.requestID,
+                kind: .transport,
+                goResponse: VpnManagerImpl.transportFailure(sameCommand ? "SESSIONAPI_IN_FLIGHT" : "CONFLICT")
+            )
+        }
+        inFlightRequests[command.requestID] = (command.operation.rawValue, requestDigest)
+        responseLock.unlock()
+        defer {
+            responseLock.lock()
+            inFlightRequests.removeValue(forKey: command.requestID)
+            responseLock.unlock()
+        }
+
+        let outcome: (payload: Data, kind: IOSProviderResponseKind)
+        switch command.operation {
+        case .create:
+            outcome = (Data(DobbyvpnCreateSession().utf8), .go)
+        case .recover:
+            outcome = (Data(DobbyvpnRecoverActiveSession().utf8), .go)
+        case .configure:
+            outcome = await configure(command)
+        case .start:
+            outcome = await start(command)
+        case .snapshot:
+            outcome = (Data(DobbyvpnSnapshotSession(command.sessionID ?? "").utf8), .go)
+        case .observe:
+            if let afterSequence = command.afterSequence {
+                outcome = (Data(DobbyvpnObserveSession(command.sessionID ?? "", afterSequence).utf8), .go)
+            } else {
+                outcome = (VpnManagerImpl.transportFailure(IOSProviderMessageError.malformed.rawValue), .transport)
+            }
+        case .stop:
+            outcome = (Data(DobbyvpnStopSession(command.sessionID ?? "", command.requestID, command.generation ?? 0).utf8), .go)
+        case .destroy:
+            outcome = (Data(DobbyvpnDestroySession(command.sessionID ?? "").utf8), .go)
+        }
+        let response = authenticatedProviderResponse(requestID: command.requestID, kind: outcome.kind, goResponse: outcome.payload)
+
+        responseLock.lock()
+        responseCache[command.requestID] = response
+        responseOperations[command.requestID] = command.operation.rawValue
+        responseDigests[command.requestID] = requestDigest
+        responseOrder.append(command.requestID)
+        while responseOrder.count > 64 {
+            let old = responseOrder.removeFirst()
+            responseCache.removeValue(forKey: old)
+            responseOperations.removeValue(forKey: old)
+            responseDigests.removeValue(forKey: old)
+        }
+        responseLock.unlock()
+        return response
+    }
+
+    private func authenticatedProviderResponse(requestID: String, kind: IOSProviderResponseKind, goResponse: Data) -> Data {
+        guard let secret = secrets.data(for: SharedKeychainSecretStore.sessionBridgeHMACKey),
+              let envelope = try? IOSProviderResponse(requestID: requestID, kind: kind, payload: goResponse),
+              let encoded = try? envelope.encoded(using: secret) else {
+            // A valid command could not be wrapped only if shared Keychain
+            // state disappeared during the provider lifetime. The app will
+            // reject this unauthenticated transport response and retain any
+            // sensitive mailbox for recovery.
+            return VpnManagerImpl.transportFailure("SESSIONAPI_RESPONSE_UNAVAILABLE")
+        }
+        return encoded
+    }
+
+    private func configure(_ command: IOSProviderCommand) async -> (payload: Data, kind: IOSProviderResponseKind) {
+        guard let rawConfiguration = secrets.data(for: sessionRawConfigurationKey) else {
+            return (VpnManagerImpl.transportFailure("CONFIGURATION_UNAVAILABLE"), .transport)
+        }
+        guard !rawConfiguration.isEmpty else {
+            return (VpnManagerImpl.transportFailure("CONFIGURATION_UNAVAILABLE"), .transport)
+        }
+        guard rawConfiguration.count <= IOSProviderCommand.maximumConfigurationBytes else {
+            return (VpnManagerImpl.transportFailure("SESSIONAPI_CONFIGURATION_TOO_LARGE"), .transport)
+        }
+        let response = GomobileProviderSessionClient.configured(
+            sessionID: command.sessionID ?? "",
+            rawConfiguration: rawConfiguration,
+            requestID: command.requestID
+        )
+        // The containing app consumes the mailbox after it receives this
+        // authenticated Go result, success or typed failure. Keeping it until
+        // then lets a provider crash or a lost response be retried safely with
+        // the same Go command ID.
+        return (response, .go)
+    }
+
+    private func start(_ command: IOSProviderCommand) async -> (payload: Data, kind: IOSProviderResponseKind) {
+        do {
+            // A prior cleanup failure leaves the old settings fence intact.
+            // Retry clearing them before accepting a new generation; this is
+            // deliberately serialized with Start on commandQueue.
+            try retryFailedSettingsCleanupIfNeeded()
+            // Go owns the transition into PROBING/PREPARING. Fixed routes are
+            // installed only by the Go-owned AcquireTunnel callback after Go
+            // has selected a generation and requested its packet-flow FD.
+            let response = GomobileProviderSessionClient.started(
+                sessionID: command.sessionID ?? "",
+                requestID: command.requestID,
+                mode: command.mode ?? "",
+                index: command.index ?? 0
+            )
+            // A rejected Start never acquired a TUN, so no fixed routes were
+            // installed by this command and no synthetic cleanup is needed.
+            return (response, .go)
+        } catch {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] Go start dispatch failed: \(error.localizedDescription)")
+            return (VpnManagerImpl.transportFailure("PLATFORM_FAILED"), .transport)
+        }
+    }
+
+    private func retryFailedSettingsCleanupIfNeeded() throws {
+        settingsLock.lock()
+        let failed = settingsCleanupFailed
+        settingsLock.unlock()
+        guard failed else { return }
+        try clearSettingsSynchronously()
+        markSettingsCleared()
+        logs.writeLog(log: "[tunnel:\(tunnelId)] recovered a prior settings cleanup failure before Start")
+    }
+
+    private func markSettingsCleanupFailed() {
+        settingsLock.lock()
+        settingsCleanupFailed = true
+        settingsLock.unlock()
+    }
+
+    private func markSettingsCleared() {
+        settingsLock.lock()
+        activeSettingsEpoch = nil
+        activeSettingsGeneration = nil
+        settingsCleanupFailed = false
+        settingsLock.unlock()
+    }
+
+    private func handleGoPublishedState(
+        sessionID: String?,
+        generation: Int64,
+        sequence: Int64,
+        state: String?,
+        failureCode: String?
+    ) {
+        _ = sessionID
+        _ = sequence
+        // IDLE and DESTROYED are positive Go cleanup completion signals. A
+        // FAILED event is clearable only when its failure is not cleanup
+        // failure; CLEANUP_FAILED deliberately keeps the fence and routes
+        // until an explicit retry can prove they were removed.
+        let cleanupCompleted = state == "IDLE" || state == "DESTROYED" ||
+            (state == "FAILED" && failureCode != "CLEANUP_FAILED")
+        guard cleanupCompleted else { return }
+        commandQueue.async { [weak self] in
+            guard let self else { return }
+            // Keep commandQueue fenced until the serialized settings queue
+            // confirms the clear. A later Start therefore cannot race it.
+            self.clearFixedSettingsAfterGoCleanup(generation: generation, state: state ?? "UNKNOWN")
+        }
+    }
+
+    private func clearFixedSettingsAfterGoCleanup(generation: Int64, state: String) {
+        settingsQueue.sync {
+            settingsLock.lock()
+            let activeGeneration = activeSettingsGeneration
+            let hasSettings = activeSettingsEpoch != nil
+            settingsLock.unlock()
+            guard hasSettings else { return }
+            // If a later Start has already acquired a different generation,
+            // this delayed callback must not clear those routes.
+            if let activeGeneration, activeGeneration != generation { return }
+            _ = clearSettingsOnCurrentQueue(reason: "Go \(state) generation=\(generation)")
+        }
+    }
+
+    private final class SettingsOperationResult {
+        var succeeded = false
+        var error: Error?
+    }
+
+    /// AcquireTunnel is the first point where Go owns a concrete generation.
+    /// Install routes immediately before duplicating that generation's TUN;
+    /// PROBING and failed Start therefore run without a routing black hole.
+    private func acquireTunnel(sessionID: String?, generation: Int64) -> Int32 {
+        _ = sessionID
+        guard !settingsFence.isPoisoned else { return -1 }
+        return settingsQueue.sync {
+            guard applyFixedTunnelSettings(generation: generation) else { return -1 }
+            let rawDescriptor = DobbyvpnGetTunnelFileDescriptor()
+            guard rawDescriptor >= 0, rawDescriptor <= Int(Int32.max) else {
+                _ = clearSettingsOnCurrentQueue(reason: "TUN descriptor unavailable")
+                return -1
+            }
+            let duplicated = dup(Int32(rawDescriptor))
+            guard duplicated >= 0 else {
+                _ = clearSettingsOnCurrentQueue(reason: "TUN descriptor duplication failed")
+                return -1
+            }
+            return duplicated
+        }
+    }
+
+    /// Go closes its descriptor before this callback. Keep the callback
+    /// synchronous so fixed routes are gone before Go emits cleanup-complete
+    /// IDLE/DESTROYED and before a subsequent generation can be acquired.
+    private func releaseTunnel(sessionID: String?, generation: Int64) -> Bool {
+        _ = sessionID
+        if settingsFence.isPoisoned { return false }
+        return settingsQueue.sync {
+            settingsLock.lock()
+            let activeGeneration = activeSettingsGeneration
+            settingsLock.unlock()
+            guard activeGeneration == nil || activeGeneration == generation else { return false }
+            return clearSettingsOnCurrentQueue(reason: "Go ReleaseTunnel")
+        }
+    }
+
+    /// This function must run on settingsQueue, which serializes it with
+    /// release/terminal cleanup. It returns false on a bounded NetworkExtension
+    /// failure and leaves the conservative cleanup-failed fence set.
+    private func applyFixedTunnelSettings(generation: Int64) -> Bool {
+        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "254.1.1.1")
+        settings.mtu = 1200
+        settings.ipv4Settings = NEIPv4Settings(
+            addresses: ["198.18.0.1"],
+            subnetMasks: ["255.255.0.0"]
+        )
+        settings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
+        settings.ipv6Settings = NEIPv6Settings(
+            addresses: ["fd00:dbb::1"],
+            networkPrefixLengths: [NSNumber(value: 128)]
+        )
+        settings.ipv6Settings?.includedRoutes = [NEIPv6Route.default()]
+        settings.dnsSettings = NEDNSSettings(servers: ["1.1.1.1", "8.8.8.8"])
+        settings.dnsSettings?.matchDomains = [""]
+        guard runSettingsOperation {
+            try await self.setTunnelNetworkSettings(settings)
+        } else {
+            markSettingsCleanupFailed()
+            logs.writeLog(log: "[tunnel:\(tunnelId)] failed to apply fixed settings before AcquireTunnel generation=\(generation)")
+            return false
+        }
+        settingsLock.lock()
+        settingsEpoch &+= 1
+        activeSettingsEpoch = settingsEpoch
+        activeSettingsGeneration = generation
+        settingsCleanupFailed = false
+        settingsLock.unlock()
+        logs.writeLog(log: "[tunnel:\(tunnelId)] fixed tunnel settings applied at Go AcquireTunnel generation=\(generation)")
+        logInterfaces()
+        logInterfacesDetailed(label: "AFTER_VPN_TUNNEL")
+        return true
+    }
+
+    private func clearSettingsSynchronously() throws {
+        guard settingsQueue.sync(execute: { clearSettingsOnCurrentQueue(reason: "retry") }) else {
+            throw sessionError("NETWORK_SETTINGS_CLEANUP_FAILED")
+        }
+    }
+
+    /// Must run on settingsQueue. Every route clear is serialized with an
+    /// AcquireTunnel installation, and failed clears block a new Start until a
+    /// later bounded retry proves NetworkExtension accepted the clear.
+    @discardableResult
+    private func clearSettingsOnCurrentQueue(reason: String) -> Bool {
+        let succeeded = runSettingsOperation {
+            try await self.setTunnelNetworkSettings(nil)
+        }
+        if succeeded {
+            markSettingsCleared()
+            logs.writeLog(log: "[tunnel:\(tunnelId)] fixed settings cleared reason=\(reason)")
+        } else {
+            markSettingsCleanupFailed()
+            logs.writeLog(log: "[tunnel:\(tunnelId)] fixed settings cleanup failed reason=\(reason)")
+        }
+        return succeeded
+    }
+
+    /// Runs an async NetworkExtension operation from the synchronous Go
+    /// callback boundary with a strict bound. Cancellation is best-effort; a
+    /// timeout therefore poisons and terminates this provider before any later
+    /// command can start another settings operation.
+    private func runSettingsOperation(_ operation: @escaping () async throws -> Void) -> Bool {
+        guard let operationEpoch = settingsFence.begin() else { return false }
+        let completion = DispatchSemaphore(value: 0)
+        let result = SettingsOperationResult()
+        let task = Task {
+            do {
+                try await operation()
+                result.succeeded = true
+            } catch {
+                result.error = error
+            }
+            completion.signal()
+        }
+        guard completion.wait(timeout: .now() + Self.settingsOperationTimeout) == .success else {
+            settingsFence.poison()
+            task.cancel()
+            logs.writeLog(log: "[tunnel:\(tunnelId)] NetworkExtension settings operation timed out after \(Int(Self.settingsOperationTimeout))s")
+            // Cancellation is best-effort. Poison the command boundary and
+            // terminate this provider process so a late NetworkExtension
+            // completion cannot be followed by another command or Start.
+            cancelTunnelWithError(sessionError("NETWORK_SETTINGS_OPERATION_TIMEOUT"))
+            return false
+        }
+        if let error = result.error {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] NetworkExtension settings operation failed: \(error.localizedDescription)")
+        }
+        guard settingsFence.canCommit(operationEpoch) else { return false }
+        return result.succeeded
     }
 
     private func startPathLogging() {
@@ -737,7 +1060,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             lowerName.contains("ipsec")
     }
 
-    @MainActor
     private func teardownForStop(reason: String) async {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
         logResourceSnapshot(label: "TEARDOWN_BEGIN reason=\(reason)")
@@ -746,7 +1068,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         do {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] clearing tunnel network settings")
-            try await self.setTunnelNetworkSettings(nil)
+            try clearSettingsSynchronously()
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] cleared tunnel network settings")
         } catch {
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] failed to clear tunnel network settings: \(error.localizedDescription)")

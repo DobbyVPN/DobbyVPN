@@ -15,8 +15,11 @@ and attempts `RecoverActiveSession`.
 - If the service is unavailable, render a typed unavailable/error state; never
   infer `CONNECTED` from a stale local flag or platform-service liveness.
 
-The UI does not run a timer-based connection detector. Android and iOS receive
-the same ordered state model through the native callback/Flow boundary.
+The UI does not own a connection detector. Android receives the ordered state
+model through its native callback/Flow boundary. iOS uses the same shared
+state model through its thin bridge: the provider emits only a content-free
+wake signal through the cross-process Darwin notification sink, and the
+off-main iOS adapter reads the authoritative ordered ledger with Go `Observe`.
 
 ## Connect
 
@@ -50,21 +53,34 @@ If another live session exists, `CreateSession` returns typed `CONFLICT`; the
 UI must not stop or replace that session implicitly. The UI instead recovers
 and renders the existing session.
 
-## Disconnect
+## Disconnect and terminal disposal
 
-Disconnect is explicit and owned by SessionV2:
+An ordinary user Disconnect is a generation-level Stop. It is explicit and
+owned by SessionV2, but it deliberately retains the accepted configuration and
+session so the next Connect can reuse the same Go-owned session:
 
 ```text
 Disconnect
   -> Stop
   -> await terminal cleanup outcome
-  -> Destroy
   -> render DISCONNECTED
 ```
 
 Go releases protocol, routing, TUN, tun2socks, probe, DNS, and child-process
 resources in reverse acquisition order. The UI reports a cleanup failure as a
-failure; it does not silently render a clean disconnect.
+failure; it does not silently render a clean disconnect. Stop does not call
+Destroy or stop the control provider.
+
+Destroy is a separate terminal disposal operation, used only when the owning
+app deliberately removes the recoverable session or tears down the provider:
+
+```text
+Terminal disposal
+  -> Go Destroy
+  -> after a successful Go result, stop the control provider and consume any mailbox
+```
+
+A failed or timed-out Destroy leaves the provider and recovery data in place.
 
 ## UI loss and recovery
 
@@ -82,7 +98,9 @@ failure; it does not silently render a clean disconnect.
 - No UI code parses protocol configuration or chooses a protocol.
 - No UI code logs URLs, configuration, endpoints, credentials, or auth
   metadata.
-- No UI code polls session state on a timer.
+- No UI code owns or synthesizes polling state; the iOS transport may perform
+  bounded off-main Observe reads because NetworkExtension has no cross-process
+  push payload channel.
 - No per-protocol start/stop path or platform-specific session manager may be
   added.
 - Diagnostics are local-only. Remote telemetry initialization, persistence, and
