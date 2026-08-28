@@ -123,6 +123,40 @@ class WindowsProcessCensusTests(unittest.TestCase):
         ):
             census.windows_process_census(123, timeout_seconds=2)
 
+    def test_timeout_preserves_all_alias_partial_streams_and_marks_incomplete(self) -> None:
+        timeout = subprocess.TimeoutExpired(
+            ["powershell.exe"],
+            2,
+            output=b"partial stdout",
+            stderr=b"partial stderr",
+        )
+        # TimeoutExpired exposes output and stdout as aliases.  The diagnostic
+        # must retain that payload once, together with stderr.
+        with (
+            mock.patch.object(census.subprocess, "run", side_effect=timeout),
+            self.assertRaisesRegex(
+                census.WindowsProcessCensusError,
+                r"stdout=partial stdout stderr=partial stderr evidence_incomplete=1",
+            ) as raised,
+        ):
+            census.windows_process_census(123, timeout_seconds=2)
+        self.assertNotIn("partial stdoutpartial stdout", str(raised.exception))
+
+    def test_oserror_preserves_partial_streams_and_marks_incomplete(self) -> None:
+        error = OSError("powershell pipe failed")
+        error.stdout = b"partial stdout"  # type: ignore[attr-defined]
+        error.output = b"partial stdout"  # type: ignore[attr-defined]
+        error.stderr = b"partial stderr"  # type: ignore[attr-defined]
+        with (
+            mock.patch.object(census.subprocess, "run", side_effect=error),
+            self.assertRaisesRegex(
+                census.WindowsProcessCensusError,
+                r"could not start: powershell pipe failed stdout=partial stdout "
+                r"stderr=partial stderr evidence_incomplete=1",
+            ),
+        ):
+            census.windows_process_census(123, timeout_seconds=2)
+
 
 if __name__ == "__main__":
     unittest.main()

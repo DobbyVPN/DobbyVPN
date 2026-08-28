@@ -19,6 +19,48 @@ def _output_text(output: str | bytes | None) -> str:
     return output
 
 
+def _output_bytes(output: str | bytes | None) -> bytes:
+    if output is None:
+        return b""
+    if isinstance(output, bytes):
+        return output
+    return output.encode("utf-8", errors="surrogatepass")
+
+
+def _merge_output_fragments(*outputs: str | bytes | None) -> bytes:
+    """Merge cumulative or incremental subprocess output without duplicating it."""
+    merged = b""
+    for output in outputs:
+        data = _output_bytes(output)
+        if not data:
+            continue
+        if not merged:
+            merged = data
+            continue
+        if data == merged:
+            continue
+        if data.startswith(merged):
+            merged = data
+            continue
+        # Independent partial reads are appended in order.  The only
+        # duplicate forms produced by subprocess APIs are the stdout/output
+        # aliases and cumulative snapshots handled above; do not scan large
+        # diagnostics byte-by-byte looking for an arbitrary overlap.
+        merged += data
+    return merged
+
+
+def _exception_output(error: BaseException) -> tuple[bytes, bytes]:
+    """Return all partial streams exposed by a subprocess exception once."""
+    return (
+        _merge_output_fragments(
+            getattr(error, "stdout", None),
+            getattr(error, "output", None),
+        ),
+        _merge_output_fragments(getattr(error, "stderr", None)),
+    )
+
+
 def windows_process_census(
     root_pid: int,
     *,
@@ -44,15 +86,16 @@ def windows_process_census(
             text=False,
             timeout=timeout_seconds,
         )
-    except subprocess.TimeoutExpired as error:
+    except (subprocess.TimeoutExpired, OSError) as error:
+        stdout, stderr = _exception_output(error)
+        if isinstance(error, subprocess.TimeoutExpired):
+            detail = f"timed out after {timeout_seconds}s"
+        else:
+            detail = f"could not start: {error}"
         raise WindowsProcessCensusError(
-            f"PowerShell process-tree query timed out after {timeout_seconds}s "
-            f"stdout={_output_text(error.output).strip()} "
-            f"stderr={_output_text(error.stderr).strip()}"
-        ) from error
-    except OSError as error:
-        raise WindowsProcessCensusError(
-            f"PowerShell process-tree query could not start: {error}"
+            f"PowerShell process-tree query {detail} "
+            f"stdout={_output_text(stdout).strip()} "
+            f"stderr={_output_text(stderr).strip()} evidence_incomplete=1"
         ) from error
     if result.returncode != 0:
         raise WindowsProcessCensusError(

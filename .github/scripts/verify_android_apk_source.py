@@ -48,6 +48,54 @@ def output_bytes(output: str | bytes | None) -> bytes:
     return output.encode("utf-8", errors="surrogatepass")
 
 
+def _merge_output_fragments(*outputs: str | bytes | None) -> bytes:
+    """Merge cumulative or incremental subprocess output without duplicating it."""
+    merged = b""
+    for output in outputs:
+        data = output_bytes(output)
+        if not data:
+            continue
+        if not merged:
+            merged = data
+            continue
+        # TimeoutExpired exposes ``output`` as an alias for ``stdout``.  A
+        # second communicate() can also return the cumulative stream, while
+        # test doubles and alternate implementations may return only a new
+        # suffix.  Handle all three forms without dropping bytes.
+        if data == merged:
+            continue
+        if data.startswith(merged):
+            merged = data
+            continue
+        # Independent partial reads are appended in order.  The only
+        # duplicate forms produced by subprocess APIs are the stdout/output
+        # aliases and cumulative snapshots handled above; do not scan large
+        # diagnostics byte-by-byte looking for an arbitrary overlap.
+        merged += data
+    return merged
+
+
+def _exception_output(error: BaseException) -> tuple[bytes, bytes]:
+    """Return all partial streams exposed by a subprocess exception once."""
+    stdout = _merge_output_fragments(
+        getattr(error, "stdout", None),
+        getattr(error, "output", None),
+    )
+    stderr = _merge_output_fragments(getattr(error, "stderr", None))
+    return stdout, stderr
+
+
+def _set_exception_output(error: BaseException, stdout: bytes, stderr: bytes) -> None:
+    """Make merged streams available to callers handling the original error."""
+    try:
+        error.stdout = output_text(stdout)  # type: ignore[attr-defined]
+        error.output = output_text(stdout)  # type: ignore[attr-defined]
+        error.stderr = output_text(stderr)  # type: ignore[attr-defined]
+    except (AttributeError, TypeError):
+        # Some foreign exception implementations expose read-only attributes.
+        pass
+
+
 class ProcessTreeProofError(RuntimeError):
     """Raised when a child tree cannot be proven to have disappeared."""
 
@@ -160,14 +208,30 @@ def _proc_descendants(root_pid: int) -> set[int]:
 
 
 def _ps_descendants(root_pid: int) -> set[int]:
-    result = subprocess.run(
-        ["ps", "-eo", "pid=,ppid="],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=False,
-        timeout=2,
-    )
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid=,ppid="],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+            timeout=2,
+        )
+    except (subprocess.TimeoutExpired, OSError) as error:
+        stdout, stderr = _exception_output(error)
+        retain_process_diagnostics(
+            stdout,
+            stderr,
+            f"ps-query-error={type(error).__name__};evidence_incomplete=1",
+        )
+        if isinstance(error, subprocess.TimeoutExpired):
+            detail = "timed out after 2s"
+        else:
+            detail = f"could not start: {error}"
+        raise ProcessTreeProofError(
+            f"ps process-tree query {detail} stdout={output_text(stdout).strip()} "
+            f"stderr={output_text(stderr).strip()} evidence_incomplete=1"
+        ) from error
     if result.returncode != 0:
         raise ProcessTreeProofError(
             f"ps process-tree query failed exit={result.returncode} "
@@ -384,6 +448,42 @@ def retain_process_diagnostics(
     return Path(handle.name)
 
 
+def _run_windows_taskkill(
+    pid: int,
+    *,
+    status_prefix: str,
+    timeout_seconds: float,
+) -> None:
+    """Run taskkill while retaining partial output if the command fails."""
+    try:
+        result = subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        stdout, stderr = _exception_output(error)
+        retain_process_diagnostics(
+            stdout,
+            stderr,
+            f"{status_prefix}-error={type(error).__name__};evidence_incomplete=1",
+        )
+        emit_process_diagnostic(
+            f"[!] Windows descendant cleanup failed for pid={pid}: {error}",
+            stdout,
+            stderr,
+        )
+        return
+    retain_process_diagnostics(
+        result.stdout,
+        result.stderr,
+        f"{status_prefix}-exit-{result.returncode}",
+    )
+
+
 def terminate_process_group(
     process: subprocess.Popen[str],
     grace_seconds: float = PROCESS_CLEANUP_GRACE_SECONDS,
@@ -420,38 +520,19 @@ def terminate_process_group(
         proof_error = first_error
 
     if os.name == "nt":
-        try:
-            cleanup = subprocess.run(
-                ["taskkill", "/T", "/F", "/PID", str(process.pid)],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=False,
-                timeout=grace_seconds,
+        _run_windows_taskkill(
+            process.pid,
+            status_prefix="taskkill",
+            timeout_seconds=grace_seconds,
+        )
+        for pid in tracker.observed_pids():
+            if pid == process.pid:
+                continue
+            _run_windows_taskkill(
+                pid,
+                status_prefix=f"taskkill-pid-{pid}",
+                timeout_seconds=grace_seconds,
             )
-            retain_process_diagnostics(
-                cleanup.stdout,
-                cleanup.stderr,
-                f"taskkill-exit-{cleanup.returncode}",
-            )
-            for pid in tracker.observed_pids():
-                if pid == process.pid:
-                    continue
-                descendant_cleanup = subprocess.run(
-                    ["taskkill", "/T", "/F", "/PID", str(pid)],
-                    check=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=False,
-                    timeout=grace_seconds,
-                )
-                retain_process_diagnostics(
-                    descendant_cleanup.stdout,
-                    descendant_cleanup.stderr,
-                    f"taskkill-pid-{pid}-exit-{descendant_cleanup.returncode}",
-                )
-        except (OSError, subprocess.SubprocessError) as error:
-            emit_process_diagnostic(str(error))
         try:
             process.kill()
         except ProcessLookupError:
@@ -487,6 +568,45 @@ def terminate_process_group(
             time.sleep(min(PROCESS_TREE_POLL_INTERVAL_SECONDS, remaining))
 
 
+def _final_drain_and_reap(
+    process: subprocess.Popen[str],
+    stdout: bytes,
+    stderr: bytes,
+    *,
+    grace_seconds: float,
+) -> tuple[bytes, bytes, bool, str | None]:
+    """Drain child pipes once, then boundedly kill and reap on drain failure."""
+    try:
+        drained_stdout, drained_stderr = process.communicate(timeout=grace_seconds)
+    except (subprocess.TimeoutExpired, OSError) as error:
+        partial_stdout, partial_stderr = _exception_output(error)
+        stdout = _merge_output_fragments(stdout, partial_stdout)
+        stderr = _merge_output_fragments(stderr, partial_stderr)
+        cleanup_error: str | None = f"final-drain={type(error).__name__}: {error}"
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        except OSError as error:
+            cleanup_error += f";kill={error}"
+        try:
+            process.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired as error:
+            cleanup_error += f";reap={error}"
+        except OSError as error:
+            cleanup_error += f";reap={error}"
+        return stdout, stderr, False, cleanup_error
+    stdout = _merge_output_fragments(stdout, drained_stdout)
+    stderr = _merge_output_fragments(stderr, drained_stderr)
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired as error:
+        return stdout, stderr, False, f"reap={error}"
+    except OSError as error:
+        return stdout, stderr, False, f"reap={error}"
+    return stdout, stderr, True, None
+
+
 def run_apkanalyzer(command: list[str]) -> subprocess.CompletedProcess[str]:
     process = subprocess.Popen(
         command,
@@ -499,32 +619,46 @@ def run_apkanalyzer(command: list[str]) -> subprocess.CompletedProcess[str]:
     attach_process_tree_tracker(process)
     try:
         stdout, stderr = process.communicate(timeout=APK_ANALYZER_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired as error:
-        partial_stdout = getattr(error, "stdout", None) or getattr(error, "output", None)
-        partial_stderr = getattr(error, "stderr", None)
-        captured_stdout = partial_stdout or b""
-        captured_stderr = partial_stderr or b""
+    except (subprocess.TimeoutExpired, OSError) as error:
+        captured_stdout, captured_stderr = _exception_output(error)
+        tree_proof: str | None = None
+        tree_error: ProcessTreeProofError | None = None
         try:
             tree_proof = terminate_process_group(process)
-        except ProcessTreeProofError as error:
-            tree_proof = f"tree-proof-failed={error}"
-            retain_process_diagnostics(captured_stdout, captured_stderr, f"timeout-{APK_ANALYZER_TIMEOUT_SECONDS}s;{tree_proof}")
-            raise
-        try:
-            stdout, stderr = process.communicate(timeout=PROCESS_CLEANUP_GRACE_SECONDS)
-        except subprocess.TimeoutExpired as cleanup_error:
-            stdout = getattr(cleanup_error, "stdout", None) or partial_stdout or ""
-            stderr = getattr(cleanup_error, "stderr", None) or partial_stderr or ""
-        retain_process_diagnostics(stdout, stderr, f"timeout-{APK_ANALYZER_TIMEOUT_SECONDS}s;{tree_proof}")
-        stdout_text = output_text(stdout)
-        stderr_text = output_text(stderr)
-        timeout_error = subprocess.TimeoutExpired(
-            command,
-            APK_ANALYZER_TIMEOUT_SECONDS,
-            output=stdout_text,
-            stderr=stderr_text,
+        except ProcessTreeProofError as cleanup_error:
+            tree_error = cleanup_error
+            tree_proof = f"tree-proof-failed={cleanup_error}"
+        stdout, stderr, eof_proven, drain_error = _final_drain_and_reap(
+            process,
+            captured_stdout,
+            captured_stderr,
+            grace_seconds=PROCESS_CLEANUP_GRACE_SECONDS,
         )
-        raise timeout_error from error
+        incomplete = tree_error is not None or not eof_proven
+        status = (
+            f"timeout-{APK_ANALYZER_TIMEOUT_SECONDS}s"
+            if isinstance(error, subprocess.TimeoutExpired)
+            else f"communicate-error={type(error).__name__}"
+        )
+        if tree_proof:
+            status += f";{tree_proof}"
+        if drain_error:
+            status += f";{drain_error}"
+        if incomplete:
+            status += ";evidence_incomplete=1"
+        retain_process_diagnostics(stdout, stderr, status)
+        _set_exception_output(error, stdout, stderr)
+        if tree_error is not None:
+            raise tree_error from error
+        if isinstance(error, subprocess.TimeoutExpired):
+            timeout_error = subprocess.TimeoutExpired(
+                command,
+                APK_ANALYZER_TIMEOUT_SECONDS,
+                output=output_text(stdout),
+                stderr=output_text(stderr),
+            )
+            raise timeout_error from error
+        raise
     try:
         tree_proof = process_tree_tracker(process).prove_gone(process._dobby_process_group_id)  # type: ignore[attr-defined]
     except ProcessTreeProofError as error:
@@ -576,10 +710,15 @@ def verify_apk(apkanalyzer: str, apk: Path, source_sha: str, repository: str) ->
     try:
         result = run_apkanalyzer(command)
     except subprocess.TimeoutExpired as error:
-        emit_process_diagnostic(error.stdout or error.output, error.stderr)
+        stdout, stderr = _exception_output(error)
+        emit_process_diagnostic(stdout, stderr)
         raise VerificationError(
             f"apkanalyzer timed out after {APK_ANALYZER_TIMEOUT_SECONDS} seconds",
         ) from error
+    except OSError as error:
+        stdout, stderr = _exception_output(error)
+        emit_process_diagnostic(stdout, stderr)
+        raise
     if result.returncode != 0:
         emit_process_diagnostic(result.stdout, result.stderr)
         raise VerificationError(

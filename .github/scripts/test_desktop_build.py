@@ -98,6 +98,29 @@ class DesktopBuildTests(unittest.TestCase):
         ):
             desktop_build._pid_is_alive(123)
 
+    @unittest.skipIf(os.name == "nt", "POSIX ps fallback assertion")
+    def test_ps_fallback_timeout_retains_partial_streams_and_marks_incomplete(self) -> None:
+        timeout = subprocess.TimeoutExpired(
+            ["ps"],
+            10,
+            output=b"ps stdout\n",
+            stderr=b"ps stderr\n",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with (
+                mock.patch.object(desktop_build, "ROOT_DIR", root),
+                mock.patch.object(desktop_build.subprocess, "run", side_effect=timeout),
+                self.assertRaisesRegex(
+                    desktop_build.ProcessTreeProofError,
+                    r"stdout=ps stdout stderr=ps stderr evidence_incomplete=1",
+                ),
+            ):
+                desktop_build._ps_descendants(123)
+            logs = list((root / "runtime" / "desktop-build-diagnostics").glob("*.log"))
+            self.assertEqual(len(logs), 1)
+            self.assertIn("ps stdout", logs[0].read_text(encoding="utf-8"))
+
     def test_windows_tree_proof_uses_final_census_without_signalling(self) -> None:
         sample_count = 0
 
@@ -640,6 +663,111 @@ class DesktopBuildTests(unittest.TestCase):
             retained_bytes = retained.read_bytes()
         self.assertIn(b"stdout-\xff\n", retained_bytes)
         self.assertIn(b"stderr-\xfe\n", retained_bytes)
+
+    def test_bounded_probe_final_drain_timeout_retains_each_partial_stream_once(self) -> None:
+        initial = subprocess.TimeoutExpired(
+            ["probe"],
+            1,
+            output=b"initial stdout\n",
+            stderr=b"initial stderr\n",
+        )
+        final = subprocess.TimeoutExpired(
+            ["probe"],
+            5,
+            output=b"final stdout\n",
+            stderr=b"final stderr\n",
+        )
+        process = mock.Mock(pid=123)
+        process.communicate.side_effect = [initial, final]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with (
+                mock.patch.object(desktop_build, "ROOT_DIR", root),
+                mock.patch.object(desktop_build.subprocess, "Popen", return_value=process),
+                mock.patch.object(desktop_build, "attach_process_tree_tracker"),
+                mock.patch.object(
+                    desktop_build,
+                    "terminate_process_group",
+                    return_value="tree=gone source=test observed_pids=1",
+                ),
+                mock.patch.object(desktop_build, "PROCESS_CLEANUP_GRACE_SECONDS", 0.1),
+            ):
+                with self.assertRaises(subprocess.TimeoutExpired) as raised:
+                    desktop_build.run_bounded_capture(
+                        ["probe"], cwd=root, timeout_seconds=1,
+                    )
+            self.assertEqual(raised.exception.output.count("stdout"), 2)
+            self.assertEqual(raised.exception.stderr.count("stderr"), 2)
+            logs = list((root / "runtime" / "desktop-build-diagnostics").glob("grpcvpnserver-probe-*.log"))
+            self.assertEqual(len(logs), 1)
+            log_text = logs[0].read_text(encoding="utf-8")
+            self.assertIn("evidence_incomplete=1", log_text)
+            self.assertEqual(log_text.count("initial stdout"), 1)
+            self.assertEqual(log_text.count("final stdout"), 1)
+            self.assertEqual(log_text.count("initial stderr"), 1)
+            self.assertEqual(log_text.count("final stderr"), 1)
+
+    def test_bounded_probe_oserror_retains_all_partial_streams_once(self) -> None:
+        error = OSError("communicate pipe failed")
+        error.stdout = b"partial stdout\n"  # type: ignore[attr-defined]
+        error.output = b"partial stdout\n"  # type: ignore[attr-defined]
+        error.stderr = b"partial stderr\n"  # type: ignore[attr-defined]
+        process = mock.Mock(pid=123)
+        process.communicate.side_effect = [error, (b"drained stdout\n", b"drained stderr\n")]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with (
+                mock.patch.object(desktop_build, "ROOT_DIR", root),
+                mock.patch.object(desktop_build.subprocess, "Popen", return_value=process),
+                mock.patch.object(desktop_build, "attach_process_tree_tracker"),
+                mock.patch.object(
+                    desktop_build,
+                    "terminate_process_group",
+                    return_value="tree=gone source=test observed_pids=1",
+                ),
+            ):
+                with self.assertRaises(OSError) as raised:
+                    desktop_build.run_bounded_capture(["probe"], cwd=root, timeout_seconds=1)
+            self.assertEqual(raised.exception.stdout.count("stdout"), 2)  # type: ignore[attr-defined]
+            self.assertEqual(raised.exception.stderr.count("stderr"), 2)  # type: ignore[attr-defined]
+            logs = list((root / "runtime" / "desktop-build-diagnostics").glob("grpcvpnserver-probe-*.log"))
+            self.assertEqual(len(logs), 1)
+            log_text = logs[0].read_text(encoding="utf-8")
+            self.assertNotIn("evidence_incomplete=1", log_text)
+            self.assertEqual(log_text.count("partial stdout"), 1)
+            self.assertEqual(log_text.count("drained stdout"), 1)
+
+    def test_windows_taskkill_exception_retains_partial_streams(self) -> None:
+        error = subprocess.TimeoutExpired(
+            ["taskkill"],
+            0.1,
+            output=b"taskkill stdout\n",
+            stderr=b"taskkill stderr\n",
+        )
+        tracker = mock.Mock()
+        tracker.prove_gone.side_effect = [
+            desktop_build.ProcessTreeProofError("descendant survivors=[456]"),
+            "tree=gone source=test observed_pids=2",
+        ]
+        tracker.observed_pids.return_value = (123, 456)
+        process = mock.Mock(pid=123)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with (
+                mock.patch.object(desktop_build, "ROOT_DIR", root),
+                mock.patch.object(desktop_build.os, "name", "nt"),
+                mock.patch.object(desktop_build.signal, "CTRL_BREAK_EVENT", 1, create=True),
+                mock.patch.object(desktop_build, "process_tree_tracker", return_value=tracker),
+                mock.patch.object(desktop_build.subprocess, "run", side_effect=error),
+                mock.patch.object(desktop_build, "retain_process_diagnostics") as retain,
+            ):
+                proof = desktop_build.terminate_process_group(process, grace_seconds=0.1)
+            self.assertEqual(proof, "tree=gone source=test observed_pids=2")
+            self.assertEqual(retain.call_count, 2)
+            for call in retain.call_args_list:
+                self.assertIn(b"taskkill stdout\n", call.args)
+                self.assertIn(b"taskkill stderr\n", call.args)
+                self.assertIn("evidence_incomplete=1", call.args[3])
 
     def test_service_stop_delegates_to_process_group_cleanup(self) -> None:
         process = mock.Mock(poll=lambda: None)
