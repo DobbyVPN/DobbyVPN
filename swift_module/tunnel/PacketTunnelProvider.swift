@@ -23,7 +23,11 @@ private enum GomobileProviderSessionClient {
 /// The Go callback is deliberately content-free. The ordered event payload is
 /// retained by Go and is fetched through Observe; this signal only wakes any
 /// extension-local observer and cannot leak profile or configuration data.
-private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacks {
+// gomobile emits both an Objective-C protocol and a proxy class with the
+// same name. Swift imports the protocol as `DobbyvpnPlatformCallbacksProtocol`
+// to disambiguate it from the proxy class; conforming to the class name would
+// be interpreted as illegal multiple class inheritance on Simulator builds.
+private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksProtocol {
     private let acquireHandler: (_ sessionID: String?, _ generation: Int64) -> Int32
     private let releaseHandler: (_ sessionID: String?, _ generation: Int64) -> Bool
     private let stateHandler: (
