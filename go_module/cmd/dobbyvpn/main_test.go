@@ -14,8 +14,19 @@ import (
 
 type disconnectClientStub struct {
 	grpcproto.VpnClient
+	recoverResponse  *grpcproto.SessionRecoverActiveSessionResponse
 	stopResponse     *grpcproto.SessionStopResponse
 	snapshotResponse *grpcproto.SessionSnapshotResponse
+	destroyResponse  *grpcproto.SessionDestroySessionResponse
+	destroyCalls     *int
+}
+
+func (stub disconnectClientStub) RecoverActiveSession(
+	context.Context,
+	*grpcproto.Empty,
+	...grpc.CallOption,
+) (*grpcproto.SessionRecoverActiveSessionResponse, error) {
+	return stub.recoverResponse, nil
 }
 
 func (stub disconnectClientStub) Stop(
@@ -32,6 +43,17 @@ func (stub disconnectClientStub) Snapshot(
 	...grpc.CallOption,
 ) (*grpcproto.SessionSnapshotResponse, error) {
 	return stub.snapshotResponse, nil
+}
+
+func (stub disconnectClientStub) DestroySession(
+	context.Context,
+	*grpcproto.SessionDestroySessionRequest,
+	...grpc.CallOption,
+) (*grpcproto.SessionDestroySessionResponse, error) {
+	if stub.destroyCalls != nil {
+		(*stub.destroyCalls)++
+	}
+	return stub.destroyResponse, nil
 }
 
 func TestReadSourceAcceptsInlineURLAndFileWithoutReadingURL(t *testing.T) {
@@ -247,6 +269,13 @@ func TestStopAndWaitRejectsEmptyServiceResponses(t *testing.T) {
 				stopResponse: &grpcproto.SessionStopResponse{Generation: 1},
 			},
 		},
+		{
+			name: "snapshot payload",
+			client: disconnectClientStub{
+				stopResponse:     &grpcproto.SessionStopResponse{Generation: 1},
+				snapshotResponse: &grpcproto.SessionSnapshotResponse{},
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -256,6 +285,67 @@ func TestStopAndWaitRejectsEmptyServiceResponses(t *testing.T) {
 			}
 			if failure != nil {
 				t.Fatalf("empty service response returned protocol failure: %v", failure)
+			}
+		})
+	}
+}
+
+func TestDisconnectRejectsMalformedSnapshotsWithoutDestroyingSession(t *testing.T) {
+	for _, snapshotResponse := range []*grpcproto.SessionSnapshotResponse{nil, {}} {
+		destroyCalls := 0
+		client := disconnectClientStub{
+			recoverResponse:  &grpcproto.SessionRecoverActiveSessionResponse{SessionId: "session"},
+			snapshotResponse: snapshotResponse,
+			destroyResponse:  &grpcproto.SessionDestroySessionResponse{Destroyed: true},
+			destroyCalls:     &destroyCalls,
+		}
+		if got := disconnect(context.Background(), client); got != exitRuntime {
+			t.Fatalf("disconnect malformed snapshot exit=%d, want %d", got, exitRuntime)
+		}
+		if destroyCalls != 0 {
+			t.Fatalf("disconnect destroyed session after malformed snapshot %d times", destroyCalls)
+		}
+	}
+}
+
+func TestDisconnectRequiresConfirmedSessionDestruction(t *testing.T) {
+	conflict := &grpcproto.SessionFailure{
+		Code: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CONFLICT,
+	}
+	tests := []struct {
+		name     string
+		response *grpcproto.SessionDestroySessionResponse
+		wantExit int
+	}{
+		{name: "empty response", wantExit: exitRuntime},
+		{name: "not destroyed", response: &grpcproto.SessionDestroySessionResponse{}, wantExit: exitRuntime},
+		{
+			name:     "protocol failure",
+			response: &grpcproto.SessionDestroySessionResponse{Failure: conflict},
+			wantExit: exitConflict,
+		},
+		{
+			name:     "confirmed",
+			response: &grpcproto.SessionDestroySessionResponse{Destroyed: true},
+			wantExit: exitOK,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			destroyCalls := 0
+			client := disconnectClientStub{
+				recoverResponse: &grpcproto.SessionRecoverActiveSessionResponse{SessionId: "session"},
+				snapshotResponse: &grpcproto.SessionSnapshotResponse{
+					Snapshot: &grpcproto.SessionSnapshot{CleanupComplete: true},
+				},
+				destroyResponse: test.response,
+				destroyCalls:    &destroyCalls,
+			}
+			if got := disconnect(context.Background(), client); got != test.wantExit {
+				t.Fatalf("disconnect destroy response exit=%d, want %d", got, test.wantExit)
+			}
+			if destroyCalls != 1 {
+				t.Fatalf("disconnect destroy calls=%d, want 1", destroyCalls)
 			}
 		})
 	}

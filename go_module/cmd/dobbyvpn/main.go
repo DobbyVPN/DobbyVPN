@@ -317,8 +317,9 @@ func disconnect(ctx context.Context, client grpcproto.VpnClient) int {
 	if stopErr != nil || stopFailure != nil {
 		return reportFailure(stopErr, stopFailure)
 	}
-	if destroyErr := destroySession(ctx, client, id); destroyErr != nil {
-		return reportFailure(destroyErr, nil)
+	destroyFailure, destroyErr := destroySession(ctx, client, id)
+	if destroyErr != nil || destroyFailure != nil {
+		return reportFailure(destroyErr, destroyFailure)
 	}
 	fmt.Println("DISCONNECTED")
 	return exitOK
@@ -339,7 +340,10 @@ func stopAndWaitForDisconnect(
 	snapshot *grpcproto.SessionSnapshotResponse,
 ) (bool, *grpcproto.SessionFailure, error) {
 	current := snapshot.GetSnapshot()
-	if current == nil || current.GetGeneration() == 0 || current.GetCleanupComplete() {
+	if current == nil {
+		return false, nil, fmt.Errorf("service returned a snapshot response without a snapshot")
+	}
+	if current.GetGeneration() == 0 || current.GetCleanupComplete() {
 		return false, nil, nil
 	}
 	generation := current.GetGeneration()
@@ -366,7 +370,11 @@ func stopAndWaitForDisconnect(
 		if current.GetFailure() != nil {
 			return false, failureOf(current), getErr
 		}
-		if current.GetSnapshot().GetCleanupComplete() {
+		currentSnapshot := current.GetSnapshot()
+		if currentSnapshot == nil {
+			return false, nil, fmt.Errorf("service returned a snapshot response without a snapshot")
+		}
+		if currentSnapshot.GetCleanupComplete() {
 			return false, nil, nil
 		}
 		select {
@@ -377,9 +385,28 @@ func stopAndWaitForDisconnect(
 	}
 }
 
-func destroySession(ctx context.Context, client grpcproto.VpnClient, sessionID string) error {
-	_, err := client.DestroySession(ctx, &grpcproto.SessionDestroySessionRequest{SessionId: sessionID})
-	return err
+func destroySession(
+	ctx context.Context,
+	client grpcproto.VpnClient,
+	sessionID string,
+) (*grpcproto.SessionFailure, error) {
+	destroyed, err := client.DestroySession(
+		ctx,
+		&grpcproto.SessionDestroySessionRequest{SessionId: sessionID},
+	)
+	if err != nil {
+		return nil, err
+	}
+	if destroyed == nil {
+		return nil, fmt.Errorf("service returned an empty destroy response")
+	}
+	if destroyed.GetFailure() != nil {
+		return failureOf(destroyed), nil
+	}
+	if !destroyed.GetDestroyed() {
+		return nil, fmt.Errorf("service did not confirm session destruction")
+	}
+	return nil, nil
 }
 
 func status(ctx context.Context, client grpcproto.VpnClient, jsonOutput bool) int {
