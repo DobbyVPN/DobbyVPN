@@ -2,9 +2,6 @@
 <SmellBaseline>
   <ManuallySuppressedIssues></ManuallySuppressedIssues>
   <CurrentIssues>
-    <ID>InjectDispatcher:DnsPreflightResolverImpl.kt$DnsPreflightResolverImpl$IO</ID>
-    <ID>MaxLineLength:DobbyVpnService.kt$DobbyVpnService$logger.log("Outline URL built (prefix=${prefix.isNotEmpty()}, ws=$websocketEnabled, tcpPath=${tcpPath.isNotEmpty()}, udpPath=${udpPath.isNotEmpty()})")</ID>
-    <ID>MaxLineLength:DobbyVpnService.kt$DobbyVpnService$logger.log("Outline websocket: $websocketEnabled, tcpPath: ${tcpPath.ifEmpty { "(none)" }}, udpPath: ${udpPath.ifEmpty { "(none)" }}")</ID>
     <ID>NewLineAtEndOfFile:Color.kt$com.dobby.ui.theme.Color.kt</ID>
     <ID>NewLineAtEndOfFile:IsPermissionCheckNeeded.jvm.kt$com.dobby.feature.main.presentation.IsPermissionCheckNeeded.jvm.kt</ID>
     <ID>NewLineAtEndOfFile:Theme.kt$com.dobby.ui.theme.Theme.kt</ID>
@@ -14,7 +11,5 @@
     <ID>UnreachableCode:CopyLogsInteractorImpl.kt$CopyLogsInteractorImpl$bestCompressionGzip(File(selectedDirectory, selectedFile)) .bufferedWriter(Charsets.UTF_8) .use { writer -&gt; writer.write(joinedLogs) }</ID>
     <ID>UnreachableCode:CopyLogsInteractorImpl.kt$CopyLogsInteractorImpl$val selectedDirectory = dialog.directory ?: return</ID>
     <ID>UnreachableCode:CopyLogsInteractorImpl.kt$CopyLogsInteractorImpl$val selectedFile = dialog.file ?: return</ID>
-    <ID>UnusedPrivateProperty:DobbyVpnService.kt$DobbyVpnService$private val logsRepository: LogsRepository</ID>
-    <ID>WildcardImport:nativeModule.kt$import com.dobby.feature.vpn_service.grpc.*</ID>
   </CurrentIssues>
 </SmellBaseline>

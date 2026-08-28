@@ -27,8 +27,7 @@ kmp_module/
 ├── app/ --- shared Compose UI, SessionV2 presentation, and thin shells
 ├── grpcprotos/ --- canonical SessionV2/Diagnostics schema
 ├── grpcstub/ --- protocol-neutral SessionV2 transport mapping
-├── iosApp/
-└── outline/ --- retained vendor integration support
+└── iosApp/
 ```
 
 Do not add a protocol-specific UI toggle, KMP repository, Swift lifecycle
