@@ -1,9 +1,7 @@
 [versions]
 agp = "8.13.2"
-compiler = "1.5.15"
 kotlin = "2.2.0"
 coreKtx = "1.15.0"
-kotlinScriptRuntime = "2.0.20"
 kotlinxSerializationJson = "1.6.3"
 lifecycleRuntimeKtx = "2.8.7"
 activityCompose = "1.9.3"
@@ -21,15 +19,11 @@ uiautomator = "2.3.0"
 conveyor = "1.12"
 protobuf = "0.9.5"
 skiko = "0.8.15"
-jnaVersion = "5.13.0"
-gsonVersion = "2.8.9"
 okio = "3.6.0"
-tomlkt = "0.5.0"
 datetime="4.0.10"
 detekt = "1.23.7"
 
 [libraries]
-androidx-compiler = { module = "androidx.compose.compiler:compiler", version.ref = "compiler" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
@@ -39,7 +33,6 @@ androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
-kotlin-script-runtime = { module = "org.jetbrains.kotlin:kotlin-script-runtime", version.ref = "kotlinScriptRuntime" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 lifecycle-viewmodel-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycleViewmodelCompose" }
 lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel", version.ref = "lifecycleViewModel"}
@@ -58,9 +51,6 @@ skiko-mac-amd64 = { group = "org.jetbrains.skiko", name = "skiko-awt-runtime-mac
 skiko-mac-arm64 = { group = "org.jetbrains.skiko", name = "skiko-awt-runtime-macos-arm64", version.ref = "skiko" }
 skiko-linux = { group = "org.jetbrains.skiko", name = "skiko-awt-runtime-linux-x64", version.ref = "skiko" }
 kotlinx-coroutines-swing = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-swing" }
-jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jnaVersion"}
-gson = { group = "com.google.code.gson", name = "gson", version.ref = "gsonVersion"}
-tomlkt = { module = "net.peanuuutz.tomlkt:tomlkt", version.ref = "tomlkt" }
 datetime = { module = "com.soywiz.korlibs.klock:klock", version.ref = "datetime" }
 
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version = "1.10.2" }

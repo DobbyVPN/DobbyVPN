@@ -127,8 +127,6 @@ kotlin {
             implementation(libs.androidx.ui.graphics)
             implementation(libs.androidx.ui.tooling.preview)
             implementation(libs.androidx.material3)
-            implementation(libs.androidx.compiler)
-            implementation(libs.kotlin.script.runtime)
             implementation(libs.koin.android)
             implementation(libs.koin.androidx.compose)
 
@@ -153,13 +151,10 @@ kotlin {
             implementation(libs.koin.compose)
             implementation(libs.lifecycle.viewmodel)
 
-            implementation(libs.tomlkt)
-
             implementation(libs.datetime)
 
             implementation("com.russhwolf:multiplatform-settings-no-arg:1.3.0")
 
-            implementation(compose.components.resources)
         }
 
         commonTest.dependencies {
@@ -177,8 +172,6 @@ kotlin {
             implementation(libs.skiko.linux)
 
             implementation(libs.kotlinx.coroutines.swing)
-            implementation(libs.jna)
-            implementation(libs.gson)
         }
 
         androidUnitTest.dependencies {
