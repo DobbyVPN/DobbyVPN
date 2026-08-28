@@ -14,11 +14,11 @@ final class IOSLifecycleCoreTests: XCTestCase {
         XCTAssertGreaterThan(IOSProviderTiming.appRetryDelay, 0)
     }
 
-    func testRetryBudgetBoundsAllAttemptsByOneMonotonicDeadline() {
+    func testRetryBudgetBoundsAllAttemptsByOneMonotonicDeadline() throws {
         var budget = IOSProviderRetryBudget(start: 100, budget: 30, maximumRetries: 6, retryDelay: 0.5)
-        XCTAssertEqual(budget.nextAttemptTimeout(now: 100), 30, accuracy: 0.0001)
-        XCTAssertEqual(budget.nextRetryDelay(now: 125), 0.5, accuracy: 0.0001)
-        XCTAssertEqual(budget.nextAttemptTimeout(now: 125.5), 4.5, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(budget.nextAttemptTimeout(now: 100)), 30, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(budget.nextRetryDelay(now: 125)), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(budget.nextAttemptTimeout(now: 125.5)), 4.5, accuracy: 0.0001)
         XCTAssertNil(budget.nextAttemptTimeout(now: 130.1))
     }
 

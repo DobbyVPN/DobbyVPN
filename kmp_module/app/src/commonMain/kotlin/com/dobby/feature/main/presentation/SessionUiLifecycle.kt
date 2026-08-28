@@ -37,10 +37,9 @@ internal class SessionUiLifecycle {
 
     fun render(event: SessionEvent): VpnConnectionState? {
         if (event.sessionId.isNotBlank()) {
-            when (val knownSession = activeSessionId) {
-                null -> activeSessionId = event.sessionId
-                event.sessionId -> Unit
-                else -> {
+            when {
+                activeSessionId == null -> activeSessionId = event.sessionId
+                activeSessionId != event.sessionId -> {
                     // Go starts its ordered ledger at sequence 1 for each
                     // session identity. Scope the UI cursor to that identity;
                     // never compare a new session's sequence with an old
@@ -52,6 +51,7 @@ internal class SessionUiLifecycle {
         }
         if (event.sequence <= lastSequence) return null
         lastSequence = event.sequence
+        var renderedState: VpnConnectionState? = null
         if (event.generation != activeGeneration) {
             // AUTO_SELECT can fail over inside Go. Only adopt an actual next-generation
             // start after the prior generation's ordered terminal event cleared it; never
@@ -63,20 +63,24 @@ internal class SessionUiLifecycle {
             ) {
                 activeGeneration = event.generation
                 stopRequested = false
-                return VpnConnectionState.CONNECTING
+                renderedState = VpnConnectionState.CONNECTING
             }
-            return null
+        } else if (
+            !stopRequested ||
+            event.state in setOf(
+                SessionState.STOPPING,
+                SessionState.IDLE,
+                SessionState.FAILED,
+                SessionState.DESTROYED,
+            )
+        ) {
+            renderedState = event.state.toConnectionState()
+            if (event.state in setOf(SessionState.IDLE, SessionState.CONFIGURED, SessionState.FAILED, SessionState.DESTROYED)) {
+                activeGeneration = null
+                stopRequested = false
+            }
         }
-        if (stopRequested && event.state !in setOf(SessionState.STOPPING, SessionState.IDLE, SessionState.FAILED, SessionState.DESTROYED)) {
-            return null
-        }
-
-        val state = event.state.toConnectionState()
-        if (event.state in setOf(SessionState.IDLE, SessionState.CONFIGURED, SessionState.FAILED, SessionState.DESTROYED)) {
-            activeGeneration = null
-            stopRequested = false
-        }
-        return state
+        return renderedState
     }
 
     fun failStart() {

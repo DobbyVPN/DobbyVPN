@@ -286,7 +286,9 @@ class MainViewModel(
                 }
                 if (!gapDetected && result.value.nextSequence >= expectedSequence) gapDetected = true
                 if (!gapDetected) {
-                    contiguous.forEach(::renderEvent)
+                    for (event in contiguous) {
+                        renderEvent(event)
+                    }
                 }
                 if (result.value.events.isEmpty() || gapDetected) {
                     // A gap is not permission to advance lastSequence. Reconcile

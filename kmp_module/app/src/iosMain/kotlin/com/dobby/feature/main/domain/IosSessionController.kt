@@ -211,7 +211,7 @@ internal class IosSessionController(
         onWorker {
             mutex.withLock {
                 when (val session = recoverOnly()) {
-                    is SessionControllerResult.Failure -> preserveFailure(session) to false
+                    is SessionControllerResult.Failure -> preserveFailure<SessionObservation>(session) to false
                     is SessionControllerResult.Success -> {
                         val reset = sessionIdentityChanged
                         val cursor = if (reset) 0uL else afterSequence
