@@ -37,7 +37,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
             CFNotificationCenterGetDarwinNotifyCenter(),
             observerPointer,
             dobbyDarwinEventCallback,
-            darwinEventName,
+            darwinEventName.rawValue,
             nil,
             .deliverImmediately
         )
@@ -48,7 +48,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
             CFNotificationCenterRemoveObserver(
                 CFNotificationCenterGetDarwinNotifyCenter(),
                 darwinObserverPointer,
-                darwinEventName,
+                darwinEventName.rawValue,
                 nil
             )
         }

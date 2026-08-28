@@ -24,11 +24,19 @@ final class IOSLifecycleCoreTests: XCTestCase {
 
     func testLateSettingsCompletionCannotCommitAfterPoisoning() {
         let fence = IOSSettingsOperationFence()
+        XCTAssertFalse(fence.isPoisoned)
         let oldEpoch = try! XCTUnwrap(fence.begin())
         fence.poison()
 
+        XCTAssertTrue(fence.isPoisoned)
         XCTAssertFalse(fence.canCommit(oldEpoch))
         XCTAssertNil(fence.begin())
+    }
+
+    func testMailboxSuccessValidationRejectsMalformedAndTypedFailures() {
+        XCTAssertTrue(IOSMailboxLifecycle.isSuccessfulGoResponse(Data(#"{"ok":true,"result":{"digest":"abc"}}"#.utf8)))
+        XCTAssertFalse(IOSMailboxLifecycle.isSuccessfulGoResponse(Data(#"{"ok":false,"error":{"code":"FAILED"}}"#.utf8)))
+        XCTAssertFalse(IOSMailboxLifecycle.isSuccessfulGoResponse(Data(#"not-json"#.utf8)))
     }
 
     func testAuthenticatedCanonicalRoundTripContainsNoConfigurationBytes() throws {
@@ -94,6 +102,16 @@ final class IOSLifecycleCoreTests: XCTestCase {
             sessionID: "session",
             generation: 1
         ))
+        XCTAssertThrowsError(try IOSProviderCommand(
+            operation: .snapshot,
+            requestID: "snapshot",
+            sessionID: ""
+        ))
+        XCTAssertThrowsError(try IOSProviderCommand(
+            operation: .stop,
+            requestID: "stop",
+            sessionID: "session"
+        ))
     }
 
     func testOversizedMessageAndInvalidIdentifiersAreRejected() throws {
@@ -103,6 +121,15 @@ final class IOSLifecycleCoreTests: XCTestCase {
         ))
         let command = try IOSProviderCommand(operation: .create, requestID: "create")
         XCTAssertThrowsError(try command.encoded(using: Data(repeating: 0x41, count: 0)))
+
+        let malformedEnvelope = Data(#"{"mac":"0000000000000000000000000000000000000000000000000000000000000000","operation":"create","request_id":"","version":1}"#.utf8)
+        XCTAssertThrowsError(try IOSProviderCommand.decode(malformedEnvelope, using: secret))
+
+        let malformedGeneration = Data(#"{"generation":"not-a-number","mac":"0000000000000000000000000000000000000000000000000000000000000000","operation":"stop","request_id":"stop","session_id":"session","version":1}"#.utf8)
+        XCTAssertThrowsError(try IOSProviderCommand.decode(malformedGeneration, using: secret))
+
+        let malformedIndex = Data(#"{"index":"not-a-number","mac":"0000000000000000000000000000000000000000000000000000000000000000","mode":"AUTO_SELECT","operation":"start","request_id":"start","session_id":"session","version":1}"#.utf8)
+        XCTAssertThrowsError(try IOSProviderCommand.decode(malformedIndex, using: secret))
     }
 
     func testRawConfigurationCeilingIsOneMiBAndDistinctFromMessageCeiling() {
@@ -164,5 +191,7 @@ final class IOSLifecycleCoreTests: XCTestCase {
         XCTAssertThrowsError(try response.encoded(using: secret)) { error in
             XCTAssertEqual(error as? IOSProviderMessageError, .tooLarge)
         }
+        XCTAssertThrowsError(try IOSProviderResponse(requestID: "", payload: Data()))
+        XCTAssertThrowsError(try IOSProviderResponse.decode(Data(#"{}"#.utf8), expectedRequestID: "", using: secret))
     }
 }
