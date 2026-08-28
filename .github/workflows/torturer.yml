@@ -12,7 +12,7 @@ jobs:
     name: Public cross-platform contract
     permissions:
       contents: read
-    uses: DobbyVPN/Torturer/.github/workflows/verify.yml@d169e620c55474122ec1b362e297507efa8d68e5
+    uses: DobbyVPN/Torturer/.github/workflows/verify.yml@1271de6630d2f71784babb7a4f5b8cb2bc5d4587
     with:
       source_repository: ${{ github.event.pull_request.head.repo.full_name }}
       commit_sha: ${{ github.event.pull_request.head.sha }}
