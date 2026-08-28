@@ -4,11 +4,95 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 
 
 class WindowsProcessCensusError(RuntimeError):
     """Raised when the Windows process census cannot be proven complete."""
+
+
+def _toolhelp_process_census(root_pid: int) -> tuple[set[int], set[int]]:
+    """Read the process table through Win32 Toolhelp, without WMI/PowerShell.
+
+    The hosted Windows runner's WMI provider can take longer than the bounded
+    cleanup window even for a small process table.  Toolhelp is the native,
+    read-only API intended for this snapshot and avoids starting a second
+    process whose startup/output pipes would themselves need supervision.
+    """
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class ProcessEntry(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_void_p),
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", ctypes.c_long),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", wintypes.WCHAR * 260),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        snapshot_handle = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+        invalid_handle = ctypes.c_void_p(-1).value
+        if snapshot_handle in (None, invalid_handle):
+            error = ctypes.get_last_error()
+            raise WindowsProcessCensusError(
+                f"native Toolhelp process snapshot failed winerror={error} evidence_incomplete=1"
+            )
+
+        entry = ProcessEntry()
+        entry.dwSize = ctypes.sizeof(ProcessEntry)
+        active_pids: set[int] = set()
+        children_by_parent: dict[int, set[int]] = {}
+        try:
+            first = kernel32.Process32FirstW(snapshot_handle, ctypes.byref(entry))
+            if not first:
+                error = ctypes.get_last_error()
+                raise WindowsProcessCensusError(
+                    f"native Toolhelp process enumeration failed winerror={error} evidence_incomplete=1"
+                )
+            while first:
+                pid = int(entry.th32ProcessID)
+                parent_pid = int(entry.th32ParentProcessID)
+                active_pids.add(pid)
+                children_by_parent.setdefault(parent_pid, set()).add(pid)
+                first = kernel32.Process32NextW(snapshot_handle, ctypes.byref(entry))
+                if not first and ctypes.get_last_error() != 18:  # ERROR_NO_MORE_FILES
+                    error = ctypes.get_last_error()
+                    raise WindowsProcessCensusError(
+                        f"native Toolhelp process enumeration failed winerror={error} evidence_incomplete=1"
+                    )
+        finally:
+            kernel32.CloseHandle(snapshot_handle)
+
+        descendants: set[int] = set()
+        pending = list(children_by_parent.get(root_pid, set()))
+        while pending:
+            pid = pending.pop()
+            if pid in descendants:
+                continue
+            descendants.add(pid)
+            pending.extend(children_by_parent.get(pid, set()))
+        if not active_pids:
+            raise WindowsProcessCensusError(
+                "native Toolhelp process snapshot returned an empty process census evidence_incomplete=1"
+            )
+        return descendants, active_pids
+    except WindowsProcessCensusError:
+        raise
+    except (AttributeError, OSError, TypeError, ValueError) as error:
+        raise WindowsProcessCensusError(
+            f"native Toolhelp process snapshot unavailable: {type(error).__name__} evidence_incomplete=1"
+        ) from error
 
 
 def _output_text(output: str | bytes | None) -> str:
@@ -70,6 +154,8 @@ def windows_process_census(
 
     if isinstance(root_pid, bool) or not isinstance(root_pid, int) or root_pid <= 0:
         raise WindowsProcessCensusError(f"invalid root PID: {root_pid}")
+    if os.name == "nt":
+        return _toolhelp_process_census(root_pid)
     try:
         result = subprocess.run(
             [
