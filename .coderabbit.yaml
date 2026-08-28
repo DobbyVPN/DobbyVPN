@@ -39,22 +39,6 @@ reviews:
         Swift code for the iOS app. Focus on memory management,
         proper KMP framework interop, and PacketTunnelProvider correctness.
 
-    - path: "file_updates/**"
-      instructions: >
-        This directory contains scheduled data-update scripts (e.g.
-        airports database refresh). These intentionally fetch fresh
-        external data, so reproducibility rules for pinned downloads
-        and checksums do NOT apply here. Review only for correctness,
-        error handling, and data validation.
-
-    - path: ".github/workflows/update_airports*"
-      instructions: >
-        This is a scheduled workflow that fetches updated airport data
-        and opens a PR. It is intentionally non-reproducible (downloads
-        fresh CSV). Do NOT flag wget/curl without checksums or unpinned
-        resources here. Review only for error handling and that the
-        workflow correctly opens a PR for human review before merge.
-
     - path: ".github/workflows/**"
       instructions: >
         CI workflows MUST preserve reproducible build properties.
@@ -200,10 +184,6 @@ reviews:
         2) File writes should use sorted keys and deterministic formatting.
         3) If the script processes external data (CSV, JSON), warn that
            the input data should be pinned or committed to the repo.
-
-        Exception: scripts under file_updates/ are data-refresh utilities
-        that intentionally fetch fresh external data. Reproducibility
-        rules for pinned downloads do not apply to them.
 
   tools:
     golangci-lint:

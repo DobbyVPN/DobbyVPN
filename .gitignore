@@ -57,7 +57,7 @@ go.work.sum
 /grpcvpnserver.out
 /grpcvpnserver.err
 
-# Python virtual environments (from scripts like updateairports.sh)
+# Python virtual environments
 **/.venv/
 **/venv/
 **/__pycache__/
