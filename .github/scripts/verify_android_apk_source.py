@@ -272,7 +272,7 @@ def _windows_process_snapshot(root_pid: int) -> tuple[set[int], set[int]]:
 def _process_tree_snapshot(root_pid: int) -> tuple[set[int], str, set[int] | None]:
     if os.name == "nt":
         descendants, active_pids = _windows_process_snapshot(root_pid)
-        return descendants, "powershell-cim", active_pids
+        return descendants, "windows-toolhelp", active_pids
     if Path("/proc").is_dir():
         return _proc_descendants(root_pid), "procfs", None
     return _ps_descendants(root_pid), "ps", None
