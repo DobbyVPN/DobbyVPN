@@ -1763,7 +1763,7 @@ def run_desktop_gradle(skip_deps: bool) -> None:
     install_android_sdk(skip_deps)
 
     props = desktop_version_properties()
-    run([gradle_command(), "--build-cache", "--parallel", ":app:jvmJar", *props], cwd=KMP_DIR)
+    run([gradle_command(), "--no-daemon", "--build-cache", "--parallel", ":app:jvmJar", *props], cwd=KMP_DIR)
     run([gradle_command(), "--no-daemon", "dependencies", *props], cwd=KMP_DIR)
     run([gradle_command(), "--no-daemon", "printConveyorConfig", *props], cwd=KMP_DIR)
 

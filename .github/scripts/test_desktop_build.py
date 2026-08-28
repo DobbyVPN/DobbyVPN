@@ -418,6 +418,37 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["cwd"], str(desktop_build.KMP_DIR))
         self.assertIs(run.call_args.kwargs["stderr"], diagnostics)
 
+    def test_desktop_gradle_invocations_are_all_non_daemon(self) -> None:
+        props = ["-PversionName=1.5.0"]
+        with (
+            mock.patch.object(desktop_build, "install_jdk"),
+            mock.patch.object(desktop_build, "install_android_sdk"),
+            mock.patch.object(desktop_build, "desktop_version_properties", return_value=props),
+            mock.patch.object(desktop_build, "gradle_command", return_value="gradlew"),
+            mock.patch.object(desktop_build, "run") as run,
+        ):
+            desktop_build.run_desktop_gradle(skip_deps=True)
+
+        self.assertEqual(
+            run.call_args_list,
+            [
+                mock.call(
+                    ["gradlew", "--no-daemon", "--build-cache", "--parallel", ":app:jvmJar", *props],
+                    cwd=desktop_build.KMP_DIR,
+                ),
+                mock.call(
+                    ["gradlew", "--no-daemon", "dependencies", *props],
+                    cwd=desktop_build.KMP_DIR,
+                ),
+                mock.call(
+                    ["gradlew", "--no-daemon", "printConveyorConfig", *props],
+                    cwd=desktop_build.KMP_DIR,
+                ),
+            ],
+        )
+        for invocation in run.call_args_list:
+            self.assertIn("--no-daemon", invocation.args[0])
+
     def test_conveyor_config_failure_never_emits_partial_hocon(self) -> None:
         output = io.StringIO()
         diagnostics = io.StringIO()
