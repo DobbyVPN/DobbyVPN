@@ -413,6 +413,47 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertIn('pkgutil --expand-full "$package" "$expanded"', installers)
         self.assertIn('if actual != expected:', installers)
 
+    def test_gradle_command_keeps_standalone_wrapper_default(self) -> None:
+        with mock.patch.object(desktop_build, "host_platform", return_value="macos"):
+            self.assertEqual(desktop_build.gradle_command(), "./gradlew")
+
+    def test_desktop_gradle_accepts_a_fixed_absolute_executable_as_one_argv_item(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixed = Path(temporary) / "Gradle 8.13" / "bin" / "gradle"
+            fixed.parent.mkdir(parents=True)
+            fixed.write_text("#!/bin/sh\n", encoding="utf-8")
+            fixed.chmod(0o755)
+            with (
+                mock.patch.object(desktop_build, "install_jdk"),
+                mock.patch.object(desktop_build, "install_android_sdk"),
+                mock.patch.object(
+                    desktop_build,
+                    "desktop_version_properties",
+                    return_value=["-PversionName=1.4.7"],
+                ),
+                mock.patch.object(desktop_build, "run") as run,
+            ):
+                desktop_build.run_desktop_gradle(True, fixed)
+
+        self.assertEqual(len(run.call_args_list), 3)
+        for call in run.call_args_list:
+            self.assertEqual(call.args[0][0], str(fixed))
+            self.assertIs(call.kwargs["cwd"], desktop_build.KMP_DIR)
+
+    def test_fixed_gradle_executable_rejects_relative_and_symlink_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixed = root / "gradle"
+            fixed.write_text("#!/bin/sh\n", encoding="utf-8")
+            fixed.chmod(0o755)
+            link = root / "gradle-link"
+            link.symlink_to(fixed)
+
+            with self.assertRaisesRegex(SystemExit, "absolute path"):
+                desktop_build.gradle_command("gradle")
+            with self.assertRaisesRegex(SystemExit, "non-symlink"):
+                desktop_build.gradle_command(link)
+
     def test_conveyor_config_uses_host_gradle_wrapper_and_emits_only_hocon(self) -> None:
         completed = mock.Mock(returncode=0, stdout="app.display-name = DobbyVPN\n")
         output = io.StringIO()
