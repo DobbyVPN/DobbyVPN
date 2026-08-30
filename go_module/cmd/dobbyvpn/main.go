@@ -283,9 +283,13 @@ func checkConfig(ctx context.Context, client grpcproto.VpnClient, source string)
 		return reportFailure(err, failureOf(created))
 	}
 	id := created.GetSessionId()
-	defer func() {
-		_, _ = client.DestroySession(context.Background(), &grpcproto.SessionDestroySessionRequest{SessionId: id})
-	}()
+	// Configuration is a read-only session operation, but the temporary
+	// session still has to be destroyed when the command returns or its
+	// request deadline expires.  Never let that deferred cleanup inherit an
+	// unbounded context: an unresponsive service would otherwise keep
+	// ``dobby-cli check-config`` alive after the 30-second command deadline and
+	// consume the hosted lane's hard deadline.
+	defer cleanupSession(client, id, 0)
 	result, err := client.Configure(ctx, &grpcproto.SessionConfigureRequest{SessionId: id, CommandId: commandID("check"), RawConfig: raw})
 	if err != nil || result == nil || result.GetFailure() != nil {
 		return reportFailure(err, failureOf(result))
