@@ -1,7 +1,10 @@
 package com.dobby.feature.main.domain
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+
 /**
- * Platform boundary for the sessionapi/v1 lifecycle.
+ * Platform boundary for the sessionapi/v2 lifecycle.
  *
  * Configuration is deliberately opaque: callers pass the bytes they acquired and this
  * controller owns the platform session and command identifiers used by the transport.
@@ -12,6 +15,8 @@ interface SessionController {
     suspend fun stop(generation: ULong): SessionControllerResult<ULong>
     suspend fun snapshot(): SessionControllerResult<SessionSnapshot>
     suspend fun observe(afterSequence: ULong): SessionControllerResult<SessionObservation>
+    /** Ordered push events. Mobile shells may use native callbacks instead. */
+    fun watch(afterSequence: ULong): Flow<SessionEvent> = emptyFlow()
     suspend fun destroy(): SessionControllerResult<Unit>
 }
 
@@ -84,6 +89,7 @@ data class SessionEvent(
     val sequence: ULong,
     val state: SessionState,
     val failureCode: SessionFailureCode? = null,
+    val sessionId: String = "",
 )
 
 data class SessionSnapshot(
@@ -92,6 +98,7 @@ data class SessionSnapshot(
     val configured: Boolean,
     val cleanupComplete: Boolean,
     val lastFailureCode: SessionFailureCode? = null,
+    val sessionId: String = "",
 )
 
 data class SessionObservation(val events: List<SessionEvent>, val nextSequence: ULong)

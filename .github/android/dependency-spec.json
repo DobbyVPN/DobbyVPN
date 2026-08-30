@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "kind": "dobbyvpn.android.dependency-spec",
+  "repositories": [
+    {
+      "id": "google",
+      "url": "https://dl.google.com/dl/android/maven2/"
+    },
+    {
+      "id": "mavenCentral",
+      "url": "https://repo.maven.apache.org/maven2/"
+    },
+    {
+      "id": "gradlePluginPortal",
+      "url": "https://plugins.gradle.org/m2/"
+    }
+  ],
+  "gradle": {
+    "distribution_url": "https://services.gradle.org/distributions/gradle-8.13-bin.zip",
+    "distribution_sha256": "20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78"
+  },
+  "java": {
+    "major": 17
+  },
+  "android": {
+    "build_tools": "36.0.0",
+    "ndk": "27.3.13750724"
+  },
+  "go": {
+    "version": "1.25.1",
+    "source_commit": "56ebf80e57db9f61981fc0636fc6419dc6f68eda"
+  },
+  "go_mobile": {
+    "module": "golang.org/x/mobile",
+    "version": "v0.0.0-20260520154334-0e4426e1883d"
+  }
+}

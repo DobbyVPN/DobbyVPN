@@ -9,6 +9,9 @@ import interop.session.SessionSnapshot as GrpcSnapshot
 import interop.session.SessionStartTarget as GrpcStartTarget
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.map
 import java.util.UUID
 
 /** JVM transport adapter. Session and command IDs never escape this platform boundary. */
@@ -42,7 +45,7 @@ internal class GrpcSessionController(
 
     override suspend fun snapshot(): SessionControllerResult<SessionSnapshot> =
         sessionMutex.withLock {
-            val id = existingSessionId()
+            val id = existingSessionId() ?: recoverSession()
             if (id == null) {
                 SessionControllerResult.Success(SessionSnapshot(0uL, SessionState.IDLE, configured = false, cleanupComplete = true))
             } else {
@@ -56,7 +59,7 @@ internal class GrpcSessionController(
 
     override suspend fun observe(afterSequence: ULong): SessionControllerResult<SessionObservation> =
         sessionMutex.withLock {
-            val id = existingSessionId()
+            val id = existingSessionId() ?: recoverSession()
                 ?: return@withLock SessionControllerResult.Success(SessionObservation(emptyList(), afterSequence))
             val result = sessionLibrary.observe(id, afterSequence).toController { it.toDomain() }
             if (result.isMissingSession()) {
@@ -65,8 +68,13 @@ internal class GrpcSessionController(
             } else result
         }
 
+    override fun watch(afterSequence: ULong): Flow<SessionEvent> = kotlinx.coroutines.flow.flow {
+        val id = sessionMutex.withLock { existingSessionId() ?: recoverSession() } ?: return@flow
+        emitAll(sessionLibrary.watch(id, afterSequence).map(GrpcEvent::toDomain))
+    }
+
     override suspend fun destroy(): SessionControllerResult<Unit> = sessionMutex.withLock {
-        val id = existingSessionId() ?: return@withLock SessionControllerResult.Success(Unit)
+        val id = existingSessionId() ?: recoverSession() ?: return@withLock SessionControllerResult.Success(Unit)
         when (val result = sessionLibrary.destroySession(id).toController { Unit }) {
             is SessionControllerResult.Success -> {
                 forgetSession()
@@ -82,7 +90,7 @@ internal class GrpcSessionController(
     private suspend fun <T> withExistingSession(
         operation: suspend (String) -> SessionControllerResult<T>,
     ): SessionControllerResult<T> = sessionMutex.withLock {
-        val id = existingSessionId()
+        val id = existingSessionId() ?: recoverSession()
             ?: return@withLock SessionControllerResult.Failure("session is not configured")
         val result = operation(id)
         if (result.isMissingSession()) forgetSession()
@@ -91,10 +99,16 @@ internal class GrpcSessionController(
 
     private suspend fun ensureSession(): String? {
         existingSessionId()?.let { return it }
+        recoverSession()?.let { return it }
         return when (val created = sessionLibrary.createSession().toController { it }) {
             is SessionControllerResult.Success -> created.value.also(::rememberSession)
             is SessionControllerResult.Failure -> null
         }
+    }
+
+    private suspend fun recoverSession(): String? = when (val recovered = sessionLibrary.recoverActiveSession().toController { it }) {
+        is SessionControllerResult.Success -> recovered.value.also(::rememberSession)
+        is SessionControllerResult.Failure -> null
     }
 
     private fun existingSessionId(): String? {
@@ -132,6 +146,7 @@ private fun GrpcSnapshot.toDomain() = SessionSnapshot(
     configured = configured,
     cleanupComplete = cleanupComplete,
     lastFailureCode = lastFailure?.code?.name?.toSessionFailureCode(),
+    sessionId = sessionId,
 )
 
 private fun GrpcObservation.toDomain() = SessionObservation(
@@ -144,6 +159,7 @@ private fun GrpcEvent.toDomain() = SessionEvent(
     sequence = sequence,
     state = state.toDomain(),
     failureCode = failure?.code?.name?.toSessionFailureCode(),
+    sessionId = sessionId,
 )
 
 private fun mapProtocol(protocol: interop.session.SessionProtocol) = when (protocol) {

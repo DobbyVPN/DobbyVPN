@@ -1,7 +1,6 @@
 package log
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -209,10 +208,6 @@ func (*logrusToSlogHook) Fire(entry *logrus.Entry) error {
 	return nil
 }
 
-// TelemetryLogger remains as an empty compatibility type. It cannot transport
-// data and intentionally stores neither endpoint nor token.
-type TelemetryLogger struct{}
-
 type Logger struct {
 	file     *os.File
 	logger   *slog.Logger
@@ -229,8 +224,6 @@ type pendingEntry struct {
 	arguments  map[string]any
 }
 
-var maxLocalLogBytes int64 = 4 << 20
-
 var (
 	lg     = &Logger{}
 	initMu sync.Mutex
@@ -246,14 +239,11 @@ func init() {
 	})
 }
 
-func NewTelemetryLogger(_, _ string) (*TelemetryLogger, error) { return &TelemetryLogger{}, nil }
-
 func (logger *Logger) dumpBuffer() {
 	for _, entry := range logger.pending {
 		emitAt(logger.logger, entry.occurredAt, entry.level, entry.event, entry.category, entry.message, entry.arguments)
 	}
 	logger.pending = nil
-	logger.trimLocked()
 }
 
 func IsInitialized() bool {
@@ -311,72 +301,6 @@ func SetPath(path string) error {
 	return nil
 }
 
-func retainNewestCompleteJSONLLines(data []byte, limit int64) []byte {
-	if limit <= 0 {
-		return nil
-	}
-	lastNewline := bytes.LastIndexByte(data, '\n')
-	if lastNewline < 0 {
-		return nil
-	}
-	complete := data[:lastNewline+1]
-	if int64(len(complete)) <= limit {
-		return complete
-	}
-	start := len(complete) - int(limit)
-	if start == 0 || complete[start-1] == '\n' {
-		return complete[start:]
-	}
-	nextNewline := bytes.IndexByte(complete[start:], '\n')
-	if nextNewline < 0 {
-		return nil
-	}
-	return complete[start+nextNewline+1:]
-}
-
-func (logger *Logger) trimLocked() {
-	if logger.file == nil || logger.fallback || maxLocalLogBytes <= 0 {
-		return
-	}
-	info, statErr := logger.file.Stat()
-	if statErr != nil || info.Size() <= maxLocalLogBytes {
-		return
-	}
-	path := logger.file.Name()
-	data, readErr := os.ReadFile(path)
-	if readErr != nil {
-		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
-		return
-	}
-	retained := retainNewestCompleteJSONLLines(data, maxLocalLogBytes)
-	if truncateErr := logger.file.Truncate(0); truncateErr != nil {
-		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
-		return
-	}
-	if written, writeErr := logger.file.Write(retained); writeErr != nil || written != len(retained) {
-		logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
-		return
-	}
-	if syncErr := logger.file.Sync(); syncErr != nil {
-		logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
-	}
-}
-
-func logRetentionFailure(message string) { fmt.Fprintln(os.Stderr, message) }
-
-// InitTelemetry is intentionally local-only. Its parameters are discarded so
-// legacy callers cannot cause a remote request or leave secrets in memory.
-func InitTelemetry(_, _ string) error {
-	Warnf("LOG", "Remote telemetry is disabled; logs remain on this device")
-	return nil
-}
-
-func SetupTelemetryAttributes(_ string) {
-	Debugf("LOG", "Telemetry attributes ignored because remote telemetry is disabled")
-}
-
-func StopTelemetry() { Debugf("LOG", "Remote telemetry is disabled; no exporter to stop") }
-
 func write(level slog.Level, category, message string, arguments map[string]any) {
 	writeEvent(level, "log.message", category, message, arguments)
 }
@@ -399,7 +323,6 @@ func writeEventAt(occurredAt time.Time, level slog.Level, event, category, messa
 		return
 	}
 	emitAt(lg.logger, occurredAt, level, event, category, message, arguments)
-	lg.trimLocked()
 }
 
 func cloneArguments(arguments map[string]any) map[string]any {

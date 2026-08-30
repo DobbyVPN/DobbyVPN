@@ -20,8 +20,9 @@ on:
 jobs:
   build_ios_lib:
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.source_sha }}
           submodules: true
@@ -39,47 +40,67 @@ jobs:
       - name: Select Xcode 26.3
         run: |
           sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
-          test "$(xcodebuild -version | tr '\n' ' ')" = "Xcode 26.3 Build version 17C529 "
+          test "$(xcodebuild -version | tee /dev/stderr | tr '\n' ' ')" = "Xcode 26.3 Build version 17C529 "
 
       - name: Cache iOS VPN library
         id: ios_lib_cache
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: go_module/MyLibrary.xcframework
+          path: go_module/DobbyVPNRuntime.xcframework
           key: ${{ runner.os }}-xcode-26.3-ios-15.6-vpn-lib-${{ hashFiles('.github/workflows/ios_libs_generate.yml', '.go-version', 'go_module/go.sum', 'go_module/**') }}
 
       - name: Set up Go
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: .go-version
           cache-dependency-path: go_module/go.sum
-
-      - name: Verify tracked embedded Cloak client source
-        if: steps.ios_lib_cache.outputs.cache-hit != 'true'
-        run: |
-          test -f go_module/modules/Cloak/internal/client/connector.go
-          test -f go_module/modules/Cloak/internal/common/dialer.go
-          test -f go_module/modules/Cloak/internal/multiplex/session.go
 
       - name: Download Go modules & dependencies
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
           go mod download
-          go mod tidy
 
-      - name: Install gomobile & init
+      - name: Install pinned gomobile toolchain
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
+          mobile_version='v0.0.0-20260520154334-0e4426e1883d'
           go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
-          gomobile init
+          go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d
+          gopath="$(go env GOPATH)"
+          tool_dir="$gopath/bin"
+          mkdir -p "$gopath/pkg/gomobile"
+          echo "$tool_dir" >> "$GITHUB_PATH"
+          for tool in gomobile gobind; do
+            test -x "$tool_dir/$tool"
+            tool_metadata="$(go version -m "$tool_dir/$tool" 2>&1 | tee /dev/stderr)"
+            if [[ "$tool_metadata" != *'golang.org/x/mobile'* || "$tool_metadata" != *"$mobile_version"* ]]; then
+              echo "tool metadata is not pinned to golang.org/x/mobile@$mobile_version: $tool" >&2
+              exit 1
+            fi
+          done
 
-      - name: Fetch gomobile runtime
+      - name: Verify pinned gomobile runtime dependency
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
-          go get "golang.org/x/mobile/bind@$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
+          test "$(go list -m -f '{{.Version}}' golang.org/x/mobile)" = 'v0.0.0-20260520154334-0e4426e1883d'
+          go mod download golang.org/x/mobile
+
+      - name: Verify Go bootstrap preserved candidate source
+        if: steps.ios_lib_cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_status="$(git status --porcelain --untracked-files=all)"
+          if [[ -n "$source_status" ]]; then
+            printf '%s\n' "$source_status"
+            git diff --no-ext-diff --binary
+            echo "candidate source changed during iOS Go bootstrap" >&2
+            exit 1
+          fi
 
       - name: Build iOS XCFramework
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
@@ -88,14 +109,15 @@ jobs:
           ./scripts/build_ios_xcframework.sh
 
       - name: Upload iOS XCFramework
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: MyLibrary.xcframework
-          path: go_module/MyLibrary.xcframework
+          name: DobbyVPNRuntime.xcframework
+          path: go_module/DobbyVPNRuntime.xcframework
           if-no-files-found: error
 
   build_ios_app_lib:
     runs-on: macos-15
+    timeout-minutes: 30
     env:
       APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
       APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
@@ -104,7 +126,7 @@ jobs:
       APP_SOURCE_SHA: ${{ inputs.source_sha }}
       APP_SOURCE_REPOSITORY: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.source_sha }}
           submodules: true
@@ -125,7 +147,7 @@ jobs:
           test "$(xcodebuild -version | tr '\n' ' ')" = "Xcode 26.3 Build version 17C529 "
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           java-version: '21'
           distribution: 'temurin'
@@ -136,7 +158,7 @@ jobs:
             kmp_module/gradle/wrapper/gradle-wrapper.properties
 
       - name: Cache Kotlin/Native compiler data
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.konan
           key: ${{ runner.os }}-konan-${{ hashFiles('kmp_module/gradle/libs.versions.toml', 'kmp_module/gradle/wrapper/gradle-wrapper.properties') }}
@@ -144,7 +166,7 @@ jobs:
             ${{ runner.os }}-konan-
 
       - name: Cache Gradle build outputs
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.gradle/caches/build-cache-*
           key: ${{ runner.os }}-gradle-build-cache-${{ hashFiles('kmp_module/**/*.gradle.kts', 'kmp_module/gradle/libs.versions.toml', 'kmp_module/gradle/wrapper/gradle-wrapper.properties') }}
@@ -152,7 +174,7 @@ jobs:
             ${{ runner.os }}-gradle-build-cache-
 
       - name: Cache Swift packages
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ~/Library/Caches/org.swift.swiftpm
@@ -180,8 +202,20 @@ jobs:
             -Pandroid.injected.version.code="${VERSION_CODE}" \
             -Pandroid.injected.version.name="${VERSION_NAME}"
 
+      - name: Verify KMP iOS build preserved candidate source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_status="$(git status --porcelain --untracked-files=all)"
+          if [[ -n "$source_status" ]]; then
+            printf '%s\n' "$source_status"
+            git diff --no-ext-diff --binary
+            echo "candidate source changed during KMP iOS build" >&2
+            exit 1
+          fi
+
       - name: Upload app.framework
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: app.framework
           path: kmp_module/app/build/bin/iosArm64/releaseFramework/app.framework

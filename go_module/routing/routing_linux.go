@@ -18,6 +18,10 @@ import (
 	"go_module/log"
 )
 
+// linuxRunCommand is the shared command seam used by Linux route recovery and
+// route-plan ownership tests. Production always points it at ExecuteCommand.
+var linuxRunCommand = ExecuteCommand
+
 func ExecuteCommand(command string) (string, error) {
 	log.Debugf(Category, "[Routing][Exec] → %s", log.MaskStr(command))
 
@@ -148,192 +152,78 @@ func parseProcRouteIPv4(hexGateway string) (net.IP, error) {
 	return net.IPv4(decoded[3], decoded[2], decoded[1], decoded[0]).To4(), nil
 }
 
-func EnsureProxyRoute(proxyIP, gatewayIP, iface string) (bool, error) {
-	if isLoopbackIP(proxyIP) {
-		log.Debugf(Category, "[Routing][ProxyRoute] Skipping proxy route for loopback server: %s", proxyIP)
-		return false, nil
+// DiscoverLinuxDefaultRoute returns the physical IPv4 gateway and interface
+// from the main table. During an active VPN session the ordinary default route
+// may point at the TUN device, so a route without a gateway is deliberately
+// ignored. This lets recovery find a newly restored uplink instead of reusing
+// the stale gateway/interface captured before a link flap.
+func DiscoverLinuxDefaultRoute() (gatewayIP, iface string, err error) {
+	output, err := linuxRunCommand("ip -4 route show table main")
+	if err != nil {
+		return "", "", fmt.Errorf("discover main-table default route: %w", err)
 	}
-
-	log.Debugf(Category, "[Routing][ProxyRoute] Adding route: %s/32 via %s dev %s",
-		proxyIP, gatewayIP, iface)
-
-	cmd := fmt.Sprintf("ip route add %s/32 via %s dev %s", proxyIP, gatewayIP, iface)
-	if _, err := ExecuteCommand(cmd); err != nil {
-		if strings.Contains(err.Error(), "File exists") {
-			log.Debugf(Category, "[Routing][ProxyRoute] Route already exists for %s; leaving it unchanged", proxyIP)
-			return false, nil
-		}
-		return false, fmt.Errorf("failed to add proxy route: %w", err)
+	gatewayIP, iface, parseErr := parseLinuxDefaultRoute(output)
+	if parseErr != nil {
+		return "", "", fmt.Errorf("%w; route output: %s", parseErr, strings.TrimSpace(output))
 	}
-
-	log.Debugf(Category, "[Routing][ProxyRoute][OK] Route installed for %s", proxyIP)
-	return true, nil
+	return gatewayIP, iface, nil
 }
 
-func DeleteProxyRoute(proxyIP, gatewayIP, iface string) error {
-	if isLoopbackIP(proxyIP) {
-		log.Debugf(Category, "[Routing][ProxyRoute] Skipping proxy route removal for loopback server: %s", proxyIP)
+func parseLinuxDefaultRoute(output string) (gatewayIP, iface string, err error) {
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] != linuxDefaultRoute {
+			continue
+		}
+		var candidateGatewayIP, candidateIface string
+		for i := 1; i+1 < len(fields); i++ {
+			switch fields[i] {
+			case "via":
+				candidateGatewayIP = fields[i+1]
+			case "dev":
+				candidateIface = fields[i+1]
+			}
+		}
+		if net.ParseIP(candidateGatewayIP).To4() != nil && candidateIface != "" {
+			return candidateGatewayIP, candidateIface, nil
+		}
+	}
+	return "", "", fmt.Errorf("main IPv4 table has no gateway-backed default route")
+}
+
+// ReconcileLinuxSessionRoutesWithRule restores the endpoint bypass, marked
+// default, and this session's fwmark rule after an uplink flap. The active
+// routing plan already owns this table/priority pair, so an already-present
+// rule is harmless; other kernel errors remain fatal.
+func ReconcileLinuxSessionRoutesWithRule(proxyIP, gatewayIP, iface string, tableID, priority int) error {
+	return reconcileLinuxSessionRoutes(proxyIP, gatewayIP, iface, tableID, priority)
+}
+
+func reconcileLinuxSessionRoutes(proxyIP, gatewayIP, iface string, tableID, priority int) error {
+	if !isLoopbackIP(proxyIP) {
+		if _, err := linuxRunCommand(fmt.Sprintf(
+			"ip route replace %s/32 via %s dev %s proto %d metric %d",
+			proxyIP, gatewayIP, iface, linuxOwnedRouteProtocol, linuxOwnedProxyMetric,
+		)); err != nil {
+			return fmt.Errorf("restore proxy route: %w", err)
+		}
+	}
+	if _, err := linuxRunCommand(fmt.Sprintf(
+		"ip route replace table %d %s via %s dev %s proto %d",
+		tableID, linuxDefaultRoute, gatewayIP, iface, linuxOwnedRouteProtocol,
+	)); err != nil {
+		return fmt.Errorf("restore marked default route: %w", err)
+	}
+	if priority <= 0 {
 		return nil
 	}
-
-	log.Debugf(Category, "[Routing][ProxyRoute] Removing route: %s/32 via %s dev %s",
-		proxyIP, gatewayIP, iface)
-
-	if _, err := ExecuteCommand(fmt.Sprintf("ip route del %s/32 via %s dev %s", proxyIP, gatewayIP, iface)); err != nil {
-		return fmt.Errorf("failed to delete proxy route: %w", err)
+	if _, err := linuxRunCommand(fmt.Sprintf("ip rule add fwmark %d lookup %d priority %d", tableID, tableID, priority)); err != nil && !strings.Contains(strings.ToLower(err.Error()), "file exists") {
+		return fmt.Errorf("restore fwmark rule: %w", err)
 	}
-
-	log.Debugf(Category, "[Routing][ProxyRoute][OK] Route removed for %s", proxyIP)
 	return nil
 }
 
 func isLoopbackIP(ip string) bool {
 	parsed := net.ParseIP(ip)
 	return parsed != nil && parsed.IsLoopback()
-}
-
-func SetupMarkedRouting(tableID, priority int, iface, gatewayIP string) error {
-	log.Debugf(Category, "[Routing][Mark] Setup fwmark routing: table=%d priority=%d iface=%s gateway=%s",
-		tableID, priority, iface, gatewayIP)
-
-	// route table
-	log.Debugf(Category, "[Routing][Mark] Adding default route to table %d", tableID)
-	if _, err := ExecuteCommand(
-		fmt.Sprintf("ip route replace table %d default via %s dev %s", tableID, gatewayIP, iface),
-	); err != nil {
-		return fmt.Errorf("failed to add default route to table %d: %w", tableID, err)
-	}
-
-	// rule
-	log.Debugf(Category, "[Routing][Mark] Installing ip rule: fwmark=%d → table=%d priority=%d",
-		tableID, tableID, priority)
-
-	_, _ = ExecuteCommand(fmt.Sprintf("ip rule del fwmark %d lookup %d priority %d", tableID, tableID, priority))
-
-	if _, err := ExecuteCommand(
-		fmt.Sprintf("ip rule add fwmark %d lookup %d priority %d", tableID, tableID, priority),
-	); err != nil {
-		return fmt.Errorf("failed to add fwmark rule: %w", err)
-	}
-
-	log.Debugf(Category, "[Routing][Mark][OK] fwmark routing configured")
-
-	return nil
-}
-
-func CleanupMarkedRouting(tableID, priority int, iface, gatewayIP string) error {
-	log.Debugf(Category, "[Routing][Mark][Cleanup] Removing fwmark routing (table=%d priority=%d)", tableID, priority)
-
-	var errs []string
-
-	if _, err := ExecuteCommand(fmt.Sprintf("ip rule del fwmark %d lookup %d priority %d", tableID, tableID, priority)); err != nil {
-		errs = append(errs, err.Error())
-	}
-
-	if _, err := ExecuteCommand(fmt.Sprintf("ip route del table %d default via %s dev %s", tableID, gatewayIP, iface)); err != nil {
-		errs = append(errs, err.Error())
-	}
-
-	if len(errs) > 0 {
-		log.Debugf(Category, "[Routing][Mark][Cleanup][WARN] %s", strings.Join(errs, "; "))
-		return fmt.Errorf("%s", strings.Join(errs, "; "))
-	}
-
-	log.Debugf(Category, "[Routing][Mark][Cleanup][OK] Cleaned")
-	return nil
-}
-
-func startIPv6Block() error {
-	log.Debugf(Category, "[Routing][IPv6] Installing IPv6 block routes")
-
-	var errs []string
-	for _, subnet := range []string{ipv6LowerHalf, ipv6UpperHalf} {
-		if _, err := ExecuteCommand(fmt.Sprintf("ip -6 route replace blackhole %s metric 1", subnet)); err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", subnet, err))
-		}
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("failed to install IPv6 block routes: %s", strings.Join(errs, "; "))
-	}
-
-	log.Debugf(Category, "[Routing][IPv6][OK] IPv6 block routes installed")
-	return nil
-}
-
-func stopIPv6Block() error {
-	log.Debugf(Category, "[Routing][IPv6] Removing IPv6 block routes")
-
-	var errs []string
-	for _, subnet := range []string{ipv6LowerHalf, ipv6UpperHalf} {
-		if _, err := ExecuteCommand(fmt.Sprintf("ip -6 route del blackhole %s metric 1", subnet)); err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", subnet, err))
-		}
-	}
-
-	if len(errs) > 0 {
-		log.Debugf(Category, "[Routing][IPv6][WARN] Failed to remove some IPv6 block routes: %s", strings.Join(errs, "; "))
-		return fmt.Errorf("%s", strings.Join(errs, "; "))
-	}
-
-	log.Debugf(Category, "[Routing][IPv6][OK] IPv6 block routes removed")
-	return nil
-}
-
-func StartRouting(proxyIP, gatewayIP, uplinkIface, tunName string) error {
-	log.Debugf(Category, "[Routing][Start] Switching default route → TUN (%s)", tunName)
-
-	log.Debugf(Category, "[Routing][Start] Removing old default route")
-	_, _ = ExecuteCommand("ip route del default")
-
-	log.Debugf(Category, "[Routing][Start] Setting default → dev %s", tunName)
-	if _, err := ExecuteCommand(fmt.Sprintf("ip route replace default dev %s", tunName)); err != nil {
-		return fmt.Errorf("failed to set default via tun %s: %w", tunName, err)
-	}
-
-	if err := startIPv6Block(); err != nil {
-		return err
-	}
-
-	log.Debugf(Category, "[Routing][Start] Ensuring VPN server bypass: %s via %s dev %s",
-		proxyIP, gatewayIP, uplinkIface)
-
-	if isLoopbackIP(proxyIP) {
-		log.Debugf(Category, "[Routing][Start] Skipping VPN server bypass route for loopback server: %s", proxyIP)
-	} else {
-		if _, err := ExecuteCommand(fmt.Sprintf("ip route replace %s/32 via %s dev %s", proxyIP, gatewayIP, uplinkIface)); err != nil {
-			return fmt.Errorf("failed to add direct route for proxy %s: %w", proxyIP, err)
-		}
-	}
-
-	log.Debugf(Category, "[Routing][Start][OK] default=VPN(%s), bypass=%s", tunName, proxyIP)
-
-	return nil
-}
-
-func StopRouting(proxyIP, gatewayIP, uplinkIface string) error {
-	log.Debugf(Category, "[Routing][Stop] Restoring system routing")
-
-	if err := stopIPv6Block(); err != nil {
-		log.Debugf(Category, "[Routing][Stop][WARN] IPv6 block cleanup failed: %v", err)
-	}
-
-	log.Debugf(Category, "[Routing][Stop] Removing proxy route: %s", proxyIP)
-	if isLoopbackIP(proxyIP) {
-		log.Debugf(Category, "[Routing][Stop] Skipping proxy route removal for loopback server: %s", proxyIP)
-	} else {
-		_ = DeleteProxyRoute(proxyIP, gatewayIP, uplinkIface)
-	}
-
-	log.Debugf(Category, "[Routing][Stop] Removing VPN default route")
-	_, _ = ExecuteCommand("ip route del default")
-
-	log.Debugf(Category, "[Routing][Stop] Restoring default via %s dev %s", gatewayIP, uplinkIface)
-	if _, err := ExecuteCommand(fmt.Sprintf("ip route replace default via %s dev %s", gatewayIP, uplinkIface)); err != nil {
-		return fmt.Errorf("failed to restore default route via %s dev %s: %w", gatewayIP, uplinkIface, err)
-	}
-
-	log.Debugf(Category, "[Routing][Stop][OK] Routing restored")
-
-	return nil
 }

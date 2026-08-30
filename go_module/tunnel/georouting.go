@@ -43,36 +43,6 @@ func IsBypass(metadata *M.Metadata) bool {
 	return false
 }
 
-func mustCIDR(s string) {
-	_, ipnet, err := net.ParseCIDR(s)
-	if err != nil {
-		defaultBypassCIDRs = append(defaultBypassCIDRs, resolveHostToCIDRs(s)...)
-	} else {
-		defaultBypassCIDRs = append(defaultBypassCIDRs, ipnet)
-	}
-}
-
-func SetGeoRoutingConf(cidrs string) {
-	routesMu.Lock()
-	defer routesMu.Unlock()
-
-	paths := strings.Fields(cidrs)
-
-	for _, cidr := range paths {
-		mustCIDR(cidr)
-	}
-
-	log.Debugf(Category, "[Routing] Set defaultBypassCIDRs: %v", summarizeCIDRs(defaultBypassCIDRs))
-}
-
-func ClearGeoRoutingConf() {
-	routesMu.Lock()
-	defer routesMu.Unlock()
-
-	defaultBypassCIDRs = nil
-	log.Debugf(Category, "[Routing] Cleared defaultBypassCIDRs")
-}
-
 // GeoRoutingLease owns a temporary replacement of the process-wide bypass
 // policy. Release is idempotent and restores the exact policy which existed
 // before acquisition. Session orchestration is serialized, so leases must be

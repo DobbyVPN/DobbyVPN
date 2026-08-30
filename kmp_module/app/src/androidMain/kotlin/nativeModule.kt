@@ -1,7 +1,6 @@
 import android.content.Context.MODE_PRIVATE
 import com.dobby.di.makeNativeModule
 import com.dobby.domain.DobbyConfigsRepositoryImpl
-import com.dobby.feature.authentication.domain.AuthenticationManagerImpl
 import com.dobby.feature.logging.CopyLogsInteractorImpl
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.LoggerManagerImpl
@@ -24,11 +23,10 @@ val androidMainModule = makeNativeModule(
         )
     },
     connectionStateRepository = { ConnectionStateRepository() },
-    authenticationManager = { AuthenticationManagerImpl(androidContext()) },
     loggerManager = { LoggerManagerImpl(get()) },
 )
 
 val androidVpnModule = module {
     single { Logger(get()) }
-    single<SessionController> { AndroidSessionController(androidContext()) }
+    single<SessionController> { AndroidSessionController(androidContext(), get()) }
 }

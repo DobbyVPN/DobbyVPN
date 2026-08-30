@@ -10,16 +10,22 @@ import os
 import platform
 import re
 import shutil
+import signal
 import socket
 import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.request
 import zipfile
 from pathlib import Path
+
+from public_output import emit_diagnostic as emit_public_diagnostic
+from public_output import public_actions
+from windows_process_census import WindowsProcessCensusError, windows_process_census
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -85,6 +91,20 @@ SERVICE_NAMES = {
     "macos": "macos_grpcvpnserver",
     "windows": "windows_grpcvpnserver.exe",
 }
+CLI_NAMES = {
+    "linux": "dobby-cli",
+    "macos": "dobby-cli",
+    "windows": "dobby-cli.exe",
+}
+MACOS_MINIMUM_SYSTEM_VERSION = "11.0"
+PROBE_TIMEOUT_SECONDS = 30
+PROCESS_CLEANUP_GRACE_SECONDS = 5
+PROCESS_TREE_POLL_INTERVAL_SECONDS = 0.01
+# Windows hosted runners can take several seconds to enumerate the complete
+# WMI process table.  Keep the proof bounded, but do not mistake normal WMI
+# startup latency for an unverifiable process tree.
+PROCESS_TREE_QUERY_TIMEOUT_SECONDS = 10
+PROCESS_TREE_WATCHER_JOIN_TIMEOUT_SECONDS = PROCESS_TREE_QUERY_TIMEOUT_SECONDS + 2
 GOOS_BY_PLATFORM = {
     "linux": "linux",
     "macos": "darwin",
@@ -103,6 +123,649 @@ def log(message: str) -> None:
 
 def fail(message: str) -> None:
     raise SystemExit(f"[!] {message}")
+
+
+def output_text(output: str | bytes | None) -> str:
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return output
+
+
+def output_bytes(output: str | bytes | None) -> bytes:
+    if output is None:
+        return b""
+    if isinstance(output, bytes):
+        return output
+    return output.encode("utf-8", errors="surrogatepass")
+
+
+def _merge_output_fragments(*outputs: str | bytes | None) -> bytes:
+    """Merge cumulative or incremental subprocess output without duplicating it."""
+    merged = b""
+    for output in outputs:
+        data = output_bytes(output)
+        if not data:
+            continue
+        if not merged:
+            merged = data
+            continue
+        # TimeoutExpired exposes ``output`` as an alias for ``stdout``.  A
+        # second communicate() can also return the cumulative stream, while
+        # test doubles and alternate implementations may return only a new
+        # suffix.  Handle all three forms without dropping bytes.
+        if data == merged:
+            continue
+        if data.startswith(merged):
+            merged = data
+            continue
+        # Independent partial reads are appended in order.  The only
+        # duplicate forms produced by subprocess APIs are the stdout/output
+        # aliases and cumulative snapshots handled above; do not scan large
+        # diagnostics byte-by-byte looking for an arbitrary overlap.
+        merged += data
+    return merged
+
+
+def _exception_output(error: BaseException) -> tuple[bytes, bytes]:
+    """Return all partial streams exposed by a subprocess exception once."""
+    stdout = _merge_output_fragments(
+        getattr(error, "stdout", None),
+        getattr(error, "output", None),
+    )
+    stderr = _merge_output_fragments(getattr(error, "stderr", None))
+    return stdout, stderr
+
+
+def _set_exception_output(error: BaseException, stdout: bytes, stderr: bytes) -> None:
+    """Make merged streams available to callers handling the original error."""
+    try:
+        error.stdout = output_text(stdout)  # type: ignore[attr-defined]
+        error.output = output_text(stdout)  # type: ignore[attr-defined]
+        error.stderr = output_text(stderr)  # type: ignore[attr-defined]
+    except (AttributeError, TypeError):
+        # Some foreign exception implementations expose read-only attributes.
+        pass
+
+
+class ProcessTreeProofError(RuntimeError):
+    """Raised when a child tree cannot be proven to have disappeared."""
+
+
+def _proc_identity(pid: int) -> tuple[str, str] | None:
+    try:
+        stat_text = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+    except (FileNotFoundError, OSError):
+        return None
+    closing_parenthesis = stat_text.rfind(")")
+    fields = stat_text[closing_parenthesis + 2 :].split()
+    if len(fields) <= 19:
+        return None
+    return fields[0], fields[19]
+
+
+def _active_proc_group_members(group_id: int) -> list[int]:
+    members: list[int] = []
+    for stat_path in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            stat_text = stat_path.read_text(encoding="ascii")
+        except (FileNotFoundError, OSError):
+            continue
+        closing_parenthesis = stat_text.rfind(")")
+        fields = stat_text[closing_parenthesis + 2 :].split()
+        if len(fields) <= 2 or fields[0] == "Z":
+            continue
+        try:
+            process_group = int(fields[2])
+            pid = int(stat_text[: stat_text.find(" ")])
+        except (ValueError, TypeError):
+            continue
+        if process_group == group_id:
+            members.append(pid)
+    return members
+
+
+def _pid_is_alive(pid: int, expected_identity: tuple[str, str] | None = None) -> bool:
+    if os.name == "nt":
+        try:
+            _, active_pids = windows_process_census(
+                pid,
+                timeout_seconds=PROCESS_TREE_QUERY_TIMEOUT_SECONDS,
+            )
+        except WindowsProcessCensusError as error:
+            raise ProcessTreeProofError(str(error)) from error
+        return pid in active_pids
+    if Path("/proc").is_dir():
+        identity = _proc_identity(pid)
+        # The process state (the first field) changes during normal execution;
+        # only the kernel start time is the stable PID-reuse identity.
+        if identity is None or (
+            expected_identity is not None and identity[1] != expected_identity[1]
+        ):
+            return False
+        if identity[0] == "Z":
+            return False
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError as error:
+        raise ProcessTreeProofError(f"pid={pid} proof permission denied") from error
+    except OSError as error:
+        raise ProcessTreeProofError(f"pid={pid} proof query failed") from error
+    return True
+
+
+def _proc_descendants(root_pid: int) -> set[int]:
+    children_path = Path(f"/proc/{root_pid}/task/{root_pid}/children")
+    try:
+        children = children_path.read_text(encoding="ascii").split()
+    except FileNotFoundError:
+        return set()
+    except OSError as error:
+        raise ProcessTreeProofError(f"could not read {children_path}: {error}") from error
+    descendants: set[int] = set()
+    try:
+        pending = [int(child) for child in children]
+    except ValueError as error:
+        raise ProcessTreeProofError(f"invalid child PID data in {children_path}") from error
+    while pending:
+        pid = pending.pop()
+        if pid in descendants:
+            continue
+        descendants.add(pid)
+        child_path = Path(f"/proc/{pid}/task/{pid}/children")
+        try:
+            try:
+                pending.extend(int(child) for child in child_path.read_text(encoding="ascii").split())
+            except ValueError as error:
+                raise ProcessTreeProofError(f"invalid child PID data in {child_path}") from error
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise ProcessTreeProofError(f"could not read {child_path}: {error}") from error
+    return descendants
+
+
+def _ps_descendants(root_pid: int) -> set[int]:
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid=,ppid="],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+            timeout=PROCESS_TREE_QUERY_TIMEOUT_SECONDS,
+        )
+    except (subprocess.TimeoutExpired, OSError) as error:
+        stdout, stderr = _exception_output(error)
+        retain_process_diagnostics(
+            "process-tree-query",
+            stdout,
+            stderr,
+            f"ps-query-error={type(error).__name__};evidence_incomplete=1",
+        )
+        if isinstance(error, subprocess.TimeoutExpired):
+            detail = f"timed out after {PROCESS_TREE_QUERY_TIMEOUT_SECONDS}s"
+        else:
+            detail = f"could not start: {error}"
+        raise ProcessTreeProofError(
+            f"ps process-tree query {detail} stdout={output_text(stdout).strip()} "
+            f"stderr={output_text(stderr).strip()} evidence_incomplete=1"
+        ) from error
+    if result.returncode != 0:
+        raise ProcessTreeProofError(
+            f"ps process-tree query failed exit={result.returncode} "
+            f"stderr={output_text(result.stderr).strip()}"
+        )
+    if result.stderr:
+        raise ProcessTreeProofError(
+            f"ps process-tree query emitted stderr={output_text(result.stderr).strip()}"
+        )
+    children_by_parent: dict[int, set[int]] = {}
+    for line in output_text(result.stdout).splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            continue
+        try:
+            pid, parent_pid = (int(field) for field in fields)
+        except ValueError:
+            continue
+        children_by_parent.setdefault(parent_pid, set()).add(pid)
+    descendants: set[int] = set()
+    pending = list(children_by_parent.get(root_pid, set()))
+    while pending:
+        pid = pending.pop()
+        if pid in descendants:
+            continue
+        descendants.add(pid)
+        pending.extend(children_by_parent.get(pid, set()))
+    return descendants
+
+
+def _windows_process_snapshot(root_pid: int) -> tuple[set[int], set[int]]:
+    try:
+        return windows_process_census(
+            root_pid,
+            timeout_seconds=PROCESS_TREE_QUERY_TIMEOUT_SECONDS,
+        )
+    except WindowsProcessCensusError as error:
+        raise ProcessTreeProofError(str(error)) from error
+
+
+def _process_tree_snapshot(root_pid: int) -> tuple[set[int], str, set[int] | None]:
+    if os.name == "nt":
+        descendants, active_pids = _windows_process_snapshot(root_pid)
+        return descendants, "windows-toolhelp", active_pids
+    if Path("/proc").is_dir():
+        return _proc_descendants(root_pid), "procfs", None
+    return _ps_descendants(root_pid), "ps", None
+
+
+class ProcessTreeTracker:
+    def __init__(self, root_pid: int) -> None:
+        self.root_pid = root_pid
+        self.observed: set[int] = {root_pid}
+        self.identities: dict[int, tuple[str, str]] = {}
+        self.active_pids: set[int] | None = None
+        self.source = "unknown"
+        self.error: ProcessTreeProofError | None = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._poll, name=f"dobby-process-tree-{root_pid}", daemon=True)
+
+    def start(self) -> None:
+        self._sample()
+        self._thread.start()
+
+    def _sample(self) -> None:
+        try:
+            descendants, source, active_pids = _process_tree_snapshot(self.root_pid)
+        except (ProcessTreeProofError, OSError, ValueError, subprocess.SubprocessError) as error:
+            with self._lock:
+                self.error = error if isinstance(error, ProcessTreeProofError) else ProcessTreeProofError(str(error))
+            return
+        with self._lock:
+            self.observed.update(descendants)
+            for pid in self.observed:
+                identity = _proc_identity(pid)
+                if identity is not None:
+                    self.identities.setdefault(pid, identity)
+            self.source = source
+            self.active_pids = active_pids
+
+    def _poll(self) -> None:
+        while not self._stop.wait(PROCESS_TREE_POLL_INTERVAL_SECONDS):
+            self._sample()
+
+    def signal_descendants(self, signum: int) -> None:
+        with self._lock:
+            pids = tuple(self.observed)
+        for pid in pids:
+            if pid == self.root_pid:
+                continue
+            expected_identity = self.identities.get(pid)
+            if expected_identity is not None:
+                current_identity = _proc_identity(pid)
+                if current_identity is None or current_identity[1] != expected_identity[1]:
+                    continue
+            try:
+                os.kill(pid, signum)
+            except ProcessLookupError:
+                continue
+            except OSError as error:
+                with self._lock:
+                    self.error = ProcessTreeProofError(
+                        f"could not signal descendant pid={pid} value={signum}: {error}"
+                    )
+
+    def observed_pids(self) -> tuple[int, ...]:
+        with self._lock:
+            return tuple(sorted(self.observed))
+
+    def prove_gone(self, group_id: int) -> str:
+        self._stop.set()
+        self._thread.join(timeout=PROCESS_TREE_WATCHER_JOIN_TIMEOUT_SECONDS)
+        if self._thread.is_alive():
+            raise ProcessTreeProofError("process-tree watcher did not stop")
+        self._sample()
+        with self._lock:
+            error = self.error
+            observed = tuple(sorted(self.observed))
+            source = self.source
+            active_pids = self.active_pids
+        if error is not None:
+            raise error
+        if os.name == "nt":
+            if active_pids is None:
+                raise ProcessTreeProofError("Windows process census is unavailable")
+            survivors = [
+                pid for pid in observed if pid != self.root_pid and pid in active_pids
+            ]
+        else:
+            survivors = [
+                pid
+                for pid in observed
+                if pid != self.root_pid and _pid_is_alive(pid, self.identities.get(pid))
+            ]
+        if survivors:
+            raise ProcessTreeProofError(f"descendant survivors={survivors}")
+        if os.name != "nt":
+            if Path("/proc").is_dir():
+                group_survivors = _active_proc_group_members(group_id)
+                if group_survivors:
+                    raise ProcessTreeProofError(f"process-group survivors={group_survivors}")
+            else:
+                try:
+                    os.killpg(group_id, 0)
+                except ProcessLookupError:
+                    pass
+                except PermissionError as error:
+                    raise ProcessTreeProofError("process-group proof permission denied") from error
+                else:
+                    raise ProcessTreeProofError(f"process-group survivor group={group_id}")
+        return f"tree=gone source={source} observed_pids={len(observed)}"
+
+
+def attach_process_tree_tracker(process: subprocess.Popen[str]) -> ProcessTreeTracker:
+    tracker = ProcessTreeTracker(process.pid)
+    tracker.start()
+    process._dobby_process_tree_tracker = tracker  # type: ignore[attr-defined]
+    return tracker
+
+
+def process_tree_tracker(process: subprocess.Popen[str]) -> ProcessTreeTracker:
+    tracker = getattr(process, "_dobby_process_tree_tracker", None)
+    if isinstance(tracker, ProcessTreeTracker):
+        return tracker
+    return attach_process_tree_tracker(process)
+
+
+def emit_process_diagnostic(prefix: str, output: str | bytes | None = None) -> None:
+    """Emit a failed child-process diagnostic without discarding its output."""
+    if public_actions():
+        emit_public_diagnostic("desktop-build", (prefix, output), root_dir=ROOT_DIR)
+        return
+    print(prefix, file=sys.stderr, flush=True)
+    text = output_text(output)
+    if text:
+        sys.stderr.write(text)
+        if not text.endswith("\n"):
+            sys.stderr.write("\n")
+        sys.stderr.flush()
+
+
+def process_group_options() -> dict[str, int | bool]:
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+    return {"start_new_session": True}
+
+
+def retain_process_diagnostics(
+    kind: str,
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+    status: str,
+) -> Path:
+    """Retain complete child streams in a unique owner-only file."""
+    handle = open_service_log(kind, binary=True)
+    try:
+        handle.write(f"status={status}\n".encode("utf-8"))
+        for label, output in (("stdout", stdout), ("stderr", stderr)):
+            handle.write(f"--- {label} ---\n".encode("utf-8"))
+            data = output_bytes(output)
+            handle.write(data)
+            if data and not data.endswith(b"\n"):
+                handle.write(b"\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    finally:
+        handle.close()
+    return Path(handle.name)
+
+
+def _run_windows_taskkill(
+    pid: int,
+    *,
+    kind: str,
+    status_prefix: str,
+    timeout_seconds: float,
+) -> None:
+    """Run taskkill while retaining partial output if the command fails."""
+    try:
+        result = subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        stdout, stderr = _exception_output(error)
+        retain_process_diagnostics(
+            kind,
+            stdout,
+            stderr,
+            f"{status_prefix}-error={type(error).__name__};evidence_incomplete=1",
+        )
+        emit_process_diagnostic(
+            f"[!] Windows descendant cleanup failed for pid={pid}: {error}",
+            stdout,
+        )
+        emit_process_diagnostic("[!] Windows descendant cleanup stderr:", stderr)
+        return
+    retain_process_diagnostics(
+        kind,
+        result.stdout,
+        result.stderr,
+        f"{status_prefix}-exit-{result.returncode}",
+    )
+
+
+def terminate_process_group(
+    process: subprocess.Popen[str],
+    grace_seconds: float = PROCESS_CLEANUP_GRACE_SECONDS,
+) -> str:
+    """Terminate a child process and all descendants, escalating if needed."""
+    group_id = getattr(process, "_dobby_process_group_id", process.pid)
+    tracker = process_tree_tracker(process)
+    if os.name == "nt":
+        try:
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+        except ProcessLookupError:
+            pass
+        except (AttributeError, OSError, ValueError) as error:
+            raise ProcessTreeProofError(f"could not signal process: {error}") from error
+    else:
+        try:
+            os.killpg(group_id, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except OSError as error:
+            raise ProcessTreeProofError(
+                f"could not terminate process group={group_id}: {error}"
+            ) from error
+        tracker.signal_descendants(signal.SIGTERM)
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        pass
+
+    try:
+        return tracker.prove_gone(group_id)
+    except ProcessTreeProofError as first_error:
+        proof_error = first_error
+
+    if os.name == "nt":
+        _run_windows_taskkill(
+            process.pid,
+            kind="process-cleanup",
+            status_prefix="taskkill",
+            timeout_seconds=grace_seconds,
+        )
+        for pid in tracker.observed_pids():
+            if pid == process.pid:
+                continue
+            _run_windows_taskkill(
+                pid,
+                kind="process-cleanup-descendant",
+                status_prefix=f"taskkill-pid-{pid}",
+                timeout_seconds=grace_seconds,
+            )
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        except OSError as error:
+            raise ProcessTreeProofError(f"could not kill process: {error}") from error
+    else:
+        tracker.signal_descendants(signal.SIGKILL)
+        try:
+            os.killpg(group_id, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as error:
+            raise ProcessTreeProofError(
+                f"could not kill process group={group_id}: {error}"
+            ) from error
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        pass
+    final_deadline = time.monotonic() + grace_seconds
+    final_error: ProcessTreeProofError | None = None
+    while True:
+        try:
+            return tracker.prove_gone(group_id)
+        except ProcessTreeProofError as error:
+            final_error = error
+            remaining = final_deadline - time.monotonic()
+            if remaining <= 0:
+                raise ProcessTreeProofError(
+                    f"process tree cleanup failed first={proof_error} final={final_error}"
+                ) from final_error
+            time.sleep(min(PROCESS_TREE_POLL_INTERVAL_SECONDS, remaining))
+
+
+def _final_drain_and_reap(
+    process: subprocess.Popen[str],
+    stdout: bytes,
+    stderr: bytes,
+    *,
+    grace_seconds: float,
+) -> tuple[bytes, bytes, bool, str | None]:
+    """Drain child pipes once, then boundedly kill and reap on drain failure."""
+    try:
+        drained_stdout, drained_stderr = process.communicate(timeout=grace_seconds)
+    except (subprocess.TimeoutExpired, OSError) as error:
+        partial_stdout, partial_stderr = _exception_output(error)
+        stdout = _merge_output_fragments(stdout, partial_stdout)
+        stderr = _merge_output_fragments(stderr, partial_stderr)
+        cleanup_error: str | None = f"final-drain={type(error).__name__}: {error}"
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        except OSError as error:
+            cleanup_error += f";kill={error}"
+        try:
+            process.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired as error:
+            cleanup_error += f";reap={error}"
+        except OSError as error:
+            cleanup_error += f";reap={error}"
+        return stdout, stderr, False, cleanup_error
+    stdout = _merge_output_fragments(stdout, drained_stdout)
+    stderr = _merge_output_fragments(stderr, drained_stderr)
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired as error:
+        return stdout, stderr, False, f"reap={error}"
+    except OSError as error:
+        return stdout, stderr, False, f"reap={error}"
+    return stdout, stderr, True, None
+
+
+def run_bounded_capture(
+    command: list[str],
+    cwd: Path = ROOT_DIR,
+    timeout_seconds: int = PROBE_TIMEOUT_SECONDS,
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        command,
+        cwd=str(cwd),
+        text=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **process_group_options(),
+    )
+    process._dobby_process_group_id = process.pid  # type: ignore[attr-defined]
+    attach_process_tree_tracker(process)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except (subprocess.TimeoutExpired, OSError) as error:
+        captured_stdout, captured_stderr = _exception_output(error)
+        tree_proof: str | None = None
+        tree_error: ProcessTreeProofError | None = None
+        try:
+            tree_proof = terminate_process_group(process)
+        except ProcessTreeProofError as cleanup_error:
+            tree_error = cleanup_error
+            tree_proof = f"tree-proof-failed={cleanup_error}"
+        stdout, stderr, eof_proven, drain_error = _final_drain_and_reap(
+            process,
+            captured_stdout,
+            captured_stderr,
+            grace_seconds=PROCESS_CLEANUP_GRACE_SECONDS,
+        )
+        incomplete = tree_error is not None or not eof_proven
+        status = (
+            f"timeout-{timeout_seconds}s"
+            if isinstance(error, subprocess.TimeoutExpired)
+            else f"communicate-error={type(error).__name__}"
+        )
+        if tree_proof:
+            status += f";{tree_proof}"
+        if drain_error:
+            status += f";{drain_error}"
+        if incomplete:
+            status += ";evidence_incomplete=1"
+        retain_process_diagnostics("probe", stdout, stderr, status)
+        _set_exception_output(error, stdout, stderr)
+        if tree_error is not None:
+            raise tree_error from error
+        if isinstance(error, subprocess.TimeoutExpired):
+            timeout_error = subprocess.TimeoutExpired(
+                command,
+                timeout_seconds,
+                output=output_text(stdout),
+                stderr=output_text(stderr),
+            )
+            raise timeout_error from error
+        raise
+    try:
+        tree_proof = process_tree_tracker(process).prove_gone(process._dobby_process_group_id)  # type: ignore[attr-defined]
+    except ProcessTreeProofError as error:
+        try:
+            tree_proof = terminate_process_group(process)
+        except ProcessTreeProofError as cleanup_error:
+            retain_process_diagnostics(
+                "probe",
+                stdout,
+                stderr,
+                f"exit-{process.returncode};tree-proof-failed={error};cleanup-failed={cleanup_error}",
+            )
+            raise
+    retain_process_diagnostics("probe", stdout, stderr, f"exit-{process.returncode};{tree_proof}")
+    return subprocess.CompletedProcess(
+        command,
+        process.returncode,
+        output_text(stdout),
+        output_text(stderr),
+    )
 
 
 def sha256_file(path: Path) -> str:
@@ -135,19 +798,42 @@ def run(
 
 
 def run_capture(command: list[str], cwd: Path = ROOT_DIR) -> str | None:
+    printable = " ".join(command)
     try:
-        result = subprocess.run(
-            command,
-            cwd=str(cwd),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+        result = run_bounded_capture(command, cwd)
+    except FileNotFoundError as error:
+        emit_process_diagnostic(f"[!] Probe command was not found: {printable}: {error}")
+        return None
+    except subprocess.TimeoutExpired as error:
+        stdout, stderr = _exception_output(error)
+        emit_process_diagnostic(
+            f"[!] Probe timed out after {error.timeout}s: {printable}",
+            stdout,
         )
-    except FileNotFoundError:
+        emit_process_diagnostic("[!] Probe stderr:", stderr)
         return None
+    except OSError as error:
+        stdout, stderr = _exception_output(error)
+        emit_process_diagnostic(
+            f"[!] Probe communicate failed: {printable}: {error}",
+            stdout,
+        )
+        emit_process_diagnostic("[!] Probe stderr:", stderr)
+        raise
     if result.returncode != 0:
+        emit_process_diagnostic(
+            f"[!] Probe failed with exit code {result.returncode}: {printable}",
+            result.stdout,
+        )
+        emit_process_diagnostic("[!] Probe stderr:", result.stderr)
         return None
-    return result.stdout.strip()
+    if result.stderr:
+        emit_process_diagnostic(f"[!] Probe diagnostics: {printable}", result.stderr)
+    # Some version probes (notably ``java -version``) write their successful
+    # version banner to stderr rather than stdout.  Keep the complete stderr
+    # visible above, but use it as the probe value when stdout is empty so a
+    # valid tool is not misclassified as unavailable.
+    return (result.stdout or result.stderr or "").strip()
 
 
 def set_env(name: str, value: str) -> None:
@@ -182,7 +868,6 @@ def download(url: str, output: Path) -> None:
                 "--fail",
                 "--location",
                 "--show-error",
-                "--silent",
                 "--http1.1",
                 "--retry",
                 "5",
@@ -285,6 +970,42 @@ def local_go_root() -> Path:
     return TOOLS_DIR / f"go-{go_version()}"
 
 
+def go_root_is_complete(root: Path) -> bool:
+    """Return whether a local Go tree contains its executable and stdlib."""
+    executable = root / "bin" / ("go.exe" if host_platform() == "windows" else "go")
+    return executable.is_file() and (root / "src" / "runtime").is_dir()
+
+
+def configure_go_root(go_executable: Path) -> None:
+    """Bind Go's runtime root to the installation that owns the executable.
+
+    Go distributions extracted below ``.local-tools`` are relocatable, but
+    the ``go`` launcher cannot infer ``GOROOT`` when its installation is not
+    under a standard system prefix.  This is especially visible on Windows:
+    the initial version probe may succeed only after the root is explicit,
+    and later module commands can otherwise fail inside the Go runtime.
+    """
+    try:
+        root = go_executable.resolve().parent.parent
+    except OSError:
+        return
+    if (root / "bin").is_dir():
+        set_env("GOROOT", str(root))
+
+
+def configure_go_module_proxy() -> None:
+    """Keep Go's normal module proxy when a stale blank setting is present.
+
+    Go also reads the per-user ``go env`` file.  A previously persisted
+    ``GOPROXY=`` therefore survives the runner's environment sanitization and
+    makes ``go mod download`` fail with an empty proxy list.  Preserve every
+    explicit non-empty policy (including ``off``), while making the default
+    behavior explicit and equivalent to an untouched Go installation.
+    """
+    if not os.environ.get("GOPROXY", "").strip():
+        set_env("GOPROXY", "https://proxy.golang.org,direct")
+
+
 def find_go() -> Path | None:
     version = go_version()
     candidates: list[Path] = []
@@ -294,6 +1015,13 @@ def find_go() -> Path | None:
 
     for candidate in candidates:
         if candidate.exists():
+            try:
+                candidate_root = candidate.resolve().parent.parent
+            except OSError:
+                continue
+            if not go_root_is_complete(candidate_root):
+                continue
+            configure_go_root(candidate)
             output = run_capture([str(candidate), "version"])
             if output and f"go{version}" in output:
                 return candidate.parent
@@ -326,10 +1054,22 @@ def install_go(skip_deps: bool) -> None:
         else:
             with tarfile.open(archive) as tar_file:
                 tar_file.extractall(extract_dir)
-        shutil.move(str(extract_dir / "go"), go_root)
+        extracted_root = extract_dir / "go"
+        if not go_root_is_complete(extracted_root):
+            fail(f"Go archive does not contain a complete standard-library tree: {archive}")
+        if go_root.exists():
+            try:
+                shutil.rmtree(go_root)
+            except OSError as error:
+                fail(f"cannot replace incomplete Go installation {go_root}: {error}")
+        if go_root.exists():
+            fail(f"cannot replace incomplete Go installation {go_root}: path remains after removal")
+        go_root.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(extracted_root), go_root)
     finally:
         shutil.rmtree(extract_dir, ignore_errors=True)
 
+    configure_go_root(go_root / "bin" / ("go.exe" if current == "windows" else "go"))
     prepend_path(go_root / "bin")
     log(f"Installed Go {go_version()} into {go_root}")
 
@@ -613,16 +1353,31 @@ def probe_windows_gcc() -> tuple[bool, str]:
     # adjacent runtime DLLs on PATH. Prefer the resolved bin directory both for
     # this probe and for the later Go/cgo process.
     prepend_path(executable.parent)
+    command = [str(executable), "-dumpmachine"]
     try:
-        result = subprocess.run(
-            [str(executable), "-dumpmachine"],
-            cwd=str(ROOT_DIR),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
+        result = run_bounded_capture(command)
     except OSError as error:
+        stdout, stderr = _exception_output(error)
+        emit_process_diagnostic(
+            f"[!] Compiler probe could not start: {command}: {error}",
+            stdout,
+        )
+        emit_process_diagnostic("[!] Compiler probe stderr:", stderr)
         return False, f"compiler=launch_failed errno={error.errno or 0}"
+    except subprocess.TimeoutExpired as error:
+        stdout, stderr = _exception_output(error)
+        emit_process_diagnostic(
+            f"[!] Compiler probe timed out after {error.timeout}s: {' '.join(command)}",
+            stdout,
+        )
+        emit_process_diagnostic("[!] Compiler probe stderr:", stderr)
+        return False, f"compiler=timeout timeout_seconds={error.timeout}"
+    if result.returncode != 0:
+        emit_process_diagnostic(
+            f"[!] Compiler probe failed with exit code {result.returncode}: {' '.join(command)}",
+            result.stdout,
+        )
+        emit_process_diagnostic("[!] Compiler probe stderr:", result.stderr)
     target = result.stdout.strip()
     if result.returncode == 0 and target == "x86_64-w64-mingw32":
         return True, f"compiler=ready target={target}"
@@ -840,23 +1595,11 @@ def install_linux_libcxx_runtime(skip_deps: bool) -> Path:
 def ensure_build_dependencies(target_platform: str, skip_deps: bool, need_android: bool) -> None:
     install_linux_packages(skip_deps)
     install_go(skip_deps)
+    configure_go_module_proxy()
     ensure_compiler(target_platform, skip_deps)
     if need_android:
         install_jdk(skip_deps)
         install_android_sdk(skip_deps)
-
-
-def validate_embedded_cloak_source() -> None:
-    target_dir = GO_MODULE_DIR / "modules" / "Cloak" / "internal"
-    required = (
-        target_dir / "client" / "connector.go",
-        target_dir / "common" / "dialer.go",
-        target_dir / "multiplex" / "session.go",
-    )
-    missing = [path for path in required if not path.is_file() or path.is_symlink()]
-    if missing:
-        fail(f"Tracked embedded Cloak client source is incomplete: {missing[0]}")
-    log("Using tracked embedded Cloak client source")
 
 
 def go_mod_download(run_tidy: bool) -> None:
@@ -865,12 +1608,74 @@ def go_mod_download(run_tidy: bool) -> None:
     run(["go", "mod", "download"], cwd=GO_MODULE_DIR)
 
 
+def prepare_go_test_dependencies(skip_deps: bool, run_go_mod_tidy: bool) -> None:
+    """Materialize the exact native closure required by Linux Go tests.
+
+    The pinned go-go-tunnel module embeds its Linux cgo search path in the
+    module cache. The public bridge and libc++ runtimes are therefore staged
+    in the checkout and added through CGO_LDFLAGS/LD_LIBRARY_PATH before the
+    test process starts. This keeps hosted CI on the same dependency contract
+    as the desktop service build without compiling a service as a side effect.
+    """
+    if host_platform() != "linux":
+        fail("prepare-go-test-deps is supported only on Linux CI runners")
+
+    ensure_build_dependencies("linux", skip_deps, need_android=False)
+    install_linux_trusttunnel_bridge(skip_deps)
+    runtime = install_linux_libcxx_runtime(skip_deps)
+    go_mod_download(run_go_mod_tidy)
+
+    environment = os.environ.copy()
+    append_cgo_ldflags(
+        environment,
+        f"-L{GO_MODULE_DIR}",
+        f"-L{runtime}",
+        "-Wl,--no-as-needed",
+    )
+    set_env("CGO_ENABLED", "1")
+    set_env("CGO_LDFLAGS", environment["CGO_LDFLAGS"])
+    existing_library_path = os.environ.get("LD_LIBRARY_PATH", "").strip()
+    library_path = os.pathsep.join(
+        part for part in (str(GO_MODULE_DIR), str(runtime), existing_library_path) if part
+    )
+    set_env("LD_LIBRARY_PATH", library_path)
+    log(f"Prepared Linux Go-test native dependencies with CGO_LDFLAGS={environment['CGO_LDFLAGS']}")
+    log(f"Prepared Linux Go-test runtime path: {library_path}")
+
+
 def service_output_path(target_platform: str) -> Path:
     return GO_MODULE_DIR / SERVICE_NAMES[target_platform]
 
 
 def service_target_path(target_platform: str) -> Path:
     return SERVICES_DIR / SERVICE_NAMES[target_platform]
+
+
+def build_cli(target_platform: str, arch: str | None = None) -> Path:
+    """Build the native operator CLI without invoking the JVM launcher."""
+    target_arch = arch or default_service_arch(target_platform)
+    output = GO_MODULE_DIR / CLI_NAMES[target_platform]
+    env = os.environ.copy()
+    env.update({"CGO_ENABLED": "0", "GOOS": GOOS_BY_PLATFORM[target_platform], "GOARCH": target_arch})
+    ldflags = "-buildid="
+    if target_platform == "macos":
+        # Go's internal Darwin linker emits a macOS 12 load command even when
+        # the app declares macOS 11 support.  Use the host external linker so
+        # the native CLI remains honest about the product's minimum version.
+        env["CGO_ENABLED"] = "1"
+        ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
+    run(
+        ["go", "build", "-trimpath", f"-ldflags={ldflags}", "-o", output.name, "./cmd/dobbyvpn/"],
+        cwd=GO_MODULE_DIR,
+        env=env,
+    )
+    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    target = SERVICES_DIR / CLI_NAMES[target_platform]
+    shutil.copyfile(output, target)
+    if target_platform != "windows":
+        target.chmod(target.stat().st_mode | 0o111)
+    log(f"Built native Go CLI {target}")
+    return target
 
 
 def install_macos_amd64_trusttunnel_helper(skip_deps: bool) -> None:
@@ -934,7 +1739,11 @@ def build_service(
     skip_deps: bool,
     skip_build: bool,
     run_go_mod_tidy: bool,
-) -> None:
+    *,
+    build_tags: tuple[str, ...] = (),
+    output_path: Path | None = None,
+    runtime_dir: Path | None = None,
+) -> Path:
     target_arch = arch or default_service_arch(target_platform)
     ensure_build_dependencies(target_platform, skip_deps, need_android=False)
     if target_platform == "windows":
@@ -945,14 +1754,29 @@ def build_service(
     if target_platform == "linux":
         if target_arch != "amd64":
             fail("The pinned TrustTunnel Linux bridge currently supports amd64 only")
-        install_linux_trusttunnel_bridge(skip_deps)
-        linux_libcxx_runtime = install_linux_libcxx_runtime(skip_deps)
+        if runtime_dir is None:
+            install_linux_trusttunnel_bridge(skip_deps)
+            linux_libcxx_runtime = install_linux_libcxx_runtime(skip_deps)
+        else:
+            if runtime_dir.is_symlink():
+                fail("The supplied Linux runtime directory is invalid")
+            runtime_dir = runtime_dir.resolve()
+            if not runtime_dir.is_dir() or runtime_dir.is_symlink():
+                fail("The supplied Linux runtime directory is invalid")
+            for name in ("libdobby_bridge.so", "libc++.so.1", "libc++abi.so.1"):
+                candidate = runtime_dir / name
+                if not candidate.is_file() or candidate.is_symlink():
+                    fail(f"The supplied Linux runtime directory is missing {name}")
+            linux_libcxx_runtime = runtime_dir
     else:
         linux_libcxx_runtime = None
-    validate_embedded_cloak_source()
     go_mod_download(run_go_mod_tidy)
 
-    output = service_output_path(target_platform)
+    output = output_path.resolve() if output_path is not None else service_output_path(target_platform)
+    if output_path is not None:
+        if output.exists() or output.is_symlink():
+            fail("The requested service output already exists")
+        output.parent.mkdir(parents=True, exist_ok=True)
     if skip_build and output.exists():
         log(f"Reusing existing {output.name}")
     else:
@@ -965,6 +1789,11 @@ def build_service(
                 "GOARCH": target_arch,
             }
         )
+        ldflags = "-buildid="
+        if target_platform == "macos":
+            # Keep the Intel package's declared macOS 11 floor valid for both
+            # the gRPC service and the native operator CLI.
+            ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
         if target_platform == "linux":
             bridge_search_path = f"-L{GO_MODULE_DIR}"
             runtime_search_path = f"-L{linux_libcxx_runtime}"
@@ -984,28 +1813,35 @@ def build_service(
             # SystemConfiguration APIs. cgo does not infer either dependency
             # from a static archive.
             append_cgo_ldflags(env, "-lc++", "-framework", "SystemConfiguration")
-        run(
+        command = ["go", "build", "-trimpath"]
+        if build_tags:
+            command.append(f"-tags={','.join(build_tags)}")
+        command.extend(
             [
-                "go",
-                "build",
-                "-trimpath",
-                "-ldflags=-buildid=",
+                f"-ldflags={ldflags}",
                 "-o",
-                output.name,
+                os.fspath(output),
                 "./desktop_exports/",
-            ],
+            ]
+        )
+        run(
+            command,
             cwd=GO_MODULE_DIR,
             env=env,
         )
 
-    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
-    target = service_target_path(target_platform)
-    shutil.copyfile(output, target)
+    if output_path is not None:
+        target = output
+    else:
+        SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+        target = service_target_path(target_platform)
+        shutil.copyfile(output, target)
     if target_platform != "windows":
         target.chmod(target.stat().st_mode | 0o111)
-    if target_platform == "macos" and target_arch == "amd64":
+    if output_path is None and target_platform == "macos" and target_arch == "amd64":
         install_macos_amd64_trusttunnel_helper(skip_deps)
     log(f"Copied {output.name} to {target}")
+    return target
 
 
 def read_gradle_properties() -> dict[str, str]:
@@ -1069,27 +1905,82 @@ def desktop_version_properties() -> list[str]:
     ]
 
 
-def gradle_command() -> str:
+def validate_gradle_executable(value: str | os.PathLike[str]) -> str:
+    """Validate and return a trusted caller's fixed Gradle executable path.
+
+    A fixed tool path is deliberately an explicit opt-in.  It must identify a
+    regular, executable, non-symlink file without dot components or symlinked
+    parent directories.  Keeping the path as one argv item means spaces and
+    other ordinary filename characters never become shell syntax.
+    """
+    try:
+        raw = os.fspath(value)
+    except TypeError as error:
+        raise ValueError("fixed Gradle executable must be a path string") from error
+    if isinstance(raw, bytes):
+        raise ValueError("fixed Gradle executable must be a text path")
+    if not raw or "\x00" in raw or "\r" in raw or "\n" in raw:
+        raise ValueError("fixed Gradle executable contains unsafe characters")
+
+    path = Path(raw)
+    if not path.is_absolute():
+        raise ValueError("fixed Gradle executable must be an absolute path")
+    if any(part in {".", ".."} for part in path.parts):
+        raise ValueError("fixed Gradle executable must not contain dot components")
+
+    current = Path(path.anchor)
+    try:
+        for part in path.parts[1:-1]:
+            current /= part
+            info = current.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                raise ValueError("fixed Gradle executable must not traverse symlinks")
+        info = path.lstat()
+    except FileNotFoundError as error:
+        raise ValueError("fixed Gradle executable does not exist") from error
+    except OSError as error:
+        raise ValueError("fixed Gradle executable cannot be inspected") from error
+
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise ValueError("fixed Gradle executable must be a regular non-symlink file")
+    if os.name != "nt" and not info.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
+        raise ValueError("fixed Gradle executable is not executable")
+    return str(path)
+
+
+def gradle_command(fixed_gradle_executable: str | os.PathLike[str] | None = None) -> str:
+    if fixed_gradle_executable is not None:
+        try:
+            return validate_gradle_executable(fixed_gradle_executable)
+        except ValueError as error:
+            fail(str(error))
     if host_platform() == "windows":
         return str(KMP_DIR / "gradlew.bat")
     return "./gradlew"
 
 
-def run_desktop_gradle(skip_deps: bool) -> None:
+def run_desktop_gradle(
+    skip_deps: bool,
+    fixed_gradle_executable: str | os.PathLike[str] | None = None,
+) -> None:
+    gradle = gradle_command(fixed_gradle_executable)
     install_jdk(skip_deps)
     install_android_sdk(skip_deps)
 
     props = desktop_version_properties()
-    run([gradle_command(), "--build-cache", "--parallel", ":app:jvmJar", *props], cwd=KMP_DIR)
-    run([gradle_command(), "--no-daemon", "-q", "dependencies", *props], cwd=KMP_DIR)
-    run([gradle_command(), "--no-daemon", "-q", "printConveyorConfig", *props], cwd=KMP_DIR)
+    run([gradle, "--no-daemon", "--build-cache", "--parallel", ":app:jvmJar", *props], cwd=KMP_DIR)
+    run([gradle, "--no-daemon", "dependencies", *props], cwd=KMP_DIR)
+    run([gradle, "--no-daemon", "printConveyorConfig", *props], cwd=KMP_DIR)
 
 
-def emit_conveyor_config() -> None:
+def emit_conveyor_config(
+    fixed_gradle_executable: str | os.PathLike[str] | None = None,
+) -> None:
     """Print only Conveyor's generated HOCON on every supported host."""
+    gradle = gradle_command(fixed_gradle_executable)
     with contextlib.redirect_stdout(sys.stderr):
         install_jdk(skip_deps=False)
-    command = [gradle_command(), "--no-daemon", "-q", "printConveyorConfig", *desktop_version_properties()]
+    command = [gradle, "--no-daemon", "printConveyorConfig", *desktop_version_properties()]
     try:
         result = subprocess.run(
             command,
@@ -1103,8 +1994,30 @@ def emit_conveyor_config() -> None:
     except FileNotFoundError as error:
         fail(f"Command was not found: {error.filename}")
     if result.returncode != 0:
+        emit_process_diagnostic(
+            f"[!] Conveyor config generation failed with exit code {result.returncode}",
+            result.stdout,
+        )
         fail(f"Conveyor config generation failed with exit code {result.returncode}")
-    sys.stdout.write(result.stdout)
+    marker = "// Generated by the Conveyor Gradle plugin."
+    marker_index = result.stdout.find(marker)
+    if marker_index < 0:
+        # Keep compatibility with older/custom Gradle tasks that already
+        # return a configuration-only stream.  The real Conveyor task emits
+        # the marker and takes the diagnostics-safe path below.
+        sys.stdout.write(result.stdout)
+        return
+    # Gradle writes its lifecycle banner, warnings, and task output to stdout
+    # alongside the task's generated HOCON.  Conveyor treats stdout as a
+    # configuration-only protocol, so preserve the complete child stream as
+    # diagnostics on stderr and pass only the marked configuration through.
+    sys.stderr.write(result.stdout)
+    config = result.stdout[marker_index:]
+    for terminator in ("\n[Incubating] Problems report", "\nDeprecated Gradle features were used"):
+        end_index = config.find(terminator)
+        if end_index >= 0:
+            config = config[:end_index]
+    sys.stdout.write(config.rstrip() + "\n")
 
 
 def required_service_platforms(require_all: bool, platform_value: str) -> list[str]:
@@ -1142,8 +2055,9 @@ def run_conveyor(passphrase: str | None) -> None:
 
 
 def build_app(args: argparse.Namespace) -> None:
+    platforms = selected_platforms(args.platform)
     if not args.skip_libs:
-        for target_platform in selected_platforms(args.platform):
+        for target_platform in platforms:
             build_service(
                 target_platform,
                 args.arch,
@@ -1152,11 +2066,42 @@ def build_app(args: argparse.Namespace) -> None:
                 args.go_mod_tidy,
             )
 
+    # The native operator CLI is a packaging input, not a JVM application
+    # output.  A source/package build may deliberately reuse already-built
+    # service binaries via --skip-libs, but it must still materialize the CLI
+    # for the selected target before Conveyor resolves conveyor.conf.
+    for target_platform in platforms:
+        cli_target = service_target_path(target_platform).parent / CLI_NAMES[target_platform]
+        if not cli_target.exists():
+            build_cli(target_platform, args.arch)
+
     if args.require_all_services:
         require_services(True, args.platform)
-    run_desktop_gradle(args.skip_deps)
+    run_desktop_gradle(args.skip_deps, args.gradle_executable)
     if args.package:
         run_conveyor(args.conveyor_passphrase)
+
+
+def build_test_seams_service(args: argparse.Namespace) -> None:
+    """Build a private Linux hardening service without changing release inputs."""
+    if args.platform != "linux":
+        fail("The build-local health seam is supported only for Linux hardening")
+    output = Path(args.output)
+    if not output.is_absolute() or output.is_symlink() or output.exists():
+        fail("Hardening service output must be an absent absolute path")
+    runtime_dir = Path(args.runtime_dir)
+    if not runtime_dir.is_absolute():
+        fail("Hardening service runtime directory must be absolute")
+    build_service(
+        "linux",
+        args.arch or "amd64",
+        args.skip_deps,
+        False,
+        args.go_mod_tidy,
+        build_tags=("dobbyvpn_test_seams",),
+        output_path=output,
+        runtime_dir=runtime_dir,
+    )
 
 
 def is_windows_admin() -> bool:
@@ -1174,8 +2119,21 @@ def prepare_config_arg(config: str) -> str:
     path = Path(config)
     if path.exists():
         return str(path)
-    config_path = ROOT_DIR / "cli-test-config.toml"
-    config_path.write_text(config, encoding="utf-8")
+    # A literal profile/config passed to the local CLI test is an owner-only
+    # run artifact.  Allocate a fresh file instead of replacing a prior
+    # config or diagnostic record at a fixed checkout path.
+    descriptor, name = tempfile.mkstemp(prefix="dobbyvpn-cli-config-", suffix=".toml")
+    config_path = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(config)
+            handle.flush()
+            os.fsync(handle.fileno())
+        config_path.chmod(0o600)
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
     return str(config_path)
 
 
@@ -1210,6 +2168,30 @@ def sudo_prefix() -> list[str]:
     return ["sudo"]
 
 
+def open_service_log(kind: str, *, binary: bool = False):
+    """Open a unique owner-only service log without replacing prior evidence."""
+    directory = ROOT_DIR / "runtime" / "desktop-build-diagnostics"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory.chmod(0o700)
+    handle = tempfile.NamedTemporaryFile(
+        mode="wb" if binary else "w",
+        **({} if binary else {"encoding": "utf-8"}),
+        prefix=f"grpcvpnserver-{kind}-",
+        suffix=".log",
+        dir=directory,
+        delete=False,
+    )
+    Path(handle.name).chmod(0o600)
+    return handle
+
+
+def close_service_logs(handles: list[object]) -> None:
+    for handle in handles:
+        close = getattr(handle, "close", None)
+        if close:
+            close()
+
+
 def start_service(
     target_platform: str,
     port: int,
@@ -1221,12 +2203,12 @@ def start_service(
 
     handles: list[object] = []
     if target_platform == "windows":
-        stdout = open(ROOT_DIR / "grpcvpnserver.out", "w", encoding="utf-8")
-        stderr = open(ROOT_DIR / "grpcvpnserver.err", "w", encoding="utf-8")
+        stdout = open_service_log("out")
+        stderr = open_service_log("err")
         command = [str(service), "-port", str(port)]
         environment = os.environ.copy()
     else:
-        stdout = open(ROOT_DIR / "grpcvpnserver.log", "w", encoding="utf-8")
+        stdout = open_service_log("combined")
         stderr = subprocess.STDOUT
         if control_socket is None:
             fail("A private control socket path is required for Unix CLI tests")
@@ -1249,33 +2231,52 @@ def start_service(
         stdout=stdout,
         stderr=stderr,
         text=True,
+        **process_group_options(),
     )
+    process._dobby_process_group_id = process.pid  # type: ignore[attr-defined]
+    attach_process_tree_tracker(process)
     ready = wait_for_port(port) if target_platform == "windows" else wait_for_socket(control_socket)
     if ready:
         log("gRPC VPN service is ready")
         return process, handles
 
     stop_service(process)
-    print_service_logs()
+    close_service_logs(handles)
+    print_service_logs(handles)
     fail("gRPC VPN service did not become ready")
 
 
 def stop_service(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
-    log("Stopping gRPC VPN service")
-    process.terminate()
+    if process.poll() is None:
+        log("Stopping gRPC VPN service")
     try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
+        tree_proof = terminate_process_group(process)
+    except ProcessTreeProofError as error:
+        retain_process_diagnostics("service-tree", None, str(error), "stop-failed")
+        raise
+    retain_process_diagnostics("service-tree", None, tree_proof, "stopped")
 
 
-def print_service_logs() -> None:
-    for name in ("grpcvpnserver.log", "grpcvpnserver.out", "grpcvpnserver.err"):
-        path = ROOT_DIR / name
-        if path.exists():
-            print(path.read_text(encoding="utf-8", errors="replace"))
+def print_service_logs(handles: list[object]) -> None:
+    for handle in handles:
+        name = getattr(handle, "name", None)
+        if not isinstance(name, (str, os.PathLike)):
+            continue
+        path = Path(name)
+        try:
+            output = path.read_bytes()
+        except OSError as error:
+            emit_process_diagnostic(f"[!] Could not read service log {path.name}: {error}")
+            continue
+        if public_actions():
+            emit_public_diagnostic("desktop-service", (f"service={path.name}\n", output), root_dir=ROOT_DIR)
+            continue
+        print(f"--- {path.name} ---")
+        rendered = output.decode("utf-8", errors="replace")
+        sys.stdout.write(rendered)
+        if output and not output.endswith(b"\n"):
+            sys.stdout.write("\n")
+        sys.stdout.flush()
 
 
 def remove_control_socket_parent(control_socket: Path | None) -> None:
@@ -1294,16 +2295,12 @@ def remove_control_socket_parent(control_socket: Path | None) -> None:
 
 
 def run_cli_check(config_arg: str, port: int, control_socket: Path | None = None) -> None:
-    props = desktop_version_properties()
     env = os.environ.copy()
     env["PORT"] = str(port)
     if control_socket is not None:
         env["DOBBYVPN_CONTROL_SOCKET"] = str(control_socket)
-    run(
-        [gradle_command(), "--quiet", ":app:run", f"--args=check-config {config_arg}", *props],
-        cwd=KMP_DIR,
-        env=env,
-    )
+    target = SERVICES_DIR / CLI_NAMES[host_platform()]
+    run([str(target), "check-config", config_arg], cwd=KMP_DIR, env=env)
 
 
 def cli_test(args: argparse.Namespace) -> None:
@@ -1326,9 +2323,12 @@ def cli_test(args: argparse.Namespace) -> None:
             skip_build=False,
             run_go_mod_tidy=args.go_mod_tidy,
         )
-        run_desktop_gradle(args.skip_deps)
+        build_cli(target_platform, go_arch_from_machine())
+        run_desktop_gradle(args.skip_deps, args.gradle_executable)
     else:
         require_services(False, "current")
+        if not (SERVICES_DIR / CLI_NAMES[target_platform]).exists():
+            build_cli(target_platform, go_arch_from_machine())
 
     config_arg = prepare_config_arg(config)
     process: subprocess.Popen[str] | None = None
@@ -1346,16 +2346,26 @@ def cli_test(args: argparse.Namespace) -> None:
             if process:
                 stop_service(process)
             remove_control_socket_parent(control_socket)
-            for handle in handles:
-                close = getattr(handle, "close", None)
-                if close:
-                    close()
-            print_service_logs()
+            close_service_logs(handles)
+            print_service_logs(handles)
 
 
 def add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skip-deps", action="store_true", help="Do not install missing local dependencies.")
     parser.add_argument("--skip-build", action="store_true", help="Reuse existing build outputs when possible.")
+
+
+def add_gradle_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--gradle-bin",
+        "--gradle-executable",
+        dest="gradle_executable",
+        metavar="ABSOLUTE_PATH",
+        help=(
+            "Use this fixed absolute Gradle executable. It must be a regular, "
+            "executable, non-symlink file."
+        ),
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -1370,8 +2380,16 @@ def parse_args() -> argparse.Namespace:
     libs.add_argument("--arch", help="Override GOARCH for the service build.")
     libs.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before go mod download.")
 
+    go_test_deps = subparsers.add_parser(
+        "prepare-go-test-deps",
+        help="Stage pinned Linux native dependencies and environment for Go tests.",
+    )
+    add_common_options(go_test_deps)
+    go_test_deps.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before go mod download.")
+
     app = subparsers.add_parser("app", help="Build the desktop JVM app and Conveyor config.")
     add_common_options(app)
+    add_gradle_option(app)
     app.add_argument(
         "--platform",
         default="current",
@@ -1384,16 +2402,29 @@ def parse_args() -> argparse.Namespace:
     app.add_argument("--conveyor-passphrase", default=os.environ.get("CONVEYOR_PASSPHRASE"))
     app.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before service builds.")
 
-    subparsers.add_parser(
+    conveyor_config = subparsers.add_parser(
         "conveyor-config",
         help="Emit generated Conveyor HOCON without platform-specific wrapper assumptions.",
     )
+    add_gradle_option(conveyor_config)
 
     cli = subparsers.add_parser("cli-test", help="Build current desktop target and run check-config.")
     add_common_options(cli)
+    add_gradle_option(cli)
     cli.add_argument("--config", help="Config URL, TOML file path, or inline TOML.")
     cli.add_argument("--port", type=int, default=int(os.environ.get("PORT", "50151")))
     cli.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the service build.")
+
+    test_seams = subparsers.add_parser(
+        "test-seams-service",
+        help="Build the private Linux hardening service with explicit test seams.",
+    )
+    test_seams.add_argument("--skip-deps", action="store_true", help="Do not install missing local dependencies.")
+    test_seams.add_argument("--platform", default="linux")
+    test_seams.add_argument("--arch", default="amd64")
+    test_seams.add_argument("--output", required=True, help="Absent absolute service output path.")
+    test_seams.add_argument("--runtime-dir", required=True, help="Installed Linux runtime library directory.")
+    test_seams.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the service build.")
 
     return parser.parse_args()
 
@@ -1413,12 +2444,16 @@ def main() -> None:
                 args.skip_build,
                 args.go_mod_tidy,
             )
+    elif args.command == "prepare-go-test-deps":
+        prepare_go_test_dependencies(args.skip_deps, args.go_mod_tidy)
     elif args.command == "app":
         build_app(args)
     elif args.command == "cli-test":
         cli_test(args)
+    elif args.command == "test-seams-service":
+        build_test_seams_service(args)
     elif args.command == "conveyor-config":
-        emit_conveyor_config()
+        emit_conveyor_config(args.gradle_executable)
         return
     else:
         fail(f"Unknown command: {args.command}")

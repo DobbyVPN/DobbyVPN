@@ -100,11 +100,8 @@ func TestTruncatedDNSConnCloseUnblocksWaitingWrite(t *testing.T) {
 	}
 }
 
-func TestForceTCPDNSForCloakOrRequiredPlatform(t *testing.T) {
-	if !shouldForceTCPDNS(true) {
-		t.Fatal("Cloak DNS must force the TCP fallback")
-	}
-	if got := shouldForceTCPDNS(false); got != forceTCPDNSForPlatform {
+func TestForceTCPDNSForRequiredPlatform(t *testing.T) {
+	if got := shouldForceTCPDNS(); got != forceTCPDNSForPlatform {
 		t.Fatalf("plain Outline force-TCP policy = %v, platform policy = %v", got, forceTCPDNSForPlatform)
 	}
 }

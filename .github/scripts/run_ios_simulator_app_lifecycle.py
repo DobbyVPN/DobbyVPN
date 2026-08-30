@@ -20,6 +20,9 @@ import subprocess
 import sys
 import time
 
+from public_output import emit_diagnostic as emit_public_diagnostic
+from public_output import public_actions
+
 
 SETTINGS_BUNDLE_ID = "com.apple.Preferences"
 LAUNCH_PID = re.compile(r"^[^:\n]+:\s*([1-9][0-9]*)\s*$")
@@ -35,11 +38,25 @@ def run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         ["xcrun", "simctl", *args],
         check=False,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stderr=subprocess.PIPE,
         text=True,
     )
-    if completed.stdout:
-        sys.stdout.write(completed.stdout)
+    stdout = completed.stdout or ""
+    stderr = completed.stderr or ""
+    if stdout or stderr:
+        if public_actions():
+            emit_public_diagnostic(
+                "ios-simulator",
+                ("--- stdout ---\n", stdout, "--- stderr ---\n", stderr),
+                root_dir=Path(__file__).resolve().parents[2],
+            )
+        else:
+            if stdout:
+                sys.stdout.write(stdout)
+                sys.stdout.flush()
+            if stderr:
+                sys.stderr.write(stderr)
+                sys.stderr.flush()
     if check and completed.returncode != 0:
         raise RuntimeError(f"simctl command failed: {' '.join(args[:2])}")
     return completed

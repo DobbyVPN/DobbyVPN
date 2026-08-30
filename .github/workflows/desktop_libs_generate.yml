@@ -11,6 +11,7 @@ on:
 jobs:
   build_desktop_libs:
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       matrix:
         include:
@@ -31,7 +32,7 @@ jobs:
             platform: macos
             arch: amd64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.source_sha }}
           submodules: true
@@ -55,7 +56,7 @@ jobs:
 
       - name: Cache desktop VPN library
         id: desktop_lib_cache
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             go_module/windows_grpcvpnserver.exe
@@ -71,7 +72,7 @@ jobs:
 
       - name: Set up Go
         if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: .go-version
           cache-dependency-path: go_module/go.sum
@@ -89,7 +90,9 @@ jobs:
           tar -xzf trusttunnel_client-v1.0.49-macos-universal.tar.gz --strip-components=1 trusttunnel_client-v1.0.49-macos-universal/trusttunnel_client
           chmod 755 trusttunnel_client
           codesign --verify --strict --verbose=2 trusttunnel_client
-          codesign -dv --verbose=2 trusttunnel_client 2>&1 | grep -F "TeamIdentifier=TC3Q7MAJXF"
+          # Preserve the complete codesign diagnostic before deriving the
+          # stable TeamIdentifier assertion.
+          codesign -dv --verbose=2 trusttunnel_client 2>&1 | tee /dev/stderr | grep -F "TeamIdentifier=TC3Q7MAJXF"
           rm trusttunnel_client-v1.0.49-macos-universal.tar.gz
 
       - name: Build desktop VPN library
@@ -138,7 +141,7 @@ jobs:
 
       - name: Upload built libraries
         if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: windows_grpcvpnserver.exe
           path: |
@@ -149,7 +152,7 @@ jobs:
 
       - name: Upload built libraries
         if: matrix.platform == 'linux'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ubuntu_grpcvpnserver
           path: |
@@ -161,7 +164,7 @@ jobs:
 
       - name: Upload macOS arm64 service
         if: matrix.platform == 'macos' && matrix.arch == 'arm64'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: macos_grpcvpnserver-${{ matrix.arch }}
           path: |
@@ -170,7 +173,7 @@ jobs:
 
       - name: Upload macOS amd64 service and TrustTunnel helper
         if: matrix.platform == 'macos' && matrix.arch == 'amd64'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: macos_grpcvpnserver-${{ matrix.arch }}
           path: |

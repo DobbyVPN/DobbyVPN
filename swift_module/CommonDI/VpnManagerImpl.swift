@@ -1,376 +1,355 @@
 import app
 import NetworkExtension
 import Foundation
-import SystemConfiguration
-import MyLibrary
 
-/// Shared health state is useful for post-mortem diagnostics, but it is not proof that an iOS
-/// packet tunnel is still connected.  NetworkExtension owns that fact.
-enum IOSVpnConnectionAuthority {
-    private static let lock = NSLock()
-    private static var lifecycle = IOSLifecycleState()
-
-    static func beginStart() -> UInt64 {
-        lock.lock()
-        defer { lock.unlock() }
-        return lifecycle.beginStart()
-    }
-
-    static func beginStop() -> UInt64 {
-        lock.lock()
-        defer { lock.unlock() }
-        return lifecycle.beginStop()
-    }
-
-    static func isCurrent(_ candidate: UInt64) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return lifecycle.isCurrent(candidate)
-    }
-
-    static func publish(_ newStatus: NEVPNStatus, generation candidate: UInt64) {
-        lock.lock()
-        defer { lock.unlock() }
-        _ = lifecycle.receive(lifecycleState(newStatus), generation: candidate)
-    }
-
-    static func currentGeneration() -> UInt64 {
-        lock.lock()
-        defer { lock.unlock() }
-        return lifecycle.generation
-    }
-
-    static func connectionState() -> VpnConnectionState {
-        lock.lock()
-        defer { lock.unlock() }
-        switch lifecycle.extensionState.presentedState {
-        case .connected: return .connected
-        case .connecting: return .connecting
-        case .disconnected: return .disconnected
-        }
-    }
-
-    private static func lifecycleState(_ status: NEVPNStatus) -> NetworkExtensionState {
-        switch status {
-        case .invalid: return .invalid
-        case .disconnected: return .disconnected
-        case .connecting: return .connecting
-        case .connected: return .connected
-        case .reasserting: return .reasserting
-        case .disconnecting: return .disconnecting
-        @unknown default: return .invalid
-        }
-    }
-}
-
-/// NetworkExtension-only transport shell for `IOSSessionShell`.
+/// A NetworkExtension readiness and message-transport shell.
 ///
-/// This deliberately is not a KMP lifecycle implementation: Go owns session
-/// selection, probing, failover, and resource lifecycle in the extension.
-public class VpnManagerImpl {
-    private static let launchId = UUID().uuidString
-    private static let disconnectingStartRetryDelay: TimeInterval = 0.5
-    private static let disconnectingStartMaxRetries = 120
-    private static let startPolicy = IOSStartPolicy(
-        maximumRetries: disconnectingStartMaxRetries
-    )
-    private var logs = NativeModuleHolder.logsRepository
-
+/// This class deliberately has no VPN product state, generation, configured
+/// flag, or event sequence. Those values belong to Go SessionV2 in the
+/// packet-tunnel process. The only state retained here is the private
+/// readiness fence needed to deliver an authenticated provider message.
+public final class VpnManagerImpl: NSObject {
     public static var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
     public static var dobbyName = "Dobby_VPN_4"
-    // NetworkExtension requires a non-empty display address. It is not a VPN endpoint:
-    // the tunnel receives opaque configuration through the App Group instead.
     private static let defaultServerAddress = "Dobby VPN"
 
+    private let logs = NativeModuleHolder.logsRepository
+    private let condition = NSCondition()
     private var vpnManager: NETunnelProviderManager?
-    private var connectionRepository: ConnectionStateRepository
-    private var suppressDisconnectedForPendingStart = false
-    private var activeGeneration: UInt64 = 0
-
+    private var providerStatus: NEVPNStatus = .invalid
     private var observer: NSObjectProtocol?
-    @Published private(set) var state: NEVPNStatus = .invalid
-    public let supportsVpnNetworkReadySignal: Bool = true
 
-    init(connectionRepository: ConnectionStateRepository) {
-        self.connectionRepository = connectionRepository
-        getOrCreateManager { [weak self] manager, _ in
-            guard let self else { return }
-            if manager?.connection.status == .connected {
-                self.state = manager?.connection.status ?? .invalid
-                self.vpnManager = manager
-            } else {
-                self.state = manager?.connection.status ?? .invalid
-            }
-            IOSVpnConnectionAuthority.publish(self.state, generation: self.activeGeneration)
-        }
-
+    public init(connectionRepository: ConnectionStateRepository? = nil) {
+        super.init()
+        _ = connectionRepository // Compatibility for existing native-module construction.
         observer = NotificationCenter.default.addObserver(
             forName: .NEVPNStatusDidChange,
             object: nil,
             queue: nil
         ) { [weak self] notification in
-            guard let self,
-                  let connection = notification.object as? NEVPNConnection else { return }
-
-            if let myConnection = self.vpnManager?.connection, myConnection !== connection {
-                self.logs.writeLog(log: "[NEVPNStatusDidChange] ignoring non-Dobby connection status=\(self.statusName(connection.status)) raw=\(connection.status.rawValue)")
+            guard let self, let connection = notification.object as? NEVPNConnection else { return }
+            self.condition.lock()
+            guard let own = self.vpnManager?.connection, own === connection else {
+                self.condition.unlock()
                 return
             }
-
-            let previous = self.state
-            self.state = connection.status
-            IOSVpnConnectionAuthority.publish(connection.status, generation: self.activeGeneration)
-            self.logs.writeLog(log: "[NEVPNStatusDidChange] \(self.statusName(previous))(\(previous.rawValue)) -> \(self.statusName(connection.status))(\(connection.status.rawValue))")
-
-            switch connection.status {
-            case .connected:
-                self.suppressDisconnectedForPendingStart = false
-                self.connectionRepository.tryUpdateVpnNetworkReady(isReady: true)
-                self.connectionRepository.tryUpdateServiceStarted(
-                    isStarted: true,
-                    generation: Int64(self.activeGeneration)
-                )
-                self.logs.writeLog(log: "VPN connected")
-
-            case .disconnected:
-                if self.suppressDisconnectedForPendingStart {
-                    self.suppressDisconnectedForPendingStart = false
-                    self.logs.writeLog(log: "[NEVPNStatusDidChange] disconnected belongs to previous stop; waiting for pending start retry")
-                    return
-                }
-                self.connectionRepository.tryUpdateVpnNetworkReady(isReady: false)
-                self.connectionRepository.tryUpdateServiceStarted(
-                    isStarted: false,
-                    generation: Int64(self.activeGeneration)
-                )
-                self.logs.writeLog(log: "VPN disconnected")
-
-            case .connecting:
-                self.logs.writeLog(log: "VPN is connecting…")
-
-            case .reasserting:
-                self.logs.writeLog(log: "VPN is reasserting…")
-
-            case .disconnecting:
-                self.logs.writeLog(log: "VPN is disconnecting…")
-
-            case .invalid:
-                self.suppressDisconnectedForPendingStart = false
-                self.connectionRepository.tryUpdateVpnNetworkReady(isReady: false)
-                self.connectionRepository.tryUpdateServiceStarted(
-                    isStarted: false,
-                    generation: Int64(self.activeGeneration)
-                )
-                self.logs.writeLog(log: "VPN status is invalid")
-
-            @unknown default:
-                self.logs.writeLog(log: "VPN status unknown: \(connection.status.rawValue)")
-            }
+            self.providerStatus = connection.status
+            self.condition.broadcast()
+            self.condition.unlock()
+            self.logs.writeLog(log: "[NEVPNStatusDidChange] provider status=\(self.statusName(connection.status)) raw=\(connection.status.rawValue)")
         }
     }
 
     deinit {
-        if let observer {
-            NotificationCenter.default.removeObserver(observer)
-        }
+        if let observer { NotificationCenter.default.removeObserver(observer) }
     }
 
-    public func start(isProtocolProbe: Bool) {
-        let generation = IOSVpnConnectionAuthority.beginStart()
-        activeGeneration = generation
-        self.logs.writeLog(log: "call start launchId=\(Self.launchId) isProtocolProbe=\(isProtocolProbe)")
-        self.logs.writeLog(log: "Routing table without vpn:")
-        getOrCreateManager { manager, _ in
-            guard IOSVpnConnectionAuthority.isCurrent(generation) else {
-                self.logs.writeLog(log: "[start] stale generation=\(generation) ignored before manager start")
-                return
-            }
-            self.handleStart(manager: manager, isProtocolProbe: isProtocolProbe, generation: generation)
+    /// Sends one exact authenticated command to the provider. A timeout or
+    /// signed in-flight response is retried with the exact same bytes so the
+    /// request ID remains idempotent. The inner Go payload is never rewritten.
+    public func sendProviderMessage(_ messageData: Data) -> Data {
+        guard !messageData.isEmpty, messageData.count <= IOSProviderCommand.maximumBytes else {
+            return Self.transportFailure(IOSProviderMessageError.tooLarge.rawValue)
         }
-    }
-
-    private func handleStart(manager: NETunnelProviderManager?, retryAttempt: Int = 0, isProtocolProbe: Bool, generation: UInt64) {
-        guard IOSVpnConnectionAuthority.isCurrent(generation) else { return }
-        guard let manager = manager else {
-            self.logs.writeLog(log: "Created VPNManager is nil")
-            return
-        }
-        let status = manager.connection.status
-        self.logs.writeLog(log: "[start] manager loaded status=\(statusName(status)) raw=\(status.rawValue)")
-        switch Self.startPolicy.action(for: lifecycleState(status), retryAttempt: retryAttempt) {
-        case .retry:
-            self.suppressDisconnectedForPendingStart = true
-            let nextAttempt = retryAttempt + 1
-            self.logs.writeLog(log: "[start] Connection is disconnecting; retry start after 500ms (attempt \(nextAttempt)/\(Self.disconnectingStartMaxRetries))")
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.disconnectingStartRetryDelay) { [weak self] in
-                guard let self else { return }
-                self.getOrCreateManager { manager, _ in
-                    self.handleStart(manager: manager, retryAttempt: nextAttempt, isProtocolProbe: isProtocolProbe, generation: generation)
-                }
-            }
-            return
-
-        case .waitForTransition:
-            self.logs.writeLog(log: "[start] Skip: connection is transitioning (\(status.rawValue))")
-            return
-
-        case .stopThenRetry:
-            // A probe/selected profile must never inherit a running packet tunnel.  Stop the
-            // current NE generation and let the normal disconnecting retry path create a fresh
-            // tunnel once NetworkExtension confirms cleanup.
-            self.logs.writeLog(log: "[start] Tunnel already connected; stopping before fresh generation start")
-            self.suppressDisconnectedForPendingStart = true
-            manager.connection.stopVPNTunnel()
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.disconnectingStartRetryDelay) { [weak self] in
-                guard let self, IOSVpnConnectionAuthority.isCurrent(generation) else { return }
-                self.getOrCreateManager { nextManager, _ in
-                    self.handleStart(
-                        manager: nextManager,
-                        retryAttempt: retryAttempt + 1,
-                        isProtocolProbe: isProtocolProbe,
-                        generation: generation
-                    )
-                }
-            }
-            return
-
-        case .fail:
-            self.logs.writeLog(log: "[start] Give up: connection stayed \(statusName(status)) after \(retryAttempt) retries")
-            self.suppressDisconnectedForPendingStart = false
-            self.connectionRepository.tryUpdateVpnNetworkReady(isReady: false)
-            self.connectionRepository.tryUpdateServiceStarted(
-                isStarted: false,
-                generation: Int64(generation)
+        var budget = IOSProviderRetryBudget(start: monotonicNow())
+        // Preference loading/saving, provider startup, and every transport
+        // retry share one deadline. Readiness is part of this app operation;
+        // it must not consume a second, independent 30-second allowance.
+        guard ensureProviderReady(until: budget.deadline) else {
+            return transportFailureResponse(
+                for: messageData,
+                code: monotonicNow() >= budget.deadline ? "SESSIONAPI_TIMEOUT" : "PLATFORM_FAILED"
             )
-            return
-
-        case .start:
-            break
         }
-        if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
-            self.logs.writeLog(log: "VPN Manager server address configured=\(proto.serverAddress != nil)")
-        }
-        self.vpnManager = manager
-        self.vpnManager?.isEnabled = true
-        manager.saveToPreferences { saveError in
-            if let saveError = saveError {
-                self.logs.writeLog(log: "Failed to save VPN configuration: \(saveError)")
-            } else {
-                self.logs.writeLog(log: "VPN configuration saved successfully!")
-                self.reloadManagerAndStartTunnel(fallbackManager: manager, isProtocolProbe: isProtocolProbe, generation: generation)
+        while let timeout = budget.nextAttemptTimeout(now: monotonicNow()) {
+            if let response = sendOnce(messageData, timeout: timeout) {
+                if !isRetryableProviderResponse(response, requestData: messageData) {
+                    return response
+                }
             }
+            guard let delay = budget.nextRetryDelay(now: monotonicNow()) else {
+                return transportFailureResponse(for: messageData, code: "SESSIONAPI_TIMEOUT")
+            }
+            logs.writeLog(log: "[provider-message] transport retry within aggregate \(Int(IOSProviderTiming.appMessageTimeout))s budget")
+            Thread.sleep(forTimeInterval: delay)
         }
+        return transportFailureResponse(for: messageData, code: "SESSIONAPI_TIMEOUT")
     }
 
-    private func reloadManagerAndStartTunnel(fallbackManager: NETunnelProviderManager, isProtocolProbe: Bool, generation: UInt64) {
-        NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, loadError in
-            guard let self else { return }
-            guard IOSVpnConnectionAuthority.isCurrent(generation) else {
-                self.logs.writeLog(log: "[start] stale generation=\(generation) ignored after preferences reload")
-                return
-            }
-            if let loadError {
-                self.logs.writeLog(log: "[start] Failed to reload VPN configuration after save: \(loadError.localizedDescription)")
-            }
+    /// Stops only the control-mode provider. Callers invoke this after a
+    /// successful Go Destroy response; a failed or timed-out destroy retains
+    /// the provider and its mailbox for recovery.
+    public func stopControlProvider() {
+        condition.lock()
+        let manager = vpnManager
+        condition.unlock()
+        manager?.connection.stopVPNTunnel()
+    }
 
-            let reloadedManager = managers?.first(where: { $0.localizedDescription == Self.dobbyName })
-            let managerToStart = reloadedManager ?? fallbackManager
-            if reloadedManager == nil {
-                self.logs.writeLog(log: "[start] Reloaded VPN manager not found after save; starting saved manager instance")
-            } else {
-                self.logs.writeLog(
-                    log: "[start] Reloaded VPN manager after save status=" +
-                        "\(self.statusName(managerToStart.connection.status)) raw=\(managerToStart.connection.status.rawValue)"
-                )
+    public static func transportFailure(_ code: String) -> Data {
+        Data("{\"ok\":false,\"error\":{\"code\":\"\(code)\"}}".utf8)
+    }
+
+    /// Failures generated by this transport shell are wrapped with the same
+    /// request-bound HMAC as provider replies. That preserves the real typed
+    /// readiness/timeout failure through IOSSessionShell instead of replacing
+    /// it with a synthetic response-invalid error. If the command itself
+    /// cannot be authenticated, the bare local failure is the only safe form.
+    private func transportFailureResponse(for messageData: Data, code: String) -> Data {
+        guard let secret = SharedKeychainSecretStore.shared.data(for: SharedKeychainSecretStore.sessionBridgeHMACKey),
+              let command = try? IOSProviderCommand.decode(messageData, using: secret),
+              let envelope = try? IOSProviderResponse(
+                  requestID: command.requestID,
+                  kind: .transport,
+                  payload: Self.transportFailure(code)
+              ),
+              let encoded = try? envelope.encoded(using: secret) else {
+            return Self.transportFailure(code)
+        }
+        return encoded
+    }
+
+    private func sendOnce(_ messageData: Data, timeout: TimeInterval) -> Data? {
+        condition.lock()
+        let session = vpnManager?.connection as? NETunnelProviderSession
+        condition.unlock()
+        guard let session else { return nil }
+        let semaphore = DispatchSemaphore(value: 0)
+        let responseLock = NSLock()
+        var response: Data?
+        do {
+            try session.sendProviderMessage(messageData) { value in
+                responseLock.lock()
+                response = value
+                responseLock.unlock()
+                semaphore.signal()
             }
+        } catch {
+            logs.writeLog(log: "[provider] sendProviderMessage failed: \(error.localizedDescription)")
+            return nil
+        }
+        guard semaphore.wait(timeout: .now() + timeout) == .success else {
+            return nil
+        }
+        responseLock.lock()
+        defer { responseLock.unlock() }
+        return response
+    }
 
-            self.vpnManager = managerToStart
+    private func monotonicNow() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
 
+    /// A signed provider timeout means the original fixed command may still
+    /// be finishing inside Go; IN_FLIGHT means the same request is explicitly
+    /// replayable. Retry the exact bytes/request ID until the provider returns
+    /// its cached Go result or the bounded transport budget is exhausted.
+    private func isRetryableProviderResponse(_ responseData: Data, requestData: Data) -> Bool {
+        guard let secret = SharedKeychainSecretStore.shared.data(for: SharedKeychainSecretStore.sessionBridgeHMACKey),
+              let command = try? IOSProviderCommand.decode(requestData, using: secret),
+              let response = try? IOSProviderResponse.decode(
+                  responseData,
+                  expectedRequestID: command.requestID,
+                  using: secret
+              ),
+              response.kind == .transport,
+              let root = try? JSONSerialization.jsonObject(with: response.payload) as? [String: Any],
+              root["ok"] as? Bool == false,
+              let error = root["error"] as? [String: Any],
+              let code = error["code"] as? String else { return false }
+        return code == "SESSIONAPI_TIMEOUT" || code == "SESSIONAPI_IN_FLIGHT"
+    }
+
+    private func ensureProviderReady(until deadline: TimeInterval) -> Bool {
+        if Thread.isMainThread {
+            // KMP invokes this bridge on Dispatchers.Default. Refuse a main
+            // thread wait rather than freezing the UI if a caller violates the
+            // boundary.
+            return false
+        }
+        // Once the saved-and-reloaded manager is connected, use that exact
+        // bound object for subsequent commands. Re-saving preferences for
+        // every Observe/Snapshot would add needless transition risk and
+        // consume the aggregate command budget.
+        condition.lock()
+        if let current = vpnManager {
+            providerStatus = current.connection.status
+            if providerStatus == .connected {
+                condition.unlock()
+                return true
+            }
+        }
+        condition.unlock()
+        let loaded = DispatchSemaphore(value: 0)
+        var loadedManager: NETunnelProviderManager?
+        var loadError: Error?
+        getOrCreateManager { value, error in
+            loadedManager = value
+            loadError = error
+            loaded.signal()
+        }
+        guard let remaining = remaining(until: deadline),
+              loaded.wait(timeout: .now() + remaining) == .success else {
+            logs.writeLog(log: "[provider] timed out loading NetworkExtension preferences")
+            return false
+        }
+        condition.lock()
+        // getOrCreateManager returns the post-save reloaded object. Never
+        // prefer an older in-memory manager after a provider-process restart.
+        let current = loadedManager
+        if let current {
+            vpnManager = current
+            providerStatus = current.connection.status
+        }
+        let status = current?.connection.status ?? .invalid
+        condition.unlock()
+        guard let current else { return false }
+        if let loadError {
+            logs.writeLog(log: "[provider] NetworkExtension preference save/load failed: \(loadError.localizedDescription)")
+            return false
+        }
+        var observedStatus = status
+        for _ in 0..<3 {
+            if observedStatus == .connected { return true }
+            if observedStatus == .disconnecting {
+                guard let settled = waitForDisconnectToSettle(until: deadline) else { return false }
+                observedStatus = settled
+                continue
+            }
+            if observedStatus == .connecting || observedStatus == .reasserting {
+                if waitForReady(until: deadline) { return true }
+                observedStatus = current.connection.status
+                continue
+            }
             do {
-                self.logs.writeLog(log: "self.vpnManager = \(managerToStart)")
-                self.logs.writeLog(log: "starting tunnel status=\(self.statusName(managerToStart.connection.status)) raw=\(managerToStart.connection.status.rawValue)")
-                try managerToStart.connection.startVPNTunnel(options: [
-                    "dobbyProtocolProbe": NSNumber(value: isProtocolProbe)
-                ])
-                self.logs.writeLog(log: "startVPNTunnel returned; manager.connection.status = \(self.statusName(managerToStart.connection.status)) raw=\(managerToStart.connection.status.rawValue)")
+                try current.connection.startVPNTunnel(options: nil)
             } catch {
-                self.logs.writeLog(log: "Error starting VPNTunnel \(error)")
-                self.suppressDisconnectedForPendingStart = false
-                self.connectionRepository.tryUpdateVpnNetworkReady(isReady: false)
-                self.connectionRepository.tryUpdateServiceStarted(
-                    isStarted: false,
-                    generation: Int64(generation)
-                )
+                logs.writeLog(log: "[provider] control-mode start failed: \(error.localizedDescription)")
+                return false
             }
+            if waitForReady(until: deadline) { return true }
+            observedStatus = current.connection.status
+        }
+        logs.writeLog(log: "[provider] control-mode provider did not reach connected state")
+        return false
+    }
+
+    private func waitForReady(until monotonicDeadline: TimeInterval) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        while providerStatus != .connected &&
+            providerStatus != .disconnected &&
+            providerStatus != .invalid &&
+            providerStatus != .disconnecting &&
+            monotonicNow() < monotonicDeadline {
+            let deadline = Date().addingTimeInterval(min(0.1, remaining(until: monotonicDeadline) ?? 0))
+            condition.wait(until: deadline)
+            if let status = vpnManager?.connection.status { providerStatus = status }
+        }
+        return providerStatus == .connected
+    }
+
+    private func waitForDisconnectToSettle(until monotonicDeadline: TimeInterval) -> NEVPNStatus? {
+        condition.lock()
+        defer { condition.unlock() }
+        while true {
+            if let status = vpnManager?.connection.status { providerStatus = status }
+            if providerStatus != .disconnecting { return providerStatus }
+            guard let remaining = remaining(until: monotonicDeadline), remaining > 0 else { return nil }
+            condition.wait(until: Date().addingTimeInterval(min(0.1, remaining)))
         }
     }
 
-    public func stop(isUserInitiated: Bool) {
-        // Invalidate any asynchronous preference/retry/restart completion before stopping.
-        activeGeneration = IOSVpnConnectionAuthority.beginStop()
-        IOSVpnConnectionAuthority.publish(.disconnecting, generation: activeGeneration)
-        if !isUserInitiated {
-            DobbyConfigsRepositoryImpl.shared.setIsUserInitStop(isUserInitStop: false)
-        }
-        self.logs.writeLog(log: "Actually vpnManager is \(String(describing: vpnManager))")
-        guard let manager = vpnManager else {
-            self.logs.writeLog(log: "[stop] Skip: vpnManager is nil")
-            return
-        }
-        let status = manager.connection.status
-        self.logs.writeLog(log: "[stop] stopVPNTunnel requested status=\(statusName(status)) raw=\(status.rawValue) isUserInitiated=\(isUserInitiated)")
-        if status == .disconnected || status == .invalid {
-            self.logs.writeLog(log: "[stop] Skip: tunnel is already \(statusName(status))")
-            return
-        }
-        if isUserInitiated {
-            DobbyConfigsRepositoryImpl.shared.setIsUserInitStop(isUserInitStop: true)
-        }
-        manager.connection.stopVPNTunnel()
-        self.logs.writeLog(log: "[stop] stopVPNTunnel() called, waiting for .disconnecting")
+    private func remaining(until deadline: TimeInterval) -> TimeInterval? {
+        let value = deadline - monotonicNow()
+        return value > 0 ? value : nil
     }
 
     private func getOrCreateManager(completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
-            guard let self else { return }
+            guard let self else { completion(nil, error); return }
             if let error {
-                self.logs.writeLog(log: "Failed to load VPN preferences: \(error.localizedDescription)")
+                self.logs.writeLog(log: "[provider] preference load failed: \(error.localizedDescription)")
+                completion(nil, error)
+                return
             }
-            self.logs.writeLog(log: "Loaded VPN managers count=\(managers?.count ?? 0)")
+            if let existing = managers?.first(where: { $0.localizedDescription == Self.dobbyName }) {
+                self.applyProtocolDefaults(manager: existing)
+                // Persist control-mode routing defaults before any start. An
+                // in-memory fix is not sufficient because NetworkExtension
+                // may reload the saved manager for the provider process.
+                self.saveAndReload(existing, completion: completion)
+                return
+            }
+            let created = self.makeManager()
+            self.saveAndReload(created, completion: completion)
+        }
+    }
 
-            if let existingManager = managers?.first(where: { $0.localizedDescription == Self.dobbyName }) {
-                vpnManager = existingManager
-                self.logs.writeLog(log: "Existing manager found status=\(self.statusName(existingManager.connection.status)) raw=\(existingManager.connection.status.rawValue)")
-                self.applyProtocolDefaults(manager: existingManager)
-                completion(existingManager, nil)
-            } else {
-                self.logs.writeLog(log: "Existing manager not found.")
-                self.vpnManager = self.makeManager()
-                self.vpnManager?.saveToPreferences { [weak self] error in
-                    completion(self?.vpnManager, error)
-                }
+    /// NetworkExtension's save completion acknowledges persistence, but the
+    /// manager object passed to it is not the authoritative object used by a
+    /// subsequent start. Reload the saved preference and bind all state to
+    /// that object before returning from the readiness fence.
+    private func saveAndReload(
+        _ manager: NETunnelProviderManager,
+        completion: @escaping (NETunnelProviderManager?, Error?) -> Void
+    ) {
+        manager.saveToPreferences { [weak self] saveError in
+            guard let self else { completion(nil, saveError); return }
+            guard let saveError else {
+                self.reloadSavedManager(completion: completion)
+                return
             }
+            self.logs.writeLog(log: "[provider] preference save failed: \(saveError.localizedDescription)")
+            completion(nil, saveError)
+        }
+    }
+
+    private func reloadSavedManager(
+        completion: @escaping (NETunnelProviderManager?, Error?) -> Void
+    ) {
+        NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, loadError in
+            guard let self else { completion(nil, loadError); return }
+            if let loadError {
+                self.logs.writeLog(log: "[provider] preference reload failed: \(loadError.localizedDescription)")
+                completion(nil, loadError)
+                return
+            }
+            guard let reloaded = managers?.first(where: { $0.localizedDescription == Self.dobbyName }) else {
+                let missing = NSError(
+                    domain: "PacketTunnelProvider.preferences",
+                    code: -8,
+                    userInfo: [NSLocalizedDescriptionKey: "saved DobbyVPN NetworkExtension manager was not returned by reload"]
+                )
+                self.logs.writeLog(log: "[provider] preference reload did not return the saved DobbyVPN manager")
+                completion(nil, missing)
+                return
+            }
+            self.condition.lock()
+            self.vpnManager = reloaded
+            self.providerStatus = reloaded.connection.status
+            self.condition.broadcast()
+            self.condition.unlock()
+            completion(reloaded, nil)
         }
     }
 
     private func makeManager() -> NETunnelProviderManager {
-        let newVpnManager = NETunnelProviderManager()
-        newVpnManager.localizedDescription = Self.dobbyName
-
-        newVpnManager.protocolConfiguration = makeDefaultProtocol()
-        newVpnManager.isEnabled = true
-        return newVpnManager
+        let manager = NETunnelProviderManager()
+        manager.localizedDescription = Self.dobbyName
+        manager.protocolConfiguration = makeDefaultProtocol()
+        manager.isEnabled = true
+        return manager
     }
 
     private func applyProtocolDefaults(manager: NETunnelProviderManager) {
-        guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else { return }
+        let proto = (manager.protocolConfiguration as? NETunnelProviderProtocol) ?? NETunnelProviderProtocol()
         applyProtocolDefaults(proto)
         manager.protocolConfiguration = proto
+        manager.isEnabled = true
     }
 
     private func makeDefaultProtocol() -> NETunnelProviderProtocol {
         let proto = NETunnelProviderProtocol()
-        proto.providerConfiguration = [:]
+        proto.providerConfiguration = ["mode": "control"]
         applyProtocolDefaults(proto)
         return proto
     }
@@ -378,47 +357,28 @@ public class VpnManagerImpl {
     private func applyProtocolDefaults(_ proto: NETunnelProviderProtocol) {
         proto.providerBundleIdentifier = Self.dobbyBundleIdentifier
         proto.serverAddress = Self.defaultServerAddress
-        proto.includeAllNetworks = true
-        proto.excludeLocalNetworks = true
+        proto.providerConfiguration = ["mode": "control"]
+        // Control mode must not claim all traffic before Go owns a generation
+        // and the provider applies settings at its AcquireTunnel callback.
+        proto.includeAllNetworks = false
+        proto.excludeLocalNetworks = false
+        proto.enforceRoutes = false
         if #available(iOS 16.4, *) {
             proto.excludeCellularServices = false
             proto.excludeAPNs = false
         }
-        proto.enforceRoutes = false
-        if #available(iOS 17.4, *) {
-            proto.excludeDeviceCommunication = false
-        }
+        if #available(iOS 17.4, *) { proto.excludeDeviceCommunication = false }
     }
 
     private func statusName(_ status: NEVPNStatus) -> String {
         switch status {
-        case .invalid:
-            return "invalid"
-        case .disconnected:
-            return "disconnected"
-        case .connecting:
-            return "connecting"
-        case .connected:
-            return "connected"
-        case .reasserting:
-            return "reasserting"
-        case .disconnecting:
-            return "disconnecting"
-        @unknown default:
-            return "unknown"
+        case .invalid: return "invalid"
+        case .disconnected: return "disconnected"
+        case .connecting: return "connecting"
+        case .connected: return "connected"
+        case .reasserting: return "reasserting"
+        case .disconnecting: return "disconnecting"
+        @unknown default: return "unknown"
         }
     }
-
-    private func lifecycleState(_ status: NEVPNStatus) -> NetworkExtensionState {
-        switch status {
-        case .invalid: return .invalid
-        case .disconnected: return .disconnected
-        case .connecting: return .connecting
-        case .connected: return .connected
-        case .reasserting: return .reasserting
-        case .disconnecting: return .disconnecting
-        @unknown default: return .invalid
-        }
-    }
-
 }

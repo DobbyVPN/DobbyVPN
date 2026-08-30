@@ -20,16 +20,4 @@ open class LoggerGrpcLibrary(channel: Channel) : LoggerLibrary {
             }
         }
     }
-
-    override fun InitTelemetry(endpoint: String, token: String) {
-        // Compatibility no-op: never forward endpoint/token through the process.
-    }
-
-    override fun StopTelemetry() {
-        // Compatibility no-op: remote telemetry is disabled.
-    }
-
-    override fun SetupTelemetryAttributes(config: String) {
-        // Compatibility no-op: configuration attributes remain local.
-    }
 }

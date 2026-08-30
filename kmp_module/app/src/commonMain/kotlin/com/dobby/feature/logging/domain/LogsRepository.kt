@@ -17,6 +17,7 @@ expect fun provideGoLogFilePath(): Path
 expect fun provideAdditionalLogFilePaths(): List<Path>
 expect fun platformLogInfo(): String
 expect fun platformLogStorageInitializationAvailable(): Boolean
+expect fun clearLogFile(path: Path, storageFileSystem: FileSystem)
 expect fun <T> withLogWriteLock(block: () -> T): T
 
 fun maskStr(input: String): String = if (input.isEmpty()) "" else "[REDACTED]"
@@ -39,7 +40,8 @@ class LogsRepository private constructor(
         internal fun withFileSystemForTesting(
             logFilePath: Path,
             storageFileSystem: FileSystem,
-        ): LogsRepository = LogsRepository(logFilePath, emptyList(), storageFileSystem)
+            additionalLogFilePaths: List<Path> = emptyList(),
+        ): LogsRepository = LogsRepository(logFilePath, additionalLogFilePaths, storageFileSystem)
     }
 
     private val producerLogPaths = (listOf(logFilePath) + additionalLogFilePaths).distinct()
@@ -112,7 +114,7 @@ class LogsRepository private constructor(
 
     fun clearLogs(): Boolean = runCatching {
         withLogWriteLock {
-            storageFileSystem.sink(logFilePath).buffer().use { }
+            clearLogFile(logFilePath, storageFileSystem)
         }
         writeEvent(
             level = LogLevel.INFO,
@@ -177,7 +179,7 @@ class LogsRepository private constructor(
     fun readAllLogs(): List<String> = readMergedRaw(EXPORT_TAIL_LINES)
 
     /** Human rendering for the app and CLI; raw records remain unchanged on disk. */
-    fun readLogs(limit: Int): List<String> = readMergedRaw(limit).map(::renderLogLine)
+    private fun readLogs(limit: Int): List<String> = readMergedRaw(limit).map(::renderLogLine)
 
     fun readUILogs(): List<String> = readLogs(UI_TAIL_LINES)
 

@@ -33,7 +33,6 @@ type OutlineDevice struct {
 	svrIP        net.IP
 	streamDialer transport.StreamDialer
 	packetDialer transport.PacketDialer
-	useCloak     bool
 	websocket    bool
 	hasTCPPath   bool
 	hasUDPPath   bool
@@ -110,7 +109,6 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 		return nil, err
 	}
 
-	useCloak := ip.IsLoopback()
 	isWebSocket := strings.Contains(transportConfig, "ws:")
 	hasTCPPath := strings.Contains(transportConfig, "tcp_path=")
 	hasUDPPath := strings.Contains(transportConfig, "udp_path=")
@@ -125,13 +123,10 @@ func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
 		sd,
 		pd,
 	)
-	log.Debugf(Category, "outline client: cloak mode = %v", useCloak)
-
 	od := &OutlineDevice{
 		svrIP:        ip,
 		streamDialer: sd,
 		packetDialer: pd,
-		useCloak:     useCloak,
 		websocket:    isWebSocket,
 		hasTCPPath:   hasTCPPath,
 		hasUDPPath:   hasUDPPath,
@@ -314,12 +309,11 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 
 		// Android's resolver did not receive replies through otherwise healthy
 		// Outline UDP transports in qualification, while its TCP retry path was
-		// reliable. Cloak already needs the same standards-compliant truncated
-		// response to force TCP DNS. Keep other desktop UDP behavior unchanged.
-		if shouldForceTCPDNS(d.useCloak) && port == 53 {
+		// reliable. Keep the platform-specific standards-compliant fallback here.
+		if shouldForceTCPDNS() && port == 53 {
 			d.udpDNSTruncated.Add(1)
 
-			log.Debugf(Category, "[SOCKS5 DNS] returning truncated DNS attempt=%d addr=%s cloak=%v stats={%s}", attempt, addr, d.useCloak, d.dialStats())
+			log.Debugf(Category, "[SOCKS5 DNS] returning truncated DNS attempt=%d addr=%s stats={%s}", attempt, addr, d.dialStats())
 
 			return newTruncatedDNSConn(), nil
 		}
@@ -342,8 +336,8 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	return nil, err
 }
 
-func shouldForceTCPDNS(useCloak bool) bool {
-	return useCloak || forceTCPDNSForPlatform
+func shouldForceTCPDNS() bool {
+	return forceTCPDNSForPlatform
 }
 
 func updatePeakInt64(peak *atomic.Int64, current int64) {
@@ -770,7 +764,7 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 		return net.ParseIP("127.0.0.1").To4(), nil
 	}
 
-	ip, err := dnscache.ResolveIPv4(context.Background(), host, dnscache.FastResolveTimeout, "outline")
+	ip, err := dnscache.ResolveIPv4(context.Background(), host, dnscache.ServerResolveTimeout, "outline")
 	if err != nil {
 		return nil, err
 	}
@@ -824,7 +818,7 @@ func extractSSHost(transportConfig string) (string, error) {
 	return "", errors.New("ss:// not found")
 }
 
-// Open implements pkg.ProtocolDevice. The SOCKS5 server is already started
+// Open implements protocol.ProtocolDevice. The SOCKS5 server is already started
 // by NewOutlineDevice, so this is a no-op.
 func (d *OutlineDevice) Open(routingTableID int, uplinkIface string) error {
 	if d == nil {

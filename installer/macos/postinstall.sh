@@ -27,6 +27,6 @@ chown root:wheel "$PLIST_DEST"
 chmod 644 "$PLIST_DEST"
 
 # Unload existing service in case of reinstall, ignore errors
-launchctl bootout system "$PLIST_DEST" 2>/dev/null || true
+launchctl bootout system "$PLIST_DEST" || true
 
 launchctl bootstrap system "$PLIST_DEST"

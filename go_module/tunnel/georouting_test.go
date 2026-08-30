@@ -6,9 +6,7 @@ import (
 )
 
 func TestGeoRoutingLeaseRestoresExactBaseline(t *testing.T) {
-	ClearGeoRoutingConf()
-	t.Cleanup(ClearGeoRoutingConf)
-	SetGeoRoutingConf("192.0.2.0/24 2001:db8::/32")
+	setTestGeoRoutingConf(t, "192.0.2.0/24", "2001:db8::/32")
 
 	lease, err := AcquireGeoRoutingConf([]string{"198.51.100.0/24"})
 	if err != nil {
@@ -26,8 +24,7 @@ func TestGeoRoutingLeaseRestoresExactBaseline(t *testing.T) {
 }
 
 func TestGeoRoutingLeaseCopiesCallerInput(t *testing.T) {
-	ClearGeoRoutingConf()
-	t.Cleanup(ClearGeoRoutingConf)
+	setTestGeoRoutingConf(t)
 	entries := []string{"198.51.100.0/24"}
 	lease, err := AcquireGeoRoutingConf(entries)
 	if err != nil {
@@ -38,6 +35,22 @@ func TestGeoRoutingLeaseCopiesCallerInput(t *testing.T) {
 		t.Fatalf("policy changed with caller slice = %#v", got)
 	}
 	lease.Release()
+}
+
+func setTestGeoRoutingConf(t *testing.T, entries ...string) {
+	t.Helper()
+	routes, err := resolveRoutingEntries(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routesMu.Lock()
+	defaultBypassCIDRs = cloneIPNets(routes)
+	routesMu.Unlock()
+	t.Cleanup(func() {
+		routesMu.Lock()
+		defaultBypassCIDRs = nil
+		routesMu.Unlock()
+	})
 }
 
 func currentGeoRoutingCIDRs() []string {

@@ -9,16 +9,8 @@ From `go_module/`:
 
 ```bash
 go test ./...
-go test github.com/cbeuw/Cloak/exported_client github.com/cbeuw/Cloak/internal/client
-go test -race ./core/... ./routing/... ./sessionapi/... ./tunnel/...
-go test -race github.com/cbeuw/Cloak/exported_client github.com/cbeuw/Cloak/internal/client
+go test -race ./routing/... ./sessionapi/... ./tunnel/...
 ```
-
-The explicit Cloak command is required because `go_module/modules/Cloak` is a
-replaced nested module and is not included in the parent module's `./...`
-pattern. It covers the embedded client integration used by every DobbyVPN
-platform; the standalone Cloak server packages are outside this app's test
-scope.
 
 From `kmp_module/` with JDK 17 and the Android SDK configured:
 
@@ -45,7 +37,7 @@ framework before invoking Xcode:
 ```bash
 cd go_module
 ./scripts/build_ios_xcframework.sh
-ditto MyLibrary.xcframework ../swift_module/MyLibrary.xcframework
+ditto DobbyVPNRuntime.xcframework ../swift_module/DobbyVPNRuntime.xcframework
 
 cd ../kmp_module
 ./gradlew :app:linkDebugFrameworkIosSimulatorArm64 :app:iosSimulatorArm64Test
@@ -77,7 +69,7 @@ The Swift package compiles the exact platform-neutral production source from
 `swift_module/CommonDI`; it is not a copied lifecycle model. The Gradle command
 links the KMP Simulator framework and executes `commonTest` coverage inside an
 iOS Simulator. Its deterministic tests include the extension-process Go
-session transaction (create/configure/start/poll/stop/destroy), including
+session transaction (create/configure/start/observe/stop/destroy), including
 virtual-time timeout and cleanup retry paths. It also executes the shared
 logging contract for legacy-record compatibility, full-timestamp ordering,
 multi-producer merge/clear, and durable retention of the latest clear marker.
@@ -94,16 +86,25 @@ storage and require controlled degradation rather than startup failure.
 
 The signed-IPA workflow separately inspects the app and packet-tunnel extension,
 signatures, exact entitlements, App Group, source commit, version/build,
-provisioning expiry, and release debugger policy. Simulator cannot execute the
-production NetworkExtension data plane, real traffic, sleep/wake, or physical
-device resource cleanup. Those remain optional physical-hardware strengthening
-tests, not prerequisites for contributors or maintainers without an iPhone.
+provisioning expiry, and release debugger policy.
 
 The Go XCFramework intentionally includes a Simulator slice. It shares all
 session/runtime code with the device slice, but TrustTunnel returns a typed
 unsupported error because its vendor-supplied native bridge is physical-iOS
 only. This keeps the Simulator app loadable without pretending to validate a
 VPN protocol it cannot execute.
+
+## Owner-controlled Android transition seam
+
+The instrumentation-only hosted-profile driver also accepts the canonical
+`network_transition`, `sleep_wake`, and `process_loss` operations. These are
+not production controls and do not add a Harness or Torturer dependency to the
+application: an owner-side adapter performs the emulator action, then signals
+the test APK through a one-use, token-bound private-file rendezvous. The app
+reports only the resulting tunnel, routing, or disconnection facts; the adapter
+retains the complete control command diagnostics and proves the emulator state
+change. Missing or malformed control input fails closed, and ordinary commands
+cannot include the control fields.
 
 ## Independent public verification
 
@@ -120,9 +121,26 @@ without duplicating tests. A named app XCTest remains a separate future stage.
 
 The caller uses the unprivileged `pull_request` event, read-only permissions,
 no secrets, no protected environments, and no shared Actions cache.
+It invokes Torturer's secretless verification workflow only; it cannot create
+provider resources or access the trusted functional environment.
+
+Torturer separately owns manually dispatched, trusted hosted functional lanes
+for Linux, Windows, macOS, and Android. Those lanes source-build an exact
+DobbyVPN commit, stage a strict runtime allow-list, and run Torturer's canonical
+scenario engine against one disposable Render-hosted Outline WebSocket server
+per platform. The provider credential and plaintext profile remain confined to
+Torturer's protected server-lease job. Candidate build jobs never receive
+provider credentials, and DobbyVPN does not import or depend on Torturer.
+
+Hosted results contain only the canonical assertions, bounded safe metrics,
+exact source/runtime provenance, and verified cleanup state. They do not upload
+screenshots, raw profiles, credentials, endpoint URLs, or literal external-IP
+observations. Owner-local qualification remains responsible for complete raw
+evidence, screenshots, private profile coverage, and OS-specific diagnostics.
 
 ## Scope boundary
 
-Public tests intentionally use no provider credentials or real endpoint
-configuration. They do not claim real external-network identity, sustained
-throughput, or physical-device NetworkExtension qualification.
+Pull-request tests intentionally use no provider credentials or real endpoint
+configuration. Trusted hosted functional lanes use only a run-scoped disposable
+profile and server, and publish no credential-bearing evidence. Private profile
+coverage and complete local diagnostics remain outside this public repository.

@@ -1,11 +1,23 @@
 # doBBYVPN - do Better By VPN
 
-Yet another VPN client. Currently wraps around OutlineSDK, cloak, TrustTunnel & XRay.
+Yet another VPN client. Currently wraps around OutlineSDK, TrustTunnel & XRay.
 More protocols planned.
+
+## Architecture
+
+The architecture driver is one shared UI layer where sharing is valuable, one
+Go product/runtime layer for behavior, and only thin OS-specific shells where
+VPN APIs require them. SessionV2 owns configuration acquisition, parsing,
+selection, lifecycle, recovery, and ordered events; the Compose UI renders that
+state across platforms.
+
+See the complete [architecture contract](docs/ARCHITECTURE.md), including the
+responsibility boundaries and future-protocol checklist.
 
 AppStore: https://apps.apple.com/us/app/dobbyvpn-do-better-by-vpn/id6741442515
 
-F-Droid: https://f-droid.org/en/packages/com.dobby.vpn/
+F-Droid: https://f-droid.org/en/packages/com.dobby.vpn/ (official metadata may
+lag releases; v1.5.0 availability is not claimed until the index is updated.)
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 
@@ -59,9 +71,9 @@ IPs = [
 
 DobbyVPN probes protocol variants one by one when the VPN starts. Each variant
 must start and pass latency probes through the tunnel; DobbyVPN then activates
-the working variant with the lowest average latency. If health check later
-reports that the active variant is no longer connected, DobbyVPN repeats the
-full probe-and-rank procedure until the user stops the VPN. Use the same
+the working variant with the lowest average latency. If the runtime readiness
+monitor reports that the active variant is no longer connected, DobbyVPN
+repeats the full probe-and-rank procedure until the user stops the VPN. Use the same
 `[[Outline]]`, `[[Xray]]` or `[[TrustTunnel]]` section format even when the
 configuration contains only one variant.
 
@@ -95,29 +107,6 @@ IPs = [
   "200.200.200.200/32" # IP adress or subnet that we want to exlude from vpn-routing
 ]
 ```
-
-**ShadowSocks over cloak** (caddy -> cloak -> outline-ss-server)
-
-```toml
-[[Outline]] # Implementation library
-Description = "My sneaky SS in Cloak" # description - whatever you like
-Cloak = true # enables cloak (what is cloak? see ref # 2 below)
-Server = "www.myserver.com"
-Password = "Qwerty123" # user's 'secret' from the Outline's config
-BrowserSig = "chrome" # or "firefox"
-EncryptionMethod = "plain" # plain / aes-256-gcm aka aes-gcm / aes-128-gcm /  chacha20-poly1305; ShadowSocks provides it's own encryption 
-# the following three lines are coming from the quick-cloak-server setup script (ref # 3 below); or could be picked up from .env and cloak-server.conf files.  
-UID = "hi8WIXyln+amtgfQeT11zQ=="
-PublicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo="
-CDNWsUrlPath = "/JmJWXlmVXByXicD7DGrdMWV1btwHv0ARK0Yjoaig"
-
-[ExcludeIPs] # Optional
-IPs = [
-  "200.200.200.200/32" # IP adress or subnet that we want to exlude from vpn-routing
-]
-```
-
-For direct Cloak mode, omit `CDNWsUrlPath` or set `Transport = "direct"` explicitly.
 
 **VLESS + Reality over xray-core** ([more details](https://xtls.github.io/en/config/outbounds/vless.html))
 ```toml
@@ -170,5 +159,3 @@ Windows and MacOS apps require manual intervention to be installed for now - not
 
 ## References:
 * 1. [Connection Prefix Disguises](https://developers.google.com/outline/docs/guides/service-providers/prefixing)
-* 2. [Cloak](https://github.com/cbeuw/Cloak)
-* 3. [quick-cloak-server]([url](https://github.com/DobbyVPN/quick-cloak-server))

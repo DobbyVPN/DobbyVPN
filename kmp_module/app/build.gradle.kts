@@ -12,8 +12,8 @@ data class AndroidNativeAbi(
     val hasTrustTunnelNativeBridge: Boolean
 )
 
-// Keep the gomobile AAR and the libc++ runtime payload in lockstep.  Torturer's
-// public Android emulator is x86_64, while production devices remain arm64.
+// Keep the gomobile AAR and the libc++ runtime payload in lockstep. The hosted
+// Android emulator is x86_64, while production devices remain arm64.
 val androidNativeAbis = listOf(
     AndroidNativeAbi("arm64-v8a", "arm64", "aarch64-linux-android", hasTrustTunnelNativeBridge = true),
     AndroidNativeAbi("x86_64", "amd64", "x86_64-linux-android", hasTrustTunnelNativeBridge = false)
@@ -21,8 +21,7 @@ val androidNativeAbis = listOf(
 
 val repoRoot: File = rootProject.projectDir.parentFile
 val goModuleDir: File = repoRoot.resolve("go_module")
-val goModuleCloakInternalDir: File = goModuleDir.resolve("modules/Cloak/internal")
-val gomobileAar = layout.buildDirectory.file("generated/gomobile/backend.aar")
+val gomobileAar = layout.buildDirectory.file("generated/gomobile/dobbyvpn-runtime.aar")
 val gomobileExecutable = providers.gradleProperty("gomobileExecutable")
     .orElse(providers.environmentVariable("GOMOBILE"))
     .orElse(providers.provider {
@@ -122,22 +121,17 @@ kotlin {
         androidMain.dependencies {
             implementation(compose.preview)
             implementation(libs.androidx.activity.compose)
-            implementation(libs.androidx.biometric.ktx)
             implementation(libs.androidx.core.ktx)
             implementation(libs.androidx.lifecycle.runtime.ktx)
             implementation(libs.androidx.ui)
             implementation(libs.androidx.ui.graphics)
             implementation(libs.androidx.ui.tooling.preview)
             implementation(libs.androidx.material3)
-            implementation(libs.androidx.compiler)
-            implementation(libs.kotlin.script.runtime)
             implementation(libs.koin.android)
             implementation(libs.koin.androidx.compose)
 
             implementation(backendGomobileAar)
 
-            implementation(libs.okhttp)
-            implementation(libs.ktor.client.okhttp)
 
         }
 
@@ -157,17 +151,10 @@ kotlin {
             implementation(libs.koin.compose)
             implementation(libs.lifecycle.viewmodel)
 
-            implementation(libs.ktor.client.core)
-            implementation(libs.ktor.client.content.negotiation)
-            implementation(libs.ktor.serialization.kotlinx.json)
-
-            implementation(libs.tomlkt)
-
             implementation(libs.datetime)
 
             implementation("com.russhwolf:multiplatform-settings-no-arg:1.3.0")
 
-            implementation(compose.components.resources)
         }
 
         commonTest.dependencies {
@@ -185,9 +172,6 @@ kotlin {
             implementation(libs.skiko.linux)
 
             implementation(libs.kotlinx.coroutines.swing)
-            implementation(libs.jna)
-            implementation(libs.gson)
-            implementation(libs.ktor.client.cio)
         }
 
         androidUnitTest.dependencies {
@@ -204,11 +188,6 @@ kotlin {
 
         iosMain.dependencies {
 
-            implementation(libs.ktor.client.darwin)
-
-            implementation(libs.compass.geocoder.mobile)
-            implementation(libs.compass.geolocation.mobile)
-            implementation(libs.compass.permissions.mobile)
         }
     }
 }
@@ -332,7 +311,6 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         include("**/*.go")
         exclude("**/build/**")
     })
-    inputs.dir(goModuleCloakInternalDir)
     inputs.file(goModuleDir.resolve("go.mod"))
     inputs.file(goModuleDir.resolve("go.sum"))
     outputs.file(outputFile)
@@ -354,9 +332,6 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         ).distinct().joinToString(" ")
 
     doFirst {
-        check(goModuleCloakInternalDir.resolve("client/connector.go").isFile) {
-            "Tracked embedded Cloak client source is incomplete: ${goModuleCloakInternalDir.absolutePath}"
-        }
         outputFile.parentFile.mkdirs()
         goTmpDir.get().mkdirs()
         logger.lifecycle("gomobileBindAndroid: gomobile=${gomobileExecutable.get()}")

@@ -6,6 +6,12 @@ import Security
 public final class SharedKeychainSecretStore {
     public static let shared = SharedKeychainSecretStore()
 
+    /// Shared by the app and packet-tunnel extension.  The mailbox is a
+    /// one-shot encrypted Keychain item; it is never copied to UserDefaults or
+    /// put into an app-message payload.
+    public static let sessionConfigurationMailboxKey = "sessionapi.v2.configuration.mailbox"
+    public static let sessionBridgeHMACKey = "sessionapi.v2.bridge.hmac"
+
     private let service = "vpn.dobby.app.config.v1"
     private let accessGroup: String?
 
@@ -25,14 +31,20 @@ public final class SharedKeychainSecretStore {
     @discardableResult
     public func set(_ value: Data, for key: String) -> Bool {
         let query = baseQuery(key)
-        let update = [kSecValueData as String: value]
+        let update: [String: Any] = [
+            kSecValueData as String: value,
+        ]
         let status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
         if status == errSecSuccess { return true }
         guard status == errSecItemNotFound else { return false }
         var create = query
         create[kSecValueData as String] = value
         create[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        return SecItemAdd(create as CFDictionary, nil) == errSecSuccess
+        let createStatus = SecItemAdd(create as CFDictionary, nil)
+        // Two processes can initialize the shared per-install key at the same
+        // time. The loser must reuse the key created by the winner rather than
+        // treating the expected duplicate-item race as a storage failure.
+        return createStatus == errSecSuccess || data(for: key) != nil
     }
 
     public func string(for key: String) -> String? {
@@ -42,6 +54,21 @@ public final class SharedKeychainSecretStore {
     @discardableResult
     public func set(_ value: String, for key: String) -> Bool {
         set(Data(value.utf8), for: key)
+    }
+
+    /// Returns the per-install bridge key, creating it only when the Keychain
+    /// does not already contain one.  Both processes use the same access group
+    /// and therefore observe one stable secret for the lifetime of an install.
+    public func randomData(for key: String, byteCount: Int = 32) -> Data? {
+        if let existing = data(for: key), existing.count == byteCount {
+            return existing
+        }
+        var generated = Data(count: byteCount)
+        let status = generated.withUnsafeMutableBytes { bytes in
+            SecRandomCopyBytes(kSecRandomDefault, byteCount, bytes.baseAddress!)
+        }
+        guard status == errSecSuccess, set(generated, for: key) else { return nil }
+        return data(for: key)
     }
 
     public func remove(_ key: String) {

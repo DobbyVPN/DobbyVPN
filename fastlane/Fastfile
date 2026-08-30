@@ -79,7 +79,7 @@ platform :android do
     gradle(
       task: "dependencies",
       project_dir: "kmp_module",
-      flags: "--no-daemon -q",
+      flags: "--no-daemon",
       properties: {
         "projectRepositoryCommit" => COMMIT,
         "projectRepositoryCommitLink" => COMMIT_LINK,
@@ -91,7 +91,7 @@ platform :android do
     gradle(
       task: "printConveyorConfig",
       project_dir: "kmp_module",
-      flags: "--no-daemon -q",
+      flags: "--no-daemon",
       properties: {
         "projectRepositoryCommit" => COMMIT,
         "projectRepositoryCommitLink" => COMMIT_LINK,

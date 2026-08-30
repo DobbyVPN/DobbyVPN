@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"log/slog"
 
-	v1 "go_module/sessionapi/v1"
+	v2 "go_module/sessionapi/v2"
 )
 
-// SessionAuditSink renders sessionapi/v1's configuration-free diagnostic
+// SessionAuditSink renders sessionapi/v2's configuration-free diagnostic
 // facts through the same redacting JSONL writer as the existing Go logs.
 type SessionAuditSink struct{}
 
-func (SessionAuditSink) RecordAudit(event v1.AuditEvent) {
+func (SessionAuditSink) RecordAudit(event v2.AuditEvent) {
 	level := slog.LevelDebug
 	eventName := event.Event
 	message := "session status recorded"
@@ -34,15 +34,15 @@ func (SessionAuditSink) RecordAudit(event v1.AuditEvent) {
 				fields["failure_code"] = event.Failure
 			}
 		}
-	case v1.AuditEventStateTransition:
+	case v2.AuditEventStateTransition:
 		level = slog.LevelInfo
 		message = fmt.Sprintf("session state changed %s -> %s", event.PreviousState, event.State)
 		fields["state_before"] = event.PreviousState
 		fields["state_after"] = event.State
-		if event.State == v1.StateFailed {
+		if event.State == v2.StateFailed {
 			level = slog.LevelError
 		}
-	case v1.AuditEventStatusSnapshot:
+	case v2.AuditEventStatusSnapshot:
 		message = fmt.Sprintf(
 			"session status state=%s generation=%d configured=%t cleanupComplete=%t",
 			event.State, event.Generation, event.Configured, event.CleanupComplete,
@@ -56,7 +56,7 @@ func (SessionAuditSink) RecordAudit(event v1.AuditEvent) {
 	if event.Sequence != 0 {
 		fields["sequence"] = event.Sequence
 	}
-	if event.Event == v1.AuditEventStateTransition || event.Event == v1.AuditEventStatusSnapshot {
+	if event.Event == v2.AuditEventStateTransition || event.Event == v2.AuditEventStatusSnapshot {
 		fields["configured"] = event.Configured
 		fields["cleanup_complete"] = event.CleanupComplete
 	}

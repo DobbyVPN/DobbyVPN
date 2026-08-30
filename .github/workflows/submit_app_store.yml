@@ -116,7 +116,7 @@ jobs:
       APP_STORE_RELEASE_NOTES: ${{ inputs.whats_new }}
     steps:
       - name: Check out trusted main submission tooling
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -125,13 +125,13 @@ jobs:
         shell: bash
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
-      - uses: ruby/setup-ruby@v1
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         with:
           ruby-version: '3.3'
           bundler-cache: true
 
       - name: Download exact IPA from selected Release run
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: DobbyVPN.ipa
           path: selected-release/ipa
@@ -139,7 +139,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download exact IPA provenance from selected Release run
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: DobbyVPN.ipa.provenance
           path: selected-release/provenance

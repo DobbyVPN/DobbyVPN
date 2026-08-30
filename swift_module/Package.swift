@@ -15,7 +15,6 @@ let package = Package(
             name: "IOSLifecycleCore",
             path: "CommonDI",
             exclude: [
-                "AuthenticationManagerImpl.swift",
                 "CommonDI.h",
                 "CopyLogsInteractorImpl.swift",
                 "DobbyConfigsRepositoryImpl.swift",
@@ -26,8 +25,7 @@ let package = Package(
                 "nativeModule.swift",
             ],
             sources: [
-                "IOSLifecycleCore.swift",
-                "IOSProviderSessionCoordinator.swift",
+                "IOSProviderMessageProtocol.swift",
             ]
         ),
         .testTarget(

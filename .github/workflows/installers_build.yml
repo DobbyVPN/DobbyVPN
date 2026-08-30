@@ -20,6 +20,7 @@ on:
 jobs:
   build_desktop_installers:
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       matrix:
         include:
@@ -30,7 +31,7 @@ jobs:
           - os: macos
             runner: macos-15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.source_sha }}
           submodules: true
@@ -53,19 +54,19 @@ jobs:
           fi
 
       - name: Download Windows gRPC vpn service
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: windows_grpcvpnserver.exe
           path: installer/windows/
 
       - name: Download macOS arm64 gRPC vpn service
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: macos_grpcvpnserver-arm64
           path: installer/macos/services/arm64
 
       - name: Download macOS amd64 gRPC vpn service
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: macos_grpcvpnserver-amd64
           path: installer/macos/services/amd64
@@ -77,25 +78,25 @@ jobs:
           chmod +x services/amd64/macos_grpcvpnserver
 
       - name: Download Windows built application
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyVPN-windows.zip
           path: installer/windows/
 
       - name: Download Linux built application
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyVPN-linux.deb
           path: installer/linux/
 
       - name: Download MacOS amd64 built application
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyVPN-macos-amd64.zip
           path: installer/macos/
 
       - name: Download MacOS aarch64 built application
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyVPN-macos-aarch64.zip
           path: installer/macos/
@@ -229,7 +230,7 @@ jobs:
 
       - name: Upload Windows amd64 installer
         if: matrix.os == 'windows'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyVPN-windows-amd64.msi
           path: installer/windows/bin/amd64/dobbyVPN-windows-amd64.msi
@@ -237,7 +238,7 @@ jobs:
 
       - name: Upload MacOS amd64 installer
         if: matrix.os == 'macos'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyVPN-macos-amd64.pkg
           path: installer/macos/bin/amd64/dobbyVPN-macos-amd64.pkg
@@ -245,7 +246,7 @@ jobs:
 
       - name: Upload MacOS aarch64 installer
         if: matrix.os == 'macos'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyVPN-macos-aarch64.pkg
           path: installer/macos/bin/aarch64/dobbyVPN-macos-aarch64.pkg

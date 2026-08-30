@@ -13,7 +13,7 @@
 		1F6D0C7D2F8D9681004A1D65 /* app.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 1F6D0C7B2F8D9681004A1D65 /* app.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		2152FB042600AC8F00CF470E /* iOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2152FB032600AC8F00CF470E /* iOSApp.swift */; };
 		7555FF83242A565900829871 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7555FF82242A565900829871 /* ContentView.swift */; };
-		8C7731F12E566DCD00B3782E /* MyLibrary.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */; };
+		8C7731F12E566DCD00B3782E /* DobbyVPNRuntime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7731F02E566DCD00B3782E /* DobbyVPNRuntime.xcframework */; };
 		8CF4C25F2E61E1C400A1B0E4 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		8CF4C2602E61E1C400A1B0E4 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		A12013A02D80DE3200D43A3A /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */; };
@@ -81,7 +81,7 @@
 		7555FF7B242A565900829871 /* doBBYVPN.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = doBBYVPN.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7555FF82242A565900829871 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		7555FF8C242A565B00829871 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = MyLibrary.xcframework; sourceTree = "<group>"; };
+		8C7731F02E566DCD00B3782E /* DobbyVPNRuntime.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = DobbyVPNRuntime.xcframework; sourceTree = "<group>"; };
 		A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 		A120131E2D7DB13F00D43A3A /* iosApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iosApp.entitlements; sourceTree = "<group>"; };
 		A120139F2D80DE3100D43A3A /* tunnel.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = tunnel.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -118,7 +118,7 @@
 			files = (
 				A15F0FEA2D874D38007FA45D /* CommonDI.framework in Frameworks */,
 				A12013A02D80DE3200D43A3A /* NetworkExtension.framework in Frameworks */,
-				8C7731F12E566DCD00B3782E /* MyLibrary.xcframework in Frameworks */,
+				8C7731F12E566DCD00B3782E /* DobbyVPNRuntime.xcframework in Frameworks */,
 				8CF4C25F2E61E1C400A1B0E4 /* (null) in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -155,7 +155,7 @@
 			isa = PBXGroup;
 			children = (
 				1F6D0C7B2F8D9681004A1D65 /* app.framework */,
-				8C7731F02E566DCD00B3782E /* MyLibrary.xcframework */,
+				8C7731F02E566DCD00B3782E /* DobbyVPNRuntime.xcframework */,
 				A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */,
 			);
 			name = Frameworks;

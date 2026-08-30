@@ -14,7 +14,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -27,14 +26,8 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.dobby.feature.authentication.domain.HideConfigsManager
-import com.dobby.feature.authentication.presentation.AuthenticationSettingsViewModel
 import com.dobby.feature.logging.ui.SettingsScreen
-import com.dobby.feature.authentication.ui.AuthenticationScreen
-import com.dobby.feature.authentication.ui.LoadingScreen
-import com.dobby.feature.authentication.ui.WebViewScreen
 import com.dobby.feature.logging.presentation.LogsViewModel
-import com.dobby.feature.logging.presentation.SettingsViewModel
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.feature.main.ui.DobbySocksScreen
 import com.dobby.util.koinViewModel
@@ -43,9 +36,6 @@ import com.dobby.util.koinViewModel
 fun App(modifier: Modifier = Modifier) {
     val mainViewModel: MainViewModel = koinViewModel()
     val logsViewModel: LogsViewModel = koinViewModel()
-    val settingsViewModel: SettingsViewModel = koinViewModel()
-    val authenticationSettingsViewModel: AuthenticationSettingsViewModel = koinViewModel()
-    val tryEnableHideConfigsStatus by authenticationSettingsViewModel.tryEnableHideConfigsStatus.collectAsState()
 
     MaterialTheme(
         colorScheme = lightColorScheme(
@@ -55,8 +45,6 @@ fun App(modifier: Modifier = Modifier) {
     ) {
         val navController = rememberNavController()
         val keyboardController = LocalSoftwareKeyboardController.current
-        HideConfigsManager.authStatus = HideConfigsManager.AuthStatus.NONE
-        val authState by HideConfigsManager.authState.collectAsState()
 
         Scaffold(
             modifier = modifier
@@ -73,43 +61,10 @@ fun App(modifier: Modifier = Modifier) {
                     startDestination = MainScreen
                 ) {
                     composable<MainScreen> {
-                        if (authState == HideConfigsManager.AuthStatus.NONE) {
-                            AuthenticationScreen(
-                                screen = MainScreen,
-                                navController = navController
-                            )
-                        } else {
-                            DobbySocksScreen(mainViewModel = mainViewModel, logsViewModel = logsViewModel)
-                        }
+                        DobbySocksScreen(mainViewModel = mainViewModel, logsViewModel = logsViewModel)
                     }
                     composable<SettingsScreen> {
-                        if (tryEnableHideConfigsStatus == HideConfigsManager.TryEnableHideConfigsResult.SUCCESS &&
-                            authState == HideConfigsManager.AuthStatus.NONE
-                            ) {
-                                AuthenticationScreen(
-                                    screen = SettingsScreen,
-                                    navController = navController
-                                )
-                        } else {
-                            HideConfigsManager.authStatus = HideConfigsManager.AuthStatus.SUCCESS
-                            SettingsScreen(
-                                authenticationSettingsViewModel = authenticationSettingsViewModel,
-                                settingsViewModel = settingsViewModel,
-                            )
-                        }
-                    }
-                    composable<WebViewScreen> {
-                        if (authState == HideConfigsManager.AuthStatus.NONE) {
-                            AuthenticationScreen(
-                                screen = MainScreen,
-                                navController = navController
-                            )
-                        } else {
-                            WebViewScreen()
-                        }
-                    }
-                    composable<LoadingScreen> {
-                        LoadingScreen()
+                        SettingsScreen()
                     }
                 }
             }
@@ -127,29 +82,25 @@ private fun BottomBar(
     val selectedIcons =
         listOf(Icons.Filled.Home, Icons.Filled.Favorite, Icons.Default.Settings)
 
-    val authState by HideConfigsManager.authState.collectAsState()
-
-    if (authState == HideConfigsManager.AuthStatus.SUCCESS) {
-        NavigationBar {
-            items.forEachIndexed { index, item ->
-                NavigationBarItem(
-                    icon = {
-                        Icon(
-                            selectedIcons[index],
-                            contentDescription = item
-                        )
-                    },
-                    label = { Text(item) },
-                    selected = selectedItem == index,
-                    onClick = {
-                        selectedItem = index
-                        navController.navigate(screens[index]) {
-                            launchSingleTop = true
-                            restoreState = true
-                        }
+    NavigationBar {
+        items.forEachIndexed { index, item ->
+            NavigationBarItem(
+                icon = {
+                    Icon(
+                        selectedIcons[index],
+                        contentDescription = item
+                    )
+                },
+                label = { Text(item) },
+                selected = selectedItem == index,
+                onClick = {
+                    selectedItem = index
+                    navController.navigate(screens[index]) {
+                        launchSingleTop = true
+                        restoreState = true
                     }
-                )
-            }
+                }
+            )
         }
     }
 }

@@ -8,13 +8,13 @@ jobs:
     name: Check for committed binaries
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           submodules: true
 
       - name: Find executable binaries in repo
         run: |
-          BINS=$(git ls-files | xargs file --mime-type 2>/dev/null \
+          BINS=$(git ls-files | xargs file --mime-type \
             | grep -E 'application/java-archive|application/x-executable|application/x-sharedlib|application/x-mach-binary|application/x-pie-executable' \
             | grep -v 'gradle-wrapper.jar' \
             | cut -d: -f1)

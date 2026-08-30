@@ -14,10 +14,11 @@ jobs:
     name: Release-version metadata
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     env:
       PR_TITLE: ${{ github.event.pull_request.title }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
       - name: Match the PR release label to VERSION
@@ -37,48 +38,63 @@ jobs:
   workflow-policy:
     name: Workflow secret-isolation policy
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
       - name: Enforce secretless PR workflow policy
         run: |
           python3 .github/scripts/check_workflow_policy.py
-          python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+          # The helper suite covers both owner-local complete-output behavior
+          # and the explicit public Actions redaction path.  Run the default
+          # suite in local mode so the former keeps its complete diagnostics;
+          # the public-mode tests set GITHUB_ACTIONS themselves.
+          python3 -m venv "$RUNNER_TEMP/policy-test-venv"
+          "$RUNNER_TEMP/policy-test-venv/bin/pip" install --disable-pip-version-check --no-input "pytest==9.0.2"
+          export PATH="$RUNNER_TEMP/policy-test-venv/bin:$PATH"
+          GITHUB_ACTIONS= python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+          GITHUB_ACTIONS= python3 -m pytest -q .github/scripts
 
   go:
     name: Go tests
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           submodules: true
           persist-credentials: false
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: .go-version
           cache-dependency-path: go_module/go.sum
+
+      - name: Stage pinned Linux native dependencies for Go tests
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/desktop_build.py prepare-go-test-deps --go-mod-tidy
+          test -f go_module/libdobby_bridge.so
+          test -f go_module/libc++.so.1
+          test -f go_module/libc++abi.so.1
 
       - name: Run Go test suite
         working-directory: go_module
         run: |
           go test ./...
-          # go_module/modules/Cloak is a replaced nested module, so ./...
-          # does not discover its embedded-client regression tests.
-          go test github.com/cbeuw/Cloak/exported_client github.com/cbeuw/Cloak/internal/client
 
       - name: Race-check lifecycle and routing
         working-directory: go_module
         run: |
-          go test -race ./core ./routing ./tunnel/...
-          go test -race github.com/cbeuw/Cloak/exported_client github.com/cbeuw/Cloak/internal/client
+          go test -race ./routing/... ./sessionapi/... ./tunnel/...
 
   kotlin:
     name: Kotlin and Android service tests
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           submodules: true
           persist-credentials: false
@@ -86,7 +102,7 @@ jobs:
       # gomobile currently needs a bootstrap toolchain to build the configured
       # Android Go toolchain from source. Keep this aligned with android_build.
       - name: Set up bootstrap Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.24.4'
           # This Go only bootstraps make.bash; module downloads use the
@@ -98,7 +114,7 @@ jobs:
         run: echo "version=$(cat .go-version)" >> "$GITHUB_OUTPUT"
 
       - name: Cache Android Go toolchain
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .ci-cache/go-android
           key: ${{ runner.os }}-android-go-${{ steps.android_go.outputs.version }}
@@ -121,7 +137,7 @@ jobs:
           echo "$GO_SRC/bin" >> "$GITHUB_PATH"
           "$GO_SRC/bin/go" env GOROOT GOVERSION
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '17'
@@ -132,7 +148,7 @@ jobs:
             kmp_module/gradle/wrapper/gradle-wrapper.properties
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
         with:
           packages: >
             platforms;android-35
@@ -164,8 +180,9 @@ jobs:
     name: iOS unsigned build
     needs: ios_libraries
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           submodules: true
           persist-credentials: false
@@ -174,14 +191,14 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_26.3.app
 
       - name: Download iOS native dependencies
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          pattern: MyLibrary.xcframework
-          path: swift_module/MyLibrary.xcframework
+          pattern: DobbyVPNRuntime.xcframework
+          path: swift_module/DobbyVPNRuntime.xcframework
           merge-multiple: true
 
       - name: Download Kotlin framework
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           pattern: app.framework
           path: swift_module/app.framework
@@ -202,8 +219,9 @@ jobs:
   swift:
     name: iOS production lifecycle policy tests
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
@@ -239,7 +257,7 @@ jobs:
 
       - name: Upload Swift lifecycle-core coverage
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: swift-lifecycle-core-coverage
           path: |
@@ -251,8 +269,9 @@ jobs:
     name: iOS Simulator shared-core and unsigned app checks
     needs: ios_libraries
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           submodules: true
           persist-credentials: false
@@ -261,14 +280,14 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_26.3.app
 
       - name: Download iOS native dependencies
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          pattern: MyLibrary.xcframework
-          path: swift_module/MyLibrary.xcframework
+          pattern: DobbyVPNRuntime.xcframework
+          path: swift_module/DobbyVPNRuntime.xcframework
           merge-multiple: true
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           java-version: '17'
           distribution: 'temurin'
@@ -296,8 +315,14 @@ jobs:
           SIMULATOR_UDID="$(xcrun simctl list devices available -j | python3 .github/scripts/select_ios_simulator.py)"
           test -n "$SIMULATOR_UDID"
           test "$SIMULATOR_UDID" != "null"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
-          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+          boot_capture_status=0
+          python3 .github/scripts/public_output.py \
+            --kind ios-simulator-boot -- \
+            xcrun simctl boot "$SIMULATOR_UDID" || boot_capture_status=$?
+          test "$boot_capture_status" != "125"
+          python3 .github/scripts/public_output.py \
+            --kind ios-simulator-bootstatus -- \
+            xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
           DERIVED_DATA="$RUNNER_TEMP/dobbyvpn-ios-simulator"
           xcodebuild build \

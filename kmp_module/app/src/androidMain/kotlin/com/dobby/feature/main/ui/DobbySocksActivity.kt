@@ -12,11 +12,8 @@ import androidx.activity.result.contract.ActivityResultContracts.StartActivityFo
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.lifecycleScope
 import com.dobby.common.ui.theme.CkClientTheme
-import com.dobby.feature.authentication.domain.HideConfigsManager
 import com.dobby.navigation.App
 import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.authentication.domain.initBiometricAuthenticationManager
-import com.dobby.feature.authentication.domain.initLocationProvider
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 
@@ -28,9 +25,6 @@ class DobbySocksActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        initBiometricAuthenticationManager(this)
-        initLocationProvider(this)
 
         initVpnPermissionLauncher()
         lifecycleScope.launch {
@@ -47,11 +41,6 @@ class DobbySocksActivity : FragmentActivity() {
                 App()
             }
         }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        HideConfigsManager.authStatus = HideConfigsManager.AuthStatus.NONE
     }
 
     private fun checkVpnPermissionAndStart() {

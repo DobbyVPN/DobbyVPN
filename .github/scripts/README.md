@@ -106,15 +106,29 @@ unsigned APK bytecode with `apkanalyzer`; the build, legacy F-Droid repair, and
 public promotion all fail unless the embedded commit and repository link match
 the selected full source SHA. The explicit `APP_SOURCE_*` values are passed to
 Gradle as build properties for both current source and a legacy-tag repair.
-Because an old tag cannot contain a verifier added later, the reusable build
-checks out only the verifier from its trusted workflow revision after the tag
-source has already been copied to the F-Droid-compatible build directory. The
-trusted checkout is never mixed into the selected source tree.
+Because an old tag cannot contain a driver or verifier added later, the
+reusable build checks out the complete small helper bundle (driver, dependency
+helper/spec, and verifiers) from its trusted workflow revision. It passes the
+legacy tag source and the separately bound helper root to the driver; the
+trusted checkout is excluded from the F-Droid-compatible source copy and is
+never mixed into the selected source tree. Before any helper or spec is
+executed, an inline workflow gate independently proves the exact workflow SHA,
+clean checkout state, absence of symlinks, and the complete expected helper
+file set; the public driver repeats that contract.
 
 The current Android release job also performs two clean, uncached unsigned APK
 builds with distinct Go build caches and temporary directories. Both builds use
-the F-Droid canonical source, Go, and GOPATH locations, the pinned Go/JDK/NDK/
-Gradle/gomobile toolchain, and path-normalizing compiler flags. Promotion calls
+the F-Droid canonical source, Go, and GOPATH locations, the trusted tracked
+source-level Go/NDK/Gradle/gomobile declarations, Java 17, and path-normalizing
+compiler flags. For a legacy source commit that predates these helper files, the
+The Gradle 8.13 archive is downloaded or restored from a content-addressed cache
+using the trusted spec URL, checked against its exact SHA-256 before extraction,
+and passed to the driver as a verified archive/root proof. A legacy wrapper may
+omit its checksum only under that proof; current wrappers must still carry the
+matching checksum. The provenance records the archive and extracted-root proof
+alongside the observed Java patch version. It does not claim a complete
+offline dependency closure: resolved Maven/Gradle bytes remain runner-local.
+Promotion calls
 `verify_android_reproducibility.py` and fails unless the complete APKs are
 byte-identical and the retained provenance matches the published unsigned APK,
 including both packaged `libgojni.so` payloads. The developer signature is
@@ -185,13 +199,45 @@ public application repository; it is not part of the current workflow.
 version, source SHA, release run ID/number, Android version code, and a sorted
 repeated asset allowlist. It fails closed if the directory contains anything
 else, any entry is not a regular file, or hashes, sizes, metadata, or canonical
-JSON disagree. The manifest deliberately contains public release metadata only.
+JSON disagree. This schema-1 manifest remains unchanged for compatibility with
+already-published releases and deliberately contains public release metadata
+only.
 
 ```bash
 python3 .github/scripts/release_provenance.py create --directory release \
-  --tag v1.4.7 --version 1.4.7 \
+  --tag v1.5.0 --version 1.5.0 \
   --source-sha 0123456789abcdef0123456789abcdef01234567 \
   --release-run-id 12345 --release-run-number 678 \
-  --android-version-code 1004007 \
+  --android-version-code 1005000 \
   --asset DobbyVPN.apk --asset DobbyVPN.zip
+```
+
+The promotion workflow also creates and verifies the separate
+`release-artifact-provenance-v2.json` sidecar. Its schema-2 records add an
+explicit `platform`, `architecture`, `kind`, per-asset `sha256`, `size`, and
+`source_sha` to every product or release-metadata asset. The identity is passed
+as a sorted `NAME|PLATFORM|ARCHITECTURE|KIND` descriptor; it is never inferred
+from a filename, digest, or fallback rule. Both provenance sidecars are
+published: the schema-1 manifest remains the compatibility contract, while the
+schema-2 sidecar is the typed contract for new releases. The sidecars do not
+describe themselves, so they cannot create a circular digest; schema-1 records
+the schema-2 sidecar's bytes, and schema-2 records the declared release assets.
+
+For a local contract check, use the same explicit descriptors as promotion:
+
+```bash
+python3 .github/scripts/release_provenance.py typed-create --directory release \
+  --tag v1.5.0 --version 1.5.0 \
+  --source-sha 0123456789abcdef0123456789abcdef01234567 \
+  --release-run-id 12345 --release-run-number 678 \
+  --android-version-code 1005000 \
+  --typed-asset 'DobbyVPN.apk|android|arm64-v8a|apk-signed' \
+  --typed-asset 'dobbyVPN-linux.deb|linux|amd64|deb'
+python3 .github/scripts/release_provenance.py typed-verify --directory release \
+  --tag v1.5.0 --version 1.5.0 \
+  --source-sha 0123456789abcdef0123456789abcdef01234567 \
+  --release-run-id 12345 --release-run-number 678 \
+  --android-version-code 1005000 \
+  --typed-asset 'DobbyVPN.apk|android|arm64-v8a|apk-signed' \
+  --typed-asset 'dobbyVPN-linux.deb|linux|amd64|deb'
 ```

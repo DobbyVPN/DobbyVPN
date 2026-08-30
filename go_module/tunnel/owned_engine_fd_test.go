@@ -15,7 +15,7 @@ import (
 func TestFDEngineRejectsBusyBeforeDuplicatingDescriptor(t *testing.T) {
 	engineMu.Lock()
 	previous := activeEngine
-	activeEngine = &Engine{ready: true}
+	activeEngine = &Engine{}
 	engineMu.Unlock()
 	t.Cleanup(func() {
 		engineMu.Lock()

@@ -1,20 +1,10 @@
 [versions]
 agp = "8.13.2"
-biometricKtx = "1.4.0-alpha02"
-compiler = "1.5.15"
 kotlin = "2.2.0"
 coreKtx = "1.15.0"
-kotlinScriptRuntime = "2.0.20"
 kotlinxSerializationJson = "1.6.3"
-ktorClientCio = "2.3.7"
-ktorClientContentNegotiation = "2.3.7"
-ktorClientCore = "2.3.7"
-ktorClientDarwin = "2.3.7"
-ktorClientOkhttp = "2.3.7"
-ktorSerializationKotlinxJson = "2.3.7"
 lifecycleRuntimeKtx = "2.8.7"
 activityCompose = "1.9.3"
-composeBom = "2024.12.01"
 compose-multiplatform = "1.7.0"
 lifecycleViewmodelCompose = "2.8.2"
 navigationCompose = "2.8.0-alpha10"
@@ -26,42 +16,24 @@ junit = "4.13.2"
 junitVersion = "1.2.1"
 androidxTestRunner = "1.6.2"
 uiautomator = "2.3.0"
-espressoCore = "3.6.1"
-appcompat = "1.6.1"
-material = "1.10.0"
 conveyor = "1.12"
 protobuf = "0.9.5"
-okhttp = "4.12.0"
 skiko = "0.8.15"
-jnaVersion = "5.13.0"
-gsonVersion = "2.8.9"
 okio = "3.6.0"
-tomlkt = "0.5.0"
 datetime="4.0.10"
-compass = "1.2.2"
 detekt = "1.23.7"
 
 [libraries]
-androidx-biometric-ktx = { module = "androidx.biometric:biometric-ktx", version.ref = "biometricKtx" }
-androidx-compiler = { module = "androidx.compose.compiler:compiler", version.ref = "compiler" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
-androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 androidx-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
-kotlin-script-runtime = { module = "org.jetbrains.kotlin:kotlin-script-runtime", version.ref = "kotlinScriptRuntime" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
-ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktorClientCio" }
-ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktorClientContentNegotiation" }
-ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktorClientCore" }
-ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktorClientDarwin" }
-ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktorClientOkhttp" }
-ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktorSerializationKotlinxJson" }
 lifecycle-viewmodel-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycleViewmodelCompose" }
 lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel", version.ref = "lifecycleViewModel"}
 koin-android = { module = "io.insert-koin:koin-android", version.ref = "koin" }
@@ -73,41 +45,25 @@ junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
 androidx-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
-androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
-androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
-material = { group = "com.google.android.material", name = "material", version.ref = "material" }
-okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 skiko-win = { group = "org.jetbrains.skiko", name = "skiko-awt-runtime-windows-x64", version.ref = "skiko" }
 skiko-mac-amd64 = { group = "org.jetbrains.skiko", name = "skiko-awt-runtime-macos-x64", version.ref = "skiko" }
 skiko-mac-arm64 = { group = "org.jetbrains.skiko", name = "skiko-awt-runtime-macos-arm64", version.ref = "skiko" }
 skiko-linux = { group = "org.jetbrains.skiko", name = "skiko-awt-runtime-linux-x64", version.ref = "skiko" }
 kotlinx-coroutines-swing = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-swing" }
-jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jnaVersion"}
-gson = { group = "com.google.code.gson", name = "gson", version.ref = "gsonVersion"}
-tomlkt = { module = "net.peanuuutz.tomlkt:tomlkt", version.ref = "tomlkt" }
 datetime = { module = "com.soywiz.korlibs.klock:klock", version.ref = "datetime" }
 
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version = "1.10.2" }
 grpc-protobuf = { group = "io.grpc", name = "grpc-protobuf", version = "1.77.0" }
-grpc-protobuf-lite = { group = "io.grpc", name = "grpc-protobuf-lite", version = "1.77.0" }
 grpc-netty = { group = "io.grpc", name = "grpc-netty", version = "1.77.0" }
-grpc-okhttp = { group = "io.grpc", name = "grpc-okhttp", version = "1.77.0" }
-grpc-testing = { group = "io.grpc", name = "grpc-testing", version = "1.77.0" }
 grpc-stub = { group = "io.grpc", name = "grpc-stub", version = "1.77.0" }
 grpc-kotlin-stub = { group = "io.grpc", name = "grpc-kotlin-stub", version = "1.5.0" }
 
 protoc = { group = "com.google.protobuf", name = "protoc", version = "4.33.1" }
 protobuf-kotlin = { group = "com.google.protobuf", name = "protobuf-kotlin", version = "4.33.1" }
-protobuf-kotlin-lite = { group = "com.google.protobuf", name = "protobuf-kotlin-lite", version = "4.33.1" }
 protobuf-java-util = { group = "com.google.protobuf", name = "protobuf-java-util", version = "4.33.1" }
 protoc-gen-grpc-java = { group = "io.grpc", name = "protoc-gen-grpc-java", version = "1.77.0" }
 protoc-gen-grpc-kotlin = { group = "io.grpc", name = "protoc-gen-grpc-kotlin", version = "1.5.0" }
-compass-geocoder = { module = "dev.jordond.compass:geocoder", version.ref = "compass" }
-compass-geocoder-mobile = { module = "dev.jordond.compass:geocoder-mobile", version.ref = "compass" }
-compass-geolocation = { module = "dev.jordond.compass:geolocation", version.ref = "compass" }
-compass-geolocation-mobile = { module = "dev.jordond.compass:geolocation-mobile", version.ref = "compass" }
-compass-permissions-mobile = { module = "dev.jordond.compass:permissions-mobile", version.ref = "compass" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

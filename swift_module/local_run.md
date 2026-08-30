@@ -1,16 +1,15 @@
 # Guide to Running the iOS App Locally
 
-## Release gate: physical NetworkExtension smoke test
+## v1.5.0 iOS coverage boundary
 
-Simulator and Linux CI cannot exercise packet-tunnel ownership. Before an iOS
-release, run a signed build on a physical device and verify a connect, a stop
-during startup, a restart after cleanup, and that the UI stays disconnected if
-NetworkExtension is disconnected. Record the device/OS result with the release
-notes.
+No physical iPhone is available for v1.5.0. Do not add or infer a physical
+NetworkExtension packet-tunnel pass from Simulator, framework, IPA, or
+screenshot evidence. The available signed-IPA and Simulator/build checks must
+still pass and the physical traffic gap must remain visible in release status.
 
 ## Installing Dependencies
 
-### MyLibrary.xcframework
+### DobbyVPNRuntime.xcframework
 
 This is the compiled Go part of our project. It is taken from CI, where it is
 stored as an artifact. To build it locally from `go_module/` on a Mac with
@@ -20,7 +19,7 @@ Xcode and gomobile installed, run:
 ./scripts/build_ios_xcframework.sh
 ```
 
-Copy the resulting `MyLibrary.xcframework` into `swift_module/`.
+Copy the resulting `DobbyVPNRuntime.xcframework` into `swift_module/`.
 
 ### app.framework
 

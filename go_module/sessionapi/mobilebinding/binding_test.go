@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	v1 "go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v2"
 )
 
 const sensitiveConfig = `[[Outline]]
@@ -24,7 +24,7 @@ func TestJSONEnvelopeRedactsConfigurationAndUsesStableKeys(t *testing.T) {
 	}
 	sessionID := jsonField(t, created, "session_id")
 	result := binding.Configure(sessionID, "configure-1", []byte(sensitiveConfig))
-	for _, secret := range []string{"super-secret-token", "vpn.example.invalid", "Password", "RawTOML"} {
+	for _, secret := range []string{"super-secret-token", "vpn.example.invalid", "Password"} {
 		if strings.Contains(result, secret) {
 			t.Fatalf("safe result leaked %q: %s", secret, result)
 		}
@@ -82,14 +82,11 @@ func TestCallbacksCarryTheSessionAndGeneration(t *testing.T) {
 	t.Fatal("did not receive a generation-correlated state callback")
 }
 
-func TestOneShotOwnershipRejectsReuseUntilRelease(t *testing.T) {
-	owners := newOneShotFDs()
-	if err := owners.queue("session", 42); err != nil {
-		t.Fatal(err)
-	}
-	fd, ok := owners.take("session")
-	if !ok || fd != 42 || !owners.reserve(fd, fdOwner{session: "session", generation: 1}) {
-		t.Fatal("one-shot descriptor was not transferred to its generation")
+func TestTunnelOwnershipRejectsReuseUntilRelease(t *testing.T) {
+	owners := newTunnelFDs()
+	fd := int32(42)
+	if !owners.reserve(fd, fdOwner{session: "session", generation: 1}) {
+		t.Fatal("descriptor was not assigned to its generation")
 	}
 	if owners.reserve(fd, fdOwner{session: "session", generation: 2}) {
 		t.Fatal("second generation reused an active descriptor")

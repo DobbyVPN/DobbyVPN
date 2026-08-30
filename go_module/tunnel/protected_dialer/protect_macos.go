@@ -17,8 +17,6 @@ const (
 )
 
 var defaultInterfaceIndex int
-var defaultGatewayIP string
-var defaultInterfaceName string
 
 func isReachableViaInterface(iface net.Interface, gw net.IP) bool {
 	addrs, _ := iface.Addrs()
@@ -81,19 +79,16 @@ func GetDefaultInterfaceNameDarwin(gatewayIP net.IP) (name string, index int, er
 	return "", 0, fmt.Errorf("no interface for gateway found")
 }
 
-func SetDefaultInterface(idx int) {
-	defaultInterfaceIndex = idx
-}
-
 func SetDefaultRoute(gatewayIP, interfaceName string, idx int) {
-	defaultGatewayIP = gatewayIP
-	defaultInterfaceName = interfaceName
 	defaultInterfaceIndex = idx
 	log.Debugf(Category, "[Darwin-Protect] default route gateway=%s iface=%s ifindex=%d", gatewayIP, interfaceName, idx)
 }
 
-func GetDefaultRoute() (gatewayIP, interfaceName string, ok bool) {
-	return defaultGatewayIP, defaultInterfaceName, defaultGatewayIP != "" && defaultInterfaceName != ""
+// ResetDefaultRoute clears the generation-owned interface binding. It must be
+// called when a session exits, including failed starts, so later protected
+// sockets cannot inherit a stale physical interface.
+func ResetDefaultRoute() {
+	defaultInterfaceIndex = 0
 }
 
 type macosProtector struct{}

@@ -1,4 +1,6 @@
 import importlib.util
+import io
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -36,6 +38,37 @@ class IosSimulatorAppLifecycleTests(unittest.TestCase):
         self.assertNotIn("backgrounded app did not resume its original process", source)
         workflow = SOURCE.parents[1] / "workflows" / "test.yml"
         self.assertNotIn("--screenshots", workflow.read_text(encoding="utf-8"))
+
+    def test_public_simulator_output_is_retained_without_public_echo(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["xcrun", "simctl", "list"], 0,
+            stdout="private simulator device path\n",
+            stderr="private simulator diagnostic\n",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            stdout = io.StringIO()
+            diagnostics = io.StringIO()
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"GITHUB_ACTIONS": "true", "RUNNER_TEMP": temporary},
+                    clear=False,
+                ),
+                mock.patch.object(LIFECYCLE.subprocess, "run", return_value=completed),
+                mock.patch.object(LIFECYCLE.sys, "stdout", stdout),
+                mock.patch.object(LIFECYCLE.sys, "stderr", diagnostics),
+            ):
+                result = LIFECYCLE.run("list")
+            self.assertEqual(result.returncode, 0)
+            self.assertNotIn("private simulator device path", stdout.getvalue())
+            self.assertNotIn("private simulator device path", diagnostics.getvalue())
+            self.assertNotIn("private simulator diagnostic", stdout.getvalue())
+            self.assertNotIn("private simulator diagnostic", diagnostics.getvalue())
+            self.assertIn("dobbyvpn_diagnostic kind=ios-simulator", diagnostics.getvalue())
+            retained = list((Path(temporary) / "dobbyvpn-public-diagnostics").glob("*.raw.log"))
+            self.assertEqual(len(retained), 1)
+            self.assertIn(b"private simulator device path", retained[0].read_bytes())
+            self.assertIn(b"private simulator diagnostic", retained[0].read_bytes())
 
     def test_screenshot_is_nonempty_private_and_digest_bound(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

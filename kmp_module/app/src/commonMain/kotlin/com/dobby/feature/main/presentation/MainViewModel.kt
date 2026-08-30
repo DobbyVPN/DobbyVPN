@@ -15,25 +15,22 @@ import com.dobby.feature.main.domain.SessionStartTarget
 import com.dobby.feature.main.domain.SessionFailureCode
 import com.dobby.feature.main.domain.SessionState
 import com.dobby.feature.main.ui.MainUiState
-import com.dobby.vpn.BuildConfig
-import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.request.get
-import io.ktor.client.request.headers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlin.time.Duration.Companion.milliseconds
-
-private val configHttpClient = HttpClient()
+import kotlinx.coroutines.withContext
 
 /**
- * A deliberately thin UI adapter around sessionapi/v1. Go owns config parsing, profile
+ * A deliberately thin UI adapter around sessionapi/v2. Go owns config parsing, profile
  * selection, probing, failover, and the tunnel lifecycle; this class only acquires bytes,
  * asks for permission, and renders ordered session events.
  */
@@ -46,7 +43,7 @@ class MainViewModel(
 ) : ViewModel() {
     private val lifecycleMutex = Mutex()
     private val lifecycle = SessionUiLifecycle()
-    private var connectionDetectorJob: Job? = null
+    private var sessionObservationJob: Job? = null
     private var startInFlight = false
     private var configured = false
     private var pendingPermissionStart = false
@@ -61,6 +58,10 @@ class MainViewModel(
         viewModelScope.launch {
             permissionEventsChannel.permissionsGrantedEvents.collect(::startVpn)
         }
+        // Reattach to a process-owned SessionV2 generation after a UI restart.
+        // The controller uses RecoverActiveSession where the platform exposes a
+        // shared Go manager; the stream is still the authoritative state source.
+        startSessionObservation()
     }
 
     fun onConnectionUrlChanged(connectionUrl: String) {
@@ -83,20 +84,20 @@ class MainViewModel(
     /** Acquires opaque configuration bytes and passes them unchanged to the session API. */
     suspend fun setConfig(connectionUrl: String): Boolean {
         logger.log("Acquiring connection configuration for ${maskStr(connectionUrl)}")
-        val rawConfig = runCatching { getConfigBytes(connectionUrl) }
-            .onFailure { logger.log("Configuration acquisition failed: type=${it::class.simpleName ?: "UNKNOWN"}") }
-            .getOrElse {
-                publishFailure(SessionFailureCode.INTERNAL)
-                return false
-            }
-
-        // Retain only the user-entered source and configuration acquisition record for migration.
-        // The exact byte array above, not this decoded record, is what is configured in Go.
+        // Go owns URL acquisition and parsing. The UI forwards the opaque source bytes.
+        val rawConfig = connectionUrl.encodeToByteArray()
         configsRepository.setConnectionURL(connectionUrl)
-        configsRepository.setConnectionConfig(rawConfig.decodeToString())
 
-        return when (val result = sessionController.configure(rawConfig)) {
+        // SessionController bridges into synchronous Go/platform calls that may wait for
+        // VPN service readiness or network probes; keep those calls off the UI dispatcher.
+        return when (val result = withContext(Dispatchers.Default) {
+            sessionController.configure(rawConfig)
+        }) {
             is SessionControllerResult.Success -> {
+                // Configure is the authoritative beginning of a fresh usable
+                // session scope. The Go ledger remains authoritative; this only
+                // prevents a prior session's UI cursor/generation from leaking.
+                lifecycleMutex.withLock { lifecycle.reset() }
                 configured = true
                 logger.log("Session configuration accepted: profiles=${result.value.profiles.size}")
                 true
@@ -110,32 +111,46 @@ class MainViewModel(
         }
     }
 
-    /** Deprecated detector shim: it now polls session events rather than a health-check state. */
-    fun startConnectionStateDetector() {
-        if (connectionDetectorJob?.isActive == true) return
-        connectionDetectorJob = viewModelScope.launch {
+    /** Collects the ordered session stream; mobile shells use native state callbacks. */
+    // A transport Flow may surface platform-specific gRPC exceptions; the shared UI must
+    // convert any non-cancellation transport failure into its typed INTERNAL state.
+    @Suppress("TooGenericExceptionCaught")
+    fun startSessionObservation() {
+        if (sessionObservationJob?.isActive == true) return
+        sessionObservationJob = viewModelScope.launch {
             while (isActive) {
-                val afterSequence = lifecycleMutex.withLock { lifecycle.lastSequence }
-                when (val result = sessionController.observe(afterSequence)) {
-                    is SessionControllerResult.Success -> {
-                        for (event in result.value.events) {
-                            renderEvent(event)
-                        }
-                    }
-                    is SessionControllerResult.Failure -> {
-                        logger.log("Session event poll failed: failureCode=${result.code.name}")
-                        publishFailure(result.code)
+                try {
+                    // Reconcile the retained ledger before every subscription.
+                    // This closes a sequence gap caused by a dropped stream or
+                    // a recreated UI without introducing timer polling.
+                    reconcileSession()
+                    val afterSequence = lifecycleMutex.withLock { lifecycle.lastSequence }
+                    sessionController.watch(afterSequence)
+                        .flowOn(Dispatchers.Default)
+                        .collect(::renderEvent)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    if (isActive) {
+                        logger.log("Session event stream failed: type=${error::class.simpleName ?: "UNKNOWN"}")
+                        publishFailure(SessionFailureCode.INTERNAL)
                     }
                 }
-                delay(250.milliseconds)
+                if (isActive) {
+                    // A stream ending is a transport boundary, not a lifecycle
+                    // transition. Reconcile once, then reconnect with a small
+                    // bounded backoff to avoid a hot loop on a dead service.
+                    reconcileSession()
+                    delay(100)
+                }
             }
         }
     }
 
-    /** Deprecated detector shim retained for screen and test compatibility. */
-    fun stopConnectionStateDetector() {
-        connectionDetectorJob?.cancel()
-        connectionDetectorJob = null
+    /** Stop observation is idempotent and only cancels the push stream; no polling loop is used. */
+    fun stopSessionObservation() {
+        sessionObservationJob?.cancel()
+        sessionObservationJob = null
     }
 
     /** Starts only AUTO_SELECT; profile choice and failover remain in the Go session. */
@@ -145,14 +160,16 @@ class MainViewModel(
             return@withLock false
         }
         startInFlight = true
-        when (val result = sessionController.start(SessionStartTarget.AutoSelect)) {
+        when (val result = withContext(Dispatchers.Default) {
+            sessionController.start(SessionStartTarget.AutoSelect)
+        }) {
             is SessionControllerResult.Success -> {
                 startInFlight = false
                 val state = lifecycle.begin(result.value)
                 if (state == null) return@withLock false
                 publish(state)
                 logger.log("Session start accepted for generation=${result.value}")
-                startConnectionStateDetector()
+                startSessionObservation()
                 true
             }
             is SessionControllerResult.Failure -> {
@@ -177,7 +194,9 @@ class MainViewModel(
                 activeGeneration
             } ?: return@launch
 
-            when (val result = sessionController.stop(generation)) {
+            when (val result = withContext(Dispatchers.Default) {
+                sessionController.stop(generation)
+            }) {
                 is SessionControllerResult.Success -> logger.log("Session stop accepted for generation=$generation")
                 is SessionControllerResult.Failure ->
                     logger.log("Session stop rejected: generation=$generation failureCode=${result.code.name}")
@@ -187,9 +206,18 @@ class MainViewModel(
     }
 
     suspend fun destroySession() {
-        stopConnectionStateDetector()
-        when (val result = sessionController.destroy()) {
-            is SessionControllerResult.Success -> publish(VpnConnectionState.DISCONNECTED)
+        stopSessionObservation()
+        when (val result = withContext(Dispatchers.Default) {
+            sessionController.destroy()
+        }) {
+            is SessionControllerResult.Success -> {
+                // Destroy is terminal. Ordinary Stop intentionally does not
+                // reset this cursor because Go retains the configured session
+                // for reconnect.
+                lifecycleMutex.withLock { lifecycle.reset() }
+                configured = false
+                publish(VpnConnectionState.DISCONNECTED)
+            }
             is SessionControllerResult.Failure ->
                 logger.log("Session destroy failed: failureCode=${result.code.name}")
                     .also { publishFailure(result.code) }
@@ -235,6 +263,66 @@ class MainViewModel(
         }
     }
 
+    private suspend fun reconcileSession() {
+        val afterSequence = lifecycleMutex.withLock { lifecycle.lastSequence }
+        when (val result = withContext(Dispatchers.Default) {
+            sessionController.observe(afterSequence)
+        }) {
+            is SessionControllerResult.Success -> {
+                val ordered = result.value.events.sortedBy { it.sequence }
+                val contiguous = mutableListOf<SessionEvent>()
+                var expectedSequence = afterSequence + 1uL
+                var gapDetected = false
+                ordered.forEach { event ->
+                    if (gapDetected) return@forEach
+                    when {
+                        event.sequence < expectedSequence -> Unit
+                        event.sequence > expectedSequence -> gapDetected = true
+                        else -> {
+                            contiguous += event
+                            expectedSequence = event.sequence + 1uL
+                        }
+                    }
+                }
+                if (!gapDetected && result.value.nextSequence >= expectedSequence) gapDetected = true
+                if (!gapDetected) {
+                    for (event in contiguous) {
+                        renderEvent(event)
+                    }
+                }
+                if (result.value.events.isEmpty() || gapDetected) {
+                    // A gap is not permission to advance lastSequence. Reconcile
+                    // a Go snapshot first, then the next Observe starts from the
+                    // unchanged cursor.
+                    when (val snapshot = withContext(Dispatchers.Default) {
+                        sessionController.snapshot()
+                    }) {
+                        is SessionControllerResult.Success -> {
+                            lifecycleMutex.withLock {
+                                lifecycle.reconcile(snapshot.value)?.let { state -> publish(state, snapshot.value.lastFailureCode) }
+                            }
+                        }
+                        is SessionControllerResult.Failure -> if (snapshot.code == SessionFailureCode.NOT_FOUND) {
+                            lifecycleMutex.withLock { lifecycle.reset() }
+                            configured = false
+                        } else {
+                            publishFailure(snapshot.code)
+                        }
+                    }
+                }
+            }
+            is SessionControllerResult.Failure -> if (result.code == SessionFailureCode.NOT_FOUND) {
+                // The Go session is gone (for example after provider process
+                // replacement). Reconcile this typed identity loss as a new
+                // scope; do not carry the old sequence into a recreated session.
+                lifecycleMutex.withLock { lifecycle.reset() }
+                configured = false
+            } else {
+                publishFailure(result.code)
+            }
+        }
+    }
+
     private suspend fun publish(
         state: VpnConnectionState,
         failureCode: SessionFailureCode? = null,
@@ -252,12 +340,4 @@ class MainViewModel(
         _uiState.value = _uiState.value.copy(lastFailureCode = code)
     }
 
-    private suspend fun getConfigBytes(connectionUrl: String): ByteArray =
-        if (connectionUrl.startsWith("http://") || connectionUrl.startsWith("https://")) {
-            configHttpClient.get(connectionUrl) {
-                headers { append("User-Agent", "DobbyVPN v${BuildConfig.VERSION_NAME}") }
-            }.body()
-        } else {
-            connectionUrl.encodeToByteArray()
-        }
 }

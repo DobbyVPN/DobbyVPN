@@ -125,7 +125,7 @@ func resolveIP(addr string) (string, error) {
 		return "", errors.New("IPv6 address not supported; routing requires IPv4")
 	}
 
-	ip4, err := dnscache.ResolveIPv4(context.Background(), addr, dnscache.FastResolveTimeout, "xray")
+	ip4, err := dnscache.ResolveIPv4(context.Background(), addr, dnscache.ServerResolveTimeout, "xray")
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve xray address %q: %w", addr, err)
 	}

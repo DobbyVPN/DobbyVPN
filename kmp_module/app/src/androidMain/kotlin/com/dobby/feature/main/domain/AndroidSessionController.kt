@@ -4,6 +4,11 @@ import android.content.Context
 import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.PlatformServiceRegistry
 import com.dobby.gomobile.dobbyvpn.Dobbyvpn
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.UUID
@@ -11,6 +16,9 @@ import java.util.UUID
 /** Android gomobile transport for the versioned Go session API. */
 internal class AndroidSessionController(
     private val context: Context,
+    // Keep a self-contained default for owner-injected instrumentation callers;
+    // production DI still supplies the shared callback repository.
+    private val connectionState: ConnectionStateRepository = ConnectionStateRepository(),
 ) : SessionController {
     private val mutex = Mutex()
     private var sessionId: String? = null
@@ -30,11 +38,11 @@ internal class AndroidSessionController(
         }
         val mode = if (target is SessionStartTarget.AutoSelect) "AUTO_SELECT" else "PROFILE_INDEX"
         val index = (target as? SessionStartTarget.ProfileIndex)?.index ?: 0
-        SessionEnvelopeDecoder.decode(Dobbyvpn.startSession(id, commandId(), mode, index)) { it.sessionLong("generation").toULong() }
+        SessionEnvelopeDecoder.decode(Dobbyvpn.startSession(id, commandId(), mode, index)) { it.requiredPositiveSessionLong("generation").toULong() }
     }
 
     override suspend fun stop(generation: ULong): SessionControllerResult<ULong> = withSession { id ->
-        SessionEnvelopeDecoder.decode(Dobbyvpn.stopSession(id, commandId(), generation.toLong())) { it.sessionLong("generation").toULong() }
+        SessionEnvelopeDecoder.decode(Dobbyvpn.stopSession(id, commandId(), generation.toLong())) { it.requiredPositiveSessionLong("generation").toULong() }
     }
 
     override suspend fun snapshot(): SessionControllerResult<SessionSnapshot> = withSession { id ->
@@ -43,6 +51,56 @@ internal class AndroidSessionController(
 
     override suspend fun observe(afterSequence: ULong): SessionControllerResult<SessionObservation> = withSession { id ->
         SessionEnvelopeDecoder.decode(Dobbyvpn.observeSession(id, afterSequence.toLong())) { it.toSessionObservation() }
+    }
+
+    /**
+     * Replays the Go-owned ledger first, then follows the generation-correlated
+     * Android service callback stream. The sequence filter closes the race
+     * between the snapshot/ledger read and subscription without polling.
+     */
+    override fun watch(afterSequence: ULong): Flow<SessionEvent> = flow {
+        val observed = observe(afterSequence)
+        var cursor = afterSequence
+        if (observed is SessionControllerResult.Success) {
+            val ordered = observed.value.events.sortedBy { it.sequence }
+            val contiguous = mutableListOf<SessionEvent>()
+            var expected = cursor + 1uL
+            var gap = false
+            ordered.forEach { event ->
+                if (gap) return@forEach
+                when {
+                    event.sequence < expected -> Unit
+                    event.sequence > expected -> gap = true
+                    else -> {
+                        contiguous += event
+                        expected = event.sequence + 1uL
+                    }
+                }
+            }
+            if (!gap && observed.value.nextSequence >= expected) gap = true
+            if (gap) return@flow
+            contiguous.forEach { event ->
+                emit(event)
+                if (event.sequence > cursor) cursor = event.sequence
+            }
+        }
+        val observedSession = mutex.withLock { sessionId }
+        emitAll(
+            connectionState.sessionEvents.filter { event ->
+                event.sequence > cursor &&
+                    !observedSession.isNullOrBlank() && event.sessionId == observedSession
+            }.transformWhile { event ->
+                when {
+                    event.sequence <= cursor -> true
+                    event.sequence > cursor + 1uL -> false
+                    else -> {
+                        cursor = event.sequence
+                        emit(event)
+                        true
+                    }
+                }
+            },
+        )
     }
 
     override suspend fun destroy(): SessionControllerResult<Unit> = mutex.withLock {
@@ -54,11 +112,20 @@ internal class AndroidSessionController(
     }
 
     private suspend fun <T> withSession(operation: suspend (String) -> SessionControllerResult<T>): SessionControllerResult<T> = mutex.withLock {
-        val id = sessionId ?: when (val created = SessionEnvelopeDecoder.decode(Dobbyvpn.createSession()) { it.sessionString("session_id") }) {
-            is SessionControllerResult.Success -> created.value.also { sessionId = it }
-            is SessionControllerResult.Failure -> return@withLock created
-        }
+        val id = sessionId ?: recoverOrCreate()
+            ?: return@withLock SessionControllerResult.Failure("session creation failed")
         operation(id)
+    }
+
+    private fun recoverOrCreate(): String? {
+        when (val recovered = SessionEnvelopeDecoder.decode(Dobbyvpn.recoverActiveSession()) { it.sessionString("session_id") }) {
+            is SessionControllerResult.Success -> return recovered.value.also { sessionId = it }
+            is SessionControllerResult.Failure -> if (recovered.code != SessionFailureCode.NOT_FOUND) return null
+        }
+        return when (val created = SessionEnvelopeDecoder.decode(Dobbyvpn.createSession()) { it.sessionString("session_id") }) {
+            is SessionControllerResult.Success -> created.value.also { sessionId = it }
+            is SessionControllerResult.Failure -> null
+        }
     }
 
     private fun commandId(): String = UUID.randomUUID().toString()

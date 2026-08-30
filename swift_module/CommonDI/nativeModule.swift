@@ -8,7 +8,7 @@ public class NativeModuleHolder {
             logFilePath: path,
             additionalLogFilePaths: LogsRepository_iosKt.provideAdditionalLogFilePaths()
         )
-    private static let vpnManager = VpnManagerImpl(connectionRepository: connectionStateRepository)
+    private static let vpnManager = VpnManagerImpl()
     private static let sessionShell = IOSSessionShell(manager: vpnManager)
     
     public static let shared: Koin_coreModule = MakeNativeModuleKt.makeNativeModule(
@@ -24,17 +24,13 @@ public class NativeModuleHolder {
         connectionStateRepository: { _ in
             return connectionStateRepository
         },
-        authenticationManager: { _ in
-            return AuthenticationManagerImpl()
-        },
         loggerManager: { _ in 
             return LoggerManagerImpl()
         }
     )
 
-    // Must run before StartDI constructs MainViewModel. The bridge is narrow:
-    // it only persists opaque bytes, controls NetworkExtension, and reports
-    // authoritative NE status; Go remains extension-process lifecycle owner.
+    // Must run before StartDI constructs MainViewModel. The bridge only stores
+    // the one-shot mailbox and transports opaque authenticated commands.
     public static func installSessionBridge() {
         IosSessionBridgeRegistry.shared.install(bridge: sessionShell)
     }
