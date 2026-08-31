@@ -175,6 +175,6 @@ jobs:
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
 
   # Public GitHub/F-Droid promotion is intentional/manual. A maintainer selects
-  # one successful run with AppStore/publish_release.py; promote_release.yml
-  # then transfers these retained artifacts to the public release entirely on
-  # GitHub-hosted infrastructure and creates the sole F-Droid-visible tag.
+  # one successful run in promote_release.yml, which transfers its retained
+  # artifacts to the public release entirely on GitHub-hosted infrastructure
+  # and creates the sole F-Droid-visible tag.

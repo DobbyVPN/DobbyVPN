@@ -3,8 +3,9 @@
 This repository contains the public DobbyVPN product. It must build, test, and
 run without the private Harness or the public Torturer repository. Do not
 import, vendor, download, invoke, or otherwise make either repository a
-product dependency. Harness owns private qualification orchestration; Torturer
-owns public scenario execution.
+product dependency. Harness coordinates owner-local qualification,
+tests-orchestrator owns the local runner VMs, and Torturer owns scenario
+execution and result validation for both local and public tests.
 
 ## Architecture driver
 

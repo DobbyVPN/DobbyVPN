@@ -132,15 +132,16 @@ per platform. The provider credential and plaintext profile remain confined to
 Torturer's protected server-lease job. Candidate build jobs never receive
 provider credentials, and DobbyVPN does not import or depend on Torturer.
 
-Hosted results contain only the canonical assertions, bounded safe metrics,
-exact source/runtime provenance, and verified cleanup state. They do not upload
-screenshots, raw profiles, credentials, endpoint URLs, or literal external-IP
-observations. Owner-local qualification remains responsible for complete raw
-evidence, screenshots, private profile coverage, and OS-specific diagnostics.
+Hosted results contain the Torturer assertions, measurements, and cleanup
+state. Complete raw VPN application and service logs are uploaded only after
+Torturer has deleted every disposable Render service for the run and confirmed
+that they are absent. Raw profiles are never uploaded. Private-profile coverage
+and complete local VPN logs remain owner-local.
 
 ## Scope boundary
 
 Pull-request tests intentionally use no provider credentials or real endpoint
-configuration. Trusted hosted functional lanes use only a run-scoped disposable
-profile and server, and publish no credential-bearing evidence. Private profile
-coverage and complete local diagnostics remain outside this public repository.
+configuration. Trusted hosted functional tests use only a disposable profile
+and server. Public raw-log upload is blocked unless disposal is confirmed.
+Private-profile coverage and complete local diagnostics remain outside this
+public repository.

@@ -174,8 +174,8 @@ jobs:
           retention-days: 90
 
       # Every green main build is retained in internal TestFlight. Production
-      # App Review and GitHub/F-Droid promotion remain an explicit maintainer
-      # action through AppStore/publish_release.py.
+      # App Review remains an explicit maintainer action through the protected
+      # submit_app_store.yml workflow.
       - name: Fastlane upload_testflight
         if: ${{ github.ref == 'refs/heads/main' }}
         env:

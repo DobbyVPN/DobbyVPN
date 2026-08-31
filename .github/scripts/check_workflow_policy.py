@@ -342,10 +342,6 @@ def main() -> int:
         'test "$(jq -r .headSha <<<"$run_json")" = "$RELEASE_SOURCE_SHA"',
         'test "$source_version" = "$RELEASE_VERSION"',
         "run-id: ${{ inputs.run_id }}",
-        "QUALIFIED_LINUX_SHA256: ${{ inputs.linux_sha256 }}",
-        "QUALIFIED_WINDOWS_AMD64_SHA256: ${{ inputs.windows_amd64_sha256 }}",
-        "QUALIFIED_MACOS_AMD64_SHA256: ${{ inputs.macos_amd64_sha256 }}",
-        "Verify locally qualified desktop packages",
         'matching-refs/tags/$tag',
         'gh release create "$release_tag"',
         "--draft",
@@ -396,10 +392,8 @@ def main() -> int:
                 f"build.gradle.kts: missing Android reproducibility control: {expected}"
             )
 
-    # A retry against an already-published tag must still fetch the exact
-    # selected Actions-run packages and compare them with the locally tested
-    # digests.  Otherwise a same-source but differently packaged run could be
-    # accepted merely because an older release asset happened to match.
+    # A retry against an already-published tag must still fetch and validate
+    # the selected Actions-run packages before comparing release provenance.
     for step in (
         "Download Linux package",
         "Download Windows amd64 package",
@@ -408,7 +402,6 @@ def main() -> int:
         "Download signed Android package",
         "Download unsigned Android package",
         "Download Android provenance",
-        "Verify locally qualified desktop packages",
         "Verify Android source and artifact provenance",
         "Create F-Droid version metadata",
         "Create and verify public release provenance",

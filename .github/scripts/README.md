@@ -152,16 +152,16 @@ environment and an explicit `replace-vX.Y.Z` confirmation. Releases carrying
 the release-wide provenance manifest are immutable and cannot use this legacy
 repair path.
 
-The same operator command dispatches `submit_app_store.yml` for production
-App Review. Its secretless validation job binds the request to the exact
+A maintainer dispatches `submit_app_store.yml` for production App Review. Its
+secretless validation job binds the request to the exact
 successful `main` Release run, source version, iOS job, and build number.
 Only then does a separate job enter the protected `release` environment and
 use its existing App Store Connect secrets. The selected build is submitted
 with automatic release after approval.
 
-Torturer remains the independent secretless gate for candidate code. Store
+Torturer remains the independent public gate for candidate code. Store
 credentials never enter Torturer or any pull-request job; production
-submission consumes the already-gated, successful Release result.
+submission consumes a successful Release result selected after qualification.
 
 ## iOS IPA provenance
 
