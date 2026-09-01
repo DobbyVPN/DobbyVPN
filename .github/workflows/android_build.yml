@@ -318,6 +318,7 @@ jobs:
           version="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
           "$TRUSTED_HELPER_ROOT/.github/scripts/android_build_driver.sh" \
             --source-root "$FDROID_COMPAT_SOURCE_ROOT" \
+            --source-sha "$APP_SOURCE_SHA" \
             --trusted-helper-root "$TRUSTED_HELPER_ROOT" \
             --trusted-helper-sha "$TRUSTED_HELPER_SHA" \
             --output "$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v${version}-unsign.apk" \

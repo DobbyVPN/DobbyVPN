@@ -12,6 +12,7 @@ export PYTHONDONTWRITEBYTECODE=1
 # the default.
 
 source_root=''
+source_sha=''
 output=''
 manifest=''
 first_output=''
@@ -46,6 +47,11 @@ while (($#)); do
     --source-root)
       (($# >= 2)) || { echo 'missing --source-root value' >&2; exit 2; }
       source_root=$2
+      shift 2
+      ;;
+    --source-sha)
+      (($# >= 2)) || { echo 'missing --source-sha value' >&2; exit 2; }
+      source_sha=$2
       shift 2
       ;;
     --output)
@@ -154,6 +160,10 @@ fi
   exit 2
 }
 source_root=$(cd -- "$source_root" && pwd -P)
+if [[ -n "$source_sha" && ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+  echo 'source SHA must be a full lowercase Git commit identity' >&2
+  exit 2
+fi
 first_output=${first_output:-"$source_root/.android-build/first.apk"}
 reproducibility=${reproducibility:-"$source_root/runtime/android-reproducibility.json"}
 dependency_manifest=${dependency_manifest:-"$source_root/runtime/android-dependency-provenance.json"}
@@ -399,8 +409,10 @@ validate_trusted_helper_root() {
   reproducibility_verifier="$trusted_helper_root/.github/scripts/verify_android_reproducibility.py"
 }
 
-if [[ "$closure_mode" == 0 ]]; then
-  validate_source_checkout "$source_root"
+if [[ "$closure_mode" == 0 && -n "$source_sha" ]]; then
+  # A local candidate may intentionally come from a dirty worktree.  An
+  # expected identity opts into the strict checkout proof used by Release.
+  validate_source_checkout "$source_root" "$source_sha"
 fi
 if [[ -n "$trusted_helper_root" || -n "$trusted_helper_sha" ]]; then
   [[ "$closure_mode" == 0 ]] || {
@@ -564,6 +576,10 @@ source_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree})
   echo 'source checkout did not yield canonical Git identities' >&2
   exit 2
 }
+if [[ -n "$source_sha" && "$source_commit" != "$source_sha" ]]; then
+  echo "source checkout commit does not match supplied source SHA: expected $source_sha got $source_commit" >&2
+  exit 2
+fi
 if [[ -z "$trusted_helper_root" ]]; then
   helper_paths=("$dependency_helper" "$source_verifier" "$reproducibility_verifier")
   if [[ "$closure_mode" == 0 ]]; then

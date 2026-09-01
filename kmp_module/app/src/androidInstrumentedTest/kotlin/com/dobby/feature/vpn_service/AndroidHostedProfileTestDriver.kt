@@ -56,7 +56,7 @@ internal data class AndroidHostedEndpoints(
 
 /** Validated owner-injected command envelope. It contains names, never profile bytes. */
 internal data class AndroidHostedCommand(
-    val sourceSha: String,
+    val sourceSha: String?,
     val profileFile: String,
     val outputFile: String,
     val endpoints: AndroidHostedEndpoints,
@@ -112,19 +112,22 @@ internal object AndroidHostedCommandContract {
         } catch (_: Exception) {
             invalid()
         }
-        val requiredKeys = setOf(
-            "schema", "kind", "platform", "source_sha", "profile_file", "output_file",
-            "endpoints", "operations",
-        )
+        val requiredKeys = setOf("schema", "kind", "platform", "profile_file", "output_file", "endpoints", "operations")
+        val optionalKeys = setOf("source_sha")
         val commandKeys = json.keys().asSequence().toSet()
-        if (!requiredKeys.all(commandKeys::contains) || (commandKeys - requiredKeys).isNotEmpty()) invalid()
+        if (!requiredKeys.all(commandKeys::contains) || (commandKeys - requiredKeys - optionalKeys).isNotEmpty()) invalid()
         if (exactInt(json.opt("schema")) != SCHEMA ||
             requiredString(json, "kind") != COMMAND_KIND ||
             requiredString(json, "platform") != PLATFORM
         ) invalid()
 
-        val sourceSha = requiredString(json, "source_sha")
-        if (!SHA.matches(sourceSha) || sourceSha.all { it == '0' }) invalid()
+        val sourceSha = if (json.has("source_sha")) {
+            requiredString(json, "source_sha").also { value ->
+                if (!SHA.matches(value) || value.all { it == '0' }) invalid()
+            }
+        } else {
+            null
+        }
         val profileFile = requiredString(json, "profile_file")
         val outputFile = requiredString(json, "output_file")
         requireFileName(profileFile)
@@ -315,33 +318,41 @@ internal data class AndroidHostedMetrics(
 
 /** Platform observations are facts only; no canonical assertion is evaluated here. */
 internal interface AndroidHostedPlatform {
+    /** The actual bounded stability sample contract used by endurance. */
+    val stabilitySampleCount: Int
+        get() = 3
+    val stabilitySampleIntervalSeconds: Double
+        get() = 1.0
     suspend fun requestConsent()
     suspend fun captureBaseline()
     suspend fun observeTunnel(): Boolean
     suspend fun observeRoutingIdentity(): Boolean
     suspend fun measureStability(): Boolean
     suspend fun measureThroughput(): AndroidHostedMetrics
-    /** Bounded local-Harness stability plus throughput proof. */
-    suspend fun measureEndurance(): AndroidHostedMetrics = measureThroughput()
+    /** Execute the complete bounded endurance operation, including live checks. */
+    suspend fun measureEndurance(timeoutSeconds: Int): AndroidHostedMetrics = measureThroughput()
     suspend fun awaitDisconnected(): Boolean
 }
 
 /** Exact safe JSON shape consumed by the canonical Android profile-observation contract. */
 internal data class AndroidHostedObservation(
-    val sourceSha: String,
+    val sourceSha: String?,
     var configured: Boolean = false,
     var connected: Boolean = false,
     var tunnelInterface: Boolean = false,
     var routingIdentityChanged: Boolean = false,
     var disconnectClean: Boolean = false,
     var restartVerified: Boolean = false,
-    var reconnectBounded: Boolean = false,
+    var reconnectCompleted: Boolean = false,
     var secondTunnelInterface: Boolean = false,
     var secondRoutingIdentityChanged: Boolean = false,
     var stabilityVerified: Boolean = false,
+    var stabilitySampleCount: Int = 3,
+    var stabilitySampleIntervalSeconds: Double = 1.0,
     var networkTransitionVerified: Boolean = false,
     var sleepWakeVerified: Boolean = false,
     var processLossVerified: Boolean = false,
+    var enduranceCompleted: Boolean = false,
     var latencyMs: Double = 0.0,
     var downloadMbps: Double = 0.0,
     var uploadMbps: Double = 0.0,
@@ -349,24 +360,34 @@ internal data class AndroidHostedObservation(
     var cleanupVerified: Boolean = false,
     var errorCode: String? = null,
 ) {
+    /** Compatibility accessor for existing local assertions; it is not serialized. */
+    var reconnectBounded: Boolean
+        get() = reconnectCompleted
+        set(value) {
+            reconnectCompleted = value
+        }
+
     fun toJson(): JSONObject = JSONObject()
         .put("schema", AndroidHostedCommandContract.SCHEMA)
         .put("kind", AndroidHostedCommandContract.OBSERVATION_KIND)
         .put("platform", AndroidHostedCommandContract.PLATFORM)
-        .put("source_sha", sourceSha)
+        .also { output -> sourceSha?.let { output.put("source_sha", it) } }
         .put("configured", configured)
         .put("connected", connected)
         .put("tunnel_interface", tunnelInterface)
         .put("routing_identity_changed", routingIdentityChanged)
         .put("disconnect_clean", disconnectClean)
         .put("restart_verified", restartVerified)
-        .put("reconnect_bounded", reconnectBounded)
+        .put("reconnect_completed", reconnectCompleted)
         .put("second_tunnel_interface", secondTunnelInterface)
         .put("second_routing_identity_changed", secondRoutingIdentityChanged)
         .put("stability_verified", stabilityVerified)
+        .put("stability_sample_count", stabilitySampleCount)
+        .put("stability_sample_interval_seconds", safeMetric(stabilitySampleIntervalSeconds))
         .put("network_transition_verified", networkTransitionVerified)
         .put("sleep_wake_verified", sleepWakeVerified)
         .put("process_loss_verified", processLossVerified)
+        .put("endurance_completed", enduranceCompleted)
         .put("latency_ms", safeMetric(latencyMs))
         .put("download_mbps", safeMetric(downloadMbps))
         .put("upload_mbps", safeMetric(uploadMbps))
@@ -500,6 +521,8 @@ internal class AndroidHostedProfileTestDriver(
             "measure_stability" -> {
                 val stable = platform.measureStability()
                 observation.stabilityVerified = stable
+                observation.stabilitySampleCount = platform.stabilitySampleCount
+                observation.stabilitySampleIntervalSeconds = platform.stabilitySampleIntervalSeconds
                 if (!stable) throw AndroidHostedOperationFailure("STABILITY_UNVERIFIED")
             }
             "measure_throughput" -> platform.measureThroughput().let { metrics ->
@@ -508,14 +531,17 @@ internal class AndroidHostedProfileTestDriver(
                 observation.uploadMbps = metrics.uploadMbps
             }
             "measure_endurance" -> {
-                val metrics = platform.measureEndurance()
+                val metrics = platform.measureEndurance(operation.timeoutSeconds)
                 observation.stabilityVerified = true
+                observation.stabilitySampleCount = platform.stabilitySampleCount
+                observation.stabilitySampleIntervalSeconds = platform.stabilitySampleIntervalSeconds
                 observation.latencyMs = metrics.latencyMs
                 observation.downloadMbps = metrics.downloadMbps
                 observation.uploadMbps = metrics.uploadMbps
                 if (metrics.latencyMs <= 0.0 || metrics.downloadMbps <= 0.0 || metrics.uploadMbps <= 0.0) {
                     throw AndroidHostedOperationFailure("ENDURANCE_METRICS_INVALID")
                 }
+                observation.enduranceCompleted = true
             }
             "disconnect" -> {
                 if (!stopCurrentSession(controller, getGeneration, setGeneration)) {
@@ -533,7 +559,7 @@ internal class AndroidHostedProfileTestDriver(
                 if (getGeneration() != null) throw AndroidHostedOperationFailure("RECONNECT_PRECONDITION")
                 connect(controller, platform, observation, setGeneration)
                 observation.restartVerified = observation.connected
-                observation.reconnectBounded = observation.connected
+                observation.reconnectCompleted = observation.connected
             }
             "inspect_cleanup" -> {
                 // Stop is acknowledged before the asynchronous platform
@@ -837,16 +863,24 @@ internal class RealAndroidHostedPlatform(
         }
     }
 
-    override suspend fun measureEndurance(): AndroidHostedMetrics = withContext(Dispatchers.IO) {
-        // Keep the local endurance proof inside the canonical 60-second step:
-        // stability performs bounded repeated identity requests, then the
-        // complete latency/download/upload transfer is measured once.  The
-        // public hosted adapter intentionally keeps this private extension
-        // unavailable until it has an equivalent public seam.
-        if (!measureStability()) {
-            throw AndroidHostedOperationFailure("STABILITY_UNVERIFIED")
+    override suspend fun measureEndurance(timeoutSeconds: Int): AndroidHostedMetrics = withContext(Dispatchers.IO) {
+        // Keep the complete operation inside the caller's declared bound. A
+        // single final sample is not endurance: each bounded cycle proves the
+        // live tunnel, routed identity, stability, and both traffic directions
+        // before the next interval. Leave a small cancellation margin so the
+        // enclosing operation timeout can write a complete observation.
+        val deadline = android.os.SystemClock.elapsedRealtime() +
+            TimeUnit.SECONDS.toMillis(timeoutSeconds.toLong()) - ENDURANCE_COMPLETION_MARGIN_MILLIS
+        var latest: AndroidHostedMetrics? = null
+        while (android.os.SystemClock.elapsedRealtime() < deadline) {
+            if (!observeTunnel()) throw AndroidHostedOperationFailure("TUNNEL_NOT_OBSERVED")
+            if (!observeRoutingIdentity()) throw AndroidHostedOperationFailure("ROUTING_IDENTITY_NOT_OBSERVED")
+            if (!measureStability()) throw AndroidHostedOperationFailure("STABILITY_UNVERIFIED")
+            latest = measureThroughput()
+            val remaining = deadline - android.os.SystemClock.elapsedRealtime()
+            if (remaining > 0L) delay(minOf(1_000L, remaining))
         }
-        measureThroughput()
+        latest ?: throw AndroidHostedOperationFailure("ENDURANCE_METRICS_INVALID")
     }
 
     private fun measureLatency(rawUrl: String): TransferMeasurement = withNetworkConnection(rawUrl, upload = false) { connection ->
@@ -988,6 +1022,7 @@ internal class RealAndroidHostedPlatform(
         const val POLL_INTERVAL_MILLIS = 100L
         const val STABILITY_SAMPLE_COUNT = 3
         const val STABILITY_INTERVAL_MILLIS = 1_000L
+        const val ENDURANCE_COMPLETION_MARGIN_MILLIS = 250L
         const val IDENTITY_PROBE_ATTEMPTS = 3
         const val IDENTITY_RETRY_INTERVAL_MILLIS = 1_000L
         const val MAX_IDENTITY_BYTES = 128

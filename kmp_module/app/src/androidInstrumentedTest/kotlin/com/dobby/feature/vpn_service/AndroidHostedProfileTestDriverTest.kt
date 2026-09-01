@@ -122,6 +122,15 @@ class AndroidHostedProfileTestDriverTest {
     }
 
     @Test
+    fun command_and_observation_allow_absent_source_sha_but_keep_supplied_identity_optional() {
+        val commandJson = JSONObject(commandJson()).apply { remove("source_sha") }
+        val command = AndroidHostedCommandContract.parse("command.json", commandJson.toString())
+
+        assertEquals(null, command.sourceSha)
+        assertFalse(AndroidHostedObservation(null).toJson().has("source_sha"))
+    }
+
+    @Test
     fun command_validation_rejects_operations_whose_total_timeout_exceeds_thirty_minutes() {
         val command = JSONObject(commandJson(operations = listOf("configure", "connect")))
         val operations = command.getJSONArray("operations")
@@ -204,14 +213,34 @@ class AndroidHostedProfileTestDriverTest {
             setOf(
                 "schema", "kind", "platform", "source_sha", "configured", "connected",
                 "tunnel_interface", "routing_identity_changed", "disconnect_clean",
-                "restart_verified", "reconnect_bounded", "second_tunnel_interface", "second_routing_identity_changed",
-                "stability_verified", "latency_ms", "download_mbps", "upload_mbps", "final_disconnect_clean",
-                "network_transition_verified", "sleep_wake_verified", "process_loss_verified", "cleanup_verified",
+                "restart_verified", "reconnect_completed", "second_tunnel_interface", "second_routing_identity_changed",
+                "stability_verified", "stability_sample_count", "stability_sample_interval_seconds",
+                "latency_ms", "download_mbps", "upload_mbps", "final_disconnect_clean",
+                "network_transition_verified", "sleep_wake_verified", "process_loss_verified", "endurance_completed",
+                "cleanup_verified",
             ),
             keys,
         )
         assertFalse(profileFile.exists())
         assertFalse(commandFile.exists())
+    }
+
+    @Test
+    fun endurance_is_bounded_by_declared_operation_and_emits_completion() = runBlocking {
+        val command = JSONObject(commandJson(operations = listOf("configure", "connect", "measure_endurance", "disconnect")))
+        command.getJSONArray("operations").getJSONObject(2).put("timeout_seconds", 7)
+        val commandFile = writeInput("command-endurance.json", command.toString())
+        writeInput("profile-4.bin", "opaque-profile")
+        val platform = FakePlatform()
+        val result = AndroidHostedProfileTestDriver(
+            context = context,
+            controllerFactory = { FakeSessionController() },
+            platformFactory = { platform },
+        ).run(commandFile.name)
+
+        assertEquals(7, platform.enduranceTimeoutSeconds)
+        assertTrue(result.enduranceCompleted)
+        assertTrue(result.stabilityVerified)
     }
 
     @Test
@@ -526,6 +555,7 @@ class AndroidHostedProfileTestDriverTest {
     ) : AndroidHostedPlatform {
 
         private var tunnelIndex = 0
+        var enduranceTimeoutSeconds: Int? = null
 
         override suspend fun requestConsent() { events += "consent" }
         override suspend fun captureBaseline() { events += "baseline" }
@@ -541,6 +571,11 @@ class AndroidHostedProfileTestDriverTest {
         override suspend fun measureThroughput(): AndroidHostedMetrics {
             events += "throughput"
             return AndroidHostedMetrics(12.5, 20.0, 10.0)
+        }
+        override suspend fun measureEndurance(timeoutSeconds: Int): AndroidHostedMetrics {
+            enduranceTimeoutSeconds = timeoutSeconds
+            events += "endurance"
+            return measureThroughput()
         }
         override suspend fun awaitDisconnected(): Boolean { events += "disconnected"; return true }
     }
