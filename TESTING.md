@@ -124,13 +124,15 @@ no secrets, no protected environments, and no shared Actions cache.
 It invokes Torturer's secretless verification workflow only; it cannot create
 provider resources or access the trusted functional environment.
 
-Torturer separately owns manually dispatched, trusted hosted functional lanes
-for Linux, Windows, macOS, and Android. Those lanes source-build an exact
-DobbyVPN commit, stage a strict runtime allow-list, and run Torturer's canonical
-scenario engine against one disposable Render-hosted Outline WebSocket server
-per platform. The provider credential and plaintext profile remain confined to
-Torturer's protected server-lease job. Candidate build jobs never receive
-provider credentials, and DobbyVPN does not import or depend on Torturer.
+After a successful exact-commit Release and internal TestFlight upload,
+Torturer owns the trusted hosted functional lanes for Linux, Windows, macOS,
+and Android. One narrow retrieval job validates that Release and stages only
+its exact packages; platform jobs install them without checking out or
+rebuilding DobbyVPN, then run Torturer's canonical scenario engine against one
+disposable Render-hosted Outline WebSocket server per platform. The provider
+credential and plaintext profile remain confined to Torturer's protected
+server-lease job. Candidate jobs receive neither provider nor cross-repository
+credentials, and DobbyVPN does not import or depend on Torturer.
 
 Hosted results contain the Torturer assertions, measurements, and cleanup
 state. Complete raw VPN application and service logs are uploaded only after

@@ -86,13 +86,13 @@ build to internal TestFlight. It does not create a final release tag.
 The authorized release process dispatches `promote_release.yml`, which
 revalidates the exact successful `main` Release run and source commit,
 downloads its artifacts only to a GitHub-hosted runner, and creates `vX.Y.Z`
-plus the GitHub Release. Promotion also receives authorized non-secret SHA-256
-values for the exact Linux DEB, Windows amd64 MSI, and macOS amd64 PKG, then
-re-hashes the selected run's downloaded files before publication. Every public
-asset is recorded in `release-provenance.json`; a draft is downloaded and
-verified byte-for-byte before publication, and retries re-download both the
-selected run and published release rather than trusting release state alone.
-That final tag is the sole signal for official F-Droid update processing.
+plus the GitHub Release. It derives and verifies each asset digest from the
+selected GitHub run; it does not consume hashes from local qualification.
+Every public asset is recorded in `release-provenance.json`; a draft is
+downloaded and verified byte-for-byte before publication, and retries
+re-download both the selected run and published release rather than trusting
+release state alone. F-Droid detects `version.txt` from that promoted GitHub
+Release and builds its matching `vX.Y.Z` tag.
 
 Android and F-Droid use a stable version code derived from the marketing
 version: `major * 1,000,000 + minor * 1,000 + maintenance`. For example,
@@ -159,9 +159,26 @@ Only then does a separate job enter the protected `release` environment and
 use its existing App Store Connect secrets. The selected build is submitted
 with automatic release after approval.
 
-Torturer remains the independent public gate for candidate code. Store
-credentials never enter Torturer or any pull-request job; production
-submission consumes a successful Release result selected after qualification.
+That manual start is temporary. The accepted release flow has the successful
+trusted Torturer release qualification start one DobbyVPN publication workflow
+automatically. DobbyVPN still performs the exact Torturer/Release-run checks and
+all App Store and GitHub Release operations. A separate Torturer retrieval job
+receives narrow read access to the selected Release artifacts, while a separate
+handoff job receives narrow workflow-start access. Candidate jobs receive
+neither credential, and Torturer receives no signing, store, publication, or
+release-environment permission.
+
+The DobbyVPN Release run and its internal TestFlight upload finish before the
+trusted Torturer qualification starts. Torturer downloads, installs, and tests
+the exact packages from that Release run without rebuilding the application;
+it never publishes those artifacts.
+The publication handoff names the exact Release and qualification runs and
+attempts, and retries must match the same publication identity.
+
+Torturer remains the separate public gate for the exact selected Release
+packages. Store credentials never enter Torturer or any pull-request job.
+DobbyVPN's production coordinator must verify qualification of its exact source
+revision and Release identity before changing external release state.
 
 ## iOS IPA provenance
 
@@ -189,8 +206,10 @@ also intentionally does not prove Apple has finished processing that upload:
 later protected submission lane retries only the documented still-processing
 attachment response for the selected version and build number.
 
-A separate F-Droid candidate-testing repository is planned outside this
-public application repository; it is not part of the current workflow.
+F-Droid compatibility and APK checks run in the DobbyVPN Release workflow.
+The official F-Droid infrastructure detects the promoted Release's
+`version.txt` and builds its matching tag; Torturer does not publish the
+application.
 
 ## Public release provenance
 

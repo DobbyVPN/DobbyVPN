@@ -15,15 +15,31 @@ APIs require them.** Keep platform-specific behavior at those OS API
 boundaries. Keep lifecycle, protocol, safety, and product policy in the shared
 Go runtime. Do not duplicate product build logic in Harness.
 
+Torturer alone owns the shared functional scenarios, platform test operations,
+assertions, result validation, and pass/fail meaning for private VM and public
+GitHub runs. The orchestrator may invoke DobbyVPN-owned build/install interfaces
+and Torturer, but must not duplicate either implementation.
+
+App Store submission and GitHub Release/tag creation remain DobbyVPN GitHub
+Actions responsibilities. F-Droid detects the promoted Release's `version.txt`
+and builds its matching tag. Do not move product signing or publication
+credentials into Torturer. A successful trusted Torturer release qualification
+starts the DobbyVPN publication workflow automatically; this repository must
+verify that run and its own successful Release run for the exact same revision
+before changing external release state.
+The Release run, including internal TestFlight upload, completes before that
+Torturer qualification starts. Public Torturer qualification installs the
+exact packages from that Release run and does not rebuild the application;
+publication uses only the exact verified Release run's outputs.
+
 ## Product and test boundaries
 
 - Keep product unit and seam tests in this repository. The existing testing
   suite, its assertions, and its norms are authoritative; do not weaken,
   replace, or silently skip them as part of an application change.
-- Preserve the current platform build/test contracts. Android test lanes have a
-  hard 30-minute maximum, including cleanup; do not change VM sizing, host
-  configuration, emulator configuration, or the testing suite to make a test
-  pass.
+- Preserve the platform build/test contracts. Torturer owns functional time
+  bounds and pass criteria; do not weaken them or hide a runner failure.
+  Runner provisioning belongs in `dobby-tests-orchestrator`, not DobbyVPN.
 - Public source and examples contain only synthetic, non-sensitive data. Never
   commit private profiles, credentials, credential-bearing URLs, endpoints,
   observed identities, screenshots, raw logs, VM state, or generated release
