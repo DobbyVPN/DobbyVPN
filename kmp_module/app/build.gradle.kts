@@ -201,6 +201,7 @@ compose.desktop {
 android {
     namespace = providers.gradleProperty("packageName").get()
     compileSdk = 35
+    testBuildType = "release"
 
     defaultConfig {
         minSdk = 26
@@ -217,6 +218,13 @@ android {
             .getOrElse("0.0.1")
 
         testInstrumentationRunner = "com.dobby.TestApplicationRunner"
+
+        // This placeholder is merged only into the instrumentation APK's
+        // manifest.  The Release driver verifies it before signing the
+        // companion, proving that the test interface was built from the same
+        // exact source identity without adding anything to the production APK.
+        manifestPlaceholders["dobbyTestSourceSha"] = providers.gradleProperty("projectRepositoryCommit")
+            .getOrElse("N/A")
 
         vectorDrawables {
             useSupportLibrary = true

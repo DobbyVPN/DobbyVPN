@@ -322,6 +322,7 @@ jobs:
             --trusted-helper-root "$TRUSTED_HELPER_ROOT" \
             --trusted-helper-sha "$TRUSTED_HELPER_SHA" \
             --output "$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v${version}-unsign.apk" \
+            --test-companion-output "$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v${version}-android-test-companion-unsigned.apk" \
             --manifest "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-build-driver-manifest.json" \
             --first-output "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-repro-first.apk" \
             --reproducibility "$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v${version}-android-reproducibility.json" \
@@ -337,6 +338,10 @@ jobs:
           version="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
           unsigned="fastlane/DobbyVPN-v${version}-unsign.apk"
           signed="fastlane/DobbyVPN-v${version}-sign.apk"
+          companion_unsigned="fastlane/DobbyVPN-v${version}-android-test-companion-unsigned.apk"
+          companion_signed="fastlane/DobbyVPN-v${version}-android-test-companion.apk"
+          test -f "$unsigned"
+          test -f "$companion_unsigned"
           signing_dir="$(mktemp -d)"
           trap 'rm -f "$signing_dir/keystore.jks"; rmdir "$signing_dir"' EXIT
           printf '%s' "$KEYSTORE_FILE" | base64 --decode > "$signing_dir/keystore.jks"
@@ -347,13 +352,28 @@ jobs:
             --key-pass env:KEY_PASSWORD \
             --out "$signed" \
             "$unsigned"
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" sign \
+            --ks "$signing_dir/keystore.jks" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
+            --out "$companion_signed" \
+            "$companion_unsigned"
           "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify "$signed"
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify "$companion_signed"
           mapfile -t signer_digests < <(
             "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$signed" | \
               sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p'
           )
+          mapfile -t companion_signer_digests < <(
+            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$companion_signed" | \
+              sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p'
+          )
           test "${#signer_digests[@]}" -eq 1
           test "${signer_digests[0]}" = "$EXPECTED_ANDROID_SIGNER_SHA256"
+          test "${#companion_signer_digests[@]}" -eq 1
+          test "${companion_signer_digests[0]}" = "$EXPECTED_ANDROID_SIGNER_SHA256"
+          test "${signer_digests[0]}" = "${companion_signer_digests[0]}"
         env:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -380,21 +400,25 @@ jobs:
 
           signed="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-sign.apk"
           unsigned="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-unsign.apk"
+          companion="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-android-test-companion.apk"
           reproducibility="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-android-reproducibility.json"
           driver_manifest="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-build-driver-manifest.json"
           manifest="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-android-provenance.json"
+          test -f "$companion"
 
           for apk in "$signed" "$unsigned"; do
             test "$(apkanalyzer manifest application-id "$apk")" = "com.dobby.vpn"
             test "$(apkanalyzer manifest version-name "$apk")" = "$VERSION_NAME"
             test "$(apkanalyzer manifest version-code "$apk")" = "$VERSION_CODE"
           done
+          test "$(apkanalyzer manifest application-id "$companion")" = "com.dobby.vpn.test"
 
           python3 "$GITHUB_WORKSPACE/.trusted-workflow/.github/scripts/verify_android_apk_source.py" \
-            --apk "$signed" --apk "$unsigned" \
+            --apk "$signed" --apk "$unsigned" --test-companion "$companion" \
             --source-sha "$SOURCE_SHA" --repository "$APP_SOURCE_REPOSITORY"
 
-          SIGNED_APK="$signed" UNSIGNED_APK="$unsigned" REPRODUCIBILITY="$reproducibility" DRIVER_MANIFEST="$driver_manifest" MANIFEST="$manifest" python3 - <<'PY'
+          SIGNED_APK="$signed" UNSIGNED_APK="$unsigned" COMPANION_APK="$companion" \
+            REPRODUCIBILITY="$reproducibility" DRIVER_MANIFEST="$driver_manifest" MANIFEST="$manifest" python3 - <<'PY'
           import hashlib
           import json
           import os
@@ -408,6 +432,8 @@ jobs:
                   "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
               }
 
+          companion = Path(os.environ["COMPANION_APK"])
+
           document = {
               "schema": 1,
               "source_sha": os.environ["SOURCE_SHA"],
@@ -415,6 +441,14 @@ jobs:
               "version_code": int(os.environ["VERSION_CODE"]),
               "application_id": "com.dobby.vpn",
               "signer_certificate_sha256": os.environ["EXPECTED_ANDROID_SIGNER_SHA256"],
+              "test_companion": {
+                  "name": companion.name,
+                  "sha256": hashlib.sha256(companion.read_bytes()).hexdigest(),
+                  "bytes": companion.stat().st_size,
+                  "application_id": "com.dobby.vpn.test",
+                  "source_sha": os.environ["SOURCE_SHA"],
+                  "signer_certificate_sha256": os.environ["EXPECTED_ANDROID_SIGNER_SHA256"],
+              },
               "signed_payload_matches_unsigned": True,
               "build_driver": json.loads(
                   Path(os.environ["DRIVER_MANIFEST"]).read_text(encoding="utf-8")
@@ -445,6 +479,13 @@ jobs:
         with:
           name: dobbyvpn-android-unsign.apk
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
+          if-no-files-found: error
+
+      - name: Upload Android test companion
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobbyvpn-android-test-companion.apk
+          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-test-companion.apk
           if-no-files-found: error
 
       - name: Upload Android provenance

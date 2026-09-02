@@ -26,8 +26,6 @@ class IosSimulatorAppLifecycleTests(unittest.TestCase):
             '"terminate"',
             '"get_app_container"',
             '"retained_data_reinstall"',
-            '"ios-app-cold-start.png"',
-            '"ios-app-foreground-return.png"',
             '"repeated_start_process_reused"',
             '"foreground_process_reused"',
             '"background_process_survived"',
@@ -36,8 +34,6 @@ class IosSimulatorAppLifecycleTests(unittest.TestCase):
             self.assertIn(required, source)
         self.assertNotIn("repeated launch unexpectedly replaced", source)
         self.assertNotIn("backgrounded app did not resume its original process", source)
-        workflow = SOURCE.parents[1] / "workflows" / "test.yml"
-        self.assertNotIn("--screenshots", workflow.read_text(encoding="utf-8"))
 
     def test_public_simulator_output_is_retained_without_public_echo(self) -> None:
         completed = subprocess.CompletedProcess(
@@ -69,22 +65,6 @@ class IosSimulatorAppLifecycleTests(unittest.TestCase):
             self.assertEqual(len(retained), 1)
             self.assertIn(b"private simulator device path", retained[0].read_bytes())
             self.assertIn(b"private simulator diagnostic", retained[0].read_bytes())
-
-    def test_screenshot_is_nonempty_private_and_digest_bound(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory) / "frame.png"
-
-            def fake_run(*args: str, **_: object) -> None:
-                Path(args[-1]).write_bytes(b"png")
-
-            with mock.patch.object(LIFECYCLE, "run", side_effect=fake_run):
-                record = LIFECYCLE.screenshot("device", target)
-
-            self.assertEqual(record["bytes"], 3)
-            self.assertEqual(record["subject"], "app")
-            self.assertEqual(record["state"], "frame")
-            self.assertEqual(len(record["sha256"]), 64)
-            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
 
     def test_launch_requires_a_live_simulator_process(self) -> None:
         launch = subprocess.CompletedProcess(
@@ -120,7 +100,7 @@ class IosSimulatorAppLifecycleTests(unittest.TestCase):
                 mock.patch.object(LIFECYCLE, "run", side_effect=fake_run) as runner,
                 mock.patch.object(LIFECYCLE, "launch_app", side_effect=[100, 101, 102, 103, 104]),
             ):
-                result = LIFECYCLE.lifecycle("device", app, None)
+                result = LIFECYCLE.lifecycle("device", app)
 
         self.assertTrue(result["repeated_start"])
         self.assertFalse(result["repeated_start_process_reused"])
@@ -152,7 +132,7 @@ class IosSimulatorAppLifecycleTests(unittest.TestCase):
                 mock.patch.object(LIFECYCLE, "run", side_effect=fake_run),
                 mock.patch.object(LIFECYCLE, "launch_app", side_effect=[100, 101, 102, 103, 104]),
             ):
-                result = LIFECYCLE.lifecycle("device", app, None)
+                result = LIFECYCLE.lifecycle("device", app)
 
         self.assertFalse(result["background_process_survived"])
         self.assertTrue(result["background_foreground"])
@@ -188,7 +168,7 @@ class IosSimulatorAppLifecycleTests(unittest.TestCase):
                 mock.patch.object(LIFECYCLE, "run", side_effect=fake_run),
                 mock.patch.object(LIFECYCLE, "launch_app", side_effect=[100, 100, 100, 101, 102]),
             ):
-                result = LIFECYCLE.lifecycle("device", app, None)
+                result = LIFECYCLE.lifecycle("device", app)
 
         self.assertTrue(result["retained_data_reinstall"])
         self.assertTrue(result["data_container_relocated_on_reinstall"])

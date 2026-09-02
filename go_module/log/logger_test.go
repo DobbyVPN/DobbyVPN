@@ -191,6 +191,51 @@ func TestSetPathUsesOwnerOnlyFileAndDirectoryPermissions(t *testing.T) {
 	}
 }
 
+func TestSetOpenedFilePreservesSupervisorPermissions(t *testing.T) {
+	initMu.Lock()
+	previous := lg
+	lg = &Logger{}
+	initMu.Unlock()
+	defer func() {
+		initMu.Lock()
+		if lg.file != nil {
+			_ = lg.file.Close()
+		}
+		lg = previous
+		initMu.Unlock()
+	}()
+
+	path := filepath.Join(t.TempDir(), "managed.log")
+	if err := os.WriteFile(path, []byte("prefix\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SetOpenedFile(file); err != nil {
+		t.Fatal(err)
+	}
+	Info("MANAGED", "retained", nil)
+	if err := lg.file.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("managed log mode = %o, want unchanged 640", info.Mode().Perm())
+	}
+	output, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(output), "prefix\n") || !strings.Contains(string(output), "retained") {
+		t.Fatalf("managed log did not append complete output: %q", output)
+	}
+}
+
 func TestJSONLinesRemainCompleteDuringConcurrentWrites(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "concurrent")
 	if err != nil {

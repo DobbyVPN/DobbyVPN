@@ -13,6 +13,8 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
+import shutil
 import subprocess
 import sys
 from typing import Any
@@ -45,8 +47,11 @@ SERVICE_IDENTITIES = {
 }
 APP_IDENTITY = "MainKt"
 ANDROID_APP_IDENTITY = "com.dobby.vpn"
+ANDROID_TEST_COMPANION_IDENTITY = "com.dobby.vpn.test"
+ANDROID_BUILD_TOOLS_VERSION = "36.0.0"
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 SOURCE_SHA = re.compile(r"[0-9a-f]{40}\Z")
+SIGNER_DIGEST = re.compile(r"certificate SHA-256 digest:\s*([0-9a-fA-F:]+)")
 
 
 class CandidateError(ValueError):
@@ -119,13 +124,23 @@ def _new_file(path: Path, root: Path, label: str) -> Path:
 
 def _regular_file(path: Path, root: Path, label: str) -> Path:
     path = _confined(path, root, label, must_exist=True)
-    if path.is_symlink() or not path.is_file():
-        raise CandidateError(f"{label} must be a regular non-symlink file")
+    if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
+        raise CandidateError(f"{label} must be a single-link regular non-symlink file")
     return path
 
 
-def _run(command: list[str], *, source_root: Path) -> None:
-    subprocess.run(command, cwd=str(source_root), check=True)
+def _run(
+    command: list[str],
+    *,
+    source_root: Path,
+    environment: dict[str, str] | None = None,
+) -> None:
+    subprocess.run(
+        command,
+        cwd=str(source_root),
+        env=environment,
+        check=True,
+    )
 
 
 def _desktop_helper(source_root: Path) -> Path:
@@ -142,15 +157,142 @@ def _android_helper(source_root: Path) -> Path:
     return helper
 
 
+def _android_tool(name: str, environment_name: str) -> Path:
+    configured = os.environ.get(environment_name)
+    if configured:
+        path = Path(configured)
+        if path.is_file() and not path.is_symlink() and os.access(path, os.X_OK):
+            return path.resolve(strict=True)
+        raise CandidateError(f"{name} is not an executable regular file")
+    found = shutil.which(name)
+    if found is not None:
+        return Path(found).resolve(strict=True)
+    sdk_root = os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME")
+    if sdk_root:
+        candidates = sorted(Path(sdk_root).glob(f"build-tools/*/{name}"), reverse=True)
+        for path in candidates:
+            if path.is_file() and not path.is_symlink() and os.access(path, os.X_OK):
+                return path.resolve(strict=True)
+    java_home = os.environ.get("JAVA_HOME")
+    if java_home:
+        path = Path(java_home) / "bin" / name
+        if path.is_file() and not path.is_symlink() and os.access(path, os.X_OK):
+            return path.resolve(strict=True)
+    raise CandidateError(f"{name} is unavailable")
+
+
+def _android_apksigner() -> Path:
+    sdk_root_value = os.environ.get("ANDROID_SDK_ROOT")
+    if not sdk_root_value:
+        raise CandidateError("pinned Android apksigner is unavailable")
+    sdk_root = Path(sdk_root_value)
+    if sdk_root.is_symlink() or not sdk_root.is_dir():
+        raise CandidateError("pinned Android apksigner is unavailable")
+    path = sdk_root / "build-tools" / ANDROID_BUILD_TOOLS_VERSION / "apksigner"
+    if path.is_symlink() or not path.is_file() or not os.access(path, os.X_OK):
+        raise CandidateError("pinned Android apksigner is unavailable")
+    return path.resolve(strict=True)
+
+
+def _android_signer_digest(apksigner: Path, apk: Path, environment: dict[str, str]) -> str:
+    try:
+        completed = subprocess.run(
+            [str(apksigner), "verify", "--print-certs", str(apk)],
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise CandidateError("could not verify Android APK signer") from error
+    if completed.returncode != 0:
+        raise CandidateError("Android APK signer verification failed")
+    output = (completed.stdout + completed.stderr).decode("utf-8", errors="replace")
+    digests = [match.group(1).replace(":", "").lower() for match in SIGNER_DIGEST.finditer(output)]
+    if len(digests) != 1 or len(digests[0]) != 64:
+        raise CandidateError("Android APK must have exactly one signer certificate")
+    return digests[0]
+
+
+def _sign_android_pair(
+    unsigned_app: Path,
+    unsigned_companion: Path,
+    signed_app: Path,
+    signed_companion: Path,
+) -> None:
+    keytool = _android_tool("keytool", "DOBBYVPN_KEYTOOL")
+    apksigner = _android_apksigner()
+    keystore = signed_app.parent / ".local-android-test.keystore"
+    password = secrets.token_urlsafe(32)
+    environment = os.environ.copy()
+    environment["DOBBYVPN_LOCAL_KEYSTORE_PASSWORD"] = password
+    environment["DOBBYVPN_LOCAL_KEY_PASSWORD"] = password
+    try:
+        generated = subprocess.run(
+            [
+                str(keytool), "-genkeypair", "-noprompt", "-storetype", "JKS",
+                "-keystore", str(keystore), "-alias", "dobbyvpn-local",
+                "-keyalg", "RSA", "-keysize", "2048", "-validity", "1",
+                "-dname", "CN=DobbyVPN local Android qualification",
+                "-storepass:env", "DOBBYVPN_LOCAL_KEYSTORE_PASSWORD",
+                "-keypass:env", "DOBBYVPN_LOCAL_KEY_PASSWORD",
+            ],
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=60,
+        )
+        if generated.returncode != 0:
+            raise CandidateError("could not create the local Android qualification signer")
+        for unsigned, signed in ((unsigned_app, signed_app), (unsigned_companion, signed_companion)):
+            completed = subprocess.run(
+                [
+                    str(apksigner), "sign", "--ks", str(keystore),
+                    "--ks-key-alias", "dobbyvpn-local",
+                    "--ks-pass", "env:DOBBYVPN_LOCAL_KEYSTORE_PASSWORD",
+                    "--key-pass", "env:DOBBYVPN_LOCAL_KEY_PASSWORD",
+                    "--out", str(signed), str(unsigned),
+                ],
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=60,
+            )
+            if completed.returncode != 0:
+                raise CandidateError("could not sign the local Android qualification APK")
+        first_digest = _android_signer_digest(apksigner, signed_app, environment)
+        companion_digest = _android_signer_digest(apksigner, signed_companion, environment)
+        if first_digest != companion_digest:
+            raise CandidateError("local Android APK signer certificates do not match")
+    except OSError as error:
+        raise CandidateError("local Android signing tool failed") from error
+    finally:
+        try:
+            keystore.unlink()
+        except FileNotFoundError:
+            pass
+        environment.pop("DOBBYVPN_LOCAL_KEYSTORE_PASSWORD", None)
+        environment.pop("DOBBYVPN_LOCAL_KEY_PASSWORD", None)
+
+
 def _build_desktop(
     source_root: Path,
     platform: str,
     architecture: str,
     skip_deps: bool,
     gradle_bin: Path | None,
+    gradle_home: Path,
 ) -> None:
     """Use desktop_build.py for both native libraries and the JVM app."""
     helper = _desktop_helper(source_root)
+    environment = os.environ.copy()
+    environment["GRADLE_USER_HOME"] = str(gradle_home)
     common = [sys.executable, str(helper)]
     libs = [*common, "libs", "--platform", platform, "--arch", architecture]
     app = [
@@ -167,8 +309,8 @@ def _build_desktop(
         app.append("--skip-deps")
     if gradle_bin is not None:
         app.extend(("--gradle-bin", str(gradle_bin)))
-    _run(libs, source_root=source_root)
-    _run(app, source_root=source_root)
+    _run(libs, source_root=source_root, environment=environment)
+    _run(app, source_root=source_root, environment=environment)
 
 
 def _build_android(
@@ -179,6 +321,9 @@ def _build_android(
 ) -> Path:
     helper = _android_helper(source_root)
     output = candidate_root / "dobbyvpn-release-unsigned.apk"
+    companion_output = candidate_root / "dobbyvpn-test-companion-unsigned.apk"
+    signed_output = candidate_root / "dobbyvpn-release.apk"
+    signed_companion = candidate_root / "dobbyvpn-test-companion.apk"
     manifest = candidate_root / "android-build-manifest.json"
     first_output = candidate_root / "android-build-first.apk"
     reproducibility = candidate_root / "android-reproducibility.json"
@@ -194,13 +339,24 @@ def _build_android(
         str(first_output),
         "--reproducibility",
         str(reproducibility),
+        "--test-companion-output",
+        str(companion_output),
     ]
     # The Android driver accepts the optional source identity as the strict
     # checkout proof.  Omitting it is what permits a dirty local worktree.
     if source_sha is not None:
         command.extend(("--source-sha", source_sha))
+    else:
+        command.append("--allow-dirty-source")
     _run(command, source_root=source_root)
-    return output
+    if not output.is_file() or output.is_symlink():
+        raise CandidateError("Android build did not produce the application APK")
+    if not companion_output.is_file() or companion_output.is_symlink():
+        raise CandidateError("Android build did not produce the test companion APK")
+    _sign_android_pair(output, companion_output, signed_output, signed_companion)
+    output.unlink()
+    companion_output.unlink()
+    return signed_output
 
 
 def _find_desktop_app(source_root: Path, request_root: Path) -> Path:
@@ -243,6 +399,49 @@ def _optional_interface(
     return _interface(path, process_identity, request_root)
 
 
+def _candidate_logs(request_root: Path, candidate_root: Path) -> tuple[Path, Path]:
+    request_logs = request_root / "logs"
+    if request_logs.exists() or request_logs.is_symlink():
+        request_logs = _existing_directory(request_logs, "request log directory")
+        return (
+            _regular_file(request_logs / "app.log", request_root, "app log"),
+            _regular_file(request_logs / "service.log", request_root, "service log"),
+        )
+    logs = _new_directory(candidate_root / "logs", request_root, "log directory")
+    return (
+        _new_file(logs / "app.log", request_root, "app log"),
+        _new_file(logs / "service.log", request_root, "service log"),
+    )
+
+
+def _expose_android_interfaces(
+    request_root: Path,
+    candidate_root: Path,
+    app_path: Path,
+    test_companion_path: Path,
+) -> None:
+    # APKs are application packages, not private runtime state.  Make only the
+    # two declared interfaces readable by the supervising runner while keeping
+    # every other Android build output private to the isolated build account.
+    try:
+        for path, label in (
+            (app_path, "Android app"),
+            (test_companion_path, "Android test companion"),
+        ):
+            _regular_file(path, request_root, label).chmod(0o444)
+        _expose_candidate_root(candidate_root)
+    except OSError as error:
+        raise CandidateError("could not expose Android candidate interfaces") from error
+
+
+def _expose_candidate_root(candidate_root: Path) -> None:
+    """Permit the supervising runner to traverse declared candidate paths."""
+    try:
+        candidate_root.chmod(0o711)
+    except OSError as error:
+        raise CandidateError("could not expose candidate root") from error
+
+
 def _descriptor(
     *,
     request_root: Path,
@@ -251,18 +450,21 @@ def _descriptor(
     platform: str,
     architecture: str,
     app_path: Path,
+    test_companion_path: Path | None,
     cli_path: Path | None,
     service_path: Path | None,
+    network_path: Path,
+    app_log: Path,
+    service_log: Path,
 ) -> dict[str, Any]:
     app_identity = ANDROID_APP_IDENTITY if platform == "android" else APP_IDENTITY
     service_identity = SERVICE_IDENTITIES.get(platform)
-    network_path = candidate_root / "network-control"
     # The service creates a Unix socket at this path when it starts. Keep it
     # absent so the descriptor can be consumed directly by the runner; on
     # Windows the same confined path is the disposable control-state slot.
     _confined(network_path, request_root, "network interface")
-    app_log = _confined(candidate_root / "logs" / "app.log", request_root, "app log", must_exist=True)
-    service_log = _confined(candidate_root / "logs" / "service.log", request_root, "service log", must_exist=True)
+    app_log = _confined(app_log, request_root, "app log", must_exist=True)
+    service_log = _confined(service_log, request_root, "service log", must_exist=True)
     result: dict[str, Any] = {
         "schema": SCHEMA,
         "kind": KIND,
@@ -289,6 +491,13 @@ def _descriptor(
             },
         },
     }
+    if platform == "android":
+        if test_companion_path is None:
+            raise CandidateError("Android test companion is missing")
+        result["test_companion"] = {
+            "path": str(_regular_file(test_companion_path, request_root, "Android test companion")),
+            "process_identity": ANDROID_TEST_COMPANION_IDENTITY,
+        }
     validate_descriptor(result, request_root)
     return result
 
@@ -301,6 +510,8 @@ def validate_descriptor(document: Any, request_root: Path) -> None:
         "schema", "kind", "platform", "architecture", "request_root", "source_root",
         "candidate_root", "interfaces",
     }
+    if document.get("platform") == "android":
+        expected.add("test_companion")
     if set(document) != expected:
         raise CandidateError("descriptor contains unexpected or missing fields")
     if document["schema"] != SCHEMA or document["kind"] != KIND:
@@ -351,6 +562,15 @@ def validate_descriptor(document: Any, request_root: Path) -> None:
     _confined(Path(network["path"]), root, "descriptor network interface")
     if not IDENTITY.fullmatch(network["process_identity"]):
         raise CandidateError("descriptor network process identity is invalid")
+    if platform == "android":
+        companion = document["test_companion"]
+        if not isinstance(companion, dict) or set(companion) != {"path", "process_identity"}:
+            raise CandidateError("descriptor Android test companion is invalid")
+        if not isinstance(companion["path"], str) or not isinstance(companion["process_identity"], str):
+            raise CandidateError("descriptor Android test companion types are invalid")
+        _regular_file(Path(companion["path"]), root, "descriptor Android test companion")
+        if companion["process_identity"] != ANDROID_TEST_COMPANION_IDENTITY:
+            raise CandidateError("descriptor Android test companion identity is invalid")
 
 
 def _write_descriptor(path: Path, request_root: Path, document: dict[str, Any]) -> None:
@@ -414,24 +634,50 @@ def prepare_candidate(
     output = _confined(Path(output), request_root, "descriptor")
     if output.exists() or output.is_symlink():
         raise CandidateError("descriptor path is already occupied")
-    logs = candidate_root / "logs"
-    try:
-        logs.mkdir(mode=0o700)
-    except OSError as error:
-        raise CandidateError(f"could not create log directory: {error}") from error
-    app_log = _new_file(logs / "app.log", request_root, "app log")
-    service_log = _new_file(logs / "service.log", request_root, "service log")
-    del app_log, service_log
+    app_log, service_log = _candidate_logs(request_root, candidate_root)
 
+    test_companion_path: Path | None = None
     if platform in DESKTOP_PLATFORMS:
-        _build_desktop(source_root, platform, architecture, skip_deps, gradle_bin)
+        gradle_home = _new_directory(
+            candidate_root / "gradle-home",
+            request_root,
+            "Gradle home",
+        )
+        _build_desktop(
+            source_root,
+            platform,
+            architecture,
+            skip_deps,
+            gradle_bin,
+            gradle_home,
+        )
         service_path = source_root / "go_module" / SERVICE_NAMES[platform]
         cli_path = source_root / "go_module" / CLI_NAMES[platform]
         app_path = _find_desktop_app(source_root, request_root)
+        _expose_candidate_root(candidate_root)
     else:
         app_path = _build_android(source_root, candidate_root, architecture, source_sha)
+        test_companion_path = candidate_root / "dobbyvpn-test-companion.apk"
+        _expose_android_interfaces(
+            request_root,
+            candidate_root,
+            app_path,
+            test_companion_path,
+        )
         service_path = None
         cli_path = None
+
+    # Linux Unix-domain socket paths are commonly limited to 107 usable bytes.
+    # This short source-adjacent directory is created by the isolated candidate
+    # account, while execute-only traversal lets the supervisor validate the
+    # socket without exposing the directory contents.
+    network_root = _new_directory(
+        source_root / ".dobbyvpn-run",
+        request_root,
+        "candidate runtime directory",
+    )
+    _expose_candidate_root(network_root)
+    network_path = network_root / "s"
 
     descriptor = _descriptor(
         request_root=request_root,
@@ -440,8 +686,12 @@ def prepare_candidate(
         platform=platform,
         architecture=architecture,
         app_path=app_path,
+        test_companion_path=test_companion_path,
         cli_path=cli_path,
         service_path=service_path,
+        network_path=network_path,
+        app_log=app_log,
+        service_log=service_log,
     )
     _write_descriptor(output, request_root, descriptor)
     return descriptor

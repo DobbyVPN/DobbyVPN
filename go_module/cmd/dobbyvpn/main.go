@@ -208,6 +208,12 @@ func connect(ctx context.Context, client grpcproto.VpnClient, source string, pro
 }
 
 func initServiceLogger(ctx context.Context, client grpcproto.VpnClient) error {
+	// Qualification supplies a request-confined path on every desktop. Honor
+	// that explicit interface before the ordinary Windows user-log default so
+	// no service log byte escapes the retained request tree.
+	if strings.TrimSpace(os.Getenv("DOBBY_LOG_PATH")) != "" {
+		return initOptInServiceLogger(ctx, client)
+	}
 	if runtime.GOOS == "windows" {
 		return initWindowsServiceLogger(ctx, client, os.UserHomeDir)
 	}

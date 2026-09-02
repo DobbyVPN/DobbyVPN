@@ -21,6 +21,20 @@ type disconnectClientStub struct {
 	destroyCalls     *int
 }
 
+type loggerClientStub struct {
+	grpcproto.VpnClient
+	path string
+}
+
+func (stub *loggerClientStub) InitLogger(
+	_ context.Context,
+	request *grpcproto.InitLoggerRequest,
+	_ ...grpc.CallOption,
+) (*grpcproto.Empty, error) {
+	stub.path = request.GetPath()
+	return &grpcproto.Empty{}, nil
+}
+
 func (stub disconnectClientStub) RecoverActiveSession(
 	context.Context,
 	*grpcproto.Empty,
@@ -97,6 +111,18 @@ func TestWindowsServiceLogPathMatchesDesktopContract(t *testing.T) {
 	want := filepath.FromSlash(`C:/Users/dobbytest/.dobbyvpn/go_desktop_service_logs.jsonl`)
 	if got := windowsServiceLogPath(home); got != want {
 		t.Fatalf("windowsServiceLogPath(%q) = %q, want %q", home, got, want)
+	}
+}
+
+func TestExplicitServiceLogPathTakesPrecedenceOnEveryDesktop(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "service.log")
+	t.Setenv("DOBBY_LOG_PATH", path)
+	client := &loggerClientStub{}
+	if err := initServiceLogger(context.Background(), client); err != nil {
+		t.Fatal(err)
+	}
+	if client.path != path {
+		t.Fatalf("InitLogger path = %q, want %q", client.path, path)
 	}
 }
 

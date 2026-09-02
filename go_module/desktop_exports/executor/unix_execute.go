@@ -18,15 +18,37 @@ import (
 	"go_module/log"
 
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 )
+
+func explicitLogRoot() (string, error) {
+	root := strings.TrimSpace(os.Getenv("DOBBY_LOG_ROOT"))
+	if root == "" {
+		root = os.TempDir()
+	}
+	return filepath.Abs(root)
+}
+
+func openManagedLocalLog(path string) (*os.File, error) {
+	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_APPEND|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("managed log descriptor is unavailable")
+	}
+	return file, nil
+}
 
 func initExplicitLocalLog() error {
 	requested := strings.TrimSpace(os.Getenv("DOBBY_LOG_PATH"))
 	if requested == "" {
 		return nil
 	}
-	root, err := filepath.Abs(os.TempDir())
+	root, err := explicitLogRoot()
 	if err != nil {
 		return err
 	}
@@ -39,6 +61,33 @@ func initExplicitLocalLog() error {
 		return fmt.Errorf("explicit log path is outside the local temporary directory")
 	}
 	parent := filepath.Dir(path)
+	managed := strings.TrimSpace(os.Getenv("DOBBY_LOG_PRECREATED")) == "1"
+	if managed {
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			return fmt.Errorf("managed explicit log target is unavailable: %w", statErr)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("managed explicit log target must be a regular file")
+		}
+		resolvedRoot, resolveErr := filepath.EvalSymlinks(root)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		resolvedParent, resolveErr := filepath.EvalSymlinks(parent)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		relative, resolveErr = filepath.Rel(resolvedRoot, resolvedParent)
+		if resolveErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+			return fmt.Errorf("managed explicit log path traverses outside its root")
+		}
+		file, openErr := openManagedLocalLog(path)
+		if openErr != nil {
+			return openErr
+		}
+		return log.SetOpenedFile(file)
+	}
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
 	}

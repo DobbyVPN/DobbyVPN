@@ -3,15 +3,21 @@ package com.dobby.feature.vpn_service
 import android.app.Activity
 import android.net.VpnService
 import android.os.Bundle
+import androidx.test.platform.app.InstrumentationRegistry
 
 /**
- * Debug-only foreground host for instrumentation that exercises Android's real VPN consent UI.
- * Release APKs do not contain this activity.
+ * Test-only host for Android's real VPN consent UI.
+ *
+ * This class is compiled into the instrumentation APK, never the production
+ * APK.  The consent request still uses the target application context so that
+ * Android grants the production VpnService permission rather than the test
+ * package's permission.
  */
 class VpnConsentTestActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val consentIntent = VpnService.prepare(this)
+        val targetContext = InstrumentationRegistry.getInstrumentation().targetContext
+        val consentIntent = VpnService.prepare(targetContext)
         if (consentIntent == null) {
             finish()
         } else {

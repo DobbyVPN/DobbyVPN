@@ -139,7 +139,8 @@ class DobbyVpnServiceInstrumentationTest {
         if (VpnService.prepare(context) == null) return
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.startActivitySync(
-            Intent(context, VpnConsentTestActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            Intent(instrumentation.context, VpnConsentTestActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         )
         val device = UiDevice.getInstance(instrumentation)
         val approval = device.wait(

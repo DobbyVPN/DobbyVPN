@@ -10,13 +10,16 @@ import com.dobby.feature.main.domain.SessionObservation
 import com.dobby.feature.main.domain.SessionSnapshot
 import com.dobby.feature.main.domain.SessionStartTarget
 import com.dobby.feature.main.domain.SessionState
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -52,6 +55,31 @@ class AndroidHostedProfileTestDriverTest {
             put("source_sha", 17)
         }
         assertInputRejected(wrongSourceType)
+
+        val wrongPreserveType = JSONObject(commandJson()).apply {
+            put("preserve_active", "true")
+        }
+        assertInputRejected(wrongPreserveType)
+
+        val unsafePreserve = JSONObject(
+            commandJson(preserveActive = true),
+        ).apply {
+            getJSONArray("operations").put(
+                JSONObject()
+                    .put("id", "late-disconnect")
+                    .put("operation", "disconnect")
+                    .put("timeout_seconds", 30),
+            )
+        }
+        assertInputRejected(unsafePreserve)
+
+        val unobservedPreserve = JSONObject(
+            commandJson(
+                operations = listOf("configure", "connect"),
+                preserveActive = true,
+            ),
+        )
+        assertInputRejected(unobservedPreserve)
 
         val wrongTimeoutType = JSONObject(commandJson()).apply {
             getJSONArray("operations").getJSONObject(0).put("timeout_seconds", 30.5)
@@ -336,7 +364,7 @@ class AndroidHostedProfileTestDriverTest {
 
     @Test
     fun external_controls_are_token_bound_and_observe_each_real_transition_boundary() = runBlocking {
-        val externalOperations = listOf("network_transition", "sleep_wake", "process_loss")
+        val externalOperations = listOf("network_transition", "sleep_wake")
         val operations = listOf("configure", "connect") + externalOperations + listOf("disconnect", "inspect_cleanup")
         val commandFile = writeInput(
             "command-external.json",
@@ -384,7 +412,6 @@ class AndroidHostedProfileTestDriverTest {
         assertEquals(null, result.errorCode)
         assertTrue(result.networkTransitionVerified)
         assertTrue(result.sleepWakeVerified)
-        assertTrue(result.processLossVerified)
         assertTrue(result.cleanupVerified)
         externalOperations.forEach { operation ->
             val operationJson = command.getJSONArray("operations").let { items ->
@@ -400,63 +427,90 @@ class AndroidHostedProfileTestDriverTest {
     }
 
     @Test
-    fun process_loss_proves_recovery_before_reporting_success_and_keeps_new_generation() = runBlocking {
-        val operations = listOf("configure", "connect", "process_loss", "disconnect", "inspect_cleanup")
+    fun successful_preserve_active_phase_leaves_the_started_generation_for_external_loss() = runBlocking {
+        val operations = listOf("configure", "connect", "observe_tunnel", "observe_routing_identity")
         val commandFile = writeInput(
-            "command-process-loss-recovery.json",
-            commandJson(operations = operations, profileFile = "profile-process-loss-recovery.bin"),
+            "command-preserve-active.json",
+            commandJson(
+                operations = operations,
+                profileFile = "profile-preserve-active.bin",
+                preserveActive = true,
+            ),
         )
-        writeInput("profile-process-loss-recovery.bin", "opaque-profile")
-        val responder = startExternalResponder(commandFile, "process_loss")
+        writeInput("profile-preserve-active.bin", "opaque-profile")
         val controller = FakeSessionController()
         val result = AndroidHostedProfileTestDriver(
             context = context,
             controllerFactory = { controller },
             platformFactory = { _ -> FakePlatform() },
         ).run(commandFile.name)
-        responder.join(2_000)
 
-        assertFalse("process-loss responder did not finish", responder.isAlive)
         assertEquals(null, result.errorCode)
-        assertTrue(result.processLossVerified)
-        assertFalse(result.restartVerified)
-        assertFalse(result.reconnectBounded)
-        assertTrue(result.secondTunnelInterface)
-        assertTrue(result.secondRoutingIdentityChanged)
-        assertTrue(result.disconnectClean)
-        assertFalse(result.finalDisconnectClean)
-        assertTrue(result.cleanupVerified)
-        assertEquals(2, controller.startCalls)
-        assertEquals(listOf(1uL, 2uL), controller.startGenerations)
-        assertNotEquals(controller.startGenerations[0], controller.startGenerations[1])
-        assertEquals(1, controller.stopCalls)
+        assertTrue(result.connected)
+        assertTrue(result.tunnelInterface)
+        assertTrue(result.routingIdentityChanged)
+        assertFalse(result.cleanupVerified)
+        assertEquals(1, controller.startCalls)
+        assertEquals(0, controller.stopCalls)
+        assertFalse(controller.events.contains("destroy"))
     }
 
     @Test
-    fun process_loss_recovery_failure_is_not_reported_as_recovered() = runBlocking {
-        val operations = listOf("configure", "connect", "process_loss")
+    fun failed_preserve_active_phase_still_cleans_up() = runBlocking {
+        val operations = listOf("configure", "connect", "observe_tunnel")
         val commandFile = writeInput(
-            "command-process-loss-failure.json",
-            commandJson(operations = operations, profileFile = "profile-process-loss-failure.bin"),
+            "command-preserve-failure.json",
+            commandJson(
+                operations = operations,
+                profileFile = "profile-preserve-failure.bin",
+                preserveActive = true,
+            ),
         )
-        writeInput("profile-process-loss-failure.bin", "opaque-profile")
-        val responder = startExternalResponder(commandFile, "process_loss")
+        writeInput("profile-preserve-failure.bin", "opaque-profile")
         val controller = FakeSessionController()
         val result = AndroidHostedProfileTestDriver(
             context = context,
             controllerFactory = { controller },
             platformFactory = { _ -> FakePlatform(tunnelResults = listOf(false)) },
         ).run(commandFile.name)
-        responder.join(2_000)
 
-        assertFalse("process-loss responder did not finish", responder.isAlive)
-        assertEquals("PROCESS_LOSS_RECOVERY_TUNNEL_UNVERIFIED", result.errorCode)
-        assertFalse(result.processLossVerified)
-        assertFalse(result.secondTunnelInterface)
-        assertFalse(result.secondRoutingIdentityChanged)
+        assertEquals("TUNNEL_NOT_OBSERVED", result.errorCode)
         assertTrue(result.cleanupVerified)
-        assertEquals(2, controller.startCalls)
+        assertEquals(1, controller.startCalls)
         assertEquals(1, controller.stopCalls)
+        assertTrue(controller.events.contains("destroy"))
+    }
+
+    @Test
+    fun cancellation_still_completes_session_and_file_cleanup() = runBlocking {
+        val outputName = "observation-cancelled.json"
+        val profileName = "profile-cancelled.bin"
+        val commandFile = writeInput(
+            "command-cancelled.json",
+            commandJson(
+                operations = listOf("configure", "connect", "measure_stability"),
+                outputFile = outputName,
+                profileFile = profileName,
+            ),
+        )
+        val profileFile = writeInput(profileName, "opaque-profile")
+        val outputFile = context.filesDir.resolve(outputName).also(files::add)
+        val controller = FakeSessionController()
+        val platform = FakePlatform(cancelStability = true)
+        val job = launch {
+            AndroidHostedProfileTestDriver(
+                context = context,
+                controllerFactory = { controller },
+                platformFactory = { _ -> platform },
+            ).run(commandFile.name)
+        }
+        while ("stability-wait" !in platform.events) yield()
+        job.cancelAndJoin()
+
+        assertEquals(1, controller.stopCalls)
+        assertTrue(controller.events.contains("destroy"))
+        assertFalse(profileFile.exists())
+        assertTrue(outputFile.isFile)
     }
 
     private fun assertInputRejected(json: JSONObject) {
@@ -475,37 +529,6 @@ class AndroidHostedProfileTestDriverTest {
         return file
     }
 
-    private fun startExternalResponder(commandFile: File, operation: String): Thread {
-        val command = JSONObject(commandFile.readText())
-        val operationJson = command.getJSONArray("operations").let { items ->
-            (0 until items.length()).asSequence()
-                .map(items::getJSONObject)
-                .first { it.getString("operation") == operation }
-        }
-        val controlFile = context.filesDir.resolve(operationJson.getString("control_file"))
-        val token = operationJson.getString("control_token")
-        val ready = context.filesDir.resolve("${controlFile.name}.ready")
-        files += controlFile
-        files += ready
-        val responder = Thread {
-            val deadline = System.currentTimeMillis() + 10_000L
-            while (!ready.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
-            check(ready.exists())
-            while (controlFile.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
-            check(!controlFile.exists())
-            val temporary = context.filesDir.resolve("${controlFile.name}.tmp")
-            temporary.writeText(JSONObject().put("operation", operation).put("token", token).toString())
-            check(temporary.renameTo(controlFile))
-            while (controlFile.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
-            check(!controlFile.exists())
-            while (ready.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
-            check(!ready.exists())
-        }
-        responder.isDaemon = true
-        responder.start()
-        return responder
-    }
-
     private fun commandJson(
         operations: List<String> = listOf(
             "configure", "connect", "observe_tunnel", "observe_routing_identity", "measure_stability",
@@ -513,6 +536,7 @@ class AndroidHostedProfileTestDriverTest {
         ),
         outputFile: String = "observation-${operations.size}.json",
         profileFile: String = "profile-${operations.size}.bin",
+        preserveActive: Boolean = false,
     ): String {
         val operationArray = JSONArray()
         operations.forEachIndexed { index, operation ->
@@ -536,6 +560,7 @@ class AndroidHostedProfileTestDriverTest {
             .put("source_sha", "a".repeat(40))
             .put("profile_file", profileFile)
             .put("output_file", outputFile)
+            .apply { if (preserveActive) put("preserve_active", true) }
             .put(
                 "endpoints",
                 JSONObject()
@@ -551,6 +576,7 @@ class AndroidHostedProfileTestDriverTest {
     private class FakePlatform(
         private val failTunnel: Boolean = false,
         private val tunnelResults: List<Boolean> = listOf(true),
+        private val cancelStability: Boolean = false,
         val events: MutableList<String> = mutableListOf(),
     ) : AndroidHostedPlatform {
 
@@ -567,7 +593,14 @@ class AndroidHostedProfileTestDriverTest {
             return result
         }
         override suspend fun observeRoutingIdentity(): Boolean { events += "identity"; return true }
-        override suspend fun measureStability(): Boolean { events += "stability"; return true }
+        override suspend fun measureStability(): Boolean {
+            if (cancelStability) {
+                events += "stability-wait"
+                awaitCancellation()
+            }
+            events += "stability"
+            return true
+        }
         override suspend fun measureThroughput(): AndroidHostedMetrics {
             events += "throughput"
             return AndroidHostedMetrics(12.5, 20.0, 10.0)

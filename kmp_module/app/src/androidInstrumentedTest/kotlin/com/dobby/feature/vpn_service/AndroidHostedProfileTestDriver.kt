@@ -16,6 +16,7 @@ import com.dobby.feature.main.domain.SessionStartTarget
 import com.dobby.feature.main.domain.SessionState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -61,6 +62,7 @@ internal data class AndroidHostedCommand(
     val outputFile: String,
     val endpoints: AndroidHostedEndpoints,
     val operations: List<AndroidHostedOperation>,
+    val preserveActive: Boolean,
 )
 
 internal class AndroidHostedInputException : IllegalArgumentException("INPUT_INVALID")
@@ -86,7 +88,7 @@ internal object AndroidHostedCommandContract {
     private val FILE_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
     private val OPERATION_ID = Regex("[a-z][a-z0-9._-]{2,95}")
     private val CONTROL_TOKEN = Regex("[0-9a-f]{64}")
-    internal val EXTERNAL_CONTROL_OPERATIONS = setOf("network_transition", "sleep_wake", "process_loss")
+    internal val EXTERNAL_CONTROL_OPERATIONS = setOf("network_transition", "sleep_wake")
     private val OPERATIONS = setOf(
         "configure",
         "connect",
@@ -113,7 +115,7 @@ internal object AndroidHostedCommandContract {
             invalid()
         }
         val requiredKeys = setOf("schema", "kind", "platform", "profile_file", "output_file", "endpoints", "operations")
-        val optionalKeys = setOf("source_sha")
+        val optionalKeys = setOf("source_sha", "preserve_active")
         val commandKeys = json.keys().asSequence().toSet()
         if (!requiredKeys.all(commandKeys::contains) || (commandKeys - requiredKeys - optionalKeys).isNotEmpty()) invalid()
         if (exactInt(json.opt("schema")) != SCHEMA ||
@@ -127,6 +129,11 @@ internal object AndroidHostedCommandContract {
             }
         } else {
             null
+        }
+        val preserveActive = if (json.has("preserve_active")) {
+            json.opt("preserve_active") as? Boolean ?: invalid()
+        } else {
+            false
         }
         val profileFile = requiredString(json, "profile_file")
         val outputFile = requiredString(json, "output_file")
@@ -192,7 +199,19 @@ internal object AndroidHostedCommandContract {
         if (operations.sumOf(AndroidHostedOperation::timeoutSeconds) > MAX_COMMAND_TIMEOUT_SECONDS) invalid()
         val tokens = operations.mapNotNull(AndroidHostedOperation::controlToken)
         if (tokens.size != tokens.toSet().size) invalid()
-        return AndroidHostedCommand(sourceSha, profileFile, outputFile, endpoints, operations)
+        if (preserveActive && (
+                setOf(
+                    "configure", "connect", "observe_tunnel", "observe_routing_identity",
+                ).any { required -> operations.none { it.operation == required } } ||
+                    operations.any {
+                        it.operation in EXTERNAL_CONTROL_OPERATIONS ||
+                            it.operation in setOf("disconnect", "reconnect", "inspect_cleanup")
+                    }
+            )
+        ) invalid()
+        return AndroidHostedCommand(
+            sourceSha, profileFile, outputFile, endpoints, operations, preserveActive,
+        )
     }
 
     fun privateFile(filesDir: File, fileName: String): File {
@@ -421,6 +440,7 @@ internal class AndroidHostedProfileTestDriver(
         val controller = controllerFactory()
         val platform = platformFactory(command.endpoints)
         var generation: ULong? = null
+        var operationsSucceeded = false
         try {
             for (operation in command.operations) {
                 try {
@@ -435,6 +455,7 @@ internal class AndroidHostedProfileTestDriver(
                     throw AndroidHostedOperationFailure("OPERATION_TIMEOUT")
                 }
             }
+            operationsSucceeded = true
         } catch (failure: AndroidHostedOperationFailure) {
             observation.errorCode = failure.code
         } catch (failure: CancellationException) {
@@ -443,33 +464,41 @@ internal class AndroidHostedProfileTestDriver(
             failure.printStackTrace()
             observation.errorCode = "DRIVER_ERROR"
         } finally {
-            // A configure-only command has no generation to stop.  The Go
-            // session is therefore legitimately left in CONFIGURED while its
-            // profile is still clean; once a generation has started, cleanup
-            // must return to IDLE so the tunnel lifecycle is proven closed.
-            val hadActiveGeneration = generation != null
-            var cleanupSucceeded = true
-            generation?.let { active ->
-                cleanupSucceeded = stopSession(controller, active) && cleanupSucceeded
-                generation = null
+            val preserveActive = command.preserveActive && operationsSucceeded && generation != null
+            if (preserveActive) {
+                writeObservation(outputFile, observation)
+                runCatching { profileFile.delete() }
+            } else {
+                withContext(NonCancellable) {
+                    // A configure-only command has no generation to stop.  The Go
+                    // session is therefore legitimately left in CONFIGURED while its
+                    // profile is still clean; once a generation has started, cleanup
+                    // must return to IDLE so the tunnel lifecycle is proven closed.
+                    val hadActiveGeneration = generation != null
+                    var cleanupSucceeded = true
+                    generation?.let { active ->
+                        cleanupSucceeded = stopSession(controller, active) && cleanupSucceeded
+                        generation = null
+                    }
+                    // Stop is deliberately asynchronous: the Go API acknowledges the
+                    // transition to STOPPING before the platform callbacks finish and
+                    // publish IDLE.  Reading one snapshot immediately after stop can
+                    // therefore report a transient STOPPING state and make destroy
+                    // return CONFLICT even though the tunnel is already draining.
+                    val cleanupSnapshot = awaitCleanSnapshot(controller, hadActiveGeneration)
+                    cleanupSucceeded = runCatching {
+                        controller.destroy() is SessionControllerResult.Success
+                    }.getOrDefault(false) && cleanupSucceeded
+                    runCatching { context.stopService(DobbyVpnService.createStopIntent(context, 0, false)) }
+                    val disconnected = runCatching { platform.awaitDisconnected() }.getOrDefault(false)
+                    observation.cleanupVerified = cleanupSucceeded && cleanupSnapshot && disconnected
+                    if (!observation.cleanupVerified && observation.errorCode == null) {
+                        observation.errorCode = "CLEANUP_FAILED"
+                    }
+                    writeObservation(outputFile, observation)
+                    runCatching { profileFile.delete() }
+                }
             }
-            // Stop is deliberately asynchronous: the Go API acknowledges the
-            // transition to STOPPING before the platform callbacks finish and
-            // publish IDLE.  Reading one snapshot immediately after stop can
-            // therefore report a transient STOPPING state and make destroy
-            // return CONFLICT even though the tunnel is already draining.
-            // Poll the authoritative snapshot until the lifecycle is actually
-            // clean, retaining any transport exception in the instrumentation
-            // output instead of silently discarding it.
-            val cleanupSnapshot = awaitCleanSnapshot(controller, hadActiveGeneration)
-            cleanupSucceeded = runCatching { controller.destroy() is SessionControllerResult.Success }
-                .getOrDefault(false) && cleanupSucceeded
-            runCatching { context.stopService(DobbyVpnService.createStopIntent(context, 0, false)) }
-            val disconnected = runCatching { platform.awaitDisconnected() }.getOrDefault(false)
-            observation.cleanupVerified = cleanupSucceeded && cleanupSnapshot && disconnected
-            if (!observation.cleanupVerified && observation.errorCode == null) observation.errorCode = "CLEANUP_FAILED"
-            writeObservation(outputFile, observation)
-            runCatching { profileFile.delete() }
         }
         return observation
     }
@@ -590,36 +619,6 @@ internal class AndroidHostedProfileTestDriver(
                 observation.sleepWakeVerified = tunnel && identity
                 if (!observation.sleepWakeVerified) {
                     throw AndroidHostedOperationFailure("SLEEP_WAKE_UNVERIFIED")
-                }
-            }
-            "process_loss" -> {
-                awaitExternalControl(operation)
-                val disconnected = platform.awaitDisconnected()
-                if (!disconnected) throw AndroidHostedOperationFailure("PROCESS_LOSS_UNVERIFIED")
-
-                // The target service process was intentionally terminated by the owner-side
-                // control. The old generation belongs to that process and must never be used
-                // for the replacement session. Keep the controller/session identity so its
-                // configured profile remains available, but clear the driver-owned generation
-                // before asking the controller to start a fresh generation.
-                setGeneration(null)
-
-                try {
-                    connect(controller, platform, observation, setGeneration)
-                    val tunnel = platform.observeTunnel()
-                    observation.secondTunnelInterface = tunnel
-                    if (!tunnel) {
-                        throw AndroidHostedOperationFailure("PROCESS_LOSS_RECOVERY_TUNNEL_UNVERIFIED")
-                    }
-                    val identity = platform.observeRoutingIdentity()
-                    observation.secondRoutingIdentityChanged = identity
-                    if (!identity) {
-                        throw AndroidHostedOperationFailure("PROCESS_LOSS_RECOVERY_IDENTITY_UNVERIFIED")
-                    }
-                    observation.processLossVerified = true
-                } catch (failure: AndroidHostedOperationFailure) {
-                    observation.processLossVerified = false
-                    throw failure
                 }
             }
             else -> throw AndroidHostedOperationFailure("INPUT_INVALID")
@@ -800,7 +799,8 @@ internal class RealAndroidHostedPlatform(
         if (VpnService.prepare(context) == null) return@withContext
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.startActivitySync(
-            Intent(context, VpnConsentTestActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            Intent(instrumentation.context, VpnConsentTestActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         )
         val approval = UiDevice.getInstance(instrumentation).wait(
             Until.findObject(By.res(Pattern.compile(".+:id/button1"))),

@@ -16,6 +16,7 @@ source_sha=''
 output=''
 manifest=''
 first_output=''
+test_companion_output=''
 reproducibility=''
 dependency_manifest=''
 dependency_spec=''
@@ -28,6 +29,7 @@ tool_closure_manifest=${DOBBYVPN_ANDROID_TOOL_CLOSURE:-}
 trusted_helper_root=''
 trusted_helper_sha=''
 trusted_helper_validation_only=0
+allow_dirty_source=0
 dependency_helper_explicit=''
 dependency_spec_explicit=''
 source_verifier_explicit=''
@@ -67,6 +69,11 @@ while (($#)); do
     --first-output)
       (($# >= 2)) || { echo 'missing --first-output value' >&2; exit 2; }
       first_output=$2
+      shift 2
+      ;;
+    --test-companion-output)
+      (($# >= 2)) || { echo 'missing --test-companion-output value' >&2; exit 2; }
+      test_companion_output=$2
       shift 2
       ;;
     --reproducibility)
@@ -132,6 +139,10 @@ while (($#)); do
       trusted_helper_validation_only=1
       shift
       ;;
+    --allow-dirty-source)
+      allow_dirty_source=1
+      shift
+      ;;
     --source-repository)
       (($# >= 2)) || { echo 'missing --source-repository value' >&2; exit 2; }
       source_repository=$2
@@ -164,6 +175,10 @@ if [[ -n "$source_sha" && ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
   echo 'source SHA must be a full lowercase Git commit identity' >&2
   exit 2
 fi
+if [[ "$allow_dirty_source" == 1 && -n "$source_sha" ]]; then
+  echo '--allow-dirty-source cannot be combined with --source-sha' >&2
+  exit 2
+fi
 first_output=${first_output:-"$source_root/.android-build/first.apk"}
 reproducibility=${reproducibility:-"$source_root/runtime/android-reproducibility.json"}
 dependency_manifest=${dependency_manifest:-"$source_root/runtime/android-dependency-provenance.json"}
@@ -172,9 +187,14 @@ dependency_closure=${dependency_closure:-"${DOBBYVPN_ANDROID_DEPENDENCY_CLOSURE:
 dependency_helper=${dependency_helper:-"$source_root/.github/scripts/android_dependency_provenance.py"}
 source_verifier=${source_verifier:-"$source_root/.github/scripts/verify_android_apk_source.py"}
 reproducibility_verifier=${reproducibility_verifier:-"$source_root/.github/scripts/verify_android_reproducibility.py"}
+local_identity_helper="$source_root/.github/scripts/local_source_identity.py"
 closure_mode=0
 if [[ -n "$dependency_closure" ]]; then
   closure_mode=1
+fi
+if [[ "$allow_dirty_source" == 1 && "$closure_mode" == 1 ]]; then
+  echo '--allow-dirty-source cannot be combined with an owner dependency closure' >&2
+  exit 2
 fi
 if [[ "${DOBBYVPN_REQUIRE_TOOL_CLOSURE:-0}" == 1 && -z "$tool_closure_manifest" ]]; then
   echo 'request-bound tool closure manifest is required' >&2
@@ -189,7 +209,9 @@ gradle_bin=${GRADLE_BIN:-"$source_root/kmp_module/gradlew"}
 # and must not traverse an existing symlink.  Validate both before and after
 # creating parent directories so a lexical alias cannot escape the checkout.
 validate_destinations() {
-  SOURCE_ROOT="$source_root" OUTPUT="$output" MANIFEST="$manifest" FIRST_OUTPUT="$first_output" REPRODUCIBILITY="$reproducibility" DEPENDENCY_MANIFEST="$dependency_manifest" python3 - <<'PY'
+  SOURCE_ROOT="$source_root" OUTPUT="$output" MANIFEST="$manifest" FIRST_OUTPUT="$first_output" \
+    TEST_COMPANION_OUTPUT="$test_companion_output" REPRODUCIBILITY="$reproducibility" \
+    DEPENDENCY_MANIFEST="$dependency_manifest" python3 - <<'PY'
 import os
 from pathlib import Path
 
@@ -201,6 +223,9 @@ destinations = [
     ("reproducibility", Path(os.environ["REPRODUCIBILITY"])),
     ("dependency manifest", Path(os.environ["DEPENDENCY_MANIFEST"])),
 ]
+companion = os.environ.get("TEST_COMPANION_OUTPUT", "")
+if companion:
+    destinations.append(("test companion", Path(companion)))
 if any(not path.is_absolute() for _, path in destinations):
     raise SystemExit("all output paths must be absolute paths")
 
@@ -231,6 +256,27 @@ PY
 # state (for example, a generated parent that Git reports as untracked).
 if [[ "$trusted_helper_validation_only" != 1 ]]; then
   validate_destinations
+fi
+
+local_identity_command=()
+if [[ "$allow_dirty_source" == 1 ]]; then
+  [[ -f "$local_identity_helper" && ! -L "$local_identity_helper" ]] || {
+    echo 'local source identity helper is missing or symlinked' >&2
+    exit 2
+  }
+  local_identity_command=(python3 "$local_identity_helper" --root "$source_root")
+  for generated_path in "$output" "$manifest" "$first_output" "$test_companion_output" "$reproducibility" "$dependency_manifest"; do
+    [[ -n "$generated_path" ]] || continue
+    case "$generated_path" in
+      "$source_root"/*)
+        local_identity_command+=(--exclude "${generated_path#"$source_root/"}")
+        ;;
+      *)
+        echo 'local generated output must be below the source root' >&2
+        exit 2
+        ;;
+    esac
+  done
 fi
 
 validate_source_checkout() {
@@ -570,15 +616,34 @@ for path_key, digest_key in executables.items():
 PY
 }
 
-source_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit})
-source_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree})
-[[ "$source_commit" =~ ^[0-9a-f]{40}$ && "$source_tree" =~ ^[0-9a-f]{40}$ ]] || {
-  echo 'source checkout did not yield canonical Git identities' >&2
-  exit 2
-}
-if [[ -n "$source_sha" && "$source_commit" != "$source_sha" ]]; then
-  echo "source checkout commit does not match supplied source SHA: expected $source_sha got $source_commit" >&2
-  exit 2
+source_identity_mode=git
+if [[ "$allow_dirty_source" == 1 ]]; then
+  # The Harness intentionally transfers a worktree without .git.  Derive a
+  # stable, local-only identity from its source bytes; this branch is never
+  # accepted by Release, which continues through the Git proof below.
+  source_identity_mode=local-content
+  source_repository=local-content
+  read -r source_commit source_tree <<<"$("${local_identity_command[@]}")"
+  [[ "$source_commit" =~ ^[0-9a-f]{40}$ && "$source_tree" =~ ^[0-9a-f]{40}$ ]] || {
+    echo 'local source tree did not yield canonical content identities' >&2
+    exit 2
+  }
+else
+  source_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit})
+  source_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree})
+  [[ "$source_commit" =~ ^[0-9a-f]{40}$ && "$source_tree" =~ ^[0-9a-f]{40}$ ]] || {
+    echo 'source checkout did not yield canonical Git identities' >&2
+    exit 2
+  }
+  if [[ -n "$source_sha" && "$source_commit" != "$source_sha" ]]; then
+    echo "source checkout commit does not match supplied source SHA: expected $source_sha got $source_commit" >&2
+    exit 2
+  fi
+fi
+if [[ "$source_identity_mode" == local-content ]]; then
+  source_link="local-content://$source_commit"
+else
+  source_link="https://github.com/$source_repository/tree/$source_commit"
 fi
 if [[ -z "$trusted_helper_root" ]]; then
   helper_paths=("$dependency_helper" "$source_verifier" "$reproducibility_verifier")
@@ -759,6 +824,9 @@ fi
 build_cache=${DOBBYVPN_GOMOBILE_GOCACHE:-"$source_root/.android-build/go-cache"}
 build_tmp=${DOBBYVPN_GOMOBILE_GOTMPDIR:-"$source_root/.android-build/go-tmp"}
 mkdir -p "$build_cache" "$build_tmp" "$(dirname -- "$first_output")" "$(dirname -- "$output")"
+if [[ -n "$test_companion_output" ]]; then
+  mkdir -p "$(dirname -- "$test_companion_output")"
+fi
 # Recheck after parent creation.  The first validation deliberately refuses
 # occupied outputs; this second check closes the documented mkdir window and
 # refuses an injected symlink before any build bytes are written.
@@ -926,7 +994,7 @@ run_unsigned_build() {
     "$gradle_bin" -p kmp_module :app:assembleRelease \
       "${gradle_flags[@]}" \
       -PprojectRepositoryCommit="$source_commit" \
-      -PprojectRepositoryCommitLink="https://github.com/DobbyVPN/DobbyVPN/tree/$source_commit" \
+      -PprojectRepositoryCommitLink="$source_link" \
       -Pandroid.injected.version.code="$version_code" \
       -Pandroid.injected.version.name="$version_name"
   )
@@ -937,8 +1005,45 @@ run_unsigned_build() {
   sync_path "$destination"
 }
 
+run_test_companion_build() {
+  local destination=$1
+  (
+    cd -- "$source_root"
+    "$gradle_bin" -p kmp_module :app:assembleReleaseAndroidTest \
+      "${gradle_flags[@]}" \
+      -PprojectRepositoryCommit="$source_commit" \
+      -PprojectRepositoryCommitLink="$source_link" \
+      -Pandroid.injected.version.code="$version_code" \
+      -Pandroid.injected.version.name="$version_name"
+  )
+  local built="$source_root/kmp_module/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk"
+  if [[ ! -f "$built" || -L "$built" ]]; then
+    mapfile -t candidates < <(
+      find "$source_root/kmp_module/app/build/outputs/apk/androidTest/release" \
+        -maxdepth 1 -type f -name '*-androidTest.apk' -print
+    )
+    [[ "${#candidates[@]}" == 1 ]] || {
+      echo 'Gradle did not produce exactly one release Android test APK' >&2
+      exit 1
+    }
+    built=${candidates[0]}
+  fi
+  [[ -f "$built" && ! -L "$built" ]] || { echo "Gradle did not produce $built" >&2; exit 1; }
+  cp -- "$built" "$destination"
+  chmod 600 "$destination"
+  sync_path "$destination"
+}
+
 verify_source_integrity_after_build() {
   local observed_commit observed_tree relative line
+  if [[ "$allow_dirty_source" == 1 ]]; then
+    read -r observed_commit observed_tree <<<"$("${local_identity_command[@]}")"
+    [[ "$observed_commit" == "$source_commit" && "$observed_tree" == "$source_tree" ]] || {
+      echo 'local source content identity changed during the Android build' >&2
+      exit 2
+    }
+    return 0
+  fi
   observed_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit})
   observed_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree})
   [[ "$observed_commit" == "$source_commit" && "$observed_tree" == "$source_tree" ]] || {
@@ -956,6 +1061,7 @@ verify_source_integrity_after_build() {
   if [[ "$closure_mode" == 1 ]]; then
     SOURCE_ROOT="$source_root" GIT_BIN="$git_bin" CLOSURE_ALLOWLIST="$closure_allowlist_file" \
       OUTPUT_REL="${output#"$source_root/"}" FIRST_OUTPUT_REL="${first_output#"$source_root/"}" \
+      COMPANION_REL="${test_companion_output#"$source_root/"}" \
       REPRO_REL="${reproducibility#"$source_root/"}" \
       DEPENDENCY_REL="${dependency_manifest#"$source_root/"}" python3 - <<'PY'
 import os
@@ -971,6 +1077,8 @@ allowed.update({
     os.environ["REPRO_REL"],
     os.environ["DEPENDENCY_REL"],
 })
+if os.environ["COMPANION_REL"]:
+    allowed.add(os.environ["COMPANION_REL"])
 allowed_prefixes = (
     ".android-build/",
     "kmp_module/build/",
@@ -1019,13 +1127,14 @@ PY
     return 0
   fi
   while IFS= read -r -d '' relative; do
-    case "$relative" in
-      "${output#"$source_root/"}"|"${first_output#"$source_root/"}"|"${reproducibility#"$source_root/"}"|"${dependency_manifest#"$source_root/"}") ;;
-      *)
-        echo "Android build created an unexpected untracked source path: $relative" >&2
-        exit 2
-        ;;
-    esac
+    if [[ "$relative" != "${output#"$source_root/"}" &&
+          "$relative" != "${first_output#"$source_root/"}" &&
+          "$relative" != "${reproducibility#"$source_root/"}" &&
+          "$relative" != "${dependency_manifest#"$source_root/"}" &&
+          ( -z "$test_companion_output" || "$relative" != "${test_companion_output#"$source_root/"}" ) ]]; then
+      echo "Android build created an unexpected untracked source path: $relative" >&2
+      exit 2
+    fi
   done < <("$git_bin" -C "$source_root" ls-files --others --exclude-standard -z)
   while IFS= read -r line; do
     [[ "$line" == '!! '* ]] || continue
@@ -1052,6 +1161,11 @@ verify_source_integrity_after_build
 
 verify_dependency_manifest
 
+if [[ -n "$test_companion_output" ]]; then
+  run_test_companion_build "$test_companion_output"
+  verify_source_integrity_after_build
+fi
+
 [[ -f "$reproducibility_verifier" && ! -L "$reproducibility_verifier" ]] || { echo 'reproducibility verifier is missing' >&2; exit 2; }
 python3 "$reproducibility_verifier" create \
   --first-apk "$first_output" --second-apk "$output" --output "$reproducibility" \
@@ -1059,7 +1173,15 @@ python3 "$reproducibility_verifier" create \
 [[ -f "$source_verifier" && ! -L "$source_verifier" ]] || { echo 'APK source verifier is missing' >&2; exit 2; }
 apkanalyzer_bin=${APKANALYZER:-"$(command -v apkanalyzer || true)"}
 [[ -n "$apkanalyzer_bin" && -x "$apkanalyzer_bin" ]] || { echo 'apkanalyzer is required for source identity verification' >&2; exit 2; }
-python3 "$source_verifier" --apk "$first_output" --apk "$output" --source-sha "$source_commit" --repository "$source_repository" --apkanalyzer "$apkanalyzer_bin"
+source_verifier_args=(
+  --apk "$first_output" --apk "$output"
+  --source-sha "$source_commit" --repository "$source_repository"
+  --apkanalyzer "$apkanalyzer_bin"
+)
+if [[ -n "$test_companion_output" ]]; then
+  source_verifier_args+=(--test-companion "$test_companion_output")
+fi
+python3 "$source_verifier" "${source_verifier_args[@]}"
 verify_source_integrity_after_build
 
 dependency_provenance_classification=tracked_dependency_spec
@@ -1067,8 +1189,10 @@ if [[ "$closure_mode" == 1 ]]; then
   dependency_provenance_classification=complete_owner_evidence
 fi
 SOURCE_ROOT="$source_root" OUTPUT="$output" MANIFEST="$manifest" FIRST_OUTPUT="$first_output" \
+  TEST_COMPANION_OUTPUT="$test_companion_output" \
   REPRODUCIBILITY="$reproducibility" DEPENDENCY_MANIFEST="$dependency_manifest" \
-  SOURCE_COMMIT="$source_commit" SOURCE_TREE="$source_tree" \
+  SOURCE_COMMIT="$source_commit" SOURCE_TREE="$source_tree" SOURCE_REPOSITORY="$source_repository" \
+  SOURCE_IDENTITY_MODE="$source_identity_mode" \
   DEPENDENCY_PROVENANCE_CLASSIFICATION="$dependency_provenance_classification" \
   VERSION_NAME="$version_name" VERSION_CODE="$version_code" MAX_ARTIFACT_BYTES="${DOBBYVPN_MAX_ARTIFACT_BYTES:-536870912}" \
   python3 - <<'PY'
@@ -1082,6 +1206,8 @@ source_root = Path(os.environ["SOURCE_ROOT"])
 output = Path(os.environ["OUTPUT"])
 manifest = Path(os.environ["MANIFEST"])
 first_output = Path(os.environ["FIRST_OUTPUT"])
+test_companion_value = os.environ.get("TEST_COMPANION_OUTPUT", "")
+test_companion = Path(test_companion_value) if test_companion_value else None
 reproducibility = Path(os.environ["REPRODUCIBILITY"])
 dependency_manifest = Path(os.environ["DEPENDENCY_MANIFEST"])
 maximum = int(os.environ["MAX_ARTIFACT_BYTES"])
@@ -1123,7 +1249,7 @@ if dependency_provenance_classification == "complete_owner_evidence":
 
 document = {
     "schema": 1,
-    "repository": "DobbyVPN/DobbyVPN",
+    "repository": os.environ["SOURCE_REPOSITORY"],
     "source_sha": os.environ["SOURCE_COMMIT"],
     "source_tree": os.environ["SOURCE_TREE"],
     "version_name": os.environ["VERSION_NAME"],
@@ -1143,7 +1269,16 @@ document = {
         "bytes": descriptor(output)["bytes"],
         "package": "com.dobby.vpn",
     },
+    "test_companion": None if test_companion is None else {
+        "name": test_companion.name,
+        "path": test_companion.relative_to(source_root).as_posix(),
+        "sha256": descriptor(test_companion)["sha256"],
+        "bytes": descriptor(test_companion)["bytes"],
+        "signing_classification": "unsigned",
+    },
 }
+if os.environ["SOURCE_IDENTITY_MODE"] == "local-content":
+    document["source_identity_mode"] = "local-content"
 encoded = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
 descriptor = os.open(manifest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 try:

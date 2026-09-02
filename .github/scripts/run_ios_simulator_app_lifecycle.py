@@ -10,7 +10,6 @@ data.  It does not claim that NetworkExtension traffic ran on the Simulator.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -62,29 +61,6 @@ def run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return completed
 
 
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def screenshot(device: str, target: Path) -> dict[str, object]:
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    run("io", device, "screenshot", str(target))
-    if not target.is_file() or target.stat().st_size <= 0:
-        raise RuntimeError("Simulator screenshot is missing or empty")
-    os.chmod(target, 0o600)
-    return {
-        "name": target.name,
-        "subject": "app",
-        "state": target.stem.removeprefix("ios-app-"),
-        "bytes": target.stat().st_size,
-        "sha256": sha256(target),
-    }
-
-
 def app_bundle_id(app: Path) -> str:
     with (app / "Info.plist").open("rb") as source:
         info = plistlib.load(source)
@@ -112,20 +88,14 @@ def launch_app(device: str, bundle_id: str, *, terminate_running: bool = False) 
     return pid
 
 
-def lifecycle(device: str, app: Path, screenshots: Path | None) -> dict[str, object]:
+def lifecycle(device: str, app: Path) -> dict[str, object]:
     bundle_id = app_bundle_id(app)
-    frames: list[dict[str, object]] = []
-
-    def capture(name: str) -> None:
-        if screenshots is not None:
-            frames.append(screenshot(device, screenshots / name))
 
     run("terminate", device, bundle_id, check=False)
     run("uninstall", device, bundle_id, check=False)
 
     run("install", device, str(app))
     cold_pid = launch_app(device, bundle_id, terminate_running=True)
-    capture("ios-app-cold-start.png")
 
     # Repeated launch is intentionally issued while the app is already alive.
     # CoreSimulator may either reactivate that process or replace it as part of
@@ -133,7 +103,6 @@ def lifecycle(device: str, app: Path, screenshots: Path | None) -> dict[str, obj
     # returned by Simulator survived the bounded startup window.
     repeated_pid = launch_app(device, bundle_id)
     repeated_process_reused = repeated_pid == cold_pid
-    capture("ios-app-repeated-start.png")
 
     # Opening Settings puts DobbyVPN into the background; launching DobbyVPN
     # again proves foreground recovery.  iOS may keep, suspend, or terminate a
@@ -147,11 +116,9 @@ def lifecycle(device: str, app: Path, screenshots: Path | None) -> dict[str, obj
     ).returncode == 0
     foreground_pid = launch_app(device, bundle_id)
     foreground_process_reused = foreground_pid == repeated_pid
-    capture("ios-app-foreground-return.png")
 
     run("terminate", device, bundle_id)
     launch_app(device, bundle_id)
-    capture("ios-app-forced-relaunch.png")
 
     run("terminate", device, bundle_id)
     data_result = run("get_app_container", device, bundle_id, "data")
@@ -176,7 +143,6 @@ def lifecycle(device: str, app: Path, screenshots: Path | None) -> dict[str, obj
     if upgraded_marker.read_bytes() != b"retained-install-v1\n":
         raise RuntimeError("retained app data did not survive reinstall")
     launch_app(device, bundle_id)
-    capture("ios-app-retained-data-relaunch.png")
     run("terminate", device, bundle_id)
 
     return {
@@ -192,8 +158,6 @@ def lifecycle(device: str, app: Path, screenshots: Path | None) -> dict[str, obj
         "forced_termination_relaunch": True,
         "retained_data_reinstall": True,
         "data_container_relocated_on_reinstall": upgraded_data_container != data_container,
-        "app_view_screenshots": screenshots is not None,
-        "screenshots": frames,
     }
 
 
@@ -201,10 +165,6 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", required=True)
     parser.add_argument("--app", required=True, type=Path)
-    parser.add_argument(
-        "--screenshots", type=Path,
-        help="local-owner execution only: retain real app screenshots in this private directory",
-    )
     parser.add_argument("--result", required=True, type=Path)
     args = parser.parse_args()
 
@@ -213,7 +173,7 @@ def main() -> int:
     if args.result.exists():
         raise SystemExit("refusing to overwrite lifecycle result")
     args.result.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    result = lifecycle(args.device, args.app, args.screenshots)
+    result = lifecycle(args.device, args.app)
     descriptor = os.open(args.result, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as output:
         json.dump(result, output, sort_keys=True, indent=2)

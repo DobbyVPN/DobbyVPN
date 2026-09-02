@@ -55,12 +55,8 @@ xcodebuild build -project ../swift_module/iosApp.xcodeproj -scheme iosApp \
 python3 .github/scripts/run_ios_simulator_app_lifecycle.py \
   --device "$SIMULATOR_UDID" \
   --app /tmp/dobbyvpn-ios-simulator/Build/Products/Debug-iphonesimulator/doBBYVPN.app \
-  --screenshots /tmp/dobbyvpn-ios-simulator-screenshots \
   --result /tmp/dobbyvpn-ios-simulator-lifecycle.json
 ```
-
-`--screenshots` is deliberately an owner-local option. Public GitHub workflows
-run the same lifecycle assertions without retaining or uploading screenshots.
 
 For an Intel Mac, replace `iosSimulatorArm64` with `iosX64` in the Gradle task
 and framework path. The hosted public workflow runs the Apple-silicon variant.
@@ -78,9 +74,9 @@ multi-producer merge/clear, and durable retention of the latest clear marker.
 Simulator checks cover shared parsing, mapping, lifecycle generation fences,
 observation sequencing, retry decisions, framework linkage, fresh install,
 retained-data reinstall, cold and repeated launch, background/foreground,
-forced termination/relaunch, and (owner-locally) real foreground app
-screenshots. The lifecycle helper verifies that every launched process remains
-alive after the startup window, not merely that launchd accepted a request.
+forced termination/relaunch. The lifecycle helper verifies that every launched
+process remains alive after the startup window, not merely that launchd accepted
+a request.
 Shared storage tests cover missing, corrupt, unwritable, and full diagnostic
 storage and require controlled degradation rather than startup failure.
 
@@ -96,15 +92,14 @@ VPN protocol it cannot execute.
 
 ## Owner-controlled Android transition seam
 
-The instrumentation-only hosted-profile driver also accepts the canonical
-`network_transition`, `sleep_wake`, and `process_loss` operations. These are
-not production controls and do not add a Harness or Torturer dependency to the
-application: an owner-side adapter performs the emulator action, then signals
-the test APK through a one-use, token-bound private-file rendezvous. The app
-reports only the resulting tunnel, routing, or disconnection facts; the adapter
-retains the complete control command diagnostics and proves the emulator state
-change. Missing or malformed control input fails closed, and ordinary commands
-cannot include the control fields.
+The instrumentation-only hosted-profile driver accepts the canonical
+`network_transition` and `sleep_wake` operations. These are not production
+controls and do not add a Harness or Torturer dependency to the application:
+an owner-side adapter performs the emulator action, then signals the test APK
+through a one-use, token-bound private-file rendezvous. Torturer proves process
+loss externally by force-stopping the production app, observing its absence,
+and starting a fresh companion session. Missing or malformed control input
+fails closed, and ordinary commands cannot include the control fields.
 
 ## Independent public verification
 

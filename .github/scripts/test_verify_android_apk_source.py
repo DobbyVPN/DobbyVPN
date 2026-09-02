@@ -78,6 +78,10 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
     def testCommitAndLinkPass(self):
         VERIFY.verify_code(self.code(), self.sha, self.repo)
 
+    def test_local_content_identity_uses_an_explicit_non_github_link(self):
+        local_link = f"local-content://{self.sha}"
+        VERIFY.verify_code(self.code(link=local_link), self.sha, VERIFY.LOCAL_CONTENT_REPOSITORY)
+
     def testRejectsMissingOrWrongCommit(self):
         for wrong in ("N/A", "b" * 40):
             with self.subTest(wrong=wrong), self.assertRaises(VERIFY.VerificationError):
@@ -160,6 +164,47 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
             apk.flush()
             with mock.patch.object(VERIFY, "run_apkanalyzer", return_value=completed):
                 VERIFY.verify_apk("apkanalyzer", Path(apk.name), self.sha, self.repo)
+
+    def test_companion_manifest_parses_multiline_exact_source_metadata(self):
+        manifest = f'''<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <meta-data
+      android:name="com.dobby.test.source_sha"
+      android:value="{self.sha}" />
+  </application>
+</manifest>'''
+        results = [
+            subprocess.CompletedProcess(["apkanalyzer"], 0, stdout="com.dobby.vpn.test\n", stderr=""),
+            subprocess.CompletedProcess(["apkanalyzer"], 0, stdout=manifest, stderr=""),
+        ]
+        with tempfile.NamedTemporaryFile() as apk:
+            apk.write(b"companion")
+            apk.flush()
+            with mock.patch.object(VERIFY, "run_apkanalyzer", side_effect=results):
+                VERIFY.verify_test_companion("apkanalyzer", Path(apk.name), self.sha)
+
+    def test_companion_manifest_rejects_wrong_or_duplicate_source_metadata(self):
+        for values in (("b" * 40,), (self.sha, self.sha)):
+            metadata = "".join(
+                '<meta-data android:name="com.dobby.test.source_sha" '
+                f'android:value="{value}" />'
+                for value in values
+            )
+            manifest = (
+                '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
+                f"<application>{metadata}</application></manifest>"
+            )
+            results = [
+                subprocess.CompletedProcess(["apkanalyzer"], 0, stdout="com.dobby.vpn.test\n", stderr=""),
+                subprocess.CompletedProcess(["apkanalyzer"], 0, stdout=manifest, stderr=""),
+            ]
+            with self.subTest(values=values), tempfile.NamedTemporaryFile() as apk:
+                apk.write(b"companion")
+                apk.flush()
+                with mock.patch.object(VERIFY, "run_apkanalyzer", side_effect=results):
+                    with self.assertRaisesRegex(VERIFY.VerificationError, "source identity"):
+                        VERIFY.verify_test_companion("apkanalyzer", Path(apk.name), self.sha)
 
     def test_analyzer_diagnostics_are_unique_and_non_overwriting(self):
         with tempfile.TemporaryDirectory() as temporary:

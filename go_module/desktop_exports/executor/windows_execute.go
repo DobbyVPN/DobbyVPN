@@ -51,28 +51,63 @@ func rejectReparseTraversal(root, target string) error {
 	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
 		return fmt.Errorf("explicit log path is outside the local temporary directory")
 	}
+	if err := rejectReparsePoint(root); err != nil {
+		return err
+	}
 	current := root
 	if relative == "." {
 		return nil
 	}
 	for _, component := range strings.Split(relative, string(filepath.Separator)) {
 		current = filepath.Join(current, component)
-		pointer, err := windows.UTF16PtrFromString(current)
-		if err != nil {
+		if err := rejectReparsePoint(current); err != nil {
 			return err
-		}
-		attributes, err := windows.GetFileAttributes(pointer)
-		if err != nil {
-			if err == windows.ERROR_FILE_NOT_FOUND || err == windows.ERROR_PATH_NOT_FOUND {
-				continue
-			}
-			return err
-		}
-		if attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-			return fmt.Errorf("explicit log path traverses a reparse point")
 		}
 	}
 	return nil
+}
+
+func rejectReparsePoint(path string) error {
+	pointer, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	attributes, err := windows.GetFileAttributes(pointer)
+	if err != nil {
+		if err == windows.ERROR_FILE_NOT_FOUND || err == windows.ERROR_PATH_NOT_FOUND {
+			return nil
+		}
+		return err
+	}
+	if attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return fmt.Errorf("explicit log path traverses a reparse point")
+	}
+	return nil
+}
+
+func openPrecreatedAppendLog(path string) (*os.File, error) {
+	pointer, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := windows.CreateFile(
+		pointer,
+		windows.FILE_APPEND_DATA,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_ATTRIBUTE_NORMAL,
+		0,
+	)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(handle), path)
+	if file == nil {
+		_ = windows.CloseHandle(handle)
+		return nil, fmt.Errorf("wrap precreated append-only log handle")
+	}
+	return file, nil
 }
 
 func initExplicitLocalLog() error {
@@ -80,7 +115,11 @@ func initExplicitLocalLog() error {
 	if requested == "" {
 		return nil
 	}
-	path, err := secureExplicitLogPath(os.TempDir(), requested)
+	root := strings.TrimSpace(os.Getenv("DOBBY_LOG_ROOT"))
+	if root == "" {
+		root = os.TempDir()
+	}
+	path, err := secureExplicitLogPath(root, requested)
 	if err != nil {
 		return err
 	}
@@ -88,11 +127,23 @@ func initExplicitLocalLog() error {
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
 	}
-	if err := rejectReparseTraversal(os.TempDir(), parent); err != nil {
+	if err := rejectReparseTraversal(root, parent); err != nil {
 		return err
 	}
+	if strings.TrimSpace(os.Getenv("DOBBY_LOG_PRECREATED")) == "1" {
+		if info, statErr := os.Lstat(path); statErr != nil {
+			return statErr
+		} else if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("explicit log target must be a regular file")
+		}
+		file, openErr := openPrecreatedAppendLog(path)
+		if openErr != nil {
+			return openErr
+		}
+		return log.SetOpenedFile(file)
+	}
 
-	resolvedRoot, err := filepath.EvalSymlinks(os.TempDir())
+	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return err
 	}

@@ -301,6 +301,34 @@ func SetPath(path string) error {
 	return nil
 }
 
+// SetOpenedFile installs an already-opened append-only log owned and
+// permissioned by an external supervisor. The logger takes ownership of file.
+// Callers must establish path confinement and link safety before opening it.
+func SetOpenedFile(file *os.File) error {
+	if file == nil {
+		return fmt.Errorf("managed log file is unavailable")
+	}
+	initMu.Lock()
+	defer initMu.Unlock()
+	if lg.logger != nil && !lg.fallback {
+		return file.Close()
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return fmt.Errorf("inspect managed log file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return fmt.Errorf("managed log file is not regular")
+	}
+	lg.file = file
+	lg.logger = slog.New(newJSONLineHandler(file))
+	lg.fallback = false
+	lg.dumpBuffer()
+	return nil
+}
+
 func write(level slog.Level, category, message string, arguments map[string]any) {
 	writeEvent(level, "log.message", category, message, arguments)
 }

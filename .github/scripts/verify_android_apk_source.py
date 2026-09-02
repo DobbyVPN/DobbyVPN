@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+import xml.etree.ElementTree as ElementTree
 
 from public_output import emit_diagnostic as emit_public_diagnostic
 from public_output import public_actions
@@ -21,7 +22,11 @@ from windows_process_census import WindowsProcessCensusError, windows_process_ce
 
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+LOCAL_CONTENT_REPOSITORY = "local-content"
 BUILD_CONFIG = "com.dobby.vpn.BuildConfig"
+TEST_COMPANION_PACKAGE = "com.dobby.vpn.test"
+TEST_COMPANION_SOURCE_METADATA = "com.dobby.test.source_sha"
+ANDROID_NAMESPACE = "http://schemas.android.com/apk/res/android"
 ROOT_DIR = Path(__file__).resolve().parents[2]
 APK_ANALYZER_TIMEOUT_SECONDS = 120
 PROCESS_CLEANUP_GRACE_SECONDS = 5
@@ -694,9 +699,12 @@ def dex_string(code: str, field: str) -> str:
 def verify_code(code: str, source_sha: str, repository: str) -> None:
     if not SHA40.fullmatch(source_sha):
         raise VerificationError("source SHA must be full lowercase hexadecimal")
-    if not REPOSITORY.fullmatch(repository):
-        raise VerificationError("repository must be OWNER/NAME")
-    expected_link = f"https://github.com/{repository}/tree/{source_sha}"
+    if repository == LOCAL_CONTENT_REPOSITORY:
+        expected_link = f"local-content://{source_sha}"
+    else:
+        if not REPOSITORY.fullmatch(repository):
+            raise VerificationError("repository must be OWNER/NAME or local-content")
+        expected_link = f"https://github.com/{repository}/tree/{source_sha}"
     if dex_string(code, "PROJECT_REPOSITORY_COMMIT") != source_sha:
         raise VerificationError("APK embedded source commit does not match selected source")
     if dex_string(code, "PROJECT_REPOSITORY_COMMIT_LINK") != expected_link:
@@ -729,9 +737,59 @@ def verify_apk(apkanalyzer: str, apk: Path, source_sha: str, repository: str) ->
     verify_code(result.stdout, source_sha, repository)
 
 
+def _manifest_output(apkanalyzer: str, apk: Path, operation: str) -> str:
+    try:
+        result = run_apkanalyzer([apkanalyzer, "manifest", operation, str(apk)])
+    except subprocess.TimeoutExpired as error:
+        stdout, stderr = _exception_output(error)
+        emit_process_diagnostic(stdout, stderr)
+        raise VerificationError(
+            f"apkanalyzer timed out after {APK_ANALYZER_TIMEOUT_SECONDS} seconds",
+        ) from error
+    except OSError as error:
+        stdout, stderr = _exception_output(error)
+        emit_process_diagnostic(stdout, stderr)
+        raise
+    if result.returncode != 0:
+        emit_process_diagnostic(result.stdout, result.stderr)
+        raise VerificationError(
+            f"apkanalyzer could not read test companion manifest (exit code {result.returncode})",
+        )
+    if result.stderr:
+        emit_process_diagnostic(result.stderr)
+    return result.stdout
+
+
+def verify_test_companion(apkanalyzer: str, apk: Path, source_sha: str) -> None:
+    if not SHA40.fullmatch(source_sha):
+        raise VerificationError("source SHA must be full lowercase hexadecimal")
+    if apk.is_symlink() or not apk.is_file() or apk.stat().st_size <= 0:
+        raise VerificationError("test companion must be a nonempty regular file")
+    package = _manifest_output(apkanalyzer, apk, "application-id").strip()
+    if package != TEST_COMPANION_PACKAGE:
+        raise VerificationError("Android test companion has an unexpected application ID")
+    manifest = _manifest_output(apkanalyzer, apk, "print")
+    try:
+        document = ElementTree.fromstring(manifest)
+    except ElementTree.ParseError as error:
+        raise VerificationError("Android test companion manifest is invalid XML") from error
+    name_key = f"{{{ANDROID_NAMESPACE}}}name"
+    value_key = f"{{{ANDROID_NAMESPACE}}}value"
+    values = [
+        element.attrib.get(value_key)
+        for element in document.iter("meta-data")
+        if element.attrib.get(name_key) == TEST_COMPANION_SOURCE_METADATA
+    ]
+    if values != [source_sha]:
+        raise VerificationError(
+            "Android test companion source identity does not match selected source"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apk", action="append", required=True, type=Path)
+    parser.add_argument("--test-companion", action="append", default=[], type=Path)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--apkanalyzer", default="apkanalyzer")
@@ -739,10 +797,16 @@ def main() -> int:
     try:
         for apk in args.apk:
             verify_apk(args.apkanalyzer, apk, args.source_sha, args.repository)
+        for companion in args.test_companion:
+            verify_test_companion(args.apkanalyzer, companion, args.source_sha)
     except (OSError, subprocess.SubprocessError, VerificationError) as error:
         print(f"Android APK source verification failed: {error}", file=sys.stderr)
         return 1
-    print(f"Android APK embedded source verified for {len(args.apk)} artifact(s)")
+    print(
+        "Android APK embedded source verified for "
+        f"{len(args.apk)} application artifact(s) and "
+        f"{len(args.test_companion)} test companion artifact(s)"
+    )
     return 0
 
 
