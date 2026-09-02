@@ -83,11 +83,12 @@ reuse existing build outputs where supported.
 Every `main` push produces candidate artifacts and uploads a successful iOS
 build to internal TestFlight. It does not create a final release tag.
 
-The authorized release process dispatches `promote_release.yml`, which
-revalidates the exact successful `main` Release run and source commit,
-downloads its artifacts only to a GitHub-hosted runner, and creates `vX.Y.Z`
-plus the GitHub Release. It derives and verifies each asset digest from the
-selected GitHub run; it does not consume hashes from local qualification.
+The trusted publication coordinator promotes only after revalidating the exact
+successful `main` Release run, source commit, Torturer run, and required
+artifacts. Its isolated promotion job downloads Release artifacts only to a
+GitHub-hosted runner and creates `vX.Y.Z` plus the GitHub Release. It derives
+and verifies each asset digest from the selected GitHub run; it does not
+consume hashes from local qualification.
 Every public asset is recorded in `release-provenance.json`; a draft is
 downloaded and verified byte-for-byte before publication, and retries
 re-download both the selected run and published release rather than trusting
@@ -106,6 +107,11 @@ unsigned APK bytecode with `apkanalyzer`; the build, legacy F-Droid repair, and
 public promotion all fail unless the embedded commit and repository link match
 the selected full source SHA. The explicit `APP_SOURCE_*` values are passed to
 Gradle as build properties for both current source and a legacy-tag repair.
+The owner-local Harness candidate path transfers a dirty worktree without
+`.git`; its explicit `--allow-dirty-source` mode records a deterministic
+`local-content://` identity and rechecks that identity after every build. This
+local identity is never accepted by the Release path, which retains the strict
+Git commit/tree proof.
 Because an old tag cannot contain a driver or verifier added later, the
 reusable build checks out the complete small helper bundle (driver, dependency
 helper/spec, and verifiers) from its trusted workflow revision. It passes the
@@ -152,24 +158,18 @@ environment and an explicit `replace-vX.Y.Z` confirmation. Releases carrying
 the release-wide provenance manifest are immutable and cannot use this legacy
 repair path.
 
-A maintainer dispatches `submit_app_store.yml` for production App Review. Its
-secretless validation job binds the request to the exact
-successful `main` Release run, source version, iOS job, and build number.
-Only then does a separate job enter the protected `release` environment and
-use its existing App Store Connect secrets. The selected build is submitted
-with automatic release after approval.
+A trusted Torturer qualification starts one DobbyVPN publication coordinator
+automatically. The coordinator revalidates the exact Torturer/Release runs,
+attempts, TestFlight upload, package set, and required qualification artifacts
+once before its isolated App Store submission and GitHub promotion jobs. A
+separate Torturer retrieval job receives narrow read access
+to the selected Release artifacts, while a separate handoff job receives only
+narrow workflow-start access. Candidate jobs receive neither credential, and
+Torturer receives no signing, store, publication, or release-environment
+permission.
 
-That manual start is temporary. The accepted release flow has the successful
-trusted Torturer release qualification start one DobbyVPN publication workflow
-automatically. DobbyVPN still performs the exact Torturer/Release-run checks and
-all App Store and GitHub Release operations. A separate Torturer retrieval job
-receives narrow read access to the selected Release artifacts, while a separate
-handoff job receives narrow workflow-start access. Candidate jobs receive
-neither credential, and Torturer receives no signing, store, publication, or
-release-environment permission.
-
-The DobbyVPN Release run and its internal TestFlight upload finish before the
-trusted Torturer qualification starts. Torturer downloads, installs, and tests
+The final DobbyVPN Release job starts the trusted Torturer qualification after
+all package and internal TestFlight jobs pass. Torturer downloads, installs, and tests
 the exact packages from that Release run without rebuilding the application;
 it never publishes those artifacts.
 The publication handoff names the exact Release and qualification runs and
@@ -229,34 +229,4 @@ python3 .github/scripts/release_provenance.py create --directory release \
   --release-run-id 12345 --release-run-number 678 \
   --android-version-code 1005000 \
   --asset DobbyVPN.apk --asset DobbyVPN.zip
-```
-
-The promotion workflow also creates and verifies the separate
-`release-artifact-provenance-v2.json` sidecar. Its schema-2 records add an
-explicit `platform`, `architecture`, `kind`, per-asset `sha256`, `size`, and
-`source_sha` to every product or release-metadata asset. The identity is passed
-as a sorted `NAME|PLATFORM|ARCHITECTURE|KIND` descriptor; it is never inferred
-from a filename, digest, or fallback rule. Both provenance sidecars are
-published: the schema-1 manifest remains the compatibility contract, while the
-schema-2 sidecar is the typed contract for new releases. The sidecars do not
-describe themselves, so they cannot create a circular digest; schema-1 records
-the schema-2 sidecar's bytes, and schema-2 records the declared release assets.
-
-For a local contract check, use the same explicit descriptors as promotion:
-
-```bash
-python3 .github/scripts/release_provenance.py typed-create --directory release \
-  --tag v1.5.0 --version 1.5.0 \
-  --source-sha 0123456789abcdef0123456789abcdef01234567 \
-  --release-run-id 12345 --release-run-number 678 \
-  --android-version-code 1005000 \
-  --typed-asset 'DobbyVPN.apk|android|arm64-v8a|apk-signed' \
-  --typed-asset 'dobbyVPN-linux.deb|linux|amd64|deb'
-python3 .github/scripts/release_provenance.py typed-verify --directory release \
-  --tag v1.5.0 --version 1.5.0 \
-  --source-sha 0123456789abcdef0123456789abcdef01234567 \
-  --release-run-id 12345 --release-run-number 678 \
-  --android-version-code 1005000 \
-  --typed-asset 'DobbyVPN.apk|android|arm64-v8a|apk-signed' \
-  --typed-asset 'dobbyVPN-linux.deb|linux|amd64|deb'
 ```

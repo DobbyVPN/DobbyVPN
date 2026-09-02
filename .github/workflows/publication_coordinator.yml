@@ -1,0 +1,836 @@
+name: Trusted release publication coordinator
+run-name: Publish Release ${{ inputs.release_run_id }}/${{ inputs.release_run_attempt }} after Torturer ${{ inputs.torturer_run_id }}/${{ inputs.torturer_run_attempt }}
+
+# Only the trusted Torturer handoff may invoke this workflow. Inputs carry
+# identities only; packages, signatures, and store credentials never cross
+# this boundary. The coordinator independently revalidates every identity
+# against the fixed Release and Torturer workflow records before mutation.
+on:
+  workflow_dispatch:
+    inputs:
+      dobbyvpn_commit:
+        description: Exact DobbyVPN Release source commit.
+        required: true
+        type: string
+      release_run_id:
+        description: Exact successful DobbyVPN Release run.
+        required: true
+        type: string
+      release_run_attempt:
+        description: Exact attempt of the DobbyVPN Release run.
+        required: true
+        type: string
+      torturer_commit:
+        description: Exact Torturer commit that executed qualification.
+        required: true
+        type: string
+      torturer_run_id:
+        description: Exact successful Torturer qualification run.
+        required: true
+        type: string
+      torturer_run_attempt:
+        description: Exact attempt of the Torturer qualification run.
+        required: true
+        type: string
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: trusted-publication-${{ inputs.release_run_id }}-${{ inputs.release_run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Verify exact Release and qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      build_number: ${{ steps.identity.outputs.build_number }}
+      ipa_artifact_id: ${{ steps.identity.outputs.ipa_artifact_id }}
+      ipa_provenance_artifact_id: ${{ steps.identity.outputs.ipa_provenance_artifact_id }}
+      linux_artifact_id: ${{ steps.identity.outputs.linux_artifact_id }}
+      windows_artifact_id: ${{ steps.identity.outputs.windows_artifact_id }}
+      macos_amd64_artifact_id: ${{ steps.identity.outputs.macos_amd64_artifact_id }}
+      macos_aarch64_artifact_id: ${{ steps.identity.outputs.macos_aarch64_artifact_id }}
+      android_sign_artifact_id: ${{ steps.identity.outputs.android_sign_artifact_id }}
+      android_unsign_artifact_id: ${{ steps.identity.outputs.android_unsign_artifact_id }}
+      android_provenance_artifact_id: ${{ steps.identity.outputs.android_provenance_artifact_id }}
+    env:
+      RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+      RELEASE_RUN_ATTEMPT: ${{ inputs.release_run_attempt }}
+      DOBBYVPN_COMMIT: ${{ inputs.dobbyvpn_commit }}
+      TORTURER_RUN_ID: ${{ inputs.torturer_run_id }}
+      TORTURER_RUN_ATTEMPT: ${{ inputs.torturer_run_attempt }}
+      TORTURER_COMMIT: ${{ inputs.torturer_commit }}
+    steps:
+      - name: Check out trusted coordinator policy
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate immutable handoff identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          current_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          test "$GITHUB_SHA" = "$current_main"
+          printf 'CURRENT_MAIN=%s\n' "$current_main" >> "$GITHUB_ENV"
+          jq -n \
+            --arg dobbyvpn_commit "$DOBBYVPN_COMMIT" \
+            --arg release_run_id "$RELEASE_RUN_ID" \
+            --arg release_run_attempt "$RELEASE_RUN_ATTEMPT" \
+            --arg torturer_commit "$TORTURER_COMMIT" \
+            --arg torturer_run_id "$TORTURER_RUN_ID" \
+            --arg torturer_run_attempt "$TORTURER_RUN_ATTEMPT" \
+            '{dobbyvpn_commit:$dobbyvpn_commit,release_run_id:$release_run_id,release_run_attempt:$release_run_attempt,torturer_commit:$torturer_commit,torturer_run_id:$torturer_run_id,torturer_run_attempt:$torturer_run_attempt}' \
+            > identity.json
+          python3 .github/scripts/publication_policy.py validate-identity \
+            --identity-json identity.json
+
+      - name: Validate exact Release run, TestFlight, and package set
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID" > release-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml" > release-workflow.json
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/attempts/$RELEASE_RUN_ATTEMPT/jobs?per_page=100" |
+            jq '{jobs: [.[].jobs[]]}' > release-jobs.json
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/artifacts?per_page=100" \
+            > release-artifacts.json
+          python3 .github/scripts/publication_policy.py release-run \
+            --run-json release-run.json --workflow-json release-workflow.json \
+            --run-id "$RELEASE_RUN_ID" --run-attempt "$RELEASE_RUN_ATTEMPT" \
+            --commit "$DOBBYVPN_COMMIT"
+          python3 .github/scripts/publication_policy.py release-jobs \
+            --jobs-json release-jobs.json --run-attempt "$RELEASE_RUN_ATTEMPT" \
+            --intervals-json release-job-intervals.json
+          python3 .github/scripts/publication_policy.py release-artifacts \
+            --listing-json release-artifacts.json \
+            --run-id "$RELEASE_RUN_ID" --run-attempt "$RELEASE_RUN_ATTEMPT" \
+            --commit "$DOBBYVPN_COMMIT" --job-intervals-json release-job-intervals.json \
+            --selected-json release-artifact-selection.json
+
+      - name: Validate exact Torturer run and required artifacts
+        env:
+          TORTURER_ARTIFACT_READ_TOKEN: ${{ secrets.TORTURER_ARTIFACT_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          GH_TOKEN="$TORTURER_ARTIFACT_READ_TOKEN" gh api \
+            "repos/DobbyVPN/Torturer/actions/runs/$TORTURER_RUN_ID" > torturer-run.json
+          GH_TOKEN="$TORTURER_ARTIFACT_READ_TOKEN" gh api \
+            "repos/DobbyVPN/Torturer/actions/workflows/functional.yml" > torturer-workflow.json
+          GH_TOKEN="$TORTURER_ARTIFACT_READ_TOKEN" gh api --paginate --slurp \
+            "repos/DobbyVPN/Torturer/actions/runs/$TORTURER_RUN_ID/artifacts?per_page=100" \
+            > torturer-artifacts.json
+          GH_TOKEN="$TORTURER_ARTIFACT_READ_TOKEN" gh api --paginate --slurp \
+            "repos/DobbyVPN/Torturer/actions/runs/$TORTURER_RUN_ID/attempts/$TORTURER_RUN_ATTEMPT/jobs?per_page=100" |
+            jq '{jobs: [.[].jobs[]]}' > torturer-jobs.json
+          python3 .github/scripts/publication_policy.py torturer-run \
+            --run-json torturer-run.json --workflow-json torturer-workflow.json \
+            --run-id "$TORTURER_RUN_ID" --run-attempt "$TORTURER_RUN_ATTEMPT" \
+            --commit "$TORTURER_COMMIT"
+          python3 .github/scripts/publication_policy.py torturer-jobs \
+            --jobs-json torturer-jobs.json --run-attempt "$TORTURER_RUN_ATTEMPT" \
+            --intervals-json torturer-job-intervals.json
+          python3 .github/scripts/publication_policy.py qualification-artifacts \
+            --listing-json torturer-artifacts.json \
+            --run-id "$TORTURER_RUN_ID" --run-attempt "$TORTURER_RUN_ATTEMPT" \
+            --commit "$TORTURER_COMMIT" --job-intervals-json torturer-job-intervals.json
+
+      - name: Reject a conflicting existing tag or GitHub Release
+        id: identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          encoded_version="$(gh api "repos/$GITHUB_REPOSITORY/contents/VERSION?ref=$DOBBYVPN_COMMIT" --jq .content)"
+          version="$(printf '%s' "$encoded_version" | base64 --decode | tr -d '[:space:]')"
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          build_number="$(jq -r .run_number release-run.json)"
+          [[ "$build_number" =~ ^[1-9][0-9]*$ ]]
+          tag="v$version"
+          tag_commit=""
+          tag_record="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" | \
+            jq -sc --arg ref "refs/tags/$tag" '
+              [.[][] | select(.ref == $ref)] |
+              if length == 0 then empty
+              elif length == 1 then .[0]
+              else error("duplicate exact tag refs")
+              end')"
+          if [[ -n "$tag_record" ]]; then
+            object_type="$(jq -r .object.type <<<"$tag_record")"
+            object_sha="$(jq -r .object.sha <<<"$tag_record")"
+            for _ in 1 2 3 4 5 6 7 8; do
+              [[ "$object_type" = tag ]] || break
+              tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+              object_type="$(jq -r .object.type <<<"$tag_object")"
+              object_sha="$(jq -r .object.sha <<<"$tag_object")"
+            done
+            test "$object_type" = commit
+            tag_commit="$object_sha"
+          fi
+          release_json="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" | \
+            jq -sc --arg tag "$tag" '
+              [.[][] | select(.tag_name == $tag)] |
+              if length == 0 then null
+              elif length == 1 then .[0]
+              else error("duplicate releases for exact tag")
+              end')"
+          jq -n --arg tag_commit "$tag_commit" --argjson release "$release_json" \
+            '{tag_commit:$tag_commit,release:$release}' > publication-state.json
+          python3 .github/scripts/publication_policy.py publication-state \
+            --state-json publication-state.json --commit "$DOBBYVPN_COMMIT" --tag "$tag" \
+            --identity-json identity.json
+          # A new publication must still be current. An exact owned draft or
+          # published release may resume after main advances.
+          if [[ "$DOBBYVPN_COMMIT" != "$CURRENT_MAIN" && "$release_json" == null ]]; then
+            echo "refusing a stale new publication" >&2
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "build_number=$build_number"
+            echo "ipa_artifact_id=$(jq -r '.\"DobbyVPN.ipa\".id' release-artifact-selection.json)"
+            echo "ipa_provenance_artifact_id=$(jq -r '.\"DobbyVPN.ipa.provenance\".id' release-artifact-selection.json)"
+            echo "linux_artifact_id=$(jq -r '.\"dobbyVPN-linux.deb\".id' release-artifact-selection.json)"
+            echo "windows_artifact_id=$(jq -r '.\"dobbyVPN-windows-amd64.msi\".id' release-artifact-selection.json)"
+            echo "macos_amd64_artifact_id=$(jq -r '.\"dobbyVPN-macos-amd64.pkg\".id' release-artifact-selection.json)"
+            echo "macos_aarch64_artifact_id=$(jq -r '.\"dobbyVPN-macos-aarch64.pkg\".id' release-artifact-selection.json)"
+            echo "android_sign_artifact_id=$(jq -r '.\"dobbyvpn-android-sign.apk\".id' release-artifact-selection.json)"
+            echo "android_unsign_artifact_id=$(jq -r '.\"dobbyvpn-android-unsign.apk\".id' release-artifact-selection.json)"
+            echo "android_provenance_artifact_id=$(jq -r '.\"dobbyvpn-android-provenance\".id' release-artifact-selection.json)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Preflight accepted v$version from Release $RELEASE_RUN_ID/$RELEASE_RUN_ATTEMPT"
+
+  submit:
+    name: Submit exact TestFlight build to App Review
+    needs: preflight
+    runs-on: macos-15
+    environment: release
+    timeout-minutes: 30
+    env:
+      APP_STORE_VERSION: ${{ needs.preflight.outputs.version }}
+      APP_STORE_BUILD_NUMBER: ${{ needs.preflight.outputs.build_number }}
+      APP_STORE_SOURCE_SHA: ${{ inputs.dobbyvpn_commit }}
+      APP_STORE_RELEASE_NOTES: ''
+    steps:
+      - name: Check out trusted main submission tooling
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify trusted checkout identity
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+
+      - name: Download exact IPA from selected Release run
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ needs.preflight.outputs.ipa_artifact_id }}
+          path: selected-release/ipa
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download exact IPA provenance from selected Release run
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ needs.preflight.outputs.ipa_provenance_artifact_id }}
+          path: selected-release/provenance
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify selected IPA provenance before submission
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/ios_artifact_provenance.py verify \
+            --ipa-dir selected-release/ipa \
+            --provenance selected-release/provenance/DobbyVPN.ipa.provenance.json \
+            --source-sha "$APP_STORE_SOURCE_SHA" \
+            --version "$APP_STORE_VERSION" \
+            --build-number "$APP_STORE_BUILD_NUMBER"
+
+      - name: Submit exact build to production App Review
+        env:
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+        run: bundle exec fastlane ios submit_app_store_review
+
+  promote:
+    name: Promote exact Release packages
+    needs: [preflight, submit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+      RELEASE_BUILD_NUMBER: ${{ needs.preflight.outputs.build_number }}
+      RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+      RELEASE_RUN_ATTEMPT: ${{ inputs.release_run_attempt }}
+      RELEASE_SOURCE_SHA: ${{ inputs.dobbyvpn_commit }}
+      TORTURER_COMMIT: ${{ inputs.torturer_commit }}
+      TORTURER_RUN_ID: ${{ inputs.torturer_run_id }}
+      TORTURER_RUN_ATTEMPT: ${{ inputs.torturer_run_attempt }}
+      EXPECTED_ANDROID_SIGNER_SHA256: c3f0414a74012060d7c6aa3a3d9dac0aa13c1bd23b7512eefd860fb865e67933
+    steps:
+      - name: Check out exact release source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.dobbyvpn_commit }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Recheck publication state and prepare exact promotion
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+          test "$(tr -d '[:space:]' < VERSION)" = "$RELEASE_VERSION"
+          android_version_code="$(
+            IFS=. read -r major minor maintenance <<< "$RELEASE_VERSION"
+            test "$minor" -lt 1000
+            test "$maintenance" -lt 1000
+            echo $((10#$major * 1000000 + 10#$minor * 1000 + 10#$maintenance))
+          )"
+          test "$android_version_code" -ge 1
+          test "$android_version_code" -le 2100000000
+          tag="v$RELEASE_VERSION"
+          jq -n \
+            --arg dobbyvpn_commit "$RELEASE_SOURCE_SHA" \
+            --arg release_run_id "$RELEASE_RUN_ID" \
+            --arg release_run_attempt "$RELEASE_RUN_ATTEMPT" \
+            --arg torturer_commit "$TORTURER_COMMIT" \
+            --arg torturer_run_id "$TORTURER_RUN_ID" \
+            --arg torturer_run_attempt "$TORTURER_RUN_ATTEMPT" \
+            '{dobbyvpn_commit:$dobbyvpn_commit,release_run_id:$release_run_id,release_run_attempt:$release_run_attempt,torturer_commit:$torturer_commit,torturer_run_id:$torturer_run_id,torturer_run_attempt:$torturer_run_attempt}' \
+            > identity.json
+          tag_commit=""
+          tag_ref_object=""
+          tag_record="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" | \
+            jq -sc --arg ref "refs/tags/$tag" '
+              [.[][] | select(.ref == $ref)] |
+              if length == 0 then empty
+              elif length == 1 then .[0]
+              else error("duplicate exact tag refs")
+              end')"
+          tag_state=absent
+          if [[ -n "$tag_record" ]]; then
+            tag_state=existing
+            object_type="$(jq -r .object.type <<<"$tag_record")"
+            object_sha="$(jq -r .object.sha <<<"$tag_record")"
+            tag_ref_object="$object_sha"
+            for _ in 1 2 3 4 5 6 7 8; do
+              [[ "$object_type" = tag ]] || break
+              tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+              object_type="$(jq -r .object.type <<<"$tag_object")"
+              object_sha="$(jq -r .object.sha <<<"$tag_object")"
+            done
+            test "$object_type" = commit
+            tag_commit="$object_sha"
+          fi
+          release_json="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" | \
+            jq -sc --arg tag "$tag" '
+              [.[][] | select(.tag_name == $tag)] |
+              if length == 0 then null
+              elif length == 1 then .[0]
+              else error("duplicate releases for exact tag")
+              end')"
+          jq -n --arg tag_commit "$tag_commit" --argjson release "$release_json" \
+            '{tag_commit:$tag_commit,release:$release}' > publication-state.json
+          python3 .github/scripts/publication_policy.py publication-state \
+            --state-json publication-state.json --commit "$RELEASE_SOURCE_SHA" --tag "$tag" \
+            --identity-json identity.json
+          release_state=new
+          if [[ "$release_json" != null ]]; then
+            if [[ "$(jq -r .draft <<<"$release_json")" = true ]]; then
+              release_state=draft
+            else
+              release_state=published
+            fi
+          fi
+          {
+            echo "tag=$tag"
+            echo "run_number=$RELEASE_BUILD_NUMBER"
+            echo "android_version_code=$android_version_code"
+            echo "release_state=$release_state"
+            echo "tag_state=$tag_state"
+            echo "tag_ref_object=$tag_ref_object"
+            echo "linux_artifact_id=${{ needs.preflight.outputs.linux_artifact_id }}"
+            echo "windows_artifact_id=${{ needs.preflight.outputs.windows_artifact_id }}"
+            echo "macos_amd64_artifact_id=${{ needs.preflight.outputs.macos_amd64_artifact_id }}"
+            echo "macos_aarch64_artifact_id=${{ needs.preflight.outputs.macos_aarch64_artifact_id }}"
+            echo "android_sign_artifact_id=${{ needs.preflight.outputs.android_sign_artifact_id }}"
+            echo "android_unsign_artifact_id=${{ needs.preflight.outputs.android_unsign_artifact_id }}"
+            echo "android_provenance_artifact_id=${{ needs.preflight.outputs.android_provenance_artifact_id }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        with:
+          packages: build-tools;36.0.0
+
+      - name: Download Linux package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ steps.preflight.outputs.linux_artifact_id }}
+          path: release
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_run_id }}
+
+      - name: Download Windows amd64 package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ steps.preflight.outputs.windows_artifact_id }}
+          path: release
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_run_id }}
+
+      - name: Download macOS amd64 package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ steps.preflight.outputs.macos_amd64_artifact_id }}
+          path: release
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_run_id }}
+
+      - name: Download macOS arm64 package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ steps.preflight.outputs.macos_aarch64_artifact_id }}
+          path: release
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_run_id }}
+
+      - name: Download signed Android package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ steps.preflight.outputs.android_sign_artifact_id }}
+          path: release
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_run_id }}
+
+      - name: Download unsigned Android package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ steps.preflight.outputs.android_unsign_artifact_id }}
+          path: release
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_run_id }}
+
+      - name: Download Android provenance
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ steps.preflight.outputs.android_provenance_artifact_id }}
+          path: release
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_run_id }}
+
+      - name: Verify Android source and artifact provenance
+        env:
+          ANDROID_VERSION_CODE: ${{ steps.preflight.outputs.android_version_code }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/verify_android_apk_source.py \
+            --apk "release/DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+            --apk "release/DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            --source-sha "$RELEASE_SOURCE_SHA" --repository "$GITHUB_REPOSITORY"
+          python3 .github/scripts/verify_android_reproducibility.py verify-provenance \
+            --apk "release/DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            --provenance "release/DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
+            --source-sha "$RELEASE_SOURCE_SHA" \
+            --version-name "$RELEASE_VERSION" \
+            --version-code "$ANDROID_VERSION_CODE"
+          python3 .github/scripts/verify_android_reproducibility.py verify-signed-payload \
+            --unsigned-apk "release/DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            --signed-apk "release/DobbyVPN-v$RELEASE_VERSION-sign.apk"
+          mapfile -t signer_digests < <(
+            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs \
+              "release/DobbyVPN-v$RELEASE_VERSION-sign.apk" | \
+              sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p'
+          )
+          test "${#signer_digests[@]}" -eq 1
+          test "${signer_digests[0]}" = "$EXPECTED_ANDROID_SIGNER_SHA256"
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          release = Path("release")
+          version = os.environ["RELEASE_VERSION"]
+          expected = {
+              "signed": release / f"DobbyVPN-v{version}-sign.apk",
+              "unsigned": release / f"DobbyVPN-v{version}-unsign.apk",
+          }
+          manifest_path = release / f"DobbyVPN-v{version}-android-provenance.json"
+          document = json.loads(manifest_path.read_text(encoding="utf-8"))
+          if document.get("schema") != 1:
+              raise SystemExit("Android provenance schema mismatch")
+          if document.get("source_sha") != os.environ["RELEASE_SOURCE_SHA"]:
+              raise SystemExit("Android provenance source mismatch")
+          if document.get("version_name") != version:
+              raise SystemExit("Android provenance version mismatch")
+          if document.get("version_code") != int(os.environ["ANDROID_VERSION_CODE"]):
+              raise SystemExit("Android provenance version code mismatch")
+          if document.get("application_id") != "com.dobby.vpn":
+              raise SystemExit("Android provenance application ID mismatch")
+          if document.get("signer_certificate_sha256") != os.environ["EXPECTED_ANDROID_SIGNER_SHA256"]:
+              raise SystemExit("Android signer certificate mismatch")
+          if document.get("signed_payload_matches_unsigned") is not True:
+              raise SystemExit("Android signed-payload binding is missing")
+
+          artifacts = document.get("artifacts")
+          if not isinstance(artifacts, list) or len(artifacts) != len(expected):
+              raise SystemExit("Android provenance artifact set mismatch")
+          by_kind = {item.get("kind"): item for item in artifacts if isinstance(item, dict)}
+          if set(by_kind) != set(expected):
+              raise SystemExit("Android provenance artifact kinds mismatch")
+          for kind, path in expected.items():
+              item = by_kind[kind]
+              if item.get("name") != path.name:
+                  raise SystemExit(f"Android provenance {kind} filename mismatch")
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              if item.get("sha256") != digest:
+                  raise SystemExit(f"Android provenance {kind} digest mismatch")
+          print("Android provenance validation passed")
+          PY
+
+      - name: Create F-Droid version metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "versionName=$RELEASE_VERSION"
+            echo "versionCode=${{ steps.preflight.outputs.android_version_code }}"
+          } > release/version.txt
+
+      - name: Create and verify public release provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset_args=(
+            --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json"
+            --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk"
+            --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk"
+            --asset dobbyVPN-linux.deb
+            --asset dobbyVPN-macos-aarch64.pkg
+            --asset dobbyVPN-macos-amd64.pkg
+            --asset dobbyVPN-windows-amd64.msi
+            --asset version.txt
+          )
+          metadata_args=(
+            --directory release
+            --tag "${{ steps.preflight.outputs.tag }}"
+            --version "$RELEASE_VERSION"
+            --source-sha "$RELEASE_SOURCE_SHA"
+            --release-run-id "$RELEASE_RUN_ID"
+            --release-run-number "${{ steps.preflight.outputs.run_number }}"
+            --android-version-code "${{ steps.preflight.outputs.android_version_code }}"
+          )
+          python3 .github/scripts/release_provenance.py create \
+            "${metadata_args[@]}" "${asset_args[@]}"
+          python3 .github/scripts/release_provenance.py verify \
+            "${metadata_args[@]}" "${asset_args[@]}"
+
+      - name: Verify already-published release against selected run
+        if: steps.preflight.outputs.release_state == 'published'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir published
+          gh release download "${{ steps.preflight.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir published \
+            --pattern '*'
+          cmp release/release-provenance.json published/release-provenance.json
+          python3 .github/scripts/release_provenance.py verify \
+            --directory published \
+            --tag "${{ steps.preflight.outputs.tag }}" \
+            --version "$RELEASE_VERSION" \
+            --source-sha "$RELEASE_SOURCE_SHA" \
+            --release-run-id "$RELEASE_RUN_ID" \
+            --release-run-number "${{ steps.preflight.outputs.run_number }}" \
+            --android-version-code "${{ steps.preflight.outputs.android_version_code }}" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            --asset dobbyVPN-linux.deb \
+            --asset dobbyVPN-macos-aarch64.pkg \
+            --asset dobbyVPN-macos-amd64.pkg \
+            --asset dobbyVPN-windows-amd64.msi \
+            --asset version.txt
+
+      - name: Create verified draft and publish
+        if: steps.preflight.outputs.release_state == 'new' || steps.preflight.outputs.release_state == 'draft'
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_tag="${{ steps.preflight.outputs.tag }}"
+          expected_tag_object="${{ steps.preflight.outputs.tag_ref_object }}"
+          tag_created=false
+          draft_created=false
+          owned_release_id=""
+          published=false
+          identity_marker="<!-- publication-handoff-v1|dobbyvpn_commit=$RELEASE_SOURCE_SHA|release_run_id=$RELEASE_RUN_ID|release_run_attempt=$RELEASE_RUN_ATTEMPT|torturer_commit=$TORTURER_COMMIT|torturer_run_id=$TORTURER_RUN_ID|torturer_run_attempt=$TORTURER_RUN_ATTEMPT -->"
+          release_notes="$identity_marker"
+          expected_asset_names="$(find release -maxdepth 1 -type f -printf '%f\n' | sort)"
+
+          exact_tag_record() {
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$release_tag" | \
+              jq -sc --arg ref "refs/tags/$release_tag" '
+                [.[][] | select(.ref == $ref)] |
+                if length == 0 then empty
+                elif length == 1 then .[0]
+                else error("duplicate exact tag refs")
+                end'
+          }
+
+          verify_remote_tag() {
+            local expected_object="$1"
+            local record
+            local object_type
+            local object_sha
+            record="$(exact_tag_record)"
+            test -n "$record"
+            object_type="$(jq -r .object.type <<<"$record")"
+            object_sha="$(jq -r .object.sha <<<"$record")"
+            test "$object_sha" = "$expected_object"
+            for _ in 1 2 3 4 5 6 7 8; do
+              if [[ "$object_type" != tag ]]; then
+                break
+              fi
+              tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+              object_type="$(jq -r .object.type <<<"$tag_object")"
+              object_sha="$(jq -r .object.sha <<<"$tag_object")"
+            done
+            test "$object_type" = commit
+            test "$object_sha" = "$RELEASE_SOURCE_SHA"
+          }
+
+          exact_release() {
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" | \
+              jq -sc --arg tag "$release_tag" '
+                [.[][] | select(.tag_name == $tag)] |
+                if length == 0 then empty
+                elif length == 1 then .[0]
+                else error("duplicate releases for exact tag")
+                end'
+          }
+
+          wait_for_exact_release() {
+            local expected_draft="${1:-any}"
+            local record
+            for _ in {1..30}; do
+              if record="$(exact_release)" && [[ -n "$record" ]]; then
+                if [[ "$expected_draft" == any || "$(jq -r .draft <<<"$record")" == "$expected_draft" ]]; then
+                  printf '%s\n' "$record"
+                  return 0
+                fi
+              fi
+              sleep 1
+            done
+            return 1
+          }
+
+          rollback() {
+            status=$?
+            if (( status == 0 )) || [[ "$published" == true ]]; then
+              exit "$status"
+            fi
+            set +e
+            safe_to_delete_tag=false
+            if [[ "$draft_created" == true ]]; then
+              if [[ ! "$owned_release_id" =~ ^[1-9][0-9]*$ ]]; then
+                release_record="$(wait_for_exact_release any)"
+                release_query_status=$?
+                if (( release_query_status == 0 )); then
+                  owned_release_id="$(jq -r .id <<<"$release_record")"
+                fi
+              fi
+              if [[ "$owned_release_id" =~ ^[1-9][0-9]*$ ]]; then
+                release_record="$(gh api "repos/$GITHUB_REPOSITORY/releases/$owned_release_id")"
+              else
+                release_record=""
+              fi
+              if [[ "$owned_release_id" =~ ^[1-9][0-9]*$ ]] && \
+                 [[ "$(jq -r .tag_name <<<"$release_record")" == "$release_tag" ]] && \
+                 [[ "$(jq -r .draft <<<"$release_record")" == true ]] && \
+                 [[ "$(jq -r .body <<<"$release_record")" == "$release_notes" ]] && \
+                 gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$owned_release_id"; then
+                safe_to_delete_tag=true
+              else
+                echo "warning: failed to roll back owned draft release $release_tag" >&2
+              fi
+            else
+              release_record="$(exact_release)"
+              release_query_status=$?
+              if (( release_query_status != 0 )); then
+                echo "warning: could not determine rollback release ownership" >&2
+              elif [[ -z "$release_record" ]]; then
+                safe_to_delete_tag=true
+              else
+                echo "warning: refusing to roll back a release not created by this run" >&2
+              fi
+            fi
+
+            if [[ "$tag_created" == true && "$safe_to_delete_tag" == true ]]; then
+              remote_record="$(exact_tag_record)"
+              tag_query_status=$?
+              if (( tag_query_status != 0 )); then
+                echo "warning: could not determine rollback tag ownership" >&2
+              elif [[ -z "$remote_record" ]]; then
+                :
+              elif [[ "$(jq -r .object.sha <<<"$remote_record")" == "$expected_tag_object" ]]; then
+                gh api --method DELETE \
+                  "repos/$GITHUB_REPOSITORY/git/refs/tags/$release_tag" || \
+                  echo "warning: failed to roll back owned tag $release_tag" >&2
+              else
+                echo "warning: refusing to delete a tag object not owned by this run" >&2
+              fi
+            fi
+            exit "$status"
+          }
+          trap rollback EXIT
+
+          if [[ "${{ steps.preflight.outputs.tag_state }}" == absent ]]; then
+            test -z "$expected_tag_object"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag --annotate "$release_tag" "$RELEASE_SOURCE_SHA" --message "DobbyVPN $release_tag"
+            test "$(git rev-parse "$release_tag^{}")" = "$RELEASE_SOURCE_SHA"
+            expected_tag_object="$(git rev-parse "$release_tag^{tag}")"
+            [[ "$expected_tag_object" =~ ^[0-9a-f]{40}$ ]]
+            tag_created=true
+            git push origin "refs/tags/$release_tag"
+          else
+            test "${{ steps.preflight.outputs.tag_state }}" = existing
+            [[ "$expected_tag_object" =~ ^[0-9a-f]{40}$ ]]
+          fi
+          verify_remote_tag "$expected_tag_object"
+
+          if [[ "${{ steps.preflight.outputs.release_state }}" == new ]]; then
+            gh release create "$release_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft \
+              --verify-tag \
+              --title "$release_tag" \
+              --notes "$release_notes" \
+              release/*
+            draft_created=true
+            release_record="$(wait_for_exact_release true)"
+          else
+            # A matching draft is owned by the stable six-field identity. Do
+            # not delete or recreate it; repair only its exact asset set.
+            release_record="$(exact_release)"
+            test -n "$release_record"
+            test "$(jq -r .draft <<<"$release_record")" = true
+            test "$(jq -r .body <<<"$release_record")" = "$release_notes"
+          fi
+          owned_release_id="$(jq -r .id <<<"$release_record")"
+          [[ "$owned_release_id" =~ ^[1-9][0-9]*$ ]]
+          test "$(jq -r .draft <<<"$release_record")" = true
+          test "$(jq -r .tag_name <<<"$release_record")" = "$release_tag"
+          test "$(jq -r .body <<<"$release_record")" = "$release_notes"
+          verify_remote_tag "$expected_tag_object"
+
+          if [[ "${{ steps.preflight.outputs.release_state }}" == draft ]]; then
+            mapfile -t existing_assets < <(
+              gh api "repos/$GITHUB_REPOSITORY/releases/$owned_release_id/assets?per_page=100" |
+                jq -r '.[].name'
+            )
+            while IFS= read -r asset_name; do
+              [[ -n "$asset_name" ]] || continue
+              if ! grep -Fxq -- "$asset_name" <<<"$expected_asset_names"; then
+                asset_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/$owned_release_id/assets?per_page=100" |
+                  jq -er --arg name "$asset_name" '.[] | select(.name == $name) | .id')"
+                gh api --method DELETE \
+                  "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+              fi
+            done < <(printf '%s\n' "${existing_assets[@]}")
+            for asset in release/*; do
+              gh release upload "$release_tag" "$asset" \
+                --repo "$GITHUB_REPOSITORY" --clobber
+            done
+          fi
+          actual_asset_names="$(gh api "repos/$GITHUB_REPOSITORY/releases/$owned_release_id/assets?per_page=100" |
+            jq -r '.[].name' | sort)"
+          test "$actual_asset_names" = "$expected_asset_names"
+
+          mkdir published
+          gh release download "$release_tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir published \
+            --pattern '*'
+          cmp release/release-provenance.json published/release-provenance.json
+          python3 .github/scripts/release_provenance.py verify \
+            --directory published \
+            --tag "$release_tag" \
+            --version "$RELEASE_VERSION" \
+            --source-sha "$RELEASE_SOURCE_SHA" \
+            --release-run-id "$RELEASE_RUN_ID" \
+            --release-run-number "${{ steps.preflight.outputs.run_number }}" \
+            --android-version-code "${{ steps.preflight.outputs.android_version_code }}" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            --asset dobbyVPN-linux.deb \
+            --asset dobbyVPN-macos-aarch64.pkg \
+            --asset dobbyVPN-macos-amd64.pkg \
+            --asset dobbyVPN-windows-amd64.msi \
+            --asset version.txt
+          verify_remote_tag "$expected_tag_object"
+          gh release edit "$release_tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false \
+            --latest
+          published=true
+          release_record="$(wait_for_exact_release false)"
+          test "$(jq -r .id <<<"$release_record")" = "$owned_release_id"
+          test "$(jq -r .draft <<<"$release_record")" = false
+          test "$(jq -r .tag_name <<<"$release_record")" = "$release_tag"
+          trap - EXIT
+
+      - name: Confirm publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/${{ steps.preflight.outputs.tag }}" --jq .sha)" = \
+            "$RELEASE_SOURCE_SHA"
+          gh release view "${{ steps.preflight.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,isPrerelease,tagName,url \
+            --jq 'select(.isDraft == false and .isPrerelease == false) | {tagName,url}'

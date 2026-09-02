@@ -17,6 +17,7 @@ WORKFLOWS = ROOT / "workflows"
 PR_TRIGGER = re.compile(r"^\s{2}pull_request\s*:", re.MULTILINE)
 SECRET = re.compile(r"\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}")
 FULL_SHA = r"[0-9a-f]{40}"
+TORTURER_COMMIT_PIN = ROOT / "torturer-commit"
 EXTERNAL_ACTION = re.compile(
     r"^\s*(?:-\s*)?uses:\s*(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)@(?P<ref>[^\s#]+)",
     re.MULTILINE,
@@ -97,6 +98,12 @@ def _step_order_violation(source: str, before: str, after: str) -> str | None:
 def main() -> int:
     violations: list[str] = []
     violations.extend(_active_tool_pin_violations())
+    if (
+        not TORTURER_COMMIT_PIN.is_file()
+        or TORTURER_COMMIT_PIN.is_symlink()
+        or re.fullmatch(FULL_SHA, TORTURER_COMMIT_PIN.read_text(encoding="utf-8").strip()) is None
+    ):
+        violations.append(".github/torturer-commit: expected one lowercase full Torturer commit SHA")
     for workflow in sorted(WORKFLOWS.glob("*.yml")):
         text = workflow.read_text(encoding="utf-8")
         if "secrets: inherit" in text:
@@ -190,7 +197,20 @@ def main() -> int:
         android_dependency_helper_text = ""
     else:
         android_dependency_helper_text = android_dependency_helper.read_text(encoding="utf-8")
-    android_contract = android_build + "\n" + android_driver_text + "\n" + android_dependency_helper_text
+    android_source_verifier = ROOT.parent / ".github" / "scripts" / "verify_android_apk_source.py"
+    if not android_source_verifier.is_file() or android_source_verifier.is_symlink():
+        violations.append("android_build.yml: Android source verifier is missing")
+        android_source_verifier_text = ""
+    else:
+        android_source_verifier_text = android_source_verifier.read_text(encoding="utf-8")
+    android_contract = "\n".join(
+        (
+            android_build,
+            android_driver_text,
+            android_dependency_helper_text,
+            android_source_verifier_text,
+        )
+    )
     for expected in (
         "APP_SOURCE_SHA: ${{ inputs.source_sha }}",
         "APP_SOURCE_REPOSITORY: ${{ github.repository }}",
@@ -231,6 +251,11 @@ def main() -> int:
         ".github/scripts/verify_android_reproducibility.py",
         "Verify reproducible Android toolchain",
         "Build and verify isolated unsigned APKs through the public driver",
+        "--test-companion-output",
+        "--test-companion",
+        ":app:assembleReleaseAndroidTest",
+        "com.dobby.test.source_sha",
+        "com.dobby.vpn.test",
         "android_build_driver.sh",
         "--dependency-spec",
         "--first-output",
@@ -259,6 +284,10 @@ def main() -> int:
         "verify-signed-payload",
         "certificate SHA-256 digest",
         '"signer_certificate_sha256": os.environ["EXPECTED_ANDROID_SIGNER_SHA256"]',
+        '"test_companion": {',
+        'companion_signer_digests',
+        "Upload Android test companion",
+        "name: dobbyvpn-android-test-companion.apk",
         '"signed_payload_matches_unsigned": True',
         '"reproducibility": json.loads(',
         '--source-sha "$SOURCE_SHA" --repository "$APP_SOURCE_REPOSITORY"',
@@ -274,6 +303,18 @@ def main() -> int:
     if android_driver_text.count("verify_source_integrity_after_build") < 4:
         violations.append(
             "android_build.yml: Android driver must recheck source integrity after each build and before final manifest creation"
+        )
+    if android_build.count('--apk "$signed" --apk "$unsigned"') != 1:
+        violations.append(
+            "android_build.yml: source provenance must validate the signed and unsigned APK pair exactly once"
+        )
+    if 'test "$(apkanalyzer manifest application-id "$companion")" = "com.dobby.vpn.test"' not in android_build:
+        violations.append(
+            "android_build.yml: source provenance must validate the test companion application ID"
+        )
+    if '--test-companion "$companion"' not in android_build:
+        violations.append(
+            "android_build.yml: source provenance must validate the test companion source identity"
         )
     for after in (
         "Build Go from source for Android",
@@ -323,57 +364,117 @@ def main() -> int:
             "test.yml: gomobile init is forbidden because it resolves an unpinned gobind"
         )
 
-    promotion = (WORKFLOWS / "promote_release.yml").read_text(encoding="utf-8")
-    if PR_TRIGGER.search(promotion):
-        violations.append("promote_release.yml: public promotion must not run on pull_request")
-    if SECRET.search(promotion) or "environment:" in promotion:
+    coordinator_path = WORKFLOWS / "publication_coordinator.yml"
+    coordinator = coordinator_path.read_text(encoding="utf-8")
+    if PR_TRIGGER.search(coordinator):
         violations.append(
-            "promote_release.yml: GitHub/F-Droid promotion must not consume release secrets"
+            "publication_coordinator.yml: publication must not run on pull_request"
         )
+    for obsolete in ("submit_app_store.yml", "promote_release.yml"):
+        if (WORKFLOWS / obsolete).exists():
+            violations.append(f"{obsolete}: publication must have one coordinator workflow")
+
+    try:
+        preflight, remainder = coordinator.split("\n  submit:\n", 1)
+        submit_body, promote_body = remainder.split("\n  promote:\n", 1)
+    except ValueError:
+        violations.append(
+            "publication_coordinator.yml: expected isolated preflight, submit, and promote jobs"
+        )
+        preflight = submit_body = promote_body = ""
+    submit = "  submit:\n" + submit_body
+    promotion = "  promote:\n" + promote_body
+
     for expected in (
         "workflow_dispatch:",
+        'test "$GITHUB_SHA" = "$current_main"',
+        'if [[ "$DOBBYVPN_COMMIT" != "$CURRENT_MAIN" && "$release_json" == null ]]',
+        "--identity-json identity.json",
+        "release-run",
+        "release-jobs",
+        "release-artifacts",
+        "torturer-run",
+        "torturer-jobs",
+        "qualification-artifacts",
+        "--selected-json release-artifact-selection.json",
+    ):
+        if expected not in preflight:
+            violations.append(
+                f"publication_coordinator.yml: missing trust-boundary control: {expected}"
+            )
+    for obsolete in (
+        "PUBLICATION_DISPATCH_TOKEN",
+        "PUBLICATION_COORDINATOR_HMAC_SECRET",
+        "coordinator_signature",
+        "extract_public_artifact.py",
+        "publication_policy.py result",
+        "publication_policy.py render-absence",
+        "gh workflow run",
+    ):
+        if obsolete in coordinator:
+            violations.append(
+                f"publication_coordinator.yml: obsolete publication indirection remains: {obsolete}"
+            )
+
+    for expected in (
+        "needs: preflight",
+        "environment: release",
+        "DobbyVPN.ipa.provenance",
+        "ios_artifact_provenance.py verify",
+        "APP_STORE_SOURCE_SHA: ${{ inputs.dobbyvpn_commit }}",
+        "run-id: ${{ inputs.release_run_id }}",
+        "APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}",
+        "APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}",
+        "APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}",
+        "artifact-ids: ${{ needs.preflight.outputs.ipa_artifact_id }}",
+        "artifact-ids: ${{ needs.preflight.outputs.ipa_provenance_artifact_id }}",
+    ):
+        if expected not in submit:
+            violations.append(
+                f"publication_coordinator.yml: missing protected App Store control: {expected}"
+            )
+    if "contents: write" in submit:
+        violations.append(
+            "publication_coordinator.yml: App Store job must not have repository write permission"
+        )
+
+    promotion_secrets = {name for name in SECRET.findall(promotion)}
+    if promotion_secrets or "environment:" in promotion:
+        violations.append(
+            "publication_coordinator.yml: GitHub/F-Droid promotion must not consume release secrets"
+        )
+    for expected in (
+        "needs: [preflight, submit]",
         "actions: read",
         "contents: write",
-        'test "$GITHUB_REF" = "refs/heads/main"',
-        'test "$GITHUB_SHA" = "$current_main"',
-        'test "$RELEASE_SOURCE_SHA" = "$current_main"',
         'test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"',
-        'test "$(jq -r .conclusion <<<"$run_json")" = "success"',
-        'test "$(jq -r .headSha <<<"$run_json")" = "$RELEASE_SOURCE_SHA"',
-        'test "$source_version" = "$RELEASE_VERSION"',
-        "run-id: ${{ inputs.run_id }}",
+        "run-id: ${{ inputs.release_run_id }}",
         'matching-refs/tags/$tag',
         'gh release create "$release_tag"',
         "--draft",
         "--verify-tag",
         'verify_remote_tag "$expected_tag_object"',
-        "draft_created=false",
-        "owned_release_id=\"\"",
-        "wait_for_exact_release()",
-        "for _ in {1..30}",
-        'release_record="$(wait_for_exact_release true)"',
-        'release_record="$(wait_for_exact_release false)"',
-        'gh api "repos/$GITHUB_REPOSITORY/releases/$owned_release_id"',
+        "release_state == 'new' || steps.preflight.outputs.release_state == 'draft'",
+        "publication-handoff-v1|dobbyvpn_commit=",
+        "--clobber",
         "release_provenance.py create",
         "release_provenance.py verify",
-        "release_provenance.py typed-create",
-        "release_provenance.py typed-verify",
-        "release-artifact-provenance-v2.json",
-        "--typed-asset \"DobbyVPN-v$RELEASE_VERSION-sign.apk|android|arm64-v8a|apk-signed\"",
-        "--typed-asset \"dobbyVPN-windows-amd64.msi|windows|amd64|msi\"",
         "cmp release/release-provenance.json published/release-provenance.json",
-        "published=true",
-        "dobbyvpn-android-provenance",
-        "Android provenance validation passed",
+        "isPrerelease == false",
         "verify_android_apk_source.py",
         "verify_android_reproducibility.py verify-provenance",
         "verify_android_reproducibility.py verify-signed-payload",
-        "Android signed-payload binding is missing",
-        "Android signer certificate mismatch",
+        "artifact-ids: ${{ steps.preflight.outputs.linux_artifact_id }}",
+        "artifact-ids: ${{ steps.preflight.outputs.windows_artifact_id }}",
+        "artifact-ids: ${{ steps.preflight.outputs.macos_amd64_artifact_id }}",
+        "artifact-ids: ${{ steps.preflight.outputs.macos_aarch64_artifact_id }}",
+        "artifact-ids: ${{ steps.preflight.outputs.android_sign_artifact_id }}",
+        "artifact-ids: ${{ steps.preflight.outputs.android_unsign_artifact_id }}",
+        "artifact-ids: ${{ steps.preflight.outputs.android_provenance_artifact_id }}",
     ):
         if expected not in promotion:
             violations.append(
-                f"promote_release.yml: missing fail-closed promotion control: {expected}"
+                f"publication_coordinator.yml: missing fail-closed promotion control: {expected}"
             )
 
     gradle_build = (ROOT.parent / "kmp_module" / "app" / "build.gradle.kts").read_text(
@@ -390,60 +491,6 @@ def main() -> int:
         if expected not in gradle_build:
             violations.append(
                 f"build.gradle.kts: missing Android reproducibility control: {expected}"
-            )
-
-    # A retry against an already-published tag must still fetch and validate
-    # the selected Actions-run packages before comparing release provenance.
-    for step in (
-        "Download Linux package",
-        "Download Windows amd64 package",
-        "Download macOS amd64 package",
-        "Download macOS arm64 package",
-        "Download signed Android package",
-        "Download unsigned Android package",
-        "Download Android provenance",
-        "Verify Android source and artifact provenance",
-        "Create F-Droid version metadata",
-        "Create and verify public release provenance",
-    ):
-        marker = f"      - name: {step}"
-        start = promotion.find(marker)
-        end = promotion.find("\n      - name:", start + len(marker)) if start >= 0 else -1
-        section = promotion[start:] if end < 0 else promotion[start:end]
-        if start < 0 or re.search(r"^\s*if:\s*", section, re.MULTILINE):
-            violations.append(
-                f"promote_release.yml: {step} must run for a published-release retry"
-            )
-
-    app_store = (WORKFLOWS / "submit_app_store.yml").read_text(encoding="utf-8")
-    if PR_TRIGGER.search(app_store):
-        violations.append(
-            "submit_app_store.yml: production submission must not run on pull_request"
-        )
-    for expected in (
-        "workflow_dispatch:",
-        "actions: read",
-        "contents: read",
-        'test "$GITHUB_REF" = "refs/heads/main"',
-        'test "$GITHUB_SHA" = "$current_main"',
-        'test "$RELEASE_SOURCE_SHA" = "$current_main"',
-        'test "$(jq -r .conclusion <<<"$run_json")" = "success"',
-        'test "$(jq -r .headSha <<<"$run_json")" = "$RELEASE_SOURCE_SHA"',
-        'test "$(jq -r .number <<<"$run_json")" = "$RELEASE_BUILD_NUMBER"',
-        '"ios_build / ios_build"',
-        'test "$source_version" = "$RELEASE_VERSION"',
-        "DobbyVPN.ipa.provenance",
-        "ios_artifact_provenance.py verify",
-        "APP_STORE_SOURCE_SHA: ${{ inputs.commit_sha }}",
-        "run-id: ${{ inputs.run_id }}",
-        "environment: release",
-        "APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}",
-        "APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}",
-        "APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}",
-    ):
-        if expected not in app_store:
-            violations.append(
-                f"submit_app_store.yml: missing protected submission control: {expected}"
             )
 
     fdroid_repair = (WORKFLOWS / "repair_fdroid_release.yml").read_text(encoding="utf-8")
@@ -496,8 +543,14 @@ def main() -> int:
         '"en-US" => "https://github.com/DobbyVPN/DobbyVPN/issues"',
         '"en-US" => "https://dobbyvpn.com/privacy"',
         "skip_binary_upload: true",
+        "skip_screenshots: true",
         "submit_for_review: true",
         "automatic_release: true",
+        "Spaceship::ConnectAPI::App.find(BUNDLE_ID)",
+        "get_app_store_versions(",
+        "attached_build.version.to_s != selected_build",
+        "READY_FOR_SALE",
+        "Exact App Store version",
         "rescue Spaceship::UnexpectedResponse",
         "specified pre-release build could not be added",
         "sleep(240)",
@@ -564,7 +617,7 @@ def main() -> int:
         if "environment: release" not in text:
             violations.append(f"{name}: secret-consuming job must require the protected release environment")
 
-    for name in ("ios_build.yml", "submit_app_store.yml"):
+    for name in ("ios_build.yml", "publication_coordinator.yml"):
         text = (WORKFLOWS / name).read_text(encoding="utf-8")
         ruby_version = re.search(
             r"ruby-version:\s*['\"]?(\d+)\.(\d+)(?:\.\d+)?['\"]?(?![\d.])",
@@ -589,6 +642,12 @@ def main() -> int:
             violations.append(
                 f"{name}: every hosted platform job must have exactly timeout-minutes: 30 (found {timeouts})"
             )
+
+    dispatch_inputs = coordinator.split("permissions:", 1)[0]
+    if "coordinator_signature:" in dispatch_inputs:
+        violations.append(
+            "publication_coordinator.yml: external Torturer handoff must carry identity only"
+        )
 
     ios_build = (WORKFLOWS / "ios_build.yml").read_text(encoding="utf-8")
     for expected in (

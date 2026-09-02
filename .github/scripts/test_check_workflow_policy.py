@@ -87,6 +87,32 @@ class ActiveToolPinTests(unittest.TestCase):
             )
         )
 
+    def test_public_qualification_uses_a_recorded_torturer_commit(self) -> None:
+        self.assertRegex(
+            policy.TORTURER_COMMIT_PIN.read_text(encoding="utf-8").strip(),
+            r"\A[0-9a-f]{40}\Z",
+        )
+
+    def test_one_publication_workflow_uses_attempt_bound_artifact_ids(self) -> None:
+        source = (policy.WORKFLOWS / "publication_coordinator.yml").read_text(encoding="utf-8")
+        self.assertFalse((policy.WORKFLOWS / "submit_app_store.yml").exists())
+        self.assertFalse((policy.WORKFLOWS / "promote_release.yml").exists())
+        self.assertIn("\n  submit:\n", source)
+        self.assertIn("\n  promote:\n", source)
+        self.assertIn("ipa_artifact_id", source)
+        self.assertIn("ipa_provenance_artifact_id", source)
+        self.assertIn("artifact-ids:", source)
+        self.assertNotRegex(
+            source,
+            r"(?ms)uses:\s*actions/download-artifact@[^\n]+\n\s+with:\n(?:(?!\n\s+- name:).)*?\n\s+name:\s+",
+        )
+
+    def test_publication_trust_boundary_checks_artifacts_without_reinterpreting_results(self) -> None:
+        source = (policy.WORKFLOWS / "publication_coordinator.yml").read_text(encoding="utf-8")
+        self.assertNotIn("archive_download_url", source)
+        self.assertNotIn("extract_public_artifact.py", source)
+        self.assertNotIn("publication_policy.py result", source)
+        self.assertNotIn("publication_policy.py render-absence", source)
 
 class HostedPlatformBoundTests(unittest.TestCase):
     def test_product_platform_workflows_have_the_hard_30_minute_ceiling(self) -> None:
@@ -180,6 +206,69 @@ class AndroidLegacyHelperContractTests(unittest.TestCase):
             '--dependency-spec "$FDROID_COMPAT_SOURCE_ROOT/.github/android/dependency-spec.json"',
             source,
         )
+
+
+class AndroidTestCompanionPolicyTests(unittest.TestCase):
+    def test_release_builds_and_uploads_a_signed_exact_source_companion(self) -> None:
+        workflow = (policy.WORKFLOWS / "android_build.yml").read_text(encoding="utf-8")
+        driver = (policy.ROOT.parent / ".github/scripts/android_build_driver.sh").read_text(encoding="utf-8")
+        verifier = (policy.ROOT.parent / ".github/scripts/verify_android_apk_source.py").read_text(
+            encoding="utf-8"
+        )
+        source = "\n".join((workflow, driver, verifier))
+        for expected in (
+            '--source-sha "$APP_SOURCE_SHA"',
+            "--test-companion-output",
+            '--test-companion "$companion"',
+            ":app:assembleReleaseAndroidTest",
+            "com.dobby.test.source_sha",
+            "com.dobby.vpn.test",
+            "companion_signer_digests",
+            "Upload Android test companion",
+            "name: dobbyvpn-android-test-companion.apk",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, source)
+        self.assertEqual(workflow.count('--apk "$signed" --apk "$unsigned"'), 1)
+        self.assertIn('test "$(apkanalyzer manifest application-id "$companion")" = "com.dobby.vpn.test"', workflow)
+
+    def test_companion_is_confined_to_instrumentation_source_set(self) -> None:
+        manifest = (policy.ROOT.parent / "kmp_module/app/src/androidInstrumentedTest/AndroidManifest.xml").read_text(
+            encoding="utf-8"
+        )
+        build = (policy.ROOT.parent / "kmp_module/app/build.gradle.kts").read_text(encoding="utf-8")
+        source_root = policy.ROOT.parent / "kmp_module/app/src"
+        production_sources = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in source_root.rglob("*")
+            if path.is_file()
+            and "androidInstrumentedTest" not in path.parts
+            and "androidDebug" not in path.parts
+            and "debug" not in path.parts
+        )
+        self.assertIn("com.dobby.test.source_sha", manifest)
+        self.assertIn("VpnConsentTestActivity", manifest)
+        self.assertIn('androidInstrumentedTest.dependencies', build)
+        self.assertIn('testBuildType = "release"', build)
+        consent_source = (
+            source_root
+            / "androidInstrumentedTest/kotlin/com/dobby/feature/vpn_service/VpnConsentTestActivity.kt"
+        ).read_text(encoding="utf-8")
+        hosted_driver = (
+            source_root
+            / "androidInstrumentedTest/kotlin/com/dobby/feature/vpn_service/AndroidHostedProfileTestDriver.kt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("VpnService.prepare(targetContext)", consent_source)
+        self.assertIn("Intent(instrumentation.context, VpnConsentTestActivity::class.java)", hosted_driver)
+        self.assertNotIn("com.dobby.test.source_sha", production_sources)
+        self.assertNotIn("VpnConsentTestActivity", production_sources)
+        self.assertFalse(
+            (
+                source_root
+                / "androidDebug/kotlin/com/dobby/feature/vpn_service/VpnConsentTestActivity.kt"
+            ).exists()
+        )
+        self.assertFalse((source_root / "debug/AndroidManifest.xml").exists())
 
     def test_inline_helper_gate_precedes_every_trusted_android_use(self) -> None:
         source = (policy.WORKFLOWS / "android_build.yml").read_text(encoding="utf-8")

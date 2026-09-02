@@ -14,12 +14,9 @@ from unittest import mock
 
 from release_provenance import (
     MANIFEST_NAME,
-    TYPED_MANIFEST_NAME,
     ProvenanceError,
     create_manifest,
-    create_typed_manifest,
     verify_manifest,
-    verify_typed_manifest,
 )
 
 
@@ -239,126 +236,6 @@ class ReleaseProvenanceTests(unittest.TestCase):
             self.skipTest("symlinks unavailable on this platform")
         with self.assertRaises(ProvenanceError):
             self.verify()
-
-
-TYPED_ASSETS = [
-    {
-        "name": "DobbyVPN-v1.4.7-sign.apk",
-        "platform": "android",
-        "architecture": "arm64-v8a",
-        "kind": "apk-signed",
-    },
-    {
-        "name": "dobbyVPN-linux.deb",
-        "platform": "linux",
-        "architecture": "amd64",
-        "kind": "deb",
-    },
-]
-
-
-class TypedReleaseProvenanceTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.directory = Path(self.temporary.name)
-        (self.directory / TYPED_ASSETS[0]["name"]).write_bytes(b"signed apk")
-        (self.directory / TYPED_ASSETS[1]["name"]).write_bytes(b"linux package")
-
-    def tearDown(self) -> None:
-        self.temporary.cleanup()
-
-    def create(self) -> Path:
-        return create_typed_manifest(self.directory, assets=TYPED_ASSETS, **METADATA)
-
-    def verify(self) -> Path:
-        return verify_typed_manifest(self.directory, assets=TYPED_ASSETS, **METADATA)
-
-    def test_explicit_identity_source_and_bytes_round_trip(self):
-        manifest = self.create()
-        self.assertEqual(manifest, self.directory / TYPED_MANIFEST_NAME)
-        payload = json.loads(manifest.read_text(encoding="utf-8"))
-        self.assertEqual(payload["schema"], 2)
-        self.assertEqual(
-            [
-                (item["name"], item["platform"], item["architecture"], item["kind"], item["source_sha"])
-                for item in payload["assets"]
-            ],
-            [
-                ("DobbyVPN-v1.4.7-sign.apk", "android", "arm64-v8a", "apk-signed", SOURCE_SHA),
-                ("dobbyVPN-linux.deb", "linux", "amd64", "deb", SOURCE_SHA),
-            ],
-        )
-        self.assertEqual(self.verify(), manifest)
-
-    def test_v1_manifest_remains_independent_and_can_include_v2_sidecar(self):
-        self.create()
-        assets = [item["name"] for item in TYPED_ASSETS] + [TYPED_MANIFEST_NAME]
-        assets.sort()
-        create_manifest(self.directory, assets=assets, **METADATA)
-        self.assertEqual(self.verify(), self.directory / TYPED_MANIFEST_NAME)
-        self.assertEqual(
-            verify_manifest(self.directory, assets=assets, **METADATA), self.directory / MANIFEST_NAME
-        )
-
-    def test_identity_is_not_inferred_from_filename_or_digest(self):
-        self.create()
-        changed = [dict(item) for item in TYPED_ASSETS]
-        changed[0]["platform"] = "linux"
-        with self.assertRaises(ProvenanceError):
-            verify_typed_manifest(self.directory, assets=changed, **METADATA)
-        payload = json.loads((self.directory / TYPED_MANIFEST_NAME).read_text(encoding="utf-8"))
-        payload["assets"][0]["source_sha"] = "f" * 40
-        (self.directory / TYPED_MANIFEST_NAME).write_bytes(
-            json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-            + b"\n"
-        )
-        with self.assertRaises(ProvenanceError):
-            self.verify()
-
-    def test_rejects_manifest_descriptor_and_unsafe_identity(self):
-        with self.assertRaises(ProvenanceError):
-            create_typed_manifest(
-                self.directory,
-                assets=[{**TYPED_ASSETS[0], "name": TYPED_MANIFEST_NAME}],
-                **METADATA,
-            )
-        with self.assertRaises(ProvenanceError):
-            create_typed_manifest(
-                self.directory,
-                assets=[{**TYPED_ASSETS[0], "platform": "../linux"}, TYPED_ASSETS[1]],
-                **METADATA,
-            )
-
-    def test_cli_requires_explicit_typed_descriptors(self):
-        script = Path(__file__).with_name("release_provenance.py")
-        command = [
-            sys.executable,
-            str(script),
-            "typed-create",
-            "--directory",
-            str(self.directory),
-            "--tag",
-            METADATA["tag"],
-            "--version",
-            METADATA["version"],
-            "--source-sha",
-            SOURCE_SHA,
-            "--release-run-id",
-            "12345",
-            "--release-run-number",
-            "678",
-            "--android-version-code",
-            "1004007",
-            "--typed-asset",
-            "DobbyVPN-v1.4.7-sign.apk|android|arm64-v8a|apk-signed",
-            "--typed-asset",
-            "dobbyVPN-linux.deb|linux|amd64|deb",
-        ]
-        self.assertEqual(run_and_surface(command).returncode, 0)
-        verify = command.copy()
-        verify[2] = "typed-verify"
-        self.assertEqual(run_and_surface(verify).returncode, 0)
-
 
 if __name__ == "__main__":
     unittest.main()

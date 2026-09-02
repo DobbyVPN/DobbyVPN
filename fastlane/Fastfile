@@ -217,8 +217,8 @@ platform :ios do
       duration: 1200
     )
 
-    # CI only parks the build in ASC/TestFlight. External/public beta review
-    # is triggered later via the local AppStore/publish_public.py script.
+    # CI only parks the build in ASC/TestFlight. Production review is submitted
+    # later through the protected publication coordinator's submission job.
     upload_to_testflight(
       ipa: "#{EXPORT_DIR}/#{IPA_NAME}",
       api_key: api_key,
@@ -249,6 +249,53 @@ platform :ios do
       key_content: ENV.fetch("APP_STORE_API_KEY"),
       duration: 1200
     )
+
+    # A coordinator retry can arrive after App Store Connect accepted the
+    # exact version/build but before the child workflow reported success. Read
+    # the existing state before calling deliver so that retrying that identity
+    # is harmless and a different build on the same version is fail-closed.
+    app = Spaceship::ConnectAPI::App.find(BUNDLE_ID)
+    UI.user_error!("App Store Connect app #{BUNDLE_ID} was not found") unless app
+    platform = Spaceship::ConnectAPI::Platform::IOS
+    versions = app.get_app_store_versions(
+      filter: { platform: platform },
+      includes: "appStoreVersionSubmission,build"
+    ).to_a
+    matching_versions = versions.select { |candidate| candidate.version_string == version }
+    if matching_versions.length > 1
+      UI.user_error!("App Store Connect has multiple iOS versions for #{version}")
+    end
+    existing_version = matching_versions.first
+    if existing_version
+      attached_build = existing_version.build
+      if attached_build && attached_build.version.to_s != selected_build
+        UI.user_error!(
+          "App Store Connect version #{version} already has build " \
+          "#{attached_build.version}, not #{selected_build}"
+        )
+      end
+      submitted_states = %w[
+        WAITING_FOR_REVIEW READY_FOR_REVIEW IN_REVIEW
+        PENDING_APPLE_RELEASE PENDING_DEVELOPER_RELEASE
+        READY_FOR_DISTRIBUTION PROCESSING_FOR_DISTRIBUTION ACCEPTED
+        READY_FOR_SALE
+      ]
+      if submitted_states.include?(existing_version.app_version_state.to_s)
+        unless attached_build && attached_build.version.to_s == selected_build
+          UI.user_error!("App Store Connect submitted version #{version} has no exact build #{selected_build}")
+        end
+        UI.success("Exact App Store version #{version} build #{selected_build} is already submitted")
+        next
+      end
+      if %w[DEVELOPER_REJECTED REJECTED METADATA_REJECTED INVALID_BINARY].include?(
+        existing_version.app_version_state.to_s
+      )
+        UI.user_error!(
+          "App Store Connect version #{version} is in terminal state " \
+          "#{existing_version.app_version_state}"
+        )
+      end
+    end
 
     options = {
       api_key: api_key,

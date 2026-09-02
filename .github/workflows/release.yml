@@ -174,7 +174,51 @@ jobs:
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
 
-  # Public GitHub/F-Droid promotion is intentional/manual. A maintainer selects
-  # one successful run in promote_release.yml, which transfers its retained
-  # artifacts to the public release entirely on GitHub-hosted infrastructure
-  # and creates the sole F-Droid-visible tag.
+  start_public_qualification:
+    name: Start exact-package Torturer qualification
+    if: github.event_name == 'push'
+    needs: [fdroid_check, fdroid_scan_apk, ios_build, installers_build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact Release source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Start pinned Torturer for this Release attempt
+        env:
+          GH_TOKEN: ${{ secrets.TORTURER_DISPATCH_TOKEN }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          DOBBYVPN_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          torturer_sha="$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('.github/torturer-commit')
+          if path.is_symlink() or not path.is_file():
+              raise SystemExit('Torturer pin is not a regular file')
+          value = path.read_bytes()
+          if re.fullmatch(rb'[0-9a-f]{40}\n?', value) is None:
+              raise SystemExit('Torturer pin is invalid')
+          print(value.decode('ascii').strip())
+          PY
+          )"
+          test "$(gh api "repos/DobbyVPN/Torturer/commits/$torturer_sha" --jq .sha)" = "$torturer_sha"
+          test "$(gh api repos/DobbyVPN/Torturer/git/ref/heads/main --jq .object.sha)" = "$torturer_sha"
+          payload="$(jq -n \
+            --arg release_id "$RELEASE_RUN_ID" \
+            --arg release_attempt "$RELEASE_RUN_ATTEMPT" \
+            --arg torturer "$torturer_sha" \
+            --arg commit "$DOBBYVPN_COMMIT" \
+            '{ref:"main",inputs:{release_run_id:$release_id,release_run_attempt:$release_attempt,dobbyvpn_commit_sha:$commit,torturer_sha:$torturer}}')"
+          gh api --method POST \
+            "repos/DobbyVPN/Torturer/actions/workflows/functional.yml/dispatches" \
+            -H "Accept: application/vnd.github+json" \
+            --input - <<<"$payload"
