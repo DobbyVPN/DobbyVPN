@@ -32,7 +32,12 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 GO_MODULE_DIR = ROOT_DIR / "go_module"
 KMP_DIR = ROOT_DIR / "kmp_module"
 SERVICES_DIR = KMP_DIR / "services"
-TOOLS_DIR = ROOT_DIR / ".local-tools" / "desktop-build"
+LOCAL_BUILD_CACHE = os.environ.get("DOBBYVPN_LOCAL_BUILD_CACHE")
+TOOLS_DIR = (
+    Path(LOCAL_BUILD_CACHE) / "desktop-tools"
+    if LOCAL_BUILD_CACHE
+    else ROOT_DIR / ".local-tools" / "desktop-build"
+)
 
 ANDROID_NDK_VERSION = "27.2.12479018"
 ANDROID_PACKAGES = (

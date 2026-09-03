@@ -169,6 +169,13 @@ func acquireWindowsRoute(plan *Plan, name string, route windowsRoute) (bool, err
 
 func releaseWindowsRoute(route windowsRoute, timeout time.Duration) error {
 	if _, err := windowsNetshCommand(windowsRouteArgs("delete", route)...); err != nil {
+		exists, verifyErr := windowsRouteExists(route)
+		if verifyErr == nil && !exists {
+			return nil
+		}
+		if verifyErr != nil {
+			return fmt.Errorf("delete session-owned Windows route: %w; verify deletion: %v", err, verifyErr)
+		}
 		return err
 	}
 	deadline := time.Now().Add(timeout)

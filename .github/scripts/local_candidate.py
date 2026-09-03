@@ -106,6 +106,20 @@ def _new_directory(path: Path, root: Path, label: str) -> Path:
     return path
 
 
+def _local_cache_directory(path: Path, label: str) -> Path:
+    """Create or reuse one explicitly configured local-runner cache."""
+    path = _absolute(path, label)
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        raise CandidateError(f"{label} must be a non-symlink directory")
+    try:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as error:
+        raise CandidateError(f"could not create {label}: {error}") from error
+    if path.is_symlink() or not path.is_dir():
+        raise CandidateError(f"{label} must be a non-symlink directory")
+    return path.resolve(strict=True)
+
+
 def _new_file(path: Path, root: Path, label: str) -> Path:
     path = _confined(path, root, label)
     if path.exists() or path.is_symlink():
@@ -651,11 +665,20 @@ def prepare_candidate(
     if platform in DESKTOP_PLATFORMS:
         gradle_home = None
         if platform != "linux":
-            gradle_home = _new_directory(
-                candidate_root / "gradle-home",
-                request_root,
-                "Gradle home",
-            )
+            local_cache = os.environ.get("DOBBYVPN_LOCAL_BUILD_CACHE")
+            if local_cache:
+                gradle_home = _local_cache_directory(
+                    Path(local_cache) / "gradle",
+                    "local Gradle cache",
+                )
+            else:
+                # Keep the disposable fallback shallow enough for Windows
+                # CreateProcess callers that still apply the legacy path limit.
+                gradle_home = _new_directory(
+                    source_root / ".gradle-home",
+                    request_root,
+                    "Gradle home",
+                )
         _build_desktop(
             source_root,
             platform,

@@ -429,12 +429,43 @@ class LocalCandidateTests(unittest.TestCase):
                 output=self.request / "windows.json",
             )
 
-        expected = self.source / ".dobbyvpn-local-candidate" / "gradle-home"
+        expected = self.source / ".gradle-home"
         self.assertEqual(captured, [expected])
         self.assertTrue(expected.is_dir())
         self.assertTrue(expected.is_relative_to(self.request))
         self.assertEqual(stat.S_IMODE(expected.stat().st_mode), 0o700)
-        self.assertEqual(stat.S_IMODE(expected.parent.stat().st_mode), 0o711)
+        self.assertEqual(expected.parent, self.source)
+
+    def test_prepare_reuses_configured_local_build_cache(self) -> None:
+        self._desktop_outputs("windows")
+        cache = self.request / "persistent-cache"
+        captured: list[Path] = []
+
+        def build(
+            _source: Path,
+            _platform: str,
+            _architecture: str,
+            _skip_deps: bool,
+            _gradle_bin: Path | None,
+            gradle_home: Path,
+        ) -> None:
+            captured.append(gradle_home)
+
+        with mock.patch.dict(
+            candidate.os.environ,
+            {"DOBBYVPN_LOCAL_BUILD_CACHE": str(cache)},
+        ), mock.patch.object(candidate, "_build_desktop", side_effect=build):
+            candidate.prepare_candidate(
+                request_root=self.request,
+                source_root=self.source,
+                platform="windows",
+                output=self.request / "windows.json",
+            )
+
+        expected = cache / "gradle"
+        self.assertEqual(captured, [expected.resolve()])
+        self.assertTrue(expected.is_dir())
+        self.assertFalse((self.source / ".gradle-home").exists())
 
     def test_desktop_candidate_root_exposure_reports_permission_failure(self) -> None:
         self._desktop_outputs("linux")
