@@ -287,14 +287,23 @@ def _build_desktop(
     architecture: str,
     skip_deps: bool,
     gradle_bin: Path | None,
-    gradle_home: Path,
+    gradle_home: Path | None,
 ) -> None:
-    """Use desktop_build.py for both native libraries and the JVM app."""
+    """Build the native candidate and, where tested, the JVM app."""
     helper = _desktop_helper(source_root)
     environment = os.environ.copy()
-    environment["GRADLE_USER_HOME"] = str(gradle_home)
     common = [sys.executable, str(helper)]
     libs = [*common, "libs", "--platform", platform, "--arch", architecture]
+    if platform == "linux":
+        libs.append("--with-cli")
+    if skip_deps:
+        libs.append("--skip-deps")
+    _run(libs, source_root=source_root, environment=environment)
+    if platform == "linux":
+        return
+    if gradle_home is None:
+        raise CandidateError("desktop Gradle home is unavailable")
+    environment["GRADLE_USER_HOME"] = str(gradle_home)
     app = [
         *common,
         "app",
@@ -305,11 +314,9 @@ def _build_desktop(
         "--skip-libs",
     ]
     if skip_deps:
-        libs.append("--skip-deps")
         app.append("--skip-deps")
     if gradle_bin is not None:
         app.extend(("--gradle-bin", str(gradle_bin)))
-    _run(libs, source_root=source_root, environment=environment)
     _run(app, source_root=source_root, environment=environment)
 
 
@@ -417,7 +424,7 @@ def _candidate_logs(request_root: Path, candidate_root: Path) -> tuple[Path, Pat
 def _expose_android_interfaces(
     request_root: Path,
     candidate_root: Path,
-    app_path: Path,
+    app_path: Path | None,
     test_companion_path: Path,
 ) -> None:
     # APKs are application packages, not private runtime state.  Make only the
@@ -480,7 +487,11 @@ def _descriptor(
                 request_root,
             ),
             "service": _optional_interface(service_path, service_identity, request_root),
-            "app": _interface(app_path, app_identity, request_root),
+            "app": _optional_interface(
+                app_path,
+                app_identity if app_path is not None else None,
+                request_root,
+            ),
             "logs": {
                 "app_path": str(_regular_file(app_log, request_root, "app log")),
                 "service_path": str(_regular_file(service_log, request_root, "service log")),
@@ -537,7 +548,7 @@ def validate_descriptor(document: Any, request_root: Path) -> None:
     for name in ("cli", "service", "app"):
         value = interfaces[name]
         if value is None:
-            if name == "app":
+            if name == "app" and platform != "linux":
                 raise CandidateError("descriptor app interface is required")
             continue
         if not isinstance(value, dict) or set(value) != {"path", "process_identity"}:
@@ -638,11 +649,13 @@ def prepare_candidate(
 
     test_companion_path: Path | None = None
     if platform in DESKTOP_PLATFORMS:
-        gradle_home = _new_directory(
-            candidate_root / "gradle-home",
-            request_root,
-            "Gradle home",
-        )
+        gradle_home = None
+        if platform != "linux":
+            gradle_home = _new_directory(
+                candidate_root / "gradle-home",
+                request_root,
+                "Gradle home",
+            )
         _build_desktop(
             source_root,
             platform,
@@ -653,7 +666,11 @@ def prepare_candidate(
         )
         service_path = source_root / "go_module" / SERVICE_NAMES[platform]
         cli_path = source_root / "go_module" / CLI_NAMES[platform]
-        app_path = _find_desktop_app(source_root, request_root)
+        app_path = (
+            None
+            if platform == "linux"
+            else _find_desktop_app(source_root, request_root)
+        )
         _expose_candidate_root(candidate_root)
     else:
         app_path = _build_android(source_root, candidate_root, architecture, source_sha)

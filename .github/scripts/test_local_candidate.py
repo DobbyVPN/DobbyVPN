@@ -57,10 +57,18 @@ class LocalCandidateTests(unittest.TestCase):
                 self.assertNotIn("provider", json.dumps(descriptor))
                 self.assertEqual(json.loads(output.read_text()), descriptor)
                 self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
-                for interface in ("cli", "service", "app"):
+                for interface in ("cli", "service"):
                     value = descriptor["interfaces"][interface]
                     self.assertIsNotNone(value)
                     self.assertTrue(Path(value["path"]).is_relative_to(self.request))
+                if platform == "linux":
+                    self.assertIsNone(descriptor["interfaces"]["app"])
+                else:
+                    self.assertTrue(
+                        Path(descriptor["interfaces"]["app"]["path"]).is_relative_to(
+                            self.request
+                        )
+                    )
                 self.assertEqual(
                     descriptor["interfaces"]["network"]["path"],
                     str(self.source / ".dobbyvpn-run" / "s"),
@@ -326,10 +334,12 @@ class LocalCandidateTests(unittest.TestCase):
         outside = self.request.parent / "outside-candidate-file"
         outside.write_bytes(b"outside")
         try:
-            descriptor["interfaces"]["app"]["path"] = str(outside)
+            descriptor["interfaces"]["cli"]["path"] = str(outside)
             with self.assertRaises(candidate.CandidateError):
                 candidate.validate_descriptor(descriptor, self.request)
-            descriptor["interfaces"]["app"]["path"] = str(self.source / "kmp_module/app/build/compose/jars/app-jvm-1.0.jar")
+            descriptor["interfaces"]["cli"]["path"] = str(
+                self.source / "go_module" / candidate.CLI_NAMES["linux"]
+            )
             descriptor["credentials"] = "must not be accepted"
             with self.assertRaises(candidate.CandidateError):
                 candidate.validate_descriptor(descriptor, self.request)
@@ -358,7 +368,7 @@ class LocalCandidateTests(unittest.TestCase):
         with mock.patch.object(candidate, "_run", side_effect=capture):
             candidate._build_desktop(
                 self.source,
-                "linux",
+                "windows",
                 "amd64",
                 True,
                 None,
@@ -373,8 +383,32 @@ class LocalCandidateTests(unittest.TestCase):
             [str(gradle_home), str(gradle_home)],
         )
 
+    def test_linux_adapter_builds_only_service_and_cli(self) -> None:
+        helper = self.source / ".github" / "scripts" / "desktop_build.py"
+        helper.parent.mkdir(parents=True)
+        helper.write_text("# fixture")
+        commands: list[list[str]] = []
+
+        with mock.patch.object(
+            candidate,
+            "_run",
+            side_effect=lambda command, **_kwargs: commands.append(command),
+        ):
+            candidate._build_desktop(
+                self.source,
+                "linux",
+                "amd64",
+                True,
+                None,
+                None,
+            )
+
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0][1:4], [str(helper), "libs", "--platform"])
+        self.assertIn("--with-cli", commands[0])
+
     def test_prepare_confines_desktop_gradle_home_to_candidate_state(self) -> None:
-        self._desktop_outputs("linux")
+        self._desktop_outputs("windows")
         captured: list[Path] = []
 
         def build(
@@ -391,8 +425,8 @@ class LocalCandidateTests(unittest.TestCase):
             candidate.prepare_candidate(
                 request_root=self.request,
                 source_root=self.source,
-                platform="linux",
-                output=self.request / "linux.json",
+                platform="windows",
+                output=self.request / "windows.json",
             )
 
         expected = self.source / ".dobbyvpn-local-candidate" / "gradle-home"

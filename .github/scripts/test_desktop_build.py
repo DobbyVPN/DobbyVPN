@@ -1075,6 +1075,31 @@ class DesktopBuildTests(unittest.TestCase):
 
         self.assertEqual(calls, ["wintun:True", "bridge:True", "build"])
 
+    def test_libs_with_cli_builds_both_native_interfaces(self) -> None:
+        args = mock.Mock(
+            command="libs",
+            platform="linux",
+            arch="amd64",
+            skip_deps=True,
+            skip_build=False,
+            go_mod_tidy=False,
+            with_cli=True,
+        )
+        with (
+            mock.patch.object(desktop_build, "bootstrap_local_tools"),
+            mock.patch.object(desktop_build, "parse_args", return_value=args),
+            mock.patch.object(
+                desktop_build, "selected_platforms", return_value=["linux"]
+            ),
+            mock.patch.object(desktop_build, "build_service") as service,
+            mock.patch.object(desktop_build, "build_cli") as cli,
+            mock.patch.object(desktop_build, "log"),
+        ):
+            desktop_build.main()
+
+        service.assert_called_once_with("linux", "amd64", True, False, False)
+        cli.assert_called_once_with("linux", "amd64")
+
     def test_windows_wintun_and_bridge_are_staged_for_upload_and_packaging(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -2378,6 +2378,11 @@ def parse_args() -> argparse.Namespace:
     add_common_options(libs)
     libs.add_argument("--platform", default="current", help="current, linux, macos, windows, ubuntu, or all.")
     libs.add_argument("--arch", help="Override GOARCH for the service build.")
+    libs.add_argument(
+        "--with-cli",
+        action="store_true",
+        help="Also build the native operator CLI for each selected platform.",
+    )
     libs.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before go mod download.")
 
     go_test_deps = subparsers.add_parser(
@@ -2444,6 +2449,8 @@ def main() -> None:
                 args.skip_build,
                 args.go_mod_tidy,
             )
+            if args.with_cli:
+                build_cli(target_platform, args.arch)
     elif args.command == "prepare-go-test-deps":
         prepare_go_test_dependencies(args.skip_deps, args.go_mod_tidy)
     elif args.command == "app":
