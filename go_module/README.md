@@ -126,10 +126,11 @@ warnings/failures, and safe profile summaries. Configuration URLs and bytes,
 credentials, and endpoints never appear in responses or diagnostics.
 
 The native `dobby-cli` shares this authenticated control channel with the
-Compose GUI. It supports `connect`, `connect-profile`, `check-config`,
-`disconnect`, `status`, `logs clear`, `external-ip`, and `verify-session`
-without starting a JVM. `logs clear` is a local file reset and does not need
-the VPN service to be running.
+Compose GUI. It supports `connect`, `connect-profile`, `profile-inventory`,
+`check-config`, `disconnect`, `status`, `logs clear`, `external-ip`, and
+`verify-session` without starting a JVM. `profile-inventory` validates a
+configuration and returns only the ordered connection indices and protocols;
+it and `logs clear` do not need the VPN service to be running.
 
 See the canonical [vpnserver.proto](../kmp_module/grpcprotos/src/main/proto/com/dobby/vpnserver/vpnserver.proto)
 for the authenticated SessionV2 and local Diagnostics transport.

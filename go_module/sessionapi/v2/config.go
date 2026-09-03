@@ -41,6 +41,17 @@ var (
 	legacySectionRE  = regexp.MustCompile(`(?m)^\|([A-Za-z_][\w-]*)\|\s*$`)
 )
 
+// InspectProfiles validates raw configuration with the product parser and
+// returns only the safe connection inventory. It performs no network or
+// session operation and never exposes normalized configuration bytes.
+func InspectProfiles(raw []byte) ([]ProfileSummary, error) {
+	parsed, err := parseConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	return summaries(parsed.profiles), nil
+}
+
 func parseConfig(raw []byte) (parsedConfig, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return parsedConfig{}, failure(FailureMalformedConfig, "configuration is blank")

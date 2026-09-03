@@ -7,6 +7,8 @@ import com.dobby.feature.main.domain.SessionConfiguration
 import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.SessionControllerResult
 import com.dobby.feature.main.domain.SessionObservation
+import com.dobby.feature.main.domain.SessionProfile
+import com.dobby.feature.main.domain.SessionProtocol
 import com.dobby.feature.main.domain.SessionSnapshot
 import com.dobby.feature.main.domain.SessionStartTarget
 import com.dobby.feature.main.domain.SessionState
@@ -60,6 +62,16 @@ class AndroidHostedProfileTestDriverTest {
             put("preserve_active", "true")
         }
         assertInputRejected(wrongPreserveType)
+
+        val wrongProfileIndex = JSONObject(commandJson()).apply {
+            put("profile_index", "0")
+        }
+        assertInputRejected(wrongProfileIndex)
+
+        val negativeProfileIndex = JSONObject(commandJson()).apply {
+            put("profile_index", -1)
+        }
+        assertInputRejected(negativeProfileIndex)
 
         val unsafePreserve = JSONObject(
             commandJson(preserveActive = true),
@@ -240,35 +252,18 @@ class AndroidHostedProfileTestDriverTest {
         assertEquals(
             setOf(
                 "schema", "kind", "platform", "source_sha", "configured", "connected",
+                "connections", "connection",
                 "tunnel_interface", "routing_identity_changed", "disconnect_clean",
                 "restart_verified", "reconnect_completed", "second_tunnel_interface", "second_routing_identity_changed",
                 "stability_verified", "stability_sample_count", "stability_sample_interval_seconds",
                 "latency_ms", "download_mbps", "upload_mbps", "final_disconnect_clean",
-                "network_transition_verified", "sleep_wake_verified", "process_loss_verified", "endurance_completed",
+                "network_transition_verified", "sleep_wake_verified", "process_loss_verified",
                 "cleanup_verified",
             ),
             keys,
         )
         assertFalse(profileFile.exists())
         assertFalse(commandFile.exists())
-    }
-
-    @Test
-    fun endurance_is_bounded_by_declared_operation_and_emits_completion() = runBlocking {
-        val command = JSONObject(commandJson(operations = listOf("configure", "connect", "measure_endurance", "disconnect")))
-        command.getJSONArray("operations").getJSONObject(2).put("timeout_seconds", 7)
-        val commandFile = writeInput("command-endurance.json", command.toString())
-        writeInput("profile-4.bin", "opaque-profile")
-        val platform = FakePlatform()
-        val result = AndroidHostedProfileTestDriver(
-            context = context,
-            controllerFactory = { FakeSessionController() },
-            platformFactory = { platform },
-        ).run(commandFile.name)
-
-        assertEquals(7, platform.enduranceTimeoutSeconds)
-        assertTrue(result.enduranceCompleted)
-        assertTrue(result.stabilityVerified)
     }
 
     @Test
@@ -299,7 +294,34 @@ class AndroidHostedProfileTestDriverTest {
         assertTrue(result.secondRoutingIdentityChanged)
         assertTrue(result.finalDisconnectClean)
         assertEquals(2, controller.stopCalls)
+        assertTrue(controller.startTargets.all { it == SessionStartTarget.ProfileIndex(0) })
         assertEquals(listOf("configure", "consent", "baseline", "start", "snapshot", "tunnel", "identity", "stability", "throughput", "stop", "disconnected", "consent", "baseline", "start", "snapshot", "tunnel", "identity", "stop", "disconnected", "snapshot", "destroy", "disconnected"), eventLog)
+    }
+
+    @Test
+    fun selected_profile_index_and_complete_dynamic_inventory_are_preserved() = runBlocking {
+        val profiles = listOf(
+            SessionProfile(0, SessionProtocol.OUTLINE, "Outline"),
+            SessionProfile(1, SessionProtocol.XRAY, "Xray"),
+        )
+        val commandFile = writeInput(
+            "command-profile-one.json",
+            commandJson(
+                operations = listOf("configure", "connect", "disconnect"),
+                profileIndex = 1,
+            ),
+        )
+        writeInput("profile-3.bin", "opaque-profile")
+        val controller = FakeSessionController(profiles = profiles)
+        val result = AndroidHostedProfileTestDriver(
+            context = context,
+            controllerFactory = { controller },
+            platformFactory = { _ -> FakePlatform() },
+        ).run(commandFile.name)
+
+        assertEquals(profiles, result.connections)
+        assertEquals(profiles[1], result.selectedConnection)
+        assertEquals(listOf(SessionStartTarget.ProfileIndex(1)), controller.startTargets)
     }
 
     @Test
@@ -537,6 +559,7 @@ class AndroidHostedProfileTestDriverTest {
         outputFile: String = "observation-${operations.size}.json",
         profileFile: String = "profile-${operations.size}.bin",
         preserveActive: Boolean = false,
+        profileIndex: Int? = 0,
     ): String {
         val operationArray = JSONArray()
         operations.forEachIndexed { index, operation ->
@@ -560,6 +583,7 @@ class AndroidHostedProfileTestDriverTest {
             .put("source_sha", "a".repeat(40))
             .put("profile_file", profileFile)
             .put("output_file", outputFile)
+            .apply { profileIndex?.let { put("profile_index", it) } }
             .apply { if (preserveActive) put("preserve_active", true) }
             .put(
                 "endpoints",
@@ -581,8 +605,6 @@ class AndroidHostedProfileTestDriverTest {
     ) : AndroidHostedPlatform {
 
         private var tunnelIndex = 0
-        var enduranceTimeoutSeconds: Int? = null
-
         override suspend fun requestConsent() { events += "consent" }
         override suspend fun captureBaseline() { events += "baseline" }
         override suspend fun observeTunnel(): Boolean {
@@ -605,26 +627,34 @@ class AndroidHostedProfileTestDriverTest {
             events += "throughput"
             return AndroidHostedMetrics(12.5, 20.0, 10.0)
         }
-        override suspend fun measureEndurance(timeoutSeconds: Int): AndroidHostedMetrics {
-            enduranceTimeoutSeconds = timeoutSeconds
-            events += "endurance"
-            return measureThroughput()
-        }
         override suspend fun awaitDisconnected(): Boolean { events += "disconnected"; return true }
     }
 
-    private class FakeSessionController(val events: MutableList<String> = mutableListOf()) : SessionController {
+    private class FakeSessionController(
+        val events: MutableList<String> = mutableListOf(),
+        private val profiles: List<SessionProfile> = listOf(
+            SessionProfile(0, SessionProtocol.OUTLINE, "Outline"),
+        ),
+    ) : SessionController {
 
         var stopCalls = 0
         var startCalls = 0
+        val startTargets = mutableListOf<SessionStartTarget>()
         val startGenerations = mutableListOf<ULong>()
         private var state = SessionState.IDLE
         override suspend fun configure(rawConfig: ByteArray): SessionControllerResult<SessionConfiguration> {
             events += "configure"
-            return SessionControllerResult.Success(SessionConfiguration("digest", emptyList(), emptyList()))
+            return SessionControllerResult.Success(
+                SessionConfiguration(
+                    "digest",
+                    profiles,
+                    emptyList(),
+                ),
+            )
         }
         override suspend fun start(target: SessionStartTarget): SessionControllerResult<ULong> {
             events += "start"
+            startTargets += target
             startCalls += 1
             state = SessionState.CONNECTED
             val generation = startCalls.toULong()

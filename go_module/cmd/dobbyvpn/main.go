@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"go_module/grpcproto"
+	sessionv2 "go_module/sessionapi/v2"
 )
 
 const (
@@ -46,6 +47,12 @@ func run(args []string) int {
 			return usage("logs accepts only clear")
 		}
 		return clearApplicationLog()
+	}
+	if args[0] == "profile-inventory" {
+		if len(args) != 2 {
+			return usage("profile-inventory requires a config path or inline TOML")
+		}
+		return profileInventory(args[1])
 	}
 	conn, err := dialService()
 	if err != nil {
@@ -302,6 +309,47 @@ func checkConfig(ctx context.Context, client grpcproto.VpnClient, source string)
 	}
 	fmt.Printf("profiles=%d source=%s\n", len(result.GetProfiles()), result.GetSourceKind().String())
 	return exitOK
+}
+
+func profileInventory(source string) int {
+	raw, err := readSource(source)
+	if err != nil {
+		return exitArgs
+	}
+	profiles, err := sessionv2.InspectProfiles(raw)
+	if err != nil {
+		return reportFailure(err, nil)
+	}
+	encoded, err := profileInventoryJSON(profiles)
+	if err != nil {
+		return reportFailure(err, nil)
+	}
+	fmt.Println(string(encoded))
+	return exitOK
+}
+
+func profileInventoryJSON(profiles []sessionv2.ProfileSummary) ([]byte, error) {
+	type profileIdentity struct {
+		Index    int32  `json:"index"`
+		Protocol string `json:"protocol"`
+	}
+	type inventory struct {
+		Profiles []profileIdentity `json:"profiles"`
+	}
+	values := make([]profileIdentity, 0, len(profiles))
+	for _, profile := range profiles {
+		if profile.Index < 0 || profile.Index > math.MaxInt32 {
+			return nil, fmt.Errorf("invalid profile identity")
+		}
+		protocol := string(profile.Protocol)
+		switch profile.Protocol {
+		case sessionv2.ProtocolOutline, sessionv2.ProtocolXray, sessionv2.ProtocolTrustTunnel:
+		default:
+			return nil, fmt.Errorf("invalid profile protocol")
+		}
+		values = append(values, profileIdentity{Index: int32(profile.Index), Protocol: protocol})
+	}
+	return json.Marshal(inventory{Profiles: values})
 }
 
 func disconnect(ctx context.Context, client grpcproto.VpnClient) int {
@@ -643,5 +691,5 @@ func usage(message string) int {
 }
 
 func printHelp() {
-	fmt.Println("dobby-cli connect <source> | connect-profile <source> <index> | check-config <source> | disconnect | status [--json] | logs clear | external-ip | verify-session")
+	fmt.Println("dobby-cli connect <source> | connect-profile <source> <index> | profile-inventory <source> | check-config <source> | disconnect | status [--json] | logs clear | external-ip | verify-session")
 }

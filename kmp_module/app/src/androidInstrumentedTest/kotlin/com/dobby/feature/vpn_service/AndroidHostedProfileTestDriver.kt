@@ -11,6 +11,8 @@ import androidx.test.uiautomator.Until
 import com.dobby.feature.main.domain.AndroidSessionController
 import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.SessionControllerResult
+import com.dobby.feature.main.domain.SessionProfile
+import com.dobby.feature.main.domain.SessionProtocol
 import com.dobby.feature.main.domain.SessionSnapshot
 import com.dobby.feature.main.domain.SessionStartTarget
 import com.dobby.feature.main.domain.SessionState
@@ -21,6 +23,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -63,6 +66,7 @@ internal data class AndroidHostedCommand(
     val endpoints: AndroidHostedEndpoints,
     val operations: List<AndroidHostedOperation>,
     val preserveActive: Boolean,
+    val profileIndex: Int?,
 )
 
 internal class AndroidHostedInputException : IllegalArgumentException("INPUT_INVALID")
@@ -96,11 +100,6 @@ internal object AndroidHostedCommandContract {
         "observe_routing_identity",
         "measure_stability",
         "measure_throughput",
-        // Private local Harness extension.  The public hosted Torturer
-        // adapter deliberately does not advertise this capability; the
-        // owner-only Android lane has a bounded combined seam instead of
-        // pretending that several unrelated wire operations are endurance.
-        "measure_endurance",
         "disconnect",
         "reconnect",
         "inspect_cleanup",
@@ -115,7 +114,7 @@ internal object AndroidHostedCommandContract {
             invalid()
         }
         val requiredKeys = setOf("schema", "kind", "platform", "profile_file", "output_file", "endpoints", "operations")
-        val optionalKeys = setOf("source_sha", "preserve_active")
+        val optionalKeys = setOf("source_sha", "preserve_active", "profile_index")
         val commandKeys = json.keys().asSequence().toSet()
         if (!requiredKeys.all(commandKeys::contains) || (commandKeys - requiredKeys - optionalKeys).isNotEmpty()) invalid()
         if (exactInt(json.opt("schema")) != SCHEMA ||
@@ -134,6 +133,13 @@ internal object AndroidHostedCommandContract {
             json.opt("preserve_active") as? Boolean ?: invalid()
         } else {
             false
+        }
+        val profileIndex = if (json.has("profile_index")) {
+            val value = exactInt(json.opt("profile_index"))
+            if (value == null || value < 0) invalid()
+            value
+        } else {
+            null
         }
         val profileFile = requiredString(json, "profile_file")
         val outputFile = requiredString(json, "output_file")
@@ -210,7 +216,7 @@ internal object AndroidHostedCommandContract {
             )
         ) invalid()
         return AndroidHostedCommand(
-            sourceSha, profileFile, outputFile, endpoints, operations, preserveActive,
+            sourceSha, profileFile, outputFile, endpoints, operations, preserveActive, profileIndex,
         )
     }
 
@@ -337,9 +343,8 @@ internal data class AndroidHostedMetrics(
 
 /** Platform observations are facts only; no canonical assertion is evaluated here. */
 internal interface AndroidHostedPlatform {
-    /** The actual bounded stability sample contract used by endurance. */
     val stabilitySampleCount: Int
-        get() = 3
+        get() = 5
     val stabilitySampleIntervalSeconds: Double
         get() = 1.0
     suspend fun requestConsent()
@@ -348,8 +353,6 @@ internal interface AndroidHostedPlatform {
     suspend fun observeRoutingIdentity(): Boolean
     suspend fun measureStability(): Boolean
     suspend fun measureThroughput(): AndroidHostedMetrics
-    /** Execute the complete bounded endurance operation, including live checks. */
-    suspend fun measureEndurance(timeoutSeconds: Int): AndroidHostedMetrics = measureThroughput()
     suspend fun awaitDisconnected(): Boolean
 }
 
@@ -366,12 +369,11 @@ internal data class AndroidHostedObservation(
     var secondTunnelInterface: Boolean = false,
     var secondRoutingIdentityChanged: Boolean = false,
     var stabilityVerified: Boolean = false,
-    var stabilitySampleCount: Int = 3,
+    var stabilitySampleCount: Int = 5,
     var stabilitySampleIntervalSeconds: Double = 1.0,
     var networkTransitionVerified: Boolean = false,
     var sleepWakeVerified: Boolean = false,
     var processLossVerified: Boolean = false,
-    var enduranceCompleted: Boolean = false,
     var latencyMs: Double = 0.0,
     var downloadMbps: Double = 0.0,
     var uploadMbps: Double = 0.0,
@@ -379,6 +381,9 @@ internal data class AndroidHostedObservation(
     var cleanupVerified: Boolean = false,
     var errorCode: String? = null,
 ) {
+    var connections: List<SessionProfile> = emptyList()
+    var selectedConnection: SessionProfile? = null
+
     /** Compatibility accessor for existing local assertions; it is not serialized. */
     var reconnectBounded: Boolean
         get() = reconnectCompleted
@@ -390,6 +395,14 @@ internal data class AndroidHostedObservation(
         .put("schema", AndroidHostedCommandContract.SCHEMA)
         .put("kind", AndroidHostedCommandContract.OBSERVATION_KIND)
         .put("platform", AndroidHostedCommandContract.PLATFORM)
+        .put("connections", JSONArray().also { array ->
+            connections.forEach { profile ->
+                array.put(JSONObject().put("index", profile.index).put("protocol", profile.protocol.name))
+            }
+        })
+        .also { output -> selectedConnection?.let { profile ->
+            output.put("connection", JSONObject().put("index", profile.index).put("protocol", profile.protocol.name))
+        } }
         .also { output -> sourceSha?.let { output.put("source_sha", it) } }
         .put("configured", configured)
         .put("connected", connected)
@@ -406,7 +419,6 @@ internal data class AndroidHostedObservation(
         .put("network_transition_verified", networkTransitionVerified)
         .put("sleep_wake_verified", sleepWakeVerified)
         .put("process_loss_verified", processLossVerified)
-        .put("endurance_completed", enduranceCompleted)
         .put("latency_ms", safeMetric(latencyMs))
         .put("download_mbps", safeMetric(downloadMbps))
         .put("upload_mbps", safeMetric(uploadMbps))
@@ -447,6 +459,7 @@ internal class AndroidHostedProfileTestDriver(
                     withTimeout(TimeUnit.SECONDS.toMillis(operation.timeoutSeconds.toLong())) {
                         execute(
                             operation, profileFile, controller, platform, observation,
+                            command.profileIndex,
                             setGeneration = { generation = it },
                             getGeneration = { generation },
                         )
@@ -509,6 +522,7 @@ internal class AndroidHostedProfileTestDriver(
         controller: SessionController,
         platform: AndroidHostedPlatform,
         observation: AndroidHostedObservation,
+        profileIndex: Int?,
         setGeneration: (ULong?) -> Unit,
         getGeneration: () -> ULong?,
     ) {
@@ -526,9 +540,18 @@ internal class AndroidHostedProfileTestDriver(
                     profileFile.delete()
                 }
                 if (configured !is SessionControllerResult.Success) throw AndroidHostedOperationFailure("CONFIGURE_REJECTED")
+                val profiles = configured.value.profiles
+                if (profiles.isEmpty() || profiles.map { it.index } != profiles.indices.toList() ||
+                    profiles.any { it.protocol !in setOf(SessionProtocol.OUTLINE, SessionProtocol.XRAY, SessionProtocol.TRUST_TUNNEL) }
+                ) throw AndroidHostedOperationFailure("CONFIGURE_REJECTED")
+                observation.connections = profiles
+                observation.selectedConnection = profileIndex?.let { selected ->
+                    profiles.singleOrNull { it.index == selected }
+                        ?: throw AndroidHostedOperationFailure("PROFILE_UNAVAILABLE")
+                }
                 observation.configured = true
             }
-            "connect" -> connect(controller, platform, observation, setGeneration)
+            "connect" -> connect(controller, platform, observation, profileIndex, setGeneration)
             "observe_tunnel" -> {
                 val observed = platform.observeTunnel()
                 if (observation.restartVerified) {
@@ -559,19 +582,6 @@ internal class AndroidHostedProfileTestDriver(
                 observation.downloadMbps = metrics.downloadMbps
                 observation.uploadMbps = metrics.uploadMbps
             }
-            "measure_endurance" -> {
-                val metrics = platform.measureEndurance(operation.timeoutSeconds)
-                observation.stabilityVerified = true
-                observation.stabilitySampleCount = platform.stabilitySampleCount
-                observation.stabilitySampleIntervalSeconds = platform.stabilitySampleIntervalSeconds
-                observation.latencyMs = metrics.latencyMs
-                observation.downloadMbps = metrics.downloadMbps
-                observation.uploadMbps = metrics.uploadMbps
-                if (metrics.latencyMs <= 0.0 || metrics.downloadMbps <= 0.0 || metrics.uploadMbps <= 0.0) {
-                    throw AndroidHostedOperationFailure("ENDURANCE_METRICS_INVALID")
-                }
-                observation.enduranceCompleted = true
-            }
             "disconnect" -> {
                 if (!stopCurrentSession(controller, getGeneration, setGeneration)) {
                     throw AndroidHostedOperationFailure("DISCONNECT_FAILED")
@@ -586,7 +596,7 @@ internal class AndroidHostedProfileTestDriver(
             }
             "reconnect" -> {
                 if (getGeneration() != null) throw AndroidHostedOperationFailure("RECONNECT_PRECONDITION")
-                connect(controller, platform, observation, setGeneration)
+                connect(controller, platform, observation, profileIndex, setGeneration)
                 observation.restartVerified = observation.connected
                 observation.reconnectCompleted = observation.connected
             }
@@ -680,15 +690,17 @@ internal class AndroidHostedProfileTestDriver(
         controller: SessionController,
         platform: AndroidHostedPlatform,
         observation: AndroidHostedObservation,
+        profileIndex: Int?,
         setGeneration: (ULong?) -> Unit,
     ) {
+        val selected = profileIndex ?: throw AndroidHostedOperationFailure("PROFILE_UNAVAILABLE")
         var stage = "request_consent"
         try {
             platform.requestConsent()
             stage = "capture_baseline"
             platform.captureBaseline()
             stage = "start_session"
-            val started = controller.start(SessionStartTarget.AutoSelect)
+            val started = controller.start(SessionStartTarget.ProfileIndex(selected))
             val value = (started as? SessionControllerResult.Success)?.value
                 ?: throw AndroidHostedOperationFailure("CONNECT_REJECTED")
             setGeneration(value)
@@ -863,26 +875,6 @@ internal class RealAndroidHostedPlatform(
         }
     }
 
-    override suspend fun measureEndurance(timeoutSeconds: Int): AndroidHostedMetrics = withContext(Dispatchers.IO) {
-        // Keep the complete operation inside the caller's declared bound. A
-        // single final sample is not endurance: each bounded cycle proves the
-        // live tunnel, routed identity, stability, and both traffic directions
-        // before the next interval. Leave a small cancellation margin so the
-        // enclosing operation timeout can write a complete observation.
-        val deadline = android.os.SystemClock.elapsedRealtime() +
-            TimeUnit.SECONDS.toMillis(timeoutSeconds.toLong()) - ENDURANCE_COMPLETION_MARGIN_MILLIS
-        var latest: AndroidHostedMetrics? = null
-        while (android.os.SystemClock.elapsedRealtime() < deadline) {
-            if (!observeTunnel()) throw AndroidHostedOperationFailure("TUNNEL_NOT_OBSERVED")
-            if (!observeRoutingIdentity()) throw AndroidHostedOperationFailure("ROUTING_IDENTITY_NOT_OBSERVED")
-            if (!measureStability()) throw AndroidHostedOperationFailure("STABILITY_UNVERIFIED")
-            latest = measureThroughput()
-            val remaining = deadline - android.os.SystemClock.elapsedRealtime()
-            if (remaining > 0L) delay(minOf(1_000L, remaining))
-        }
-        latest ?: throw AndroidHostedOperationFailure("ENDURANCE_METRICS_INVALID")
-    }
-
     private fun measureLatency(rawUrl: String): TransferMeasurement = withNetworkConnection(rawUrl, upload = false) { connection ->
         val started = System.nanoTime()
         requireSuccess(connection)
@@ -1020,9 +1012,8 @@ internal class RealAndroidHostedPlatform(
         const val NETWORK_TIMEOUT_MILLIS = 20_000
         const val THROUGHPUT_TIMEOUT_SECONDS = 30L
         const val POLL_INTERVAL_MILLIS = 100L
-        const val STABILITY_SAMPLE_COUNT = 3
+        const val STABILITY_SAMPLE_COUNT = 5
         const val STABILITY_INTERVAL_MILLIS = 1_000L
-        const val ENDURANCE_COMPLETION_MARGIN_MILLIS = 250L
         const val IDENTITY_PROBE_ATTEMPTS = 3
         const val IDENTITY_RETRY_INTERVAL_MILLIS = 1_000L
         const val MAX_IDENTITY_BYTES = 128
