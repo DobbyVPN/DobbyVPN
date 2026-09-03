@@ -38,3 +38,30 @@ func TestNormalizeHost(t *testing.T) {
 		t.Fatalf("NormalizeHost()=%q", got)
 	}
 }
+
+func TestResolvePreflightIPv4PinsResult(t *testing.T) {
+	Clear()
+	started := time.Now()
+	ip, err := ResolvePreflightIPv4(
+		context.Background(),
+		"203.0.113.7",
+		time.Nanosecond,
+		"test-preflight",
+	)
+	if err != nil {
+		t.Fatalf("ResolvePreflightIPv4 returned error: %v", err)
+	}
+	if got := ip.String(); got != "203.0.113.7" {
+		t.Fatalf("ip=%s, want 203.0.113.7", got)
+	}
+
+	mu.RLock()
+	cached, ok := entries["203.0.113.7"]
+	mu.RUnlock()
+	if !ok {
+		t.Fatal("preflight result was not cached")
+	}
+	if cached.expiresAt.Before(started.Add(PreflightCacheTTL - time.Second)) {
+		t.Fatalf("preflight cache expires too early: %s", cached.expiresAt)
+	}
+}

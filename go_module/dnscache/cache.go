@@ -127,6 +127,18 @@ func ResolveIPv4(ctx context.Context, host string, timeout time.Duration, source
 	return nil, errors.New("DNS resolved only IPv6, IPv4 required")
 }
 
+// ResolvePreflightIPv4 pins a successful bootstrap lookup for the session.
+func ResolvePreflightIPv4(ctx context.Context, host string, timeout time.Duration, source string) (net.IP, error) {
+	ip, err := ResolveIPv4(ctx, host, timeout, source)
+	if err != nil {
+		return nil, err
+	}
+	if !SetIPv4(host, ip.String(), source, PreflightCacheTTL) {
+		return nil, errors.New("failed to cache preflight IPv4")
+	}
+	return ip, nil
+}
+
 func LookupIPv4(host, source string) (net.IP, bool) {
 	host = NormalizeHost(host)
 	if host == "" {

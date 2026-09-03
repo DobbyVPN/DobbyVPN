@@ -538,7 +538,7 @@ func (defaultInputs) Apply(ctx context.Context, _ v2.SessionRef, cidrs, hosts []
 			routes.Release()
 			return nil, err
 		}
-		if _, err := dnscache.ResolveIPv4(
+		if _, err := dnscache.ResolvePreflightIPv4(
 			ctx,
 			host,
 			dnscache.FastResolveTimeout,
