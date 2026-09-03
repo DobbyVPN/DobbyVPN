@@ -56,16 +56,24 @@ func linuxOwnedProxyRouteDelete(line string) (string, bool) {
 	), true
 }
 
-func linuxOwnedMarkedRouteDelete(line string, tableID int) (string, bool) {
+func linuxOwnedMarkedRouteFields(line string) (gateway, iface string, ok bool) {
 	fields := strings.Fields(line)
 	if len(fields) < 7 || fields[0] != linuxDefaultRoute {
-		return "", false
+		return "", "", false
 	}
 	gateway, hasGateway := linuxRouteField(fields, "via")
 	iface, hasIface := linuxRouteField(fields, "dev")
 	protocol, hasProtocol := linuxRouteField(fields, "proto")
 	if !hasGateway || net.ParseIP(gateway).To4() == nil || !hasIface || iface == "" ||
 		!hasProtocol || protocol != strconv.Itoa(linuxOwnedRouteProtocol) {
+		return "", "", false
+	}
+	return gateway, iface, true
+}
+
+func linuxOwnedMarkedRouteDelete(line string, tableID int) (string, bool) {
+	gateway, iface, ok := linuxOwnedMarkedRouteFields(line)
+	if !ok {
 		return "", false
 	}
 	return fmt.Sprintf(
@@ -115,10 +123,10 @@ func linuxRoutingTableAbsent(output string, err error) bool {
 }
 
 // RecoverLinuxOwnedRoutes removes only routes carrying DobbyVPN's explicit
-// protocol/metric ownership tags. The kernel retains routes and rules when the
-// service is killed, so the next process must reclaim those tagged resources
-// before creating a new routing Plan. Untagged pre-existing routes remain
-// outside product ownership and are never removed.
+// protocol/metric ownership tags. If process death removed the TUN and its
+// main-table default route, the owned marked table supplies the gateway and
+// interface needed to restore connectivity. Untagged pre-existing routes
+// remain outside product ownership and are never replaced.
 func RecoverLinuxOwnedRoutes(tableID, priority int, tunName string) error {
 	// Keep these queries unfiltered: iproute2 omits the protocol field from
 	// output when a protocol selector is present, and recovery must independently
@@ -141,6 +149,7 @@ func RecoverLinuxOwnedRoutes(tableID, priority int, tunName string) error {
 	}
 
 	var deletes []string
+	hasIndependentDefault := false
 	for _, line := range strings.Split(mainOutput, "\n") {
 		if command, ok := linuxOwnedProxyRouteDelete(line); ok {
 			deletes = append(deletes, command)
@@ -148,11 +157,28 @@ func RecoverLinuxOwnedRoutes(tableID, priority int, tunName string) error {
 		}
 		if command, ok := linuxOwnedTunnelRouteDelete(line, tunName); ok {
 			deletes = append(deletes, command)
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == linuxDefaultRoute {
+			hasIndependentDefault = true
 		}
 	}
+	var restoreDefault string
+	restoreAmbiguous := false
 	for _, line := range strings.Split(markedOutput, "\n") {
 		if command, ok := linuxOwnedMarkedRouteDelete(line, tableID); ok {
 			deletes = append(deletes, command)
+			gateway, iface, _ := linuxOwnedMarkedRouteFields(line)
+			candidate := fmt.Sprintf(
+				"ip -4 route replace table main %s via %s dev %s",
+				linuxDefaultRoute, gateway, iface,
+			)
+			if restoreDefault == "" {
+				restoreDefault = candidate
+			} else if restoreDefault != candidate {
+				restoreAmbiguous = true
+			}
 		}
 	}
 	for _, line := range strings.Split(ipv6Output, "\n") {
@@ -173,6 +199,13 @@ func RecoverLinuxOwnedRoutes(tableID, priority int, tunName string) error {
 	for _, command := range deletes {
 		if _, deleteErr := linuxRunCommand(command); deleteErr != nil && !linuxRouteAlreadyGone(deleteErr) {
 			errs = append(errs, fmt.Errorf("remove owned route: %w", deleteErr))
+		}
+	}
+	if restoreAmbiguous {
+		errs = append(errs, fmt.Errorf("restore interrupted default route: owned marked routes disagree"))
+	} else if restoreDefault != "" && !hasIndependentDefault {
+		if _, restoreErr := linuxRunCommand(restoreDefault); restoreErr != nil {
+			errs = append(errs, fmt.Errorf("restore interrupted default route: %w", restoreErr))
 		}
 	}
 	return errors.Join(errs...)

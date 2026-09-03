@@ -86,9 +86,36 @@ func TestRecoverLinuxOwnedRoutesDeletesOnlyRecognizedTaggedResources(t *testing.
 		"ip -4 route del table 233 default via 192.0.2.1 dev eth0 proto 233",
 		"ip -6 route del table main blackhole ::/1 proto 233 metric 1",
 		"ip -6 route del table main blackhole 8000::/1 proto 233 metric 1",
+		"ip -4 route replace table main default via 192.0.2.1 dev eth0",
 	}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestRecoverLinuxOwnedRoutesRestoresDefaultAfterTunDisappears(t *testing.T) {
+	original := linuxRunCommand
+	t.Cleanup(func() { linuxRunCommand = original })
+	var commands []string
+	linuxRunCommand = func(command string) (string, error) {
+		commands = append(commands, command)
+		switch command {
+		case "ip -o -4 route show table main":
+			return "192.0.2.0/24 dev eth0 proto kernel scope link src 192.0.2.10\n", nil
+		case "ip -o -4 route show table 233":
+			return "default via 192.0.2.1 dev eth0 proto 233\n", nil
+		case "ip -o -6 route show table main":
+			return "", nil
+		default:
+			return "", nil
+		}
+	}
+
+	if err := RecoverLinuxOwnedRoutes(233, 23333, "dobby233"); err != nil {
+		t.Fatal(err)
+	}
+	if got := commands[len(commands)-1]; got != "ip -4 route replace table main default via 192.0.2.1 dev eth0" {
+		t.Fatalf("last command = %q", got)
 	}
 }
 
@@ -101,7 +128,8 @@ func TestRecoverLinuxOwnedRoutesPreservesUntaggedAndUnrecognizedRoutes(t *testin
 		switch command {
 		case "ip -o -4 route show table main":
 			return "198.51.100.8/32 via 192.0.2.1 dev eth0 proto static metric 233\n" +
-				"203.0.113.0/24 via 192.0.2.1 dev eth0 proto 233 metric 233\n", nil
+				"203.0.113.0/24 via 192.0.2.1 dev eth0 proto 233 metric 233\n" +
+				"default via 192.0.2.254 dev eth9 proto dhcp\n", nil
 		case "ip -o -4 route show table 233":
 			return "default via 192.0.2.1 dev eth0 proto static\n", nil
 		case "ip -o -6 route show table main":

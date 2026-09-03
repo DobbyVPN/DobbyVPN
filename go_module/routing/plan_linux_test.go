@@ -105,6 +105,62 @@ func TestLinuxTunnelDefaultRestoresCapturedBaseline(t *testing.T) {
 	}
 }
 
+func TestLinuxResolvedDNSLeaseConfiguresAndRevertsOnlyTunnelLink(t *testing.T) {
+	original := linuxRunResolvedCommand
+	t.Cleanup(func() { linuxRunResolvedCommand = original })
+	var commands [][]string
+	linuxRunResolvedCommand = func(args ...string) error {
+		commands = append(commands, append([]string(nil), args...))
+		return nil
+	}
+
+	plan := NewPlan("generation-dns")
+	if _, err := plan.AcquireLinuxResolvedDNS("dobby0", "9.9.9.9"); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"dns", "dobby0", "9.9.9.9"},
+		{"domain", "dobby0", "~."},
+		{"default-route", "dobby0", "yes"},
+		{"revert", "dobby0"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %v, want %v", commands, want)
+	}
+}
+
+func TestLinuxResolvedDNSFailureRevertsPartialConfiguration(t *testing.T) {
+	original := linuxRunResolvedCommand
+	t.Cleanup(func() { linuxRunResolvedCommand = original })
+	var commands [][]string
+	linuxRunResolvedCommand = func(args ...string) error {
+		commands = append(commands, append([]string(nil), args...))
+		if args[0] == "domain" {
+			return fmt.Errorf("permission denied")
+		}
+		return nil
+	}
+
+	plan := NewPlan("generation-dns-failure")
+	if _, err := plan.AcquireLinuxResolvedDNS("dobby0", "9.9.9.9"); err == nil {
+		t.Fatal("AcquireLinuxResolvedDNS succeeded")
+	}
+	if err := plan.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"dns", "dobby0", "9.9.9.9"},
+		{"domain", "dobby0", "~."},
+		{"revert", "dobby0"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %v, want %v", commands, want)
+	}
+}
+
 func TestLinuxMarkedRoutingFailureRollsBackOnlyRouteCreatedByPlan(t *testing.T) {
 	original := linuxRunCommand
 	t.Cleanup(func() { linuxRunCommand = original })

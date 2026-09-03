@@ -276,6 +276,12 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	log.Debugf(Category, "[Linux][Step 10] Switching default route → TUN (%s)", app.RoutingConfig.TunDeviceName)
 
 	if _, err = routePlan.AcquireLinuxTunnelDefault(app.RoutingConfig.TunDeviceName); err == nil {
+		_, err = routePlan.AcquireLinuxResolvedDNS(
+			app.RoutingConfig.TunDeviceName,
+			app.RoutingConfig.DNSServerIP,
+		)
+	}
+	if err == nil {
 		err = routePlan.AcquireLinuxIPv6Block()
 	}
 	if err != nil {

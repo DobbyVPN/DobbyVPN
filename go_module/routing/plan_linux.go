@@ -3,9 +3,28 @@
 package routing
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net"
+	"os/exec"
 	"strings"
+	"time"
 )
+
+const linuxResolvedCommandTimeout = 5 * time.Second
+
+var linuxRunResolvedCommand = executeLinuxResolvedCommand
+
+func executeLinuxResolvedCommand(args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), linuxResolvedCommandTimeout)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "/usr/bin/resolvectl", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("resolvectl %s: %w: %s", args[0], err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
 
 func linuxRouteAlreadyGone(err error) bool {
 	if err == nil {
@@ -124,6 +143,39 @@ func (p *Plan) AcquireLinuxTunnelDefault(tunName string) (*Lease, error) {
 		}
 		_, err := linuxRunCommand(baseline)
 		return err
+	})
+}
+
+// AcquireLinuxResolvedDNS makes systemd-resolved send all DNS through this
+// session's TUN. The TUN is newly created for the session, so reverting its
+// per-link state restores the exact baseline (no state) without touching the
+// uplink resolver configuration.
+func (p *Plan) AcquireLinuxResolvedDNS(tunName, dnsIP string) (*Lease, error) {
+	if tunName == "" || strings.HasPrefix(tunName, "-") || strings.ContainsAny(tunName, " \t\r\n") {
+		return nil, fmt.Errorf("invalid Linux DNS interface %q", tunName)
+	}
+	if parsed := net.ParseIP(dnsIP); parsed == nil || parsed.To4() == nil {
+		return nil, fmt.Errorf("invalid Linux IPv4 DNS server %q", dnsIP)
+	}
+
+	configured := false
+	return p.Acquire("resolved-dns "+tunName, func() error {
+		for _, args := range [][]string{
+			{"dns", tunName, dnsIP},
+			{"domain", tunName, "~."},
+			{"default-route", tunName, "yes"},
+		} {
+			if err := linuxRunResolvedCommand(args...); err != nil {
+				if !configured {
+					return err
+				}
+				return errors.Join(err, linuxRunResolvedCommand("revert", tunName))
+			}
+			configured = true
+		}
+		return nil
+	}, func() error {
+		return linuxRunResolvedCommand("revert", tunName)
 	})
 }
 

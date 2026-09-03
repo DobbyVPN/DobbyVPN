@@ -307,9 +307,9 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		log.Debugf(Category, "[SOCKS5 UDP BEGIN] attempt=%d dst=%s server=%s inFlight=%d stats={%s}", attempt, addr, serverIP, inFlight, d.dialStats())
 		defer d.udpDialInFlight.Add(-1)
 
-		// Android's resolver did not receive replies through otherwise healthy
-		// Outline UDP transports in qualification, while its TCP retry path was
-		// reliable. Keep the platform-specific standards-compliant fallback here.
+		// Some platform resolvers did not receive replies through otherwise
+		// healthy Outline UDP transports in qualification, while their TCP retry
+		// path was reliable. Keep the standards-compliant fallback scoped by OS.
 		if shouldForceTCPDNS() && port == 53 {
 			d.udpDNSTruncated.Add(1)
 
