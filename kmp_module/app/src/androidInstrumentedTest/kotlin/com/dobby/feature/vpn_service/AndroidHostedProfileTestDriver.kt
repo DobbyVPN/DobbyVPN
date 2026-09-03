@@ -92,7 +92,7 @@ internal object AndroidHostedCommandContract {
     private val FILE_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
     private val OPERATION_ID = Regex("[a-z][a-z0-9._-]{2,95}")
     private val CONTROL_TOKEN = Regex("[0-9a-f]{64}")
-    internal val EXTERNAL_CONTROL_OPERATIONS = setOf("network_transition", "sleep_wake")
+    internal val EXTERNAL_CONTROL_OPERATIONS = setOf("network_transition")
     private val OPERATIONS = setOf(
         "configure",
         "connect",
@@ -372,7 +372,6 @@ internal data class AndroidHostedObservation(
     var stabilitySampleCount: Int = 5,
     var stabilitySampleIntervalSeconds: Double = 1.0,
     var networkTransitionVerified: Boolean = false,
-    var sleepWakeVerified: Boolean = false,
     var processLossVerified: Boolean = false,
     var latencyMs: Double = 0.0,
     var downloadMbps: Double = 0.0,
@@ -417,7 +416,6 @@ internal data class AndroidHostedObservation(
         .put("stability_sample_count", stabilitySampleCount)
         .put("stability_sample_interval_seconds", safeMetric(stabilitySampleIntervalSeconds))
         .put("network_transition_verified", networkTransitionVerified)
-        .put("sleep_wake_verified", sleepWakeVerified)
         .put("process_loss_verified", processLossVerified)
         .put("latency_ms", safeMetric(latencyMs))
         .put("download_mbps", safeMetric(downloadMbps))
@@ -620,15 +618,6 @@ internal class AndroidHostedProfileTestDriver(
                 observation.networkTransitionVerified = tunnel && identity
                 if (!observation.networkTransitionVerified) {
                     throw AndroidHostedOperationFailure("NETWORK_TRANSITION_UNVERIFIED")
-                }
-            }
-            "sleep_wake" -> {
-                awaitExternalControl(operation)
-                val tunnel = platform.observeTunnel()
-                val identity = platform.observeRoutingIdentity()
-                observation.sleepWakeVerified = tunnel && identity
-                if (!observation.sleepWakeVerified) {
-                    throw AndroidHostedOperationFailure("SLEEP_WAKE_UNVERIFIED")
                 }
             }
             else -> throw AndroidHostedOperationFailure("INPUT_INVALID")

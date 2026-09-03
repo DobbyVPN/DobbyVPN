@@ -113,7 +113,9 @@ class AndroidHostedProfileTestDriverTest {
         }
         assertInputRejected(missingControl)
 
-        val malformedControlToken = JSONObject(commandJson(operations = listOf("sleep_wake"))).apply {
+        val malformedControlToken = JSONObject(
+            commandJson(operations = listOf("network_transition")),
+        ).apply {
             getJSONArray("operations").getJSONObject(0).put("control_token", "not-a-token")
         }
         assertInputRejected(malformedControlToken)
@@ -123,28 +125,6 @@ class AndroidHostedProfileTestDriverTest {
             put("control_token", "b".repeat(64))
         }
         assertInputRejected(ordinaryControlFields)
-
-        val duplicateControlFile = JSONObject(
-            commandJson(operations = listOf("network_transition", "sleep_wake")),
-        ).apply {
-            val operations = getJSONArray("operations")
-            operations.getJSONObject(1).put(
-                "control_file",
-                operations.getJSONObject(0).getString("control_file"),
-            )
-        }
-        assertInputRejected(duplicateControlFile)
-
-        val duplicateControlToken = JSONObject(
-            commandJson(operations = listOf("network_transition", "sleep_wake")),
-        ).apply {
-            val operations = getJSONArray("operations")
-            operations.getJSONObject(1).put(
-                "control_token",
-                operations.getJSONObject(0).getString("control_token"),
-            )
-        }
-        assertInputRejected(duplicateControlToken)
 
         val controlAliasesProfile = JSONObject(
             commandJson(operations = listOf("network_transition")),
@@ -257,7 +237,7 @@ class AndroidHostedProfileTestDriverTest {
                 "restart_verified", "reconnect_completed", "second_tunnel_interface", "second_routing_identity_changed",
                 "stability_verified", "stability_sample_count", "stability_sample_interval_seconds",
                 "latency_ms", "download_mbps", "upload_mbps", "final_disconnect_clean",
-                "network_transition_verified", "sleep_wake_verified", "process_loss_verified",
+                "network_transition_verified", "process_loss_verified",
                 "cleanup_verified",
             ),
             keys,
@@ -385,8 +365,8 @@ class AndroidHostedProfileTestDriverTest {
     }
 
     @Test
-    fun external_controls_are_token_bound_and_observe_each_real_transition_boundary() = runBlocking {
-        val externalOperations = listOf("network_transition", "sleep_wake")
+    fun network_transition_control_is_token_bound_and_observed() = runBlocking {
+        val externalOperations = listOf("network_transition")
         val operations = listOf("configure", "connect") + externalOperations + listOf("disconnect", "inspect_cleanup")
         val commandFile = writeInput(
             "command-external.json",
@@ -433,7 +413,6 @@ class AndroidHostedProfileTestDriverTest {
         assertFalse("external control responder did not finish", responder.isAlive)
         assertEquals(null, result.errorCode)
         assertTrue(result.networkTransitionVerified)
-        assertTrue(result.sleepWakeVerified)
         assertTrue(result.cleanupVerified)
         externalOperations.forEach { operation ->
             val operationJson = command.getJSONArray("operations").let { items ->

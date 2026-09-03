@@ -93,13 +93,17 @@ VPN protocol it cannot execute.
 ## Owner-controlled Android transition seam
 
 The instrumentation-only hosted-profile driver accepts the canonical
-`network_transition` and `sleep_wake` operations. These are not production
-controls and do not add a Harness or Torturer dependency to the application:
+`network_transition` operation. This is not a production control and does not
+add a Harness or Torturer dependency to the application:
 an owner-side adapter performs the emulator action, then signals the test APK
 through a one-use, token-bound private-file rendezvous. Torturer proves process
 loss externally by force-stopping the production app, observing its absence,
 and starting a fresh companion session. Missing or malformed control input
 fails closed, and ordinary commands cannot include the control fields.
+
+Suspend/resume is a known untested limitation on every platform. The functional
+contract contains no sleep/wake operation until a controlled environment can
+perform and observe real system suspend and resume.
 
 ## Independent public verification
 
