@@ -19,6 +19,7 @@ import tarfile
 import tempfile
 import threading
 import time
+import traceback
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -189,9 +190,12 @@ def _set_exception_output(error: BaseException, stdout: bytes, stderr: bytes) ->
         error.stdout = output_text(stdout)  # type: ignore[attr-defined]
         error.output = output_text(stdout)  # type: ignore[attr-defined]
         error.stderr = output_text(stderr)  # type: ignore[attr-defined]
-    except (AttributeError, TypeError):
-        # Some foreign exception implementations expose read-only attributes.
-        pass
+    except (AttributeError, TypeError) as attachment_error:
+        error.add_note(
+            "subprocess output could not be attached as attributes:\n"
+            + "".join(traceback.format_exception(attachment_error)).rstrip()
+            + f"\nstdout={stdout!r}\nstderr={stderr!r}"
+        )
 
 
 class ProcessTreeProofError(RuntimeError):
@@ -201,8 +205,12 @@ class ProcessTreeProofError(RuntimeError):
 def _proc_identity(pid: int) -> tuple[str, str] | None:
     try:
         stat_text = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
-    except (FileNotFoundError, OSError):
+    except FileNotFoundError:
         return None
+    except OSError as error:
+        raise ProcessTreeProofError(
+            f"process {pid} identity could not be read"
+        ) from error
     closing_parenthesis = stat_text.rfind(")")
     fields = stat_text[closing_parenthesis + 2 :].split()
     if len(fields) <= 19:
@@ -2114,8 +2122,8 @@ def is_windows_admin() -> bool:
         return True
     try:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception:
-        return False
+    except Exception as error:
+        raise RuntimeError("Windows administrator status check failed") from error
 
 
 def prepare_config_arg(config: str) -> str:
@@ -2144,13 +2152,15 @@ def prepare_config_arg(config: str) -> str:
 
 def wait_for_port(port: int, timeout_seconds: int = 30) -> bool:
     deadline = time.monotonic() + timeout_seconds
+    last_error: OSError | None = None
     while time.monotonic() < deadline:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1):
                 return True
-        except OSError:
+        except OSError as error:
+            last_error = error
             time.sleep(1)
-    return False
+    raise TimeoutError(f"port {port} did not become ready") from last_error
 
 
 def wait_for_socket(path: Path, timeout_seconds: int = 30) -> bool:

@@ -13,7 +13,7 @@ class DobbyApp : Application() {
     override fun onCreate() {
         super.onCreate()
         initLogFilePath(applicationContext)
-        initLogger()
+        check(initLogger()) { "Go logger initialization returned false" }
         startDI(listOf(androidMainModule, androidVpnModule)) {
             androidContext(applicationContext)
         }

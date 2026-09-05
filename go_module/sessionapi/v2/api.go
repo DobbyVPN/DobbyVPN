@@ -67,11 +67,18 @@ const (
 type Error struct {
 	Code    FailureCode
 	Message string
+	Cause   error
 }
 
 func (e *Error) Error() string { return string(e.Code) + ": " + e.Message }
 
+func (e *Error) Unwrap() error { return e.Cause }
+
 func failure(code FailureCode, message string) error { return &Error{Code: code, Message: message} }
+
+func failureWithCause(code FailureCode, message string, cause error) error {
+	return &Error{Code: code, Message: message, Cause: cause}
+}
 
 func CodeOf(err error) FailureCode {
 	var target *Error
@@ -1130,7 +1137,7 @@ func wrapFailure(code FailureCode, err error) error {
 	if errors.As(err, &domain) {
 		return err
 	}
-	return failure(code, "operation failed")
+	return failureWithCause(code, "operation failed", err)
 }
 
 func randomID() string {

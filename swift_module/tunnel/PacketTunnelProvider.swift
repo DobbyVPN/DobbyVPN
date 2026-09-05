@@ -206,6 +206,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             release = fixedCString(&utsRelease)
             version = fixedCString(&utsVersion)
             machine = fixedCString(&utsMachine)
+        } else {
+            let code = errno
+            logs.writeLog(
+                log: "[tunnel:\(tunnelId)] uname failed errno=\(code) error=\(String(cString: strerror(code)))"
+            )
         }
 
         let physicalMemoryMB = processInfo.physicalMemory / 1024 / 1024
@@ -257,12 +262,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 highWaterMB: highWater
             )
         }
+        logs.writeLog(log: "[Memory] task_info failed kern_return=\(result)")
         return nil
     }
 
     func logInterfaces() {
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
-        getifaddrs(&ifaddrPtr)
+        guard getifaddrs(&ifaddrPtr) == 0 else {
+            let code = errno
+            logs.writeLog(
+                log: "[Interfaces] getifaddrs failed errno=\(code) error=\(String(cString: strerror(code)))"
+            )
+            return
+        }
         var ptr = ifaddrPtr
         while ptr != nil {
             if let name = ptr?.pointee.ifa_name {
@@ -280,7 +292,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[Interfaces] ========== INTERFACES: \(label) ==========")
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else {
-            logs.writeLog(log: "[DEBUG][Interfaces] getifaddrs failed errno=\(errno)")
+            let code = errno
+            logs.writeLog(
+                log: "[DEBUG][Interfaces] getifaddrs failed errno=\(code) error=\(String(cString: strerror(code)))"
+            )
             logs.writeLog(log: "[Interfaces] ========== INTERFACES: END_\(label) ==========")
             return
         }
@@ -396,7 +411,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func cancelTunnelWithError(_ error: Error?) {
         if let error {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] cancelTunnelWithError: \(error.localizedDescription)")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] cancelTunnelWithError: \(String(reflecting: error))")
         } else {
             logs.writeLog(log: "[tunnel:\(tunnelId)] cancelTunnelWithError: nil")
         }
@@ -434,22 +449,33 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func timeoutResponse(for messageData: Data) -> Data {
-        guard let secret = secrets.data(for: SharedKeychainSecretStore.sessionBridgeHMACKey),
-              let command = try? IOSProviderCommand.decode(messageData, using: secret) else {
+        guard let secret = secrets.data(for: SharedKeychainSecretStore.sessionBridgeHMACKey) else {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] timeout response key is unavailable")
             return VpnManagerImpl.transportFailure("SESSIONAPI_TIMEOUT")
         }
-        return authenticatedProviderResponse(
-            requestID: command.requestID,
-            kind: .transport,
-            goResponse: VpnManagerImpl.transportFailure("SESSIONAPI_TIMEOUT")
-        )
+        do {
+            let command = try IOSProviderCommand.decode(messageData, using: secret)
+            return authenticatedProviderResponse(
+                requestID: command.requestID,
+                kind: .transport,
+                goResponse: VpnManagerImpl.transportFailure("SESSIONAPI_TIMEOUT")
+            )
+        } catch {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] timeout command decode failed: \(String(reflecting: error))")
+            return VpnManagerImpl.transportFailure("SESSIONAPI_TIMEOUT")
+        }
     }
 
     private func dispatchProviderCommand(_ messageData: Data) async -> Data {
         guard let secret = secrets.data(for: SharedKeychainSecretStore.sessionBridgeHMACKey) else {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] provider command authentication key is unavailable")
             return VpnManagerImpl.transportFailure(IOSProviderMessageError.unauthenticated.rawValue)
         }
-        guard let command = try? IOSProviderCommand.decode(messageData, using: secret) else {
+        let command: IOSProviderCommand
+        do {
+            command = try IOSProviderCommand.decode(messageData, using: secret)
+        } catch {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] provider command decode failed: \(String(reflecting: error))")
             return VpnManagerImpl.transportFailure(IOSProviderMessageError.malformed.rawValue)
         }
         guard !settingsFence.isPoisoned else {
@@ -530,16 +556,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func authenticatedProviderResponse(requestID: String, kind: IOSProviderResponseKind, goResponse: Data) -> Data {
-        guard let secret = secrets.data(for: SharedKeychainSecretStore.sessionBridgeHMACKey),
-              let envelope = try? IOSProviderResponse(requestID: requestID, kind: kind, payload: goResponse),
-              let encoded = try? envelope.encoded(using: secret) else {
+        guard let secret = secrets.data(for: SharedKeychainSecretStore.sessionBridgeHMACKey) else {
             // A valid command could not be wrapped only if shared Keychain
             // state disappeared during the provider lifetime. The app will
             // reject this unauthenticated transport response and retain any
             // sensitive mailbox for recovery.
+            logs.writeLog(log: "[tunnel:\(tunnelId)] provider response key is unavailable")
             return VpnManagerImpl.transportFailure("SESSIONAPI_RESPONSE_UNAVAILABLE")
         }
-        return encoded
+        do {
+            let envelope = try IOSProviderResponse(requestID: requestID, kind: kind, payload: goResponse)
+            return try envelope.encoded(using: secret)
+        } catch {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] provider response encoding failed: \(String(reflecting: error))")
+            return VpnManagerImpl.transportFailure("SESSIONAPI_RESPONSE_UNAVAILABLE")
+        }
     }
 
     private func configure(_ command: IOSProviderCommand) async -> (payload: Data, kind: IOSProviderResponseKind) {
@@ -583,7 +614,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             // installed by this command and no synthetic cleanup is needed.
             return (response, .go)
         } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] Go start dispatch failed: \(error.localizedDescription)")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] Go start dispatch failed: \(String(reflecting: error))")
             return (VpnManagerImpl.transportFailure("PLATFORM_FAILED"), .transport)
         }
     }
@@ -660,16 +691,24 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     /// PROBING and failed Start therefore run without a routing black hole.
     private func acquireTunnel(sessionID: String?, generation: Int64) -> Int32 {
         _ = sessionID
-        guard !settingsFence.isPoisoned else { return -1 }
+        guard !settingsFence.isPoisoned else {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] AcquireTunnel rejected: settings fence is poisoned generation=\(generation)")
+            return -1
+        }
         return settingsQueue.sync {
             guard applyFixedTunnelSettings(generation: generation) else { return -1 }
             let rawDescriptor = DobbyvpnGetTunnelFileDescriptor()
             guard rawDescriptor >= 0, rawDescriptor <= Int(Int32.max) else {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] AcquireTunnel received invalid descriptor=\(rawDescriptor) generation=\(generation)")
                 _ = clearSettingsOnCurrentQueue(reason: "TUN descriptor unavailable")
                 return -1
             }
             let duplicated = dup(Int32(rawDescriptor))
             guard duplicated >= 0 else {
+                let code = errno
+                logs.writeLog(
+                    log: "[tunnel:\(tunnelId)] TUN descriptor duplication failed errno=\(code) error=\(String(cString: strerror(code))) generation=\(generation)"
+                )
                 _ = clearSettingsOnCurrentQueue(reason: "TUN descriptor duplication failed")
                 return -1
             }
@@ -682,12 +721,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     /// IDLE/DESTROYED and before a subsequent generation can be acquired.
     private func releaseTunnel(sessionID: String?, generation: Int64) -> Bool {
         _ = sessionID
-        if settingsFence.isPoisoned { return false }
+        if settingsFence.isPoisoned {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] ReleaseTunnel rejected: settings fence is poisoned generation=\(generation)")
+            return false
+        }
         return settingsQueue.sync {
             settingsLock.lock()
             let activeGeneration = activeSettingsGeneration
             settingsLock.unlock()
-            guard activeGeneration == nil || activeGeneration == generation else { return false }
+            guard activeGeneration == nil || activeGeneration == generation else {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] ReleaseTunnel generation mismatch requested=\(generation) active=\(activeGeneration ?? -1)")
+                return false
+            }
             return clearSettingsOnCurrentQueue(reason: "Go ReleaseTunnel")
         }
     }
@@ -758,7 +803,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     /// timeout therefore poisons and terminates this provider before any later
     /// command can start another settings operation.
     private func runSettingsOperation(_ operation: @escaping () async throws -> Void) -> Bool {
-        guard let operationEpoch = settingsFence.begin() else { return false }
+        guard let operationEpoch = settingsFence.begin() else {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] NetworkExtension settings operation rejected: fence is poisoned")
+            return false
+        }
         let completion = DispatchSemaphore(value: 0)
         let result = SettingsOperationResult()
         let task = Task {
@@ -781,9 +829,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return false
         }
         if let error = result.error {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] NetworkExtension settings operation failed: \(error.localizedDescription)")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] NetworkExtension settings operation failed: \(String(reflecting: error))")
         }
-        guard settingsFence.canCommit(operationEpoch) else { return false }
+        guard settingsFence.canCommit(operationEpoch) else {
+            logs.writeLog(log: "[tunnel:\(tunnelId)] NetworkExtension settings operation completion rejected epoch=\(operationEpoch)")
+            return false
+        }
         return result.succeeded
     }
 
@@ -989,17 +1040,29 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         var count = mach_msg_type_number_t(0)
         let result = task_threads(mach_task_self_, &threads, &count)
         guard result == KERN_SUCCESS, let threads else {
+            logs.writeLog(log: "[Resources] task_threads failed kern_return=\(result)")
             return -1
         }
 
         let size = vm_size_t(Int(count) * MemoryLayout<thread_t>.stride)
-        vm_deallocate(mach_task_self_, vm_address_t(UInt(bitPattern: threads)), size)
+        let deallocateResult = vm_deallocate(
+            mach_task_self_, vm_address_t(UInt(bitPattern: threads)), size
+        )
+        if deallocateResult != KERN_SUCCESS {
+            logs.writeLog(
+                log: "[Resources] vm_deallocate thread list failed kern_return=\(deallocateResult)"
+            )
+        }
         return Int(count)
     }
 
     private func rusageSnapshot() -> RUsageSnapshot? {
         var usage = rusage()
         guard getrusage(RUSAGE_SELF, &usage) == 0 else {
+            let code = errno
+            logs.writeLog(
+                log: "[Resources] getrusage failed errno=\(code) error=\(String(cString: strerror(code)))"
+            )
             return nil
         }
         return RUsageSnapshot(
@@ -1075,7 +1138,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             try clearSettingsSynchronously()
             logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] cleared tunnel network settings")
         } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] failed to clear tunnel network settings: \(error.localizedDescription)")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] failed to clear tunnel network settings: \(String(reflecting: error))")
         }
 
         pathMonitor?.cancel()

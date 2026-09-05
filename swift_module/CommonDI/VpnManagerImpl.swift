@@ -49,6 +49,9 @@ public final class VpnManagerImpl: NSObject {
     /// request ID remains idempotent. The inner Go payload is never rewritten.
     public func sendProviderMessage(_ messageData: Data) -> Data {
         guard !messageData.isEmpty, messageData.count <= IOSProviderCommand.maximumBytes else {
+            logs.writeLog(
+                log: "[provider-message] rejected invalid size bytes=\(messageData.count) maximum=\(IOSProviderCommand.maximumBytes)"
+            )
             return Self.transportFailure(IOSProviderMessageError.tooLarge.rawValue)
         }
         var budget = IOSProviderRetryBudget(start: monotonicNow())
@@ -96,24 +99,32 @@ public final class VpnManagerImpl: NSObject {
     /// it with a synthetic response-invalid error. If the command itself
     /// cannot be authenticated, the bare local failure is the only safe form.
     private func transportFailureResponse(for messageData: Data, code: String) -> Data {
-        guard let secret = SharedKeychainSecretStore.shared.data(for: SharedKeychainSecretStore.sessionBridgeHMACKey),
-              let command = try? IOSProviderCommand.decode(messageData, using: secret),
-              let envelope = try? IOSProviderResponse(
-                  requestID: command.requestID,
-                  kind: .transport,
-                  payload: Self.transportFailure(code)
-              ),
-              let encoded = try? envelope.encoded(using: secret) else {
+        guard let secret = SharedKeychainSecretStore.shared.data(for: SharedKeychainSecretStore.sessionBridgeHMACKey) else {
+            logs.writeLog(log: "[provider] transport failure response key is unavailable")
             return Self.transportFailure(code)
         }
-        return encoded
+        do {
+            let command = try IOSProviderCommand.decode(messageData, using: secret)
+            let envelope = try IOSProviderResponse(
+                requestID: command.requestID,
+                kind: .transport,
+                payload: Self.transportFailure(code)
+            )
+            return try envelope.encoded(using: secret)
+        } catch {
+            logs.writeLog(log: "[provider] transport failure response encoding failed: \(String(reflecting: error))")
+            return Self.transportFailure(code)
+        }
     }
 
     private func sendOnce(_ messageData: Data, timeout: TimeInterval) -> Data? {
         condition.lock()
         let session = vpnManager?.connection as? NETunnelProviderSession
         condition.unlock()
-        guard let session else { return nil }
+        guard let session else {
+            logs.writeLog(log: "[provider] sendProviderMessage failed: provider session is unavailable")
+            return nil
+        }
         let semaphore = DispatchSemaphore(value: 0)
         let responseLock = NSLock()
         var response: Data?
@@ -125,14 +136,18 @@ public final class VpnManagerImpl: NSObject {
                 semaphore.signal()
             }
         } catch {
-            logs.writeLog(log: "[provider] sendProviderMessage failed: \(error.localizedDescription)")
+            logs.writeLog(log: "[provider] sendProviderMessage failed: \(String(reflecting: error))")
             return nil
         }
         guard semaphore.wait(timeout: .now() + timeout) == .success else {
+            logs.writeLog(log: "[provider] sendProviderMessage timed out after \(timeout)s")
             return nil
         }
         responseLock.lock()
         defer { responseLock.unlock() }
+        if response == nil {
+            logs.writeLog(log: "[provider] sendProviderMessage completed without a response")
+        }
         return response
     }
 
@@ -163,6 +178,7 @@ public final class VpnManagerImpl: NSObject {
             // KMP invokes this bridge on Dispatchers.Default. Refuse a main
             // thread wait rather than freezing the UI if a caller violates the
             // boundary.
+            logs.writeLog(log: "[provider] readiness check rejected on the main thread")
             return false
         }
         // Once the saved-and-reloaded manager is connected, use that exact
@@ -201,16 +217,22 @@ public final class VpnManagerImpl: NSObject {
         }
         let status = current?.connection.status ?? .invalid
         condition.unlock()
-        guard let current else { return false }
         if let loadError {
-            logs.writeLog(log: "[provider] NetworkExtension preference save/load failed: \(loadError.localizedDescription)")
+            logs.writeLog(log: "[provider] NetworkExtension preference save/load failed: \(String(reflecting: loadError))")
+            return false
+        }
+        guard let current else {
+            logs.writeLog(log: "[provider] NetworkExtension manager is unavailable without an error")
             return false
         }
         var observedStatus = status
         for _ in 0..<3 {
             if observedStatus == .connected { return true }
             if observedStatus == .disconnecting {
-                guard let settled = waitForDisconnectToSettle(until: deadline) else { return false }
+                guard let settled = waitForDisconnectToSettle(until: deadline) else {
+                    logs.writeLog(log: "[provider] disconnect did not settle before the readiness deadline")
+                    return false
+                }
                 observedStatus = settled
                 continue
             }
@@ -222,7 +244,7 @@ public final class VpnManagerImpl: NSObject {
             do {
                 try current.connection.startVPNTunnel(options: nil)
             } catch {
-                logs.writeLog(log: "[provider] control-mode start failed: \(error.localizedDescription)")
+                logs.writeLog(log: "[provider] control-mode start failed: \(String(reflecting: error))")
                 return false
             }
             if waitForReady(until: deadline) { return true }
@@ -267,7 +289,7 @@ public final class VpnManagerImpl: NSObject {
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
             guard let self else { completion(nil, error); return }
             if let error {
-                self.logs.writeLog(log: "[provider] preference load failed: \(error.localizedDescription)")
+                self.logs.writeLog(log: "[provider] preference load failed: \(String(reflecting: error))")
                 completion(nil, error)
                 return
             }
@@ -298,7 +320,7 @@ public final class VpnManagerImpl: NSObject {
                 self.reloadSavedManager(completion: completion)
                 return
             }
-            self.logs.writeLog(log: "[provider] preference save failed: \(saveError.localizedDescription)")
+            self.logs.writeLog(log: "[provider] preference save failed: \(String(reflecting: saveError))")
             completion(nil, saveError)
         }
     }
@@ -309,7 +331,7 @@ public final class VpnManagerImpl: NSObject {
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, loadError in
             guard let self else { completion(nil, loadError); return }
             if let loadError {
-                self.logs.writeLog(log: "[provider] preference reload failed: \(loadError.localizedDescription)")
+                self.logs.writeLog(log: "[provider] preference reload failed: \(String(reflecting: loadError))")
                 completion(nil, loadError)
                 return
             }

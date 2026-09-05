@@ -134,7 +134,7 @@ func pingHostCheck(host string) error {
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			log.Warnf("PROBE", "HTTP probe response body close failed errorType=%T", closeErr)
+			log.Warnf("PROBE", "HTTP probe response body close failed errorType=%T error=%v", closeErr, closeErr)
 		}
 	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
@@ -293,7 +293,7 @@ func probeEndpoint(parent context.Context, endpointURL string, timeout time.Dura
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			log.Warnf("PROBE", "Tunnel probe response body close failed errorType=%T", closeErr)
+			log.Warnf("PROBE", "Tunnel probe response body close failed errorType=%T error=%v", closeErr, closeErr)
 		}
 	}()
 

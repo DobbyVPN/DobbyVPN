@@ -112,7 +112,7 @@ func ResolveIPv4(ctx context.Context, host string, timeout time.Duration, source
 	addrs, err := resolver.LookupIPAddr(ctx, host)
 	elapsed := time.Since(startedAt).Truncate(time.Millisecond)
 	if err != nil {
-		log.Debugf(Category, "lookup failed source=%s elapsed=%s errorType=%T", source, elapsed, err)
+		log.Debugf(Category, "lookup failed source=%s elapsed=%s errorType=%T error=%v", source, elapsed, err, err)
 		return nil, fmt.Errorf("DNS resolve failed: %w", err)
 	}
 

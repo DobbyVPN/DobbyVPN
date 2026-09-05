@@ -2,6 +2,7 @@ package v2
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -88,5 +89,9 @@ func TestDefaultConfigLoaderHonorsCallerCancellation(t *testing.T) {
 	defer cancel()
 	if _, err := (DefaultConfigLoader{}).Load(ctx, []byte(server.URL)); CodeOf(err) != FailureInvalidArgument {
 		t.Fatalf("canceled load error = %v", err)
+	} else if errors.Unwrap(err) == nil {
+		t.Fatalf("canceled load lost its original cause: %v", err)
+	} else if strings.Contains(err.Error(), server.URL) {
+		t.Fatalf("safe error exposed the source URL: %v", err)
 	}
 }

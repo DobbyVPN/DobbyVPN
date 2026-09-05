@@ -21,7 +21,7 @@ class CopyLogsInteractorImpl: CopyLogsInteractor {
             try writeGzip(logText, to: fileURL)
             self.logs.writeLog(log: "Log export archive written to owner-only temporary storage")
         } catch {
-            self.logs.writeLog(log: "Log export failed failureType=\(String(describing: type(of: error)))")
+            self.logs.writeLog(log: "Log export failed: \(String(reflecting: error))")
             return
         }
 

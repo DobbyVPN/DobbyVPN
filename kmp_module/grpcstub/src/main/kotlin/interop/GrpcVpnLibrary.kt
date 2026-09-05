@@ -29,7 +29,9 @@ object GrpcVpnLibrary: Closeable {
 
     override fun close() {
         this.desktopControl.close()
-        this.baseChannel.awaitTermination(TERMINATION_TIMEOUT, TimeUnit.SECONDS)
+        check(this.baseChannel.awaitTermination(TERMINATION_TIMEOUT, TimeUnit.SECONDS)) {
+            "desktop control channel did not terminate within $TERMINATION_TIMEOUT seconds"
+        }
     }
 
     private fun isWindows(): Boolean = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
@@ -39,8 +41,10 @@ object GrpcVpnLibrary: Closeable {
             "Windows installation control token path is unavailable"
         }
         val path = windowsControlTokenPath(programData)
-        val value = runCatching { Files.readString(path).trim() }.getOrElse {
-            error("Windows installation control token is unavailable")
+        val value = try {
+            Files.readString(path).trim()
+        } catch (failure: Exception) {
+            throw IllegalStateException("Windows installation control token is unavailable", failure)
         }
         check(value.matches(Regex("[0-9a-fA-F]{64}"))) {
             "Windows installation control token is invalid"

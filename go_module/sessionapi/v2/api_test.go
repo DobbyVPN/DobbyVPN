@@ -21,6 +21,17 @@ func fixture(t *testing.T) []byte {
 	return b
 }
 
+func TestWrappedFailurePreservesCauseBehindSafeBoundary(t *testing.T) {
+	cause := errors.New("exact internal cause")
+	wrapped := wrapFailure(FailurePlatform, cause)
+	if !errors.Is(wrapped, cause) {
+		t.Fatalf("wrapped failure lost its cause: %v", wrapped)
+	}
+	if wrapped.Error() != "PLATFORM_FAILED: operation failed" {
+		t.Fatalf("safe failure changed: %v", wrapped)
+	}
+}
+
 func TestConfigurePreservesMixedSourceOrderAndTelemetryIsLocalOnly(t *testing.T) {
 	m := NewManager(ManagerOptions{})
 	id, err := m.CreateSession(context.Background())

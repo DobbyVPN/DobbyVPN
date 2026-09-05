@@ -50,7 +50,7 @@ class CopyLogsInteractorImpl(
             )
 
         } catch (e: Exception) {
-            logger.error("Log export failed failureType=${e.javaClass.simpleName}")
+            logger.error("Log export failed\n${e.stackTraceToString()}")
             context.showToast("Can't send logs")
         }
     }

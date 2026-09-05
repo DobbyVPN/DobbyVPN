@@ -8,11 +8,9 @@ import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.domain.initLogFilePath
-import com.dobby.feature.logging.domain.initLogger
 import com.dobby.feature.logging.domain.provideGoLogFilePath
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.vpn_service.DobbyVpnService
-import okio.Path.Companion.toPath
 import org.koin.core.context.startKoin
 import org.koin.core.context.stopKoin
 import org.koin.dsl.module
@@ -21,19 +19,15 @@ class TestApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         initLogFilePath(applicationContext)
-        if (TestRuntimeOptions.realProfileEnabled) {
-            initLogger()
-        }
         DobbyVpnService.nativePlatformRegistrar = if (TestRuntimeOptions.realProfileEnabled) {
             GoBackendWrapper::registerSessionPlatform
         } else {
             {}
         }
-        startKoin {
+        val koinApplication = startKoin {
             modules(module {
                 single {
                     LogsRepository(
-                        logFilePath = cacheDir.resolve("instrumentation.log").absolutePath.toPath(),
                         additionalLogFilePaths = listOf(provideGoLogFilePath()),
                     )
                 }
@@ -41,6 +35,10 @@ class TestApplication : Application() {
                 single { ConnectionStateRepository() }
             })
         }
+        // Koin definitions are lazy. Resolve the logger once so the
+        // target application creates its canonical files/app_logs.txt before
+        // any hosted operation starts.
+        koinApplication.koin.get<Logger>()
     }
 
     override fun onTerminate() {

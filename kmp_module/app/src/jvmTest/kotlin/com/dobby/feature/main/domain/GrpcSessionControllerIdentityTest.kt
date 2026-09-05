@@ -66,6 +66,35 @@ class GrpcSessionControllerIdentityTest {
         assertEquals(SessionState.FAILED, event.state)
         assertEquals(SessionFailureCode.RUNTIME_FAILED, event.failureCode)
     }
+
+    @Test
+    fun configurePreservesRecoveryFailureAndDoesNotCreateAReplacement() = runBlocking {
+        val library = RecordingSessionLibrary().apply {
+            recoverFailure = SessionFailure(TransportFailureCode.INTERNAL, "exact recovery failure")
+        }
+
+        val result = GrpcSessionController(library, MemoryStore()).configure(byteArrayOf(1))
+
+        assertEquals(
+            SessionControllerResult.Failure("exact recovery failure", SessionFailureCode.INTERNAL),
+            result,
+        )
+        assertEquals(0, library.createCalls)
+    }
+
+    @Test
+    fun configurePreservesCreateFailure() = runBlocking {
+        val library = RecordingSessionLibrary().apply {
+            createFailure = SessionFailure(TransportFailureCode.INTERNAL, "exact creation failure")
+        }
+
+        val result = GrpcSessionController(library, MemoryStore()).configure(byteArrayOf(1))
+
+        assertEquals(
+            SessionControllerResult.Failure("exact creation failure", SessionFailureCode.INTERNAL),
+            result,
+        )
+    }
 }
 
 private class MemoryStore(var value: String? = null) : SessionIdentityStore {
@@ -79,6 +108,8 @@ private class RecordingSessionLibrary : SessionLibrary {
     var snapshotSessionId: String? = null
     var stopSessionId: String? = null
     var terminalFailure: SessionFailure? = null
+    var recoverFailure: SessionFailure? = null
+    var createFailure: SessionFailure? = null
     private val sessions = mutableSetOf<String>()
 
     override suspend fun getCapabilities(): SessionResult<TransportCapabilities> =
@@ -86,8 +117,12 @@ private class RecordingSessionLibrary : SessionLibrary {
 
     override suspend fun createSession(): SessionResult<String> {
         createCalls += 1
+        createFailure?.let { return SessionResult.Failure(it) }
         return SessionResult.Success("session-$createCalls".also(sessions::add))
     }
+
+    override suspend fun recoverActiveSession(): SessionResult<String> =
+        recoverFailure?.let { SessionResult.Failure(it) } ?: missing()
 
     override suspend fun configure(sessionId: String, commandId: String, rawConfig: ByteArray): SessionResult<TransportConfiguration> =
         if (sessionId !in sessions) missing() else SessionResult.Success(

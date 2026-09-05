@@ -28,6 +28,9 @@ sealed interface SessionControllerResult<out T> {
     ) : SessionControllerResult<Nothing>
 }
 
+internal fun SessionControllerResult.Failure.asException(operation: String): IllegalStateException =
+    IllegalStateException("$operation failed: ${code.name}: $message")
+
 data class SessionConfiguration(
     val digest: String,
     val profiles: List<SessionProfile>,

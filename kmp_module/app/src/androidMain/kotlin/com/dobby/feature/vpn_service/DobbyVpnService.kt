@@ -115,7 +115,7 @@ class DobbyVpnService : VpnService() {
             return -1
         }
         ensureForeground()
-        val established = runCatching {
+        val established = try {
             // One policy for every protocol. Do not disallow this app: Dobby traffic is included
             // in the VPN and protocol sockets are explicitly protected before they dial.
             Builder()
@@ -127,21 +127,40 @@ class DobbyVpnService : VpnService() {
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("2606:4700:4700::1111")
                 .establish()
-        }.getOrElse { error ->
-            logger.log("[svc:$serviceId] TUN establish failed generation=$generation errorType=${error::class.simpleName ?: "UNKNOWN"}")
-            null
-        } ?: return -1
+        } catch (failure: Throwable) {
+            reportFailure("tun_establish generation=$generation", failure)
+            return -1
+        }
+        if (established == null) {
+            reportFailure(
+                "tun_establish generation=$generation",
+                IllegalStateException("Android VpnService.Builder.establish returned null"),
+            )
+            return -1
+        }
 
-        val duplicate = runCatching { ParcelFileDescriptor.dup(established.fileDescriptor) }
-            .getOrElse { error ->
-                logger.log("[svc:$serviceId] TUN duplication failed generation=$generation errorType=${error::class.simpleName ?: "UNKNOWN"}")
+        val duplicate = try {
+            ParcelFileDescriptor.dup(established.fileDescriptor)
+        } catch (failure: Throwable) {
+            try {
                 established.close()
-                return -1
+            } catch (cleanupFailure: Throwable) {
+                failure.addSuppressed(cleanupFailure)
             }
-        val fd = runCatching { duplicate.detachFd() }.getOrElse { error ->
-            logger.log("[svc:$serviceId] TUN FD transfer failed generation=$generation errorType=${error::class.simpleName ?: "UNKNOWN"}")
-            duplicate.close()
-            established.close()
+            reportFailure("tun_duplicate generation=$generation", failure)
+            return -1
+        }
+        val fd = try {
+            duplicate.detachFd()
+        } catch (failure: Throwable) {
+            for (descriptor in listOf(duplicate, established)) {
+                try {
+                    descriptor.close()
+                } catch (cleanupFailure: Throwable) {
+                    failure.addSuppressed(cleanupFailure)
+                }
+            }
+            reportFailure("tun_fd_transfer generation=$generation", failure)
             return -1
         }
         vpnInterface = established
@@ -197,10 +216,10 @@ class DobbyVpnService : VpnService() {
         val session = activeSessionId
         val generation = activeGeneration
         if (session != null && generation > 0L) {
-            val stopped = runCatching {
+            val stopped = try {
                 sessionStopSucceeded(GoBackendWrapper.stopSession(session, UUID.randomUUID().toString(), generation))
-            }.getOrElse {
-                logger.log("[svc:$serviceId] session stop during destroy failed errorType=${it::class.simpleName ?: "UNKNOWN"}")
+            } catch (failure: Throwable) {
+                reportFailure("session_stop_during_destroy generation=$generation", failure)
                 false
             }
             if (!stopped) logger.log("[svc:$serviceId] Go rejected stop during destroy; forcing Android descriptor close")
@@ -224,10 +243,10 @@ class DobbyVpnService : VpnService() {
         // A generation-tagged intent is only a platform request. Ask Go to stop the
         // authoritative runtime first; its release callback closes the matching PFD.
         if (session != null && active > 0L) {
-            val stopped = runCatching {
+            val stopped = try {
                 sessionStopSucceeded(GoBackendWrapper.stopSession(session, UUID.randomUUID().toString(), active))
-            }.getOrElse {
-                logger.log("[svc:$serviceId] session stop from intent failed errorType=${it::class.simpleName ?: "UNKNOWN"}")
+            } catch (failure: Throwable) {
+                reportFailure("session_stop_from_intent generation=$active", failure)
                 false
             }
             if (!stopped) {
@@ -243,16 +262,41 @@ class DobbyVpnService : VpnService() {
     private fun closeTunnel(reason: String): Boolean {
         val fd = goTunFd
         goTunFd = null
-        val closed = runCatching { vpnInterface?.close() }.isSuccess
+        val closed = try {
+            vpnInterface?.close()
+            true
+        } catch (failure: Throwable) {
+            reportFailure("tun_close reason=$reason", failure)
+            false
+        }
         vpnInterface = null
         activeGeneration = -1L
         logger.log("[svc:$serviceId] closed service-owned TUN descriptorPresent=${fd != null} reason=$reason")
         return closed
     }
 
-    private fun sessionStopSucceeded(payload: String): Boolean = runCatching {
-        Json.parseToJsonElement(payload).jsonObject["ok"]?.jsonPrimitive?.booleanOrNull == true
-    }.getOrDefault(false)
+    private fun sessionStopSucceeded(payload: String): Boolean {
+        val root = Json.parseToJsonElement(payload).jsonObject
+        val ok = root["ok"]?.jsonPrimitive?.booleanOrNull ?: error("Go stop response has no valid ok field")
+        if (!ok) {
+            val failure = root["error"]?.jsonObject ?: error("Go stop failure has no error object")
+            val code = failure["code"]?.jsonPrimitive?.content ?: error("Go stop failure has no code")
+            val message = failure["message"]?.jsonPrimitive?.content.orEmpty()
+            error("Go stop failed: $code${message.takeIf(String::isNotBlank)?.let { ": $it" }.orEmpty()}")
+        }
+        return true
+    }
+
+    private fun reportFailure(stage: String, failure: Throwable) {
+        try {
+            logger.log(
+                "[ERROR] [svc:$serviceId] stage=$stage\n${failure.stackTraceToString()}",
+            )
+        } catch (loggingFailure: Throwable) {
+            failure.addSuppressed(loggingFailure)
+        }
+        failure.printStackTrace()
+    }
 
     private fun ensureForeground() {
         val manager = getSystemService(NotificationManager::class.java)

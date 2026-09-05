@@ -61,28 +61,31 @@ internal class AndroidSessionController(
     override fun watch(afterSequence: ULong): Flow<SessionEvent> = flow {
         val observed = observe(afterSequence)
         var cursor = afterSequence
-        if (observed is SessionControllerResult.Success) {
-            val ordered = observed.value.events.sortedBy { it.sequence }
-            val contiguous = mutableListOf<SessionEvent>()
-            var expected = cursor + 1uL
-            var gap = false
-            ordered.forEach { event ->
-                if (gap) return@forEach
-                when {
-                    event.sequence < expected -> Unit
-                    event.sequence > expected -> gap = true
-                    else -> {
-                        contiguous += event
-                        expected = event.sequence + 1uL
+        when (observed) {
+            is SessionControllerResult.Success -> {
+                val ordered = observed.value.events.sortedBy { it.sequence }
+                val contiguous = mutableListOf<SessionEvent>()
+                var expected = cursor + 1uL
+                var gap = false
+                ordered.forEach { event ->
+                    if (gap) return@forEach
+                    when {
+                        event.sequence < expected -> Unit
+                        event.sequence > expected -> gap = true
+                        else -> {
+                            contiguous += event
+                            expected = event.sequence + 1uL
+                        }
                     }
                 }
+                if (!gap && observed.value.nextSequence >= expected) gap = true
+                if (gap) return@flow
+                contiguous.forEach { event ->
+                    emit(event)
+                    if (event.sequence > cursor) cursor = event.sequence
+                }
             }
-            if (!gap && observed.value.nextSequence >= expected) gap = true
-            if (gap) return@flow
-            contiguous.forEach { event ->
-                emit(event)
-                if (event.sequence > cursor) cursor = event.sequence
-            }
+            is SessionControllerResult.Failure -> throw observed.asException("session observation")
         }
         val observedSession = mutex.withLock { sessionId }
         emitAll(
@@ -112,19 +115,20 @@ internal class AndroidSessionController(
     }
 
     private suspend fun <T> withSession(operation: suspend (String) -> SessionControllerResult<T>): SessionControllerResult<T> = mutex.withLock {
-        val id = sessionId ?: recoverOrCreate()
-            ?: return@withLock SessionControllerResult.Failure("session creation failed")
-        operation(id)
+        when (val session = sessionId?.let { SessionControllerResult.Success(it) } ?: recoverOrCreate()) {
+            is SessionControllerResult.Success -> operation(session.value)
+            is SessionControllerResult.Failure -> session
+        }
     }
 
-    private fun recoverOrCreate(): String? {
+    private fun recoverOrCreate(): SessionControllerResult<String> {
         when (val recovered = SessionEnvelopeDecoder.decode(Dobbyvpn.recoverActiveSession()) { it.sessionString("session_id") }) {
-            is SessionControllerResult.Success -> return recovered.value.also { sessionId = it }
-            is SessionControllerResult.Failure -> if (recovered.code != SessionFailureCode.NOT_FOUND) return null
+            is SessionControllerResult.Success -> return recovered.also { sessionId = it.value }
+            is SessionControllerResult.Failure -> if (recovered.code != SessionFailureCode.NOT_FOUND) return recovered
         }
         return when (val created = SessionEnvelopeDecoder.decode(Dobbyvpn.createSession()) { it.sessionString("session_id") }) {
-            is SessionControllerResult.Success -> created.value.also { sessionId = it }
-            is SessionControllerResult.Failure -> null
+            is SessionControllerResult.Success -> created.also { sessionId = it.value }
+            is SessionControllerResult.Failure -> created
         }
     }
 

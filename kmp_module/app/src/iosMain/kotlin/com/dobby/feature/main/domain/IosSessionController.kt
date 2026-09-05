@@ -175,10 +175,7 @@ internal class IosSessionController(
                         // collector for its next Observe.
                         continue
                     }
-                    // Let the shared UI reconcile a snapshot and decide whether
-                    // to resubscribe. Do not hide a typed provider failure in a
-                    // timer loop.
-                    return@flow
+                    throw observed.asException("session observation")
                 }
             }
             // Darwin notification is only a wake. The next Observe reads Go's

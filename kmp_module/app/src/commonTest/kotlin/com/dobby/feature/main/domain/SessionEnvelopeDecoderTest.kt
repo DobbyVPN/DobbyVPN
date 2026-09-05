@@ -2,6 +2,7 @@ package com.dobby.feature.main.domain
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertIs
 
 class SessionEnvelopeDecoderTest {
@@ -22,13 +23,8 @@ class SessionEnvelopeDecoderTest {
     }
 
     @Test
-    fun malformedPayloadIsInternalFailure() {
-        val result = SessionEnvelopeDecoder.decode("not json") { it.sessionString("digest") }
-
-        assertEquals(
-            SessionControllerResult.Failure("INTERNAL", SessionFailureCode.INTERNAL),
-            result,
-        )
+    fun malformedPayloadPreservesTheDecoderFailure() {
+        assertFails { SessionEnvelopeDecoder.decode("not json") { it.sessionString("digest") } }
     }
 
     @Test
@@ -66,10 +62,12 @@ class SessionEnvelopeDecoderTest {
 
     @Test
     fun typedFailurePayloadIsPreserved() {
-        val result = SessionEnvelopeDecoder.decode("""{"ok":false,"error":{"code":"STALE_GENERATION"}}""") { Unit }
+        val result = SessionEnvelopeDecoder.decode(
+            """{"ok":false,"error":{"code":"STALE_GENERATION","message":"exact stale generation"}}""",
+        ) { Unit }
 
         assertEquals(
-            SessionControllerResult.Failure("STALE_GENERATION", SessionFailureCode.STALE_GENERATION),
+            SessionControllerResult.Failure("exact stale generation", SessionFailureCode.STALE_GENERATION),
             result,
         )
     }
@@ -92,71 +90,62 @@ class SessionEnvelopeDecoderTest {
             """{"ok":true,"result":{"state":"IDLE","configured":false,"cleanup_complete":true}}""",
             """{"ok":true,"result":{"generation":-1,"state":"IDLE","configured":false,"cleanup_complete":true}}""",
         ).forEach { payload ->
-            val result = SessionEnvelopeDecoder.decode(payload) { it.toSessionSnapshot() }
-            assertEquals(SessionControllerResult.Failure("INTERNAL", SessionFailureCode.INTERNAL), result)
+            assertFails { SessionEnvelopeDecoder.decode(payload) { it.toSessionSnapshot() } }
         }
     }
 
     @Test
-    fun observationPayloadMapsOrderedEventsAndIgnoresMalformedItems() {
-        val result = SessionEnvelopeDecoder.decode(
-            """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":3,"sequence":8,"state":"PREPARING"},42,{"session_id":"session-1","generation":3,"sequence":9,"state":"FAILED","failure":"PLATFORM_FAILED"}],"next_sequence":9}}""",
-        ) { it.toSessionObservation() }
-
-        assertEquals(
-            SessionObservation(
-                events = listOf(
-                    SessionEvent(3uL, 8uL, SessionState.PREPARING, sessionId = "session-1"),
-                    SessionEvent(3uL, 9uL, SessionState.FAILED, SessionFailureCode.PLATFORM_FAILED, sessionId = "session-1"),
-                ),
-                nextSequence = 9uL,
-            ),
-            assertIs<SessionControllerResult.Success<SessionObservation>>(result).value,
-        )
+    fun observationPayloadRejectsMalformedItems() {
+        assertFails {
+            SessionEnvelopeDecoder.decode(
+                """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":3,"sequence":8,"state":"PREPARING"},42,{"session_id":"session-1","generation":3,"sequence":9,"state":"FAILED","failure":"PLATFORM_FAILED"}],"next_sequence":9}}""",
+            ) { it.toSessionObservation() }
+        }
     }
 
     @Test
     fun observationWithout_go_authoritative_sequence_is_not_given_a_zero_fallback() {
-        val result = SessionEnvelopeDecoder.decode(
-            """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":3,"state":"CONNECTED"}],"next_sequence":1}}""",
-        ) { it.toSessionObservation() }
-
-        assertEquals(SessionControllerResult.Failure("INTERNAL", SessionFailureCode.INTERNAL), result)
+        assertFails {
+            SessionEnvelopeDecoder.decode(
+                """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":3,"state":"CONNECTED"}],"next_sequence":1}}""",
+            ) { it.toSessionObservation() }
+        }
     }
 
     @Test
     fun observation_with_zero_go_sequence_is_rejected() {
-        val result = SessionEnvelopeDecoder.decode(
-            """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":3,"sequence":0,"state":"CONNECTED"}],"next_sequence":0}}""",
-        ) { it.toSessionObservation() }
-
-        assertEquals(SessionControllerResult.Failure("INTERNAL", SessionFailureCode.INTERNAL), result)
+        assertFails {
+            SessionEnvelopeDecoder.decode(
+                """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":3,"sequence":0,"state":"CONNECTED"}],"next_sequence":0}}""",
+            ) { it.toSessionObservation() }
+        }
     }
 
     @Test
     fun observation_with_negative_next_sequence_is_rejected() {
-        val result = SessionEnvelopeDecoder.decode(
-            """{"ok":true,"result":{"events":[],"next_sequence":-1}}""",
-        ) { it.toSessionObservation() }
-
-        assertEquals(SessionControllerResult.Failure("INTERNAL", SessionFailureCode.INTERNAL), result)
+        assertFails {
+            SessionEnvelopeDecoder.decode(
+                """{"ok":true,"result":{"events":[],"next_sequence":-1}}""",
+            ) { it.toSessionObservation() }
+        }
     }
 
     @Test
     fun observation_with_mixed_go_session_identities_is_rejected() {
-        val result = SessionEnvelopeDecoder.decode(
-            """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":1,"sequence":1,"state":"CONNECTED"},{"session_id":"session-2","generation":1,"sequence":2,"state":"FAILED"}],"next_sequence":2}}""",
-        ) { it.toSessionObservation() }
-
-        assertEquals(SessionControllerResult.Failure("INTERNAL", SessionFailureCode.INTERNAL), result)
+        assertFails {
+            SessionEnvelopeDecoder.decode(
+                """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":1,"sequence":1,"state":"CONNECTED"},{"session_id":"session-2","generation":1,"sequence":2,"state":"FAILED"}],"next_sequence":2}}""",
+            ) { it.toSessionObservation() }
+        }
     }
 
     @Test
     fun active_event_requires_a_positive_go_generation_but_idle_allows_zero() {
-        val active = SessionEnvelopeDecoder.decode(
-            """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":0,"sequence":1,"state":"CONNECTED"}],"next_sequence":1}}""",
-        ) { it.toSessionObservation() }
-        assertEquals(SessionControllerResult.Failure("INTERNAL", SessionFailureCode.INTERNAL), active)
+        assertFails {
+            SessionEnvelopeDecoder.decode(
+                """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":0,"sequence":1,"state":"CONNECTED"}],"next_sequence":1}}""",
+            ) { it.toSessionObservation() }
+        }
 
         val idle = SessionEnvelopeDecoder.decode(
             """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":0,"sequence":1,"state":"IDLE"}],"next_sequence":1}}""",
@@ -171,10 +160,8 @@ class SessionEnvelopeDecoderTest {
             """{"ok":true,"result":{"generation":0}}""",
             """{"ok":true,"result":{"generation":-1}}""",
         ).forEach { payload ->
-            val start = SessionEnvelopeDecoder.decode(payload) { it.requiredPositiveSessionLong("generation").toULong() }
-            val stop = SessionEnvelopeDecoder.decode(payload) { it.requiredPositiveSessionLong("generation").toULong() }
-            assertEquals(SessionControllerResult.Failure("INTERNAL", SessionFailureCode.INTERNAL), start)
-            assertEquals(SessionControllerResult.Failure("INTERNAL", SessionFailureCode.INTERNAL), stop)
+            assertFails { SessionEnvelopeDecoder.decode(payload) { it.requiredPositiveSessionLong("generation").toULong() } }
+            assertFails { SessionEnvelopeDecoder.decode(payload) { it.requiredPositiveSessionLong("generation").toULong() } }
         }
     }
 }

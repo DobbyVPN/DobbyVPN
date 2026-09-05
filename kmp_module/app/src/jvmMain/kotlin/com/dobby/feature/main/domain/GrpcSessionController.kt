@@ -24,14 +24,20 @@ internal class GrpcSessionController(
 
     override suspend fun configure(rawConfig: ByteArray): SessionControllerResult<SessionConfiguration> =
         sessionMutex.withLock {
-            val id = ensureSession() ?: return@withLock SessionControllerResult.Failure("session creation failed")
+            val id = when (val session = resolveSession(createIfMissing = true)) {
+                is SessionControllerResult.Success -> session.value
+                is SessionControllerResult.Failure -> return@withLock session
+            }
             val result = sessionLibrary.configure(id, commandId(), rawConfig).toController { it.toDomain() }
             // A persisted CLI identity can outlive a desktop service restart. Only Configure may
             // replace it: starts/stops/status must never accidentally create a second session.
             if (result.isMissingSession()) {
                 forgetSession()
-                val replacement = ensureSession() ?: return@withLock SessionControllerResult.Failure("session creation failed")
-                sessionLibrary.configure(replacement, commandId(), rawConfig).toController { it.toDomain() }
+                when (val replacement = resolveSession(createIfMissing = true)) {
+                    is SessionControllerResult.Success ->
+                        sessionLibrary.configure(replacement.value, commandId(), rawConfig).toController { it.toDomain() }
+                    is SessionControllerResult.Failure -> replacement
+                }
             } else {
                 result
             }
@@ -45,70 +51,86 @@ internal class GrpcSessionController(
 
     override suspend fun snapshot(): SessionControllerResult<SessionSnapshot> =
         sessionMutex.withLock {
-            val id = existingSessionId() ?: recoverSession()
-            if (id == null) {
-                SessionControllerResult.Success(SessionSnapshot(0uL, SessionState.IDLE, configured = false, cleanupComplete = true))
-            } else {
-                val result = sessionLibrary.snapshot(id).toController { it.toDomain() }
-                if (result.isMissingSession()) {
-                    forgetSession()
-                    SessionControllerResult.Success(SessionSnapshot(0uL, SessionState.IDLE, configured = false, cleanupComplete = true))
-                } else result
+            when (val session = resolveSession(createIfMissing = false)) {
+                is SessionControllerResult.Failure -> if (session.isMissingSession()) idleSnapshot() else session
+                is SessionControllerResult.Success -> {
+                    val result = sessionLibrary.snapshot(session.value).toController { it.toDomain() }
+                    if (result.isMissingSession()) {
+                        forgetSession()
+                        idleSnapshot()
+                    } else result
+                }
             }
         }
 
     override suspend fun observe(afterSequence: ULong): SessionControllerResult<SessionObservation> =
         sessionMutex.withLock {
-            val id = existingSessionId() ?: recoverSession()
-                ?: return@withLock SessionControllerResult.Success(SessionObservation(emptyList(), afterSequence))
-            val result = sessionLibrary.observe(id, afterSequence).toController { it.toDomain() }
-            if (result.isMissingSession()) {
-                forgetSession()
-                SessionControllerResult.Success(SessionObservation(emptyList(), afterSequence))
-            } else result
+            when (val session = resolveSession(createIfMissing = false)) {
+                is SessionControllerResult.Failure ->
+                    if (session.isMissingSession()) emptyObservation(afterSequence) else session
+                is SessionControllerResult.Success -> {
+                    val result = sessionLibrary.observe(session.value, afterSequence).toController { it.toDomain() }
+                    if (result.isMissingSession()) {
+                        forgetSession()
+                        emptyObservation(afterSequence)
+                    } else result
+                }
+            }
         }
 
     override fun watch(afterSequence: ULong): Flow<SessionEvent> = kotlinx.coroutines.flow.flow {
-        val id = sessionMutex.withLock { existingSessionId() ?: recoverSession() } ?: return@flow
+        val id = when (val session = sessionMutex.withLock { resolveSession(createIfMissing = false) }) {
+            is SessionControllerResult.Success -> session.value
+            is SessionControllerResult.Failure -> {
+                if (session.isMissingSession()) return@flow
+                throw session.asException("session recovery")
+            }
+        }
         emitAll(sessionLibrary.watch(id, afterSequence).map(GrpcEvent::toDomain))
     }
 
     override suspend fun destroy(): SessionControllerResult<Unit> = sessionMutex.withLock {
-        val id = existingSessionId() ?: recoverSession() ?: return@withLock SessionControllerResult.Success(Unit)
-        when (val result = sessionLibrary.destroySession(id).toController { Unit }) {
-            is SessionControllerResult.Success -> {
-                forgetSession()
-                result
+        when (val session = resolveSession(createIfMissing = false)) {
+            is SessionControllerResult.Failure ->
+                if (session.isMissingSession()) SessionControllerResult.Success(Unit) else session
+            is SessionControllerResult.Success -> when (
+                val result = sessionLibrary.destroySession(session.value).toController { Unit }
+            ) {
+                is SessionControllerResult.Success -> {
+                    forgetSession()
+                    result
+                }
+                is SessionControllerResult.Failure -> if (result.isMissingSession()) {
+                    forgetSession()
+                    SessionControllerResult.Success(Unit)
+                } else result
             }
-            is SessionControllerResult.Failure -> if (result.isMissingSession()) {
-                forgetSession()
-                SessionControllerResult.Success(Unit)
-            } else result
         }
     }
 
     private suspend fun <T> withExistingSession(
         operation: suspend (String) -> SessionControllerResult<T>,
     ): SessionControllerResult<T> = sessionMutex.withLock {
-        val id = existingSessionId() ?: recoverSession()
-            ?: return@withLock SessionControllerResult.Failure("session is not configured")
-        val result = operation(id)
-        if (result.isMissingSession()) forgetSession()
-        result
-    }
-
-    private suspend fun ensureSession(): String? {
-        existingSessionId()?.let { return it }
-        recoverSession()?.let { return it }
-        return when (val created = sessionLibrary.createSession().toController { it }) {
-            is SessionControllerResult.Success -> created.value.also(::rememberSession)
-            is SessionControllerResult.Failure -> null
+        when (val session = resolveSession(createIfMissing = false)) {
+            is SessionControllerResult.Failure -> session
+            is SessionControllerResult.Success -> operation(session.value).also { result ->
+                if (result.isMissingSession()) forgetSession()
+            }
         }
     }
 
-    private suspend fun recoverSession(): String? = when (val recovered = sessionLibrary.recoverActiveSession().toController { it }) {
-        is SessionControllerResult.Success -> recovered.value.also(::rememberSession)
-        is SessionControllerResult.Failure -> null
+    private suspend fun resolveSession(createIfMissing: Boolean): SessionControllerResult<String> {
+        existingSessionId()?.let { return SessionControllerResult.Success(it) }
+        when (val recovered = sessionLibrary.recoverActiveSession().toController { it }) {
+            is SessionControllerResult.Success -> return recovered.also { rememberSession(it.value) }
+            is SessionControllerResult.Failure -> {
+                if (!recovered.isMissingSession() || !createIfMissing) return recovered
+            }
+        }
+        return when (val created = sessionLibrary.createSession().toController { it }) {
+            is SessionControllerResult.Success -> created.also { rememberSession(it.value) }
+            is SessionControllerResult.Failure -> created
+        }
     }
 
     private fun existingSessionId(): String? {
@@ -127,6 +149,13 @@ internal class GrpcSessionController(
     }
 
     private fun commandId(): String = UUID.randomUUID().toString()
+
+    private fun idleSnapshot() = SessionControllerResult.Success(
+        SessionSnapshot(0uL, SessionState.IDLE, configured = false, cleanupComplete = true),
+    )
+
+    private fun emptyObservation(afterSequence: ULong) =
+        SessionControllerResult.Success(SessionObservation(emptyList(), afterSequence))
 }
 
 private fun SessionStartTarget.toGrpc(): GrpcStartTarget = when (this) {

@@ -24,8 +24,18 @@ public final class SharedKeychainSecretStore {
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
-        return result as? Data
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess else {
+            if status != errSecItemNotFound { reportFailure("read", key, status) }
+            return nil
+        }
+        guard let data = result as? Data else {
+            NativeModuleHolder.logsRepository.writeLog(
+                log: "[ERROR] DobbyVPN Keychain read returned an unexpected value type key=\(key)"
+            )
+            return nil
+        }
+        return data
     }
 
     @discardableResult
@@ -36,7 +46,10 @@ public final class SharedKeychainSecretStore {
         ]
         let status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
         if status == errSecSuccess { return true }
-        guard status == errSecItemNotFound else { return false }
+        guard status == errSecItemNotFound else {
+            reportFailure("update", key, status)
+            return false
+        }
         var create = query
         create[kSecValueData as String] = value
         create[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
@@ -44,7 +57,9 @@ public final class SharedKeychainSecretStore {
         // Two processes can initialize the shared per-install key at the same
         // time. The loser must reuse the key created by the winner rather than
         // treating the expected duplicate-item race as a storage failure.
-        return createStatus == errSecSuccess || data(for: key) != nil
+        if createStatus == errSecSuccess || data(for: key) != nil { return true }
+        reportFailure("create", key, createStatus)
+        return false
     }
 
     public func string(for key: String) -> String? {
@@ -67,12 +82,19 @@ public final class SharedKeychainSecretStore {
         let status = generated.withUnsafeMutableBytes { bytes in
             SecRandomCopyBytes(kSecRandomDefault, byteCount, bytes.baseAddress!)
         }
-        guard status == errSecSuccess, set(generated, for: key) else { return nil }
+        guard status == errSecSuccess else {
+            reportFailure("random", key, status)
+            return nil
+        }
+        guard set(generated, for: key) else { return nil }
         return data(for: key)
     }
 
     public func remove(_ key: String) {
-        SecItemDelete(baseQuery(key) as CFDictionary)
+        let status = SecItemDelete(baseQuery(key) as CFDictionary)
+        if status != errSecSuccess && status != errSecItemNotFound {
+            reportFailure("delete", key, status)
+        }
     }
 
     public func migrate(keys: [String], from defaults: UserDefaults) {
@@ -109,5 +131,11 @@ public final class SharedKeychainSecretStore {
             query[kSecAttrAccessGroup as String] = accessGroup
         }
         return query
+    }
+
+    private func reportFailure(_ operation: String, _ key: String, _ status: OSStatus) {
+        NativeModuleHolder.logsRepository.writeLog(
+            log: "[ERROR] DobbyVPN Keychain operation failed operation=\(operation) key=\(key) osstatus=\(status)"
+        )
     }
 }

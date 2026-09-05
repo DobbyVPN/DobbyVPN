@@ -10,20 +10,10 @@ class LoggerManagerImpl(
     private val goLogFilePath: () -> Path = ::provideGoLogFilePath,
 ) : LoggerManager {
     override fun initLogger(): Boolean {
-        val logFilePath = try {
-            goLogFilePath()
-        } catch (_: Exception) {
-            logger.log("[ERROR] service_logger_init result=failed failure_code=LOCAL_STORAGE_UNAVAILABLE")
-            return false
-        }
+        val logFilePath = goLogFilePath()
 
         logger.log("Starting Go tunnel logger using owner-only local storage")
-        try {
-            loggerLibrary.InitLogger(logFilePath.toString())
-        } catch (_: Exception) {
-            logger.log("[ERROR] service_logger_init result=failed failure_code=SERVICE_RPC_FAILED")
-            return false
-        }
+        loggerLibrary.InitLogger(logFilePath.toString())
         logger.log("service_logger_init result=success state=ready")
         return true
     }

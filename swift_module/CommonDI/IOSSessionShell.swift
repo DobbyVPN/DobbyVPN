@@ -22,6 +22,7 @@ private func dobbyDarwinEventCallback(
 final class IOSSessionShell: NSObject, IosSessionBridge {
     private let secrets = SharedKeychainSecretStore.shared
     private let manager: VpnManagerImpl
+    private let logs = NativeModuleHolder.logsRepository
     private let eventCondition = NSCondition()
     private var eventGeneration: UInt64 = 0
     private var deliveredEventGeneration: UInt64 = 0
@@ -69,6 +70,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
             return failure("SESSIONAPI_CONFIGURATION_TOO_LARGE")
         }
         guard secrets.set(raw, for: SharedKeychainSecretStore.sessionConfigurationMailboxKey) else {
+            logs.writeLog(log: "iOS session configuration mailbox write returned failure")
             return failure("SECURE_STORAGE_FAILED")
         }
         let result = executeResult(
@@ -183,26 +185,36 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         index: Int32? = nil,
         afterSequence: Int64? = nil
     ) -> (response: String, isGoResult: Bool) {
-        guard let secret = secrets.randomData(for: SharedKeychainSecretStore.sessionBridgeHMACKey),
-              let command = try? IOSProviderCommand(
-                  operation: operation,
-                  requestID: requestID,
-                  sessionID: sessionID,
-                  generation: generation,
-                  mode: mode,
-                  index: index,
-                  afterSequence: afterSequence
-              ),
-              let bytes = try? command.encoded(using: secret),
-              let providerResponse = try? IOSProviderResponse.decode(
-                  manager.sendProviderMessage(bytes),
-                  expectedRequestID: requestID,
-                  using: secret
-              ),
-              let response = String(data: providerResponse.payload, encoding: .utf8) else {
+        guard let secret = secrets.randomData(for: SharedKeychainSecretStore.sessionBridgeHMACKey) else {
+            logs.writeLog(log: "iOS session bridge key acquisition returned failure operation=\(operation.rawValue)")
             return (failure("SESSIONAPI_RESPONSE_INVALID"), false)
         }
-        return (response, providerResponse.kind == .go)
+        do {
+            let command = try IOSProviderCommand(
+                operation: operation,
+                requestID: requestID,
+                sessionID: sessionID,
+                generation: generation,
+                mode: mode,
+                index: index,
+                afterSequence: afterSequence
+            )
+            let bytes = try command.encoded(using: secret)
+            let providerResponse = try IOSProviderResponse.decode(
+                manager.sendProviderMessage(bytes),
+                expectedRequestID: requestID,
+                using: secret
+            )
+            guard let response = String(data: providerResponse.payload, encoding: .utf8) else {
+                throw IOSProviderMessageError.malformed
+            }
+            return (response, providerResponse.kind == .go)
+        } catch {
+            logs.writeLog(
+                log: "iOS session bridge failed operation=\(operation.rawValue): \(String(reflecting: error))"
+            )
+            return (failure("SESSIONAPI_RESPONSE_INVALID"), false)
+        }
     }
 
     private func requestID(for operation: IOSProviderOperation) -> String {

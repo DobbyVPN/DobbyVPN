@@ -6,6 +6,7 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.AclEntry
@@ -78,9 +79,9 @@ internal class DobbyConfigsRepositoryImpl(
         if (!attributes.isRegularFile) error("Legacy desktop configuration is not a regular file")
         restrictToOwner(legacyFile, directory = false)
         try {
-            runCatching {
+            try {
                 Files.move(legacyFile, connectionUrlFile, StandardCopyOption.ATOMIC_MOVE)
-            }.getOrElse {
+            } catch (_: AtomicMoveNotSupportedException) {
                 Files.move(legacyFile, connectionUrlFile)
             }
         } catch (_: java.nio.file.FileAlreadyExistsException) {
@@ -96,23 +97,35 @@ internal class DobbyConfigsRepositoryImpl(
         Files.createDirectories(storageDir)
         restrictToOwner(storageDir, directory = true)
         val temporary = Files.createTempFile(storageDir, ".dobby-source-", ".tmp")
+        var primaryFailure: Throwable? = null
         try {
             restrictToOwner(temporary, directory = false)
             Files.writeString(temporary, value, StandardCharsets.UTF_8)
-            runCatching {
+            try {
                 Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-            }.getOrElse { Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING) }
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING)
+            }
             restrictToOwner(file, directory = false)
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
         } finally {
-            Files.deleteIfExists(temporary)
+            try {
+                Files.deleteIfExists(temporary)
+            } catch (cleanupFailure: Throwable) {
+                primaryFailure?.addSuppressed(cleanupFailure) ?: throw cleanupFailure
+            }
         }
     }
 
     private fun restrictToOwner(path: Path, directory: Boolean) {
-        if (runCatching {
-                Files.setPosixFilePermissions(path, PosixFilePermissions.fromString(if (directory) "rwx------" else "rw-------"))
-            }.isSuccess
-        ) return
+        try {
+            Files.setPosixFilePermissions(path, PosixFilePermissions.fromString(if (directory) "rwx------" else "rw-------"))
+            return
+        } catch (_: UnsupportedOperationException) {
+            // Windows uses the ACL path below.
+        }
         val view = checkNotNull(Files.getFileAttributeView(path, AclFileAttributeView::class.java)) {
             "Owner-only file permissions are unavailable"
         }

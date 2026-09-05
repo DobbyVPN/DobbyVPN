@@ -62,6 +62,7 @@ private fun sharedLogPath(name: String): Path {
     val fileManager = NSFileManager.defaultManager
     val containerURL = fileManager.containerURLForSecurityApplicationGroupIdentifier(appGroupIdentifier)
     val containerPath = containerURL?.path ?: run {
+        IllegalStateException("iOS App Group log container is unavailable").printStackTrace()
         logStorageInitializationAvailable = false
         NSTemporaryDirectory().trimEnd('/')
     }
@@ -74,7 +75,7 @@ private fun sharedLogPath(name: String): Path {
 @OptIn(ExperimentalForeignApi::class)
 private fun secureLogPath(name: String): Path {
     val logFilePath = sharedLogPath(name)
-    logStorageInitializationAvailable = runCatching {
+    try {
         fileSystem.createDirectories(logFilePath.parent!!)
         // appendingSink creates an absent file without truncating a file another
         // app-group process may have created between the existence check and open.
@@ -84,7 +85,10 @@ private fun secureLogPath(name: String): Path {
         if (!protectedDirectory || !protectedFile) {
             throw IllegalStateException("local diagnostic permissions unavailable")
         }
-    }.isSuccess && logStorageInitializationAvailable
+    } catch (failure: Throwable) {
+        failure.printStackTrace()
+        logStorageInitializationAvailable = false
+    }
     return logFilePath
 }
 

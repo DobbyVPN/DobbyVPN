@@ -14,14 +14,20 @@ internal class DobbyConfigsRepositoryImpl(
         // cached config/profile/protocol/telemetry values without logging them.
         val legacy = "сonnectionURL"
         if (!prefs.contains("connectionURL") && prefs.contains(legacy)) {
-            prefs.getString(legacy, null)?.let { secrets.write("connectionURL", it) }
+            prefs.getString(legacy, null)?.let {
+                check(secrets.write("connectionURL", it)) { "legacy connection source migration failed" }
+            }
         }
         secrets.migrate(listOf("connectionURL", legacy))
         listOf(
             "connectionConfig", "сonnectionConfig", "connectionProfiles",
             "activeConnectionProfileIndex", "vpnInterface", "geoRoutingConf",
             "telemetryEndpoint", "telemetryApiToken", "telemetryAttributes",
-        ).forEach { prefs.edit().remove(it).remove("secure.v1.$it").apply() }
+        ).forEach {
+            check(prefs.edit().remove(it).remove("secure.v1.$it").commit()) {
+                "obsolete private state removal failed for $it"
+            }
+        }
     }
 
     override fun getConnectionURL(): String = secrets.read("connectionURL")

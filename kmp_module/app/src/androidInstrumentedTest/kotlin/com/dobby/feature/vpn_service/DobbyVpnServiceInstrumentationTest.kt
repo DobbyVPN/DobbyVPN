@@ -23,7 +23,6 @@ import org.junit.runner.RunWith
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
 import java.util.regex.Pattern
 
 /**
@@ -52,14 +51,14 @@ class DobbyVpnServiceInstrumentationTest {
     fun foreground_promotion_precedes_platform_ready_callback(): Unit = runBlocking {
         val session = UUID.randomUUID().toString()
         sessionId = session
-        resetInstrumentationLog()
+        resetApplicationLog()
         PlatformServiceRegistry.expect(session)
 
         context.startForegroundService(DobbyVpnService.createPrepareIntent(context, session))
 
         assertEquals(true, PlatformServiceRegistry.awaitReady(10_000))
         assertNotNull(PlatformServiceRegistry.current(session))
-        val log = context.cacheDir.resolve(INSTRUMENTATION_LOG_FILE).readText()
+        val log = context.filesDir.resolve(APP_LOG_FILE).readText()
         val foreground = log.indexOf("foreground promotion complete")
         val prepared = log.indexOf("platform preparation complete")
         assertTrue("service did not record foreground promotion", foreground >= 0)
@@ -131,8 +130,8 @@ class DobbyVpnServiceInstrumentationTest {
     private val connectivityManager: ConnectivityManager
         get() = requireNotNull(context.getSystemService(ConnectivityManager::class.java))
 
-    private fun resetInstrumentationLog() {
-        context.cacheDir.resolve(INSTRUMENTATION_LOG_FILE).writeText("")
+    private fun resetApplicationLog() {
+        context.filesDir.resolve(APP_LOG_FILE).writeText("")
     }
 
     private fun grantVpnConsentThroughSystemUi() {
@@ -182,6 +181,7 @@ class DobbyVpnServiceInstrumentationTest {
             }
             found
         }
+        var primaryFailure: Throwable? = null
         try {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
             val trafficComponent =
@@ -189,17 +189,40 @@ class DobbyVpnServiceInstrumentationTest {
             UiDevice.getInstance(instrumentation).executeShellCommand(
                 "am start -W -n $trafficComponent",
             )
-            return try {
-                packet.get(PACKET_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
-            } catch (_: TimeoutException) {
-                false
-            }
+            return packet.get(PACKET_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
         } finally {
             // Closing the owner unblocks AutoCloseInputStream.read before the worker is interrupted.
-            runCatching { input.close() }
-            packet.cancel(true)
-            executor.shutdownNow()
-            executor.awaitTermination(READER_SHUTDOWN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+            val cleanupFailures = mutableListOf<Throwable>()
+            for (cleanup in listOf<() -> Unit>(
+                { input.close() },
+                { packet.cancel(true) },
+                { executor.shutdownNow() },
+                {
+                    check(executor.awaitTermination(READER_SHUTDOWN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
+                        "VPN packet reader did not terminate"
+                    }
+                },
+            )) {
+                try {
+                    cleanup()
+                } catch (failure: Throwable) {
+                    cleanupFailures += failure
+                }
+            }
+            cleanupFailures.forEach { failure ->
+                val primary = primaryFailure
+                if (primary == null) {
+                    primaryFailure = failure
+                } else {
+                    primary.addSuppressed(failure)
+                }
+            }
+            if (primaryFailure != null && primaryFailure in cleanupFailures) {
+                throw requireNotNull(primaryFailure)
+            }
         }
     }
 
@@ -207,10 +230,20 @@ class DobbyVpnServiceInstrumentationTest {
         val tunnel = acquiredTunnel ?: return
         // Clear first so an assertion failure or @After re-entry cannot close or release twice.
         acquiredTunnel = null
-        runCatching { tunnel.goOwnedDescriptor.close() }
-        check(tunnel.service.releaseTunnel(tunnel.sessionId, tunnel.generation, tunnel.fd)) {
-            "Android service failed to release the Go-owned generation"
+        var failure: Throwable? = null
+        try {
+            tunnel.goOwnedDescriptor.close()
+        } catch (current: Throwable) {
+            failure = current
         }
+        try {
+            check(tunnel.service.releaseTunnel(tunnel.sessionId, tunnel.generation, tunnel.fd)) {
+                "Android service failed to release the Go-owned generation"
+            }
+        } catch (current: Throwable) {
+            if (failure == null) failure = current else failure.addSuppressed(current)
+        }
+        failure?.let { throw it }
     }
 
     private fun packetTargetsDocumentationAddress(packet: ByteArray, count: Int): Boolean =
@@ -238,6 +271,6 @@ class DobbyVpnServiceInstrumentationTest {
         const val DOCUMENTATION_ROUTE_ADDRESS = "192.0.2.1"
         const val IPV4_DESTINATION_OFFSET = 16
         const val IPV4_DESTINATION_END = 20
-        const val INSTRUMENTATION_LOG_FILE = "instrumentation.log"
+        const val APP_LOG_FILE = "app_logs.txt"
     }
 }

@@ -81,3 +81,13 @@ deletion, retry, or release continuation, record exactly what failed, exactly
 what caused it (or that the cause remains unproven), and the specific fix or
 mitigation. A clear success is evidence-checked before normal cleanup; an
 incident on one platform must not silently change another platform's contract.
+
+At every call boundary: call, verify success, and continue only on success.
+Otherwise retain and report the original exception type, message and chain,
+exit status or signal, and complete stdout and stderr. Never replace them with
+a generic code, status, or message. Catch only to add context, preserve
+evidence, or clean up, then rethrow the original error; append any cleanup
+failure without replacing it. Machine-readable outcomes and exact reviewed
+limitation identifiers classify results but never substitute for diagnostics.
+Sensitive diagnostics remain in their approved owner-only evidence channel;
+they are never discarded or copied into a less-protected status channel.

@@ -6,6 +6,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.dobby.feature.main.domain.SessionConfiguration
 import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.SessionControllerResult
+import com.dobby.feature.main.domain.SessionFailureCode
 import com.dobby.feature.main.domain.SessionObservation
 import com.dobby.feature.main.domain.SessionProfile
 import com.dobby.feature.main.domain.SessionProtocol
@@ -309,16 +310,21 @@ class AndroidHostedProfileTestDriverTest {
         val commandFile = writeInput("command-first-false.json", commandJson(operations = listOf("configure", "connect", "observe_tunnel")))
         writeInput("profile-first-false.bin", "opaque-profile")
         val controller = FakeSessionController()
-        val result = AndroidHostedProfileTestDriver(
-            context = context,
-            controllerFactory = { controller },
-            platformFactory = { _ -> FakePlatform(tunnelResults = listOf(false)) },
-        ).run(commandFile.name)
+        val outputFile = context.filesDir.resolve("observation-3.json").also(files::add)
+        val failure = captureFailure {
+            AndroidHostedProfileTestDriver(
+                context = context,
+                controllerFactory = { controller },
+                platformFactory = { _ -> FakePlatform(tunnelResults = listOf(false)) },
+            ).run(commandFile.name)
+        }
+        val result = JSONObject(outputFile.readText())
 
-        assertEquals("TUNNEL_NOT_OBSERVED", result.errorCode)
-        assertFalse(result.tunnelInterface)
-        assertFalse(result.secondTunnelInterface)
-        assertTrue(result.cleanupVerified)
+        assertEquals("TUNNEL_NOT_OBSERVED", failure.message)
+        assertEquals("TUNNEL_NOT_OBSERVED", result.getString("error_code"))
+        assertFalse(result.getBoolean("tunnel_interface"))
+        assertFalse(result.getBoolean("second_tunnel_interface"))
+        assertTrue(result.getBoolean("cleanup_verified"))
     }
 
     @Test
@@ -329,16 +335,21 @@ class AndroidHostedProfileTestDriverTest {
         val commandFile = writeInput("command-second-false.json", commandJson(operations = operations))
         writeInput("profile-second-false.bin", "opaque-profile")
         val controller = FakeSessionController()
-        val result = AndroidHostedProfileTestDriver(
-            context = context,
-            controllerFactory = { controller },
-            platformFactory = { _ -> FakePlatform(tunnelResults = listOf(true, false)) },
-        ).run(commandFile.name)
+        val outputFile = context.filesDir.resolve("observation-6.json").also(files::add)
+        val failure = captureFailure {
+            AndroidHostedProfileTestDriver(
+                context = context,
+                controllerFactory = { controller },
+                platformFactory = { _ -> FakePlatform(tunnelResults = listOf(true, false)) },
+            ).run(commandFile.name)
+        }
+        val result = JSONObject(outputFile.readText())
 
-        assertEquals("TUNNEL_NOT_OBSERVED", result.errorCode)
-        assertTrue(result.tunnelInterface)
-        assertFalse(result.secondTunnelInterface)
-        assertTrue(result.cleanupVerified)
+        assertEquals("TUNNEL_NOT_OBSERVED", failure.message)
+        assertEquals("TUNNEL_NOT_OBSERVED", result.getString("error_code"))
+        assertTrue(result.getBoolean("tunnel_interface"))
+        assertFalse(result.getBoolean("second_tunnel_interface"))
+        assertTrue(result.getBoolean("cleanup_verified"))
         assertEquals(2, controller.stopCalls)
     }
 
@@ -348,20 +359,131 @@ class AndroidHostedProfileTestDriverTest {
         writeInput("profile-3.bin", "opaque-profile")
         val controller = FakeSessionController()
         val platform = FakePlatform(failTunnel = true)
+        val diagnostics = mutableListOf<String>()
         val outputFile = context.filesDir.resolve("observation-failure.json")
         files += outputFile
-        val result = AndroidHostedProfileTestDriver(
-            context = context,
-            controllerFactory = { controller },
-            platformFactory = { _ -> platform },
-        ).run(commandFile.name)
+        val failure = captureFailure {
+            AndroidHostedProfileTestDriver(
+                context = context,
+                controllerFactory = { controller },
+                platformFactory = { _ -> platform },
+                diagnosticLog = diagnostics::add,
+            ).run(commandFile.name)
+        }
+        val result = JSONObject(outputFile.readText())
 
-        assertEquals("DRIVER_ERROR", result.errorCode)
+        assertTrue(failure is IllegalStateException)
+        assertEquals("synthetic platform failure", failure.message)
+        assertEquals("DRIVER_ERROR", result.getString("error_code"))
         assertEquals(1, controller.stopCalls)
         assertTrue(controller.events.contains("destroy"))
         assertTrue(platform.events.contains("disconnected"))
-        assertTrue(result.cleanupVerified)
+        assertTrue(result.getBoolean("cleanup_verified"))
         assertFalse(outputFile.readText().contains("opaque-profile"))
+        assertTrue(
+            diagnostics.any {
+                it.contains("operation=observe_tunnel") &&
+                    it.contains("failureTypes=IllegalStateException") &&
+                    it.contains("failureCode=DRIVER_ERROR")
+            },
+        )
+        assertTrue(diagnostics.any { it.contains("cleanupVerified=true") })
+    }
+
+    @Test
+    fun cleanup_failure_is_suppressed_on_the_original_operation_failure() = runBlocking {
+        val commandFile = writeInput(
+            "command-primary-secondary.json",
+            commandJson(operations = listOf("configure", "connect", "observe_tunnel")),
+        )
+        writeInput("profile-3.bin", "opaque-profile")
+        val failure = captureFailure {
+            AndroidHostedProfileTestDriver(
+                context = context,
+                controllerFactory = {
+                    FakeSessionController(
+                        destroyFailure = IllegalArgumentException("synthetic cleanup failure"),
+                    )
+                },
+                platformFactory = { _ -> FakePlatform(failTunnel = true) },
+            ).run(commandFile.name)
+        }
+
+        assertTrue(failure is IllegalStateException)
+        assertEquals("synthetic platform failure", failure.message)
+        assertTrue(
+            failure.suppressed.any {
+                it.message == "synthetic cleanup failure"
+            },
+        )
+    }
+
+    @Test
+    fun controller_failure_preserves_its_exact_code_and_message() = runBlocking {
+        val commandFile = writeInput(
+            "command-controller-failure.json",
+            commandJson(operations = listOf("configure", "connect", "disconnect")),
+        )
+        writeInput("profile-3.bin", "opaque-profile")
+        val failure = captureFailure {
+            AndroidHostedProfileTestDriver(
+                context = context,
+                controllerFactory = {
+                    FakeSessionController(
+                        stopFailure = SessionControllerResult.Failure(
+                            "synthetic stop failure",
+                            SessionFailureCode.PLATFORM_FAILED,
+                        ),
+                    )
+                },
+                platformFactory = { _ -> FakePlatform() },
+            ).run(commandFile.name)
+        }
+
+        assertEquals("DISCONNECT_FAILED", failure.message)
+        assertEquals(
+            "session controller stop failed: code=PLATFORM_FAILED; message=synthetic stop failure",
+            failure.cause?.message,
+        )
+    }
+
+    @Test
+    fun failed_connection_records_the_last_product_state_and_failure_code() = runBlocking {
+        val outputName = "observation-connect-failure.json"
+        val commandFile = writeInput(
+            "command-connect-failure.json",
+            commandJson(
+                operations = listOf("configure", "connect"),
+                outputFile = outputName,
+            ),
+        )
+        writeInput("profile-2.bin", "opaque-profile")
+        files += context.filesDir.resolve(outputName)
+        val diagnostics = mutableListOf<String>()
+        val failure = captureFailure {
+            AndroidHostedProfileTestDriver(
+                context = context,
+                controllerFactory = {
+                    FakeSessionController(
+                        stateAfterStart = SessionState.FAILED,
+                        failureAfterStart = SessionFailureCode.PLATFORM_FAILED,
+                    )
+                },
+                platformFactory = { _ -> FakePlatform() },
+                diagnosticLog = diagnostics::add,
+            ).run(commandFile.name)
+        }
+        val result = JSONObject(context.filesDir.resolve(outputName).readText())
+
+        assertEquals("CONNECT_FAILED", failure.message)
+        assertEquals("CONNECT_FAILED", result.getString("error_code"))
+        assertTrue(
+            diagnostics.any {
+                it.contains("stage=await_connected") &&
+                    it.contains("lastState=FAILED") &&
+                    it.contains("lastFailureCode=PLATFORM_FAILED")
+            },
+        )
     }
 
     @Test
@@ -469,14 +591,19 @@ class AndroidHostedProfileTestDriverTest {
         )
         writeInput("profile-preserve-failure.bin", "opaque-profile")
         val controller = FakeSessionController()
-        val result = AndroidHostedProfileTestDriver(
-            context = context,
-            controllerFactory = { controller },
-            platformFactory = { _ -> FakePlatform(tunnelResults = listOf(false)) },
-        ).run(commandFile.name)
+        val outputFile = context.filesDir.resolve("observation-3.json").also(files::add)
+        val failure = captureFailure {
+            AndroidHostedProfileTestDriver(
+                context = context,
+                controllerFactory = { controller },
+                platformFactory = { _ -> FakePlatform(tunnelResults = listOf(false)) },
+            ).run(commandFile.name)
+        }
+        val result = JSONObject(outputFile.readText())
 
-        assertEquals("TUNNEL_NOT_OBSERVED", result.errorCode)
-        assertTrue(result.cleanupVerified)
+        assertEquals("TUNNEL_NOT_OBSERVED", failure.message)
+        assertEquals("TUNNEL_NOT_OBSERVED", result.getString("error_code"))
+        assertTrue(result.getBoolean("cleanup_verified"))
         assertEquals(1, controller.startCalls)
         assertEquals(1, controller.stopCalls)
         assertTrue(controller.events.contains("destroy"))
@@ -521,6 +648,15 @@ class AndroidHostedProfileTestDriverTest {
         } catch (_: AndroidHostedInputException) {
             // Expected: invalid input is rejected without exposing the offending value.
         }
+    }
+
+    private suspend fun captureFailure(action: suspend () -> Unit): Throwable {
+        try {
+            action()
+        } catch (failure: Throwable) {
+            return failure
+        }
+        throw AssertionError("operation unexpectedly succeeded")
     }
 
     private fun writeInput(name: String, contents: String): File {
@@ -614,6 +750,10 @@ class AndroidHostedProfileTestDriverTest {
         private val profiles: List<SessionProfile> = listOf(
             SessionProfile(0, SessionProtocol.OUTLINE, "Outline"),
         ),
+        private val stateAfterStart: SessionState = SessionState.CONNECTED,
+        private val failureAfterStart: SessionFailureCode? = null,
+        private val destroyFailure: Throwable? = null,
+        private val stopFailure: SessionControllerResult.Failure? = null,
     ) : SessionController {
 
         var stopCalls = 0
@@ -635,7 +775,7 @@ class AndroidHostedProfileTestDriverTest {
             events += "start"
             startTargets += target
             startCalls += 1
-            state = SessionState.CONNECTED
+            state = stateAfterStart
             val generation = startCalls.toULong()
             startGenerations += generation
             return SessionControllerResult.Success(generation)
@@ -643,19 +783,27 @@ class AndroidHostedProfileTestDriverTest {
         override suspend fun stop(generation: ULong): SessionControllerResult<ULong> {
             events += "stop"
             stopCalls += 1
+            if (stopCalls == 1) stopFailure?.let { return it }
             state = SessionState.IDLE
             return SessionControllerResult.Success(generation)
         }
         override suspend fun snapshot(): SessionControllerResult<SessionSnapshot> {
             events += "snapshot"
             return SessionControllerResult.Success(
-                SessionSnapshot(1u, state, configured = true, cleanupComplete = state == SessionState.IDLE),
+                SessionSnapshot(
+                    1u,
+                    state,
+                    configured = true,
+                    cleanupComplete = state == SessionState.IDLE,
+                    lastFailureCode = failureAfterStart.takeIf { state == SessionState.FAILED },
+                ),
             )
         }
         override suspend fun observe(afterSequence: ULong): SessionControllerResult<SessionObservation> =
             SessionControllerResult.Success(SessionObservation(emptyList(), afterSequence))
         override suspend fun destroy(): SessionControllerResult<Unit> {
             events += "destroy"
+            destroyFailure?.let { throw it }
             return SessionControllerResult.Success(Unit)
         }
     }

@@ -265,8 +265,5 @@ enum class LogStorageStatus {
 }
 
 private fun reportLogFailure(operation: String, failure: Throwable) {
-    println(
-        "DobbyVPN local log $operation failed " +
-            "failureType=${failure::class.simpleName ?: "Throwable"}",
-    )
+    println("DobbyVPN local log $operation failed\n${failure.stackTraceToString()}")
 }

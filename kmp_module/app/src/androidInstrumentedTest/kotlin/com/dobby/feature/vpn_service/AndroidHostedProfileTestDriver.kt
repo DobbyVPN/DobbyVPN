@@ -8,6 +8,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import com.dobby.feature.logging.Logger
+import com.dobby.feature.logging.domain.initLogger
 import com.dobby.feature.main.domain.AndroidSessionController
 import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.SessionControllerResult
@@ -25,6 +27,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
+import org.koin.core.context.GlobalContext
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -69,7 +72,8 @@ internal data class AndroidHostedCommand(
     val profileIndex: Int?,
 )
 
-internal class AndroidHostedInputException : IllegalArgumentException("INPUT_INVALID")
+internal class AndroidHostedInputException(cause: Throwable? = null) :
+    IllegalArgumentException("INPUT_INVALID", cause)
 
 /**
  * The product seam is deliberately a small data contract. An external runner supplies the ordered
@@ -110,8 +114,8 @@ internal object AndroidHostedCommandContract {
         requireFileName(commandFileName)
         val json = try {
             JSONObject(jsonText)
-        } catch (_: Exception) {
-            invalid()
+        } catch (failure: Exception) {
+            invalid(failure)
         }
         val requiredKeys = setOf("schema", "kind", "platform", "profile_file", "output_file", "endpoints", "operations")
         val optionalKeys = setOf("source_sha", "preserve_active", "profile_index")
@@ -153,8 +157,8 @@ internal object AndroidHostedCommandContract {
         val endpoints = parseEndpoints(json.optJSONObject("endpoints") ?: invalid())
         val rawOperations = try {
             json.getJSONArray("operations")
-        } catch (_: Exception) {
-            invalid()
+        } catch (failure: Exception) {
+            invalid(failure)
         }
         if (rawOperations.length() !in 1..MAX_OPERATIONS) invalid()
         val seenIds = HashSet<String>()
@@ -162,8 +166,8 @@ internal object AndroidHostedCommandContract {
             for (index in 0 until rawOperations.length()) {
                 val item = try {
                     rawOperations.getJSONObject(index)
-                } catch (_: Exception) {
-                    invalid()
+                } catch (failure: Exception) {
+                    invalid(failure)
                 }
                 val id = requiredString(item, "id")
                 val operation = requiredString(item, "operation")
@@ -255,8 +259,8 @@ internal object AndroidHostedCommandContract {
             true
         } catch (_: FileAlreadyExistsException) {
             false
-        } catch (_: Exception) {
-            false
+        } catch (failure: Exception) {
+            throw AndroidHostedInputException(failure)
         }
     }
 
@@ -272,8 +276,8 @@ internal object AndroidHostedCommandContract {
             if (value.length !in 12..512 || !value.startsWith("https://") || value.any(Char::isWhitespace)) invalid()
             val uri = try {
                 URI(value)
-            } catch (_: Exception) {
-                invalid()
+            } catch (failure: Exception) {
+                invalid(failure)
             }
             if (uri.scheme != "https" || uri.host.isNullOrBlank() || uri.userInfo != null) invalid()
         }
@@ -294,9 +298,9 @@ internal object AndroidHostedCommandContract {
                     if (count < 0) break
                 }
             }
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
             Arrays.fill(result, 0)
-            invalid()
+            invalid(failure)
         }
         val size = buffer.position()
         if (size > maximumBytes) {
@@ -332,7 +336,8 @@ internal object AndroidHostedCommandContract {
         if (json.keys().asSequence().toSet() != expected) invalid()
     }
 
-    private fun invalid(): Nothing = throw AndroidHostedInputException()
+    private fun invalid(cause: Throwable? = null): Nothing =
+        throw AndroidHostedInputException(cause)
 }
 
 internal data class AndroidHostedMetrics(
@@ -427,7 +432,8 @@ internal data class AndroidHostedObservation(
     private fun safeMetric(value: Double): Double = if (value.isFinite() && value >= 0.0) value else 0.0
 }
 
-private class AndroidHostedOperationFailure(val code: String) : Exception()
+private class AndroidHostedOperationFailure(val code: String, cause: Throwable? = null) :
+    Exception(code, cause)
 
 /** Candidate-owned Android profile driver, compiled only into the instrumentation APK. */
 internal class AndroidHostedProfileTestDriver(
@@ -436,13 +442,21 @@ internal class AndroidHostedProfileTestDriver(
     private val platformFactory: (AndroidHostedEndpoints) -> AndroidHostedPlatform = { endpoints ->
         RealAndroidHostedPlatform(context, endpoints)
     },
+    private val diagnosticLog: (String) -> Unit = {},
 ) {
     suspend fun run(commandFileName: String): AndroidHostedObservation {
         val commandFile = AndroidHostedCommandContract.privateFile(context.filesDir, commandFileName)
         val command = try {
             AndroidHostedCommandContract.parse(commandFileName, AndroidHostedCommandContract.readCommand(commandFile))
-        } finally {
-            commandFile.delete()
+        } catch (failure: Throwable) {
+            try {
+                deleteFile(commandFile, "delete command input")
+            } catch (cleanupFailure: Throwable) {
+                failure.addSuppressed(cleanupFailure)
+            }
+            throw failure
+        }.also {
+            deleteFile(commandFile, "delete command input")
         }
         val profileFile = AndroidHostedCommandContract.privateFile(context.filesDir, command.profileFile)
         val outputFile = AndroidHostedCommandContract.privateFile(context.filesDir, command.outputFile)
@@ -451,8 +465,56 @@ internal class AndroidHostedProfileTestDriver(
         val platform = platformFactory(command.endpoints)
         var generation: ULong? = null
         var operationsSucceeded = false
+        var activeOperation: AndroidHostedOperation? = null
+        var primaryFailure: Throwable? = null
+
+        fun recordFailure(failure: Throwable, code: String, stage: String) {
+            val primary = primaryFailure
+            if (primary == null) {
+                primaryFailure = failure
+            } else if (primary !== failure) {
+                primary.addSuppressed(failure)
+            }
+            try {
+                diagnosticLog(
+                    "[ERROR] Android hosted failure failureCode=$code stage=$stage " +
+                        "failureTypes=${failureTypes(failure)}",
+                )
+            } catch (loggingFailure: Throwable) {
+                requireNotNull(primaryFailure).addSuppressed(loggingFailure)
+            }
+        }
+
+        suspend fun <T> cleanupAttempt(
+            stage: String,
+            fallback: T,
+            action: suspend () -> T,
+        ): T = try {
+            action()
+        } catch (failure: Throwable) {
+            recordFailure(failure, "CLEANUP_FAILED", stage)
+            fallback
+        }
+
+        suspend fun deleteInput(file: File, stage: String): Boolean = cleanupAttempt(
+            stage,
+            false,
+        ) {
+            deleteFile(file, stage)
+            true
+        }
+
+        diagnosticLog(
+            "[DEBUG] Android hosted command accepted " +
+                "operationCount=${command.operations.size} profileIndex=${command.profileIndex ?: -1}",
+        )
         try {
             for (operation in command.operations) {
+                activeOperation = operation
+                diagnosticLog(
+                    "[DEBUG] Android hosted operation started " +
+                        "operation=${operation.operation} operationId=${operation.id}",
+                )
                 try {
                     withTimeout(TimeUnit.SECONDS.toMillis(operation.timeoutSeconds.toLong())) {
                         execute(
@@ -462,25 +524,54 @@ internal class AndroidHostedProfileTestDriver(
                             getGeneration = { generation },
                         )
                     }
-                } catch (_: TimeoutCancellationException) {
-                    throw AndroidHostedOperationFailure("OPERATION_TIMEOUT")
+                } catch (failure: TimeoutCancellationException) {
+                    throw AndroidHostedOperationFailure("OPERATION_TIMEOUT", failure)
                 }
+                diagnosticLog(
+                    "Android hosted operation completed " +
+                        "operation=${operation.operation} operationId=${operation.id}",
+                )
             }
             operationsSucceeded = true
         } catch (failure: AndroidHostedOperationFailure) {
             observation.errorCode = failure.code
+            recordFailure(
+                failure,
+                failure.code,
+                activeOperation?.operation ?: "none",
+            )
         } catch (failure: CancellationException) {
-            throw failure
+            recordFailure(
+                failure,
+                "OPERATION_CANCELLED",
+                activeOperation?.operation ?: "none",
+            )
         } catch (failure: Exception) {
-            failure.printStackTrace()
             observation.errorCode = "DRIVER_ERROR"
+            recordFailure(
+                failure,
+                "DRIVER_ERROR",
+                activeOperation?.operation ?: "none",
+            )
         } finally {
             val preserveActive = command.preserveActive && operationsSucceeded && generation != null
             if (preserveActive) {
-                writeObservation(outputFile, observation)
-                runCatching { profileFile.delete() }
+                cleanupAttempt("log_preserved_session", Unit) {
+                    diagnosticLog(
+                        "Android hosted active session preserved profileIndex=${command.profileIndex ?: -1}",
+                    )
+                }
+                cleanupAttempt("write_preserved_observation", Unit) {
+                    writeObservation(outputFile, observation)
+                }
+                deleteInput(profileFile, "delete_preserved_profile")
             } else {
                 withContext(NonCancellable) {
+                    cleanupAttempt("log_cleanup_start", Unit) {
+                        diagnosticLog(
+                            "[DEBUG] Android hosted cleanup started activeGeneration=${generation != null}",
+                        )
+                    }
                     // A configure-only command has no generation to stop.  The Go
                     // session is therefore legitimately left in CONFIGURED while its
                     // profile is still clean; once a generation has started, cleanup
@@ -488,7 +579,9 @@ internal class AndroidHostedProfileTestDriver(
                     val hadActiveGeneration = generation != null
                     var cleanupSucceeded = true
                     generation?.let { active ->
-                        cleanupSucceeded = stopSession(controller, active) && cleanupSucceeded
+                        cleanupSucceeded = cleanupAttempt("stop_session", false) {
+                            stopSession(controller, active)
+                        } && cleanupSucceeded
                         generation = null
                     }
                     // Stop is deliberately asynchronous: the Go API acknowledges the
@@ -496,21 +589,43 @@ internal class AndroidHostedProfileTestDriver(
                     // publish IDLE.  Reading one snapshot immediately after stop can
                     // therefore report a transient STOPPING state and make destroy
                     // return CONFLICT even though the tunnel is already draining.
-                    val cleanupSnapshot = awaitCleanSnapshot(controller, hadActiveGeneration)
-                    cleanupSucceeded = runCatching {
-                        controller.destroy() is SessionControllerResult.Success
-                    }.getOrDefault(false) && cleanupSucceeded
-                    runCatching { context.stopService(DobbyVpnService.createStopIntent(context, 0, false)) }
-                    val disconnected = runCatching { platform.awaitDisconnected() }.getOrDefault(false)
+                    val cleanupSnapshot = cleanupAttempt("await_clean_snapshot", false) {
+                        awaitCleanSnapshot(controller, hadActiveGeneration)
+                    }
+                    cleanupSucceeded = cleanupAttempt("destroy_session", false) {
+                        requireControllerSuccess(
+                            "CLEANUP_FAILED",
+                            "destroy",
+                            controller.destroy(),
+                        )
+                        true
+                    } && cleanupSucceeded
+                    cleanupAttempt("stop_vpn_service", false) {
+                        context.stopService(DobbyVpnService.createStopIntent(context, 0, false))
+                    }
+                    val disconnected = cleanupAttempt("await_disconnected", false) {
+                        platform.awaitDisconnected()
+                    }
                     observation.cleanupVerified = cleanupSucceeded && cleanupSnapshot && disconnected
                     if (!observation.cleanupVerified && observation.errorCode == null) {
                         observation.errorCode = "CLEANUP_FAILED"
                     }
-                    writeObservation(outputFile, observation)
-                    runCatching { profileFile.delete() }
+                    cleanupAttempt("log_cleanup_finish", Unit) {
+                        diagnosticLog(
+                            "Android hosted cleanup completed " +
+                                "cleanupVerified=${observation.cleanupVerified} " +
+                                "sessionCleanup=$cleanupSucceeded snapshotClean=$cleanupSnapshot " +
+                                "networkDisconnected=$disconnected",
+                        )
+                    }
+                    cleanupAttempt("write_final_observation", Unit) {
+                        writeObservation(outputFile, observation)
+                    }
+                    deleteInput(profileFile, "delete_profile")
                 }
             }
         }
+        primaryFailure?.let { throw it }
         return observation
     }
 
@@ -528,17 +643,20 @@ internal class AndroidHostedProfileTestDriver(
             "configure" -> {
                 val profile = try {
                     AndroidHostedCommandContract.readProfile(profileFile)
-                } catch (_: Exception) {
-                    throw AndroidHostedOperationFailure("PROFILE_UNAVAILABLE")
+                } catch (failure: Exception) {
+                    throw AndroidHostedOperationFailure("PROFILE_UNAVAILABLE", failure)
                 }
                 val configured = try {
                     controller.configure(profile)
                 } finally {
                     Arrays.fill(profile, 0)
-                    profileFile.delete()
+                    deleteFile(profileFile, "delete configured profile")
                 }
-                if (configured !is SessionControllerResult.Success) throw AndroidHostedOperationFailure("CONFIGURE_REJECTED")
-                val profiles = configured.value.profiles
+                val profiles = requireControllerSuccess(
+                    "CONFIGURE_REJECTED",
+                    "configure",
+                    configured,
+                ).profiles
                 if (profiles.isEmpty() || profiles.map { it.index } != profiles.indices.toList() ||
                     profiles.any { it.protocol !in setOf(SessionProtocol.OUTLINE, SessionProtocol.XRAY, SessionProtocol.TRUST_TUNNEL) }
                 ) throw AndroidHostedOperationFailure("CONFIGURE_REJECTED")
@@ -548,6 +666,11 @@ internal class AndroidHostedProfileTestDriver(
                         ?: throw AndroidHostedOperationFailure("PROFILE_UNAVAILABLE")
                 }
                 observation.configured = true
+                diagnosticLog(
+                    "Android hosted configuration accepted " +
+                        "connectionCount=${profiles.size} selectedProfileIndex=${profileIndex ?: -1} " +
+                        "selectedProtocol=${observation.selectedConnection?.protocol?.name ?: "NONE"}",
+                )
             }
             "connect" -> connect(controller, platform, observation, profileIndex, setGeneration)
             "observe_tunnel" -> {
@@ -638,14 +761,18 @@ internal class AndroidHostedProfileTestDriver(
         if (control.exists() || ready.exists() || !AndroidHostedCommandContract.createReady(ready)) {
             throw AndroidHostedOperationFailure("CONTROL_UNAVAILABLE")
         }
+        var primaryFailure: Throwable? = null
         try {
             while (true) {
                 if (control.exists()) {
                     val payload = readControlPayload(control)
                     val json = try {
                         JSONObject(payload.toString(Charsets.UTF_8))
-                    } catch (_: Exception) {
-                        throw AndroidHostedOperationFailure("CONTROL_INPUT_INVALID")
+                    } catch (failure: Exception) {
+                        throw AndroidHostedOperationFailure(
+                            "CONTROL_INPUT_INVALID",
+                            failure,
+                        )
                     } finally {
                         Arrays.fill(payload, 0)
                     }
@@ -661,17 +788,34 @@ internal class AndroidHostedProfileTestDriver(
                 }
                 delay(100L)
             }
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
         } finally {
-            runCatching { control.delete() }
-            runCatching { ready.delete() }
+            var cleanupFailure: Throwable? = null
+            for (file in listOf(control, ready)) {
+                try {
+                    deleteFile(file, "delete external control input")
+                } catch (current: Throwable) {
+                    if (cleanupFailure == null) {
+                        cleanupFailure = current
+                    } else {
+                        cleanupFailure.addSuppressed(current)
+                    }
+                }
+            }
+            cleanupFailure?.let { failure ->
+                val primary = primaryFailure
+                if (primary == null) throw failure else primary.addSuppressed(failure)
+            }
         }
     }
 
     private fun readControlPayload(file: File): ByteArray {
         return try {
             AndroidHostedCommandContract.readControl(file)
-        } catch (_: AndroidHostedInputException) {
-            throw AndroidHostedOperationFailure("CONTROL_INPUT_INVALID")
+        } catch (failure: AndroidHostedInputException) {
+            throw AndroidHostedOperationFailure("CONTROL_INPUT_INVALID", failure)
         }
     }
 
@@ -685,45 +829,111 @@ internal class AndroidHostedProfileTestDriver(
         val selected = profileIndex ?: throw AndroidHostedOperationFailure("PROFILE_UNAVAILABLE")
         var stage = "request_consent"
         try {
+            diagnosticLog(
+                "[DEBUG] Android hosted connect stage started stage=$stage profileIndex=$selected",
+            )
             platform.requestConsent()
+            diagnosticLog("Android hosted connect stage completed stage=$stage profileIndex=$selected")
             stage = "capture_baseline"
+            diagnosticLog(
+                "[DEBUG] Android hosted connect stage started stage=$stage profileIndex=$selected",
+            )
             platform.captureBaseline()
+            diagnosticLog("Android hosted connect stage completed stage=$stage profileIndex=$selected")
             stage = "start_session"
-            val started = controller.start(SessionStartTarget.ProfileIndex(selected))
-            val value = (started as? SessionControllerResult.Success)?.value
-                ?: throw AndroidHostedOperationFailure("CONNECT_REJECTED")
+            diagnosticLog(
+                "[DEBUG] Android hosted connect stage started stage=$stage profileIndex=$selected",
+            )
+            val value = requireControllerSuccess(
+                "CONNECT_REJECTED",
+                "start",
+                controller.start(SessionStartTarget.ProfileIndex(selected)),
+            )
             setGeneration(value)
+            diagnosticLog("Android hosted connect stage completed stage=$stage profileIndex=$selected")
             stage = "await_connected"
-            if (awaitState(controller, SessionState.CONNECTED)?.state != SessionState.CONNECTED) {
+            diagnosticLog(
+                "[DEBUG] Android hosted connect stage started stage=$stage profileIndex=$selected",
+            )
+            val snapshot = awaitState(controller, SessionState.CONNECTED)
+            if (snapshot?.state != SessionState.CONNECTED) {
+                diagnosticLog(
+                    "[ERROR] Android hosted connect stage failed " +
+                        "stage=$stage profileIndex=$selected code=CONNECT_FAILED " +
+                        "lastState=${snapshot?.state?.name ?: "UNAVAILABLE"} " +
+                        "lastFailureCode=${snapshot?.lastFailureCode?.name ?: "NONE"}",
+                )
                 throw AndroidHostedOperationFailure("CONNECT_FAILED")
             }
             observation.connected = true
+            diagnosticLog("Android hosted connect stage completed stage=$stage profileIndex=$selected")
         } catch (failure: AndroidHostedOperationFailure) {
+            diagnosticLog(
+                "[ERROR] Android hosted connect failed " +
+                    "stage=$stage profileIndex=$selected code=${failure.code}",
+            )
             throw failure
         } catch (failure: CancellationException) {
             throw failure
         } catch (failure: Exception) {
-            System.err.println(
-                "android_hosted_connect_failed stage=$stage " +
-                    "exception=${failure::class.java.name}",
+            diagnosticLog(
+                "[ERROR] Android hosted connect exception " +
+                    "stage=$stage profileIndex=$selected " +
+                    "failureTypes=${failureTypes(failure)} failureCode=CONNECT_FAILED",
             )
-            failure.printStackTrace()
-            throw AndroidHostedOperationFailure("CONNECT_FAILED")
+            throw AndroidHostedOperationFailure("CONNECT_FAILED", failure)
         }
     }
 
     private suspend fun awaitState(controller: SessionController, expected: SessionState): SessionSnapshot? {
         var latest: SessionSnapshot? = null
+        var latestSignature: Triple<SessionState, Boolean, String>? = null
+        var latestControllerFailure: SessionControllerResult.Failure? = null
         repeat(80) {
             val snapshot = controller.snapshot()
             if (snapshot is SessionControllerResult.Success) {
+                latestControllerFailure = null
                 latest = snapshot.value
+                val signature = Triple(
+                    snapshot.value.state,
+                    snapshot.value.cleanupComplete,
+                    snapshot.value.lastFailureCode?.name ?: "NONE",
+                )
+                if (signature != latestSignature) {
+                    diagnosticLog(
+                        "[DEBUG] Android hosted session snapshot " +
+                            "state=${signature.first.name} cleanupComplete=${signature.second} " +
+                            "failureCode=${signature.third}",
+                    )
+                    latestSignature = signature
+                }
                 if (snapshot.value.state == expected || snapshot.value.state == SessionState.FAILED) return latest
+            } else if (snapshot is SessionControllerResult.Failure) {
+                if (snapshot != latestControllerFailure) {
+                    diagnosticLog(
+                        "[WARN] Android hosted session snapshot rejected " +
+                            "failureCode=${snapshot.code.name} failureMessage=${snapshot.message}",
+                    )
+                    latestControllerFailure = snapshot
+                }
             }
             delay(250L)
         }
+        diagnosticLog(
+            "[ERROR] Android hosted session state wait expired " +
+                "expected=${expected.name} lastState=${latest?.state?.name ?: "UNAVAILABLE"} " +
+                "lastFailureCode=${latest?.lastFailureCode?.name ?: latestControllerFailure?.code?.name ?: "NONE"}",
+        )
+        latestControllerFailure?.let { failure ->
+            throw controllerFailure("CONNECT_FAILED", "snapshot", failure)
+        }
         return latest
     }
+
+    private fun failureTypes(failure: Throwable): String =
+        generateSequence(failure) { current -> current.cause }
+            .take(6)
+            .joinToString("->") { current -> current::class.simpleName ?: "Throwable" }
 
     private suspend fun stopCurrentSession(
         controller: SessionController,
@@ -734,8 +944,34 @@ internal class AndroidHostedProfileTestDriver(
         return stopSession(controller, generation).also { if (it) setGeneration(null) }
     }
 
-    private suspend fun stopSession(controller: SessionController, generation: ULong): Boolean =
-        runCatching { controller.stop(generation) is SessionControllerResult.Success }.getOrDefault(false)
+    private suspend fun stopSession(controller: SessionController, generation: ULong): Boolean {
+        requireControllerSuccess(
+            "DISCONNECT_FAILED",
+            "stop",
+            controller.stop(generation),
+        )
+        return true
+    }
+
+    private fun <T> requireControllerSuccess(
+        code: String,
+        operation: String,
+        result: SessionControllerResult<T>,
+    ): T = when (result) {
+        is SessionControllerResult.Success -> result.value
+        is SessionControllerResult.Failure -> throw controllerFailure(code, operation, result)
+    }
+
+    private fun controllerFailure(
+        code: String,
+        operation: String,
+        result: SessionControllerResult.Failure,
+    ): AndroidHostedOperationFailure = AndroidHostedOperationFailure(
+        code,
+        IllegalStateException(
+            "session controller $operation failed: code=${result.code.name}; message=${result.message}",
+        ),
+    )
 
     private suspend fun awaitCleanSnapshot(
         controller: SessionController,
@@ -751,6 +987,9 @@ internal class AndroidHostedProfileTestDriver(
                 failure.printStackTrace()
                 null
             }
+            if (result is SessionControllerResult.Failure) {
+                lastFailure = controllerFailure("CLEANUP_FAILED", "snapshot", result)
+            }
             val clean = (result as? SessionControllerResult.Success)?.value?.let { snapshot ->
                 (snapshot.state == SessionState.IDLE ||
                     (!hadActiveGeneration && snapshot.state == SessionState.CONFIGURED)) &&
@@ -759,25 +998,27 @@ internal class AndroidHostedProfileTestDriver(
             if (clean) return true
             if (attempt < 79) delay(250L)
         }
-        lastFailure?.let { failure ->
-            System.err.println(
-                "android_hosted_cleanup_snapshot_failed exception=${failure::class.java.name}",
-            )
-        }
+        lastFailure?.let { throw it }
         return false
     }
 
     private fun writeObservation(file: File, observation: AndroidHostedObservation) {
         val temporary = File(file.parentFile, "${file.name}.tmp")
-        runCatching { temporary.delete() }
+        deleteFile(temporary, "delete stale observation")
         FileOutputStream(temporary, false).use { output ->
             output.write(observation.toJson().toString().toByteArray(Charsets.UTF_8))
             output.flush()
             output.fd.sync()
         }
         if (!temporary.renameTo(file)) {
-            temporary.delete()
+            deleteFile(temporary, "delete failed observation")
             throw IllegalStateException("OUTPUT_WRITE_FAILED")
+        }
+    }
+
+    private fun deleteFile(file: File, stage: String) {
+        if (!file.delete() && file.exists()) {
+            throw IllegalStateException("$stage failed for ${file.name}")
         }
     }
 }
@@ -1021,7 +1262,29 @@ class AndroidHostedProfileInstrumentationTest {
             .getString(AndroidHostedCommandContract.COMMAND_ARGUMENT)
         org.junit.Assume.assumeTrue(commandFile != null)
         requireNotNull(commandFile)
-        val observation = AndroidHostedProfileTestDriver(InstrumentationRegistry.getInstrumentation().targetContext).run(requireNotNull(commandFile))
+        org.junit.Assert.assertTrue("hosted Android logger initialization failed", initLogger())
+        val logger = GlobalContext.get().get<Logger>()
+        logger.log("Android hosted instrumentation started")
+        val observation = try {
+            AndroidHostedProfileTestDriver(
+                InstrumentationRegistry.getInstrumentation().targetContext,
+                diagnosticLog = logger::log,
+            ).run(requireNotNull(commandFile))
+        } catch (failure: Throwable) {
+            try {
+                logger.log(
+                    "[ERROR] Android hosted instrumentation failed\n" +
+                        failure.stackTraceToString(),
+                )
+            } catch (loggingFailure: Throwable) {
+                failure.addSuppressed(loggingFailure)
+            }
+            failure.printStackTrace()
+            throw failure
+        }
+        logger.log(
+            "Android hosted instrumentation completed errorCode=${observation.errorCode ?: "NONE"}",
+        )
         org.junit.Assert.assertNull("hosted Android driver reported an error", observation.errorCode)
     }
 }

@@ -17,6 +17,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import traceback
 from typing import Any
 
 
@@ -56,6 +57,54 @@ SIGNER_DIGEST = re.compile(r"certificate SHA-256 digest:\s*([0-9a-fA-F:]+)")
 
 class CandidateError(ValueError):
     """Raised when a candidate request or its resulting descriptor is invalid."""
+
+
+def _command_error(
+    label: str,
+    *,
+    returncode: int | None,
+    stdout: bytes | str | None,
+    stderr: bytes | str | None,
+) -> CandidateError:
+    return CandidateError(
+        f"{label}: returncode={returncode!r}\n"
+        f"stdout:\n{stdout!r}\n"
+        f"stderr:\n{stderr!r}"
+    )
+
+
+def _run_captured(
+    command: list[str],
+    *,
+    label: str,
+    environment: dict[str, str],
+    timeout: int,
+) -> subprocess.CompletedProcess[bytes]:
+    try:
+        completed = subprocess.run(
+            command,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise _command_error(
+            label,
+            returncode=getattr(error, "returncode", None),
+            stdout=getattr(error, "stdout", getattr(error, "output", None)),
+            stderr=getattr(error, "stderr", None),
+        ) from error
+    if completed.returncode != 0:
+        raise _command_error(
+            label,
+            returncode=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+    return completed
 
 
 def _absolute(path: Path, label: str) -> Path:
@@ -209,20 +258,12 @@ def _android_apksigner() -> Path:
 
 
 def _android_signer_digest(apksigner: Path, apk: Path, environment: dict[str, str]) -> str:
-    try:
-        completed = subprocess.run(
-            [str(apksigner), "verify", "--print-certs", str(apk)],
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=30,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise CandidateError("could not verify Android APK signer") from error
-    if completed.returncode != 0:
-        raise CandidateError("Android APK signer verification failed")
+    completed = _run_captured(
+        [str(apksigner), "verify", "--print-certs", str(apk)],
+        label="Android APK signer verification failed",
+        environment=environment,
+        timeout=30,
+    )
     output = (completed.stdout + completed.stderr).decode("utf-8", errors="replace")
     digests = [match.group(1).replace(":", "").lower() for match in SIGNER_DIGEST.finditer(output)]
     if len(digests) != 1 or len(digests[0]) != 64:
@@ -243,8 +284,9 @@ def _sign_android_pair(
     environment = os.environ.copy()
     environment["DOBBYVPN_LOCAL_KEYSTORE_PASSWORD"] = password
     environment["DOBBYVPN_LOCAL_KEY_PASSWORD"] = password
+    primary: BaseException | None = None
     try:
-        generated = subprocess.run(
+        _run_captured(
             [
                 str(keytool), "-genkeypair", "-noprompt", "-storetype", "JKS",
                 "-keystore", str(keystore), "-alias", "dobbyvpn-local",
@@ -253,17 +295,12 @@ def _sign_android_pair(
                 "-storepass:env", "DOBBYVPN_LOCAL_KEYSTORE_PASSWORD",
                 "-keypass:env", "DOBBYVPN_LOCAL_KEY_PASSWORD",
             ],
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            check=False,
+            label="could not create the local Android qualification signer",
+            environment=environment,
             timeout=60,
         )
-        if generated.returncode != 0:
-            raise CandidateError("could not create the local Android qualification signer")
         for unsigned, signed in ((unsigned_app, signed_app), (unsigned_companion, signed_companion)):
-            completed = subprocess.run(
+            _run_captured(
                 [
                     str(apksigner), "sign", "--ks", str(keystore),
                     "--ks-key-alias", "dobbyvpn-local",
@@ -271,26 +308,32 @@ def _sign_android_pair(
                     "--key-pass", "env:DOBBYVPN_LOCAL_KEY_PASSWORD",
                     "--out", str(signed), str(unsigned),
                 ],
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                check=False,
+                label="could not sign the local Android qualification APK",
+                environment=environment,
                 timeout=60,
             )
-            if completed.returncode != 0:
-                raise CandidateError("could not sign the local Android qualification APK")
         first_digest = _android_signer_digest(apksigner, signed_app, environment)
         companion_digest = _android_signer_digest(apksigner, signed_companion, environment)
         if first_digest != companion_digest:
             raise CandidateError("local Android APK signer certificates do not match")
     except OSError as error:
+        primary = error
         raise CandidateError("local Android signing tool failed") from error
+    except BaseException as error:
+        primary = error
+        raise
     finally:
         try:
             keystore.unlink()
         except FileNotFoundError:
             pass
+        except OSError as cleanup_error:
+            if primary is None:
+                raise
+            primary.add_note(
+                "local Android signer cleanup failed:\n"
+                + "".join(traceback.format_exception(cleanup_error)).rstrip()
+            )
         environment.pop("DOBBYVPN_LOCAL_KEYSTORE_PASSWORD", None)
         environment.pop("DOBBYVPN_LOCAL_KEY_PASSWORD", None)
 
@@ -767,7 +810,7 @@ def main(argv: list[str] | None = None) -> int:
             gradle_bin=args.gradle_bin,
         )
     except CandidateError as error:
-        print(f"local candidate rejected: {error}", file=sys.stderr)
+        traceback.print_exception(error)
         return 2
     print(json.dumps(descriptor, sort_keys=True, separators=(",", ":")))
     return 0

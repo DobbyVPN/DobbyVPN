@@ -13,15 +13,18 @@ import kotlinx.serialization.json.longOrNull
 internal object SessionEnvelopeDecoder {
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun <T> decode(payload: String, transform: (JsonObject) -> T): SessionControllerResult<T> = runCatching {
+    fun <T> decode(payload: String, transform: (JsonObject) -> T): SessionControllerResult<T> {
         val root = json.parseToJsonElement(payload).jsonObject
-        if (!root.sessionBool("ok")) {
-            val code = root["error"]?.jsonObject?.sessionString("code") ?: "INTERNAL"
-            return SessionControllerResult.Failure(message = code, code = code.toSessionFailureCode())
+        val ok = root["ok"]?.jsonPrimitive?.booleanOrNull ?: error("missing or invalid ok")
+        if (!ok) {
+            val failure = root["error"]?.jsonObject ?: error("failure envelope has no error")
+            val code = failure.sessionString("code").also { require(it.isNotBlank()) }
+            return SessionControllerResult.Failure(
+                message = failure.sessionOptionalString("message") ?: code,
+                code = code.toSessionFailureCode(),
+            )
         }
-        SessionControllerResult.Success(transform(root["result"]?.jsonObject ?: JsonObject(emptyMap())))
-    }.getOrElse {
-        SessionControllerResult.Failure(message = "INTERNAL", code = SessionFailureCode.INTERNAL)
+        return SessionControllerResult.Success(transform(root["result"]?.jsonObject ?: JsonObject(emptyMap())))
     }
 }
 
@@ -54,7 +57,7 @@ internal fun JsonObject.sessionInt(name: String): Int = this[name]?.jsonPrimitiv
 internal fun JsonObject.sessionBool(name: String): Boolean = this[name]?.jsonPrimitive?.booleanOrNull ?: false
 
 internal fun JsonObject.sessionArray(name: String): List<JsonObject> =
-    (this[name] as? JsonArray)?.mapNotNull { runCatching { it.jsonObject }.getOrNull() }.orEmpty()
+    (this[name] as? JsonArray)?.map { it.jsonObject }.orEmpty()
 
 internal fun String.toSessionProtocol(): SessionProtocol = when (this) {
     "OUTLINE" -> SessionProtocol.OUTLINE

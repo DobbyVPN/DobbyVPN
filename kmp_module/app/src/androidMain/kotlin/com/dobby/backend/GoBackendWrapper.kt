@@ -17,13 +17,16 @@ object GoBackendWrapper {
         // prepared shell for every callback, so stale callbacks fail closed.
         Dobbyvpn.registerSessionPlatform(object : PlatformCallbacks {
             override fun acquireTunnel(sessionId: String, generation: Long): Int =
-                PlatformServiceRegistry.current(sessionId)?.acquireTunnel(sessionId, generation) ?: -1
+                PlatformServiceRegistry.current(sessionId)?.acquireTunnel(sessionId, generation)
+                    ?: missingPlatform("acquireTunnel", generation, -1)
 
             override fun releaseTunnel(sessionId: String, generation: Long, fd: Int): Boolean =
-                PlatformServiceRegistry.current(sessionId)?.releaseTunnel(sessionId, generation, fd) ?: false
+                PlatformServiceRegistry.current(sessionId)?.releaseTunnel(sessionId, generation, fd)
+                    ?: missingPlatform("releaseTunnel", generation, false)
 
             override fun protectSocket(sessionId: String, generation: Long, fd: Int): Boolean =
-                PlatformServiceRegistry.current(sessionId)?.protectProtocolSocket(sessionId, generation, fd) ?: false
+                PlatformServiceRegistry.current(sessionId)?.protectProtocolSocket(sessionId, generation, fd)
+                    ?: missingPlatform("protectSocket", generation, false)
 
             override fun publishState(
                 sessionId: String,
@@ -34,8 +37,20 @@ object GoBackendWrapper {
                 profileProtocol: String,
                 failureCode: String,
             ) {
-                PlatformServiceRegistry.current(sessionId)?.publishState(sessionId, generation, sequence, state, failureCode)
+                val platform = PlatformServiceRegistry.current(sessionId)
+                if (platform == null) {
+                    missingPlatform("publishState", generation, Unit)
+                } else {
+                    platform.publishState(sessionId, generation, sequence, state, failureCode)
+                }
             }
         })
+    }
+
+    private fun <T> missingPlatform(operation: String, generation: Long, result: T): T {
+        IllegalStateException(
+            "$operation has no prepared Android platform for generation=$generation",
+        ).printStackTrace()
+        return result
     }
 }

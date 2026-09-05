@@ -26,40 +26,42 @@ internal class AndroidKeystoreSecretStore(
             // behind if the process died before its cleanup commit. It is
             // never a read fallback: remove it on every idempotent migration.
             if (preferences.contains(secureName(name))) {
-                preferences.edit().remove(name).commit()
+                check(preferences.edit().remove(name).commit()) {
+                    "legacy secret removal failed for $name"
+                }
                 return@forEach
             }
             if (!preferences.contains(name)) return@forEach
             val plaintext = preferences.getString(name, null) ?: return@forEach
-            write(name, plaintext) // commits ciphertext and plaintext removal together
+            check(write(name, plaintext)) {
+                "secure secret migration failed for $name"
+            }
         }
     }
 
     fun read(name: String, default: String = ""): String {
         val encoded = preferences.getString(secureName(name), null) ?: return default
-        return runCatching {
-            val payload = Base64.decode(encoded, Base64.NO_WRAP)
-            require(payload.size > IV_BYTES)
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                key,
-                GCMParameterSpec(TAG_BITS, payload, 0, IV_BYTES),
-            )
-            cipher.doFinal(payload, IV_BYTES, payload.size - IV_BYTES).decodeToString()
-        }.getOrDefault(default)
+        val payload = Base64.decode(encoded, Base64.NO_WRAP)
+        require(payload.size > IV_BYTES)
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            key,
+            GCMParameterSpec(TAG_BITS, payload, 0, IV_BYTES),
+        )
+        return cipher.doFinal(payload, IV_BYTES, payload.size - IV_BYTES).decodeToString()
     }
 
-    fun write(name: String, value: String): Boolean = runCatching {
+    fun write(name: String, value: String): Boolean {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, key)
         val ciphertext = cipher.doFinal(value.encodeToByteArray())
         val payload = cipher.iv + ciphertext
-        preferences.edit()
+        return preferences.edit()
             .putString(secureName(name), Base64.encodeToString(payload, Base64.NO_WRAP))
             .remove(name)
             .commit()
-    }.getOrDefault(false)
+    }
 
     private fun loadOrCreateKey(): SecretKey {
         val store = KeyStore.getInstance(KEYSTORE).apply { load(null) }

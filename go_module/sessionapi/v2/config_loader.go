@@ -3,6 +3,7 @@ package v2
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -61,7 +62,7 @@ func (l DefaultConfigLoader) Load(ctx context.Context, source []byte) (LoadedCon
 func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (LoadedConfig, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, http.NoBody)
 	if err != nil {
-		return LoadedConfig{}, failure(FailureInvalidArgument, "configuration URL is invalid")
+		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL is invalid", err)
 	}
 	requestCtx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
 	defer cancel()
@@ -86,15 +87,25 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 	request.Header.Set("User-Agent", "DobbyVPN/"+versionOrDev(l.Version))
 	response, err := clone.Do(request)
 	if err != nil {
-		return LoadedConfig{}, failure(FailureInvalidArgument, "configuration URL could not be fetched")
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return LoadedConfig{}, failure(FailureInvalidArgument, "configuration URL returned a non-success response")
+		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL could not be fetched", err)
 	}
 	limited := io.LimitReader(response.Body, maxConfigBytes+1)
-	body, err := io.ReadAll(limited)
-	if err != nil || len(body) > maxConfigBytes {
+	body, readErr := io.ReadAll(limited)
+	closeErr := response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return LoadedConfig{}, failureWithCause(
+			FailureInvalidArgument,
+			"configuration URL returned a non-success response",
+			errors.Join(fmt.Errorf("configuration URL returned HTTP %d", response.StatusCode), readErr, closeErr),
+		)
+	}
+	if readErr != nil {
+		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL response could not be read", errors.Join(readErr, closeErr))
+	}
+	if closeErr != nil {
+		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL response could not be closed", closeErr)
+	}
+	if len(body) > maxConfigBytes {
 		return LoadedConfig{}, failure(FailureInvalidArgument, "downloaded configuration exceeds the 1 MiB limit")
 	}
 	return LoadedConfig{Raw: body, Kind: ConfigSourceURL}, nil

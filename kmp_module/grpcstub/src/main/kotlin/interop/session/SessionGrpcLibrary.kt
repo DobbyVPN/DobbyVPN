@@ -20,7 +20,6 @@ import com.dobby.grpcproto.SessionWarning as ProtoWarning
 import com.dobby.grpcproto.VpnGrpcKt
 import com.google.protobuf.ByteString
 import io.grpc.Channel
-import io.grpc.StatusException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -32,33 +31,26 @@ import kotlinx.coroutines.flow.map
 open class SessionGrpcLibrary(channel: Channel) : SessionLibrary {
     private val stub = VpnGrpcKt.VpnCoroutineStub(channel)
 
-    override suspend fun getCapabilities(): SessionResult<SessionCapabilities> = try {
+    override suspend fun getCapabilities(): SessionResult<SessionCapabilities> =
         SessionResult.Success(stub.getCapabilities(SessionGetCapabilitiesRequest.getDefaultInstance()).toTransport())
-    } catch (_: StatusException) {
-        unavailable()
-    }
 
-    override suspend fun createSession(): SessionResult<String> = try {
+    override suspend fun createSession(): SessionResult<String> {
         val response = stub.createSession(SessionCreateSessionRequest.getDefaultInstance())
-        response.result { response.sessionId }
-    } catch (_: StatusException) {
-        unavailable()
+        return response.result { response.sessionId }
     }
 
-    override suspend fun recoverActiveSession(): SessionResult<String> = try {
+    override suspend fun recoverActiveSession(): SessionResult<String> {
         val response = stub.recoverActiveSession(Empty.getDefaultInstance())
-        response.result { response.sessionId }
-    } catch (_: StatusException) {
-        unavailable()
+        return response.result { response.sessionId }
     }
 
     override suspend fun configure(
         sessionId: String,
         commandId: String,
         rawConfig: ByteArray,
-    ): SessionResult<SessionConfiguration> = try {
+    ): SessionResult<SessionConfiguration> {
         val response = stub.configure(SessionRequests.configure(sessionId, commandId, rawConfig))
-        response.result {
+        return response.result {
             SessionConfiguration(
                 digest = response.digest,
                 profiles = response.profilesList.map(ProtoProfile::toTransport),
@@ -66,54 +58,44 @@ open class SessionGrpcLibrary(channel: Channel) : SessionLibrary {
                 sourceKind = response.sourceKind.toTransport(),
             )
         }
-    } catch (_: StatusException) {
-        unavailable()
     }
 
     override suspend fun start(
         sessionId: String,
         commandId: String,
         target: SessionStartTarget,
-    ): SessionResult<ULong> = try {
+    ): SessionResult<ULong> {
         val response = stub.start(SessionRequests.start(sessionId, commandId, target))
-        response.result { response.generation.toULong() }
-    } catch (_: StatusException) {
-        unavailable()
+        return response.result { response.generation.toULong() }
     }
 
     override suspend fun stop(
         sessionId: String,
         commandId: String,
         generation: ULong,
-    ): SessionResult<ULong> = try {
+    ): SessionResult<ULong> {
         val response = stub.stop(SessionRequests.stop(sessionId, commandId, generation))
-        response.result { response.generation.toULong() }
-    } catch (_: StatusException) {
-        unavailable()
+        return response.result { response.generation.toULong() }
     }
 
-    override suspend fun snapshot(sessionId: String): SessionResult<SessionSnapshot> = try {
+    override suspend fun snapshot(sessionId: String): SessionResult<SessionSnapshot> {
         val response = stub.snapshot(SessionSnapshotRequest.newBuilder().setSessionId(sessionId).build())
-        response.result { response.snapshot.toTransport() }
-    } catch (_: StatusException) {
-        unavailable()
+        return response.result { response.snapshot.toTransport() }
     }
 
-    override suspend fun observe(sessionId: String, afterSequence: ULong): SessionResult<SessionObservation> = try {
+    override suspend fun observe(sessionId: String, afterSequence: ULong): SessionResult<SessionObservation> {
         val response = stub.observe(
             SessionObserveRequest.newBuilder()
                 .setSessionId(sessionId)
                 .setAfterSequence(afterSequence.toLong())
                 .build(),
         )
-        response.result {
+        return response.result {
             SessionObservation(
                 events = response.eventsList.map { it.toTransport() },
                 nextSequence = response.nextSequence.toULong(),
             )
         }
-    } catch (_: StatusException) {
-        unavailable()
     }
 
     override fun watch(sessionId: String, afterSequence: ULong): Flow<SessionEvent> =
@@ -124,13 +106,11 @@ open class SessionGrpcLibrary(channel: Channel) : SessionLibrary {
                 .build(),
         ).map { it.toTransport() }
 
-    override suspend fun destroySession(sessionId: String): SessionResult<Unit> = try {
+    override suspend fun destroySession(sessionId: String): SessionResult<Unit> {
         val response = stub.destroySession(
             SessionDestroySessionRequest.newBuilder().setSessionId(sessionId).build(),
         )
-        response.result { Unit }
-    } catch (_: StatusException) {
-        unavailable()
+        return response.result { Unit }
     }
 }
 
@@ -167,9 +147,6 @@ internal object SessionRequests {
 
 private fun <T> result(hasFailure: Boolean, failure: ProtoFailure, value: () -> T): SessionResult<T> =
     if (hasFailure) SessionResult.Failure(failure.toTransport()) else SessionResult.Success(value())
-
-private fun unavailable(): SessionResult.Failure =
-    SessionResult.Failure(SessionFailure(SessionFailureCode.INTERNAL, "session service request failed"))
 
 private fun com.dobby.grpcproto.SessionCreateSessionResponse.result(value: () -> String) =
     result(hasFailure(), failure, value)

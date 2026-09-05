@@ -15,7 +15,8 @@ class IosLogStorageContractTests(unittest.TestCase):
         self.assertIn('return "$containerPath/$privateLogDirectoryName/$name".toPath()', source)
         self.assertIn("chmod(logFilePath.parent.toString(), 448.convert())", source)
         self.assertNotIn('return "$containerPath/$name".toPath()', source)
-        self.assertIn("logStorageInitializationAvailable = runCatching", source)
+        self.assertIn("failure.printStackTrace()", source)
+        self.assertNotIn("runCatching", source)
         self.assertNotIn('error("Failed to get shared log container")', source)
         self.assertNotIn('check(chmod(logFilePath.parent', source)
 

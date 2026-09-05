@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,30 @@ import (
 
 	"google.golang.org/grpc"
 )
+
+func captureStderr(t *testing.T, operation func()) string {
+	t.Helper()
+	original := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = writer
+	t.Cleanup(func() { os.Stderr = original })
+	operation()
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = original
+	return string(output)
+}
 
 type disconnectClientStub struct {
 	grpcproto.VpnClient
@@ -406,13 +432,43 @@ func TestDisconnectRequiresConfirmedSessionDestruction(t *testing.T) {
 }
 
 func TestReportFailureUsesConflictExitCodeOnlyForConflict(t *testing.T) {
-	conflict := &grpcproto.SessionFailure{Code: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CONFLICT}
-	if got := reportFailure(nil, conflict); got != exitConflict {
-		t.Fatalf("conflict exit=%d, want %d", got, exitConflict)
+	output := captureStderr(t, func() {
+		conflict := &grpcproto.SessionFailure{
+			Code: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CONFLICT,
+			Message: "exact conflict detail",
+		}
+		if got := reportFailure(errors.New("exact transport detail"), conflict); got != exitConflict {
+			t.Fatalf("conflict exit=%d, want %d", got, exitConflict)
+		}
+		unsupported := &grpcproto.SessionFailure{Code: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_UNSUPPORTED}
+		if got := reportFailure(nil, unsupported); got != exitRuntime {
+			t.Fatalf("unsupported exit=%d, want %d", got, exitRuntime)
+		}
+	})
+	for _, expected := range []string{
+		"exact transport detail",
+		"SESSION_FAILURE_CODE_CONFLICT",
+		"exact conflict detail",
+		"SESSION_FAILURE_CODE_UNSUPPORTED",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("failure output %q lacks %q", output, expected)
+		}
 	}
-	unsupported := &grpcproto.SessionFailure{Code: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_UNSUPPORTED}
-	if got := reportFailure(nil, unsupported); got != exitRuntime {
-		t.Fatalf("unsupported exit=%d, want %d", got, exitRuntime)
+}
+
+func TestCleanupSessionReturnsEveryFailure(t *testing.T) {
+	failure := cleanupSession(disconnectClientStub{}, "session", 0)
+	if failure == nil {
+		t.Fatal("incomplete cleanup unexpectedly succeeded")
+	}
+	for _, expected := range []string{
+		"cleanup session snapshot response is nil",
+		"destroy cleanup session response is nil",
+	} {
+		if !strings.Contains(failure.Error(), expected) {
+			t.Fatalf("cleanup failure %q lacks %q", failure, expected)
+		}
 	}
 }
 

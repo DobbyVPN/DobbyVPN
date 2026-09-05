@@ -104,7 +104,7 @@ class MainViewModel(
             }
             is SessionControllerResult.Failure -> {
                 configured = false
-                logger.log("Session configuration rejected: failureCode=${result.code.name}")
+                logger.error("Session configuration rejected: failureCode=${result.code.name} message=${result.message}")
                 publishFailure(result.code)
                 false
             }
@@ -132,7 +132,7 @@ class MainViewModel(
                     throw error
                 } catch (error: Exception) {
                     if (isActive) {
-                        logger.log("Session event stream failed: type=${error::class.simpleName ?: "UNKNOWN"}")
+                        logger.error("Session event stream failed\n${error.stackTraceToString()}")
                         publishFailure(SessionFailureCode.INTERNAL)
                     }
                 }
@@ -175,7 +175,7 @@ class MainViewModel(
             is SessionControllerResult.Failure -> {
                 startInFlight = false
                 lifecycle.failStart()
-                logger.log("Session start rejected: failureCode=${result.code.name}")
+                logger.error("Session start rejected: failureCode=${result.code.name} message=${result.message}")
                 publish(VpnConnectionState.DISCONNECTED, result.code)
                 false
             }
@@ -199,7 +199,9 @@ class MainViewModel(
             }) {
                 is SessionControllerResult.Success -> logger.log("Session stop accepted for generation=$generation")
                 is SessionControllerResult.Failure ->
-                    logger.log("Session stop rejected: generation=$generation failureCode=${result.code.name}")
+                    logger.error(
+                        "Session stop rejected: generation=$generation failureCode=${result.code.name} message=${result.message}",
+                    )
                         .also { publishFailure(result.code) }
             }
         }
@@ -219,7 +221,7 @@ class MainViewModel(
                 publish(VpnConnectionState.DISCONNECTED)
             }
             is SessionControllerResult.Failure ->
-                logger.log("Session destroy failed: failureCode=${result.code.name}")
+                logger.error("Session destroy failed: failureCode=${result.code.name} message=${result.message}")
                     .also { publishFailure(result.code) }
         }
     }
@@ -306,6 +308,9 @@ class MainViewModel(
                             lifecycleMutex.withLock { lifecycle.reset() }
                             configured = false
                         } else {
+                            logger.error(
+                                "Session snapshot failed: failureCode=${snapshot.code.name} message=${snapshot.message}",
+                            )
                             publishFailure(snapshot.code)
                         }
                     }
@@ -318,6 +323,7 @@ class MainViewModel(
                 lifecycleMutex.withLock { lifecycle.reset() }
                 configured = false
             } else {
+                logger.error("Session observation failed: failureCode=${result.code.name} message=${result.message}")
                 publishFailure(result.code)
             }
         }
