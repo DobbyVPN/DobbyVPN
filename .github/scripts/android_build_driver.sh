@@ -493,6 +493,15 @@ start_evidence_capture() {
     2> >(tee -- "$stderr_original" >&2)
 }
 
+# Duplicate diagnostic text to the inherited stderr stream without reopening
+# /dev/stderr.  The candidate helper may run with a restricted stderr pipe
+# whose /proc/self/fd entry is readable by the process but not reopenable.
+# Process substitution keeps the original bytes available to the parser on
+# stdout while cat writes them through the already-inherited descriptor.
+tee_stderr() {
+  tee >(cat >&2)
+}
+
 sync_path() {
   python3 - "$1" <<'PY'
 import os
@@ -743,7 +752,7 @@ if [[ -n "$trusted_helper_root" ]]; then
 fi
 java_bin=${JAVA_BIN:-"$(command -v java || true)"}
 [[ -n "$java_bin" && -x "$java_bin" ]] || { echo 'Java executable is required' >&2; exit 2; }
-java_version_output=$("$java_bin" -version 2>&1 | tee /dev/stderr)
+java_version_output=$("$java_bin" -version 2>&1 | tee_stderr)
 java_version=''
 java_version_pattern='version[[:space:]]+"([^"]+)"'
 while IFS= read -r java_line; do
@@ -771,7 +780,7 @@ tool_metadata_matches_pin() {
   local tool=$1
   # tee preserves every metadata byte on stderr; grep is only a derived
   # predicate and is never the diagnostic record.
-  "$go_bin" version -m "$tool" | tee /dev/stderr | \
+  "$go_bin" version -m "$tool" | tee_stderr | \
     grep -F "$mobile_module" | grep -F "$mobile_version" >/dev/null
 }
 ensure_mobile_tool() {
@@ -809,7 +818,7 @@ grep -F 'Pkg.Revision = 27.3.13750724' "$ANDROID_NDK_HOME/source.properties" >/d
   echo 'Android NDK revision is not 27.3.13750724' >&2
   exit 2
 }
-gradle_version=$("$gradle_bin" --version --no-daemon | tee /dev/stderr | awk '/^Gradle / && !seen {version=$2; seen=1} END {if (seen) print version}')
+gradle_version=$("$gradle_bin" --version --no-daemon | tee_stderr | awk '/^Gradle / && !seen {version=$2; seen=1} END {if (seen) print version}')
 [[ "$gradle_version" == '8.13' ]] || { echo 'Gradle version is not 8.13' >&2; exit 2; }
 
 gradle_offline=${DOBBYVPN_GRADLE_OFFLINE:-0}

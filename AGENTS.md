@@ -45,12 +45,12 @@ publication uses only the exact verified Release run's outputs.
   observed identities, screenshots, raw logs, VM state, or generated release
   artifacts.
 - Local VPN qualifications preserve every byte of the VPN application and VPN
-  service logs from start through cleanup. There is no standing requirement to
-  archive every test action, observation, error, timing, screenshot, system
-  snapshot, command stream, build transcript, cleanup record, or other
-  auxiliary evidence. Retain additional material only when the owner explicitly
-  requests it, a test contract defines it as an ordinary result, or a scoped
-  active-failure investigation requires it. If any log file is found to be
+  service logs from start through cleanup. They also preserve complete raw
+  stdout and stderr for every runner-invoked command from candidate preparation
+  through cleanup, including empty streams; missing or incomplete command
+  output fails the run. This does not require a broader archive of screenshots,
+  system snapshots, workspaces, caches, or unrelated machine state. If any log
+  file is found to be
   larger than 300 MB, stop the current work, investigate exactly what produced
   it and why, and report that explanation to the owner before proceeding. Do
   not impose an artificial cap or truncate the log, and do not infer any other
@@ -67,3 +67,17 @@ publication uses only the exact verified Release run's outputs.
 - Keep changes small, formatted, and covered by the existing product tests.
   Run focused checks after edits and report any failed, skipped, or
   missing-required-VPN-log check explicitly.
+
+## Universal failure diagnosis
+
+For every product build, package, install, emulator, runner, functional test,
+cleanup, or release operation, treat any error, timeout, exception, non-zero
+command, missing or partial output, unclear state, flaky result, logging
+defect, or cleanup problem as a held incident. Preserve complete stdout and
+stderr and the complete canonical application/service logs, inspect the first
+actionable product-side error and the live affected state, and do not describe
+a generic exception, exit code, or timeout as the root cause. Before teardown,
+deletion, retry, or release continuation, record exactly what failed, exactly
+what caused it (or that the cause remains unproven), and the specific fix or
+mitigation. A clear success is evidence-checked before normal cleanup; an
+incident on one platform must not silently change another platform's contract.

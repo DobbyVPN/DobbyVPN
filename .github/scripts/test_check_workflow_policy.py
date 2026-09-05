@@ -163,7 +163,11 @@ class DiagnosticOutputPolicyTests(unittest.TestCase):
                 self.assertNotRegex(source, r"version -m[^\n]*2>&1[^\n]*\|\s*grep")
         for name in sources:
             with self.subTest(source=name):
-                self.assertIn("tee /dev/stderr", sources[name])
+                if name == "android_build_driver.sh":
+                    self.assertIn("tee_stderr", sources[name])
+                    self.assertNotIn("tee /dev/stderr", sources[name])
+                else:
+                    self.assertIn("tee /dev/stderr", sources[name])
 
     def test_android_driver_uses_fresh_non_overwriting_evidence_files(self) -> None:
         source = (SCRIPT.parent / "android_build_driver.sh").read_text(encoding="utf-8")
