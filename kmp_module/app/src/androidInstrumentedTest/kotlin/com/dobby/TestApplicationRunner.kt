@@ -3,6 +3,7 @@ package com.dobby
 import android.app.Application
 import android.content.Context
 import android.os.Bundle
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.AndroidJUnitRunner
 import androidMainModule
 import androidVpnModule
@@ -19,7 +20,10 @@ import org.koin.core.context.stopKoin
 class TestApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        initLogFilePath(applicationContext)
+        // This Application belongs to the instrumentation APK; diagnostics and
+        // the service must use the VPN application's private files directory.
+        val targetContext = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        initLogFilePath(targetContext)
         check(initLogger()) { "Go logger initialization returned false" }
         DobbyVpnService.nativePlatformRegistrar = if (TestRuntimeOptions.realProfileEnabled) {
             GoBackendWrapper::registerSessionPlatform
@@ -29,7 +33,7 @@ class TestApplication : Application() {
         // Consent uses the real application activity. Reuse its dependencies
         // instead of maintaining an incomplete parallel test application graph.
         startDI(listOf(androidMainModule, androidVpnModule)) {
-            androidContext(applicationContext)
+            androidContext(targetContext)
         }
         // Koin definitions are lazy. Resolve the logger once so the
         // target application creates its canonical files/app_logs.txt before
