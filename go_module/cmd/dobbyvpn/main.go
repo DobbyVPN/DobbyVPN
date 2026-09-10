@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"go_module/grpcproto"
+	applicationlog "go_module/log"
 	sessionv2 "go_module/sessionapi/v2"
 )
 
@@ -47,6 +48,11 @@ func run(args []string) int {
 		}
 		return clearApplicationLog()
 	}
+	if err := initApplicationLogger(); err != nil {
+		fmt.Fprintf(os.Stderr, "dobby-cli: application logging unavailable errorType=%T error=%v\n", err, err)
+		return exitRuntime
+	}
+	applicationlog.Info("CLI", "dobby-cli command started", map[string]any{"command": args[0]})
 	if args[0] == "profile-inventory" {
 		if len(args) != 2 {
 			return usage("profile-inventory requires a config path or inline TOML")
@@ -69,6 +75,21 @@ func run(args []string) int {
 		}
 	}
 	return result
+}
+
+func initApplicationLogger() error {
+	path := strings.TrimSpace(os.Getenv("DOBBY_CLI_LOG_PATH"))
+	if path == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(home) == "" {
+			return errors.New("user home directory is empty")
+		}
+		path = applicationLogPath(home)
+	}
+	return applicationlog.SetPath(path)
 }
 
 func isHelpCommand(args []string) bool {
@@ -747,9 +768,21 @@ func failureOf(response failureResponse) *grpcproto.SessionFailure {
 
 func reportFailure(err error, failure *grpcproto.SessionFailure) int {
 	if err != nil {
+		if applicationlog.IsInitialized() {
+			applicationlog.Error("CLI", "operation transport failed", map[string]any{
+				"errorType": fmt.Sprintf("%T", err),
+				"error":     err.Error(),
+			})
+		}
 		fmt.Fprintf(os.Stderr, "dobby-cli: operation transport failed errorType=%T error=%v\n", err, err)
 	}
 	if failure != nil {
+		if applicationlog.IsInitialized() {
+			applicationlog.Error("CLI", "operation rejected", map[string]any{
+				"failureCode":    failure.GetCode().String(),
+				"failureMessage": failure.GetMessage(),
+			})
+		}
 		fmt.Fprintf(
 			os.Stderr,
 			"dobby-cli: operation rejected failureCode=%s failureMessage=%q\n",
@@ -758,6 +791,9 @@ func reportFailure(err error, failure *grpcproto.SessionFailure) int {
 		)
 	}
 	if err == nil && failure == nil {
+		if applicationlog.IsInitialized() {
+			applicationlog.Error("CLI", "operation failed because the service returned no result or diagnostic", nil)
+		}
 		fmt.Fprintln(os.Stderr, "dobby-cli: operation failed because the service returned no result or diagnostic")
 	}
 	if failure != nil && failure.GetCode() == grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CONFLICT {
@@ -779,6 +815,14 @@ func sessionFailureError(operation string, failure *grpcproto.SessionFailure) er
 }
 
 func reportCLIError(operation string, err error) {
+	if applicationlog.IsInitialized() {
+		fields := map[string]any{}
+		if err != nil {
+			fields["errorType"] = fmt.Sprintf("%T", err)
+			fields["error"] = err.Error()
+		}
+		applicationlog.Error("CLI", operation, fields)
+	}
 	fmt.Fprintf(os.Stderr, "dobby-cli: %s errorType=%T error=%v\n", operation, err, err)
 }
 

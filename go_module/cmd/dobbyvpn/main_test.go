@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"go_module/grpcproto"
+	applicationlog "go_module/log"
 	sessionv2 "go_module/sessionapi/v2"
 
 	"google.golang.org/grpc"
@@ -150,6 +151,24 @@ func TestExplicitServiceLogPathTakesPrecedenceOnEveryDesktop(t *testing.T) {
 	}
 	if client.path != path {
 		t.Fatalf("InitLogger path = %q, want %q", client.path, path)
+	}
+}
+
+func TestApplicationLoggerUsesTheQualificationPath(t *testing.T) {
+	applicationlog.Close()
+	t.Cleanup(func() { _ = applicationlog.Close() })
+	path := filepath.Join(t.TempDir(), "app.log")
+	t.Setenv("DOBBY_CLI_LOG_PATH", path)
+	if err := initApplicationLogger(); err != nil {
+		t.Fatal(err)
+	}
+	applicationlog.Info("CLI", "test application event", nil)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "test application event") {
+		t.Fatalf("application log = %q, want the CLI event", data)
 	}
 }
 
