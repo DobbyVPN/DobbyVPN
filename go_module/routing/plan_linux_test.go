@@ -182,7 +182,9 @@ func TestLinuxMarkedRoutingFailureRollsBackOnlyRouteCreatedByPlan(t *testing.T) 
 	}
 	want := []string{
 		"ip route add table 233 default via 192.0.2.1 dev eth0 proto 233",
+		"ip route add table 233 unreachable default proto 233 metric 1",
 		"ip rule add fwmark 233 lookup 233 priority 23333",
+		"ip route del table 233 unreachable default proto 233 metric 1",
 		"ip route del table 233 default via 192.0.2.1 dev eth0 proto 233",
 	}
 	if !reflect.DeepEqual(commands, want) {

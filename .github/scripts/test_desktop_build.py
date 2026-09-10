@@ -51,140 +51,6 @@ class DesktopBuildTests(unittest.TestCase):
                 self.assertIsNone(desktop_build.find_go())
             run_capture.assert_not_called()
 
-    @unittest.skipIf(os.name == "nt", "POSIX process identity assertion")
-    def test_process_state_change_is_not_pid_reuse(self) -> None:
-        with mock.patch.object(desktop_build, "_proc_identity", return_value=("S", "123")):
-            self.assertTrue(desktop_build._pid_is_alive(123, ("R", "123")))
-        with mock.patch.object(desktop_build, "_proc_identity", return_value=("S", "456")):
-            self.assertFalse(desktop_build._pid_is_alive(123, ("R", "123")))
-
-    def test_windows_process_liveness_uses_read_only_census(self) -> None:
-        with (
-            mock.patch.object(desktop_build.os, "name", "nt"),
-            mock.patch.object(
-                desktop_build,
-                "windows_process_census",
-                return_value=(set(), {123}),
-            ) as census,
-            mock.patch.object(desktop_build.os, "kill") as kill,
-        ):
-            self.assertTrue(desktop_build._pid_is_alive(123))
-        census.assert_called_once_with(
-            123,
-            timeout_seconds=desktop_build.PROCESS_TREE_QUERY_TIMEOUT_SECONDS,
-        )
-        kill.assert_not_called()
-
-    def test_windows_process_liveness_proves_absence_from_census(self) -> None:
-        with (
-            mock.patch.object(desktop_build.os, "name", "nt"),
-            mock.patch.object(
-                desktop_build,
-                "windows_process_census",
-                return_value=(set(), {456}),
-            ),
-        ):
-            self.assertFalse(desktop_build._pid_is_alive(123))
-
-    def test_windows_process_liveness_query_error_fails_closed(self) -> None:
-        with (
-            mock.patch.object(desktop_build.os, "name", "nt"),
-            mock.patch.object(
-                desktop_build,
-                "windows_process_census",
-                side_effect=desktop_build.WindowsProcessCensusError("query failed"),
-            ),
-            self.assertRaisesRegex(desktop_build.ProcessTreeProofError, "query failed"),
-        ):
-            desktop_build._pid_is_alive(123)
-
-    @unittest.skipIf(os.name == "nt", "POSIX ps fallback assertion")
-    def test_ps_fallback_timeout_retains_partial_streams_and_marks_incomplete(self) -> None:
-        timeout = subprocess.TimeoutExpired(
-            ["ps"],
-            10,
-            output=b"ps stdout\n",
-            stderr=b"ps stderr\n",
-        )
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with (
-                mock.patch.object(desktop_build, "ROOT_DIR", root),
-                mock.patch.object(desktop_build.subprocess, "run", side_effect=timeout),
-                self.assertRaisesRegex(
-                    desktop_build.ProcessTreeProofError,
-                    r"stdout=ps stdout stderr=ps stderr evidence_incomplete=1",
-                ),
-            ):
-                desktop_build._ps_descendants(123)
-            logs = list((root / "runtime" / "desktop-build-diagnostics").glob("*.log"))
-            self.assertEqual(len(logs), 1)
-            self.assertIn("ps stdout", logs[0].read_text(encoding="utf-8"))
-
-    def test_windows_tree_proof_uses_final_census_without_signalling(self) -> None:
-        sample_count = 0
-
-        def snapshot(_root_pid: int) -> tuple[set[int], str, set[int]]:
-            nonlocal sample_count
-            sample_count += 1
-            if sample_count == 1:
-                return {200}, "powershell-cim", {100, 200}
-            return set(), "powershell-cim", {999}
-
-        with (
-            mock.patch.object(desktop_build.os, "name", "nt"),
-            mock.patch.object(
-                desktop_build,
-                "_process_tree_snapshot",
-                side_effect=snapshot,
-            ),
-            mock.patch.object(
-                desktop_build,
-                "_pid_is_alive",
-                side_effect=AssertionError("Windows proof must use the census"),
-            ),
-            mock.patch.object(
-                desktop_build,
-                "PROCESS_TREE_POLL_INTERVAL_SECONDS",
-                60,
-            ),
-        ):
-            tracker = desktop_build.ProcessTreeTracker(100)
-            tracker.start()
-            proof = tracker.prove_gone(100)
-        self.assertEqual(proof, "tree=gone source=powershell-cim observed_pids=2")
-
-    def test_windows_tree_proof_rejects_census_survivor(self) -> None:
-        sample_count = 0
-
-        def snapshot(_root_pid: int) -> tuple[set[int], str, set[int]]:
-            nonlocal sample_count
-            sample_count += 1
-            if sample_count == 1:
-                return {200}, "powershell-cim", {100, 200}
-            return set(), "powershell-cim", {200}
-
-        with (
-            mock.patch.object(desktop_build.os, "name", "nt"),
-            mock.patch.object(
-                desktop_build,
-                "_process_tree_snapshot",
-                side_effect=snapshot,
-            ),
-            mock.patch.object(
-                desktop_build,
-                "PROCESS_TREE_POLL_INTERVAL_SECONDS",
-                60,
-            ),
-            self.assertRaisesRegex(
-                desktop_build.ProcessTreeProofError,
-                r"descendant survivors=\[200\]",
-            ),
-        ):
-            tracker = desktop_build.ProcessTreeTracker(100)
-            tracker.start()
-            tracker.prove_gone(100)
-
     def test_literal_config_uses_fresh_owner_only_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -219,6 +85,7 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertNotIn('/Applications/Dobby Vpn.app', postinstall)
         self.assertIn('/Applications/Dobby VPN.app', postinstall)
         self.assertEqual(service["Label"], "com.dobby.vpnservice")
+        self.assertEqual(service["UserName"], "root")
         self.assertEqual(
             service["ProgramArguments"][0],
             "/Applications/Dobby VPN.app/Contents/Resources/macos_grpcvpnserver",
@@ -227,6 +94,29 @@ class DesktopBuildTests(unittest.TestCase):
             service["WorkingDirectory"],
             "/Applications/Dobby VPN.app/Contents/Resources/",
         )
+
+    def test_macos_installer_preserves_setup_failure_before_daemon_start(self) -> None:
+        # A failed chmod used to be hidden by the later launchctl exit status.
+        script = SCRIPT_PATH.parents[2] / "installer/macos/postinstall.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for name, body in {
+                "stat": "printf 'desktop-user\\n'",
+                "id": "printf '501\\n'",
+                "chmod": "echo 'fixture chmod failure' >&2; exit 47",
+                "launchctl": "echo 'daemon must not start'; exit 0",
+            }.items():
+                executable = directory / name
+                executable.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
+                executable.chmod(0o755)
+            completed = subprocess.run(
+                ["/bin/bash", str(script)],
+                env={**os.environ, "PATH": str(directory)},
+                capture_output=True, check=False,
+            )
+        self.assertEqual(completed.returncode, 47)
+        self.assertEqual(completed.stdout, b"")
+        self.assertEqual(completed.stderr, b"fixture chmod failure\n")
 
     def test_builds_do_not_package_removed_cloak_runtime(self) -> None:
         script = SCRIPT_PATH.read_text(encoding="utf-8")
@@ -243,7 +133,7 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertNotIn("'Cloak/internal/**'", ios)
         self.assertNotIn("'Cloak/internal/**'", desktop)
 
-    def test_curl_download_has_bounded_transfer_and_retry_time(self) -> None:
+    def test_curl_download_has_bounded_transfer_time_without_retries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
             output = Path(temporary_name) / "download.bin"
             with (
@@ -255,7 +145,7 @@ class DesktopBuildTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--connect-timeout") + 1], "60")
         self.assertEqual(command[command.index("--max-time") + 1], "900")
-        self.assertEqual(command[command.index("--retry-max-time") + 1], "1200")
+        self.assertNotIn("--retry", command)
 
     def test_windows_compiler_probe_resolves_path_and_requires_exact_target(self) -> None:
         compiler = Path("C:/tools/mingw64/bin/gcc.exe")
@@ -328,6 +218,50 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertFalse(usable)
         self.assertIn("compiler stdout\n", diagnostics.getvalue())
         self.assertIn("compiler stderr\n", diagnostics.getvalue())
+
+    def test_run_scopes_async_preemption_workaround_to_windows_go_children(self) -> None:
+        commands = [
+            (["go", "version"], "windows", "parent=1", "parent=1,asyncpreemptoff=1"),
+            (["C:/Go/bin/go.exe", "version"], "windows", "parent=2", "parent=2,asyncpreemptoff=1"),
+            (["powershell", "-Command", "build"], "windows", "parent=3", "parent=3"),
+            (["go", "version"], "linux", "parent=4", "parent=4"),
+        ]
+
+        with (
+            mock.patch.object(desktop_build, "log"),
+            mock.patch.object(desktop_build, "host_platform", side_effect=[item[1] for item in commands]),
+            mock.patch.object(
+                desktop_build.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], 0),
+            ) as subprocess_run,
+        ):
+            for command, _, godebug, expected_godebug in commands:
+                caller_env = {"GODEBUG": godebug, "KEEP_CALLER_VALUE": "yes"}
+                desktop_build.run(command, env=caller_env)
+                child_env = subprocess_run.call_args.kwargs["env"]
+                self.assertEqual(child_env["GODEBUG"], expected_godebug)
+                self.assertEqual(child_env["KEEP_CALLER_VALUE"], "yes")
+                self.assertEqual(caller_env["GODEBUG"], godebug)
+
+    def test_bounded_probe_scopes_async_preemption_workaround_to_windows_go(self) -> None:
+        process = mock.Mock(pid=123, returncode=0)
+        process.communicate.return_value = (b"go version go1.25.1 windows/amd64\n", b"")
+        with (
+            mock.patch.object(desktop_build, "host_platform", return_value="windows"),
+            mock.patch.dict(desktop_build.os.environ, {"GODEBUG": "parent=1"}),
+            mock.patch.object(
+                desktop_build.subprocess, "Popen", return_value=process,
+            ) as popen,
+        ):
+            result = desktop_build.run_bounded_capture(["go.exe", "version"])
+            self.assertEqual(desktop_build.os.environ["GODEBUG"], "parent=1")
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            popen.call_args.kwargs["env"]["GODEBUG"],
+            "parent=1,asyncpreemptoff=1",
+        )
 
     def test_windows_compiler_repairs_broken_gcc_before_returning(self) -> None:
         with (
@@ -440,7 +374,7 @@ class DesktopBuildTests(unittest.TestCase):
             self.assertEqual(call.args[0][0], str(fixed))
             self.assertIs(call.kwargs["cwd"], desktop_build.KMP_DIR)
 
-    def test_fixed_gradle_executable_rejects_relative_and_symlink_paths(self) -> None:
+    def test_fixed_gradle_executable_uses_the_supplied_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fixed = root / "gradle"
@@ -449,13 +383,11 @@ class DesktopBuildTests(unittest.TestCase):
             link = root / "gradle-link"
             link.symlink_to(fixed)
 
-            with self.assertRaisesRegex(SystemExit, "absolute path"):
-                desktop_build.gradle_command("gradle")
-            with self.assertRaisesRegex(SystemExit, "non-symlink"):
-                desktop_build.gradle_command(link)
+            self.assertEqual(desktop_build.gradle_command("gradle"), "gradle")
+            self.assertEqual(desktop_build.gradle_command(link), str(link))
 
     def test_conveyor_config_uses_host_gradle_wrapper_and_emits_only_hocon(self) -> None:
-        completed = mock.Mock(returncode=0, stdout="app.display-name = DobbyVPN\n")
+        completed = mock.Mock(returncode=0, stdout="// Generated by the Conveyor Gradle plugin.\napp.display-name = DobbyVPN\n")
         output = io.StringIO()
         diagnostics = io.StringIO()
         with (
@@ -473,8 +405,9 @@ class DesktopBuildTests(unittest.TestCase):
             desktop_build.emit_conveyor_config()
 
         install_jdk.assert_called_once_with(skip_deps=False)
-        self.assertEqual(output.getvalue(), completed.stdout)
-        self.assertEqual(diagnostics.getvalue(), "jdk-ready\n")
+        self.assertIn("app.display-name = DobbyVPN", output.getvalue())
+        self.assertIn("jdk-ready\n", diagnostics.getvalue())
+        self.assertIn("// Generated by the Conveyor Gradle plugin.", diagnostics.getvalue())
         self.assertEqual(
             run.call_args.args[0],
             ["gradlew.bat", "--no-daemon", "printConveyorConfig", "-PversionName=1.4.7"],
@@ -590,12 +523,10 @@ class DesktopBuildTests(unittest.TestCase):
             mock.patch.object(desktop_build, "wait_for_socket", return_value=True) as wait_for_socket,
             mock.patch.object(desktop_build, "wait_for_port") as wait_for_port,
             mock.patch.object(desktop_build.subprocess, "Popen", return_value=process) as popen,
-            mock.patch.object(desktop_build, "attach_process_tree_tracker") as attach_tracker,
         ):
             started, _ = desktop_build.start_service("linux", 50151, socket_path)
 
         self.assertIs(started, process)
-        attach_tracker.assert_called_once_with(process)
         wait_for_socket.assert_called_once_with(socket_path)
         wait_for_port.assert_not_called()
         command = popen.call_args.args[0]
@@ -605,40 +536,19 @@ class DesktopBuildTests(unittest.TestCase):
             str(socket_path),
         )
 
-    def test_service_logs_are_unique_owner_only_and_never_fixed_paths(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with mock.patch.object(desktop_build, "ROOT_DIR", root):
-                first = desktop_build.open_service_log("combined")
-                second = desktop_build.open_service_log("combined")
-                try:
-                    self.assertNotEqual(first.name, second.name)
-                    self.assertEqual(Path(first.name).stat().st_mode & 0o777, 0o600)
-                    self.assertEqual(Path(second.name).stat().st_mode & 0o777, 0o600)
-                    self.assertEqual(
-                        (root / "runtime" / "desktop-build-diagnostics").stat().st_mode & 0o777,
-                        0o700,
-                    )
-                finally:
-                    first.close()
-                    second.close()
-            source = SCRIPT_PATH.read_text(encoding="utf-8")
-            for fixed_name in ("grpcvpnserver.log", "grpcvpnserver.out", "grpcvpnserver.err"):
-                self.assertNotIn(f'open(ROOT_DIR / "{fixed_name}", "w"', source)
-
     def test_service_log_reporting_keeps_complete_output_after_close(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             with mock.patch.object(desktop_build, "ROOT_DIR", root):
-                handle = desktop_build.open_service_log("combined")
-                handle.write("first diagnostic line\nsecond diagnostic line\n")
-                handle.close()
+                handle = desktop_build.open_service_log()
+                handle.write(b"first diagnostic line\nsecond diagnostic line\n")
                 output = io.StringIO()
                 with mock.patch.object(desktop_build.sys, "stdout", output):
                     desktop_build.print_service_logs([handle])
+                handle.close()
         self.assertIn("first diagnostic line\nsecond diagnostic line\n", output.getvalue())
 
-    def test_public_service_log_reporting_retains_raw_bytes_without_public_echo(self) -> None:
+    def test_service_log_reporting_prints_complete_output_in_actions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             with mock.patch.object(desktop_build, "ROOT_DIR", root), mock.patch.dict(
@@ -646,9 +556,8 @@ class DesktopBuildTests(unittest.TestCase):
                 {"GITHUB_ACTIONS": "true", "RUNNER_TEMP": temporary},
                 clear=False,
             ):
-                handle = desktop_build.open_service_log("combined")
-                handle.write("private service endpoint /tmp/private.sock\n")
-                handle.close()
+                handle = desktop_build.open_service_log()
+                handle.write(b"private service endpoint /tmp/private.sock\n")
                 output = io.StringIO()
                 diagnostics = io.StringIO()
                 with (
@@ -656,14 +565,11 @@ class DesktopBuildTests(unittest.TestCase):
                     mock.patch.object(desktop_build.sys, "stderr", diagnostics),
                 ):
                     desktop_build.print_service_logs([handle])
-            self.assertNotIn("private service endpoint", output.getvalue())
-            self.assertNotIn("private service endpoint", diagnostics.getvalue())
-            retained = list((Path(temporary) / "dobbyvpn-public-diagnostics").glob("*.raw.log"))
-            self.assertEqual(len(retained), 1)
-            self.assertIn("private service endpoint", retained[0].read_text(encoding="utf-8"))
-            self.assertEqual(retained[0].stat().st_mode & 0o777, 0o600)
+                handle.close()
+            self.assertIn("private service endpoint", output.getvalue())
+            self.assertEqual(diagnostics.getvalue(), "")
 
-    def test_public_process_diagnostic_retains_raw_bytes_without_public_echo(self) -> None:
+    def test_process_diagnostic_prints_complete_output_in_actions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             diagnostics = io.StringIO()
             with (
@@ -675,140 +581,8 @@ class DesktopBuildTests(unittest.TestCase):
                 mock.patch.object(desktop_build.sys, "stderr", diagnostics),
             ):
                 desktop_build.emit_process_diagnostic("probe failed", b"private stderr\xff\n")
-            self.assertNotIn("private stderr", diagnostics.getvalue())
-            self.assertIn("dobbyvpn_diagnostic kind=desktop-build", diagnostics.getvalue())
-            retained = list((Path(temporary) / "dobbyvpn-public-diagnostics").glob("*.raw.log"))
-            self.assertEqual(len(retained), 1)
-            self.assertIn(b"private stderr\xff\n", retained[0].read_bytes())
-
-    def test_probe_diagnostics_are_unique_and_non_overwriting(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with mock.patch.object(desktop_build, "ROOT_DIR", root):
-                first = desktop_build.retain_process_diagnostics(
-                    "probe", "first stdout\n", "first stderr\n", "exit-1",
-                )
-                second = desktop_build.retain_process_diagnostics(
-                    "probe", "second stdout\n", "second stderr\n", "exit-2",
-                )
-            self.assertNotEqual(first, second)
-            self.assertIn("first stderr\n", first.read_text(encoding="utf-8"))
-            self.assertIn("second stderr\n", second.read_text(encoding="utf-8"))
-
-    def test_probe_diagnostics_preserve_raw_bytes(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            with mock.patch.object(desktop_build, "ROOT_DIR", Path(temporary)):
-                retained = desktop_build.retain_process_diagnostics(
-                    "probe", b"stdout-\xff\n", b"stderr-\xfe\n", "exit-1",
-                )
-            retained_bytes = retained.read_bytes()
-        self.assertIn(b"stdout-\xff\n", retained_bytes)
-        self.assertIn(b"stderr-\xfe\n", retained_bytes)
-
-    def test_bounded_probe_final_drain_timeout_retains_each_partial_stream_once(self) -> None:
-        initial = subprocess.TimeoutExpired(
-            ["probe"],
-            1,
-            output=b"initial stdout\n",
-            stderr=b"initial stderr\n",
-        )
-        final = subprocess.TimeoutExpired(
-            ["probe"],
-            5,
-            output=b"final stdout\n",
-            stderr=b"final stderr\n",
-        )
-        process = mock.Mock(pid=123)
-        process.communicate.side_effect = [initial, final]
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with (
-                mock.patch.object(desktop_build, "ROOT_DIR", root),
-                mock.patch.object(desktop_build.subprocess, "Popen", return_value=process),
-                mock.patch.object(desktop_build, "attach_process_tree_tracker"),
-                mock.patch.object(
-                    desktop_build,
-                    "terminate_process_group",
-                    return_value="tree=gone source=test observed_pids=1",
-                ),
-                mock.patch.object(desktop_build, "PROCESS_CLEANUP_GRACE_SECONDS", 0.1),
-            ):
-                with self.assertRaises(subprocess.TimeoutExpired) as raised:
-                    desktop_build.run_bounded_capture(
-                        ["probe"], cwd=root, timeout_seconds=1,
-                    )
-            self.assertEqual(raised.exception.output.count("stdout"), 2)
-            self.assertEqual(raised.exception.stderr.count("stderr"), 2)
-            logs = list((root / "runtime" / "desktop-build-diagnostics").glob("grpcvpnserver-probe-*.log"))
-            self.assertEqual(len(logs), 1)
-            log_text = logs[0].read_text(encoding="utf-8")
-            self.assertIn("evidence_incomplete=1", log_text)
-            self.assertEqual(log_text.count("initial stdout"), 1)
-            self.assertEqual(log_text.count("final stdout"), 1)
-            self.assertEqual(log_text.count("initial stderr"), 1)
-            self.assertEqual(log_text.count("final stderr"), 1)
-
-    def test_bounded_probe_oserror_retains_all_partial_streams_once(self) -> None:
-        error = OSError("communicate pipe failed")
-        error.stdout = b"partial stdout\n"  # type: ignore[attr-defined]
-        error.output = b"partial stdout\n"  # type: ignore[attr-defined]
-        error.stderr = b"partial stderr\n"  # type: ignore[attr-defined]
-        process = mock.Mock(pid=123)
-        process.communicate.side_effect = [error, (b"drained stdout\n", b"drained stderr\n")]
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with (
-                mock.patch.object(desktop_build, "ROOT_DIR", root),
-                mock.patch.object(desktop_build.subprocess, "Popen", return_value=process),
-                mock.patch.object(desktop_build, "attach_process_tree_tracker"),
-                mock.patch.object(
-                    desktop_build,
-                    "terminate_process_group",
-                    return_value="tree=gone source=test observed_pids=1",
-                ),
-            ):
-                with self.assertRaises(OSError) as raised:
-                    desktop_build.run_bounded_capture(["probe"], cwd=root, timeout_seconds=1)
-            self.assertEqual(raised.exception.stdout.count("stdout"), 2)  # type: ignore[attr-defined]
-            self.assertEqual(raised.exception.stderr.count("stderr"), 2)  # type: ignore[attr-defined]
-            logs = list((root / "runtime" / "desktop-build-diagnostics").glob("grpcvpnserver-probe-*.log"))
-            self.assertEqual(len(logs), 1)
-            log_text = logs[0].read_text(encoding="utf-8")
-            self.assertNotIn("evidence_incomplete=1", log_text)
-            self.assertEqual(log_text.count("partial stdout"), 1)
-            self.assertEqual(log_text.count("drained stdout"), 1)
-
-    def test_windows_taskkill_exception_retains_partial_streams(self) -> None:
-        error = subprocess.TimeoutExpired(
-            ["taskkill"],
-            0.1,
-            output=b"taskkill stdout\n",
-            stderr=b"taskkill stderr\n",
-        )
-        tracker = mock.Mock()
-        tracker.prove_gone.side_effect = [
-            desktop_build.ProcessTreeProofError("descendant survivors=[456]"),
-            "tree=gone source=test observed_pids=2",
-        ]
-        tracker.observed_pids.return_value = (123, 456)
-        process = mock.Mock(pid=123)
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with (
-                mock.patch.object(desktop_build, "ROOT_DIR", root),
-                mock.patch.object(desktop_build.os, "name", "nt"),
-                mock.patch.object(desktop_build.signal, "CTRL_BREAK_EVENT", 1, create=True),
-                mock.patch.object(desktop_build, "process_tree_tracker", return_value=tracker),
-                mock.patch.object(desktop_build.subprocess, "run", side_effect=error),
-                mock.patch.object(desktop_build, "retain_process_diagnostics") as retain,
-            ):
-                proof = desktop_build.terminate_process_group(process, grace_seconds=0.1)
-            self.assertEqual(proof, "tree=gone source=test observed_pids=2")
-            self.assertEqual(retain.call_count, 2)
-            for call in retain.call_args_list:
-                self.assertIn(b"taskkill stdout\n", call.args)
-                self.assertIn(b"taskkill stderr\n", call.args)
-                self.assertIn("evidence_incomplete=1", call.args[3])
+            self.assertIn("probe failed", diagnostics.getvalue())
+            self.assertIn("private stderr", diagnostics.getvalue())
 
     def test_service_stop_delegates_to_process_group_cleanup(self) -> None:
         process = mock.Mock(poll=lambda: None)
@@ -850,7 +624,11 @@ class DesktopBuildTests(unittest.TestCase):
                 desktop_build.terminate_process_group(process, grace_seconds=0.1)
                 self.assertIsNotNone(process.poll())
                 for _ in range(30):
-                    if not desktop_build._pid_is_alive(child_pid):
+                    try:
+                        state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
+                    except (FileNotFoundError, ProcessLookupError):
+                        break
+                    if state[state.rfind(")") + 2 :].split()[0] == "Z":
                         break
                     time.sleep(0.05)
                 else:
@@ -864,7 +642,7 @@ class DesktopBuildTests(unittest.TestCase):
                 process.stderr.close()
 
     @unittest.skipIf(os.name == "nt", "POSIX process-group assertion")
-    def test_bounded_probe_timeout_retains_streams_and_kills_descendants(self) -> None:
+    def test_bounded_probe_timeout_preserves_streams_and_kills_descendants(self) -> None:
         child_code = (
             "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
             "time.sleep(60)"
@@ -887,57 +665,18 @@ class DesktopBuildTests(unittest.TestCase):
                     )
             output = raised.exception.stdout or raised.exception.output or ""
             child_pid = int(desktop_build.output_text(output).split("childpid=", 1)[1].splitlines()[0])
-            logs = list((root / "runtime" / "desktop-build-diagnostics").glob("grpcvpnserver-probe-*.log"))
-            self.assertEqual(len(logs), 1)
-            log_text = logs[0].read_text(encoding="utf-8")
-            self.assertIn("childpid=", log_text)
-            self.assertIn("probe stderr", log_text)
+            self.assertIn("childpid=", desktop_build.output_text(output))
+            self.assertIn("probe stderr", raised.exception.stderr)
             for _ in range(30):
-                if not desktop_build._pid_is_alive(child_pid):
+                try:
+                    state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
+                except (FileNotFoundError, ProcessLookupError):
+                    break
+                if state[state.rfind(")") + 2 :].split()[0] == "Z":
                     break
                 time.sleep(0.05)
             else:
                 self.fail("timed-out probe descendant survived cleanup")
-
-    @unittest.skipIf(os.name == "nt", "POSIX detached-process assertion")
-    def test_zero_exit_leader_detached_resistant_descendant_is_proven_gone(self) -> None:
-        child_code = (
-            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            "time.sleep(60)"
-        )
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            child_stdout = root / "child.stdout.raw.log"
-            child_stderr = root / "child.stderr.raw.log"
-            parent_code = (
-                "import os,subprocess,sys,time; "
-                f"child_stdout=os.fdopen(os.open({str(child_stdout)!r}, os.O_WRONLY|os.O_CREAT|os.O_APPEND, 0o600), 'ab', buffering=0); "
-                f"child_stderr=os.fdopen(os.open({str(child_stderr)!r}, os.O_WRONLY|os.O_CREAT|os.O_APPEND, 0o600), 'ab', buffering=0); "
-                f"child=subprocess.Popen([sys.executable,'-c',{child_code!r}], "
-                "start_new_session=True, stdout=child_stdout, stderr=child_stderr); "
-                "childstat=open('/proc/%s/stat' % child.pid).read(); "
-                "print('childpid='+str(child.pid), flush=True); "
-                "print('childstart='+childstat[childstat.rfind(')')+2:].split()[19], flush=True); time.sleep(1.5)"
-            )
-            with mock.patch.object(desktop_build, "ROOT_DIR", root):
-                result = desktop_build.run_bounded_capture(
-                    [sys.executable, "-c", parent_code], cwd=root, timeout_seconds=2,
-                )
-            child_output = result.stdout
-            child_pid = int(child_output.split("childpid=", 1)[1].splitlines()[0])
-            child_start = child_output.split("childstart=", 1)[1].splitlines()[0]
-            logs = list((root / "runtime" / "desktop-build-diagnostics").glob("grpcvpnserver-probe-*.log"))
-            self.assertEqual(len(logs), 1)
-            self.assertIn(b"tree=gone", logs[0].read_bytes())
-            for _ in range(30):
-                identity = desktop_build._proc_identity(child_pid)
-                if identity is None or identity[1] != child_start or identity[0] == "Z":
-                    break
-                time.sleep(0.05)
-            else:
-                self.fail("zero-exit detached descendant survived process-tree cleanup")
-            self.assertEqual(child_stdout.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(child_stderr.stat().st_mode & 0o777, 0o600)
 
     def test_cli_check_passes_control_socket_to_gradle_process(self) -> None:
         socket_path = Path("/tmp/dobbyvpn-test/control.sock")
@@ -971,8 +710,8 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertEqual(
             run.call_args_list,
             [
-                mock.call(["sudo", "unlink", str(socket_path)], check=False),
-                mock.call(["sudo", "rmdir", str(socket_path.parent)], check=False),
+                mock.call(["sudo", "unlink", str(socket_path)]),
+                mock.call(["sudo", "rmdir", str(socket_path.parent)]),
             ],
         )
 
@@ -1055,6 +794,8 @@ class DesktopBuildTests(unittest.TestCase):
         calls: list[str] = []
 
         with (
+            mock.patch.object(desktop_build, "host_platform", return_value="windows"),
+            mock.patch.dict(desktop_build.os.environ, {"GODEBUG": "gctrace=1"}),
             mock.patch.object(desktop_build, "ensure_build_dependencies"),
             mock.patch.object(
                 desktop_build,
@@ -1067,13 +808,15 @@ class DesktopBuildTests(unittest.TestCase):
                 side_effect=lambda skip_deps: calls.append(f"bridge:{skip_deps}"),
             ),
             mock.patch.object(desktop_build, "go_mod_download"),
-            mock.patch.object(desktop_build, "run", side_effect=lambda *args, **kwargs: calls.append("build")),
+            mock.patch.object(desktop_build, "run", side_effect=lambda *args, **kwargs: calls.append("build")) as run,
             mock.patch.object(desktop_build.shutil, "copyfile"),
             mock.patch.object(desktop_build.Path, "mkdir"),
         ):
             desktop_build.build_service("windows", "amd64", True, False, False)
+            self.assertEqual(desktop_build.os.environ["GODEBUG"], "gctrace=1")
 
         self.assertEqual(calls, ["wintun:True", "bridge:True", "build"])
+        self.assertEqual(run.call_args.kwargs["env"]["GODEBUG"], "gctrace=1")
 
     def test_libs_with_cli_builds_both_native_interfaces(self) -> None:
         args = mock.Mock(

@@ -1,9 +1,9 @@
 // Package v2 is the transport-neutral API for a DobbyVPN session.
 //
-// It deliberately does not bind a protocol implementation.  Desktop gRPC and
+// It deliberately does not bind a protocol implementation. Desktop gRPC and
 // mobile bindings can use the same manager while supplying their own Runtime
-// and PlatformAdapter.  In particular, neither an event nor a Snapshot exposes
-// a connection URL, credential, or the raw TOML.
+// and PlatformAdapter. Session events and snapshots carry control state and
+// profile identity; protocol payloads remain in the runtime.
 package v2
 
 import (
@@ -62,15 +62,20 @@ const (
 	FailureCleanup         FailureCode = "CLEANUP_FAILED"
 )
 
-// Error is safe for UI/IPC use.  Message must never be populated with a raw
-// configuration fragment or a credential.
+// Error carries a stable caller-facing classification and message.
 type Error struct {
 	Code    FailureCode
 	Message string
 	Cause   error
 }
 
-func (e *Error) Error() string { return string(e.Code) + ": " + e.Message }
+func (e *Error) Error() string {
+	message := string(e.Code) + ": " + e.Message
+	if e.Cause != nil {
+		message += ": " + e.Cause.Error()
+	}
+	return message
+}
 
 func (e *Error) Unwrap() error { return e.Cause }
 
@@ -99,8 +104,7 @@ type Capabilities struct {
 	Features  []Capability
 }
 
-// ProfileSummary is safe to return to an untrusted UI.  It intentionally has
-// no server/address/config field.
+// ProfileSummary is the connection inventory returned by session status.
 type ProfileSummary struct {
 	Index       int
 	Protocol    Protocol
@@ -135,31 +139,28 @@ type StartResult struct{ Generation uint64 }
 
 type StopResult struct{ Generation uint64 }
 
-// HealthResult reports the generation which was evaluated. An unhealthy
-// AUTO_SELECT generation is released before deterministic failover starts;
-// an explicitly selected profile fails without substituting another profile.
-type HealthResult struct{ Generation uint64 }
-
 // Event is an append-only, monotonically sequenced transition.  A failure is
 // typed so platform code never needs to parse log/error strings.
 type Event struct {
-	SessionID  string
-	Generation uint64
-	Sequence   uint64
-	State      State
-	Profile    *ProfileSummary
-	Failure    FailureCode
-	Warning    *Warning
+	SessionID      string
+	Generation     uint64
+	Sequence       uint64
+	State          State
+	Profile        *ProfileSummary
+	Failure        FailureCode
+	FailureMessage string
+	Warning        *Warning
 }
 
 type SnapshotResult struct {
-	SessionID       string
-	Generation      uint64
-	State           State
-	Configured      bool
-	ActiveProfile   *ProfileSummary
-	LastFailure     FailureCode
-	CleanupComplete bool
+	SessionID          string
+	Generation         uint64
+	State              State
+	Configured         bool
+	ActiveProfile      *ProfileSummary
+	LastFailure        FailureCode
+	LastFailureMessage string
+	CleanupComplete    bool
 }
 
 type ObserveResult struct {
@@ -180,11 +181,10 @@ type RuntimeProfile struct {
 	Summary          ProfileSummary
 	NormalizedFormat ConfigFormat
 	NormalizedConfig []byte
-	// ExcludeCIDRs and PreflightHosts are interpreted once by Go and remain
-	// private to the runtime. Platform shells must not parse routing or DNS
-	// inputs from the original configuration.
-	ExcludeCIDRs   []string
-	PreflightHosts []string
+	// ExcludeCIDRs is interpreted once by Go and remains private to the
+	// runtime. Platform shells must not parse routing inputs from the original
+	// configuration.
+	ExcludeCIDRs []string
 }
 
 // ConfigFormat identifies the representation a protocol runtime should use.
@@ -211,8 +211,7 @@ type RuntimeLease interface{ Stop(context.Context) error }
 // checks. The runtime applies its own failure threshold and sends at most one
 // notification for a lease. Closing the channel means monitoring stopped.
 //
-// The manager deliberately treats this as optional so existing Runtime
-// implementations and the public ReportHealth compatibility path keep working.
+// Runtimes without connected-health checks return a plain RuntimeLease.
 type HealthMonitoringLease interface {
 	RuntimeLease
 	HealthFailures() <-chan struct{}
@@ -225,7 +224,7 @@ type HealthMonitoringLease interface {
 type PlatformAdapter interface {
 	PrepareTunnel(context.Context, SessionRef) (PlatformLease, error)
 	ProtectSocket(context.Context, SessionRef, int) error
-	PublishState(context.Context, Event) error
+	PublishState(context.Context, Event)
 }
 
 type PlatformLease interface{ Release(context.Context) error }
@@ -233,7 +232,6 @@ type PlatformLease interface{ Release(context.Context) error }
 type ManagerOptions struct {
 	Runtime  Runtime
 	Platform PlatformAdapter
-	Audit    AuditSink
 	Loader   ConfigLoader
 }
 
@@ -242,7 +240,6 @@ type Manager struct {
 	runtime  Runtime
 	platform PlatformAdapter
 	loader   ConfigLoader
-	audit    *auditRecorder
 	sessions map[string]*session
 	newID    func() string
 	activeID string
@@ -269,6 +266,7 @@ type session struct {
 
 	active              *ProfileSummary
 	lastFailure         FailureCode
+	lastFailureMessage  string
 	cleanupDone         bool
 	cleanupFailed       bool
 	cancel              context.CancelFunc
@@ -283,8 +281,6 @@ type session struct {
 	watchers            map[chan Event]struct{}
 	done                chan struct{}
 	destroyed           bool
-	auditState          State
-	publisher           *eventPublisher
 }
 
 // NewManager never starts a real core.  Its default runtime fails with the
@@ -303,14 +299,12 @@ func NewManager(options ManagerOptions) *Manager {
 		loader = DefaultConfigLoader{}
 	}
 	return &Manager{
-		runtime: r, platform: p, loader: loader, audit: newAuditRecorder(options.Audit),
+		runtime: r, platform: p, loader: loader,
 		sessions: make(map[string]*session), newID: randomID,
 	}
 }
 
 func (m *Manager) GetCapabilities(context.Context) Capabilities {
-	operation := m.audit.begin("get_capabilities")
-	defer operation.end(nil)
 	return Capabilities{
 		Version:   APIVersion,
 		Protocols: []Protocol{ProtocolOutline, ProtocolXray, ProtocolTrustTunnel},
@@ -319,15 +313,13 @@ func (m *Manager) GetCapabilities(context.Context) Capabilities {
 }
 
 func (m *Manager) CreateSession(context.Context) (id string, err error) {
-	operation := m.audit.begin("create_session")
-	defer func() { operation.end(err) }()
 	id = m.newID()
 	if id == "" {
 		return "", failure(FailureInternal, "could not allocate a session ID")
 	}
 	s := &session{
-		id: id, state: StateIdle, auditState: StateIdle, cleanupDone: true,
-		commands: make(map[string]commandRecord), watchers: make(map[chan Event]struct{}), done: make(chan struct{}), publisher: newEventPublisher(),
+		id: id, state: StateIdle, cleanupDone: true,
+		commands: make(map[string]commandRecord), watchers: make(map[chan Event]struct{}), done: make(chan struct{}),
 	}
 	m.mu.Lock()
 	if m.activeID != "" {
@@ -336,8 +328,6 @@ func (m *Manager) CreateSession(context.Context) (id string, err error) {
 	}
 	m.sessions[id] = s
 	m.mu.Unlock()
-	go m.publishEvents(s.publisher) // #nosec G118 -- the publisher intentionally owns the session lifetime, not one request.
-	m.audit.snapshot(snapshotLocked(s), "create_session")
 	return id, nil
 }
 
@@ -405,8 +395,6 @@ func (m *Manager) RecoverActiveSession(context.Context) (string, error) {
 }
 
 func (m *Manager) Configure(ctx context.Context, sessionID, commandID string, rawConfig []byte) (result ConfigureResult, err error) {
-	operation := m.audit.begin("configure")
-	defer func() { operation.end(err) }()
 	s, err := m.get(sessionID)
 	if err != nil {
 		return ConfigureResult{}, err
@@ -443,13 +431,14 @@ func (m *Manager) Configure(ctx context.Context, sessionID, commandID string, ra
 	if loadErr != nil {
 		s.commands[commandID] = commandRecord{op: commandConfigure, err: loadErr}
 		s.lastFailure = CodeOf(loadErr)
+		s.lastFailureMessage = loadErr.Error()
 		s.state = StateFailed
-		m.appendLocked(s, Event{State: StateFailed, Failure: CodeOf(loadErr)})
+		m.appendLocked(s, Event{State: StateFailed, Failure: CodeOf(loadErr), FailureMessage: loadErr.Error()})
 		s.mu.Unlock()
 		return ConfigureResult{}, loadErr
 	}
 	s.profiles, s.digest, s.warnings, s.configured = parsed.profiles, parsed.digest, parsed.warnings, true
-	s.active, s.lastFailure, s.state, s.cleanupDone, s.cleanupFailed = nil, "", StateConfigured, true, false
+	s.active, s.lastFailure, s.lastFailureMessage, s.state, s.cleanupDone, s.cleanupFailed = nil, "", "", StateConfigured, true, false
 	result = ConfigureResult{Digest: s.digest, Profiles: summaries(s.profiles), Warnings: cloneWarnings(s.warnings), SourceKind: loaded.Kind}
 	s.commands[commandID] = commandRecord{op: commandConfigure, config: result}
 	m.appendLocked(s, Event{State: StateConfigured})
@@ -462,8 +451,6 @@ func (m *Manager) Configure(ctx context.Context, sessionID, commandID string, ra
 }
 
 func (m *Manager) Start(requestCtx context.Context, sessionID, commandID string, target StartTarget) (result StartResult, err error) {
-	operation := m.audit.begin("start")
-	defer func() { operation.end(err) }()
 	s, err := m.get(sessionID)
 	if err != nil {
 		return StartResult{}, err
@@ -523,7 +510,7 @@ func (m *Manager) Start(requestCtx context.Context, sessionID, commandID string,
 	s.generation++
 	generation := s.generation
 	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
-	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure = cancel, &ledger{}, make(chan struct{}), false, false, nil, ""
+	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure, s.lastFailureMessage = cancel, &ledger{}, make(chan struct{}), false, false, nil, "", ""
 	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = target, false, ""
 	s.state = StateProbing
 	result = StartResult{Generation: generation}
@@ -535,8 +522,6 @@ func (m *Manager) Start(requestCtx context.Context, sessionID, commandID string,
 }
 
 func (m *Manager) Stop(_ context.Context, sessionID, commandID string, generation uint64) (result StopResult, err error) {
-	operation := m.audit.begin("stop")
-	defer func() { operation.end(err) }()
 	s, err := m.get(sessionID)
 	if err != nil {
 		return StopResult{}, err
@@ -596,8 +581,6 @@ func (m *Manager) Stop(_ context.Context, sessionID, commandID string, generatio
 // Runtimes normally receive this as a closure from their binding before each
 // non-loopback protocol dial. A protection failure aborts that dial.
 func (m *Manager) ProtectSocket(ctx context.Context, ref SessionRef, fd int, loopback bool) (err error) {
-	operation := m.audit.begin("protect_socket")
-	defer func() { operation.end(err) }()
 	if fd < 0 {
 		return failure(FailureInvalidArgument, "socket descriptor must be non-negative")
 	}
@@ -620,29 +603,13 @@ func (m *Manager) ProtectSocket(ctx context.Context, ref SessionRef, fd int, loo
 	return nil
 }
 
-// ReportHealth accepts a generation-correlated health result. An unhealthy
-// connected generation is fully cleaned up before AUTO_SELECT failover. A
-// PROFILE_INDEX generation fails in place so its requested profile identity
-// cannot silently change beneath a caller.
-func (m *Manager) ReportHealth(_ context.Context, sessionID string, generation uint64, healthy bool) (result HealthResult, err error) {
-	operation := m.audit.begin("report_health")
-	defer func() { operation.end(err) }()
-	s, err := m.get(sessionID)
-	if err != nil {
-		return HealthResult{}, err
-	}
+// reportHealthFailure cleans up a failed connected generation before
+// AUTO_SELECT failover. PROFILE_INDEX fails without changing profile identity.
+func (m *Manager) reportHealthFailure(s *session, generation uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.destroyed {
-		return HealthResult{}, failure(FailureNotFound, "session has been destroyed")
-	}
-	if generation == 0 || generation != s.generation || s.state != StateConnected {
-		return HealthResult{}, failure(FailureStaleGeneration, "health result is not for the connected generation")
-	}
-	result = HealthResult{Generation: generation}
-	if healthy {
-		m.appendLocked(s, Event{Generation: generation, State: StateConnected, Profile: cloneSummaryPtr(s.active)})
-		return result, nil
+	if s.destroyed || generation == 0 || generation != s.generation || s.state != StateConnected {
+		return
 	}
 	m.appendLocked(s, Event{Generation: generation, State: StateConnected, Profile: cloneSummaryPtr(s.active), Failure: FailureRuntime})
 	if s.activeTarget.Mode == AutoSelect {
@@ -660,12 +627,9 @@ func (m *Manager) ReportHealth(_ context.Context, sessionID string, generation u
 		<-done
 		m.finishAfterStop(s, generation, nil, failure(FailureCanceled, "health check requested failover"))
 	}()
-	return result, nil
 }
 
 func (m *Manager) Snapshot(_ context.Context, sessionID string) (result SnapshotResult, err error) {
-	operation := m.audit.begin("snapshot")
-	defer func() { operation.end(err) }()
 	s, err := m.get(sessionID)
 	if err != nil {
 		return SnapshotResult{}, err
@@ -676,13 +640,10 @@ func (m *Manager) Snapshot(_ context.Context, sessionID string) (result Snapshot
 		return SnapshotResult{}, failure(FailureNotFound, "session has been destroyed")
 	}
 	result = snapshotLocked(s)
-	m.audit.snapshot(result, "snapshot")
 	return result, nil
 }
 
 func (m *Manager) Observe(_ context.Context, sessionID string, afterSequence uint64) (result ObserveResult, err error) {
-	operation := m.audit.begin("observe")
-	defer func() { operation.end(err) }()
 	s, err := m.get(sessionID)
 	if err != nil {
 		return ObserveResult{}, err
@@ -701,10 +662,6 @@ func (m *Manager) Observe(_ context.Context, sessionID string, afterSequence uin
 // DestroySession is only valid after cleanup.  Keeping an active session
 // addressable prevents an old callback from being mistaken for a new session.
 func (m *Manager) DestroySession(_ context.Context, sessionID string) (err error) {
-	operation := m.audit.begin("destroy_session")
-	defer func() {
-		operation.endAndFlush(err, defaultAuditFlushTimeout)
-	}()
 	s, err := m.get(sessionID)
 	if err != nil {
 		return err
@@ -721,7 +678,6 @@ func (m *Manager) DestroySession(_ context.Context, sessionID string) (err error
 		delete(s.watchers, ch)
 		close(ch)
 	}
-	s.publisher.close()
 	s.mu.Unlock()
 	m.mu.Lock()
 	delete(m.sessions, sessionID)
@@ -827,21 +783,18 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 		return
 	}
 	if monitored, ok := runtimeLease.(HealthMonitoringLease); ok {
-		go m.watchRuntimeHealth(ctx, s, generation, monitored)
+		go m.watchRuntimeHealth(s, generation, monitored)
 	}
 }
 
-// watchRuntimeHealth only receives a notification after the runtime's local
-// threshold is reached. ReportHealth retains its public behavior and provides
-// the generation/state fence against a late result from a stopped or destroyed
-// lease.
-func (m *Manager) watchRuntimeHealth(ctx context.Context, s *session, generation uint64, lease HealthMonitoringLease) {
+// watchRuntimeHealth receives one notification after the runtime's local threshold.
+func (m *Manager) watchRuntimeHealth(s *session, generation uint64, lease HealthMonitoringLease) {
 	failures := lease.HealthFailures()
 	if failures == nil {
 		return
 	}
 	for range failures {
-		_, _ = m.ReportHealth(ctx, s.id, generation, false)
+		m.reportHealthFailure(s, generation)
 		return
 	}
 }
@@ -878,13 +831,13 @@ func (m *Manager) selectProfile(ctx context.Context, s *session, generation uint
 			prepareErr = failure(FailurePlatform, "platform returned an empty tunnel lease for probe")
 		}
 		if prepareErr != nil {
-			m.appendProbeEvent(s, generation, profile, FailurePlatform)
+			m.appendProbeEvent(s, generation, profile, FailurePlatform, prepareErr)
 			return RuntimeProfile{}, wrapFailure(FailurePlatform, prepareErr)
 		}
 		result, probeErr := m.runtime.Probe(ctx, ref, profile)
 		releaseErr := platformLease.Release(context.Background())
 		if releaseErr != nil {
-			m.appendProbeEvent(s, generation, profile, FailurePlatform)
+			m.appendProbeEvent(s, generation, profile, FailurePlatform, releaseErr)
 			return RuntimeProfile{}, wrapFailure(FailurePlatform, releaseErr)
 		}
 		err := probeErr
@@ -893,7 +846,7 @@ func (m *Manager) selectProfile(ctx context.Context, s *session, generation uint
 				return FailureProbe
 			}
 			return ""
-		}())
+		}(), err)
 		if err != nil {
 			continue
 		}
@@ -914,13 +867,16 @@ func (m *Manager) selectProfile(ctx context.Context, s *session, generation uint
 	return best.profile, nil
 }
 
-func (m *Manager) appendProbeEvent(s *session, generation uint64, profile RuntimeProfile, failureCode FailureCode) {
+func (m *Manager) appendProbeEvent(s *session, generation uint64, profile RuntimeProfile, failureCode FailureCode, failureErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.generation != generation || s.state != StateProbing || s.destroyed {
 		return
 	}
 	event := Event{Generation: generation, State: StateProbing, Profile: cloneSummaryPtr(&profile.Summary), Failure: failureCode}
+	if failureErr != nil {
+		event.FailureMessage = failureErr.Error()
+	}
 	m.appendLocked(s, event)
 }
 
@@ -974,7 +930,10 @@ func (m *Manager) finishWithPolicy(s *session, generation uint64, profile *Profi
 	if cleanupErr != nil {
 		s.restartAfterCleanup, s.failureAfterCleanup = false, ""
 		s.state, s.active, s.lastFailure = StateFailed, nil, FailureCleanup
-		m.appendLocked(s, Event{Generation: generation, State: StateFailed, Profile: cloneSummaryPtr(profile), Failure: FailureCleanup})
+		diagnostic := errors.Join(cause, cleanupErr)
+		message := errorMessage(diagnostic)
+		s.lastFailureMessage = message
+		m.appendLocked(s, Event{Generation: generation, State: StateFailed, Profile: cloneSummaryPtr(profile), Failure: FailureCleanup, FailureMessage: message})
 		return
 	}
 	if wasStopping || cause != nil && CodeOf(cause) == FailureCanceled {
@@ -982,12 +941,12 @@ func (m *Manager) finishWithPolicy(s *session, generation uint64, profile *Profi
 		terminalFailure := s.failureAfterCleanup
 		s.restartAfterCleanup, s.failureAfterCleanup = false, ""
 		if terminalFailure != "" {
-			s.state, s.active, s.lastFailure = StateFailed, nil, terminalFailure
+			s.state, s.active, s.lastFailure, s.lastFailureMessage = StateFailed, nil, terminalFailure, ""
 			m.appendLocked(s, Event{Generation: generation, State: StateFailed, Profile: cloneSummaryPtr(profile), Failure: terminalFailure})
 			m.clearActive(s.id)
 			return
 		}
-		s.state, s.active, s.lastFailure = StateIdle, nil, ""
+		s.state, s.active, s.lastFailure, s.lastFailureMessage = StateIdle, nil, "", ""
 		m.appendLocked(s, Event{Generation: generation, State: StateIdle})
 		m.clearActive(s.id)
 		if restart {
@@ -995,8 +954,9 @@ func (m *Manager) finishWithPolicy(s *session, generation uint64, profile *Profi
 		}
 		return
 	}
-	s.state, s.active, s.lastFailure = StateFailed, nil, CodeOf(cause)
-	m.appendLocked(s, Event{Generation: generation, State: StateFailed, Profile: cloneSummaryPtr(profile), Failure: CodeOf(cause)})
+	message := errorMessage(cause)
+	s.state, s.active, s.lastFailure, s.lastFailureMessage = StateFailed, nil, CodeOf(cause), message
+	m.appendLocked(s, Event{Generation: generation, State: StateFailed, Profile: cloneSummaryPtr(profile), Failure: CodeOf(cause), FailureMessage: message})
 	m.clearActive(s.id)
 }
 
@@ -1029,7 +989,7 @@ func (m *Manager) startFailover(s *session) {
 	s.generation++
 	generation := s.generation
 	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure = cancel, &ledger{}, make(chan struct{}), false, false, nil, ""
+	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure, s.lastFailureMessage = cancel, &ledger{}, make(chan struct{}), false, false, nil, "", ""
 	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = StartTarget{Mode: AutoSelect}, false, ""
 	s.state = StateProbing
 	m.appendLocked(s, Event{Generation: generation, State: StateProbing})
@@ -1041,32 +1001,7 @@ func (m *Manager) appendLocked(s *session, e Event) {
 	s.sequence++
 	e.SessionID, e.Sequence = s.id, s.sequence
 	s.events = append(s.events, e)
-
-	eventName := AuditEventStatusSnapshot
-	if s.auditState != e.State {
-		eventName = AuditEventStateTransition
-	}
-	auditEvent := AuditEvent{
-		Event: eventName, Generation: e.Generation, Sequence: e.Sequence,
-		PreviousState: s.auditState, State: e.State, Configured: s.configured,
-		CleanupComplete: s.cleanupDone, Failure: e.Failure,
-	}
-	if e.Profile != nil {
-		auditEvent.HasProfile = true
-		auditEvent.ProfileIndex = e.Profile.Index
-		auditEvent.Protocol = e.Profile.Protocol
-	}
-	if e.Warning != nil {
-		auditEvent.WarningCode = e.Warning.Code
-	}
-	s.auditState = e.State
-	m.audit.record(auditEvent)
-
-	// Queueing is deliberately non-blocking while the session mutex is held.
-	// Platform callbacks are advisory delivery; Observe/Subscribe retain the
-	// authoritative ordered ledger for reconnect and gap recovery. A slow
-	// callback must never stall lifecycle ownership or cleanup.
-	s.publisher.enqueue(e)
+	m.platform.PublishState(context.Background(), e)
 	for ch := range s.watchers {
 		select {
 		case ch <- cloneEvent(e):
@@ -1076,16 +1011,6 @@ func (m *Manager) appendLocked(s *session, e Event) {
 			delete(s.watchers, ch)
 			close(ch)
 		}
-	}
-}
-
-func (m *Manager) publishEvents(publisher *eventPublisher) {
-	for {
-		event, ok := publisher.next()
-		if !ok {
-			return
-		}
-		_ = m.platform.PublishState(context.Background(), event)
 	}
 }
 
@@ -1099,7 +1024,7 @@ func (m *Manager) get(id string) (*session, error) {
 	return s, nil
 }
 func snapshotLocked(s *session) SnapshotResult {
-	return SnapshotResult{SessionID: s.id, Generation: s.generation, State: s.state, Configured: s.configured, ActiveProfile: cloneSummaryPtr(s.active), LastFailure: s.lastFailure, CleanupComplete: s.cleanupDone}
+	return SnapshotResult{SessionID: s.id, Generation: s.generation, State: s.state, Configured: s.configured, ActiveProfile: cloneSummaryPtr(s.active), LastFailure: s.lastFailure, LastFailureMessage: s.lastFailureMessage, CleanupComplete: s.cleanupDone}
 }
 func summaries(in []RuntimeProfile) []ProfileSummary {
 	out := make([]ProfileSummary, len(in))
@@ -1140,6 +1065,13 @@ func wrapFailure(code FailureCode, err error) error {
 	return failureWithCause(code, "operation failed", err)
 }
 
+func errorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 func randomID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -1152,63 +1084,13 @@ type ledger struct{ closers []func(context.Context) error }
 
 func (l *ledger) push(closer func(context.Context) error) { l.closers = append(l.closers, closer) }
 func (l *ledger) release(ctx context.Context) error {
-	var first error
+	var errs []error
 	for i := len(l.closers) - 1; i >= 0; i-- {
-		if err := l.closers[i](ctx); err != nil && first == nil {
-			first = err
+		if err := l.closers[i](ctx); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return first
-}
-
-// eventPublisher is an ordered, unbounded hand-off between the authoritative
-// session ledger and the platform callback. It intentionally never invokes a
-// platform implementation while holding the session mutex: a slow callback
-// must not block Configure/Start/Stop or prevent cleanup. Closing drains all
-// already-enqueued events before the publisher exits, so Destroyed remains the
-// final callback in sequence order.
-type eventPublisher struct {
-	mu     sync.Mutex
-	cond   *sync.Cond
-	queue  []Event
-	closed bool
-}
-
-func newEventPublisher() *eventPublisher {
-	publisher := &eventPublisher{}
-	publisher.cond = sync.NewCond(&publisher.mu)
-	return publisher
-}
-
-func (p *eventPublisher) enqueue(event Event) {
-	p.mu.Lock()
-	if !p.closed {
-		p.queue = append(p.queue, event)
-		p.cond.Signal()
-	}
-	p.mu.Unlock()
-}
-
-func (p *eventPublisher) next() (Event, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for len(p.queue) == 0 && !p.closed {
-		p.cond.Wait()
-	}
-	if len(p.queue) == 0 {
-		return Event{}, false
-	}
-	event := p.queue[0]
-	p.queue[0] = Event{}
-	p.queue = p.queue[1:]
-	return event, true
-}
-
-func (p *eventPublisher) close() {
-	p.mu.Lock()
-	p.closed = true
-	p.cond.Broadcast()
-	p.mu.Unlock()
+	return errors.Join(errs...)
 }
 
 type unsupportedRuntime struct{}
@@ -1226,7 +1108,7 @@ func (noopPlatform) PrepareTunnel(context.Context, SessionRef) (PlatformLease, e
 	return noopLease{}, nil
 }
 func (noopPlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
-func (noopPlatform) PublishState(context.Context, Event) error            { return nil }
+func (noopPlatform) PublishState(context.Context, Event)                  {}
 
 type noopLease struct{}
 

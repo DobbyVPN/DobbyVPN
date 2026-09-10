@@ -13,7 +13,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import stat
 import sys
 
 
@@ -36,18 +35,7 @@ class IdentityError(ValueError):
 
 
 def _relative_path(root: Path, path: Path) -> str:
-    relative = path.relative_to(root).as_posix()
-    if (
-        not relative
-        or relative.startswith("/")
-        or any(character in relative for character in ("\x00", "\n", "\r", "\\"))
-    ):
-        raise IdentityError("source tree contains a non-canonical path")
-    try:
-        relative.encode("utf-8")
-    except UnicodeEncodeError as error:
-        raise IdentityError("source tree contains a non-UTF-8 path") from error
-    return relative
+    return path.relative_to(root).as_posix()
 
 
 def _is_excluded(relative: Path, exclusions: frozenset[str]) -> bool:
@@ -65,44 +53,20 @@ def _is_excluded(relative: Path, exclusions: frozenset[str]) -> bool:
     return False
 
 
-def _digest_file(path: Path) -> tuple[int, int, str]:
-    before = path.lstat()
-    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
-        raise IdentityError(f"source tree contains a non-regular entry: {path}")
+def _digest_file(path: Path) -> tuple[bool, int, str]:
+    info = path.stat()
     digest = hashlib.sha256()
     size = 0
-    try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except OSError as error:
-        raise IdentityError(f"could not open source file: {path}") from error
-    try:
-        opened = os.fstat(descriptor)
-        if (
-            opened.st_dev != before.st_dev
-            or opened.st_ino != before.st_ino
-            or opened.st_size != before.st_size
-        ):
-            raise IdentityError(f"source file changed while being inspected: {path}")
-        with os.fdopen(descriptor, "rb", closefd=False) as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                size += len(chunk)
-                digest.update(chunk)
-    finally:
-        os.close(descriptor)
-    after = path.lstat()
-    if (
-        after.st_dev != before.st_dev
-        or after.st_ino != before.st_ino
-        or after.st_size != size
-        or stat.S_IMODE(after.st_mode) != stat.S_IMODE(before.st_mode)
-    ):
-        raise IdentityError(f"source file changed while being inspected: {path}")
-    return stat.S_IMODE(before.st_mode), size, digest.hexdigest()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            size += len(chunk)
+            digest.update(chunk)
+    return bool(info.st_mode & 0o111), size, digest.hexdigest()
 
 
 def _records(root: Path, exclusions: frozenset[str]) -> list[dict[str, object]]:
-    if root.is_symlink() or not root.is_dir():
-        raise IdentityError("source root must be a real directory")
+    if not root.is_dir():
+        raise IdentityError("source root must be a directory")
     records: list[dict[str, object]] = []
 
     def visit(directory: Path) -> None:
@@ -115,34 +79,35 @@ def _records(root: Path, exclusions: frozenset[str]) -> list[dict[str, object]]:
             relative = Path(_relative_path(root, path))
             if _is_excluded(relative, exclusions):
                 continue
-            try:
-                mode = entry.stat(follow_symlinks=False).st_mode
-            except OSError as error:
-                raise IdentityError(f"could not inspect source entry: {path}") from error
-            if stat.S_ISLNK(mode):
-                raise IdentityError(f"source tree contains a symlink: {path}")
-            if stat.S_ISDIR(mode):
+            if entry.is_symlink():
+                records.append(
+                    {
+                        "path": relative.as_posix(),
+                        "symlink": os.readlink(path),
+                    }
+                )
+                continue
+            if entry.is_dir(follow_symlinks=False):
                 visit(path)
                 continue
-            if not stat.S_ISREG(mode):
-                raise IdentityError(f"source tree contains a non-regular entry: {path}")
-            file_mode, size, digest = _digest_file(path)
-            records.append(
-                {
-                    "mode": file_mode,
-                    "path": relative.as_posix(),
-                    "sha256": digest,
-                    "size_bytes": size,
-                }
-            )
+            if entry.is_file(follow_symlinks=False):
+                executable, size, digest = _digest_file(path)
+                records.append(
+                    {
+                        "executable": executable,
+                        "path": relative.as_posix(),
+                        "sha256": digest,
+                        "size_bytes": size,
+                    }
+                )
+            else:
+                records.append({"path": relative.as_posix(), "type": "other"})
 
     visit(root)
     return records
 
 
 def content_identities(root: Path, exclusions: frozenset[str] = frozenset()) -> tuple[str, str]:
-    if root.is_symlink():
-        raise IdentityError("source root must be a real directory")
     root = root.resolve(strict=True)
     records = _records(root, exclusions)
     encoded = json.dumps(
@@ -166,7 +131,7 @@ def _parser() -> argparse.ArgumentParser:
         "--exclude",
         action="append",
         default=[],
-        help="canonical generated file or directory path relative to --root",
+        help="generated file or directory path relative to --root",
     )
     return parser
 
@@ -174,19 +139,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        exclusions: set[str] = set()
-        for value in args.exclude:
-            relative = Path(value)
-            if (
-                not value
-                or any(character in value for character in ("\x00", "\n", "\r", "\\"))
-                or relative.is_absolute()
-                or relative.as_posix() != value
-                or any(part in {"", ".", ".."} for part in relative.parts)
-            ):
-                raise IdentityError("--exclude must be a canonical relative path")
-            exclusions.add(value)
-        commit, tree = content_identities(args.root, frozenset(exclusions))
+        commit, tree = content_identities(args.root, frozenset(args.exclude))
     except (IdentityError, OSError, RuntimeError) as error:
         print(f"local source identity failed: {error}", file=sys.stderr)
         return 2

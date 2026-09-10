@@ -126,7 +126,5 @@ internal fun SessionState.toConnectionState(): VpnConnectionState = when (this) 
     SessionState.CONFIGURED,
     SessionState.FAILED,
     SessionState.DESTROYED,
-    SessionState.UNSPECIFIED,
-    SessionState.UNKNOWN,
     -> VpnConnectionState.DISCONNECTED
 }

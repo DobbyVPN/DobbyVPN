@@ -62,13 +62,11 @@ GO111MODULE=on gomobile bind \
   -o "$simulator_output" \
   ./ios_exports
 
-device_framework="$(find "$device_output" -type d -name DobbyVPNRuntime.framework -print)"
-simulator_framework="$(find "$simulator_output" -type d -name DobbyVPNRuntime.framework -print)"
+device_framework="$device_output/ios-arm64/DobbyVPNRuntime.framework"
+simulator_framework="$simulator_output/ios-arm64_x86_64-simulator/DobbyVPNRuntime.framework"
 
-if [[ -z "$device_framework" || -z "$simulator_framework" ]] \
-  || [[ "$(printf '%s\n' "$device_framework" | wc -l | tr -d ' ')" -ne 1 ]] \
-  || [[ "$(printf '%s\n' "$simulator_framework" | wc -l | tr -d ' ')" -ne 1 ]]; then
-  echo "expected exactly one device and one Simulator DobbyVPNRuntime.framework" >&2
+if [[ ! -d "$device_framework" || ! -d "$simulator_framework" ]]; then
+  echo "missing generated device or Simulator DobbyVPNRuntime.framework" >&2
   exit 1
 fi
 
@@ -93,10 +91,10 @@ merged_library="$workdir/DobbyVPNRuntime-merged.a"
 libtool -static -D -o "$merged_library" "$device_library" "$bridge"
 mv "$merged_library" "$device_library"
 
-# The output is ignored/generated. Replacing this exact path makes local and
-# CI rebuilds idempotent without touching any source or credential material.
-rm -rf "$output"
+final_output="$workdir/$output"
 xcodebuild -create-xcframework \
   -framework "$device_framework" \
   -framework "$simulator_framework" \
-  -output "$output"
+  -output "$final_output"
+rm -rf "$output"
+mv "$final_output" "$output"

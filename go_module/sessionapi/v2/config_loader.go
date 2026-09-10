@@ -12,12 +12,12 @@ import (
 	"time"
 )
 
-const maxConfigBytes = 1 << 20
+const configFetchTimeout = 20 * time.Second
 
 var sourceSchemeRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
 
 // ConfigSourceKind describes only how the caller supplied the source. The
-// source value and acquired bytes never cross the public result boundary.
+// source value and acquired bytes stay inside the session manager.
 type ConfigSourceKind string
 
 const (
@@ -45,13 +45,13 @@ type DefaultConfigLoader struct {
 }
 
 func (l DefaultConfigLoader) Load(ctx context.Context, source []byte) (LoadedConfig, error) {
-	if len(source) == 0 || len(source) > maxConfigBytes {
-		return LoadedConfig{}, failure(FailureInvalidArgument, "configuration source exceeds the 1 MiB limit")
+	if len(source) == 0 {
+		return LoadedConfig{}, failure(FailureInvalidArgument, "configuration source is empty")
 	}
 	trimmed := strings.TrimSpace(string(source))
 	if sourceSchemeRE.MatchString(trimmed) {
 		parsed, err := url.Parse(trimmed)
-		if err == nil && (strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")) && parsed.Host != "" && parsed.User == nil {
+		if err == nil && (strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")) && parsed.Host != "" {
 			return l.loadURL(ctx, trimmed)
 		}
 		return LoadedConfig{}, failure(FailureInvalidArgument, "configuration URL must use HTTP or HTTPS")
@@ -64,33 +64,19 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 	if err != nil {
 		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL is invalid", err)
 	}
-	requestCtx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
+	requestCtx, cancel := context.WithTimeout(request.Context(), configFetchTimeout)
 	defer cancel()
 	request = request.WithContext(requestCtx)
 	client := l.Client
 	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
-	}
-	clone := *client
-	clone.CheckRedirect = func(next *http.Request, history []*http.Request) error {
-		if len(history) >= 5 {
-			return errors.New("redirect limit")
-		}
-		if len(history) > 0 && strings.EqualFold(history[len(history)-1].URL.Scheme, "https") && strings.EqualFold(next.URL.Scheme, "http") {
-			return errors.New("https downgrade")
-		}
-		return nil
-	}
-	if clone.Timeout <= 0 || clone.Timeout > 20*time.Second {
-		clone.Timeout = 20 * time.Second
+		client = &http.Client{}
 	}
 	request.Header.Set("User-Agent", "DobbyVPN/"+versionOrDev(l.Version))
-	response, err := clone.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL could not be fetched", err)
 	}
-	limited := io.LimitReader(response.Body, maxConfigBytes+1)
-	body, readErr := io.ReadAll(limited)
+	body, readErr := io.ReadAll(response.Body)
 	closeErr := response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return LoadedConfig{}, failureWithCause(
@@ -104,9 +90,6 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 	}
 	if closeErr != nil {
 		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL response could not be closed", closeErr)
-	}
-	if len(body) > maxConfigBytes {
-		return LoadedConfig{}, failure(FailureInvalidArgument, "downloaded configuration exceeds the 1 MiB limit")
 	}
 	return LoadedConfig{Raw: body, Kind: ConfigSourceURL}, nil
 }

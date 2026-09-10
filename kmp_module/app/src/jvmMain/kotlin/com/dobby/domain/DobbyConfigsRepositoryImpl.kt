@@ -3,12 +3,10 @@ package com.dobby.domain
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
-import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.StandardCopyOption
-import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.AclEntry
 import java.nio.file.attribute.AclEntryFlag
 import java.nio.file.attribute.AclEntryPermission
@@ -56,41 +54,13 @@ internal class DobbyConfigsRepositoryImpl(
         else writeOwnerOnly(connectionUrlFile, connectionURL)
     }
 
-    /**
-     * Preserve the one supported desktop value when upgrading from the former
-     * storage root. The old file is moved only after a no-follow regular-file
-     * check; aliases and non-regular entries fail closed rather than being
-     * read, followed, or silently abandoned.
-    */
+    /** Preserve the one supported desktop value from the former storage root. */
     private fun migrateLegacyConnectionUrl() {
-        if (Files.exists(connectionUrlFile, LinkOption.NOFOLLOW_LINKS)) {
-            if (Files.isSymbolicLink(connectionUrlFile)) error("Current desktop configuration path is an alias")
-            val attributes = Files.readAttributes(connectionUrlFile, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
-            if (!attributes.isRegularFile) error("Current desktop configuration is not a regular file")
-            return
-        }
-        val legacyDirectory = legacyStorageDir
-        val legacyFile = legacyDirectory.resolve("connection-url.txt")
-        if (!Files.exists(legacyFile, LinkOption.NOFOLLOW_LINKS)) return
-        if (Files.isSymbolicLink(legacyDirectory) || Files.isSymbolicLink(legacyFile)) {
-            error("Legacy desktop configuration path is an alias")
-        }
-        val attributes = Files.readAttributes(legacyFile, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
-        if (!attributes.isRegularFile) error("Legacy desktop configuration is not a regular file")
-        restrictToOwner(legacyFile, directory = false)
-        try {
-            try {
-                Files.move(legacyFile, connectionUrlFile, StandardCopyOption.ATOMIC_MOVE)
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(legacyFile, connectionUrlFile)
-            }
-        } catch (_: java.nio.file.FileAlreadyExistsException) {
-            // Another process completed the migration; the new file is now
-            // authoritative and the legacy file remains untouched.
-        }
-        if (Files.exists(connectionUrlFile, LinkOption.NOFOLLOW_LINKS)) {
-            restrictToOwner(connectionUrlFile, directory = false)
-        }
+        if (Files.exists(connectionUrlFile)) return
+        val legacyFile = legacyStorageDir.resolve("connection-url.txt")
+        if (!Files.exists(legacyFile)) return
+        writeOwnerOnly(connectionUrlFile, Files.readString(legacyFile, StandardCharsets.UTF_8))
+        Files.delete(legacyFile)
     }
 
     private fun writeOwnerOnly(file: Path, value: String) {

@@ -5,7 +5,7 @@ package grpctransport
 
 import (
 	"context"
-	"math"
+	"fmt"
 
 	"go_module/grpcproto"
 	"go_module/sessionapi/desktoptransport"
@@ -143,11 +143,7 @@ func profiles(in []v2.ProfileSummary) []*grpcproto.SessionProfile {
 	return out
 }
 func profile(in v2.ProfileSummary) *grpcproto.SessionProfile {
-	index := int32(-1)
-	if in.Index >= 0 && in.Index <= math.MaxInt32 {
-		index = int32(in.Index) // #nosec G115 -- bounds checked immediately above.
-	}
-	return &grpcproto.SessionProfile{Index: index, Protocol: desktoptransport.Protocol(in.Protocol), Description: in.Description}
+	return &grpcproto.SessionProfile{Index: int32(in.Index), Protocol: desktoptransport.Protocol(in.Protocol), Description: in.Description}
 }
 func warnings(in []v2.Warning) []*grpcproto.SessionWarning {
 	out := make([]*grpcproto.SessionWarning, 0, len(in))
@@ -164,7 +160,7 @@ func sourceKind(kind v2.ConfigSourceKind) grpcproto.SessionSourceKind {
 	case v2.ConfigSourceInline:
 		return grpcproto.SessionSourceKind_SESSION_SOURCE_KIND_INLINE
 	default:
-		return grpcproto.SessionSourceKind_SESSION_SOURCE_KIND_UNSPECIFIED
+		panic(fmt.Sprintf("unsupported session source kind %q", kind))
 	}
 }
 func eventResponse(in v2.Event) *grpcproto.SessionEvent {
@@ -173,7 +169,7 @@ func eventResponse(in v2.Event) *grpcproto.SessionEvent {
 		out.Profile = profile(*in.Profile)
 	}
 	if in.Failure != "" {
-		out.Failure = &grpcproto.SessionFailure{Code: desktoptransport.FailureCode(in.Failure)}
+		out.Failure = &grpcproto.SessionFailure{Code: desktoptransport.FailureCode(in.Failure), Message: in.FailureMessage}
 	}
 	if in.Warning != nil {
 		out.Warning = &grpcproto.SessionWarning{Code: in.Warning.Code, Message: in.Warning.Message}
@@ -186,7 +182,7 @@ func snapshot(in v2.SnapshotResult) *grpcproto.SessionSnapshot {
 		out.ActiveProfile = profile(*in.ActiveProfile)
 	}
 	if in.LastFailure != "" {
-		out.LastFailure = &grpcproto.SessionFailure{Code: desktoptransport.FailureCode(in.LastFailure)}
+		out.LastFailure = &grpcproto.SessionFailure{Code: desktoptransport.FailureCode(in.LastFailure), Message: in.LastFailureMessage}
 	}
 	return out
 }

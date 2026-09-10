@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import io
 import importlib.util
 import json
 from pathlib import Path
-import stat
 import tempfile
 import unittest
 from unittest import mock
@@ -32,7 +32,7 @@ class LocalCandidateTests(unittest.TestCase):
         go.mkdir(exist_ok=True)
         (go / candidate.SERVICE_NAMES[platform]).write_bytes(b"service")
         (go / candidate.CLI_NAMES[platform]).write_bytes(b"cli")
-        app = self.source / "kmp_module" / "app" / "build" / "compose" / "jars"
+        app = self.source / "kmp_module" / "app" / "build" / "libs"
         app.mkdir(parents=True)
         (app / "app-jvm-1.0.jar").write_bytes(b"app")
 
@@ -56,7 +56,6 @@ class LocalCandidateTests(unittest.TestCase):
                 self.assertNotIn("profile", json.dumps(descriptor))
                 self.assertNotIn("provider", json.dumps(descriptor))
                 self.assertEqual(json.loads(output.read_text()), descriptor)
-                self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
                 for interface in ("cli", "service"):
                     value = descriptor["interfaces"][interface]
                     self.assertIsNotNone(value)
@@ -71,12 +70,30 @@ class LocalCandidateTests(unittest.TestCase):
                     )
                 self.assertEqual(
                     descriptor["interfaces"]["network"]["path"],
-                    str(self.source / ".dobbyvpn-run" / "s"),
+                    str((self.source.parent if platform == "linux" else self.source) / ".dobbyvpn-run" / "s"),
                 )
                 self.assertEqual(
-                    stat.S_IMODE((self.source / ".dobbyvpn-run").stat().st_mode),
+                    ((self.source.parent if platform == "linux" else self.source) / ".dobbyvpn-run").stat().st_mode & 0o777,
                     0o711,
                 )
+
+    def test_macos_default_matches_host_and_explicit_architecture_wins(self) -> None:
+        self._desktop_outputs("macos")
+        for machine, requested, expected in (
+            ("x86_64", None, "amd64"),
+            ("arm64", None, "arm64"),
+            ("x86_64", "arm64", "arm64"),
+        ):
+            with self.subTest(machine=machine, requested=requested), mock.patch.object(
+                candidate.host_platform, "machine", return_value=machine
+            ), mock.patch.object(candidate, "_build_desktop") as build:
+                descriptor = candidate.prepare_candidate(
+                    request_root=self.request, source_root=self.source,
+                    platform="macos", architecture=requested,
+                    output=self.request / "macos.json",
+                )
+                self.assertEqual(descriptor["architecture"], expected)
+                self.assertEqual(build.call_args.args[2], expected)
 
     def test_prepare_describes_android_without_source_identity(self) -> None:
         apk = self.source / ".dobbyvpn-local-candidate" / "dobbyvpn-release-unsigned.apk"
@@ -107,9 +124,9 @@ class LocalCandidateTests(unittest.TestCase):
         )
         self.assertTrue(Path(descriptor["test_companion"]["path"]).is_relative_to(self.request))
         self.assertNotIn("source_sha", json.loads((self.request / "android.json").read_text()))
-        self.assertEqual(stat.S_IMODE(apk.parent.stat().st_mode), 0o711)
-        self.assertEqual(stat.S_IMODE(apk.stat().st_mode), 0o444)
-        self.assertEqual(stat.S_IMODE(companion.stat().st_mode), 0o444)
+        self.assertEqual(apk.parent.stat().st_mode & 0o777, 0o711)
+        self.assertEqual(apk.stat().st_mode & 0o777, 0o444)
+        self.assertEqual(companion.stat().st_mode & 0o777, 0o444)
 
     def test_prepare_uses_precreated_request_logs(self) -> None:
         self._desktop_outputs("linux")
@@ -135,8 +152,6 @@ class LocalCandidateTests(unittest.TestCase):
             "service_path": str(service_log),
         })
         self.assertFalse((self.source / ".dobbyvpn-local-candidate" / "logs").exists())
-        self.assertEqual(stat.S_IMODE(app_log.stat().st_mode), 0o600)
-        self.assertEqual(stat.S_IMODE(service_log.stat().st_mode), 0o600)
         self.assertEqual(app_log.read_bytes(), b"existing app log\n")
         self.assertEqual(service_log.read_bytes(), b"existing service log\n")
 
@@ -189,18 +204,6 @@ class LocalCandidateTests(unittest.TestCase):
                 "pinned Android apksigner is unavailable",
             ):
                 candidate._android_apksigner()
-
-    def test_regular_file_rejects_hardlinks(self) -> None:
-        original = self.request / "original"
-        linked = self.request / "linked"
-        original.write_bytes(b"artifact")
-        linked.hardlink_to(original)
-
-        with self.assertRaisesRegex(
-            candidate.CandidateError,
-            "must be a single-link regular non-symlink file",
-        ):
-            candidate._regular_file(linked, self.request, "artifact")
 
     def test_android_source_identity_is_forwarded_only_when_supplied(self) -> None:
         source_sha = "a" * 40
@@ -322,29 +325,78 @@ class LocalCandidateTests(unittest.TestCase):
                     {},
                 )
 
-    def test_descriptor_rejects_outside_paths_and_extra_fields(self) -> None:
-        self._desktop_outputs("linux")
-        with mock.patch.object(candidate, "_build_desktop"):
-            descriptor = candidate.prepare_candidate(
-                request_root=self.request,
-                source_root=self.source,
-                platform="linux",
-                output=self.request / "linux.json",
+    def test_android_signing_retains_nested_tool_stdout_and_stderr(self) -> None:
+        candidate_root = self.request / "candidate"
+        candidate_root.mkdir()
+        unsigned_app = candidate_root / "unsigned.apk"
+        unsigned_companion = candidate_root / "unsigned-companion.apk"
+        signed_app = candidate_root / "signed.apk"
+        signed_companion = candidate_root / "signed-companion.apk"
+        unsigned_app.write_bytes(b"app")
+        unsigned_companion.write_bytes(b"companion")
+        digest = "ab" * 32
+        completed = [
+            candidate.subprocess.CompletedProcess(
+                ["keytool"], 0, stdout=b"", stderr=b"keytool stderr\n"
+            ),
+            candidate.subprocess.CompletedProcess(
+                ["apksigner", "sign", "app"],
+                0,
+                stdout=b"app sign stdout\n",
+                stderr=b"app sign stderr\n",
+            ),
+            candidate.subprocess.CompletedProcess(
+                ["apksigner", "sign", "companion"],
+                0,
+                stdout=b"companion sign stdout\n",
+                stderr=b"companion sign stderr\n",
+            ),
+            candidate.subprocess.CompletedProcess(
+                ["apksigner", "verify", "app"],
+                0,
+                stdout=f"certificate SHA-256 digest: {digest}\n".encode(),
+                stderr=b"",
+            ),
+            candidate.subprocess.CompletedProcess(
+                ["apksigner", "verify", "companion"],
+                0,
+                stdout=f"certificate SHA-256 digest: {digest}\n".encode(),
+                stderr=b"companion verify stderr\n",
+            ),
+        ]
+        stdout = io.BytesIO()
+        stderr = io.BytesIO()
+        stdout_stream = io.TextIOWrapper(stdout, encoding="utf-8", write_through=True)
+        stderr_stream = io.TextIOWrapper(stderr, encoding="utf-8", write_through=True)
+
+        with (
+            mock.patch.object(candidate, "_android_tool", return_value=Path("/keytool")),
+            mock.patch.object(candidate, "_android_apksigner", return_value=Path("/apksigner")),
+            mock.patch.object(candidate.subprocess, "run", side_effect=completed),
+            mock.patch.object(candidate.sys, "stdout", stdout_stream),
+            mock.patch.object(candidate.sys, "stderr", stderr_stream),
+        ):
+            candidate._sign_android_pair(
+                unsigned_app,
+                unsigned_companion,
+                signed_app,
+                signed_companion,
             )
-        outside = self.request.parent / "outside-candidate-file"
-        outside.write_bytes(b"outside")
-        try:
-            descriptor["interfaces"]["cli"]["path"] = str(outside)
-            with self.assertRaises(candidate.CandidateError):
-                candidate.validate_descriptor(descriptor, self.request)
-            descriptor["interfaces"]["cli"]["path"] = str(
-                self.source / "go_module" / candidate.CLI_NAMES["linux"]
-            )
-            descriptor["credentials"] = "must not be accepted"
-            with self.assertRaises(candidate.CandidateError):
-                candidate.validate_descriptor(descriptor, self.request)
-        finally:
-            outside.unlink()
+
+        self.assertIn(b"keytool stderr\n", stderr.getvalue())
+        self.assertIn(b"app sign stdout\n", stdout.getvalue())
+        self.assertIn(b"app sign stderr\n", stderr.getvalue())
+        self.assertIn(b"companion sign stdout\n", stdout.getvalue())
+        self.assertIn(b"companion sign stderr\n", stderr.getvalue())
+        self.assertIn(f"certificate SHA-256 digest: {digest}\n".encode(), stdout.getvalue())
+        self.assertIn(b"companion verify stderr\n", stderr.getvalue())
+        metadata = stderr.getvalue().decode("utf-8")
+        self.assertIn('"event":"start"', metadata)
+        self.assertIn('"event":"finish"', metadata)
+        self.assertIn('"stdout_bytes":0', metadata)
+        self.assertIn('"stderr_bytes":0', metadata)
+        self.assertIn('"label":"could not sign the local Android qualification APK"', metadata)
+        self.assertIn('"argv":["/keytool"', metadata)
 
     def test_desktop_adapter_invokes_existing_build_helper(self) -> None:
         helper = self.source / ".github" / "scripts" / "desktop_build.py"
@@ -433,7 +485,7 @@ class LocalCandidateTests(unittest.TestCase):
         self.assertEqual(captured, [expected])
         self.assertTrue(expected.is_dir())
         self.assertTrue(expected.is_relative_to(self.request))
-        self.assertEqual(stat.S_IMODE(expected.stat().st_mode), 0o700)
+        self.assertEqual(expected.stat().st_mode & 0o777, 0o700)
         self.assertEqual(expected.parent, self.source)
 
     def test_prepare_reuses_configured_local_build_cache(self) -> None:

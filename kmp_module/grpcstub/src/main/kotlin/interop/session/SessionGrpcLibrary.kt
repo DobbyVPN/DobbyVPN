@@ -173,10 +173,10 @@ private fun com.dobby.grpcproto.SessionDestroySessionResponse.result(value: () -
     result(hasFailure(), failure, value)
 
 private fun com.dobby.grpcproto.SessionSourceKind.toTransport() = when (this) {
-    com.dobby.grpcproto.SessionSourceKind.SESSION_SOURCE_KIND_UNSPECIFIED -> SessionSourceKind.UNSPECIFIED
+    com.dobby.grpcproto.SessionSourceKind.SESSION_SOURCE_KIND_UNSPECIFIED -> error("session source kind is unspecified")
     com.dobby.grpcproto.SessionSourceKind.SESSION_SOURCE_KIND_INLINE -> SessionSourceKind.INLINE
     com.dobby.grpcproto.SessionSourceKind.SESSION_SOURCE_KIND_URL -> SessionSourceKind.URL
-    com.dobby.grpcproto.SessionSourceKind.UNRECOGNIZED -> SessionSourceKind.UNSPECIFIED
+    com.dobby.grpcproto.SessionSourceKind.UNRECOGNIZED -> error("session source kind is unrecognized")
 }
 
 internal fun ProtoFailure.toTransport() = SessionFailure(code.toTransport(), message)
@@ -214,15 +214,15 @@ private fun ProtoSnapshot.toTransport() = SessionSnapshot(
 )
 
 private fun ProtoProtocol.toTransport() = when (this) {
-    ProtoProtocol.SESSION_PROTOCOL_UNSPECIFIED -> SessionProtocol.UNSPECIFIED
+    ProtoProtocol.SESSION_PROTOCOL_UNSPECIFIED -> error("session protocol is unspecified")
     ProtoProtocol.SESSION_PROTOCOL_OUTLINE -> SessionProtocol.OUTLINE
     ProtoProtocol.SESSION_PROTOCOL_XRAY -> SessionProtocol.XRAY
     ProtoProtocol.SESSION_PROTOCOL_TRUST_TUNNEL -> SessionProtocol.TRUST_TUNNEL
-    ProtoProtocol.UNRECOGNIZED -> SessionProtocol.UNKNOWN
+    ProtoProtocol.UNRECOGNIZED -> error("session protocol is unrecognized")
 }
 
 private fun ProtoState.toTransport() = when (this) {
-    ProtoState.SESSION_STATE_UNSPECIFIED -> SessionState.UNSPECIFIED
+    ProtoState.SESSION_STATE_UNSPECIFIED -> error("session state is unspecified")
     ProtoState.SESSION_STATE_IDLE -> SessionState.IDLE
     ProtoState.SESSION_STATE_CONFIGURED -> SessionState.CONFIGURED
     ProtoState.SESSION_STATE_PROBING -> SessionState.PROBING
@@ -231,11 +231,11 @@ private fun ProtoState.toTransport() = when (this) {
     ProtoState.SESSION_STATE_STOPPING -> SessionState.STOPPING
     ProtoState.SESSION_STATE_FAILED -> SessionState.FAILED
     ProtoState.SESSION_STATE_DESTROYED -> SessionState.DESTROYED
-    ProtoState.UNRECOGNIZED -> SessionState.UNKNOWN
+    ProtoState.UNRECOGNIZED -> error("session state is unrecognized")
 }
 
 private fun com.dobby.grpcproto.SessionFailureCode.toTransport() = when (this) {
-    com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_UNSPECIFIED -> SessionFailureCode.UNSPECIFIED
+    com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_UNSPECIFIED -> error("session failure code is unspecified")
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_INVALID_ARGUMENT -> SessionFailureCode.INVALID_ARGUMENT
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_NOT_FOUND -> SessionFailureCode.NOT_FOUND
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_CONFLICT -> SessionFailureCode.CONFLICT
@@ -249,5 +249,5 @@ private fun com.dobby.grpcproto.SessionFailureCode.toTransport() = when (this) {
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_CANCELED -> SessionFailureCode.CANCELED
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_INTERNAL -> SessionFailureCode.INTERNAL
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_CLEANUP_FAILED -> SessionFailureCode.CLEANUP_FAILED
-    com.dobby.grpcproto.SessionFailureCode.UNRECOGNIZED -> SessionFailureCode.UNKNOWN
+    com.dobby.grpcproto.SessionFailureCode.UNRECOGNIZED -> error("session failure code is unrecognized")
 }

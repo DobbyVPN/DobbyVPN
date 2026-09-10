@@ -23,9 +23,7 @@ type nativeRuntime struct {
 	tun       io.ReadWriteCloser
 	engine    *tunnel.Engine
 	resources *resourceLedger
-	// cleanupErr makes an incomplete rollback a terminal generation failure;
-	// starting a new generation while native resources may still be live is
-	// unsafe and must fail closed.
+	// cleanupErr retains the failed rollback for a repeated Disconnect call.
 	cleanupErr error
 	state      lifecycleState
 	generation uint64
@@ -67,9 +65,6 @@ func (c *nativeRuntime) Connect() error {
 }
 
 func (c *nativeRuntime) connectLocked() (err error) {
-	if c.state == stateFailed && c.cleanupErr != nil {
-		return fmt.Errorf("native session runtime has incomplete cleanup: %w", c.cleanupErr)
-	}
 	if c.state != stateIdle && c.state != stateFailed {
 		return lifecycleBusyError(c.state)
 	}

@@ -5,7 +5,56 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
+
+	"go_module/dnscache"
 )
+
+func TestDialersUsePreflightAddressWithoutDNS(t *testing.T) {
+	dnscache.Clear()
+	t.Cleanup(dnscache.Clear)
+	if !dnscache.SetIPv4("vpn.invalid", "127.0.0.1", "test", time.Minute) {
+		t.Fatal("could not set preflight address")
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := net.JoinHostPort("vpn.invalid", port)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	for name, dial := range map[string]func() (net.Conn, error){
+		"tcp": func() (net.Conn, error) { return DialContextWithProtect(ctx, "tcp", address) },
+		"udp": func() (net.Conn, error) { return DialUDPConnWithProtect(ctx, "udp", address) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn, err := dial()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	packet, err := DialUDPWithProtect(ctx, "udp", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := packet.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, unchanged := range []string{"uncached.invalid:443", "127.0.0.1:443", "[::1]:443", "invalid"} {
+		if got := cachedDialAddress(unchanged); got != unchanged {
+			t.Errorf("cachedDialAddress(%q) = %q", unchanged, got)
+		}
+	}
+}
 
 type failingProtector struct{ err error }
 

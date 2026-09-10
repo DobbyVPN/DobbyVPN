@@ -10,7 +10,6 @@ public final class SharedKeychainSecretStore {
     /// one-shot encrypted Keychain item; it is never copied to UserDefaults or
     /// put into an app-message payload.
     public static let sessionConfigurationMailboxKey = "sessionapi.v2.configuration.mailbox"
-    public static let sessionBridgeHMACKey = "sessionapi.v2.bridge.hmac"
 
     private let service = "vpn.dobby.app.config.v1"
     private let accessGroup: String?
@@ -69,25 +68,6 @@ public final class SharedKeychainSecretStore {
     @discardableResult
     public func set(_ value: String, for key: String) -> Bool {
         set(Data(value.utf8), for: key)
-    }
-
-    /// Returns the per-install bridge key, creating it only when the Keychain
-    /// does not already contain one.  Both processes use the same access group
-    /// and therefore observe one stable secret for the lifetime of an install.
-    public func randomData(for key: String, byteCount: Int = 32) -> Data? {
-        if let existing = data(for: key), existing.count == byteCount {
-            return existing
-        }
-        var generated = Data(count: byteCount)
-        let status = generated.withUnsafeMutableBytes { bytes in
-            SecRandomCopyBytes(kSecRandomDefault, byteCount, bytes.baseAddress!)
-        }
-        guard status == errSecSuccess else {
-            reportFailure("random", key, status)
-            return nil
-        }
-        guard set(generated, for: key) else { return nil }
-        return data(for: key)
     }
 
     public func remove(_ key: String) {

@@ -6,11 +6,10 @@ import (
 	"time"
 )
 
-func TestSetEntriesAndResolveCacheHit(t *testing.T) {
+func TestSetAndResolveCacheHit(t *testing.T) {
 	Clear()
-	stored := SetEntries("Example.COM=203.0.113.7\nbad-entry\n", "test", time.Minute)
-	if stored != 1 {
-		t.Fatalf("stored=%d, want 1", stored)
+	if !SetIPv4("Example.COM", "203.0.113.7", "test", time.Minute) {
+		t.Fatal("SetIPv4 returned false")
 	}
 
 	ip, err := ResolveIPv4(context.Background(), "example.com", time.Nanosecond, "test")

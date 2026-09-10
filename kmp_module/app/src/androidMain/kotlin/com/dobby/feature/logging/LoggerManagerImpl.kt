@@ -8,7 +8,7 @@ class LoggerManagerImpl(
 ) : LoggerManager {
     override fun initLogger(): Boolean {
         val logFilePath = provideGoLogFilePath()
-        logger.log("Starting Go tunnel logger using owner-only local storage")
+        logger.log("Starting Go tunnel logger using local storage")
         if (!GoBackendWrapper.initLogger(logFilePath.toString())) {
             logger.log("[ERROR] service_logger_init result=failed failure_code=LOCAL_LOGGER_REJECTED")
             return false

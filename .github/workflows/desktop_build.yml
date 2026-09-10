@@ -119,8 +119,6 @@ jobs:
         with:
           path: .conveyor/cache
           key: conveyor-${{ runner.os }}-${{ hashFiles('kmp_module/conveyor.conf', 'kmp_module/**/*.gradle.kts', 'kmp_module/gradle/libs.versions.toml') }}
-          restore-keys: |
-            conveyor-${{ runner.os }}-
 
       - name: Conveyor build site
         uses: hydraulic-software/conveyor/actions/build@3fd1c206e213cbc01d0b0343ddb120fdde074165 # v16.0

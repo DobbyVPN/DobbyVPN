@@ -51,6 +51,33 @@ func TestRecoverLinuxOwnedRoutesAcceptsAbsentMarkedTable(t *testing.T) {
 	}
 }
 
+func TestRecoverLinuxOwnedTerminalRouteAfterUplinkLoss(t *testing.T) {
+	original := linuxRunCommand
+	t.Cleanup(func() { linuxRunCommand = original })
+	var commands []string
+	linuxRunCommand = func(command string) (string, error) {
+		commands = append(commands, command)
+		if command == "ip -o -4 route show table 233" {
+			return "unreachable default proto 233 metric 1\n" +
+				"unreachable default proto static metric 2\n", nil
+		}
+		return "", nil
+	}
+	if err := RecoverLinuxOwnedRoutes(233, 23333, "dobby233"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"ip -o -4 route show table main",
+		"ip -o -4 route show table 233",
+		"ip -o -6 route show table main",
+		"ip rule del fwmark 233 lookup 233 priority 23333",
+		"ip route del table 233 unreachable default proto 233 metric 1",
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
 func TestRecoverLinuxOwnedRoutesDeletesOnlyRecognizedTaggedResources(t *testing.T) {
 	original := linuxRunCommand
 	t.Cleanup(func() { linuxRunCommand = original })

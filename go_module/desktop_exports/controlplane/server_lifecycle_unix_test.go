@@ -16,7 +16,7 @@ import (
 )
 
 func TestServeUntilSignalRemovesControlSocket(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "runtime", "control.sock")
+	path := filepath.Join(shortControlSocketTempDir(t), "runtime", "control.sock")
 	t.Setenv("DOBBYVPN_CONTROL_SOCKET", path)
 	listener, err := ListenControlSocket()
 	if err != nil {
@@ -47,7 +47,7 @@ func TestServeUntilSignalRemovesControlSocket(t *testing.T) {
 }
 
 func TestServeUntilSignalBoundsActiveRPCShutdown(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "runtime", "control.sock")
+	path := filepath.Join(shortControlSocketTempDir(t), "runtime", "control.sock")
 	t.Setenv("DOBBYVPN_CONTROL_SOCKET", path)
 	listener, err := ListenControlSocket()
 	if err != nil {

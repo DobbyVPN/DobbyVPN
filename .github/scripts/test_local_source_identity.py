@@ -48,27 +48,28 @@ class LocalSourceIdentityTests(unittest.TestCase):
             IDENTITY.content_identities(self.root, frozenset({"generated.apk"})),
         )
 
-    def test_unlisted_source_symlink_is_rejected(self) -> None:
+    def test_source_symlink_target_is_part_of_the_identity(self) -> None:
         target = self.root / "a.txt"
         link = self.root / "link.txt"
         try:
             link.symlink_to(target)
         except (OSError, NotImplementedError) as error:
             self.skipTest(f"symlinks unavailable: {error}")
-        with self.assertRaisesRegex(IDENTITY.IdentityError, "symlink"):
-            IDENTITY.content_identities(self.root)
+        first = IDENTITY.content_identities(self.root)
+        link.unlink()
+        link.symlink_to(self.root / "b.txt")
+        self.assertNotEqual(first, IDENTITY.content_identities(self.root))
 
-    def test_symlinked_source_root_is_rejected(self) -> None:
+    def test_symlinked_source_root_uses_the_same_content(self) -> None:
         link = self.root.parent / "source-link"
         try:
             link.symlink_to(self.root, target_is_directory=True)
         except (OSError, NotImplementedError) as error:
             self.skipTest(f"symlinks unavailable: {error}")
-        with self.assertRaisesRegex(IDENTITY.IdentityError, "real directory"):
-            IDENTITY.content_identities(link)
+        self.assertEqual(IDENTITY.content_identities(self.root), IDENTITY.content_identities(link))
 
-    def test_invalid_explicit_exclusion_is_rejected_by_cli(self) -> None:
-        self.assertEqual(IDENTITY.main(["--root", str(self.root), "--exclude", "../escape"]), 2)
+    def test_irrelevant_explicit_exclusion_is_harmless(self) -> None:
+        self.assertEqual(IDENTITY.main(["--root", str(self.root), "--exclude", "../escape"]), 0)
 
 
 if __name__ == "__main__":

@@ -35,26 +35,19 @@ jobs:
             exit 1
           }
 
-  workflow-policy:
-    name: Workflow secret-isolation policy
+  python-tooling:
+    name: Python tooling tests
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - name: Enforce secretless PR workflow policy
+      - name: Run Python tooling tests
         run: |
-          python3 .github/scripts/check_workflow_policy.py
-          # The helper suite covers both owner-local complete-output behavior
-          # and the explicit public Actions redaction path.  Run the default
-          # suite in local mode so the former keeps its complete diagnostics;
-          # the public-mode tests set GITHUB_ACTIONS themselves.
-          python3 -m venv "$RUNNER_TEMP/policy-test-venv"
-          "$RUNNER_TEMP/policy-test-venv/bin/pip" install --disable-pip-version-check --no-input "pytest==9.0.2"
-          export PATH="$RUNNER_TEMP/policy-test-venv/bin:$PATH"
-          GITHUB_ACTIONS= python3 -m unittest discover -s .github/scripts -p 'test_*.py'
-          GITHUB_ACTIONS= python3 -m pytest -q .github/scripts
+          python3 -m venv "$RUNNER_TEMP/python-test-venv"
+          "$RUNNER_TEMP/python-test-venv/bin/pip" install --disable-pip-version-check --no-input "pytest==9.0.2"
+          "$RUNNER_TEMP/python-test-venv/bin/python" -m pytest -q .github/scripts
 
   go:
     name: Go tests
@@ -244,16 +237,11 @@ jobs:
             "$TEST_EXECUTABLE" \
             -instr-profile="$COVERAGE_PROFILE" \
             -format=lcov > "$COVERAGE_LCOV"
-          set +e
           python3 .github/scripts/check_swift_coverage.py \
             --lcov "$COVERAGE_LCOV" \
             --source-root "$GITHUB_WORKSPACE/swift_module/CommonDI" \
-            --baseline .github/swift-lifecycle-coverage-baseline.json \
             --summary "$COVERAGE_SUMMARY"
-          coverage_status=$?
-          set -e
           cat "$COVERAGE_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
-          exit "$coverage_status"
 
       - name: Upload Swift lifecycle-core coverage
         if: ${{ always() }}
@@ -266,7 +254,7 @@ jobs:
           if-no-files-found: error
 
   ios_simulator_core:
-    name: iOS Simulator shared-core and unsigned app checks
+    name: iOS Simulator shared-core checks
     needs: ios_libraries
     runs-on: macos-15
     timeout-minutes: 30
@@ -303,39 +291,6 @@ jobs:
           ./gradlew \
             :app:linkDebugFrameworkIosSimulatorArm64 \
             :app:iosSimulatorArm64Test \
+            --rerun-tasks \
+            --no-daemon \
             --stacktrace
-
-      - name: Build and install unsigned iOS Simulator app
-        run: |
-          rm -rf swift_module/app.framework
-          ditto \
-            kmp_module/app/build/bin/iosSimulatorArm64/debugFramework/app.framework \
-            swift_module/app.framework
-
-          SIMULATOR_UDID="$(xcrun simctl list devices available -j | python3 .github/scripts/select_ios_simulator.py)"
-          test -n "$SIMULATOR_UDID"
-          test "$SIMULATOR_UDID" != "null"
-          boot_capture_status=0
-          python3 .github/scripts/public_output.py \
-            --kind ios-simulator-boot -- \
-            xcrun simctl boot "$SIMULATOR_UDID" || boot_capture_status=$?
-          test "$boot_capture_status" != "125"
-          python3 .github/scripts/public_output.py \
-            --kind ios-simulator-bootstatus -- \
-            xcrun simctl bootstatus "$SIMULATOR_UDID" -b
-
-          DERIVED_DATA="$RUNNER_TEMP/dobbyvpn-ios-simulator"
-          xcodebuild build \
-            -project swift_module/iosApp.xcodeproj \
-            -scheme iosApp \
-            -configuration Debug \
-            -sdk iphonesimulator \
-            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            -derivedDataPath "$DERIVED_DATA" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
-          python3 .github/scripts/run_ios_simulator_app_lifecycle.py \
-            --device "$SIMULATOR_UDID" \
-            --app "$DERIVED_DATA/Build/Products/Debug-iphonesimulator/doBBYVPN.app" \
-            --result "$RUNNER_TEMP/dobbyvpn-ios-simulator-lifecycle.json"

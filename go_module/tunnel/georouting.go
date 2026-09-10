@@ -120,19 +120,9 @@ func cloneIPNets(input []*net.IPNet) []*net.IPNet {
 }
 
 func summarizeCIDRs(cidrs []*net.IPNet) []string {
-	const limit = 10
-
-	count := len(cidrs)
-	if count > limit {
-		count = limit
-	}
-
-	result := make([]string, 0, count+1)
-	for _, cidr := range cidrs[:count] {
+	result := make([]string, 0, len(cidrs))
+	for _, cidr := range cidrs {
 		result = append(result, cidr.String())
-	}
-	if len(cidrs) > limit {
-		result = append(result, "...")
 	}
 	return result
 }

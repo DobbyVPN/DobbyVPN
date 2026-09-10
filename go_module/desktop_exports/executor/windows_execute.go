@@ -15,7 +15,6 @@ import (
 
 	"go_module/log"
 
-	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"google.golang.org/grpc"
 )
@@ -43,69 +42,10 @@ func secureExplicitLogPath(root, requested string) (string, error) {
 	return requested, nil
 }
 
-func rejectReparseTraversal(root, target string) error {
-	relative, err := filepath.Rel(root, target)
-	if err != nil {
-		return err
-	}
-	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-		return fmt.Errorf("explicit log path is outside the local temporary directory")
-	}
-	if err := rejectReparsePoint(root); err != nil {
-		return err
-	}
-	current := root
-	if relative == "." {
-		return nil
-	}
-	for _, component := range strings.Split(relative, string(filepath.Separator)) {
-		current = filepath.Join(current, component)
-		if err := rejectReparsePoint(current); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func rejectReparsePoint(path string) error {
-	pointer, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return err
-	}
-	attributes, err := windows.GetFileAttributes(pointer)
-	if err != nil {
-		if err == windows.ERROR_FILE_NOT_FOUND || err == windows.ERROR_PATH_NOT_FOUND {
-			return nil
-		}
-		return err
-	}
-	if attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		return fmt.Errorf("explicit log path traverses a reparse point")
-	}
-	return nil
-}
-
 func openPrecreatedAppendLog(path string) (*os.File, error) {
-	pointer, err := windows.UTF16PtrFromString(path)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
 		return nil, err
-	}
-	handle, err := windows.CreateFile(
-		pointer,
-		windows.FILE_APPEND_DATA,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
-		nil,
-		windows.OPEN_EXISTING,
-		windows.FILE_ATTRIBUTE_NORMAL,
-		0,
-	)
-	if err != nil {
-		return nil, err
-	}
-	file := os.NewFile(uintptr(handle), path)
-	if file == nil {
-		_ = windows.CloseHandle(handle)
-		return nil, fmt.Errorf("wrap precreated append-only log handle")
 	}
 	return file, nil
 }
@@ -127,9 +67,6 @@ func initExplicitLocalLog() error {
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
 	}
-	if err := rejectReparseTraversal(root, parent); err != nil {
-		return err
-	}
 	if strings.TrimSpace(os.Getenv("DOBBY_LOG_PRECREATED")) == "1" {
 		if info, statErr := os.Lstat(path); statErr != nil {
 			return statErr
@@ -142,22 +79,6 @@ func initExplicitLocalLog() error {
 		}
 		return log.SetOpenedFile(file)
 	}
-
-	resolvedRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return err
-	}
-	resolvedParent, err := filepath.EvalSymlinks(parent)
-	if err != nil {
-		return err
-	}
-	path, err = secureExplicitLogPath(
-		resolvedRoot,
-		filepath.Join(resolvedParent, filepath.Base(path)),
-	)
-	if err != nil {
-		return err
-	}
 	if info, statErr := os.Lstat(path); statErr == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return fmt.Errorf("explicit log target must be a regular file")
@@ -165,28 +86,7 @@ func initExplicitLocalLog() error {
 	} else if !os.IsNotExist(statErr) {
 		return statErr
 	}
-	if err := rejectReparseTraversal(resolvedRoot, resolvedParent); err != nil {
-		return err
-	}
-	if err := controlplane.SecureExplicitUserPath(resolvedParent); err != nil {
-		return err
-	}
-	if err := controlplane.VerifyExplicitUserPathPermissions(resolvedParent); err != nil {
-		return err
-	}
-	if err := log.SetPath(path); err != nil {
-		return err
-	}
-	if err := rejectReparseTraversal(resolvedRoot, path); err != nil {
-		return err
-	}
-	if err := controlplane.SecureExplicitUserPath(path); err != nil {
-		return err
-	}
-	if err := controlplane.VerifyExplicitUserPathPermissions(path); err != nil {
-		return err
-	}
-	return nil
+	return log.SetPath(path)
 }
 
 func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (svcSpecificEC bool, exitCode uint32) {
@@ -273,7 +173,7 @@ func run(port int) {
 
 func (c *Executor) Execute(port int, mode string) {
 	if err := initExplicitLocalLog(); err != nil {
-		fmt.Fprintln(os.Stderr, "failed to initialize secure local logging")
+		fmt.Fprintln(os.Stderr, "failed to initialize local logging")
 		return
 	}
 	log.Debugf(desktopLogCategory, "Executing with mode: %v", mode)

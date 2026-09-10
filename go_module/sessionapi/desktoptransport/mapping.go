@@ -6,6 +6,7 @@ package desktoptransport
 
 import (
 	"errors"
+	"fmt"
 
 	"go_module/grpcproto"
 	v2 "go_module/sessionapi/v2"
@@ -20,7 +21,7 @@ func Protocol(protocol v2.Protocol) grpcproto.SessionProtocol {
 	case v2.ProtocolTrustTunnel:
 		return grpcproto.SessionProtocol_SESSION_PROTOCOL_TRUST_TUNNEL
 	default:
-		return grpcproto.SessionProtocol_SESSION_PROTOCOL_UNSPECIFIED
+		panic(fmt.Sprintf("unsupported session protocol %q", protocol))
 	}
 }
 
@@ -43,7 +44,7 @@ func State(state v2.State) grpcproto.SessionState {
 	case v2.StateDestroyed:
 		return grpcproto.SessionState_SESSION_STATE_DESTROYED
 	default:
-		return grpcproto.SessionState_SESSION_STATE_UNSPECIFIED
+		panic(fmt.Sprintf("unsupported session state %q", state))
 	}
 }
 
@@ -76,7 +77,7 @@ func FailureCode(code v2.FailureCode) grpcproto.SessionFailureCode {
 	case v2.FailureCleanup:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CLEANUP_FAILED
 	default:
-		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_UNSPECIFIED
+		panic(fmt.Sprintf("unsupported session failure code %q", code))
 	}
 }
 
@@ -86,7 +87,7 @@ func Failure(err error) *grpcproto.SessionFailure {
 	}
 	var domain *v2.Error
 	if errors.As(err, &domain) {
-		return &grpcproto.SessionFailure{Code: FailureCode(domain.Code), Message: domain.Message}
+		return &grpcproto.SessionFailure{Code: FailureCode(domain.Code), Message: err.Error()}
 	}
-	return &grpcproto.SessionFailure{Code: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INTERNAL, Message: "operation failed"}
+	return &grpcproto.SessionFailure{Code: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INTERNAL, Message: err.Error()}
 }

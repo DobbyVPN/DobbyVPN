@@ -239,5 +239,5 @@ func (app *App) SwitchProtocolDevice(device protocol.ProtocolDevice) error {
 	// A replacement needs a second independently-owned server bypass lease. The
 	// current tunnel API does not retain that Plan, so refuse the transition
 	// instead of deleting a route that may predate this session.
-	return fmt.Errorf("Windows protocol hot-switch is unavailable while routing leases are session-owned")
+	return fmt.Errorf("Windows protocol hot-switch is unavailable; stop the active session before starting another profile (routing leases are session-owned)")
 }

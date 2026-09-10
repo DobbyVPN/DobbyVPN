@@ -22,7 +22,6 @@ func profile() v1.RuntimeProfile {
 		NormalizedFormat: v1.ConfigTransportURL,
 		NormalizedConfig: []byte("normalized-only"),
 		ExcludeCIDRs:     []string{"203.0.113.0/24"},
-		PreflightHosts:   []string{"example.invalid"},
 	}
 }
 
@@ -47,11 +46,11 @@ type fakeInputs struct {
 	err    error
 }
 
-func (f fakeInputs) Apply(_ context.Context, _ v1.SessionRef, cidrs, hosts []string) (InputLease, error) {
+func (f fakeInputs) Apply(_ context.Context, _ v1.SessionRef, cidrs []string) (InputLease, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	if len(cidrs) != 1 || len(hosts) != 1 {
+	if len(cidrs) != 1 {
 		return nil, errors.New("runtime did not supply Go-only inputs")
 	}
 	f.record.add("inputs")

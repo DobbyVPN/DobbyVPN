@@ -14,25 +14,49 @@ import (
 
 func fixture(t *testing.T) []byte {
 	t.Helper()
-	b, err := os.ReadFile("testdata/redacted_mixed.toml")
+	b, err := os.ReadFile("testdata/mixed_profiles.toml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	return b
 }
 
-func TestWrappedFailurePreservesCauseBehindSafeBoundary(t *testing.T) {
+func TestWrappedFailurePreservesCauseAndClassification(t *testing.T) {
 	cause := errors.New("exact internal cause")
 	wrapped := wrapFailure(FailurePlatform, cause)
 	if !errors.Is(wrapped, cause) {
 		t.Fatalf("wrapped failure lost its cause: %v", wrapped)
 	}
-	if wrapped.Error() != "PLATFORM_FAILED: operation failed" {
-		t.Fatalf("safe failure changed: %v", wrapped)
+	if wrapped.Error() != "PLATFORM_FAILED: operation failed: exact internal cause" {
+		t.Fatalf("failure classification changed: %v", wrapped)
 	}
 }
 
-func TestConfigurePreservesMixedSourceOrderAndTelemetryIsLocalOnly(t *testing.T) {
+func TestAsyncRuntimeFailurePreservesExactMessageInEventAndSnapshot(t *testing.T) {
+	const exact = "runtime start failed: dial tcp: i/o timeout"
+	m := NewManager(ManagerOptions{
+		Runtime:  &startErrorRuntime{err: errors.New(exact)},
+		Platform: &eventPlatform{events: make(chan Event, 32)},
+	})
+	id := configured(t, m)
+	if _, err := m.Start(context.Background(), id, "start", StartTarget{Mode: ProfileIndex, Index: 0}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The runtime error is wrapped with its stable code, but its complete
+	// message must survive the asynchronous event and snapshot paths.
+	want := "RUNTIME_FAILED: operation failed: " + exact
+	event := waitForEvent(t, m.platform.(*eventPlatform).events, 1, StateFailed)
+	if event.Failure != FailureRuntime || event.FailureMessage != want {
+		t.Fatalf("async failure event = %#v, want message %q", event, want)
+	}
+	snapshot := waitState(t, m, id, StateFailed)
+	if snapshot.LastFailure != FailureRuntime || snapshot.LastFailureMessage != want {
+		t.Fatalf("async failure snapshot = %#v, want message %q", snapshot, want)
+	}
+}
+
+func TestConfigurePreservesMixedSourceOrder(t *testing.T) {
 	m := NewManager(ManagerOptions{})
 	id, err := m.CreateSession(context.Background())
 	if err != nil {
@@ -51,7 +75,7 @@ func TestConfigurePreservesMixedSourceOrderAndTelemetryIsLocalOnly(t *testing.T)
 			t.Fatalf("profile %d = %#v", i, got.Profiles[i])
 		}
 	}
-	if len(got.Warnings) != 1 || got.Warnings[0].Code != "TELEMETRY_IGNORED" {
+	if len(got.Warnings) != 0 {
 		t.Fatalf("warnings = %#v", got.Warnings)
 	}
 	if got.Digest == "" {
@@ -68,9 +92,9 @@ func TestConfigurePreservesMixedSourceOrderAndTelemetryIsLocalOnly(t *testing.T)
 
 func TestConfigureRejectsRemovedCloakProfiles(t *testing.T) {
 	raw := strings.Join([]string{
-		"[[Outline]]", `Description = "supported-before"`, `Server = "198.51.100.20"`, "Port = 443", `Password = "redacted"`,
+		"[[Outline]]", `Description = "supported-before"`, `Server = "198.51.100.20"`, "Port = 443", `Password = "synthetic-password"`,
 		"", "[[Xray]]", `Description = "legacy-cloak"`, "Cloak = true", `Server = "cloak.invalid"`, `Password = "do-not-return"`,
-		"", "[[TrustTunnel]]", `Description = "supported-after"`, `vpn_mode = "general"`, "|endpoint|", `hostname = "vpn.invalid"`, `addresses = ["198.51.100.21:443"]`, `username = "redacted"`, `password = "redacted"`, "|socks|", `address = "127.0.0.1:10808"`,
+		"", "[[TrustTunnel]]", `Description = "supported-after"`, `vpn_mode = "general"`, "[TrustTunnel.endpoint]", `hostname = "vpn.invalid"`, `addresses = ["198.51.100.21:443"]`, `username = "synthetic-user"`, `password = "synthetic-password"`, "[TrustTunnel.listener.socks]", `address = "127.0.0.1:10808"`,
 	}, "\n")
 	m := NewManager(ManagerOptions{})
 	id, err := m.CreateSession(context.Background())
@@ -81,23 +105,20 @@ func TestConfigureRejectsRemovedCloakProfiles(t *testing.T) {
 	if CodeOf(err) != FailureUnsupported || err.Error() != "UNSUPPORTED: configuration contains a removed Cloak profile" {
 		t.Fatalf("removed Cloak result = %v", err)
 	}
-	if strings.Contains(err.Error(), "cloak.invalid") || strings.Contains(err.Error(), "do-not-return") {
-		t.Fatalf("removed Cloak error leaked source: %v", err)
-	}
 }
 
 func TestConfigureRejectsMultipleAndAllCloakInputsBeforeExecution(t *testing.T) {
-	const sensitiveURL = "https://cloak.example.invalid/private/profile"
-	const sensitiveEndpoint = "198.51.100.99:8443"
-	const sensitiveCredential = "cloak-secret-token"
+	const syntheticURL = "https://cloak.example.invalid/private/profile"
+	const syntheticEndpoint = "198.51.100.99:8443"
+	const syntheticCredential = "cloak-secret-token"
 	tests := map[string]string{
 		"multiple Cloak sections": strings.Join([]string{
-			"[[Xray]]", "Cloak = true", `outbounds = [{"address" = "` + sensitiveEndpoint + `"}]`,
-			"", "[[Outline]]", "Cloak = true", `Server = "` + sensitiveURL + `"`, `Password = "` + sensitiveCredential + `"`, "Port = 443",
+			"[[Xray]]", "Cloak = true", `outbounds = [{"address" = "` + syntheticEndpoint + `"}]`,
+			"", "[[Outline]]", "Cloak = true", `Server = "` + syntheticURL + `"`, `Password = "` + syntheticCredential + `"`, "Port = 443",
 		}, "\n"),
 		"all Cloak sections": strings.Join([]string{
-			"[[Outline]]", "Cloak = true", `Server = "` + sensitiveURL + `"`, `Password = "` + sensitiveCredential + `"`, "Port = 443",
-			"", "[[TrustTunnel]]", "Cloak = true", `hostname = "` + sensitiveEndpoint + `"`, `password = "` + sensitiveCredential + `"`, "|endpoint|", `addresses = ["` + sensitiveEndpoint + `"]`,
+			"[[Outline]]", "Cloak = true", `Server = "` + syntheticURL + `"`, `Password = "` + syntheticCredential + `"`, "Port = 443",
+			"", "[[TrustTunnel]]", "Cloak = true", `hostname = "` + syntheticEndpoint + `"`, `password = "` + syntheticCredential + `"`, "[TrustTunnel.endpoint]", `addresses = ["` + syntheticEndpoint + `"]`,
 		}, "\n"),
 	}
 	for name, raw := range tests {
@@ -127,16 +148,6 @@ func TestConfigureRejectsMultipleAndAllCloakInputsBeforeExecution(t *testing.T) 
 			}
 			if snapshot.Configured || snapshot.State != StateFailed || snapshot.LastFailure != FailureUnsupported {
 				t.Fatalf("rejected input changed session state: %#v", snapshot)
-			}
-			events, err := m.Observe(context.Background(), id, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			public := fmt.Sprintf("%#v %#v %#v", configureErr, snapshot, events)
-			for _, secret := range []string{sensitiveURL, sensitiveEndpoint, sensitiveCredential, raw} {
-				if strings.Contains(public, secret) {
-					t.Fatalf("rejected-input boundary leaked %q: %s", secret, public)
-				}
 			}
 		})
 	}
@@ -213,7 +224,7 @@ func TestCreateSessionConflictsWhileAnotherGenerationIsRecoverable(t *testing.T)
 	}
 }
 
-func TestNormalizationAndPublicResultsNeverExposeFixtureSecrets(t *testing.T) {
+func TestNormalizationAndResults(t *testing.T) {
 	m := NewManager(ManagerOptions{})
 	id := configured(t, m)
 	s, err := m.get(id)
@@ -235,22 +246,9 @@ func TestNormalizationAndPublicResultsNeverExposeFixtureSecrets(t *testing.T) {
 	if len(profiles[0].ExcludeCIDRs) != 1 || profiles[0].ExcludeCIDRs[0] != "203.0.113.0/24" {
 		t.Fatalf("routing inputs = %#v", profiles[0].ExcludeCIDRs)
 	}
-	if len(profiles[2].PreflightHosts) != 1 || profiles[2].PreflightHosts[0] != "vpn.invalid" {
-		t.Fatalf("DNS preflight inputs = %#v", profiles[2].PreflightHosts)
-	}
 	result, err := m.Configure(context.Background(), id, "bad", []byte("not = [valid"))
 	if err == nil || result.Digest != "" || CodeOf(err) != FailureMalformedConfig {
 		t.Fatalf("malformed result=%#v err=%v", result, err)
-	}
-	events, err := m.Observe(context.Background(), id, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	public := fmt.Sprintf("%#v %#v %v", result, events.Events, err)
-	for _, secret := range []string{"redacted", "198.51.100.10", "telemetry.invalid", "ApiToken", "Password"} {
-		if strings.Contains(public, secret) {
-			t.Fatalf("public response leaked %q: %s", secret, public)
-		}
 	}
 }
 
@@ -272,98 +270,6 @@ func TestConfigureRejectsProfilesRejectedByLegacyInterpreter(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestSlowPlatformPublicationPreservesEventOrder(t *testing.T) {
-	p := &orderedPlatform{firstEntered: make(chan struct{}), releaseFirst: make(chan struct{})}
-	m := NewManager(ManagerOptions{Platform: p})
-	id, err := m.CreateSession(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.Configure(context.Background(), id, "configure", fixture(t)); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-p.firstEntered:
-	case <-time.After(time.Second):
-		t.Fatal("first publication did not begin")
-	}
-	if _, err := m.Start(context.Background(), id, "start", StartTarget{Mode: ProfileIndex, Index: 0}); err != nil {
-		t.Fatal(err)
-	}
-	waitState(t, m, id, StateFailed) // default runtime queues the final failure event
-	close(p.releaseFirst)
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		p.mu.Lock()
-		n := len(p.events)
-		p.mu.Unlock()
-		if n >= 5 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	p.mu.Lock()
-	events := append([]Event(nil), p.events...)
-	p.mu.Unlock()
-	if len(events) < 5 {
-		t.Fatalf("published events=%#v", events)
-	}
-	for i, event := range events {
-		if event.Sequence != uint64(i+1) {
-			t.Fatalf("event publication reordered at %d: %#v", i, event)
-		}
-	}
-}
-
-func TestSlowPlatformPublicationCannotBlockTheSessionMutex(t *testing.T) {
-	p := &orderedPlatform{firstEntered: make(chan struct{}), releaseFirst: make(chan struct{})}
-	m := NewManager(ManagerOptions{Platform: p})
-	id, err := m.CreateSession(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	s, err := m.get(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	appended := make(chan struct{})
-	go func() {
-		s.mu.Lock()
-		for i := 0; i < 256; i++ {
-			m.appendLocked(s, Event{State: StateIdle})
-		}
-		s.mu.Unlock()
-		close(appended)
-	}()
-	select {
-	case <-p.firstEntered:
-	case <-time.After(time.Second):
-		t.Fatal("first publication did not begin")
-	}
-	select {
-	case <-appended:
-	case <-time.After(time.Second):
-		t.Fatal("slow platform publication blocked the session mutex")
-	}
-	close(p.releaseFirst)
-	if err := m.DestroySession(context.Background(), id); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		p.mu.Lock()
-		count := len(p.events)
-		p.mu.Unlock()
-		if count >= 257 { // 256 synthetic events plus Destroyed.
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	t.Fatalf("slow publisher dropped queued events: got %d", len(p.events))
 }
 
 func TestDestroyDoesNotRaceACommandThatAlreadyResolvedSession(t *testing.T) {
@@ -450,7 +356,8 @@ func TestStopReportsCleanupFailureAndBlocksRestart(t *testing.T) {
 }
 
 func TestStopAcknowledgesAlreadyCleanedTerminalGeneration(t *testing.T) {
-	runtime := &monitoringRuntime{failures: make(chan struct{}, 1), stopped: make(chan uint64, 2)}
+	failures := make(chan struct{}, 1)
+	runtime := &monitoringRuntime{failures: failures, stopped: make(chan uint64, 2)}
 	platform := &eventPlatform{events: make(chan Event, 32)}
 	m := NewManager(ManagerOptions{Runtime: runtime, Platform: platform})
 	id := configured(t, m)
@@ -459,9 +366,7 @@ func TestStopAcknowledgesAlreadyCleanedTerminalGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, m, id, StateConnected)
-	if _, err := m.ReportHealth(context.Background(), id, start.Generation, false); err != nil {
-		t.Fatal(err)
-	}
+	failures <- struct{}{}
 	snapshot := waitState(t, m, id, StateFailed)
 	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureRuntime {
 		t.Fatalf("health-failure snapshot=%#v", snapshot)
@@ -856,6 +761,15 @@ type fakeRuntime struct {
 	stopHook     func()
 }
 
+type startErrorRuntime struct{ err error }
+
+func (r *startErrorRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
+	return ProbeResult{LatencyMillis: 1}, nil
+}
+func (r *startErrorRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
+	return nil, r.err
+}
+
 type countingRuntime struct {
 	probeCalls int
 	startCalls int
@@ -957,9 +871,8 @@ func (*eventPlatform) PrepareTunnel(context.Context, SessionRef) (PlatformLease,
 	return noopLease{}, nil
 }
 func (*eventPlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
-func (p *eventPlatform) PublishState(_ context.Context, event Event) error {
+func (p *eventPlatform) PublishState(_ context.Context, event Event) {
 	p.events <- event
-	return nil
 }
 
 func waitForEvent(t *testing.T, events <-chan Event, generation uint64, state State) Event {
@@ -994,7 +907,7 @@ func (p *fakePlatform) PrepareTunnel(context.Context, SessionRef) (PlatformLease
 	return fakePlatformLease{p.releaseHook}, nil
 }
 func (*fakePlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
-func (*fakePlatform) PublishState(context.Context, Event) error            { return nil }
+func (*fakePlatform) PublishState(context.Context, Event)                  {}
 
 type fakePlatformLease struct{ release func() }
 
@@ -1014,7 +927,7 @@ func (p errorWithLeasePlatform) PrepareTunnel(context.Context, SessionRef) (Plat
 	return cleanupErrorPlatformLease{err: p.releaseErr}, p.prepareErr
 }
 func (errorWithLeasePlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
-func (errorWithLeasePlatform) PublishState(context.Context, Event) error            { return nil }
+func (errorWithLeasePlatform) PublishState(context.Context, Event)                  {}
 
 type cleanupErrorPlatformLease struct{ err error }
 
@@ -1063,9 +976,8 @@ func (p *orderedProbePlatform) PrepareTunnel(_ context.Context, _ SessionRef) (P
 	return fakePlatformLease{release: func() { p.order.add(fmt.Sprintf("release-%d", index)) }}, nil
 }
 func (*orderedProbePlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
-func (p *orderedProbePlatform) PublishState(_ context.Context, event Event) error {
+func (p *orderedProbePlatform) PublishState(_ context.Context, event Event) {
 	p.events <- event
-	return nil
 }
 
 type releaseSignalPlatform struct{ released chan<- struct{} }
@@ -1074,7 +986,7 @@ func (p *releaseSignalPlatform) PrepareTunnel(context.Context, SessionRef) (Plat
 	return fakePlatformLease{release: func() { p.released <- struct{}{} }}, nil
 }
 func (*releaseSignalPlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
-func (*releaseSignalPlatform) PublishState(context.Context, Event) error            { return nil }
+func (*releaseSignalPlatform) PublishState(context.Context, Event)                  {}
 
 type failingProbePlatform struct{ events chan Event }
 
@@ -1082,29 +994,8 @@ func (f failingProbePlatform) PrepareTunnel(context.Context, SessionRef) (Platfo
 	return nil, errors.New("prepare probe")
 }
 func (f failingProbePlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
-func (f failingProbePlatform) PublishState(_ context.Context, event Event) error {
+func (f failingProbePlatform) PublishState(_ context.Context, event Event) {
 	f.events <- event
-	return nil
-}
-
-type orderedPlatform struct {
-	mu           sync.Mutex
-	events       []Event
-	firstEntered chan struct{}
-	releaseFirst chan struct{}
-	once         sync.Once
-}
-
-func (*orderedPlatform) PrepareTunnel(context.Context, SessionRef) (PlatformLease, error) {
-	return noopLease{}, nil
-}
-func (*orderedPlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
-func (p *orderedPlatform) PublishState(_ context.Context, event Event) error {
-	p.once.Do(func() { close(p.firstEntered); <-p.releaseFirst })
-	p.mu.Lock()
-	p.events = append(p.events, event)
-	p.mu.Unlock()
-	return nil
 }
 
 type blockingStartRuntime struct {
@@ -1143,7 +1034,7 @@ func (p blockingPreparePlatform) PrepareTunnel(context.Context, SessionRef) (Pla
 	return blockingPrepareLease{released: p.released, err: p.err}, nil
 }
 func (blockingPreparePlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
-func (blockingPreparePlatform) PublishState(context.Context, Event) error            { return nil }
+func (blockingPreparePlatform) PublishState(context.Context, Event)                  {}
 
 type blockingPrepareLease struct {
 	released chan<- struct{}

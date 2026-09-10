@@ -2,7 +2,6 @@ package internal
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -61,7 +60,9 @@ func GenerateXrayConfig(vlessConfigStr, socksListen string, socksPort, routingTa
 	userConfig["inbounds"] = []interface{}{socksInbound}
 
 	ensureXrayLogConfig(userConfig)
-	applyResolvedOutboundAddresses(userConfig)
+	if err := applyResolvedOutboundAddresses(userConfig); err != nil {
+		return nil, err
+	}
 	applyProtectedSockopt(userConfig, routingTableID, uplinkIface)
 
 	finalJSON, err := json.Marshal(userConfig)
@@ -103,11 +104,10 @@ func ensureXrayLogConfig(userConfig map[string]interface{}) {
 	}
 }
 
-func applyResolvedOutboundAddresses(userConfig map[string]interface{}) {
+func applyResolvedOutboundAddresses(userConfig map[string]interface{}) error {
 	outbounds, ok := userConfig["outbounds"].([]interface{})
 	if !ok {
-		log.Debugf(xrayCommon.Category, "protected DNS rewrite skipped: outbounds missing or invalid type")
-		return
+		return nil
 	}
 
 	updated := 0
@@ -150,11 +150,9 @@ func applyResolvedOutboundAddresses(userConfig map[string]interface{}) {
 				continue
 			}
 
-			ip4, err := dnscache.ResolveIPv4(context.Background(), address, dnscache.FastResolveTimeout, "xray-config")
-			if err != nil {
-				log.Debugf(xrayCommon.Category, "protected DNS rewrite skipped: address=%s timeout=%s err=%v", address, dnscache.FastResolveTimeout, err)
-				skipped++
-				continue
+			ip4, ok := dnscache.LookupIPv4(address, "xray-config")
+			if !ok {
+				return fmt.Errorf("resolved Xray endpoint %q is absent from the session DNS cache", address)
 			}
 			appliedNames := applyOriginalServerName(outboundMap, address)
 			serverMap["address"] = ip4.String()
@@ -164,6 +162,7 @@ func applyResolvedOutboundAddresses(userConfig map[string]interface{}) {
 	}
 
 	log.Debugf(xrayCommon.Category, "protected DNS rewrite complete: outbounds=%d updated=%d skipped=%d", len(outbounds), updated, skipped)
+	return nil
 }
 
 func applyOriginalServerName(outboundMap map[string]interface{}, originalAddress string) []string {

@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go_module/dnscache"
 	"go_module/log"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptrace"
-	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,11 +15,8 @@ import (
 
 const (
 	probeTimeout          = 2 * time.Second
-	probeMinTimeout       = 100 * time.Millisecond
-	probeMaxBodyBytes     = 4096
 	httpProbeMinSuccesses = 2
 	probeFailureResult    = int64(-1)
-	probeDNSPreflightTTL  = 12 * time.Hour
 )
 
 var httpProbeURLs = []string{
@@ -30,8 +24,6 @@ var httpProbeURLs = []string{
 	"https://www.cloudflare.com/cdn-cgi/trace",
 	"https://about.google",
 }
-
-var probeDNSLookup = net.DefaultResolver.LookupIPAddr
 
 type probeEndpointResult struct {
 	url          string
@@ -47,64 +39,12 @@ const (
 	probeStageConnect  = "connect"
 	probeStageTLS      = "tls"
 	probeStageResponse = "response"
-	probeStageBody     = "body"
 	probeStageStatus   = "status"
 	probeErrorTimeout  = "timeout"
 	probeErrorCanceled = "canceled"
 	probeErrorDNS      = "dns"
 	probeErrorProtocol = "protocol"
 )
-
-// PreflightTunnelProbeDNS resolves the fixed readiness hosts before a platform
-// redirects DNS into the new tunnel. The cached IPv4 answers remove a circular
-// dependency where proving the tunnel requires the tunnel's first DNS exchange
-// to have already succeeded. Failures remain best-effort because a platform may
-// still provide working DNS through the tunnel.
-func PreflightTunnelProbeDNS(ctx context.Context) (resolved, total int) {
-	hosts := tunnelProbeHosts(httpProbeURLs)
-	for _, host := range hosts {
-		if err := ctx.Err(); err != nil {
-			break
-		}
-		lookupCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-		addresses, err := probeDNSLookup(lookupCtx, host)
-		cancel()
-		if err != nil {
-			continue
-		}
-		for _, address := range addresses {
-			if ipv4 := address.IP.To4(); ipv4 != nil {
-				if dnscache.SetIPv4(host, ipv4.String(), "tunnel-probe-preflight", probeDNSPreflightTTL) {
-					resolved++
-				}
-				break
-			}
-		}
-	}
-	log.Debugf("PROBE", "Tunnel probe DNS preflight resolved=%d total=%d", resolved, len(hosts))
-	return resolved, len(hosts)
-}
-
-func tunnelProbeHosts(rawURLs []string) []string {
-	seen := make(map[string]struct{}, len(rawURLs))
-	hosts := make([]string, 0, len(rawURLs))
-	for _, rawURL := range rawURLs {
-		parsed, err := url.Parse(rawURL)
-		if err != nil {
-			continue
-		}
-		host := dnscache.NormalizeHost(parsed.Hostname())
-		if host == "" || net.ParseIP(host) != nil {
-			continue
-		}
-		if _, exists := seen[host]; exists {
-			continue
-		}
-		seen[host] = struct{}{}
-		hosts = append(hosts, host)
-	}
-	return hosts
-}
 
 // pingHostCheck performs one bounded HTTP readiness request through the
 // generation-owned route. It is kept beside the latency probe so the package
@@ -187,9 +127,9 @@ func MeasureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis int64) int6
 // callers which do not have a tighter deadline.
 func MeasureTunnelProbeAverageLatencyMillisWithContext(ctx context.Context, timeoutMillis int64) int64 {
 	timeout := time.Duration(timeoutMillis) * time.Millisecond
-	if timeout < probeMinTimeout {
-		log.Warnf("PROBE", "Tunnel probe timeout is too small timeoutMs=%d using default=%s", timeoutMillis, probeTimeout)
-		timeout = probeTimeout
+	if timeout <= 0 {
+		log.Warnf("PROBE", "Tunnel probe timeout is invalid timeoutMs=%d", timeoutMillis)
+		return probeFailureResult
 	}
 	log.Debugf("PROBE", "Tunnel probe begin endpoints=%d timeout=%s", len(httpProbeURLs), timeout)
 
@@ -297,10 +237,6 @@ func probeEndpoint(parent context.Context, endpointURL string, timeout time.Dura
 		}
 	}()
 
-	_, err = io.ReadAll(io.LimitReader(resp.Body, probeMaxBodyBytes))
-	if err != nil {
-		return failedProbeEndpoint(endpointURL, resp.StatusCode, probeStageBody, err)
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		return failedProbeEndpoint(endpointURL, resp.StatusCode, probeStageStatus, fmt.Errorf("unexpected status %d", resp.StatusCode))
 	}
@@ -329,7 +265,7 @@ func probeFailureStage(stage int32) string {
 	case 3:
 		return probeStageResponse
 	case 4:
-		return probeStageBody
+		return probeStageResponse
 	default:
 		return probeStageRequest
 	}

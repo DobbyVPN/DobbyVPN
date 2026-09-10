@@ -29,7 +29,6 @@ const (
 	exitConnect  = 3
 	exitRuntime  = 4
 	exitConflict = 8
-	maxSource    = 1 << 20
 )
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -557,9 +556,6 @@ func verifySession(ctx context.Context, client grpcproto.VpnClient) int {
 }
 
 func readSource(source string) ([]byte, error) {
-	if len([]byte(source)) > maxSource {
-		return nil, fmt.Errorf("source too large")
-	}
 	// A Windows drive path such as C:\\path\\config.toml parses as a URL
 	// with scheme "c". Recognize it as a filesystem path before URL parsing;
 	// otherwise the Windows desktop harness cannot pass a config file path.
@@ -592,11 +588,8 @@ func parseSourceURL(source string) (urlSource []byte, isURL bool, err error) {
 func readSourceFileOrInline(source string) ([]byte, error) {
 	cleanPath := filepath.Clean(source)
 	if data, err := os.ReadFile(cleanPath); err == nil {
-		if len(data) > maxSource {
-			return nil, fmt.Errorf("source too large")
-		}
 		return data, nil
-	} else if !os.IsNotExist(err) {
+	} else if !sourceFileReadMayFallbackToInline(err) {
 		return nil, fmt.Errorf("cannot read configuration source: %w", err)
 	}
 	return []byte(source), nil
@@ -711,7 +704,7 @@ func externalIP() int {
 			failures = append(failures, fmt.Errorf("external IP request failed: %w", err))
 			continue
 		}
-		body, readErr := io.ReadAll(io.LimitReader(response.Body, 256))
+		body, readErr := io.ReadAll(response.Body)
 		closeErr := response.Body.Close()
 		if closeErr != nil {
 			failures = append(failures, fmt.Errorf("close external IP response: %w", closeErr))

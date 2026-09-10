@@ -100,6 +100,24 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 		return err
 	}
 
+	// Link loss removes the physical default. Without a terminal route, marked
+	// VPN-server traffic falls through to the main TUN route and loops back into
+	// the VPN. Metric 1 loses to the physical route's metric 0 and survives link loss.
+	terminalRoute := fmt.Sprintf("table %d unreachable default proto %d metric 1", tableID, linuxOwnedRouteProtocol)
+	terminalLease, err := p.Acquire(fmt.Sprintf("mark-unreachable table=%d", tableID), func() error {
+		_, err := linuxRunCommand("ip route add " + terminalRoute)
+		return err
+	}, func() error {
+		_, err := linuxRunCommand("ip route del " + terminalRoute)
+		if linuxRouteAlreadyGone(err) {
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		return errors.Join(err, routeLease.Close())
+	}
+
 	ruleCommand := fmt.Sprintf("ip rule add fwmark %d lookup %d priority %d", tableID, tableID, priority)
 	ruleDelete := fmt.Sprintf("ip rule del fwmark %d lookup %d priority %d", tableID, tableID, priority)
 	if _, err := p.Acquire(fmt.Sprintf("mark-rule table=%d priority=%d", tableID, priority), func() error {
@@ -109,8 +127,7 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 		_, err := linuxRunCommand(ruleDelete)
 		return err
 	}); err != nil {
-		_ = routeLease.Close()
-		return err
+		return errors.Join(err, terminalLease.Close(), routeLease.Close())
 	}
 	return nil
 }

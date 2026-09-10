@@ -38,8 +38,7 @@ func RegisterSessionPlatform(callbacks PlatformCallbacks) {
 	androidCallbacks.set(callbacks)
 }
 
-// Session API bindings. Each result is a safe JSON envelope and never echoes
-// a raw configuration, URL, or credential.
+// Session API bindings. Each result uses the stable session JSON envelope.
 func GetSessionCapabilities() string { return mobileSessions.GetCapabilities() }
 func CreateSession() string          { return mobileSessions.CreateSession() }
 func RecoverActiveSession() string   { return mobileSessions.RecoverActiveSession() }

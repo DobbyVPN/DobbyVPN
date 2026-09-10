@@ -5,10 +5,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
-import stat
 import sys
 import zipfile
 
@@ -48,12 +46,8 @@ class VerificationError(ValueError):
 
 
 def _regular_file(path: Path, label: str) -> None:
-    try:
-        mode = path.lstat().st_mode
-    except FileNotFoundError as exc:
-        raise VerificationError(f"{label} does not exist") from exc
-    if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
-        raise VerificationError(f"{label} must be a regular non-symlink file")
+    if not path.is_file():
+        raise VerificationError(f"{label} does not exist")
 
 
 def _sha256(path: Path) -> str:
@@ -64,25 +58,10 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _same_bytes(first: Path, second: Path) -> bool:
-    if first.stat().st_size != second.stat().st_size:
-        return False
-    with first.open("rb") as left, second.open("rb") as right:
-        while True:
-            left_chunk = left.read(1024 * 1024)
-            right_chunk = right.read(1024 * 1024)
-            if left_chunk != right_chunk:
-                return False
-            if not left_chunk:
-                return True
-
-
 def _native_records(apk: Path) -> list[dict[str, object]]:
     try:
         with zipfile.ZipFile(apk) as archive:
             names = [item.filename for item in archive.infolist()]
-            if len(names) != len(set(names)):
-                raise VerificationError("APK contains duplicate ZIP member names")
             records: list[dict[str, object]] = []
             for name in NATIVE_PATHS:
                 if names.count(name) != 1:
@@ -115,9 +94,6 @@ def _is_v1_signature_member(name: str) -> bool:
 def _logical_payload_records(apk: Path) -> list[dict[str, object]]:
     try:
         with zipfile.ZipFile(apk) as archive:
-            names = [item.filename for item in archive.infolist()]
-            if len(names) != len(set(names)):
-                raise VerificationError("APK contains duplicate ZIP member names")
             records: list[dict[str, object]] = []
             for item in archive.infolist():
                 if _is_v1_signature_member(item.filename):
@@ -126,13 +102,11 @@ def _logical_payload_records(apk: Path) -> list[dict[str, object]]:
                 records.append(
                     {
                         "bytes": len(payload),
-                        "compression": item.compress_type,
-                        "crc32": f"{item.CRC:08x}",
                         "path": item.filename,
                         "sha256": hashlib.sha256(payload).hexdigest(),
                     }
                 )
-            return records
+            return sorted(records, key=lambda record: str(record["path"]))
     except zipfile.BadZipFile as exc:
         raise VerificationError("APK is not a valid ZIP archive") from exc
 
@@ -142,8 +116,62 @@ def verify_signed_payload(unsigned_apk: Path, signed_apk: Path) -> None:
     _regular_file(signed_apk, "signed APK")
     if _logical_payload_records(unsigned_apk) != _logical_payload_records(signed_apk):
         raise VerificationError("signed APK payload differs from the verified unsigned APK")
-    if _native_records(unsigned_apk) != _native_records(signed_apk):
-        raise VerificationError("signed APK native payload differs from the verified unsigned APK")
+
+
+def verify_publication_provenance(
+    provenance_path: Path,
+    unsigned_apk: Path,
+    signed_apk: Path,
+    source_sha: str,
+    version_name: str,
+    version_code: int,
+    signer_certificate_sha256: str,
+) -> None:
+    """Verify the shared Android publication manifest and its two APKs."""
+    _regular_file(provenance_path, "Android provenance")
+    try:
+        document = json.loads(provenance_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise VerificationError("Android provenance is not valid JSON") from error
+    if not isinstance(document, dict):
+        raise VerificationError("Android provenance must be a JSON object")
+    if document.get("schema") != 1:
+        raise VerificationError("Android provenance schema mismatch")
+    if document.get("source_sha") != source_sha:
+        raise VerificationError("Android provenance source mismatch")
+    if document.get("version_name") != version_name:
+        raise VerificationError("Android provenance version mismatch")
+    if document.get("version_code") != version_code:
+        raise VerificationError("Android provenance version code mismatch")
+    if document.get("application_id") != "com.dobby.vpn":
+        raise VerificationError("Android provenance application ID mismatch")
+    if document.get("signer_certificate_sha256") != signer_certificate_sha256:
+        raise VerificationError("Android signer certificate mismatch")
+    if document.get("signed_payload_matches_unsigned") is not True:
+        raise VerificationError("Android signed-payload binding is missing")
+
+    verify_document(
+        document.get("reproducibility"),
+        unsigned_apk,
+        source_sha,
+        version_name,
+        version_code,
+    )
+    verify_signed_payload(unsigned_apk, signed_apk)
+
+    expected = {"signed": signed_apk, "unsigned": unsigned_apk}
+    artifacts = document.get("artifacts")
+    if not isinstance(artifacts, list) or len(artifacts) != len(expected):
+        raise VerificationError("Android provenance artifact set mismatch")
+    by_kind = {item.get("kind"): item for item in artifacts if isinstance(item, dict)}
+    if set(by_kind) != set(expected):
+        raise VerificationError("Android provenance artifact kinds mismatch")
+    for kind, path in expected.items():
+        item = by_kind[kind]
+        if item.get("name") != path.name:
+            raise VerificationError(f"Android provenance {kind} filename mismatch")
+        if item.get("sha256") != _sha256(path):
+            raise VerificationError(f"Android provenance {kind} digest mismatch")
 
 
 def _validate_metadata(source_sha: str, version_name: str, version_code: int) -> None:
@@ -167,7 +195,7 @@ def create_document(
     _regular_file(second_apk, "second APK")
     first_digest = _sha256(first_apk)
     second_digest = _sha256(second_apk)
-    if first_digest != second_digest or not _same_bytes(first_apk, second_apk):
+    if first_digest != second_digest:
         raise VerificationError("independent unsigned APK builds are not byte-identical")
     first_native = _native_records(first_apk)
     second_native = _native_records(second_apk)
@@ -232,27 +260,37 @@ def verify_document(
     digest = _sha256(apk)
     size = apk.stat().st_size
     builds = document["builds"]
-    if not isinstance(builds, list) or len(builds) != 2:
+    if (
+        not isinstance(builds, list)
+        or len(builds) != 2
+        or not all(isinstance(record, dict) for record in builds)
+    ):
         raise VerificationError("reproducibility build record set mismatch")
     expected_builds = [
         {"bytes": size, "id": "first", "sha256": digest},
         {"bytes": size, "id": "second", "sha256": digest},
     ]
-    if builds != expected_builds:
+    if sorted(builds, key=lambda record: str(record.get("id"))) != expected_builds:
         raise VerificationError("reproducibility APK digest or size mismatch")
     if not SHA256.fullmatch(digest):
         raise VerificationError("reproducibility APK digest is invalid")
-    if document["native_libraries"] != _native_records(apk):
+    native_libraries = document["native_libraries"]
+    expected_native_libraries = _native_records(apk)
+    if (
+        not isinstance(native_libraries, list)
+        or not all(isinstance(record, dict) for record in native_libraries)
+        or sorted(native_libraries, key=lambda record: str(record.get("path")))
+        != expected_native_libraries
+    ):
         raise VerificationError("reproducibility native-library records mismatch")
 
 
-def _write_new_json(path: Path, document: dict[str, object]) -> None:
+def _write_json(path: Path, document: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    descriptor = os.open(path, flags, 0o644)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        json.dump(document, stream, sort_keys=True, separators=(",", ":"))
-        stream.write("\n")
+    path.write_text(
+        json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -268,7 +306,12 @@ def _parser() -> argparse.ArgumentParser:
     signed = commands.add_parser("verify-signed-payload")
     signed.add_argument("--unsigned-apk", type=Path, required=True)
     signed.add_argument("--signed-apk", type=Path, required=True)
-    for command in (create, verify):
+    publication = commands.add_parser("verify-publication")
+    publication.add_argument("--unsigned-apk", type=Path, required=True)
+    publication.add_argument("--signed-apk", type=Path, required=True)
+    publication.add_argument("--provenance", type=Path, required=True)
+    publication.add_argument("--signer-certificate-sha256", required=True)
+    for command in (create, verify, publication):
         command.add_argument("--source-sha", required=True)
         command.add_argument("--version-name", required=True)
         command.add_argument("--version-code", type=int, required=True)
@@ -286,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.version_name,
                 args.version_code,
             )
-            _write_new_json(args.output, document)
+            _write_json(args.output, document)
             print(f"Android unsigned APK reproducibility verified: {document['builds'][0]['sha256']}")
         elif args.command == "verify-provenance":
             _regular_file(args.provenance, "Android provenance")
@@ -301,6 +344,17 @@ def main(argv: list[str] | None = None) -> int:
                 args.version_code,
             )
             print("Android reproducibility provenance validation passed")
+        elif args.command == "verify-publication":
+            verify_publication_provenance(
+                args.provenance,
+                args.unsigned_apk,
+                args.signed_apk,
+                args.source_sha,
+                args.version_name,
+                args.version_code,
+                args.signer_certificate_sha256,
+            )
+            print("Android publication provenance validation passed")
         else:
             verify_signed_payload(args.unsigned_apk, args.signed_apk)
             print("Signed APK payload matches the verified unsigned APK")

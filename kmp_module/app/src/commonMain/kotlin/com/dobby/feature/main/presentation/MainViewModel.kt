@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.logging.domain.maskStr
 import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
@@ -71,7 +70,7 @@ class MainViewModel(
 
     fun onConnectionButtonClicked(connectionUrl: String) {
         _uiState.value = _uiState.value.copy(lastFailureCode = null)
-        logger.log("Connection button clicked for ${maskStr(connectionUrl)}")
+        logger.log("Connection button clicked for $connectionUrl")
         viewModelScope.launch {
             when (connectionStateRepository.statusFlow.value) {
                 VpnConnectionState.DISCONNECTED -> connect(connectionUrl)
@@ -83,7 +82,7 @@ class MainViewModel(
 
     /** Acquires opaque configuration bytes and passes them unchanged to the session API. */
     suspend fun setConfig(connectionUrl: String): Boolean {
-        logger.log("Acquiring connection configuration for ${maskStr(connectionUrl)}")
+        logger.log("Acquiring connection configuration for $connectionUrl")
         // Go owns URL acquisition and parsing. The UI forwards the opaque source bytes.
         val rawConfig = connectionUrl.encodeToByteArray()
         configsRepository.setConnectionURL(connectionUrl)
@@ -256,7 +255,7 @@ class MainViewModel(
                 publish(
                     state,
                     if (event.state == SessionState.FAILED) {
-                        event.failureCode ?: SessionFailureCode.UNKNOWN
+                        event.failureCode ?: error("failed session event has no failure code")
                     } else {
                         null
                     },

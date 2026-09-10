@@ -121,7 +121,7 @@ func initExplicitLocalLog() error {
 
 func run(_ int) {
 	if err := initExplicitLocalLog(); err != nil {
-		panic(fmt.Sprintf("failed to initialize secure local logging: %v", err))
+		panic(fmt.Sprintf("failed to initialize local logging: %v", err))
 	}
 	// Convert logrus.Fatal (os.Exit) into a panic so goroutines can recover from it
 	// instead of crashing the entire gRPC server process.

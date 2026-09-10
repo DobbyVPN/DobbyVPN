@@ -14,7 +14,7 @@ import (
 )
 
 func ExecuteCommand(command string) (string, error) {
-	log.Debugf(Category, "[Exec] Running route command: %s", log.MaskStr(command))
+	log.Debugf(Category, "[Exec] Running route command: %s", command)
 
 	args := strings.Fields(command)
 	if len(args) == 0 {

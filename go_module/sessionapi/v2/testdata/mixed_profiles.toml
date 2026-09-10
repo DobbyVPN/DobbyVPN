@@ -1,7 +1,4 @@
-# Safe fixture only: all endpoints and credentials are deliberately synthetic.
-[Telemetry]
-Endpoint = "https://telemetry.invalid"
-ApiToken = "redacted"
+# All endpoints and credentials are synthetic test data.
 
 [ExcludeIPs]
 IPs = ["203.0.113.0/24"]
@@ -10,7 +7,7 @@ IPs = ["203.0.113.0/24"]
 Description = "outline-first"
 Server = "198.51.100.10"
 Port = 443
-Password = "redacted"
+Password = "synthetic-password"
 
 [[Xray]]
 Description = "xray-second"
@@ -18,16 +15,16 @@ outbounds = [{ tag = "proxy", protocol = "vless", settings = { vnext = [] } }]
 
 [[TrustTunnel]]
 vpn_mode = "general"
-|endpoint|
+[TrustTunnel.endpoint]
 hostname = "vpn.invalid"
 addresses = ["198.51.100.11:443"]
-username = "redacted"
-password = "redacted"
-|socks|
+username = "synthetic-user"
+password = "synthetic-password"
+[TrustTunnel.listener.socks]
 address = "127.0.0.1:10808"
 
 [[Outline]]
 Description = "outline-last"
 Server = "198.51.100.12"
 Port = 8443
-Password = "redacted"
+Password = "synthetic-password"

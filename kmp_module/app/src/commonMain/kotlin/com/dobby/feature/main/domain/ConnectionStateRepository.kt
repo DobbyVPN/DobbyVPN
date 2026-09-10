@@ -12,7 +12,7 @@ class ConnectionStateRepository {
 
     // Android platform callbacks are an optional wake/stream equivalent of the
     // desktop SessionV2 stream. iOS fetches its Go-owned ledger through its
-    // authenticated provider bridge instead of publishing local events here.
+    // provider bridge instead of publishing local events here.
     private val _sessionEvents = MutableSharedFlow<SessionEvent>(replay = 64, extraBufferCapacity = 64)
     val sessionEvents = _sessionEvents.asSharedFlow()
     // Go sequences restart with a new SessionV2 identity. Keep one cursor per
@@ -22,10 +22,6 @@ class ConnectionStateRepository {
 
     suspend fun updateStatus(connectionState: VpnConnectionState) {
         _statusFlow.emit(connectionState)
-    }
-
-    fun tryUpdateStatus(connectionState: VpnConnectionState) {
-        _statusFlow.tryEmit(connectionState)
     }
 
     /**

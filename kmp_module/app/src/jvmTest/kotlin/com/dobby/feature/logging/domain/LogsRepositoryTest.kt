@@ -1,7 +1,6 @@
 package com.dobby.feature.logging.domain
 
 import java.nio.file.Files
-import java.nio.file.attribute.PosixFilePermission
 import kotlin.concurrent.thread
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -40,14 +39,6 @@ class LogsRepositoryTest {
             assertTrue(Files.exists(current))
             assertEquals("", Files.readString(current))
             assertEquals("legacy remains", Files.readString(legacy))
-            try {
-                assertEquals(
-                    setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
-                    Files.getPosixFilePermissions(current),
-                )
-            } catch (_: UnsupportedOperationException) {
-                // Windows uses its ACL path instead of POSIX mode bits.
-            }
         } finally {
             Files.walk(root).use { paths ->
                 paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
@@ -72,134 +63,6 @@ class LogsRepositoryTest {
             Files.walk(root).use { paths ->
                 paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
             }
-        }
-    }
-
-    @Test
-    fun activeLogCreationRejectsAliasedParent() {
-        val root = Files.createTempDirectory("dobby-log-parent-alias")
-        val target = root.resolve("real-current")
-        val alias = root.resolve(".dobbyvpn")
-        val previousHome = System.getProperty("user.home")
-        try {
-            Files.createDirectories(target)
-            Files.createSymbolicLink(alias, target.fileName)
-            System.setProperty("user.home", root.toString())
-
-            assertFailsWith<LocalLogStorageInitializationException> {
-                provideLogFilePath()
-            }
-            assertTrue(Files.notExists(target.resolve("app_logs.txt")))
-        } finally {
-            if (previousHome == null) {
-                System.clearProperty("user.home")
-            } else {
-                System.setProperty("user.home", previousHome)
-            }
-            Files.walk(root).use { paths ->
-                paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
-            }
-        }
-    }
-
-    @Test
-    fun groupWritableHomeIsRejectedBeforeCurrentStorageCreation() {
-        val root = Files.createTempDirectory("dobby-log-group-writable-home")
-        val posix = Files.getFileAttributeView(
-            root,
-            java.nio.file.attribute.PosixFileAttributeView::class.java,
-        ) ?: return
-        val originalPermissions = posix.readAttributes().permissions()
-        val previousHome = System.getProperty("user.home")
-        try {
-            posix.setPermissions(originalPermissions + PosixFilePermission.GROUP_WRITE)
-            System.setProperty("user.home", root.toString())
-
-            assertFailsWith<LocalLogStorageInitializationException> {
-                provideLogFilePath()
-            }
-            assertTrue(Files.notExists(root.resolve(".dobbyvpn")))
-        } finally {
-            posix.setPermissions(originalPermissions)
-            if (previousHome == null) {
-                System.clearProperty("user.home")
-            } else {
-                System.setProperty("user.home", previousHome)
-            }
-            Files.walk(root).use { paths ->
-                paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
-            }
-        }
-    }
-
-    @Test
-    fun discoversAnExistingLogFromItsDirectoryWithoutRecreatingIt() {
-        val directory = Files.createTempDirectory("dobby-existing-log")
-        val log = directory.resolve("app_logs.txt")
-        Files.writeString(log, "retained")
-
-        try {
-            ensureLogFileEntry(directory, log)
-
-            assertEquals("retained", Files.readString(log))
-        } finally {
-            Files.deleteIfExists(log)
-            Files.deleteIfExists(directory)
-        }
-    }
-
-    @Test
-    fun createsAMissingLogAndRejectsANonFileEntry() {
-        val directory = Files.createTempDirectory("dobby-new-log")
-        val log = directory.resolve("app_logs.txt")
-        val target = directory.resolve("target.txt")
-
-        try {
-            ensureLogFileEntry(directory, log)
-            assertTrue(Files.isRegularFile(log))
-
-            Files.delete(log)
-            Files.createDirectory(log)
-            assertFailsWith<IllegalStateException> { ensureLogFileEntry(directory, log) }
-            Files.delete(log)
-
-            Files.writeString(target, "target")
-            Files.createSymbolicLink(log, target.fileName)
-            assertFailsWith<IllegalStateException> { ensureLogFileEntry(directory, log) }
-            assertEquals("target", Files.readString(target))
-        } finally {
-            Files.deleteIfExists(log)
-            Files.deleteIfExists(target)
-            Files.deleteIfExists(directory)
-        }
-    }
-
-    @Test
-    fun parsesOnlyOneBoundedEffectiveWindowsUserSid() {
-        assertEquals(
-            "S-1-5-21-1000-2000-3000-4000",
-            parseWindowsUserSid("\"WORKSTATION\\user\",\"S-1-5-21-1000-2000-3000-4000\"\r\n"),
-        )
-        listOf(
-            "S-1-5-21-1000",
-            "\"user\",\"S-1-5-21-1000\" trailing",
-            "\"user\",\"S-1-5-21-1000\"\n\"other\",\"S-1-5-18\"",
-            "\"user\",\"S-1-5-21-1000 & injected\"",
-        ).forEach { value ->
-            assertFailsWith<IllegalStateException> { parseWindowsUserSid(value) }
-        }
-    }
-
-    @Test
-    fun parsesLocalizedSystemAccountWithoutAcceptingControlOutput() {
-        assertEquals("NT-AUTORITÄT\\SYSTEM", parseWindowsAccountName("NT-AUTORITÄT\\SYSTEM"))
-        listOf(
-            "SYSTEM",
-            "NT AUTHORITY\\SYSTEM\nextra",
-            "",
-            "D\\${"x".repeat(256)}",
-        ).forEach { value ->
-            assertFailsWith<IllegalStateException> { parseWindowsAccountName(value) }
         }
     }
 

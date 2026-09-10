@@ -11,8 +11,18 @@ import (
 	"testing"
 )
 
+func shortControlSocketTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "dobby-control-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func TestControlSocketIsOwnerOnlyAndPeerVerifiable(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "runtime", "control.sock")
+	path := filepath.Join(shortControlSocketTempDir(t), "runtime", "control.sock")
 	t.Setenv("DOBBYVPN_CONTROL_SOCKET", path)
 	lis, err := ListenControlSocket()
 	if err != nil {
@@ -49,7 +59,7 @@ func TestSupervisedUnprivilegedSocketAuthenticatesAcrossUIDs(t *testing.T) {
 	if currentUID() == 0 {
 		t.Skip("supervised unprivileged socket requires a non-root service UID")
 	}
-	root := t.TempDir()
+	root := shortControlSocketTempDir(t)
 	parent := filepath.Join(root, ".dobbyvpn-run")
 	if err := os.Mkdir(parent, 0700); err != nil {
 		t.Fatal(err)
@@ -86,7 +96,7 @@ func TestSupervisedUnprivilegedSocketRejectsOutsideRequest(t *testing.T) {
 		t.Skip("supervised unprivileged socket requires a non-root service UID")
 	}
 	root := t.TempDir()
-	outside := t.TempDir()
+	outside := shortControlSocketTempDir(t)
 	path := filepath.Join(outside, "s")
 	t.Setenv("DOBBYVPN_CONTROL_SOCKET", path)
 	t.Setenv("DOBBYVPN_CONTROL_PEER_UID", strconv.Itoa(currentUID()+1))

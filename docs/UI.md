@@ -1,15 +1,15 @@
 # UI behavior
 
-The Compose UI is a shared presentation layer. It renders safe SessionV2
+The Compose UI is a shared presentation layer. It renders SessionV2
 snapshots and push events; it does not parse configuration or own VPN
 resources.
 
 ## Startup and reattachment
 
-On startup the UI creates an authenticated, protocol-neutral SessionV2 client
+On startup the UI creates a protocol-neutral SessionV2 client
 and attempts `RecoverActiveSession`.
 
-- If a live session exists, apply its safe snapshot and resume `Watch` after
+- If a live session exists, apply its snapshot and resume `Watch` after
   the returned sequence.
 - If no session exists, render `DISCONNECTED` and wait for user input.
 - If the service is unavailable, render a typed unavailable/error state; never
@@ -29,7 +29,7 @@ The shared UI sends one source to Go:
 2. If no session exists, call `CreateSession`.
 3. Call `Configure` with either the entered HTTP(S) URL or transient inline
    bytes.
-4. Render safe profile summaries, digest, source kind, and typed warnings.
+4. Render profile summaries, digest, source kind, and typed warnings.
 5. Call `Start` and render ordered generation events.
 6. Persist only an accepted connection URL; never persist raw configuration or
    parsed profiles.
@@ -44,7 +44,7 @@ the same input are never partially started.
 Connect
   -> RecoverActiveSession or CreateSession
   -> Configure(URL | INLINE)
-  -> safe snapshot/warnings
+  -> snapshot/warnings
   -> Start
   -> ordered Watch/native callback events
 ```
@@ -93,11 +93,11 @@ A failed or timed-out Destroy leaves the provider and recovery data in place.
 - iOS follows the NetworkExtension lifecycle and uses the same shared state
   model; Simulator/build evidence is not physical packet-tunnel evidence.
 
-## Safety rules
+## Ownership rules
 
 - No UI code parses protocol configuration or chooses a protocol.
-- No UI code logs URLs, configuration, endpoints, credentials, or auth
-  metadata.
+- Local UI diagnostics retain complete emitted messages; they are not uploaded
+  or sent to remote telemetry.
 - No UI code owns or synthesizes polling state; the iOS transport may perform
   bounded off-main Observe reads because NetworkExtension has no cross-process
   push payload channel.

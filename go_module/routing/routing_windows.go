@@ -68,13 +68,13 @@ func ExecuteCommand(command string) (string, error) {
 	if err != nil {
 		return string(output), fmt.Errorf("command execution failed after %s: %w, output: %s", elapsed, err, output)
 	}
-	log.Debugf(Category, "Outline/routing: Command executed elapsed=%s: %s, output: %s", elapsed, log.MaskStr(command), output)
+	log.Debugf(Category, "Outline/routing: Command executed elapsed=%s: %s, output: %s", elapsed, command, output)
 	return string(output), nil
 }
 
 func executeNetshCommand(args ...string) (string, error) {
 	commandForLog := formatCommandForLog("netsh", args...)
-	log.Debugf(Category, "Outline/routing: Executing command: %s", log.MaskStr(commandForLog))
+	log.Debugf(Category, "Outline/routing: Executing command: %s", commandForLog)
 
 	startedAt := time.Now()
 	cmd := exec.Command("netsh", args...)
@@ -87,7 +87,7 @@ func executeNetshCommand(args ...string) (string, error) {
 	if err != nil {
 		return string(output), fmt.Errorf("command execution failed after %s: %w, output: %s", elapsed, err, output)
 	}
-	log.Debugf(Category, "Outline/routing: Command executed elapsed=%s: %s, output: %s", elapsed, log.MaskStr(commandForLog), output)
+	log.Debugf(Category, "Outline/routing: Command executed elapsed=%s: %s, output: %s", elapsed, commandForLog, output)
 	return string(output), nil
 }
 

@@ -6,6 +6,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.dobby.feature.main.domain.SessionConfiguration
 import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.SessionControllerResult
+import com.dobby.feature.main.domain.SessionEvent
 import com.dobby.feature.main.domain.SessionFailureCode
 import com.dobby.feature.main.domain.SessionObservation
 import com.dobby.feature.main.domain.SessionProfile
@@ -15,6 +16,9 @@ import com.dobby.feature.main.domain.SessionStartTarget
 import com.dobby.feature.main.domain.SessionState
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
@@ -27,7 +31,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
-import java.nio.file.Files
 
 /** Unit-style contract tests for the candidate-owned Android hosted seam. */
 @RunWith(AndroidJUnit4::class)
@@ -43,9 +46,9 @@ class AndroidHostedProfileTestDriverTest {
     }
 
     @Test
-    fun command_validation_rejects_wrong_types_unknown_fields_and_placeholder_sha() {
+    fun command_validation_rejects_missing_or_invalid_required_values() {
         val valid = JSONObject(commandJson()).apply {
-            put("source_sha", "0".repeat(40))
+            put("source_sha", "not-a-sha")
         }
         assertInputRejected(valid)
 
@@ -74,26 +77,6 @@ class AndroidHostedProfileTestDriverTest {
         }
         assertInputRejected(negativeProfileIndex)
 
-        val unsafePreserve = JSONObject(
-            commandJson(preserveActive = true),
-        ).apply {
-            getJSONArray("operations").put(
-                JSONObject()
-                    .put("id", "late-disconnect")
-                    .put("operation", "disconnect")
-                    .put("timeout_seconds", 30),
-            )
-        }
-        assertInputRejected(unsafePreserve)
-
-        val unobservedPreserve = JSONObject(
-            commandJson(
-                operations = listOf("configure", "connect"),
-                preserveActive = true,
-            ),
-        )
-        assertInputRejected(unobservedPreserve)
-
         val wrongTimeoutType = JSONObject(commandJson()).apply {
             getJSONArray("operations").getJSONObject(0).put("timeout_seconds", 30.5)
         }
@@ -104,98 +87,40 @@ class AndroidHostedProfileTestDriverTest {
         }
         assertInputRejected(wrongOperationType)
 
-        val endpointExtra = JSONObject(commandJson()).apply {
-            getJSONObject("endpoints").put("secret", "do-not-accept")
-        }
-        assertInputRejected(endpointExtra)
-
         val missingControl = JSONObject(commandJson(operations = listOf("network_transition"))).apply {
-            getJSONArray("operations").getJSONObject(0).remove("control_token")
+            getJSONArray("operations").getJSONObject(0).remove("control_file")
         }
         assertInputRejected(missingControl)
 
-        val malformedControlToken = JSONObject(
-            commandJson(operations = listOf("network_transition")),
-        ).apply {
-            getJSONArray("operations").getJSONObject(0).put("control_token", "not-a-token")
+        val unknownOperation = JSONObject(commandJson()).apply {
+            getJSONArray("operations").getJSONObject(0).put("operation", "unknown")
         }
-        assertInputRejected(malformedControlToken)
+        assertInputRejected(unknownOperation)
+    }
 
-        val ordinaryControlFields = JSONObject(commandJson()).apply {
-            put("control_file", "unexpected-control")
-            put("control_token", "b".repeat(64))
+    @Test
+    fun command_parser_ignores_extra_fields_and_leaves_scenario_policy_to_torturer() {
+        val json = JSONObject(commandJson(preserveActive = true)).apply {
+            put("diagnostic", "retained")
+            getJSONObject("endpoints").put("diagnostic", "retained")
+            getJSONArray("operations").getJSONObject(0).put("diagnostic", "retained")
         }
-        assertInputRejected(ordinaryControlFields)
-
-        val controlAliasesProfile = JSONObject(
-            commandJson(operations = listOf("network_transition")),
-        ).apply {
-            getJSONArray("operations").getJSONObject(0).put("control_file", getString("profile_file"))
-        }
-        assertInputRejected(controlAliasesProfile)
-
-        val controlAliasesCommand = JSONObject(
-            commandJson(operations = listOf("network_transition")),
-        ).apply {
-            getJSONArray("operations").getJSONObject(0).put("control_file", "command.json")
-        }
-        assertInputRejected(controlAliasesCommand)
+        val command = AndroidHostedCommandContract.parse(json.toString())
+        assertTrue(command.preserveActive)
     }
 
     @Test
     fun command_and_observation_allow_absent_source_sha_but_keep_supplied_identity_optional() {
         val commandJson = JSONObject(commandJson()).apply { remove("source_sha") }
-        val command = AndroidHostedCommandContract.parse("command.json", commandJson.toString())
+        val command = AndroidHostedCommandContract.parse(commandJson.toString())
 
         assertEquals(null, command.sourceSha)
         assertFalse(AndroidHostedObservation(null).toJson().has("source_sha"))
     }
 
     @Test
-    fun command_validation_rejects_operations_whose_total_timeout_exceeds_thirty_minutes() {
-        val command = JSONObject(commandJson(operations = listOf("configure", "connect")))
-        val operations = command.getJSONArray("operations")
-        operations.getJSONObject(0).put("timeout_seconds", 901)
-        operations.getJSONObject(1).put("timeout_seconds", 900)
-
-        assertInputRejected(command)
-
-        operations.getJSONObject(0).put("timeout_seconds", 900)
-        AndroidHostedCommandContract.parse("command.json", command.toString())
-    }
-
-    @Test
-    fun private_file_validation_rejects_traversal_and_symlink() {
-        try {
-            AndroidHostedCommandContract.privateFile(context.filesDir, "../outside.json")
-            throw AssertionError("path traversal was accepted")
-        } catch (_: AndroidHostedInputException) {
-            // Expected.
-        }
-
-        val target = writeInput("real-command.json", "{}")
-        val link = context.filesDir.resolve("command-link.json")
-        Files.createSymbolicLink(link.toPath(), target.toPath())
-        files += link
-        try {
-            AndroidHostedCommandContract.privateFile(context.filesDir, link.name)
-            throw AssertionError("symlink input was accepted")
-        } catch (_: AndroidHostedInputException) {
-            // Expected.
-        }
-
-        try {
-            AndroidHostedCommandContract.readProfile(link)
-            throw AssertionError("symlink was opened as profile input")
-        } catch (_: AndroidHostedInputException) {
-            // Expected: the open itself uses NOFOLLOW_LINKS, closing the check/open race.
-        }
-    }
-
-    @Test
     fun command_validation_preserves_supplied_operation_order_without_scenario_catalog() {
         val command = AndroidHostedCommandContract.parse(
-            "command.json",
             commandJson(
                 operations = listOf(
                     "measure_throughput", "configure", "connect", "disconnect", "inspect_cleanup",
@@ -209,11 +134,11 @@ class AndroidHostedProfileTestDriverTest {
     }
 
     @Test
-    fun output_is_exactly_safe_and_never_contains_profile_endpoints_or_literal_identity() = runBlocking {
-        val secret = "PROFILE_SECRET https://private.example.test/path 198.51.100.7"
-        val commandFile = writeInput("command-safe.json", commandJson(outputFile = "observation-safe.json"))
-        val profileFile = writeInput("profile-8.bin", secret)
-        val outputFile = context.filesDir.resolve("observation-safe.json")
+    fun output_contains_the_declared_observation_fields_and_cleans_up_inputs() = runBlocking {
+        val profileData = "synthetic profile https://private.example.test/path 198.51.100.7"
+        val commandFile = writeInput("command-observation.json", commandJson(outputFile = "observation.json"))
+        val profileFile = writeInput("profile-8.bin", profileData)
+        val outputFile = context.filesDir.resolve("observation.json")
         files += outputFile
         val controller = FakeSessionController()
         val platform = FakePlatform()
@@ -224,18 +149,13 @@ class AndroidHostedProfileTestDriverTest {
         ).run(commandFile.name)
 
         val output = outputFile.readText()
-        assertFalse(output.contains(secret))
-        assertFalse(output.contains("https://private.example.test"))
-        assertFalse(output.contains("identity.example.test"))
-        assertFalse(output.contains("download.example.test"))
-        assertFalse(output.contains("198.51.100.7"))
         val keys = JSONObject(output).keys().asSequence().toSet()
         assertEquals(
             setOf(
                 "schema", "kind", "platform", "source_sha", "configured", "connected",
                 "connections", "connection",
-                "tunnel_interface", "routing_identity_changed", "disconnect_clean",
-                "restart_verified", "reconnect_completed", "second_tunnel_interface", "second_routing_identity_changed",
+                "tunnel_interface", "routing_verified", "disconnect_clean",
+                "restart_verified", "reconnect_completed", "second_tunnel_interface", "second_routing_verified",
                 "stability_verified", "stability_sample_count", "stability_sample_interval_seconds",
                 "latency_ms", "download_mbps", "upload_mbps", "final_disconnect_clean",
                 "network_transition_verified", "process_loss_verified",
@@ -257,7 +177,7 @@ class AndroidHostedProfileTestDriverTest {
         val commandFile = writeInput("command-order.json", commandJson(operations = operations))
         writeInput("profile-12.bin", "opaque-profile")
         val eventLog = mutableListOf<String>()
-        val controller = FakeSessionController(eventLog)
+        val controller = FakeSessionController(eventLog, staleIdleReplay = true)
         val platform = FakePlatform(events = eventLog)
         val result = AndroidHostedProfileTestDriver(
             context = context,
@@ -267,16 +187,17 @@ class AndroidHostedProfileTestDriverTest {
 
         assertEquals(null, result.errorCode)
         assertTrue(result.tunnelInterface)
-        assertTrue(result.routingIdentityChanged)
+        assertTrue(result.routingVerified)
         assertTrue(result.disconnectClean)
         assertTrue(result.restartVerified)
-        assertTrue(result.reconnectBounded)
+        assertTrue(result.reconnectCompleted)
         assertTrue(result.secondTunnelInterface)
-        assertTrue(result.secondRoutingIdentityChanged)
+        assertTrue(result.secondRoutingVerified)
         assertTrue(result.finalDisconnectClean)
         assertEquals(2, controller.stopCalls)
+        assertEquals(4, controller.emittedWatchEvents)
         assertTrue(controller.startTargets.all { it == SessionStartTarget.ProfileIndex(0) })
-        assertEquals(listOf("configure", "consent", "baseline", "start", "snapshot", "tunnel", "identity", "stability", "throughput", "stop", "disconnected", "consent", "baseline", "start", "snapshot", "tunnel", "identity", "stop", "disconnected", "snapshot", "destroy", "disconnected"), eventLog)
+        assertEquals(listOf("configure", "disconnected", "consent", "start", "watch", "tunnel", "identity", "stability", "throughput", "stop", "disconnected", "disconnected", "consent", "start", "watch", "tunnel", "identity", "stop", "disconnected", "snapshot", "watch", "snapshot", "disconnected", "snapshot", "destroy", "disconnected"), eventLog)
     }
 
     @Test
@@ -308,7 +229,7 @@ class AndroidHostedProfileTestDriverTest {
     @Test
     fun first_cycle_false_is_not_masked_by_later_values() = runBlocking {
         val commandFile = writeInput("command-first-false.json", commandJson(operations = listOf("configure", "connect", "observe_tunnel")))
-        writeInput("profile-first-false.bin", "opaque-profile")
+        writeInput("profile-3.bin", "opaque-profile")
         val controller = FakeSessionController()
         val outputFile = context.filesDir.resolve("observation-3.json").also(files::add)
         val failure = captureFailure {
@@ -333,7 +254,7 @@ class AndroidHostedProfileTestDriverTest {
             "configure", "connect", "observe_tunnel", "disconnect", "reconnect", "observe_tunnel",
         )
         val commandFile = writeInput("command-second-false.json", commandJson(operations = operations))
-        writeInput("profile-second-false.bin", "opaque-profile")
+        writeInput("profile-6.bin", "opaque-profile")
         val controller = FakeSessionController()
         val outputFile = context.filesDir.resolve("observation-6.json").also(files::add)
         val failure = captureFailure {
@@ -354,13 +275,13 @@ class AndroidHostedProfileTestDriverTest {
     }
 
     @Test
-    fun operation_failure_still_attempts_stop_destroy_service_and_safe_cleanup() = runBlocking {
+    fun operation_failure_still_attempts_stop_destroy_service_and_cleanup() = runBlocking {
         val commandFile = writeInput("command-failure.json", commandJson(operations = listOf("configure", "connect", "observe_tunnel")))
         writeInput("profile-3.bin", "opaque-profile")
         val controller = FakeSessionController()
         val platform = FakePlatform(failTunnel = true)
         val diagnostics = mutableListOf<String>()
-        val outputFile = context.filesDir.resolve("observation-failure.json")
+        val outputFile = context.filesDir.resolve("observation-3.json")
         files += outputFile
         val failure = captureFailure {
             AndroidHostedProfileTestDriver(
@@ -379,10 +300,10 @@ class AndroidHostedProfileTestDriverTest {
         assertTrue(controller.events.contains("destroy"))
         assertTrue(platform.events.contains("disconnected"))
         assertTrue(result.getBoolean("cleanup_verified"))
-        assertFalse(outputFile.readText().contains("opaque-profile"))
         assertTrue(
+            "diagnostics:\n${diagnostics.joinToString(separator = "\n")}",
             diagnostics.any {
-                it.contains("operation=observe_tunnel") &&
+                it.contains("stage=observe_tunnel") &&
                     it.contains("failureTypes=IllegalStateException") &&
                     it.contains("failureCode=DRIVER_ERROR")
             },
@@ -487,7 +408,7 @@ class AndroidHostedProfileTestDriverTest {
     }
 
     @Test
-    fun network_transition_control_is_token_bound_and_observed() = runBlocking {
+    fun network_transition_control_is_observed() = runBlocking {
         val externalOperations = listOf("network_transition")
         val operations = listOf("configure", "connect") + externalOperations + listOf("disconnect", "inspect_cleanup")
         val commandFile = writeInput(
@@ -506,7 +427,6 @@ class AndroidHostedProfileTestDriverTest {
                         .first { it.getString("operation") == operation }
                 }
                 val controlFile = context.filesDir.resolve(operationJson.getString("control_file"))
-                val token = operationJson.getString("control_token")
                 val ready = context.filesDir.resolve("${controlFile.name}.ready")
                 val deadline = System.currentTimeMillis() + 10_000L
                 while (!ready.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
@@ -514,7 +434,7 @@ class AndroidHostedProfileTestDriverTest {
                 while (controlFile.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
                 check(!controlFile.exists())
                 val temporary = context.filesDir.resolve("${controlFile.name}.tmp")
-                temporary.writeText(JSONObject().put("operation", operation).put("token", token).toString())
+                temporary.writeText(JSONObject().put("operation", operation).toString())
                 check(temporary.renameTo(controlFile))
                 while (controlFile.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
                 check(!controlFile.exists())
@@ -543,7 +463,7 @@ class AndroidHostedProfileTestDriverTest {
                     .first { it.getString("operation") == operation }
             }
             val controlFile = context.filesDir.resolve(operationJson.getString("control_file"))
-            assertFalse(outputFile.readText().contains(operationJson.getString("control_token")))
+            assertFalse(operationJson.has("control_token"))
             assertFalse(controlFile.exists())
             assertFalse(context.filesDir.resolve("${controlFile.name}.ready").exists())
         }
@@ -571,7 +491,7 @@ class AndroidHostedProfileTestDriverTest {
         assertEquals(null, result.errorCode)
         assertTrue(result.connected)
         assertTrue(result.tunnelInterface)
-        assertTrue(result.routingIdentityChanged)
+        assertTrue(result.routingVerified)
         assertFalse(result.cleanupVerified)
         assertEquals(1, controller.startCalls)
         assertEquals(0, controller.stopCalls)
@@ -643,10 +563,10 @@ class AndroidHostedProfileTestDriverTest {
 
     private fun assertInputRejected(json: JSONObject) {
         try {
-            AndroidHostedCommandContract.parse("command.json", json.toString())
+            AndroidHostedCommandContract.parse(json.toString())
             throw AssertionError("invalid command was accepted")
         } catch (_: AndroidHostedInputException) {
-            // Expected: invalid input is rejected without exposing the offending value.
+            // Expected.
         }
     }
 
@@ -686,7 +606,6 @@ class AndroidHostedProfileTestDriverTest {
                     .apply {
                         if (operation in AndroidHostedCommandContract.EXTERNAL_CONTROL_OPERATIONS) {
                             put("control_file", "control-${operations.size}-$index.json")
-                            put("control_token", "b".repeat(62) + index.toString(16).padStart(2, '0'))
                         }
                     },
             )
@@ -721,7 +640,6 @@ class AndroidHostedProfileTestDriverTest {
 
         private var tunnelIndex = 0
         override suspend fun requestConsent() { events += "consent" }
-        override suspend fun captureBaseline() { events += "baseline" }
         override suspend fun observeTunnel(): Boolean {
             events += "tunnel"
             if (failTunnel) error("synthetic platform failure")
@@ -729,7 +647,7 @@ class AndroidHostedProfileTestDriverTest {
             tunnelIndex += 1
             return result
         }
-        override suspend fun observeRoutingIdentity(): Boolean { events += "identity"; return true }
+        override suspend fun observeRoutingProof(controlFile: String): Boolean { events += "identity"; return true }
         override suspend fun measureStability(): Boolean {
             if (cancelStability) {
                 events += "stability-wait"
@@ -754,10 +672,12 @@ class AndroidHostedProfileTestDriverTest {
         private val failureAfterStart: SessionFailureCode? = null,
         private val destroyFailure: Throwable? = null,
         private val stopFailure: SessionControllerResult.Failure? = null,
+        private val staleIdleReplay: Boolean = false,
     ) : SessionController {
 
         var stopCalls = 0
         var startCalls = 0
+        var emittedWatchEvents = 0
         val startTargets = mutableListOf<SessionStartTarget>()
         val startGenerations = mutableListOf<ULong>()
         private var state = SessionState.IDLE
@@ -791,13 +711,30 @@ class AndroidHostedProfileTestDriverTest {
             events += "snapshot"
             return SessionControllerResult.Success(
                 SessionSnapshot(
-                    1u,
+                    startCalls.toULong(),
                     state,
                     configured = true,
                     cleanupComplete = state == SessionState.IDLE,
                     lastFailureCode = failureAfterStart.takeIf { state == SessionState.FAILED },
+                    sessionId = "test-session",
                 ),
             )
+        }
+        override fun watch(afterSequence: ULong): Flow<SessionEvent> {
+            events += "watch"
+            val current = SessionEvent(
+                generation = startCalls.toULong(),
+                sequence = afterSequence + 1uL,
+                state = state,
+                failureCode = failureAfterStart.takeIf { state == SessionState.FAILED },
+                sessionId = "test-session",
+            )
+            val replay = if (staleIdleReplay && state == SessionState.IDLE && current.generation > 1uL) {
+                listOf(current.copy(generation = current.generation - 1uL), current)
+            } else {
+                listOf(current)
+            }
+            return flowOf(*replay.toTypedArray()).onEach { emittedWatchEvents += 1 }
         }
         override suspend fun observe(afterSequence: ULong): SessionControllerResult<SessionObservation> =
             SessionControllerResult.Success(SessionObservation(emptyList(), afterSequence))

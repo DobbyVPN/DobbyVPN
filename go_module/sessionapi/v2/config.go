@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"net"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -38,12 +37,11 @@ type parsedConfig struct {
 
 var (
 	protocolHeaderRE = regexp.MustCompile(`(?m)^\s*\[\[\s*(Outline|Xray|TrustTunnel)\s*]]`)
-	legacySectionRE  = regexp.MustCompile(`(?m)^\|([A-Za-z_][\w-]*)\|\s*$`)
 )
 
 // InspectProfiles validates raw configuration with the product parser and
-// returns only the safe connection inventory. It performs no network or
-// session operation and never exposes normalized configuration bytes.
+// returns the connection inventory. It performs no network or session
+// operation.
 func InspectProfiles(raw []byte) ([]ProfileSummary, error) {
 	parsed, err := parseConfig(raw)
 	if err != nil {
@@ -60,13 +58,15 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 	if !protocolHeaderRE.MatchString(text) {
 		return parsedConfig{}, failure(FailureMalformedConfig, "expected one or more [[Outline]], [[Xray]], or [[TrustTunnel]] sections")
 	}
-	preprocessed := preprocessLegacyTrustTunnel(text)
 	var root configRoot
-	if _, err := toml.Decode(preprocessed, &root); err != nil {
+	if _, err := toml.Decode(text, &root); err != nil {
 		return parsedConfig{}, failure(FailureMalformedConfig, "TOML could not be parsed")
 	}
+	if root.Telemetry != nil {
+		return parsedConfig{}, failure(FailureUnsupported, "configuration contains removed Telemetry settings")
+	}
 
-	headers := protocolHeaderRE.FindAllStringSubmatch(preprocessed, -1)
+	headers := protocolHeaderRE.FindAllStringSubmatch(text, -1)
 	counts := map[string]int{}
 	for _, header := range headers {
 		counts[header[1]]++
@@ -77,7 +77,6 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 
 	next := map[string]int{}
 	profiles := make([]RuntimeProfile, 0, len(headers))
-	warnings := make([]Warning, 0, 1)
 	for _, header := range headers {
 		name := header[1]
 		var block map[string]interface{}
@@ -108,36 +107,13 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 			NormalizedFormat: format,
 			NormalizedConfig: normalized,
 			ExcludeCIDRs:     append([]string(nil), root.ExcludeIPs.IPs...),
-			PreflightHosts:   preflightHosts(protocol, block),
 		})
 	}
 	if len(profiles) == 0 {
 		return parsedConfig{}, failure(FailureMalformedConfig, "configuration contains no protocol profiles")
 	}
 	digest := sha256.Sum256(raw)
-	result := parsedConfig{digest: hex.EncodeToString(digest[:]), profiles: profiles, warnings: warnings}
-	if root.Telemetry != nil {
-		result.warnings = append(result.warnings, Warning{
-			Code:    "TELEMETRY_IGNORED",
-			Message: "legacy [Telemetry] is accepted for compatibility; sessionapi never sends telemetry over the network",
-		})
-	}
-	return result, nil
-}
-
-func preprocessLegacyTrustTunnel(text string) string {
-	return legacySectionRE.ReplaceAllStringFunc(text, func(match string) string {
-		parts := legacySectionRE.FindStringSubmatch(match)
-		name := parts[1]
-		switch name {
-		case "endpoint":
-			return "[TrustTunnel.endpoint]"
-		case "socks":
-			return "[TrustTunnel.listener.socks]"
-		default:
-			return "[TrustTunnel." + name + "]"
-		}
-	})
+	return parsedConfig{digest: hex.EncodeToString(digest[:]), profiles: profiles}, nil
 }
 
 func encodeProfile(block map[string]interface{}) ([]byte, error) {
@@ -248,58 +224,4 @@ func outlineHost(serverPort string) string {
 		return strings.Split(host, ":")[0]
 	}
 	return host
-}
-
-func preflightHosts(protocol Protocol, block map[string]interface{}) []string {
-	var hosts []string
-	add := func(value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return
-		}
-		if host, _, err := net.SplitHostPort(value); err == nil {
-			value = strings.Trim(host, "[]")
-		} else {
-			value = strings.Trim(value, "[]")
-		}
-		if net.ParseIP(value) == nil {
-			for _, existing := range hosts {
-				if existing == value {
-					return
-				}
-			}
-			hosts = append(hosts, value)
-		}
-	}
-	switch protocol {
-	case ProtocolOutline:
-		add(stringValue(block, "Server"))
-	case ProtocolTrustTunnel:
-		if endpoint, ok := block["endpoint"].(map[string]interface{}); ok {
-			add(stringValue(endpoint, "hostname"))
-			addTrustTunnelAddresses(endpoint["addresses"], add)
-		}
-	case ProtocolXray:
-		// Xray endpoint extraction is handled from its normalized JSON form.
-	}
-	return hosts
-}
-
-func addTrustTunnelAddresses(raw any, add func(string)) {
-	switch addresses := raw.(type) {
-	case []map[string]interface{}:
-		for _, address := range addresses {
-			add(stringValue(address, "address"))
-		}
-	case []interface{}:
-		for _, address := range addresses {
-			if value, ok := address.(string); ok {
-				add(value)
-			}
-		}
-	case []string:
-		for _, address := range addresses {
-			add(address)
-		}
-	}
 }

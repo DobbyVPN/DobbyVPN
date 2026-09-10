@@ -12,7 +12,7 @@ class LoggerManagerImpl(
     override fun initLogger(): Boolean {
         val logFilePath = goLogFilePath()
 
-        logger.log("Starting Go tunnel logger using owner-only local storage")
+        logger.log("Starting Go tunnel logger using local storage")
         loggerLibrary.InitLogger(logFilePath.toString())
         logger.log("service_logger_init result=success state=ready")
         return true

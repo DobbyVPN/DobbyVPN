@@ -9,9 +9,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
-/** Decodes the stable, safe JSON envelope returned by every session transport. */
+/** Decodes the stable JSON envelope returned by every session transport. */
 internal object SessionEnvelopeDecoder {
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = Json
 
     fun <T> decode(payload: String, transform: (JsonObject) -> T): SessionControllerResult<T> {
         val root = json.parseToJsonElement(payload).jsonObject
@@ -20,7 +20,7 @@ internal object SessionEnvelopeDecoder {
             val failure = root["error"]?.jsonObject ?: error("failure envelope has no error")
             val code = failure.sessionString("code").also { require(it.isNotBlank()) }
             return SessionControllerResult.Failure(
-                message = failure.sessionOptionalString("message") ?: code,
+                message = failure.sessionString("message").also { require(it.isNotBlank()) },
                 code = code.toSessionFailureCode(),
             )
         }
@@ -28,7 +28,8 @@ internal object SessionEnvelopeDecoder {
     }
 }
 
-internal fun JsonObject.sessionString(name: String): String = this[name]?.jsonPrimitive?.content.orEmpty()
+internal fun JsonObject.sessionString(name: String): String =
+    this[name]?.jsonPrimitive?.content ?: error("missing or invalid $name")
 
 internal fun JsonObject.sessionOptionalString(name: String): String? =
     this[name]?.jsonPrimitive?.content?.takeIf(String::isNotBlank)
@@ -52,19 +53,20 @@ internal fun JsonObject.requiredNonNegativeSessionLong(name: String): Long =
 internal fun JsonObject.requiredPositiveSessionLong(name: String): Long =
     requiredSessionLong(name).also { require(it > 0) }
 
-internal fun JsonObject.sessionInt(name: String): Int = this[name]?.jsonPrimitive?.intOrNull ?: -1
+internal fun JsonObject.sessionInt(name: String): Int =
+    this[name]?.jsonPrimitive?.intOrNull ?: error("missing or invalid $name")
 
-internal fun JsonObject.sessionBool(name: String): Boolean = this[name]?.jsonPrimitive?.booleanOrNull ?: false
+internal fun JsonObject.sessionBool(name: String): Boolean =
+    this[name]?.jsonPrimitive?.booleanOrNull ?: error("missing or invalid $name")
 
 internal fun JsonObject.sessionArray(name: String): List<JsonObject> =
-    (this[name] as? JsonArray)?.map { it.jsonObject }.orEmpty()
+    (this[name] as? JsonArray)?.map { it.jsonObject } ?: error("missing or invalid $name")
 
 internal fun String.toSessionProtocol(): SessionProtocol = when (this) {
     "OUTLINE" -> SessionProtocol.OUTLINE
     "XRAY" -> SessionProtocol.XRAY
     "TRUST_TUNNEL" -> SessionProtocol.TRUST_TUNNEL
-    "" -> SessionProtocol.UNSPECIFIED
-    else -> SessionProtocol.UNKNOWN
+    else -> error("unsupported session protocol: $this")
 }
 
 internal fun String.toSessionState(): SessionState = when (this) {
@@ -76,8 +78,7 @@ internal fun String.toSessionState(): SessionState = when (this) {
     "STOPPING" -> SessionState.STOPPING
     "FAILED" -> SessionState.FAILED
     "DESTROYED" -> SessionState.DESTROYED
-    "" -> SessionState.UNSPECIFIED
-    else -> SessionState.UNKNOWN
+    else -> error("unsupported session state: $this")
 }
 
 internal fun JsonObject.toSessionConfiguration(): SessionConfiguration = SessionConfiguration(

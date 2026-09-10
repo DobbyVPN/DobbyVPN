@@ -48,18 +48,12 @@ type Engine struct {
 	stopPlatform func() error
 }
 
-const (
-	maxActiveTCPConnections   = 256
-	maxActiveUDPAssociations  = 256
-	udpAssociationIdleTimeout = 10 * time.Second
-)
+const udpAssociationIdleTimeout = 10 * time.Second
 
 type DobbyProxy struct {
-	vpn     proxy.Proxy
-	vpnMu   sync.RWMutex
-	direct  proxy.Proxy
-	tcpSlot flowSlot
-	udpSlot flowSlot
+	vpn    proxy.Proxy
+	vpnMu  sync.RWMutex
+	direct proxy.Proxy
 
 	activeTCP atomic.Int64
 	activeUDP atomic.Int64
@@ -67,9 +61,7 @@ type DobbyProxy struct {
 	peakUDP   atomic.Int64
 
 	tcpDialAttempt atomic.Uint64
-	tcpLimitErr    atomic.Uint64
 	udpDialAttempt atomic.Uint64
-	udpLimitErr    atomic.Uint64
 	udpIdleTimeout atomic.Uint64
 }
 
@@ -254,19 +246,15 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 }
 
 func (p *DobbyProxy) dialTCPRoute(ctx context.Context, metadata *M.Metadata, route string, px proxy.Proxy, attempt uint64, dest string, start time.Time) (net.Conn, error) {
-	active, release, err := p.tcpSlot.reserve(&p.activeTCP)
-	if err != nil {
-		p.tcpLimitErr.Add(1)
-		log.Debugf(Category, "[Router] %s TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
-		return nil, err
-	}
+	active := p.activeTCP.Add(1)
+	release := func() int64 { return p.activeTCP.Add(-1) }
+	updatePeakInt64(&p.peakTCP, active)
 	conn, err := px.DialContext(ctx, metadata)
 	if err != nil {
 		release()
 		log.Debugf(Category, "[Router] %s TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
-	updatePeakInt64(&p.peakTCP, active)
 	log.Debugf(Category, "[Router] %s TCP dial OK attempt=%d dest=%s elapsed=%s local=%s remote=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), p.flowStats())
 	return &trackedConn{Conn: conn, release: release, route: route, dest: dest, started: time.Now()}, nil
 }
@@ -289,19 +277,15 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 }
 
 func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.Proxy, attempt uint64, dest string, start time.Time) (net.PacketConn, error) {
-	active, release, err := p.udpSlot.reserve(&p.activeUDP)
-	if err != nil {
-		p.udpLimitErr.Add(1)
-		log.Debugf(Category, "[Router] %s UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
-		return nil, err
-	}
+	active := p.activeUDP.Add(1)
+	release := func() int64 { return p.activeUDP.Add(-1) }
+	updatePeakInt64(&p.peakUDP, active)
 	conn, err := px.DialUDP(metadata)
 	if err != nil {
 		release()
 		log.Debugf(Category, "[Router] %s UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
-	updatePeakInt64(&p.peakUDP, active)
 	log.Debugf(Category, "[Router] %s UDP dial OK attempt=%d dest=%s elapsed=%s local=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), p.flowStats())
 	tracked := &trackedPacketConn{PacketConn: conn, release: release, route: route, dest: dest, started: time.Now()}
 	return newIdlePacketConn(tracked, udpAssociationIdleTimeout, route, dest, func() uint64 {
@@ -376,10 +360,8 @@ func startOwnedEngineLocked(cfg platform_engine.EngineConfig) (*Engine, bool, er
 	}
 
 	wrapper := &DobbyProxy{
-		vpn:     vpnOutbound,
-		direct:  &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect()},
-		tcpSlot: flowSlot{maxTotal: maxActiveTCPConnections},
-		udpSlot: flowSlot{maxTotal: maxActiveUDPAssociations},
+		vpn:    vpnOutbound,
+		direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect()},
 	}
 	t.SetDialer(wrapper)
 
@@ -435,18 +417,14 @@ func (e *Engine) InterfaceName() string {
 
 func (p *DobbyProxy) flowStats() string {
 	return fmt.Sprintf(
-		"activeTCP=%d peakTCP=%d activeUDP=%d peakUDP=%d tcpAttempt=%d udpAttempt=%d tcpLimitErr=%d udpLimitErr=%d udpIdleTimeout=%d limits=tcp:%d,udp:%d",
+		"activeTCP=%d peakTCP=%d activeUDP=%d peakUDP=%d tcpAttempt=%d udpAttempt=%d udpIdleTimeout=%d",
 		p.activeTCP.Load(),
 		p.peakTCP.Load(),
 		p.activeUDP.Load(),
 		p.peakUDP.Load(),
 		p.tcpDialAttempt.Load(),
 		p.udpDialAttempt.Load(),
-		p.tcpLimitErr.Load(),
-		p.udpLimitErr.Load(),
 		p.udpIdleTimeout.Load(),
-		maxActiveTCPConnections,
-		maxActiveUDPAssociations,
 	)
 }
 
@@ -495,17 +473,4 @@ func updatePeakInt64(peak *atomic.Int64, current int64) {
 			return
 		}
 	}
-}
-
-type flowSlot struct {
-	maxTotal int64
-}
-
-func (s *flowSlot) reserve(active *atomic.Int64) (cur int64, release func() int64, err error) {
-	cur = active.Add(1)
-	if cur > s.maxTotal {
-		active.Add(-1)
-		return cur - 1, nil, fmt.Errorf("flow limit reached active=%d max=%d", cur-1, s.maxTotal)
-	}
-	return cur, func() int64 { return active.Add(-1) }, nil
 }

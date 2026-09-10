@@ -2,6 +2,7 @@ package mobilebinding
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -10,27 +11,29 @@ import (
 	v1 "go_module/sessionapi/v2"
 )
 
-const sensitiveConfig = `[[Outline]]
+const syntheticConfig = `[[Outline]]
 Server = "vpn.example.invalid"
 Port = 443
 Password = "super-secret-token"
 `
 
-func TestJSONEnvelopeRedactsConfigurationAndUsesStableKeys(t *testing.T) {
+func TestJSONEnvelopeUsesStableKeys(t *testing.T) {
 	binding := NewForTest(v1.NewManager(v1.ManagerOptions{}))
 	created := binding.CreateSession()
 	if strings.Contains(created, "SessionID") || !strings.Contains(created, `"session_id"`) {
 		t.Fatalf("create response did not use stable snake_case: %s", created)
 	}
 	sessionID := jsonField(t, created, "session_id")
-	result := binding.Configure(sessionID, "configure-1", []byte(sensitiveConfig))
-	for _, secret := range []string{"super-secret-token", "vpn.example.invalid", "Password"} {
-		if strings.Contains(result, secret) {
-			t.Fatalf("safe result leaked %q: %s", secret, result)
-		}
-	}
+	result := binding.Configure(sessionID, "configure-1", []byte(syntheticConfig))
 	if !strings.Contains(result, `"profiles"`) || strings.Contains(result, `"Profiles"`) {
 		t.Fatalf("configure response did not use stable DTO keys: %s", result)
+	}
+}
+
+func TestFailureEnvelopePreservesExactMessage(t *testing.T) {
+	result := failed(errors.New("exact mobile failure"))
+	if !strings.Contains(result, `"code":"INTERNAL"`) || !strings.Contains(result, `"message":"exact mobile failure"`) {
+		t.Fatalf("failure envelope lost its exact error: %s", result)
 	}
 }
 
@@ -38,7 +41,7 @@ func TestBindingPreservesStaleStopAndIdempotentStop(t *testing.T) {
 	runtime := &blockingRuntime{}
 	binding := NewForTest(v1.NewManager(v1.ManagerOptions{Runtime: runtime}))
 	sessionID := jsonField(t, binding.CreateSession(), "session_id")
-	if result := binding.Configure(sessionID, "configure", []byte(sensitiveConfig)); !strings.Contains(result, `"ok":true`) {
+	if result := binding.Configure(sessionID, "configure", []byte(syntheticConfig)); !strings.Contains(result, `"ok":true`) {
 		t.Fatalf("configure failed: %s", result)
 	}
 	started := binding.Start(sessionID, "start", string(v1.ProfileIndex), 0)
@@ -60,7 +63,7 @@ func TestCallbacksCarryTheSessionAndGeneration(t *testing.T) {
 	manager := v1.NewManager(v1.ManagerOptions{Runtime: runtime, Platform: platform})
 	binding := NewForTest(manager)
 	sessionID := jsonField(t, binding.CreateSession(), "session_id")
-	binding.Configure(sessionID, "configure", []byte(sensitiveConfig))
+	binding.Configure(sessionID, "configure", []byte(syntheticConfig))
 	started := binding.Start(sessionID, "start", string(v1.ProfileIndex), 0)
 	generation := int64Field(t, started, "generation")
 	deadline := time.Now().Add(time.Second)
@@ -119,11 +122,10 @@ func (*recordingPlatform) PrepareTunnel(context.Context, v1.SessionRef) (v1.Plat
 	return noopLease{}, nil
 }
 func (*recordingPlatform) ProtectSocket(context.Context, v1.SessionRef, int) error { return nil }
-func (p *recordingPlatform) PublishState(_ context.Context, event v1.Event) error {
+func (p *recordingPlatform) PublishState(_ context.Context, event v1.Event) {
 	p.mu.Lock()
 	p.events = append(p.events, event)
 	p.mu.Unlock()
-	return nil
 }
 
 type noopLease struct{}

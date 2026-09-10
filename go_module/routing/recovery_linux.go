@@ -72,6 +72,14 @@ func linuxOwnedMarkedRouteFields(line string) (gateway, iface string, ok bool) {
 }
 
 func linuxOwnedMarkedRouteDelete(line string, tableID int) (string, bool) {
+	fields := strings.Fields(line)
+	if len(fields) >= 6 && fields[0] == "unreachable" && fields[1] == linuxDefaultRoute {
+		protocol, _ := linuxRouteField(fields, "proto")
+		metric, _ := linuxRouteField(fields, "metric")
+		if protocol == strconv.Itoa(linuxOwnedRouteProtocol) && metric == "1" {
+			return fmt.Sprintf("ip route del table %d unreachable default proto %d metric 1", tableID, linuxOwnedRouteProtocol), true
+		}
+	}
 	gateway, iface, ok := linuxOwnedMarkedRouteFields(line)
 	if !ok {
 		return "", false
@@ -169,7 +177,10 @@ func RecoverLinuxOwnedRoutes(tableID, priority int, tunName string) error {
 	for _, line := range strings.Split(markedOutput, "\n") {
 		if command, ok := linuxOwnedMarkedRouteDelete(line, tableID); ok {
 			deletes = append(deletes, command)
-			gateway, iface, _ := linuxOwnedMarkedRouteFields(line)
+			gateway, iface, hasGateway := linuxOwnedMarkedRouteFields(line)
+			if !hasGateway {
+				continue
+			}
 			candidate := fmt.Sprintf(
 				"ip -4 route replace table main %s via %s dev %s",
 				linuxDefaultRoute, gateway, iface,

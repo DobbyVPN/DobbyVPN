@@ -14,6 +14,8 @@ import interop.session.SessionSnapshot as TransportSnapshot
 import interop.session.SessionStartTarget as TransportStartTarget
 import interop.session.SessionState as TransportState
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -126,7 +128,7 @@ private class RecordingSessionLibrary : SessionLibrary {
 
     override suspend fun configure(sessionId: String, commandId: String, rawConfig: ByteArray): SessionResult<TransportConfiguration> =
         if (sessionId !in sessions) missing() else SessionResult.Success(
-            TransportConfiguration("digest", listOf(TransportProfile(0, TransportProtocol.OUTLINE, "")), emptyList()),
+            TransportConfiguration("digest", listOf(TransportProfile(0, TransportProtocol.OUTLINE, "")), emptyList(), interop.session.SessionSourceKind.INLINE),
         )
 
     override suspend fun start(sessionId: String, commandId: String, target: TransportStartTarget): SessionResult<ULong> =
@@ -165,6 +167,8 @@ private class RecordingSessionLibrary : SessionLibrary {
                 ),
             )
         }
+
+    override fun watch(sessionId: String, afterSequence: ULong): Flow<TransportEvent> = emptyFlow()
 
     override suspend fun destroySession(sessionId: String): SessionResult<Unit> =
         if (sessionId !in sessions) missing() else SessionResult.Success(Unit)

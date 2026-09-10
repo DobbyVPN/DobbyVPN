@@ -13,16 +13,12 @@ import (
 )
 
 const (
-	Category           = "DNSCache"
-	PreflightCacheTTL  = 12 * time.Hour
-	FastResolveTimeout = 750 * time.Millisecond
+	Category          = "DNSCache"
+	PreflightCacheTTL = 12 * time.Hour
 	// ServerResolveTimeout bounds the mandatory bootstrap lookup used to
-	// establish the VPN server route.  It is intentionally longer than the
-	// opportunistic fast lookup used for protected per-flow sockets: a cold
-	// Android resolver can legitimately need more than one round trip after a
-	// network transition, and failing the whole session at 750 ms would turn a
-	// reachable server into a false connection failure.
-	ServerResolveTimeout = 2 * time.Second
+	// establish the VPN server route. A fresh macOS daemon can need longer than
+	// two seconds for its first resolver request after launchd restarts it.
+	ServerResolveTimeout = 5 * time.Second
 )
 
 type entry struct {
@@ -46,11 +42,8 @@ func Clear() {
 func SetIPv4(host, ipString, source string, ttl time.Duration) bool {
 	host = NormalizeHost(host)
 	ip := net.ParseIP(strings.TrimSpace(ipString))
-	if host == "" || ip == nil || ip.To4() == nil {
+	if host == "" || ip == nil || ip.To4() == nil || ttl <= 0 {
 		return false
-	}
-	if ttl <= 0 {
-		ttl = time.Minute
 	}
 
 	mu.Lock()
@@ -62,26 +55,6 @@ func SetIPv4(host, ipString, source string, ttl time.Duration) bool {
 	}
 	log.Debugf(Category, "stored source=%s ttl=%s", source, ttl)
 	return true
-}
-
-func SetEntries(lines, source string, ttl time.Duration) int {
-	count := 0
-	for _, line := range strings.Split(lines, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		host, ip, ok := strings.Cut(line, "=")
-		if !ok {
-			log.Debugf(Category, "skip malformed preflight entry")
-			continue
-		}
-		if SetIPv4(host, ip, source, ttl) {
-			count++
-		}
-	}
-	log.Debugf(Category, "preflight stored entries=%d source=%s", count, source)
-	return count
 }
 
 func ResolveIPv4(ctx context.Context, host string, timeout time.Duration, source string) (net.IP, error) {

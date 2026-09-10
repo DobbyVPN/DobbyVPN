@@ -12,7 +12,7 @@ import kotlin.random.Random
 
 /**
  * Narrow app/NetworkExtension handoff. Swift stores configuration in its
- * encrypted one-shot mailbox and sends only authenticated fixed commands to
+ * one-shot mailbox and sends fixed commands to
  * the provider. All returned JSON is the opaque Go envelope.
  */
 interface IosSessionBridge {
@@ -64,8 +64,7 @@ internal class IosSessionController(
                 when (val session = recoverOrCreate()) {
                     is SessionControllerResult.Failure -> preserveFailure(session)
                     is SessionControllerResult.Success -> {
-                        // One command ID is created for this logical operation
-                        // and reused by Swift for every provider retry.
+                        // One command ID identifies this logical operation.
                         val commandID = commandID("configure")
                         SessionEnvelopeDecoder.decode(bridge.configure(session.value, commandID, rawConfig)) {
                             it.toSessionConfiguration()
@@ -216,7 +215,7 @@ internal class IosSessionController(
                             bridge.observe(session.value, cursor.toLong()),
                         ) { it.toSessionObservation() }
                         // Retain the reset marker across a failed Observe. A
-                        // transport/authentication failure must not cause the
+                        // transport failure must not cause the
                         // next attempt to send an old session's high cursor to
                         // a newly recovered Go session.
                         if (result is SessionControllerResult.Success) sessionIdentityChanged = false
@@ -275,8 +274,7 @@ internal class IosSessionController(
     }
 
     private fun commandID(operation: String): String {
-        // ASCII-safe stable ID; the caller retains it for this logical command
-        // while Swift reuses the same signed bytes across transport retries.
+        // ASCII-safe ID for one logical command.
         return "ios-$operation-${Random.nextLong().toULong().toString(16)}"
     }
 

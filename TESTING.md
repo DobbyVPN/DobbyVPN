@@ -27,39 +27,31 @@ On an Apple-silicon Mac with Xcode 26.3 and an installed iOS runtime:
 ```bash
 swift test --enable-code-coverage --package-path swift_module
 cd kmp_module
-./gradlew :app:linkDebugFrameworkIosSimulatorArm64 :app:iosSimulatorArm64Test
+./gradlew :app:linkDebugFrameworkIosSimulatorArm64 :app:iosSimulatorArm64Test --rerun-tasks --no-daemon
 ```
 
-To build and install the complete unsigned Simulator app locally, first build
-the public Go framework from `go_module/`, then stage the matching KMP
-framework before invoking Xcode:
+On an Intel Mac with Xcode 26.3 and an installed iOS runtime:
 
 ```bash
-cd go_module
-./scripts/build_ios_xcframework.sh
-ditto DobbyVPNRuntime.xcframework ../swift_module/DobbyVPNRuntime.xcframework
-
-cd ../kmp_module
-./gradlew :app:linkDebugFrameworkIosSimulatorArm64 :app:iosSimulatorArm64Test
-rm -rf ../swift_module/app.framework
-ditto app/build/bin/iosSimulatorArm64/debugFramework/app.framework ../swift_module/app.framework
-
-SIMULATOR_UDID="$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.isAvailable and (.name | startswith("iPhone")))][0].udid')"
-xcrun simctl boot "$SIMULATOR_UDID" || true
-xcrun simctl bootstatus "$SIMULATOR_UDID" -b
-xcodebuild build -project ../swift_module/iosApp.xcodeproj -scheme iosApp \
-  -configuration Debug -sdk iphonesimulator \
-  -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-  -derivedDataPath /tmp/dobbyvpn-ios-simulator \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
-python3 .github/scripts/run_ios_simulator_app_lifecycle.py \
-  --device "$SIMULATOR_UDID" \
-  --app /tmp/dobbyvpn-ios-simulator/Build/Products/Debug-iphonesimulator/doBBYVPN.app \
-  --result /tmp/dobbyvpn-ios-simulator-lifecycle.json
+cd kmp_module
+./gradlew :app:linkDebugFrameworkIosX64 :app:iosX64Test --rerun-tasks --no-daemon
 ```
 
-For an Intel Mac, replace `iosSimulatorArm64` with `iosX64` in the Gradle task
-and framework path. The hosted public workflow runs the Apple-silicon variant.
+The public iOS Simulator app lifecycle is owned by the pinned Torturer
+workflow. It prepares the Go and KMP frameworks through the product build
+interfaces, then invokes Torturer's canonical app-contract command. The same
+command supports `--architecture amd64 --startup-only` on the Intel local Mac.
+The standalone KMP checks above remain the local CPU-rendered native checks.
+
+For initialization-only testing, adding `DOBBY_STARTUP_TEST` to Xcode's Swift
+active compilation conditions builds a Simulator-only variant. It executes
+the normal session-bridge and dependency initialization, records
+`startup.initialized mode=startup-only` in the canonical app log, and omits
+the Compose window. It is not normal app UI launch, Metal, input, or VPN-traffic
+coverage. Normal builds do not set this flag and keep the Compose UI; the
+condition cannot omit the UI on physical-device builds. This test mode exists
+to isolate initialization from graphics and can be removed if that separate
+check is retired. It does not require a modified Compose dependency.
 
 The Swift package compiles the exact platform-neutral production source from
 `swift_module/CommonDI`; it is not a copied lifecycle model. The Gradle command
@@ -71,12 +63,11 @@ logging contract for legacy-record compatibility, full-timestamp ordering,
 multi-producer merge/clear, and durable retention of the latest clear marker.
 `iosX64` is also declared for Intel macOS environments.
 
-Simulator checks cover shared parsing, mapping, lifecycle generation fences,
-observation sequencing, retry decisions, framework linkage, fresh install,
-retained-data reinstall, cold and repeated launch, background/foreground,
-forced termination/relaunch. The lifecycle helper verifies that every launched
-process remains alive after the startup window, not merely that launchd accepted
-a request.
+Simulator checks cover shared parsing, mapping, lifecycle generation handling,
+observation sequencing, retry decisions, framework linkage, fresh install and
+one canonical launch/termination lifecycle. The app-contract helper verifies
+that the launched process remains alive after the startup window, not merely
+that launchd accepted a request.
 Shared storage tests cover missing, corrupt, unwritable, and full diagnostic
 storage and require controlled degradation rather than startup failure.
 
@@ -96,10 +87,9 @@ The instrumentation-only hosted-profile driver accepts the canonical
 `network_transition` operation. This is not a production control and does not
 add a Harness or Torturer dependency to the application:
 an owner-side adapter performs the emulator action, then signals the test APK
-through a one-use, token-bound private-file rendezvous. Torturer proves process
+through a run-scoped file rendezvous. Torturer proves process
 loss externally by force-stopping the production app, observing its absence,
-and starting a fresh companion session. Missing or malformed control input
-fails closed, and ordinary commands cannot include the control fields.
+and starting a fresh companion session.
 
 Suspend/resume is a known untested limitation on every platform. The functional
 contract contains no sleep/wake operation until a controlled environment can

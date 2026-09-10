@@ -9,7 +9,6 @@ import (
 	"os"
 	"sync"
 
-	appLog "go_module/log"
 	"go_module/sessionapi/runtime"
 	"go_module/sessionapi/runtimebridge"
 	v2 "go_module/sessionapi/v2"
@@ -20,7 +19,7 @@ import (
 // platform boundary for TUN, socket protection, and state publication.
 func New(callbacks PlatformCallbacks) *Binding {
 	platform := &platformAdapter{callbacks: callbacks, tunnels: newTunnelFDs(), active: make(map[string]v2.SessionRef)}
-	manager := v2.NewManager(v2.ManagerOptions{Runtime: runtimebridge.New(platform), Platform: platform, Audit: appLog.SessionAuditSink{}})
+	manager := v2.NewManager(v2.ManagerOptions{Runtime: runtimebridge.New(platform), Platform: platform})
 	return &Binding{manager: manager, platform: platform}
 }
 
@@ -81,10 +80,7 @@ func (p *platformAdapter) acquire(ref v2.SessionRef) (int32, PlatformCallbacks, 
 	if callbacks == nil {
 		return 0, nil, fmt.Errorf("platform tunnel callback is not registered")
 	}
-	generation, ok := generationAsInt64(ref.Generation)
-	if !ok {
-		return 0, nil, fmt.Errorf("generation exceeds mobile binding range")
-	}
+	generation := int64(ref.Generation)
 	fd := callbacks.AcquireTunnel(ref.SessionID, generation)
 	if fd < 0 {
 		return 0, nil, fmt.Errorf("platform failed to acquire a fresh tunnel")
@@ -110,10 +106,7 @@ func (p *platformAdapter) release(ref v2.SessionRef, fd int32, callbacks Platfor
 	if callbacks == nil {
 		return fmt.Errorf("platform tunnel cleanup callback is unavailable")
 	}
-	generation, ok := generationAsInt64(ref.Generation)
-	if !ok {
-		return fmt.Errorf("generation exceeds mobile binding range during tunnel cleanup")
-	}
+	generation := int64(ref.Generation)
 	if !callbacks.ReleaseTunnel(ref.SessionID, generation, fd) {
 		return fmt.Errorf("platform tunnel cleanup failed")
 	}
@@ -130,8 +123,8 @@ func (p *platformAdapter) ProtectSocket(_ context.Context, ref v2.SessionRef, fd
 	if callbacks == nil {
 		return fmt.Errorf("platform socket protector is not registered")
 	}
-	generation, ok := generationAsInt64(ref.Generation)
-	if !ok || !callbacks.ProtectSocket(ref.SessionID, generation, int32(fd)) {
+	generation := int64(ref.Generation)
+	if !callbacks.ProtectSocket(ref.SessionID, generation, int32(fd)) {
 		return fmt.Errorf("platform rejected socket protection")
 	}
 	return nil
@@ -155,20 +148,15 @@ func (p *platformAdapter) protectActive(fd int32) bool {
 	if callbacks == nil {
 		return false
 	}
-	generation, ok := generationAsInt64(ref.Generation)
-	return ok && callbacks.ProtectSocket(ref.SessionID, generation, fd)
+	return callbacks.ProtectSocket(ref.SessionID, int64(ref.Generation), fd)
 }
 
-func (p *platformAdapter) PublishState(_ context.Context, event v2.Event) error {
+func (p *platformAdapter) PublishState(_ context.Context, event v2.Event) {
 	p.mu.Lock()
 	callbacks := p.callbacks
 	p.mu.Unlock()
 	if callbacks == nil {
-		return nil
-	}
-	generation, ok := generationAsInt64(event.Generation)
-	if !ok {
-		return fmt.Errorf("generation exceeds mobile binding range")
+		return
 	}
 	profileIndex := int32(-1)
 	protocol := ""
@@ -176,8 +164,7 @@ func (p *platformAdapter) PublishState(_ context.Context, event v2.Event) error 
 		profileIndex = int32(event.Profile.Index)
 		protocol = string(event.Profile.Protocol)
 	}
-	callbacks.PublishState(event.SessionID, generation, int64(event.Sequence), string(event.State), profileIndex, protocol, string(event.Failure))
-	return nil
+	callbacks.PublishState(event.SessionID, int64(event.Generation), int64(event.Sequence), string(event.State), profileIndex, protocol, string(event.Failure))
 }
 
 type platformLease struct {

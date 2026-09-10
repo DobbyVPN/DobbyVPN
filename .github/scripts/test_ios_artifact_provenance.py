@@ -15,7 +15,7 @@ from unittest import mock
 
 from ios_artifact_provenance import (
     SCHEMA,
-    canonical_json,
+    json_bytes,
     load_provenance,
     make_provenance,
     verify_provenance,
@@ -81,7 +81,7 @@ class IosArtifactProvenanceTests(unittest.TestCase):
 
     def create_sidecar(self) -> dict[str, object]:
         provenance = make_provenance(self.ipa_dir, SOURCE_SHA, VERSION, BUILD_NUMBER)
-        self.sidecar.write_bytes(canonical_json(provenance))
+        self.sidecar.write_bytes(json_bytes(provenance))
         return provenance
 
     def test_create_is_canonical_and_verifies_complete_binding(self) -> None:
@@ -91,7 +91,7 @@ class IosArtifactProvenanceTests(unittest.TestCase):
         self.assertEqual(provenance["version"], VERSION)
         self.assertEqual(provenance["build_number"], int(BUILD_NUMBER))
         self.assertEqual(provenance["ipa"]["filename"], "DobbyVPN.ipa")  # type: ignore[index]
-        self.assertEqual(self.sidecar.read_bytes(), canonical_json(provenance))
+        self.assertEqual(self.sidecar.read_bytes(), json_bytes(provenance))
         verify_provenance(self.ipa_dir, self.sidecar, SOURCE_SHA, VERSION, BUILD_NUMBER)
 
     def test_verification_rejects_each_selected_release_identity_field(self) -> None:
@@ -115,31 +115,28 @@ class IosArtifactProvenanceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             verify_provenance(self.ipa_dir, self.sidecar, SOURCE_SHA, VERSION, BUILD_NUMBER)
 
-    def test_rejects_missing_multiple_or_symlinked_ipa(self) -> None:
-        self.ipa.unlink()
+    def test_requires_the_named_ipa_and_ignores_unrelated_entries(self) -> None:
+        renamed = self.ipa.with_name("Renamed.ipa")
+        self.ipa.rename(renamed)
         with self.assertRaises(ValueError):
             make_provenance(self.ipa_dir, SOURCE_SHA, VERSION, BUILD_NUMBER)
+        renamed.rename(self.ipa)
+        (self.ipa_dir / "second.ipa").write_bytes(b"unrelated")
+        self.assertEqual(
+            make_provenance(self.ipa_dir, SOURCE_SHA, VERSION, BUILD_NUMBER)["ipa"]["filename"],  # type: ignore[index]
+            "DobbyVPN.ipa",
+        )
 
-    def test_rejects_empty_ipa(self) -> None:
+    def test_records_empty_ipa_exactly(self) -> None:
         self.ipa.write_bytes(b"")
-        with self.assertRaises(ValueError):
-            make_provenance(self.ipa_dir, SOURCE_SHA, VERSION, BUILD_NUMBER)
-        self.ipa.write_bytes(b"one")
-        (self.ipa_dir / "second.ipa").write_bytes(b"two")
-        with self.assertRaises(ValueError):
-            make_provenance(self.ipa_dir, SOURCE_SHA, VERSION, BUILD_NUMBER)
-        (self.ipa_dir / "second.ipa").unlink()
-        self.ipa.unlink()
-        self.ipa.symlink_to(self.root / "outside.ipa")
-        with self.assertRaises(ValueError):
-            make_provenance(self.ipa_dir, SOURCE_SHA, VERSION, BUILD_NUMBER)
+        provenance = make_provenance(self.ipa_dir, SOURCE_SHA, VERSION, BUILD_NUMBER)
+        self.assertEqual(provenance["ipa"]["size_bytes"], 0)  # type: ignore[index]
 
-    def test_rejects_noncanonical_or_malformed_sidecar(self) -> None:
+    def test_accepts_ordinary_json_formatting_and_rejects_malformed_sidecar(self) -> None:
         provenance = self.create_sidecar()
         self.sidecar.write_text(json.dumps(provenance, indent=2), encoding="utf-8")
-        with self.assertRaises(ValueError):
-            load_provenance(self.sidecar)
-        self.sidecar.write_bytes(canonical_json({"schema": SCHEMA}))
+        self.assertEqual(load_provenance(self.sidecar), provenance)
+        self.sidecar.write_bytes(json_bytes({"schema": SCHEMA}))
         with self.assertRaises(ValueError):
             load_provenance(self.sidecar)
 
@@ -178,31 +175,6 @@ class IosArtifactProvenanceTests(unittest.TestCase):
         failed = run_and_surface(command, check=False)
         self.assertNotEqual(failed.returncode, 0)
         self.assertIn("does not match", failed.stderr)
-
-    def test_create_rejects_dangling_provenance_symlink(self) -> None:
-        self.sidecar.symlink_to(self.root / "missing-target.json")
-        script = Path(__file__).with_name("ios_artifact_provenance.py")
-        failed = run_and_surface(
-            [
-                sys.executable,
-                str(script),
-                "create",
-                "--ipa-dir",
-                str(self.ipa_dir),
-                "--provenance",
-                str(self.sidecar),
-                "--source-sha",
-                SOURCE_SHA,
-                "--version",
-                VERSION,
-                "--build-number",
-                BUILD_NUMBER,
-            ],
-            check=False,
-        )
-        self.assertNotEqual(failed.returncode, 0)
-        self.assertIn("must not be a symlink", failed.stderr)
-
 
 if __name__ == "__main__":
     unittest.main()

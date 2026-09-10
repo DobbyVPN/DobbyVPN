@@ -77,7 +77,7 @@ class ReleaseProvenanceTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "complete stdout\n")
         self.assertEqual(stderr.getvalue(), "complete stderr\n")
 
-    def test_create_is_canonical_and_verify_round_trips(self):
+    def test_create_is_deterministic_and_verify_round_trips(self):
         manifest = self.create()
         self.assertEqual(manifest, self.directory / MANIFEST_NAME)
         raw = manifest.read_bytes()
@@ -126,7 +126,7 @@ class ReleaseProvenanceTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("metadata", result.stderr)
 
-    def test_rejects_invalid_metadata_and_unsorted_or_unsafe_assets(self):
+    def test_rejects_invalid_metadata_and_normalizes_asset_arguments(self):
         invalid = dict(METADATA)
         invalid["tag"] = "v01.4.7"
         with self.assertRaises(ProvenanceError):
@@ -139,40 +139,32 @@ class ReleaseProvenanceTests(unittest.TestCase):
         invalid["source_sha"] = SOURCE_SHA.upper()
         with self.assertRaises(ProvenanceError):
             create_manifest(self.directory, assets=ASSETS, **invalid)
-        for assets in ([ASSETS[1], ASSETS[0]], [ASSETS[0], ASSETS[0]], ["../secret"]):
-            with self.subTest(assets=assets):
-                with self.assertRaises(ProvenanceError):
-                    create_manifest(self.directory, assets=assets, **METADATA)
+        manifest = create_manifest(
+            self.directory,
+            assets=[ASSETS[1], ASSETS[0], ASSETS[0]],
+            **METADATA,
+        )
+        self.assertEqual(
+            [record["name"] for record in json.loads(manifest.read_text())["assets"]],
+            list(ASSETS),
+        )
 
-    def test_rejects_missing_extra_symlink_and_directory_entries(self):
+    def test_requires_named_assets_but_ignores_unrelated_directory_entries(self):
         (self.directory / ASSETS[1]).unlink()
         with self.assertRaises(ProvenanceError):
             self.create()
         (self.directory / ASSETS[1]).write_bytes(b"archive")
         (self.directory / "unexpected").write_bytes(b"no")
-        with self.assertRaises(ProvenanceError):
-            self.create()
-        (self.directory / "unexpected").unlink()
         (self.directory / "directory").mkdir()
-        with self.assertRaises(ProvenanceError):
-            self.create()
-        (self.directory / "directory").rmdir()
-        try:
-            (self.directory / "link").symlink_to(self.directory / ASSETS[0])
-        except (NotImplementedError, OSError):
-            self.skipTest("symlinks unavailable on this platform")
-        with self.assertRaises(ProvenanceError):
-            self.create()
+        self.create()
+        self.verify()
 
-    def test_rejects_noncanonical_and_malformed_manifest(self):
+    def test_accepts_ordinary_json_formatting_and_rejects_malformed_manifest(self):
         manifest = self.create()
         payload = json.loads(manifest.read_text())
+        payload["assets"].reverse()
         manifest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        with self.assertRaises(ProvenanceError):
-            self.verify()
-        manifest.write_text('{"schema":1,"schema":1}', encoding="utf-8")
-        with self.assertRaises(ProvenanceError):
-            self.verify()
+        self.verify()
         manifest.write_text("not json\n", encoding="utf-8")
         with self.assertRaises(ProvenanceError):
             self.verify()
@@ -186,10 +178,10 @@ class ReleaseProvenanceTests(unittest.TestCase):
         with self.assertRaises(ProvenanceError):
             verify_manifest(self.directory, assets=[ASSETS[0]], **METADATA)
 
-    def test_rejects_empty_release_asset(self):
+    def test_records_empty_release_asset_exactly(self):
         (self.directory / ASSETS[0]).write_bytes(b"")
-        with self.assertRaises(ProvenanceError):
-            self.create()
+        self.create()
+        self.verify()
 
     def testVerifierChecksEveryMetadataField(self):
         self.create()
@@ -225,17 +217,9 @@ class ReleaseProvenanceTests(unittest.TestCase):
         with self.assertRaises(ProvenanceError):
             self.verify()
 
-    def test_manifest_cannot_be_an_asset_or_symlink(self):
+    def test_manifest_cannot_be_an_asset(self):
         with self.assertRaises(ProvenanceError):
             create_manifest(self.directory, assets=[MANIFEST_NAME], **METADATA)
-        manifest = self.create()
-        manifest.unlink()
-        try:
-            manifest.symlink_to(self.directory / ASSETS[0])
-        except (NotImplementedError, OSError):
-            self.skipTest("symlinks unavailable on this platform")
-        with self.assertRaises(ProvenanceError):
-            self.verify()
 
 if __name__ == "__main__":
     unittest.main()

@@ -117,7 +117,7 @@ func TestMobileConnectPanicRecoveryDoesNotDeadlockAndAllowsNextGeneration(t *tes
 	}
 }
 
-func TestMobileConnectPanicRecoveryFencesLaterGenerationWhenCleanupFails(t *testing.T) {
+func TestMobileConnectPanicRecoveryDoesNotFenceLaterGenerationWhenCleanupFails(t *testing.T) {
 	wantCleanupErr := errors.New("test TUN cleanup failed")
 	firstTun := newMobileTestTun(t, wantCleanupErr)
 	c := newNativeRuntime(&panicMobileDevice{}, firstTun)
@@ -135,10 +135,10 @@ func TestMobileConnectPanicRecoveryFencesLaterGenerationWhenCleanupFails(t *test
 	secondTun := newMobileTestTun(t, nil)
 	c.device = &panicMobileDevice{}
 	c.tun = secondTun
-	if err := connectMobileBounded(t, c); !errors.Is(err, wantCleanupErr) {
-		t.Fatalf("fenced later-generation error = %v, want cleanup error %v", err, wantCleanupErr)
+	if err := connectMobileBounded(t, c); err == nil || errors.Is(err, wantCleanupErr) {
+		t.Fatalf("later-generation error = %v, want fresh panic failure", err)
 	}
-	if got := c.generationValue(); got != 1 {
-		t.Fatalf("generation after incomplete-cleanup retry = %d, want 1", got)
+	if got := c.generationValue(); got != 2 {
+		t.Fatalf("generation after incomplete-cleanup retry = %d, want 2", got)
 	}
 }

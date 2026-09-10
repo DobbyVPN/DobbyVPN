@@ -69,6 +69,7 @@ class SessionUiLifecycleTest {
                     state = SessionState.CONNECTED,
                     configured = true,
                     cleanupComplete = false,
+                    sessionId = "",
                 ),
             ),
         )
@@ -88,6 +89,7 @@ class SessionUiLifecycleTest {
                     state = SessionState.IDLE,
                     configured = true,
                     cleanupComplete = true,
+                    sessionId = "",
                 ),
             ),
         )

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Create and verify the public provenance sidecar for a release IPA.
 
-The sidecar is deliberately small, canonical JSON.  It binds the one IPA
+The sidecar binds the IPA
 published by an iOS Release job to its immutable source revision and release
 metadata before the protected App Store submission job is allowed to use it.
 """
@@ -24,13 +24,8 @@ POSITIVE_INTEGER = re.compile(r"[1-9]\d*")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
-def canonical_json(value: dict[str, Any]) -> bytes:
+def json_bytes(value: dict[str, Any]) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode("utf-8")
-
-
-def require_regular_file(path: Path, description: str) -> None:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"{description} must be a regular non-symlink file: {path}")
 
 
 def sha256_file(path: Path) -> str:
@@ -61,21 +56,15 @@ def validate_build_number(value: str | int) -> int:
 
 
 def discover_ipa(ipa_dir: Path) -> Path:
-    if ipa_dir.is_symlink() or not ipa_dir.is_dir():
-        raise ValueError(f"IPA directory must be a real directory: {ipa_dir}")
-    candidates = sorted(path for path in ipa_dir.iterdir() if path.name.endswith(".ipa"))
-    if len(candidates) != 1:
-        raise ValueError(f"expected exactly one IPA in {ipa_dir}, found {len(candidates)}")
-    ipa = candidates[0]
-    require_regular_file(ipa, "IPA")
+    ipa = ipa_dir / "DobbyVPN.ipa"
+    if not ipa.is_file():
+        raise ValueError(f"DobbyVPN.ipa is missing from {ipa_dir}")
     return ipa
 
 
 def make_provenance(ipa_dir: Path, source_sha: str, version: str, build_number: str | int) -> dict[str, Any]:
     ipa = discover_ipa(ipa_dir)
     size_bytes = ipa.stat().st_size
-    if size_bytes <= 0:
-        raise ValueError("IPA must not be empty")
     return {
         "build_number": validate_build_number(build_number),
         "ipa": {
@@ -90,7 +79,6 @@ def make_provenance(ipa_dir: Path, source_sha: str, version: str, build_number: 
 
 
 def load_provenance(path: Path) -> dict[str, Any]:
-    require_regular_file(path, "provenance sidecar")
     raw = path.read_bytes()
     try:
         value = json.loads(raw.decode("utf-8"))
@@ -109,17 +97,15 @@ def load_provenance(path: Path) -> dict[str, Any]:
         raise ValueError("provenance version must be a string")
     if isinstance(value["build_number"], bool) or not isinstance(value["build_number"], int):
         raise ValueError("provenance build_number must be an integer")
-    if not isinstance(ipa["filename"], str) or Path(ipa["filename"]).name != ipa["filename"] or not ipa["filename"].endswith(".ipa"):
-        raise ValueError("provenance IPA filename is invalid")
-    if isinstance(ipa["size_bytes"], bool) or not isinstance(ipa["size_bytes"], int) or ipa["size_bytes"] <= 0:
-        raise ValueError("provenance IPA size must be a positive integer")
+    if not isinstance(ipa["filename"], str):
+        raise ValueError("provenance IPA filename must be a string")
+    if isinstance(ipa["size_bytes"], bool) or not isinstance(ipa["size_bytes"], int) or ipa["size_bytes"] < 0:
+        raise ValueError("provenance IPA size must be a nonnegative integer")
     if not isinstance(ipa["sha256"], str) or not SHA256.fullmatch(ipa["sha256"]):
         raise ValueError("provenance IPA SHA-256 must be lowercase hexadecimal")
     validate_source_sha(value["source_sha"])
     validate_version(value["version"])
     validate_build_number(value["build_number"])
-    if raw != canonical_json(value):
-        raise ValueError("provenance sidecar must use canonical JSON encoding")
     return value
 
 
@@ -154,10 +140,8 @@ def main() -> int:
     try:
         if args.command == "create":
             args.provenance.parent.mkdir(parents=True, exist_ok=True)
-            if args.provenance.is_symlink():
-                raise ValueError(f"provenance output must not be a symlink: {args.provenance}")
             args.provenance.write_bytes(
-                canonical_json(make_provenance(args.ipa_dir, args.source_sha, args.version, args.build_number))
+                json_bytes(make_provenance(args.ipa_dir, args.source_sha, args.version, args.build_number))
             )
         else:
             verify_provenance(args.ipa_dir, args.provenance, args.source_sha, args.version, args.build_number)

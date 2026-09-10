@@ -20,8 +20,6 @@ expect fun platformLogStorageInitializationAvailable(): Boolean
 expect fun clearLogFile(path: Path, storageFileSystem: FileSystem)
 expect fun <T> withLogWriteLock(block: () -> T): T
 
-fun maskStr(input: String): String = if (input.isEmpty()) "" else "[REDACTED]"
-
 class LogsRepository private constructor(
     private val logFilePath: Path = provideLogFilePath(),
     additionalLogFilePaths: List<Path> = emptyList(),
@@ -65,7 +63,7 @@ class LogsRepository private constructor(
                 level = LogLevel.INFO,
                 source = "app",
                 event = "logger.ready",
-                message = "Owner-only local diagnostic storage is ready",
+                message = "Local diagnostic storage is ready",
                 fields = mapOf("producer_count" to producerLogPaths.size.toString()),
             )
             writeLog("[Platform] ${platformLogInfo()}")

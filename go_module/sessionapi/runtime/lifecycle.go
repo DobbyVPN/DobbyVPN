@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"go_module/dnscache"
 	"go_module/log"
 	"go_module/probe"
 	"go_module/protocol"
@@ -49,7 +48,7 @@ type TunnelLease interface {
 // implementation owns tunnel's process-global exclusion policy; Runtime
 // serializes all leases so no other runtime lease can overwrite that policy.
 type InputProvider interface {
-	Apply(context.Context, v2.SessionRef, []string, []string) (InputLease, error)
+	Apply(context.Context, v2.SessionRef, []string) (InputLease, error)
 }
 
 type InputLease interface{ Release(context.Context) error }
@@ -298,7 +297,7 @@ func (r *runtime) startLocked(ctx context.Context, ref v2.SessionRef, profile v2
 		return nil, errors.Join(cause, owned.Stop(context.Background()))
 	}
 
-	inputs, err := r.options.Inputs.Apply(ctx, ref, profile.ExcludeCIDRs, profile.PreflightHosts)
+	inputs, err := r.options.Inputs.Apply(ctx, ref, profile.ExcludeCIDRs)
 	if err != nil {
 		return fail(fmt.Errorf("prepare Go routing/DNS inputs: %w", err))
 	}
@@ -527,38 +526,11 @@ func (l *lease) Stop(ctx context.Context) error {
 
 type defaultInputs struct{}
 
-func (defaultInputs) Apply(ctx context.Context, _ v2.SessionRef, cidrs, hosts []string) (InputLease, error) {
+func (defaultInputs) Apply(_ context.Context, _ v2.SessionRef, cidrs []string) (InputLease, error) {
 	routes, err := tunnel.AcquireGeoRoutingConf(cidrs)
 	if err != nil {
 		return nil, fmt.Errorf("acquire exclusion policy: %w", err)
 	}
-	profileResolved := 0
-	for _, host := range hosts {
-		if err := ctx.Err(); err != nil {
-			routes.Release()
-			return nil, err
-		}
-		if _, err := dnscache.ResolvePreflightIPv4(
-			ctx,
-			host,
-			dnscache.FastResolveTimeout,
-			"runtime-profile-preflight",
-		); err != nil {
-			// DNS prewarm is best-effort; protocol DNS remains authoritative.
-			log.Debugf(category, "preflight DNS did not resolve host count=%d", len(hosts))
-		} else {
-			profileResolved++
-		}
-	}
-	probeResolved, probeTotal := probe.PreflightTunnelProbeDNS(ctx)
-	log.Debugf(
-		category,
-		"preflight DNS complete profileResolved=%d profileTotal=%d probeResolved=%d probeTotal=%d",
-		profileResolved,
-		len(hosts),
-		probeResolved,
-		probeTotal,
-	)
 	return routingInputs{routes: routes}, nil
 }
 

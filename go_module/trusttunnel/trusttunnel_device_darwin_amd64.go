@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -55,7 +54,6 @@ type TrustTunnelDevice struct {
 	svrPort    int
 	socksUser  string
 	socksPass  string
-	redactions []string
 	helperPath string
 
 	command    *exec.Cmd
@@ -107,14 +105,6 @@ func NewTrustTunnelDevice(trusttunnelConfig string) (*TrustTunnelDevice, error) 
 		socksPass:  password,
 		helperPath: helperPath,
 		label:      fmt.Sprintf("tt-process-%d", trustTunnelProcessSequence.Add(1)),
-	}
-	// The proxy address is consumed by tun2socks and may appear in existing
-	// lifecycle logs. Child output is untrusted too, so register sensitive
-	// endpoint/configuration leaf values with the central redactor for this
-	// process lifetime. No raw values are ever emitted here.
-	d.redactions = trustTunnelRedactionWords(trusttunnelConfig, user, password)
-	for _, word := range d.redactions {
-		log.AddForbiddenWord(word)
 	}
 	log.Infof("trusttunnel", "[Intel macOS][TrustTunnel] helper validated; SOCKS bridge reserved process=%s", d.label)
 	return d, nil
@@ -191,51 +181,6 @@ func rewriteTrustTunnelSOCKSConfig(config string, port int, user, password strin
 	return encoded.String(), nil
 }
 
-func trustTunnelRedactionWords(config string, generated ...string) []string {
-	words := make(map[string]struct{})
-	for _, word := range generated {
-		if word != "" {
-			words[word] = struct{}{}
-		}
-	}
-	var parsed map[string]interface{}
-	if _, err := toml.Decode(config, &parsed); err == nil {
-		var collect func(key string, value interface{})
-		collect = func(key string, value interface{}) {
-			sensitive := false
-			lowerKey := strings.ToLower(key)
-			for _, marker := range []string{"endpoint", "address", "host", "server", "username", "password", "credential", "token", "secret", "certificate", "url"} {
-				if strings.Contains(lowerKey, marker) {
-					sensitive = true
-					break
-				}
-			}
-			switch typed := value.(type) {
-			case map[string]interface{}:
-				for nestedKey, nestedValue := range typed {
-					collect(nestedKey, nestedValue)
-				}
-			case []interface{}:
-				for _, nestedValue := range typed {
-					collect(key, nestedValue)
-				}
-			case string:
-				if sensitive && typed != "" {
-					words[typed] = struct{}{}
-				}
-			}
-		}
-		for key, value := range parsed {
-			collect(key, value)
-		}
-	}
-	out := make([]string, 0, len(words))
-	for word := range words {
-		out = append(out, word)
-	}
-	return out
-}
-
 func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 	if d == nil {
 		return errors.New("trusttunnel device is not initialized")
@@ -245,13 +190,6 @@ func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 	if d.command != nil {
 		return errors.New("TrustTunnel process is already running")
 	}
-	// Close removes per-device forbidden words so they do not outlive the
-	// session. Re-register them for a supported sequential reopen before any
-	// child output or existing lifecycle logs can be emitted.
-	for _, word := range d.redactions {
-		log.AddForbiddenWord(word)
-	}
-
 	config, err := rewriteTrustTunnelRoutingConfig(d.config, routingTableID, uplinkIface)
 	if err != nil {
 		return err
@@ -336,14 +274,19 @@ func (d *TrustTunnelDevice) writeConfigLocked(config string) error {
 func (d *TrustTunnelDevice) streamProcessOutputLocked(stream string, reader io.ReadCloser) {
 	label := d.label
 	go func() {
-		scanner := bufio.NewScanner(reader)
-		scanner.Buffer(make([]byte, 1024), 64*1024)
-		for scanner.Scan() {
-			// All child output is routed through the central structured redactor.
-			log.Debugf("trusttunnel", "[Intel macOS][TrustTunnel] process=%s stream=%s line=%s", label, stream, scanner.Text())
-		}
-		if err := scanner.Err(); err != nil {
-			log.Debugf("trusttunnel", "[Intel macOS][TrustTunnel] process=%s stream=%s ended with read error type=%T error=%v", label, stream, err, err)
+		buffered := bufio.NewReader(reader)
+		for {
+			line, err := buffered.ReadString('\n')
+			if line != "" {
+				log.Debugf("trusttunnel", "[Intel macOS][TrustTunnel] process=%s stream=%s line=%s", label, stream, line)
+			}
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			if err != nil {
+				log.Debugf("trusttunnel", "[Intel macOS][TrustTunnel] process=%s stream=%s ended with read error type=%T error=%v", label, stream, err, err)
+				return
+			}
 		}
 	}()
 }
@@ -473,21 +416,18 @@ func (d *TrustTunnelDevice) closeLocked() error {
 		}
 	}
 	if d.stdout != nil {
-		if err := d.stdout.Close(); err != nil {
+		if err := d.stdout.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
 			errs = append(errs, fmt.Errorf("close TrustTunnel stdout: %w", err))
 		}
 		d.stdout = nil
 	}
 	if d.stderr != nil {
-		if err := d.stderr.Close(); err != nil {
+		if err := d.stderr.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
 			errs = append(errs, fmt.Errorf("close TrustTunnel stderr: %w", err))
 		}
 		d.stderr = nil
 	}
 	errs = append(errs, d.removeTempArtifactsLocked())
-	for _, word := range d.redactions {
-		log.RemoveForbiddenWord(word)
-	}
 	return errors.Join(errs...)
 }
 

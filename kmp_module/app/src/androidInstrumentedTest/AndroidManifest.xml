@@ -7,11 +7,6 @@
             android:name="com.dobby.test.source_sha"
             android:value="${dobbyTestSourceSha}" />
         <activity
-            android:name="com.dobby.feature.vpn_service.VpnConsentTestActivity"
-            android:exported="false"
-            android:noHistory="true"
-            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
-        <activity
             android:name="com.dobby.feature.vpn_service.VpnTrafficTestActivity"
             android:exported="true"
             android:noHistory="true"

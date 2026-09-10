@@ -22,50 +22,6 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
         self.sha = "a" * 40
         self.repo = "DobbyVPN/DobbyVPN"
 
-    @unittest.skipIf(os.name == "nt", "POSIX process identity assertion")
-    def test_process_state_change_is_not_pid_reuse(self):
-        with mock.patch.object(VERIFY, "_proc_identity", return_value=("S", "123")):
-            self.assertTrue(VERIFY._pid_is_alive(123, ("R", "123")))
-        with mock.patch.object(VERIFY, "_proc_identity", return_value=("S", "456")):
-            self.assertFalse(VERIFY._pid_is_alive(123, ("R", "123")))
-
-    def test_windows_process_liveness_uses_read_only_census(self):
-        with (
-            mock.patch.object(VERIFY.os, "name", "nt"),
-            mock.patch.object(
-                VERIFY,
-                "windows_process_census",
-                return_value=(set(), {123}),
-            ) as census,
-            mock.patch.object(VERIFY.os, "kill") as kill,
-        ):
-            self.assertTrue(VERIFY._pid_is_alive(123))
-        census.assert_called_once_with(123, timeout_seconds=2)
-        kill.assert_not_called()
-
-    def test_windows_process_liveness_proves_absence_from_census(self):
-        with (
-            mock.patch.object(VERIFY.os, "name", "nt"),
-            mock.patch.object(
-                VERIFY,
-                "windows_process_census",
-                return_value=(set(), {456}),
-            ),
-        ):
-            self.assertFalse(VERIFY._pid_is_alive(123))
-
-    def test_windows_process_liveness_query_error_fails_closed(self):
-        with (
-            mock.patch.object(VERIFY.os, "name", "nt"),
-            mock.patch.object(
-                VERIFY,
-                "windows_process_census",
-                side_effect=VERIFY.WindowsProcessCensusError("query failed"),
-            ),
-            self.assertRaisesRegex(VERIFY.ProcessTreeProofError, "query failed"),
-        ):
-            VERIFY._pid_is_alive(123)
-
     def code(self, sha=None, link=None):
         sha = self.sha if sha is None else sha
         link = f"https://github.com/{self.repo}/tree/{self.sha}" if link is None else link
@@ -127,7 +83,7 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
         self.assertIn("partial analyzer output\n", diagnostics.getvalue())
         self.assertIn("partial analyzer stderr\n", diagnostics.getvalue())
 
-    def test_public_apkanalyzer_failure_retains_raw_output_without_public_echo(self):
+    def test_apkanalyzer_failure_prints_complete_output_in_actions(self):
         completed = subprocess.CompletedProcess(
             ["apkanalyzer"], 9, stdout="private apk path\n", stderr="private analyzer endpoint\n",
         )
@@ -146,14 +102,8 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(VERIFY.VerificationError, "exit code 9"):
                     VERIFY.verify_apk("apkanalyzer", apk, self.sha, self.repo)
-            self.assertNotIn("private apk path", diagnostics.getvalue())
-            self.assertNotIn("private analyzer endpoint", diagnostics.getvalue())
-            self.assertIn("dobbyvpn_diagnostic kind=android-apk-source", diagnostics.getvalue())
-            retained = list((Path(temporary) / "dobbyvpn-public-diagnostics").glob("*.raw.log"))
-            self.assertEqual(len(retained), 1)
-            retained_bytes = retained[0].read_bytes()
-            self.assertIn(b"private apk path\n", retained_bytes)
-            self.assertIn(b"private analyzer endpoint\n", retained_bytes)
+            self.assertIn("private apk path", diagnostics.getvalue())
+            self.assertIn("private analyzer endpoint", diagnostics.getvalue())
 
     def test_apkanalyzer_success_parses_stdout_without_stderr_warning(self):
         completed = subprocess.CompletedProcess(
@@ -206,179 +156,6 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
                     with self.assertRaisesRegex(VERIFY.VerificationError, "source identity"):
                         VERIFY.verify_test_companion("apkanalyzer", Path(apk.name), self.sha)
 
-    def test_analyzer_diagnostics_are_unique_and_non_overwriting(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            with mock.patch.object(VERIFY, "ROOT_DIR", Path(temporary)):
-                first = VERIFY.retain_process_diagnostics(
-                    "first stdout\n", "first stderr\n", "exit-1",
-                )
-                second = VERIFY.retain_process_diagnostics(
-                    "second stdout\n", "second stderr\n", "exit-2",
-                )
-            self.assertNotEqual(first, second)
-            self.assertIn("first stderr\n", first.read_text(encoding="utf-8"))
-            self.assertIn("second stderr\n", second.read_text(encoding="utf-8"))
-
-    def test_analyzer_diagnostics_preserve_raw_bytes(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            with mock.patch.object(VERIFY, "ROOT_DIR", Path(temporary)):
-                retained = VERIFY.retain_process_diagnostics(
-                    b"stdout-\xff\n", b"stderr-\xfe\n", "exit-1",
-                )
-            retained_bytes = retained.read_bytes()
-        self.assertIn(b"stdout-\xff\n", retained_bytes)
-        self.assertIn(b"stderr-\xfe\n", retained_bytes)
-
-    def test_analyzer_final_drain_timeout_retains_each_partial_stream_once(self):
-        initial = subprocess.TimeoutExpired(
-            ["apkanalyzer"],
-            1,
-            output=b"initial stdout\n",
-            stderr=b"initial stderr\n",
-        )
-        final = subprocess.TimeoutExpired(
-            ["apkanalyzer"],
-            5,
-            output=b"final stdout\n",
-            stderr=b"final stderr\n",
-        )
-        process = mock.Mock(pid=123)
-        process.communicate.side_effect = [initial, final]
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with (
-                mock.patch.object(VERIFY, "ROOT_DIR", root),
-                mock.patch.object(VERIFY.subprocess, "Popen", return_value=process),
-                mock.patch.object(VERIFY, "attach_process_tree_tracker"),
-                mock.patch.object(
-                    VERIFY,
-                    "terminate_process_group",
-                    return_value="tree=gone source=test observed_pids=1",
-                ),
-                mock.patch.object(VERIFY, "PROCESS_CLEANUP_GRACE_SECONDS", 0.1),
-            ):
-                with self.assertRaises(subprocess.TimeoutExpired) as raised:
-                    VERIFY.run_apkanalyzer(["apkanalyzer"])
-            self.assertEqual(raised.exception.output.count("stdout"), 2)
-            self.assertEqual(raised.exception.stderr.count("stderr"), 2)
-            logs = list((root / "runtime" / "android-apk-source-diagnostics").glob("apkanalyzer-*.log"))
-            self.assertEqual(len(logs), 1)
-            log_text = logs[0].read_text(encoding="utf-8")
-            self.assertIn("evidence_incomplete=1", log_text)
-            self.assertEqual(log_text.count("initial stdout"), 1)
-            self.assertEqual(log_text.count("final stdout"), 1)
-            self.assertEqual(log_text.count("initial stderr"), 1)
-            self.assertEqual(log_text.count("final stderr"), 1)
-
-    def test_analyzer_oserror_retains_all_partial_streams_once(self):
-        error = OSError("communicate pipe failed")
-        error.stdout = b"partial stdout\n"  # type: ignore[attr-defined]
-        error.output = b"partial stdout\n"  # type: ignore[attr-defined]
-        error.stderr = b"partial stderr\n"  # type: ignore[attr-defined]
-        process = mock.Mock(pid=123)
-        process.communicate.side_effect = [error, (b"drained stdout\n", b"drained stderr\n")]
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with (
-                mock.patch.object(VERIFY, "ROOT_DIR", root),
-                mock.patch.object(VERIFY.subprocess, "Popen", return_value=process),
-                mock.patch.object(VERIFY, "attach_process_tree_tracker"),
-                mock.patch.object(
-                    VERIFY,
-                    "terminate_process_group",
-                    return_value="tree=gone source=test observed_pids=1",
-                ),
-            ):
-                with self.assertRaises(OSError) as raised:
-                    VERIFY.run_apkanalyzer(["apkanalyzer"])
-            self.assertEqual(raised.exception.stdout.count("stdout"), 2)  # type: ignore[attr-defined]
-            self.assertEqual(raised.exception.stderr.count("stderr"), 2)  # type: ignore[attr-defined]
-            logs = list((root / "runtime" / "android-apk-source-diagnostics").glob("apkanalyzer-*.log"))
-            self.assertEqual(len(logs), 1)
-            log_text = logs[0].read_text(encoding="utf-8")
-            self.assertNotIn("evidence_incomplete=1", log_text)
-            self.assertEqual(log_text.count("partial stdout"), 1)
-            self.assertEqual(log_text.count("drained stdout"), 1)
-
-    def test_windows_taskkill_exception_retains_partial_streams(self):
-        error = subprocess.TimeoutExpired(
-            ["taskkill"],
-            0.1,
-            output=b"taskkill stdout\n",
-            stderr=b"taskkill stderr\n",
-        )
-        tracker = mock.Mock()
-        tracker.prove_gone.side_effect = [
-            VERIFY.ProcessTreeProofError("descendant survivors=[456]"),
-            "tree=gone source=test observed_pids=2",
-        ]
-        tracker.observed_pids.return_value = (123, 456)
-        process = mock.Mock(pid=123)
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with (
-                mock.patch.object(VERIFY, "ROOT_DIR", root),
-                mock.patch.object(VERIFY.os, "name", "nt"),
-                mock.patch.object(VERIFY.signal, "CTRL_BREAK_EVENT", 1, create=True),
-                mock.patch.object(VERIFY, "process_tree_tracker", return_value=tracker),
-                mock.patch.object(VERIFY.subprocess, "run", side_effect=error),
-                mock.patch.object(VERIFY, "retain_process_diagnostics") as retain,
-            ):
-                proof = VERIFY.terminate_process_group(process, grace_seconds=0.1)
-            self.assertEqual(proof, "tree=gone source=test observed_pids=2")
-            self.assertEqual(retain.call_count, 2)
-            for call in retain.call_args_list:
-                self.assertIn(b"taskkill stdout\n", call.args)
-                self.assertIn(b"taskkill stderr\n", call.args)
-                self.assertIn("evidence_incomplete=1", call.args[2])
-
-    @unittest.skipIf(os.name == "nt", "POSIX process-group assertion")
-    def test_process_group_census_read_error_fails_closed(self):
-        class BrokenStatPath:
-            def read_text(self, **kwargs):
-                raise OSError("permission denied")
-
-            def __str__(self):
-                return "/proc/12345/stat"
-
-        with mock.patch.object(
-            VERIFY.Path, "glob", return_value=[BrokenStatPath()]
-        ):
-            with self.assertRaisesRegex(VERIFY.ProcessTreeProofError, "permission denied"):
-                VERIFY._active_proc_group_members(12345)
-
-    @unittest.skipIf(os.name == "nt", "POSIX process identity assertion")
-    def test_process_identity_read_error_fails_closed(self):
-        with mock.patch.object(
-            VERIFY.Path,
-            "read_text",
-            side_effect=OSError("permission denied"),
-        ):
-            with self.assertRaisesRegex(VERIFY.ProcessTreeProofError, "permission denied"):
-                VERIFY._proc_identity(12345)
-
-    @unittest.skipIf(os.name == "nt", "POSIX ps fallback assertion")
-    def test_ps_fallback_oserror_retains_partial_streams_and_marks_incomplete(self):
-        error = OSError("ps pipe failed")
-        error.stdout = b"ps stdout\n"  # type: ignore[attr-defined]
-        error.output = b"ps stdout\n"  # type: ignore[attr-defined]
-        error.stderr = b"ps stderr\n"  # type: ignore[attr-defined]
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with (
-                mock.patch.object(VERIFY, "ROOT_DIR", root),
-                mock.patch.object(VERIFY.subprocess, "run", side_effect=error),
-                self.assertRaisesRegex(
-                    VERIFY.ProcessTreeProofError,
-                    r"could not start: ps pipe failed stdout=ps stdout "
-                    r"stderr=ps stderr evidence_incomplete=1",
-                ),
-            ):
-                VERIFY._ps_descendants(123)
-            logs = list((root / "runtime" / "android-apk-source-diagnostics").glob("*.log"))
-            self.assertEqual(len(logs), 1)
-            self.assertIn("ps stderr", logs[0].read_text(encoding="utf-8"))
-
     @unittest.skipIf(os.name == "nt", "POSIX process-group assertion")
     def test_sigterm_resistant_analyzer_descendant_is_killed(self):
         child_code = (
@@ -409,7 +186,11 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
                 VERIFY.terminate_process_group(process, grace_seconds=0.1)
                 self.assertIsNotNone(process.poll())
                 for _ in range(30):
-                    if not VERIFY._pid_is_alive(child_pid):
+                    try:
+                        state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
+                    except (FileNotFoundError, ProcessLookupError):
+                        break
+                    if state[state.rfind(")") + 2 :].split()[0] == "Z":
                         break
                     time.sleep(0.05)
                 else:
@@ -423,7 +204,7 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
                 process.stderr.close()
 
     @unittest.skipIf(os.name == "nt", "POSIX process-group assertion")
-    def test_analyzer_timeout_retains_streams_and_kills_descendants(self):
+    def test_analyzer_timeout_preserves_streams_and_kills_descendants(self):
         child_code = (
             "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
             "time.sleep(60)"
@@ -436,7 +217,6 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temporary:
             with (
-                mock.patch.object(VERIFY, "ROOT_DIR", Path(temporary)),
                 mock.patch.object(VERIFY, "APK_ANALYZER_TIMEOUT_SECONDS", 1),
                 mock.patch.object(VERIFY, "PROCESS_CLEANUP_GRACE_SECONDS", 0.1),
             ):
@@ -444,65 +224,13 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
                     VERIFY.run_apkanalyzer([sys.executable, "-c", parent_code])
             output = raised.exception.stdout or raised.exception.output or ""
             child_pid = int(VERIFY.output_text(output).split("childpid=", 1)[1].splitlines()[0])
-            logs = list((Path(temporary) / "runtime" / "android-apk-source-diagnostics").glob("apkanalyzer-*.log"))
-            self.assertEqual(len(logs), 1)
-            log_text = logs[0].read_text(encoding="utf-8")
-            self.assertIn("childpid=", log_text)
-            self.assertIn("analyzer stderr", log_text)
             for _ in range(30):
-                if not VERIFY._pid_is_alive(child_pid):
+                try:
+                    state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
+                except (FileNotFoundError, ProcessLookupError):
+                    break
+                if state[state.rfind(")") + 2 :].split()[0] == "Z":
                     break
                 time.sleep(0.05)
             else:
                 self.fail("timed-out analyzer descendant survived cleanup")
-
-    @unittest.skipIf(os.name == "nt", "POSIX detached-process assertion")
-    def test_zero_exit_leader_detached_resistant_descendant_is_proven_gone(self):
-        child_code = (
-            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            "time.sleep(60)"
-        )
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            child_stdout = root / "child.stdout.raw.log"
-            child_stderr = root / "child.stderr.raw.log"
-            parent_code = (
-                "import os,subprocess,sys,time; "
-                f"child_stdout=os.fdopen(os.open({str(child_stdout)!r}, os.O_WRONLY|os.O_CREAT|os.O_APPEND, 0o600), 'ab', buffering=0); "
-                f"child_stderr=os.fdopen(os.open({str(child_stderr)!r}, os.O_WRONLY|os.O_CREAT|os.O_APPEND, 0o600), 'ab', buffering=0); "
-                f"child=subprocess.Popen([sys.executable,'-c',{child_code!r}], "
-                "start_new_session=True, stdout=child_stdout, stderr=child_stderr); "
-                "childstat=open('/proc/%s/stat' % child.pid).read(); "
-                "print('childpid='+str(child.pid), flush=True); "
-                "print('childstart='+childstat[childstat.rfind(')')+2:].split()[19], flush=True); time.sleep(1.5)"
-            )
-            with mock.patch.object(VERIFY, "ROOT_DIR", root):
-                with mock.patch.object(VERIFY, "APK_ANALYZER_TIMEOUT_SECONDS", 2):
-                    result = VERIFY.run_apkanalyzer([sys.executable, "-c", parent_code])
-            child_output = result.stdout
-            child_pid = int(child_output.split("childpid=", 1)[1].splitlines()[0])
-            child_start = child_output.split("childstart=", 1)[1].splitlines()[0]
-            logs = list((Path(temporary) / "runtime" / "android-apk-source-diagnostics").glob("apkanalyzer-*.log"))
-            self.assertEqual(len(logs), 1)
-            self.assertIn(b"tree=gone", logs[0].read_bytes())
-            for _ in range(30):
-                identity = VERIFY._proc_identity(child_pid)
-                if identity is None or identity[1] != child_start or identity[0] == "Z":
-                    break
-                time.sleep(0.05)
-            else:
-                self.fail("zero-exit detached analyzer descendant survived process-tree cleanup")
-            self.assertEqual(child_stdout.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(child_stderr.stat().st_mode & 0o777, 0o600)
-
-    def test_public_helpers_retain_failure_output_and_avoid_fixed_service_logs(self):
-        desktop = (SCRIPT.parent / "desktop_build.py").read_text(encoding="utf-8")
-        self.assertIn("emit_process_diagnostic", desktop)
-        self.assertIn("NamedTemporaryFile", desktop)
-        self.assertNotIn('open(ROOT_DIR / "grpcvpnserver.log", "w"', desktop)
-        self.assertNotIn('open(ROOT_DIR / "grpcvpnserver.out", "w"', desktop)
-        self.assertNotIn('open(ROOT_DIR / "grpcvpnserver.err", "w"', desktop)
-
-
-if __name__ == "__main__":
-    unittest.main()

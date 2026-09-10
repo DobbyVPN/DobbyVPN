@@ -14,7 +14,7 @@ protocol implementations in each platform UI.
 ### Shared Compose UI
 
 The common Compose code owns presentation state, user interaction, navigation,
-safe profile summaries, and rendering of SessionV2 snapshots and ordered
+profile summaries, and rendering of SessionV2 snapshots and ordered
 events. It stores only the accepted connection URL. It does not parse VPN
 configuration, select a protocol, own a tunnel, poll service liveness, or
 decide whether a platform VPN is connected.
@@ -31,9 +31,9 @@ construction, probes, routing/TUN/tun2socks resources, cleanup, diagnostics,
 and the native desktop CLI.
 
 Configuration enters Go as one HTTPS/HTTP URL or transient inline bytes. Go
-returns only safe summaries, digests, source kind, typed warnings, and typed
-failures. URLs, raw configuration, endpoints, credentials, and authentication
-metadata never cross a UI, gRPC, mobile-binding, or diagnostics boundary.
+returns profile summaries, digests, source kind, typed warnings, and typed
+failures; status events contain control state and profile identity, not raw
+protocol payloads.
 
 SessionV2 is the sole externally meaningful session and generation owner. It
 supports capabilities, create, recover, configure, start, stop, snapshot,
@@ -43,7 +43,7 @@ accepted sequence; it does not create a competing tunnel.
 
 Supported configuration sections are Outline, Outline WebSocket, Xray, and
 TrustTunnel. Cloak is removed: a Cloak-bearing section is rejected with the
-safe typed `UNSUPPORTED` failure, without returning any source fields.
+typed `UNSUPPORTED` failure before profile selection or execution.
 
 ### Thin platform shells
 
@@ -52,7 +52,7 @@ Platform code owns only operating-system responsibilities that Go cannot own:
 - Android: VPN permission, foreground `VpnService` lifetime, TUN allocation,
   socket protection, and publication of native state to shared code.
 - iOS: NetworkExtension/Packet Tunnel lifetime, TUN/socket callbacks, and the
-  authenticated opaque command handoff between the app and provider. The
+  opaque command handoff between the app and provider. The
   provider starts in control mode without routes. Go enters the generation
   lifecycle first; its `AcquireTunnel` callback is the point where the
   provider applies fixed tunnel settings immediately before duplicating the
@@ -76,14 +76,14 @@ Shared Compose UI
                 -> routing/TUN/tun2socks/probe resources
 
 Android shell: permission + foreground service + TUN/socket callbacks
-iOS shell: NetworkExtension lifecycle + authenticated control messages + TUN/socket callbacks
+iOS shell: NetworkExtension lifecycle + control messages + TUN/socket callbacks
 Desktop shell: authenticated transport + local diagnostics
 ```
 
 Session events remain Go-owned and ordered. Desktop uses the authenticated gRPC
 `Watch` stream; Android uses the generation-correlated native callback. iOS
 uses a content-free provider wake signal and fetches the real event ledger via
-authenticated Go `Observe`; the iOS KMP bridge waits for the cross-process
+Go `Observe`; the iOS KMP bridge waits for the cross-process
 wake and performs those reads off the UI dispatcher. Clients apply a snapshot first, then accept events
 strictly after its sequence. Duplicate events are ignored; a sequence gap
 causes snapshot/resubscribe rather than inferred state. No UI path owns a
@@ -93,13 +93,11 @@ timer or manufactures an event.
 
 NetworkExtension places the Go runtime in a separate packet-tunnel process, so
 iOS has one narrow opaque handoff exception: the containing app creates or
-recovers the Go session by sending authenticated fixed commands through
-`NETunnelProviderSession.sendProviderMessage`. The per-install Keychain HMAC
-secret authenticates canonical envelopes with bounded size and request IDs.
-Provider replies are likewise authenticated envelopes containing the request ID
-and the exact Go response bytes (base64 inside the envelope); the app validates
-the wrapper and returns the inner Go JSON unchanged. Swift retains only its
-NetworkExtension readiness/request fence; SessionV2 remains the sole owner of
+recovers the Go session by sending fixed commands through
+`NETunnelProviderSession.sendProviderMessage`. Provider replies contain the
+request ID and the exact Go response bytes (base64 inside the envelope); the app
+returns the inner Go JSON unchanged. Swift retains only NetworkExtension
+readiness state; SessionV2 remains the sole owner of
 configuration, generation, state, event sequence, and cleanup.
 
 An ordinary Disconnect sends Go `Stop`: it releases the active generation and
@@ -118,7 +116,7 @@ reconcile stale Dobby-owned resources and never show a false `CONNECTED` state.
 Do not add a protocol-specific RPC, KMP repository, Swift lifecycle owner, UI
 toggle, or platform-specific configuration parser. Use this checklist:
 
-1. Add one Go configuration section and a safe profile summary.
+1. Add one Go configuration section and a profile summary.
 2. Implement the neutral `ProtocolDevice` interface.
 3. Register one factory in the Go native composition root.
 4. Add parser, runtime, cleanup, and integration tests, including failure and
@@ -128,4 +126,4 @@ toggle, or platform-specific configuration parser. Use this checklist:
    the application behavior is complete.
 
 The new implementation must preserve one SessionV2 state owner, reverse-order
-resource cleanup, source redaction, and the shared Compose UI.
+resource cleanup, and the shared Compose UI.

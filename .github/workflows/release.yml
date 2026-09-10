@@ -74,10 +74,7 @@ jobs:
           if [[ -n "$tag_record" ]]; then
             object_type="$(jq -r .object.type <<<"$tag_record")"
             object_sha="$(jq -r .object.sha <<<"$tag_record")"
-            for _ in 1 2 3 4 5 6 7 8; do
-              if [[ "$object_type" != tag ]]; then
-                break
-              fi
+            while [[ "$object_type" == tag ]]; do
               tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
               object_type="$(jq -r .object.type <<<"$tag_object")"
               object_sha="$(jq -r .object.sha <<<"$tag_object")"
@@ -96,7 +93,6 @@ jobs:
       source_sha: ${{ github.sha }}
 
   ios_libs_build:
-    if: github.event_name != 'pull_request'
     needs: [verification, prepare_version]
     uses: ./.github/workflows/ios_libs_generate.yml
     with:
@@ -132,7 +128,6 @@ jobs:
       version_code: ${{ needs.prepare_version.outputs.android_version_code }}
 
   ios_build:
-    if: github.event_name != 'pull_request'
     needs: [prepare_version, ios_libs_build]
     uses: ./.github/workflows/ios_build.yml
     with:
@@ -163,7 +158,6 @@ jobs:
       CONVEYOR_SIGNING_KEY: ${{ secrets.CONVEYOR_SIGNING_KEY }}
 
   installers_build:
-    if: github.event_name != 'pull_request'
     # Real-profile and performance qualification is a separate maintainer
     # release gate; it never exposes private endpoints to public CI.
     needs: [prepare_version, desktop_build]
@@ -201,10 +195,7 @@ jobs:
           from pathlib import Path
           import re
 
-          path = Path('.github/torturer-commit')
-          if path.is_symlink() or not path.is_file():
-              raise SystemExit('Torturer pin is not a regular file')
-          value = path.read_bytes()
+          value = Path('.github/torturer-commit').read_bytes()
           if re.fullmatch(rb'[0-9a-f]{40}\n?', value) is None:
               raise SystemExit('Torturer pin is invalid')
           print(value.decode('ascii').strip())

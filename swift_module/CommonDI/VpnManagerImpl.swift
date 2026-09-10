@@ -7,7 +7,7 @@ import Foundation
 /// This class deliberately has no VPN product state, generation, configured
 /// flag, or event sequence. Those values belong to Go SessionV2 in the
 /// packet-tunnel process. The only state retained here is the private
-/// readiness fence needed to deliver an authenticated provider message.
+/// readiness state needed to deliver a provider message.
 public final class VpnManagerImpl: NSObject {
     public static var dobbyBundleIdentifier = "vpn.dobby.app.tunnel"
     public static var dobbyName = "Dobby_VPN_4"
@@ -19,9 +19,8 @@ public final class VpnManagerImpl: NSObject {
     private var providerStatus: NEVPNStatus = .invalid
     private var observer: NSObjectProtocol?
 
-    public init(connectionRepository: ConnectionStateRepository? = nil) {
+    public override init() {
         super.init()
-        _ = connectionRepository // Compatibility for existing native-module construction.
         observer = NotificationCenter.default.addObserver(
             forName: .NEVPNStatusDidChange,
             object: nil,
@@ -44,39 +43,37 @@ public final class VpnManagerImpl: NSObject {
         if let observer { NotificationCenter.default.removeObserver(observer) }
     }
 
-    /// Sends one exact authenticated command to the provider. A timeout or
-    /// signed in-flight response is retried with the exact same bytes so the
-    /// request ID remains idempotent. The inner Go payload is never rewritten.
+    /// Sends one command to the provider. The inner Go payload is never rewritten.
     public func sendProviderMessage(_ messageData: Data) -> Data {
-        guard !messageData.isEmpty, messageData.count <= IOSProviderCommand.maximumBytes else {
-            logs.writeLog(
-                log: "[provider-message] rejected invalid size bytes=\(messageData.count) maximum=\(IOSProviderCommand.maximumBytes)"
-            )
-            return Self.transportFailure(IOSProviderMessageError.tooLarge.rawValue)
+        guard !messageData.isEmpty else {
+            logs.writeLog(log: "[provider-message] rejected empty command")
+            return Self.transportFailure("INTERNAL", message: "provider command is empty")
         }
-        var budget = IOSProviderRetryBudget(start: monotonicNow())
-        // Preference loading/saving, provider startup, and every transport
-        // retry share one deadline. Readiness is part of this app operation;
-        // it must not consume a second, independent 30-second allowance.
-        guard ensureProviderReady(until: budget.deadline) else {
+        let deadline = monotonicNow() + IOSProviderTiming.appMessageTimeout
+        if let readinessFailure = ensureProviderReady(until: deadline) {
             return transportFailureResponse(
                 for: messageData,
-                code: monotonicNow() >= budget.deadline ? "SESSIONAPI_TIMEOUT" : "PLATFORM_FAILED"
+                code: "PLATFORM_FAILED",
+                message: readinessFailure
             )
         }
-        while let timeout = budget.nextAttemptTimeout(now: monotonicNow()) {
-            if let response = sendOnce(messageData, timeout: timeout) {
-                if !isRetryableProviderResponse(response, requestData: messageData) {
-                    return response
-                }
-            }
-            guard let delay = budget.nextRetryDelay(now: monotonicNow()) else {
-                return transportFailureResponse(for: messageData, code: "SESSIONAPI_TIMEOUT")
-            }
-            logs.writeLog(log: "[provider-message] transport retry within aggregate \(Int(IOSProviderTiming.appMessageTimeout))s budget")
-            Thread.sleep(forTimeInterval: delay)
+        guard let timeout = remaining(until: deadline) else {
+            return transportFailureResponse(
+                for: messageData,
+                code: "PLATFORM_FAILED",
+                message: "provider message deadline expired"
+            )
         }
-        return transportFailureResponse(for: messageData, code: "SESSIONAPI_TIMEOUT")
+        do {
+            return try sendOnce(messageData, timeout: timeout)
+        } catch {
+            logs.writeLog(log: "[provider] sendProviderMessage failed: \(String(reflecting: error))")
+            return transportFailureResponse(
+                for: messageData,
+                code: "PLATFORM_FAILED",
+                message: String(reflecting: error)
+            )
+        }
     }
 
     /// Stops only the control-mode provider. Callers invoke this after a
@@ -89,97 +86,86 @@ public final class VpnManagerImpl: NSObject {
         manager?.connection.stopVPNTunnel()
     }
 
-    public static func transportFailure(_ code: String) -> Data {
-        Data("{\"ok\":false,\"error\":{\"code\":\"\(code)\"}}".utf8)
+    public static func transportFailure(_ code: String, message: String) -> Data {
+        let value: [String: Any] = [
+            "ok": false,
+            "error": ["code": code, "message": message],
+        ]
+        do {
+            return try JSONSerialization.data(withJSONObject: value)
+        } catch {
+            NativeModuleHolder.logsRepository.writeLog(
+                log: "[provider] transport failure encoding failed: \(String(reflecting: error))"
+            )
+            // No valid response can be encoded. Return no decodable bytes so
+            // the caller observes a transport failure rather than success.
+            return Data()
+        }
     }
 
-    /// Failures generated by this transport shell are wrapped with the same
-    /// request-bound HMAC as provider replies. That preserves the real typed
-    /// readiness/timeout failure through IOSSessionShell instead of replacing
-    /// it with a synthetic response-invalid error. If the command itself
-    /// cannot be authenticated, the bare local failure is the only safe form.
-    private func transportFailureResponse(for messageData: Data, code: String) -> Data {
-        guard let secret = SharedKeychainSecretStore.shared.data(for: SharedKeychainSecretStore.sessionBridgeHMACKey) else {
-            logs.writeLog(log: "[provider] transport failure response key is unavailable")
-            return Self.transportFailure(code)
-        }
+    private func transportFailureResponse(for messageData: Data, code: String, message: String) -> Data {
         do {
-            let command = try IOSProviderCommand.decode(messageData, using: secret)
+            let command = try IOSProviderCommand.decode(messageData)
             let envelope = try IOSProviderResponse(
                 requestID: command.requestID,
                 kind: .transport,
-                payload: Self.transportFailure(code)
+                payload: Self.transportFailure(code, message: message)
             )
-            return try envelope.encoded(using: secret)
+            return try envelope.encoded()
         } catch {
             logs.writeLog(log: "[provider] transport failure response encoding failed: \(String(reflecting: error))")
-            return Self.transportFailure(code)
+            return Self.transportFailure("INTERNAL", message: String(reflecting: error))
         }
     }
 
-    private func sendOnce(_ messageData: Data, timeout: TimeInterval) -> Data? {
+    private func sendOnce(_ messageData: Data, timeout: TimeInterval) throws -> Data {
         condition.lock()
         let session = vpnManager?.connection as? NETunnelProviderSession
         condition.unlock()
         guard let session else {
-            logs.writeLog(log: "[provider] sendProviderMessage failed: provider session is unavailable")
-            return nil
+            throw NSError(
+                domain: "VpnManagerImpl.sessionapi",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "provider session is unavailable"]
+            )
         }
         let semaphore = DispatchSemaphore(value: 0)
         let responseLock = NSLock()
         var response: Data?
-        do {
-            try session.sendProviderMessage(messageData) { value in
-                responseLock.lock()
-                response = value
-                responseLock.unlock()
-                semaphore.signal()
-            }
-        } catch {
-            logs.writeLog(log: "[provider] sendProviderMessage failed: \(String(reflecting: error))")
-            return nil
+        try session.sendProviderMessage(messageData) { value in
+            responseLock.lock()
+            response = value
+            responseLock.unlock()
+            semaphore.signal()
         }
         guard semaphore.wait(timeout: .now() + timeout) == .success else {
-            logs.writeLog(log: "[provider] sendProviderMessage timed out after \(timeout)s")
-            return nil
+            throw NSError(
+                domain: "VpnManagerImpl.sessionapi",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "provider message timed out"]
+            )
         }
         responseLock.lock()
         defer { responseLock.unlock() }
-        if response == nil {
-            logs.writeLog(log: "[provider] sendProviderMessage completed without a response")
+        guard let response else {
+            throw NSError(
+                domain: "VpnManagerImpl.sessionapi",
+                code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "provider message completed without a response"]
+            )
         }
         return response
     }
 
     private func monotonicNow() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
 
-    /// A signed provider timeout means the original fixed command may still
-    /// be finishing inside Go; IN_FLIGHT means the same request is explicitly
-    /// replayable. Retry the exact bytes/request ID until the provider returns
-    /// its cached Go result or the bounded transport budget is exhausted.
-    private func isRetryableProviderResponse(_ responseData: Data, requestData: Data) -> Bool {
-        guard let secret = SharedKeychainSecretStore.shared.data(for: SharedKeychainSecretStore.sessionBridgeHMACKey),
-              let command = try? IOSProviderCommand.decode(requestData, using: secret),
-              let response = try? IOSProviderResponse.decode(
-                  responseData,
-                  expectedRequestID: command.requestID,
-                  using: secret
-              ),
-              response.kind == .transport,
-              let root = try? JSONSerialization.jsonObject(with: response.payload) as? [String: Any],
-              root["ok"] as? Bool == false,
-              let error = root["error"] as? [String: Any],
-              let code = error["code"] as? String else { return false }
-        return code == "SESSIONAPI_TIMEOUT" || code == "SESSIONAPI_IN_FLIGHT"
-    }
-
-    private func ensureProviderReady(until deadline: TimeInterval) -> Bool {
+    private func ensureProviderReady(until deadline: TimeInterval) -> String? {
         if Thread.isMainThread {
             // KMP invokes this bridge on Dispatchers.Default. Refuse a main
             // thread wait rather than freezing the UI if a caller violates the
             // boundary.
             logs.writeLog(log: "[provider] readiness check rejected on the main thread")
-            return false
+            return "readiness check rejected on the main thread"
         }
         // Once the saved-and-reloaded manager is connected, use that exact
         // bound object for subsequent commands. Re-saving preferences for
@@ -190,7 +176,7 @@ public final class VpnManagerImpl: NSObject {
             providerStatus = current.connection.status
             if providerStatus == .connected {
                 condition.unlock()
-                return true
+                return nil
             }
         }
         condition.unlock()
@@ -202,10 +188,10 @@ public final class VpnManagerImpl: NSObject {
             loadError = error
             loaded.signal()
         }
-        guard let remaining = remaining(until: deadline),
-              loaded.wait(timeout: .now() + remaining) == .success else {
+        guard let loadRemaining = remaining(until: deadline),
+              loaded.wait(timeout: .now() + loadRemaining) == .success else {
             logs.writeLog(log: "[provider] timed out loading NetworkExtension preferences")
-            return false
+            return "timed out loading NetworkExtension preferences"
         }
         condition.lock()
         // getOrCreateManager returns the post-save reloaded object. Never
@@ -219,25 +205,25 @@ public final class VpnManagerImpl: NSObject {
         condition.unlock()
         if let loadError {
             logs.writeLog(log: "[provider] NetworkExtension preference save/load failed: \(String(reflecting: loadError))")
-            return false
+            return String(reflecting: loadError)
         }
         guard let current else {
             logs.writeLog(log: "[provider] NetworkExtension manager is unavailable without an error")
-            return false
+            return "NetworkExtension manager is unavailable without an error"
         }
         var observedStatus = status
-        for _ in 0..<3 {
-            if observedStatus == .connected { return true }
+        while remaining(until: deadline) != nil {
+            if observedStatus == .connected { return nil }
             if observedStatus == .disconnecting {
                 guard let settled = waitForDisconnectToSettle(until: deadline) else {
                     logs.writeLog(log: "[provider] disconnect did not settle before the readiness deadline")
-                    return false
+                    return "disconnect did not settle before the readiness deadline"
                 }
                 observedStatus = settled
                 continue
             }
             if observedStatus == .connecting || observedStatus == .reasserting {
-                if waitForReady(until: deadline) { return true }
+                if waitForReady(until: deadline) { return nil }
                 observedStatus = current.connection.status
                 continue
             }
@@ -245,13 +231,13 @@ public final class VpnManagerImpl: NSObject {
                 try current.connection.startVPNTunnel(options: nil)
             } catch {
                 logs.writeLog(log: "[provider] control-mode start failed: \(String(reflecting: error))")
-                return false
+                return String(reflecting: error)
             }
-            if waitForReady(until: deadline) { return true }
+            if waitForReady(until: deadline) { return nil }
             observedStatus = current.connection.status
         }
         logs.writeLog(log: "[provider] control-mode provider did not reach connected state")
-        return false
+        return "control-mode provider did not reach connected state before the readiness deadline"
     }
 
     private func waitForReady(until monotonicDeadline: TimeInterval) -> Bool {

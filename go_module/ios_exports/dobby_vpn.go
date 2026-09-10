@@ -4,7 +4,6 @@ package dobbyvpn
 
 import (
 	"sync"
-	"syscall"
 
 	"go_module/sessionapi/mobilebinding"
 
@@ -13,7 +12,6 @@ import (
 
 const utunControlName = "com.apple.net.utun_control"
 const logCategory = "ios_exports"
-const soNoTCNetPolicy = 0x1101
 
 var (
 	iosCallbacks   iosPlatformCallbacks
@@ -38,9 +36,8 @@ type PlatformCallbacks interface {
 	)
 }
 
-// RegisterSessionPlatform lets the NetworkExtension shell receive only safe,
-// generation-correlated state. Without a delegate, iOS acquires its TUN by
-// locating and duplicating the current utun for every runtime generation.
+// RegisterSessionPlatform installs the NetworkExtension boundary used by the
+// shared runtime.
 func RegisterSessionPlatform(callbacks PlatformCallbacks) {
 	iosCallbacks.set(callbacks)
 }
@@ -82,29 +79,19 @@ func (p *iosPlatformCallbacks) AcquireTunnel(sessionID string, generation int64)
 	if callback := p.callback(); callback != nil {
 		return callback.AcquireTunnel(sessionID, generation)
 	}
-	fd := GetTunnelFileDescriptor()
-	if fd < 0 {
-		return -1
-	}
-	dup, err := unix.Dup(fd)
-	if err != nil {
-		return -1
-	}
-	return int32(dup)
+	return -1
 }
 func (p *iosPlatformCallbacks) ReleaseTunnel(sessionID string, generation int64, fd int32) bool {
 	if callback := p.callback(); callback != nil {
 		return callback.ReleaseTunnel(sessionID, generation, fd)
 	}
-	// The fallback owns no NetworkExtension settings; Go already closed its
-	// duplicate before this callback, so there is no remaining native cleanup.
-	return true
+	return false
 }
 func (p *iosPlatformCallbacks) ProtectSocket(sessionID string, generation int64, fd int32) bool {
 	if callback := p.callback(); callback != nil {
 		return callback.ProtectSocket(sessionID, generation, fd)
 	}
-	return syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, soNoTCNetPolicy, 1) == nil
+	return false
 }
 func (p *iosPlatformCallbacks) PublishState(sessionID string, generation int64, sequence int64, state string, profileIndex int32, profileProtocol string, failureCode string) {
 	if callback := p.callback(); callback != nil {

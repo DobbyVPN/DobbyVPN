@@ -7,7 +7,6 @@ package mobilebinding
 import (
 	"context"
 	"encoding/json"
-	"math"
 
 	v2 "go_module/sessionapi/v2"
 )
@@ -59,33 +58,34 @@ type platformControl interface {
 func NewForTest(manager managerAPI) *Binding { return &Binding{manager: manager} }
 
 type envelope struct {
-	OK     bool        `json:"ok"`
-	Result interface{} `json:"result,omitempty"`
-	Error  *safeError  `json:"error,omitempty"`
+	OK     bool           `json:"ok"`
+	Result interface{}    `json:"result,omitempty"`
+	Error  *envelopeError `json:"error,omitempty"`
 }
 
-type safeError struct {
-	Code string `json:"code"`
+type envelopeError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 func success(value interface{}) string { return encode(envelope{OK: true, Result: value}) }
 func failed(err error) string {
-	return encode(envelope{OK: false, Error: &safeError{Code: string(v2.CodeOf(err))}})
+	return encode(envelope{OK: false, Error: &envelopeError{Code: string(v2.CodeOf(err)), Message: err.Error()}})
 }
 func encode(value interface{}) string {
 	data, err := json.Marshal(value)
 	if err != nil {
-		return `{"ok":false,"error":{"code":"INTERNAL"}}`
+		panic(err)
 	}
 	return string(data)
 }
 
-// GetCapabilities returns a safe JSON envelope.
+// GetCapabilities returns the JSON envelope used by the mobile binding.
 func (b *Binding) GetCapabilities() string {
 	return success(capabilitiesDTO(b.manager.GetCapabilities(context.Background())))
 }
 
-// CreateSession returns {session_id: ...} in a safe JSON envelope.
+// CreateSession returns {session_id: ...} in the mobile JSON envelope.
 func (b *Binding) CreateSession() string {
 	id, err := b.manager.CreateSession(context.Background())
 	if err != nil {
@@ -167,13 +167,6 @@ func (b *Binding) Destroy(sessionID string) string {
 	return success(struct{}{})
 }
 
-func generationAsInt64(value uint64) (int64, bool) { //nolint:unparam // Mobile-tagged callers consume the validity result.
-	if value > math.MaxInt64 {
-		return 0, false
-	}
-	return int64(value), true
-}
-
 type capabilityDTO struct {
 	Name    string `json:"name"`
 	Enabled bool   `json:"enabled"`
@@ -237,11 +230,7 @@ func capabilitiesDTO(in v2.Capabilities) capabilitiesResultDTO {
 	return out
 }
 func profileResultDTO(in v2.ProfileSummary) profileDTO {
-	index := int32(-1)
-	if in.Index >= 0 && in.Index <= math.MaxInt32 {
-		index = int32(in.Index) // #nosec G115 -- bounds checked immediately above.
-	}
-	return profileDTO{Index: index, Protocol: string(in.Protocol), Description: in.Description}
+	return profileDTO{Index: int32(in.Index), Protocol: string(in.Protocol), Description: in.Description}
 }
 func profileResultPtr(in *v2.ProfileSummary) *profileDTO {
 	if in == nil {
@@ -261,24 +250,18 @@ func configureDTO(in v2.ConfigureResult) configureResultDTO {
 	return out
 }
 func startDTO(in v2.StartResult) startResultDTO {
-	generation, _ := generationAsInt64(in.Generation)
-	return startResultDTO{Generation: generation}
+	return startResultDTO{Generation: int64(in.Generation)}
 }
 func stopDTO(in v2.StopResult) stopResultDTO {
-	generation, _ := generationAsInt64(in.Generation)
-	return stopResultDTO{Generation: generation}
+	return stopResultDTO{Generation: int64(in.Generation)}
 }
 func snapshotDTO(in v2.SnapshotResult) snapshotResultDTO {
-	generation, _ := generationAsInt64(in.Generation)
-	return snapshotResultDTO{SessionID: in.SessionID, Generation: generation, State: string(in.State), Configured: in.Configured, ActiveProfile: profileResultPtr(in.ActiveProfile), LastFailure: string(in.LastFailure), CleanupComplete: in.CleanupComplete}
+	return snapshotResultDTO{SessionID: in.SessionID, Generation: int64(in.Generation), State: string(in.State), Configured: in.Configured, ActiveProfile: profileResultPtr(in.ActiveProfile), LastFailure: string(in.LastFailure), CleanupComplete: in.CleanupComplete}
 }
 func observeDTO(in v2.ObserveResult) observeResultDTO {
-	next, _ := generationAsInt64(in.NextSequence)
-	out := observeResultDTO{Events: make([]eventDTO, len(in.Events)), NextSequence: next}
+	out := observeResultDTO{Events: make([]eventDTO, len(in.Events)), NextSequence: int64(in.NextSequence)}
 	for i := range in.Events {
-		generation, _ := generationAsInt64(in.Events[i].Generation)
-		sequence, _ := generationAsInt64(in.Events[i].Sequence)
-		item := eventDTO{SessionID: in.Events[i].SessionID, Generation: generation, Sequence: sequence, State: string(in.Events[i].State), Profile: profileResultPtr(in.Events[i].Profile), Failure: string(in.Events[i].Failure)}
+		item := eventDTO{SessionID: in.Events[i].SessionID, Generation: int64(in.Events[i].Generation), Sequence: int64(in.Events[i].Sequence), State: string(in.Events[i].State), Profile: profileResultPtr(in.Events[i].Profile), Failure: string(in.Events[i].Failure)}
 		if in.Events[i].Warning != nil {
 			item.Warning = &warningDTO{Code: in.Events[i].Warning.Code, Message: in.Events[i].Warning.Message}
 		}

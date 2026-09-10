@@ -19,7 +19,7 @@ class CopyLogsInteractorImpl: CopyLogsInteractor {
 
         do {
             try writeGzip(logText, to: fileURL)
-            self.logs.writeLog(log: "Log export archive written to owner-only temporary storage")
+            self.logs.writeLog(log: "Log export archive written to temporary storage")
         } catch {
             self.logs.writeLog(log: "Log export failed: \(String(reflecting: error))")
             return
@@ -96,12 +96,4 @@ class CopyLogsInteractorImpl: CopyLogsInteractor {
             }
         }
     }
-}
-
-public func maskStr(value: String) -> String {
-    guard value.count > 2 else { return value }   // if length is 1-2, don't mask
-
-    let first = value[value.startIndex]
-    let last = value[value.index(before: value.endIndex)]
-    return "\(first)***\(last)"
 }

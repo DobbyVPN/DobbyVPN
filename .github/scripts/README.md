@@ -103,36 +103,25 @@ The release workflow and APK scan both enforce this mapping.
 
 Android builds also carry their exact selected source commit in BuildConfig.
 `verify_android_apk_source.py` reads that value back from both signed and
-unsigned APK bytecode with `apkanalyzer`; the build, legacy F-Droid repair, and
-public promotion all fail unless the embedded commit and repository link match
-the selected full source SHA. The explicit `APP_SOURCE_*` values are passed to
-Gradle as build properties for both current source and a legacy-tag repair.
+unsigned APK bytecode with `apkanalyzer`; the build and public promotion fail
+unless the embedded commit and repository link match the selected full source
+SHA. The explicit `APP_SOURCE_*` values are passed to Gradle as build
+properties.
 The owner-local Harness candidate path transfers a dirty worktree without
 `.git`; its explicit `--allow-dirty-source` mode records a deterministic
-`local-content://` identity and rechecks that identity after every build. This
+`local-content://` identity and rechecks that identity after the build. This
 local identity is never accepted by the Release path, which retains the strict
 Git commit/tree proof.
-Because an old tag cannot contain a driver or verifier added later, the
-reusable build checks out the complete small helper bundle (driver, dependency
-helper/spec, and verifiers) from its trusted workflow revision. It passes the
-legacy tag source and the separately bound helper root to the driver; the
-trusted checkout is excluded from the F-Droid-compatible source copy and is
-never mixed into the selected source tree. Before any helper or spec is
-executed, an inline workflow gate independently proves the exact workflow SHA,
-clean checkout state, absence of symlinks, and the complete expected helper
-file set; the public driver repeats that contract.
-
 The current Android release job also performs two clean, uncached unsigned APK
 builds with distinct Go build caches and temporary directories. Both builds use
-the F-Droid canonical source, Go, and GOPATH locations, the trusted tracked
+the F-Droid-compatible source, Go, and GOPATH locations, the tracked
 source-level Go/NDK/Gradle/gomobile declarations, Java 17, and path-normalizing
-compiler flags. For a legacy source commit that predates these helper files, the
-The Gradle 8.13 archive is downloaded or restored from a content-addressed cache
-using the trusted spec URL, checked against its exact SHA-256 before extraction,
-and passed to the driver as a verified archive/root proof. A legacy wrapper may
-omit its checksum only under that proof; current wrappers must still carry the
-matching checksum. The provenance records the archive and extracted-root proof
-alongside the observed Java patch version. It does not claim a complete
+compiler flags. The Gradle 8.13 archive is downloaded or restored from a
+content-addressed cache using the tracked spec URL, checked against its exact
+SHA-256 before extraction, and passed to the driver. The driver checks that the
+archive is readable and that the extracted Gradle entry point is executable.
+The wrapper must carry the matching checksum. Provenance records the archive
+digest, Gradle version, and Java patch version. It does not claim a complete
 offline dependency closure: resolved Maven/Gradle bytes remain runner-local.
 Promotion calls
 `verify_android_reproducibility.py` and fails unless the complete APKs are
@@ -149,14 +138,6 @@ Android build-tools `36.0.0` is pinned for packaging, signing, and verification.
 The gate does not claim that signature-block bytes are reproducible: it proves
 the complete unsigned APK byte-for-byte, then separately proves that signing
 changed only signature metadata and used the established certificate.
-
-`repair_fdroid_release.yml` is a guarded recovery path for a release whose
-Android assets predate that enforcement. It rebuilds from the exact existing
-tag commit and replaces only the signed APK, unsigned APK, their Android
-provenance, and `version.txt` after checking the protected `release`
-environment and an explicit `replace-vX.Y.Z` confirmation. Releases carrying
-the release-wide provenance manifest are immutable and cannot use this legacy
-repair path.
 
 A trusted Torturer qualification starts one DobbyVPN publication coordinator
 automatically. The coordinator revalidates the exact Torturer/Release runs,
@@ -189,9 +170,9 @@ Apple team, shared `group.vpn.dobby.app` App Group, and the tunnel's
 `packet-tunnel-provider` entitlement. This prevents a signed package that
 cannot open its shared container from reaching TestFlight.
 
-`ios_artifact_provenance.py` is a standard-library-only, fail-closed contract
+`ios_artifact_provenance.py` is a standard-library-only provenance contract
 between the reusable iOS build and protected App Store submission workflows.
-The build creates one canonical JSON sidecar for exactly one regular IPA. It
+The build creates a JSON sidecar for `DobbyVPN.ipa`. It
 records the full lowercase source SHA, semantic version, positive Apple build
 number, IPA filename, byte size, and SHA-256. Submission downloads both
 artifacts from the selected successful Release run and verifies all of those
@@ -213,14 +194,13 @@ application.
 
 ## Public release provenance
 
-`release_provenance.py` creates and verifies the deterministic public
+`release_provenance.py` creates and verifies the public
 `release-provenance.json` beside the release assets. It accepts the exact tag,
-version, source SHA, release run ID/number, Android version code, and a sorted
-repeated asset allowlist. It fails closed if the directory contains anything
-else, any entry is not a regular file, or hashes, sizes, metadata, or canonical
-JSON disagree. This schema-1 manifest remains unchanged for compatibility with
-already-published releases and deliberately contains public release metadata
-only.
+version, source SHA, release run ID/number, Android version code, and repeated
+asset names. It fails if a named asset is missing or its hash, size, or
+metadata disagree. This schema-1 manifest remains
+unchanged for compatibility with already-published releases and deliberately
+contains public release metadata only.
 
 ```bash
 python3 .github/scripts/release_provenance.py create --directory release \

@@ -30,7 +30,7 @@ public class NativeModuleHolder {
     )
 
     // Must run before StartDI constructs MainViewModel. The bridge only stores
-    // the one-shot mailbox and transports opaque authenticated commands.
+    // the one-shot mailbox and transports opaque commands.
     public static func installSessionBridge() {
         IosSessionBridgeRegistry.shared.install(bridge: sessionShell)
     }

@@ -15,8 +15,8 @@ private func dobbyDarwinEventCallback(
 
 /// Containing-app side of the iOS SessionV2 boundary.
 ///
-/// This shell persists the opaque configuration in the shared encrypted
-/// Keychain mailbox and transports authenticated fixed commands to the packet
+/// This shell persists the opaque configuration in the shared Keychain
+/// mailbox and transports fixed commands to the packet
 /// tunnel. It never owns a session, generation, state, configured bit, or
 /// event sequence; every successful response is the exact JSON returned by Go.
 final class IOSSessionShell: NSObject, IosSessionBridge {
@@ -56,31 +56,30 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
     }
 
     func recover(commandID: String) -> String {
-        execute(operation: .recover, requestID: commandID)
+        executeResult(operation: .recover, requestID: commandID).response
     }
 
     func create(commandID: String) -> String {
-        execute(operation: .create, requestID: commandID)
+        executeResult(operation: .create, requestID: commandID).response
     }
 
     func configure(sessionID: String, commandID: String, rawConfig: KotlinByteArray) -> String {
         let raw = data(from: rawConfig)
-        guard !raw.isEmpty else { return failure(IOSProviderMessageError.malformed.rawValue) }
-        guard raw.count <= IOSProviderCommand.maximumConfigurationBytes else {
-            return failure("SESSIONAPI_CONFIGURATION_TOO_LARGE")
+        guard !raw.isEmpty else {
+            return failure("MALFORMED_CONFIG", message: "configuration is blank")
         }
         guard secrets.set(raw, for: SharedKeychainSecretStore.sessionConfigurationMailboxKey) else {
             logs.writeLog(log: "iOS session configuration mailbox write returned failure")
-            return failure("SECURE_STORAGE_FAILED")
+            return failure("PLATFORM_FAILED", message: "configuration mailbox write returned failure")
         }
         let result = executeResult(
             operation: .configure,
             requestID: commandID,
             sessionID: sessionID
         )
-        // A mailbox is consumed after any authenticated, syntactically valid
+        // A mailbox is consumed after any syntactically valid
         // Go configure result, including a typed Go rejection. Transport,
-        // authentication, and malformed responses retain it for recovery.
+        // and malformed responses retain it for recovery.
         if result.isGoResult,
            let response = result.response.data(using: .utf8),
            IOSMailboxLifecycle.mayConsumeConfigureResponse(response) {
@@ -90,35 +89,35 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
     }
 
     func start(sessionID: String, commandID: String, mode: String, index: Int32) -> String {
-        execute(
+        executeResult(
             operation: .start,
             requestID: commandID,
             sessionID: sessionID,
             mode: mode,
             index: index
-        )
+        ).response
     }
 
     func stop(sessionID: String, commandID: String, generation: Int64) -> String {
-        execute(
+        executeResult(
             operation: .stop,
             requestID: commandID,
             sessionID: sessionID,
             generation: generation
-        )
+        ).response
     }
 
     func snapshot(sessionID: String) -> String {
-        execute(operation: .snapshot, requestID: requestID(for: .snapshot), sessionID: sessionID)
+        executeResult(operation: .snapshot, requestID: requestID(for: .snapshot), sessionID: sessionID).response
     }
 
     func observe(sessionID: String, afterSequence: Int64) -> String {
-        execute(
+        executeResult(
             operation: .observe,
             requestID: requestID(for: .observe),
             sessionID: sessionID,
             afterSequence: afterSequence
-        )
+        ).response
     }
 
     func destroy(sessionID: String) -> String {
@@ -156,26 +155,6 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         eventCondition.unlock()
     }
 
-    private func execute(
-        operation: IOSProviderOperation,
-        requestID: String,
-        sessionID: String? = nil,
-        generation: Int64? = nil,
-        mode: String? = nil,
-        index: Int32? = nil,
-        afterSequence: Int64? = nil
-    ) -> String {
-        executeResult(
-            operation: operation,
-            requestID: requestID,
-            sessionID: sessionID,
-            generation: generation,
-            mode: mode,
-            index: index,
-            afterSequence: afterSequence
-        ).response
-    }
-
     private func executeResult(
         operation: IOSProviderOperation,
         requestID: String,
@@ -185,10 +164,6 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         index: Int32? = nil,
         afterSequence: Int64? = nil
     ) -> (response: String, isGoResult: Bool) {
-        guard let secret = secrets.randomData(for: SharedKeychainSecretStore.sessionBridgeHMACKey) else {
-            logs.writeLog(log: "iOS session bridge key acquisition returned failure operation=\(operation.rawValue)")
-            return (failure("SESSIONAPI_RESPONSE_INVALID"), false)
-        }
         do {
             let command = try IOSProviderCommand(
                 operation: operation,
@@ -199,11 +174,10 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
                 index: index,
                 afterSequence: afterSequence
             )
-            let bytes = try command.encoded(using: secret)
+            let bytes = try command.encoded()
             let providerResponse = try IOSProviderResponse.decode(
                 manager.sendProviderMessage(bytes),
-                expectedRequestID: requestID,
-                using: secret
+                expectedRequestID: requestID
             )
             guard let response = String(data: providerResponse.payload, encoding: .utf8) else {
                 throw IOSProviderMessageError.malformed
@@ -213,7 +187,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
             logs.writeLog(
                 log: "iOS session bridge failed operation=\(operation.rawValue): \(String(reflecting: error))"
             )
-            return (failure("SESSIONAPI_RESPONSE_INVALID"), false)
+            return (failure("INTERNAL", message: String(reflecting: error)), false)
         }
     }
 
@@ -226,7 +200,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         return Data((0..<count).map { UInt8(bitPattern: value.get(index: Int32($0))) })
     }
 
-    private func failure(_ code: String) -> String {
-        "{\"ok\":false,\"error\":{\"code\":\"\(code)\"}}"
+    private func failure(_ code: String, message: String) -> String {
+        String(decoding: VpnManagerImpl.transportFailure(code, message: message), as: UTF8.self)
     }
 }

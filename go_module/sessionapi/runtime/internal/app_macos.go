@@ -12,6 +12,7 @@ import (
 	"go_module/tunnel/platform_engine"
 	"go_module/tunnel/protected_dialer"
 	"sync"
+	"time"
 
 	"go_module/routing"
 	"go_module/tunnel"
@@ -87,9 +88,8 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			ownedEngine = app.engine
 			app.engine = nil
 			app.mu.Unlock()
-			// Restore the captured system routes while the owned utun still
-			// exists. Stopping tun2socks first can make the default route vanish
-			// before the Plan can prove ownership and restore its baseline.
+			// Remove the session routes while the owned utun still exists, then
+			// stop the engine and protocol device.
 			routeErr := routePlan.Close()
 			var engineErr error
 			if ownedEngine != nil {
@@ -161,19 +161,16 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 	log.Debugf(Category, "[Darwin][Tunnel] tun2socks engine ready interface=%s", tunName)
 
-	_, err = routePlan.AcquireMacOSTunnelDefault(tunName)
+	err = routePlan.AcquireMacOSIPv4Default(tunName)
 	if err == nil {
 		err = routePlan.AcquireMacOSIPv6Block(tunName)
-	}
-	if err == nil && ifaceName != "" {
-		_, err = routePlan.AcquireMacOSScopedDefault(ifaceName, gatewayIP.String())
 	}
 	if err != nil {
 		err = fmt.Errorf("failed to acquire generation-owned routing: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(Category, "[Darwin][Routing] generation-owned default, IPv6, and protected routes ready")
+	log.Debugf(Category, "[Darwin][Routing] generation-owned IPv4, IPv6, and protected routes ready")
 
 	app.mu.Lock()
 	app.currentDevice = app.ProtocolDevice
@@ -188,11 +185,25 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 
 	signalInit(initResult, nil)
 
-	<-ctx.Done()
-
-	log.Debugf(Category, "[Darwin][Lifecycle] context cancelled — stopping generation")
-
-	return nil
+	routeRepair := time.NewTicker(time.Second)
+	defer routeRepair.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			log.Debugf(Category, "[Darwin][Lifecycle] context cancelled — stopping generation")
+			return nil
+		case <-routeRepair.C:
+			repaired, repairErr := routing.RepairMacOSSessionRoutes(
+				serverIP.String(), gatewayIP.String(), tunName, ifaceName,
+			)
+			if repairErr != nil {
+				return fmt.Errorf("repair macOS session routing: %w", repairErr)
+			}
+			if repaired {
+				log.Debugf(Category, "[Darwin][Routing] restored routes removed during physical-uplink transition")
+			}
+		}
+	}
 }
 
 func (app *App) SwitchProtocolDevice(device protocol.ProtocolDevice) error {

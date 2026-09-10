@@ -151,7 +151,7 @@ internal class GrpcSessionController(
     private fun commandId(): String = UUID.randomUUID().toString()
 
     private fun idleSnapshot() = SessionControllerResult.Success(
-        SessionSnapshot(0uL, SessionState.IDLE, configured = false, cleanupComplete = true),
+        SessionSnapshot(0uL, SessionState.IDLE, configured = false, cleanupComplete = true, sessionId = ""),
     )
 
     private fun emptyObservation(afterSequence: ULong) =
@@ -192,15 +192,12 @@ private fun GrpcEvent.toDomain() = SessionEvent(
 )
 
 private fun mapProtocol(protocol: interop.session.SessionProtocol) = when (protocol) {
-    interop.session.SessionProtocol.UNSPECIFIED -> SessionProtocol.UNSPECIFIED
     interop.session.SessionProtocol.OUTLINE -> SessionProtocol.OUTLINE
     interop.session.SessionProtocol.XRAY -> SessionProtocol.XRAY
     interop.session.SessionProtocol.TRUST_TUNNEL -> SessionProtocol.TRUST_TUNNEL
-    interop.session.SessionProtocol.UNKNOWN -> SessionProtocol.UNKNOWN
 }
 
 private fun interop.session.SessionState.toDomain() = when (this) {
-    interop.session.SessionState.UNSPECIFIED -> SessionState.UNSPECIFIED
     interop.session.SessionState.IDLE -> SessionState.IDLE
     interop.session.SessionState.CONFIGURED -> SessionState.CONFIGURED
     interop.session.SessionState.PROBING -> SessionState.PROBING
@@ -209,7 +206,6 @@ private fun interop.session.SessionState.toDomain() = when (this) {
     interop.session.SessionState.STOPPING -> SessionState.STOPPING
     interop.session.SessionState.FAILED -> SessionState.FAILED
     interop.session.SessionState.DESTROYED -> SessionState.DESTROYED
-    interop.session.SessionState.UNKNOWN -> SessionState.UNKNOWN
 }
 
 private fun <T, R> GrpcResult<T>.toController(transform: (T) -> R): SessionControllerResult<R> = when (this) {

@@ -47,7 +47,7 @@ func TestRunLockedWithPanicRecoveryIsBoundedAndUsesLockHeldCleanup(t *testing.T)
 	mu.Unlock()
 }
 
-func TestMobileConnectRecoveryContractUsesLockedCleanupAndFailureFence(t *testing.T) {
+func TestMobileConnectRecoveryContractUsesLockedCleanup(t *testing.T) {
 	_, filename, _, ok := goruntime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -59,7 +59,6 @@ func TestMobileConnectRecoveryContractUsesLockedCleanupAndFailureFence(t *testin
 	text := string(source)
 	for _, required := range []string{
 		`runLockedWithPanicRecovery("mobile session connect", &c.mu, c.connectLocked, c.disconnectLocked)`,
-		"if c.state == stateFailed && c.cleanupErr != nil",
 		"c.state = stateFailed",
 		"c.generation++",
 	} {

@@ -161,6 +161,11 @@ kotlin {
             implementation(kotlin("test"))
         }
 
+        @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+        iosTest.dependencies {
+            implementation(compose.uiTest)
+        }
+
         jvmMain.dependencies {
             implementation(project(":grpcstub"))
             runtimeOnly(libs.grpc.netty)

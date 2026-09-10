@@ -48,7 +48,7 @@ vpn_mode = "general"
 killswitch_enabled = false
 post_quantum_group_enabled = true
 exclusions = []
-|endpoint|
+[TrustTunnel.endpoint]
 hostname = "domain.com"
 addresses = ["ip:port"]
 custom_sni = "domain.com"
@@ -59,7 +59,7 @@ skip_verification = true
 upstream_protocol = "http3"
 anti_dpi = true
 dns_upstreams = []
-|socks|
+[TrustTunnel.listener.socks]
 address = "127.0.0.1:10808"
 
 # Shared by all variants and kept at the end 
@@ -131,7 +131,7 @@ vpn_mode = "general"
 killswitch_enabled = false
 post_quantum_group_enabled = true
 exclusions = []
-|endpoint|
+[TrustTunnel.endpoint]
 hostname = "domain.com"
 addresses = ["ip:port"]
 custom_sni = "domain.com"
@@ -142,7 +142,7 @@ skip_verification = true
 upstream_protocol = "http3"
 anti_dpi = true
 dns_upstreams = []
-|socks|
+[TrustTunnel.listener.socks]
 address = "127.0.0.1:10808"
 ```
 
@@ -151,9 +151,8 @@ Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nic
 See [TESTING.md](TESTING.md) for contributor-local checks and independent
 public pull-request verification.
 
-Remote telemetry has been removed. Legacy `[Telemetry]` configuration blocks
-are accepted only for compatibility, produce a warning, and never initiate a
-network request; see [docs/Telemetry.md](docs/Telemetry.md).
+Remote telemetry has been removed. `[Telemetry]` configuration blocks are not
+supported; see [docs/Telemetry.md](docs/Telemetry.md).
 
 Windows and MacOS apps require manual intervention to be installed for now - notarization is a work in progress.
 

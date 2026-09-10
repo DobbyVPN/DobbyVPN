@@ -23,8 +23,6 @@ class VerificationError(ValueError):
 
 
 def load_plist(path: Path, description: str) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file() or path.stat().st_size <= 0:
-        raise VerificationError(f"{description} must be a nonempty regular file")
     try:
         value = plistlib.loads(path.read_bytes())
     except (OSError, plistlib.InvalidFileException) as error:

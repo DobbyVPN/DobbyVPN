@@ -7,7 +7,7 @@ import kotlin.test.assertIs
 
 class SessionEnvelopeDecoderTest {
     @Test
-    fun validConfigurationPayloadPreservesSafeFieldsAndKnownProtocol() {
+    fun validConfigurationPayloadPreservesFieldsAndKnownProtocol() {
         val result = SessionEnvelopeDecoder.decode(
             """{"ok":true,"result":{"digest":"digest","profiles":[{"index":2,"protocol":"OUTLINE","description":"primary"}],"warnings":[{"code":"legacy","message":"accepted"}]}}""",
         ) { it.toSessionConfiguration() }
@@ -28,18 +28,20 @@ class SessionEnvelopeDecoderTest {
     }
 
     @Test
-    fun unknownProtocolStateAndFailureMapToUnknownWithoutRejectingPayload() {
-        val protocol = SessionEnvelopeDecoder.decode("""{"ok":true,"result":{"protocol":"FUTURE"}}""") {
-            it.sessionString("protocol").toSessionProtocol()
+    fun unknownProtocolStateAndIncompleteFailureAreRejected() {
+        assertFails {
+            SessionEnvelopeDecoder.decode("""{"ok":true,"result":{"protocol":"FUTURE"}}""") {
+                it.sessionString("protocol").toSessionProtocol()
+            }
         }
-        val state = SessionEnvelopeDecoder.decode("""{"ok":true,"result":{"state":"FUTURE"}}""") {
-            it.sessionString("state").toSessionState()
+        assertFails {
+            SessionEnvelopeDecoder.decode("""{"ok":true,"result":{"state":"FUTURE"}}""") {
+                it.sessionString("state").toSessionState()
+            }
         }
-        val failure = SessionEnvelopeDecoder.decode("""{"ok":false,"error":{"code":"FUTURE"}}""") { Unit }
-
-        assertEquals(SessionProtocol.UNKNOWN, assertIs<SessionControllerResult.Success<SessionProtocol>>(protocol).value)
-        assertEquals(SessionState.UNKNOWN, assertIs<SessionControllerResult.Success<SessionState>>(state).value)
-        assertEquals(SessionControllerResult.Failure("FUTURE", SessionFailureCode.UNKNOWN), failure)
+        assertFails {
+            SessionEnvelopeDecoder.decode("""{"ok":false,"error":{"code":"FUTURE"}}""") { Unit }
+        }
     }
 
     @Test
@@ -47,7 +49,6 @@ class SessionEnvelopeDecoderTest {
         assertEquals(SessionProtocol.OUTLINE, "OUTLINE".toSessionProtocol())
         assertEquals(SessionProtocol.XRAY, "XRAY".toSessionProtocol())
         assertEquals(SessionProtocol.TRUST_TUNNEL, "TRUST_TUNNEL".toSessionProtocol())
-        assertEquals(SessionProtocol.UNSPECIFIED, "".toSessionProtocol())
 
         assertEquals(SessionState.IDLE, "IDLE".toSessionState())
         assertEquals(SessionState.CONFIGURED, "CONFIGURED".toSessionState())
@@ -57,7 +58,6 @@ class SessionEnvelopeDecoderTest {
         assertEquals(SessionState.STOPPING, "STOPPING".toSessionState())
         assertEquals(SessionState.FAILED, "FAILED".toSessionState())
         assertEquals(SessionState.DESTROYED, "DESTROYED".toSessionState())
-        assertEquals(SessionState.UNSPECIFIED, "".toSessionState())
     }
 
     @Test
@@ -160,7 +160,6 @@ class SessionEnvelopeDecoderTest {
             """{"ok":true,"result":{"generation":0}}""",
             """{"ok":true,"result":{"generation":-1}}""",
         ).forEach { payload ->
-            assertFails { SessionEnvelopeDecoder.decode(payload) { it.requiredPositiveSessionLong("generation").toULong() } }
             assertFails { SessionEnvelopeDecoder.decode(payload) { it.requiredPositiveSessionLong("generation").toULong() } }
         }
     }

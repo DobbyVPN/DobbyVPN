@@ -63,8 +63,8 @@ jobs:
             "com.startapp"
           )
 
-          APK=$(find apk -name '*.apk' -type f | head -n 1)
-          if [ -z "$APK" ]; then
+          APK=apk/dobbyvpn-android-unsign.apk
+          if [ ! -f "$APK" ]; then
             echo "::error::Unsigned APK artifact was not found"
             exit 1
           fi

@@ -65,7 +65,7 @@ class DobbyVpnService : VpnService() {
 
     private val logger: Logger by inject()
     private val connectionState: ConnectionStateRepository by inject()
-    val serviceId: String = UUID.randomUUID().toString().take(8)
+    val serviceId: String = UUID.randomUUID().toString()
 
     /** The service retains this original descriptor while Go owns a duplicated FD. */
     var vpnInterface: ParcelFileDescriptor? = null
@@ -207,7 +207,12 @@ class DobbyVpnService : VpnService() {
         if (state == "IDLE" || state == "FAILED" || state == "DESTROYED") {
             if (vpnInterface == null) stopForeground(STOP_FOREGROUND_REMOVE)
         }
-        logger.log("[svc:$serviceId] Go state=$state generation=$generation failure=$failureCode")
+        val stateMessage = "[svc:$serviceId] Go state=$state generation=$generation failure=$failureCode"
+        if (state == "FAILED" || failureCode.isNotEmpty()) {
+            logger.error(stateMessage)
+        } else {
+            logger.info(stateMessage)
+        }
     }
 
     override fun onDestroy() {

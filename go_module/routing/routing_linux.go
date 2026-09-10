@@ -23,7 +23,7 @@ import (
 var linuxRunCommand = ExecuteCommand
 
 func ExecuteCommand(command string) (string, error) {
-	log.Debugf(Category, "[Routing][Exec] → %s", log.MaskStr(command))
+	log.Debugf(Category, "[Routing][Exec] → %s", command)
 
 	args := strings.Fields(command)
 	if len(args) == 0 {
@@ -39,12 +39,12 @@ func ExecuteCommand(command string) (string, error) {
 
 	if err != nil {
 		log.Debugf(Category, "[Routing][Exec][ERROR] cmd=%s err=%v output=%s",
-			log.MaskStr(command), err, outStr)
+			command, err, outStr)
 		return outStr, fmt.Errorf("command execution failed: %w, output: %s", err, outStr)
 	}
 
 	log.Debugf(Category, "[Routing][Exec][OK] cmd=%s output=%s",
-		log.MaskStr(command), outStr)
+		command, outStr)
 	return outStr, nil
 }
 

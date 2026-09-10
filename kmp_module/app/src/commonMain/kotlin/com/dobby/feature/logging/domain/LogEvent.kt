@@ -12,7 +12,6 @@ private const val LogSchema = "dobby.log/v1"
 private const val SortableTimestampLength = 19
 private const val ReadableTimestampLength = 23
 private const val RenderedLevelWidth = 5
-private val stableEventName = Regex("[a-z0-9][a-z0-9_.-]*")
 private val legacyTimestampPrefix = Regex("""^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})]""")
 private val logJson = Json { ignoreUnknownKeys = true }
 
@@ -56,15 +55,15 @@ internal fun encodeLogEvent(
     put("schema", LogSchema)
     put("timestamp", timestamp)
     put("level", level.name)
-    put("source", source.takeIf(stableEventName::matches) ?: "app")
-    put("event", event.takeIf(stableEventName::matches) ?: "log.message")
-    put("message", redactLog(message))
+    put("source", source)
+    put("event", event)
+    put("message", message)
     if (fields.isNotEmpty()) {
         put(
             "fields",
             buildJsonObject {
                 fields.entries.sortedBy { it.key }.forEach { (key, value) ->
-                    put(key, redactLogField(key, value))
+                    put(key, value)
                 }
             },
         )

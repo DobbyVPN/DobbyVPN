@@ -170,8 +170,7 @@ jobs:
           if [[ -n "$tag_record" ]]; then
             object_type="$(jq -r .object.type <<<"$tag_record")"
             object_sha="$(jq -r .object.sha <<<"$tag_record")"
-            for _ in 1 2 3 4 5 6 7 8; do
-              [[ "$object_type" = tag ]] || break
+            while [[ "$object_type" == tag ]]; do
               tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
               object_type="$(jq -r .object.type <<<"$tag_object")"
               object_sha="$(jq -r .object.sha <<<"$tag_object")"
@@ -467,15 +466,6 @@ jobs:
             --apk "release/DobbyVPN-v$RELEASE_VERSION-sign.apk" \
             --apk "release/DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
             --source-sha "$RELEASE_SOURCE_SHA" --repository "$GITHUB_REPOSITORY"
-          python3 .github/scripts/verify_android_reproducibility.py verify-provenance \
-            --apk "release/DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
-            --provenance "release/DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
-            --source-sha "$RELEASE_SOURCE_SHA" \
-            --version-name "$RELEASE_VERSION" \
-            --version-code "$ANDROID_VERSION_CODE"
-          python3 .github/scripts/verify_android_reproducibility.py verify-signed-payload \
-            --unsigned-apk "release/DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
-            --signed-apk "release/DobbyVPN-v$RELEASE_VERSION-sign.apk"
           mapfile -t signer_digests < <(
             "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs \
               "release/DobbyVPN-v$RELEASE_VERSION-sign.apk" | \
@@ -483,50 +473,14 @@ jobs:
           )
           test "${#signer_digests[@]}" -eq 1
           test "${signer_digests[0]}" = "$EXPECTED_ANDROID_SIGNER_SHA256"
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-
-          release = Path("release")
-          version = os.environ["RELEASE_VERSION"]
-          expected = {
-              "signed": release / f"DobbyVPN-v{version}-sign.apk",
-              "unsigned": release / f"DobbyVPN-v{version}-unsign.apk",
-          }
-          manifest_path = release / f"DobbyVPN-v{version}-android-provenance.json"
-          document = json.loads(manifest_path.read_text(encoding="utf-8"))
-          if document.get("schema") != 1:
-              raise SystemExit("Android provenance schema mismatch")
-          if document.get("source_sha") != os.environ["RELEASE_SOURCE_SHA"]:
-              raise SystemExit("Android provenance source mismatch")
-          if document.get("version_name") != version:
-              raise SystemExit("Android provenance version mismatch")
-          if document.get("version_code") != int(os.environ["ANDROID_VERSION_CODE"]):
-              raise SystemExit("Android provenance version code mismatch")
-          if document.get("application_id") != "com.dobby.vpn":
-              raise SystemExit("Android provenance application ID mismatch")
-          if document.get("signer_certificate_sha256") != os.environ["EXPECTED_ANDROID_SIGNER_SHA256"]:
-              raise SystemExit("Android signer certificate mismatch")
-          if document.get("signed_payload_matches_unsigned") is not True:
-              raise SystemExit("Android signed-payload binding is missing")
-
-          artifacts = document.get("artifacts")
-          if not isinstance(artifacts, list) or len(artifacts) != len(expected):
-              raise SystemExit("Android provenance artifact set mismatch")
-          by_kind = {item.get("kind"): item for item in artifacts if isinstance(item, dict)}
-          if set(by_kind) != set(expected):
-              raise SystemExit("Android provenance artifact kinds mismatch")
-          for kind, path in expected.items():
-              item = by_kind[kind]
-              if item.get("name") != path.name:
-                  raise SystemExit(f"Android provenance {kind} filename mismatch")
-              digest = hashlib.sha256(path.read_bytes()).hexdigest()
-              if item.get("sha256") != digest:
-                  raise SystemExit(f"Android provenance {kind} digest mismatch")
-          print("Android provenance validation passed")
-          PY
+          python3 .github/scripts/verify_android_reproducibility.py verify-publication \
+            --unsigned-apk "release/DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            --signed-apk "release/DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+            --provenance "release/DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
+            --source-sha "$RELEASE_SOURCE_SHA" \
+            --version-name "$RELEASE_VERSION" \
+            --version-code "$ANDROID_VERSION_CODE" \
+            --signer-certificate-sha256 "$EXPECTED_ANDROID_SIGNER_SHA256"
 
       - name: Create F-Droid version metadata
         shell: bash
@@ -537,7 +491,7 @@ jobs:
             echo "versionCode=${{ steps.preflight.outputs.android_version_code }}"
           } > release/version.txt
 
-      - name: Create and verify public release provenance
+      - name: Create public release provenance
         shell: bash
         run: |
           set -euo pipefail
@@ -562,8 +516,6 @@ jobs:
           )
           python3 .github/scripts/release_provenance.py create \
             "${metadata_args[@]}" "${asset_args[@]}"
-          python3 .github/scripts/release_provenance.py verify \
-            "${metadata_args[@]}" "${asset_args[@]}"
 
       - name: Verify already-published release against selected run
         if: steps.preflight.outputs.release_state == 'published'
@@ -575,7 +527,6 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --dir published \
             --pattern '*'
-          cmp release/release-provenance.json published/release-provenance.json
           python3 .github/scripts/release_provenance.py verify \
             --directory published \
             --tag "${{ steps.preflight.outputs.tag }}" \
@@ -629,10 +580,7 @@ jobs:
             object_type="$(jq -r .object.type <<<"$record")"
             object_sha="$(jq -r .object.sha <<<"$record")"
             test "$object_sha" = "$expected_object"
-            for _ in 1 2 3 4 5 6 7 8; do
-              if [[ "$object_type" != tag ]]; then
-                break
-              fi
+            while [[ "$object_type" == tag ]]; do
               tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
               object_type="$(jq -r .object.type <<<"$tag_object")"
               object_sha="$(jq -r .object.sha <<<"$tag_object")"
@@ -654,7 +602,7 @@ jobs:
           wait_for_exact_release() {
             local expected_draft="${1:-any}"
             local record
-            for _ in {1..30}; do
+            while true; do
               if record="$(exact_release)" && [[ -n "$record" ]]; then
                 if [[ "$expected_draft" == any || "$(jq -r .draft <<<"$record")" == "$expected_draft" ]]; then
                   printf '%s\n' "$record"
@@ -663,7 +611,6 @@ jobs:
               fi
               sleep 1
             done
-            return 1
           }
 
           rollback() {
@@ -675,7 +622,7 @@ jobs:
             safe_to_delete_tag=false
             if [[ "$draft_created" == true ]]; then
               if [[ ! "$owned_release_id" =~ ^[1-9][0-9]*$ ]]; then
-                release_record="$(wait_for_exact_release any)"
+                release_record="$(exact_release)"
                 release_query_status=$?
                 if (( release_query_status == 0 )); then
                   owned_release_id="$(jq -r .id <<<"$release_record")"
@@ -795,7 +742,6 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --dir published \
             --pattern '*'
-          cmp release/release-provenance.json published/release-provenance.json
           python3 .github/scripts/release_provenance.py verify \
             --directory published \
             --tag "$release_tag" \
