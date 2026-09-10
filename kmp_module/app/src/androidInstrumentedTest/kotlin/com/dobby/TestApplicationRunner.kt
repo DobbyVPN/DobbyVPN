@@ -22,7 +22,7 @@ class TestApplication : Application() {
         super.onCreate()
         // This Application belongs to the instrumentation APK; diagnostics and
         // the service must use the VPN application's private files directory.
-        val targetContext = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val targetContext = InstrumentationRegistry.getInstrumentation().targetContext
         initLogFilePath(targetContext)
         check(initLogger()) { "Go logger initialization returned false" }
         DobbyVpnService.nativePlatformRegistrar = if (TestRuntimeOptions.realProfileEnabled) {
