@@ -6,6 +6,7 @@ import io.grpc.ClientInterceptors
 import io.grpc.Metadata
 import io.grpc.stub.MetadataUtils
 import java.io.Closeable
+import java.io.IOException
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 
@@ -43,7 +44,7 @@ object GrpcVpnLibrary: Closeable {
         val path = windowsControlTokenPath(programData)
         val value = try {
             Files.readString(path).trim()
-        } catch (failure: Exception) {
+        } catch (failure: IOException) {
             throw IllegalStateException("Windows installation control token is unavailable", failure)
         }
         check(value.matches(Regex("[0-9a-fA-F]{64}"))) {
