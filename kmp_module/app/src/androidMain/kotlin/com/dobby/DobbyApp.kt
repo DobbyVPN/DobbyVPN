@@ -4,9 +4,11 @@ import android.app.Application
 import com.dobby.di.startDI
 import androidMainModule
 import androidVpnModule
+import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.initLogFilePath
 import com.dobby.feature.logging.domain.initLogger
 import org.koin.android.ext.koin.androidContext
+import org.koin.core.context.GlobalContext
 
 class DobbyApp : Application() {
 
@@ -17,5 +19,6 @@ class DobbyApp : Application() {
         startDI(listOf(androidMainModule, androidVpnModule)) {
             androidContext(applicationContext)
         }
+        GlobalContext.get().get<Logger>()
     }
 }
