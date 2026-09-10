@@ -38,8 +38,8 @@ func TestDialersUsePreflightAddressWithoutDNS(t *testing.T) {
 			if dialErr != nil {
 				t.Fatal(dialErr)
 			}
-			if err := conn.Close(); err != nil {
-				t.Fatal(err)
+			if closeErr := conn.Close(); closeErr != nil {
+				t.Fatal(closeErr)
 			}
 		})
 	}
