@@ -236,6 +236,7 @@ jobs:
           name: dobbyVPN-windows-amd64.msi
           path: installer/windows/bin/amd64/dobbyVPN-windows-amd64.msi
           if-no-files-found: error
+          retention-days: 90
 
       - name: Upload MacOS amd64 installer
         if: matrix.os == 'macos'
@@ -244,6 +245,7 @@ jobs:
           name: dobbyVPN-macos-amd64.pkg
           path: installer/macos/bin/amd64/dobbyVPN-macos-amd64.pkg
           if-no-files-found: error
+          retention-days: 90
 
       - name: Upload MacOS aarch64 installer
         if: matrix.os == 'macos'
@@ -252,3 +254,4 @@ jobs:
           name: dobbyVPN-macos-aarch64.pkg
           path: installer/macos/bin/aarch64/dobbyVPN-macos-aarch64.pkg
           if-no-files-found: error
+          retention-days: 90

@@ -221,6 +221,7 @@ jobs:
           name: dobbyVPN-linux.deb
           path: upload/dobbyVPN-linux.deb
           if-no-files-found: error
+          retention-days: 90
 
       - name: Upload zip for macOS aarch64
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -228,6 +229,7 @@ jobs:
           name: dobbyVPN-macos-aarch64.zip
           path: upload/dobbyVPN-macos-aarch64.zip
           if-no-files-found: error
+          retention-days: 90
 
       - name: Upload zip for macOS amd64
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -235,6 +237,7 @@ jobs:
           name: dobbyVPN-macos-amd64.zip
           path: upload/dobbyVPN-macos-amd64.zip
           if-no-files-found: error
+          retention-days: 90
 
       - name: Upload Windows zip
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -242,6 +245,7 @@ jobs:
           name: dobbyVPN-windows.zip
           path: upload/dobbyVPN-windows.zip
           if-no-files-found: error
+          retention-days: 90
 
       - name: Display file tree with sizes after Windows build
         run: |

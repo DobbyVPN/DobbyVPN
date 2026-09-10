@@ -331,6 +331,7 @@ jobs:
           name: dobbyvpn-android-sign.apk
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-sign.apk
           if-no-files-found: error
+          retention-days: 90
 
       - name: Upload unsigned APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -338,6 +339,7 @@ jobs:
           name: dobbyvpn-android-unsign.apk
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
           if-no-files-found: error
+          retention-days: 90
 
       - name: Upload Android test companion
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -345,6 +347,7 @@ jobs:
           name: dobbyvpn-android-test-companion.apk
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-test-companion.apk
           if-no-files-found: error
+          retention-days: 90
 
       - name: Upload Android provenance
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -352,3 +355,4 @@ jobs:
           name: dobbyvpn-android-provenance
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-provenance.json
           if-no-files-found: error
+          retention-days: 90
