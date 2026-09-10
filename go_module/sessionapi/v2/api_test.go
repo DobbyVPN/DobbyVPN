@@ -71,7 +71,7 @@ func TestConfigurePreservesMixedSourceOrder(t *testing.T) {
 	}
 	want := []Protocol{ProtocolOutline, ProtocolXray, ProtocolTrustTunnel, ProtocolOutline}
 	for i := range want {
-		if got.Profiles[i].Index != i || got.Profiles[i].Protocol != want[i] {
+		if int(got.Profiles[i].Index) != i || got.Profiles[i].Protocol != want[i] {
 			t.Fatalf("profile %d = %#v", i, got.Profiles[i])
 		}
 	}
@@ -210,7 +210,7 @@ func TestSubscribeReplaysAndPublishesOrderedEvents(t *testing.T) {
 }
 
 func TestCreateSessionConflictsWhileAnotherGenerationIsRecoverable(t *testing.T) {
-	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int]int64{0: 1}}, Platform: &fakePlatform{}})
+	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int32]int64{0: 1}}, Platform: &fakePlatform{}})
 	first := configured(t, m)
 	if _, err := m.Start(context.Background(), first, "start", StartTarget{Mode: AutoSelect}); err != nil {
 		t.Fatal(err)
@@ -291,7 +291,7 @@ func TestDestroyDoesNotRaceACommandThatAlreadyResolvedSession(t *testing.T) {
 }
 
 func TestAutoSelectionUsesLatencyThenSourceOrderAndEventsAreMonotonic(t *testing.T) {
-	r := &fakeRuntime{latency: map[int]int64{0: 50, 1: 10, 2: 10, 3: 60}}
+	r := &fakeRuntime{latency: map[int32]int64{0: 50, 1: 10, 2: 10, 3: 60}}
 	m := NewManager(ManagerOptions{Runtime: r, Platform: &fakePlatform{}})
 	id := configured(t, m)
 	start, err := m.Start(context.Background(), id, "start-1", StartTarget{Mode: AutoSelect})
@@ -382,7 +382,7 @@ func TestStopAcknowledgesAlreadyCleanedTerminalGeneration(t *testing.T) {
 func TestPlatformAcquisitionErrorStillOwnsAndReportsReturnedLeaseCleanup(t *testing.T) {
 	want := errors.New("platform rollback failed")
 	m := NewManager(ManagerOptions{
-		Runtime:  &fakeRuntime{latency: map[int]int64{0: 1}},
+		Runtime:  &fakeRuntime{latency: map[int32]int64{0: 1}},
 		Platform: errorWithLeasePlatform{prepareErr: errors.New("prepare failed"), releaseErr: want},
 	})
 	id := configured(t, m)
@@ -413,7 +413,7 @@ func TestRuntimeAcquisitionErrorStillOwnsAndReportsReturnedLeaseCleanup(t *testi
 
 func TestAutoSelectionProbesWithFreshPlatformLeaseBeforeEachRuntimeProbe(t *testing.T) {
 	order := &recordedOrder{}
-	runtime := &orderedProbeRuntime{order: order, latency: map[int]int64{0: 40, 1: 10, 2: 30, 3: 20}}
+	runtime := &orderedProbeRuntime{order: order, latency: map[int32]int64{0: 40, 1: 10, 2: 30, 3: 20}}
 	platform := &orderedProbePlatform{order: order, events: make(chan Event, 32)}
 	m := NewManager(ManagerOptions{Runtime: runtime, Platform: platform})
 	id := configured(t, m)
@@ -436,7 +436,7 @@ func TestAutoSelectionProbesWithFreshPlatformLeaseBeforeEachRuntimeProbe(t *test
 func TestAutoSelectionReleasesProbeLeaseWhenCanceled(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	released := make(chan struct{}, 1)
-	runtime := &fakeRuntime{latency: map[int]int64{0: 1}, blockProbe: make(chan struct{}), probeEntered: entered}
+	runtime := &fakeRuntime{latency: map[int32]int64{0: 1}, blockProbe: make(chan struct{}), probeEntered: entered}
 	platform := &releaseSignalPlatform{released: released}
 	m := NewManager(ManagerOptions{Runtime: runtime, Platform: platform})
 	id := configured(t, m)
@@ -458,7 +458,7 @@ func TestAutoSelectionReleasesProbeLeaseWhenCanceled(t *testing.T) {
 
 func TestAutoSelectionReportsPlatformProbePreparationFailure(t *testing.T) {
 	platform := failingProbePlatform{events: make(chan Event, 8)}
-	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int]int64{0: 1}}, Platform: platform})
+	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int32]int64{0: 1}}, Platform: platform})
 	id := configured(t, m)
 	if _, err := m.Start(context.Background(), id, "start", StartTarget{Mode: AutoSelect}); err != nil {
 		t.Fatal(err)
@@ -470,7 +470,7 @@ func TestAutoSelectionReportsPlatformProbePreparationFailure(t *testing.T) {
 }
 
 func TestStopDuringProbePreventsLateConnectedAndAllowsRestartAfterCleanup(t *testing.T) {
-	r := &fakeRuntime{latency: map[int]int64{0: 1}, blockProbe: make(chan struct{}), probeEntered: make(chan struct{}, 1)}
+	r := &fakeRuntime{latency: map[int32]int64{0: 1}, blockProbe: make(chan struct{}), probeEntered: make(chan struct{}, 1)}
 	p := &fakePlatform{}
 	m := NewManager(ManagerOptions{Runtime: r, Platform: p})
 	id := configured(t, m)
@@ -505,7 +505,7 @@ func TestStopDuringProbePreventsLateConnectedAndAllowsRestartAfterCleanup(t *tes
 func TestCleanupIsLIFOAndRunsBeforeRestart(t *testing.T) {
 	order := make([]string, 0, 2)
 	var orderMu sync.Mutex
-	r := &fakeRuntime{latency: map[int]int64{0: 1}, stopHook: func() { orderMu.Lock(); order = append(order, "runtime"); orderMu.Unlock() }}
+	r := &fakeRuntime{latency: map[int32]int64{0: 1}, stopHook: func() { orderMu.Lock(); order = append(order, "runtime"); orderMu.Unlock() }}
 	p := &fakePlatform{releaseHook: func() { orderMu.Lock(); order = append(order, "platform"); orderMu.Unlock() }}
 	m := NewManager(ManagerOptions{Runtime: r, Platform: p})
 	id := configured(t, m)
@@ -686,7 +686,7 @@ func TestStopReportsLatePlatformLeaseCleanupFailure(t *testing.T) {
 		released: released,
 		err:      errors.New("late platform cleanup failed"),
 	}
-	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int]int64{0: 1}}, Platform: platform})
+	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int32]int64{0: 1}}, Platform: platform})
 	id := configured(t, m)
 	start, err := m.Start(context.Background(), id, "start", StartTarget{Mode: ProfileIndex, Index: 0})
 	if err != nil {
@@ -755,7 +755,7 @@ func waitState(t *testing.T, m *Manager, id string, want State) SnapshotResult {
 }
 
 type fakeRuntime struct {
-	latency      map[int]int64
+	latency      map[int32]int64
 	blockProbe   chan struct{}
 	probeEntered chan struct{}
 	stopHook     func()
@@ -951,7 +951,7 @@ func (r *recordedOrder) itemsCopy() []string {
 
 type orderedProbeRuntime struct {
 	order   *recordedOrder
-	latency map[int]int64
+	latency map[int32]int64
 }
 
 func (r *orderedProbeRuntime) Probe(_ context.Context, _ SessionRef, profile RuntimeProfile) (ProbeResult, error) {

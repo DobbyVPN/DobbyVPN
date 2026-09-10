@@ -19,7 +19,9 @@ var linuxRunResolvedCommand = executeLinuxResolvedCommand
 func executeLinuxResolvedCommand(args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), linuxResolvedCommandTimeout)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, "/usr/bin/resolvectl", args...).CombinedOutput()
+	command := exec.CommandContext(ctx, "/usr/bin/resolvectl")
+	command.Args = append(command.Args, args...)
+	output, err := command.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("resolvectl %s: %w: %s", args[0], err, strings.TrimSpace(string(output)))
 	}
@@ -105,14 +107,14 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 	// the VPN. Metric 1 loses to the physical route's metric 0 and survives link loss.
 	terminalRoute := fmt.Sprintf("table %d unreachable default proto %d metric 1", tableID, linuxOwnedRouteProtocol)
 	terminalLease, err := p.Acquire(fmt.Sprintf("mark-unreachable table=%d", tableID), func() error {
-		_, err := linuxRunCommand("ip route add " + terminalRoute)
-		return err
+		_, routeErr := linuxRunCommand("ip route add " + terminalRoute)
+		return routeErr
 	}, func() error {
-		_, err := linuxRunCommand("ip route del " + terminalRoute)
-		if linuxRouteAlreadyGone(err) {
+		_, routeErr := linuxRunCommand("ip route del " + terminalRoute)
+		if linuxRouteAlreadyGone(routeErr) {
 			return nil
 		}
-		return err
+		return routeErr
 	})
 	if err != nil {
 		return errors.Join(err, routeLease.Close())

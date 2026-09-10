@@ -77,6 +77,7 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 
 	next := map[string]int{}
 	profiles := make([]RuntimeProfile, 0, len(headers))
+	var profileIndex int32
 	for _, header := range headers {
 		name := header[1]
 		var block map[string]interface{}
@@ -103,11 +104,12 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 			return parsedConfig{}, err
 		}
 		profiles = append(profiles, RuntimeProfile{
-			Summary:          ProfileSummary{Index: len(profiles), Protocol: protocol, Description: description},
+			Summary:          ProfileSummary{Index: profileIndex, Protocol: protocol, Description: description},
 			NormalizedFormat: format,
 			NormalizedConfig: normalized,
 			ExcludeCIDRs:     append([]string(nil), root.ExcludeIPs.IPs...),
 		})
+		profileIndex++
 	}
 	if len(profiles) == 0 {
 		return parsedConfig{}, failure(FailureMalformedConfig, "configuration contains no protocol profiles")

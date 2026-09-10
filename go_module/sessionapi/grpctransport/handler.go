@@ -143,7 +143,7 @@ func profiles(in []v2.ProfileSummary) []*grpcproto.SessionProfile {
 	return out
 }
 func profile(in v2.ProfileSummary) *grpcproto.SessionProfile {
-	return &grpcproto.SessionProfile{Index: int32(in.Index), Protocol: desktoptransport.Protocol(in.Protocol), Description: in.Description}
+	return &grpcproto.SessionProfile{Index: in.Index, Protocol: desktoptransport.Protocol(in.Protocol), Description: in.Description}
 }
 func warnings(in []v2.Warning) []*grpcproto.SessionWarning {
 	out := make([]*grpcproto.SessionWarning, 0, len(in))

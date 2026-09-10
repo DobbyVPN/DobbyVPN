@@ -381,7 +381,7 @@ func profileInventoryJSON(profiles []sessionv2.ProfileSummary) ([]byte, error) {
 	}
 	values := make([]profileIdentity, 0, len(profiles))
 	for _, profile := range profiles {
-		if profile.Index < 0 || profile.Index > math.MaxInt32 {
+		if profile.Index < 0 {
 			return nil, fmt.Errorf("invalid profile identity")
 		}
 		protocol := string(profile.Protocol)
@@ -390,7 +390,7 @@ func profileInventoryJSON(profiles []sessionv2.ProfileSummary) ([]byte, error) {
 		default:
 			return nil, fmt.Errorf("invalid profile protocol")
 		}
-		values = append(values, profileIdentity{Index: int32(profile.Index), Protocol: protocol})
+		values = append(values, profileIdentity{Index: profile.Index, Protocol: protocol})
 	}
 	return json.Marshal(inventory{Profiles: values})
 }

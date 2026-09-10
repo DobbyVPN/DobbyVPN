@@ -106,7 +106,7 @@ type Capabilities struct {
 
 // ProfileSummary is the connection inventory returned by session status.
 type ProfileSummary struct {
-	Index       int
+	Index       int32
 	Protocol    Protocol
 	Description string
 }

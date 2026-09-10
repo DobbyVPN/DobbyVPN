@@ -101,25 +101,29 @@ func TestHandlerPreservesAsyncFailureMessageInEventAndSnapshot(t *testing.T) {
 		if snapshotErr != nil {
 			t.Fatal(snapshotErr)
 		}
-		if failure := snapshot.GetSnapshot().GetLastFailure(); failure != nil {
-			if failure.GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_RUNTIME_FAILED || failure.GetMessage() != want {
-				t.Fatalf("snapshot failure = %#v, want message %q", failure, want)
-			}
-			observed, observeErr := h.Observe(ctx, &grpcproto.SessionObserveRequest{SessionId: created.GetSessionId()})
-			if observeErr != nil {
-				t.Fatal(observeErr)
-			}
-			for _, event := range observed.GetEvents() {
-				if failure := event.GetFailure(); failure != nil && failure.GetCode() == grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_RUNTIME_FAILED {
-					if failure.GetMessage() != want {
-						t.Fatalf("event failure = %#v, want message %q", failure, want)
-					}
-					return
-				}
-			}
-			t.Fatal("snapshot failure had no corresponding runtime failure event")
+		failure := snapshot.GetSnapshot().GetLastFailure()
+		if failure == nil {
+			time.Sleep(time.Millisecond)
+			continue
 		}
-		time.Sleep(time.Millisecond)
+		if failure.GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_RUNTIME_FAILED || failure.GetMessage() != want {
+			t.Fatalf("snapshot failure = %#v, want message %q", failure, want)
+		}
+		observed, observeErr := h.Observe(ctx, &grpcproto.SessionObserveRequest{SessionId: created.GetSessionId()})
+		if observeErr != nil {
+			t.Fatal(observeErr)
+		}
+		for _, event := range observed.GetEvents() {
+			eventFailure := event.GetFailure()
+			if eventFailure == nil || eventFailure.GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_RUNTIME_FAILED {
+				continue
+			}
+			if eventFailure.GetMessage() != want {
+				t.Fatalf("event failure = %#v, want message %q", eventFailure, want)
+			}
+			return
+		}
+		t.Fatal("snapshot failure had no corresponding runtime failure event")
 	}
 	t.Fatal("async runtime failure did not reach the snapshot")
 }

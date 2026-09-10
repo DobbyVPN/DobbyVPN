@@ -161,7 +161,7 @@ func (p *platformAdapter) PublishState(_ context.Context, event v2.Event) {
 	profileIndex := int32(-1)
 	protocol := ""
 	if event.Profile != nil {
-		profileIndex = int32(event.Profile.Index)
+		profileIndex = event.Profile.Index
 		protocol = string(event.Profile.Protocol)
 	}
 	callbacks.PublishState(event.SessionID, int64(event.Generation), int64(event.Sequence), string(event.State), profileIndex, protocol, string(event.Failure))

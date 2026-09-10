@@ -34,15 +34,16 @@ func clearLocalLogFileAtBase(path, base string) error {
 		return fmt.Errorf("local log path is outside its base")
 	}
 	parent := filepath.Dir(path)
-	if err := os.MkdirAll(parent, 0o700); err != nil {
+	if err = os.MkdirAll(parent, 0o700); err != nil {
 		return fmt.Errorf("create local log directory: %w", err)
 	}
-	if info, err := os.Lstat(parent); err != nil {
+	var info os.FileInfo
+	if info, err = os.Lstat(parent); err != nil {
 		return fmt.Errorf("inspect local log directory: %w", err)
 	} else if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("local log directory is not a real directory")
 	}
-	if info, err := os.Lstat(path); err == nil {
+	if info, err = os.Lstat(path); err == nil {
 		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("local log path is not a regular file")
 		}

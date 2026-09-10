@@ -84,12 +84,12 @@ func TestSetOpenedFilePreservesSupervisorPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := SetOpenedFile(file); err != nil {
-		t.Fatal(err)
+	if setErr := SetOpenedFile(file); setErr != nil {
+		t.Fatal(setErr)
 	}
 	Info("MANAGED", "retained", nil)
-	if err := lg.file.Sync(); err != nil {
-		t.Fatal(err)
+	if syncErr := lg.file.Sync(); syncErr != nil {
+		t.Fatal(syncErr)
 	}
 	info, err := os.Stat(path)
 	if err != nil {

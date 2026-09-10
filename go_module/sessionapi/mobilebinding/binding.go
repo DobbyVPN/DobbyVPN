@@ -191,14 +191,14 @@ type configureResultDTO struct {
 	Warnings []warningDTO `json:"warnings"`
 }
 type startResultDTO struct {
-	Generation int64 `json:"generation"`
+	Generation uint64 `json:"generation"`
 }
 type stopResultDTO struct {
-	Generation int64 `json:"generation"`
+	Generation uint64 `json:"generation"`
 }
 type snapshotResultDTO struct {
 	SessionID       string      `json:"session_id"`
-	Generation      int64       `json:"generation"`
+	Generation      uint64      `json:"generation"`
 	State           string      `json:"state"`
 	Configured      bool        `json:"configured"`
 	ActiveProfile   *profileDTO `json:"active_profile,omitempty"`
@@ -207,8 +207,8 @@ type snapshotResultDTO struct {
 }
 type eventDTO struct {
 	SessionID  string      `json:"session_id"`
-	Generation int64       `json:"generation"`
-	Sequence   int64       `json:"sequence"`
+	Generation uint64      `json:"generation"`
+	Sequence   uint64      `json:"sequence"`
 	State      string      `json:"state"`
 	Profile    *profileDTO `json:"profile,omitempty"`
 	Failure    string      `json:"failure,omitempty"`
@@ -216,7 +216,7 @@ type eventDTO struct {
 }
 type observeResultDTO struct {
 	Events       []eventDTO `json:"events"`
-	NextSequence int64      `json:"next_sequence"`
+	NextSequence uint64     `json:"next_sequence"`
 }
 
 func capabilitiesDTO(in v2.Capabilities) capabilitiesResultDTO {
@@ -230,7 +230,7 @@ func capabilitiesDTO(in v2.Capabilities) capabilitiesResultDTO {
 	return out
 }
 func profileResultDTO(in v2.ProfileSummary) profileDTO {
-	return profileDTO{Index: int32(in.Index), Protocol: string(in.Protocol), Description: in.Description}
+	return profileDTO{Index: in.Index, Protocol: string(in.Protocol), Description: in.Description}
 }
 func profileResultPtr(in *v2.ProfileSummary) *profileDTO {
 	if in == nil {
@@ -250,18 +250,18 @@ func configureDTO(in v2.ConfigureResult) configureResultDTO {
 	return out
 }
 func startDTO(in v2.StartResult) startResultDTO {
-	return startResultDTO{Generation: int64(in.Generation)}
+	return startResultDTO{Generation: in.Generation}
 }
 func stopDTO(in v2.StopResult) stopResultDTO {
-	return stopResultDTO{Generation: int64(in.Generation)}
+	return stopResultDTO{Generation: in.Generation}
 }
 func snapshotDTO(in v2.SnapshotResult) snapshotResultDTO {
-	return snapshotResultDTO{SessionID: in.SessionID, Generation: int64(in.Generation), State: string(in.State), Configured: in.Configured, ActiveProfile: profileResultPtr(in.ActiveProfile), LastFailure: string(in.LastFailure), CleanupComplete: in.CleanupComplete}
+	return snapshotResultDTO{SessionID: in.SessionID, Generation: in.Generation, State: string(in.State), Configured: in.Configured, ActiveProfile: profileResultPtr(in.ActiveProfile), LastFailure: string(in.LastFailure), CleanupComplete: in.CleanupComplete}
 }
 func observeDTO(in v2.ObserveResult) observeResultDTO {
-	out := observeResultDTO{Events: make([]eventDTO, len(in.Events)), NextSequence: int64(in.NextSequence)}
+	out := observeResultDTO{Events: make([]eventDTO, len(in.Events)), NextSequence: in.NextSequence}
 	for i := range in.Events {
-		item := eventDTO{SessionID: in.Events[i].SessionID, Generation: int64(in.Events[i].Generation), Sequence: int64(in.Events[i].Sequence), State: string(in.Events[i].State), Profile: profileResultPtr(in.Events[i].Profile), Failure: string(in.Events[i].Failure)}
+		item := eventDTO{SessionID: in.Events[i].SessionID, Generation: in.Events[i].Generation, Sequence: in.Events[i].Sequence, State: string(in.Events[i].State), Profile: profileResultPtr(in.Events[i].Profile), Failure: string(in.Events[i].Failure)}
 		if in.Events[i].Warning != nil {
 			item.Warning = &warningDTO{Code: in.Events[i].Warning.Code, Message: in.Events[i].Warning.Message}
 		}

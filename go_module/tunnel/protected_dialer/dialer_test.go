@@ -16,7 +16,8 @@ func TestDialersUsePreflightAddressWithoutDNS(t *testing.T) {
 	if !dnscache.SetIPv4("vpn.invalid", "127.0.0.1", "test", time.Minute) {
 		t.Fatal("could not set preflight address")
 	}
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listenConfig := net.ListenConfig{}
+	listener, err := listenConfig.Listen(context.Background(), "tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,9 +34,9 @@ func TestDialersUsePreflightAddressWithoutDNS(t *testing.T) {
 		"udp": func() (net.Conn, error) { return DialUDPConnWithProtect(ctx, "udp", address) },
 	} {
 		t.Run(name, func(t *testing.T) {
-			conn, err := dial()
-			if err != nil {
-				t.Fatal(err)
+			conn, dialErr := dial()
+			if dialErr != nil {
+				t.Fatal(dialErr)
 			}
 			if err := conn.Close(); err != nil {
 				t.Fatal(err)

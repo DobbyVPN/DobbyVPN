@@ -26,8 +26,8 @@ func captureStderr(t *testing.T, operation func()) string {
 	os.Stderr = writer
 	t.Cleanup(func() { os.Stderr = original })
 	operation()
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := writer.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	output, err := io.ReadAll(reader)
 	if err != nil {
