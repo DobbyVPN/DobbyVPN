@@ -63,7 +63,10 @@ internal class DobbyConfigsRepositoryImpl(
         Files.delete(legacyFile)
     }
 
+    @Suppress("TooGenericExceptionCaught")
     private fun writeOwnerOnly(file: Path, value: String) {
+        // Keep the original Throwable while required cleanup runs; a narrower
+        // catch would weaken the error-preservation contract at this boundary.
         Files.createDirectories(storageDir)
         restrictToOwner(storageDir, directory = true)
         val temporary = Files.createTempFile(storageDir, ".dobby-source-", ".tmp")
