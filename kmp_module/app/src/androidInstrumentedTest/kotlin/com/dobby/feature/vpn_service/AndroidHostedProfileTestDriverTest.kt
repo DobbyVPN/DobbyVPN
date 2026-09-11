@@ -119,7 +119,7 @@ class AndroidHostedProfileTestDriverTest {
     }
 
     @Test
-    fun command_validation_preserves_supplied_operation_order_without_scenario_catalog() {
+    fun command_validation_preserves_supplied_operation_order_without_test_set() {
         val command = AndroidHostedCommandContract.parse(
             commandJson(
                 operations = listOf(

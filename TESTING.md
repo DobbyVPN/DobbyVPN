@@ -97,21 +97,10 @@ perform and observe real system suspend and resume.
 
 ## Independent public verification
 
-Pull requests also call
-[`DobbyVPN/Torturer`](https://github.com/DobbyVPN/Torturer) at an immutable
-commit. Torturer source-builds the exact pull-request revision on hosted Linux,
-Windows, macOS ARM, macOS Intel, and Android runners, then exercises only
-secretless product-facing contracts and synthetic invalid input. Its iOS
-Simulator lane builds the Go Simulator framework, runs the production Swift
-suite and KMP `iosSimulatorArm64Test`, then builds, installs, launches,
-and terminates the unsigned app. Shared `commonTest` additions therefore
-extend both DobbyVPN's own Simulator job and the independent Torturer lane
-without duplicating tests. A named app XCTest remains a separate future stage.
-
-The caller uses the unprivileged `pull_request` event, read-only permissions,
-no secrets, no protected environments, and no shared Actions cache.
-It invokes Torturer's secretless verification workflow only; it cannot create
-provider resources or access the trusted functional environment.
+There is no pull-request source-build contract. After merge, GitHub Release
+builds the publishable packages. The product Test workflow runs as part of
+that Release, including the iOS Simulator shared-core checks. A named app
+XCTest remains a separate future stage.
 
 After a successful exact-commit Release and internal TestFlight upload,
 Torturer owns the trusted hosted functional lanes for Linux, Windows, macOS,
@@ -131,8 +120,7 @@ and complete local VPN logs remain owner-local.
 
 ## Scope boundary
 
-Pull-request tests intentionally use no provider credentials or real endpoint
-configuration. Trusted hosted functional tests use only a disposable profile
-and server. Public raw-log upload is blocked unless disposal is confirmed.
-Private-profile coverage and complete local diagnostics remain outside this
-public repository.
+Pull-request product jobs are not the functional test set. Trusted hosted
+functional tests use only a disposable profile and server. Public raw-log
+upload is blocked unless disposal is confirmed. Private-profile coverage and
+complete local diagnostics remain outside this public repository.

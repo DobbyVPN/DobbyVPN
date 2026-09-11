@@ -148,8 +148,8 @@ address = "127.0.0.1:10808"
 
 Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nicely expressed Issues accordingly.
 
-See [TESTING.md](TESTING.md) for contributor-local checks and independent
-public pull-request verification.
+See [TESTING.md](TESTING.md) for contributor-local checks. GitHub runs the
+product Test workflow on Release, then Torturer’s trusted functional test set.
 
 Remote telemetry has been removed. `[Telemetry]` configuration blocks are not
 supported; see [docs/Telemetry.md](docs/Telemetry.md).

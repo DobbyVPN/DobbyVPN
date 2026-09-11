@@ -9,7 +9,7 @@ on:
 
 concurrency:
   group: release-${{ github.ref }}
-  # Release jobs are serialized; PR verification runs in test.yml instead.
+  # Release jobs are serialized. Test.yml runs here, not on pull requests.
   cancel-in-progress: false
 
 jobs:
