@@ -152,7 +152,7 @@ See [TESTING.md](TESTING.md) for contributor-local checks. GitHub runs the
 product Test workflow on Release, then Torturer’s trusted functional test set.
 
 Remote telemetry has been removed. `[Telemetry]` configuration blocks are not
-supported; see [docs/Telemetry.md](docs/Telemetry.md).
+supported.
 
 Windows and MacOS apps require manual intervention to be installed for now - notarization is a work in progress.
 
