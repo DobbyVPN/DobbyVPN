@@ -39,6 +39,18 @@ class TestApplication : Application() {
         // target application creates its canonical files/app_logs.txt before
         // any hosted operation starts.
         GlobalContext.get().get<Logger>()
+        val instrumentationContext = InstrumentationRegistry.getInstrumentation().context
+        val appLog = targetContext.filesDir.resolve("app_logs.txt")
+        val serviceLog = targetContext.filesDir.resolve("go_android_logs.jsonl")
+        check(appLog.isFile && serviceLog.isFile) {
+            "Android canonical log startup failed: " +
+                "targetPackage=${targetContext.packageName} " +
+                "targetFiles=${targetContext.filesDir.absolutePath} " +
+                "targetFilesWritable=${targetContext.filesDir.canWrite()} " +
+                "instrumentationPackage=${instrumentationContext.packageName} " +
+                "instrumentationFiles=${instrumentationContext.filesDir.absolutePath} " +
+                "appLogExists=${appLog.isFile} serviceLogExists=${serviceLog.isFile}"
+        }
     }
 
     override fun onTerminate() {
