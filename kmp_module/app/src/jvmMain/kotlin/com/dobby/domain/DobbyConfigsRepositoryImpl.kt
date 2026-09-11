@@ -67,7 +67,8 @@ internal class DobbyConfigsRepositoryImpl(
         Files.createDirectories(storageDir)
         restrictToOwner(storageDir, directory = true)
         val temporary = Files.createTempFile(storageDir, ".dobby-source-", ".tmp")
-        val writeResult = runCatching {
+        var writeFailure: Throwable? = null
+        try {
             restrictToOwner(temporary, directory = false)
             Files.writeString(temporary, value, StandardCharsets.UTF_8)
             try {
@@ -76,15 +77,19 @@ internal class DobbyConfigsRepositoryImpl(
                 Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING)
             }
             restrictToOwner(file, directory = false)
+        } catch (failure: Throwable) {
+            writeFailure = failure
         }
-        val cleanupFailure = runCatching {
+        val cleanupFailure = try {
             Files.deleteIfExists(temporary)
-        }.exceptionOrNull()
-        if (cleanupFailure != null) {
-            writeResult.exceptionOrNull()?.addSuppressed(cleanupFailure)
-                ?: throw cleanupFailure
+            null
+        } catch (failure: Throwable) {
+            failure
         }
-        writeResult.getOrThrow()
+        if (cleanupFailure != null) {
+            writeFailure?.addSuppressed(cleanupFailure) ?: throw cleanupFailure
+        }
+        writeFailure?.let { throw it }
     }
 
     private fun restrictToOwner(path: Path, directory: Boolean) {

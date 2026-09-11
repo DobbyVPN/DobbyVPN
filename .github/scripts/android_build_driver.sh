@@ -221,8 +221,10 @@ gradle_version=$("$gradle_bin" --version --no-daemon | tee_stderr | awk '/^Gradl
 
 build_cache=${DOBBYVPN_GOMOBILE_GOCACHE:-"$source_root/.android-build/go-cache"}
 build_tmp=${DOBBYVPN_GOMOBILE_GOTMPDIR:-"$source_root/.android-build/go-tmp"}
-mkdir -p "$build_cache" "$build_tmp" "$(dirname -- "$first_output")" "$(dirname -- "$output")" "$(dirname -- "$manifest")" \
+build_mod_cache="$source_root/.android-build/go-mod-cache"
+mkdir -p "$build_cache" "$build_tmp" "$build_mod_cache" "$(dirname -- "$first_output")" "$(dirname -- "$output")" "$(dirname -- "$manifest")" \
   "$(dirname -- "$reproducibility")" "$(dirname -- "$dependency_manifest")"
+export GOMODCACHE="$build_mod_cache"
 if [[ -n "$test_companion_output" ]]; then
   mkdir -p "$(dirname -- "$test_companion_output")"
 fi
