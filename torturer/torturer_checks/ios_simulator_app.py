@@ -45,6 +45,7 @@ MAX_RUN_SECONDS = 30 * 60
 CLEANUP_RESERVE_SECONDS = 120
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
 IOS_KMP_BUILD_TIMEOUT_SECONDS = 15 * 60
+IOS_UI_TEST_TIMEOUT_SECONDS = 15 * 60
 COMMAND_TERMINATION_GRACE_SECONDS = 15
 UI_SMOKE_TEST = "iosAppUITests/IOSAppUITests/testConnectionSettingsNavigationAndText"
 
@@ -575,6 +576,7 @@ def run_ios_simulator_app_contract(
                 ),
                 "run iOS Simulator UI XCTest",
                 budget=budget,
+                timeout_seconds=budget.operation_timeout(IOS_UI_TEST_TIMEOUT_SECONDS),
             )
             app_path = existing_app_path or contract.app_path(work_dir)
 

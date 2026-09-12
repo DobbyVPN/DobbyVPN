@@ -13,6 +13,7 @@ from unittest.mock import patch
 from torturer_checks.ios_simulator_app import (
     CLEANUP_RESERVE_SECONDS,
     IOS_KMP_BUILD_TIMEOUT_SECONDS,
+    IOS_UI_TEST_TIMEOUT_SECONDS,
     MAX_RUN_SECONDS,
     CommandResult,
     IOSSimulatorAppContractError,
@@ -219,7 +220,11 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
             mode="metal", contract=self.contract,
         )
         self.assertEqual(evidence.mode, "metal")
-        self.assertTrue(any(command[:2] == ["xcodebuild", "test"] for command in runner.commands))
+        xctest_timeout = next(
+            timeout for command, _, timeout in runner.calls
+            if command[:2] == ["xcodebuild", "test"]
+        )
+        self.assertEqual(xctest_timeout, IOS_UI_TEST_TIMEOUT_SECONDS)
         self.assertFalse(any(command[:3] == ["xcrun", "simctl", "install"] for command in runner.commands))
         self.assertFalse(any(command[:3] == ["xcrun", "simctl", "launch"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
