@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"go_module/grpcproto"
-	v1 "go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v2"
 )
 
 func TestMappingsCoverPublicDomainValues(t *testing.T) {
@@ -26,8 +26,8 @@ func TestMappingsCoverPublicDomainValues(t *testing.T) {
 			t.Fatalf("failure %q = %v", input, got)
 		}
 	}
-	if got := Failure(context.Canceled); got.GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INTERNAL || got.GetMessage() != "operation failed" {
-		t.Fatalf("unsafe error = %#v", got)
+	if got := Failure(context.Canceled); got.GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INTERNAL || got.GetMessage() != context.Canceled.Error() {
+		t.Fatalf("error lost its exact message = %#v", got)
 	}
 }
 
@@ -94,7 +94,7 @@ func (mapperPlatform) PrepareTunnel(context.Context, v1.SessionRef) (v1.Platform
 	return mapperPlatformLease{}, nil
 }
 func (mapperPlatform) ProtectSocket(context.Context, v1.SessionRef, int) error { return nil }
-func (mapperPlatform) PublishState(context.Context, v1.Event) error            { return nil }
+func (mapperPlatform) PublishState(context.Context, v1.Event)                  {}
 
 type mapperPlatformLease struct{}
 

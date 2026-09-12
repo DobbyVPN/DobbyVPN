@@ -1,6 +1,5 @@
 package com.dobby.di
 
-import com.dobby.feature.authentication.domain.AuthenticationManager
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.LoggerManager
 import com.dobby.feature.logging.domain.CopyLogsInteractor
@@ -17,7 +16,6 @@ fun makeNativeModule(
     logsRepository: NativeInjectionFactory<LogsRepository>,
     configsRepository: NativeInjectionFactory<DobbyConfigsRepository>,
     connectionStateRepository: NativeInjectionFactory<ConnectionStateRepository>,
-    authenticationManager: NativeInjectionFactory<AuthenticationManager>,
     loggerManager: NativeInjectionFactory<LoggerManager>,
 ): Module {
     return module {
@@ -28,6 +26,5 @@ fun makeNativeModule(
         single { Logger(get()) }
         single { connectionStateRepository() }
         single { configsRepository() }
-        single { authenticationManager() }
     }
 }

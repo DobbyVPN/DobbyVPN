@@ -1,11 +1,11 @@
 //go:build ios
 
-package cloak_outline
+package dobbyvpn
 
 import (
 	"runtime/debug"
 
-	"go_module/vpnmanager"
+	"go_module/exportguard"
 )
 
 func init() {
@@ -18,13 +18,13 @@ func init() {
 }
 
 func guard(fn string) func() {
-	return vpnmanager.Guard(logCategory, fn)
+	return exportguard.Guard(logCategory, fn)
 }
 
 func guardErr(fn string, errp *error) func() {
-	return vpnmanager.GuardErr(logCategory, fn, errp)
+	return exportguard.GuardErr(logCategory, fn, errp)
 }
 
 func guardStatus(fn string, statusp *int32) func() {
-	return vpnmanager.GuardStatus(logCategory, fn, statusp)
+	return exportguard.GuardStatus(logCategory, fn, statusp)
 }

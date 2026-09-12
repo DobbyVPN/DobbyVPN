@@ -1,190 +1,21 @@
 package log
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
 )
 
-const (
-	redactedValue    = "[REDACTED]"
-	redactedEndpoint = "[REDACTED ENDPOINT]"
-	logSchema        = "dobby.log/v1"
-	logSource        = "go"
-)
-
-var sourceFileSuffixes = []string{
-	".go", ".swift", ".kt", ".kts", ".proto", ".json", ".toml", ".yaml", ".yml", ".xml", ".md",
-}
-
-var (
-	forbiddenMu    sync.RWMutex
-	forbiddenWords = make([]string, 0)
-	urlPattern     = regexp.MustCompile(`(?i)\b(?:https?|ss|vless|vmess|trojan)://[^\s"']+`)
-	// Network locations are credentials-adjacent data in a VPN client: a local
-	// SOCKS listener can contain generated credentials and a remote name/IP
-	// identifies a user's selected service.  Keep lifecycle and timing facts,
-	// but never persist either kind of location in local logs.
-	// Mask address literals wherever a dependency embeds them. Host names are
-	// masked only when they carry an endpoint-related key or an explicit port;
-	// masking every dotted word would also destroy useful source file names.
-	networkEndpointPattern = regexp.MustCompile(`(?i)(?:[^\s:@]+:[^\s@]+@)?(?:\[[0-9a-f:.]+\](?::\d{1,5})?|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b|\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|local):\d{1,5}\b)`)
-	ipv6Pattern            = regexp.MustCompile(`(?i)\b[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){2,7}\b`)
-	hostnamePattern        = regexp.MustCompile(`(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|local|invalid)\b`)
-	stableEventPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
-	secretPattern          = regexp.MustCompile(`(?i)(["']?(?:token|api[_-]?key|password|secret|credential|authorization|auth|endpoint|url|config|server(?:ip|_ip)?|host|address|remote|proxy|gateway|dest(?:ination)?|resolved|path|file|directory|session[_-]?id|command[_-]?id)["']?\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,}\]]+)`)
-	tomlPattern            = regexp.MustCompile(`(?m)^\s*\[{1,2}[A-Za-z0-9_.-]+\]{1,2}\s*$`)
-	jsonConfig             = regexp.MustCompile(`["'][A-Za-z0-9_.-]+["']\s*:`)
-)
-
-func AddForbiddenWord(word string) {
-	if word == "" {
-		return
-	}
-	forbiddenMu.Lock()
-	defer forbiddenMu.Unlock()
-	for _, existing := range forbiddenWords {
-		if existing == word {
-			return
-		}
-	}
-	forbiddenWords = append(forbiddenWords, word)
-}
-
-func RemoveForbiddenWord(word string) {
-	forbiddenMu.Lock()
-	defer forbiddenMu.Unlock()
-	for i, existing := range forbiddenWords {
-		if existing == word {
-			forbiddenWords = append(forbiddenWords[:i], forbiddenWords[i+1:]...)
-			return
-		}
-	}
-}
-
-// MaskStr is for callers that need a short human-readable secret marker.
-func MaskStr(input string) string {
-	if input == "" {
-		return ""
-	}
-	return redactedValue
-}
-
-func isSensitiveKey(key string) bool {
-	key = strings.ToLower(key)
-	for _, marker := range []string{
-		"token", "api_key", "api-key", "apikey", "password", "secret", "credential", "authorization", "auth", "endpoint", "url", "config", "server", "host", "address",
-		"remote", "proxy", "gateway", "dest", "resolved", "path", "file", "directory", "session-id", "session_id", "command-id", "command_id",
-	} {
-		if strings.Contains(key, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func redactText(message string) string {
-	// A TOML/JSON configuration is never useful in a diagnostic line and may
-	// carry multiple credentials beyond any individual key-value pattern.
-	if tomlPattern.MatchString(message) || (strings.Contains(message, "{") && jsonConfig.MatchString(message)) {
-		return "[REDACTED CONFIGURATION]"
-	}
-	message = urlPattern.ReplaceAllString(message, "[REDACTED URL]")
-	message = secretPattern.ReplaceAllString(message, "${1}"+redactedValue)
-	message = networkEndpointPattern.ReplaceAllString(message, redactedEndpoint)
-	message = ipv6Pattern.ReplaceAllStringFunc(message, func(candidate string) string {
-		if strings.Contains(candidate, "::") || strings.ContainsAny(strings.ToLower(candidate), "abcdef") || strings.Count(candidate, ":") >= 3 {
-			return redactedEndpoint
-		}
-		return candidate
-	})
-	message = hostnamePattern.ReplaceAllStringFunc(message, func(candidate string) string {
-		lower := strings.ToLower(candidate)
-		for _, sourceSuffix := range sourceFileSuffixes {
-			if strings.HasSuffix(lower, sourceSuffix) {
-				return candidate
-			}
-		}
-		return redactedEndpoint
-	})
-	return message
-}
-
-type trustedVocabulary string
-
-func trustedEventName(event string) trustedVocabulary {
-	if stableEventPattern.MatchString(event) {
-		return trustedVocabulary(event)
-	}
-	return trustedVocabulary("log.message")
-}
-
-func redactValue(key string, value any) any {
-	if isSensitiveKey(key) {
-		return redactedValue
-	}
-	switch typed := value.(type) {
-	case trustedVocabulary:
-		return string(typed)
-	case string:
-		return redactText(typed)
-	case []byte:
-		return "[REDACTED BINARY]"
-	case map[string]any:
-		out := make(map[string]any, len(typed))
-		for nestedKey, nestedValue := range typed {
-			out[nestedKey] = redactValue(nestedKey, nestedValue)
-		}
-		return out
-	case map[string]string:
-		out := make(map[string]any, len(typed))
-		for nestedKey, nestedValue := range typed {
-			out[nestedKey] = redactValue(nestedKey, nestedValue)
-		}
-		return out
-	case logrus.Fields:
-		out := make(map[string]any, len(typed))
-		for nestedKey, nestedValue := range typed {
-			out[nestedKey] = redactValue(nestedKey, nestedValue)
-		}
-		return out
-	case []any:
-		out := make([]any, len(typed))
-		for index, nestedValue := range typed {
-			out[index] = redactValue(key, nestedValue)
-		}
-		return out
-	case error:
-		return maskMessage(typed.Error())
-	case fmt.Stringer:
-		return maskMessage(typed.String())
-	default:
-		return value
-	}
-}
-
-func maskMessage(message string) string {
-	forbiddenMu.RLock()
-	words := append([]string(nil), forbiddenWords...)
-	forbiddenMu.RUnlock()
-	for _, word := range words {
-		if word != "" {
-			message = strings.ReplaceAll(message, word, redactedValue)
-		}
-	}
-	return redactText(message)
-}
+const logSchema = "dobby.log/v1"
+const logSource = "go"
 
 type logrusToSlogHook struct{}
 
@@ -209,15 +40,10 @@ func (*logrusToSlogHook) Fire(entry *logrus.Entry) error {
 	return nil
 }
 
-// TelemetryLogger remains as an empty compatibility type. It cannot transport
-// data and intentionally stores neither endpoint nor token.
-type TelemetryLogger struct{}
-
 type Logger struct {
-	file     *os.File
-	logger   *slog.Logger
-	pending  []pendingEntry
-	fallback bool
+	file    *os.File
+	logger  *slog.Logger
+	pending []pendingEntry
 }
 
 type pendingEntry struct {
@@ -229,8 +55,6 @@ type pendingEntry struct {
 	arguments  map[string]any
 }
 
-var maxLocalLogBytes int64 = 4 << 20
-
 var (
 	lg     = &Logger{}
 	initMu sync.Mutex
@@ -239,21 +63,18 @@ var (
 
 func init() {
 	bridge.Do(func() {
-		// Hooks do not replace Logrus's default output. Suppress that raw path
-		// and route every entry through the redacting bridge above.
+		// Hooks do not replace Logrus's default output. Suppress that duplicate
+		// path and route every entry into the same structured log.
 		logrus.SetOutput(io.Discard)
 		logrus.AddHook(&logrusToSlogHook{})
 	})
 }
-
-func NewTelemetryLogger(_, _ string) (*TelemetryLogger, error) { return &TelemetryLogger{}, nil }
 
 func (logger *Logger) dumpBuffer() {
 	for _, entry := range logger.pending {
 		emitAt(logger.logger, entry.occurredAt, entry.level, entry.event, entry.category, entry.message, entry.arguments)
 	}
 	logger.pending = nil
-	logger.trimLocked()
 }
 
 func IsInitialized() bool {
@@ -263,8 +84,7 @@ func IsInitialized() bool {
 }
 
 // Close releases the local log file and returns the logger to its buffered
-// pre-initialization state. It is safe to call repeatedly during orderly
-// process shutdown and allows permission tests to remove their temporary log.
+// pre-initialization state.
 func Close() error {
 	initMu.Lock()
 	defer initMu.Unlock()
@@ -274,108 +94,45 @@ func Close() error {
 	}
 	lg.file = nil
 	lg.logger = nil
-	lg.fallback = false
 	return err
 }
 
-// SetPath creates local log storage with owner-only permissions, correcting
-// permissions on pre-existing files/directories as well.
+// SetPath creates or reuses the local log file.
 func SetPath(path string) error {
 	initMu.Lock()
 	defer initMu.Unlock()
-	if lg.logger != nil && !lg.fallback {
+	if lg.logger != nil {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create log directory: %w", err)
 	}
-	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("secure log directory: %w", err)
-	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot open local log file; falling back to stderr logging")
-		lg.logger = slog.New(newJSONLineHandler(os.Stderr))
-		lg.fallback = true
-		lg.dumpBuffer()
 		return fmt.Errorf("open local log file: %w", err)
-	}
-	if err := f.Chmod(0o600); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("secure log file: %w", err)
 	}
 	lg.file = f
 	lg.logger = slog.New(newJSONLineHandler(f))
-	lg.fallback = false
 	lg.dumpBuffer()
 	return nil
 }
 
-func retainNewestCompleteJSONLLines(data []byte, limit int64) []byte {
-	if limit <= 0 {
-		return nil
+// SetOpenedFile installs an already-opened append-only log supplied by an
+// external supervisor. The logger takes ownership of file.
+func SetOpenedFile(file *os.File) error {
+	if file == nil {
+		return fmt.Errorf("managed log file is unavailable")
 	}
-	lastNewline := bytes.LastIndexByte(data, '\n')
-	if lastNewline < 0 {
-		return nil
+	initMu.Lock()
+	defer initMu.Unlock()
+	if lg.logger != nil {
+		return file.Close()
 	}
-	complete := data[:lastNewline+1]
-	if int64(len(complete)) <= limit {
-		return complete
-	}
-	start := len(complete) - int(limit)
-	if start == 0 || complete[start-1] == '\n' {
-		return complete[start:]
-	}
-	nextNewline := bytes.IndexByte(complete[start:], '\n')
-	if nextNewline < 0 {
-		return nil
-	}
-	return complete[start+nextNewline+1:]
-}
-
-func (logger *Logger) trimLocked() {
-	if logger.file == nil || logger.fallback || maxLocalLogBytes <= 0 {
-		return
-	}
-	info, statErr := logger.file.Stat()
-	if statErr != nil || info.Size() <= maxLocalLogBytes {
-		return
-	}
-	path := logger.file.Name()
-	data, readErr := os.ReadFile(path)
-	if readErr != nil {
-		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
-		return
-	}
-	retained := retainNewestCompleteJSONLLines(data, maxLocalLogBytes)
-	if truncateErr := logger.file.Truncate(0); truncateErr != nil {
-		logRetentionFailure("Cannot apply local log retention; continuing with the active log")
-		return
-	}
-	if written, writeErr := logger.file.Write(retained); writeErr != nil || written != len(retained) {
-		logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
-		return
-	}
-	if syncErr := logger.file.Sync(); syncErr != nil {
-		logRetentionFailure("Cannot apply local log retention; retained log may be incomplete")
-	}
-}
-
-func logRetentionFailure(message string) { fmt.Fprintln(os.Stderr, message) }
-
-// InitTelemetry is intentionally local-only. Its parameters are discarded so
-// legacy callers cannot cause a remote request or leave secrets in memory.
-func InitTelemetry(_, _ string) error {
-	Warnf("LOG", "Remote telemetry is disabled; logs remain on this device")
+	lg.file = file
+	lg.logger = slog.New(newJSONLineHandler(file))
+	lg.dumpBuffer()
 	return nil
 }
-
-func SetupTelemetryAttributes(_ string) {
-	Debugf("LOG", "Telemetry attributes ignored because remote telemetry is disabled")
-}
-
-func StopTelemetry() { Debugf("LOG", "Remote telemetry is disabled; no exporter to stop") }
 
 func write(level slog.Level, category, message string, arguments map[string]any) {
 	writeEvent(level, "log.message", category, message, arguments)
@@ -399,7 +156,6 @@ func writeEventAt(occurredAt time.Time, level slog.Level, event, category, messa
 		return
 	}
 	emitAt(lg.logger, occurredAt, level, event, category, message, arguments)
-	lg.trimLocked()
 }
 
 func cloneArguments(arguments map[string]any) map[string]any {
@@ -424,9 +180,9 @@ func emitAt(logger *slog.Logger, occurredAt time.Time, level slog.Level, event, 
 	}
 	attrs := make([]slog.Attr, 0, 4+len(arguments))
 	attrs = append(attrs,
-		slog.Any("schema", trustedVocabulary(logSchema)),
-		slog.Any("source", trustedVocabulary(logSource)),
-		slog.Any("event", trustedEventName(event)),
+		slog.String("schema", logSchema),
+		slog.String("source", logSource),
+		slog.String("event", event),
 		slog.String("category", category),
 	)
 	keys := make([]string, 0, len(arguments))
@@ -435,11 +191,13 @@ func emitAt(logger *slog.Logger, occurredAt time.Time, level slog.Level, event, 
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		attrs = append(attrs, slog.Any(key, redactValue(key, arguments[key])))
+		attrs = append(attrs, slog.Any(key, arguments[key]))
 	}
-	record := slog.NewRecord(occurredAt, level, maskMessage(fmt.Sprintf("[%s] %s", category, message)), 0)
+	record := slog.NewRecord(occurredAt, level, fmt.Sprintf("[%s] %s", category, message), 0)
 	record.AddAttrs(attrs...)
-	_ = logger.Handler().Handle(ctx, record)
+	if err := logger.Handler().Handle(ctx, record); err != nil {
+		fmt.Fprintf(os.Stderr, "write structured log: %v\n", err)
+	}
 }
 
 func Info(category, message string, arguments map[string]any) {
@@ -463,10 +221,8 @@ func Warnf(category, format string, args ...any)  { Warn(category, fmt.Sprintf(f
 func Errorf(category, format string, args ...any) { Error(category, fmt.Sprintf(format, args...), nil) }
 func Tracef(category, format string, args ...any) { Trace(category, fmt.Sprintf(format, args...), nil) }
 
-type redactingHandler struct{ next slog.Handler }
-
 func newJSONLineHandler(writer io.Writer) slog.Handler {
-	next := slog.NewJSONHandler(writer, &slog.HandlerOptions{
+	return slog.NewJSONHandler(writer, &slog.HandlerOptions{
 		Level: slog.LevelDebug - 4,
 		ReplaceAttr: func(_ []string, attribute slog.Attr) slog.Attr {
 			switch attribute.Key {
@@ -485,51 +241,4 @@ func newJSONLineHandler(writer io.Writer) slog.Handler {
 			return attribute
 		},
 	})
-	return &redactingHandler{next: next}
-}
-
-func (h *redactingHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return h.next.Enabled(ctx, level)
-}
-
-func (h *redactingHandler) Handle(ctx context.Context, record slog.Record) error {
-	sanitized := slog.NewRecord(record.Time, record.Level, maskMessage(record.Message), record.PC)
-	record.Attrs(func(attribute slog.Attr) bool {
-		sanitized.AddAttrs(redactAttribute(attribute))
-		return true
-	})
-	return h.next.Handle(ctx, sanitized)
-}
-
-func (h *redactingHandler) WithAttrs(attributes []slog.Attr) slog.Handler {
-	redacted := make([]slog.Attr, len(attributes))
-	for index, attribute := range attributes {
-		redacted[index] = redactAttribute(attribute)
-	}
-	return &redactingHandler{next: h.next.WithAttrs(redacted)}
-}
-
-func (h *redactingHandler) WithGroup(name string) slog.Handler {
-	return &redactingHandler{next: h.next.WithGroup(name)}
-}
-
-func redactAttribute(attribute slog.Attr) slog.Attr {
-	attribute.Value = attribute.Value.Resolve()
-	if attribute.Value.Kind() == slog.KindGroup {
-		group := attribute.Value.Group()
-		redacted := make([]slog.Attr, len(group))
-		for index, nested := range group {
-			redacted[index] = redactAttribute(nested)
-		}
-		return slog.Group(attribute.Key, attrsToAny(redacted)...)
-	}
-	return slog.Any(attribute.Key, redactValue(attribute.Key, attribute.Value.Any()))
-}
-
-func attrsToAny(attributes []slog.Attr) []any {
-	values := make([]any, len(attributes))
-	for index := range attributes {
-		values[index] = attributes[index]
-	}
-	return values
 }

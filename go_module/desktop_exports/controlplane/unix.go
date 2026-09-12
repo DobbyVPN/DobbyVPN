@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 )
 
 var errWrongLocalConnection = errors.New("control plane accepted a non-Unix connection")
@@ -91,6 +93,39 @@ func ControlSocketPath() (string, error) {
 	}
 	return filepath.Join(dir, "DobbyVPN", "control.sock"), nil
 }
+
+func supervisedUnprivilegedSocket(path string, expected int) (bool, error) {
+	if os.Getenv("DOBBYVPN_SUPERVISED_REQUEST") != "1" || currentUID() == 0 || expected == currentUID() {
+		return false, nil
+	}
+	root := os.Getenv("DOBBYVPN_REQUEST_ROOT")
+	if root == "" || !filepath.IsAbs(root) || !filepath.IsAbs(path) {
+		return false, fmt.Errorf("supervised control socket paths are invalid")
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false, fmt.Errorf("supervised request root is unavailable: %w", err)
+	}
+	parent := filepath.Dir(path)
+	resolvedParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return false, fmt.Errorf("supervised control socket parent is unavailable: %w", err)
+	}
+	relative, err := filepath.Rel(resolvedRoot, resolvedParent)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return false, fmt.Errorf("supervised control socket escapes its request")
+	}
+	info, err := os.Lstat(parent)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf("supervised control socket parent is unsafe")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != currentUID() {
+		return false, fmt.Errorf("supervised control socket parent has the wrong owner")
+	}
+	return true, nil
+}
+
 func ListenControlSocket() (net.Listener, error) {
 	expected, err := expectedPeerUID()
 	if err != nil {
@@ -107,12 +142,18 @@ func ListenControlSocket() (net.Listener, error) {
 	if err != nil || !dirInfo.IsDir() {
 		return nil, fmt.Errorf("control socket parent is not a directory")
 	}
+	supervisedUnprivileged, err := supervisedUnprivilegedSocket(path, expected)
+	if err != nil {
+		return nil, err
+	}
 	if expected != currentUID() {
 		// A privileged daemon keeps the directory root-owned so the desktop
 		// user cannot replace the socket. Execute-only access is sufficient to
 		// connect to the user-owned 0600 socket below.
-		if err := os.Chown(filepath.Dir(path), currentUID(), -1); err != nil {
-			return nil, err
+		if !supervisedUnprivileged {
+			if err := os.Chown(filepath.Dir(path), currentUID(), -1); err != nil {
+				return nil, err
+			}
 		}
 		if err := os.Chmod(filepath.Dir(path), 0711); err != nil {
 			return nil, err
@@ -134,11 +175,18 @@ func ListenControlSocket() (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(path, 0600); err != nil {
+	socketMode := os.FileMode(0600)
+	if supervisedUnprivileged {
+		// The disposable runner is a different UID. Filesystem write permission
+		// permits connect(2); Unix peer credentials still authenticate that one
+		// exact UID before any RPC is accepted.
+		socketMode = 0622
+	}
+	if err := os.Chmod(path, socketMode); err != nil {
 		_ = lis.Close()
 		return nil, err
 	}
-	if expected != currentUID() {
+	if expected != currentUID() && !supervisedUnprivileged {
 		if err := os.Chown(path, expected, -1); err != nil {
 			_ = lis.Close()
 			return nil, err

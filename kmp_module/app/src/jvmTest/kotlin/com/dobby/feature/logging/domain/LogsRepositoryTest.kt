@@ -13,72 +13,56 @@ import kotlin.test.assertTrue
 
 class LogsRepositoryTest {
     @Test
-    fun discoversAnExistingLogFromItsDirectoryWithoutRecreatingIt() {
-        val directory = Files.createTempDirectory("dobby-existing-log")
-        val log = directory.resolve("app_logs.txt")
-        Files.writeString(log, "retained")
-
+    fun freshCurrentStorageLeavesLegacyLogUntouched() {
+        val root = Files.createTempDirectory("dobby-log-fresh-current")
+        val legacyDirectory = root.resolve(".myapp")
+        val currentDirectory = root.resolve(".dobbyvpn")
+        val legacy = legacyDirectory.resolve("app_logs.txt")
+        val current = currentDirectory.resolve("app_logs.txt")
         try {
-            ensureLogFileEntry(directory, log)
+            Files.createDirectories(legacyDirectory)
+            Files.writeString(legacy, "legacy remains")
+            Files.createDirectories(currentDirectory)
 
-            assertEquals("retained", Files.readString(log))
+            val previousHome = System.getProperty("user.home")
+            try {
+                System.setProperty("user.home", root.toString())
+                assertEquals(current.toString(), provideLogFilePath().toString())
+            } finally {
+                if (previousHome == null) {
+                    System.clearProperty("user.home")
+                } else {
+                    System.setProperty("user.home", previousHome)
+                }
+            }
+
+            assertTrue(Files.exists(current))
+            assertEquals("", Files.readString(current))
+            assertEquals("legacy remains", Files.readString(legacy))
         } finally {
-            Files.deleteIfExists(log)
-            Files.deleteIfExists(directory)
+            Files.walk(root).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
         }
     }
 
     @Test
-    fun createsAMissingLogAndRejectsANonFileEntry() {
-        val directory = Files.createTempDirectory("dobby-new-log")
-        val log = directory.resolve("app_logs.txt")
-        val target = directory.resolve("target.txt")
-
+    fun activeJvmClearRejectsFinalAlias() {
+        val root = Files.createTempDirectory("dobby-log-clear-alias")
+        val target = root.resolve("target.log")
+        val link = root.resolve("app_logs.txt")
         try {
-            ensureLogFileEntry(directory, log)
-            assertTrue(Files.isRegularFile(log))
+            Files.writeString(target, "must remain")
+            Files.createSymbolicLink(link, target.fileName)
 
-            Files.delete(log)
-            Files.createDirectory(log)
-            assertFailsWith<IllegalStateException> { ensureLogFileEntry(directory, log) }
-            Files.delete(log)
-
-            Files.writeString(target, "target")
-            Files.createSymbolicLink(log, target.fileName)
-            assertFailsWith<IllegalStateException> { ensureLogFileEntry(directory, log) }
+            assertFailsWith<IllegalStateException> {
+                clearLogFile(link.toString().toPath(), fileSystem)
+            }
+            assertEquals("must remain", Files.readString(target))
         } finally {
-            Files.deleteIfExists(log)
-            Files.deleteIfExists(target)
-            Files.deleteIfExists(directory)
-        }
-    }
-
-    @Test
-    fun parsesOnlyOneBoundedEffectiveWindowsUserSid() {
-        assertEquals(
-            "S-1-5-21-1000-2000-3000-4000",
-            parseWindowsUserSid("\"WORKSTATION\\user\",\"S-1-5-21-1000-2000-3000-4000\"\r\n"),
-        )
-        listOf(
-            "S-1-5-21-1000",
-            "\"user\",\"S-1-5-21-1000\" trailing",
-            "\"user\",\"S-1-5-21-1000\"\n\"other\",\"S-1-5-18\"",
-            "\"user\",\"S-1-5-21-1000 & injected\"",
-        ).forEach { value ->
-            assertFailsWith<IllegalStateException> { parseWindowsUserSid(value) }
-        }
-    }
-
-    @Test
-    fun parsesLocalizedSystemAccountWithoutAcceptingControlOutput() {
-        assertEquals("NT-AUTORITÄT\\SYSTEM", parseWindowsAccountName("NT-AUTORITÄT\\SYSTEM"))
-        listOf(
-            "SYSTEM",
-            "NT AUTHORITY\\SYSTEM\nextra",
-            "",
-            "D\\${"x".repeat(256)}",
-        ).forEach { value ->
-            assertFailsWith<IllegalStateException> { parseWindowsAccountName(value) }
+            Files.walk(root).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
         }
     }
 

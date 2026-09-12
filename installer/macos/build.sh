@@ -14,7 +14,7 @@ install_service() {
   local actual_arches
 
   actual_arches="$(lipo -archs "$service")"
-  if ! tr ' ' '\n' <<<"$actual_arches" | grep -Fxq "$expected_arch"; then
+  if ! tr ' ' '\n' <<<"$actual_arches" | grep -Fx "$expected_arch"; then
     echo "[!] Refusing to package $service: expected $expected_arch, found $actual_arches" >&2
     exit 1
   fi
@@ -29,7 +29,7 @@ install_trusttunnel_helper() {
   local actual_arches
 
   actual_arches="$(lipo -archs "$helper")"
-  if ! tr ' ' '\n' <<<"$actual_arches" | grep -Fxq "x86_64"; then
+  if ! tr ' ' '\n' <<<"$actual_arches" | grep -Fx "x86_64"; then
     echo "[!] Refusing to package TrustTunnel helper: x86_64 slice is missing ($actual_arches)" >&2
     exit 1
   fi
@@ -106,6 +106,13 @@ install_service ../../services/amd64/macos_grpcvpnserver x86_64 "$APP_BUNDLE/Con
 
 echo [+] Inserting verified TrustTunnel helper beside Intel service
 install_trusttunnel_helper ../../services/amd64/trusttunnel_client "$APP_BUNDLE/Contents/Resources/trusttunnel_client"
+
+echo [+] Exposing the native CLI at the documented app-bundle path
+[[ -x "$APP_BUNDLE/Contents/Resources/dobby-cli" ]] || {
+  echo "[!] Native dobby-cli is missing from the macOS bundle" >&2
+  exit 1
+}
+ln -s ../Resources/dobby-cli "$APP_BUNDLE/Contents/MacOS/dobby-cli"
 
 echo [+] Making Payload/ folder
 mkdir Payload

@@ -4,6 +4,8 @@ import com.dobby.feature.diagnostic.domain.VpnConnectionState
 
 /** Stable, non-secret accessibility values for local and independent UI automation. */
 object AutomationSemantics {
+    const val CONNECTION_NAV = "dobby.connection.nav"
+    const val SETTINGS_NAV = "dobby.settings.nav"
     const val CONNECTION_SCREEN = "dobby.connection.screen"
     const val CONNECTION_STATUS = "dobby.connection.status"
     const val SUBSCRIPTION_INPUT = "dobby.subscription.input"

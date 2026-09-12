@@ -1,133 +1,104 @@
+import Foundation
 import XCTest
 @testable import IOSLifecycleCore
 
 final class IOSLifecycleCoreTests: XCTestCase {
-    func testEveryExtensionStateMapsToExpectedPresentation() {
-        let cases: [(NetworkExtensionState, PresentedConnectionState)] = [
-            (.invalid, .disconnected),
-            (.disconnected, .disconnected),
-            (.connecting, .connecting),
-            (.connected, .connected),
-            (.reasserting, .connecting),
-            (.disconnecting, .connecting),
-        ]
+    func testMailboxSuccessValidationRejectsMalformedAndTypedFailures() {
+        XCTAssertTrue(IOSMailboxLifecycle.isSuccessfulGoResponse(Data(#"{"ok":true,"result":{"digest":"abc"}}"#.utf8)))
+        XCTAssertFalse(IOSMailboxLifecycle.isSuccessfulGoResponse(Data(#"{"ok":false,"error":{"code":"FAILED"}}"#.utf8)))
+        XCTAssertFalse(IOSMailboxLifecycle.isSuccessfulGoResponse(Data(#"not-json"#.utf8)))
+    }
 
-        for (state, expected) in cases {
-            XCTAssertEqual(state.presentedState, expected)
+    func testCommandRoundTripContainsNoConfigurationBytes() throws {
+        let command = try IOSProviderCommand(
+            operation: .configure,
+            requestID: "ios-configure-1",
+            sessionID: "0123456789abcdef0123456789abcdef"
+        )
+        let bytes = try command.encoded()
+        XCTAssertFalse(String(decoding: bytes, as: UTF8.self).contains("raw_config"))
+        XCTAssertEqual(try IOSProviderCommand.decode(bytes), command)
+    }
+
+    func testCommandDecoderIgnoresUnrelatedFields() throws {
+        let bytes = Data(#"{"operation":"create","request_id":"ios-create-1","version":1,"future_field":true}"#.utf8)
+        XCTAssertEqual(try IOSProviderCommand.decode(bytes).operation, .create)
+    }
+
+    func testOperationFieldsAreBound() throws {
+        XCTAssertThrowsError(try IOSProviderCommand(
+            operation: .start,
+            requestID: "start",
+            sessionID: "session",
+            mode: "UNKNOWN",
+            index: 0
+        )) { error in
+            XCTAssertEqual(error as? IOSProviderMessageError, .unsupportedOperation)
         }
+        XCTAssertThrowsError(try IOSProviderCommand(
+            operation: .observe,
+            requestID: "observe",
+            sessionID: "session"
+        ))
+        XCTAssertThrowsError(try IOSProviderCommand(
+            operation: .configure,
+            requestID: "configure",
+            sessionID: "session",
+            generation: 1
+        ))
+        XCTAssertThrowsError(try IOSProviderCommand(
+            operation: .snapshot,
+            requestID: "snapshot",
+            sessionID: ""
+        ))
+        XCTAssertThrowsError(try IOSProviderCommand(
+            operation: .stop,
+            requestID: "stop",
+            sessionID: "session"
+        ))
     }
 
-    func testGenerationFenceRejectsDelayedCallbacks() {
-        var state = IOSLifecycleState()
-        let first = state.beginStart()
-        XCTAssertEqual(state.extensionState, .connecting)
-        XCTAssertTrue(state.receive(.connected, generation: first))
+    func testMalformedRequiredNumbersAreRejected() {
+        let generation = Data(#"{"generation":"not-a-number","operation":"stop","request_id":"stop","session_id":"session","version":1}"#.utf8)
+        XCTAssertThrowsError(try IOSProviderCommand.decode(generation))
 
-        let stop = state.beginStop()
-        XCTAssertNotEqual(first, stop)
-        XCTAssertEqual(state.extensionState, .disconnecting)
-        XCTAssertFalse(state.receive(.connected, generation: first))
-        XCTAssertTrue(state.receive(.disconnected, generation: stop))
-        XCTAssertEqual(state.extensionState.presentedState, .disconnected)
+        let index = Data(#"{"index":"not-a-number","mode":"AUTO_SELECT","operation":"start","request_id":"start","session_id":"session","version":1}"#.utf8)
+        XCTAssertThrowsError(try IOSProviderCommand.decode(index))
     }
 
-    func testStopDuringStartupCannotReconnectFromDelayedStartCallback() {
-        var state = IOSLifecycleState()
-        let startingGeneration = state.beginStart()
-        let stoppingGeneration = state.beginStop()
-
-        XCTAssertFalse(state.receive(.connected, generation: startingGeneration))
-        XCTAssertTrue(state.receive(.disconnected, generation: stoppingGeneration))
-        XCTAssertEqual(state.extensionState.presentedState, .disconnected)
+    func testEmptyIdentifiersAreRejected() throws {
+        XCTAssertThrowsError(try IOSProviderCommand.decode(Data(#"{"operation":"create","request_id":"","version":1}"#.utf8)))
+        let longID = String(repeating: "x", count: 1_024)
+        XCTAssertNoThrow(try IOSProviderCommand(operation: .create, requestID: longID))
     }
 
-    func testReconnectOwnsNewGenerationAfterCleanDisconnect() {
-        var state = IOSLifecycleState()
-        let firstStart = state.beginStart()
-        XCTAssertTrue(state.receive(.connected, generation: firstStart))
-        let stop = state.beginStop()
-        XCTAssertTrue(state.receive(.disconnected, generation: stop))
-
-        let reconnect = state.beginStart()
-        XCTAssertNotEqual(reconnect, firstStart)
-        XCTAssertTrue(state.receive(.connected, generation: reconnect))
-        XCTAssertFalse(state.receive(.disconnected, generation: stop))
-        XCTAssertEqual(state.extensionState.presentedState, .connected)
+    func testMailboxIsConsumedOnlyByValidGoEnvelope() {
+        XCTAssertTrue(IOSMailboxLifecycle.mayConsumeConfigureResponse(Data(#"{"ok":true,"result":{"digest":"abc"}}"#.utf8)))
+        XCTAssertTrue(IOSMailboxLifecycle.mayConsumeConfigureResponse(Data(#"{"ok":false,"error":{"code":"MALFORMED_CONFIG"}}"#.utf8)))
+        XCTAssertFalse(IOSMailboxLifecycle.mayConsumeConfigureResponse(Data(#"{"ok":false,"error":{}}"#.utf8)))
+        XCTAssertFalse(IOSMailboxLifecycle.mayConsumeConfigureResponse(Data(#"not-json"#.utf8)))
     }
 
-    func testNewStartCannotTemporarilyPresentOldConnectedState() {
-        var state = IOSLifecycleState()
-        let first = state.beginStart()
-        XCTAssertTrue(state.receive(.connected, generation: first))
-
-        let second = state.beginStart()
-        XCTAssertEqual(state.extensionState, .connecting)
-        XCTAssertFalse(state.receive(.disconnected, generation: first))
-        XCTAssertTrue(state.isCurrent(second))
+    func testResponsePreservesExactGoBytes() throws {
+        let goBytes = Data(#"{"ok":true, "result":{"digest":"exact-spacing"}}"#.utf8)
+        let response = try IOSProviderResponse(requestID: "ios-response-1", payload: goBytes)
+        let encoded = try response.encoded()
+        let decoded = try IOSProviderResponse.decode(encoded, expectedRequestID: "ios-response-1")
+        XCTAssertEqual(decoded.kind, .go)
+        XCTAssertEqual(decoded.payload, goBytes)
     }
 
-    func testSessionRequestPolicyRequiresConfigurationAndAutoSelect() {
-        XCTAssertEqual(
-            IOSSessionRequestPolicy.validateStart(
-                configured: false,
-                mode: "AUTO_SELECT",
-                index: 0
-            ),
-            .notConfigured
-        )
-        XCTAssertEqual(
-            IOSSessionRequestPolicy.validateStart(
-                configured: true,
-                mode: "MANUAL",
-                index: 0
-            ),
-            .unsupported
-        )
-        XCTAssertEqual(
-            IOSSessionRequestPolicy.validateStart(
-                configured: true,
-                mode: "AUTO_SELECT",
-                index: 1
-            ),
-            .unsupported
-        )
-        XCTAssertNil(
-            IOSSessionRequestPolicy.validateStart(
-                configured: true,
-                mode: "AUTO_SELECT",
-                index: 0
-            )
-        )
+    func testResponseRequiresMatchingRequest() throws {
+        let response = try IOSProviderResponse(requestID: "ios-response-2", payload: Data(#"{"ok":false}"#.utf8))
+        let encoded = try response.encoded()
+        XCTAssertThrowsError(try IOSProviderResponse.decode(encoded, expectedRequestID: "other"))
+        XCTAssertThrowsError(try IOSProviderResponse.decode(Data(#"{}"#.utf8), expectedRequestID: "ios-response-2"))
     }
 
-    func testObservationsAreMonotonicAndDeduplicated() {
-        var observation = IOSStateObservation()
-
-        var result = observation.observe(state: "IDLE", afterSequence: 0)
-        XCTAssertFalse(result.emit)
-
-        result = observation.observe(state: "PREPARING", afterSequence: 0)
-        XCTAssertTrue(result.emit)
-        XCTAssertEqual(result.nextSequence, 1)
-
-        result = observation.observe(state: "PREPARING", afterSequence: 1)
-        XCTAssertFalse(result.emit)
-        XCTAssertEqual(result.nextSequence, 1)
-
-        result = observation.observe(state: "CONNECTED", afterSequence: 1)
-        XCTAssertTrue(result.emit)
-        XCTAssertEqual(result.nextSequence, 2)
-    }
-
-    func testStartPolicyCoversEveryNetworkExtensionStatusAndLimit() {
-        let policy = IOSStartPolicy(maximumRetries: 2)
-        XCTAssertEqual(policy.action(for: .disconnected, retryAttempt: 0), .start)
-        XCTAssertEqual(policy.action(for: .invalid, retryAttempt: 0), .start)
-        XCTAssertEqual(policy.action(for: .connecting, retryAttempt: 0), .waitForTransition)
-        XCTAssertEqual(policy.action(for: .reasserting, retryAttempt: 0), .waitForTransition)
-        XCTAssertEqual(policy.action(for: .connected, retryAttempt: 0), .stopThenRetry)
-        XCTAssertEqual(policy.action(for: .disconnecting, retryAttempt: 0), .retry)
-        XCTAssertEqual(policy.action(for: .connected, retryAttempt: 2), .fail)
-        XCTAssertEqual(policy.action(for: .disconnecting, retryAttempt: 2), .fail)
+    func testResponseRequiresANonEmptyRequestID() throws {
+        let payload = Data(repeating: 0x41, count: 256 * 1024)
+        let response = try IOSProviderResponse(requestID: "ios-response-large", payload: payload)
+        XCTAssertNoThrow(try response.encoded())
+        XCTAssertThrowsError(try IOSProviderResponse(requestID: "", payload: Data()))
     }
 }

@@ -22,21 +22,3 @@ func (c *Server) InitLogger(_ context.Context, in *grpcproto.InitLoggerRequest) 
 	}
 	return &grpcproto.Empty{}, nil
 }
-
-func (c *Server) InitTelemetry(_ context.Context, in *grpcproto.InitTelemetryRequest) (*grpcproto.Empty, error) {
-	log.Debugf(common.Category, "InitTelemetry")
-	api.InitTelemetry(in.Endpoint, in.Token)
-	return &grpcproto.Empty{}, nil
-}
-
-func (c *Server) StopTelemetry(_ context.Context, in *grpcproto.Empty) (*grpcproto.Empty, error) {
-	log.Debugf(common.Category, "StopTelemetry")
-	api.StopTelemetry()
-	return &grpcproto.Empty{}, nil
-}
-
-func (c *Server) SetupTelemetryAttributes(_ context.Context, in *grpcproto.SetupTelemetryAttributesRequest) (*grpcproto.Empty, error) {
-	log.Debugf(common.Category, "SetupTelemetryAttributes")
-	api.SetupTelemetryAttributes(in.Config)
-	return &grpcproto.Empty{}, nil
-}

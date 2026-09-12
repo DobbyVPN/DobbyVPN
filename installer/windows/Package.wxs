@@ -12,7 +12,6 @@
 		<Property Id="ARPURLINFOABOUT" Value="https://github.com/DobbyVPN/DobbyVPN" />
 		<Property Id="ARPNOMODIFY" Value="yes" />
 		<Property Id="DISABLEADVTSHORTCUTS" Value="yes" />
-		<Property Id="DISABLEROLLBACK" Value="yes" />
 		<Property Id="MSIDISABLERMRESTART" Value="1" />
 		<Property Id="MSIRMSHUTDOWN" Value="1" />
 
@@ -22,8 +21,7 @@
 			AllowDowngrades="no"
 			AllowSameVersionUpgrades="yes"
 			DowngradeErrorMessage="A newer version of [ProductName] is already installed."
-			Schedule="afterInstallExecute"
-			IgnoreRemoveFailure="yes" />
+			Schedule="afterInstallExecute" />
 
     <Feature Id="Main">
       <ComponentGroupRef Id="AppComponents" />

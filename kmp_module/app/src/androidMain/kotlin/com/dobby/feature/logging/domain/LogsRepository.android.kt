@@ -2,8 +2,11 @@ package com.dobby.feature.logging.domain
 
 import android.content.Context
 import android.os.Build
+import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
+import okio.buffer
+import okio.use
 import com.dobby.backend.GoBackendWrapper
 
 actual val fileSystem = okio.FileSystem.SYSTEM
@@ -24,6 +27,10 @@ actual fun provideGoLogFilePath(): Path = "${appContext.filesDir.absolutePath}/g
 actual fun provideAdditionalLogFilePaths(): List<Path> = listOf(provideGoLogFilePath())
 
 actual fun platformLogStorageInitializationAvailable(): Boolean = true
+
+actual fun clearLogFile(path: Path, storageFileSystem: FileSystem) {
+    storageFileSystem.sink(path).buffer().use { }
+}
 
 actual fun platformLogInfo(): String {
     return "platform=android " +

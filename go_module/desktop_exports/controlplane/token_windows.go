@@ -34,53 +34,7 @@ func secureControlTokenFile(path string) error {
 	if err != nil {
 		return err
 	}
-	return setExactACL(path, []*windows.SID{systemSID, userSID}, windows.GENERIC_READ|windows.GENERIC_WRITE)
-}
-
-// SecureInstalledUserPath replaces inherited permissions with an explicit ACL
-// for only SYSTEM and the installed user. Directories propagate that ACL to
-// children; files grant both identities full access.
-func SecureInstalledUserPath(path string) error {
-	account, err := controlTokenUser()
-	if err != nil {
-		return err
-	}
-	userSID, _, _, err := windows.LookupSID("", account)
-	if err != nil {
-		return err
-	}
-	systemSID, err := windows.StringToSid("S-1-5-18")
-	if err != nil {
-		return err
-	}
-	return setExactACL(path, []*windows.SID{systemSID, userSID}, windows.GENERIC_ALL)
-}
-
-// VerifyInstalledUserPathPermissions rejects inherited or unexpected ACL
-// entries. It intentionally shares the same identity policy as the control
-// token: the installed user and SYSTEM are the only permitted principals.
-func VerifyInstalledUserPathPermissions(path string) error {
-	return verifyInstalledUserACL(path)
-}
-
-// SecureExplicitUserPath protects a caller-selected runtime path for the
-// identity running this process and SYSTEM. Unlike installed paths, this
-// policy intentionally does not depend on the configured installed-user
-// identity: elevated diagnostics and test harnesses can run as SYSTEM.
-func SecureExplicitUserPath(path string) error {
-	currentSID, err := currentProcessUserSID()
-	if err != nil {
-		return err
-	}
-	systemSID, err := windows.StringToSid("S-1-5-18")
-	if err != nil {
-		return err
-	}
-	allowed := []*windows.SID{systemSID}
-	if !currentSID.Equals(systemSID) {
-		allowed = append(allowed, currentSID)
-	}
-	return setExactACL(path, allowed, windows.GENERIC_ALL)
+	return setExactACL(path, []*windows.SID{systemSID, userSID}, fileControlTokenAccess)
 }
 
 // setExactACL replaces the DACL atomically. In particular, it does not use
@@ -126,29 +80,7 @@ func setExactACL(path string, allowed []*windows.SID, permissions windows.ACCESS
 	return nil
 }
 
-// VerifyExplicitUserPathPermissions accepts only SYSTEM and the current
-// process identity. ACL inheritance and every other principal are rejected.
-func VerifyExplicitUserPathPermissions(path string) error {
-	currentSID, err := currentProcessUserSID()
-	if err != nil {
-		return err
-	}
-	systemSID, err := windows.StringToSid("S-1-5-18")
-	if err != nil {
-		return err
-	}
-	allowed := []*windows.SID{systemSID}
-	if !currentSID.Equals(systemSID) {
-		allowed = append(allowed, currentSID)
-	}
-	return verifyExactACL(path, allowed, "explicit runtime path", true)
-}
-
 func verifyControlTokenPermissions(path string) error {
-	return verifyInstalledUserACL(path)
-}
-
-func verifyInstalledUserACL(path string) error {
 	account, err := controlTokenUser()
 	if err != nil {
 		return err
@@ -161,23 +93,63 @@ func verifyInstalledUserACL(path string) error {
 	if err != nil {
 		return err
 	}
-	return verifyExactACL(path, []*windows.SID{systemSID, userSID}, "protected path", false)
+	administratorsSID, err := windows.StringToSid("S-1-5-32-544")
+	if err != nil {
+		return err
+	}
+	// SetEntriesInAcl maps generic rights to the file-specific mask stored in
+	// the ACE. Keep the expected mask explicit per path so a broader ACL cannot
+	// satisfy this verifier by accident.
+	// The service can create the token as SYSTEM, while the desktop process can
+	// create it as the configured installed user. These are the same two
+	// identities already required by the exact token DACL. An elevated Windows
+	// process may inherit BUILTIN\\Administrators as the descriptor owner even
+	// when its effective user is the configured account; that trusted owner does
+	// not become an ACL principal and therefore does not widen token access.
+	return verifyExactACLWithOwners(
+		path,
+		[]*windows.SID{systemSID, userSID},
+		[]*windows.SID{systemSID, userSID, administratorsSID},
+		fileControlTokenAccess,
+		"control token",
+	)
 }
 
-func verifyExactACL(path string, allowed []*windows.SID, description string, allowDuplicateAllowedEntries bool) error {
-	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+func verifyExactACL(path string, allowed []*windows.SID, expectedOwner *windows.SID, expectedMask windows.ACCESS_MASK, description string) error {
+	return verifyExactACLWithOwners(path, allowed, []*windows.SID{expectedOwner}, expectedMask, description)
+}
+
+func verifyExactACLWithOwners(path string, allowed, expectedOwners []*windows.SID, expectedMask windows.ACCESS_MASK, description string) error {
+	sd, err := windows.GetNamedSecurityInfo(
+		path,
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION,
+	)
 	if err != nil {
 		return fmt.Errorf("read %s ACL: %w", description, err)
 	}
 	if sd == nil {
 		return fmt.Errorf("%s has no security descriptor", description)
 	}
+	if !sd.IsValid() {
+		return fmt.Errorf("%s security descriptor is invalid", description)
+	}
 	control, _, err := sd.Control()
-	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
-		return fmt.Errorf("%s ACL inheritance is not disabled", description)
+	if err != nil {
+		return fmt.Errorf("read %s security descriptor control: %w", description, err)
+	}
+	if err := validateExactACLControl(control, description); err != nil {
+		return err
+	}
+	owner, _, err := sd.Owner()
+	if err != nil || !matchesExpectedOwner(owner, expectedOwners) {
+		if err != nil {
+			return fmt.Errorf("read %s owner: %w", description, err)
+		}
+		return fmt.Errorf("%s owner is not the expected identity", description)
 	}
 	acl, _, err := sd.DACL()
-	if err != nil || acl == nil || (!allowDuplicateAllowedEntries && int(acl.AceCount) != len(allowed)) {
+	if err != nil || acl == nil || int(acl.AceCount) != len(allowed) {
 		if err != nil {
 			return fmt.Errorf("read %s DACL: %w", description, err)
 		}
@@ -187,16 +159,36 @@ func verifyExactACL(path string, allowed []*windows.SID, description string, all
 		return fmt.Errorf("%s ACL contains %d entries; expected %d", description, acl.AceCount, len(allowed))
 	}
 	found := make([]bool, len(allowed))
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect %s type: %w", description, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a reparse point", description)
+	}
+	expectedFlags := uint8(windows.NO_INHERITANCE)
+	if info.IsDir() {
+		expectedFlags = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
+	}
 	for index := uint32(0); index < uint32(acl.AceCount); index++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
-		if err := windows.GetAce(acl, index, &ace); err != nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+		if err := windows.GetAce(acl, index, &ace); err != nil || ace == nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
 			return fmt.Errorf("%s ACL contains an unsupported entry", description)
 		}
+		if ace.Header.AceFlags&^uint8(windows.VALID_INHERIT_FLAGS) != 0 {
+			return fmt.Errorf("%s ACL contains unsupported inheritance flags", description)
+		}
+		if ace.Mask != expectedMask || ace.Header.AceFlags != expectedFlags {
+			return fmt.Errorf("%s ACL contains an entry with unexpected access mask or inheritance", description)
+		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if sid == nil || !sid.IsValid() {
+			return fmt.Errorf("%s ACL contains an invalid identity", description)
+		}
 		matched := false
 		for allowedIndex, allowedSID := range allowed {
 			if sid.Equals(allowedSID) {
-				if found[allowedIndex] && !allowDuplicateAllowedEntries {
+				if found[allowedIndex] {
 					return fmt.Errorf("%s ACL repeats an identity", description)
 				}
 				found[allowedIndex] = true
@@ -216,17 +208,39 @@ func verifyExactACL(path string, allowed []*windows.SID, description string, all
 	return nil
 }
 
-func currentProcessUserSID() (*windows.SID, error) {
-	token := windows.GetCurrentProcessToken()
-	user, err := token.GetTokenUser()
-	if err != nil {
-		return nil, fmt.Errorf("resolve current process SID: %w", err)
+func validateExactACLControl(control windows.SECURITY_DESCRIPTOR_CONTROL, description string) error {
+	// OWNER_DEFAULTED and DACL_DEFAULTED describe descriptor provenance, not
+	// access semantics. The owner identity and exact protected DACL below are
+	// the security policy; defaulted provenance does not weaken either check.
+	if control&windows.SE_DACL_PRESENT == 0 {
+		return fmt.Errorf("%s has no DACL", description)
 	}
-	if user == nil || user.User.Sid == nil {
-		return nil, fmt.Errorf("current process SID is unavailable")
+	if control&windows.SE_DACL_PROTECTED == 0 {
+		return fmt.Errorf("%s ACL inheritance is not disabled", description)
 	}
-	return user.User.Sid, nil
+	return nil
 }
+
+func matchesExpectedOwner(owner *windows.SID, expectedOwners []*windows.SID) bool {
+	return containsSID(expectedOwners, owner)
+}
+
+func containsSID(identities []*windows.SID, candidate *windows.SID) bool {
+	for _, identity := range identities {
+		if identity != nil && candidate != nil && identity.Equals(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	// SetEntriesInAcl expands GENERIC_* rights into the corresponding
+	// file-specific masks when it builds an ACL. Use those masks for both
+	// writing and verification; comparing the generic bits would reject a
+	// correctly secured file on Windows.
+	fileControlTokenAccess windows.ACCESS_MASK = windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE
+)
 
 func controlTokenUser() (string, error) {
 	account := strings.TrimSpace(os.Getenv("DOBBYVPN_CONTROL_TOKEN_USER"))

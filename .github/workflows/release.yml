@@ -1,15 +1,16 @@
 name: Release
 
-# Configures this workflow to run every time a change is pushed to the main branch.
+# Release is an explicit owner action. Pushes run Test without publishing.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
+
+permissions:
+  contents: read
+  actions: read
 
 concurrency:
   group: release-${{ github.ref }}
-  # Release jobs are serialized; PR verification runs in test.yml instead.
+  # Serialize explicit release builds for a branch.
   cancel-in-progress: false
 
 jobs:
@@ -28,7 +29,7 @@ jobs:
       version_name: ${{ steps.version.outputs.version_name }}
       android_version_code: ${{ steps.version.outputs.android_version_code }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -36,16 +37,10 @@ jobs:
 
       - name: Read VERSION
         id: version
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$GITHUB_REF" = "refs/heads/main"
-          current_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
-          test "$SOURCE_SHA" = "$current_main"
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           python3 .github/scripts/version_metadata.py \
             --version-file VERSION \
             --github-output "$GITHUB_OUTPUT"
@@ -61,34 +56,6 @@ jobs:
           )"
           echo "Marketing version $version_name; Android/F-Droid versionCode $android_version_code"
 
-          release_tag="v$version_name"
-          tag_ref="refs/tags/$release_tag"
-          tag_record="$(gh api --paginate \
-            "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$release_tag" | \
-            jq -sc --arg ref "$tag_ref" '
-              [.[][] | select(.ref == $ref)] |
-              if length == 0 then empty
-              elif length == 1 then .[0]
-              else error("duplicate exact tag refs")
-              end')"
-          if [[ -n "$tag_record" ]]; then
-            object_type="$(jq -r .object.type <<<"$tag_record")"
-            object_sha="$(jq -r .object.sha <<<"$tag_record")"
-            for _ in 1 2 3 4 5 6 7 8; do
-              if [[ "$object_type" != tag ]]; then
-                break
-              fi
-              tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
-              object_type="$(jq -r .object.type <<<"$tag_object")"
-              object_sha="$(jq -r .object.sha <<<"$tag_object")"
-            done
-            test "$object_type" = commit
-            if [[ "$object_sha" != "$SOURCE_SHA" ]]; then
-              echo "release tag $release_tag points to $object_sha, not candidate $SOURCE_SHA" >&2
-              exit 1
-            fi
-          fi
-
   desktop_libs_build:
     needs: [verification, prepare_version]
     uses: ./.github/workflows/desktop_libs_generate.yml
@@ -96,7 +63,6 @@ jobs:
       source_sha: ${{ github.sha }}
 
   ios_libs_build:
-    if: github.event_name != 'pull_request'
     needs: [verification, prepare_version]
     uses: ./.github/workflows/ios_libs_generate.yml
     with:
@@ -132,7 +98,6 @@ jobs:
       version_code: ${{ needs.prepare_version.outputs.android_version_code }}
 
   ios_build:
-    if: github.event_name != 'pull_request'
     needs: [prepare_version, ios_libs_build]
     uses: ./.github/workflows/ios_build.yml
     with:
@@ -146,9 +111,6 @@ jobs:
       CERT_P12_BASE64: ${{ secrets.CERT_P12_BASE64 }}
       PROVISION_DOBBY_BASE64: ${{ secrets.PROVISION_DOBBY_BASE64 }}
       PROVISION_DOBBY_TUNNEL_BASE64: ${{ secrets.PROVISION_DOBBY_TUNNEL_BASE64 }}
-      APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
-      APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
-      APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
 
   desktop_build:
     needs: [prepare_version, desktop_libs_build]
@@ -163,7 +125,6 @@ jobs:
       CONVEYOR_SIGNING_KEY: ${{ secrets.CONVEYOR_SIGNING_KEY }}
 
   installers_build:
-    if: github.event_name != 'pull_request'
     # Real-profile and performance qualification is a separate maintainer
     # release gate; it never exposes private endpoints to public CI.
     needs: [prepare_version, desktop_build]
@@ -174,7 +135,10 @@ jobs:
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
 
-  # Public GitHub/F-Droid promotion is intentional/manual. A maintainer selects
-  # one successful run with AppStore/publish_release.py; promote_release.yml
-  # then transfers these retained artifacts to the public release entirely on
-  # GitHub-hosted infrastructure and creates the sole F-Droid-visible tag.
+  qualification:
+    name: Qualify exact Release packages
+    needs: [android_build, ios_build, installers_build, fdroid_check, fdroid_scan_apk]
+    uses: ./.github/workflows/qualification.yml
+    permissions:
+      contents: read
+      actions: write

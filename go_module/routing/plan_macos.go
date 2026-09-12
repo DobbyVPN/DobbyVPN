@@ -11,14 +11,10 @@ import (
 // deliberately accepts only the routing package's fixed command strings.
 var macosRunCommand = ExecuteCommand
 
-type macOSDefaultRoute struct {
-	gateway string
-	iface   string
-	flags   string
-}
+var ipv4DefaultSubnets = []string{"0.0.0.0/1", "128.0.0.0/1"}
 
-// AcquireMacOSProxyRoute installs the exact server bypass only if this
-// generation created it. A route that predates the session is never removed.
+// AcquireMacOSProxyRoute installs the exact server bypass. If the same route
+// survived a killed predecessor, this generation adopts and later removes it.
 func (p *Plan) AcquireMacOSProxyRoute(proxyIP, gatewayIP string) (*Lease, error) {
 	if isLoopbackIP(proxyIP) {
 		return nil, nil
@@ -30,6 +26,7 @@ func (p *Plan) AcquireMacOSProxyRoute(proxyIP, gatewayIP string) (*Lease, error)
 		out, err := macosRunCommand(command)
 		if err != nil {
 			if macOSRouteExists(out, err) {
+				created = true
 				return nil
 			}
 			return err
@@ -45,60 +42,39 @@ func (p *Plan) AcquireMacOSProxyRoute(proxyIP, gatewayIP string) (*Lease, error)
 	})
 }
 
-// AcquireMacOSTunnelDefault snapshots the active default before changing it
-// to the session TUN. Cleanup first proves that the current default is still
-// our TUN, then changes it back to the exact captured gateway/interface.
-func (p *Plan) AcquireMacOSTunnelDefault(tunName string) (*Lease, error) {
-	var baseline macOSDefaultRoute
-	return p.Acquire("tun-default "+tunName, func() error {
-		out, err := macosRunCommand("route -n get default")
-		if err != nil {
-			return fmt.Errorf("capture default route: %w", err)
-		}
-		baseline, err = macOSParseDefaultRoute(out)
-		if err != nil {
-			return err
-		}
-		_, err = macosRunCommand(fmt.Sprintf("route -n change default -interface %s", tunName))
-		return err
-	}, func() error {
-		out, err := macosRunCommand("route -n get default")
-		if err != nil {
-			return fmt.Errorf("verify owned default route: %w", err)
-		}
-		current, err := macOSParseDefaultRoute(out)
-		if err != nil {
-			return fmt.Errorf("parse current default route: %w", err)
-		}
-		if current.iface != tunName {
-			return fmt.Errorf("session default is no longer owned by TUN %q", tunName)
-		}
-		_, err = macosRunCommand(macOSRestoreDefaultCommand(baseline))
-		return err
-	})
+// AcquireMacOSIPv4Default routes both halves of IPv4 through the session TUN
+// without replacing the physical default. Routes bound to a killed utun then
+// disappear while the machine's ordinary default remains usable for restart.
+func (p *Plan) AcquireMacOSIPv4Default(tunName string) error {
+	return p.acquireMacOSInterfaceRoutes("ipv4-default", "", ipv4DefaultSubnets, tunName)
 }
 
 // AcquireMacOSIPv6Block adds each sink route without pre-deleting a possibly
-// pre-existing route. Only routes created by this plan are released.
+// pre-existing route. An exact route left by a killed predecessor is adopted.
 func (p *Plan) AcquireMacOSIPv6Block(tunName string) error {
-	for _, subnet := range ipv6DefaultSubnets {
+	return p.acquireMacOSInterfaceRoutes("ipv6-block", "-inet6 ", ipv6DefaultSubnets, tunName)
+}
+
+func (p *Plan) acquireMacOSInterfaceRoutes(label, family string, subnets []string, tunName string) error {
+	for _, subnet := range subnets {
 		subnet := subnet
-		created := false
-		if _, err := p.Acquire("ipv6-block "+subnet, func() error {
-			out, err := macosRunCommand(fmt.Sprintf("route -n add -inet6 -net %s -interface %s", subnet, tunName))
+		owned := false
+		if _, err := p.Acquire(label+" "+subnet, func() error {
+			out, err := macosRunCommand(fmt.Sprintf("route -n add %s-net %s -interface %s", family, subnet, tunName))
 			if err != nil {
 				if macOSRouteExists(out, err) {
+					owned = true
 					return nil
 				}
 				return err
 			}
-			created = true
+			owned = true
 			return nil
 		}, func() error {
-			if !created {
+			if !owned {
 				return nil
 			}
-			_, err := macosRunCommand(fmt.Sprintf("route -n delete -inet6 -net %s -interface %s", subnet, tunName))
+			_, err := macosRunCommand(fmt.Sprintf("route -n delete %s-net %s -interface %s", family, subnet, tunName))
 			return err
 		}); err != nil {
 			return err
@@ -107,39 +83,66 @@ func (p *Plan) AcquireMacOSIPv6Block(tunName string) error {
 	return nil
 }
 
-// AcquireMacOSScopedDefault creates the direct-traffic bypass only if this
-// session created it. It is released before the tunnel default (LIFO).
-func (p *Plan) AcquireMacOSScopedDefault(iface, gatewayIP string) (*Lease, error) {
-	if iface == "" {
-		return nil, nil
+// RepairMacOSSessionRoutes restores the routes which macOS removes when the
+// physical interface goes down. A present exact server route is the inexpensive
+// signal; a fallback route through either the TUN or physical default is not.
+func RepairMacOSSessionRoutes(proxyIP, gatewayIP, tunName, iface string) (bool, error) {
+	if isLoopbackIP(proxyIP) {
+		return false, nil
 	}
-	created := false
-	command := fmt.Sprintf("route -n add default %s -ifscope %s", gatewayIP, iface)
-	return p.Acquire("scoped-default "+iface, func() error {
-		out, err := macosRunCommand(command)
-		if err != nil {
-			if macOSRouteExists(out, err) {
-				return nil
-			}
-			return err
+	out, err := macosRunCommand(fmt.Sprintf("route -n get %s", proxyIP))
+	if macOSRouteMissing(out, err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect proxy route for repair: %w", err)
+	}
+	healthy, err := macOSRouteIsExactHost(out, proxyIP, iface)
+	if err != nil {
+		return false, fmt.Errorf("parse proxy route for repair: %w", err)
+	}
+	if healthy {
+		return false, nil
+	}
+
+	// macOS may retain the exact host route but re-resolve its gateway through
+	// the TUN after the physical interface returns. Remove the two TUN routes
+	// first so the fresh host route resolves through the untouched physical
+	// default, then restore the TUN routes.
+	for _, subnet := range ipv4DefaultSubnets {
+		out, err = macosRunCommand(fmt.Sprintf("route -n delete -net %s -interface %s", subnet, tunName))
+		if err != nil && !macOSRouteMissing(out, err) {
+			return false, fmt.Errorf("remove tunnel route %s for repair: %w", subnet, err)
 		}
-		created = true
-		return nil
-	}, func() error {
-		if !created {
-			return nil
+	}
+	out, err = macosRunCommand(fmt.Sprintf("route -n delete -host %s %s", proxyIP, gatewayIP))
+	if err != nil && !macOSRouteMissing(out, err) {
+		return false, fmt.Errorf("remove proxy route for repair: %w", err)
+	}
+	out, err = macosRunCommand(fmt.Sprintf("route -n add -host %s %s", proxyIP, gatewayIP))
+	if err != nil && !macOSRouteExists(out, err) {
+		return false, fmt.Errorf("restore proxy route: %w", err)
+	}
+	for _, subnet := range ipv4DefaultSubnets {
+		out, err = macosRunCommand(fmt.Sprintf("route -n add -net %s -interface %s", subnet, tunName))
+		if err != nil && !macOSRouteExists(out, err) {
+			return false, fmt.Errorf("restore tunnel route %s: %w", subnet, err)
 		}
-		_, err := macosRunCommand(fmt.Sprintf("route -n delete default %s -ifscope %s", gatewayIP, iface))
-		return err
-	})
+	}
+	return true, nil
 }
 
 func macOSRouteExists(out string, err error) bool {
 	return strings.Contains(out, "File exists") || (err != nil && strings.Contains(err.Error(), "File exists"))
 }
 
-func macOSParseDefaultRoute(output string) (macOSDefaultRoute, error) {
-	var route macOSDefaultRoute
+func macOSRouteMissing(out string, err error) bool {
+	return strings.Contains(out, "not in table") || (err != nil && strings.Contains(err.Error(), "not in table"))
+}
+
+func macOSRouteIsExactHost(output, address, iface string) (bool, error) {
+	var destination string
+	var currentIface string
 	for _, line := range strings.Split(output, "\n") {
 		parts := strings.SplitN(line, ":", 2)
 		if len(parts) != 2 {
@@ -148,33 +151,17 @@ func macOSParseDefaultRoute(output string) (macOSDefaultRoute, error) {
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
 		switch key {
-		case "gateway":
-			route.gateway = value
+		case "destination":
+			destination = value
 		case "interface":
-			route.iface = value
-		case "flags":
-			route.flags = value
+			currentIface = value
 		}
 	}
-	if route.iface == "" {
-		return macOSDefaultRoute{}, fmt.Errorf("default route has no interface")
+	if destination == "" {
+		return false, fmt.Errorf("route has no destination")
 	}
-	if route.gateway == "" {
-		return macOSDefaultRoute{}, fmt.Errorf("default route has no gateway")
+	if currentIface == "" {
+		return false, fmt.Errorf("route has no interface")
 	}
-	return route, nil
-}
-
-func macOSRestoreDefaultCommand(route macOSDefaultRoute) string {
-	if strings.HasPrefix(route.gateway, "link#") {
-		return fmt.Sprintf("route -n change default -interface %s", route.iface)
-	}
-	// -ifscope only matches a default route which was scoped before this
-	// generation. Applying it to the usual unscoped DHCP default can remove the
-	// active default without installing the replacement. For the unscoped case,
-	// route resolves the captured gateway via its original interface.
-	if strings.Contains(route.flags, "IFSCOPE") {
-		return fmt.Sprintf("route -n change default %s -ifscope %s", route.gateway, route.iface)
-	}
-	return fmt.Sprintf("route -n change default %s", route.gateway)
+	return destination == address && currentIface == iface, nil
 }

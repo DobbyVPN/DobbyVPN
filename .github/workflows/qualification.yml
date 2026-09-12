@@ -1,0 +1,151 @@
+name: Release functional qualification
+
+# Reusable part of the explicit Release run. It qualifies the built packages,
+# then deletes the shared Render VPN. Publication is a separate workflow.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  render_start:
+    name: Start one disposable Render VPN
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment: render-functional
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Start Render VPN
+        working-directory: torturer
+        env:
+          RENDER_API_TOKEN: ${{ secrets.RENDER_API_TOKEN }}
+          RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+          RENDER_IMAGE_OWNER_ID: ${{ vars.RENDER_IMAGE_OWNER_ID }}
+          RENDER_IMAGE_PATH: ${{ vars.RENDER_IMAGE_PATH }}
+          RENDER_IMAGE_DIGEST: ${{ vars.RENDER_IMAGE_DIGEST }}
+          RENDER_REGION: ${{ vars.RENDER_REGION }}
+        run: |
+          set -euo pipefail
+          test -n "$RENDER_API_TOKEN"
+          test -n "$RENDER_OWNER_ID"
+          test -n "$RENDER_IMAGE_OWNER_ID"
+          test -n "$RENDER_IMAGE_PATH"
+          test -n "$RENDER_IMAGE_DIGEST"
+          test -n "$RENDER_REGION"
+          PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_provider.render_service start \
+            --run-id "$GITHUB_RUN_ID" \
+            --attempt "$GITHUB_RUN_ATTEMPT" \
+            --owner-id "$RENDER_OWNER_ID" \
+            --image-owner-id "$RENDER_IMAGE_OWNER_ID" \
+            --image-path "$RENDER_IMAGE_PATH" \
+            --image-digest "$RENDER_IMAGE_DIGEST" \
+            --region "$RENDER_REGION" \
+            --output "$RUNNER_TEMP/render"
+
+      - name: Upload shared Render profile
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v7
+        with:
+          name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/render/profile.toml
+            ${{ runner.temp }}/render/deadline_epoch.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  linux:
+    needs: render_start
+    if: always() && needs.render_start.result == 'success'
+    uses: ./.github/workflows/qualification_platform.yml
+    with:
+      platform: linux
+      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+    permissions:
+      contents: read
+      actions: read
+
+  windows:
+    needs: render_start
+    if: always() && needs.render_start.result == 'success'
+    uses: ./.github/workflows/qualification_platform.yml
+    with:
+      platform: windows
+      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+    permissions:
+      contents: read
+      actions: read
+
+  macos:
+    needs: render_start
+    if: always() && needs.render_start.result == 'success'
+    uses: ./.github/workflows/qualification_platform.yml
+    with:
+      platform: macos
+      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+    permissions:
+      contents: read
+      actions: read
+
+  android:
+    needs: render_start
+    if: always() && needs.render_start.result == 'success'
+    uses: ./.github/workflows/qualification_platform.yml
+    with:
+      platform: android
+      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+    permissions:
+      contents: read
+      actions: write
+
+  render_cleanup:
+    name: Delete disposable Render VPN
+    if: always()
+    needs: [render_start, linux, windows, macos, android]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: render-functional
+    permissions:
+      contents: read
+    env:
+      RENDER_API_TOKEN: ${{ secrets.RENDER_API_TOKEN }}
+      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Delete Render VPN
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_provider.render_service stop \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --owner-id "$RENDER_OWNER_ID"
+
+  aggregate:
+    name: Require all functional results
+    if: always()
+    needs: [render_start, linux, windows, macos, android, render_cleanup]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check platform jobs and Render cleanup
+        env:
+          LINUX_RESULT: ${{ needs.linux.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+          MACOS_RESULT: ${{ needs.macos.result }}
+          ANDROID_RESULT: ${{ needs.android.result }}
+          RENDER_RESULT: ${{ needs.render_cleanup.result }}
+        run: |
+          set -euo pipefail
+          test "$LINUX_RESULT" = success
+          test "$WINDOWS_RESULT" = success
+          test "$MACOS_RESULT" = success
+          test "$ANDROID_RESULT" = success
+          test "$RENDER_RESULT" = success
+          echo "public qualification passed"

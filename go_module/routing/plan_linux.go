@@ -3,13 +3,39 @@
 package routing
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net"
+	"os/exec"
 	"strings"
+	"time"
 )
 
-// linuxRunCommand is a narrow seam for route-plan tests. Production uses the
-// existing command executor; callers must not replace it.
-var linuxRunCommand = ExecuteCommand
+const linuxResolvedCommandTimeout = 5 * time.Second
+
+var linuxRunResolvedCommand = executeLinuxResolvedCommand
+
+func executeLinuxResolvedCommand(args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), linuxResolvedCommandTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, "/usr/bin/resolvectl")
+	command.Args = append(command.Args, args...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("resolvectl %s: %w: %s", args[0], err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func linuxRouteAlreadyGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no such process") ||
+		strings.Contains(message, "no such file or directory") || strings.Contains(message, "cannot find")
+}
 
 // AcquireLinuxProxyRoute installs a host bypass only when this session added
 // it. Existing routes are left untouched and therefore are never removed by
@@ -19,7 +45,10 @@ func (p *Plan) AcquireLinuxProxyRoute(proxyIP, gatewayIP, iface string) (*Lease,
 		return nil, nil
 	}
 
-	command := fmt.Sprintf("ip route add %s/32 via %s dev %s", proxyIP, gatewayIP, iface)
+	command := fmt.Sprintf(
+		"ip route add %s/32 via %s dev %s proto %d metric %d",
+		proxyIP, gatewayIP, iface, linuxOwnedRouteProtocol, linuxOwnedProxyMetric,
+	)
 	var created bool
 	return p.Acquire("proxy-route "+proxyIP, func() error {
 		_, err := linuxRunCommand(command)
@@ -35,7 +64,13 @@ func (p *Plan) AcquireLinuxProxyRoute(proxyIP, gatewayIP, iface string) (*Lease,
 		if !created {
 			return nil
 		}
-		_, err := linuxRunCommand(fmt.Sprintf("ip route del %s/32 via %s dev %s", proxyIP, gatewayIP, iface))
+		_, err := linuxRunCommand(fmt.Sprintf(
+			"ip route del %s/32 via %s dev %s proto %d metric %d",
+			proxyIP, gatewayIP, iface, linuxOwnedRouteProtocol, linuxOwnedProxyMetric,
+		))
+		if linuxRouteAlreadyGone(err) {
+			return nil
+		}
 		return err
 	})
 }
@@ -45,17 +80,44 @@ func (p *Plan) AcquireLinuxProxyRoute(proxyIP, gatewayIP, iface string) (*Lease,
 // rule. If either resource already exists, acquisition fails rather than
 // claiming ownership of it.
 func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP string) error {
-	routeCommand := fmt.Sprintf("ip route add table %d default via %s dev %s", tableID, gatewayIP, iface)
-	routeDelete := fmt.Sprintf("ip route del table %d default via %s dev %s", tableID, gatewayIP, iface)
+	routeCommand := fmt.Sprintf(
+		"ip route add table %d %s via %s dev %s proto %d",
+		tableID, linuxDefaultRoute, gatewayIP, iface, linuxOwnedRouteProtocol,
+	)
+	routeDelete := fmt.Sprintf(
+		"ip route del table %d %s via %s dev %s proto %d",
+		tableID, linuxDefaultRoute, gatewayIP, iface, linuxOwnedRouteProtocol,
+	)
 	routeLease, err := p.Acquire(fmt.Sprintf("mark-route table=%d", tableID), func() error {
 		_, err := linuxRunCommand(routeCommand)
 		return err
 	}, func() error {
 		_, err := linuxRunCommand(routeDelete)
+		if linuxRouteAlreadyGone(err) {
+			return nil
+		}
 		return err
 	})
 	if err != nil {
 		return err
+	}
+
+	// Link loss removes the physical default. Without a terminal route, marked
+	// VPN-server traffic falls through to the main TUN route and loops back into
+	// the VPN. Metric 1 loses to the physical route's metric 0 and survives link loss.
+	terminalRoute := fmt.Sprintf("table %d unreachable default proto %d metric 1", tableID, linuxOwnedRouteProtocol)
+	terminalLease, err := p.Acquire(fmt.Sprintf("mark-unreachable table=%d", tableID), func() error {
+		_, routeErr := linuxRunCommand("ip route add " + terminalRoute)
+		return routeErr
+	}, func() error {
+		_, routeErr := linuxRunCommand("ip route del " + terminalRoute)
+		if linuxRouteAlreadyGone(routeErr) {
+			return nil
+		}
+		return routeErr
+	})
+	if err != nil {
+		return errors.Join(err, routeLease.Close())
 	}
 
 	ruleCommand := fmt.Sprintf("ip rule add fwmark %d lookup %d priority %d", tableID, tableID, priority)
@@ -67,8 +129,7 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 		_, err := linuxRunCommand(ruleDelete)
 		return err
 	}); err != nil {
-		_ = routeLease.Close()
-		return err
+		return errors.Join(err, terminalLease.Close(), routeLease.Close())
 	}
 	return nil
 }
@@ -79,7 +140,7 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 func (p *Plan) AcquireLinuxTunnelDefault(tunName string) (*Lease, error) {
 	var baseline string
 	return p.Acquire("tun-default "+tunName, func() error {
-		output, err := linuxRunCommand("ip -o -4 route show default")
+		output, err := linuxRunCommand("ip -o -4 route show " + linuxDefaultRoute)
 		if err != nil {
 			return fmt.Errorf("capture default route: %w", err)
 		}
@@ -87,16 +148,53 @@ func (p *Plan) AcquireLinuxTunnelDefault(tunName string) (*Lease, error) {
 		if err != nil {
 			return err
 		}
-		_, err = linuxRunCommand(fmt.Sprintf("ip route replace default dev %s", tunName))
+		_, err = linuxRunCommand(fmt.Sprintf(
+			"ip route replace %s dev %s proto %d", linuxDefaultRoute, tunName, linuxOwnedRouteProtocol,
+		))
 		return err
 	}, func() error {
 		// Specify the TUN device so a changed default owned by another actor is
 		// never removed. Do not restore the snapshot if that deletion fails.
-		if _, err := linuxRunCommand(fmt.Sprintf("ip route del default dev %s", tunName)); err != nil {
+		if _, err := linuxRunCommand(fmt.Sprintf(
+			"ip route del %s dev %s proto %d", linuxDefaultRoute, tunName, linuxOwnedRouteProtocol,
+		)); err != nil {
 			return err
 		}
 		_, err := linuxRunCommand(baseline)
 		return err
+	})
+}
+
+// AcquireLinuxResolvedDNS makes systemd-resolved send all DNS through this
+// session's TUN. The TUN is newly created for the session, so reverting its
+// per-link state restores the exact baseline (no state) without touching the
+// uplink resolver configuration.
+func (p *Plan) AcquireLinuxResolvedDNS(tunName, dnsIP string) (*Lease, error) {
+	if tunName == "" || strings.HasPrefix(tunName, "-") || strings.ContainsAny(tunName, " \t\r\n") {
+		return nil, fmt.Errorf("invalid Linux DNS interface %q", tunName)
+	}
+	if parsed := net.ParseIP(dnsIP); parsed == nil || parsed.To4() == nil {
+		return nil, fmt.Errorf("invalid Linux IPv4 DNS server %q", dnsIP)
+	}
+
+	configured := false
+	return p.Acquire("resolved-dns "+tunName, func() error {
+		for _, args := range [][]string{
+			{"dns", tunName, dnsIP},
+			{"domain", tunName, "~."},
+			{"default-route", tunName, "yes"},
+		} {
+			if err := linuxRunResolvedCommand(args...); err != nil {
+				if !configured {
+					return err
+				}
+				return errors.Join(err, linuxRunResolvedCommand("revert", tunName))
+			}
+			configured = true
+		}
+		return nil
+	}, func() error {
+		return linuxRunResolvedCommand("revert", tunName)
 	})
 }
 
@@ -106,7 +204,7 @@ func linuxDefaultRouteRestoreCommand(output string) (string, error) {
 		if len(fields) == 0 {
 			continue
 		}
-		if fields[0] == "default" {
+		if fields[0] == linuxDefaultRoute {
 			return "ip route replace " + strings.Join(fields, " "), nil
 		}
 	}
@@ -120,7 +218,9 @@ func (p *Plan) AcquireLinuxIPv6Block() error {
 		subnet := subnet
 		created := false
 		_, err := p.Acquire("ipv6-block "+subnet, func() error {
-			_, err := linuxRunCommand(fmt.Sprintf("ip -6 route add blackhole %s metric 1", subnet))
+			_, err := linuxRunCommand(fmt.Sprintf(
+				"ip -6 route add blackhole %s proto %d metric 1", subnet, linuxOwnedRouteProtocol,
+			))
 			if err != nil {
 				if strings.Contains(err.Error(), "File exists") {
 					return nil
@@ -133,7 +233,9 @@ func (p *Plan) AcquireLinuxIPv6Block() error {
 			if !created {
 				return nil
 			}
-			_, err := linuxRunCommand(fmt.Sprintf("ip -6 route del blackhole %s metric 1", subnet))
+			_, err := linuxRunCommand(fmt.Sprintf(
+				"ip -6 route del blackhole %s proto %d metric 1", subnet, linuxOwnedRouteProtocol,
+			))
 			return err
 		})
 		if err != nil {

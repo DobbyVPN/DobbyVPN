@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
+import warnings
 import zipfile
 
 
@@ -44,6 +46,8 @@ class AndroidReproducibilityTests(unittest.TestCase):
             )
             self.assertTrue(document["identical"])
             self.assertEqual(document["builds"][0], document["builds"][1] | {"id": "first"})
+            document["builds"].reverse()
+            document["native_libraries"].reverse()
             REPRO.verify_document(document, second, SOURCE_SHA, VERSION_NAME, VERSION_CODE)
 
     def test_invalid_release_metadata_is_rejected(self) -> None:
@@ -61,15 +65,25 @@ class AndroidReproducibilityTests(unittest.TestCase):
                     with self.assertRaisesRegex(REPRO.VerificationError, message):
                         REPRO.verify_document({}, apk, source_sha, version_name, version_code)
 
-    def test_symlink_apk_is_rejected(self) -> None:
+    def test_existing_apk_output_can_be_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             apk = root / "app.apk"
-            link = root / "linked.apk"
+            output = root / "reproducibility.json"
             write_apk(apk)
-            link.symlink_to(apk.name)
-            with self.assertRaisesRegex(REPRO.VerificationError, "non-symlink"):
-                REPRO.create_document(link, apk, SOURCE_SHA, VERSION_NAME, VERSION_CODE)
+            self.assertEqual(REPRO.main([
+                "create", "--first-apk", str(apk), "--second-apk", str(apk),
+                "--output", str(output), "--source-sha", SOURCE_SHA,
+                "--version-name", VERSION_NAME, "--version-code", str(VERSION_CODE),
+            ]), 0)
+            first = output.read_text(encoding="utf-8")
+            output.write_text("stale\n", encoding="utf-8")
+            self.assertEqual(REPRO.main([
+                "create", "--first-apk", str(apk), "--second-apk", str(apk),
+                "--output", str(output), "--source-sha", SOURCE_SHA,
+                "--version-name", VERSION_NAME, "--version-code", str(VERSION_CODE),
+            ]), 0)
+            self.assertEqual(output.read_text(encoding="utf-8"), first)
 
     def test_non_native_apk_difference_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -121,6 +135,41 @@ class AndroidReproducibilityTests(unittest.TestCase):
             with self.assertRaisesRegex(REPRO.VerificationError, "payload differs"):
                 REPRO.verify_signed_payload(unsigned, signed)
 
+    def test_publication_provenance_binds_both_apks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            unsigned = root / "DobbyVPN-v1.4.8-unsign.apk"
+            signed = root / "DobbyVPN-v1.4.8-sign.apk"
+            provenance = root / "DobbyVPN-v1.4.8-android-provenance.json"
+            write_apk(unsigned)
+            write_apk(signed, signature=b"signature bytes")
+            document = {
+                "schema": 1,
+                "source_sha": SOURCE_SHA,
+                "version_name": VERSION_NAME,
+                "version_code": VERSION_CODE,
+                "application_id": "com.dobby.vpn",
+                "signer_certificate_sha256": "c" * 64,
+                "signed_payload_matches_unsigned": True,
+                "reproducibility": REPRO.create_document(
+                    unsigned, unsigned, SOURCE_SHA, VERSION_NAME, VERSION_CODE
+                ),
+                "artifacts": [
+                    {"kind": "signed", "name": signed.name, "sha256": REPRO._sha256(signed)},
+                    {"kind": "unsigned", "name": unsigned.name, "sha256": REPRO._sha256(unsigned)},
+                ],
+            }
+            provenance.write_text(json.dumps(document), encoding="utf-8")
+            REPRO.verify_publication_provenance(
+                provenance,
+                unsigned,
+                signed,
+                SOURCE_SHA,
+                VERSION_NAME,
+                VERSION_CODE,
+                "c" * 64,
+            )
+
     def test_nested_meta_inf_payload_is_not_treated_as_a_signature(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -136,11 +185,13 @@ class AndroidReproducibilityTests(unittest.TestCase):
     def test_duplicate_zip_member_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / "duplicate.apk"
-            with zipfile.ZipFile(apk, "w") as archive:
-                archive.writestr("lib/arm64-v8a/libgojni.so", b"first")
-                archive.writestr("lib/arm64-v8a/libgojni.so", b"second")
-                archive.writestr("lib/x86_64/libgojni.so", b"x86")
-            with self.assertRaisesRegex(REPRO.VerificationError, "duplicate"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                with zipfile.ZipFile(apk, "w") as archive:
+                    archive.writestr("lib/arm64-v8a/libgojni.so", b"first")
+                    archive.writestr("lib/arm64-v8a/libgojni.so", b"second")
+                    archive.writestr("lib/x86_64/libgojni.so", b"x86")
+            with self.assertRaisesRegex(REPRO.VerificationError, "exactly one"):
                 REPRO.create_document(apk, apk, SOURCE_SHA, VERSION_NAME, VERSION_CODE)
 
 

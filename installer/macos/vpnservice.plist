@@ -5,6 +5,9 @@
     <key>Label</key>
     <string>com.dobby.vpnservice</string>
 
+    <key>UserName</key>
+    <string>root</string>
+
     <key>ProgramArguments</key>
     <array>
         <string>/Applications/Dobby VPN.app/Contents/Resources/macos_grpcvpnserver</string>

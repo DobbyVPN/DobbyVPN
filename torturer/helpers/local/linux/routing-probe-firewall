@@ -1,0 +1,63 @@
+#!/bin/sh
+# Narrow Linux routing proof helper for one local qualification run.
+set -eu
+
+table=dobbyvpn_torturer_probe
+uplink_file=${DOBBYVPN_TEST_UPLINK_FILE:-/etc/dobbyvpn-tests-uplink}
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo 'routing-probe-firewall must be invoked through sudo' >&2
+    exit 2
+fi
+
+if [ "$#" -lt 1 ]; then
+    echo 'usage: routing-probe-firewall block|remove|status [address]' >&2
+    exit 2
+fi
+
+if [ -f "$uplink_file" ] && [ ! -L "$uplink_file" ]; then
+    uplink=$(sed -n '1p' "$uplink_file")
+else
+    uplink=
+fi
+case "$uplink" in
+    ''|*[!A-Za-z0-9._:-]*)
+        echo 'uplink interface is unavailable' >&2
+        exit 2
+        ;;
+esac
+[ "${#uplink}" -le 32 ] || exit 2
+
+remove_table() {
+    if nft list table inet "$table" >/dev/null 2>&1; then
+        nft delete table inet "$table"
+    fi
+    ! nft list table inet "$table" >/dev/null 2>&1
+}
+
+case "$1" in
+    block)
+        [ "$#" -eq 2 ] || exit 2
+        address=$2
+        python3 -c 'import ipaddress,sys; value=ipaddress.ip_address(sys.argv[1]); raise SystemExit(0 if value.version == 4 and value.is_global else 1)' "$address"
+        remove_table
+        trap 'remove_table' EXIT INT TERM
+        nft add table inet "$table"
+        nft add chain inet "$table" output '{ type filter hook output priority 0; policy accept; }'
+        nft add rule inet "$table" output oifname "$uplink" ip daddr "$address" tcp dport 443 reject
+        nft list table inet "$table" >/dev/null
+        trap - EXIT INT TERM
+        ;;
+    remove)
+        [ "$#" -eq 1 ] || exit 2
+        remove_table
+        ;;
+    status)
+        [ "$#" -eq 1 ] || exit 2
+        nft list table inet "$table" 2>/dev/null
+        ;;
+    *)
+        echo "unknown operation: $1" >&2
+        exit 2
+        ;;
+esac

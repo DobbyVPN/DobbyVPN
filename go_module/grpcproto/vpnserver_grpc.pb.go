@@ -19,89 +19,38 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Vpn_GetOutlineLastError_FullMethodName                    = "/grpcproto.Vpn/GetOutlineLastError"
-	Vpn_StartOutline_FullMethodName                           = "/grpcproto.Vpn/StartOutline"
-	Vpn_StopOutline_FullMethodName                            = "/grpcproto.Vpn/StopOutline"
-	Vpn_GetXrayLastError_FullMethodName                       = "/grpcproto.Vpn/GetXrayLastError"
-	Vpn_StartXray_FullMethodName                              = "/grpcproto.Vpn/StartXray"
-	Vpn_StopXray_FullMethodName                               = "/grpcproto.Vpn/StopXray"
-	Vpn_GetTrustTunnelLastError_FullMethodName                = "/grpcproto.Vpn/GetTrustTunnelLastError"
-	Vpn_StartTrustTunnel_FullMethodName                       = "/grpcproto.Vpn/StartTrustTunnel"
-	Vpn_StopTrustTunnel_FullMethodName                        = "/grpcproto.Vpn/StopTrustTunnel"
-	Vpn_CouldStart_FullMethodName                             = "/grpcproto.Vpn/CouldStart"
-	Vpn_GetConnectionState_FullMethodName                     = "/grpcproto.Vpn/GetConnectionState"
-	Vpn_InitHealthCheck_FullMethodName                        = "/grpcproto.Vpn/InitHealthCheck"
-	Vpn_StartHealthCheck_FullMethodName                       = "/grpcproto.Vpn/StartHealthCheck"
-	Vpn_StopHealthCheck_FullMethodName                        = "/grpcproto.Vpn/StopHealthCheck"
-	Vpn_MeasureTunnelProbeAverageLatencyMillis_FullMethodName = "/grpcproto.Vpn/MeasureTunnelProbeAverageLatencyMillis"
-	Vpn_StartCloakClient_FullMethodName                       = "/grpcproto.Vpn/StartCloakClient"
-	Vpn_StopCloakClient_FullMethodName                        = "/grpcproto.Vpn/StopCloakClient"
-	Vpn_InitLogger_FullMethodName                             = "/grpcproto.Vpn/InitLogger"
-	Vpn_InitTelemetry_FullMethodName                          = "/grpcproto.Vpn/InitTelemetry"
-	Vpn_StopTelemetry_FullMethodName                          = "/grpcproto.Vpn/StopTelemetry"
-	Vpn_SetupTelemetryAttributes_FullMethodName               = "/grpcproto.Vpn/SetupTelemetryAttributes"
-	Vpn_SetGeoRoutingConf_FullMethodName                      = "/grpcproto.Vpn/SetGeoRoutingConf"
-	Vpn_ClearGeoRoutingConf_FullMethodName                    = "/grpcproto.Vpn/ClearGeoRoutingConf"
-	Vpn_ClearDNSCache_FullMethodName                          = "/grpcproto.Vpn/ClearDNSCache"
-	Vpn_SetDNSCacheEntries_FullMethodName                     = "/grpcproto.Vpn/SetDNSCacheEntries"
-	Vpn_GetCapabilities_FullMethodName                        = "/grpcproto.Vpn/GetCapabilities"
-	Vpn_CreateSession_FullMethodName                          = "/grpcproto.Vpn/CreateSession"
-	Vpn_Configure_FullMethodName                              = "/grpcproto.Vpn/Configure"
-	Vpn_Start_FullMethodName                                  = "/grpcproto.Vpn/Start"
-	Vpn_Stop_FullMethodName                                   = "/grpcproto.Vpn/Stop"
-	Vpn_Snapshot_FullMethodName                               = "/grpcproto.Vpn/Snapshot"
-	Vpn_Observe_FullMethodName                                = "/grpcproto.Vpn/Observe"
-	Vpn_DestroySession_FullMethodName                         = "/grpcproto.Vpn/DestroySession"
+	Vpn_InitLogger_FullMethodName           = "/grpcproto.Vpn/InitLogger"
+	Vpn_GetCapabilities_FullMethodName      = "/grpcproto.Vpn/GetCapabilities"
+	Vpn_CreateSession_FullMethodName        = "/grpcproto.Vpn/CreateSession"
+	Vpn_RecoverActiveSession_FullMethodName = "/grpcproto.Vpn/RecoverActiveSession"
+	Vpn_Configure_FullMethodName            = "/grpcproto.Vpn/Configure"
+	Vpn_Start_FullMethodName                = "/grpcproto.Vpn/Start"
+	Vpn_Stop_FullMethodName                 = "/grpcproto.Vpn/Stop"
+	Vpn_Snapshot_FullMethodName             = "/grpcproto.Vpn/Snapshot"
+	Vpn_Observe_FullMethodName              = "/grpcproto.Vpn/Observe"
+	Vpn_Watch_FullMethodName                = "/grpcproto.Vpn/Watch"
+	Vpn_DestroySession_FullMethodName       = "/grpcproto.Vpn/DestroySession"
 )
 
 // VpnClient is the client API for Vpn service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type VpnClient interface {
-	// outline.go
-	GetOutlineLastError(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetOutlineLastErrorResponse, error)
-	StartOutline(ctx context.Context, in *StartOutlineRequest, opts ...grpc.CallOption) (*StartOutlineResponse, error)
-	StopOutline(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
-	// xray.go
-	GetXrayLastError(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetXrayLastErrorResponse, error)
-	StartXray(ctx context.Context, in *StartXrayRequest, opts ...grpc.CallOption) (*StartXrayResponse, error)
-	StopXray(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
-	// trusttunnel.go
-	GetTrustTunnelLastError(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetTrustTunnelLastErrorResponse, error)
-	StartTrustTunnel(ctx context.Context, in *StartTrustTunnelRequest, opts ...grpc.CallOption) (*StartTrustTunnelResponse, error)
-	StopTrustTunnel(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
-	// health_check.go
-	CouldStart(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*CouldStartResponce, error)
-	GetConnectionState(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetConnectionStateResponce, error)
-	InitHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
-	StartHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
-	StopHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
-	MeasureTunnelProbeAverageLatencyMillis(ctx context.Context, in *MeasureTunnelProbeRequest, opts ...grpc.CallOption) (*MeasureTunnelProbeResponse, error)
-	// cloak.go
-	StartCloakClient(ctx context.Context, in *StartCloakClientRequest, opts ...grpc.CallOption) (*Empty, error)
-	StopCloakClient(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
-	// logger.go
+	// Local diagnostics only. Remote telemetry is not a product feature.
 	InitLogger(ctx context.Context, in *InitLoggerRequest, opts ...grpc.CallOption) (*Empty, error)
-	InitTelemetry(ctx context.Context, in *InitTelemetryRequest, opts ...grpc.CallOption) (*Empty, error)
-	StopTelemetry(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
-	SetupTelemetryAttributes(ctx context.Context, in *SetupTelemetryAttributesRequest, opts ...grpc.CallOption) (*Empty, error)
-	// georouting.go
-	SetGeoRoutingConf(ctx context.Context, in *SetGeoRoutingConfRequest, opts ...grpc.CallOption) (*Empty, error)
-	ClearGeoRoutingConf(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
-	// dns_cache.go
-	ClearDNSCache(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
-	SetDNSCacheEntries(ctx context.Context, in *SetDNSCacheEntriesRequest, opts ...grpc.CallOption) (*SetDNSCacheEntriesResponse, error)
-	// sessionapi/v1. These methods are intentionally separate from the legacy
-	// protocol-specific calls above. Session identifiers and command identifiers
+	// sessionapi/v2. These methods are the only production lifecycle surface.
+	// Session identifiers and command identifiers
 	// are opaque strings owned by the caller; configuration is transported as
 	// bytes and is never reflected in a response.
 	GetCapabilities(ctx context.Context, in *SessionGetCapabilitiesRequest, opts ...grpc.CallOption) (*SessionGetCapabilitiesResponse, error)
 	CreateSession(ctx context.Context, in *SessionCreateSessionRequest, opts ...grpc.CallOption) (*SessionCreateSessionResponse, error)
+	RecoverActiveSession(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*SessionRecoverActiveSessionResponse, error)
 	Configure(ctx context.Context, in *SessionConfigureRequest, opts ...grpc.CallOption) (*SessionConfigureResponse, error)
 	Start(ctx context.Context, in *SessionStartRequest, opts ...grpc.CallOption) (*SessionStartResponse, error)
 	Stop(ctx context.Context, in *SessionStopRequest, opts ...grpc.CallOption) (*SessionStopResponse, error)
 	Snapshot(ctx context.Context, in *SessionSnapshotRequest, opts ...grpc.CallOption) (*SessionSnapshotResponse, error)
 	Observe(ctx context.Context, in *SessionObserveRequest, opts ...grpc.CallOption) (*SessionObserveResponse, error)
+	Watch(ctx context.Context, in *SessionObserveRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SessionEvent], error)
 	DestroySession(ctx context.Context, in *SessionDestroySessionRequest, opts ...grpc.CallOption) (*SessionDestroySessionResponse, error)
 }
 
@@ -113,250 +62,10 @@ func NewVpnClient(cc grpc.ClientConnInterface) VpnClient {
 	return &vpnClient{cc}
 }
 
-func (c *vpnClient) GetOutlineLastError(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetOutlineLastErrorResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetOutlineLastErrorResponse)
-	err := c.cc.Invoke(ctx, Vpn_GetOutlineLastError_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) StartOutline(ctx context.Context, in *StartOutlineRequest, opts ...grpc.CallOption) (*StartOutlineResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(StartOutlineResponse)
-	err := c.cc.Invoke(ctx, Vpn_StartOutline_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) StopOutline(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_StopOutline_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) GetXrayLastError(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetXrayLastErrorResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetXrayLastErrorResponse)
-	err := c.cc.Invoke(ctx, Vpn_GetXrayLastError_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) StartXray(ctx context.Context, in *StartXrayRequest, opts ...grpc.CallOption) (*StartXrayResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(StartXrayResponse)
-	err := c.cc.Invoke(ctx, Vpn_StartXray_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) StopXray(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_StopXray_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) GetTrustTunnelLastError(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetTrustTunnelLastErrorResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetTrustTunnelLastErrorResponse)
-	err := c.cc.Invoke(ctx, Vpn_GetTrustTunnelLastError_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) StartTrustTunnel(ctx context.Context, in *StartTrustTunnelRequest, opts ...grpc.CallOption) (*StartTrustTunnelResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(StartTrustTunnelResponse)
-	err := c.cc.Invoke(ctx, Vpn_StartTrustTunnel_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) StopTrustTunnel(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_StopTrustTunnel_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) CouldStart(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*CouldStartResponce, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CouldStartResponce)
-	err := c.cc.Invoke(ctx, Vpn_CouldStart_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) GetConnectionState(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetConnectionStateResponce, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetConnectionStateResponce)
-	err := c.cc.Invoke(ctx, Vpn_GetConnectionState_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) InitHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_InitHealthCheck_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) StartHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_StartHealthCheck_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) StopHealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_StopHealthCheck_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) MeasureTunnelProbeAverageLatencyMillis(ctx context.Context, in *MeasureTunnelProbeRequest, opts ...grpc.CallOption) (*MeasureTunnelProbeResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MeasureTunnelProbeResponse)
-	err := c.cc.Invoke(ctx, Vpn_MeasureTunnelProbeAverageLatencyMillis_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) StartCloakClient(ctx context.Context, in *StartCloakClientRequest, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_StartCloakClient_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) StopCloakClient(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_StopCloakClient_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *vpnClient) InitLogger(ctx context.Context, in *InitLoggerRequest, opts ...grpc.CallOption) (*Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
 	err := c.cc.Invoke(ctx, Vpn_InitLogger_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) InitTelemetry(ctx context.Context, in *InitTelemetryRequest, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_InitTelemetry_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) StopTelemetry(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_StopTelemetry_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) SetupTelemetryAttributes(ctx context.Context, in *SetupTelemetryAttributesRequest, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_SetupTelemetryAttributes_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) SetGeoRoutingConf(ctx context.Context, in *SetGeoRoutingConfRequest, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_SetGeoRoutingConf_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) ClearGeoRoutingConf(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_ClearGeoRoutingConf_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) ClearDNSCache(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Empty)
-	err := c.cc.Invoke(ctx, Vpn_ClearDNSCache_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vpnClient) SetDNSCacheEntries(ctx context.Context, in *SetDNSCacheEntriesRequest, opts ...grpc.CallOption) (*SetDNSCacheEntriesResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SetDNSCacheEntriesResponse)
-	err := c.cc.Invoke(ctx, Vpn_SetDNSCacheEntries_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -377,6 +86,16 @@ func (c *vpnClient) CreateSession(ctx context.Context, in *SessionCreateSessionR
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SessionCreateSessionResponse)
 	err := c.cc.Invoke(ctx, Vpn_CreateSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vpnClient) RecoverActiveSession(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*SessionRecoverActiveSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SessionRecoverActiveSessionResponse)
+	err := c.cc.Invoke(ctx, Vpn_RecoverActiveSession_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -433,6 +152,25 @@ func (c *vpnClient) Observe(ctx context.Context, in *SessionObserveRequest, opts
 	return out, nil
 }
 
+func (c *vpnClient) Watch(ctx context.Context, in *SessionObserveRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SessionEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Vpn_ServiceDesc.Streams[0], Vpn_Watch_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[SessionObserveRequest, SessionEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Vpn_WatchClient = grpc.ServerStreamingClient[SessionEvent]
+
 func (c *vpnClient) DestroySession(ctx context.Context, in *SessionDestroySessionRequest, opts ...grpc.CallOption) (*SessionDestroySessionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SessionDestroySessionResponse)
@@ -447,50 +185,21 @@ func (c *vpnClient) DestroySession(ctx context.Context, in *SessionDestroySessio
 // All implementations must embed UnimplementedVpnServer
 // for forward compatibility.
 type VpnServer interface {
-	// outline.go
-	GetOutlineLastError(context.Context, *Empty) (*GetOutlineLastErrorResponse, error)
-	StartOutline(context.Context, *StartOutlineRequest) (*StartOutlineResponse, error)
-	StopOutline(context.Context, *Empty) (*Empty, error)
-	// xray.go
-	GetXrayLastError(context.Context, *Empty) (*GetXrayLastErrorResponse, error)
-	StartXray(context.Context, *StartXrayRequest) (*StartXrayResponse, error)
-	StopXray(context.Context, *Empty) (*Empty, error)
-	// trusttunnel.go
-	GetTrustTunnelLastError(context.Context, *Empty) (*GetTrustTunnelLastErrorResponse, error)
-	StartTrustTunnel(context.Context, *StartTrustTunnelRequest) (*StartTrustTunnelResponse, error)
-	StopTrustTunnel(context.Context, *Empty) (*Empty, error)
-	// health_check.go
-	CouldStart(context.Context, *Empty) (*CouldStartResponce, error)
-	GetConnectionState(context.Context, *Empty) (*GetConnectionStateResponce, error)
-	InitHealthCheck(context.Context, *Empty) (*Empty, error)
-	StartHealthCheck(context.Context, *Empty) (*Empty, error)
-	StopHealthCheck(context.Context, *Empty) (*Empty, error)
-	MeasureTunnelProbeAverageLatencyMillis(context.Context, *MeasureTunnelProbeRequest) (*MeasureTunnelProbeResponse, error)
-	// cloak.go
-	StartCloakClient(context.Context, *StartCloakClientRequest) (*Empty, error)
-	StopCloakClient(context.Context, *Empty) (*Empty, error)
-	// logger.go
+	// Local diagnostics only. Remote telemetry is not a product feature.
 	InitLogger(context.Context, *InitLoggerRequest) (*Empty, error)
-	InitTelemetry(context.Context, *InitTelemetryRequest) (*Empty, error)
-	StopTelemetry(context.Context, *Empty) (*Empty, error)
-	SetupTelemetryAttributes(context.Context, *SetupTelemetryAttributesRequest) (*Empty, error)
-	// georouting.go
-	SetGeoRoutingConf(context.Context, *SetGeoRoutingConfRequest) (*Empty, error)
-	ClearGeoRoutingConf(context.Context, *Empty) (*Empty, error)
-	// dns_cache.go
-	ClearDNSCache(context.Context, *Empty) (*Empty, error)
-	SetDNSCacheEntries(context.Context, *SetDNSCacheEntriesRequest) (*SetDNSCacheEntriesResponse, error)
-	// sessionapi/v1. These methods are intentionally separate from the legacy
-	// protocol-specific calls above. Session identifiers and command identifiers
+	// sessionapi/v2. These methods are the only production lifecycle surface.
+	// Session identifiers and command identifiers
 	// are opaque strings owned by the caller; configuration is transported as
 	// bytes and is never reflected in a response.
 	GetCapabilities(context.Context, *SessionGetCapabilitiesRequest) (*SessionGetCapabilitiesResponse, error)
 	CreateSession(context.Context, *SessionCreateSessionRequest) (*SessionCreateSessionResponse, error)
+	RecoverActiveSession(context.Context, *Empty) (*SessionRecoverActiveSessionResponse, error)
 	Configure(context.Context, *SessionConfigureRequest) (*SessionConfigureResponse, error)
 	Start(context.Context, *SessionStartRequest) (*SessionStartResponse, error)
 	Stop(context.Context, *SessionStopRequest) (*SessionStopResponse, error)
 	Snapshot(context.Context, *SessionSnapshotRequest) (*SessionSnapshotResponse, error)
 	Observe(context.Context, *SessionObserveRequest) (*SessionObserveResponse, error)
+	Watch(*SessionObserveRequest, grpc.ServerStreamingServer[SessionEvent]) error
 	DestroySession(context.Context, *SessionDestroySessionRequest) (*SessionDestroySessionResponse, error)
 	mustEmbedUnimplementedVpnServer()
 }
@@ -502,86 +211,17 @@ type VpnServer interface {
 // pointer dereference when methods are called.
 type UnimplementedVpnServer struct{}
 
-func (UnimplementedVpnServer) GetOutlineLastError(context.Context, *Empty) (*GetOutlineLastErrorResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetOutlineLastError not implemented")
-}
-func (UnimplementedVpnServer) StartOutline(context.Context, *StartOutlineRequest) (*StartOutlineResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method StartOutline not implemented")
-}
-func (UnimplementedVpnServer) StopOutline(context.Context, *Empty) (*Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method StopOutline not implemented")
-}
-func (UnimplementedVpnServer) GetXrayLastError(context.Context, *Empty) (*GetXrayLastErrorResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetXrayLastError not implemented")
-}
-func (UnimplementedVpnServer) StartXray(context.Context, *StartXrayRequest) (*StartXrayResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method StartXray not implemented")
-}
-func (UnimplementedVpnServer) StopXray(context.Context, *Empty) (*Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method StopXray not implemented")
-}
-func (UnimplementedVpnServer) GetTrustTunnelLastError(context.Context, *Empty) (*GetTrustTunnelLastErrorResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetTrustTunnelLastError not implemented")
-}
-func (UnimplementedVpnServer) StartTrustTunnel(context.Context, *StartTrustTunnelRequest) (*StartTrustTunnelResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method StartTrustTunnel not implemented")
-}
-func (UnimplementedVpnServer) StopTrustTunnel(context.Context, *Empty) (*Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method StopTrustTunnel not implemented")
-}
-func (UnimplementedVpnServer) CouldStart(context.Context, *Empty) (*CouldStartResponce, error) {
-	return nil, status.Error(codes.Unimplemented, "method CouldStart not implemented")
-}
-func (UnimplementedVpnServer) GetConnectionState(context.Context, *Empty) (*GetConnectionStateResponce, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetConnectionState not implemented")
-}
-func (UnimplementedVpnServer) InitHealthCheck(context.Context, *Empty) (*Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method InitHealthCheck not implemented")
-}
-func (UnimplementedVpnServer) StartHealthCheck(context.Context, *Empty) (*Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method StartHealthCheck not implemented")
-}
-func (UnimplementedVpnServer) StopHealthCheck(context.Context, *Empty) (*Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method StopHealthCheck not implemented")
-}
-func (UnimplementedVpnServer) MeasureTunnelProbeAverageLatencyMillis(context.Context, *MeasureTunnelProbeRequest) (*MeasureTunnelProbeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method MeasureTunnelProbeAverageLatencyMillis not implemented")
-}
-func (UnimplementedVpnServer) StartCloakClient(context.Context, *StartCloakClientRequest) (*Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method StartCloakClient not implemented")
-}
-func (UnimplementedVpnServer) StopCloakClient(context.Context, *Empty) (*Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method StopCloakClient not implemented")
-}
 func (UnimplementedVpnServer) InitLogger(context.Context, *InitLoggerRequest) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method InitLogger not implemented")
-}
-func (UnimplementedVpnServer) InitTelemetry(context.Context, *InitTelemetryRequest) (*Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method InitTelemetry not implemented")
-}
-func (UnimplementedVpnServer) StopTelemetry(context.Context, *Empty) (*Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method StopTelemetry not implemented")
-}
-func (UnimplementedVpnServer) SetupTelemetryAttributes(context.Context, *SetupTelemetryAttributesRequest) (*Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetupTelemetryAttributes not implemented")
-}
-func (UnimplementedVpnServer) SetGeoRoutingConf(context.Context, *SetGeoRoutingConfRequest) (*Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetGeoRoutingConf not implemented")
-}
-func (UnimplementedVpnServer) ClearGeoRoutingConf(context.Context, *Empty) (*Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method ClearGeoRoutingConf not implemented")
-}
-func (UnimplementedVpnServer) ClearDNSCache(context.Context, *Empty) (*Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method ClearDNSCache not implemented")
-}
-func (UnimplementedVpnServer) SetDNSCacheEntries(context.Context, *SetDNSCacheEntriesRequest) (*SetDNSCacheEntriesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetDNSCacheEntries not implemented")
 }
 func (UnimplementedVpnServer) GetCapabilities(context.Context, *SessionGetCapabilitiesRequest) (*SessionGetCapabilitiesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCapabilities not implemented")
 }
 func (UnimplementedVpnServer) CreateSession(context.Context, *SessionCreateSessionRequest) (*SessionCreateSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateSession not implemented")
+}
+func (UnimplementedVpnServer) RecoverActiveSession(context.Context, *Empty) (*SessionRecoverActiveSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecoverActiveSession not implemented")
 }
 func (UnimplementedVpnServer) Configure(context.Context, *SessionConfigureRequest) (*SessionConfigureResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Configure not implemented")
@@ -597,6 +237,9 @@ func (UnimplementedVpnServer) Snapshot(context.Context, *SessionSnapshotRequest)
 }
 func (UnimplementedVpnServer) Observe(context.Context, *SessionObserveRequest) (*SessionObserveResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Observe not implemented")
+}
+func (UnimplementedVpnServer) Watch(*SessionObserveRequest, grpc.ServerStreamingServer[SessionEvent]) error {
+	return status.Error(codes.Unimplemented, "method Watch not implemented")
 }
 func (UnimplementedVpnServer) DestroySession(context.Context, *SessionDestroySessionRequest) (*SessionDestroySessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DestroySession not implemented")
@@ -622,312 +265,6 @@ func RegisterVpnServer(s grpc.ServiceRegistrar, srv VpnServer) {
 	s.RegisterService(&Vpn_ServiceDesc, srv)
 }
 
-func _Vpn_GetOutlineLastError_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).GetOutlineLastError(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_GetOutlineLastError_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).GetOutlineLastError(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_StartOutline_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StartOutlineRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).StartOutline(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_StartOutline_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).StartOutline(ctx, req.(*StartOutlineRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_StopOutline_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).StopOutline(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_StopOutline_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).StopOutline(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_GetXrayLastError_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).GetXrayLastError(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_GetXrayLastError_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).GetXrayLastError(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_StartXray_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StartXrayRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).StartXray(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_StartXray_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).StartXray(ctx, req.(*StartXrayRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_StopXray_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).StopXray(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_StopXray_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).StopXray(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_GetTrustTunnelLastError_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).GetTrustTunnelLastError(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_GetTrustTunnelLastError_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).GetTrustTunnelLastError(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_StartTrustTunnel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StartTrustTunnelRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).StartTrustTunnel(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_StartTrustTunnel_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).StartTrustTunnel(ctx, req.(*StartTrustTunnelRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_StopTrustTunnel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).StopTrustTunnel(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_StopTrustTunnel_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).StopTrustTunnel(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_CouldStart_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).CouldStart(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_CouldStart_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).CouldStart(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_GetConnectionState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).GetConnectionState(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_GetConnectionState_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).GetConnectionState(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_InitHealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).InitHealthCheck(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_InitHealthCheck_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).InitHealthCheck(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_StartHealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).StartHealthCheck(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_StartHealthCheck_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).StartHealthCheck(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_StopHealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).StopHealthCheck(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_StopHealthCheck_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).StopHealthCheck(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_MeasureTunnelProbeAverageLatencyMillis_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MeasureTunnelProbeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).MeasureTunnelProbeAverageLatencyMillis(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_MeasureTunnelProbeAverageLatencyMillis_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).MeasureTunnelProbeAverageLatencyMillis(ctx, req.(*MeasureTunnelProbeRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_StartCloakClient_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StartCloakClientRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).StartCloakClient(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_StartCloakClient_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).StartCloakClient(ctx, req.(*StartCloakClientRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_StopCloakClient_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).StopCloakClient(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_StopCloakClient_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).StopCloakClient(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Vpn_InitLogger_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(InitLoggerRequest)
 	if err := dec(in); err != nil {
@@ -942,132 +279,6 @@ func _Vpn_InitLogger_Handler(srv interface{}, ctx context.Context, dec func(inte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(VpnServer).InitLogger(ctx, req.(*InitLoggerRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_InitTelemetry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(InitTelemetryRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).InitTelemetry(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_InitTelemetry_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).InitTelemetry(ctx, req.(*InitTelemetryRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_StopTelemetry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).StopTelemetry(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_StopTelemetry_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).StopTelemetry(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_SetupTelemetryAttributes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetupTelemetryAttributesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).SetupTelemetryAttributes(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_SetupTelemetryAttributes_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).SetupTelemetryAttributes(ctx, req.(*SetupTelemetryAttributesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_SetGeoRoutingConf_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetGeoRoutingConfRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).SetGeoRoutingConf(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_SetGeoRoutingConf_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).SetGeoRoutingConf(ctx, req.(*SetGeoRoutingConfRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_ClearGeoRoutingConf_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).ClearGeoRoutingConf(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_ClearGeoRoutingConf_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).ClearGeoRoutingConf(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_ClearDNSCache_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).ClearDNSCache(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_ClearDNSCache_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).ClearDNSCache(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Vpn_SetDNSCacheEntries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetDNSCacheEntriesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VpnServer).SetDNSCacheEntries(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Vpn_SetDNSCacheEntries_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VpnServer).SetDNSCacheEntries(ctx, req.(*SetDNSCacheEntriesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1104,6 +315,24 @@ func _Vpn_CreateSession_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(VpnServer).CreateSession(ctx, req.(*SessionCreateSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Vpn_RecoverActiveSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VpnServer).RecoverActiveSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Vpn_RecoverActiveSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VpnServer).RecoverActiveSession(ctx, req.(*Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1198,6 +427,17 @@ func _Vpn_Observe_Handler(srv interface{}, ctx context.Context, dec func(interfa
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Vpn_Watch_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(SessionObserveRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(VpnServer).Watch(m, &grpc.GenericServerStream[SessionObserveRequest, SessionEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Vpn_WatchServer = grpc.ServerStreamingServer[SessionEvent]
+
 func _Vpn_DestroySession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SessionDestroySessionRequest)
 	if err := dec(in); err != nil {
@@ -1224,104 +464,8 @@ var Vpn_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*VpnServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "GetOutlineLastError",
-			Handler:    _Vpn_GetOutlineLastError_Handler,
-		},
-		{
-			MethodName: "StartOutline",
-			Handler:    _Vpn_StartOutline_Handler,
-		},
-		{
-			MethodName: "StopOutline",
-			Handler:    _Vpn_StopOutline_Handler,
-		},
-		{
-			MethodName: "GetXrayLastError",
-			Handler:    _Vpn_GetXrayLastError_Handler,
-		},
-		{
-			MethodName: "StartXray",
-			Handler:    _Vpn_StartXray_Handler,
-		},
-		{
-			MethodName: "StopXray",
-			Handler:    _Vpn_StopXray_Handler,
-		},
-		{
-			MethodName: "GetTrustTunnelLastError",
-			Handler:    _Vpn_GetTrustTunnelLastError_Handler,
-		},
-		{
-			MethodName: "StartTrustTunnel",
-			Handler:    _Vpn_StartTrustTunnel_Handler,
-		},
-		{
-			MethodName: "StopTrustTunnel",
-			Handler:    _Vpn_StopTrustTunnel_Handler,
-		},
-		{
-			MethodName: "CouldStart",
-			Handler:    _Vpn_CouldStart_Handler,
-		},
-		{
-			MethodName: "GetConnectionState",
-			Handler:    _Vpn_GetConnectionState_Handler,
-		},
-		{
-			MethodName: "InitHealthCheck",
-			Handler:    _Vpn_InitHealthCheck_Handler,
-		},
-		{
-			MethodName: "StartHealthCheck",
-			Handler:    _Vpn_StartHealthCheck_Handler,
-		},
-		{
-			MethodName: "StopHealthCheck",
-			Handler:    _Vpn_StopHealthCheck_Handler,
-		},
-		{
-			MethodName: "MeasureTunnelProbeAverageLatencyMillis",
-			Handler:    _Vpn_MeasureTunnelProbeAverageLatencyMillis_Handler,
-		},
-		{
-			MethodName: "StartCloakClient",
-			Handler:    _Vpn_StartCloakClient_Handler,
-		},
-		{
-			MethodName: "StopCloakClient",
-			Handler:    _Vpn_StopCloakClient_Handler,
-		},
-		{
 			MethodName: "InitLogger",
 			Handler:    _Vpn_InitLogger_Handler,
-		},
-		{
-			MethodName: "InitTelemetry",
-			Handler:    _Vpn_InitTelemetry_Handler,
-		},
-		{
-			MethodName: "StopTelemetry",
-			Handler:    _Vpn_StopTelemetry_Handler,
-		},
-		{
-			MethodName: "SetupTelemetryAttributes",
-			Handler:    _Vpn_SetupTelemetryAttributes_Handler,
-		},
-		{
-			MethodName: "SetGeoRoutingConf",
-			Handler:    _Vpn_SetGeoRoutingConf_Handler,
-		},
-		{
-			MethodName: "ClearGeoRoutingConf",
-			Handler:    _Vpn_ClearGeoRoutingConf_Handler,
-		},
-		{
-			MethodName: "ClearDNSCache",
-			Handler:    _Vpn_ClearDNSCache_Handler,
-		},
-		{
-			MethodName: "SetDNSCacheEntries",
-			Handler:    _Vpn_SetDNSCacheEntries_Handler,
 		},
 		{
 			MethodName: "GetCapabilities",
@@ -1330,6 +474,10 @@ var Vpn_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateSession",
 			Handler:    _Vpn_CreateSession_Handler,
+		},
+		{
+			MethodName: "RecoverActiveSession",
+			Handler:    _Vpn_RecoverActiveSession_Handler,
 		},
 		{
 			MethodName: "Configure",
@@ -1356,6 +504,12 @@ var Vpn_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Vpn_DestroySession_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Watch",
+			Handler:       _Vpn_Watch_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "grpcproto/vpnserver.proto",
 }

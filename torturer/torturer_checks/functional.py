@@ -1,0 +1,270 @@
+"""Run the canonical Torturer lane against a local prepared installed candidate.
+
+It deliberately calls the same scenario engine, adapter factory, result
+validator, and command runner used by the hosted lane; platform setup supplies
+only the installed candidate paths and required inputs.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import platform as host_platform
+from pathlib import Path
+import re
+import shutil
+import time
+
+from torturer_contract.functional.engine import FunctionalEngine
+from torturer_contract.functional.results import (
+    ConnectionIdentity,
+    RunProvenance,
+)
+from torturer_contract.functional.scenarios import (
+    test_set,
+)
+
+from .hosted.cli import (
+    HostedAdapterError,
+    SubprocessRunner,
+    _ensure_directory,
+)
+from .hosted.factory import adapter_for_platform
+from .hosted.run import (
+    _discover_connections,
+    _emit_progress_event,
+    _finalize_adapter,
+    _run_connection_matrix,
+    _select_scenarios,
+    _write_json,
+)
+_SHA40 = re.compile(r"^[0-9a-f]{40}$")
+_ARCHITECTURES = {
+    "linux": "amd64",
+    "windows": "amd64",
+    "macos": "arm64",
+    "android": "x86_64",
+}
+# Local runs have no skip allowlist. Hosted desktop network-transition skips
+# live in the public qualification contract, where GitHub runners cannot
+# interrupt the control uplink.
+
+
+def _parse_timeout(value: str) -> float:
+    try:
+        timeout = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("lane timeout must be a number") from error
+    if not 0 < timeout < float("inf"):
+        raise argparse.ArgumentTypeError("lane timeout must be a positive finite number")
+    return timeout
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--platform", choices=tuple(_ARCHITECTURES), required=True)
+    parser.add_argument("--cli", type=Path, help="Installed candidate CLI for desktop platforms")
+    parser.add_argument(
+        "--dobby-source", type=Path,
+        help="Built/installed candidate root or CLI path (prepared-candidate compatibility)",
+    )
+    parser.add_argument("--adb", type=Path, help="ADB executable for Android")
+    parser.add_argument(
+        "--profile", dest="profile", type=Path,
+        required=True, help="Plaintext synthetic VPN test profile",
+    )
+    parser.add_argument("--output", "--result", dest="output", type=Path, required=True)
+    parser.add_argument(
+        "--raw-log-dir", "--logs", dest="raw_log_dir", type=Path, required=True,
+        help="Directory for command output and diagnostics",
+    )
+    parser.add_argument("--platform-version", default="local")
+    parser.add_argument(
+        "--architecture",
+        help="Observed local guest architecture (defaults to the host architecture for macOS)",
+    )
+    parser.add_argument("--adapter", help="Optional adapter name to verify")
+    parser.add_argument(
+        "--source-sha", default=None,
+        help="Optional candidate source SHA; dirty local trees do not require one",
+    )
+    parser.add_argument("--lane-timeout-seconds", type=_parse_timeout, default=1800.0)
+    parser.add_argument(
+        "--scenario-id", "--scenario", action="append", dest="scenario_ids",
+    )
+    parser.add_argument("--service-pid", type=int)
+    parser.add_argument("--service-binary", type=Path)
+    parser.add_argument("--service-socket", type=Path)
+    parser.add_argument("--service-library-path", type=Path)
+    parser.add_argument("--service-pid-file", type=Path)
+    parser.add_argument("--service-identity-file", type=Path)
+    parser.add_argument("--network-interface")
+    parser.add_argument("--routing-firewall-helper", type=Path)
+    parser.add_argument("--network-transition-helper", type=Path)
+    return parser
+
+
+def _candidate_cli(source: Path | None, explicit: Path | None) -> Path | None:
+    """Resolve a built candidate root to its installed desktop CLI."""
+
+    if explicit is not None:
+        return explicit
+    if source is None:
+        return None
+    if source.is_file():
+        return source
+    for relative in (
+        "kmp_module/services/dobby-cli",
+        "kmp_module/services/dobby-cli.exe",
+        "build/bin/dobby-cli",
+        "build/bin/dobby-cli.exe",
+        "dobby-cli",
+        "dobby-cli.exe",
+    ):
+        candidate = source / relative
+        if candidate.is_file():
+            return candidate
+    return source
+
+
+def _supervised_request_root() -> Path | None:
+    if os.environ.get("DOBBYVPN_SUPERVISED_REQUEST") != "1":
+        return None
+    value = os.environ.get("DOBBYVPN_REQUEST_ROOT")
+    if not value:
+        raise ValueError("SUPERVISED_REQUEST_ROOT_UNAVAILABLE")
+    root = Path(value)
+    if not root.is_dir():
+        raise ValueError("SUPERVISED_REQUEST_ROOT_UNAVAILABLE")
+    return root
+
+
+def _create_log(path: Path) -> None:
+    """Create or reopen one VPN log."""
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(exist_ok=True)
+    except OSError as error:
+        raise ValueError("LOG_UNAVAILABLE") from error
+
+
+def _prepare_output_path(path: Path) -> None:
+    """Prepare the result directory."""
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ValueError("RESULT_DIRECTORY_UNAVAILABLE") from error
+
+
+def _local_exit_code(results: list[dict[str, object]]) -> int:
+    """A run passes only when it returned at least one passing scenario."""
+
+    return 0 if results and all(result["outcome"] == "passed" for result in results) else 2
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    lane_deadline = time.monotonic() + args.lane_timeout_seconds
+    local_architecture = args.architecture or (
+        "x86_64" if args.platform == "macos" and host_platform.machine().lower() in {"x86_64", "amd64"}
+        else "arm64" if args.platform == "macos" and host_platform.machine().lower() in {"aarch64", "arm64"}
+        else _ARCHITECTURES[args.platform]
+    )
+    selected = _select_scenarios(
+        args.scenario_ids,
+        platform=args.platform,
+    )
+    connections: tuple[ConnectionIdentity, ...] = ()
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", local_architecture) is None:
+        raise ValueError("architecture has an invalid format")
+    raw_dir = args.raw_log_dir
+    supervised_root = _supervised_request_root()
+    _ensure_directory(raw_dir)
+    app_log = None if args.platform == "android" else raw_dir / "app.log"
+    service_log = raw_dir / "service.log" if args.platform == "linux" else None
+    for path in (app_log, service_log):
+        if path is None:
+            continue
+        _create_log(path)
+    _prepare_output_path(args.output)
+    if args.source_sha is not None and _SHA40.fullmatch(args.source_sha) is None:
+        raise ValueError("source SHA must be a full lowercase SHA")
+    cli = _candidate_cli(args.dobby_source, args.cli)
+    runner = SubprocessRunner(
+        supervised_root / "output" if supervised_root is not None else raw_dir,
+        environment=(
+            {"DOBBY_CLI_LOG_PATH": str(app_log)}
+            if args.platform != "android" and cli is not None
+            else None
+        ),
+    )
+    adb = args.adb or (Path(shutil.which("adb")) if shutil.which("adb") else None)
+    if args.platform == "linux" and args.routing_firewall_helper is None:
+        raise HostedAdapterError("ROUTING_FIREWALL_HELPER_UNAVAILABLE")
+    adapter = adapter_for_platform(
+        args.platform,
+        cli=cli,
+        adb=adb,
+        profile=args.profile,
+        runner=runner,
+        source_sha=args.source_sha,
+        local_mode=True,
+        service_pid=args.service_pid,
+        service_binary=args.service_binary,
+        service_socket=args.service_socket,
+        service_library_path=args.service_library_path,
+        service_pid_file=args.service_pid_file,
+        service_identity_file=args.service_identity_file,
+        service_log=service_log,
+        network_interface=args.network_interface,
+        routing_firewall_helper=args.routing_firewall_helper,
+        network_transition_helper=args.network_transition_helper,
+    )
+    set_progress_sink = getattr(adapter, "set_progress_sink", None)
+    if callable(set_progress_sink):
+        set_progress_sink(_emit_progress_event)
+    if args.adapter is not None and args.adapter != adapter.adapter_id:
+        raise ValueError("adapter does not match the selected platform")
+    if args.scenario_ids:
+        adapter.reset()
+    _emit_progress_event("connection-discovery-start", {"platform": args.platform})
+    connections = _discover_connections(adapter, deadline=lane_deadline)
+    _emit_progress_event(
+        "connection-discovery-finish",
+        {"connection_count": len(connections), "platform": args.platform},
+    )
+    provenance = RunProvenance(
+        platform=args.platform,
+        platform_version=args.platform_version,
+        architecture=local_architecture,
+    )
+    engine = FunctionalEngine()
+    results = _run_connection_matrix(
+        engine,
+        selected,
+        adapter,
+        provenance,
+        connections,
+        deadline=lane_deadline,
+    )
+    _finalize_adapter(adapter, lane_deadline)
+    document = {
+        "environment": {
+            "platform": args.platform,
+            "platform_version": args.platform_version,
+            "architecture": local_architecture,
+        },
+        "connections": [connection.to_dict() for connection in connections],
+        "scenarios": results,
+        "complete_test_set": {scenario.id for scenario in selected}
+        == {scenario.id for scenario in test_set()},
+    }
+    _write_json(args.output, document)
+    return _local_exit_code(results)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

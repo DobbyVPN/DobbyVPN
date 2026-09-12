@@ -1,16 +1,28 @@
 # doBBYVPN - do Better By VPN
 
-Yet another VPN client. Currently wraps around OutlineSDK, cloak, TrustTunnel & XRay.
+Yet another VPN client. Currently wraps around OutlineSDK, TrustTunnel & XRay.
 More protocols planned.
+
+## Architecture
+
+The architecture driver is one shared UI layer where sharing is valuable, one
+Go product/runtime layer for behavior, and only thin OS-specific shells where
+VPN APIs require them. SessionV2 owns configuration acquisition, parsing,
+selection, lifecycle, recovery, and ordered events; the Compose UI renders that
+state across platforms.
+
+See the complete [architecture contract](docs/ARCHITECTURE.md), including the
+responsibility boundaries and future-protocol checklist.
 
 AppStore: https://apps.apple.com/us/app/dobbyvpn-do-better-by-vpn/id6741442515
 
-F-Droid: https://f-droid.org/en/packages/com.dobby.vpn/
+F-Droid: https://f-droid.org/en/packages/com.dobby.vpn/ (official metadata may
+lag releases; v1.5.0 availability is not claimed until the index is updated.)
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 
-Local desktop CLI/VPN checks and CI desktop build commands are documented in
-[.github/scripts/README.md](.github/scripts/README.md).
+Desktop build commands, a local CLI configuration check, and CI build
+commands are documented in [.github/scripts/README.md](.github/scripts/README.md).
 
 Consume 'subscription' / 'dynamic keys' as TOML via HTTPS or inline:
 
@@ -36,7 +48,7 @@ vpn_mode = "general"
 killswitch_enabled = false
 post_quantum_group_enabled = true
 exclusions = []
-|endpoint|
+[TrustTunnel.endpoint]
 hostname = "domain.com"
 addresses = ["ip:port"]
 custom_sni = "domain.com"
@@ -47,7 +59,7 @@ skip_verification = true
 upstream_protocol = "http3"
 anti_dpi = true
 dns_upstreams = []
-|socks|
+[TrustTunnel.listener.socks]
 address = "127.0.0.1:10808"
 
 # Shared by all variants and kept at the end 
@@ -59,9 +71,9 @@ IPs = [
 
 DobbyVPN probes protocol variants one by one when the VPN starts. Each variant
 must start and pass latency probes through the tunnel; DobbyVPN then activates
-the working variant with the lowest average latency. If health check later
-reports that the active variant is no longer connected, DobbyVPN repeats the
-full probe-and-rank procedure until the user stops the VPN. Use the same
+the working variant with the lowest average latency. If the runtime readiness
+monitor reports that the active variant is no longer connected, DobbyVPN
+repeats the full probe-and-rank procedure until the user stops the VPN. Use the same
 `[[Outline]]`, `[[Xray]]` or `[[TrustTunnel]]` section format even when the
 configuration contains only one variant.
 
@@ -96,29 +108,6 @@ IPs = [
 ]
 ```
 
-**ShadowSocks over cloak** (caddy -> cloak -> outline-ss-server)
-
-```toml
-[[Outline]] # Implementation library
-Description = "My sneaky SS in Cloak" # description - whatever you like
-Cloak = true # enables cloak (what is cloak? see ref # 2 below)
-Server = "www.myserver.com"
-Password = "Qwerty123" # user's 'secret' from the Outline's config
-BrowserSig = "chrome" # or "firefox"
-EncryptionMethod = "plain" # plain / aes-256-gcm aka aes-gcm / aes-128-gcm /  chacha20-poly1305; ShadowSocks provides it's own encryption 
-# the following three lines are coming from the quick-cloak-server setup script (ref # 3 below); or could be picked up from .env and cloak-server.conf files.  
-UID = "hi8WIXyln+amtgfQeT11zQ=="
-PublicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo="
-CDNWsUrlPath = "/JmJWXlmVXByXicD7DGrdMWV1btwHv0ARK0Yjoaig"
-
-[ExcludeIPs] # Optional
-IPs = [
-  "200.200.200.200/32" # IP adress or subnet that we want to exlude from vpn-routing
-]
-```
-
-For direct Cloak mode, omit `CDNWsUrlPath` or set `Transport = "direct"` explicitly.
-
 **VLESS + Reality over xray-core** ([more details](https://xtls.github.io/en/config/outbounds/vless.html))
 ```toml
 [[Xray]] # Implementation library
@@ -142,7 +131,7 @@ vpn_mode = "general"
 killswitch_enabled = false
 post_quantum_group_enabled = true
 exclusions = []
-|endpoint|
+[TrustTunnel.endpoint]
 hostname = "domain.com"
 addresses = ["ip:port"]
 custom_sni = "domain.com"
@@ -153,22 +142,21 @@ skip_verification = true
 upstream_protocol = "http3"
 anti_dpi = true
 dns_upstreams = []
-|socks|
+[TrustTunnel.listener.socks]
 address = "127.0.0.1:10808"
 ```
 
 Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nicely expressed Issues accordingly.
 
-See [TESTING.md](TESTING.md) for contributor-local checks and independent
-public pull-request verification.
+See [TESTING.md](TESTING.md) for contributor checks. Pushes and pull requests
+run checks. Release starts manually and qualifies its packages with the
+functional suite in `torturer/`. A separate manual Publish step uses the
+successful Release run's tested artifacts.
 
-Remote telemetry has been removed. Legacy `[Telemetry]` configuration blocks
-are accepted only for compatibility, produce a warning, and never initiate a
-network request; see [docs/Telemetry.md](docs/Telemetry.md).
+Remote telemetry has been removed. `[Telemetry]` configuration blocks are not
+supported.
 
 Windows and MacOS apps require manual intervention to be installed for now - notarization is a work in progress.
 
 ## References:
 * 1. [Connection Prefix Disguises](https://developers.google.com/outline/docs/guides/service-providers/prefixing)
-* 2. [Cloak](https://github.com/cbeuw/Cloak)
-* 3. [quick-cloak-server]([url](https://github.com/DobbyVPN/quick-cloak-server))

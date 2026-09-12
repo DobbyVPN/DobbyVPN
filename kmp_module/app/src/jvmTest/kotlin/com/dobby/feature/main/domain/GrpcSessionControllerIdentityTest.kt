@@ -14,6 +14,8 @@ import interop.session.SessionSnapshot as TransportSnapshot
 import interop.session.SessionStartTarget as TransportStartTarget
 import interop.session.SessionState as TransportState
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -66,6 +68,35 @@ class GrpcSessionControllerIdentityTest {
         assertEquals(SessionState.FAILED, event.state)
         assertEquals(SessionFailureCode.RUNTIME_FAILED, event.failureCode)
     }
+
+    @Test
+    fun configurePreservesRecoveryFailureAndDoesNotCreateAReplacement() = runBlocking {
+        val library = RecordingSessionLibrary().apply {
+            recoverFailure = SessionFailure(TransportFailureCode.INTERNAL, "exact recovery failure")
+        }
+
+        val result = GrpcSessionController(library, MemoryStore()).configure(byteArrayOf(1))
+
+        assertEquals(
+            SessionControllerResult.Failure("exact recovery failure", SessionFailureCode.INTERNAL),
+            result,
+        )
+        assertEquals(0, library.createCalls)
+    }
+
+    @Test
+    fun configurePreservesCreateFailure() = runBlocking {
+        val library = RecordingSessionLibrary().apply {
+            createFailure = SessionFailure(TransportFailureCode.INTERNAL, "exact creation failure")
+        }
+
+        val result = GrpcSessionController(library, MemoryStore()).configure(byteArrayOf(1))
+
+        assertEquals(
+            SessionControllerResult.Failure("exact creation failure", SessionFailureCode.INTERNAL),
+            result,
+        )
+    }
 }
 
 private class MemoryStore(var value: String? = null) : SessionIdentityStore {
@@ -79,19 +110,25 @@ private class RecordingSessionLibrary : SessionLibrary {
     var snapshotSessionId: String? = null
     var stopSessionId: String? = null
     var terminalFailure: SessionFailure? = null
+    var recoverFailure: SessionFailure? = null
+    var createFailure: SessionFailure? = null
     private val sessions = mutableSetOf<String>()
 
     override suspend fun getCapabilities(): SessionResult<TransportCapabilities> =
-        SessionResult.Success(TransportCapabilities("v1", emptyList(), emptyList(), true))
+        SessionResult.Success(TransportCapabilities("sessionapi/v2", emptyList(), emptyList()))
 
     override suspend fun createSession(): SessionResult<String> {
         createCalls += 1
+        createFailure?.let { return SessionResult.Failure(it) }
         return SessionResult.Success("session-$createCalls".also(sessions::add))
     }
 
+    override suspend fun recoverActiveSession(): SessionResult<String> =
+        recoverFailure?.let { SessionResult.Failure(it) } ?: missing()
+
     override suspend fun configure(sessionId: String, commandId: String, rawConfig: ByteArray): SessionResult<TransportConfiguration> =
         if (sessionId !in sessions) missing() else SessionResult.Success(
-            TransportConfiguration("digest", listOf(TransportProfile(0, TransportProtocol.OUTLINE, "")), emptyList()),
+            TransportConfiguration("digest", listOf(TransportProfile(0, TransportProtocol.OUTLINE, "")), emptyList(), interop.session.SessionSourceKind.INLINE),
         )
 
     override suspend fun start(sessionId: String, commandId: String, target: TransportStartTarget): SessionResult<ULong> =
@@ -130,6 +167,8 @@ private class RecordingSessionLibrary : SessionLibrary {
                 ),
             )
         }
+
+    override fun watch(sessionId: String, afterSequence: ULong): Flow<TransportEvent> = emptyFlow()
 
     override suspend fun destroySession(sessionId: String): SessionResult<Unit> =
         if (sessionId !in sessions) missing() else SessionResult.Success(Unit)

@@ -1,0 +1,63 @@
+#!/bin/sh
+# Privileged macOS network-transition seam for one local qualification run.
+set -eu
+
+pf_anchor=com.apple/dobbyvpn-torturer-routing
+pf_token=/var/run/dobbyvpn-torturer-pf.token
+
+valid_interface() { case "$1" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac; }
+valid_ipv4() {
+  address=$1; old_ifs=$IFS; IFS=.; set -- $address; IFS=$old_ifs
+  [ "$#" -eq 4 ] || return 1
+  for octet in "$@"; do case "$octet" in ''|*[!0-9]*) return 1 ;; esac; [ "$octet" -le 255 ] || return 1; done
+}
+[ "$(/usr/bin/id -u)" -eq 0 ] || { echo 'network-transition must be invoked through sudo' >&2; exit 2; }
+
+routing_remove() {
+  set +e; flush_output=$(/sbin/pfctl -a "$pf_anchor" -F rules 2>&1); flush_status=$?; set -e
+  [ -z "$flush_output" ] || printf '%s\n' "$flush_output"; [ "$flush_status" -eq 0 ] || return "$flush_status"
+  [ -f "$pf_token" ] || return 0
+  token=$(/bin/cat "$pf_token"); case "$token" in ''|*[!0-9]*) return 2 ;; esac
+  set +e; release_output=$(/sbin/pfctl -X "$token" 2>&1); release_status=$?; set -e
+  [ -z "$release_output" ] || printf '%s\n' "$release_output"; [ "$release_status" -eq 0 ] || return "$release_status"
+  /bin/rm -f "$pf_token"
+}
+
+case ${1-} in
+  arm)
+    [ "$#" -eq 5 ] || { echo 'usage: network-transition arm INTERFACE STATE STDOUT STDERR' >&2; exit 2; }
+    interface=$2; valid_interface "$interface" || exit 2
+    state=$3; restore_stdout=$4; restore_stderr=$5
+    [ -f "$state" ] && [ -f "$restore_stdout" ] && [ -f "$restore_stderr" ] || exit 2
+    route_output=$(/sbin/route -n get default -ifscope "$interface")
+    gateway=$(printf '%s\n' "$route_output" | /usr/bin/awk '$1 == "gateway:" { print $2 }'); valid_ipv4 "$gateway" || exit 2
+    : > "$state"; printf 'baseline_gateway=%s\n' "$gateway" >> "$state"
+    /usr/bin/nohup "$0" restore "$interface" "$state" > "$restore_stdout" 2> "$restore_stderr" < /dev/null &
+    restore_pid=$!; printf 'restore_pid=%s\n' "$restore_pid" >> "$state"
+    count=0
+    while ! /usr/bin/grep -q '^restore_ready=1$' "$state"; do count=$((count + 1)); [ "$count" -lt 20 ] || exit 1; /bin/sleep 0.1; done
+    printf 'restore_requested=1\n' >> "$state"; /sbin/ifconfig "$interface" down
+    ;;
+  restore)
+    [ "$#" -eq 3 ] || exit 2; interface=$2; valid_interface "$interface" || exit 2; state=$3
+    printf 'restore_ready=1\n' >> "$state"; count=0
+    while ! /usr/bin/grep -q '^restore_requested=1$' "$state"; do count=$((count + 1)); [ "$count" -lt 50 ] || { printf 'restore_status=2\n' >> "$state"; exit 2; }; /bin/sleep 0.1; done
+    /bin/sleep 3; gateway=$(/usr/bin/sed -n 's/^baseline_gateway=//p' "$state"); valid_ipv4 "$gateway" || { printf 'restore_status=2\n' >> "$state"; exit 2; }
+    set +e; /sbin/ifconfig "$interface" up; status=$?; if [ "$status" -eq 0 ]; then /sbin/route -n get default >/dev/null 2>&1 || { /sbin/route -n add default "$gateway"; status=$?; }; fi; set -e
+    printf 'restore_status=%s\n' "$status" >> "$state"; exit "$status"
+    ;;
+  finish)
+    [ "$#" -eq 2 ] || exit 2; state=$2; count=0
+    while ! /usr/bin/grep -q '^restore_status=' "$state"; do count=$((count + 1)); [ "$count" -lt 200 ] || exit 1; /bin/sleep 0.1; done
+    status=$(/usr/bin/sed -n 's/^restore_status=//p' "$state"); /bin/cat "$state"; [ "$status" -eq 0 ] || exit "$status"
+    ;;
+  routing-block)
+    [ "$#" -eq 3 ] || exit 2; interface=$2; address=$3; valid_interface "$interface" || exit 2; valid_ipv4 "$address" || exit 2; routing_remove
+    set +e; enable_output=$(/sbin/pfctl -E 2>&1); enable_status=$?; set -e; [ -z "$enable_output" ] || printf '%s\n' "$enable_output"; [ "$enable_status" -eq 0 ] || exit "$enable_status"
+    token=$(printf '%s\n' "$enable_output" | /usr/bin/sed -n 's/^Token : \([0-9][0-9]*\)$/\1/p'); case "$token" in ''|*[!0-9]*) exit 2 ;; esac
+    umask 077; printf '%s\n' "$token" > "$pf_token"
+    set +e; rule_output=$(printf 'block drop out quick on %s inet proto tcp to %s port = 443\n' "$interface" "$address" | /sbin/pfctl -a "$pf_anchor" -f - 2>&1); rule_status=$?; set -e; [ -z "$rule_output" ] || printf '%s\n' "$rule_output"; [ "$rule_status" -eq 0 ] || { routing_remove || true; exit "$rule_status"; }
+    ;;
+  routing-remove) [ "$#" -eq 1 ] || exit 2; routing_remove ;;
+  *) echo 'network-transition requires arm, restore, finish, routing-block, or routing-remove' >&2; exit 2 ;;
+esac

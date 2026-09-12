@@ -6,48 +6,20 @@ import (
 	"syscall"
 
 	"go_module/log"
-	"go_module/routing"
-
-	"github.com/jackpal/gateway"
 )
 
 var defaultInterfaceIndex int
-var defaultGatewayIP string
-var defaultInterfaceName string
-
-func GetDefaultInterfaceIndex() (int, error) {
-	gw, err := gateway.DiscoverGateway()
-	if err != nil {
-		return 0, err
-	}
-
-	ip, err := routing.FindInterfaceIPByGateway(gw.String())
-	if err != nil {
-		return 0, err
-	}
-
-	iface, err := routing.GetNetworkInterfaceByIP(ip)
-	if err != nil {
-		return 0, err
-	}
-
-	return iface.Index, nil
-}
-
-func SetDefaultInterfaceIndex(idx int) {
-	defaultInterfaceIndex = idx
-	log.Debugf(Category, "[Windows-Protect] ifindex=%d", idx)
-}
 
 func SetDefaultRoute(gatewayIP, interfaceName string, idx int) {
-	defaultGatewayIP = gatewayIP
-	defaultInterfaceName = interfaceName
 	defaultInterfaceIndex = idx
 	log.Debugf(Category, "[Windows-Protect] default route gateway=%s iface=%s ifindex=%d", gatewayIP, interfaceName, idx)
 }
 
-func GetDefaultRoute() (gatewayIP, interfaceName string, ok bool) {
-	return defaultGatewayIP, defaultInterfaceName, defaultGatewayIP != "" && defaultInterfaceName != ""
+// ResetDefaultRoute clears the generation-owned interface binding. It must be
+// called when a session exits, including failed starts, so later protected
+// sockets cannot inherit a stale physical interface.
+func ResetDefaultRoute() {
+	defaultInterfaceIndex = 0
 }
 
 type windowsProtector struct{}

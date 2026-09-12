@@ -4,11 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"testing"
 	"time"
 
 	"go_module/grpcproto"
-	v1 "go_module/sessionapi/v1"
+	v1 "go_module/sessionapi/v2"
 )
 
 func TestHandlerExactRawBytesOrderedObserveStaleAndIdempotentStart(t *testing.T) {
@@ -66,7 +67,77 @@ func TestHandlerMapsDomainFailures(t *testing.T) {
 	}
 }
 
+func TestHandlerPreservesAsyncFailureMessageInEventAndSnapshot(t *testing.T) {
+	const exact = "runtime start failed: dial tcp: i/o timeout"
+	h := New(v1.NewManager(v1.ManagerOptions{
+		Runtime:  &asyncFailureRuntime{err: errors.New(exact)},
+		Platform: testPlatform{},
+	}))
+	ctx := context.Background()
+	created, err := h.CreateSession(ctx, &grpcproto.SessionCreateSessionRequest{})
+	if err != nil || created.GetFailure() != nil {
+		t.Fatalf("CreateSession = %#v, %v", created, err)
+	}
+	configured, err := h.Configure(ctx, &grpcproto.SessionConfigureRequest{
+		SessionId: created.GetSessionId(),
+		CommandId: "configure",
+		RawConfig: []byte("[[Outline]]\nServer=\"vpn.invalid\"\nPort=443\nPassword=\"secret\"\n"),
+	})
+	if err != nil || configured.GetFailure() != nil {
+		t.Fatalf("Configure = %#v, %v", configured, err)
+	}
+	started, err := h.Start(ctx, &grpcproto.SessionStartRequest{
+		SessionId: created.GetSessionId(),
+		CommandId: "start",
+		Mode:      grpcproto.SessionStartMode_SESSION_START_MODE_PROFILE_INDEX,
+	})
+	if err != nil || started.GetFailure() != nil {
+		t.Fatalf("Start = %#v, %v", started, err)
+	}
+	want := "RUNTIME_FAILED: operation failed: " + exact
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		snapshot, snapshotErr := h.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: created.GetSessionId()})
+		if snapshotErr != nil {
+			t.Fatal(snapshotErr)
+		}
+		failure := snapshot.GetSnapshot().GetLastFailure()
+		if failure == nil {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		if failure.GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_RUNTIME_FAILED || failure.GetMessage() != want {
+			t.Fatalf("snapshot failure = %#v, want message %q", failure, want)
+		}
+		observed, observeErr := h.Observe(ctx, &grpcproto.SessionObserveRequest{SessionId: created.GetSessionId()})
+		if observeErr != nil {
+			t.Fatal(observeErr)
+		}
+		for _, event := range observed.GetEvents() {
+			eventFailure := event.GetFailure()
+			if eventFailure == nil || eventFailure.GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_RUNTIME_FAILED {
+				continue
+			}
+			if eventFailure.GetMessage() != want {
+				t.Fatalf("event failure = %#v, want message %q", eventFailure, want)
+			}
+			return
+		}
+		t.Fatal("snapshot failure had no corresponding runtime failure event")
+	}
+	t.Fatal("async runtime failure did not reach the snapshot")
+}
+
 type testRuntime struct{}
+
+type asyncFailureRuntime struct{ err error }
+
+func (r *asyncFailureRuntime) Probe(context.Context, v1.SessionRef, v1.RuntimeProfile) (v1.ProbeResult, error) {
+	return v1.ProbeResult{LatencyMillis: 1}, nil
+}
+func (r *asyncFailureRuntime) Start(context.Context, v1.SessionRef, v1.RuntimeProfile) (v1.RuntimeLease, error) {
+	return nil, r.err
+}
 
 func (testRuntime) Probe(context.Context, v1.SessionRef, v1.RuntimeProfile) (v1.ProbeResult, error) {
 	return v1.ProbeResult{LatencyMillis: 1}, nil
@@ -85,7 +156,7 @@ func (testPlatform) PrepareTunnel(context.Context, v1.SessionRef) (v1.PlatformLe
 	return testPlatformLease{}, nil
 }
 func (testPlatform) ProtectSocket(context.Context, v1.SessionRef, int) error { return nil }
-func (testPlatform) PublishState(context.Context, v1.Event) error            { return nil }
+func (testPlatform) PublishState(context.Context, v1.Event)                  {}
 
 type testPlatformLease struct{}
 

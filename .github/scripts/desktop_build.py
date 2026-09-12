@@ -10,6 +10,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -26,15 +27,18 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 GO_MODULE_DIR = ROOT_DIR / "go_module"
 KMP_DIR = ROOT_DIR / "kmp_module"
 SERVICES_DIR = KMP_DIR / "services"
-TOOLS_DIR = ROOT_DIR / ".local-tools" / "desktop-build"
+LOCAL_BUILD_CACHE = os.environ.get("DOBBYVPN_LOCAL_BUILD_CACHE")
+TOOLS_DIR = (
+    Path(LOCAL_BUILD_CACHE) / "desktop-tools"
+    if LOCAL_BUILD_CACHE
+    else ROOT_DIR / ".local-tools" / "desktop-build"
+)
 
-ANDROID_NDK_VERSION = "27.2.12479018"
 ANDROID_PACKAGES = (
     "platforms;android-35",
     "platforms;android-36",
     "build-tools;36.0.0",
     "platform-tools",
-    f"ndk;{ANDROID_NDK_VERSION}",
 )
 ANDROID_TOOLS_VERSION = "11076708"
 WINTUN_VERSION = "0.14.1"
@@ -80,11 +84,36 @@ BRIDGE_RELEASES = {
     ),
 }
 
+
+@contextlib.contextmanager
+def temporary_directory(prefix: str):
+    path = Path(tempfile.mkdtemp(prefix=prefix))
+    try:
+        yield path
+    except BaseException as primary:
+        try:
+            shutil.rmtree(path)
+        except BaseException as cleanup_error:
+            primary.add_note(
+                f"temporary-directory cleanup failure: {type(cleanup_error).__name__}: {cleanup_error}"
+            )
+        raise
+    else:
+        shutil.rmtree(path)
+
 SERVICE_NAMES = {
     "linux": "ubuntu_grpcvpnserver",
     "macos": "macos_grpcvpnserver",
     "windows": "windows_grpcvpnserver.exe",
 }
+CLI_NAMES = {
+    "linux": "dobby-cli",
+    "macos": "dobby-cli",
+    "windows": "dobby-cli.exe",
+}
+MACOS_MINIMUM_SYSTEM_VERSION = "11.0"
+PROBE_TIMEOUT_SECONDS = 30
+PROCESS_CLEANUP_GRACE_SECONDS = 5
 GOOS_BY_PLATFORM = {
     "linux": "linux",
     "macos": "darwin",
@@ -105,6 +134,257 @@ def fail(message: str) -> None:
     raise SystemExit(f"[!] {message}")
 
 
+def output_text(output: str | bytes | None) -> str:
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return output
+
+
+def output_bytes(output: str | bytes | None) -> bytes:
+    if output is None:
+        return b""
+    if isinstance(output, bytes):
+        return output
+    return output.encode("utf-8", errors="surrogatepass")
+
+
+def _merge_output_fragments(*outputs: str | bytes | None) -> bytes:
+    """Merge cumulative or incremental subprocess output without duplicating it."""
+    merged = b""
+    for output in outputs:
+        data = output_bytes(output)
+        if not data:
+            continue
+        if not merged:
+            merged = data
+            continue
+        # TimeoutExpired exposes ``output`` as an alias for ``stdout``.  A
+        # second communicate() can also return the cumulative stream, while
+        # test doubles and alternate implementations may return only a new
+        # suffix.  Handle all three forms without dropping bytes.
+        if data == merged:
+            continue
+        if data.startswith(merged):
+            merged = data
+            continue
+        # Independent partial reads are appended in order.  The only
+        # duplicate forms produced by subprocess APIs are the stdout/output
+        # aliases and cumulative snapshots handled above; do not scan large
+        # diagnostics byte-by-byte looking for an arbitrary overlap.
+        merged += data
+    return merged
+
+
+def _exception_output(error: BaseException) -> tuple[bytes, bytes]:
+    """Return all partial streams exposed by a subprocess exception once."""
+    stdout = _merge_output_fragments(
+        getattr(error, "stdout", None),
+        getattr(error, "output", None),
+    )
+    stderr = _merge_output_fragments(getattr(error, "stderr", None))
+    return stdout, stderr
+
+
+def _set_exception_output(error: BaseException, stdout: bytes, stderr: bytes) -> None:
+    """Make merged streams available to callers handling the original error."""
+    try:
+        error.stdout = output_text(stdout)  # type: ignore[attr-defined]
+        error.output = output_text(stdout)  # type: ignore[attr-defined]
+        error.stderr = output_text(stderr)  # type: ignore[attr-defined]
+    except (AttributeError, TypeError) as attachment_error:
+        error.add_note(f"subprocess output could not be attached: {attachment_error}")
+
+
+class ProcessCleanupError(RuntimeError):
+    """Raised when bounded process cleanup itself fails."""
+
+
+def emit_process_diagnostic(prefix: str, output: str | bytes | None = None) -> None:
+    """Emit a failed child-process diagnostic without discarding its output."""
+    print(prefix, file=sys.stderr, flush=True)
+    text = output_text(output)
+    if text:
+        sys.stderr.write(text)
+        if not text.endswith("\n"):
+            sys.stderr.write("\n")
+        sys.stderr.flush()
+
+
+def process_group_options() -> dict[str, int | bool]:
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+    return {"start_new_session": True}
+
+
+def child_environment(
+    command: list[str], env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    child_env = os.environ.copy() if env is None else env.copy()
+    if host_platform() == "windows" and command and command[0].replace("\\", "/").rsplit("/", 1)[-1].lower() in {
+        "go",
+        "go.exe",
+    }:
+        # The Windows Go 1.25.1 compiler stalled in asyncPreempt/badmcall
+        # and recursive panic reporting, even during compile -V=full.
+        # Upstream: golang/go#67108 and #79249. Scope this mitigation to
+        # Go tools, not the VPN runtime; remove after a verified fix.
+        child_env["GODEBUG"] = ",".join(
+            filter(None, (child_env.get("GODEBUG"), "asyncpreemptoff=1"))
+        )
+    return child_env
+
+
+def _run_windows_taskkill(pid: int, timeout_seconds: float) -> None:
+    try:
+        result = subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        stdout, stderr = _exception_output(error)
+        raise ProcessCleanupError(
+            f"taskkill failed: {error} stdout={output_text(stdout).strip()} "
+            f"stderr={output_text(stderr).strip()}"
+        ) from error
+    if result.returncode != 0:
+        raise ProcessCleanupError(
+            f"taskkill exited with code {result.returncode} "
+            f"stdout={output_text(result.stdout).strip()} "
+            f"stderr={output_text(result.stderr).strip()}"
+        )
+
+
+def terminate_process_group(
+    process: subprocess.Popen[str],
+    grace_seconds: float = PROCESS_CLEANUP_GRACE_SECONDS,
+) -> str:
+    """Terminate a child process and its process group, escalating if needed."""
+    group_id = getattr(process, "_dobby_process_group_id", process.pid)
+    if os.name == "nt":
+        if process.poll() is None:
+            _run_windows_taskkill(process.pid, grace_seconds)
+    else:
+        try:
+            os.killpg(group_id, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except OSError as error:
+            raise ProcessCleanupError(
+                f"could not terminate process group={group_id}: {error}"
+            ) from error
+        try:
+            process.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(group_id, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError as error:
+                raise ProcessCleanupError(
+                    f"could not kill process group={group_id}: {error}"
+                ) from error
+            try:
+                process.wait(timeout=grace_seconds)
+            except subprocess.TimeoutExpired as error:
+                raise ProcessCleanupError(
+                    f"process group {group_id} did not terminate after escalation"
+                ) from error
+    return "process-group=terminated"
+
+
+def _drain_after_cleanup(
+    process: subprocess.Popen[str],
+    stdout: bytes,
+    stderr: bytes,
+    *,
+    grace_seconds: float,
+) -> tuple[bytes, bytes]:
+    """Read the complete streams after the process group has been stopped."""
+    try:
+        drained_stdout, drained_stderr = process.communicate(timeout=grace_seconds)
+    except (subprocess.TimeoutExpired, OSError) as error:
+        partial_stdout, partial_stderr = _exception_output(error)
+        stdout = _merge_output_fragments(stdout, partial_stdout)
+        stderr = _merge_output_fragments(stderr, partial_stderr)
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        except OSError as kill_error:
+            raise ProcessCleanupError(
+                f"could not kill process while draining output: {kill_error} "
+                f"stdout={output_text(stdout).strip()} stderr={output_text(stderr).strip()}"
+            ) from error
+        try:
+            drained_stdout, drained_stderr = process.communicate(timeout=grace_seconds)
+        except (subprocess.TimeoutExpired, OSError) as drain_error:
+            raise ProcessCleanupError(
+                f"could not drain process output: {drain_error} "
+                f"stdout={output_text(stdout).strip()} stderr={output_text(stderr).strip()}"
+            ) from error
+        return _merge_output_fragments(stdout, drained_stdout), _merge_output_fragments(
+            stderr, drained_stderr
+        )
+    stdout = _merge_output_fragments(stdout, drained_stdout)
+    stderr = _merge_output_fragments(stderr, drained_stderr)
+    return stdout, stderr
+
+
+def run_bounded_capture(
+    command: list[str],
+    cwd: Path = ROOT_DIR,
+    timeout_seconds: int = PROBE_TIMEOUT_SECONDS,
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        command,
+        cwd=str(cwd),
+        env=child_environment(command),
+        text=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **process_group_options(),
+    )
+    process._dobby_process_group_id = process.pid  # type: ignore[attr-defined]
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except (subprocess.TimeoutExpired, OSError) as error:
+        captured_stdout, captured_stderr = _exception_output(error)
+        cleanup_errors: list[ProcessCleanupError] = []
+        try:
+            terminate_process_group(process)
+        except ProcessCleanupError as secondary_error:
+            cleanup_errors.append(secondary_error)
+        try:
+            stdout, stderr = _drain_after_cleanup(
+                process,
+                captured_stdout,
+                captured_stderr,
+                grace_seconds=PROCESS_CLEANUP_GRACE_SECONDS,
+            )
+        except ProcessCleanupError as secondary_error:
+            cleanup_errors.append(secondary_error)
+            stdout, stderr = captured_stdout, captured_stderr
+        _set_exception_output(error, stdout, stderr)
+        if cleanup_errors:
+            error.add_note(
+                "process cleanup failed: "
+                + "; ".join(str(cleanup_error) for cleanup_error in cleanup_errors)
+            )
+        raise
+    return subprocess.CompletedProcess(
+        command,
+        process.returncode,
+        output_text(stdout),
+        output_text(stderr),
+    )
+
+
 def sha256_file(path: Path) -> str:
     with path.open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
@@ -119,11 +399,12 @@ def run(
 ) -> subprocess.CompletedProcess[str]:
     printable = " ".join(command)
     log(f"$ {printable}")
+    child_env = child_environment(command, env)
     try:
         result = subprocess.run(
             command,
             cwd=str(cwd),
-            env=env or os.environ.copy(),
+            env=child_env,
             input=input_text,
             text=True,
         )
@@ -135,19 +416,42 @@ def run(
 
 
 def run_capture(command: list[str], cwd: Path = ROOT_DIR) -> str | None:
+    printable = " ".join(command)
     try:
-        result = subprocess.run(
-            command,
-            cwd=str(cwd),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+        result = run_bounded_capture(command, cwd)
+    except FileNotFoundError as error:
+        emit_process_diagnostic(f"[!] Probe command was not found: {printable}: {error}")
+        return None
+    except subprocess.TimeoutExpired as error:
+        stdout, stderr = _exception_output(error)
+        emit_process_diagnostic(
+            f"[!] Probe timed out after {error.timeout}s: {printable}",
+            stdout,
         )
-    except FileNotFoundError:
+        emit_process_diagnostic("[!] Probe stderr:", stderr)
         return None
+    except OSError as error:
+        stdout, stderr = _exception_output(error)
+        emit_process_diagnostic(
+            f"[!] Probe communicate failed: {printable}: {error}",
+            stdout,
+        )
+        emit_process_diagnostic("[!] Probe stderr:", stderr)
+        raise
     if result.returncode != 0:
+        emit_process_diagnostic(
+            f"[!] Probe failed with exit code {result.returncode}: {printable}",
+            result.stdout,
+        )
+        emit_process_diagnostic("[!] Probe stderr:", result.stderr)
         return None
-    return result.stdout.strip()
+    if result.stderr:
+        emit_process_diagnostic(f"[!] Probe diagnostics: {printable}", result.stderr)
+    # Some version probes (notably ``java -version``) write their successful
+    # version banner to stderr rather than stdout.  Keep the complete stderr
+    # visible above, but use it as the probe value when stdout is empty so a
+    # valid tool is not misclassified as unavailable.
+    return (result.stdout or result.stderr or "").strip()
 
 
 def set_env(name: str, value: str) -> None:
@@ -182,18 +486,11 @@ def download(url: str, output: Path) -> None:
                 "--fail",
                 "--location",
                 "--show-error",
-                "--silent",
                 "--http1.1",
-                "--retry",
-                "5",
-                "--retry-delay",
-                "2",
                 "--connect-timeout",
                 "60",
                 "--max-time",
                 "900",
-                "--retry-max-time",
-                "1200",
                 "--continue-at",
                 "-",
                 url,
@@ -285,6 +582,42 @@ def local_go_root() -> Path:
     return TOOLS_DIR / f"go-{go_version()}"
 
 
+def go_root_is_complete(root: Path) -> bool:
+    """Return whether a local Go tree contains its executable and stdlib."""
+    executable = root / "bin" / ("go.exe" if host_platform() == "windows" else "go")
+    return executable.is_file() and (root / "src" / "runtime").is_dir()
+
+
+def configure_go_root(go_executable: Path) -> None:
+    """Bind Go's runtime root to the installation that owns the executable.
+
+    Go distributions extracted below ``.local-tools`` are relocatable, but
+    the ``go`` launcher cannot infer ``GOROOT`` when its installation is not
+    under a standard system prefix.  This is especially visible on Windows:
+    the initial version probe may succeed only after the root is explicit,
+    and later module commands can otherwise fail inside the Go runtime.
+    """
+    try:
+        root = go_executable.resolve().parent.parent
+    except OSError:
+        return
+    if (root / "bin").is_dir():
+        set_env("GOROOT", str(root))
+
+
+def configure_go_module_proxy() -> None:
+    """Keep Go's normal module proxy when a stale blank setting is present.
+
+    Go also reads the per-user ``go env`` file.  A previously persisted
+    ``GOPROXY=`` therefore survives the runner's environment sanitization and
+    makes ``go mod download`` fail with an empty proxy list.  Preserve every
+    explicit non-empty policy (including ``off``), while making the default
+    behavior explicit and equivalent to an untouched Go installation.
+    """
+    if not os.environ.get("GOPROXY", "").strip():
+        set_env("GOPROXY", "https://proxy.golang.org,direct")
+
+
 def find_go() -> Path | None:
     version = go_version()
     candidates: list[Path] = []
@@ -294,6 +627,13 @@ def find_go() -> Path | None:
 
     for candidate in candidates:
         if candidate.exists():
+            try:
+                candidate_root = candidate.resolve().parent.parent
+            except OSError:
+                continue
+            if not go_root_is_complete(candidate_root):
+                continue
+            configure_go_root(candidate)
             output = run_capture([str(candidate), "version"])
             if output and f"go{version}" in output:
                 return candidate.parent
@@ -314,22 +654,30 @@ def install_go(skip_deps: bool) -> None:
     arch = go_arch_from_machine()
     suffix = "zip" if current == "windows" else "tar.gz"
     archive = TOOLS_DIR / "downloads" / f"go{go_version()}.{goos}-{arch}.{suffix}"
-    extract_dir = Path(tempfile.mkdtemp(prefix="dobby-go-"))
     go_root = local_go_root()
 
     download(f"https://go.dev/dl/go{go_version()}.{goos}-{arch}.{suffix}", archive)
-    shutil.rmtree(go_root, ignore_errors=True)
-    try:
+    with temporary_directory("dobby-go-") as extract_dir:
         if suffix == "zip":
             with zipfile.ZipFile(archive) as zip_file:
                 zip_file.extractall(extract_dir)
         else:
             with tarfile.open(archive) as tar_file:
                 tar_file.extractall(extract_dir)
-        shutil.move(str(extract_dir / "go"), go_root)
-    finally:
-        shutil.rmtree(extract_dir, ignore_errors=True)
+        extracted_root = extract_dir / "go"
+        if not go_root_is_complete(extracted_root):
+            fail(f"Go archive does not contain a complete standard-library tree: {archive}")
+        if go_root.exists():
+            try:
+                shutil.rmtree(go_root)
+            except OSError as error:
+                fail(f"cannot replace incomplete Go installation {go_root}: {error}")
+        if go_root.exists():
+            fail(f"cannot replace incomplete Go installation {go_root}: path remains after removal")
+        go_root.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(extracted_root), go_root)
 
+    configure_go_root(go_root / "bin" / ("go.exe" if current == "windows" else "go"))
     prepend_path(go_root / "bin")
     log(f"Installed Go {go_version()} into {go_root}")
 
@@ -388,7 +736,6 @@ def install_jdk(skip_deps: bool) -> None:
     adoptium_os = {"linux": "linux", "macos": "mac", "windows": "windows"}[current]
     suffix = "zip" if current == "windows" else "tar.gz"
     archive = TOOLS_DIR / "downloads" / f"temurin-17-{adoptium_os}-{adoptium_arch()}.{suffix}"
-    extract_dir = Path(tempfile.mkdtemp(prefix="dobby-jdk-"))
     jdk_root = TOOLS_DIR / "jdk-17"
     url = (
         "https://api.adoptium.net/v3/binary/latest/17/ga/"
@@ -396,8 +743,7 @@ def install_jdk(skip_deps: bool) -> None:
     )
 
     download(url, archive)
-    shutil.rmtree(jdk_root, ignore_errors=True)
-    try:
+    with temporary_directory("dobby-jdk-") as extract_dir:
         if suffix == "zip":
             with zipfile.ZipFile(archive) as zip_file:
                 zip_file.extractall(extract_dir)
@@ -409,9 +755,9 @@ def install_jdk(skip_deps: bool) -> None:
         java_files = list(extract_dir.rglob(f"bin/{java_name}"))
         if not java_files:
             fail("Downloaded JDK archive does not contain java")
+        if jdk_root.exists():
+            shutil.rmtree(jdk_root)
         shutil.move(str(java_home_from_executable(java_files[0])), jdk_root)
-    finally:
-        shutil.rmtree(extract_dir, ignore_errors=True)
 
     set_env("JAVA_HOME", str(jdk_root))
     prepend_path(jdk_root / "bin")
@@ -456,7 +802,6 @@ def android_packages_installed(sdk_root: Path) -> bool:
         (sdk_root / "platforms" / "android-35").is_dir()
         and (sdk_root / "platforms" / "android-36").is_dir()
         and (sdk_root / "build-tools" / "36.0.0").is_dir()
-        and (sdk_root / "ndk" / ANDROID_NDK_VERSION).is_dir()
     )
 
 
@@ -467,29 +812,11 @@ def configure_android_env(sdk_root: Path) -> None:
     prepend_path(sdk_root / "platform-tools")
 
 
-def ensure_android_tools_executable(sdk_root: Path) -> None:
-    if host_platform() == "windows":
-        return
-    tools_bin = sdk_root / "cmdline-tools" / "latest" / "bin"
-    if not tools_bin.is_dir():
-        return
-    for tool in tools_bin.iterdir():
-        if tool.is_file():
-            try:
-                tool.chmod(tool.stat().st_mode | 0o111)
-            except PermissionError:
-                if TOOLS_DIR in sdk_root.resolve().parents:
-                    fail(f"Android SDK tool is not writable: {tool}")
-                log(f"Android SDK tools are not writable, leaving permissions unchanged: {tools_bin}")
-                return
-
-
 def install_android_sdk(skip_deps: bool) -> None:
     found = find_sdkmanager()
     if found:
         sdkmanager, sdk_root = found
         configure_android_env(sdk_root)
-        ensure_android_tools_executable(sdk_root)
         if android_packages_installed(sdk_root):
             log("Android SDK already available")
             return
@@ -516,19 +843,23 @@ def install_android_sdk(skip_deps: bool) -> None:
             f"commandlinetools-{tools_os}-{ANDROID_TOOLS_VERSION}_latest.zip",
             tools_zip,
         )
-        shutil.rmtree(tools_dir / "latest", ignore_errors=True)
-        shutil.rmtree(tools_dir / "cmdline-tools", ignore_errors=True)
+        for existing in (tools_dir / "latest", tools_dir / "cmdline-tools"):
+            if existing.exists():
+                shutil.rmtree(existing)
         tools_dir.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(tools_zip) as zip_file:
             zip_file.extractall(tools_dir)
         shutil.move(str(tools_dir / "cmdline-tools"), str(tools_dir / "latest"))
+        if current != "windows":
+            for tool in (tools_dir / "latest" / "bin").iterdir():
+                if tool.is_file():
+                    tool.chmod(tool.stat().st_mode | 0o111)
 
     if not sdkmanager.exists():
         fail(f"sdkmanager was not found at {sdkmanager}")
 
-    ensure_android_tools_executable(sdk_root)
     configure_android_env(sdk_root)
-    run([str(sdkmanager), "--licenses"], input_text="y\n" * 100, check=False)
+    run([str(sdkmanager), "--licenses"], input_text="y\n" * 100)
     run([str(sdkmanager), *ANDROID_PACKAGES])
     log("Android SDK packages are installed")
 
@@ -571,7 +902,7 @@ def ensure_compiler(target_platform: str, skip_deps: bool) -> None:
         if run_capture(["xcode-select", "-p"]):
             return
         if not skip_deps:
-            run(["xcode-select", "--install"], check=False)
+            run(["xcode-select", "--install"])
         fail("Install Xcode Command Line Tools, then run the script again")
     elif target_platform == "windows":
         mingw_bin = Path("C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin")
@@ -613,21 +944,35 @@ def probe_windows_gcc() -> tuple[bool, str]:
     # adjacent runtime DLLs on PATH. Prefer the resolved bin directory both for
     # this probe and for the later Go/cgo process.
     prepend_path(executable.parent)
+    command = [str(executable), "-dumpmachine"]
     try:
-        result = subprocess.run(
-            [str(executable), "-dumpmachine"],
-            cwd=str(ROOT_DIR),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
+        result = run_bounded_capture(command)
     except OSError as error:
+        stdout, stderr = _exception_output(error)
+        emit_process_diagnostic(
+            f"[!] Compiler probe could not start: {command}: {error}",
+            stdout,
+        )
+        emit_process_diagnostic("[!] Compiler probe stderr:", stderr)
         return False, f"compiler=launch_failed errno={error.errno or 0}"
+    except subprocess.TimeoutExpired as error:
+        stdout, stderr = _exception_output(error)
+        emit_process_diagnostic(
+            f"[!] Compiler probe timed out after {error.timeout}s: {' '.join(command)}",
+            stdout,
+        )
+        emit_process_diagnostic("[!] Compiler probe stderr:", stderr)
+        return False, f"compiler=timeout timeout_seconds={error.timeout}"
+    if result.returncode != 0:
+        emit_process_diagnostic(
+            f"[!] Compiler probe failed with exit code {result.returncode}: {' '.join(command)}",
+            result.stdout,
+        )
+        emit_process_diagnostic("[!] Compiler probe stderr:", result.stderr)
     target = result.stdout.strip()
     if result.returncode == 0 and target == "x86_64-w64-mingw32":
         return True, f"compiler=ready target={target}"
-    safe_target = target if re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", target) else "invalid"
-    return False, f"compiler=unusable exit_code={result.returncode} target={safe_target}"
+    return False, f"compiler=unusable exit_code={result.returncode} target={target}"
 
 
 def install_wintun(skip_deps: bool) -> None:
@@ -649,8 +994,6 @@ def install_wintun(skip_deps: bool) -> None:
         try:
             with zipfile.ZipFile(archive) as zip_file:
                 member = zip_file.getinfo(member_name)
-                if member.is_dir() or Path(member.filename).name != "wintun.dll":
-                    fail("Wintun archive member is invalid")
                 with zip_file.open(member) as input_file, open(temporary, "wb") as output_file:
                     shutil.copyfileobj(input_file, output_file)
             temporary.replace(artifact)
@@ -686,19 +1029,14 @@ def install_windows_bridge(skip_deps: bool) -> None:
         if sha256_file(archive) != release.archive_sha256:
             fail("Windows native bridge archive checksum mismatch")
         with zipfile.ZipFile(archive) as zip_file:
-            for member in zip_file.infolist():
-                member_path = Path(member.filename)
-                if member.is_dir() or member_path.is_absolute() or ".." in member_path.parts:
-                    continue
-                if member_path.name not in {
-                    "dobby_bridge.dll",
-                    "dobby_bridge.lib",
-                    "dobby_bridge.a",
-                    "libdobby_bridge.a",
-                }:
-                    continue
-                with zip_file.open(member) as source, open(bridge_dir / member_path.name, "wb") as target:
-                    shutil.copyfileobj(source, target)
+            member = next(
+                (item for item in zip_file.infolist() if Path(item.filename).name == release.member_name),
+                None,
+            )
+            if member is None:
+                fail("Windows native bridge archive did not contain the expected bridge library")
+            with zip_file.open(member) as source, open(bridge, "wb") as target:
+                shutil.copyfileobj(source, target)
     if not bridge.is_file() or sha256_file(bridge) != release.member_sha256:
         fail("Windows native bridge archive did not contain the expected dobby_bridge.dll")
     SERVICES_DIR.mkdir(parents=True, exist_ok=True)
@@ -739,14 +1077,12 @@ def install_linux_trusttunnel_bridge(skip_deps: bool) -> None:
             fail("TrustTunnel Linux bridge archive checksum mismatch")
 
         with zipfile.ZipFile(archive) as zip_file:
-            candidates = [
-                member
-                for member in zip_file.infolist()
-                if not member.is_dir() and Path(member.filename).name == bridge.name
-            ]
-            if len(candidates) != 1:
-                fail("TrustTunnel Linux bridge archive did not contain exactly one shared library")
-            member = candidates[0]
+            member = next(
+                (item for item in zip_file.infolist() if Path(item.filename).name == bridge.name),
+                None,
+            )
+            if member is None:
+                fail("TrustTunnel Linux bridge archive did not contain the shared library")
             source = zip_file.open(member)
             temporary = bridge.with_suffix(".so.tmp")
             try:
@@ -796,8 +1132,7 @@ def install_linux_libcxx_runtime(skip_deps: bool) -> Path:
         if not command_exists("dpkg-deb"):
             fail("dpkg-deb is required to extract workspace-local LLVM runtimes")
         runtime = TOOLS_DIR / f"llvm-libcxx-{LLVM_LIBCXX_VERSION}"
-        extract_dir = Path(tempfile.mkdtemp(prefix="dobby-libcxx-"))
-        try:
+        with temporary_directory("dobby-libcxx-") as extract_dir:
             for filename, expected_digest in LLVM_LIBCXX_PACKAGES:
                 archive = TOOLS_DIR / "downloads" / filename
                 if not archive.exists():
@@ -812,14 +1147,12 @@ def install_linux_libcxx_runtime(skip_deps: bool) -> Path:
 
             runtime.mkdir(parents=True, exist_ok=True)
             for library in ("libc++", "libc++abi"):
-                matches = list(extract_dir.rglob(f"{library}.so.1.0"))
-                if len(matches) != 1:
-                    fail(f"LLVM runtime archive did not contain exactly one {library}")
+                match = next(extract_dir.rglob(f"{library}.so.1.0"), None)
+                if match is None:
+                    fail(f"LLVM runtime archive did not contain {library}")
                 for name in (f"{library}.so", f"{library}.so.1"):
-                    shutil.copyfile(matches[0], runtime / name)
+                    shutil.copyfile(match, runtime / name)
                     (runtime / name).chmod(0o755)
-        finally:
-            shutil.rmtree(extract_dir, ignore_errors=True)
         runtime = find_linux_libcxx_runtime()
     if runtime is None:
         fail("Workspace-local LLVM runtime bootstrap did not produce required files")
@@ -840,23 +1173,11 @@ def install_linux_libcxx_runtime(skip_deps: bool) -> Path:
 def ensure_build_dependencies(target_platform: str, skip_deps: bool, need_android: bool) -> None:
     install_linux_packages(skip_deps)
     install_go(skip_deps)
+    configure_go_module_proxy()
     ensure_compiler(target_platform, skip_deps)
     if need_android:
         install_jdk(skip_deps)
         install_android_sdk(skip_deps)
-
-
-def validate_embedded_cloak_source() -> None:
-    target_dir = GO_MODULE_DIR / "modules" / "Cloak" / "internal"
-    required = (
-        target_dir / "client" / "connector.go",
-        target_dir / "common" / "dialer.go",
-        target_dir / "multiplex" / "session.go",
-    )
-    missing = [path for path in required if not path.is_file() or path.is_symlink()]
-    if missing:
-        fail(f"Tracked embedded Cloak client source is incomplete: {missing[0]}")
-    log("Using tracked embedded Cloak client source")
 
 
 def go_mod_download(run_tidy: bool) -> None:
@@ -865,12 +1186,74 @@ def go_mod_download(run_tidy: bool) -> None:
     run(["go", "mod", "download"], cwd=GO_MODULE_DIR)
 
 
+def prepare_go_test_dependencies(skip_deps: bool, run_go_mod_tidy: bool) -> None:
+    """Materialize the exact native closure required by Linux Go tests.
+
+    The pinned go-go-tunnel module embeds its Linux cgo search path in the
+    module cache. The public bridge and libc++ runtimes are therefore staged
+    in the checkout and added through CGO_LDFLAGS/LD_LIBRARY_PATH before the
+    test process starts. This keeps hosted CI on the same dependency contract
+    as the desktop service build without compiling a service as a side effect.
+    """
+    if host_platform() != "linux":
+        fail("prepare-go-test-deps is supported only on Linux CI runners")
+
+    ensure_build_dependencies("linux", skip_deps, need_android=False)
+    install_linux_trusttunnel_bridge(skip_deps)
+    runtime = install_linux_libcxx_runtime(skip_deps)
+    go_mod_download(run_go_mod_tidy)
+
+    environment = os.environ.copy()
+    append_cgo_ldflags(
+        environment,
+        f"-L{GO_MODULE_DIR}",
+        f"-L{runtime}",
+        "-Wl,--no-as-needed",
+    )
+    set_env("CGO_ENABLED", "1")
+    set_env("CGO_LDFLAGS", environment["CGO_LDFLAGS"])
+    existing_library_path = os.environ.get("LD_LIBRARY_PATH", "").strip()
+    library_path = os.pathsep.join(
+        part for part in (str(GO_MODULE_DIR), str(runtime), existing_library_path) if part
+    )
+    set_env("LD_LIBRARY_PATH", library_path)
+    log(f"Prepared Linux Go-test native dependencies with CGO_LDFLAGS={environment['CGO_LDFLAGS']}")
+    log(f"Prepared Linux Go-test runtime path: {library_path}")
+
+
 def service_output_path(target_platform: str) -> Path:
     return GO_MODULE_DIR / SERVICE_NAMES[target_platform]
 
 
 def service_target_path(target_platform: str) -> Path:
     return SERVICES_DIR / SERVICE_NAMES[target_platform]
+
+
+def build_cli(target_platform: str, arch: str | None = None) -> Path:
+    """Build the native operator CLI without invoking the JVM launcher."""
+    target_arch = arch or default_service_arch(target_platform)
+    output = GO_MODULE_DIR / CLI_NAMES[target_platform]
+    env = os.environ.copy()
+    env.update({"CGO_ENABLED": "0", "GOOS": GOOS_BY_PLATFORM[target_platform], "GOARCH": target_arch})
+    ldflags = "-buildid="
+    if target_platform == "macos":
+        # Go's internal Darwin linker emits a macOS 12 load command even when
+        # the app declares macOS 11 support.  Use the host external linker so
+        # the native CLI remains honest about the product's minimum version.
+        env["CGO_ENABLED"] = "1"
+        ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
+    run(
+        ["go", "build", "-trimpath", f"-ldflags={ldflags}", "-o", output.name, "./cmd/dobbyvpn/"],
+        cwd=GO_MODULE_DIR,
+        env=env,
+    )
+    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    target = SERVICES_DIR / CLI_NAMES[target_platform]
+    shutil.copyfile(output, target)
+    if target_platform != "windows":
+        target.chmod(target.stat().st_mode | 0o111)
+    log(f"Built native Go CLI {target}")
+    return target
 
 
 def install_macos_amd64_trusttunnel_helper(skip_deps: bool) -> None:
@@ -934,7 +1317,11 @@ def build_service(
     skip_deps: bool,
     skip_build: bool,
     run_go_mod_tidy: bool,
-) -> None:
+    *,
+    build_tags: tuple[str, ...] = (),
+    output_path: Path | None = None,
+    runtime_dir: Path | None = None,
+) -> Path:
     target_arch = arch or default_service_arch(target_platform)
     ensure_build_dependencies(target_platform, skip_deps, need_android=False)
     if target_platform == "windows":
@@ -945,14 +1332,18 @@ def build_service(
     if target_platform == "linux":
         if target_arch != "amd64":
             fail("The pinned TrustTunnel Linux bridge currently supports amd64 only")
-        install_linux_trusttunnel_bridge(skip_deps)
-        linux_libcxx_runtime = install_linux_libcxx_runtime(skip_deps)
+        if runtime_dir is None:
+            install_linux_trusttunnel_bridge(skip_deps)
+            linux_libcxx_runtime = install_linux_libcxx_runtime(skip_deps)
+        else:
+            linux_libcxx_runtime = runtime_dir
     else:
         linux_libcxx_runtime = None
-    validate_embedded_cloak_source()
     go_mod_download(run_go_mod_tidy)
 
-    output = service_output_path(target_platform)
+    output = output_path.resolve() if output_path is not None else service_output_path(target_platform)
+    if output_path is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
     if skip_build and output.exists():
         log(f"Reusing existing {output.name}")
     else:
@@ -965,6 +1356,11 @@ def build_service(
                 "GOARCH": target_arch,
             }
         )
+        ldflags = "-buildid="
+        if target_platform == "macos":
+            # Keep the Intel package's declared macOS 11 floor valid for both
+            # the gRPC service and the native operator CLI.
+            ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
         if target_platform == "linux":
             bridge_search_path = f"-L{GO_MODULE_DIR}"
             runtime_search_path = f"-L{linux_libcxx_runtime}"
@@ -984,28 +1380,35 @@ def build_service(
             # SystemConfiguration APIs. cgo does not infer either dependency
             # from a static archive.
             append_cgo_ldflags(env, "-lc++", "-framework", "SystemConfiguration")
-        run(
+        command = ["go", "build", "-trimpath"]
+        if build_tags:
+            command.append(f"-tags={','.join(build_tags)}")
+        command.extend(
             [
-                "go",
-                "build",
-                "-trimpath",
-                "-ldflags=-buildid=",
+                f"-ldflags={ldflags}",
                 "-o",
-                output.name,
+                os.fspath(output),
                 "./desktop_exports/",
-            ],
+            ]
+        )
+        run(
+            command,
             cwd=GO_MODULE_DIR,
             env=env,
         )
 
-    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
-    target = service_target_path(target_platform)
-    shutil.copyfile(output, target)
+    if output_path is not None:
+        target = output
+    else:
+        SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+        target = service_target_path(target_platform)
+        shutil.copyfile(output, target)
     if target_platform != "windows":
         target.chmod(target.stat().st_mode | 0o111)
-    if target_platform == "macos" and target_arch == "amd64":
+    if output_path is None and target_platform == "macos" and target_arch == "amd64":
         install_macos_amd64_trusttunnel_helper(skip_deps)
     log(f"Copied {output.name} to {target}")
+    return target
 
 
 def read_gradle_properties() -> dict[str, str]:
@@ -1069,27 +1472,36 @@ def desktop_version_properties() -> list[str]:
     ]
 
 
-def gradle_command() -> str:
+def gradle_command(fixed_gradle_executable: str | os.PathLike[str] | None = None) -> str:
+    if fixed_gradle_executable is not None:
+        return os.fspath(fixed_gradle_executable)
     if host_platform() == "windows":
         return str(KMP_DIR / "gradlew.bat")
     return "./gradlew"
 
 
-def run_desktop_gradle(skip_deps: bool) -> None:
+def run_desktop_gradle(
+    skip_deps: bool,
+    fixed_gradle_executable: str | os.PathLike[str] | None = None,
+) -> None:
+    gradle = gradle_command(fixed_gradle_executable)
     install_jdk(skip_deps)
     install_android_sdk(skip_deps)
 
     props = desktop_version_properties()
-    run([gradle_command(), "--build-cache", "--parallel", ":app:jvmJar", *props], cwd=KMP_DIR)
-    run([gradle_command(), "--no-daemon", "-q", "dependencies", *props], cwd=KMP_DIR)
-    run([gradle_command(), "--no-daemon", "-q", "printConveyorConfig", *props], cwd=KMP_DIR)
+    run([gradle, "--no-daemon", "--build-cache", "--parallel", ":app:jvmJar", *props], cwd=KMP_DIR)
+    run([gradle, "--no-daemon", "dependencies", *props], cwd=KMP_DIR)
+    run([gradle, "--no-daemon", "printConveyorConfig", *props], cwd=KMP_DIR)
 
 
-def emit_conveyor_config() -> None:
+def emit_conveyor_config(
+    fixed_gradle_executable: str | os.PathLike[str] | None = None,
+) -> None:
     """Print only Conveyor's generated HOCON on every supported host."""
+    gradle = gradle_command(fixed_gradle_executable)
     with contextlib.redirect_stdout(sys.stderr):
         install_jdk(skip_deps=False)
-    command = [gradle_command(), "--no-daemon", "-q", "printConveyorConfig", *desktop_version_properties()]
+    command = [gradle, "--no-daemon", "printConveyorConfig", *desktop_version_properties()]
     try:
         result = subprocess.run(
             command,
@@ -1103,8 +1515,26 @@ def emit_conveyor_config() -> None:
     except FileNotFoundError as error:
         fail(f"Command was not found: {error.filename}")
     if result.returncode != 0:
+        emit_process_diagnostic(
+            f"[!] Conveyor config generation failed with exit code {result.returncode}",
+            result.stdout,
+        )
         fail(f"Conveyor config generation failed with exit code {result.returncode}")
-    sys.stdout.write(result.stdout)
+    marker = "// Generated by the Conveyor Gradle plugin."
+    marker_index = result.stdout.find(marker)
+    if marker_index < 0:
+        fail("Conveyor config output is missing the generated configuration marker")
+    # Gradle writes its lifecycle banner, warnings, and task output to stdout
+    # alongside the task's generated HOCON.  Conveyor treats stdout as a
+    # configuration-only protocol, so preserve the complete child stream as
+    # diagnostics on stderr and pass only the marked configuration through.
+    sys.stderr.write(result.stdout)
+    config = result.stdout[marker_index:]
+    for terminator in ("\n[Incubating] Problems report", "\nDeprecated Gradle features were used"):
+        end_index = config.find(terminator)
+        if end_index >= 0:
+            config = config[:end_index]
+    sys.stdout.write(config.rstrip() + "\n")
 
 
 def required_service_platforms(require_all: bool, platform_value: str) -> list[str]:
@@ -1142,8 +1572,9 @@ def run_conveyor(passphrase: str | None) -> None:
 
 
 def build_app(args: argparse.Namespace) -> None:
+    platforms = selected_platforms(args.platform)
     if not args.skip_libs:
-        for target_platform in selected_platforms(args.platform):
+        for target_platform in platforms:
             build_service(
                 target_platform,
                 args.arch,
@@ -1152,11 +1583,38 @@ def build_app(args: argparse.Namespace) -> None:
                 args.go_mod_tidy,
             )
 
+    # The native operator CLI is a packaging input, not a JVM application
+    # output.  A source/package build may deliberately reuse already-built
+    # service binaries via --skip-libs, but it must still materialize the CLI
+    # for the selected target before Conveyor resolves conveyor.conf.
+    for target_platform in platforms:
+        cli_target = service_target_path(target_platform).parent / CLI_NAMES[target_platform]
+        if not cli_target.exists():
+            build_cli(target_platform, args.arch)
+
     if args.require_all_services:
         require_services(True, args.platform)
-    run_desktop_gradle(args.skip_deps)
+    run_desktop_gradle(args.skip_deps, args.gradle_executable)
     if args.package:
         run_conveyor(args.conveyor_passphrase)
+
+
+def build_test_seams_service(args: argparse.Namespace) -> None:
+    """Build a private Linux hardening service without changing release inputs."""
+    if args.platform != "linux":
+        fail("The build-local health seam is supported only for Linux hardening")
+    output = Path(args.output)
+    runtime_dir = Path(args.runtime_dir)
+    build_service(
+        "linux",
+        args.arch or "amd64",
+        args.skip_deps,
+        False,
+        args.go_mod_tidy,
+        build_tags=("dobbyvpn_test_seams",),
+        output_path=output,
+        runtime_dir=runtime_dir,
+    )
 
 
 def is_windows_admin() -> bool:
@@ -1164,8 +1622,8 @@ def is_windows_admin() -> bool:
         return True
     try:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception:
-        return False
+    except Exception as error:
+        raise RuntimeError("Windows administrator status check failed") from error
 
 
 def prepare_config_arg(config: str) -> str:
@@ -1174,20 +1632,35 @@ def prepare_config_arg(config: str) -> str:
     path = Path(config)
     if path.exists():
         return str(path)
-    config_path = ROOT_DIR / "cli-test-config.toml"
-    config_path.write_text(config, encoding="utf-8")
+    # A literal profile/config passed to the local CLI test is an owner-only
+    # run artifact.  Allocate a fresh file instead of replacing a prior
+    # config or diagnostic record at a fixed checkout path.
+    descriptor, name = tempfile.mkstemp(prefix="dobbyvpn-cli-config-", suffix=".toml")
+    config_path = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(config)
+            handle.flush()
+            os.fsync(handle.fileno())
+        config_path.chmod(0o600)
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
     return str(config_path)
 
 
 def wait_for_port(port: int, timeout_seconds: int = 30) -> bool:
     deadline = time.monotonic() + timeout_seconds
+    last_error: OSError | None = None
     while time.monotonic() < deadline:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1):
                 return True
-        except OSError:
+        except OSError as error:
+            last_error = error
             time.sleep(1)
-    return False
+    raise TimeoutError(f"port {port} did not become ready") from last_error
 
 
 def wait_for_socket(path: Path, timeout_seconds: int = 30) -> bool:
@@ -1210,6 +1683,26 @@ def sudo_prefix() -> list[str]:
     return ["sudo"]
 
 
+def open_service_log():
+    return tempfile.TemporaryFile(mode="w+b")
+
+
+def close_service_logs(handles: list[object]) -> None:
+    failures: list[BaseException] = []
+    for handle in handles:
+        close = getattr(handle, "close", None)
+        if close:
+            try:
+                close()
+            except BaseException as error:
+                failures.append(error)
+    if failures:
+        primary = failures[0]
+        for secondary in failures[1:]:
+            primary.add_note(f"additional service-log close failure: {type(secondary).__name__}: {secondary}")
+        raise primary
+
+
 def start_service(
     target_platform: str,
     port: int,
@@ -1221,12 +1714,12 @@ def start_service(
 
     handles: list[object] = []
     if target_platform == "windows":
-        stdout = open(ROOT_DIR / "grpcvpnserver.out", "w", encoding="utf-8")
-        stderr = open(ROOT_DIR / "grpcvpnserver.err", "w", encoding="utf-8")
+        stdout = open_service_log()
+        stderr = open_service_log()
         command = [str(service), "-port", str(port)]
         environment = os.environ.copy()
     else:
-        stdout = open(ROOT_DIR / "grpcvpnserver.log", "w", encoding="utf-8")
+        stdout = open_service_log()
         stderr = subprocess.STDOUT
         if control_socket is None:
             fail("A private control socket path is required for Unix CLI tests")
@@ -1248,34 +1741,55 @@ def start_service(
         env=environment,
         stdout=stdout,
         stderr=stderr,
-        text=True,
+        text=False,
+        **process_group_options(),
     )
+    process._dobby_process_group_id = process.pid  # type: ignore[attr-defined]
     ready = wait_for_port(port) if target_platform == "windows" else wait_for_socket(control_socket)
     if ready:
         log("gRPC VPN service is ready")
         return process, handles
 
-    stop_service(process)
-    print_service_logs()
-    fail("gRPC VPN service did not become ready")
+    failure = SystemExit("[!] gRPC VPN service did not become ready")
+    try:
+        cleanup_cli_test(process, control_socket, handles)
+    except BaseException as cleanup_error:
+        failure.add_note(
+            f"service startup cleanup failure: {type(cleanup_error).__name__}: {cleanup_error}"
+        )
+    raise failure
 
 
 def stop_service(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
-    log("Stopping gRPC VPN service")
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
+    if process.poll() is None:
+        log("Stopping gRPC VPN service")
+    terminate_process_group(process)
 
 
-def print_service_logs() -> None:
-    for name in ("grpcvpnserver.log", "grpcvpnserver.out", "grpcvpnserver.err"):
-        path = ROOT_DIR / name
-        if path.exists():
-            print(path.read_text(encoding="utf-8", errors="replace"))
+def print_service_logs(handles: list[object]) -> None:
+    failures: list[OSError] = []
+    for handle in handles:
+        try:
+            handle.flush()
+            handle.seek(0)
+            output = handle.read()
+        except OSError as error:
+            emit_process_diagnostic(f"[!] Could not read service log: {error}")
+            failures.append(error)
+            continue
+        if isinstance(output, str):
+            output = output.encode("utf-8")
+        print("--- service log ---")
+        rendered = output.decode("utf-8", errors="replace")
+        sys.stdout.write(rendered)
+        if output and not output.endswith(b"\n"):
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+    if failures:
+        primary = failures[0]
+        for secondary in failures[1:]:
+            primary.add_note(f"additional service-log read failure: {type(secondary).__name__}: {secondary}")
+        raise primary
 
 
 def remove_control_socket_parent(control_socket: Path | None) -> None:
@@ -1287,23 +1801,47 @@ def remove_control_socket_parent(control_socket: Path | None) -> None:
         socket_mode = None
     if socket_mode is not None:
         if not stat.S_ISSOCK(socket_mode):
-            log("Refusing to remove a non-socket control path")
-            return
-        run([*sudo_prefix(), "unlink", str(control_socket)], check=False)
-    run([*sudo_prefix(), "rmdir", str(control_socket.parent)], check=False)
+            fail("Control socket path is not a socket")
+        run([*sudo_prefix(), "unlink", str(control_socket)])
+    run([*sudo_prefix(), "rmdir", str(control_socket.parent)])
 
 
 def run_cli_check(config_arg: str, port: int, control_socket: Path | None = None) -> None:
-    props = desktop_version_properties()
     env = os.environ.copy()
     env["PORT"] = str(port)
     if control_socket is not None:
         env["DOBBYVPN_CONTROL_SOCKET"] = str(control_socket)
-    run(
-        [gradle_command(), "--quiet", ":app:run", f"--args=check-config {config_arg}", *props],
-        cwd=KMP_DIR,
-        env=env,
+    target = SERVICES_DIR / CLI_NAMES[host_platform()]
+    run([str(target), "check-config", config_arg], cwd=KMP_DIR, env=env)
+
+
+def cleanup_cli_test(
+    process: subprocess.Popen[str] | None,
+    control_socket: Path | None,
+    handles: list[object],
+) -> None:
+    actions = []
+    if process is not None:
+        actions.append(("stop service", lambda: stop_service(process)))
+    actions.extend(
+        (
+            ("remove control socket", lambda: remove_control_socket_parent(control_socket)),
+            ("print service logs", lambda: print_service_logs(handles)),
+            ("close service logs", lambda: close_service_logs(handles)),
+        )
     )
+    failures: list[tuple[str, BaseException]] = []
+    for label, action in actions:
+        try:
+            action()
+        except BaseException as error:
+            failures.append((label, error))
+    if failures:
+        first_label, primary = failures[0]
+        primary.add_note(f"cleanup stage: {first_label}")
+        for label, secondary in failures[1:]:
+            primary.add_note(f"additional cleanup failure at {label}: {type(secondary).__name__}: {secondary}")
+        raise primary
 
 
 def cli_test(args: argparse.Namespace) -> None:
@@ -1326,36 +1864,50 @@ def cli_test(args: argparse.Namespace) -> None:
             skip_build=False,
             run_go_mod_tidy=args.go_mod_tidy,
         )
-        run_desktop_gradle(args.skip_deps)
+        build_cli(target_platform, go_arch_from_machine())
+        run_desktop_gradle(args.skip_deps, args.gradle_executable)
     else:
         require_services(False, "current")
+        if not (SERVICES_DIR / CLI_NAMES[target_platform]).exists():
+            build_cli(target_platform, go_arch_from_machine())
 
     config_arg = prepare_config_arg(config)
     process: subprocess.Popen[str] | None = None
     handles: list[object] = []
-    with tempfile.TemporaryDirectory(prefix="dobbyvpn-cli-control-") as control_root:
+    with temporary_directory("dobbyvpn-cli-control-") as control_root:
         control_socket = (
             None
             if target_platform == "windows"
-            else Path(control_root) / "service" / "control.sock"
+            else control_root / "service" / "control.sock"
         )
         try:
             process, handles = start_service(target_platform, args.port, control_socket)
             run_cli_check(config_arg, args.port, control_socket)
-        finally:
-            if process:
-                stop_service(process)
-            remove_control_socket_parent(control_socket)
-            for handle in handles:
-                close = getattr(handle, "close", None)
-                if close:
-                    close()
-            print_service_logs()
+        except BaseException as primary:
+            try:
+                cleanup_cli_test(process, control_socket, handles)
+            except BaseException as cleanup_error:
+                primary.add_note(
+                    f"CLI cleanup failure: {type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            raise
+        else:
+            cleanup_cli_test(process, control_socket, handles)
 
 
 def add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skip-deps", action="store_true", help="Do not install missing local dependencies.")
     parser.add_argument("--skip-build", action="store_true", help="Reuse existing build outputs when possible.")
+
+
+def add_gradle_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--gradle-bin",
+        "--gradle-executable",
+        dest="gradle_executable",
+        metavar="PATH",
+        help="Use this Gradle executable.",
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -1368,10 +1920,23 @@ def parse_args() -> argparse.Namespace:
     add_common_options(libs)
     libs.add_argument("--platform", default="current", help="current, linux, macos, windows, ubuntu, or all.")
     libs.add_argument("--arch", help="Override GOARCH for the service build.")
+    libs.add_argument(
+        "--with-cli",
+        action="store_true",
+        help="Also build the native operator CLI for each selected platform.",
+    )
     libs.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before go mod download.")
+
+    go_test_deps = subparsers.add_parser(
+        "prepare-go-test-deps",
+        help="Stage pinned Linux native dependencies and environment for Go tests.",
+    )
+    add_common_options(go_test_deps)
+    go_test_deps.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before go mod download.")
 
     app = subparsers.add_parser("app", help="Build the desktop JVM app and Conveyor config.")
     add_common_options(app)
+    add_gradle_option(app)
     app.add_argument(
         "--platform",
         default="current",
@@ -1384,16 +1949,29 @@ def parse_args() -> argparse.Namespace:
     app.add_argument("--conveyor-passphrase", default=os.environ.get("CONVEYOR_PASSPHRASE"))
     app.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before service builds.")
 
-    subparsers.add_parser(
+    conveyor_config = subparsers.add_parser(
         "conveyor-config",
         help="Emit generated Conveyor HOCON without platform-specific wrapper assumptions.",
     )
+    add_gradle_option(conveyor_config)
 
     cli = subparsers.add_parser("cli-test", help="Build current desktop target and run check-config.")
     add_common_options(cli)
+    add_gradle_option(cli)
     cli.add_argument("--config", help="Config URL, TOML file path, or inline TOML.")
     cli.add_argument("--port", type=int, default=int(os.environ.get("PORT", "50151")))
     cli.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the service build.")
+
+    test_seams = subparsers.add_parser(
+        "test-seams-service",
+        help="Build the private Linux hardening service with explicit test seams.",
+    )
+    test_seams.add_argument("--skip-deps", action="store_true", help="Do not install missing local dependencies.")
+    test_seams.add_argument("--platform", default="linux")
+    test_seams.add_argument("--arch", default="amd64")
+    test_seams.add_argument("--output", required=True, help="Absent absolute service output path.")
+    test_seams.add_argument("--runtime-dir", required=True, help="Installed Linux runtime library directory.")
+    test_seams.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the service build.")
 
     return parser.parse_args()
 
@@ -1413,12 +1991,18 @@ def main() -> None:
                 args.skip_build,
                 args.go_mod_tidy,
             )
+            if args.with_cli:
+                build_cli(target_platform, args.arch)
+    elif args.command == "prepare-go-test-deps":
+        prepare_go_test_dependencies(args.skip_deps, args.go_mod_tidy)
     elif args.command == "app":
         build_app(args)
     elif args.command == "cli-test":
         cli_test(args)
+    elif args.command == "test-seams-service":
+        build_test_seams_service(args)
     elif args.command == "conveyor-config":
-        emit_conveyor_config()
+        emit_conveyor_config(args.gradle_executable)
         return
     else:
         fail(f"Unknown command: {args.command}")

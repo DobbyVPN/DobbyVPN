@@ -1,18 +1,17 @@
 package com.dobby.feature.logging.domain
 
 import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.cinterop.convert
 import kotlinx.cinterop.useContents
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
+import okio.buffer
 import okio.use
 import platform.Foundation.NSBundle
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSProcessInfo
 import platform.Foundation.NSRecursiveLock
 import platform.Foundation.NSTemporaryDirectory
-import platform.posix.chmod
 
 actual val fileSystem: FileSystem = FileSystem.SYSTEM
 private val logWriteLock = NSRecursiveLock()
@@ -27,18 +26,21 @@ actual fun <T> withLogWriteLock(block: () -> T): T {
 }
 
 private const val appGroupIdentifier = "group.vpn.dobby.app"
-private const val privateLogDirectoryName = "DobbyVPNLogs"
 private var logStorageInitializationAvailable = true
 
 actual fun platformLogStorageInitializationAvailable(): Boolean = logStorageInitializationAvailable
 
+actual fun clearLogFile(path: Path, storageFileSystem: FileSystem) {
+    storageFileSystem.sink(path).buffer().use { }
+}
+
 @OptIn(ExperimentalForeignApi::class)
-actual fun provideLogFilePath(): Path = secureLogPath(
+actual fun provideLogFilePath(): Path = initializedLogPath(
     if (isTunnelProcess()) "tunnel_logs.jsonl" else "app_logs.txt",
 )
 
 @OptIn(ExperimentalForeignApi::class)
-actual fun provideGoLogFilePath(): Path = secureLogPath(
+actual fun provideGoLogFilePath(): Path = initializedLogPath(
     if (isTunnelProcess()) "go_tunnel_logs.jsonl" else "go_app_logs.jsonl",
 )
 
@@ -57,29 +59,22 @@ private fun sharedLogPath(name: String): Path {
     val fileManager = NSFileManager.defaultManager
     val containerURL = fileManager.containerURLForSecurityApplicationGroupIdentifier(appGroupIdentifier)
     val containerPath = containerURL?.path ?: run {
+        IllegalStateException("iOS App Group log container is unavailable").printStackTrace()
         logStorageInitializationAvailable = false
         NSTemporaryDirectory().trimEnd('/')
     }
-    // The App Group container root is owned and managed by iOS.  Changing its
-    // mode can fail on physical devices even when the entitlement is valid.
-    // Secure an app-created child directory instead.
-    return "$containerPath/$privateLogDirectoryName/$name".toPath()
+    return "$containerPath/$name".toPath()
 }
 
 @OptIn(ExperimentalForeignApi::class)
-private fun secureLogPath(name: String): Path {
+private fun initializedLogPath(name: String): Path {
     val logFilePath = sharedLogPath(name)
-    logStorageInitializationAvailable = runCatching {
-        fileSystem.createDirectories(logFilePath.parent!!)
-        // appendingSink creates an absent file without truncating a file another
-        // app-group process may have created between the existence check and open.
+    try {
         fileSystem.appendingSink(logFilePath).use { }
-        val protectedDirectory = chmod(logFilePath.parent.toString(), 448.convert()) == 0
-        val protectedFile = chmod(logFilePath.toString(), 384.convert()) == 0
-        if (!protectedDirectory || !protectedFile) {
-            throw IllegalStateException("local diagnostic permissions unavailable")
-        }
-    }.isSuccess && logStorageInitializationAvailable
+    } catch (failure: Throwable) {
+        failure.printStackTrace()
+        logStorageInitializationAvailable = false
+    }
     return logFilePath
 }
 

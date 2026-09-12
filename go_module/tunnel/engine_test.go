@@ -10,7 +10,7 @@ import (
 
 func TestOwnedEngineStopIsIdempotent(t *testing.T) {
 	stops := 0
-	e := &Engine{ready: true, stopPlatform: func() error { stops++; return nil }}
+	e := &Engine{stopPlatform: func() error { stops++; return nil }}
 	engineMu.Lock()
 	previous := activeEngine
 	activeEngine = e
@@ -26,14 +26,11 @@ func TestOwnedEngineStopIsIdempotent(t *testing.T) {
 	if stops != 1 {
 		t.Fatalf("platform stops = %d, want 1", stops)
 	}
-	if e.Ready() {
-		t.Fatal("stopped engine still reports ready")
-	}
 }
 
 func TestOwnedEngineStopReturnsTheSameCleanupError(t *testing.T) {
 	want := errors.New("cleanup failed")
-	e := &Engine{ready: true, stopPlatform: func() error { return want }}
+	e := &Engine{stopPlatform: func() error { return want }}
 	engineMu.Lock()
 	previous := activeEngine
 	activeEngine = e
@@ -54,8 +51,8 @@ func TestOwnedEngineStopReturnsTheSameCleanupError(t *testing.T) {
 
 func TestStaleEngineCannotStopCurrentOwner(t *testing.T) {
 	oldStops, currentStops := 0, 0
-	old := &Engine{ready: true, stopPlatform: func() error { oldStops++; return nil }}
-	current := &Engine{ready: true, stopPlatform: func() error { currentStops++; return nil }}
+	old := &Engine{stopPlatform: func() error { oldStops++; return nil }}
+	current := &Engine{stopPlatform: func() error { currentStops++; return nil }}
 	engineMu.Lock()
 	previous := activeEngine
 	activeEngine = current
@@ -70,15 +67,12 @@ func TestStaleEngineCannotStopCurrentOwner(t *testing.T) {
 	if oldStops != 0 || currentStops != 0 {
 		t.Fatalf("stale stop affected platform: old=%d current=%d", oldStops, currentStops)
 	}
-	if !current.Ready() {
-		t.Fatal("current owner was marked not ready by stale stop")
-	}
 }
 
 func TestSecondOwnedStartReturnsBusyBeforeTouchingPlatform(t *testing.T) {
 	engineMu.Lock()
 	previous := activeEngine
-	activeEngine = &Engine{ready: true}
+	activeEngine = &Engine{}
 	engineMu.Unlock()
 	defer func() {
 		engineMu.Lock()
@@ -95,7 +89,7 @@ func TestSecondOwnedStartReturnsBusyBeforeTouchingPlatform(t *testing.T) {
 func TestConcurrentStopReleasesOwnerExactlyOnce(t *testing.T) {
 	var mu sync.Mutex
 	stops := 0
-	e := &Engine{ready: true, statsStop: make(chan struct{}), stopPlatform: func() error {
+	e := &Engine{statsStop: make(chan struct{}), stopPlatform: func() error {
 		mu.Lock()
 		stops++
 		mu.Unlock()
@@ -136,14 +130,11 @@ func TestConcurrentStopReleasesOwnerExactlyOnce(t *testing.T) {
 	if owner != nil {
 		t.Fatal("owner remains reserved after its cleanup completed")
 	}
-	if e.Ready() {
-		t.Fatal("stopped engine remains ready")
-	}
 }
 
 func TestStaleStopCannotReleaseNewOwnerReservation(t *testing.T) {
-	stale := &Engine{ready: true}
-	current := &Engine{ready: true}
+	stale := &Engine{}
+	current := &Engine{}
 	engineMu.Lock()
 	previous := activeEngine
 	activeEngine = current

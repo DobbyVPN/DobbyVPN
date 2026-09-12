@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/docker/go-units v0.5.0
-	github.com/go-chi/chi/v5 v5.2.1
+	github.com/go-chi/chi/v5 v5.2.4
 	github.com/go-chi/cors v1.2.1
 	github.com/go-chi/render v1.0.3
 	github.com/go-gost/relay v0.5.0
@@ -16,7 +16,7 @@ require (
 	go.uber.org/atomic v1.11.0
 	go.uber.org/automaxprocs v1.6.0
 	go.uber.org/zap v1.27.0
-	golang.org/x/crypto v0.53.0
+	golang.org/x/crypto v0.55.0
 	golang.org/x/sys v0.46.0
 	golang.org/x/time v0.11.0
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb

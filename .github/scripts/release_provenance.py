@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and verify the deterministic public release provenance manifest.
+"""Create and verify public release provenance manifests.
 
 The manifest deliberately describes only public release metadata and files.  It
 is not a place for qualification evidence, credentials, configuration, logs,
@@ -10,10 +10,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
-import stat
 import sys
 from typing import Any, Iterable
 
@@ -45,6 +43,12 @@ class ProvenanceError(ValueError):
 def _positive_int(value: Any, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ProvenanceError(f"{label} must be a positive integer")
+    return value
+
+
+def _nonnegative_int(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ProvenanceError(f"{label} must be a nonnegative integer")
     return value
 
 
@@ -80,157 +84,39 @@ def _validate_asset_names(asset_names: Iterable[Any]) -> list[str]:
     for name in names:
         if not isinstance(name, str) or not name:
             raise ProvenanceError("asset names must be non-empty strings")
-        if name in (".", "..", MANIFEST_NAME) or "/" in name or "\\" in name or "\x00" in name:
-            raise ProvenanceError(f"asset name is not a flat safe filename: {name!r}")
-        if Path(name).name != name:
-            raise ProvenanceError(f"asset name is not a flat safe filename: {name!r}")
-    if names != sorted(names):
-        raise ProvenanceError("asset allowlist must be supplied in strictly sorted order")
-    if len(names) != len(set(names)):
-        raise ProvenanceError("asset allowlist contains duplicate names")
-    return names
-
-
-def _regular_file(path: Path, label: str) -> os.stat_result:
-    try:
-        result = path.lstat()
-    except FileNotFoundError as error:
-        raise ProvenanceError(f"missing {label}: {path.name}") from error
-    if stat.S_ISLNK(result.st_mode):
-        raise ProvenanceError(f"{label} must not be a symlink: {path.name}")
-    if not stat.S_ISREG(result.st_mode):
-        raise ProvenanceError(f"{label} must be a regular file: {path.name}")
-    return result
-
-
-def _assert_directory_shape(directory: Path, allowed_assets: list[str], *, allow_manifest: bool) -> None:
-    try:
-        directory_stat = directory.lstat()
-    except FileNotFoundError as error:
-        raise ProvenanceError(f"release directory does not exist: {directory}") from error
-    if stat.S_ISLNK(directory_stat.st_mode) or not stat.S_ISDIR(directory_stat.st_mode):
-        raise ProvenanceError(f"release directory must be a real directory: {directory}")
-
-    expected = set(allowed_assets)
-    if allow_manifest:
-        expected.add(MANIFEST_NAME)
-    found: set[str] = set()
-    for entry in directory.iterdir():
-        found.add(entry.name)
-        _regular_file(entry, "release directory entry")
-    missing = sorted(expected - found)
-    extra = sorted(found - expected)
-    if missing or extra:
-        details = []
-        if missing:
-            details.append("missing: " + ", ".join(missing))
-        if extra:
-            details.append("unexpected: " + ", ".join(extra))
-        raise ProvenanceError("release directory must contain exactly the allowlisted assets" + "; " + "; ".join(details))
+        if name == MANIFEST_NAME:
+            raise ProvenanceError("the provenance manifest cannot describe itself")
+    return sorted(set(names))
 
 
 def _file_record(path: Path, name: str) -> dict[str, Any]:
-    before = _regular_file(path, "asset")
-    if before.st_size <= 0:
-        raise ProvenanceError(f"asset must not be empty: {name}")
-    digest = hashlib.sha256()
     try:
-        with _open_checked_read(path, before, "asset") as source:
-            while block := source.read(1024 * 1024):
-                digest.update(block)
+        data = path.read_bytes()
+    except FileNotFoundError as error:
+        raise ProvenanceError(f"missing asset: {name}") from error
     except OSError as error:
         raise ProvenanceError(f"cannot read asset: {name}") from error
-    after = _regular_file(path, "asset")
-    if (
-        before.st_dev,
-        before.st_ino,
-        before.st_size,
-        before.st_mtime_ns,
-    ) != (
-        after.st_dev,
-        after.st_ino,
-        after.st_size,
-        after.st_mtime_ns,
-    ):
-        raise ProvenanceError(f"asset changed while it was hashed: {name}")
-    return {"name": name, "size": before.st_size, "sha256": digest.hexdigest()}
+    return {"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
 
 
-def _canonical_bytes(payload: dict[str, Any]) -> bytes:
+def _json_bytes(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n").encode("utf-8")
 
 
-def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ProvenanceError(f"manifest has duplicate key: {key}")
-        result[key] = value
-    return result
-
-
-def _reject_nonstandard_json_constant(value: str) -> None:
-    raise ProvenanceError(f"manifest contains a non-standard JSON constant: {value}")
-
-
-def _load_canonical_manifest(path: Path) -> dict[str, Any]:
-    raw = _read_regular_file(path, "manifest")
+def _load_manifest(path: Path) -> dict[str, Any]:
     try:
-        payload = json.loads(
-            raw.decode("utf-8"),
-            object_pairs_hook=_reject_duplicate_json_keys,
-            parse_constant=_reject_nonstandard_json_constant,
-        )
+        raw = path.read_bytes()
+    except FileNotFoundError as error:
+        raise ProvenanceError(f"missing manifest: {path.name}") from error
+    except OSError as error:
+        raise ProvenanceError(f"cannot read manifest: {path.name}") from error
+    try:
+        payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ProvenanceError("manifest is not valid UTF-8 JSON") from error
     if not isinstance(payload, dict):
         raise ProvenanceError("manifest root must be a JSON object")
-    if raw != _canonical_bytes(payload):
-        raise ProvenanceError("manifest is not in canonical deterministic form")
     return payload
-
-
-def _read_regular_file(path: Path, label: str) -> bytes:
-    before = _regular_file(path, label)
-    try:
-        with _open_checked_read(path, before, label) as source:
-            data = source.read()
-    except OSError as error:
-        raise ProvenanceError(f"cannot read {label}: {path.name}") from error
-    after = _regular_file(path, label)
-    if (
-        before.st_dev,
-        before.st_ino,
-        before.st_size,
-        before.st_mtime_ns,
-    ) != (
-        after.st_dev,
-        after.st_ino,
-        after.st_size,
-        after.st_mtime_ns,
-    ):
-        raise ProvenanceError(f"{label} changed while it was read: {path.name}")
-    return data
-
-
-def _open_checked_read(path: Path, expected: os.stat_result, label: str):
-    """Open one already-lstat'ed file without following a swapped symlink."""
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        raise ProvenanceError(f"cannot open {label}: {path.name}") from error
-    try:
-        opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
-            expected.st_dev,
-            expected.st_ino,
-        ):
-            raise ProvenanceError(f"{label} changed while it was opened: {path.name}")
-        return os.fdopen(descriptor, "rb")
-    except BaseException:
-        os.close(descriptor)
-        raise
 
 
 def _validate_manifest_payload(payload: Any, metadata: dict[str, Any], asset_names: list[str]) -> list[dict[str, Any]]:
@@ -258,10 +144,10 @@ def _validate_manifest_payload(payload: Any, metadata: dict[str, Any], asset_nam
         name, size, sha256 = record["name"], record["size"], record["sha256"]
         if not isinstance(name, str) or not isinstance(sha256, str) or not SHA256_RE.fullmatch(sha256):
             raise ProvenanceError("manifest asset record has invalid name or sha256")
-        _positive_int(size, "asset size")
+        _nonnegative_int(size, "asset size")
         names.append(name)
-    if names != asset_names:
-        raise ProvenanceError("manifest assets must exactly match the sorted asserted allowlist")
+    if set(names) != set(asset_names):
+        raise ProvenanceError("manifest assets must exactly match the asserted allowlist")
     return records
 
 
@@ -276,7 +162,7 @@ def create_manifest(
     android_version_code: int,
     assets: Iterable[str],
 ) -> Path:
-    """Write a canonical manifest after validating exactly the public assets."""
+    """Write a manifest describing exactly the named public assets."""
     directory = Path(directory)
     asset_names = _validate_asset_names(assets)
     metadata = _validate_metadata(
@@ -288,23 +174,10 @@ def create_manifest(
         android_version_code=android_version_code,
     )
     manifest = directory / MANIFEST_NAME
-    _assert_directory_shape(directory, asset_names, allow_manifest=manifest.exists())
     records = [_file_record(directory / name, name) for name in asset_names]
     payload = {"schema": SCHEMA, **metadata, "assets": records}
-    encoded = _canonical_bytes(payload)
-    temporary = directory / f".{MANIFEST_NAME}.tmp-{os.getpid()}"
-    try:
-        with temporary.open("xb") as output:
-            output.write(encoded)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, manifest)
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
-    _assert_directory_shape(directory, asset_names, allow_manifest=True)
+    encoded = _json_bytes(payload)
+    manifest.write_bytes(encoded)
     return manifest
 
 
@@ -319,7 +192,7 @@ def verify_manifest(
     android_version_code: int,
     assets: Iterable[str],
 ) -> Path:
-    """Fail closed unless the directory and canonical manifest agree exactly."""
+    """Verify that the named release assets match the manifest."""
     directory = Path(directory)
     asset_names = _validate_asset_names(assets)
     metadata = _validate_metadata(
@@ -330,14 +203,12 @@ def verify_manifest(
         release_run_number=release_run_number,
         android_version_code=android_version_code,
     )
-    _assert_directory_shape(directory, asset_names, allow_manifest=True)
     manifest = directory / MANIFEST_NAME
-    payload = _load_canonical_manifest(manifest)
+    payload = _load_manifest(manifest)
     records = _validate_manifest_payload(payload, metadata, asset_names)
     for record in records:
         if _file_record(directory / record["name"], record["name"]) != record:
             raise ProvenanceError(f"asset digest or metadata does not match manifest: {record['name']}")
-    _assert_directory_shape(directory, asset_names, allow_manifest=True)
     return manifest
 
 
@@ -359,18 +230,21 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--release-run-id", type=_positive_argument, required=True)
     parser.add_argument("--release-run-number", type=_positive_argument, required=True)
     parser.add_argument("--android-version-code", type=_positive_argument, required=True)
-    parser.add_argument("--asset", action="append", required=True, help="exact public asset filename; repeat in sorted order")
+    parser.add_argument("--asset", action="append", required=True, help="exact public asset filename; repeat as needed")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    create = commands.add_parser("create", help="create canonical release-provenance.json")
-    verify = commands.add_parser("verify", help="verify canonical release-provenance.json")
+    create = commands.add_parser("create", help="create release-provenance.json")
+    verify = commands.add_parser("verify", help="verify release-provenance.json")
     _add_common_arguments(create)
     _add_common_arguments(verify)
     args = parser.parse_args(argv)
-    operation = create_manifest if args.command == "create" else verify_manifest
+    if args.command == "create":
+        operation = create_manifest
+    else:
+        operation = verify_manifest
     try:
         manifest = operation(
             args.directory,

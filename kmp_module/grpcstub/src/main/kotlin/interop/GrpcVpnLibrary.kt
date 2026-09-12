@@ -1,18 +1,12 @@
 package interop
 
-import interop.cloak.CloakGrpcLibrary
-import interop.dnscache.DnsCacheGrpcLibrary
-import interop.georouting.GeoroutingGrpcLibrary
-import interop.healthcheck.HealthCheckGrpcLibrary
 import interop.logger.LoggerGrpcLibrary
-import interop.outline.OutlineGrpcLibrary
 import interop.session.SessionGrpcLibrary
-import interop.trusttunnel.TrustTunnelGrpcLibrary
-import interop.xray.XrayGrpcLibrary
 import io.grpc.ClientInterceptors
 import io.grpc.Metadata
 import io.grpc.stub.MetadataUtils
 import java.io.Closeable
+import java.io.IOException
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 
@@ -31,19 +25,14 @@ object GrpcVpnLibrary: Closeable {
         ClientInterceptors.intercept(baseChannel, MetadataUtils.newAttachHeadersInterceptor(headers))
     } else baseChannel
 
-    val outlineGrpcLibrary = OutlineGrpcLibrary(channel)
-    val xrayGrpcLibrary = XrayGrpcLibrary(channel)
-    val trustTunnelGrpcLibrary = TrustTunnelGrpcLibrary(channel)
-    val cloakGrpcLibrary = CloakGrpcLibrary(channel)
-    val healthCheckGrpcLibrary = HealthCheckGrpcLibrary(channel)
-    val dnsCacheGrpcLibrary = DnsCacheGrpcLibrary(channel)
     val loggerGrpcLibrary = LoggerGrpcLibrary(channel)
-    val georoutingGrpcLibrary = GeoroutingGrpcLibrary(channel)
     val sessionGrpcLibrary = SessionGrpcLibrary(channel)
 
     override fun close() {
         this.desktopControl.close()
-        this.baseChannel.awaitTermination(TERMINATION_TIMEOUT, TimeUnit.SECONDS)
+        check(this.baseChannel.awaitTermination(TERMINATION_TIMEOUT, TimeUnit.SECONDS)) {
+            "desktop control channel did not terminate within $TERMINATION_TIMEOUT seconds"
+        }
     }
 
     private fun isWindows(): Boolean = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
@@ -53,8 +42,10 @@ object GrpcVpnLibrary: Closeable {
             "Windows installation control token path is unavailable"
         }
         val path = windowsControlTokenPath(programData)
-        val value = runCatching { Files.readString(path).trim() }.getOrElse {
-            error("Windows installation control token is unavailable")
+        val value = try {
+            Files.readString(path).trim()
+        } catch (failure: IOException) {
+            throw IllegalStateException("Windows installation control token is unavailable", failure)
         }
         check(value.matches(Regex("[0-9a-fA-F]{64}"))) {
             "Windows installation control token is invalid"

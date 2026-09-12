@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/url"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -39,11 +38,9 @@ var ErrEngineBusy = fmt.Errorf("tun2socks engine is busy")
 // or stop request to affect a different lifecycle generation.
 type Engine struct {
 	mu        sync.RWMutex
-	ready     bool
 	stopped   bool
 	stopErr   error
 	statsStop chan struct{}
-	proxy     *DobbyProxy
 	ifaceName string
 
 	// stopPlatform exists so ownership bookkeeping can be tested without a
@@ -51,28 +48,12 @@ type Engine struct {
 	stopPlatform func() error
 }
 
-// Ready reports whether this handle owns a fully initialized tun2socks engine.
-func (e *Engine) Ready() bool {
-	if e == nil {
-		return false
-	}
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.ready && !e.stopped
-}
-
-const (
-	maxActiveTCPConnections   = 256
-	maxActiveUDPAssociations  = 256
-	udpAssociationIdleTimeout = 10 * time.Second
-)
+const udpAssociationIdleTimeout = 10 * time.Second
 
 type DobbyProxy struct {
-	vpn     proxy.Proxy
-	vpnMu   sync.RWMutex
-	direct  proxy.Proxy
-	tcpSlot flowSlot
-	udpSlot flowSlot
+	vpn    proxy.Proxy
+	vpnMu  sync.RWMutex
+	direct proxy.Proxy
 
 	activeTCP atomic.Int64
 	activeUDP atomic.Int64
@@ -80,9 +61,7 @@ type DobbyProxy struct {
 	peakUDP   atomic.Int64
 
 	tcpDialAttempt atomic.Uint64
-	tcpLimitErr    atomic.Uint64
 	udpDialAttempt atomic.Uint64
-	udpLimitErr    atomic.Uint64
 	udpIdleTimeout atomic.Uint64
 }
 
@@ -267,19 +246,15 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 }
 
 func (p *DobbyProxy) dialTCPRoute(ctx context.Context, metadata *M.Metadata, route string, px proxy.Proxy, attempt uint64, dest string, start time.Time) (net.Conn, error) {
-	active, release, err := p.tcpSlot.reserve(&p.activeTCP)
-	if err != nil {
-		p.tcpLimitErr.Add(1)
-		log.Debugf(Category, "[Router] %s TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
-		return nil, err
-	}
+	active := p.activeTCP.Add(1)
+	release := func() int64 { return p.activeTCP.Add(-1) }
+	updatePeakInt64(&p.peakTCP, active)
 	conn, err := px.DialContext(ctx, metadata)
 	if err != nil {
 		release()
 		log.Debugf(Category, "[Router] %s TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
-	updatePeakInt64(&p.peakTCP, active)
 	log.Debugf(Category, "[Router] %s TCP dial OK attempt=%d dest=%s elapsed=%s local=%s remote=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), p.flowStats())
 	return &trackedConn{Conn: conn, release: release, route: route, dest: dest, started: time.Now()}, nil
 }
@@ -302,19 +277,15 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 }
 
 func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.Proxy, attempt uint64, dest string, start time.Time) (net.PacketConn, error) {
-	active, release, err := p.udpSlot.reserve(&p.activeUDP)
-	if err != nil {
-		p.udpLimitErr.Add(1)
-		log.Debugf(Category, "[Router] %s UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
-		return nil, err
-	}
+	active := p.activeUDP.Add(1)
+	release := func() int64 { return p.activeUDP.Add(-1) }
+	updatePeakInt64(&p.peakUDP, active)
 	conn, err := px.DialUDP(metadata)
 	if err != nil {
 		release()
 		log.Debugf(Category, "[Router] %s UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
-	updatePeakInt64(&p.peakUDP, active)
 	log.Debugf(Category, "[Router] %s UDP dial OK attempt=%d dest=%s elapsed=%s local=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), p.flowStats())
 	tracked := &trackedPacketConn{PacketConn: conn, release: release, route: route, dest: dest, started: time.Now()}
 	return newIdlePacketConn(tracked, udpAssociationIdleTimeout, route, dest, func() uint64 {
@@ -338,27 +309,6 @@ func (p *DobbyProxy) currentVPNProxy() proxy.Proxy {
 	p.vpnMu.RLock()
 	defer p.vpnMu.RUnlock()
 	return p.vpn
-}
-
-func (p *DobbyProxy) updateVPNProxy(px proxy.Proxy) {
-	p.vpnMu.Lock()
-	defer p.vpnMu.Unlock()
-	p.vpn = px
-}
-
-func newSocks5Proxy(proxyAddr string) (proxy.Proxy, error) {
-	parsed, err := url.Parse("socks5://" + proxyAddr)
-	if err != nil {
-		return nil, fmt.Errorf("parse SOCKS5 proxy address %q: %w", proxyAddr, err)
-	}
-	host := parsed.Host
-	user := ""
-	pass := ""
-	if parsed.User != nil {
-		user = parsed.User.Username()
-		pass, _ = parsed.User.Password()
-	}
-	return proxy.NewSocks5(host, user, pass)
 }
 
 // StartOwnedEngine starts tun2socks and returns the handle which exclusively
@@ -410,17 +360,13 @@ func startOwnedEngineLocked(cfg platform_engine.EngineConfig) (*Engine, bool, er
 	}
 
 	wrapper := &DobbyProxy{
-		vpn:     vpnOutbound,
-		direct:  &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect()},
-		tcpSlot: flowSlot{maxTotal: maxActiveTCPConnections},
-		udpSlot: flowSlot{maxTotal: maxActiveUDPAssociations},
+		vpn:    vpnOutbound,
+		direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect()},
 	}
 	t.SetDialer(wrapper)
 
-	handle.proxy = wrapper
 	handle.statsStop = make(chan struct{})
-	handle.ready = true
-	log.Debugf(Category, "[Engine] DobbyProxy installed; owner is ready")
+	log.Debugf(Category, "[Engine] DobbyProxy installed; owner is active")
 	go wrapper.logStatsLoop(handle.statsStop)
 	return handle, true, nil
 }
@@ -438,7 +384,6 @@ func (e *Engine) Stop() error {
 		return e.stopErr
 	}
 	e.stopped = true
-	e.ready = false
 	statsStop := e.statsStop
 	e.statsStop = nil
 	stopPlatform := e.stopPlatform
@@ -470,74 +415,16 @@ func (e *Engine) InterfaceName() string {
 	return e.ifaceName
 }
 
-// SwitchVPNProxy updates only this engine's outbound proxy. New lifecycle code
-// deliberately does not use hot switching; this method is retained for older
-// callers while they move to stop-before-start orchestration.
-func (e *Engine) SwitchVPNProxy(proxyAddr string) error {
-	if e == nil || !e.Ready() {
-		return fmt.Errorf("tun2socks engine is not running")
-	}
-	px, err := newSocks5Proxy(proxyAddr)
-	if err != nil {
-		return err
-	}
-	e.mu.RLock()
-	wrapper := e.proxy
-	e.mu.RUnlock()
-	if wrapper == nil {
-		return fmt.Errorf("tun2socks engine proxy is not initialized")
-	}
-	wrapper.updateVPNProxy(px)
-	log.Debugf(Category, "[Engine] switched owned VPN outbound proxy to %s", proxyAddr)
-	return nil
-}
-
-// StartEngine is retained for source compatibility. New callers must retain
-// and stop the Engine returned by StartOwnedEngine.
-func StartEngine(cfg platform_engine.EngineConfig) error {
-	_, err := StartOwnedEngine(cfg)
-	return err
-}
-
-// StopEngine is a compatibility shim for legacy callers. It never replaces an
-// owner, but cannot provide stale-owner protection because it has no handle.
-func StopEngine() {
-	engineMu.Lock()
-	e := activeEngine
-	engineMu.Unlock()
-	if e != nil {
-		if err := e.Stop(); err != nil {
-			log.Warnf(Category, "[Engine] compatibility stop failed: %v", err)
-		}
-	}
-}
-
-// SwitchVPNProxy is a compatibility shim for legacy callers. New code must
-// use Engine.SwitchVPNProxy so it is bound to the owning lifecycle.
-func SwitchVPNProxy(proxyAddr string) error {
-	engineMu.Lock()
-	e := activeEngine
-	engineMu.Unlock()
-	if e == nil {
-		return fmt.Errorf("tun2socks engine is not running")
-	}
-	return e.SwitchVPNProxy(proxyAddr)
-}
-
 func (p *DobbyProxy) flowStats() string {
 	return fmt.Sprintf(
-		"activeTCP=%d peakTCP=%d activeUDP=%d peakUDP=%d tcpAttempt=%d udpAttempt=%d tcpLimitErr=%d udpLimitErr=%d udpIdleTimeout=%d limits=tcp:%d,udp:%d",
+		"activeTCP=%d peakTCP=%d activeUDP=%d peakUDP=%d tcpAttempt=%d udpAttempt=%d udpIdleTimeout=%d",
 		p.activeTCP.Load(),
 		p.peakTCP.Load(),
 		p.activeUDP.Load(),
 		p.peakUDP.Load(),
 		p.tcpDialAttempt.Load(),
 		p.udpDialAttempt.Load(),
-		p.tcpLimitErr.Load(),
-		p.udpLimitErr.Load(),
 		p.udpIdleTimeout.Load(),
-		maxActiveTCPConnections,
-		maxActiveUDPAssociations,
 	)
 }
 
@@ -586,17 +473,4 @@ func updatePeakInt64(peak *atomic.Int64, current int64) {
 			return
 		}
 	}
-}
-
-type flowSlot struct {
-	maxTotal int64
-}
-
-func (s *flowSlot) reserve(active *atomic.Int64) (cur int64, release func() int64, err error) {
-	cur = active.Add(1)
-	if cur > s.maxTotal {
-		active.Add(-1)
-		return cur - 1, nil, fmt.Errorf("flow limit reached active=%d max=%d", cur-1, s.maxTotal)
-	}
-	return cur, func() int64 { return active.Add(-1) }, nil
 }

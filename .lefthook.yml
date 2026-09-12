@@ -31,7 +31,7 @@ pre-commit:
 
     swift-lint:
       glob: "swift_module/**/*.swift"
-      run: cd swift_module && swiftlint lint --config .swiftlint.yml --quiet
+      run: cd swift_module && swiftlint lint --config .swiftlint.yml
       only:
         - os: darwin
       fail_text: "SwiftLint found issues. Fix them before committing."

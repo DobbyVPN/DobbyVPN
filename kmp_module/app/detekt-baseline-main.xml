@@ -2,40 +2,14 @@
 <SmellBaseline>
   <ManuallySuppressedIssues></ManuallySuppressedIssues>
   <CurrentIssues>
-    <ID>InjectDispatcher:DnsPreflightResolverImpl.kt$DnsPreflightResolverImpl$IO</ID>
-    <ID>LongMethod:CliParser.kt$fun printHelp(exitCode: ExitCode)</ID>
-    <ID>LoopWithTooManyJumpStatements:CliClient.kt$CliClient$for</ID>
-    <ID>MagicNumber:CliClient.kt$CliClient$10</ID>
-    <ID>MagicNumber:CliClient.kt$CliClient$1000L</ID>
-    <ID>MagicNumber:CliClient.kt$CliClient$20</ID>
-    <ID>MagicNumber:CliClient.kt$CliClient$200</ID>
-    <ID>MagicNumber:CliClient.kt$CliClient$299</ID>
-    <ID>MagicNumber:DobbyConfigsRepositoryImpl.kt$DobbyConfigsRepositoryImpl$1984</ID>
-    <ID>MaxLineLength:DobbyVpnService.kt$DobbyVpnService$logger.log("Outline URL built (prefix=${prefix.isNotEmpty()}, ws=$websocketEnabled, tcpPath=${tcpPath.isNotEmpty()}, udpPath=${udpPath.isNotEmpty()})")</ID>
-    <ID>MaxLineLength:DobbyVpnService.kt$DobbyVpnService$logger.log("Outline websocket: $websocketEnabled, tcpPath: ${tcpPath.ifEmpty { "(none)" }}, udpPath: ${udpPath.ifEmpty { "(none)" }}")</ID>
-    <ID>NewLineAtEndOfFile:AuthenticationManagerImpl.kt$com.dobby.feature.authentication.domain.AuthenticationManagerImpl.kt</ID>
     <ID>NewLineAtEndOfFile:Color.kt$com.dobby.ui.theme.Color.kt</ID>
     <ID>NewLineAtEndOfFile:IsPermissionCheckNeeded.jvm.kt$com.dobby.feature.main.presentation.IsPermissionCheckNeeded.jvm.kt</ID>
     <ID>NewLineAtEndOfFile:Theme.kt$com.dobby.ui.theme.Theme.kt</ID>
     <ID>NewLineAtEndOfFile:Type.kt$com.dobby.ui.theme.Type.kt</ID>
-    <ID>NewLineAtEndOfFile:WebViewScreen.kt$com.dobby.feature.authentication.ui.WebViewScreen.kt</ID>
     <ID>PackageNaming:ActualResourceCollectors.kt$package kmp_module.app.generated.resources</ID>
     <ID>PackageNaming:DobbyVpnService.kt$package com.dobby.feature.vpn_service</ID>
-    <ID>PackageNaming:RestartableCloakGrpcLibrary.kt$package com.dobby.feature.vpn_service.grpc</ID>
-    <ID>PackageNaming:RestartableDnsCacheGrpcLibrary.kt$package com.dobby.feature.vpn_service.grpc</ID>
-    <ID>PackageNaming:RestartableGeoroutingGrpcLibrary.kt$package com.dobby.feature.vpn_service.grpc</ID>
-    <ID>PackageNaming:RestartableHealthCheckGrpcLibrary.kt$package com.dobby.feature.vpn_service.grpc</ID>
-    <ID>PackageNaming:RestartableLoggerGrpcLibrary.kt$package com.dobby.feature.vpn_service.grpc</ID>
-    <ID>PackageNaming:RestartableOutlineGrpcLibrary.kt$package com.dobby.feature.vpn_service.grpc</ID>
-    <ID>PackageNaming:RestartableTrustTunnelGrpcLibrary.kt$package com.dobby.feature.vpn_service.grpc</ID>
-    <ID>PackageNaming:RestartableXrayGrpcLibrary.kt$package com.dobby.feature.vpn_service.grpc</ID>
-    <ID>ReturnCount:CliClient.kt$CliClient$fun connect(options: List&lt;String&gt;): ExitCode</ID>
-    <ID>ReturnCount:CliClient.kt$CliClient$fun verifySession(options: List&lt;String&gt;): ExitCode</ID>
     <ID>UnreachableCode:CopyLogsInteractorImpl.kt$CopyLogsInteractorImpl$bestCompressionGzip(File(selectedDirectory, selectedFile)) .bufferedWriter(Charsets.UTF_8) .use { writer -&gt; writer.write(joinedLogs) }</ID>
     <ID>UnreachableCode:CopyLogsInteractorImpl.kt$CopyLogsInteractorImpl$val selectedDirectory = dialog.directory ?: return</ID>
     <ID>UnreachableCode:CopyLogsInteractorImpl.kt$CopyLogsInteractorImpl$val selectedFile = dialog.file ?: return</ID>
-    <ID>UnusedPrivateProperty:DobbyVpnService.kt$DobbyVpnService$private val logsRepository: LogsRepository</ID>
-    <ID>WildcardImport:CliClient.kt$import com.dobby.feature.vpn_service.grpc.*</ID>
-    <ID>WildcardImport:nativeModule.kt$import com.dobby.feature.vpn_service.grpc.*</ID>
   </CurrentIssues>
 </SmellBaseline>

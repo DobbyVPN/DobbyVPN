@@ -92,6 +92,47 @@ func TestWindowsRouteLeaseAcceptsVerifiedDeletion(t *testing.T) {
 	}
 }
 
+func TestWindowsRouteLeaseAcceptsAlreadyAbsentRouteAfterDeleteError(t *testing.T) {
+	originalExists := windowsRouteExists
+	originalCommand := windowsNetshCommand
+	t.Cleanup(func() {
+		windowsRouteExists = originalExists
+		windowsNetshCommand = originalCommand
+	})
+	windowsNetshCommand = func(...string) (string, error) {
+		return "Element not found.", errors.New("exit status 1")
+	}
+	windowsRouteExists = func(windowsRoute) (bool, error) { return false, nil }
+
+	if err := releaseWindowsRoute(
+		windowsRoute{prefix: "198.51.100.7/32", nextHop: "192.0.2.1", interfaceName: "Ethernet"},
+		5*time.Millisecond,
+	); err != nil {
+		t.Fatalf("release route already absent after adapter reset: %v", err)
+	}
+}
+
+func TestWindowsRouteLeaseRejectsDeleteErrorWhenRouteRemains(t *testing.T) {
+	originalExists := windowsRouteExists
+	originalCommand := windowsNetshCommand
+	t.Cleanup(func() {
+		windowsRouteExists = originalExists
+		windowsNetshCommand = originalCommand
+	})
+	windowsNetshCommand = func(...string) (string, error) {
+		return "Access denied.", errors.New("exit status 1")
+	}
+	windowsRouteExists = func(windowsRoute) (bool, error) { return true, nil }
+
+	err := releaseWindowsRoute(
+		windowsRoute{prefix: "198.51.100.7/32", nextHop: "192.0.2.1", interfaceName: "Ethernet"},
+		5*time.Millisecond,
+	)
+	if err == nil || !strings.Contains(err.Error(), "exit status 1") {
+		t.Fatalf("release error=%v", err)
+	}
+}
+
 func TestWindowsRouteLeasePreservesPreExistingExactRoute(t *testing.T) {
 	originalExists := windowsRouteExists
 	originalCommand := windowsNetshCommand

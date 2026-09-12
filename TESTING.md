@@ -1,36 +1,52 @@
 # Testing DobbyVPN
 
-The public repository keeps tests that contributors can run without private
-infrastructure or credentials.
+Run checks relevant to the change. Tests are disposable: rerun them freely,
+keep useful diagnostics, and clean up resources on success or failure.
+A missing tool or unavailable platform is not a passing test.
 
-## Local source checks
+## Source checks
 
-From `go_module/`:
+On Linux, Go tests need the TrustTunnel bridge and C++ runtimes staged in
+`go_module/`. The Test workflow runs
+`python3 .github/scripts/desktop_build.py prepare-go-test-deps --go-mod-tidy`
+and sets `CGO_LDFLAGS` and `LD_LIBRARY_PATH` for later workflow steps. That
+environment handoff uses GitHub Actions; running the setup command as a local
+subprocess will not export those variables into your shell.
+
+With those dependencies and environment variables available, from
+`go_module/`:
 
 ```bash
 go test ./...
-go test github.com/cbeuw/Cloak/exported_client github.com/cbeuw/Cloak/internal/client
-go test -race ./core/... ./routing/... ./sessionapi/... ./tunnel/...
-go test -race github.com/cbeuw/Cloak/exported_client github.com/cbeuw/Cloak/internal/client
+go test -race ./routing/... ./sessionapi/... ./tunnel/...
 ```
 
-The explicit Cloak command is required because `go_module/modules/Cloak` is a
-replaced nested module and is not included in the parent module's `./...`
-pattern. It covers the embedded client integration used by every DobbyVPN
-platform; the standalone Cloak server packages are outside this app's test
-scope.
-
-From `kmp_module/` with JDK 17 and the Android SDK configured:
+From `kmp_module/`, with JDK 17 and the Android SDK:
 
 ```bash
-./gradlew :grpcstub:test :app:jvmTest :app:testDebugUnitTest :app:verifyDebugNativeAbiPayloads
+./gradlew :grpcstub:test :app:jvmTest :app:testDebugUnitTest :app:verifyDebugNativeAbiPayloads :app:assembleReleaseAndroidTest
 ./gradlew :app:detektMetadataCommonMain :app:detektJvmMain :grpcstub:detekt
 ```
 
-Use the source-set-specific Detekt tasks above. The root KMP aggregate
-`detekt` task has no sources and is not lint evidence.
+The root KMP `detekt` aggregate has no sources; use the source-set tasks above.
 
-On an Apple-silicon Mac with Xcode 26.3 and an installed iOS runtime:
+With a disposable Android emulator/device connected, run the app's own
+instrumentation tests directly: `./gradlew :app:connectedReleaseAndroidTest`.
+These service-shell tests do not replace VPN traffic tests.
+
+From the repository root:
+
+```bash
+python3 -m pytest .github/scripts
+PYTHONPATH=torturer python3 -m unittest discover -s torturer/tests -p 'test_*.py'
+```
+
+The functional-tooling suite includes Windows-only process tests, skipped on
+other operating systems. Running its Python unit tests is not a live VPN test.
+
+## iOS
+
+On a Mac with Xcode and an installed Simulator runtime:
 
 ```bash
 swift test --enable-code-coverage --package-path swift_module
@@ -38,91 +54,70 @@ cd kmp_module
 ./gradlew :app:linkDebugFrameworkIosSimulatorArm64 :app:iosSimulatorArm64Test
 ```
 
-To build and install the complete unsigned Simulator app locally, first build
-the public Go framework from `go_module/`, then stage the matching KMP
-framework before invoking Xcode:
+On Intel, use `:app:linkDebugFrameworkIosX64 :app:iosX64Test` instead.
+The Test workflow covers Swift lifecycle and KMP shared-core tests.
+The private Harness also runs the app-contract helper in
+`torturer/tests/ios_simulator/`. Local Intel runs use explicit Mini mode and
+check initialization without Metal. GitHub uses explicit Metal mode, which
+requires usable Metal and checks that the normal app builds, launches, and
+attaches its main view. Shared Compose tests cover UI behavior; this startup
+smoke does not prove that Metal presented a frame. Neither mode is VPN traffic
+qualification.
 
-```bash
-cd go_module
-./scripts/build_ios_xcframework.sh
-ditto MyLibrary.xcframework ../swift_module/MyLibrary.xcframework
+Simulator coverage is not physical-device VPN coverage. The vendor
+TrustTunnel bridge is device-only; the Simulator returns an unsupported
+error for that protocol. Suspend/resume is also not currently covered by the
+functional suite.
 
-cd ../kmp_module
-./gradlew :app:linkDebugFrameworkIosSimulatorArm64 :app:iosSimulatorArm64Test
-rm -rf ../swift_module/app.framework
-ditto app/build/bin/iosSimulatorArm64/debugFramework/app.framework ../swift_module/app.framework
+## Functional tests and releases
 
-SIMULATOR_UDID="$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.isAvailable and (.name | startswith("iPhone")))][0].udid')"
-xcrun simctl boot "$SIMULATOR_UDID" || true
-xcrun simctl bootstatus "$SIMULATOR_UDID" -b
-xcodebuild build -project ../swift_module/iosApp.xcodeproj -scheme iosApp \
-  -configuration Debug -sdk iphonesimulator \
-  -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-  -derivedDataPath /tmp/dobbyvpn-ios-simulator \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
-python3 .github/scripts/run_ios_simulator_app_lifecycle.py \
-  --device "$SIMULATOR_UDID" \
-  --app /tmp/dobbyvpn-ios-simulator/Build/Products/Debug-iphonesimulator/doBBYVPN.app \
-  --screenshots /tmp/dobbyvpn-ios-simulator-screenshots \
-  --result /tmp/dobbyvpn-ios-simulator-lifecycle.json
-```
+Product and functional tests live at one revision. See
+[the functional suite](torturer/README.md) for setup and
+[scenario definitions](torturer/docs/contract.md) for assertions.
 
-`--screenshots` is deliberately an owner-local option. Public GitHub workflows
-run the same lifecycle assertions without retaining or uploading screenshots.
+Pushes to `main` and pull requests run **Test** automatically. To check a
+feature branch before opening a pull request, use **Actions → Test → Run
+workflow** and select that branch. Its goal is source/build checks, including
+the iOS Simulator Metal app-startup smoke on a Metal-capable runner; it does
+not create a Render VPN or publish anything.
 
-For an Intel Mac, replace `iosSimulatorArm64` with `iosX64` in the Gradle task
-and framework path. The hosted public workflow runs the Apple-silicon variant.
+After the intended change is merged, use **Actions → Release → Run workflow**
+on `main` when you want to qualify real signed packages. It tests those exact
+packages on Linux, Windows, macOS, and Android, shares one Render VPN, then
+deletes it. Release does not publish. When that run succeeds and you want to
+distribute it, use **Actions → Publish → Run workflow** on `main` and select
+its run ID. Publish uses those retained artifacts. Apple submission and
+GitHub/F-Droid publication are independent jobs. Publishing credentials stay
+in those jobs.
 
-The Swift package compiles the exact platform-neutral production source from
-`swift_module/CommonDI`; it is not a copied lifecycle model. The Gradle command
-links the KMP Simulator framework and executes `commonTest` coverage inside an
-iOS Simulator. Its deterministic tests include the extension-process Go
-session transaction (create/configure/start/poll/stop/destroy), including
-virtual-time timeout and cleanup retry paths. It also executes the shared
-logging contract for legacy-record compatibility, full-timestamp ordering,
-multi-producer merge/clear, and durable retention of the latest clear marker.
-`iosX64` is also declared for Intel macOS environments.
+To Publish, copy the digits after `/actions/runs/` in the successful Release
+run's URL into the required `release_run_id` field. Use a completed successful
+Release from `main`; Publish rejects failed, in-progress, retried, or expired
+artifact runs.
 
-Simulator checks cover shared parsing, mapping, lifecycle generation fences,
-observation sequencing, retry decisions, framework linkage, fresh install,
-retained-data reinstall, cold and repeated launch, background/foreground,
-forced termination/relaunch, and (owner-locally) real foreground app
-screenshots. The lifecycle helper verifies that every launched process remains
-alive after the startup window, not merely that launchd accepted a request.
-Shared storage tests cover missing, corrupt, unwritable, and full diagnostic
-storage and require controlled degradation rather than startup failure.
+Hosted tests share one disposable Render VPN for the whole run. Public
+services provide IP and bounded upload/download checks; there is no custom
+HTTP measurement server. All platform traffic must originate inside the
+tested VPN environment (including inside Android, not on its host). The shared
+functional deadline starts when Render service creation begins, includes
+platform setup and queue time, and reserves five minutes for final deletion.
+External-service failures must be distinguished from product failures.
+Scenario resets and deletion of the shared Render service are checked. The
+initial VPN service and Android emulator are left to the disposable
+GitHub-hosted runner; their shutdown is not separately verified.
 
-The signed-IPA workflow separately inspects the app and packet-tunnel extension,
-signatures, exact entitlements, App Group, source commit, version/build,
-provisioning expiry, and release debugger policy. Simulator cannot execute the
-production NetworkExtension data plane, real traffic, sleep/wake, or physical
-device resource cleanup. Those remain optional physical-hardware strengthening
-tests, not prerequisites for contributors or maintainers without an iPhone.
+Local VM tests take one product worktree and a fresh owner profile. They build
+for iteration, not for release reproducibility, and clean up after every
+result. See the private Harness README for the launcher command.
 
-The Go XCFramework intentionally includes a Simulator slice. It shares all
-session/runtime code with the device slice, but TrustTunnel returns a typed
-unsupported error because its vendor-supplied native bridge is physical-iOS
-only. This keeps the Simulator app loadable without pretending to validate a
-VPN protocol it cannot execute.
+Keep available logs even when a test fails. Missing logs are reported, not
+used to prevent cleanup. A failed cleanup is reported separately and prevents
+a release from being treated as successful.
 
-## Independent public verification
-
-Pull requests also call
-[`DobbyVPN/Torturer`](https://github.com/DobbyVPN/Torturer) at an immutable
-commit. Torturer source-builds the exact pull-request revision on hosted Linux,
-Windows, macOS ARM, macOS Intel, and Android runners, then exercises only
-secretless product-facing contracts and synthetic invalid input. Its iOS
-Simulator lane builds the Go Simulator framework, runs the production Swift
-suite and KMP `iosSimulatorArm64Test`, then builds, installs, launches,
-and terminates the unsigned app. Shared `commonTest` additions therefore
-extend both DobbyVPN's own Simulator job and the independent Torturer lane
-without duplicating tests. A named app XCTest remains a separate future stage.
-
-The caller uses the unprivileged `pull_request` event, read-only permissions,
-no secrets, no protected environments, and no shared Actions cache.
-
-## Scope boundary
-
-Public tests intentionally use no provider credentials or real endpoint
-configuration. They do not claim real external-network identity, sustained
-throughput, or physical-device NetworkExtension qualification.
+Release-only checks retain Android reproducibility and signing-certificate
+verification, and iOS signature, entitlement, provisioning, and version
+checks. They protect deliverable correctness, not routine test bookkeeping.
+Publish never rebuilds or requalifies packages. It rejects incomplete or
+unsuccessful Release runs, checks that artifacts remain available, and uses
+the selected run's source commit and Apple build number. An Apple API failure
+does not block GitHub/F-Droid publication, and vice versa.

@@ -25,7 +25,7 @@ fi
 
 for plugin in protoc-gen-go protoc-gen-go-grpc; do
   if ! command -v "$plugin" >/dev/null; then
-    echo "error: $plugin not found. Run: go install google.golang.org/protobuf/cmd/protoc-gen-go@latest && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest" >&2
+    echo "error: $plugin not found. Run: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2" >&2
     exit 1
   fi
 done

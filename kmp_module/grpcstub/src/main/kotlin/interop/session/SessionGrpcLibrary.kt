@@ -7,6 +7,7 @@ import com.dobby.grpcproto.SessionFailure as ProtoFailure
 import com.dobby.grpcproto.SessionFeature as ProtoFeature
 import com.dobby.grpcproto.SessionGetCapabilitiesRequest
 import com.dobby.grpcproto.SessionObserveRequest
+import com.dobby.grpcproto.Empty
 import com.dobby.grpcproto.SessionProfile as ProtoProfile
 import com.dobby.grpcproto.SessionProtocol as ProtoProtocol
 import com.dobby.grpcproto.SessionSnapshot as ProtoSnapshot
@@ -19,99 +20,97 @@ import com.dobby.grpcproto.SessionWarning as ProtoWarning
 import com.dobby.grpcproto.VpnGrpcKt
 import com.google.protobuf.ByteString
 import io.grpc.Channel
-import io.grpc.StatusException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 /**
- * Thin sessionapi/v1 RPC client for desktop callers. It performs no TOML
+ * Thin sessionapi/v2 RPC client for desktop callers. It performs no TOML
  * parsing, decoding, or logging, so configuration text and credentials stay out of this
  * layer's errors and diagnostics.
  */
 open class SessionGrpcLibrary(channel: Channel) : SessionLibrary {
     private val stub = VpnGrpcKt.VpnCoroutineStub(channel)
 
-    override suspend fun getCapabilities(): SessionResult<SessionCapabilities> = try {
+    override suspend fun getCapabilities(): SessionResult<SessionCapabilities> =
         SessionResult.Success(stub.getCapabilities(SessionGetCapabilitiesRequest.getDefaultInstance()).toTransport())
-    } catch (_: StatusException) {
-        unavailable()
+
+    override suspend fun createSession(): SessionResult<String> {
+        val response = stub.createSession(SessionCreateSessionRequest.getDefaultInstance())
+        return response.result { response.sessionId }
     }
 
-    override suspend fun createSession(): SessionResult<String> = try {
-        val response = stub.createSession(SessionCreateSessionRequest.getDefaultInstance())
-        response.result { response.sessionId }
-    } catch (_: StatusException) {
-        unavailable()
+    override suspend fun recoverActiveSession(): SessionResult<String> {
+        val response = stub.recoverActiveSession(Empty.getDefaultInstance())
+        return response.result { response.sessionId }
     }
 
     override suspend fun configure(
         sessionId: String,
         commandId: String,
         rawConfig: ByteArray,
-    ): SessionResult<SessionConfiguration> = try {
+    ): SessionResult<SessionConfiguration> {
         val response = stub.configure(SessionRequests.configure(sessionId, commandId, rawConfig))
-        response.result {
+        return response.result {
             SessionConfiguration(
                 digest = response.digest,
                 profiles = response.profilesList.map(ProtoProfile::toTransport),
                 warnings = response.warningsList.map(ProtoWarning::toTransport),
+                sourceKind = response.sourceKind.toTransport(),
             )
         }
-    } catch (_: StatusException) {
-        unavailable()
     }
 
     override suspend fun start(
         sessionId: String,
         commandId: String,
         target: SessionStartTarget,
-    ): SessionResult<ULong> = try {
+    ): SessionResult<ULong> {
         val response = stub.start(SessionRequests.start(sessionId, commandId, target))
-        response.result { response.generation.toULong() }
-    } catch (_: StatusException) {
-        unavailable()
+        return response.result { response.generation.toULong() }
     }
 
     override suspend fun stop(
         sessionId: String,
         commandId: String,
         generation: ULong,
-    ): SessionResult<ULong> = try {
+    ): SessionResult<ULong> {
         val response = stub.stop(SessionRequests.stop(sessionId, commandId, generation))
-        response.result { response.generation.toULong() }
-    } catch (_: StatusException) {
-        unavailable()
+        return response.result { response.generation.toULong() }
     }
 
-    override suspend fun snapshot(sessionId: String): SessionResult<SessionSnapshot> = try {
+    override suspend fun snapshot(sessionId: String): SessionResult<SessionSnapshot> {
         val response = stub.snapshot(SessionSnapshotRequest.newBuilder().setSessionId(sessionId).build())
-        response.result { response.snapshot.toTransport() }
-    } catch (_: StatusException) {
-        unavailable()
+        return response.result { response.snapshot.toTransport() }
     }
 
-    override suspend fun observe(sessionId: String, afterSequence: ULong): SessionResult<SessionObservation> = try {
+    override suspend fun observe(sessionId: String, afterSequence: ULong): SessionResult<SessionObservation> {
         val response = stub.observe(
             SessionObserveRequest.newBuilder()
                 .setSessionId(sessionId)
                 .setAfterSequence(afterSequence.toLong())
                 .build(),
         )
-        response.result {
+        return response.result {
             SessionObservation(
                 events = response.eventsList.map { it.toTransport() },
                 nextSequence = response.nextSequence.toULong(),
             )
         }
-    } catch (_: StatusException) {
-        unavailable()
     }
 
-    override suspend fun destroySession(sessionId: String): SessionResult<Unit> = try {
+    override fun watch(sessionId: String, afterSequence: ULong): Flow<SessionEvent> =
+        stub.watch(
+            SessionObserveRequest.newBuilder()
+                .setSessionId(sessionId)
+                .setAfterSequence(afterSequence.toLong())
+                .build(),
+        ).map { it.toTransport() }
+
+    override suspend fun destroySession(sessionId: String): SessionResult<Unit> {
         val response = stub.destroySession(
             SessionDestroySessionRequest.newBuilder().setSessionId(sessionId).build(),
         )
-        response.result { Unit }
-    } catch (_: StatusException) {
-        unavailable()
+        return response.result { Unit }
     }
 }
 
@@ -149,10 +148,10 @@ internal object SessionRequests {
 private fun <T> result(hasFailure: Boolean, failure: ProtoFailure, value: () -> T): SessionResult<T> =
     if (hasFailure) SessionResult.Failure(failure.toTransport()) else SessionResult.Success(value())
 
-private fun unavailable(): SessionResult.Failure =
-    SessionResult.Failure(SessionFailure(SessionFailureCode.INTERNAL, "session service request failed"))
-
 private fun com.dobby.grpcproto.SessionCreateSessionResponse.result(value: () -> String) =
+    result(hasFailure(), failure, value)
+
+private fun com.dobby.grpcproto.SessionRecoverActiveSessionResponse.result(value: () -> String) =
     result(hasFailure(), failure, value)
 
 private fun com.dobby.grpcproto.SessionConfigureResponse.result(value: () -> SessionConfiguration) =
@@ -173,6 +172,13 @@ private fun com.dobby.grpcproto.SessionObserveResponse.result(value: () -> Sessi
 private fun com.dobby.grpcproto.SessionDestroySessionResponse.result(value: () -> Unit) =
     result(hasFailure(), failure, value)
 
+private fun com.dobby.grpcproto.SessionSourceKind.toTransport() = when (this) {
+    com.dobby.grpcproto.SessionSourceKind.SESSION_SOURCE_KIND_UNSPECIFIED -> error("session source kind is unspecified")
+    com.dobby.grpcproto.SessionSourceKind.SESSION_SOURCE_KIND_INLINE -> SessionSourceKind.INLINE
+    com.dobby.grpcproto.SessionSourceKind.SESSION_SOURCE_KIND_URL -> SessionSourceKind.URL
+    com.dobby.grpcproto.SessionSourceKind.UNRECOGNIZED -> error("session source kind is unrecognized")
+}
+
 internal fun ProtoFailure.toTransport() = SessionFailure(code.toTransport(), message)
 
 internal fun ProtoProfile.toTransport() = SessionProfile(index, protocol.toTransport(), description)
@@ -185,7 +191,6 @@ private fun com.dobby.grpcproto.SessionGetCapabilitiesResponse.toTransport() = S
     version = version,
     protocols = protocolsList.map(ProtoProtocol::toTransport),
     features = featuresList.map(ProtoFeature::toTransport),
-    telemetryNetworkDisabled = telemetryNetworkDisabled,
 )
 
 internal fun com.dobby.grpcproto.SessionEvent.toTransport() = SessionEvent(
@@ -209,15 +214,15 @@ private fun ProtoSnapshot.toTransport() = SessionSnapshot(
 )
 
 private fun ProtoProtocol.toTransport() = when (this) {
-    ProtoProtocol.SESSION_PROTOCOL_UNSPECIFIED -> SessionProtocol.UNSPECIFIED
+    ProtoProtocol.SESSION_PROTOCOL_UNSPECIFIED -> error("session protocol is unspecified")
     ProtoProtocol.SESSION_PROTOCOL_OUTLINE -> SessionProtocol.OUTLINE
     ProtoProtocol.SESSION_PROTOCOL_XRAY -> SessionProtocol.XRAY
     ProtoProtocol.SESSION_PROTOCOL_TRUST_TUNNEL -> SessionProtocol.TRUST_TUNNEL
-    ProtoProtocol.UNRECOGNIZED -> SessionProtocol.UNKNOWN
+    ProtoProtocol.UNRECOGNIZED -> error("session protocol is unrecognized")
 }
 
 private fun ProtoState.toTransport() = when (this) {
-    ProtoState.SESSION_STATE_UNSPECIFIED -> SessionState.UNSPECIFIED
+    ProtoState.SESSION_STATE_UNSPECIFIED -> error("session state is unspecified")
     ProtoState.SESSION_STATE_IDLE -> SessionState.IDLE
     ProtoState.SESSION_STATE_CONFIGURED -> SessionState.CONFIGURED
     ProtoState.SESSION_STATE_PROBING -> SessionState.PROBING
@@ -226,11 +231,11 @@ private fun ProtoState.toTransport() = when (this) {
     ProtoState.SESSION_STATE_STOPPING -> SessionState.STOPPING
     ProtoState.SESSION_STATE_FAILED -> SessionState.FAILED
     ProtoState.SESSION_STATE_DESTROYED -> SessionState.DESTROYED
-    ProtoState.UNRECOGNIZED -> SessionState.UNKNOWN
+    ProtoState.UNRECOGNIZED -> error("session state is unrecognized")
 }
 
 private fun com.dobby.grpcproto.SessionFailureCode.toTransport() = when (this) {
-    com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_UNSPECIFIED -> SessionFailureCode.UNSPECIFIED
+    com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_UNSPECIFIED -> error("session failure code is unspecified")
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_INVALID_ARGUMENT -> SessionFailureCode.INVALID_ARGUMENT
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_NOT_FOUND -> SessionFailureCode.NOT_FOUND
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_CONFLICT -> SessionFailureCode.CONFLICT
@@ -244,5 +249,5 @@ private fun com.dobby.grpcproto.SessionFailureCode.toTransport() = when (this) {
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_CANCELED -> SessionFailureCode.CANCELED
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_INTERNAL -> SessionFailureCode.INTERNAL
     com.dobby.grpcproto.SessionFailureCode.SESSION_FAILURE_CODE_CLEANUP_FAILED -> SessionFailureCode.CLEANUP_FAILED
-    com.dobby.grpcproto.SessionFailureCode.UNRECOGNIZED -> SessionFailureCode.UNKNOWN
+    com.dobby.grpcproto.SessionFailureCode.UNRECOGNIZED -> error("session failure code is unrecognized")
 }

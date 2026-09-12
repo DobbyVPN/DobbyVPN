@@ -4,7 +4,6 @@ import com.dobby.feature.vpn_service.DobbyVpnService
 import com.dobby.feature.vpn_service.PlatformServiceRegistry
 import com.dobby.gomobile.dobbyvpn.Dobbyvpn
 import com.dobby.gomobile.dobbyvpn.PlatformCallbacks
-import com.dobby.gomobile.dobbyvpn.SocketProtector
 
 object GoBackendWrapper {
     fun stopSession(sessionId: String, commandId: String, generation: Long): String =
@@ -12,32 +11,22 @@ object GoBackendWrapper {
 
     fun initLogger(path: String): Boolean = Dobbyvpn.initLogger(path)
 
-    fun initTelemetry(endpoint: String, token: String) {
-        Dobbyvpn.initTelemetry(endpoint, token)
-    }
-
-    fun stopTelemetry() {
-        Dobbyvpn.stopTelemetry()
-    }
-
-    fun setupTelemetryAttributes(config: String) {
-        Dobbyvpn.setupTelemetryAttributes(config)
-    }
-
-    /** Installs the v1 Android platform callback. Every native callback is correlated. */
+    /** Installs the Android platform callback. Every native callback is correlated. */
     fun registerSessionPlatform(service: DobbyVpnService) {
         // Do not retain a destroyed Service in gomobile. The proxy resolves the current
         // prepared shell for every callback, so stale callbacks fail closed.
         Dobbyvpn.registerSessionPlatform(object : PlatformCallbacks {
             override fun acquireTunnel(sessionId: String, generation: Long): Int =
-                PlatformServiceRegistry.current(sessionId)?.acquireTunnel(sessionId, generation) ?: -1
+                PlatformServiceRegistry.current(sessionId)?.acquireTunnel(sessionId, generation)
+                    ?: missingPlatform("acquireTunnel", generation, -1)
 
-            override fun releaseTunnel(sessionId: String, generation: Long, fd: Int) {
+            override fun releaseTunnel(sessionId: String, generation: Long, fd: Int): Boolean =
                 PlatformServiceRegistry.current(sessionId)?.releaseTunnel(sessionId, generation, fd)
-            }
+                    ?: missingPlatform("releaseTunnel", generation, false)
 
             override fun protectSocket(sessionId: String, generation: Long, fd: Int): Boolean =
-                PlatformServiceRegistry.current(sessionId)?.protectProtocolSocket(sessionId, generation, fd) ?: false
+                PlatformServiceRegistry.current(sessionId)?.protectProtocolSocket(sessionId, generation, fd)
+                    ?: missingPlatform("protectSocket", generation, false)
 
             override fun publishState(
                 sessionId: String,
@@ -48,8 +37,20 @@ object GoBackendWrapper {
                 profileProtocol: String,
                 failureCode: String,
             ) {
-                PlatformServiceRegistry.current(sessionId)?.publishState(sessionId, generation, state, failureCode)
+                val platform = PlatformServiceRegistry.current(sessionId)
+                if (platform == null) {
+                    missingPlatform("publishState", generation, Unit)
+                } else {
+                    platform.publishState(sessionId, generation, sequence, state, failureCode)
+                }
             }
         })
+    }
+
+    private fun <T> missingPlatform(operation: String, generation: Long, result: T): T {
+        IllegalStateException(
+            "$operation has no prepared Android platform for generation=$generation",
+        ).printStackTrace()
+        return result
     }
 }

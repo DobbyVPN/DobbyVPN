@@ -27,21 +27,17 @@ on:
       source_sha:
         type: string
         required: true
-      legacy_android_version_code:
-        description: Compatibility override for tagged sources that used APPLE_BUILD_NUMBER as Android versionCode
-        type: string
-        required: false
-        default: ''
 
 jobs:
   android_build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: release
     env:
       APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
       APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
       APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
-      APPLE_BUILD_NUMBER: ${{ inputs.legacy_android_version_code || github.run_number }}
+      APPLE_BUILD_NUMBER: ${{ inputs.android_version_code }}
       ANDROID_VERSION_CODE: ${{ inputs.android_version_code }}
       APP_SOURCE_SHA: ${{ inputs.source_sha }}
       APP_SOURCE_REPOSITORY: ${{ github.repository }}
@@ -53,10 +49,9 @@ jobs:
       EXPECTED_ANDROID_SIGNER_SHA256: c3f0414a74012060d7c6aa3a3d9dac0aa13c1bd23b7512eefd860fb865e67933
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.source_sha }}
-          submodules: true
           persist-credentials: false
 
       - name: Verify exact source
@@ -78,7 +73,7 @@ jobs:
           sudo chown -R "$USER:$USER" /home/vagrant
 
       - name: Set up bootstrap Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.24.4'
           # This Go only bootstraps make.bash; there is no root go.mod to cache.
@@ -88,6 +83,34 @@ jobs:
         id: android_go
         run: echo "version=$(cat .go-version)" >> "$GITHUB_OUTPUT"
 
+      - name: Cache trusted Gradle distribution archive
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/dobbyvpn-gradle-cache
+          key: android-gradle-8.13-${{ hashFiles('.github/android/dependency-spec.json') }}
+
+      - name: Restore Gradle distribution
+        run: |
+          set -euo pipefail
+          cache_root="$RUNNER_TEMP/dobbyvpn-gradle-cache"
+          mkdir -p "$cache_root"
+          archive="$cache_root/gradle-8.13-bin.zip"
+          gradle_url="$(python3 .github/scripts/android_dependency_provenance.py \
+            --spec .github/android/dependency-spec.json --print-gradle-url)"
+          if [[ ! -f "$archive" ]]; then
+            temporary_archive="$(mktemp "$cache_root/gradle-8.13-bin.zip.XXXXXX")"
+            curl --fail --show-error --location --output "$temporary_archive" "$gradle_url"
+            mv "$temporary_archive" "$archive"
+          fi
+          extraction_root="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-gradle-root.XXXXXX")"
+          unzip "$archive" -d "$extraction_root"
+          gradle_root="$extraction_root/gradle-8.13"
+          {
+            echo "GRADLE_ARCHIVE=$archive"
+            echo "GRADLE_ROOT=$gradle_root"
+            echo "GRADLE_BIN=$gradle_root/bin/gradle"
+          } >> "$GITHUB_ENV"
+
       - name: Build Go from source for Android
         env:
           ANDROID_GO_VERSION: ${{ steps.android_go.outputs.version }}
@@ -95,8 +118,15 @@ jobs:
           set -euo pipefail
           GO_VERSION="$ANDROID_GO_VERSION"
           [[ "$GO_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
+          SPEC_GO_VERSION="$(python3 .github/scripts/android_dependency_provenance.py \
+            --spec .github/android/dependency-spec.json \
+            --print-go-version)"
+          test "$GO_VERSION" = "$SPEC_GO_VERSION"
           GO_SRC="$FDROID_COMPAT_GO_ROOT"
-          GO_COMMIT="56ebf80e57db9f61981fc0636fc6419dc6f68eda"
+          GO_COMMIT="$(python3 .github/scripts/android_dependency_provenance.py \
+            --spec .github/android/dependency-spec.json \
+            --print-go-source-commit)"
+          [[ "$GO_COMMIT" =~ ^[0-9a-f]{40}$ ]]
 
           test ! -e "$GO_SRC"
           git clone --depth 1 --branch "go${GO_VERSION}" https://github.com/golang/go.git "$GO_SRC"
@@ -110,7 +140,7 @@ jobs:
           test "$("$GO_SRC/bin/go" env GOVERSION)" = "go${GO_VERSION}"
 
       - name: Set up JDK 17 (Temurin)
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           java-version: '17'
           distribution: 'temurin'
@@ -121,7 +151,7 @@ jobs:
             kmp_module/gradle/wrapper/gradle-wrapper.properties
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
         with:
           packages: >
             platforms;android-35
@@ -132,108 +162,43 @@ jobs:
       - name: Install gomobile
         run: |
           set -euo pipefail
-          cd go_module
-          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
-          go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d
-          cd ..
+          mobile_pin="$(python3 .github/scripts/android_dependency_provenance.py \
+            --spec .github/android/dependency-spec.json --print-mobile-version)"
+          mobile_module="${mobile_pin%@*}"
+          mobile_version="${mobile_pin#*@}"
+          test "$mobile_module" = 'golang.org/x/mobile'
+          test "$mobile_version" = 'v0.0.0-20260520154334-0e4426e1883d'
+          GOBIN="$GOPATH/bin" go install "$mobile_module/cmd/gomobile@$mobile_version"
+          GOBIN="$GOPATH/bin" go install "$mobile_module/cmd/gobind@$mobile_version"
           echo "$GOPATH/bin" >> "$GITHUB_PATH"
           go env GOROOT GOVERSION GOFLAGS
 
-      - name: Verify reproducible Android toolchain
-        run: |
-          set -euo pipefail
-          test "$(go env GOVERSION)" = "go$(cat .go-version)"
-          test "$(go env GOROOT)" = "$FDROID_COMPAT_GO_ROOT"
-          test "$(go env GOPATH)" = "$GOPATH"
-          test "$(go env GOFLAGS)" = '-trimpath -buildvcs=false'
-          test "$(readlink -f "$GOMOBILE")" = "$GOPATH/bin/gomobile"
-          test -x "$GOMOBILE"
-          for tool in gomobile gobind; do
-            go version -m "$GOPATH/bin/$tool" | \
-              grep -F 'golang.org/x/mobile' | \
-              grep -F 'v0.0.0-20260520154334-0e4426e1883d'
-          done
-          java_version="$(java -version 2>&1)"
-          grep -F 'version "17.' <<<"$java_version"
-          ndk_revision="$(sed -n 's/^Pkg.Revision *= *//p' \
-            "$ANDROID_SDK_ROOT/ndk/27.3.13750724/source.properties")"
-          test "$ndk_revision" = "27.3.13750724"
-          test -x "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
-          gradle_version="$(./kmp_module/gradlew -p kmp_module --version --no-daemon | \
-            awk '/^Gradle / {print $2}')"
-          test "$gradle_version" = "8.13"
-
       - name: Prepare F-Droid-compatible source path
         run: |
-          rsync -a --delete --exclude='.git' "$GITHUB_WORKSPACE/" "$FDROID_COMPAT_SOURCE_ROOT/"
+          # Keep the exact detached Git objects with the source copy.  The
+          # shared public driver proves that the checkout bytes still equal
+          # HEAD^{tree} before it creates any build output.
+          rsync -a --delete "$GITHUB_WORKSPACE/" "$FDROID_COMPAT_SOURCE_ROOT/"
 
-      # A legacy selected tag does not contain this newer verifier. Keep the
-      # trusted workflow implementation separate from the exact source tree
-      # copied above, and bind it to the workflow revision invoking this job.
-      - name: Check out trusted APK source verifier
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: .trusted-workflow
-          sparse-checkout: |
-            .github/scripts/verify_android_apk_source.py
-            .github/scripts/verify_android_reproducibility.py
-          persist-credentials: false
-
-      - name: Build first isolated unsigned APK
+      - name: Build and verify isolated unsigned APKs through the public driver
         working-directory: /home/vagrant/build/com.dobby.vpn
         env:
           DOBBYVPN_GOMOBILE_GOCACHE: ${{ runner.temp }}/dobbyvpn-android-repro/first/go-cache
           DOBBYVPN_GOMOBILE_GOTMPDIR: ${{ runner.temp }}/dobbyvpn-android-repro/first/go-tmp
         run: |
           set -euo pipefail
-          mkdir -p "$DOBBYVPN_GOMOBILE_GOCACHE" "$DOBBYVPN_GOMOBILE_GOTMPDIR"
-          ./kmp_module/gradlew -p kmp_module :app:assembleRelease \
-            --no-build-cache --no-daemon --rerun-tasks --stacktrace \
-            -PprojectRepositoryCommit="$APP_SOURCE_SHA" \
-            -PprojectRepositoryCommitLink="https://github.com/$APP_SOURCE_REPOSITORY/tree/$APP_SOURCE_SHA" \
-            -Pandroid.injected.version.code="$ANDROID_VERSION_CODE" \
-            -Pandroid.injected.version.name="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          mv "kmp_module/app/build/outputs/apk/release/app-release-unsigned.apk" \
-            "$RUNNER_TEMP/dobbyvpn-android-repro/first.apk"
-
-      - name: Remove first-build outputs
-        working-directory: /home/vagrant/build/com.dobby.vpn
-        run: |
-          set -euo pipefail
-          ./kmp_module/gradlew -p kmp_module clean --no-daemon --no-build-cache
-          test ! -e kmp_module/app/build/generated/gomobile/backend.aar
-
-      - name: Build second isolated unsigned APK
-        working-directory: /home/vagrant/build/com.dobby.vpn
-        env:
-          DOBBYVPN_GOMOBILE_GOCACHE: ${{ runner.temp }}/dobbyvpn-android-repro/second/go-cache
-          DOBBYVPN_GOMOBILE_GOTMPDIR: ${{ runner.temp }}/dobbyvpn-android-repro/second/go-tmp
-        run: |
-          set -euo pipefail
-          mkdir -p "$DOBBYVPN_GOMOBILE_GOCACHE" "$DOBBYVPN_GOMOBILE_GOTMPDIR"
-          ./kmp_module/gradlew -p kmp_module :app:assembleRelease \
-            --no-build-cache --no-daemon --rerun-tasks --stacktrace \
-            -PprojectRepositoryCommit="$APP_SOURCE_SHA" \
-            -PprojectRepositoryCommitLink="https://github.com/$APP_SOURCE_REPOSITORY/tree/$APP_SOURCE_SHA" \
-            -Pandroid.injected.version.code="$ANDROID_VERSION_CODE" \
-            -Pandroid.injected.version.name="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          mkdir -p fastlane
-          mv "kmp_module/app/build/outputs/apk/release/app-release-unsigned.apk" \
-            "fastlane/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-unsign.apk"
-
-      - name: Verify complete unsigned APK reproducibility
-        working-directory: /home/vagrant/build/com.dobby.vpn
-        run: |
-          set -euo pipefail
           version="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          python3 "$GITHUB_WORKSPACE/.trusted-workflow/.github/scripts/verify_android_reproducibility.py" create \
-            --first-apk "$RUNNER_TEMP/dobbyvpn-android-repro/first.apk" \
-            --second-apk "fastlane/DobbyVPN-v${version}-unsign.apk" \
-            --output "fastlane/DobbyVPN-v${version}-android-reproducibility.json" \
+          "$GITHUB_WORKSPACE/.github/scripts/android_build_driver.sh" \
+            --source-root "$FDROID_COMPAT_SOURCE_ROOT" \
             --source-sha "$APP_SOURCE_SHA" \
-            --version-name "$version" \
-            --version-code "$ANDROID_VERSION_CODE"
+            --output "$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v${version}-unsign.apk" \
+            --test-companion-output "$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v${version}-android-test-companion-unsigned.apk" \
+            --manifest "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-build-driver-manifest.json" \
+            --first-output "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-repro-first.apk" \
+            --reproducibility "$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v${version}-android-reproducibility.json" \
+            --gradle-archive "$GRADLE_ARCHIVE" \
+            --gradle-root "$GRADLE_ROOT" \
+            --source-repository "$APP_SOURCE_REPOSITORY"
 
       - name: Sign the verified unsigned APK
         working-directory: /home/vagrant/build/com.dobby.vpn
@@ -243,6 +208,10 @@ jobs:
           version="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
           unsigned="fastlane/DobbyVPN-v${version}-unsign.apk"
           signed="fastlane/DobbyVPN-v${version}-sign.apk"
+          companion_unsigned="fastlane/DobbyVPN-v${version}-android-test-companion-unsigned.apk"
+          companion_signed="fastlane/DobbyVPN-v${version}-android-test-companion.apk"
+          test -f "$unsigned"
+          test -f "$companion_unsigned"
           signing_dir="$(mktemp -d)"
           trap 'rm -f "$signing_dir/keystore.jks"; rmdir "$signing_dir"' EXIT
           printf '%s' "$KEYSTORE_FILE" | base64 --decode > "$signing_dir/keystore.jks"
@@ -253,13 +222,26 @@ jobs:
             --key-pass env:KEY_PASSWORD \
             --out "$signed" \
             "$unsigned"
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify "$signed"
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" sign \
+            --ks "$signing_dir/keystore.jks" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
+            --out "$companion_signed" \
+            "$companion_unsigned"
           mapfile -t signer_digests < <(
             "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$signed" | \
               sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p'
           )
+          mapfile -t companion_signer_digests < <(
+            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$companion_signed" | \
+              sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p'
+          )
           test "${#signer_digests[@]}" -eq 1
           test "${signer_digests[0]}" = "$EXPECTED_ANDROID_SIGNER_SHA256"
+          test "${#companion_signer_digests[@]}" -eq 1
+          test "${companion_signer_digests[0]}" = "$EXPECTED_ANDROID_SIGNER_SHA256"
+          test "${signer_digests[0]}" = "${companion_signer_digests[0]}"
         env:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -271,7 +253,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          python3 "$GITHUB_WORKSPACE/.trusted-workflow/.github/scripts/verify_android_reproducibility.py" verify-signed-payload \
+          python3 "$GITHUB_WORKSPACE/.github/scripts/verify_android_reproducibility.py" verify-signed-payload \
             --unsigned-apk "fastlane/DobbyVPN-v${version}-unsign.apk" \
             --signed-apk "fastlane/DobbyVPN-v${version}-sign.apk"
 
@@ -286,20 +268,14 @@ jobs:
 
           signed="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-sign.apk"
           unsigned="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-unsign.apk"
+          companion="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-android-test-companion.apk"
           reproducibility="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-android-reproducibility.json"
+          driver_manifest="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-build-driver-manifest.json"
           manifest="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-android-provenance.json"
+          test -f "$companion"
 
-          for apk in "$signed" "$unsigned"; do
-            test "$(apkanalyzer manifest application-id "$apk")" = "com.dobby.vpn"
-            test "$(apkanalyzer manifest version-name "$apk")" = "$VERSION_NAME"
-            test "$(apkanalyzer manifest version-code "$apk")" = "$VERSION_CODE"
-          done
-
-          python3 "$GITHUB_WORKSPACE/.trusted-workflow/.github/scripts/verify_android_apk_source.py" \
-            --apk "$signed" --apk "$unsigned" \
-            --source-sha "$SOURCE_SHA" --repository "$APP_SOURCE_REPOSITORY"
-
-          SIGNED_APK="$signed" UNSIGNED_APK="$unsigned" REPRODUCIBILITY="$reproducibility" MANIFEST="$manifest" python3 - <<'PY'
+          SIGNED_APK="$signed" UNSIGNED_APK="$unsigned" COMPANION_APK="$companion" \
+            REPRODUCIBILITY="$reproducibility" DRIVER_MANIFEST="$driver_manifest" MANIFEST="$manifest" python3 - <<'PY'
           import hashlib
           import json
           import os
@@ -313,6 +289,8 @@ jobs:
                   "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
               }
 
+          companion = Path(os.environ["COMPANION_APK"])
+
           document = {
               "schema": 1,
               "source_sha": os.environ["SOURCE_SHA"],
@@ -320,7 +298,18 @@ jobs:
               "version_code": int(os.environ["VERSION_CODE"]),
               "application_id": "com.dobby.vpn",
               "signer_certificate_sha256": os.environ["EXPECTED_ANDROID_SIGNER_SHA256"],
+              "test_companion": {
+                  "name": companion.name,
+                  "sha256": hashlib.sha256(companion.read_bytes()).hexdigest(),
+                  "bytes": companion.stat().st_size,
+                  "application_id": "com.dobby.vpn.test",
+                  "source_sha": os.environ["SOURCE_SHA"],
+                  "signer_certificate_sha256": os.environ["EXPECTED_ANDROID_SIGNER_SHA256"],
+              },
               "signed_payload_matches_unsigned": True,
+              "build_driver": json.loads(
+                  Path(os.environ["DRIVER_MANIFEST"]).read_text(encoding="utf-8")
+              ),
               "reproducibility": json.loads(
                   Path(os.environ["REPRODUCIBILITY"]).read_text(encoding="utf-8")
               ),
@@ -336,22 +325,33 @@ jobs:
           PY
 
       - name: Upload signed APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyvpn-android-sign.apk
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-sign.apk
           if-no-files-found: error
+          retention-days: 90
 
       - name: Upload unsigned APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyvpn-android-unsign.apk
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
           if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload Android test companion
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobbyvpn-android-test-companion.apk
+          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-test-companion.apk
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Upload Android provenance
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyvpn-android-provenance
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-provenance.json
           if-no-files-found: error
+          retention-days: 90

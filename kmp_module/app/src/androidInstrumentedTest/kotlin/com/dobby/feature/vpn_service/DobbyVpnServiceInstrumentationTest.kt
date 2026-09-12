@@ -1,16 +1,12 @@
 package com.dobby.feature.vpn_service
 
 import android.content.Context
-import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
-import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
-import androidx.test.uiautomator.Until
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -23,8 +19,6 @@ import org.junit.runner.RunWith
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
-import java.util.regex.Pattern
 
 /**
  * Device coverage for the real Android shell on an API 35 emulator. This suite accepts Android's
@@ -46,28 +40,32 @@ class DobbyVpnServiceInstrumentationTest {
         sessionId?.let { id ->
             PlatformServiceRegistry.current(id)?.let(PlatformServiceRegistry::clear)
         }
-        DobbyVpnServiceTestEvents.endCapture()
     }
 
     @Test
     fun foreground_promotion_precedes_platform_ready_callback(): Unit = runBlocking {
         val session = UUID.randomUUID().toString()
         sessionId = session
-        DobbyVpnServiceTestEvents.beginCapture()
         PlatformServiceRegistry.expect(session)
+        val logFile = context.filesDir.resolve(APP_LOG_FILE)
+        val logLength = logFile.length()
 
         context.startForegroundService(DobbyVpnService.createPrepareIntent(context, session))
 
         assertEquals(true, PlatformServiceRegistry.awaitReady(10_000))
         assertNotNull(PlatformServiceRegistry.current(session))
-        assertEquals(listOf("foreground", "prepared"), DobbyVpnServiceTestEvents.snapshot())
+        val log = readAppendedLog(logFile, logLength)
+        val foreground = log.indexOf("foreground promotion complete")
+        val prepared = log.indexOf("platform preparation complete")
+        assertTrue("service did not record foreground promotion", foreground >= 0)
+        assertTrue("service did not record platform preparation", prepared >= 0)
+        assertTrue("service became ready before foreground promotion", foreground < prepared)
     }
 
     @Test
     fun real_service_rejects_stale_session_and_invalid_socket_protection_without_tun(): Unit = runBlocking {
         val session = UUID.randomUUID().toString()
         sessionId = session
-        DobbyVpnServiceTestEvents.beginCapture()
         PlatformServiceRegistry.expect(session)
         context.startForegroundService(DobbyVpnService.createPrepareIntent(context, session))
         assertEquals(true, PlatformServiceRegistry.awaitReady(10_000))
@@ -75,10 +73,38 @@ class DobbyVpnServiceInstrumentationTest {
 
         assertEquals(-1, service.acquireTunnel("stale-$session", 1))
         assertFalse(service.protectProtocolSocket(session, 1, -1))
-        service.releaseTunnel("stale-$session", 1, 42)
-        service.releaseTunnel(session, 1, 42)
+        assertFalse(service.releaseTunnel("stale-$session", 1, 42))
+        assertFalse(service.releaseTunnel(session, 1, 42))
         assertNull(service.vpnInterface)
         assertNull(service.goTunFd)
+    }
+
+    @Test
+    fun go_lifecycle_state_messages_use_explicit_failure_severity(): Unit = runBlocking {
+        val session = UUID.randomUUID().toString()
+        sessionId = session
+        PlatformServiceRegistry.expect(session)
+        context.startForegroundService(DobbyVpnService.createPrepareIntent(context, session))
+        assertEquals(true, PlatformServiceRegistry.awaitReady(10_000))
+        val service = requireNotNull(PlatformServiceRegistry.current(session))
+        val logFile = context.filesDir.resolve(APP_LOG_FILE)
+        val logLength = logFile.length()
+
+        listOf("PROBING", "PREPARING", "CONNECTED", "STOPPING", "IDLE", "DESTROYED")
+            .forEachIndexed { index, state ->
+                service.publishState(session, 1L, index.toLong() + 1L, state, "")
+            }
+        service.publishState(session, 1L, 7L, "FAILED", "")
+        service.publishState(session, 1L, 8L, "CONNECTED", "RUNTIME_FAILED")
+
+        val stateRecords = readAppendedLog(logFile, logLength).lineSequence()
+            .filter { it.isNotEmpty() }
+            .toList()
+            .filter { it.contains("Go state=") }
+        assertEquals(8, stateRecords.size)
+        assertTrue(stateRecords.take(6).all { it.contains("\"level\":\"INFO\"") })
+        assertTrue(stateRecords[6].contains("\"level\":\"ERROR\""))
+        assertTrue(stateRecords[7].contains("\"level\":\"ERROR\""))
     }
 
     @Test
@@ -128,26 +154,15 @@ class DobbyVpnServiceInstrumentationTest {
     private val connectivityManager: ConnectivityManager
         get() = requireNotNull(context.getSystemService(ConnectivityManager::class.java))
 
-    private fun grantVpnConsentThroughSystemUi() {
-        if (VpnService.prepare(context) == null) return
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        instrumentation.startActivitySync(
-            Intent(context, VpnConsentTestActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
-        val device = UiDevice.getInstance(instrumentation)
-        val approval = device.wait(
-            Until.findObject(By.res(Pattern.compile(".+:id/button1"))),
-            CONSENT_TIMEOUT_MILLIS,
-        )
-        assertNotNull("Android VPN consent dialog did not expose its approval button", approval)
-        requireNotNull(approval).click()
+    private fun readAppendedLog(file: java.io.File, initialLength: Long): String {
+        val bytes = file.readBytes()
+        assertTrue("canonical application log shrank", bytes.size.toLong() >= initialLength)
+        val start = initialLength.toInt()
+        return String(bytes, start, bytes.size - start, Charsets.UTF_8)
+    }
 
-        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(CONSENT_TIMEOUT_MILLIS)
-        while (System.nanoTime() < deadline) {
-            if (VpnService.prepare(context) == null) return
-            Thread.sleep(POLL_INTERVAL_MILLIS)
-        }
-        assertNull("Android did not grant VPN consent after the system dialog was approved", VpnService.prepare(context))
+    private fun grantVpnConsentThroughSystemUi() {
+        VpnConsentTestHelper.grant(context, CONSENT_TIMEOUT_MILLIS, POLL_INTERVAL_MILLIS)
     }
 
     private fun awaitVpnNetwork(present: Boolean): Network? {
@@ -174,6 +189,7 @@ class DobbyVpnServiceInstrumentationTest {
             }
             found
         }
+        var primaryFailure: Throwable? = null
         try {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
             val trafficComponent =
@@ -181,17 +197,40 @@ class DobbyVpnServiceInstrumentationTest {
             UiDevice.getInstance(instrumentation).executeShellCommand(
                 "am start -W -n $trafficComponent",
             )
-            return try {
-                packet.get(PACKET_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
-            } catch (_: TimeoutException) {
-                false
-            }
+            return packet.get(PACKET_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
         } finally {
             // Closing the owner unblocks AutoCloseInputStream.read before the worker is interrupted.
-            runCatching { input.close() }
-            packet.cancel(true)
-            executor.shutdownNow()
-            executor.awaitTermination(READER_SHUTDOWN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+            val cleanupFailures = mutableListOf<Throwable>()
+            for (cleanup in listOf<() -> Unit>(
+                { input.close() },
+                { packet.cancel(true) },
+                { executor.shutdownNow() },
+                {
+                    check(executor.awaitTermination(READER_SHUTDOWN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
+                        "VPN packet reader did not terminate"
+                    }
+                },
+            )) {
+                try {
+                    cleanup()
+                } catch (failure: Throwable) {
+                    cleanupFailures += failure
+                }
+            }
+            cleanupFailures.forEach { failure ->
+                val primary = primaryFailure
+                if (primary == null) {
+                    primaryFailure = failure
+                } else {
+                    primary.addSuppressed(failure)
+                }
+            }
+            if (primaryFailure != null && primaryFailure in cleanupFailures) {
+                throw requireNotNull(primaryFailure)
+            }
         }
     }
 
@@ -199,8 +238,20 @@ class DobbyVpnServiceInstrumentationTest {
         val tunnel = acquiredTunnel ?: return
         // Clear first so an assertion failure or @After re-entry cannot close or release twice.
         acquiredTunnel = null
-        runCatching { tunnel.goOwnedDescriptor.close() }
-        runCatching { tunnel.service.releaseTunnel(tunnel.sessionId, tunnel.generation, tunnel.fd) }
+        var failure: Throwable? = null
+        try {
+            tunnel.goOwnedDescriptor.close()
+        } catch (current: Throwable) {
+            failure = current
+        }
+        try {
+            check(tunnel.service.releaseTunnel(tunnel.sessionId, tunnel.generation, tunnel.fd)) {
+                "Android service failed to release the Go-owned generation"
+            }
+        } catch (current: Throwable) {
+            if (failure == null) failure = current else failure.addSuppressed(current)
+        }
+        failure?.let { throw it }
     }
 
     private fun packetTargetsDocumentationAddress(packet: ByteArray, count: Int): Boolean =
@@ -228,5 +279,6 @@ class DobbyVpnServiceInstrumentationTest {
         const val DOCUMENTATION_ROUTE_ADDRESS = "192.0.2.1"
         const val IPV4_DESTINATION_OFFSET = 16
         const val IPV4_DESTINATION_END = 20
+        const val APP_LOG_FILE = "app_logs.txt"
     }
 }

@@ -3,6 +3,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application>
+        <meta-data
+            android:name="com.dobby.test.source_sha"
+            android:value="${dobbyTestSourceSha}" />
         <activity
             android:name="com.dobby.feature.vpn_service.VpnTrafficTestActivity"
             android:exported="true"

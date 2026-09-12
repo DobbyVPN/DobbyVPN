@@ -37,6 +37,44 @@ func TestLinuxProxyRouteLeasePreservesExistingRoute(t *testing.T) {
 	}
 }
 
+func TestLinuxProxyRouteCleanupToleratesLinkRemovedRoute(t *testing.T) {
+	original := linuxRunCommand
+	t.Cleanup(func() { linuxRunCommand = original })
+	linuxRunCommand = func(command string) (string, error) {
+		if strings.Contains(command, "route del") {
+			return "", fmt.Errorf("RTNETLINK answers: No such process")
+		}
+		return "", nil
+	}
+
+	plan := NewPlan("generation-proxy-link-loss")
+	if _, err := plan.AcquireLinuxProxyRoute("198.51.100.8", "192.0.2.1", "eth0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Close(); err != nil {
+		t.Fatalf("cleanup should be idempotent after link removal: %v", err)
+	}
+}
+
+func TestLinuxMarkedRoutingCleanupToleratesLinkRemovedRoute(t *testing.T) {
+	original := linuxRunCommand
+	t.Cleanup(func() { linuxRunCommand = original })
+	linuxRunCommand = func(command string) (string, error) {
+		if strings.Contains(command, "ip route del table") {
+			return "", fmt.Errorf("RTNETLINK answers: No such process")
+		}
+		return "", nil
+	}
+
+	plan := NewPlan("generation-mark-link-loss")
+	if err := plan.AcquireLinuxMarkedRouting(233, 23333, "eth0", "192.0.2.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Close(); err != nil {
+		t.Fatalf("cleanup should be idempotent after link removal: %v", err)
+	}
+}
+
 func TestLinuxTunnelDefaultRestoresCapturedBaseline(t *testing.T) {
 	original := linuxRunCommand
 	t.Cleanup(func() { linuxRunCommand = original })
@@ -58,11 +96,67 @@ func TestLinuxTunnelDefaultRestoresCapturedBaseline(t *testing.T) {
 	}
 	want := []string{
 		"ip -o -4 route show default",
-		"ip route replace default dev dobby0",
-		"ip route del default dev dobby0",
+		"ip route replace default dev dobby0 proto 233",
+		"ip route del default dev dobby0 proto 233",
 		"ip route replace default via 192.0.2.1 dev eth0 proto dhcp metric 100",
 	}
 	if strings.Join(commands, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("commands = %v, want %v", commands, want)
+	}
+}
+
+func TestLinuxResolvedDNSLeaseConfiguresAndRevertsOnlyTunnelLink(t *testing.T) {
+	original := linuxRunResolvedCommand
+	t.Cleanup(func() { linuxRunResolvedCommand = original })
+	var commands [][]string
+	linuxRunResolvedCommand = func(args ...string) error {
+		commands = append(commands, append([]string(nil), args...))
+		return nil
+	}
+
+	plan := NewPlan("generation-dns")
+	if _, err := plan.AcquireLinuxResolvedDNS("dobby0", "9.9.9.9"); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"dns", "dobby0", "9.9.9.9"},
+		{"domain", "dobby0", "~."},
+		{"default-route", "dobby0", "yes"},
+		{"revert", "dobby0"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %v, want %v", commands, want)
+	}
+}
+
+func TestLinuxResolvedDNSFailureRevertsPartialConfiguration(t *testing.T) {
+	original := linuxRunResolvedCommand
+	t.Cleanup(func() { linuxRunResolvedCommand = original })
+	var commands [][]string
+	linuxRunResolvedCommand = func(args ...string) error {
+		commands = append(commands, append([]string(nil), args...))
+		if args[0] == "domain" {
+			return fmt.Errorf("permission denied")
+		}
+		return nil
+	}
+
+	plan := NewPlan("generation-dns-failure")
+	if _, err := plan.AcquireLinuxResolvedDNS("dobby0", "9.9.9.9"); err == nil {
+		t.Fatal("AcquireLinuxResolvedDNS succeeded")
+	}
+	if err := plan.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"dns", "dobby0", "9.9.9.9"},
+		{"domain", "dobby0", "~."},
+		{"revert", "dobby0"},
+	}
+	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %v, want %v", commands, want)
 	}
 }
@@ -87,9 +181,11 @@ func TestLinuxMarkedRoutingFailureRollsBackOnlyRouteCreatedByPlan(t *testing.T) 
 		t.Fatal(err)
 	}
 	want := []string{
-		"ip route add table 233 default via 192.0.2.1 dev eth0",
+		"ip route add table 233 default via 192.0.2.1 dev eth0 proto 233",
+		"ip route add table 233 unreachable default proto 233 metric 1",
 		"ip rule add fwmark 233 lookup 233 priority 23333",
-		"ip route del table 233 default via 192.0.2.1 dev eth0",
+		"ip route del table 233 unreachable default proto 233 metric 1",
+		"ip route del table 233 default via 192.0.2.1 dev eth0 proto 233",
 	}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %v, want %v", commands, want)
@@ -105,7 +201,7 @@ func TestLinuxTunnelDefaultDoesNotRestoreBaselineWhenOwnedRouteIsGone(t *testing
 		switch command {
 		case "ip -o -4 route show default":
 			return "default via 192.0.2.1 dev eth0 proto dhcp metric 100\n", nil
-		case "ip route del default dev dobby0":
+		case "ip route del default dev dobby0 proto 233":
 			return "", fmt.Errorf("No such process")
 		default:
 			return "", nil

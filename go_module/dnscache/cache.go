@@ -13,9 +13,12 @@ import (
 )
 
 const (
-	Category           = "DNSCache"
-	PreflightCacheTTL  = 12 * time.Hour
-	FastResolveTimeout = 750 * time.Millisecond
+	Category          = "DNSCache"
+	PreflightCacheTTL = 12 * time.Hour
+	// ServerResolveTimeout bounds the mandatory bootstrap lookup used to
+	// establish the VPN server route. A fresh macOS daemon can need longer than
+	// two seconds for its first resolver request after launchd restarts it.
+	ServerResolveTimeout = 5 * time.Second
 )
 
 type entry struct {
@@ -39,11 +42,8 @@ func Clear() {
 func SetIPv4(host, ipString, source string, ttl time.Duration) bool {
 	host = NormalizeHost(host)
 	ip := net.ParseIP(strings.TrimSpace(ipString))
-	if host == "" || ip == nil || ip.To4() == nil {
+	if host == "" || ip == nil || ip.To4() == nil || ttl <= 0 {
 		return false
-	}
-	if ttl <= 0 {
-		ttl = time.Minute
 	}
 
 	mu.Lock()
@@ -55,26 +55,6 @@ func SetIPv4(host, ipString, source string, ttl time.Duration) bool {
 	}
 	log.Debugf(Category, "stored source=%s ttl=%s", source, ttl)
 	return true
-}
-
-func SetEntries(lines, source string, ttl time.Duration) int {
-	count := 0
-	for _, line := range strings.Split(lines, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		host, ip, ok := strings.Cut(line, "=")
-		if !ok {
-			log.Debugf(Category, "skip malformed preflight entry")
-			continue
-		}
-		if SetIPv4(host, ip, source, ttl) {
-			count++
-		}
-	}
-	log.Debugf(Category, "preflight stored entries=%d source=%s", count, source)
-	return count
 }
 
 func ResolveIPv4(ctx context.Context, host string, timeout time.Duration, source string) (net.IP, error) {
@@ -105,7 +85,7 @@ func ResolveIPv4(ctx context.Context, host string, timeout time.Duration, source
 	addrs, err := resolver.LookupIPAddr(ctx, host)
 	elapsed := time.Since(startedAt).Truncate(time.Millisecond)
 	if err != nil {
-		log.Debugf(Category, "lookup failed source=%s elapsed=%s errorType=%T", source, elapsed, err)
+		log.Debugf(Category, "lookup failed source=%s elapsed=%s errorType=%T error=%v", source, elapsed, err, err)
 		return nil, fmt.Errorf("DNS resolve failed: %w", err)
 	}
 
@@ -118,6 +98,18 @@ func ResolveIPv4(ctx context.Context, host string, timeout time.Duration, source
 	}
 	log.Debugf(Category, "lookup returned no IPv4 source=%s elapsed=%s addresses=%d", source, elapsed, len(addrs))
 	return nil, errors.New("DNS resolved only IPv6, IPv4 required")
+}
+
+// ResolvePreflightIPv4 pins a successful bootstrap lookup for the session.
+func ResolvePreflightIPv4(ctx context.Context, host string, timeout time.Duration, source string) (net.IP, error) {
+	ip, err := ResolveIPv4(ctx, host, timeout, source)
+	if err != nil {
+		return nil, err
+	}
+	if !SetIPv4(host, ip.String(), source, PreflightCacheTTL) {
+		return nil, errors.New("failed to cache preflight IPv4")
+	}
+	return ip, nil
 }
 
 func LookupIPv4(host, source string) (net.IP, bool) {

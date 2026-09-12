@@ -1,17 +1,21 @@
 package com.dobby.feature.main.domain
 
+import kotlinx.coroutines.flow.Flow
+
 /**
- * Platform boundary for the sessionapi/v1 lifecycle.
+ * Platform boundary for the sessionapi/v2 lifecycle.
  *
  * Configuration is deliberately opaque: callers pass the bytes they acquired and this
  * controller owns the platform session and command identifiers used by the transport.
  */
 interface SessionController {
     suspend fun configure(rawConfig: ByteArray): SessionControllerResult<SessionConfiguration>
-    suspend fun start(target: SessionStartTarget = SessionStartTarget.AutoSelect): SessionControllerResult<ULong>
+    suspend fun start(target: SessionStartTarget): SessionControllerResult<ULong>
     suspend fun stop(generation: ULong): SessionControllerResult<ULong>
     suspend fun snapshot(): SessionControllerResult<SessionSnapshot>
     suspend fun observe(afterSequence: ULong): SessionControllerResult<SessionObservation>
+    /** Ordered push events. Mobile shells may use native callbacks instead. */
+    fun watch(afterSequence: ULong): Flow<SessionEvent>
     suspend fun destroy(): SessionControllerResult<Unit>
 }
 
@@ -19,9 +23,12 @@ sealed interface SessionControllerResult<out T> {
     data class Success<T>(val value: T) : SessionControllerResult<T>
     data class Failure(
         val message: String,
-        val code: SessionFailureCode = SessionFailureCode.UNKNOWN,
+        val code: SessionFailureCode,
     ) : SessionControllerResult<Nothing>
 }
+
+internal fun SessionControllerResult.Failure.asException(operation: String): IllegalStateException =
+    IllegalStateException("$operation failed: ${code.name}: $message")
 
 data class SessionConfiguration(
     val digest: String,
@@ -37,7 +44,7 @@ data class SessionProfile(
 
 data class SessionWarning(val code: String, val message: String)
 
-enum class SessionProtocol { UNSPECIFIED, OUTLINE, XRAY, TRUST_TUNNEL, UNKNOWN }
+enum class SessionProtocol { OUTLINE, XRAY, TRUST_TUNNEL }
 
 sealed interface SessionStartTarget {
     data object AutoSelect : SessionStartTarget
@@ -45,7 +52,6 @@ sealed interface SessionStartTarget {
 }
 
 enum class SessionState {
-    UNSPECIFIED,
     IDLE,
     CONFIGURED,
     PROBING,
@@ -54,11 +60,9 @@ enum class SessionState {
     STOPPING,
     FAILED,
     DESTROYED,
-    UNKNOWN,
 }
 
 enum class SessionFailureCode {
-    UNSPECIFIED,
     INVALID_ARGUMENT,
     NOT_FOUND,
     CONFLICT,
@@ -72,18 +76,18 @@ enum class SessionFailureCode {
     CANCELED,
     INTERNAL,
     CLEANUP_FAILED,
-    UNKNOWN,
 }
 
-internal fun String?.toSessionFailureCode(): SessionFailureCode =
-    this?.let { raw -> SessionFailureCode.entries.firstOrNull { it.name == raw } }
-        ?: SessionFailureCode.UNKNOWN
+internal fun String.toSessionFailureCode(): SessionFailureCode =
+    SessionFailureCode.entries.firstOrNull { it.name == this }
+        ?: error("unsupported session failure code: $this")
 
 data class SessionEvent(
     val generation: ULong,
     val sequence: ULong,
     val state: SessionState,
     val failureCode: SessionFailureCode? = null,
+    val sessionId: String,
 )
 
 data class SessionSnapshot(
@@ -92,6 +96,7 @@ data class SessionSnapshot(
     val configured: Boolean,
     val cleanupComplete: Boolean,
     val lastFailureCode: SessionFailureCode? = null,
+    val sessionId: String,
 )
 
 data class SessionObservation(val events: List<SessionEvent>, val nextSequence: ULong)

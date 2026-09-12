@@ -1,6 +1,10 @@
-# Mobile client
+# Shared Compose client
 
-A cross-platform VPN client built using Kotlin Multiplatform (KMP), sharing business logic across Android, iOS, and Desktop while using VPN protocols for each platform from [go_module/](../go_module/) library.
+A Kotlin Multiplatform client that keeps one shared Compose presentation layer
+across Android, iOS, Linux, Windows, and macOS. Go owns configuration parsing,
+protocol selection, SessionV2 lifecycle, and runtime resources in
+[`go_module/`](../go_module/); platform shells only provide the OS VPN
+permission, TUN, socket-protection, and extension/service callbacks.
 
 ## Prerequisites
 
@@ -16,13 +20,17 @@ A cross-platform VPN client built using Kotlin Multiplatform (KMP), sharing busi
 
 ## Architecture
 
-The project gradle layered architecture:
+The module is intentionally a shared UI and binding layer:
 
 ```
 kmp_module/
-├── app/ --- UI library
-├── grpcprotos/ --- Library to generate automatic code for gRPC client
-├── grpcstub/ --- Library-wrapper for gRPC client
-├── iosApp/
-└── outline/ --- Library to import Outline tunnel golang code
+├── app/ --- shared Compose UI, SessionV2 presentation, and thin shells
+├── grpcprotos/ --- canonical SessionV2/Diagnostics schema
+├── grpcstub/ --- protocol-neutral SessionV2 transport mapping
+└── iosApp/
 ```
+
+Do not add a protocol-specific UI toggle, KMP repository, Swift lifecycle
+owner, or separate start/stop RPC. New protocols enter through the Go
+`ProtocolDevice`/SessionV2 extension path described in
+[`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).

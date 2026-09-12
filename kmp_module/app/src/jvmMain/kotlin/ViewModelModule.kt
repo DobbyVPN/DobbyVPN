@@ -1,7 +1,5 @@
-import com.dobby.feature.authentication.presentation.AuthenticationSettingsViewModel
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.presentation.LogsViewModel
-import com.dobby.feature.logging.presentation.SettingsViewModel
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.presentation.MainViewModel
 import org.koin.core.module.dsl.singleOf
@@ -12,6 +10,4 @@ actual val sharedModule = module {
     singleOf(::PermissionEventsChannel)
     singleOf(::LogsViewModel)
     singleOf(::MainViewModel)
-    singleOf(::AuthenticationSettingsViewModel)
-    singleOf(::SettingsViewModel)
 }
