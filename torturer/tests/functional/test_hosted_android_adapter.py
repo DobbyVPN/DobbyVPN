@@ -151,7 +151,7 @@ class FakeAndroidRunner:
             return CommandResult(
                 argv,
                 0,
-                b"Starting: Intent { cmp=com.dobby.vpn/com.dobby.feature.main.ui.DobbySocksActivity }\n"
+                b"Starting: Intent { cmp=com.dobby.vpn/com.dobby.feature.main.ui.MainActivity }\n"
                 b"Status: ok\nComplete\n",
                 b"",
             )

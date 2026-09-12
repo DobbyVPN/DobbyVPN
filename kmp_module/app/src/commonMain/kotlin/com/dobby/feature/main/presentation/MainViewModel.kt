@@ -206,25 +206,6 @@ class MainViewModel(
         }
     }
 
-    suspend fun destroySession() {
-        stopSessionObservation()
-        when (val result = withContext(Dispatchers.Default) {
-            sessionController.destroy()
-        }) {
-            is SessionControllerResult.Success -> {
-                // Destroy is terminal. Ordinary Stop intentionally does not
-                // reset this cursor because Go retains the configured session
-                // for reconnect.
-                lifecycleMutex.withLock { lifecycle.reset() }
-                configured = false
-                publish(VpnConnectionState.DISCONNECTED)
-            }
-            is SessionControllerResult.Failure ->
-                logger.error("Session destroy failed: failureCode=${result.code.name} message=${result.message}")
-                    .also { publishFailure(result.code) }
-        }
-    }
-
     private suspend fun connect(connectionUrl: String) {
         if (!setConfig(connectionUrl)) {
             return

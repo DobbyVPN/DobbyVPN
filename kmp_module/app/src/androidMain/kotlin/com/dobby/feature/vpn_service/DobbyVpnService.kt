@@ -22,7 +22,7 @@ import org.koin.android.ext.android.inject
 import java.util.UUID
 
 /**
- * Android's deliberately small side of a v1 VPN session.
+ * Android's deliberately small side of a SessionV2 VPN session.
  *
  * The Go manager owns configuration parsing, profile selection, probing, protocol
  * processes and tunnel lifecycle.  This service owns only Android's foreground

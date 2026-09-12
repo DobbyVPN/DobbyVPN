@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"go_module/common"
-	"go_module/protocol"
 	"go_module/routing"
 	"go_module/tunnel"
 
@@ -227,17 +226,4 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	log.Debugf(Category, "Runtime: received interrupt signal, terminating...")
 
 	return nil
-}
-
-func (app *App) SwitchProtocolDevice(device protocol.ProtocolDevice) error {
-	_ = app
-	if device != nil {
-		if closeErr := device.Close(); closeErr != nil {
-			log.Debugf(Category, "[Windows][Lifecycle] replacement device close after rejected switch failed: %v", closeErr)
-		}
-	}
-	// A replacement needs a second independently-owned server bypass lease. The
-	// current tunnel API does not retain that Plan, so refuse the transition
-	// instead of deleting a route that may predate this session.
-	return fmt.Errorf("Windows protocol hot-switch is unavailable; stop the active session before starting another profile (routing leases are session-owned)")
 }

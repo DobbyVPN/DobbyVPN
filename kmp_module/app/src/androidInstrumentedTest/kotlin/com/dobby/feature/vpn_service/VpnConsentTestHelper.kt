@@ -8,7 +8,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
-import com.dobby.feature.main.ui.DobbySocksActivity
+import com.dobby.feature.main.ui.MainActivity
 import java.util.regex.Pattern
 
 /** Test-only access to Android's real VPN consent dialog through the production activity process. */
@@ -22,9 +22,9 @@ internal object VpnConsentTestHelper {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val targetContext = instrumentation.targetContext
         val activity = instrumentation.startActivitySync(
-            Intent(targetContext, DobbySocksActivity::class.java)
+            Intent(targetContext, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        ) as? DobbySocksActivity ?: throw Failure("CONSENT_ACTIVITY_UNAVAILABLE")
+        ) as? MainActivity ?: throw Failure("CONSENT_ACTIVITY_UNAVAILABLE")
 
         var primaryFailure: Throwable? = null
         try {

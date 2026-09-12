@@ -2,9 +2,9 @@
 <SmellBaseline>
   <ManuallySuppressedIssues></ManuallySuppressedIssues>
   <CurrentIssues>
-    <ID>CyclomaticComplexMethod:DobbySocksScreen.kt$@Preview @Composable fun DobbySocksScreen( mainViewModel: MainViewModel, logsViewModel: LogsViewModel, modifier: Modifier = Modifier, )</ID>
+    <ID>CyclomaticComplexMethod:ConnectionScreen.kt$@Preview @Composable fun ConnectionScreen( mainViewModel: MainViewModel, logsViewModel: LogsViewModel, modifier: Modifier = Modifier, )</ID>
     <ID>LongMethod:App.kt$@Composable fun App(modifier: Modifier = Modifier)</ID>
-    <ID>LongMethod:DobbySocksScreen.kt$@Preview @Composable fun DobbySocksScreen( mainViewModel: MainViewModel, logsViewModel: LogsViewModel, modifier: Modifier = Modifier, )</ID>
+    <ID>LongMethod:ConnectionScreen.kt$@Preview @Composable fun ConnectionScreen( mainViewModel: MainViewModel, logsViewModel: LogsViewModel, modifier: Modifier = Modifier, )</ID>
     <ID>LongMethod:LogMessageScreen.kt$@Composable fun LogMessageScreen(message: String)</ID>
     <ID>MagicNumber:LogsRepository.kt$LogsRepository$10</ID>
     <ID>MagicNumber:LogsRepository.kt$LogsRepository$1000L</ID>
@@ -18,16 +18,16 @@
     <ID>PackageNaming:Res.kt$package kmp_module.app.generated.resources</ID>
     <ID>TooGenericExceptionCaught:MainViewModel.kt$MainViewModel$e: Exception</ID>
     <ID>TooGenericExceptionThrown:MainViewModel.kt$MainViewModel$throw RuntimeException(errorMsg)</ID>
-    <ID>UnusedImports:DobbySocksScreen.kt$import androidx.compose.ui.text.SpanStyle</ID>
-    <ID>UnusedImports:DobbySocksScreen.kt$import androidx.compose.ui.text.buildAnnotatedString</ID>
-    <ID>UnusedImports:DobbySocksScreen.kt$import androidx.compose.ui.text.font.FontFamily</ID>
-    <ID>UnusedImports:DobbySocksScreen.kt$import androidx.compose.ui.text.withStyle</ID>
-    <ID>UnusedImports:DobbySocksScreen.kt$import com.dobby.util.koinViewModel</ID>
-    <ID>UnusedImports:DobbySocksScreen.kt$import kotlin.math.log</ID>
+    <ID>UnusedImports:ConnectionScreen.kt$import androidx.compose.ui.text.SpanStyle</ID>
+    <ID>UnusedImports:ConnectionScreen.kt$import androidx.compose.ui.text.buildAnnotatedString</ID>
+    <ID>UnusedImports:ConnectionScreen.kt$import androidx.compose.ui.text.font.FontFamily</ID>
+    <ID>UnusedImports:ConnectionScreen.kt$import androidx.compose.ui.text.withStyle</ID>
+    <ID>UnusedImports:ConnectionScreen.kt$import com.dobby.util.koinViewModel</ID>
+    <ID>UnusedImports:ConnectionScreen.kt$import kotlin.math.log</ID>
     <ID>UnusedImports:LogsRepository.kt$import org.koin.compose.koinInject</ID>
     <ID>UnusedImports:SettingsScreen.kt$import kotlinx.coroutines.flow.MutableStateFlow</ID>
     <ID>UnusedImports:SettingsScreen.kt$import kotlinx.coroutines.flow.asStateFlow</ID>
-    <ID>WildcardImport:DobbySocksScreen.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:ConnectionScreen.kt$import androidx.compose.runtime.*</ID>
     <ID>WildcardImport:MainViewModel.kt$import com.dobby.feature.main.domain.*</ID>
     <ID>WildcardImport:MakeNativeModule.kt$import com.dobby.feature.main.domain.*</ID>
   </CurrentIssues>

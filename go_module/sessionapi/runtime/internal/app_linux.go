@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go_module/protocol"
 	"go_module/tunnel/platform_engine"
 	"go_module/tunnel/protected_dialer"
 	"sync"
@@ -334,17 +333,4 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 
 	log.Debugf(Category, "[Linux][Lifecycle] Context cancelled — stopping engine")
 	return nil
-}
-
-func (app *App) SwitchProtocolDevice(device protocol.ProtocolDevice) error {
-	_ = app
-	if device != nil {
-		if closeErr := device.Close(); closeErr != nil {
-			log.Debugf(Category, "[Linux][Lifecycle] replacement device close after rejected switch failed: %v", closeErr)
-		}
-	}
-	// A replacement would require a second server bypass lease while the
-	// existing TUN, engine, and routing plan remain live. Refuse it rather than
-	// partially changing a generation or deleting a route we do not own.
-	return fmt.Errorf("linux protocol hot-switch is unavailable; stop the active session before starting another profile")
 }

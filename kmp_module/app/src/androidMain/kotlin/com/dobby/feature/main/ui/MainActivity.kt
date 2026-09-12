@@ -11,13 +11,13 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.lifecycleScope
-import com.dobby.common.ui.theme.CkClientTheme
+import com.dobby.common.ui.theme.DobbyTheme
 import com.dobby.navigation.App
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 
-class DobbySocksActivity : FragmentActivity() {
+class MainActivity : FragmentActivity() {
 
     private lateinit var requestVpnPermissionLauncher: ActivityResultLauncher<Intent>
 
@@ -37,7 +37,7 @@ class DobbySocksActivity : FragmentActivity() {
             WindowManager.LayoutParams.FLAG_SECURE
         )
         setContent {
-            CkClientTheme {
+            DobbyTheme {
                 App()
             }
         }

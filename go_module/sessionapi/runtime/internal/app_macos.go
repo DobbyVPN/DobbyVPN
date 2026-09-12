@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"go_module/log"
-	"go_module/protocol"
 	"go_module/tunnel/platform_engine"
 	"go_module/tunnel/protected_dialer"
 	"sync"
@@ -204,17 +203,4 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			}
 		}
 	}
-}
-
-func (app *App) SwitchProtocolDevice(device protocol.ProtocolDevice) error {
-	_ = app
-	if device != nil {
-		if closeErr := device.Close(); closeErr != nil {
-			log.Debugf(Category, "[Darwin][Lifecycle] replacement device close after rejected switch failed: %v", closeErr)
-		}
-	}
-	// macOS routing is a generation-owned transaction. Changing protocol while
-	// it is live would require sharing the active Plan with another device, so
-	// callers must fully stop before they start the replacement profile.
-	return fmt.Errorf("macOS protocol hot-switch is unavailable; stop the active session before starting another profile")
 }

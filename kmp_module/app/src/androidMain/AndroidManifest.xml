@@ -16,7 +16,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:theme="@style/Theme.CkClient"
+        android:theme="@style/Theme.Dobby"
         tools:targetApi="31">
 
         <!-- Preparation must enter the foreground before Android marks the VPN active,
@@ -36,9 +36,9 @@
 
 
         <activity
-            android:name="com.dobby.feature.main.ui.DobbySocksActivity"
+            android:name="com.dobby.feature.main.ui.MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.CkClient"
+            android:theme="@style/Theme.Dobby"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

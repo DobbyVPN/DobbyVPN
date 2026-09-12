@@ -38,7 +38,7 @@ import com.dobby.feature.main.domain.SessionStartTarget
 import com.dobby.feature.main.domain.SessionState
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.feature.main.ui.AutomationSemantics
-import com.dobby.feature.main.ui.DobbySocksScreen
+import com.dobby.feature.main.ui.ConnectionScreen
 import com.dobby.navigation.App
 import com.dobby.vpn.BuildConfig
 import kotlin.test.AfterTest
@@ -69,7 +69,7 @@ class IOSComposeScreenTest {
 
         runComposeUiTest {
             setContent {
-                DobbySocksScreen(fixture.mainViewModel, fixture.logsViewModel)
+                ConnectionScreen(fixture.mainViewModel, fixture.logsViewModel)
             }
 
             onNodeWithTag(AutomationSemantics.CONNECTION_SCREEN).assertExists()
@@ -100,7 +100,7 @@ class IOSComposeScreenTest {
 
         runComposeUiTest {
             setContent {
-                DobbySocksScreen(fixture.mainViewModel, fixture.logsViewModel)
+                ConnectionScreen(fixture.mainViewModel, fixture.logsViewModel)
             }
 
             onNodeWithTag(AutomationSemantics.SUBSCRIPTION_INPUT)

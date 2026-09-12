@@ -47,7 +47,7 @@ from .cli import (
 
 
 _PACKAGE_NAME = "com.dobby.vpn"
-_MAIN_ACTIVITY = "com.dobby.vpn/com.dobby.feature.main.ui.DobbySocksActivity"
+_MAIN_ACTIVITY = "com.dobby.vpn/com.dobby.feature.main.ui.MainActivity"
 _APP_DATA = "/data/user/0/com.dobby.vpn"
 _APP_FILES = "/data/user/0/com.dobby.vpn/files"
 _INSTRUMENTATION_COMPONENT = "com.dobby.vpn.test/com.dobby.TestApplicationRunner"

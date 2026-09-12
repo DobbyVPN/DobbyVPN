@@ -21,9 +21,6 @@
 go.work
 go.work.sum
 
-#configs
-*ckclient.json
-
 # iOS / Xcode build artifacts
 **/DerivedData/
 **/xcuserdata/

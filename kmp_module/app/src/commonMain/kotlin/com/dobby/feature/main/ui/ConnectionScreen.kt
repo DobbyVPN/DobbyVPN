@@ -38,7 +38,7 @@ import kotlin.time.TimeSource
 
 @Preview
 @Composable
-fun DobbySocksScreen(
+fun ConnectionScreen(
     mainViewModel: MainViewModel,
     logsViewModel: LogsViewModel,
     modifier: Modifier = Modifier,
