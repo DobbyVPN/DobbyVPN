@@ -1,15 +1,16 @@
 name: Release
 
-# Configures this workflow to run every time a change is pushed to the main branch.
+# Release is an explicit owner action. Pushes run Test without publishing.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
+
+permissions:
+  contents: read
+  actions: read
 
 concurrency:
   group: release-${{ github.ref }}
-  # Release jobs are serialized. Test.yml runs here, not on pull requests.
+  # Serialize explicit release builds for a branch.
   cancel-in-progress: false
 
 jobs:
@@ -36,16 +37,10 @@ jobs:
 
       - name: Read VERSION
         id: version
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$GITHUB_REF" = "refs/heads/main"
-          current_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
-          test "$SOURCE_SHA" = "$current_main"
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           python3 .github/scripts/version_metadata.py \
             --version-file VERSION \
             --github-output "$GITHUB_OUTPUT"
@@ -60,31 +55,6 @@ jobs:
               --field android_version_code
           )"
           echo "Marketing version $version_name; Android/F-Droid versionCode $android_version_code"
-
-          release_tag="v$version_name"
-          tag_ref="refs/tags/$release_tag"
-          tag_record="$(gh api --paginate \
-            "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$release_tag" | \
-            jq -sc --arg ref "$tag_ref" '
-              [.[][] | select(.ref == $ref)] |
-              if length == 0 then empty
-              elif length == 1 then .[0]
-              else error("duplicate exact tag refs")
-              end')"
-          if [[ -n "$tag_record" ]]; then
-            object_type="$(jq -r .object.type <<<"$tag_record")"
-            object_sha="$(jq -r .object.sha <<<"$tag_record")"
-            while [[ "$object_type" == tag ]]; do
-              tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
-              object_type="$(jq -r .object.type <<<"$tag_object")"
-              object_sha="$(jq -r .object.sha <<<"$tag_object")"
-            done
-            test "$object_type" = commit
-            if [[ "$object_sha" != "$SOURCE_SHA" ]]; then
-              echo "release tag $release_tag points to $object_sha, not candidate $SOURCE_SHA" >&2
-              exit 1
-            fi
-          fi
 
   desktop_libs_build:
     needs: [verification, prepare_version]
@@ -141,9 +111,6 @@ jobs:
       CERT_P12_BASE64: ${{ secrets.CERT_P12_BASE64 }}
       PROVISION_DOBBY_BASE64: ${{ secrets.PROVISION_DOBBY_BASE64 }}
       PROVISION_DOBBY_TUNNEL_BASE64: ${{ secrets.PROVISION_DOBBY_TUNNEL_BASE64 }}
-      APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
-      APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
-      APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
 
   desktop_build:
     needs: [prepare_version, desktop_libs_build]
@@ -168,48 +135,10 @@ jobs:
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
 
-  start_public_qualification:
-    name: Start exact-package Torturer qualification
-    if: github.event_name == 'push'
-    needs: [fdroid_check, fdroid_scan_apk, ios_build, installers_build]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
+  qualification:
+    name: Qualify exact Release packages
+    needs: [android_build, ios_build, installers_build, fdroid_check, fdroid_scan_apk]
+    uses: ./.github/workflows/qualification.yml
     permissions:
       contents: read
-    steps:
-      - name: Check out exact Release source
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Start pinned Torturer for this Release attempt
-        env:
-          GH_TOKEN: ${{ secrets.TORTURER_DISPATCH_TOKEN }}
-          RELEASE_RUN_ID: ${{ github.run_id }}
-          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          DOBBYVPN_COMMIT: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          torturer_sha="$(python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          value = Path('.github/torturer-commit').read_bytes()
-          if re.fullmatch(rb'[0-9a-f]{40}\n?', value) is None:
-              raise SystemExit('Torturer pin is invalid')
-          print(value.decode('ascii').strip())
-          PY
-          )"
-          test "$(gh api "repos/DobbyVPN/Torturer/commits/$torturer_sha" --jq .sha)" = "$torturer_sha"
-          test "$(gh api repos/DobbyVPN/Torturer/git/ref/heads/main --jq .object.sha)" = "$torturer_sha"
-          payload="$(jq -n \
-            --arg release_id "$RELEASE_RUN_ID" \
-            --arg release_attempt "$RELEASE_RUN_ATTEMPT" \
-            --arg torturer "$torturer_sha" \
-            --arg commit "$DOBBYVPN_COMMIT" \
-            '{ref:"main",inputs:{release_run_id:$release_id,release_run_attempt:$release_attempt,dobbyvpn_commit_sha:$commit,torturer_sha:$torturer}}')"
-          gh api --method POST \
-            "repos/DobbyVPN/Torturer/actions/workflows/functional.yml/dispatches" \
-            -H "Accept: application/vnd.github+json" \
-            --input - <<<"$payload"
+      actions: write

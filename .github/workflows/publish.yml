@@ -1,0 +1,342 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: Successful Release workflow run ID whose artifacts should be published.
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  resolve_release:
+    name: Select successful Release artifacts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      source_sha: ${{ steps.run.outputs.source_sha }}
+      release_run_number: ${{ steps.run.outputs.release_run_number }}
+      version_name: ${{ steps.version.outputs.version_name }}
+      android_version_code: ${{ steps.version.outputs.android_version_code }}
+    steps:
+      - name: Validate selected Release run
+        id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_RUN_ID" =~ ^[0-9]+$ ]]
+          test "$GITHUB_REF" = refs/heads/main
+          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID")"
+          release_workflow_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml" --jq .id)"
+          test "$(jq -r .workflow_id <<<"$run")" = "$release_workflow_id"
+          test "$(jq -r .head_branch <<<"$run")" = main
+          test "$(jq -r .event <<<"$run")" = workflow_dispatch
+          test "$(jq -r .status <<<"$run")" = completed
+          test "$(jq -r .conclusion <<<"$run")" = success
+          test "$(jq -r .run_attempt <<<"$run")" = 1
+          source_sha="$(jq -r .head_sha <<<"$run")"
+          release_run_number="$(jq -r .run_number <<<"$run")"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+
+          artifact_names="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.expired == false) | .name' | sort -u)"
+          for name in \
+            DobbyVPN.ipa \
+            dobbyVPN-linux.deb \
+            dobbyVPN-windows-amd64.msi \
+            dobbyVPN-macos-aarch64.pkg \
+            dobbyVPN-macos-amd64.pkg \
+            dobbyvpn-android-sign.apk \
+            dobbyvpn-android-unsign.apk \
+            dobbyvpn-android-provenance; do
+            if ! grep -Fxq "$name" <<<"$artifact_names"; then
+              echo "Release run $RELEASE_RUN_ID is missing unexpired artifact: $name" >&2
+              exit 1
+            fi
+          done
+          {
+            echo "source_sha=$source_sha"
+            echo "release_run_number=$release_run_number"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out selected Release source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ steps.run.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Read selected version and check tag
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.run.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python3 .github/scripts/version_metadata.py --version-file VERSION --github-output "$GITHUB_OUTPUT"
+          version_name="$(python3 .github/scripts/version_metadata.py --version-file VERSION --field version_name)"
+          tag="v$version_name"
+          tag_ref="refs/tags/$tag"
+          tag_record="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" | \
+            jq -sc --arg ref "$tag_ref" '
+              [.[][] | select(.ref == $ref)] |
+              if length == 0 then empty
+              elif length == 1 then .[0]
+              else error("duplicate exact tag refs")
+              end')"
+          if [[ -n "$tag_record" ]]; then
+            object_type="$(jq -r .object.type <<<"$tag_record")"
+            object_sha="$(jq -r .object.sha <<<"$tag_record")"
+            while [[ "$object_type" == tag ]]; do
+              tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+              object_type="$(jq -r .object.type <<<"$tag_object")"
+              object_sha="$(jq -r .object.sha <<<"$tag_object")"
+            done
+            test "$object_type" = commit
+            if [[ "$object_sha" != "$SOURCE_SHA" ]]; then
+              echo "release tag $tag points to $object_sha, not selected source $SOURCE_SHA" >&2
+              exit 1
+            fi
+          fi
+
+  submit_testflight:
+    name: Submit selected iOS build to Apple
+    needs: resolve_release
+    runs-on: macos-15
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.resolve_release.outputs.source_sha }}
+          persist-credentials: false
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+      - name: Set release metadata
+        run: |
+          set -euo pipefail
+          echo "APP_STORE_VERSION=${{ needs.resolve_release.outputs.version_name }}" >> "$GITHUB_ENV"
+          echo "APP_STORE_BUILD_NUMBER=${{ needs.resolve_release.outputs.release_run_number }}" >> "$GITHUB_ENV"
+      - name: Download exact IPA
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: DobbyVPN.ipa
+          path: selected-release
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+      - name: Upload exact IPA to TestFlight
+        env:
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+          APP_STORE_IPA_PATH: ${{ github.workspace }}/selected-release/DobbyVPN.ipa
+        run: bundle exec fastlane ios upload_testflight
+      - name: Submit exact build to App Review
+        env:
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+        run: bundle exec fastlane ios submit_app_store_review
+
+  promote:
+    name: Publish selected Release packages
+    needs: resolve_release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment: release
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SOURCE_SHA: ${{ needs.resolve_release.outputs.source_sha }}
+      RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+      RELEASE_RUN_NUMBER: ${{ needs.resolve_release.outputs.release_run_number }}
+      EXPECTED_ANDROID_SIGNER_SHA256: c3f0414a74012060d7c6aa3a3d9dac0aa13c1bd23b7512eefd860fb865e67933
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.resolve_release.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Read release metadata
+        id: metadata
+        env:
+          RELEASE_VERSION: ${{ needs.resolve_release.outputs.version_name }}
+          ANDROID_VERSION_CODE: ${{ needs.resolve_release.outputs.android_version_code }}
+        run: |
+          set -euo pipefail
+          {
+            echo "version=$RELEASE_VERSION"
+            echo "version_code=$ANDROID_VERSION_CODE"
+          } >> "$GITHUB_OUTPUT"
+      # Artifact names are deliberately exact.  A multiline `pattern` is one
+      # glob to download-artifact, not a list, and a broad glob would also
+      # publish build intermediates.
+      - name: Download Linux package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobbyVPN-linux.deb
+          path: release
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+      - name: Download Windows package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobbyVPN-windows-amd64.msi
+          path: release
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+      - name: Download macOS arm64 package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobbyVPN-macos-aarch64.pkg
+          path: release
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+      - name: Download macOS amd64 package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobbyVPN-macos-amd64.pkg
+          path: release
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+      - name: Download signed Android package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobbyvpn-android-sign.apk
+          path: release
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+      - name: Download unsigned Android package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobbyvpn-android-unsign.apk
+          path: release
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+      - name: Download Android provenance
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobbyvpn-android-provenance
+          path: release
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          java-version: '17'
+          distribution: temurin
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        with:
+          packages: build-tools;36.0.0
+      - name: Verify exact Android artifacts
+        env:
+          RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+          ANDROID_VERSION_CODE: ${{ steps.metadata.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          signed="release/DobbyVPN-v$RELEASE_VERSION-sign.apk"
+          unsigned="release/DobbyVPN-v$RELEASE_VERSION-unsign.apk"
+          provenance="release/DobbyVPN-v$RELEASE_VERSION-android-provenance.json"
+          test -f "$signed"; test -f "$unsigned"; test -f "$provenance"
+          python3 .github/scripts/verify_android_apk_source.py \
+            --apk "$signed" --apk "$unsigned" \
+            --source-sha "$RELEASE_SOURCE_SHA" --repository "$GITHUB_REPOSITORY"
+          mapfile -t signer_digests < <(
+            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$signed" |
+              sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p'
+          )
+          test "${#signer_digests[@]}" -eq 1
+          test "${signer_digests[0]}" = "$EXPECTED_ANDROID_SIGNER_SHA256"
+          python3 .github/scripts/verify_android_reproducibility.py verify-publication \
+            --unsigned-apk "$unsigned" --signed-apk "$signed" --provenance "$provenance" \
+            --source-sha "$RELEASE_SOURCE_SHA" --version-name "$RELEASE_VERSION" \
+            --version-code "$ANDROID_VERSION_CODE" \
+            --signer-certificate-sha256 "$EXPECTED_ANDROID_SIGNER_SHA256"
+      - name: Create F-Droid metadata and release provenance
+        env:
+          RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+          ANDROID_VERSION_CODE: ${{ steps.metadata.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          printf 'versionName=%s\nversionCode=%s\n' "$RELEASE_VERSION" "$ANDROID_VERSION_CODE" > release/version.txt
+          python3 .github/scripts/release_provenance.py create \
+            --directory release --tag "v$RELEASE_VERSION" --version "$RELEASE_VERSION" \
+            --source-sha "$RELEASE_SOURCE_SHA" --release-run-id "$RELEASE_RUN_ID" \
+            --release-run-number "$RELEASE_RUN_NUMBER" --android-version-code "$ANDROID_VERSION_CODE" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
+            --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
+            --asset version.txt
+      - name: Create tag and GitHub Release
+        env:
+          RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v$RELEASE_VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "GitHub Release $tag already exists; checking it against the selected Release run."
+            mkdir "$RUNNER_TEMP/existing-release"
+            gh release download "$tag" --dir "$RUNNER_TEMP/existing-release"
+            python3 .github/scripts/release_provenance.py verify \
+              --directory "$RUNNER_TEMP/existing-release" --tag "$tag" --version "$RELEASE_VERSION" \
+              --source-sha "$RELEASE_SOURCE_SHA" --release-run-id "$RELEASE_RUN_ID" \
+              --release-run-number "$RELEASE_RUN_NUMBER" \
+              --android-version-code "${{ needs.resolve_release.outputs.android_version_code }}" \
+              --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
+              --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+              --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+              --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
+              --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
+              --asset version.txt
+            exit 0
+          fi
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            test "$(git rev-list -n1 "$tag^{commit}")" = "$RELEASE_SOURCE_SHA"
+          else
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag --annotate "$tag" "$RELEASE_SOURCE_SHA" --message "DobbyVPN $tag"
+            git push origin "refs/tags/$tag"
+          fi
+          gh release create "$tag" --verify-tag --title "$tag" --notes "DobbyVPN $tag" release/*
+      - name: Verify published assets
+        env:
+          RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+          ANDROID_VERSION_CODE: ${{ steps.metadata.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          mkdir -p published
+          gh release download "v$RELEASE_VERSION" --dir published --pattern '*'
+          python3 .github/scripts/release_provenance.py verify \
+            --directory published --tag "v$RELEASE_VERSION" --version "$RELEASE_VERSION" \
+            --source-sha "$RELEASE_SOURCE_SHA" --release-run-id "$RELEASE_RUN_ID" \
+            --release-run-number "$RELEASE_RUN_NUMBER" --android-version-code "$ANDROID_VERSION_CODE" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
+            --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
+            --asset version.txt

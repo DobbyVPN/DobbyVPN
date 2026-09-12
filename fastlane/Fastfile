@@ -1,5 +1,3 @@
-default_platform(:android)
-
 # CI sets APP_* from the manual VERSION file (prepare_version reads x.y.z, no auto-bump).
 # Android/F-Droid versionCode is stable for the marketing version. Apple's
 # CFBundleVersion remains the GitHub Actions run number.
@@ -16,93 +14,6 @@ COMMIT          = ENV["APP_SOURCE_SHA"] || ENV["GITHUB_SHA"]
 SHORT_SHA       = COMMIT && !COMMIT.empty? ? COMMIT[0, 7] : "unknown"
 REPO            = ENV["APP_SOURCE_REPOSITORY"] || ENV["GITHUB_REPOSITORY"]
 COMMIT_LINK     = "https://github.com/#{REPO}/tree/#{COMMIT}"
-
-platform :android do
-  desc "Build Android APK"
-  lane :build_android do
-
-    gradle(
-      task: "assembleRelease",
-      project_dir: "kmp_module",
-      flags: "--build-cache --parallel",
-      properties: {
-        "projectRepositoryCommit" => COMMIT,
-        "projectRepositoryCommitLink" => COMMIT_LINK,
-        "android.injected.version.code" => VERSION_CODE,
-        "android.injected.version.name" => FULL_VERSION,
-      }
-    )
-
-    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} DobbyVPN-v#{FULL_VERSION}-unsign.apk"
-  end
-
-  desc "Build and sign Android APK"
-  lane :build_android_and_signing do
-
-    tmp = Dir.mktmpdir
-    keystore_path = File.join(tmp, "keystore.jks")
-    File.write(keystore_path, Base64.decode64(ENV['KEYSTORE_FILE']))
-
-    gradle(
-      task: "assembleRelease",
-      project_dir: "kmp_module",
-      flags: "--build-cache --parallel",
-      properties: {
-        "projectRepositoryCommit" => COMMIT,
-        "projectRepositoryCommitLink" => COMMIT_LINK,
-        "android.injected.signing.store.file" => keystore_path,
-        "android.injected.version.code" => VERSION_CODE,
-        "android.injected.version.name" => FULL_VERSION,
-        "android.injected.signing.store.password" => ENV["KEYSTORE_PASSWORD"],
-        "android.injected.signing.key.alias" => ENV["KEY_ALIAS"],
-        "android.injected.signing.key.password" => ENV["KEY_PASSWORD"],
-      }
-    )
-
-    sh "mv #{lane_context[SharedValues::GRADLE_APK_OUTPUT_PATH]} DobbyVPN-v#{FULL_VERSION}-sign.apk"
-  end
-
-  desc "Build Desktop artifacts"
-  lane :build_desktop do
-    gradle(
-      task: ":app:jvmJar",
-      project_dir: "kmp_module",
-      flags: "--build-cache --parallel",
-      properties: {
-        "projectRepositoryCommit" => COMMIT,
-        "projectRepositoryCommitLink" => COMMIT_LINK,
-        "android.injected.version.code" => VERSION_CODE,
-        "android.injected.version.name" => FULL_VERSION,
-      }
-    )
-
-    gradle(
-      task: "dependencies",
-      project_dir: "kmp_module",
-      flags: "--no-daemon",
-      properties: {
-        "projectRepositoryCommit" => COMMIT,
-        "projectRepositoryCommitLink" => COMMIT_LINK,
-        "android.injected.version.code" => VERSION_CODE,
-        "android.injected.version.name" => FULL_VERSION,
-      }
-    )
-
-    gradle(
-      task: "printConveyorConfig",
-      project_dir: "kmp_module",
-      flags: "--no-daemon",
-      properties: {
-        "projectRepositoryCommit" => COMMIT,
-        "projectRepositoryCommitLink" => COMMIT_LINK,
-        "android.injected.version.code" => VERSION_CODE,
-        "android.injected.version.name" => FULL_VERSION,
-      }
-    )
-  end
-end
-
-
 platform :ios do
   PROJECT    = File.expand_path("../swift_module/iosApp.xcodeproj", __dir__)
   SCHEME     = "iosApp"
@@ -208,7 +119,7 @@ platform :ios do
     )
   end
 
-  desc "Upload IPA to TestFlight (no external distribute — public beta is manual)"
+  desc "Upload the selected Release IPA to TestFlight"
   lane :upload_testflight do
     api_key = app_store_connect_api_key(
       key_id: ENV['APP_STORE_KEY_ID'],
@@ -217,13 +128,12 @@ platform :ios do
       duration: 1200
     )
 
-    # CI only parks the build in ASC/TestFlight. Production review is submitted
-    # later through the protected publication coordinator's submission job.
+    # Upload happens in the Apple-only publication job after qualification.
     upload_to_testflight(
-      ipa: "#{EXPORT_DIR}/#{IPA_NAME}",
+      ipa: ENV.fetch("APP_STORE_IPA_PATH"),
       api_key: api_key,
       # A changelog makes Fastlane wait partially and patch beta metadata.
-      # CI only needs the immutable binary parked for later promotion.
+      # Keep the build internal until the explicit App Review submission.
       skip_waiting_for_build_processing: true,
       distribute_external: false,
       notify_external_testers: false
@@ -250,7 +160,7 @@ platform :ios do
       duration: 1200
     )
 
-    # A coordinator retry can arrive after App Store Connect accepted the
+    # A publication retry can arrive after App Store Connect accepted the
     # exact version/build but before the child workflow reported success. Read
     # the existing state before calling deliver so that retrying that identity
     # is harmless and a different build on the same version is fail-closed.

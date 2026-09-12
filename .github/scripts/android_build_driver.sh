@@ -2,8 +2,7 @@
 set -euo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 
-# One Android build path.  The checkout identity, pinned inputs, tool versions,
-# and resulting APKs are recorded; ordinary build outputs are reusable.
+# One Android builder: cached local iteration or reproducible release output.
 
 source_root=''
 source_sha=''
@@ -14,7 +13,7 @@ test_companion_output=''
 reproducibility=''
 dependency_manifest=''
 source_repository='DobbyVPN/DobbyVPN'
-allow_dirty_source=0
+local_build=0
 gradle_archive=''
 gradle_root=''
 
@@ -30,7 +29,7 @@ while (($#)); do
     --dependency-manifest) dependency_manifest=${2:?missing --dependency-manifest value}; shift 2 ;;
     --gradle-archive) gradle_archive=$2; shift 2 ;;
     --gradle-root) gradle_root=$2; shift 2 ;;
-    --allow-dirty-source) allow_dirty_source=1; shift ;;
+    --local) local_build=1; shift ;;
     --source-repository) source_repository=$2; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -43,23 +42,25 @@ source_root=$(cd -- "$source_root" && pwd -P)
   echo 'source SHA must be a full lowercase Git commit identity' >&2
   exit 2
 }
-if [[ "$allow_dirty_source" == 1 && -n "$source_sha" ]]; then
-  echo '--allow-dirty-source cannot be combined with --source-sha' >&2
+if [[ "$local_build" == 1 && -n "$source_sha" ]]; then
+  echo '--local cannot be combined with --source-sha' >&2
   exit 2
 fi
 
-[[ -n "$output" && -n "$manifest" ]] || {
-  echo '--output and --manifest are required' >&2
+[[ -n "$output" ]] || { echo '--output is required' >&2; exit 2; }
+if [[ "$local_build" == 0 ]]; then
+  [[ -n "$manifest" ]] || {
+  echo '--manifest is required for a release build' >&2
   exit 2
-}
-first_output=${first_output:-"$source_root/.android-build/first.apk"}
-reproducibility=${reproducibility:-"$source_root/runtime/android-reproducibility.json"}
-dependency_manifest=${dependency_manifest:-"$source_root/runtime/android-dependency-provenance.json"}
+  }
+  first_output=${first_output:-"$source_root/.android-build/first.apk"}
+  reproducibility=${reproducibility:-"$source_root/runtime/android-reproducibility.json"}
+  dependency_manifest=${dependency_manifest:-"$source_root/runtime/android-dependency-provenance.json"}
+fi
 dependency_spec="$source_root/.github/android/dependency-spec.json"
 dependency_helper="$source_root/.github/scripts/android_dependency_provenance.py"
 source_verifier="$source_root/.github/scripts/verify_android_apk_source.py"
 reproducibility_verifier="$source_root/.github/scripts/verify_android_reproducibility.py"
-local_identity_helper="$source_root/.github/scripts/local_source_identity.py"
 
 evidence_dir=${DOBBYVPN_BUILD_EVIDENCE_DIR:-}
 stdout_original=''
@@ -112,25 +113,14 @@ validate_source_checkout() {
 
 start_evidence_capture
 
-if [[ "$allow_dirty_source" == 1 ]]; then
-  [[ -f "$local_identity_helper" ]] || { echo 'local source identity helper is missing' >&2; exit 2; }
-  local_identity_command=(python3 "$local_identity_helper" --root "$source_root")
-  source_identity_mode=local-content
-  source_repository=local-content
-  read -r source_commit source_tree <<<"$("${local_identity_command[@]}")"
+if [[ "$local_build" == 1 ]]; then
+  # Local builds are disposable, not release provenance claims.
+  source_commit=local
+  source_commit_link=''
 else
   validate_source_checkout "$source_root" "$source_sha"
   source_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit})
   source_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree})
-  source_identity_mode=git
-fi
-[[ "$source_commit" =~ ^[0-9a-f]{40}$ && "$source_tree" =~ ^[0-9a-f]{40}$ ]] || {
-  echo 'source checkout did not yield canonical source identities' >&2
-  exit 2
-}
-if [[ "$source_repository" == 'local-content' ]]; then
-  source_commit_link="local-content://$source_commit"
-else
   source_commit_link="https://github.com/$source_repository/tree/$source_commit"
 fi
 [[ -f "$dependency_helper" && -f "$dependency_spec" && -f "$source_verifier" && -f "$reproducibility_verifier" ]] || {
@@ -221,9 +211,12 @@ gradle_version=$("$gradle_bin" --version --no-daemon | tee_stderr | awk '/^Gradl
 
 build_cache=${DOBBYVPN_GOMOBILE_GOCACHE:-"$source_root/.android-build/go-cache"}
 build_tmp=${DOBBYVPN_GOMOBILE_GOTMPDIR:-"$source_root/.android-build/go-tmp"}
-build_mod_cache="$source_root/.android-build/go-mod-cache"
-mkdir -p "$build_cache" "$build_tmp" "$build_mod_cache" "$(dirname -- "$first_output")" "$(dirname -- "$output")" "$(dirname -- "$manifest")" \
-  "$(dirname -- "$reproducibility")" "$(dirname -- "$dependency_manifest")"
+build_mod_cache="$go_path/pkg/mod"
+mkdir -p "$build_cache" "$build_tmp" "$build_mod_cache" "$(dirname -- "$output")"
+if [[ "$local_build" == 0 ]]; then
+  mkdir -p "$(dirname -- "$first_output")" "$(dirname -- "$manifest")" \
+    "$(dirname -- "$reproducibility")" "$(dirname -- "$dependency_manifest")"
+fi
 export GOMODCACHE="$build_mod_cache"
 if [[ -n "$test_companion_output" ]]; then
   mkdir -p "$(dirname -- "$test_companion_output")"
@@ -247,14 +240,6 @@ done <<< "$java_version_output"
 [[ "$java_version" == 17.* ]] || { echo "Java runtime must have major version 17; observed $java_version" >&2; exit 2; }
 
 verify_source_integrity_after_build() {
-  if [[ "$allow_dirty_source" == 1 ]]; then
-    read -r observed_commit observed_tree <<<"$("${local_identity_command[@]}")"
-    [[ "$observed_commit" == "$source_commit" && "$observed_tree" == "$source_tree" ]] || {
-      echo 'local source content identity changed during the Android build' >&2
-      exit 2
-    }
-    return 0
-  fi
   observed_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit})
   observed_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree})
   [[ "$observed_commit" == "$source_commit" && "$observed_tree" == "$source_tree" ]] || {
@@ -297,6 +282,16 @@ run_test_companion_build() {
   cp -- "$built" "$destination"
 }
 
+if [[ "$local_build" == 1 ]]; then
+  gradle_flags=(--no-daemon --stacktrace)
+  run_unsigned_build "$build_cache/local" "$build_tmp/local" "$output"
+  if [[ -n "$test_companion_output" ]]; then
+    run_test_companion_build "$test_companion_output"
+  fi
+  echo "android_build_driver mode=local artifact=$output"
+  exit 0
+fi
+
 run_unsigned_build "$build_cache/first" "$build_tmp/first" "$first_output"
 ( cd -- "$source_root"; "$gradle_bin" -p kmp_module clean --no-daemon --no-build-cache )
 run_unsigned_build "$build_cache/second" "$build_tmp/second" "$output"
@@ -321,7 +316,7 @@ python3 "$source_verifier" "${source_verifier_args[@]}"
 SOURCE_ROOT="$source_root" OUTPUT="$output" MANIFEST="$manifest" FIRST_OUTPUT="$first_output" \
   TEST_COMPANION_OUTPUT="$test_companion_output" REPRODUCIBILITY="$reproducibility" DEPENDENCY_MANIFEST="$dependency_manifest" \
   SOURCE_COMMIT="$source_commit" SOURCE_TREE="$source_tree" SOURCE_REPOSITORY="$source_repository" \
-  SOURCE_IDENTITY_MODE="$source_identity_mode" VERSION_NAME="$version_name" VERSION_CODE="$version_code" \
+  VERSION_NAME="$version_name" VERSION_CODE="$version_code" \
   python3 - <<'PY'
 import hashlib
 import json
@@ -367,8 +362,6 @@ document = {
         "signing_classification": "unsigned",
     },
 }
-if os.environ["SOURCE_IDENTITY_MODE"] == "local-content":
-    document["source_identity_mode"] = "local-content"
 manifest = Path(os.environ["MANIFEST"])
 manifest.parent.mkdir(parents=True, exist_ok=True)
 manifest.write_text(json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")

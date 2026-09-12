@@ -22,6 +22,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -30,6 +33,7 @@ import com.dobby.feature.logging.ui.SettingsScreen
 import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.feature.main.ui.DobbySocksScreen
+import com.dobby.feature.main.ui.AutomationSemantics
 import com.dobby.util.koinViewModel
 
 @Composable
@@ -85,10 +89,19 @@ private fun BottomBar(
     NavigationBar {
         items.forEachIndexed { index, item ->
             NavigationBarItem(
+                modifier = Modifier
+                    .testTag(if (index == 0) AutomationSemantics.CONNECTION_NAV else AutomationSemantics.SETTINGS_NAV)
+                    .semantics {
+                        contentDescription = if (index == 0) {
+                            AutomationSemantics.CONNECTION_NAV
+                        } else {
+                            AutomationSemantics.SETTINGS_NAV
+                        }
+                    },
                 icon = {
                     Icon(
                         selectedIcons[index],
-                        contentDescription = item
+                        contentDescription = null
                     )
                 },
                 label = { Text(item) },

@@ -14,7 +14,6 @@ import xml.etree.ElementTree as ElementTree
 
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
-LOCAL_CONTENT_REPOSITORY = "local-content"
 BUILD_CONFIG = "com.dobby.vpn.BuildConfig"
 TEST_COMPANION_PACKAGE = "com.dobby.vpn.test"
 TEST_COMPANION_SOURCE_METADATA = "com.dobby.test.source_sha"
@@ -264,12 +263,9 @@ def dex_string(code: str, field: str) -> str:
 def verify_code(code: str, source_sha: str, repository: str) -> None:
     if not SHA40.fullmatch(source_sha):
         raise VerificationError("source SHA must be full lowercase hexadecimal")
-    if repository == LOCAL_CONTENT_REPOSITORY:
-        expected_link = f"local-content://{source_sha}"
-    else:
-        if not REPOSITORY.fullmatch(repository):
-            raise VerificationError("repository must be OWNER/NAME or local-content")
-        expected_link = f"https://github.com/{repository}/tree/{source_sha}"
+    if not REPOSITORY.fullmatch(repository):
+        raise VerificationError("repository must be OWNER/NAME")
+    expected_link = f"https://github.com/{repository}/tree/{source_sha}"
     if dex_string(code, "PROJECT_REPOSITORY_COMMIT") != source_sha:
         raise VerificationError("APK embedded source commit does not match selected source")
     if dex_string(code, "PROJECT_REPOSITORY_COMMIT_LINK") != expected_link:

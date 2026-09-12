@@ -34,10 +34,6 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
     def testCommitAndLinkPass(self):
         VERIFY.verify_code(self.code(), self.sha, self.repo)
 
-    def test_local_content_identity_uses_an_explicit_non_github_link(self):
-        local_link = f"local-content://{self.sha}"
-        VERIFY.verify_code(self.code(link=local_link), self.sha, VERIFY.LOCAL_CONTENT_REPOSITORY)
-
     def testRejectsMissingOrWrongCommit(self):
         for wrong in ("N/A", "b" * 40):
             with self.subTest(wrong=wrong), self.assertRaises(VERIFY.VerificationError):

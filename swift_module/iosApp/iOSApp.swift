@@ -7,8 +7,8 @@ struct iOSApp: App {
     init() {
         NativeModuleHolder.installSessionBridge()
         StartDIKt.startDI(nativeModules: [NativeModuleHolder.shared]) { _ in }
-        #if DOBBY_STARTUP_TEST && targetEnvironment(simulator)
-        NativeModuleHolder.logsRepository.writeLog(log: "startup.initialized mode=startup-only")
+        #if DOBBY_SIMULATOR_MINI && targetEnvironment(simulator)
+        NativeModuleHolder.logsRepository.writeLog(log: "startup.initialized mode=mini")
         #else
         NativeModuleHolder.logsRepository.writeLog(log: "startup.initialized mode=normal")
         #endif
@@ -16,8 +16,8 @@ struct iOSApp: App {
 
     var body: some Scene {
         WindowGroup {
-            #if DOBBY_STARTUP_TEST && targetEnvironment(simulator)
-            // Test only: exercise real initialization without constructing the
+            #if DOBBY_SIMULATOR_MINI && targetEnvironment(simulator)
+            // Mini mode exercises real initialization without constructing the
             // Metal-backed Compose window. This is not UI launch coverage.
             Color.clear
             #else

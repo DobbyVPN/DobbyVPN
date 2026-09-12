@@ -30,13 +30,13 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.InetAddress
-import java.net.Socket
 import java.net.URI
 import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
-import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLSocketFactory
+import okhttp3.Dns
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 /** One semantic operation supplied by an external canonical runner; this app owns no scenarios. */
 internal data class AndroidHostedOperation(
@@ -73,10 +73,6 @@ internal class AndroidHostedInputException(cause: Throwable? = null) :
  * operations and owns scenario meaning/assertions; Dobby only executes observations.
  */
 internal object AndroidHostedCommandContract {
-    const val SCHEMA = 1
-    const val COMMAND_KIND = "dobbyvpn.android.profile-command"
-    const val OBSERVATION_KIND = "dobbyvpn.android.profile-observation"
-    const val PLATFORM = "android"
     const val COMMAND_ARGUMENT = "dobby.hosted_command_file"
     const val REAL_PROFILE_ARGUMENT = "dobby.real_profile"
 
@@ -101,13 +97,9 @@ internal object AndroidHostedCommandContract {
         } catch (failure: Exception) {
             invalid(failure)
         }
-        val requiredKeys = setOf("schema", "kind", "platform", "profile_file", "output_file", "endpoints", "operations")
+        val requiredKeys = setOf("profile_file", "output_file", "endpoints", "operations")
         val commandKeys = json.keys().asSequence().toSet()
         if (!requiredKeys.all(commandKeys::contains)) invalid()
-        if (exactInt(json.opt("schema")) != SCHEMA ||
-            requiredString(json, "kind") != COMMAND_KIND ||
-            requiredString(json, "platform") != PLATFORM
-        ) invalid()
 
         val sourceSha = if (json.has("source_sha")) {
             requiredString(json, "source_sha").also { value ->
@@ -266,9 +258,6 @@ internal data class AndroidHostedObservation(
     var selectedConnection: SessionProfile? = null
 
     fun toJson(): JSONObject = JSONObject()
-        .put("schema", AndroidHostedCommandContract.SCHEMA)
-        .put("kind", AndroidHostedCommandContract.OBSERVATION_KIND)
-        .put("platform", AndroidHostedCommandContract.PLATFORM)
         .put("connections", JSONArray().also { array ->
             connections.forEach { profile ->
                 array.put(JSONObject().put("index", profile.index).put("protocol", profile.protocol.name))
@@ -303,6 +292,13 @@ internal data class AndroidHostedObservation(
 
 private class AndroidHostedOperationFailure(val code: String, cause: Throwable? = null) :
     Exception(code, cause)
+
+internal fun measurementServiceFailureCode(responseCode: Int): String? =
+    if (responseCode !in HttpURLConnection.HTTP_OK..299) {
+        "MEASUREMENT_SERVICE_UNAVAILABLE"
+    } else {
+        null
+    }
 
 /** Candidate-owned Android profile driver, compiled only into the instrumentation APK. */
 internal class AndroidHostedProfileTestDriver(
@@ -854,23 +850,6 @@ private suspend fun <T> withControlFiles(control: File, ready: File, block: susp
     }
 }
 
-/** Preserve the HTTPS hostname while the HTTP connection dials its pinned IP. */
-private class PinnedHostnameSocketFactory(
-    private val delegate: SSLSocketFactory,
-    private val hostname: String,
-) : SSLSocketFactory() {
-    override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
-    override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
-    override fun createSocket(socket: Socket, host: String, port: Int, autoClose: Boolean): Socket =
-        delegate.createSocket(socket, hostname, port, autoClose)
-    override fun createSocket(host: String, port: Int): Socket = delegate.createSocket(host, port)
-    override fun createSocket(host: String, port: Int, local: InetAddress, localPort: Int): Socket =
-        delegate.createSocket(host, port, local, localPort)
-    override fun createSocket(host: InetAddress, port: Int): Socket = delegate.createSocket(host, port)
-    override fun createSocket(host: InetAddress, port: Int, local: InetAddress, localPort: Int): Socket =
-        delegate.createSocket(host, port, local, localPort)
-}
-
 /** Real Android network APIs used by the candidate seam; Torturer evaluates routing proof. */
 internal class RealAndroidHostedPlatform(
     private val context: Context,
@@ -962,11 +941,23 @@ internal class RealAndroidHostedPlatform(
         // Retain the selected ID to diagnose a stale VPN network after process loss.
         val result = JSONObject().put("network_id", network.networkHandle)
         return try {
-            withNetworkConnection(endpoints.identityUrl, upload = false, network = network, pinnedAddress = address) { connection ->
-                val status = connection.responseCode
-                val body = (if (status in 200..299) connection.inputStream else connection.errorStream)
-                    ?.use { it.readBytes().toString(Charsets.UTF_8) }.orEmpty()
-                result.put("status", status).put("message", connection.responseMessage).put("body", body)
+            val client = OkHttpClient.Builder()
+                .dns(object : Dns {
+                    override fun lookup(hostname: String): List<InetAddress> = listOf(address)
+                })
+                .socketFactory(network.socketFactory)
+                .connectTimeout(5, TimeUnit.SECONDS)
+                .readTimeout(5, TimeUnit.SECONDS)
+                .followRedirects(false)
+                .build()
+            val request = Request.Builder()
+                .url(endpoints.identityUrl)
+                .header("User-Agent", "DobbyVPN-Harness/1")
+                .build()
+            client.newCall(request).execute().use { response ->
+                result.put("status", response.code)
+                    .put("message", response.message)
+                    .put("body", response.body?.string().orEmpty())
             }
         } catch (failure: Exception) {
             // A physical request is deliberately rejected by the routing test.
@@ -1021,6 +1012,7 @@ internal class RealAndroidHostedPlatform(
     }
 
     private fun fetchFingerprint(): ByteArray = withNetworkConnection(endpoints.identityUrl, upload = false) { connection ->
+        requireSuccess(connection)
         val bytes = connection.inputStream.use { it.readBytes() }
         if (bytes.isEmpty()) throw AndroidHostedOperationFailure("NETWORK_BODY_INVALID")
         MessageDigest.getInstance("SHA-256").digest(bytes)
@@ -1061,28 +1053,14 @@ internal class RealAndroidHostedPlatform(
         rawUrl: String,
         upload: Boolean,
         network: Network? = null,
-        pinnedAddress: InetAddress? = null,
         block: (HttpURLConnection) -> T,
     ): T {
         val original = URL(rawUrl)
-        val target = if (pinnedAddress == null) original else
-            URI(original.protocol, null, pinnedAddress.hostAddress, original.port,
-                original.path, original.query, null).toURL()
-        val connection = ((network?.openConnection(target) ?: target.openConnection()) as? HttpURLConnection)
+        val connection = ((network?.openConnection(original) ?: original.openConnection()) as? HttpURLConnection)
             ?: throw AndroidHostedOperationFailure("NETWORK_UNAVAILABLE")
-        connection.connectTimeout = if (pinnedAddress == null) NETWORK_TIMEOUT_MILLIS else 5_000
+        connection.connectTimeout = NETWORK_TIMEOUT_MILLIS
         connection.readTimeout = connection.connectTimeout
         connection.instanceFollowRedirects = false
-        if (pinnedAddress != null) {
-            val https = connection as HttpsURLConnection
-            // Pin the dial address without changing the HTTPS peer identity:
-            // retain normal CA validation, original-host SNI and hostname checks.
-            https.sslSocketFactory = PinnedHostnameSocketFactory(https.sslSocketFactory, original.host)
-            https.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, session ->
-                HttpsURLConnection.getDefaultHostnameVerifier().verify(original.host, session)
-            }
-            https.setRequestProperty("Host", original.authority)
-        }
         // Use the same request identity as the private and signed-release checks.
         connection.setRequestProperty("User-Agent", "DobbyVPN-Harness/1")
         if (upload) connection.setRequestProperty("Content-Type", "application/octet-stream")
@@ -1094,7 +1072,9 @@ internal class RealAndroidHostedPlatform(
     }
 
     private fun requireSuccess(connection: HttpURLConnection) {
-        if (connection.responseCode !in HttpURLConnection.HTTP_OK..299) throw AndroidHostedOperationFailure("NETWORK_STATUS")
+        measurementServiceFailureCode(connection.responseCode)?.let { code ->
+            throw AndroidHostedOperationFailure(code)
+        }
     }
 
     private fun drainResponse(connection: HttpURLConnection) {

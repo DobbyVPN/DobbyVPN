@@ -147,6 +147,8 @@ def test_driver_does_not_keep_the_removed_guard_paths() -> None:
 
 def test_driver_reuses_the_source_identity_link_for_both_gradle_builds() -> None:
     driver = Path(__file__).with_name("android_build_driver.sh").read_text(encoding="utf-8")
-    assert 'source_commit_link="local-content://$source_commit"' in driver
+    assert 'source_commit=local' in driver
+    assert 'local_source_identity.py' not in driver
+    assert 'gradle_flags=(--no-daemon --stacktrace)' in driver
     assert 'source_commit_link="https://github.com/$source_repository/tree/$source_commit"' in driver
     assert driver.count('-PprojectRepositoryCommitLink="$source_commit_link"') == 2

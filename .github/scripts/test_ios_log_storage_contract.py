@@ -9,11 +9,11 @@ SOURCE = (
 
 
 class IosLogStorageContractTests(unittest.TestCase):
-    def test_startup_only_mode_keeps_initialization_and_is_simulator_only(self) -> None:
+    def test_mini_mode_keeps_initialization_and_is_simulator_only(self) -> None:
         source = (Path(__file__).resolve().parents[2] / "swift_module/iosApp/iOSApp.swift").read_text()
         self.assertLess(source.index("StartDIKt.startDI"), source.index("startup.initialized"))
-        self.assertEqual(source.count("#if DOBBY_STARTUP_TEST && targetEnvironment(simulator)"), 2)
-        self.assertIn('startup.initialized mode=startup-only', source)
+        self.assertEqual(source.count("#if DOBBY_SIMULATOR_MINI && targetEnvironment(simulator)"), 2)
+        self.assertIn('startup.initialized mode=mini', source)
         self.assertIn('startup.ui_attached mode=normal', source)
         self.assertIn("#else\n            ContentView()", source)
 

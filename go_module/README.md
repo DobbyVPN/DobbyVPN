@@ -112,10 +112,18 @@ bootstrap above creates only the required directory and installs both tools at
 the exact revision recorded by `go.mod`. The build therefore does not mutate
 the module files or resolve an unpinned tool.
 
-The script builds one physical-iOS slice and one universal Simulator slice.
+With no arguments, the script builds one physical-iOS slice and one universal
+Simulator slice for the release XCFramework. A local Simulator check can avoid
+the unused slice by selecting its native architecture explicitly:
+
+```bash
+./scripts/build_ios_xcframework.sh --simulator-architecture arm64
+# or: ./scripts/build_ios_xcframework.sh --simulator-architecture amd64
+```
+
 Physical packet-tunnel qualification is intentionally not claimed until a real
-iPhone is available; the Simulator remains a package/build check. The output
-artifact is `DobbyVPNRuntime.xcframework`.
+iPhone is available; the Simulator remains a package/build check. Every mode
+writes the expected `DobbyVPNRuntime.xcframework` artifact.
 
 ## SessionV2 API
 

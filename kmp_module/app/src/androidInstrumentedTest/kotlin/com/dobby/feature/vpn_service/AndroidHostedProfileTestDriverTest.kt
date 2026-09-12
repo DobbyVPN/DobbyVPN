@@ -99,6 +99,14 @@ class AndroidHostedProfileTestDriverTest {
     }
 
     @Test
+    fun non_success_measurement_http_status_has_stable_service_error_code() {
+        assertEquals(null, measurementServiceFailureCode(200))
+        assertEquals(null, measurementServiceFailureCode(299))
+        assertEquals("MEASUREMENT_SERVICE_UNAVAILABLE", measurementServiceFailureCode(429))
+        assertEquals("MEASUREMENT_SERVICE_UNAVAILABLE", measurementServiceFailureCode(503))
+    }
+
+    @Test
     fun command_parser_ignores_extra_fields_and_leaves_scenario_policy_to_torturer() {
         val json = JSONObject(commandJson(preserveActive = true)).apply {
             put("diagnostic", "retained")
@@ -152,7 +160,7 @@ class AndroidHostedProfileTestDriverTest {
         val keys = JSONObject(output).keys().asSequence().toSet()
         assertEquals(
             setOf(
-                "schema", "kind", "platform", "source_sha", "configured", "connected",
+                "source_sha", "configured", "connected",
                 "connections", "connection",
                 "tunnel_interface", "routing_verified", "disconnect_clean",
                 "restart_verified", "reconnect_completed", "second_tunnel_interface", "second_routing_verified",
@@ -611,9 +619,6 @@ class AndroidHostedProfileTestDriverTest {
             )
         }
         return JSONObject()
-            .put("schema", 1)
-            .put("kind", AndroidHostedCommandContract.COMMAND_KIND)
-            .put("platform", "android")
             .put("source_sha", "a".repeat(40))
             .put("profile_file", profileFile)
             .put("output_file", outputFile)

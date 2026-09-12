@@ -20,6 +20,13 @@ Xcode and gomobile installed, run:
 ```
 
 Copy the resulting `DobbyVPNRuntime.xcframework` into `swift_module/`.
+For a Simulator-only local check, select the native slice to avoid building
+the physical-iOS and other Simulator architectures:
+
+```bash
+./scripts/build_ios_xcframework.sh --simulator-architecture arm64
+# Intel Mac: ./scripts/build_ios_xcframework.sh --simulator-architecture amd64
+```
 
 ### app.framework
 

@@ -34,13 +34,11 @@ TOOLS_DIR = (
     else ROOT_DIR / ".local-tools" / "desktop-build"
 )
 
-ANDROID_NDK_VERSION = "27.2.12479018"
 ANDROID_PACKAGES = (
     "platforms;android-35",
     "platforms;android-36",
     "build-tools;36.0.0",
     "platform-tools",
-    f"ndk;{ANDROID_NDK_VERSION}",
 )
 ANDROID_TOOLS_VERSION = "11076708"
 WINTUN_VERSION = "0.14.1"
@@ -804,7 +802,6 @@ def android_packages_installed(sdk_root: Path) -> bool:
         (sdk_root / "platforms" / "android-35").is_dir()
         and (sdk_root / "platforms" / "android-36").is_dir()
         and (sdk_root / "build-tools" / "36.0.0").is_dir()
-        and (sdk_root / "ndk" / ANDROID_NDK_VERSION).is_dir()
     )
 
 

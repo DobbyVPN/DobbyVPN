@@ -1,0 +1,320 @@
+name: Release qualification platform
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: Platform to qualify.
+        required: true
+        type: string
+      render_artifact_name:
+        description: Artifact containing the shared Render VPN profile.
+        required: true
+        type: string
+
+jobs:
+  qualification:
+    name: Public Release qualification / ${{ inputs.platform }}
+    runs-on: ${{ inputs.platform == 'windows' && 'windows-2022' || inputs.platform == 'macos' && 'macos-14' || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PLATFORM: ${{ inputs.platform }}
+      DOBBYVPN_COMMIT_SHA: ${{ github.sha }}
+    steps:
+      - name: Check out Release source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download Linux package
+        if: inputs.platform == 'linux'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: dobbyVPN-linux.deb
+          path: release-packages
+      - name: Download Windows package
+        if: inputs.platform == 'windows'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: dobbyVPN-windows-amd64.msi
+          path: release-packages
+      - name: Download macOS packages
+        if: inputs.platform == 'macos'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          pattern: dobbyVPN-macos-*.pkg
+          path: release-packages
+          merge-multiple: true
+      - name: Download Android packages
+        if: inputs.platform == 'android'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          pattern: dobbyvpn-android-*.apk
+          path: release-packages
+          merge-multiple: true
+
+      - name: Download shared Render VPN profile
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: ${{ inputs.render_artifact_name }}
+          path: render
+
+      - name: Initialize runner-local qualification paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "EVIDENCE_DIR=$RUNNER_TEMP/dobbyvpn-release-evidence"
+            echo "SERVICE_DIR=$RUNNER_TEMP/dobbyvpn-release-service"
+            echo "RESULT_PATH=$RUNNER_TEMP/dobbyvpn-release-evidence/functional-result.json"
+          } >> "$GITHUB_ENV"
+
+      - name: Check package and initialize evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR" "$SERVICE_DIR"
+          case "$PLATFORM" in linux|windows|macos|android) ;; *) exit 1 ;; esac
+          [[ "$DOBBYVPN_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$DOBBYVPN_COMMIT_SHA"
+          test -s "$GITHUB_WORKSPACE/render/profile.toml"
+          case "$PLATFORM" in
+            linux) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-linux.deb" ;;
+            windows) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi" ;;
+            macos) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-macos-aarch64.pkg" ;;
+            android) test "$(find "$GITHUB_WORKSPACE/release-packages" -maxdepth 1 -name 'DobbyVPN-*-sign.apk' -type f | wc -l)" -eq 1; test "$(find "$GITHUB_WORKSPACE/release-packages" -maxdepth 1 -name 'DobbyVPN-*-android-test-companion.apk' -type f | wc -l)" -eq 1 ;;
+            *) exit 1 ;;
+          esac
+          if [ "$PLATFORM" != android ]; then
+            # Loggers and redirections use these paths as writable sinks;
+            # file existence or content is never qualification evidence.
+            : > "$EVIDENCE_DIR/app.log"
+            : > "$EVIDENCE_DIR/service.log"
+            : > "$EVIDENCE_DIR/service.log.stdout"
+            : > "$EVIDENCE_DIR/service.log.stderr"
+          fi
+          deadline="$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/render/deadline_epoch.txt")"
+          [[ "$deadline" =~ ^[0-9]+$ ]]
+          printf 'RUN_DEADLINE_EPOCH=%s\n' "$deadline" >> "$GITHUB_ENV"
+
+      - name: Install Android tooling for the exact Release APKs
+        if: inputs.platform == 'android'
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
+
+      - name: Install the exact native Release package
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$PLATFORM" in
+            linux)
+              sudo -n dpkg -i "$GITHUB_WORKSPACE/release-packages/dobbyVPN-linux.deb"
+              mapfile -t cli_matches < <(find /opt/dobbyvpn -xdev -type f -name dobby-cli -perm -0100)
+              mapfile -t service_matches < <(find /opt/dobbyvpn -xdev -type f -name ubuntu_grpcvpnserver -perm -0100)
+              test "${#cli_matches[@]}" -eq 1; test "${#service_matches[@]}" -eq 1
+              printf 'CLI=%s\nSERVICE=%s\nSERVICE_SOCKET=%s\nSERVICE_LIBRARY_PATH=%s\n' \
+                "${cli_matches[0]}" "${service_matches[0]}" "$SERVICE_DIR/control.sock" /opt/dobbyvpn/lib/runtime/lib >> "$GITHUB_ENV"
+              ;;
+            windows)
+              package="$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi"
+              export PACKAGE_WIN="$(cygpath -w "$package")"
+              powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$ErrorActionPreference="Stop"; $p=Start-Process msiexec.exe -ArgumentList @("/i",$env:PACKAGE_WIN,"/qn","/norestart") -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "msiexec failed" }; $root="$env:ProgramFiles\DobbyVPN"; $cli=Get-ChildItem $root -Filter "dobby-cli.exe" -Recurse -File; $service=Get-ChildItem $root -Filter "windows_grpcvpnserver.exe" -Recurse -File; if ($cli.Count -ne 1 -or $service.Count -ne 1) { throw "installed closure is ambiguous" }; Write-Output ("$($cli[0].FullName)|$($service[0].FullName)")' > "$SERVICE_DIR/installed-paths.txt"
+              IFS='|' read -r cli service < <(tr -d '\r' < "$SERVICE_DIR/installed-paths.txt")
+              cli="$(cygpath "$cli")"; service="$(cygpath "$service")"
+              printf 'CLI=%s\nSERVICE=%s\nSERVICE_SOCKET=127.0.0.1:50051\n' "$cli" "$service" >> "$GITHUB_ENV"
+              ;;
+            macos)
+              case "$(uname -m)" in arm64) package=dobbyVPN-macos-aarch64.pkg ;; x86_64) package=dobbyVPN-macos-amd64.pkg ;; *) exit 1 ;; esac
+              sudo -n env \
+                "DOBBYVPN_CONTROL_PEER_UID=$(id -u)" \
+                "DOBBY_LOG_PATH=$EVIDENCE_DIR/service.log" \
+                installer -pkg "$GITHUB_WORKSPACE/release-packages/$package" -target /
+              printf 'CLI=%s\nSERVICE=%s\nSERVICE_SOCKET=%s\n' "/Applications/Dobby VPN.app/Contents/Resources/dobby-cli" "/Applications/Dobby VPN.app/Contents/Resources/macos_grpcvpnserver" "/var/run/dobbyvpn/control.sock" >> "$GITHUB_ENV"
+              test -x "/Applications/Dobby VPN.app/Contents/Resources/dobby-cli"
+              test -x "/Applications/Dobby VPN.app/Contents/Resources/macos_grpcvpnserver"
+              ;;
+            android)
+              sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;36.0.0' 'emulator' 'system-images;android-35;google_apis;x86_64'
+              avdmanager create avd --force --name dobbyvpn-release --package 'system-images;android-35;google_apis;x86_64' --device pixel_2
+              emulator -avd dobbyvpn-release -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > "$SERVICE_DIR/emulator.stdout.log" 2> "$SERVICE_DIR/emulator.stderr.log" &
+              adb wait-for-device
+              booted=false; for _ in $(seq 1 120); do [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && booted=true && break; sleep 1; done
+              test "$booted" = true
+              adb root
+              adb wait-for-device
+              test "$(adb shell id -u | tr -d '\r')" = 0
+              signed="$(find release-packages -maxdepth 1 -name 'DobbyVPN-*-sign.apk' -type f)"
+              companion="$(find release-packages -maxdepth 1 -name 'DobbyVPN-*-android-test-companion.apk' -type f)"
+              test -f "$signed"; test -f "$companion"
+              sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK root is unavailable}}"
+              apksigner_bin="$sdk_root/build-tools/36.0.0/apksigner"
+              test -x "$apksigner_bin"
+              "$apksigner_bin" verify --print-certs "$signed" > "$SERVICE_DIR/signed-certs.txt"
+              "$apksigner_bin" verify --print-certs "$companion" > "$SERVICE_DIR/companion-certs.txt"
+              signed_cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$SERVICE_DIR/signed-certs.txt")"
+              companion_cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$SERVICE_DIR/companion-certs.txt")"
+              cert_digest_re='^([0-9A-Fa-f]{64}|[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){31})$'
+              [[ "$signed_cert" =~ $cert_digest_re ]]
+              test "$signed_cert" = "$companion_cert"
+              adb install -r "$signed"; adb install -r -t "$companion"
+              printf 'ADB=%s\n' "$(command -v adb)" >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - name: Record observed platform version
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$PLATFORM" in
+            linux)
+              test -r /etc/os-release
+              . /etc/os-release
+              platform_version="${ID:-linux}-${VERSION_ID:-unknown}"
+              ;;
+            windows)
+              platform_version="$(powershell.exe -NoLogo -NoProfile -NonInteractive -Command '[Environment]::OSVersion.Version.ToString()' | tr -d '\r\n')"
+              ;;
+            macos)
+              platform_version="$(sw_vers -productVersion | tr -d '\r\n')"
+              ;;
+            android)
+              release="$("$ADB" shell getprop ro.build.version.release | tr -d '\r\n')"
+              api="$("$ADB" shell getprop ro.build.version.sdk | tr -d '\r\n')"
+              platform_version="android-${release}-api-${api}"
+              ;;
+            *)
+              printf 'unsupported platform=%s\n' "$PLATFORM" >&2
+              exit 1
+              ;;
+          esac
+          test -n "$platform_version"
+          test "$platform_version" != "$PLATFORM"
+          printf 'PLATFORM_VERSION=%s\n' "$platform_version" >> "$GITHUB_ENV"
+
+      - name: Start installed service
+        if: inputs.platform != 'android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$PLATFORM" = windows ]; then
+            export SERVICE_WIN="$(cygpath -w "$SERVICE")" SERVICE_OUT_WIN="$(cygpath -w "$EVIDENCE_DIR/service.log.stdout")" SERVICE_ERR_WIN="$(cygpath -w "$EVIDENCE_DIR/service.log.stderr")" SERVICE_LOG_PATH_WIN="$(cygpath -w "$EVIDENCE_DIR/service.log")" SERVICE_LOG_ROOT_WIN="$(cygpath -w "$EVIDENCE_DIR")"
+            service_pid="$(powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$ErrorActionPreference="Stop"; $env:DOBBY_LOG_PATH=$env:SERVICE_LOG_PATH_WIN; $env:DOBBY_LOG_ROOT=$env:SERVICE_LOG_ROOT_WIN; $p=Start-Process -FilePath $env:SERVICE_WIN -ArgumentList @("-port","50051") -RedirectStandardOutput $env:SERVICE_OUT_WIN -RedirectStandardError $env:SERVICE_ERR_WIN -PassThru; $p.Id')"
+          elif [ "$PLATFORM" = macos ]; then
+            launchd_stdout="$SERVICE_DIR/macos-launchd-print.stdout.log"
+            launchd_stderr="$SERVICE_DIR/macos-launchd-print.stderr.log"
+            if ! launchctl print system/com.dobby.vpnservice > "$launchd_stdout" 2> "$launchd_stderr"; then
+              cat "$launchd_stdout" >&2
+              cat "$launchd_stderr" >&2
+              exit 1
+            fi
+            service_pid="$(python3 - "$launchd_stdout" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          text = Path(sys.argv[1]).read_text(encoding="utf-8")
+          matches = re.findall(r"(?m)^\s*pid\s*=\s*([1-9][0-9]*)\s*$", text)
+          if len(matches) != 1:
+              raise SystemExit("launchd service PID is missing or ambiguous")
+          print(matches[0])
+          PY
+            )"
+            [[ "$service_pid" =~ ^[1-9][0-9]*$ ]]
+          else
+            # Linux retains its existing candidate service launcher.
+            service_pid="$(sudo -n sh -c '
+              set -eu
+              binary=$1
+              control_socket=$2
+              peer_uid=$3
+              library_path=$4
+              log_path=$5
+              stdout_path=$6
+              stderr_path=$7
+              if [ -n "$library_path" ]; then
+                env LD_LIBRARY_PATH="$library_path" DOBBYVPN_CONTROL_SOCKET="$control_socket" DOBBYVPN_CONTROL_PEER_UID="$peer_uid" DOBBY_LOG_PATH="$log_path" DOBBY_LOG_ROOT="$(dirname "$log_path")" "$binary" > "$stdout_path" 2> "$stderr_path" < /dev/null &
+              else
+                env DOBBYVPN_CONTROL_SOCKET="$control_socket" DOBBYVPN_CONTROL_PEER_UID="$peer_uid" DOBBY_LOG_PATH="$log_path" DOBBY_LOG_ROOT="$(dirname "$log_path")" "$binary" > "$stdout_path" 2> "$stderr_path" < /dev/null &
+              fi
+              printf "%s\\n" "$!"
+            ' dobbyvpn-service "$SERVICE" "$SERVICE_SOCKET" "$(id -u)" "${SERVICE_LIBRARY_PATH:-}" "$EVIDENCE_DIR/service.log" "$EVIDENCE_DIR/service.log.stdout" "$EVIDENCE_DIR/service.log.stderr")"
+            [[ "$service_pid" =~ ^[1-9][0-9]*$ ]]
+          fi
+          [[ "$service_pid" =~ ^[1-9][0-9]*$ ]]
+          printf 'SERVICE_BINARY=%s\nSERVICE_PID=%s\n' "$SERVICE" "$service_pid" >> "$GITHUB_ENV"
+          sleep 2
+
+      - name: Run canonical test set against exact Release package
+        id: functional
+        working-directory: torturer
+        shell: bash
+        run: |
+          set -euo pipefail
+          lane_timeout=$((RUN_DEADLINE_EPOCH - $(date +%s) - 300))
+          if [ "$lane_timeout" -le 0 ]; then
+            printf 'functional lane has no provider-bound execution budget\n' >&2
+            exit 1
+          fi
+          if [ "$PLATFORM" = android ]; then
+            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_checks.hosted.run \
+              --platform android --adb "$ADB" --profile "$GITHUB_WORKSPACE/render/profile.toml" --source-sha "$DOBBYVPN_COMMIT_SHA" \
+              --platform-version "$PLATFORM_VERSION" --lane-timeout-seconds "$lane_timeout" --output "$RESULT_PATH" \
+              --raw-log-dir "$EVIDENCE_DIR"
+          else
+            extra=(--app-log "$EVIDENCE_DIR/app.log")
+            if [ "$PLATFORM" = linux ]; then
+              extra+=(--service-library-path "$SERVICE_LIBRARY_PATH" --service-log "$EVIDENCE_DIR/service.log")
+            fi
+            if [ "$PLATFORM" = macos ]; then
+              export DOBBYVPN_CONTROL_SOCKET="$SERVICE_SOCKET"
+              export DOBBY_LOG_PATH="$EVIDENCE_DIR/service.log"
+              export DOBBY_LOG_ROOT="$EVIDENCE_DIR"
+            fi
+            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_checks.hosted.run \
+              --platform "$PLATFORM" --cli "$CLI" --profile "$GITHUB_WORKSPACE/render/profile.toml" --source-sha "$DOBBYVPN_COMMIT_SHA" \
+              --platform-version "$PLATFORM_VERSION" --lane-timeout-seconds "$lane_timeout" --output "$RESULT_PATH" \
+              --raw-log-dir "$EVIDENCE_DIR" "${extra[@]}" \
+              --service-pid "$SERVICE_PID" --service-binary "$SERVICE_BINARY" --service-socket "$SERVICE_SOCKET"
+          fi
+
+      - name: Collect Android logs
+        if: always() && inputs.platform == 'android'
+        shell: bash
+        run: |
+          adb pull /data/user/0/com.dobby.vpn/files/app_logs.txt \
+            "$EVIDENCE_DIR/app.log" || echo "warning: Android app log unavailable"
+          adb pull /data/user/0/com.dobby.vpn/files/go_android_logs.jsonl \
+            "$EVIDENCE_DIR/service.log" || echo "warning: Android service log unavailable"
+
+      - name: Remove shared profile from runner
+        if: always()
+        shell: bash
+        run: rm -f "$GITHUB_WORKSPACE/render/profile.toml"
+
+      - name: Upload complete app, service, and command logs
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: functional-raw-logs-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.platform }}
+          path: |
+            ${{ runner.temp }}/dobbyvpn-release-evidence/app.log
+            ${{ runner.temp }}/dobbyvpn-release-evidence/service.log
+            ${{ runner.temp }}/dobbyvpn-release-evidence/service.log.stdout
+            ${{ runner.temp }}/dobbyvpn-release-evidence/service.log.stderr
+            ${{ runner.temp }}/dobbyvpn-release-evidence/command-*.raw.log
+            ${{ runner.temp }}/dobbyvpn-release-service/emulator.stdout.log
+            ${{ runner.temp }}/dobbyvpn-release-service/emulator.stderr.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload functional result
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: public-functional-evidence-${{ inputs.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dobbyvpn-release-evidence/functional-result.json
+          if-no-files-found: warn
+          retention-days: 14

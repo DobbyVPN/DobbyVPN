@@ -189,6 +189,7 @@ kotlin {
             implementation(libs.androidx.test.runner)
             implementation(libs.androidx.uiautomator)
             implementation(libs.junit)
+            implementation(libs.okhttp)
         }
 
         iosMain.dependencies {

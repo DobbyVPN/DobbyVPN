@@ -21,8 +21,8 @@ lag releases; v1.5.0 availability is not claimed until the index is updated.)
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 
-Local desktop CLI/VPN checks and CI desktop build commands are documented in
-[.github/scripts/README.md](.github/scripts/README.md).
+Desktop build commands, a local CLI configuration check, and CI build
+commands are documented in [.github/scripts/README.md](.github/scripts/README.md).
 
 Consume 'subscription' / 'dynamic keys' as TOML via HTTPS or inline:
 
@@ -148,8 +148,10 @@ address = "127.0.0.1:10808"
 
 Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nicely expressed Issues accordingly.
 
-See [TESTING.md](TESTING.md) for contributor-local checks. GitHub runs the
-product Test workflow on Release, then Torturer’s trusted functional test set.
+See [TESTING.md](TESTING.md) for contributor checks. Pushes and pull requests
+run checks. Release starts manually and qualifies its packages with the
+functional suite in `torturer/`. A separate manual Publish step uses the
+successful Release run's tested artifacts.
 
 Remote telemetry has been removed. `[Telemetry]` configuration blocks are not
 supported.

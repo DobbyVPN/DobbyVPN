@@ -351,6 +351,18 @@ class DesktopBuildTests(unittest.TestCase):
         with mock.patch.object(desktop_build, "host_platform", return_value="macos"):
             self.assertEqual(desktop_build.gradle_command(), "./gradlew")
 
+    def test_desktop_sdk_check_does_not_require_android_ndk(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sdk = Path(temporary)
+            for relative in (
+                "platforms/android-35",
+                "platforms/android-36",
+                "build-tools/36.0.0",
+            ):
+                (sdk / relative).mkdir(parents=True)
+
+            self.assertTrue(desktop_build.android_packages_installed(sdk))
+
     def test_desktop_gradle_accepts_a_fixed_absolute_executable_as_one_argv_item(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixed = Path(temporary) / "Gradle 8.13" / "bin" / "gradle"

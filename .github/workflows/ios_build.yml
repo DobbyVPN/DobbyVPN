@@ -13,12 +13,6 @@ on:
         required: true
       PROVISION_DOBBY_TUNNEL_BASE64:
         required: true
-      APP_STORE_API_KEY:
-        required: true
-      APP_STORE_KEY_ID:
-        required: true
-      APP_STORE_ISSUER_ID:
-        required: true
     inputs:
       app_major_version:
         type: string
@@ -50,7 +44,6 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.source_sha }}
-          submodules: true
           persist-credentials: false
 
       - name: Verify exact source checkout
@@ -143,18 +136,6 @@ jobs:
             --version "$APP_MAJOR_VERSION.$APP_MINOR_VERSION.$APP_MAINTENANCE_VERSION" \
             --build-number "$APPLE_BUILD_NUMBER"
 
-      - name: Create exact IPA provenance sidecar
-        env:
-          APPLE_BUILD_NUMBER: ${{ github.run_number }}
-        run: |
-          set -euo pipefail
-          python3 .github/scripts/ios_artifact_provenance.py create \
-            --ipa-dir swift_module/build/ipa \
-            --provenance swift_module/build/ipa/DobbyVPN.ipa.provenance.json \
-            --source-sha "$APP_SOURCE_SHA" \
-            --version "$APP_MAJOR_VERSION.$APP_MINOR_VERSION.$APP_MAINTENANCE_VERSION" \
-            --build-number "$APPLE_BUILD_NUMBER"
-
       - name: Upload IPA as artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -162,22 +143,3 @@ jobs:
           path: swift_module/build/ipa/*.ipa
           if-no-files-found: error
           retention-days: 90
-
-      - name: Upload IPA provenance as artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: DobbyVPN.ipa.provenance
-          path: swift_module/build/ipa/DobbyVPN.ipa.provenance.json
-          if-no-files-found: error
-          retention-days: 90
-
-      # Every green main build is retained in internal TestFlight. The trusted
-      # publication coordinator submits the exact selected build for review.
-      - name: Fastlane upload_testflight
-        if: ${{ github.ref == 'refs/heads/main' }}
-        env:
-          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
-          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
-          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
-        run: |
-          bundle exec fastlane ios upload_testflight

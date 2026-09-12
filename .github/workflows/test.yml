@@ -1,6 +1,9 @@
 name: Test
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_call:
   workflow_dispatch:
 
@@ -8,6 +11,32 @@ permissions:
   contents: read
 
 jobs:
+  functional-tooling:
+    name: Functional test tooling
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Check the integrated functional suite
+        working-directory: torturer
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
+  windows-containment:
+    name: Windows process containment
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Check native Windows Job Objects
+        shell: pwsh
+        env:
+          PYTHONPATH: torturer
+        run: python -m unittest discover -s torturer/tests -p test_windows_job_integration.py -v
+
   python-tooling:
     name: Python tooling tests
     runs-on: ubuntu-24.04
@@ -29,7 +58,6 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          submodules: true
           persist-credentials: false
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -62,7 +90,6 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          submodules: true
           persist-credentials: false
 
       # gomobile currently needs a bootstrap toolchain to build the configured
@@ -131,7 +158,7 @@ jobs:
 
       - name: Run KMP and Android service tests
         working-directory: kmp_module
-        run: ./gradlew :grpcstub:test :app:jvmTest :app:testDebugUnitTest :app:verifyDebugNativeAbiPayloads --stacktrace
+        run: ./gradlew :grpcstub:test :app:jvmTest :app:testDebugUnitTest :app:verifyDebugNativeAbiPayloads :app:assembleReleaseAndroidTest --stacktrace
 
   ios_libraries:
     name: iOS native dependencies
@@ -150,7 +177,6 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          submodules: true
           persist-credentials: false
 
       - name: Select Xcode 26.3
@@ -226,15 +252,14 @@ jobs:
             ${{ runner.temp }}/swift-lifecycle-core-coverage.md
           if-no-files-found: error
 
-  ios_simulator_core:
-    name: iOS Simulator shared-core checks
+  ios_simulator_metal:
+    name: iOS Simulator Metal and UI checks
     needs: ios_libraries
     runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          submodules: true
           persist-credentials: false
 
       - name: Select Xcode 26.3
@@ -267,3 +292,20 @@ jobs:
             --rerun-tasks \
             --no-daemon \
             --stacktrace
+
+      - name: Stage the Simulator KMP framework
+        run: |
+          set -euo pipefail
+          rm -rf swift_module/app.framework
+          ditto \
+            kmp_module/app/build/bin/iosSimulatorArm64/debugFramework/app.framework \
+            swift_module/app.framework
+
+      - name: Run the Metal capability check and UI smoke
+        env:
+          PYTHONPATH: torturer
+        run: |
+          set -euo pipefail
+          python3 torturer/tests/ios_simulator/run_app_contract.py \
+            --candidate-root "$GITHUB_WORKSPACE" \
+            --work-dir "$RUNNER_TEMP/ios-simulator-metal-contract"

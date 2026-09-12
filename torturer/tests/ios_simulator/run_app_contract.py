@@ -1,0 +1,58 @@
+"""Run the hosted Dobby iOS Simulator Metal UI check without VPN credentials."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import sys
+
+
+if __package__ in {None, ""}:  # pragma: no cover - exercised by the local launcher
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from torturer_checks.ios_simulator_app import (  # noqa: E402
+    IOSSimulatorAppContractError,
+    RunBudget,
+    SubprocessCommandRunner,
+    public_ios_simulator_app_contract,
+    require_metal,
+    run_ios_simulator_app_contract,
+)
+
+
+def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--candidate-root", type=Path, required=True)
+    parser.add_argument("--work-dir", type=Path, required=True)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_arguments(argv)
+    try:
+        # The workflow stages the Go/KMP dependencies. This helper checks Metal
+        # and runs the single xcodebuild UI-test build against its Simulator.
+        contract = public_ios_simulator_app_contract("arm64")
+        runner = SubprocessCommandRunner()
+        budget = RunBudget()
+        require_metal(runner, budget=budget)
+        evidence = run_ios_simulator_app_contract(
+            candidate_root=args.candidate_root,
+            work_dir=args.work_dir,
+            runner=runner,
+            mode="metal",
+            contract=contract,
+            budget=budget,
+        )
+    except IOSSimulatorAppContractError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(
+        "iOS-Simulator-Metal UI check passed: "
+        f"{evidence.simulator.name} ({evidence.simulator.runtime})"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

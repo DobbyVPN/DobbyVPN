@@ -1,0 +1,26 @@
+# Generated build/test output
+artifacts/
+results/
+tmp/
+*.log
+*.pid
+
+# Local tool state
+.gradle/
+.konan/
+__pycache__/
+*.py[cod]
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Torturer never accepts private fixtures
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.mobileprovision
+**/secrets/
+**/.secure/

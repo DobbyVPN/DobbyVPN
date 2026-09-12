@@ -78,135 +78,52 @@ workflow behavior; local service builds only run `go mod download` by default.
 Use `--skip-deps` to require dependencies to already exist and `--skip-build` to
 reuse existing build outputs where supported.
 
-## Release promotion
+## Local Android builds
 
-Every `main` push produces candidate artifacts and uploads a successful iOS
-build to internal TestFlight. It does not create a final release tag.
+The private runner calls `local_candidate.py`, which uses
+`android_build_driver.sh --local` and a disposable signing key.
+Local mode accepts the supplied worktree, builds the app once with normal
+incremental caches, and builds its test companion. It does not prove release
+reproducibility or invent a Git identity for uncommitted source.
+For desktop targets, the resulting `candidate.json` is a flat map of the
+built native paths (`service`, `cli`, and `network`). Desktop local VM checks
+do not build or discover the JVM application. Android additionally records
+the signed `app` and `test_companion` APK paths.
+The runner already owns platform identities and logs, so the descriptor does
+not repeat those values or perform a cross-user permission handoff.
 
-The trusted publication coordinator promotes only after revalidating the exact
-successful `main` Release run, source commit, Torturer run, and required
-artifacts. Its isolated promotion job downloads Release artifacts only to a
-GitHub-hosted runner and creates `vX.Y.Z` plus the GitHub Release. It derives
-and verifies each asset digest from the selected GitHub run; it does not
-consume hashes from local qualification.
-Every public asset is recorded in `release-provenance.json`; a draft is
-downloaded and verified byte-for-byte before publication, and retries
-re-download both the selected run and published release rather than trusting
-release state alone. F-Droid detects `version.txt` from that promoted GitHub
-Release and builds its matching `vX.Y.Z` tag.
+## Release
 
-Android and F-Droid use a stable version code derived from the marketing
-version: `major * 1,000,000 + minor * 1,000 + maintenance`. For example,
-`1.4.3` is `1004003`. This is intentionally independent of the GitHub Actions
-run number, which remains Apple's monotonically increasing `CFBundleVersion`.
-The release workflow and APK scan both enforce this mapping.
+Pushes run checks. The explicitly started Release workflow owns package
+builds, functional tests, shared Render cleanup, and protected publication jobs. After
+qualification, GitHub package publication and Apple App Store submission run
+independently: an App Store Connect failure does not block the verified
+Android, desktop, or F-Droid GitHub Release.
+Tests install the built packages rather than rebuilding a different candidate.
+See [testing](../../TESTING.md) for the test lifecycle.
 
-Android builds also carry their exact selected source commit in BuildConfig.
-`verify_android_apk_source.py` reads that value back from both signed and
-unsigned APK bytecode with `apkanalyzer`; the build and public promotion fail
-unless the embedded commit and repository link match the selected full source
-SHA. The explicit `APP_SOURCE_*` values are passed to Gradle as build
-properties.
-The owner-local Harness candidate path transfers a dirty worktree without
-`.git`; its explicit `--allow-dirty-source` mode records a deterministic
-`local-content://` identity and rechecks that identity after the build. This
-local identity is never accepted by the Release path, which retains the strict
-Git commit/tree proof.
-The current Android release job also performs two clean, uncached unsigned APK
-builds with distinct Go build caches and temporary directories. Both builds use
-the F-Droid-compatible source, Go, and GOPATH locations, the tracked
-source-level Go/NDK/Gradle/gomobile declarations, Java 17, and path-normalizing
-compiler flags. The Gradle 8.13 archive is downloaded or restored from a
-content-addressed cache using the tracked spec URL, checked against its exact
-SHA-256 before extraction, and passed to the driver. The driver checks that the
-archive is readable and that the extracted Gradle entry point is executable.
-The wrapper must carry the matching checksum. Provenance records the archive
-digest, Gradle version, and Java patch version. It does not claim a complete
-offline dependency closure: resolved Maven/Gradle bytes remain runner-local.
-Promotion calls
-`verify_android_reproducibility.py` and fails unless the complete APKs are
-byte-identical and the retained provenance matches the published unsigned APK,
-including both packaged `libgojni.so` payloads. The developer signature is
-applied directly to that proven unsigned APK; a second verifier compares every
-logical ZIP payload entry after signing and promotion repeats both checks. This
-check also pins the public SHA-256 fingerprint of the established Android
-signing certificate so an otherwise valid but upgrade-incompatible key cannot
-be published. Together these gates prevent another tagged-source versus
-F-Droid-build mismatch.
+Release-only Android checks build unsigned APKs twice and compare them.
+`verify_android_reproducibility.py` verifies identical payloads;
+`verify_android_apk_source.py` checks the embedded source identity.
+Signing verification checks the established certificate and that signing
+did not change application payloads. These checks protect F-Droid source
+matching and upgrade compatibility.
 
-Android build-tools `36.0.0` is pinned for packaging, signing, and verification.
-The gate does not claim that signature-block bytes are reproducible: it proves
-the complete unsigned APK byte-for-byte, then separately proves that signing
-changed only signature metadata and used the established certificate.
+The marketing version determines Android's version code:
+`major * 1,000,000 + minor * 1,000 + maintenance`.
+Apple uses the release run number as its build number.
+F-Droid builds the promoted tag and `version.txt`.
 
-A trusted Torturer qualification starts one DobbyVPN publication coordinator
-automatically. The coordinator revalidates the exact Torturer/Release runs,
-attempts, TestFlight upload, package set, and required qualification artifacts
-once before its isolated App Store submission and GitHub promotion jobs. A
-separate Torturer retrieval job receives narrow read access
-to the selected Release artifacts, while a separate handoff job receives only
-narrow workflow-start access. Candidate jobs receive neither credential, and
-Torturer receives no signing, store, publication, or release-environment
-permission.
+## Signed iOS packages
 
-The final DobbyVPN Release job starts the trusted Torturer qualification after
-all package and internal TestFlight jobs pass. Torturer downloads, installs, and tests
-the exact packages from that Release run without rebuilding the application;
-it never publishes those artifacts.
-The publication handoff names the exact Release and qualification runs and
-attempts, and retries must match the same publication identity.
+`verify_ios_app_group.py` checks signatures, profiles, bundle identifiers,
+Apple team, source revision, version, build number, App Group, and
+packet-tunnel entitlement before the exact IPA is uploaded as a run-scoped
+artifact for TestFlight submission.
 
-Torturer remains the separate public gate for the exact selected Release
-packages. Store credentials never enter Torturer or any pull-request job.
-DobbyVPN's production coordinator must verify qualification of its exact source
-revision and Release identity before changing external release state.
+## Public release metadata
 
-## iOS IPA provenance
-
-Before provenance is created, the iOS build extracts the signed IPA and
-verifies both the app and packet-tunnel signatures and provisioning profiles.
-`verify_ios_app_group.py` requires their exact bundle/application identifiers,
-Apple team, shared `group.vpn.dobby.app` App Group, and the tunnel's
-`packet-tunnel-provider` entitlement. This prevents a signed package that
-cannot open its shared container from reaching TestFlight.
-
-`ios_artifact_provenance.py` is a standard-library-only provenance contract
-between the reusable iOS build and protected App Store submission workflows.
-The build creates a JSON sidecar for `DobbyVPN.ipa`. It
-records the full lowercase source SHA, semantic version, positive Apple build
-number, IPA filename, byte size, and SHA-256. Submission downloads both
-artifacts from the selected successful Release run and verifies all of those
-fields before Fastlane is allowed to submit the already-uploaded TestFlight
-build. The sidecar carries no credentials, configuration, or private evidence.
-The successful Release iOS job proves that its named IPA upload command
-completed after both retained artifacts were created. App Store Connect does
-not expose a downloadable binary hash, so the sidecar cannot independently
-prove that Apple's retained TestFlight binary is byte-for-byte identical. It
-also intentionally does not prove Apple has finished processing that upload:
-`skip_waiting_for_build_processing` keeps normal release CI bounded, and the
-later protected submission lane retries only the documented still-processing
-attachment response for the selected version and build number.
-
-F-Droid compatibility and APK checks run in the DobbyVPN Release workflow.
-The official F-Droid infrastructure detects the promoted Release's
-`version.txt` and builds its matching tag; Torturer does not publish the
-application.
-
-## Public release provenance
-
-`release_provenance.py` creates and verifies the public
-`release-provenance.json` beside the release assets. It accepts the exact tag,
-version, source SHA, release run ID/number, Android version code, and repeated
-asset names. It fails if a named asset is missing or its hash, size, or
-metadata disagree. This schema-1 manifest remains
-unchanged for compatibility with already-published releases and deliberately
-contains public release metadata only.
-
-```bash
-python3 .github/scripts/release_provenance.py create --directory release \
-  --tag v1.5.0 --version 1.5.0 \
-  --source-sha 0123456789abcdef0123456789abcdef01234567 \
-  --release-run-id 12345 --release-run-number 678 \
-  --android-version-code 1005000 \
-  --asset DobbyVPN.apk --asset DobbyVPN.zip
-```
+`release_provenance.py` creates and verifies the asset checksums and source
+metadata in `release-provenance.json`. It contains no credentials or private
+test evidence. Publishing credentials are confined to protected jobs, never
+passed to the candidate application.
