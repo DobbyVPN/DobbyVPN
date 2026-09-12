@@ -66,6 +66,7 @@ class FakeRunner:
         self.commands: list[list[str]] = []
         self.calls: list[tuple[list[str], Path | None, float | None]] = []
         self.container = root / "simulator-app-group"
+        self.log_at_launch: bytes | None = None
         self.container.mkdir(parents=True, exist_ok=True)
         (self.container / "app_logs.txt").write_bytes(app_logs)
         (self.container / "go_app_logs.jsonl").write_bytes(b"go log\n")
@@ -84,6 +85,7 @@ class FakeRunner:
         if command[:3] == ["xcrun", "simctl", "get_app_container"]:
             return CommandResult(0, f"{self.container}\n")
         if command[:3] == ["xcrun", "simctl", "launch"]:
+            self.log_at_launch = (self.container / "app_logs.txt").read_bytes()
             if self.write_startup_marker:
                 marker = (
                     b"startup.initialized mode=mini"
@@ -182,10 +184,11 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         self.assertEqual((diagnostics / "go_app_logs.jsonl").read_bytes(), b"go log\n")
 
     def test_mini_fails_without_new_startup_marker_but_still_shuts_down(self) -> None:
+        stale_marker = b'{"message":"startup.initialized mode=mini"}\n'
         runner = FakeRunner(
             self.root,
             write_startup_marker=False,
-            app_logs=b'{"message":"startup.initialized mode=mini"}\n',
+            app_logs=stale_marker,
         )
         with patch("torturer_checks.ios_simulator_app._STARTUP_WAIT_SECONDS", 0.01):
             with self.assertRaisesRegex(IOSSimulatorAppContractError, "did not write startup.initialized"):
@@ -193,6 +196,7 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
                     candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
                     mode="mini", contract=self.contract,
                 )
+        self.assertEqual(runner.log_at_launch, b"")
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
     def test_metal_contract_builds_launches_and_checks_view_attachment(self) -> None:

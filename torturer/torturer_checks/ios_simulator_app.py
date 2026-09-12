@@ -384,7 +384,6 @@ def _log_bytes(path: Path) -> bytes:
 
 def _wait_for_startup(
     log_path: Path,
-    baseline: bytes,
     *,
     mode: str,
     budget: RunBudget,
@@ -395,9 +394,7 @@ def _wait_for_startup(
         budget.clock() + _STARTUP_WAIT_SECONDS,
     )
     while True:
-        current = _log_bytes(log_path)
-        new_records = current[len(baseline):] if current.startswith(baseline) else current
-        if marker in new_records:
+        if marker in _log_bytes(log_path):
             return
         remaining = deadline - budget.clock()
         if remaining <= 0:
@@ -537,7 +534,12 @@ def run_ios_simulator_app_contract(
         if container is None:
             raise IOSSimulatorAppContractError("Simulator app log container is unavailable")
         log_path = container / _APP_LOG_NAME
-        baseline = _log_bytes(log_path)
+        try:
+            # Simulators are disposable; clear old runs so log rotation cannot
+            # make a retained startup marker look like evidence from this run.
+            log_path.write_bytes(b"")
+        except OSError as error:
+            raise IOSSimulatorAppContractError("could not reset the Simulator app log") from error
         _require_success(
             runner,
             simctl_launch_command(simulator.udid, contract.bundle_identifier),
@@ -545,7 +547,7 @@ def run_ios_simulator_app_contract(
             budget=budget,
         )
         app_launched = True
-        _wait_for_startup(log_path, baseline, mode=mode, budget=budget)
+        _wait_for_startup(log_path, mode=mode, budget=budget)
 
         evidence = IOSSimulatorAppEvidence(
             simulator=simulator,

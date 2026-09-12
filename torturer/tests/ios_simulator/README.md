@@ -18,7 +18,9 @@ rendered pixels, accessibility exposure, or VPN traffic. Metal fails clearly
 on a host without usable Metal and never falls back to Mini.
 
 The app-group log is required for the startup marker. Copying log tails into
-diagnostics is best-effort and is not a second validation step.
+diagnostics is best-effort and is not a second validation step. The check
+clears the disposable Simulator's app log before launch so a retained marker
+from an earlier run cannot pass the check.
 
 Neither Simulator mode tests VPN traffic or the physical-device-only
 TrustTunnel bridge.
