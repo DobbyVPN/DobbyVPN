@@ -5,28 +5,29 @@ final class IOSAppUITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        let input = app.descendants(matching: .any)
-            .matching(identifier: "dobby.subscription.input")
-            .firstMatch
-        XCTAssertTrue(input.waitForExistence(timeout: 20), "subscription input is missing")
+        func element(label: String) -> XCUIElement {
+            app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == %@", label))
+                .firstMatch
+        }
+
+        let input = element(label: "dobby.subscription.input")
+        XCTAssertTrue(
+            input.waitForExistence(timeout: 20),
+            "subscription input is missing:\n\(app.debugDescription)",
+        )
         input.tap()
         input.typeText("https://example.invalid/simulator-smoke")
 
-        let settings = app.descendants(matching: .any)
-            .matching(identifier: "dobby.settings.nav")
-            .firstMatch
+        let settings = element(label: "dobby.settings.nav")
         XCTAssertTrue(settings.waitForExistence(timeout: 10), "settings navigation is missing")
         settings.tap()
 
-        let version = app.descendants(matching: .any)
-            .matching(identifier: "dobby.build.version")
-            .firstMatch
+        let version = element(label: "dobby.build.version")
         XCTAssertTrue(version.waitForExistence(timeout: 10), "build version is missing")
         XCTAssertFalse((version.value as? String ?? "").isEmpty, "build version is empty")
 
-        let connection = app.descendants(matching: .any)
-            .matching(identifier: "dobby.connection.nav")
-            .firstMatch
+        let connection = element(label: "dobby.connection.nav")
         XCTAssertTrue(connection.waitForExistence(timeout: 10), "connection navigation is missing")
         connection.tap()
 
