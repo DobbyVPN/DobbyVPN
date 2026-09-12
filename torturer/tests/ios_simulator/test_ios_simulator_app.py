@@ -161,7 +161,10 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
             candidate_root=self.candidate, device_udid=UDID, work_dir=self.root / "work",
         )
         self.assertEqual(command[:2], ["xcodebuild", "test"])
-        self.assertIn(f"-only-testing:IOSAppUITests/IOSAppUITests/testConnectionSettingsNavigationAndText", command)
+        self.assertIn(
+            "-only-testing:iosAppUITests/IOSAppUITests/testConnectionSettingsNavigationAndText",
+            command,
+        )
         self.assertNotIn("xcodebuild build", command)
 
     def test_mini_build_is_explicitly_non_metal_and_native_arch(self) -> None:

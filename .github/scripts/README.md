@@ -94,13 +94,9 @@ not repeat those values or perform a cross-user permission handoff.
 
 ## Release
 
-Pushes run checks. The explicitly started Release workflow owns package
-builds, functional tests, shared Render cleanup, and protected publication jobs. After
-qualification, GitHub package publication and Apple App Store submission run
-independently: an App Store Connect failure does not block the verified
-Android, desktop, or F-Droid GitHub Release.
-Tests install the built packages rather than rebuilding a different candidate.
-See [testing](../../TESTING.md) for the test lifecycle.
+Pushes and pull requests run checks. For the manual Release and Publish steps,
+see [Testing DobbyVPN](../../TESTING.md); that is the single source for the
+workflow instructions.
 
 Release-only Android checks build unsigned APKs twice and compare them.
 `verify_android_reproducibility.py` verifies identical payloads;

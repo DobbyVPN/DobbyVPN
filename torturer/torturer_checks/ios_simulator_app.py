@@ -46,7 +46,7 @@ CLEANUP_RESERVE_SECONDS = 120
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
 IOS_KMP_BUILD_TIMEOUT_SECONDS = 15 * 60
 COMMAND_TERMINATION_GRACE_SECONDS = 15
-UI_SMOKE_TEST = "IOSAppUITests/IOSAppUITests/testConnectionSettingsNavigationAndText"
+UI_SMOKE_TEST = "iosAppUITests/IOSAppUITests/testConnectionSettingsNavigationAndText"
 
 
 class IOSSimulatorAppContractError(RuntimeError):
