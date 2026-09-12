@@ -120,7 +120,8 @@ jobs:
               ;;
             windows)
               package="$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi"
-              export PACKAGE_WIN="$(cygpath -w "$package")"
+              PACKAGE_WIN="$(cygpath -w "$package")"
+              export PACKAGE_WIN
               powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$ErrorActionPreference="Stop"; $p=Start-Process msiexec.exe -ArgumentList @("/i",$env:PACKAGE_WIN,"/qn","/norestart") -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "msiexec failed" }; $root="$env:ProgramFiles\DobbyVPN"; $cli=Get-ChildItem $root -Filter "dobby-cli.exe" -Recurse -File; $service=Get-ChildItem $root -Filter "windows_grpcvpnserver.exe" -Recurse -File; if ($cli.Count -ne 1 -or $service.Count -ne 1) { throw "installed closure is ambiguous" }; Write-Output ("$($cli[0].FullName)|$($service[0].FullName)")' > "$SERVICE_DIR/installed-paths.txt"
               IFS='|' read -r cli service < <(tr -d '\r' < "$SERVICE_DIR/installed-paths.txt")
               cli="$(cygpath "$cli")"; service="$(cygpath "$service")"
@@ -200,7 +201,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$PLATFORM" = windows ]; then
-            export SERVICE_WIN="$(cygpath -w "$SERVICE")" SERVICE_OUT_WIN="$(cygpath -w "$EVIDENCE_DIR/service.log.stdout")" SERVICE_ERR_WIN="$(cygpath -w "$EVIDENCE_DIR/service.log.stderr")" SERVICE_LOG_PATH_WIN="$(cygpath -w "$EVIDENCE_DIR/service.log")" SERVICE_LOG_ROOT_WIN="$(cygpath -w "$EVIDENCE_DIR")"
+            SERVICE_WIN="$(cygpath -w "$SERVICE")"
+            SERVICE_OUT_WIN="$(cygpath -w "$EVIDENCE_DIR/service.log.stdout")"
+            SERVICE_ERR_WIN="$(cygpath -w "$EVIDENCE_DIR/service.log.stderr")"
+            SERVICE_LOG_PATH_WIN="$(cygpath -w "$EVIDENCE_DIR/service.log")"
+            SERVICE_LOG_ROOT_WIN="$(cygpath -w "$EVIDENCE_DIR")"
+            export SERVICE_WIN SERVICE_OUT_WIN SERVICE_ERR_WIN SERVICE_LOG_PATH_WIN SERVICE_LOG_ROOT_WIN
             service_pid="$(powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$ErrorActionPreference="Stop"; $env:DOBBY_LOG_PATH=$env:SERVICE_LOG_PATH_WIN; $env:DOBBY_LOG_ROOT=$env:SERVICE_LOG_ROOT_WIN; $p=Start-Process -FilePath $env:SERVICE_WIN -ArgumentList @("-port","50051") -RedirectStandardOutput $env:SERVICE_OUT_WIN -RedirectStandardError $env:SERVICE_ERR_WIN -PassThru; $p.Id')"
           elif [ "$PLATFORM" = macos ]; then
             launchd_stdout="$SERVICE_DIR/macos-launchd-print.stdout.log"
