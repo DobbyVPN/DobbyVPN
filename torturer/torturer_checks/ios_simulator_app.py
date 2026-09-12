@@ -36,6 +36,7 @@ _APP_LOG_CONTAINER_IDENTIFIER = "group.vpn.dobby.app"
 _APP_LOG_NAME = "app_logs.txt"
 _GO_APP_LOG_NAME = "go_app_logs.jsonl"
 _MINI_STARTUP_MARKER = b"startup.initialized mode=mini"
+_METAL_STARTUP_MARKER = b"startup.ui_attached mode=normal"
 _DEFAULT_ARCHITECTURE = "arm64"
 _SUPPORTED_ARCHITECTURES = frozenset(("arm64", "amd64"))
 _XCODE_ARCHITECTURES = {"arm64": "arm64", "amd64": "x86_64"}
@@ -45,9 +46,7 @@ MAX_RUN_SECONDS = 30 * 60
 CLEANUP_RESERVE_SECONDS = 120
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
 IOS_KMP_BUILD_TIMEOUT_SECONDS = 15 * 60
-IOS_UI_TEST_TIMEOUT_SECONDS = 15 * 60
 COMMAND_TERMINATION_GRACE_SECONDS = 15
-UI_SMOKE_TEST = "iosAppUITests/IOSAppUITests/testConnectionSettingsNavigationAndText"
 
 
 class IOSSimulatorAppContractError(RuntimeError):
@@ -257,27 +256,6 @@ def require_metal(runner: CommandRunner, *, budget: RunBudget) -> None:
         )
 
 
-def xcodebuild_ui_smoke_command(
-    *, candidate_root: Path, device_udid: str, work_dir: Path,
-    architecture: str = _DEFAULT_ARCHITECTURE,
-) -> list[str]:
-    try:
-        udid = simctl_boot_command(device_udid)[-1]
-    except IOSSimulatorContractError as error:
-        raise IOSSimulatorAppContractError(str(error)) from error
-    if architecture not in _SUPPORTED_ARCHITECTURES:
-        raise IOSSimulatorAppContractError("Simulator architecture must be arm64 or amd64")
-    return [
-        "xcodebuild", "test", "-project", str(candidate_root / _PROJECT_PATH),
-        "-scheme", "iosAppUITests", "-configuration", _CONFIGURATION,
-        "-sdk", "iphonesimulator", "-destination", f"platform=iOS Simulator,id={udid}",
-        "-derivedDataPath", str(work_dir / "derived-data"),
-        f"ARCHS={_XCODE_ARCHITECTURES[architecture]}",
-        "CODE_SIGNING_ALLOWED=YES", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_IDENTITY=-",
-        f"-only-testing:{UI_SMOKE_TEST}",
-    ]
-
-
 def public_ios_simulator_app_contract(architecture: str) -> IOSSimulatorAppContract:
     return IOSSimulatorAppContract(architecture=architecture)
 
@@ -404,12 +382,14 @@ def _log_bytes(path: Path) -> bytes:
         return b""
 
 
-def _wait_for_mini_startup(
+def _wait_for_startup(
     log_path: Path,
     baseline: bytes,
     *,
+    mode: str,
     budget: RunBudget,
 ) -> None:
+    marker = _MINI_STARTUP_MARKER if mode == "mini" else _METAL_STARTUP_MARKER
     deadline = min(
         budget.deadline - budget.cleanup_reserve_seconds,
         budget.clock() + _STARTUP_WAIT_SECONDS,
@@ -417,13 +397,16 @@ def _wait_for_mini_startup(
     while True:
         current = _log_bytes(log_path)
         new_records = current[len(baseline):] if current.startswith(baseline) else current
-        if _MINI_STARTUP_MARKER in new_records:
+        if marker in new_records:
             return
         remaining = deadline - budget.clock()
         if remaining <= 0:
-            raise IOSSimulatorAppContractError(
+            message = (
                 "Mini Simulator app did not write startup.initialized mode=mini"
+                if mode == "mini"
+                else "Metal Simulator app did not attach its main view"
             )
+            raise IOSSimulatorAppContractError(message)
         time.sleep(min(0.1, remaining))
 
 
@@ -477,7 +460,7 @@ def _terminate_app(
     _require_success(
         runner,
         simctl_terminate_command(simulator.udid, contract.bundle_identifier),
-        "terminate Mini Simulator app",
+        "terminate Simulator app",
         budget=budget,
         timeout_seconds=budget.cleanup_timeout(),
     )
@@ -488,18 +471,16 @@ def run_ios_simulator_app_contract(
     candidate_root: Path,
     work_dir: Path,
     runner: CommandRunner,
-    existing_app: Path | None = None,
     mode: str = "metal",
     contract: IOSSimulatorAppContract = PUBLIC_IOS_SIMULATOR_APP_CONTRACT,
     budget: RunBudget | None = None,
     diagnostic_dir: Path | None = None,
 ) -> IOSSimulatorAppEvidence:
-    """Run the Mini startup marker or Metal UI XCTest, then shut down the Simulator."""
+    """Launch the app, verify its startup marker, then shut down the Simulator."""
     mode = _validate_mode(mode)
     budget = budget or RunBudget()
-    existing_app_path = (
-        Path(existing_app) if mode == "mini" and existing_app is not None else None
-    )
+    if mode == "metal":
+        require_metal(runner, budget=budget)
     work_dir.mkdir(parents=True, exist_ok=True)
     simulator: AvailableSimulator | None = None
     container: Path | None = None
@@ -507,7 +488,7 @@ def run_ios_simulator_app_contract(
     boot_started = False
     failure: BaseException | None = None
     evidence: IOSSimulatorAppEvidence | None = None
-    app_path: Path | None = existing_app_path
+    app_path = contract.app_path(work_dir)
 
     try:
         inventory = _require_success(
@@ -532,57 +513,43 @@ def run_ios_simulator_app_contract(
             budget=budget,
         )
 
-        if mode == "mini":
-            if app_path is None:
-                _require_success(
-                    runner,
-                    xcodebuild_app_command(
-                        contract, candidate_root=candidate_root, device_udid=simulator.udid,
-                        work_dir=work_dir, mode=mode,
-                    ),
-                    "build Mini Simulator app",
-                    budget=budget,
-                )
-                app_path = contract.app_path(work_dir)
-            _require_success(
-                runner,
-                simctl_install_command(simulator.udid, app_path),
-                "install Mini Simulator app",
-                budget=budget,
-            )
-            container = _app_container(runner, simulator.udid, budget=budget)
-            if container is None:
-                raise IOSSimulatorAppContractError("Simulator app log container is unavailable")
-            log_path = container / _APP_LOG_NAME
-            baseline = _log_bytes(log_path)
-            _require_success(
-                runner,
-                simctl_launch_command(simulator.udid, contract.bundle_identifier),
-                "launch Mini Simulator app",
-                budget=budget,
-            )
-            app_launched = True
-            _wait_for_mini_startup(log_path, baseline, budget=budget)
-        else:
-            # XCTest owns app launch and teardown in Metal mode. Its exit
-            # status is the UI contract; do not add a parallel marker protocol.
-            _require_success(
-                runner,
-                xcodebuild_ui_smoke_command(
-                    candidate_root=candidate_root,
-                    device_udid=simulator.udid,
-                    work_dir=work_dir,
-                    architecture=contract.architecture,
-                ),
-                "run iOS Simulator UI XCTest",
-                budget=budget,
-                timeout_seconds=budget.operation_timeout(IOS_UI_TEST_TIMEOUT_SECONDS),
-            )
-            app_path = existing_app_path or contract.app_path(work_dir)
+        _require_success(
+            runner,
+            xcodebuild_app_command(
+                contract,
+                candidate_root=candidate_root,
+                device_udid=simulator.udid,
+                work_dir=work_dir,
+                mode=mode,
+            ),
+            f"build {mode.title()} Simulator app",
+            budget=budget,
+        )
+        if not app_path.is_dir():
+            raise IOSSimulatorAppContractError(f"iOS Simulator build produced no app bundle: {app_path}")
+        _require_success(
+            runner,
+            simctl_install_command(simulator.udid, app_path),
+            "install Simulator app",
+            budget=budget,
+        )
+        container = _app_container(runner, simulator.udid, budget=budget)
+        if container is None:
+            raise IOSSimulatorAppContractError("Simulator app log container is unavailable")
+        log_path = container / _APP_LOG_NAME
+        baseline = _log_bytes(log_path)
+        _require_success(
+            runner,
+            simctl_launch_command(simulator.udid, contract.bundle_identifier),
+            "launch Simulator app",
+            budget=budget,
+        )
+        app_launched = True
+        _wait_for_startup(log_path, baseline, mode=mode, budget=budget)
 
         evidence = IOSSimulatorAppEvidence(
             simulator=simulator,
-            app=SimulatorApp(app_path=app_path or contract.app_path(work_dir),
+            app=SimulatorApp(app_path=app_path,
                              bundle_identifier=contract.bundle_identifier,
                              architecture=contract.architecture),
             mode=mode,
@@ -591,11 +558,11 @@ def run_ios_simulator_app_contract(
         failure = error
     finally:
         if simulator is not None:
-            if mode == "mini" and app_launched:
+            if app_launched:
                 try:
                     _terminate_app(runner, simulator, contract, budget=budget)
                 except BaseException as error:
-                    failure = _add_note(failure, "Mini app cleanup also failed", error)
+                    failure = _add_note(failure, "Simulator app cleanup also failed", error)
             if diagnostic_dir is not None:
                 if container is None and boot_started:
                     container = _app_container(
@@ -629,11 +596,9 @@ def prepare_ios_simulator_candidate(
     work_dir: Path,
     runner: CommandRunner,
     contract: IOSSimulatorAppContract,
-    mode: str,
     budget: RunBudget,
-) -> Path | None:
-    """Build native frameworks; Mini also builds the app, while Metal XCTest builds it."""
-    mode = _validate_mode(mode)
+) -> None:
+    """Build and stage the native frameworks needed by the Simulator app."""
     candidate_root = Path(candidate_root).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     go_root = candidate_root / "go_module"
@@ -683,27 +648,3 @@ def prepare_ios_simulator_candidate(
         "stage iOS KMP framework",
         budget=budget,
     )
-
-    if mode == "metal":
-        return None
-
-    inventory = _require_success(
-        runner,
-        ["xcrun", "simctl", "list", "devices", "available", "-j"],
-        "list Simulators for app build",
-        budget=budget,
-    )
-    simulator = select_available_iphone(inventory.stdout)
-    app_path = contract.app_path(work_dir)
-    _require_success(
-        runner,
-        xcodebuild_app_command(
-            contract, candidate_root=candidate_root, device_udid=simulator.udid,
-            work_dir=work_dir, mode=mode,
-        ),
-        f"build {mode.title()} Simulator app",
-        budget=budget,
-    )
-    if not app_path.is_dir():
-        raise IOSSimulatorAppContractError(f"iOS Simulator build produced no app bundle: {app_path}")
-    return app_path

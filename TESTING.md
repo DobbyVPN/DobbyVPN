@@ -59,8 +59,10 @@ The Test workflow covers Swift lifecycle and KMP shared-core tests.
 The private Harness also runs the app-contract helper in
 `torturer/tests/ios_simulator/`. Local Intel runs use explicit Mini mode and
 check initialization without Metal. GitHub uses explicit Metal mode, which
-fails if the host has no usable Metal device and includes one bounded native UI
-smoke. Neither mode is VPN traffic qualification.
+requires usable Metal and checks that the normal app builds, launches, and
+attaches its main view. Shared Compose tests cover UI behavior; this startup
+smoke does not prove that Metal presented a frame. Neither mode is VPN traffic
+qualification.
 
 Simulator coverage is not physical-device VPN coverage. The vendor
 TrustTunnel bridge is device-only; the Simulator returns an unsupported
@@ -76,8 +78,8 @@ Product and functional tests live at one revision. See
 Pushes to `main` and pull requests run **Test** automatically. To check a
 feature branch before opening a pull request, use **Actions → Test → Run
 workflow** and select that branch. Its goal is source/build checks, including
-the iOS Simulator Metal UI smoke on a Metal-capable runner; it does not create
-a Render VPN or publish anything.
+the iOS Simulator Metal app-startup smoke on a Metal-capable runner; it does
+not create a Render VPN or publish anything.
 
 After the intended change is merged, use **Actions → Release → Run workflow**
 on `main` when you want to qualify real signed packages. It tests those exact

@@ -48,16 +48,13 @@ def run(
 
     runner = Runner()
     budget = ios.RunBudget(max_seconds=timeout, cleanup_reserve_seconds=min(120, timeout / 4))
-    if simulator_mode == "metal":
-        ios.require_metal(runner, budget=budget)
     work = run_dir / "work" / "ios"
-    app = ios.prepare_ios_simulator_candidate(
+    ios.prepare_ios_simulator_candidate(
         candidate_root=run_dir / "source", work_dir=work, runner=runner,
-        contract=contract, mode=simulator_mode, budget=budget,
+        contract=contract, budget=budget,
     )
     evidence = ios.run_ios_simulator_app_contract(
         candidate_root=run_dir / "source", work_dir=work, runner=runner,
-        existing_app=app if simulator_mode == "mini" else None,
         contract=contract, budget=budget,
         mode=simulator_mode,
         diagnostic_dir=logs / "ios",

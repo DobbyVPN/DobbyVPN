@@ -142,10 +142,17 @@ class IOSComposeScreenTest {
                 }
 
                 onNodeWithTag(AutomationSemantics.CONNECTION_SCREEN).assertExists()
+                val subscriptionUrl = "https://example.test/persisted-profile"
+                val subscriptionInput = onNodeWithTag(AutomationSemantics.SUBSCRIPTION_INPUT)
+                subscriptionInput.performTextInput(subscriptionUrl)
+                subscriptionInput.assertTextContains(subscriptionUrl)
                 onNodeWithText("Settings").performClick()
                 onNodeWithTag(AutomationSemantics.SETTINGS_SCREEN).assertExists()
                 onNodeWithText(BuildConfig.VERSION_NAME).assertExists()
                 onNodeWithText(BuildConfig.PROJECT_REPOSITORY_COMMIT).assertExists()
+                onNodeWithTag(AutomationSemantics.CONNECTION_NAV).performClick()
+                onNodeWithTag(AutomationSemantics.SUBSCRIPTION_INPUT)
+                    .assertTextContains(subscriptionUrl)
             }
         } finally {
             viewModelStoreOwner.viewModelStore.clear()

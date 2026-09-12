@@ -1,4 +1,4 @@
-"""Run the hosted Dobby iOS Simulator Metal UI check without VPN credentials."""
+"""Run the hosted iOS Simulator Metal app-startup check without VPN credentials."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from torturer_checks.ios_simulator_app import (  # noqa: E402
     RunBudget,
     SubprocessCommandRunner,
     public_ios_simulator_app_contract,
-    require_metal,
     run_ios_simulator_app_contract,
 )
 
@@ -30,12 +29,10 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_arguments(argv)
     try:
-        # The workflow stages the Go/KMP dependencies. This helper checks Metal
-        # and runs the single xcodebuild UI-test build against its Simulator.
+        # The workflow stages Go/KMP dependencies and runs their tests first.
         contract = public_ios_simulator_app_contract("arm64")
         runner = SubprocessCommandRunner()
         budget = RunBudget()
-        require_metal(runner, budget=budget)
         evidence = run_ios_simulator_app_contract(
             candidate_root=args.candidate_root,
             work_dir=args.work_dir,
@@ -48,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(
-        "iOS-Simulator-Metal UI check passed: "
+        "iOS-Simulator-Metal app startup check passed: "
         f"{evidence.simulator.name} ({evidence.simulator.runtime})"
     )
     return 0

@@ -253,7 +253,7 @@ jobs:
           if-no-files-found: error
 
   ios_simulator_metal:
-    name: iOS Simulator Metal and UI checks
+    name: iOS Simulator Metal app startup check
     needs: ios_libraries
     runs-on: macos-15
     timeout-minutes: 30
@@ -301,7 +301,7 @@ jobs:
             kmp_module/app/build/bin/iosSimulatorArm64/debugFramework/app.framework \
             swift_module/app.framework
 
-      - name: Run the Metal capability check and UI smoke
+      - name: Build and launch the normal app with Metal
         env:
           PYTHONPATH: torturer
         run: |

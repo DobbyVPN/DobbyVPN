@@ -37,28 +37,27 @@ class LocalSimulatorTests(unittest.TestCase):
 
         with patch.object(local_vm_ios.platform, "machine", return_value="x86_64"), \
                 patch.object(local_vm_ios.ios.SubprocessCommandRunner, "run", autospec=True, side_effect=execute), \
-                patch.object(local_vm_ios.ios, "prepare_ios_simulator_candidate", autospec=True, return_value=self.root / "app.app") as prepare, \
+                patch.object(local_vm_ios.ios, "prepare_ios_simulator_candidate", autospec=True) as prepare, \
                 patch.object(local_vm_ios.ios, "run_ios_simulator_app_contract", autospec=True, side_effect=lifecycle) as run_contract:
             runtime = local_vm_ios.run(self.root, self.logs, 300, None, "mini")
         self.assertEqual(prepare.call_args.kwargs["contract"].architecture, "amd64")
+        self.assertNotIn("mode", prepare.call_args.kwargs)
         self.assertEqual(run_contract.call_args.kwargs["diagnostic_dir"], self.logs / "ios")
         self.assertEqual(run_contract.call_args.kwargs["mode"], "mini")
+        self.assertNotIn("existing_app", run_contract.call_args.kwargs)
         self.assertFalse(runtime["installed"])
         self.assertIn(["xcrun", "simctl", "uninstall", "device-1", "vpn.dobby.app"], commands)
         self.assertTrue((self.logs / "simulator.json").exists())
 
-    def test_metal_lane_leaves_app_build_to_xctest(self):
+    def test_metal_mode_is_owned_by_the_app_contract(self):
         def lifecycle(**kwargs):
-            self.assertIsNone(kwargs["existing_app"])
             self.assertEqual(kwargs["mode"], "metal")
             return SimpleNamespace(simulator=SimpleNamespace(udid="device-1"))
 
-        with patch.object(local_vm_ios.ios, "require_metal") as require_metal, \
-                patch.object(local_vm_ios.ios, "prepare_ios_simulator_candidate", return_value=None) as prepare, \
+        with patch.object(local_vm_ios.ios, "prepare_ios_simulator_candidate") as prepare, \
                 patch.object(local_vm_ios.ios, "run_ios_simulator_app_contract", side_effect=lifecycle) as run_contract:
             local_vm_ios.run(self.root, self.logs, 300, "arm64", "metal")
-        require_metal.assert_called_once()
-        self.assertEqual(prepare.call_args.kwargs["mode"], "metal")
+        self.assertNotIn("mode", prepare.call_args.kwargs)
         self.assertEqual(run_contract.call_args.kwargs["mode"], "metal")
 
     def test_simulator_never_uses_vpn_candidate_builder_or_profile(self):

@@ -13,7 +13,6 @@ from unittest.mock import patch
 from torturer_checks.ios_simulator_app import (
     CLEANUP_RESERVE_SECONDS,
     IOS_KMP_BUILD_TIMEOUT_SECONDS,
-    IOS_UI_TEST_TIMEOUT_SECONDS,
     MAX_RUN_SECONDS,
     CommandResult,
     IOSSimulatorAppContractError,
@@ -23,11 +22,9 @@ from torturer_checks.ios_simulator_app import (
     metal_probe_command,
     prepare_ios_simulator_candidate,
     public_ios_simulator_app_contract,
-    require_metal,
     run_ios_simulator_app_contract,
     select_available_iphone,
     xcodebuild_app_command,
-    xcodebuild_ui_smoke_command,
 )
 
 
@@ -58,12 +55,14 @@ class FakeRunner:
         root: Path,
         *,
         fail: dict[tuple[str, ...], CommandResult] | None = None,
-        write_mini_marker: bool = True,
+        startup_mode: str = "mini",
+        write_startup_marker: bool = True,
         app_logs: bytes = b'{"message":"old run"}\n',
     ) -> None:
         self.root = root
         self.fail = fail or {}
-        self.write_mini_marker = write_mini_marker
+        self.startup_mode = startup_mode
+        self.write_startup_marker = write_startup_marker
         self.commands: list[list[str]] = []
         self.calls: list[tuple[list[str], Path | None, float | None]] = []
         self.container = root / "simulator-app-group"
@@ -80,20 +79,25 @@ class FakeRunner:
                 return result
         if command == ["xcrun", "simctl", "list", "devices", "available", "-j"]:
             return CommandResult(0, json.dumps(inventory()))
+        if command[:2] == ["swift", "-e"]:
+            return CommandResult(0, "true\n")
         if command[:3] == ["xcrun", "simctl", "get_app_container"]:
             return CommandResult(0, f"{self.container}\n")
         if command[:3] == ["xcrun", "simctl", "launch"]:
-            if self.write_mini_marker:
+            if self.write_startup_marker:
+                marker = (
+                    b"startup.initialized mode=mini"
+                    if self.startup_mode == "mini"
+                    else b"startup.ui_attached mode=normal"
+                )
                 with (self.container / "app_logs.txt").open("ab") as output:
-                    output.write(b'{"message":"startup.initialized mode=mini"}\n')
+                    output.write(b'{"message":"' + marker + b'"}\n')
             return CommandResult(0, f"{BUNDLE}: 1001\n")
         if command[:2] == ["xcodebuild", "build"]:
             derived_data = Path(command[command.index("-derivedDataPath") + 1])
             app = derived_data / "Build" / "Products" / "Debug-iphonesimulator" / "doBBYVPN.app"
             app.mkdir(parents=True, exist_ok=True)
             return CommandResult(0)
-        if command[:2] == ["xcodebuild", "test"]:
-            return CommandResult(0, "Test Suite passed\n")
         if command[:2] == ["/bin/bash", "scripts/build_ios_xcframework.sh"]:
             (Path(cwd) / "DobbyVPNRuntime.xcframework").mkdir(parents=True, exist_ok=True)
             return CommandResult(0)
@@ -147,27 +151,6 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
             ":app:linkDebugFrameworkIosSimulatorArm64", ":app:iosSimulatorArm64Test",
         ))
 
-    def test_metal_probe_and_xctest_command_are_explicit(self) -> None:
-        self.assertEqual(metal_probe_command(), [
-            "swift", "-e", "import Metal; print(MTLCreateSystemDefaultDevice() != nil)",
-        ])
-        runner = unittest.mock.Mock()
-        runner.run.return_value = CommandResult(0, "false\n")
-        with self.assertRaisesRegex(IOSSimulatorAppContractError, "usable Metal"):
-            require_metal(runner, budget=RunBudget())
-        runner.run.return_value = CommandResult(0, "true\n")
-        require_metal(runner, budget=RunBudget())
-
-        command = xcodebuild_ui_smoke_command(
-            candidate_root=self.candidate, device_udid=UDID, work_dir=self.root / "work",
-        )
-        self.assertEqual(command[:2], ["xcodebuild", "test"])
-        self.assertIn(
-            "-only-testing:iosAppUITests/IOSAppUITests/testConnectionSettingsNavigationAndText",
-            command,
-        )
-        self.assertNotIn("xcodebuild build", command)
-
     def test_mini_build_is_explicitly_non_metal_and_native_arch(self) -> None:
         command = xcodebuild_app_command(
             self.contract, candidate_root=self.candidate, device_udid=UDID,
@@ -178,105 +161,121 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
 
     def test_mini_requires_fresh_startup_marker_and_cleans_up(self) -> None:
         work = self.root / "work"
-        app = work / "fixture.app"
-        app.mkdir(parents=True)
         runner = FakeRunner(self.root)
         diagnostics = self.root / "logs" / "ios"
         evidence = run_ios_simulator_app_contract(
             candidate_root=self.candidate,
             work_dir=work,
             runner=runner,
-            existing_app=app,
             mode="mini",
             contract=self.contract,
             diagnostic_dir=diagnostics,
         )
         self.assertEqual(evidence.mode, "mini")
-        self.assertEqual(evidence.app.app_path, app)
+        self.assertTrue(evidence.app.app_path.is_dir())
+        self.assertNotIn(metal_probe_command(), runner.commands)
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "install"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "launch"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "terminate"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
-        self.assertFalse(any(command[:2] == ["xcodebuild", "test"] for command in runner.commands))
         self.assertIn(b"startup.initialized mode=mini", (diagnostics / "app_logs.txt").read_bytes())
         self.assertEqual((diagnostics / "go_app_logs.jsonl").read_bytes(), b"go log\n")
 
     def test_mini_fails_without_new_startup_marker_but_still_shuts_down(self) -> None:
-        app = self.root / "existing.app"
-        app.mkdir()
-        runner = FakeRunner(self.root, write_mini_marker=False, app_logs=b'{"message":"startup.initialized mode=mini"}\n')
+        runner = FakeRunner(
+            self.root,
+            write_startup_marker=False,
+            app_logs=b'{"message":"startup.initialized mode=mini"}\n',
+        )
         with patch("torturer_checks.ios_simulator_app._STARTUP_WAIT_SECONDS", 0.01):
             with self.assertRaisesRegex(IOSSimulatorAppContractError, "did not write startup.initialized"):
                 run_ios_simulator_app_contract(
                     candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
-                    existing_app=app, mode="mini", contract=self.contract,
+                    mode="mini", contract=self.contract,
                 )
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
-    def test_metal_contract_is_xctest_outcome_without_parallel_install_or_marker(self) -> None:
-        runner = FakeRunner(self.root)
+    def test_metal_contract_builds_launches_and_checks_view_attachment(self) -> None:
+        runner = FakeRunner(self.root, startup_mode="metal")
         evidence = run_ios_simulator_app_contract(
             candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
             mode="metal", contract=self.contract,
         )
         self.assertEqual(evidence.mode, "metal")
-        xctest_timeout = next(
-            timeout for command, _, timeout in runner.calls
-            if command[:2] == ["xcodebuild", "test"]
-        )
-        self.assertEqual(xctest_timeout, IOS_UI_TEST_TIMEOUT_SECONDS)
-        self.assertFalse(any(command[:3] == ["xcrun", "simctl", "install"] for command in runner.commands))
-        self.assertFalse(any(command[:3] == ["xcrun", "simctl", "launch"] for command in runner.commands))
+        self.assertEqual(runner.commands[0], metal_probe_command())
+        self.assertTrue(evidence.app.app_path.is_dir())
+        self.assertTrue(any(command[:2] == ["xcodebuild", "build"] for command in runner.commands))
+        self.assertTrue(any(command[:3] == ["xcrun", "simctl", "install"] for command in runner.commands))
+        self.assertTrue(any(command[:3] == ["xcrun", "simctl", "launch"] for command in runner.commands))
+        self.assertTrue(any(command[:3] == ["xcrun", "simctl", "terminate"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
-    def test_xctest_failure_is_failure_and_simulator_is_shut_down(self) -> None:
+    def test_metal_capability_failure_stops_before_simulator_setup(self) -> None:
         runner = FakeRunner(self.root, fail={
-            ("xcodebuild", "test"): CommandResult(65, "test failed", "assertion details"),
+            ("swift", "-e"): CommandResult(0, "false\n"),
         })
-        with self.assertRaisesRegex(IOSSimulatorAppContractError, "assertion details"):
+        with self.assertRaisesRegex(IOSSimulatorAppContractError, "usable Metal"):
             run_ios_simulator_app_contract(
                 candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
                 mode="metal", contract=self.contract,
             )
+        self.assertEqual(runner.commands, [metal_probe_command()])
+
+    def test_metal_launch_failure_shuts_down_simulator(self) -> None:
+        runner = FakeRunner(self.root, fail={
+            ("xcrun", "simctl", "launch"): CommandResult(1, stderr="app failed to launch"),
+        }, startup_mode="metal")
+        with self.assertRaisesRegex(IOSSimulatorAppContractError, "app failed to launch"):
+            run_ios_simulator_app_contract(
+                candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
+                mode="metal", contract=self.contract,
+            )
+        self.assertFalse(any(command[:3] == ["xcrun", "simctl", "terminate"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
-    def test_missing_metal_diagnostics_do_not_turn_a_pass_into_failure(self) -> None:
-        runner = FakeRunner(self.root, fail={
+    def test_metal_requires_fresh_view_attachment_marker(self) -> None:
+        runner = FakeRunner(
+            self.root,
+            startup_mode="metal",
+            write_startup_marker=False,
+            app_logs=b'{"message":"startup.ui_attached mode=normal"}\n',
+        )
+        with patch("torturer_checks.ios_simulator_app._STARTUP_WAIT_SECONDS", 0.01):
+            with self.assertRaisesRegex(IOSSimulatorAppContractError, "did not attach its main view"):
+                run_ios_simulator_app_contract(
+                    candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
+                    mode="metal", contract=self.contract,
+                )
+        self.assertTrue(any(command[:3] == ["xcrun", "simctl", "terminate"] for command in runner.commands))
+        self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
+
+    def test_metal_startup_check_requires_app_log_container(self) -> None:
+        runner = FakeRunner(self.root, startup_mode="metal", fail={
             ("xcrun", "simctl", "get_app_container"): CommandResult(1, stderr="not available"),
         })
-        evidence = run_ios_simulator_app_contract(
-            candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
-            mode="metal", contract=self.contract,
-            diagnostic_dir=self.root / "diagnostics",
-        )
-        self.assertEqual(evidence.mode, "metal")
+        with self.assertRaisesRegex(IOSSimulatorAppContractError, "not available"):
+            run_ios_simulator_app_contract(
+                candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
+                mode="metal", contract=self.contract,
+                diagnostic_dir=self.root / "diagnostics",
+            )
+        self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
-    def test_prepare_uses_native_sim_framework_and_gradle_exit_code_without_xml_protocol(self) -> None:
+    def test_prepare_builds_native_frameworks_and_runs_kmp_tests(self) -> None:
         runner = FakeRunner(self.root)
         work = self.root / "work"
-        app = prepare_ios_simulator_candidate(
+        prepare_ios_simulator_candidate(
             candidate_root=self.candidate, work_dir=work, runner=runner,
-            contract=self.contract, mode="mini", budget=RunBudget(),
+            contract=self.contract, budget=RunBudget(),
         )
-        self.assertTrue(app.is_dir())
         go_build = next(command for command in runner.commands if command[:2] == ["/bin/bash", "scripts/build_ios_xcframework.sh"])
         self.assertEqual(go_build[-2:], ["--simulator-architecture", "amd64"])
         gradle = next(command for command in runner.commands if command and command[0] == "./gradlew")
         self.assertIn(":app:iosX64Test", gradle)
         timeout = next(timeout for command, _, timeout in runner.calls if command == gradle)
         self.assertEqual(timeout, IOS_KMP_BUILD_TIMEOUT_SECONDS)
-        self.assertFalse((work / "kmp-test-results").exists())
-        self.assertFalse(any(command[:3] == ["xcrun", "simctl", "boot"] for command in runner.commands))
-
-    def test_metal_prepare_stages_frameworks_without_building_the_app(self) -> None:
-        runner = FakeRunner(self.root)
-        result = prepare_ios_simulator_candidate(
-            candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
-            contract=self.contract, mode="metal", budget=RunBudget(),
-        )
-        self.assertIsNone(result)
         self.assertFalse(any(command[:2] == ["xcodebuild", "build"] for command in runner.commands))
-        self.assertFalse(any(command[:2] == ["xcodebuild", "test"] for command in runner.commands))
+        self.assertFalse(any(command[:3] == ["xcrun", "simctl", "list"] for command in runner.commands))
 
     @unittest.skipUnless(os.name == "posix", "process-group cleanup requires POSIX")
     def test_command_runner_timeout_kills_group_and_keeps_no_sidecars(self) -> None:
