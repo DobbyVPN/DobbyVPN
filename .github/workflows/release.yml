@@ -135,10 +135,105 @@ jobs:
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
 
+  render_start:
+    name: Start one disposable Render VPN
+    needs: [android_build, ios_build, installers_build, fdroid_check, fdroid_scan_apk]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment: render-functional
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Start Render VPN
+        working-directory: torturer
+        env:
+          RENDER_API_TOKEN: ${{ secrets.RENDER_API_TOKEN }}
+          RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+          RENDER_IMAGE_OWNER_ID: ${{ vars.RENDER_IMAGE_OWNER_ID }}
+          RENDER_IMAGE_PATH: ${{ vars.RENDER_IMAGE_PATH }}
+          RENDER_IMAGE_DIGEST: ${{ vars.RENDER_IMAGE_DIGEST }}
+          RENDER_REGION: ${{ vars.RENDER_REGION }}
+        run: |
+          set -euo pipefail
+          test -n "$RENDER_API_TOKEN"
+          test -n "$RENDER_OWNER_ID"
+          test -n "$RENDER_IMAGE_OWNER_ID"
+          test -n "$RENDER_IMAGE_PATH"
+          test -n "$RENDER_IMAGE_DIGEST"
+          test -n "$RENDER_REGION"
+          PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_provider.render_service start \
+            --run-id "$GITHUB_RUN_ID" \
+            --attempt "$GITHUB_RUN_ATTEMPT" \
+            --owner-id "$RENDER_OWNER_ID" \
+            --image-owner-id "$RENDER_IMAGE_OWNER_ID" \
+            --image-path "$RENDER_IMAGE_PATH" \
+            --image-digest "$RENDER_IMAGE_DIGEST" \
+            --region "$RENDER_REGION" \
+            --output "$RUNNER_TEMP/render"
+
+      - name: Upload shared Render profile
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v7
+        with:
+          name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/render/profile.toml
+            ${{ runner.temp }}/render/deadline_epoch.txt
+          if-no-files-found: error
+          retention-days: 1
+
   qualification:
     name: Qualify exact Release packages
-    needs: [android_build, ios_build, installers_build, fdroid_check, fdroid_scan_apk]
+    needs: render_start
     uses: ./.github/workflows/qualification.yml
     permissions:
       contents: read
       actions: write
+    with:
+      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+
+  render_cleanup:
+    name: Delete disposable Render VPN
+    if: always() && needs.render_start.result != 'skipped'
+    needs: [render_start, qualification]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: render-functional
+    permissions:
+      contents: read
+    env:
+      RENDER_API_TOKEN: ${{ secrets.RENDER_API_TOKEN }}
+      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Delete Render VPN
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_provider.render_service stop \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --owner-id "$RENDER_OWNER_ID"
+
+  qualification_result:
+    name: Require qualification and Render cleanup
+    if: always()
+    needs: [render_start, qualification, render_cleanup]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check Render and platform jobs
+        env:
+          RENDER_START_RESULT: ${{ needs.render_start.result }}
+          PLATFORM_RESULT: ${{ needs.qualification.result }}
+          RENDER_CLEANUP_RESULT: ${{ needs.render_cleanup.result }}
+        run: |
+          set -euo pipefail
+          test "$RENDER_START_RESULT" = success
+          test "$PLATFORM_RESULT" = success
+          test "$RENDER_CLEANUP_RESULT" = success
+          echo "Release qualification passed"
