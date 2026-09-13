@@ -140,12 +140,16 @@ jobs:
             android)
               sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;36.0.0' 'emulator' 'system-images;android-35;google_apis;x86_64'
               avdmanager create avd --force --name dobbyvpn-release --package 'system-images;android-35;google_apis;x86_64' --device pixel_2
-              emulator -avd dobbyvpn-release -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > "$SERVICE_DIR/emulator.stdout.log" 2> "$SERVICE_DIR/emulator.stderr.log" &
-              adb wait-for-device
+              emulator -avd dobbyvpn-release -no-window -no-audio -no-boot-anim -no-snapshot > "$SERVICE_DIR/emulator.stdout.log" 2> "$SERVICE_DIR/emulator.stderr.log" &
+              if ! timeout 120s adb wait-for-device; then
+                echo "Android emulator did not become visible to ADB" >&2
+                cat "$SERVICE_DIR/emulator.stderr.log" >&2 || true
+                exit 1
+              fi
               booted=false; for _ in $(seq 1 120); do [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && booted=true && break; sleep 1; done
               test "$booted" = true
               adb root
-              adb wait-for-device
+              timeout 120s adb wait-for-device
               test "$(adb shell id -u | tr -d '\r')" = 0
               signed="$(find release-packages -maxdepth 1 -name 'DobbyVPN-*-sign.apk' -type f)"
               companion="$(find release-packages -maxdepth 1 -name 'DobbyVPN-*-android-test-companion.apk' -type f)"
@@ -302,7 +306,7 @@ jobs:
         run: rm -f "$GITHUB_WORKSPACE/render/profile.toml"
 
       - name: Upload complete app, service, and command logs
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: functional-raw-logs-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.platform }}
