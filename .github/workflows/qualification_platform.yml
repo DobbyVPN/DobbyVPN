@@ -151,6 +151,8 @@ jobs:
               avdmanager create avd --force --name dobbyvpn-release --package 'system-images;android-35;google_apis;x86_64' --device pixel_2
               test -s "$ANDROID_AVD_HOME/dobbyvpn-release.ini"
               "$emulator_bin" -list-avds | grep -Fxq dobbyvpn-release
+              sudo -n chown "$(id -un)" /dev/kvm
+              "$emulator_bin" -accel-check
               "$emulator_bin" -avd dobbyvpn-release -no-window -no-audio -no-boot-anim -no-snapshot > "$SERVICE_DIR/emulator.stdout.log" 2> "$SERVICE_DIR/emulator.stderr.log" &
               if ! timeout 120s adb wait-for-device; then
                 echo "Android emulator did not become visible to ADB" >&2
