@@ -68,6 +68,8 @@ jobs:
             go_module/libc++.so.1
             go_module/libc++abi.so.1
             go_module/wintun.dll
+            go_module/dobby-cli
+            go_module/dobby-cli.exe
           key: ${{ runner.os }}-${{ matrix.arch }}-desktop-vpn-lib-${{ hashFiles('.go-version', 'go_module/**', '.github/scripts/desktop_build.py', '.github/workflows/desktop_libs_generate.yml') }}
 
       - name: Set up Go
@@ -106,7 +108,7 @@ jobs:
           else
             export CGO_LDFLAGS="-L${{ github.workspace }}/go_module"
           fi
-          python .github/scripts/desktop_build.py libs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --go-mod-tidy
+          python .github/scripts/desktop_build.py libs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --go-mod-tidy --with-cli
         shell: bash
 
       - name: Verify Windows service runtime closure
@@ -179,4 +181,28 @@ jobs:
           path: |
             go_module/macos_grpcvpnserver
             go_module/trusttunnel_client
+          if-no-files-found: error
+
+      - name: Upload Windows desktop CLI
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobby-cli-windows
+          path: go_module/dobby-cli.exe
+          if-no-files-found: error
+
+      - name: Upload Linux desktop CLI
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobby-cli-linux
+          path: go_module/dobby-cli
+          if-no-files-found: error
+
+      - name: Upload macOS desktop CLI
+        if: matrix.platform == 'macos'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobby-cli-macos-${{ matrix.arch }}
+          path: go_module/dobby-cli
           if-no-files-found: error

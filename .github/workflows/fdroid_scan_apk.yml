@@ -35,6 +35,9 @@ jobs:
           path: apk
 
       - name: Scan for proprietary packages
+        env:
+          VERSION_NAME: ${{ inputs.version_name }}
+          VERSION_CODE: ${{ inputs.version_code }}
         run: |
           BLOCKED=(
             "com.google.firebase"
@@ -63,14 +66,14 @@ jobs:
             "com.startapp"
           )
 
-          APK=apk/dobbyvpn-android-unsign.apk
+          APK="apk/DobbyVPN-v${VERSION_NAME}-unsign.apk"
           if [ ! -f "$APK" ]; then
             echo "::error::Unsigned APK artifact was not found"
             exit 1
           fi
 
-          test "$(apkanalyzer manifest version-name "$APK")" = "${{ inputs.version_name }}"
-          test "$(apkanalyzer manifest version-code "$APK")" = "${{ inputs.version_code }}"
+          test "$(apkanalyzer manifest version-name "$APK")" = "$VERSION_NAME"
+          test "$(apkanalyzer manifest version-code "$APK")" = "$VERSION_CODE"
 
           PACKAGES=$(apkanalyzer dex packages "$APK" | awk '{print $NF}')
 
