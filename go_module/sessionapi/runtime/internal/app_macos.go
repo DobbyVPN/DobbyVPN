@@ -19,16 +19,6 @@ import (
 	"github.com/jackpal/gateway"
 )
 
-// signalInit sends the initialization result to the channel (if provided) exactly once.
-func signalInit(initResult chan<- error, err error) {
-	if initResult != nil {
-		select {
-		case initResult <- err:
-		default:
-		}
-	}
-}
-
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
 	log.Debugf(Category, "[Darwin][Init] VPN initialization started")
 	defer protected_dialer.ResetDefaultRoute()

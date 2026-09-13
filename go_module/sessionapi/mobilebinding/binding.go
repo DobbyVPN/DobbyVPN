@@ -1,44 +1,40 @@
 // Package mobilebinding exposes the session API through gomobile-safe values.
 //
-// It deliberately serializes only the API's public DTOs.  Configuration bytes
-// are accepted at the edge but are never included in a result or callback.
+// It serializes only public state DTOs. Configuration bytes are accepted at
+// the edge but are never returned in a result or callback.
 package mobilebinding
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	v2 "go_module/sessionapi/v2"
 )
 
 // PlatformCallbacks is implemented by the Android service or iOS extension
-// shell.  Every callback carries both the session and its generation, so a
-// delayed platform result cannot be applied to a later connection attempt.
-// AcquireTunnel must return a newly duplicated descriptor owned by Go.  A
-// negative result is an acquisition failure. Go closes the owned descriptor
-// before invoking ReleaseTunnel; its result is part of the cleanup contract,
-// so a false result prevents Go from publishing cleanup-complete IDLE.
+// shell. State callbacks are wake hints; clients read Snapshot for the current
+// authoritative state. Every callback carries the owner and generation so a
+// delayed platform result cannot affect another connection attempt.
+// AcquireTunnel must return a fresh duplicated descriptor owned by Go. Go
+// closes that descriptor before ReleaseTunnel; a failed release prevents Go
+// from reporting cleanup as complete.
 type PlatformCallbacks interface {
 	AcquireTunnel(sessionID string, generation int64) int32
 	ReleaseTunnel(sessionID string, generation int64, fd int32) bool
 	ProtectSocket(sessionID string, generation int64, fd int32) bool
-	PublishState(sessionID string, generation int64, sequence int64, state string, profileIndex int32, profileProtocol string, failureCode string)
+	PublishState(sessionID string, generation int64, state string, failureCode string)
 }
 
 type managerAPI interface {
-	GetCapabilities(context.Context) v2.Capabilities
-	CreateSession(context.Context) (string, error)
-	RecoverActiveSession(context.Context) (string, error)
-	Configure(context.Context, string, string, []byte) (v2.ConfigureResult, error)
-	Start(context.Context, string, string, v2.StartTarget) (v2.StartResult, error)
-	Stop(context.Context, string, string, uint64) (v2.StopResult, error)
+	Configure(context.Context, string, uint64, []byte) (v2.ConfigureResult, error)
+	Start(context.Context, string, uint64, v2.StartTarget) (v2.StartResult, error)
+	Stop(context.Context, string, uint64) (v2.StopResult, error)
 	Snapshot(context.Context, string) (v2.SnapshotResult, error)
-	Observe(context.Context, string, uint64) (v2.ObserveResult, error)
-	DestroySession(context.Context, string) error
+	Reset(context.Context, string, uint64) (v2.SnapshotResult, error)
 }
 
-// Binding is a thin, synchronous command envelope over one process manager.
-// It contains no configuration cache or VPN lifecycle state of its own.
+// Binding is a thin synchronous JSON boundary over one process manager.
 type Binding struct {
 	manager  managerAPI
 	platform platformControl //nolint:unused // Used by the android/ios platform adapter build.
@@ -53,8 +49,8 @@ type platformControl interface {
 	protectActive(int32) bool
 }
 
-// NewForTest permits pure tests to inject a SessionV2 manager without constructing
-// native protocol implementations. Production mobile builds use New.
+// NewForTest permits pure tests to inject a manager without constructing native
+// protocol implementations. Production mobile builds use New.
 func NewForTest(manager managerAPI) *Binding { return &Binding{manager: manager} }
 
 type envelope struct {
@@ -70,7 +66,12 @@ type envelopeError struct {
 
 func success(value interface{}) string { return encode(envelope{OK: true, Result: value}) }
 func failed(err error) string {
-	return encode(envelope{OK: false, Error: &envelopeError{Code: string(v2.CodeOf(err)), Message: err.Error()}})
+	message := "internal session error"
+	var domain *v2.Error
+	if errors.As(err, &domain) {
+		message = domain.Message
+	}
+	return encode(envelope{OK: false, Error: &envelopeError{Code: string(v2.CodeOf(err)), Message: message}})
 }
 func encode(value interface{}) string {
 	data, err := json.Marshal(value)
@@ -80,67 +81,50 @@ func encode(value interface{}) string {
 	return string(data)
 }
 
-// GetCapabilities returns the JSON envelope used by the mobile binding.
-func (b *Binding) GetCapabilities() string {
-	return success(capabilitiesDTO(b.manager.GetCapabilities(context.Background())))
-}
-
-// CreateSession returns {session_id: ...} in the mobile JSON envelope.
-func (b *Binding) CreateSession() string {
-	id, err := b.manager.CreateSession(context.Background())
+// Configure replaces accepted configuration only if the inspected snapshot is
+// still current. The result identifies the new snapshot revision.
+func (b *Binding) Configure(sessionID string, expectedSequence int64, rawConfig []byte) string {
+	sequence, err := nonNegative(expectedSequence, "configuration sequence")
 	if err != nil {
 		return failed(err)
 	}
-	return success(struct {
-		SessionID string `json:"session_id"`
-	}{id})
-}
-
-// RecoverActiveSession returns the process-owned session that a restarted UI
-// should reattach to, without creating a competing lifecycle owner.
-func (b *Binding) RecoverActiveSession() string {
-	id, err := b.manager.RecoverActiveSession(context.Background())
-	if err != nil {
-		return failed(err)
-	}
-	return success(struct {
-		SessionID string `json:"session_id"`
-	}{id})
-}
-
-// Configure forwards the exact supplied bytes to SessionV2's configuration
-// parser. The result contains only digest, profile summaries, and warnings.
-func (b *Binding) Configure(sessionID, commandID string, rawConfig []byte) string {
-	result, err := b.manager.Configure(context.Background(), sessionID, commandID, append([]byte(nil), rawConfig...))
+	result, err := b.manager.Configure(context.Background(), sessionID, sequence, append([]byte(nil), rawConfig...))
 	if err != nil {
 		return failed(err)
 	}
 	return success(configureDTO(result))
 }
 
-// Start accepts only SessionV2's stable modes and profile indexes.
-func (b *Binding) Start(sessionID, commandID, mode string, index int32) string {
-	if index < 0 && mode != string(v2.AutoSelect) {
-		return failed(&v2.Error{Code: v2.FailureInvalidArgument})
+// Start starts an attempt only if the inspected snapshot is still current.
+func (b *Binding) Start(sessionID string, expectedSequence int64, mode string, index int32) string {
+	sequence, err := nonNegative(expectedSequence, "start sequence")
+	if err != nil {
+		return failed(err)
 	}
-	result, err := b.manager.Start(context.Background(), sessionID, commandID, v2.StartTarget{Mode: v2.StartMode(mode), Index: int(index)})
+	if index < 0 && mode != string(v2.AutoSelect) {
+		return failed(&v2.Error{Code: v2.FailureInvalidArgument, Message: "profile index must be non-negative"})
+	}
+	result, err := b.manager.Start(context.Background(), sessionID, sequence, v2.StartTarget{Mode: v2.StartMode(mode), Index: int(index)})
 	if err != nil {
 		return failed(err)
 	}
 	return success(startDTO(result))
 }
 
-func (b *Binding) Stop(sessionID, commandID string, generation int64) string {
+// Stop stops only the requested generation. Repeating a completed stop is
+// harmless according to the manager contract.
+func (b *Binding) Stop(sessionID string, generation int64) string {
 	if generation <= 0 {
-		return failed(&v2.Error{Code: v2.FailureStaleGeneration})
+		return failed(&v2.Error{Code: v2.FailureStaleGeneration, Message: "generation must be positive"})
 	}
-	result, err := b.manager.Stop(context.Background(), sessionID, commandID, uint64(generation))
+	result, err := b.manager.Stop(context.Background(), sessionID, uint64(generation))
 	if err != nil {
 		return failed(err)
 	}
 	return success(stopDTO(result))
 }
 
+// Snapshot attaches to the process-owned session when sessionID is empty.
 func (b *Binding) Snapshot(sessionID string) string {
 	result, err := b.manager.Snapshot(context.Background(), sessionID)
 	if err != nil {
@@ -149,33 +133,27 @@ func (b *Binding) Snapshot(sessionID string) string {
 	return success(snapshotDTO(result))
 }
 
-func (b *Binding) Observe(sessionID string, afterSequence int64) string {
-	if afterSequence < 0 {
-		return failed(&v2.Error{Code: v2.FailureInvalidArgument})
-	}
-	result, err := b.manager.Observe(context.Background(), sessionID, uint64(afterSequence))
+// Reset clears accepted configuration after successful cleanup and a matching
+// snapshot revision.
+func (b *Binding) Reset(sessionID string, expectedSequence int64) string {
+	sequence, err := nonNegative(expectedSequence, "reset sequence")
 	if err != nil {
 		return failed(err)
 	}
-	return success(observeDTO(result))
-}
-
-func (b *Binding) Destroy(sessionID string) string {
-	if err := b.manager.DestroySession(context.Background(), sessionID); err != nil {
+	result, err := b.manager.Reset(context.Background(), sessionID, sequence)
+	if err != nil {
 		return failed(err)
 	}
-	return success(struct{}{})
+	return success(snapshotDTO(result))
 }
 
-type capabilityDTO struct {
-	Name    string `json:"name"`
-	Enabled bool   `json:"enabled"`
+func nonNegative(value int64, name string) (uint64, error) {
+	if value < 0 {
+		return 0, &v2.Error{Code: v2.FailureInvalidArgument, Message: name + " must be non-negative"}
+	}
+	return uint64(value), nil
 }
-type capabilitiesResultDTO struct {
-	Version   string          `json:"version"`
-	Protocols []string        `json:"protocols"`
-	Features  []capabilityDTO `json:"features"`
-}
+
 type profileDTO struct {
 	Index       int32  `json:"index"`
 	Protocol    string `json:"protocol"`
@@ -185,50 +163,40 @@ type warningDTO struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+type failureDTO struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
 type configureResultDTO struct {
-	Digest   string       `json:"digest"`
-	Profiles []profileDTO `json:"profiles"`
-	Warnings []warningDTO `json:"warnings"`
+	Digest     string       `json:"digest"`
+	Sequence   uint64       `json:"sequence,omitempty"`
+	SourceKind string       `json:"source_kind"`
+	Profiles   []profileDTO `json:"profiles"`
+	Warnings   []warningDTO `json:"warnings"`
 }
 type startResultDTO struct {
 	Generation uint64 `json:"generation"`
+	Sequence   uint64 `json:"sequence"`
 }
 type stopResultDTO struct {
 	Generation uint64 `json:"generation"`
+	Sequence   uint64 `json:"sequence"`
 }
 type snapshotResultDTO struct {
-	SessionID       string      `json:"session_id"`
-	Generation      uint64      `json:"generation"`
-	State           string      `json:"state"`
-	Configured      bool        `json:"configured"`
-	ActiveProfile   *profileDTO `json:"active_profile,omitempty"`
-	LastFailure     string      `json:"last_failure,omitempty"`
-	CleanupComplete bool        `json:"cleanup_complete"`
-}
-type eventDTO struct {
-	SessionID  string      `json:"session_id"`
-	Generation uint64      `json:"generation"`
-	Sequence   uint64      `json:"sequence"`
-	State      string      `json:"state"`
-	Profile    *profileDTO `json:"profile,omitempty"`
-	Failure    string      `json:"failure,omitempty"`
-	Warning    *warningDTO `json:"warning,omitempty"`
-}
-type observeResultDTO struct {
-	Events       []eventDTO `json:"events"`
-	NextSequence uint64     `json:"next_sequence"`
+	SessionID       string       `json:"session_id"`
+	Sequence        uint64       `json:"sequence"`
+	Generation      uint64       `json:"generation"`
+	State           string       `json:"state"`
+	Configured      bool         `json:"configured"`
+	Digest          string       `json:"digest"`
+	SourceKind      string       `json:"source_kind"`
+	Profiles        []profileDTO `json:"profiles"`
+	Warnings        []warningDTO `json:"warnings"`
+	ActiveProfile   *profileDTO  `json:"active_profile,omitempty"`
+	LastFailure     *failureDTO  `json:"last_failure,omitempty"`
+	CleanupComplete bool         `json:"cleanup_complete"`
 }
 
-func capabilitiesDTO(in v2.Capabilities) capabilitiesResultDTO {
-	out := capabilitiesResultDTO{Version: in.Version, Protocols: make([]string, len(in.Protocols)), Features: make([]capabilityDTO, len(in.Features))}
-	for i := range in.Protocols {
-		out.Protocols[i] = string(in.Protocols[i])
-	}
-	for i := range in.Features {
-		out.Features[i] = capabilityDTO{Name: in.Features[i].Name, Enabled: in.Features[i].Enabled}
-	}
-	return out
-}
 func profileResultDTO(in v2.ProfileSummary) profileDTO {
 	return profileDTO{Index: in.Index, Protocol: string(in.Protocol), Description: in.Description}
 }
@@ -239,33 +207,42 @@ func profileResultPtr(in *v2.ProfileSummary) *profileDTO {
 	out := profileResultDTO(*in)
 	return &out
 }
-func configureDTO(in v2.ConfigureResult) configureResultDTO {
-	out := configureResultDTO{Digest: in.Digest, Profiles: make([]profileDTO, len(in.Profiles)), Warnings: make([]warningDTO, len(in.Warnings))}
-	for i := range in.Profiles {
-		out.Profiles[i] = profileResultDTO(in.Profiles[i])
-	}
-	for i := range in.Warnings {
-		out.Warnings[i] = warningDTO{Code: in.Warnings[i].Code, Message: in.Warnings[i].Message}
+func profilesDTO(in []v2.ProfileSummary) []profileDTO {
+	out := make([]profileDTO, len(in))
+	for i := range in {
+		out[i] = profileResultDTO(in[i])
 	}
 	return out
 }
+func warningsDTO(in []v2.Warning) []warningDTO {
+	out := make([]warningDTO, len(in))
+	for i := range in {
+		out[i] = warningDTO{Code: in[i].Code, Message: in[i].Message}
+	}
+	return out
+}
+func configureDTO(in v2.ConfigureResult) configureResultDTO {
+	return configureResultDTO{
+		Digest: in.Digest, Sequence: in.Sequence, SourceKind: string(in.SourceKind),
+		Profiles: profilesDTO(in.Profiles), Warnings: warningsDTO(in.Warnings),
+	}
+}
 func startDTO(in v2.StartResult) startResultDTO {
-	return startResultDTO{Generation: in.Generation}
+	return startResultDTO{Generation: in.Generation, Sequence: in.Sequence}
 }
 func stopDTO(in v2.StopResult) stopResultDTO {
-	return stopResultDTO{Generation: in.Generation}
+	return stopResultDTO{Generation: in.Generation, Sequence: in.Sequence}
 }
 func snapshotDTO(in v2.SnapshotResult) snapshotResultDTO {
-	return snapshotResultDTO{SessionID: in.SessionID, Generation: in.Generation, State: string(in.State), Configured: in.Configured, ActiveProfile: profileResultPtr(in.ActiveProfile), LastFailure: string(in.LastFailure), CleanupComplete: in.CleanupComplete}
-}
-func observeDTO(in v2.ObserveResult) observeResultDTO {
-	out := observeResultDTO{Events: make([]eventDTO, len(in.Events)), NextSequence: in.NextSequence}
-	for i := range in.Events {
-		item := eventDTO{SessionID: in.Events[i].SessionID, Generation: in.Events[i].Generation, Sequence: in.Events[i].Sequence, State: string(in.Events[i].State), Profile: profileResultPtr(in.Events[i].Profile), Failure: string(in.Events[i].Failure)}
-		if in.Events[i].Warning != nil {
-			item.Warning = &warningDTO{Code: in.Events[i].Warning.Code, Message: in.Events[i].Warning.Message}
-		}
-		out.Events[i] = item
+	out := snapshotResultDTO{
+		SessionID: in.SessionID, Sequence: in.Sequence, Generation: in.Generation,
+		State: string(in.State), Configured: in.Configured, Digest: in.Digest,
+		SourceKind: string(in.SourceKind), Profiles: profilesDTO(in.Profiles),
+		Warnings: warningsDTO(in.Warnings), ActiveProfile: profileResultPtr(in.ActiveProfile),
+		CleanupComplete: in.CleanupComplete,
+	}
+	if in.LastFailure != "" {
+		out.LastFailure = &failureDTO{Code: string(in.LastFailure), Message: in.LastFailureMessage}
 	}
 	return out
 }

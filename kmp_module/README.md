@@ -1,8 +1,8 @@
 # Shared Compose client
 
-A Kotlin Multiplatform client that keeps one shared Compose presentation layer
-across Android, iOS, Linux, Windows, and macOS. Go owns configuration parsing,
-protocol selection, SessionV2 lifecycle, and runtime resources in
+A Kotlin Multiplatform app that keeps one shared Compose UI across Android,
+iOS, Linux, Windows, and macOS. Go owns configuration parsing, protocol
+selection, session lifecycle, and runtime resources in
 [`go_module/`](../go_module/); platform shells only provide the OS VPN
 permission, TUN, socket-protection, and extension/service callbacks.
 
@@ -24,13 +24,13 @@ The module is intentionally a shared UI and binding layer:
 
 ```
 kmp_module/
-├── app/ --- shared Compose UI, SessionV2 presentation, and thin shells
-├── grpcprotos/ --- canonical SessionV2/Diagnostics schema
-├── grpcstub/ --- protocol-neutral SessionV2 transport mapping
+├── app/ --- shared Compose UI and thin platform shells
+├── grpcprotos/ --- canonical session/Diagnostics schema
+├── grpcstub/ --- typed desktop gRPC calls
 └── iosApp/
 ```
 
-Do not add a protocol-specific UI toggle, KMP repository, Swift lifecycle
-owner, or separate start/stop RPC. New protocols enter through the Go
-`ProtocolDevice`/SessionV2 extension path described in
+Do not add a protocol-specific UI toggle, KMP repository, another session
+manager in Kotlin or Swift, or protocol-specific start/stop RPCs. New protocols
+enter through the Go `ProtocolDevice` session extension path described in
 [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).

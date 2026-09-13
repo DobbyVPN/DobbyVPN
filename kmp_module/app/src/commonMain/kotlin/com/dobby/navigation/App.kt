@@ -13,10 +13,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -24,93 +21,76 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.navigation.NavHostController
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
-import com.dobby.feature.logging.ui.SettingsScreen
-import com.dobby.feature.logging.presentation.LogsViewModel
-import com.dobby.feature.main.presentation.MainViewModel
-import com.dobby.feature.main.ui.ConnectionScreen
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.dobby.AppDependencies
 import com.dobby.feature.main.ui.AutomationSemantics
-import com.dobby.util.koinViewModel
+import com.dobby.feature.main.ui.ConnectionScreen
+import com.dobby.feature.logging.ui.SettingsScreen as SettingsScreenContent
 
 @Composable
-fun App(modifier: Modifier = Modifier) {
-    val mainViewModel: MainViewModel = koinViewModel()
-    val logsViewModel: LogsViewModel = koinViewModel()
+fun App(
+    dependencies: AppDependencies,
+    modifier: Modifier = Modifier,
+) {
+    val mainViewModel = viewModel { dependencies.createMainViewModel() }
+    val logsViewModel = viewModel { dependencies.createLogsViewModel() }
+    val navigation = dependencies.navigation
+    val screen = navigation.currentScreen
+    val stateHolder = rememberSaveableStateHolder()
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     MaterialTheme(
         colorScheme = lightColorScheme(
             background = Color.White,
-            surface = Color.White
-        )
+            surface = Color.White,
+        ),
     ) {
-        val navController = rememberNavController()
-        val keyboardController = LocalSoftwareKeyboardController.current
-
         Scaffold(
             modifier = modifier
                 .pointerInput(Unit) {
                     detectTapGestures(onTap = { keyboardController?.hide() })
                 },
-            bottomBar = {
-                BottomBar(navController)
-            },
-            content = { innerPadding ->
-                NavHost(
-                    modifier = Modifier.padding(innerPadding),
-                    navController = navController,
-                    startDestination = MainScreen
-                ) {
-                    composable<MainScreen> {
-                        ConnectionScreen(mainViewModel = mainViewModel, logsViewModel = logsViewModel)
-                    }
-                    composable<SettingsScreen> {
-                        SettingsScreen()
-                    }
+            bottomBar = { BottomBar(navigation) },
+        ) { innerPadding ->
+            stateHolder.SaveableStateProvider(screen.name) {
+                when (screen) {
+                    AppScreen.CONNECTION -> ConnectionScreen(
+                        mainViewModel = mainViewModel,
+                        logsViewModel = logsViewModel,
+                        modifier = Modifier.padding(innerPadding),
+                    )
+                    AppScreen.SETTINGS -> SettingsScreenContent(
+                        modifier = Modifier.padding(innerPadding),
+                    )
                 }
             }
-        )
+        }
     }
 }
 
 @Composable
-private fun BottomBar(
-    navController: NavHostController
-) {
-    var selectedItem by remember { mutableIntStateOf(0) }
-    val items = listOf("Connection", "Settings")
-    val screens = listOf(MainScreen, SettingsScreen)
-    val selectedIcons = listOf(Icons.Filled.Home, Icons.Default.Settings)
+private fun BottomBar(navigation: AppNavigationState) {
+    val screen = navigation.currentScreen
+    val items = listOf(
+        Triple("Connection", AppScreen.CONNECTION, Icons.Filled.Home),
+        Triple("Settings", AppScreen.SETTINGS, Icons.Default.Settings),
+    )
 
     NavigationBar {
-        items.forEachIndexed { index, item ->
+        items.forEach { (label, target, icon) ->
+            val tag = if (target == AppScreen.CONNECTION) {
+                AutomationSemantics.CONNECTION_NAV
+            } else {
+                AutomationSemantics.SETTINGS_NAV
+            }
             NavigationBarItem(
                 modifier = Modifier
-                    .testTag(if (index == 0) AutomationSemantics.CONNECTION_NAV else AutomationSemantics.SETTINGS_NAV)
-                    .semantics {
-                        contentDescription = if (index == 0) {
-                            AutomationSemantics.CONNECTION_NAV
-                        } else {
-                            AutomationSemantics.SETTINGS_NAV
-                        }
-                    },
-                icon = {
-                    Icon(
-                        selectedIcons[index],
-                        contentDescription = null
-                    )
-                },
-                label = { Text(item) },
-                selected = selectedItem == index,
-                onClick = {
-                    selectedItem = index
-                    navController.navigate(screens[index]) {
-                        launchSingleTop = true
-                        restoreState = true
-                    }
-                }
+                    .testTag(tag)
+                    .semantics { contentDescription = tag },
+                icon = { Icon(icon, contentDescription = null) },
+                label = { Text(label) },
+                selected = screen == target,
+                onClick = { navigation.select(target) },
             )
         }
     }

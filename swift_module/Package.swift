@@ -19,10 +19,9 @@ let package = Package(
                 "CopyLogsInteractorImpl.swift",
                 "DobbyConfigsRepositoryImpl.swift",
                 "IOSSessionShell.swift",
-                "LoggerManagerImpl.swift",
                 "SharedKeychainSecretStore.swift",
                 "VpnManagerImpl.swift",
-                "nativeModule.swift",
+                "AppCompositionRoot.swift",
             ],
             sources: [
                 "IOSProviderMessageProtocol.swift",

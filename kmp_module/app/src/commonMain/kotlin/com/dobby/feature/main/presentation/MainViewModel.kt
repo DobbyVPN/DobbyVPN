@@ -9,30 +9,26 @@ import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.SessionControllerResult
-import com.dobby.feature.main.domain.SessionEvent
-import com.dobby.feature.main.domain.SessionStartTarget
 import com.dobby.feature.main.domain.SessionFailureCode
+import com.dobby.feature.main.domain.SessionSnapshot
+import com.dobby.feature.main.domain.SessionSourceKind
+import com.dobby.feature.main.domain.SessionStartTarget
 import com.dobby.feature.main.domain.SessionState
 import com.dobby.feature.main.ui.MainUiState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-/**
- * A deliberately thin UI adapter around sessionapi/v2. Go owns config parsing, profile
- * selection, probing, failover, and the tunnel lifecycle; this class only acquires bytes,
- * asks for permission, and renders ordered session events.
- */
+/** Go owns configuration, selection, failover, and lifecycle; this class maps snapshots to UI. */
 class MainViewModel(
     private val configsRepository: DobbyConfigsRepository,
     private val connectionStateRepository: ConnectionStateRepository,
@@ -41,120 +37,89 @@ class MainViewModel(
     private val logger: Logger,
 ) : ViewModel() {
     private val lifecycleMutex = Mutex()
-    private val lifecycle = SessionUiLifecycle()
-    private var sessionObservationJob: Job? = null
-    private var startInFlight = false
+    private val revisionGate = SessionRevisionGate()
+    private var activeGeneration: ULong? = null
     private var configured = false
+    private var startInFlight = false
     private var pendingPermissionStart = false
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
 
     init {
-        viewModelScope.launch {
-            _uiState.emit(MainUiState(connectionURL = configsRepository.getConnectionURL()))
-        }
+        _uiState.value = MainUiState(connectionURL = configsRepository.getConnectionURL())
         viewModelScope.launch {
             permissionEventsChannel.permissionsGrantedEvents.collect(::startVpn)
         }
-        // Reattach to a process-owned SessionV2 generation after a UI restart.
-        // The controller uses RecoverActiveSession where the platform exposes a
-        // shared Go manager; the stream is still the authoritative state source.
-        startSessionObservation()
+        observeSnapshots()
     }
 
     fun onConnectionUrlChanged(connectionUrl: String) {
         _uiState.value = _uiState.value.copy(connectionURL = connectionUrl)
-        configsRepository.setConnectionURL(connectionUrl)
     }
 
     fun onConnectionButtonClicked(connectionUrl: String) {
         _uiState.value = _uiState.value.copy(lastFailureCode = null)
-        logger.log("Connection button clicked for $connectionUrl")
+        logger.log("Connection button clicked")
         viewModelScope.launch {
             when (connectionStateRepository.statusFlow.value) {
                 VpnConnectionState.DISCONNECTED -> connect(connectionUrl)
                 VpnConnectionState.CONNECTING, VpnConnectionState.CONNECTED -> stopVpnService()
-                VpnConnectionState.STOPPING -> logger.log("Ignoring connection button while session stop is pending")
+                VpnConnectionState.STOPPING -> logger.log("Ignoring connection button while stop is pending")
             }
         }
     }
 
-    /** Acquires opaque configuration bytes and passes them unchanged to the session API. */
+    /** Sends the entered source unchanged; only an accepted URL is persisted. */
     suspend fun setConfig(connectionUrl: String): Boolean {
-        logger.log("Acquiring connection configuration for $connectionUrl")
-        // Go owns URL acquisition and parsing. The UI forwards the opaque source bytes.
-        val rawConfig = connectionUrl.encodeToByteArray()
-        configsRepository.setConnectionURL(connectionUrl)
-
-        // SessionController bridges into synchronous Go/platform calls that may wait for
-        // VPN service readiness or network probes; keep those calls off the UI dispatcher.
-        return when (val result = withContext(Dispatchers.Default) {
-            sessionController.configure(rawConfig)
-        }) {
+        val result = withContext(Dispatchers.Default) {
+            sessionController.configure(connectionUrl.encodeToByteArray())
+        }
+        return when (result) {
             is SessionControllerResult.Success -> {
-                // Configure is the authoritative beginning of a fresh usable
-                // session scope. The Go ledger remains authoritative; this only
-                // prevents a prior session's UI cursor/generation from leaking.
-                lifecycleMutex.withLock { lifecycle.reset() }
-                configured = true
+                lifecycleMutex.withLock {
+                    revisionGate.advance(result.value.sessionId, result.value.sequence)
+                    configured = true
+                }
+                if (result.value.sourceKind == SessionSourceKind.URL) {
+                    configsRepository.setConnectionURL(connectionUrl)
+                }
                 logger.log("Session configuration accepted: profiles=${result.value.profiles.size}")
                 true
             }
             is SessionControllerResult.Failure -> {
-                configured = false
-                logger.error("Session configuration rejected: failureCode=${result.code.name} message=${result.message}")
+                logger.error("Session configuration rejected: failureCode=${result.code.name}")
                 publishFailure(result.code)
                 false
             }
         }
     }
 
-    /** Collects the ordered session stream; mobile shells use native state callbacks. */
-    // A transport Flow may surface platform-specific gRPC exceptions; the shared UI must
-    // convert any non-cancellation transport failure into its typed INTERNAL state.
+    /** Reattaches by consuming the current snapshot stream; no event history or cursor is needed. */
     @Suppress("TooGenericExceptionCaught")
-    fun startSessionObservation() {
-        if (sessionObservationJob?.isActive == true) return
-        sessionObservationJob = viewModelScope.launch {
+    private fun observeSnapshots() {
+        viewModelScope.launch {
             while (isActive) {
                 try {
-                    // Reconcile the retained ledger before every subscription.
-                    // This closes a sequence gap caused by a dropped stream or
-                    // a recreated UI without introducing timer polling.
-                    reconcileSession()
-                    val afterSequence = lifecycleMutex.withLock { lifecycle.lastSequence }
-                    sessionController.watch(afterSequence)
+                    sessionController.watch()
                         .flowOn(Dispatchers.Default)
-                        .collect(::renderEvent)
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
+                        .collect(::renderSnapshot)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
                     if (isActive) {
-                        logger.error("Session event stream failed\n${error.stackTraceToString()}")
+                        logger.error("Session snapshot stream failed")
                         publishFailure(SessionFailureCode.INTERNAL)
                     }
                 }
-                if (isActive) {
-                    // A stream ending is a transport boundary, not a lifecycle
-                    // transition. Reconcile once, then reconnect with a small
-                    // bounded backoff to avoid a hot loop on a dead service.
-                    reconcileSession()
-                    delay(100)
-                }
+                if (isActive) delay(1_000)
             }
         }
     }
 
-    /** Stop observation is idempotent and only cancels the push stream; no polling loop is used. */
-    fun stopSessionObservation() {
-        sessionObservationJob?.cancel()
-        sessionObservationJob = null
-    }
-
-    /** Starts only AUTO_SELECT; profile choice and failover remain in the Go session. */
+    /** Starts Go's automatic protocol selection after Android permission succeeds. */
     suspend fun startVpnService(): Boolean = lifecycleMutex.withLock {
-        if (!configured || startInFlight || lifecycle.activeGeneration != null) {
+        if (!configured || startInFlight || activeGeneration != null) {
             logger.log("Ignoring duplicate or unconfigured session start")
             return@withLock false
         }
@@ -163,59 +128,49 @@ class MainViewModel(
             sessionController.start(SessionStartTarget.AutoSelect)
         }) {
             is SessionControllerResult.Success -> {
+                revisionGate.advance(result.value.sessionId, result.value.sequence)
+                activeGeneration = result.value.generation
                 startInFlight = false
-                val state = lifecycle.begin(result.value)
-                if (state == null) return@withLock false
-                publish(state)
-                logger.log("Session start accepted for generation=${result.value}")
-                startSessionObservation()
+                publish(VpnConnectionState.CONNECTING)
                 true
             }
             is SessionControllerResult.Failure -> {
                 startInFlight = false
-                lifecycle.failStart()
-                logger.error("Session start rejected: failureCode=${result.code.name} message=${result.message}")
+                activeGeneration = null
+                logger.error("Session start rejected: failureCode=${result.code.name}")
                 publish(VpnConnectionState.DISCONNECTED, result.code)
                 false
             }
         }
     }
 
-    /** Sends a generation-correlated stop to the session API. */
     fun stopVpnService() {
         viewModelScope.launch {
             val generation = lifecycleMutex.withLock {
-                val activeGeneration = lifecycle.activeGeneration ?: return@withLock null
-                val stoppingState = lifecycle.requestStop()
-                if (stoppingState != null) {
-                    publish(stoppingState)
-                }
-                activeGeneration
+                val active = activeGeneration ?: return@withLock null
+                publish(VpnConnectionState.STOPPING)
+                active
             } ?: return@launch
 
-            when (val result = withContext(Dispatchers.Default) {
-                sessionController.stop(generation)
-            }) {
-                is SessionControllerResult.Success -> logger.log("Session stop accepted for generation=$generation")
-                is SessionControllerResult.Failure ->
-                    logger.error(
-                        "Session stop rejected: generation=$generation failureCode=${result.code.name} message=${result.message}",
-                    )
-                        .also { publishFailure(result.code) }
+            when (val result = withContext(Dispatchers.Default) { sessionController.stop(generation) }) {
+                is SessionControllerResult.Success -> {
+                    lifecycleMutex.withLock {
+                        revisionGate.advance(result.value.sessionId, result.value.sequence)
+                    }
+                    logger.log("Session stop accepted for generation=$generation")
+                }
+                is SessionControllerResult.Failure -> {
+                    logger.error("Session stop rejected: generation=$generation failureCode=${result.code.name}")
+                    publishFailure(result.code)
+                }
             }
         }
     }
 
     private suspend fun connect(connectionUrl: String) {
-        if (!setConfig(connectionUrl)) {
-            return
-        }
+        if (!setConfig(connectionUrl)) return
         pendingPermissionStart = true
-        if (isPermissionCheckNeeded) {
-            permissionEventsChannel.checkPermissions()
-        } else {
-            startVpn(true)
-        }
+        if (isPermissionCheckNeeded) permissionEventsChannel.checkPermissions() else startVpn(true)
     }
 
     private suspend fun startVpn(isPermissionGranted: Boolean) {
@@ -229,83 +184,19 @@ class MainViewModel(
         }
     }
 
-    private suspend fun renderEvent(event: SessionEvent) {
+    private suspend fun renderSnapshot(snapshot: SessionSnapshot) {
         lifecycleMutex.withLock {
-            val state = lifecycle.render(event)
-            if (state != null) {
-                publish(
-                    state,
-                    if (event.state == SessionState.FAILED) {
-                        event.failureCode ?: error("failed session event has no failure code")
-                    } else {
-                        null
-                    },
+            if (!revisionGate.accept(snapshot.sessionId, snapshot.sequence)) return@withLock
+            configured = snapshot.configured
+            activeGeneration = snapshot.generation.takeIf {
+                snapshot.state in setOf(
+                    SessionState.PROBING,
+                    SessionState.PREPARING,
+                    SessionState.CONNECTED,
+                    SessionState.STOPPING,
                 )
             }
-        }
-    }
-
-    private suspend fun reconcileSession() {
-        val afterSequence = lifecycleMutex.withLock { lifecycle.lastSequence }
-        when (val result = withContext(Dispatchers.Default) {
-            sessionController.observe(afterSequence)
-        }) {
-            is SessionControllerResult.Success -> {
-                val ordered = result.value.events.sortedBy { it.sequence }
-                val contiguous = mutableListOf<SessionEvent>()
-                var expectedSequence = afterSequence + 1uL
-                var gapDetected = false
-                ordered.forEach { event ->
-                    if (gapDetected) return@forEach
-                    when {
-                        event.sequence < expectedSequence -> Unit
-                        event.sequence > expectedSequence -> gapDetected = true
-                        else -> {
-                            contiguous += event
-                            expectedSequence = event.sequence + 1uL
-                        }
-                    }
-                }
-                if (!gapDetected && result.value.nextSequence >= expectedSequence) gapDetected = true
-                if (!gapDetected) {
-                    for (event in contiguous) {
-                        renderEvent(event)
-                    }
-                }
-                if (result.value.events.isEmpty() || gapDetected) {
-                    // A gap is not permission to advance lastSequence. Reconcile
-                    // a Go snapshot first, then the next Observe starts from the
-                    // unchanged cursor.
-                    when (val snapshot = withContext(Dispatchers.Default) {
-                        sessionController.snapshot()
-                    }) {
-                        is SessionControllerResult.Success -> {
-                            lifecycleMutex.withLock {
-                                lifecycle.reconcile(snapshot.value)?.let { state -> publish(state, snapshot.value.lastFailureCode) }
-                            }
-                        }
-                        is SessionControllerResult.Failure -> if (snapshot.code == SessionFailureCode.NOT_FOUND) {
-                            lifecycleMutex.withLock { lifecycle.reset() }
-                            configured = false
-                        } else {
-                            logger.error(
-                                "Session snapshot failed: failureCode=${snapshot.code.name} message=${snapshot.message}",
-                            )
-                            publishFailure(snapshot.code)
-                        }
-                    }
-                }
-            }
-            is SessionControllerResult.Failure -> if (result.code == SessionFailureCode.NOT_FOUND) {
-                // The Go session is gone (for example after provider process
-                // replacement). Reconcile this typed identity loss as a new
-                // scope; do not carry the old sequence into a recreated session.
-                lifecycleMutex.withLock { lifecycle.reset() }
-                configured = false
-            } else {
-                logger.error("Session observation failed: failureCode=${result.code.name} message=${result.message}")
-                publishFailure(result.code)
-            }
+            publish(snapshot.state.toConnectionState(), snapshot.lastFailure?.code)
         }
     }
 
@@ -313,17 +204,43 @@ class MainViewModel(
         state: VpnConnectionState,
         failureCode: SessionFailureCode? = null,
     ) {
-        _uiState.emit(
-            _uiState.value.copy(
-                connectionState = state,
-                lastFailureCode = failureCode,
-            ),
-        )
+        _uiState.emit(_uiState.value.copy(connectionState = state, lastFailureCode = failureCode))
         connectionStateRepository.updateStatus(state)
     }
 
     private fun publishFailure(code: SessionFailureCode) {
         _uiState.value = _uiState.value.copy(lastFailureCode = code)
     }
+}
 
+/** Prevents a delayed watch response from rolling UI state behind an accepted command revision. */
+internal class SessionRevisionGate {
+    private var sessionId: String? = null
+    private var sequence: ULong = 0uL
+
+    fun advance(sessionId: String, sequence: ULong) {
+        if (this.sessionId != sessionId) {
+            this.sessionId = sessionId
+            this.sequence = sequence
+        } else if (sequence > this.sequence) {
+            this.sequence = sequence
+        }
+    }
+
+    fun accept(sessionId: String, sequence: ULong): Boolean {
+        if (this.sessionId != sessionId) {
+            advance(sessionId, sequence)
+            return true
+        }
+        if (sequence < this.sequence) return false
+        this.sequence = sequence
+        return true
+    }
+}
+
+private fun SessionState.toConnectionState() = when (this) {
+    SessionState.PROBING, SessionState.PREPARING -> VpnConnectionState.CONNECTING
+    SessionState.CONNECTED -> VpnConnectionState.CONNECTED
+    SessionState.STOPPING -> VpnConnectionState.STOPPING
+    SessionState.IDLE, SessionState.CONFIGURED, SessionState.FAILED -> VpnConnectionState.DISCONNECTED
 }

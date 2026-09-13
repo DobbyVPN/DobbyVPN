@@ -30,11 +30,12 @@ import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.domain.SessionConfiguration
 import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.SessionControllerResult
-import com.dobby.feature.main.domain.SessionEvent
 import com.dobby.feature.main.domain.SessionFailureCode
-import com.dobby.feature.main.domain.SessionObservation
 import com.dobby.feature.main.domain.SessionSnapshot
+import com.dobby.feature.main.domain.SessionSourceKind
+import com.dobby.feature.main.domain.SessionStart
 import com.dobby.feature.main.domain.SessionStartTarget
+import com.dobby.feature.main.domain.SessionStop
 import com.dobby.feature.main.domain.SessionState
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.feature.main.ui.AutomationSemantics
@@ -48,9 +49,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import okio.FileSystem
 import okio.Path
-import org.koin.core.context.startKoin
-import org.koin.core.context.stopKoin
-import org.koin.dsl.module
 
 @OptIn(ExperimentalTestApi::class)
 class IOSComposeScreenTest {
@@ -60,7 +58,6 @@ class IOSComposeScreenTest {
     fun removeTestLogs() {
         fixtures.forEach { it.close() }
         fixtures.clear()
-        stopKoin()
     }
 
     @Test
@@ -126,7 +123,6 @@ class IOSComposeScreenTest {
     @Test
     fun app_navigates_to_settings_and_shows_build_information() {
         val fixture = fixture()
-        startKoin { modules(fixture.koinModule()) }
         val viewModelStoreOwner = TestViewModelStoreOwner()
         val lifecycleOwner = TestLifecycleOwner()
 
@@ -137,7 +133,7 @@ class IOSComposeScreenTest {
                         LocalViewModelStoreOwner provides viewModelStoreOwner,
                         LocalLifecycleOwner provides lifecycleOwner,
                     ) {
-                        App()
+                        App(fixture.appDependencies)
                     }
                 }
 
@@ -163,7 +159,10 @@ class IOSComposeScreenTest {
         configureResult: SessionControllerResult<SessionConfiguration> =
             SessionControllerResult.Success(
                 SessionConfiguration(
+                    sessionId = "test-session",
+                    sequence = 1uL,
                     digest = "test-digest",
+                    sourceKind = SessionSourceKind.URL,
                     profiles = emptyList(),
                     warnings = emptyList(),
                 ),
@@ -177,44 +176,27 @@ private class UiFixture(
     private val logPath: Path =
         FileSystem.SYSTEM_TEMPORARY_DIRECTORY / "dobby-ios-compose-ui-${kotlin.random.Random.nextLong()}.jsonl"
     private val logsRepository = LogsRepository(logPath)
-    private val appLogger = AppLogger(logsRepository)
     val sessionController = FakeSessionController(configureResult)
     private val configsRepository = FakeConfigsRepository()
     private val connectionStateRepository = ConnectionStateRepository()
     private val permissionEventsChannel = PermissionEventsChannel()
-    val mainViewModel: MainViewModel by lazy {
-        MainViewModel(
-            configsRepository = configsRepository,
+    private val appLogger = AppLogger(logsRepository)
+    val appDependencies: AppDependencies by lazy {
+        AppDependencies(
             connectionStateRepository = connectionStateRepository,
             permissionEventsChannel = permissionEventsChannel,
             sessionController = sessionController,
             logger = appLogger,
+            configsRepository = configsRepository,
+            logsRepository = logsRepository,
+            copyLogsInteractor = NoOpCopyLogsInteractor,
         )
     }
-    val logsViewModel: LogsViewModel by lazy {
-        LogsViewModel(logsRepository, NoOpCopyLogsInteractor)
+    val mainViewModel: MainViewModel by lazy {
+        appDependencies.createMainViewModel()
     }
-
-    fun koinModule() = module {
-        single<DobbyConfigsRepository> { configsRepository }
-        single<ConnectionStateRepository> { connectionStateRepository }
-        single<PermissionEventsChannel> { permissionEventsChannel }
-        single<SessionController> { sessionController }
-        single<LogsRepository> { logsRepository }
-        single<AppLogger> { appLogger }
-        single<CopyLogsInteractor> { NoOpCopyLogsInteractor }
-        factory<MainViewModel> {
-            MainViewModel(
-                get<DobbyConfigsRepository>(),
-                get<ConnectionStateRepository>(),
-                get<PermissionEventsChannel>(),
-                get<SessionController>(),
-                get<AppLogger>(),
-            )
-        }
-        factory<LogsViewModel> {
-            LogsViewModel(get<LogsRepository>(), get<CopyLogsInteractor>())
-        }
+    val logsViewModel: LogsViewModel by lazy {
+        appDependencies.createLogsViewModel()
     }
 
     fun close() {
@@ -243,32 +225,35 @@ private class FakeSessionController(
         return configureResult
     }
 
-    override suspend fun start(target: SessionStartTarget): SessionControllerResult<ULong> =
-        SessionControllerResult.Success(1uL)
+    override suspend fun start(target: SessionStartTarget): SessionControllerResult<SessionStart> =
+        SessionControllerResult.Success(SessionStart(sessionId = "test-session", generation = 1uL, sequence = 2uL))
 
-    override suspend fun stop(generation: ULong): SessionControllerResult<ULong> =
-        SessionControllerResult.Success(generation)
+    override suspend fun stop(generation: ULong): SessionControllerResult<SessionStop> =
+        SessionControllerResult.Success(SessionStop(sessionId = "test-session", generation = generation, sequence = 3uL))
 
     override suspend fun snapshot(): SessionControllerResult<SessionSnapshot> =
         SessionControllerResult.Success(
             SessionSnapshot(
+                sessionId = "test-session",
+                sequence = 1uL,
                 generation = 0uL,
                 state = SessionState.IDLE,
                 configured = false,
+                digest = "",
+                sourceKind = SessionSourceKind.INLINE,
+                profiles = emptyList(),
+                warnings = emptyList(),
+                activeProfile = null,
+                lastFailure = null,
                 cleanupComplete = true,
-                sessionId = "test-session",
             ),
         )
 
-    override suspend fun observe(afterSequence: ULong): SessionControllerResult<SessionObservation> =
-        SessionControllerResult.Success(SessionObservation(emptyList(), afterSequence))
-
-    override fun watch(afterSequence: ULong): Flow<SessionEvent> = flow {
+    override fun watch(): Flow<SessionSnapshot> = flow {
         awaitCancellation()
     }
 
-    override suspend fun destroy(): SessionControllerResult<Unit> =
-        SessionControllerResult.Success(Unit)
+    override suspend fun reset(): SessionControllerResult<SessionSnapshot> = snapshot()
 }
 
 private object NoOpCopyLogsInteractor : CopyLogsInteractor {

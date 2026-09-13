@@ -9,7 +9,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
-/** Decodes the stable JSON envelope returned by every session transport. */
+/** Decodes the small JSON boundary used by gomobile. */
 internal object SessionEnvelopeDecoder {
     private val json = Json
 
@@ -18,10 +18,9 @@ internal object SessionEnvelopeDecoder {
         val ok = root["ok"]?.jsonPrimitive?.booleanOrNull ?: error("missing or invalid ok")
         if (!ok) {
             val failure = root["error"]?.jsonObject ?: error("failure envelope has no error")
-            val code = failure.sessionString("code").also { require(it.isNotBlank()) }
             return SessionControllerResult.Failure(
                 message = failure.sessionString("message").also { require(it.isNotBlank()) },
-                code = code.toSessionFailureCode(),
+                code = failure.sessionString("code").toSessionFailureCode(),
             )
         }
         return SessionControllerResult.Success(transform(root["result"]?.jsonObject ?: JsonObject(emptyMap())))
@@ -34,19 +33,9 @@ internal fun JsonObject.sessionString(name: String): String =
 internal fun JsonObject.sessionOptionalString(name: String): String? =
     this[name]?.jsonPrimitive?.content?.takeIf(String::isNotBlank)
 
-internal fun JsonObject.requiredSessionIdentifier(name: String): String =
-    sessionString(name).also { value ->
-        require(value.isNotEmpty() && value.all { it.isLetterOrDigit() || it == '-' || it == '.' || it == '_' })
-    }
-
-/** Required for Go-owned monotonic values; never manufacture a zero cursor. */
 internal fun JsonObject.requiredSessionLong(name: String): Long =
     this[name]?.jsonPrimitive?.longOrNull ?: error("missing or invalid $name")
 
-internal fun JsonObject.requiredSessionSequence(): Long =
-    requiredSessionLong("sequence").also { require(it > 0) }
-
-/** Allows the initial zero cursor but never accepts a negative Go value. */
 internal fun JsonObject.requiredNonNegativeSessionLong(name: String): Long =
     requiredSessionLong(name).also { require(it >= 0) }
 
@@ -77,18 +66,23 @@ internal fun String.toSessionState(): SessionState = when (this) {
     "CONNECTED" -> SessionState.CONNECTED
     "STOPPING" -> SessionState.STOPPING
     "FAILED" -> SessionState.FAILED
-    "DESTROYED" -> SessionState.DESTROYED
     else -> error("unsupported session state: $this")
 }
 
-internal fun JsonObject.toSessionConfiguration(): SessionConfiguration = SessionConfiguration(
+private fun String.toSessionSourceKind(): SessionSourceKind = when (this) {
+    "INLINE" -> SessionSourceKind.INLINE
+    "URL" -> SessionSourceKind.URL
+    "" -> SessionSourceKind.INLINE
+    else -> error("unsupported session source kind: $this")
+}
+
+internal fun JsonObject.toSessionConfiguration(sessionId: String): SessionConfiguration = SessionConfiguration(
+    sessionId = sessionId,
+    sequence = requiredNonNegativeSessionLong("sequence").toULong(),
     digest = sessionString("digest"),
+    sourceKind = sessionString("source_kind").toSessionSourceKind(),
     profiles = sessionArray("profiles").map { profile ->
-        SessionProfile(
-            index = profile.sessionInt("index"),
-            protocol = profile.sessionString("protocol").toSessionProtocol(),
-            description = profile.sessionString("description"),
-        )
+        SessionProfile(profile.sessionInt("index"), profile.sessionString("protocol").toSessionProtocol(), profile.sessionString("description"))
     },
     warnings = sessionArray("warnings").map { warning ->
         SessionWarning(warning.sessionString("code"), warning.sessionString("message"))
@@ -96,43 +90,32 @@ internal fun JsonObject.toSessionConfiguration(): SessionConfiguration = Session
 )
 
 internal fun JsonObject.toSessionSnapshot(): SessionSnapshot {
-    val state = sessionString("state").toSessionState()
+    val failure = this["last_failure"]?.let { value ->
+        val obj = value.jsonObject
+        SessionFailure(
+            code = obj.sessionString("code").toSessionFailureCode(),
+            message = obj.sessionString("message"),
+        )
+    }
+    val activeProfile = this["active_profile"]?.jsonObject?.toSessionProfile()
     return SessionSnapshot(
+        sessionId = sessionString("session_id"),
+        sequence = requiredNonNegativeSessionLong("sequence").toULong(),
         generation = requiredNonNegativeSessionLong("generation").toULong(),
-        state = state,
+        state = sessionString("state").toSessionState(),
         configured = sessionBool("configured"),
+        digest = sessionString("digest"),
+        sourceKind = sessionString("source_kind").toSessionSourceKind(),
+        profiles = sessionArray("profiles").map(JsonObject::toSessionProfile),
+        warnings = sessionArray("warnings").map { SessionWarning(it.sessionString("code"), it.sessionString("message")) },
+        activeProfile = activeProfile,
+        lastFailure = failure,
         cleanupComplete = sessionBool("cleanup_complete"),
-        lastFailureCode = sessionOptionalString("last_failure")?.toSessionFailureCode(),
-        sessionId = requiredSessionIdentifier("session_id"),
     )
 }
 
-internal fun JsonObject.toSessionObservation(): SessionObservation {
-    val events = sessionArray("events").map { event ->
-        val state = event.sessionString("state").toSessionState()
-        val generation = event.requiredNonNegativeSessionLong("generation")
-        if (state in setOf(
-                SessionState.PROBING,
-                SessionState.PREPARING,
-                SessionState.CONNECTED,
-                SessionState.STOPPING,
-            )) {
-            require(generation > 0)
-        }
-        SessionEvent(
-            sessionId = event.requiredSessionIdentifier("session_id"),
-            generation = generation.toULong(),
-            sequence = event.requiredSessionSequence().toULong(),
-            state = state,
-            failureCode = event.sessionOptionalString("failure")?.toSessionFailureCode(),
-        )
-    }
-    // One Observe response is scoped to one Go session. Reject a mixed
-    // response instead of allowing a foreign sequence to advance the cursor
-    // before the UI can notice the identity mismatch.
-    require(events.map { it.sessionId }.distinct().size <= 1)
-    return SessionObservation(
-        events = events,
-        nextSequence = requiredNonNegativeSessionLong("next_sequence").toULong(),
-    )
-}
+private fun JsonObject.toSessionProfile() = SessionProfile(
+    index = sessionInt("index"),
+    protocol = sessionString("protocol").toSessionProtocol(),
+    description = sessionString("description"),
+)

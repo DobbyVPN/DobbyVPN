@@ -23,18 +23,6 @@ import (
 
 var windowsRunSequence atomic.Uint64
 
-// signalInit sends the initialization result to the channel (if provided) exactly once.
-// After signaling, further calls are no-ops.
-func signalInit(initResult chan<- error, err error) {
-	if initResult != nil {
-		select {
-		case initResult <- err:
-		default:
-			// Already signaled
-		}
-	}
-}
-
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
 	startedAt := time.Now()
 	defer protected_dialer.ResetDefaultRoute()

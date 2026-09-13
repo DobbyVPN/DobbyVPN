@@ -45,32 +45,17 @@ func newMobileTestTun(t *testing.T, closeErr error) *mobileTestTun {
 	return &mobileTestTun{File: readEnd, closeErr: closeErr}
 }
 
-func TestCloseMobileTunAfterEngineRetainsLedgerOnFailure(t *testing.T) {
+func TestMobileTunCloseResultIsCachedDuringRollback(t *testing.T) {
 	want := errors.New("test TUN close failed")
-	releaseCalls := 0
-	err := closeMobileTunAfterEngine(
-		func() error { return want },
-		func() { releaseCalls++ },
-	)
-	if !errors.Is(err, want) {
-		t.Fatalf("closeMobileTunAfterEngine error = %v, want %v", err, want)
+	tun := newMobileTestTun(t, want)
+	runtime := &nativeRuntime{tun: tun, tunOwned: true}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := runtime.closeTunLocked(); !errors.Is(err, want) {
+			t.Fatalf("closeTunLocked attempt %d error = %v, want %v", attempt, err, want)
+		}
 	}
-	if releaseCalls != 0 {
-		t.Fatalf("ledger release calls = %d, want 0 after failed close", releaseCalls)
-	}
-}
-
-func TestCloseMobileTunAfterEngineReleasesOnlyAfterSuccess(t *testing.T) {
-	releaseCalls := 0
-	err := closeMobileTunAfterEngine(
-		func() error { return nil },
-		func() { releaseCalls++ },
-	)
-	if err != nil {
-		t.Fatalf("closeMobileTunAfterEngine error = %v", err)
-	}
-	if releaseCalls != 1 {
-		t.Fatalf("ledger release calls = %d, want 1", releaseCalls)
+	if tun.closeCalls != 1 {
+		t.Fatalf("TUN close calls = %d, want 1", tun.closeCalls)
 	}
 }
 
@@ -87,7 +72,7 @@ func connectMobileBounded(t *testing.T, c *nativeRuntime) error {
 	}
 }
 
-func TestMobileConnectPanicRecoveryDoesNotDeadlockAndAllowsNextGeneration(t *testing.T) {
+func TestMobileConnectPanicRecoveryDoesNotDeadlockOrFenceNextAttempt(t *testing.T) {
 	firstTun := newMobileTestTun(t, nil)
 	c := newNativeRuntime(&panicMobileDevice{}, firstTun)
 
@@ -104,16 +89,19 @@ func TestMobileConnectPanicRecoveryDoesNotDeadlockAndAllowsNextGeneration(t *tes
 		t.Fatalf("TUN close calls after panic cleanup = %d, want 1", firstTun.closeCalls)
 	}
 
-	// A clean rollback leaves the adapter unfenced: a later generation can
-	// enter Connect instead of blocking on the old mutex or cleanup error.
+	// A clean rollback leaves the adapter unfenced: a later Connect attempt
+	// does not block on the mutex or retain the old cleanup error.
 	secondTun := newMobileTestTun(t, nil)
 	c.device = &panicMobileDevice{}
 	c.tun = secondTun
 	if err := connectMobileBounded(t, c); err == nil {
 		t.Fatal("later generation unexpectedly succeeded after forced test panic")
 	}
-	if got := c.generationValue(); got != 2 {
-		t.Fatalf("generation after successful-cleanup retry = %d, want 2", got)
+	if got := c.stateValue(); got != stateIdle {
+		t.Fatalf("state after the next clean rollback = %s, want %s", got, stateIdle)
+	}
+	if secondTun.closeCalls != 1 {
+		t.Fatalf("second TUN close calls = %d, want 1", secondTun.closeCalls)
 	}
 }
 
@@ -138,7 +126,10 @@ func TestMobileConnectPanicRecoveryDoesNotFenceLaterGenerationWhenCleanupFails(t
 	if err := connectMobileBounded(t, c); err == nil || errors.Is(err, wantCleanupErr) {
 		t.Fatalf("later-generation error = %v, want fresh panic failure", err)
 	}
-	if got := c.generationValue(); got != 2 {
-		t.Fatalf("generation after incomplete-cleanup retry = %d, want 2", got)
+	if got := c.stateValue(); got != stateIdle {
+		t.Fatalf("state after the next clean rollback = %s, want %s", got, stateIdle)
+	}
+	if secondTun.closeCalls != 1 {
+		t.Fatalf("second TUN close calls = %d, want 1", secondTun.closeCalls)
 	}
 }

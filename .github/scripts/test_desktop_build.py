@@ -262,6 +262,7 @@ class DesktopBuildTests(unittest.TestCase):
             popen.call_args.kwargs["env"]["GODEBUG"],
             "parent=1,asyncpreemptoff=1",
         )
+        self.assertEqual(popen.call_args.kwargs["cwd"], str(desktop_build.ROOT_DIR))
 
     def test_windows_compiler_repairs_broken_gcc_before_returning(self) -> None:
         with (
@@ -605,90 +606,6 @@ class DesktopBuildTests(unittest.TestCase):
         ) as terminate:
             desktop_build.stop_service(process)
         terminate.assert_called_once_with(process)
-
-    @unittest.skipIf(os.name == "nt", "POSIX process-group assertion")
-    def test_sigterm_resistant_descendant_is_killed_with_process_group(self) -> None:
-        child_code = (
-            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            "time.sleep(60)"
-        )
-        with tempfile.TemporaryDirectory(prefix="desktop-build-resistant-child-") as temporary:
-            root = Path(temporary)
-            child_stdout = root / "child.stdout.raw.log"
-            child_stderr = root / "child.stderr.raw.log"
-            parent_code = (
-                "import os,signal,subprocess,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-                f"child_stdout=os.fdopen(os.open({str(child_stdout)!r}, os.O_WRONLY|os.O_CREAT|os.O_APPEND, 0o600), 'ab', buffering=0); "
-                f"child_stderr=os.fdopen(os.open({str(child_stderr)!r}, os.O_WRONLY|os.O_CREAT|os.O_APPEND, 0o600), 'ab', buffering=0); "
-                f"child=subprocess.Popen([sys.executable,'-c',{child_code!r}], stdout=child_stdout, stderr=child_stderr); "
-                "print(child.pid, flush=True); time.sleep(60)"
-            )
-            process = subprocess.Popen(
-                [sys.executable, "-c", parent_code],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True,
-            )
-            process._dobby_process_group_id = process.pid  # type: ignore[attr-defined]
-            try:
-                child_pid = int(process.stdout.readline().strip())
-                desktop_build.terminate_process_group(process, grace_seconds=0.1)
-                self.assertIsNotNone(process.poll())
-                for _ in range(30):
-                    try:
-                        state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
-                    except (FileNotFoundError, ProcessLookupError):
-                        break
-                    if state[state.rfind(")") + 2 :].split()[0] == "Z":
-                        break
-                    time.sleep(0.05)
-                else:
-                    self.fail("SIGTERM-resistant descendant survived process-group cleanup")
-                self.assertEqual(child_stdout.stat().st_mode & 0o777, 0o600)
-                self.assertEqual(child_stderr.stat().st_mode & 0o777, 0o600)
-            finally:
-                if process.poll() is None:
-                    desktop_build.terminate_process_group(process, grace_seconds=0.1)
-                process.stdout.close()
-                process.stderr.close()
-
-    @unittest.skipIf(os.name == "nt", "POSIX process-group assertion")
-    def test_bounded_probe_timeout_preserves_streams_and_kills_descendants(self) -> None:
-        child_code = (
-            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            "time.sleep(60)"
-        )
-        parent_code = (
-            "import signal,subprocess,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            f"child=subprocess.Popen([sys.executable,'-c',{child_code!r}]); "
-            "print('childpid='+str(child.pid), flush=True); "
-            "print('probe stderr', file=sys.stderr, flush=True); time.sleep(60)"
-        )
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with (
-                mock.patch.object(desktop_build, "ROOT_DIR", root),
-                mock.patch.object(desktop_build, "PROCESS_CLEANUP_GRACE_SECONDS", 0.1),
-            ):
-                with self.assertRaises(subprocess.TimeoutExpired) as raised:
-                    desktop_build.run_bounded_capture(
-                        [sys.executable, "-c", parent_code], cwd=root, timeout_seconds=1,
-                    )
-            output = raised.exception.stdout or raised.exception.output or ""
-            child_pid = int(desktop_build.output_text(output).split("childpid=", 1)[1].splitlines()[0])
-            self.assertIn("childpid=", desktop_build.output_text(output))
-            self.assertIn("probe stderr", raised.exception.stderr)
-            for _ in range(30):
-                try:
-                    state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
-                except (FileNotFoundError, ProcessLookupError):
-                    break
-                if state[state.rfind(")") + 2 :].split()[0] == "Z":
-                    break
-                time.sleep(0.05)
-            else:
-                self.fail("timed-out probe descendant survived cleanup")
 
     def test_cli_check_passes_control_socket_to_gradle_process(self) -> None:
         socket_path = Path("/tmp/dobbyvpn-test/control.sock")

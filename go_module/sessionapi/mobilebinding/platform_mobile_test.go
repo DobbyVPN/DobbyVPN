@@ -14,10 +14,10 @@ type releaseResultCallbacks struct {
 	releaseOK bool
 }
 
-func (releaseResultCallbacks) AcquireTunnel(string, int64) int32                                { return -1 }
-func (c releaseResultCallbacks) ReleaseTunnel(string, int64, int32) bool                        { return c.releaseOK }
-func (releaseResultCallbacks) ProtectSocket(string, int64, int32) bool                          { return true }
-func (releaseResultCallbacks) PublishState(string, int64, int64, string, int32, string, string) {}
+func (releaseResultCallbacks) AcquireTunnel(string, int64) int32          { return -1 }
+func (c releaseResultCallbacks) ReleaseTunnel(string, int64, int32) bool  { return c.releaseOK }
+func (releaseResultCallbacks) ProtectSocket(string, int64, int32) bool    { return true }
+func (releaseResultCallbacks) PublishState(string, int64, string, string) {}
 
 func TestTunnelLeaseReleasePropagatesPlatformCleanupFailure(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "mobile-tun")

@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,7 +30,6 @@ import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.logging.domain.LogStorageStatus
 import com.dobby.feature.main.presentation.MainViewModel
-import com.dobby.util.koinViewModel
 import org.jetbrains.compose.ui.tooling.preview.Preview
 import kotlin.math.log
 import kotlin.time.Duration.Companion.milliseconds
@@ -46,7 +46,7 @@ fun ConnectionScreen(
     val uiMainState by mainViewModel.uiState.collectAsState()
     val uiLogState by logsViewModel.uiState.collectAsState()
 
-    var showLogsDialog by remember { mutableStateOf(false) }
+    var showLogsDialog by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier = modifier

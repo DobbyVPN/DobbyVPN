@@ -60,7 +60,6 @@ func TestMobileConnectRecoveryContractUsesLockedCleanup(t *testing.T) {
 	for _, required := range []string{
 		`runLockedWithPanicRecovery("mobile session connect", &c.mu, c.connectLocked, c.disconnectLocked)`,
 		"c.state = stateFailed",
-		"c.generation++",
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("mobile recovery contract is missing %q", required)

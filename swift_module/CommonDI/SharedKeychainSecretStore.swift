@@ -29,7 +29,7 @@ public final class SharedKeychainSecretStore {
             return nil
         }
         guard let data = result as? Data else {
-            NativeModuleHolder.logsRepository.writeLog(
+            IOSAppCompositionRoot.logsRepository.writeLog(
                 log: "[ERROR] DobbyVPN Keychain read returned an unexpected value type key=\(key)"
             )
             return nil
@@ -114,7 +114,7 @@ public final class SharedKeychainSecretStore {
     }
 
     private func reportFailure(_ operation: String, _ key: String, _ status: OSStatus) {
-        NativeModuleHolder.logsRepository.writeLog(
+        IOSAppCompositionRoot.logsRepository.writeLog(
             log: "[ERROR] DobbyVPN Keychain operation failed operation=\(operation) key=\(key) osstatus=\(status)"
         )
     }

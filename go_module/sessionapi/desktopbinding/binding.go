@@ -1,4 +1,4 @@
-// Package desktopbinding owns the one desktop SessionV2 manager used by the
+// Package desktopbinding owns the one desktop session manager used by the
 // gRPC server. Keeping construction here prevents transports from creating
 // independent runtime owners.
 package desktopbinding
@@ -17,7 +17,7 @@ func (platform) PrepareTunnel(context.Context, v2.SessionRef) (v2.PlatformLease,
 	return lease{}, nil
 }
 func (platform) ProtectSocket(context.Context, v2.SessionRef, int) error { return nil }
-func (platform) PublishState(context.Context, v2.Event)                  {}
+func (platform) PublishState(context.Context, v2.StateChange)            {}
 
 type lease struct{}
 

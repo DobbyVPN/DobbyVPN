@@ -16,18 +16,20 @@ import (
 )
 
 // nativeRuntime is the platform-native resource adapter used by
-// sessionapi/runtime. SessionV2 owns the externally meaningful session state
-// and generation; this type only tracks local resource cleanup.
+// sessionapi/runtime. The session manager owns the externally meaningful
+// state and generation; this type only tracks local resource cleanup.
 type nativeRuntime struct {
-	device    protocol.ProtocolDevice
-	tun       io.ReadWriteCloser
-	engine    *tunnel.Engine
-	resources *resourceLedger
+	device protocol.ProtocolDevice
+	tun    io.ReadWriteCloser
+	engine *tunnel.Engine
 	// cleanupErr retains the failed rollback for a repeated Disconnect call.
-	cleanupErr error
-	state      lifecycleState
-	generation uint64
-	mu         sync.Mutex
+	cleanupErr        error
+	state             lifecycleState
+	deviceOpened      bool
+	tunOwned          bool
+	tunCloseAttempted bool
+	tunCloseErr       error
+	mu                sync.Mutex
 }
 
 func newNativeRuntime(device protocol.ProtocolDevice, tun io.ReadWriteCloser) *nativeRuntime {
@@ -38,23 +40,6 @@ func newNativeRuntime(device protocol.ProtocolDevice, tun io.ReadWriteCloser) *n
 	}
 	log.Debugf(nativeLogCategory, "mobile session runtime created (tun2socks version)")
 	return c
-}
-
-// closeMobileTunAfterEngine closes the wrapper after tun2socks has taken
-// ownership of the descriptor. The ledger entry is released only after the
-// close succeeds; on failure the caller must roll back and retain the failed
-// cleanup in the generation state.
-func closeMobileTunAfterEngine(closeTun func() error, release func()) error {
-	if closeTun == nil {
-		return errors.New("mobile TUN close function is not initialized")
-	}
-	if err := closeTun(); err != nil {
-		return fmt.Errorf("failed to close local TUN after engine start: %w", err)
-	}
-	if release != nil {
-		release()
-	}
-	return nil
 }
 
 func (c *nativeRuntime) Connect() error {
@@ -68,18 +53,17 @@ func (c *nativeRuntime) connectLocked() (err error) {
 	if c.state != stateIdle && c.state != stateFailed {
 		return lifecycleBusyError(c.state)
 	}
-	c.generation++
 	c.state = statePreparing
-	ledger := &resourceLedger{}
-	c.resources = ledger
 	c.cleanupErr = nil
+	c.deviceOpened = false
+	c.tunOwned = false
+	c.tunCloseAttempted = false
+	c.tunCloseErr = nil
 	fail := func(cause error) error {
 		c.state = stateFailed
-		cleanupErr := ledger.Rollback()
+		cleanupErr := c.cleanupResourcesLocked()
 		c.cleanupErr = cleanupErr
-		c.engine = nil
-		c.tun = nil
-		c.device = nil
+		c.device, c.tun, c.engine = nil, nil, nil
 		return errors.Join(cause, cleanupErr)
 	}
 
@@ -89,15 +73,7 @@ func (c *nativeRuntime) connectLocked() (err error) {
 	if c.tun == nil {
 		return fail(errors.New("mobile TUN device is not initialized"))
 	}
-	var tunCloseOnce sync.Once
-	var tunCloseErr error
-	closeTun := func() error {
-		tunCloseOnce.Do(func() {
-			tunCloseErr = c.tun.Close()
-		})
-		return tunCloseErr
-	}
-	releaseTun := ledger.Add(closeTun)
+	c.tunOwned = true
 
 	var fd int
 	if f, ok := c.tun.(interface{ Fd() uintptr }); ok {
@@ -116,7 +92,7 @@ func (c *nativeRuntime) connectLocked() (err error) {
 		log.Debugf(nativeLogCategory, "failed to create protocol device: %v", err)
 		return fail(fmt.Errorf("failed to open protocol device: %w", err))
 	}
-	ledger.Add(c.device.Close)
+	c.deviceOpened = true
 
 	log.Debugf(nativeLogCategory, "starting tun2socks engine proxy_ready=true")
 	c.engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{
@@ -128,14 +104,13 @@ func (c *nativeRuntime) connectLocked() (err error) {
 		log.Debugf(nativeLogCategory, "Can't start tun2socks: %v", err)
 		return fail(fmt.Errorf("failed to start tun2socks engine: %w", err))
 	}
-	ownedEngine := c.engine
-	ledger.Add(ownedEngine.Stop)
 
 	if c.tun != nil {
-		if closeErr := closeMobileTunAfterEngine(closeTun, releaseTun); closeErr != nil {
+		if closeErr := c.closeTunLocked(); closeErr != nil {
 			log.Debugf(nativeLogCategory, "failed to close local tun fd wrapper after engine start: %v", closeErr)
-			return fail(closeErr)
+			return fail(fmt.Errorf("failed to close local TUN after engine start: %w", closeErr))
 		}
+		c.tunOwned = false
 		log.Debugf(nativeLogCategory, "local tun fd wrapper closed after engine start")
 		c.tun = nil
 	}
@@ -143,6 +118,40 @@ func (c *nativeRuntime) connectLocked() (err error) {
 	c.state = stateConnected
 	log.Debugf(nativeLogCategory, "native session runtime connected successfully via tun2socks")
 	return nil
+}
+
+func (c *nativeRuntime) closeTunLocked() error {
+	if c.tun == nil {
+		return nil
+	}
+	if !c.tunCloseAttempted {
+		c.tunCloseAttempted = true
+		c.tunCloseErr = c.tun.Close()
+	}
+	return c.tunCloseErr
+}
+
+func (c *nativeRuntime) cleanupResourcesLocked() error {
+	var errs []error
+	if c.engine != nil {
+		engine := c.engine
+		c.engine = nil
+		errs = append(errs, engine.Stop())
+	}
+	if c.deviceOpened {
+		device := c.device
+		c.deviceOpened = false
+		if device != nil {
+			errs = append(errs, device.Close())
+		}
+	}
+	if c.tunOwned && c.tun != nil {
+		tunErr := c.closeTunLocked()
+		c.tunOwned = false
+		c.tun = nil
+		errs = append(errs, tunErr)
+	}
+	return errors.Join(errs...)
 }
 
 func (c *nativeRuntime) Disconnect() error {
@@ -166,12 +175,8 @@ func (c *nativeRuntime) disconnectLocked() error {
 	}
 	c.state = stateStopping
 
-	var err error
-	if c.resources != nil {
-		err = c.resources.Rollback()
-	}
+	err := c.cleanupResourcesLocked()
 	c.cleanupErr = err
-	c.resources = nil
 	c.engine = nil
 	c.tun = nil
 	c.device = nil
@@ -192,13 +197,4 @@ func (c *nativeRuntime) stateValue() lifecycleState {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.state
-}
-
-func (c *nativeRuntime) generationValue() uint64 {
-	if c == nil {
-		return 0
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.generation
 }

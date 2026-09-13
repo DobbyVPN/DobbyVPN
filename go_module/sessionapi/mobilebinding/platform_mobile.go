@@ -18,7 +18,11 @@ import (
 // The manager owns protocol/runtime lifecycle; the callback is only the narrow
 // platform boundary for TUN, socket protection, and state publication.
 func New(callbacks PlatformCallbacks) *Binding {
-	platform := &platformAdapter{callbacks: callbacks, tunnels: newTunnelFDs(), active: make(map[string]v2.SessionRef)}
+	platform := &platformAdapter{
+		callbacks: callbacks, tunnels: newTunnelFDs(), active: make(map[string]v2.SessionRef),
+		stateChanges: make(chan v2.StateChange, 1),
+	}
+	go platform.publishStateChanges()
 	manager := v2.NewManager(v2.ManagerOptions{Runtime: runtimebridge.New(platform), Platform: platform})
 	return &Binding{manager: manager, platform: platform}
 }
@@ -38,10 +42,11 @@ func (b *Binding) ProtectActiveSocket(fd int32) bool {
 }
 
 type platformAdapter struct {
-	mu        sync.Mutex
-	callbacks PlatformCallbacks
-	tunnels   tunnelFDs
-	active    map[string]v2.SessionRef
+	mu           sync.Mutex
+	callbacks    PlatformCallbacks
+	tunnels      tunnelFDs
+	active       map[string]v2.SessionRef
+	stateChanges chan v2.StateChange
 }
 
 func (p *platformAdapter) setCallbacks(callbacks PlatformCallbacks) {
@@ -151,20 +156,31 @@ func (p *platformAdapter) protectActive(fd int32) bool {
 	return callbacks.ProtectSocket(ref.SessionID, int64(ref.Generation), fd)
 }
 
-func (p *platformAdapter) PublishState(_ context.Context, event v2.Event) {
-	p.mu.Lock()
-	callbacks := p.callbacks
-	p.mu.Unlock()
-	if callbacks == nil {
-		return
+func (p *platformAdapter) PublishState(_ context.Context, event v2.StateChange) {
+	select {
+	case p.stateChanges <- event:
+	default:
+		select {
+		case <-p.stateChanges:
+		default:
+		}
+		select {
+		case p.stateChanges <- event:
+		default:
+		}
 	}
-	profileIndex := int32(-1)
-	protocol := ""
-	if event.Profile != nil {
-		profileIndex = event.Profile.Index
-		protocol = string(event.Profile.Protocol)
+}
+
+func (p *platformAdapter) publishStateChanges() {
+	for event := range p.stateChanges {
+		p.mu.Lock()
+		callbacks := p.callbacks
+		p.mu.Unlock()
+		if callbacks == nil {
+			continue
+		}
+		callbacks.PublishState(event.SessionID, int64(event.Generation), string(event.State), string(event.Failure))
 	}
-	callbacks.PublishState(event.SessionID, int64(event.Generation), int64(event.Sequence), string(event.State), profileIndex, protocol, string(event.Failure))
 }
 
 type platformLease struct {

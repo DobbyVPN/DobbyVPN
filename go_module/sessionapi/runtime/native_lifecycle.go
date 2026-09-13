@@ -8,14 +8,13 @@ import (
 )
 
 // lifecycleState is the internal phase of one native resource adapter. It is
-// not a public session state; SessionV2 owns the externally meaningful state
+// not a public session state; the session manager owns the externally meaningful state
 // and generation contract.
 type lifecycleState string
 
 const (
 	stateIdle      lifecycleState = "IDLE"
 	statePreparing lifecycleState = "PREPARING"
-	stateProbing   lifecycleState = "PROBING"
 	stateConnected lifecycleState = "CONNECTED"
 	stateStopping  lifecycleState = "STOPPING"
 	stateFailed    lifecycleState = "FAILED"
@@ -37,9 +36,6 @@ func runLockedWithPanicRecovery(
 	operation func() error,
 	cleanup func() error,
 ) (err error) {
-	if mu == nil {
-		return errors.New("native lifecycle mutex is not initialized")
-	}
 	mu.Lock()
 	defer mu.Unlock()
 	defer func() {
@@ -52,9 +48,6 @@ func runLockedWithPanicRecovery(
 			err = errors.Join(fmt.Errorf("%s panic: %v", label, recovered), cleanupErr)
 		}
 	}()
-	if operation == nil {
-		return errors.New("native lifecycle operation is not initialized")
-	}
 	return operation()
 }
 

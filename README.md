@@ -7,9 +7,9 @@ More protocols planned.
 
 The architecture driver is one shared UI layer where sharing is valuable, one
 Go product/runtime layer for behavior, and only thin OS-specific shells where
-VPN APIs require them. SessionV2 owns configuration acquisition, parsing,
-selection, lifecycle, recovery, and ordered events; the Compose UI renders that
-state across platforms.
+VPN APIs require them. Go owns configuration acquisition, parsing, selection,
+and the process-local session; the Compose UI renders current snapshots across
+platforms.
 
 See the complete [architecture contract](docs/ARCHITECTURE.md), including the
 responsibility boundaries and future-protocol checklist.
@@ -26,7 +26,7 @@ commands are documented in [.github/scripts/README.md](.github/scripts/README.md
 
 Consume 'subscription' / 'dynamic keys' as TOML via HTTPS or inline:
 
-**Connection variants** (one or more, cyclic fallback)
+**Connection variants** (automatic probe-based selection and failover)
 ```toml
 [[Outline]] # First variant
 Description = "My fast SS"
@@ -71,11 +71,12 @@ IPs = [
 
 DobbyVPN probes protocol variants one by one when the VPN starts. Each variant
 must start and pass latency probes through the tunnel; DobbyVPN then activates
-the working variant with the lowest average latency. If the runtime readiness
-monitor reports that the active variant is no longer connected, DobbyVPN
-repeats the full probe-and-rank procedure until the user stops the VPN. Use the same
-`[[Outline]]`, `[[Xray]]` or `[[TrustTunnel]]` section format even when the
-configuration contains only one variant.
+the working variant with the lowest average latency, breaking ties by the
+variant's order in the configuration. If the runtime readiness monitor reports
+that the active variant is no longer connected, DobbyVPN repeats the full
+probe-and-rank procedure until the user stops the VPN. Use the same `[[Outline]]`,
+`[[Xray]]` or `[[TrustTunnel]]` section format even when the configuration
+contains only one variant.
 
 **Clean ShadowSocks** (best performance)
 ```toml

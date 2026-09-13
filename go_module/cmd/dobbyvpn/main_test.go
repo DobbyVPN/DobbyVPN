@@ -42,11 +42,11 @@ func captureStderr(t *testing.T, operation func()) string {
 
 type disconnectClientStub struct {
 	grpcproto.VpnClient
-	recoverResponse  *grpcproto.SessionRecoverActiveSessionResponse
-	stopResponse     *grpcproto.SessionStopResponse
-	snapshotResponse *grpcproto.SessionSnapshotResponse
-	destroyResponse  *grpcproto.SessionDestroySessionResponse
-	destroyCalls     *int
+	stopResponse      *grpcproto.SessionStopResponse
+	snapshotResponse  *grpcproto.SessionSnapshotResponse
+	snapshotResponses []*grpcproto.SessionSnapshotResponse
+	snapshotCall      int
+	stopCalls         int
 }
 
 type loggerClientStub struct {
@@ -63,39 +63,33 @@ func (stub *loggerClientStub) InitLogger(
 	return &grpcproto.Empty{}, nil
 }
 
-func (stub disconnectClientStub) RecoverActiveSession(
-	context.Context,
-	*grpcproto.Empty,
-	...grpc.CallOption,
-) (*grpcproto.SessionRecoverActiveSessionResponse, error) {
-	return stub.recoverResponse, nil
-}
-
-func (stub disconnectClientStub) Stop(
-	context.Context,
-	*grpcproto.SessionStopRequest,
-	...grpc.CallOption,
+func (stub *disconnectClientStub) Stop(
+	_ context.Context,
+	request *grpcproto.SessionStopRequest,
+	_ ...grpc.CallOption,
 ) (*grpcproto.SessionStopResponse, error) {
+	stub.stopCalls++
+	if stub.stopResponse != nil && stub.stopResponse.GetGeneration() != 0 &&
+		stub.stopResponse.GetGeneration() != request.GetGeneration() {
+		return nil, errors.New("stop generation mismatch")
+	}
 	return stub.stopResponse, nil
 }
 
-func (stub disconnectClientStub) Snapshot(
-	context.Context,
-	*grpcproto.SessionSnapshotRequest,
-	...grpc.CallOption,
+func (stub *disconnectClientStub) Snapshot(
+	_ context.Context,
+	_ *grpcproto.SessionSnapshotRequest,
+	_ ...grpc.CallOption,
 ) (*grpcproto.SessionSnapshotResponse, error) {
-	return stub.snapshotResponse, nil
-}
-
-func (stub disconnectClientStub) DestroySession(
-	context.Context,
-	*grpcproto.SessionDestroySessionRequest,
-	...grpc.CallOption,
-) (*grpcproto.SessionDestroySessionResponse, error) {
-	if stub.destroyCalls != nil {
-		(*stub.destroyCalls)++
+	if len(stub.snapshotResponses) > 0 {
+		index := stub.snapshotCall
+		if index >= len(stub.snapshotResponses) {
+			index = len(stub.snapshotResponses) - 1
+		}
+		stub.snapshotCall++
+		return stub.snapshotResponses[index], nil
 	}
-	return stub.destroyResponse, nil
+	return stub.snapshotResponse, nil
 }
 
 func TestReadSourceAcceptsInlineURLAndFileWithoutReadingURL(t *testing.T) {
@@ -349,9 +343,7 @@ func TestProfileInventoryJSONRejectsIncompleteIdentity(t *testing.T) {
 }
 
 func TestStopAndWaitRejectsEmptyServiceResponses(t *testing.T) {
-	initial := &grpcproto.SessionSnapshotResponse{
-		Snapshot: &grpcproto.SessionSnapshot{Generation: 1},
-	}
+	initial := &grpcproto.SessionSnapshot{SessionId: "session", Generation: 1}
 	tests := []struct {
 		name   string
 		client disconnectClientStub
@@ -373,7 +365,7 @@ func TestStopAndWaitRejectsEmptyServiceResponses(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, failure, err := stopAndWaitForDisconnect(context.Background(), test.client, "session", initial)
+			_, failure, err := stopAndWaitForDisconnect(context.Background(), &test.client, initial)
 			if err == nil {
 				t.Fatal("empty service response unexpectedly succeeded")
 			}
@@ -384,62 +376,83 @@ func TestStopAndWaitRejectsEmptyServiceResponses(t *testing.T) {
 	}
 }
 
-func TestDisconnectRejectsMalformedSnapshotsWithoutDestroyingSession(t *testing.T) {
+func TestDisconnectRejectsMalformedSnapshots(t *testing.T) {
 	for _, snapshotResponse := range []*grpcproto.SessionSnapshotResponse{nil, {}} {
-		destroyCalls := 0
-		client := disconnectClientStub{
-			recoverResponse:  &grpcproto.SessionRecoverActiveSessionResponse{SessionId: "session"},
-			snapshotResponse: snapshotResponse,
-			destroyResponse:  &grpcproto.SessionDestroySessionResponse{Destroyed: true},
-			destroyCalls:     &destroyCalls,
-		}
+		client := &disconnectClientStub{snapshotResponse: snapshotResponse}
 		if got := disconnect(context.Background(), client); got != exitRuntime {
 			t.Fatalf("disconnect malformed snapshot exit=%d, want %d", got, exitRuntime)
-		}
-		if destroyCalls != 0 {
-			t.Fatalf("disconnect destroyed session after malformed snapshot %d times", destroyCalls)
 		}
 	}
 }
 
-func TestDisconnectRequiresConfirmedSessionDestruction(t *testing.T) {
-	conflict := &grpcproto.SessionFailure{
-		Code: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CONFLICT,
+func TestDisconnectRetainsConfiguredSession(t *testing.T) {
+	client := &disconnectClientStub{snapshotResponse: &grpcproto.SessionSnapshotResponse{
+		Snapshot: &grpcproto.SessionSnapshot{
+			SessionId: "session", State: grpcproto.SessionState_SESSION_STATE_CONFIGURED,
+			Configured: true, Digest: "accepted", CleanupComplete: true,
+		},
+	}}
+	if got := disconnect(context.Background(), client); got != exitOK {
+		t.Fatalf("disconnect exit=%d, want %d", got, exitOK)
+	}
+	if client.stopCalls != 0 {
+		t.Fatalf("disconnect stopped an idle configured session %d times", client.stopCalls)
+	}
+}
+
+func TestDisconnectReportsCleanupFailureFromCompletedSnapshot(t *testing.T) {
+	cleanupFailure := &grpcproto.SessionFailure{
+		Code:    grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CLEANUP_FAILED,
+		Message: "tunnel release failed",
 	}
 	tests := []struct {
-		name     string
-		response *grpcproto.SessionDestroySessionResponse
-		wantExit int
+		name              string
+		snapshotResponses []*grpcproto.SessionSnapshotResponse
+		stopResponse      *grpcproto.SessionStopResponse
+		wantStopCalls     int
 	}{
-		{name: "empty response", wantExit: exitRuntime},
-		{name: "not destroyed", response: &grpcproto.SessionDestroySessionResponse{}, wantExit: exitRuntime},
 		{
-			name:     "protocol failure",
-			response: &grpcproto.SessionDestroySessionResponse{Failure: conflict},
-			wantExit: exitConflict,
+			name: "already complete",
+			snapshotResponses: []*grpcproto.SessionSnapshotResponse{{
+				Snapshot: &grpcproto.SessionSnapshot{
+					SessionId: "session", Generation: 1, State: grpcproto.SessionState_SESSION_STATE_FAILED,
+					CleanupComplete: true, LastFailure: cleanupFailure,
+				},
+			}},
 		},
 		{
-			name:     "confirmed",
-			response: &grpcproto.SessionDestroySessionResponse{Destroyed: true},
-			wantExit: exitOK,
+			name:          "completes after stop",
+			stopResponse:  &grpcproto.SessionStopResponse{Generation: 1},
+			wantStopCalls: 1,
+			snapshotResponses: []*grpcproto.SessionSnapshotResponse{
+				{Snapshot: &grpcproto.SessionSnapshot{
+					SessionId: "session", Generation: 1, State: grpcproto.SessionState_SESSION_STATE_CONNECTED,
+				}},
+				{Snapshot: &grpcproto.SessionSnapshot{
+					SessionId: "session", Generation: 1, State: grpcproto.SessionState_SESSION_STATE_FAILED,
+					CleanupComplete: true, LastFailure: cleanupFailure,
+				}},
+			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			destroyCalls := 0
-			client := disconnectClientStub{
-				recoverResponse: &grpcproto.SessionRecoverActiveSessionResponse{SessionId: "session"},
-				snapshotResponse: &grpcproto.SessionSnapshotResponse{
-					Snapshot: &grpcproto.SessionSnapshot{CleanupComplete: true},
-				},
-				destroyResponse: test.response,
-				destroyCalls:    &destroyCalls,
+			client := &disconnectClientStub{
+				stopResponse:      test.stopResponse,
+				snapshotResponses: test.snapshotResponses,
 			}
-			if got := disconnect(context.Background(), client); got != test.wantExit {
-				t.Fatalf("disconnect destroy response exit=%d, want %d", got, test.wantExit)
+			var exitCode int
+			output := captureStderr(t, func() { exitCode = disconnect(context.Background(), client) })
+			if exitCode != exitRuntime {
+				t.Fatalf("disconnect exit=%d, want %d", exitCode, exitRuntime)
 			}
-			if destroyCalls != 1 {
-				t.Fatalf("disconnect destroy calls=%d, want 1", destroyCalls)
+			if client.stopCalls != test.wantStopCalls {
+				t.Fatalf("disconnect stop calls=%d, want %d", client.stopCalls, test.wantStopCalls)
+			}
+			for _, expected := range []string{"CLEANUP_FAILED", "tunnel release failed"} {
+				if !strings.Contains(output, expected) {
+					t.Fatalf("disconnect error %q lacks %q", output, expected)
+				}
 			}
 		})
 	}
@@ -471,18 +484,45 @@ func TestReportFailureUsesConflictExitCodeOnlyForConflict(t *testing.T) {
 	}
 }
 
-func TestCleanupSessionReturnsEveryFailure(t *testing.T) {
-	failure := cleanupSession(disconnectClientStub{}, "session", 0)
-	if failure == nil {
-		t.Fatal("incomplete cleanup unexpectedly succeeded")
+func TestCleanupSessionNeverStopsANewerGeneration(t *testing.T) {
+	client := &disconnectClientStub{snapshotResponse: &grpcproto.SessionSnapshotResponse{
+		Snapshot: &grpcproto.SessionSnapshot{
+			SessionId: "session", Generation: 2, CleanupComplete: true,
+			LastFailure: &grpcproto.SessionFailure{
+				Code:    grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CLEANUP_FAILED,
+				Message: "newer generation cleanup failed",
+			},
+		},
+	}}
+	if err := cleanupSession(client, "session", 1); err != nil {
+		t.Fatal(err)
 	}
-	for _, expected := range []string{
-		"cleanup session snapshot response is nil",
-		"destroy cleanup session response is nil",
-	} {
-		if !strings.Contains(failure.Error(), expected) {
-			t.Fatalf("cleanup failure %q lacks %q", failure, expected)
+	if client.stopCalls != 0 {
+		t.Fatalf("cleanup stopped a newer generation %d times", client.stopCalls)
+	}
+}
+
+func TestCleanupSessionReportsCompletedCleanupFailureForItsGeneration(t *testing.T) {
+	client := &disconnectClientStub{snapshotResponse: &grpcproto.SessionSnapshotResponse{
+		Snapshot: &grpcproto.SessionSnapshot{
+			SessionId: "session", Generation: 1, CleanupComplete: true,
+			LastFailure: &grpcproto.SessionFailure{
+				Code:    grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CLEANUP_FAILED,
+				Message: "tunnel release failed",
+			},
+		},
+	}}
+	err := cleanupSession(client, "session", 1)
+	if err == nil {
+		t.Fatal("cleanupSession accepted a completed cleanup failure")
+	}
+	for _, expected := range []string{"CLEANUP_FAILED", "tunnel release failed"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Fatalf("cleanupSession error %q lacks %q", err, expected)
 		}
+	}
+	if client.stopCalls != 0 {
+		t.Fatalf("cleanup retried completed cleanup %d times", client.stopCalls)
 	}
 }
 

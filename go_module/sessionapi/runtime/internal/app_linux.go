@@ -19,16 +19,6 @@ import (
 	"go_module/tunnel"
 )
 
-// signalInit sends the initialization result to the channel (if provided) exactly once.
-func signalInit(initResult chan<- error, err error) {
-	if initResult != nil {
-		select {
-		case initResult <- err:
-		default:
-		}
-	}
-}
-
 var discoverLinuxUplink = routing.DiscoverLinuxDefaultRoute
 var reconcileLinuxRoutes = routing.ReconcileLinuxSessionRoutesWithRule
 var recoverLinuxOwnedRoutes = routing.RecoverLinuxOwnedRoutes

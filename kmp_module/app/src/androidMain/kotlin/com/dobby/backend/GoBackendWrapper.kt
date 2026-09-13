@@ -6,8 +6,8 @@ import com.dobby.gomobile.dobbyvpn.Dobbyvpn
 import com.dobby.gomobile.dobbyvpn.PlatformCallbacks
 
 object GoBackendWrapper {
-    fun stopSession(sessionId: String, commandId: String, generation: Long): String =
-        Dobbyvpn.stopSession(sessionId, commandId, generation)
+    fun stopSession(sessionId: String, generation: Long): String =
+        Dobbyvpn.stopSession(sessionId, generation)
 
     fun initLogger(path: String): Boolean = Dobbyvpn.initLogger(path)
 
@@ -31,17 +31,14 @@ object GoBackendWrapper {
             override fun publishState(
                 sessionId: String,
                 generation: Long,
-                sequence: Long,
                 state: String,
-                profileIndex: Int,
-                profileProtocol: String,
                 failureCode: String,
             ) {
                 val platform = PlatformServiceRegistry.current(sessionId)
                 if (platform == null) {
                     missingPlatform("publishState", generation, Unit)
                 } else {
-                    platform.publishState(sessionId, generation, sequence, state, failureCode)
+                    platform.publishState(sessionId, generation, state, failureCode)
                 }
             }
         })

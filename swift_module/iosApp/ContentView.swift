@@ -1,11 +1,12 @@
 import UIKit
 import SwiftUI
 import app
+import CommonDI
 
 struct ComposeView: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UIViewController {
-        return MainViewControllerKt.MainViewController()
+        return MainViewControllerKt.MainViewController(dependencies: IOSAppCompositionRoot.appDependencies)
     }
 
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}

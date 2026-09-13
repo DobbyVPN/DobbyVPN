@@ -1,16 +1,13 @@
 import SwiftUI
-import app
 import CommonDI
 
 @main
 struct iOSApp: App {
     init() {
-        NativeModuleHolder.installSessionBridge()
-        StartDIKt.startDI(nativeModules: [NativeModuleHolder.shared]) { _ in }
         #if DOBBY_SIMULATOR_MINI && targetEnvironment(simulator)
-        NativeModuleHolder.logsRepository.writeLog(log: "startup.initialized mode=mini")
+        IOSAppCompositionRoot.logsRepository.writeLog(log: "startup.initialized mode=mini")
         #else
-        NativeModuleHolder.logsRepository.writeLog(log: "startup.initialized mode=normal")
+        IOSAppCompositionRoot.logsRepository.writeLog(log: "startup.initialized mode=normal")
         #endif
     }
 
@@ -26,7 +23,7 @@ struct iOSApp: App {
                 .onAppear {
                     // View attachment is a startup milestone, not proof that
                     // Metal presented a frame or that UI interactions passed.
-                    NativeModuleHolder.logsRepository.writeLog(log: "startup.ui_attached mode=normal")
+                    IOSAppCompositionRoot.logsRepository.writeLog(log: "startup.ui_attached mode=normal")
                 }
             #endif
         }

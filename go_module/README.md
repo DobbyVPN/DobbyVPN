@@ -1,16 +1,16 @@
 # Go product/runtime
 
-This module owns configuration acquisition and parsing, SessionV2 policy and
+This module owns configuration acquisition and parsing, session policy and
 generation state, protocol-device construction, routing/TUN/tun2socks
 resources, probes, cleanup, local diagnostics, and the native desktop CLI.
 The shared Compose UI talks to this layer through the authenticated desktop
-SessionV2 transport or the one protocol-neutral mobile binding. Platform code
+gRPC service or the one protocol-neutral mobile binding. Platform code
 only supplies the OS VPN callbacks and permission/lifecycle hooks it cannot
 provide in Go.
 
-The supported configuration sections are Outline, Outline WebSocket, Xray, and
-TrustTunnel. Unsupported sections are reported in the SessionV2 diagnostics
-and never reach protocol-device construction.
+The supported configuration sections are Outline (including its WebSocket
+transport variant), Xray, and TrustTunnel. Unsupported sections are reported
+in session diagnostics and never reach protocol-device construction.
 
 ## Build
 
@@ -125,13 +125,15 @@ Physical packet-tunnel qualification is intentionally not claimed until a real
 iPhone is available; the Simulator remains a package/build check. Every mode
 writes the expected `DobbyVPNRuntime.xcframework` artifact.
 
-## SessionV2 API
+## Session API
 
-The only product lifecycle surface is SessionV2: capabilities, create/recover,
-configure, start, stop, snapshot, ordered `Watch` events, and destroy. It uses
-opaque session and command IDs, generation-correlated operations, typed
-warnings/failures, and safe profile summaries. Configuration URLs and bytes,
-credentials, and endpoints never appear in responses or diagnostics.
+The manager owns one process-local session. Clients attach with `Snapshot`;
+`Watch` sends a current snapshot and then the latest snapshot after changes.
+`ValidateConfig` is stateless and serves the Go CLI's `check-config` and
+`profile-inventory` commands. App clients configure directly. `Configure` and
+`Start` use an expected snapshot revision, `Stop` uses a generation, and
+`Reset` clears configuration after cleanup. Configuration sources,
+credentials, and protocol payloads stay out of responses and diagnostics.
 
 The native `dobby-cli` shares this authenticated control channel with the
 Compose GUI. It supports `connect`, `connect-profile`, `profile-inventory`,
@@ -141,7 +143,7 @@ configuration and returns only the ordered connection indices and protocols;
 it and `logs clear` do not need the VPN service to be running.
 
 See the canonical [vpnserver.proto](../kmp_module/grpcprotos/src/main/proto/com/dobby/vpnserver/vpnserver.proto)
-for the authenticated SessionV2 and local Diagnostics transport.
+for the authenticated session and local Diagnostics transport.
 
 After editing that proto, regenerate stubs:
 

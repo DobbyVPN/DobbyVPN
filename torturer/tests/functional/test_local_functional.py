@@ -12,6 +12,7 @@ from unittest import mock
 from torturer_checks.functional import (
     _local_exit_code,
     _create_log,
+    build_parser,
     main,
     _supervised_request_root,
     _prepare_output_path,
@@ -30,6 +31,17 @@ from torturer_contract.functional.scenarios import (
 
 class LocalRunTests(unittest.TestCase):
     CONNECTION = ConnectionIdentity(0, "OUTLINE")
+
+    def test_parser_exposes_only_canonical_runner_options(self) -> None:
+        options = {
+            option
+            for action in build_parser()._actions
+            for option in action.option_strings
+        }
+        self.assertTrue({"--output", "--raw-log-dir", "--scenario"}.issubset(options))
+        self.assertTrue(
+            {"--result", "--logs", "--scenario-id", "--adapter", "--dobby-source"}.isdisjoint(options)
+        )
 
     @staticmethod
     def _result(scenario):
@@ -141,14 +153,14 @@ class LocalRunTests(unittest.TestCase):
             with (
                 mock.patch("torturer_checks.functional.adapter_for_platform", side_effect=setup),
                 mock.patch(
-                    "torturer_checks.functional._discover_connections",
+                    "torturer_checks.hosted.run._discover_connections",
                     return_value=(self.CONNECTION,),
                 ),
                 mock.patch(
-                    "torturer_checks.functional._run_connection_matrix",
+                    "torturer_checks.hosted.run._run_connection_matrix",
                     return_value=results,
                 ),
-                mock.patch("torturer_checks.functional._finalize_adapter"),
+                mock.patch("torturer_checks.hosted.run._finalize_adapter"),
             ):
                 code = main(
                     [
@@ -200,14 +212,14 @@ class LocalRunTests(unittest.TestCase):
                     side_effect=setup,
                 ),
                 mock.patch(
-                    "torturer_checks.functional._discover_connections",
+                    "torturer_checks.hosted.run._discover_connections",
                     side_effect=discover,
                 ),
                 mock.patch(
-                    "torturer_checks.functional._run_connection_matrix",
+                    "torturer_checks.hosted.run._run_connection_matrix",
                     return_value=results,
                 ),
-                mock.patch("torturer_checks.functional._finalize_adapter"),
+                mock.patch("torturer_checks.hosted.run._finalize_adapter"),
             ):
                 code = main(
                     [
@@ -216,7 +228,7 @@ class LocalRunTests(unittest.TestCase):
                         "--output", str(output),
                         "--raw-log-dir", str(logs),
                         "--routing-firewall-helper", str(firewall_helper),
-                        "--scenario-id", scenario.id,
+                        "--scenario", scenario.id,
                     ]
                 )
 
@@ -263,6 +275,9 @@ class LocalRunTests(unittest.TestCase):
                     "torturer_checks.functional.adapter_for_platform",
                     return_value=adapter,
                 ),
+                mock.patch(
+                    "torturer_checks.hosted.run._finalize_adapter"
+                ) as finalize,
                 self.assertRaises(HostedAdapterError) as raised,
             ):
                 main(
@@ -272,12 +287,13 @@ class LocalRunTests(unittest.TestCase):
                         "--output", str(output),
                         "--raw-log-dir", str(logs),
                         "--routing-firewall-helper", str(firewall_helper),
-                        "--scenario-id", scenario.id,
+                        "--scenario", scenario.id,
                     ]
                 )
 
             self.assertIs(raised.exception, error)
             self.assertFalse(output.exists())
+            finalize.assert_called_once()
 
 class LocalLogTests(unittest.TestCase):
     def test_required_logs_are_created_before_setup(self) -> None:

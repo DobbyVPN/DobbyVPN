@@ -15,7 +15,7 @@ import (
 )
 
 // nativeRuntime is the platform-native resource adapter used by
-// sessionapi/runtime. SessionV2 owns the externally meaningful session state
+// sessionapi/runtime. The session manager owns externally meaningful state
 // and generation; this type only tracks the local Connect/Disconnect work
 // needed to release native resources safely.
 type nativeRuntime struct {

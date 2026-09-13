@@ -1,107 +1,56 @@
 # UI behavior
 
-The Compose UI is a shared presentation layer. It renders SessionV2
-snapshots and push events; it does not parse configuration or own VPN
-resources.
+The shared Compose UI renders the state owned by one Go session manager in each
+service process. It forwards the entered source bytes, requests VPN permission,
+and displays current snapshots. It does not parse configuration, choose a
+protocol, or manage tunnel resources.
 
-## Startup and reattachment
+## Connect and reattach
 
-On startup the UI creates a protocol-neutral SessionV2 client
-and attempts `RecoverActiveSession`.
+At startup, the UI attaches with `Snapshot` and starts `Watch`. `Watch` sends
+the current snapshot first, then the latest snapshot after each change; slow
+clients may skip intermediate revisions and always render the complete newest
+state. Android and iOS use native callbacks only as wake hints and read a fresh
+Go snapshot after each wake.
 
-- If a live session exists, apply its snapshot and resume `Watch` after
-  the returned sequence.
-- If no session exists, render `DISCONNECTED` and wait for user input.
-- If the service is unavailable, render a typed unavailable/error state; never
-  infer `CONNECTED` from a stale local flag or platform-service liveness.
+Connect calls `Configure` with the entered HTTP(S) URL or transient inline
+configuration. Go fetches and validates the source before accepting it. The UI
+stores a URL only after Go accepts it, and does not log the entered source. A
+subsequent `Start` includes the current snapshot revision so a stale UI cannot
+start from an outdated state. Go selects profiles, probes protocols, performs
+automatic failover, and owns runtime cleanup.
 
-The UI does not own a connection detector. Android receives the ordered state
-model through its native callback/Flow boundary. iOS uses the same shared
-state model through its thin bridge: the provider emits only a content-free
-wake signal through the cross-process Darwin notification sink, and the
-off-main iOS adapter reads the authoritative ordered ledger with Go `Observe`.
+Supported profiles remain Outline (including its WebSocket variant), Xray,
+and TrustTunnel. An unsupported legacy section such as Cloak rejects the full
+configuration with a typed, input-safe failure; Go does not partially start
+the supported sections from that input.
 
-## Connect
+## Disconnect and cleanup
 
-The shared UI sends one source to Go:
+Disconnect sends `Stop` for the active generation. Go releases that
+generation's resources and publishes the complete current snapshot. The
+accepted configuration remains available for reconnect. A later `Configure`
+can replace it after cleanup completes. `Reset` clears the accepted
+configuration after successful cleanup when a caller needs an empty session.
 
-1. Recover the active session, if any.
-2. If no session exists, call `CreateSession`.
-3. Call `Configure` with either the entered HTTP(S) URL or transient inline
-   bytes.
-4. Render profile summaries, digest, source kind, and typed warnings.
-5. Call `Start` and render ordered generation events.
-6. Persist only an accepted connection URL; never persist raw configuration or
-   parsed profiles.
+Closing the desktop GUI or swiping away the Android UI does not stop a healthy
+service-owned tunnel. Reopening the UI attaches to the same process-owned
+session. If that service process ends, its Go owner ends with it; a new owner
+starts in `IDLE`, and no client replays stale local state.
 
-Go fetches and parses the configuration, selects supported protocols, probes
-variants, and owns the runtime lease. A configuration containing a removed
-legacy section such as Cloak is rejected in full with a safe typed `UNSUPPORTED`
-result before profile selection or scenario execution; supported sections from
-the same input are never partially started.
+On iOS, the containing app sends opaque control commands to the Network
+Extension provider. Raw configuration passes through a one-shot encrypted
+Keychain mailbox and never enters the app message. Darwin notifications carry
+no state; the app follows each wake with a current Go snapshot.
 
-```text
-Connect
-  -> RecoverActiveSession or CreateSession
-  -> Configure(URL | INLINE)
-  -> snapshot/warnings
-  -> Start
-  -> ordered Watch/native callback events
-```
+## Ownership
 
-If another live session exists, `CreateSession` returns typed `CONFLICT`; the
-UI must not stop or replace that session implicitly. The UI instead recovers
-and renders the existing session.
-
-## Disconnect and terminal disposal
-
-An ordinary user Disconnect is a generation-level Stop. It is explicit and
-owned by SessionV2, but it deliberately retains the accepted configuration and
-session so the next Connect can reuse the same Go-owned session:
-
-```text
-Disconnect
-  -> Stop
-  -> await terminal cleanup outcome
-  -> render DISCONNECTED
-```
-
-Go releases protocol, routing, TUN, tun2socks, probe, DNS, and child-process
-resources in reverse acquisition order. The UI reports a cleanup failure as a
-failure; it does not silently render a clean disconnect. Stop does not call
-Destroy or stop the control provider.
-
-Destroy is a separate terminal disposal operation, used only when the owning
-app deliberately removes the recoverable session or tears down the provider:
-
-```text
-Terminal disposal
-  -> Go Destroy
-  -> after a successful Go result, stop the control provider and consume any mailbox
-```
-
-A failed or timed-out Destroy leaves the provider and recovery data in place.
-
-## UI loss and recovery
-
-- Closing or crashing a desktop GUI does not stop a healthy service-owned
-  tunnel. Reopening the GUI recovers the same session and generation.
-- Swiping an Android task removes only the UI. The foreground VPN service
-  remains responsible for a healthy tunnel, and the reopened UI recovers it.
-- If the service/process dies, OS TUN closure and the next startup
-  reconciliation must yield `DISCONNECTED` with no stale resource owner.
-- iOS follows the NetworkExtension lifecycle and uses the same shared state
-  model; Simulator/build evidence is not physical packet-tunnel evidence.
-
-## Ownership rules
-
-- No UI code parses protocol configuration or chooses a protocol.
-- Local UI diagnostics retain complete emitted messages; they are not uploaded
-  or sent to remote telemetry.
-- No UI code owns or synthesizes polling state; the iOS transport may perform
-  bounded off-main Observe reads because NetworkExtension has no cross-process
-  push payload channel.
-- No per-protocol start/stop path or platform-specific session manager may be
-  added.
-- Diagnostics are local-only. Remote telemetry initialization, persistence, and
-  network upload are not part of the product lifecycle.
+- Go owns configuration acquisition and parsing, profile selection, automatic
+  failover, protocol runtimes, and session state.
+- Platform shells own only VPN permission, foreground/extension lifetime,
+  tunnel creation, socket protection, and wake delivery.
+- The shared UI maps snapshots to presentation state. It does not maintain an
+  event ledger or synthesize connection state. It does not run its own polling
+  loop; the iOS bridge refreshes a snapshot on each Darwin wake or after its
+  five-second wait timeout.
+- Diagnostics stay local. Remote telemetry is not part of the session flow.

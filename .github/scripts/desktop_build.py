@@ -10,7 +10,6 @@ import os
 import platform
 import re
 import shutil
-import signal
 import socket
 import stat
 import subprocess
@@ -21,6 +20,15 @@ import time
 import urllib.request
 import zipfile
 from pathlib import Path
+
+from bounded_process import (
+    PROCESS_CLEANUP_GRACE_SECONDS,
+    exception_output as _exception_output,
+    output_text,
+    process_group_options,
+    run_bounded_capture as _run_bounded_capture,
+    terminate_process_group,
+)
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -113,7 +121,6 @@ CLI_NAMES = {
 }
 MACOS_MINIMUM_SYSTEM_VERSION = "11.0"
 PROBE_TIMEOUT_SECONDS = 30
-PROCESS_CLEANUP_GRACE_SECONDS = 5
 GOOS_BY_PLATFORM = {
     "linux": "linux",
     "macos": "darwin",
@@ -134,73 +141,6 @@ def fail(message: str) -> None:
     raise SystemExit(f"[!] {message}")
 
 
-def output_text(output: str | bytes | None) -> str:
-    if output is None:
-        return ""
-    if isinstance(output, bytes):
-        return output.decode("utf-8", errors="replace")
-    return output
-
-
-def output_bytes(output: str | bytes | None) -> bytes:
-    if output is None:
-        return b""
-    if isinstance(output, bytes):
-        return output
-    return output.encode("utf-8", errors="surrogatepass")
-
-
-def _merge_output_fragments(*outputs: str | bytes | None) -> bytes:
-    """Merge cumulative or incremental subprocess output without duplicating it."""
-    merged = b""
-    for output in outputs:
-        data = output_bytes(output)
-        if not data:
-            continue
-        if not merged:
-            merged = data
-            continue
-        # TimeoutExpired exposes ``output`` as an alias for ``stdout``.  A
-        # second communicate() can also return the cumulative stream, while
-        # test doubles and alternate implementations may return only a new
-        # suffix.  Handle all three forms without dropping bytes.
-        if data == merged:
-            continue
-        if data.startswith(merged):
-            merged = data
-            continue
-        # Independent partial reads are appended in order.  The only
-        # duplicate forms produced by subprocess APIs are the stdout/output
-        # aliases and cumulative snapshots handled above; do not scan large
-        # diagnostics byte-by-byte looking for an arbitrary overlap.
-        merged += data
-    return merged
-
-
-def _exception_output(error: BaseException) -> tuple[bytes, bytes]:
-    """Return all partial streams exposed by a subprocess exception once."""
-    stdout = _merge_output_fragments(
-        getattr(error, "stdout", None),
-        getattr(error, "output", None),
-    )
-    stderr = _merge_output_fragments(getattr(error, "stderr", None))
-    return stdout, stderr
-
-
-def _set_exception_output(error: BaseException, stdout: bytes, stderr: bytes) -> None:
-    """Make merged streams available to callers handling the original error."""
-    try:
-        error.stdout = output_text(stdout)  # type: ignore[attr-defined]
-        error.output = output_text(stdout)  # type: ignore[attr-defined]
-        error.stderr = output_text(stderr)  # type: ignore[attr-defined]
-    except (AttributeError, TypeError) as attachment_error:
-        error.add_note(f"subprocess output could not be attached: {attachment_error}")
-
-
-class ProcessCleanupError(RuntimeError):
-    """Raised when bounded process cleanup itself fails."""
-
-
 def emit_process_diagnostic(prefix: str, output: str | bytes | None = None) -> None:
     """Emit a failed child-process diagnostic without discarding its output."""
     print(prefix, file=sys.stderr, flush=True)
@@ -210,12 +150,6 @@ def emit_process_diagnostic(prefix: str, output: str | bytes | None = None) -> N
         if not text.endswith("\n"):
             sys.stderr.write("\n")
         sys.stderr.flush()
-
-
-def process_group_options() -> dict[str, int | bool]:
-    if os.name == "nt":
-        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
-    return {"start_new_session": True}
 
 
 def child_environment(
@@ -236,152 +170,17 @@ def child_environment(
     return child_env
 
 
-def _run_windows_taskkill(pid: int, timeout_seconds: float) -> None:
-    try:
-        result = subprocess.run(
-            ["taskkill", "/T", "/F", "/PID", str(pid)],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False,
-            timeout=timeout_seconds,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        stdout, stderr = _exception_output(error)
-        raise ProcessCleanupError(
-            f"taskkill failed: {error} stdout={output_text(stdout).strip()} "
-            f"stderr={output_text(stderr).strip()}"
-        ) from error
-    if result.returncode != 0:
-        raise ProcessCleanupError(
-            f"taskkill exited with code {result.returncode} "
-            f"stdout={output_text(result.stdout).strip()} "
-            f"stderr={output_text(result.stderr).strip()}"
-        )
-
-
-def terminate_process_group(
-    process: subprocess.Popen[str],
-    grace_seconds: float = PROCESS_CLEANUP_GRACE_SECONDS,
-) -> str:
-    """Terminate a child process and its process group, escalating if needed."""
-    group_id = getattr(process, "_dobby_process_group_id", process.pid)
-    if os.name == "nt":
-        if process.poll() is None:
-            _run_windows_taskkill(process.pid, grace_seconds)
-    else:
-        try:
-            os.killpg(group_id, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        except OSError as error:
-            raise ProcessCleanupError(
-                f"could not terminate process group={group_id}: {error}"
-            ) from error
-        try:
-            process.wait(timeout=grace_seconds)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(group_id, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except OSError as error:
-                raise ProcessCleanupError(
-                    f"could not kill process group={group_id}: {error}"
-                ) from error
-            try:
-                process.wait(timeout=grace_seconds)
-            except subprocess.TimeoutExpired as error:
-                raise ProcessCleanupError(
-                    f"process group {group_id} did not terminate after escalation"
-                ) from error
-    return "process-group=terminated"
-
-
-def _drain_after_cleanup(
-    process: subprocess.Popen[str],
-    stdout: bytes,
-    stderr: bytes,
-    *,
-    grace_seconds: float,
-) -> tuple[bytes, bytes]:
-    """Read the complete streams after the process group has been stopped."""
-    try:
-        drained_stdout, drained_stderr = process.communicate(timeout=grace_seconds)
-    except (subprocess.TimeoutExpired, OSError) as error:
-        partial_stdout, partial_stderr = _exception_output(error)
-        stdout = _merge_output_fragments(stdout, partial_stdout)
-        stderr = _merge_output_fragments(stderr, partial_stderr)
-        try:
-            process.kill()
-        except ProcessLookupError:
-            pass
-        except OSError as kill_error:
-            raise ProcessCleanupError(
-                f"could not kill process while draining output: {kill_error} "
-                f"stdout={output_text(stdout).strip()} stderr={output_text(stderr).strip()}"
-            ) from error
-        try:
-            drained_stdout, drained_stderr = process.communicate(timeout=grace_seconds)
-        except (subprocess.TimeoutExpired, OSError) as drain_error:
-            raise ProcessCleanupError(
-                f"could not drain process output: {drain_error} "
-                f"stdout={output_text(stdout).strip()} stderr={output_text(stderr).strip()}"
-            ) from error
-        return _merge_output_fragments(stdout, drained_stdout), _merge_output_fragments(
-            stderr, drained_stderr
-        )
-    stdout = _merge_output_fragments(stdout, drained_stdout)
-    stderr = _merge_output_fragments(stderr, drained_stderr)
-    return stdout, stderr
-
-
 def run_bounded_capture(
     command: list[str],
     cwd: Path = ROOT_DIR,
     timeout_seconds: int = PROBE_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
-    process = subprocess.Popen(
+    return _run_bounded_capture(
         command,
-        cwd=str(cwd),
+        cwd=cwd,
         env=child_environment(command),
-        text=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        **process_group_options(),
-    )
-    process._dobby_process_group_id = process.pid  # type: ignore[attr-defined]
-    try:
-        stdout, stderr = process.communicate(timeout=timeout_seconds)
-    except (subprocess.TimeoutExpired, OSError) as error:
-        captured_stdout, captured_stderr = _exception_output(error)
-        cleanup_errors: list[ProcessCleanupError] = []
-        try:
-            terminate_process_group(process)
-        except ProcessCleanupError as secondary_error:
-            cleanup_errors.append(secondary_error)
-        try:
-            stdout, stderr = _drain_after_cleanup(
-                process,
-                captured_stdout,
-                captured_stderr,
-                grace_seconds=PROCESS_CLEANUP_GRACE_SECONDS,
-            )
-        except ProcessCleanupError as secondary_error:
-            cleanup_errors.append(secondary_error)
-            stdout, stderr = captured_stdout, captured_stderr
-        _set_exception_output(error, stdout, stderr)
-        if cleanup_errors:
-            error.add_note(
-                "process cleanup failed: "
-                + "; ".join(str(cleanup_error) for cleanup_error in cleanup_errors)
-            )
-        raise
-    return subprocess.CompletedProcess(
-        command,
-        process.returncode,
-        output_text(stdout),
-        output_text(stderr),
+        timeout_seconds=timeout_seconds,
+        cleanup_grace_seconds=PROCESS_CLEANUP_GRACE_SECONDS,
     )
 
 

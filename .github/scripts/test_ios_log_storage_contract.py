@@ -10,8 +10,13 @@ SOURCE = (
 
 class IosLogStorageContractTests(unittest.TestCase):
     def test_mini_mode_keeps_initialization_and_is_simulator_only(self) -> None:
-        source = (Path(__file__).resolve().parents[2] / "swift_module/iosApp/iOSApp.swift").read_text()
-        self.assertLess(source.index("StartDIKt.startDI"), source.index("startup.initialized"))
+        root = Path(__file__).resolve().parents[2]
+        source = (root / "swift_module/iosApp/iOSApp.swift").read_text()
+        composition_root = (root / "swift_module/CommonDI/AppCompositionRoot.swift").read_text()
+        content_view = (root / "swift_module/iosApp/ContentView.swift").read_text()
+        self.assertIn("IOSAppCompositionRoot.logsRepository", source)
+        self.assertIn("createIosAppDependencies", composition_root)
+        self.assertIn("IOSAppCompositionRoot.appDependencies", content_view)
         self.assertEqual(source.count("#if DOBBY_SIMULATOR_MINI && targetEnvironment(simulator)"), 2)
         self.assertIn('startup.initialized mode=mini', source)
         self.assertIn('startup.ui_attached mode=normal', source)

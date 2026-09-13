@@ -28,10 +28,7 @@ type PlatformCallbacks interface {
 	PublishState(
 		sessionID string,
 		generation int64,
-		sequence int64,
 		state string,
-		profileIndex int32,
-		profileProtocol string,
 		failureCode string,
 	)
 }
@@ -42,23 +39,19 @@ func RegisterSessionPlatform(callbacks PlatformCallbacks) {
 	iosCallbacks.set(callbacks)
 }
 
-func GetSessionCapabilities() string { return mobileSessions.GetCapabilities() }
-func CreateSession() string          { return mobileSessions.CreateSession() }
-func RecoverActiveSession() string   { return mobileSessions.RecoverActiveSession() }
-func ConfigureSession(sessionID, commandID string, rawConfig []byte) string {
-	return mobileSessions.Configure(sessionID, commandID, rawConfig)
+func ConfigureSession(sessionID string, sequence int64, rawConfig []byte) string {
+	return mobileSessions.Configure(sessionID, sequence, rawConfig)
 }
-func StartSession(sessionID, commandID, mode string, index int32) string {
-	return mobileSessions.Start(sessionID, commandID, mode, index)
+func StartSession(sessionID string, sequence int64, mode string, index int32) string {
+	return mobileSessions.Start(sessionID, sequence, mode, index)
 }
-func StopSession(sessionID, commandID string, generation int64) string {
-	return mobileSessions.Stop(sessionID, commandID, generation)
+func StopSession(sessionID string, generation int64) string {
+	return mobileSessions.Stop(sessionID, generation)
 }
 func SnapshotSession(sessionID string) string { return mobileSessions.Snapshot(sessionID) }
-func ObserveSession(sessionID string, afterSequence int64) string {
-	return mobileSessions.Observe(sessionID, afterSequence)
+func ResetSession(sessionID string, sequence int64) string {
+	return mobileSessions.Reset(sessionID, sequence)
 }
-func DestroySession(sessionID string) string { return mobileSessions.Destroy(sessionID) }
 
 type iosPlatformCallbacks struct {
 	mu       sync.RWMutex
@@ -93,9 +86,9 @@ func (p *iosPlatformCallbacks) ProtectSocket(sessionID string, generation int64,
 	}
 	return false
 }
-func (p *iosPlatformCallbacks) PublishState(sessionID string, generation int64, sequence int64, state string, profileIndex int32, profileProtocol string, failureCode string) {
+func (p *iosPlatformCallbacks) PublishState(sessionID string, generation int64, state string, failureCode string) {
 	if callback := p.callback(); callback != nil {
-		callback.PublishState(sessionID, generation, sequence, state, profileIndex, profileProtocol, failureCode)
+		callback.PublishState(sessionID, generation, state, failureCode)
 	}
 }
 

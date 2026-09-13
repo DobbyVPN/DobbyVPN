@@ -331,6 +331,63 @@ def _run_connection_matrix(
     return results
 
 
+def _execute_lane(
+    engine,
+    scenarios,
+    adapter,
+    provenance,
+    *,
+    deadline: float | None,
+    reset_before_discovery: bool = False,
+) -> tuple[tuple[ConnectionIdentity, ...], list[dict[str, object]]]:
+    """Discover, run, and finalize one adapter lane on every outcome."""
+
+    finalization_attempted = False
+    try:
+        if reset_before_discovery:
+            adapter.reset()
+        _emit_progress_event(
+            "connection-discovery-start",
+            {"platform": provenance.platform},
+        )
+        connections = _discover_connections(adapter, deadline=deadline)
+        _emit_progress_event(
+            "connection-discovery-finish",
+            {"connection_count": len(connections), "platform": provenance.platform},
+        )
+        results = _run_connection_matrix(
+            engine,
+            scenarios,
+            adapter,
+            provenance,
+            connections,
+            deadline=deadline,
+        )
+        finalization_started = time.monotonic()
+        _emit_progress_event(
+            "finalization-start",
+            {"timeout_seconds": _FINALIZE_TIMEOUT_SECONDS},
+        )
+        finalization_attempted = True
+        _finalize_adapter(adapter, deadline)
+        _emit_progress_event(
+            "finalization-finish",
+            {"duration_seconds": time.monotonic() - finalization_started},
+        )
+        return connections, results
+    except Exception as error:
+        if not finalization_attempted:
+            finalization_attempted = True
+            try:
+                _finalize_adapter(adapter, deadline)
+            except Exception as finalization_error:
+                error.add_note(
+                    "Adapter finalization also failed:\n"
+                    + "".join(traceback.format_exception(finalization_error)).rstrip()
+                )
+        raise
+
+
 def _qualification_exit_code(coverage: dict[str, object]) -> int:
     """Fail qualification unless the reviewed platform coverage contract matches."""
     return 0 if coverage.get("status") in {
@@ -373,7 +430,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--app-log", type=Path, help="Complete application log")
     parser.add_argument("--service-log", type=Path, help="Complete VPN service log")
     parser.add_argument("--adb", type=Path)
-    parser.add_argument("--scenario-id", action="append", dest="scenario_ids", help="Run one canonical scenario; repeat to select a diagnostic subset.")
+    parser.add_argument("--scenario", action="append", dest="scenario_ids", help="Run one canonical scenario; repeat to select a diagnostic subset.")
     parser.add_argument("--service-pid", type=int)
     parser.add_argument("--service-binary", type=Path)
     parser.add_argument("--service-socket", type=Path)
@@ -447,31 +504,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         # Keep every selected scenario in the engine run. Unsupported behavior
         # becomes an ordinary unavailable result, not an omitted test.
-        _emit_progress_event("connection-discovery-start", {"platform": args.platform})
-        connections = _discover_connections(adapter, deadline=lane_deadline)
-        _emit_progress_event(
-            "connection-discovery-finish",
-            {"connection_count": len(connections), "platform": args.platform},
-        )
-        scenarios = selected_scenarios
-        results = _run_connection_matrix(
+        finalization_attempted = True
+        connections, results = _execute_lane(
             engine,
-            scenarios,
+            selected_scenarios,
             adapter,
             provenance,
-            connections,
             deadline=lane_deadline,
-        )
-        finalization_attempted = True
-        finalization_started = time.monotonic()
-        _emit_progress_event(
-            "finalization-start",
-            {"timeout_seconds": _FINALIZE_TIMEOUT_SECONDS},
-        )
-        _finalize_adapter(adapter, lane_deadline)
-        _emit_progress_event(
-            "finalization-finish",
-            {"duration_seconds": time.monotonic() - finalization_started},
         )
         coverage = _coverage_contract(
             args.platform,

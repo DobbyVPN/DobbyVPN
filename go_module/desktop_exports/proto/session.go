@@ -10,8 +10,7 @@ import (
 	"go_module/sessionapi/grpctransport"
 )
 
-// The zero-value Server uses this exact SessionV2 binding, including its
-// process-local session manager and serialization lock.
+// The zero-value Server uses this exact process-owned session API binding.
 var defaultSessionHandler = grpctransport.New(desktopbinding.Default())
 
 func (s *Server) sessionHandler() *grpctransport.Handler {
@@ -21,14 +20,8 @@ func (s *Server) sessionHandler() *grpctransport.Handler {
 	return defaultSessionHandler
 }
 
-func (s *Server) GetCapabilities(ctx context.Context, in *grpcproto.SessionGetCapabilitiesRequest) (*grpcproto.SessionGetCapabilitiesResponse, error) {
-	return s.sessionHandler().GetCapabilities(ctx, in)
-}
-func (s *Server) CreateSession(ctx context.Context, in *grpcproto.SessionCreateSessionRequest) (*grpcproto.SessionCreateSessionResponse, error) {
-	return s.sessionHandler().CreateSession(ctx, in)
-}
-func (s *Server) RecoverActiveSession(ctx context.Context, in *grpcproto.Empty) (*grpcproto.SessionRecoverActiveSessionResponse, error) {
-	return s.sessionHandler().RecoverActiveSession(ctx, in)
+func (s *Server) ValidateConfig(ctx context.Context, in *grpcproto.SessionValidateConfigRequest) (*grpcproto.SessionValidateConfigResponse, error) {
+	return s.sessionHandler().ValidateConfig(ctx, in)
 }
 func (s *Server) Configure(ctx context.Context, in *grpcproto.SessionConfigureRequest) (*grpcproto.SessionConfigureResponse, error) {
 	return s.sessionHandler().Configure(ctx, in)
@@ -42,12 +35,9 @@ func (s *Server) Stop(ctx context.Context, in *grpcproto.SessionStopRequest) (*g
 func (s *Server) Snapshot(ctx context.Context, in *grpcproto.SessionSnapshotRequest) (*grpcproto.SessionSnapshotResponse, error) {
 	return s.sessionHandler().Snapshot(ctx, in)
 }
-func (s *Server) Observe(ctx context.Context, in *grpcproto.SessionObserveRequest) (*grpcproto.SessionObserveResponse, error) {
-	return s.sessionHandler().Observe(ctx, in)
-}
-func (s *Server) Watch(in *grpcproto.SessionObserveRequest, stream grpcproto.Vpn_WatchServer) error {
+func (s *Server) Watch(in *grpcproto.SessionSnapshotRequest, stream grpcproto.Vpn_WatchServer) error {
 	return s.sessionHandler().Watch(in, stream)
 }
-func (s *Server) DestroySession(ctx context.Context, in *grpcproto.SessionDestroySessionRequest) (*grpcproto.SessionDestroySessionResponse, error) {
-	return s.sessionHandler().DestroySession(ctx, in)
+func (s *Server) Reset(ctx context.Context, in *grpcproto.SessionResetRequest) (*grpcproto.SessionResetResponse, error) {
+	return s.sessionHandler().Reset(ctx, in)
 }

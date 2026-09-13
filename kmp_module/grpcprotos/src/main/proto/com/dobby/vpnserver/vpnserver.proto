@@ -11,20 +11,14 @@ service Vpn {
   // Local diagnostics only. Remote telemetry is not a product feature.
   rpc InitLogger (InitLoggerRequest) returns (Empty);
 
-  // sessionapi/v2. These methods are the only production lifecycle surface.
-  // Session identifiers and command identifiers
-  // are opaque strings owned by the caller; configuration is transported as
-  // bytes and is never reflected in a response.
-  rpc GetCapabilities(SessionGetCapabilitiesRequest) returns (SessionGetCapabilitiesResponse);
-  rpc CreateSession(SessionCreateSessionRequest) returns (SessionCreateSessionResponse);
-  rpc RecoverActiveSession(Empty) returns (SessionRecoverActiveSessionResponse);
+  // One process-owned session. Snapshot attaches clients after restart.
+  rpc ValidateConfig(SessionValidateConfigRequest) returns (SessionValidateConfigResponse);
   rpc Configure(SessionConfigureRequest) returns (SessionConfigureResponse);
   rpc Start(SessionStartRequest) returns (SessionStartResponse);
   rpc Stop(SessionStopRequest) returns (SessionStopResponse);
   rpc Snapshot(SessionSnapshotRequest) returns (SessionSnapshotResponse);
-  rpc Observe(SessionObserveRequest) returns (SessionObserveResponse);
-  rpc Watch(SessionObserveRequest) returns (stream SessionEvent);
-  rpc DestroySession(SessionDestroySessionRequest) returns (SessionDestroySessionResponse);
+  rpc Watch(SessionSnapshotRequest) returns (stream SessionSnapshot);
+  rpc Reset(SessionResetRequest) returns (SessionResetResponse);
 }
 
 message InitLoggerRequest {
@@ -34,10 +28,7 @@ message InitLoggerRequest {
 message Empty {
 }
 
-// sessionapi/v2 transport contract ------------------------------------------------
-//
-// Keep these names and field numbers stable. The Vpn service is the desktop
-// transport endpoint for SessionV2 and local diagnostics.
+// Session transport contract. Retired field numbers remain reserved.
 
 enum SessionProtocol {
   SESSION_PROTOCOL_UNSPECIFIED = 0;
@@ -55,7 +46,7 @@ enum SessionState {
   SESSION_STATE_CONNECTED = 5;
   SESSION_STATE_STOPPING = 6;
   SESSION_STATE_FAILED = 7;
-  SESSION_STATE_DESTROYED = 8;
+  reserved 8;
 }
 
 enum SessionFailureCode {
@@ -106,22 +97,6 @@ message SessionWarning {
   string message = 2;
 }
 
-message SessionFeature {
-  string name = 1;
-  bool enabled = 2;
-}
-
-// An event is append-only and ordered by sequence within one session.
-message SessionEvent {
-  string session_id = 1;
-  uint64 generation = 2;
-  uint64 sequence = 3;
-  SessionState state = 4;
-  SessionProfile profile = 5;
-  SessionFailure failure = 6;
-  SessionWarning warning = 7;
-}
-
 message SessionSnapshot {
   string session_id = 1;
   uint64 generation = 2;
@@ -130,39 +105,18 @@ message SessionSnapshot {
   SessionProfile active_profile = 5;
   SessionFailure last_failure = 6;
   bool cleanup_complete = 7;
+  uint64 sequence = 8;
+  string digest = 9;
+  SessionSourceKind source_kind = 10;
+  repeated SessionProfile profiles = 11;
+  repeated SessionWarning warnings = 12;
 }
 
-message SessionGetCapabilitiesRequest {
+message SessionValidateConfigRequest {
+  bytes raw_config = 1;
 }
 
-message SessionGetCapabilitiesResponse {
-  string version = 1;
-  repeated SessionProtocol protocols = 2;
-  repeated SessionFeature features = 3;
-  reserved 4;
-}
-
-message SessionCreateSessionRequest {
-}
-
-message SessionCreateSessionResponse {
-  string session_id = 1;
-  SessionFailure failure = 100;
-}
-
-message SessionRecoverActiveSessionResponse {
-  string session_id = 1;
-  SessionFailure failure = 100;
-}
-
-message SessionConfigureRequest {
-  string session_id = 1;
-  string command_id = 2;
-  bytes raw_config = 3;
-  SessionSourceKind source_kind = 4;
-}
-
-message SessionConfigureResponse {
+message SessionValidateConfigResponse {
   string digest = 1;
   repeated SessionProfile profiles = 2;
   repeated SessionWarning warnings = 3;
@@ -170,26 +124,45 @@ message SessionConfigureResponse {
   SessionFailure failure = 100;
 }
 
+message SessionConfigureRequest {
+  string session_id = 1;
+  reserved 2, 4;
+  bytes raw_config = 3;
+  uint64 expected_sequence = 5;
+}
+
+message SessionConfigureResponse {
+  string digest = 1;
+  repeated SessionProfile profiles = 2;
+  repeated SessionWarning warnings = 3;
+  SessionSourceKind source_kind = 4;
+  uint64 sequence = 5;
+  SessionFailure failure = 100;
+}
+
 message SessionStartRequest {
   string session_id = 1;
-  string command_id = 2;
+  reserved 2;
   SessionStartMode mode = 3;
   int32 profile_index = 4;
+  uint64 expected_sequence = 5;
 }
 
 message SessionStartResponse {
   uint64 generation = 1;
+  uint64 sequence = 2;
   SessionFailure failure = 100;
 }
 
 message SessionStopRequest {
   string session_id = 1;
-  string command_id = 2;
+  reserved 2;
   uint64 generation = 3;
 }
 
 message SessionStopResponse {
   uint64 generation = 1;
+  uint64 sequence = 2;
   SessionFailure failure = 100;
 }
 
@@ -202,22 +175,12 @@ message SessionSnapshotResponse {
   SessionFailure failure = 100;
 }
 
-message SessionObserveRequest {
+message SessionResetRequest {
   string session_id = 1;
-  uint64 after_sequence = 2;
+  uint64 expected_sequence = 2;
 }
 
-message SessionObserveResponse {
-  repeated SessionEvent events = 1;
-  uint64 next_sequence = 2;
-  SessionFailure failure = 100;
-}
-
-message SessionDestroySessionRequest {
-  string session_id = 1;
-}
-
-message SessionDestroySessionResponse {
-  bool destroyed = 1;
+message SessionResetResponse {
+  SessionSnapshot snapshot = 1;
   SessionFailure failure = 100;
 }

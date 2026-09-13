@@ -7,13 +7,13 @@ import (
 	"context"
 	"fmt"
 
+	"go_module/outline"
 	vpnprotocol "go_module/protocol"
-	"go_module/sessionapi/native"
 	"go_module/sessionapi/runtime"
 	v2 "go_module/sessionapi/v2"
+	"go_module/trusttunnel"
+	"go_module/xray"
 )
-
-const category = "sessionapi/runtimebridge"
 
 // New installs all supported native protocols while retaining the runtime's
 // transactional lifecycle, probing, tun2socks, routing, and DNS behavior.
@@ -25,13 +25,15 @@ func New(tunnel runtime.TunnelProvider) v2.Runtime {
 }
 
 func newDevice(_ context.Context, _ v2.SessionRef, profile v2.RuntimeProfile, _ runtime.SocketProtector) (vpnprotocol.ProtocolDevice, error) {
-	protocol, ok := map[v2.Protocol]string{
-		v2.ProtocolOutline:     "outline",
-		v2.ProtocolXray:        "xray",
-		v2.ProtocolTrustTunnel: "trusttunnel",
-	}[profile.Summary.Protocol]
-	if !ok {
+	config := string(profile.NormalizedConfig)
+	switch profile.Summary.Protocol {
+	case v2.ProtocolOutline:
+		return outline.NewOutlineDevice(config)
+	case v2.ProtocolXray:
+		return xray.NewXrayDevice(config)
+	case v2.ProtocolTrustTunnel:
+		return trusttunnel.NewTrustTunnelDevice(config)
+	default:
 		return nil, fmt.Errorf("unsupported protocol")
 	}
-	return native.NewProtocolDevice(string(profile.NormalizedConfig), protocol, category)
 }

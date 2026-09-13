@@ -90,21 +90,21 @@ class DobbyVpnServiceInstrumentationTest {
         val logFile = context.filesDir.resolve(APP_LOG_FILE)
         val logLength = logFile.length()
 
-        listOf("PROBING", "PREPARING", "CONNECTED", "STOPPING", "IDLE", "DESTROYED")
-            .forEachIndexed { index, state ->
-                service.publishState(session, 1L, index.toLong() + 1L, state, "")
+        listOf("PROBING", "PREPARING", "CONNECTED", "STOPPING", "IDLE")
+            .forEach { state ->
+                service.publishState(session, 1L, state, "")
             }
-        service.publishState(session, 1L, 7L, "FAILED", "")
-        service.publishState(session, 1L, 8L, "CONNECTED", "RUNTIME_FAILED")
+        service.publishState(session, 1L, "FAILED", "")
+        service.publishState(session, 1L, "CONNECTED", "RUNTIME_FAILED")
 
         val stateRecords = readAppendedLog(logFile, logLength).lineSequence()
             .filter { it.isNotEmpty() }
             .toList()
             .filter { it.contains("Go state=") }
-        assertEquals(8, stateRecords.size)
-        assertTrue(stateRecords.take(6).all { it.contains("\"level\":\"INFO\"") })
+        assertEquals(7, stateRecords.size)
+        assertTrue(stateRecords.take(5).all { it.contains("\"level\":\"INFO\"") })
+        assertTrue(stateRecords[5].contains("\"level\":\"ERROR\""))
         assertTrue(stateRecords[6].contains("\"level\":\"ERROR\""))
-        assertTrue(stateRecords[7].contains("\"level\":\"ERROR\""))
     }
 
     @Test

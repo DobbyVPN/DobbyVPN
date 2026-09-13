@@ -9,6 +9,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.content.ContextCompat
+import com.dobby.AppDependenciesProvider
 import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.ConnectionStateRepository
@@ -18,11 +19,10 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import org.koin.android.ext.android.inject
 import java.util.UUID
 
 /**
- * Android's deliberately small side of a SessionV2 VPN session.
+ * Android's deliberately small side of a Go-owned VPN session.
  *
  * The Go manager owns configuration parsing, profile selection, probing, protocol
  * processes and tunnel lifecycle.  This service owns only Android's foreground
@@ -63,8 +63,9 @@ class DobbyVpnService : VpnService() {
         }
     }
 
-    private val logger: Logger by inject()
-    private val connectionState: ConnectionStateRepository by inject()
+    private val appDependencies get() = (application as AppDependenciesProvider).appDependencies
+    private val logger: Logger get() = appDependencies.logger
+    private val connectionState: ConnectionStateRepository get() = appDependencies.connectionStateRepository
     val serviceId: String = UUID.randomUUID().toString()
 
     /** The service retains this original descriptor while Go owns a duplicated FD. */
@@ -192,19 +193,13 @@ class DobbyVpnService : VpnService() {
     }
 
     @Synchronized
-    fun publishState(sessionId: String, generation: Long, sequence: Long, state: String, failureCode: String) {
+    fun publishState(sessionId: String, generation: Long, state: String, failureCode: String) {
         if (sessionId != activeSessionId || generation < activeGeneration) {
             logger.log("[svc:$serviceId] ignore stale Go state=$state generation=$generation")
             return
         }
-        connectionState.tryPublishSessionEvent(
-            sessionId = sessionId,
-            generation = generation,
-            sequence = sequence,
-            state = state,
-            failureCode = failureCode,
-        )
-        if (state == "IDLE" || state == "FAILED" || state == "DESTROYED") {
+        connectionState.publishSessionChanged()
+        if (state == "IDLE" || state == "FAILED") {
             if (vpnInterface == null) stopForeground(STOP_FOREGROUND_REMOVE)
         }
         val stateMessage = "[svc:$serviceId] Go state=$state generation=$generation failure=$failureCode"
@@ -222,7 +217,7 @@ class DobbyVpnService : VpnService() {
         val generation = activeGeneration
         if (session != null && generation > 0L) {
             val stopped = try {
-                sessionStopSucceeded(GoBackendWrapper.stopSession(session, UUID.randomUUID().toString(), generation))
+                sessionStopSucceeded(GoBackendWrapper.stopSession(session, generation))
             } catch (failure: Throwable) {
                 reportFailure("session_stop_during_destroy generation=$generation", failure)
                 false
@@ -249,7 +244,7 @@ class DobbyVpnService : VpnService() {
         // authoritative runtime first; its release callback closes the matching PFD.
         if (session != null && active > 0L) {
             val stopped = try {
-                sessionStopSucceeded(GoBackendWrapper.stopSession(session, UUID.randomUUID().toString(), active))
+                sessionStopSucceeded(GoBackendWrapper.stopSession(session, active))
             } catch (failure: Throwable) {
                 reportFailure("session_stop_from_intent generation=$active", failure)
                 false

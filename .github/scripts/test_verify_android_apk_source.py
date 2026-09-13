@@ -5,7 +5,6 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from unittest import mock
 
@@ -21,6 +20,18 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
     def setUp(self):
         self.sha = "a" * 40
         self.repo = "DobbyVPN/DobbyVPN"
+
+    def test_bounded_capture_keeps_inherited_cwd_and_environment(self):
+        process = mock.Mock(pid=123, returncode=0)
+        process.communicate.return_value = (b"analyzer output", b"")
+        with mock.patch.object(VERIFY.subprocess, "Popen", return_value=process) as popen:
+            result = VERIFY.run_bounded_capture(["apkanalyzer"], timeout_seconds=7)
+
+        self.assertEqual(result.stdout, "analyzer output")
+        self.assertEqual(popen.call_args.args, (["apkanalyzer"],))
+        self.assertNotIn("cwd", popen.call_args.kwargs)
+        self.assertNotIn("env", popen.call_args.kwargs)
+        process.communicate.assert_called_once_with(timeout=7)
 
     def code(self, sha=None, link=None):
         sha = self.sha if sha is None else sha
@@ -151,82 +162,3 @@ class VerifyAndroidApkSourceTests(unittest.TestCase):
                 with mock.patch.object(VERIFY, "run_apkanalyzer", side_effect=results):
                     with self.assertRaisesRegex(VERIFY.VerificationError, "source identity"):
                         VERIFY.verify_test_companion("apkanalyzer", Path(apk.name), self.sha)
-
-    @unittest.skipIf(os.name == "nt", "POSIX process-group assertion")
-    def test_sigterm_resistant_analyzer_descendant_is_killed(self):
-        child_code = (
-            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            "time.sleep(60)"
-        )
-        with tempfile.TemporaryDirectory(prefix="android-source-resistant-child-") as temporary:
-            root = Path(temporary)
-            child_stdout = root / "child.stdout.raw.log"
-            child_stderr = root / "child.stderr.raw.log"
-            parent_code = (
-                "import os,signal,subprocess,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-                f"child_stdout=os.fdopen(os.open({str(child_stdout)!r}, os.O_WRONLY|os.O_CREAT|os.O_APPEND, 0o600), 'ab', buffering=0); "
-                f"child_stderr=os.fdopen(os.open({str(child_stderr)!r}, os.O_WRONLY|os.O_CREAT|os.O_APPEND, 0o600), 'ab', buffering=0); "
-                f"child=subprocess.Popen([sys.executable,'-c',{child_code!r}], stdout=child_stdout, stderr=child_stderr); "
-                "print(child.pid, flush=True); time.sleep(60)"
-            )
-            process = subprocess.Popen(
-                [sys.executable, "-c", parent_code],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True,
-            )
-            process._dobby_process_group_id = process.pid  # type: ignore[attr-defined]
-            try:
-                child_pid = int(process.stdout.readline().strip())
-                VERIFY.terminate_process_group(process, grace_seconds=0.1)
-                self.assertIsNotNone(process.poll())
-                for _ in range(30):
-                    try:
-                        state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
-                    except (FileNotFoundError, ProcessLookupError):
-                        break
-                    if state[state.rfind(")") + 2 :].split()[0] == "Z":
-                        break
-                    time.sleep(0.05)
-                else:
-                    self.fail("SIGTERM-resistant analyzer descendant survived cleanup")
-                self.assertEqual(child_stdout.stat().st_mode & 0o777, 0o600)
-                self.assertEqual(child_stderr.stat().st_mode & 0o777, 0o600)
-            finally:
-                if process.poll() is None:
-                    VERIFY.terminate_process_group(process, grace_seconds=0.1)
-                process.stdout.close()
-                process.stderr.close()
-
-    @unittest.skipIf(os.name == "nt", "POSIX process-group assertion")
-    def test_analyzer_timeout_preserves_streams_and_kills_descendants(self):
-        child_code = (
-            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            "time.sleep(60)"
-        )
-        parent_code = (
-            "import signal,subprocess,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            f"child=subprocess.Popen([sys.executable,'-c',{child_code!r}]); "
-            "print('childpid='+str(child.pid), flush=True); "
-            "print('analyzer stderr', file=sys.stderr, flush=True); time.sleep(60)"
-        )
-        with tempfile.TemporaryDirectory() as temporary:
-            with (
-                mock.patch.object(VERIFY, "APK_ANALYZER_TIMEOUT_SECONDS", 1),
-                mock.patch.object(VERIFY, "PROCESS_CLEANUP_GRACE_SECONDS", 0.1),
-            ):
-                with self.assertRaises(subprocess.TimeoutExpired) as raised:
-                    VERIFY.run_apkanalyzer([sys.executable, "-c", parent_code])
-            output = raised.exception.stdout or raised.exception.output or ""
-            child_pid = int(VERIFY.output_text(output).split("childpid=", 1)[1].splitlines()[0])
-            for _ in range(30):
-                try:
-                    state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
-                except (FileNotFoundError, ProcessLookupError):
-                    break
-                if state[state.rfind(")") + 2 :].split()[0] == "Z":
-                    break
-                time.sleep(0.05)
-            else:
-                self.fail("timed-out analyzer descendant survived cleanup")

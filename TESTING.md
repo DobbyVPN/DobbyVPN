@@ -44,6 +44,9 @@ PYTHONPATH=torturer python3 -m unittest discover -s torturer/tests -p 'test_*.py
 The functional-tooling suite includes Windows-only process tests, skipped on
 other operating systems. Running its Python unit tests is not a live VPN test.
 
+Shared Compose tests cover UI state. TODO: add desktop tests that drive the app
+through its GUI. CLI-driven testing is deferred to a separate task.
+
 ## iOS
 
 On a Mac with Xcode and an installed Simulator runtime:
@@ -60,9 +63,8 @@ The private Harness also runs the app-contract helper in
 `torturer/tests/ios_simulator/`. Local Intel runs use explicit Mini mode and
 check initialization without Metal. GitHub uses explicit Metal mode, which
 requires usable Metal and checks that the normal app builds, launches, and
-attaches its main view. Shared Compose tests cover UI behavior; this startup
-smoke does not prove that Metal presented a frame. Neither mode is VPN traffic
-qualification.
+attaches its main view. This startup smoke does not prove that Metal presented
+a frame. Neither mode is VPN traffic qualification.
 
 Simulator coverage is not physical-device VPN coverage. The vendor
 TrustTunnel bridge is device-only; the Simulator returns an unsupported

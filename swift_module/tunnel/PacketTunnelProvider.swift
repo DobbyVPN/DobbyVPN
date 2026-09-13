@@ -10,17 +10,16 @@ import Network
 import CoreFoundation
 
 private enum GomobileProviderSessionClient {
-    static func configured(sessionID: String, rawConfiguration: Data, requestID: String) -> Data {
-        Data(DobbyvpnConfigureSession(sessionID, requestID, rawConfiguration).utf8)
+    static func configured(sessionID: String, sequence: Int64, rawConfiguration: Data) -> Data {
+        Data(DobbyvpnConfigureSession(sessionID, sequence, rawConfiguration).utf8)
     }
 
-    static func started(sessionID: String, requestID: String, mode: String, index: Int32) -> Data {
-        Data(DobbyvpnStartSession(sessionID, requestID, mode, index).utf8)
+    static func started(sessionID: String, sequence: Int64, mode: String, index: Int32) -> Data {
+        Data(DobbyvpnStartSession(sessionID, sequence, mode, index).utf8)
     }
 }
 
-/// The ordered event payload is retained by Go and fetched through Observe;
-/// this callback only wakes the extension-local observer.
+/// Go snapshots are authoritative; this callback only wakes the observers.
 // gomobile emits both an Objective-C protocol and a proxy class with the
 // same name. Swift imports the protocol as `DobbyvpnPlatformCallbacksProtocol`
 // to disambiguate it from the proxy class; conforming to the class name would
@@ -31,7 +30,6 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
     private let stateHandler: (
         _ sessionID: String?,
         _ generation: Int64,
-        _ sequence: Int64,
         _ state: String?,
         _ failureCode: String?
     ) -> Void
@@ -42,7 +40,6 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
         stateHandler: @escaping (
             _ sessionID: String?,
             _ generation: Int64,
-            _ sequence: Int64,
             _ state: String?,
             _ failureCode: String?
         ) -> Void
@@ -80,13 +77,9 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
     func publishState(
         _ sessionID: String?,
         generation: Int64,
-        sequence: Int64,
         state: String?,
-        profileIndex: Int32,
-        profileProtocol: String?,
         failureCode: String?
     ) {
-        NotificationCenter.default.post(name: .iosSessionEventAvailable, object: nil)
         let name = CFNotificationName(rawValue: IOSDarwinEventSink.notificationName as CFString)
         CFNotificationCenterPostNotification(
             CFNotificationCenterGetDarwinNotifyCenter(),
@@ -95,7 +88,7 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
             nil,
             true
         )
-        stateHandler(sessionID, generation, sequence, state, failureCode)
+        stateHandler(sessionID, generation, state, failureCode)
     }
 }
 
@@ -105,10 +98,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     // The containing app writes opaque configuration bytes to this shared
     // encrypted Keychain mailbox before asking NetworkExtension to start; the
-    // provider is the only process that hands them to Go's SessionV2 parser.
+    // provider is the only process that hands them to Go's configuration parser.
     private let sessionRawConfigurationKey = SharedKeychainSecretStore.sessionConfigurationMailboxKey
 
-    private var logs = NativeModuleHolder.logsRepository
+    private var logs = IOSAppCompositionRoot.logsRepository
     private let secrets = SharedKeychainSecretStore.shared
     private let commandQueue = DispatchQueue(label: "vpn.dobby.app.tunnel.session-command")
     private let settingsQueue = DispatchQueue(label: "vpn.dobby.app.tunnel.settings")
@@ -120,11 +113,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         releaseHandler: { [weak self] sessionID, generation in
             self?.releaseTunnel(sessionID: sessionID, generation: generation) ?? false
         },
-        stateHandler: { [weak self] sessionID, generation, sequence, state, failureCode in
+        stateHandler: { [weak self] sessionID, generation, state, failureCode in
             self?.handleGoPublishedState(
                 sessionID: sessionID,
                 generation: generation,
-                sequence: sequence,
                 state: state,
                 failureCode: failureCode
             )
@@ -339,7 +331,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         }
         DobbyvpnRegisterSessionPlatform(callbackBridge)
-        logs.writeLog(log: "[tunnel:\(tunnelId)] control mode ready; waiting for SessionV2 command")
+        logs.writeLog(log: "[tunnel:\(tunnelId)] control mode ready; waiting for session command")
 
         startPathLogging()
         logInitialNetworkPath(timeout: 1.0)
@@ -355,7 +347,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func stopGoSession(reason: String) async {
-        // Ordinary Stop and Destroy are sent by the app before the provider is
+        // Stop is sent by the app before the provider is
         // stopped. An unexpected provider stop has no safe generation to
         // invent, so it only tears down NetworkExtension state.
         logs.writeLog(log: "[tunnel:\(tunnelId)] provider stop reason=\(reason); Go owns any recorded cleanup")
@@ -415,32 +407,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         let outcome: (payload: Data, kind: IOSProviderResponseKind)
         switch command.operation {
-        case .create:
-            outcome = (Data(DobbyvpnCreateSession().utf8), .go)
-        case .recover:
-            outcome = (Data(DobbyvpnRecoverActiveSession().utf8), .go)
         case .configure:
             outcome = configure(command)
         case .start:
             outcome = start(command)
         case .snapshot:
             outcome = (Data(DobbyvpnSnapshotSession(command.sessionID ?? "").utf8), .go)
-        case .observe:
-            if let afterSequence = command.afterSequence {
-                outcome = (Data(DobbyvpnObserveSession(command.sessionID ?? "", afterSequence).utf8), .go)
-            } else {
-                outcome = (
-                    VpnManagerImpl.transportFailure(
-                        "INTERNAL",
-                        message: "observe command is missing after_sequence"
-                    ),
-                    .transport
-                )
-            }
         case .stop:
-            outcome = (Data(DobbyvpnStopSession(command.sessionID ?? "", command.requestID, command.generation ?? 0).utf8), .go)
-        case .destroy:
-            outcome = (Data(DobbyvpnDestroySession(command.sessionID ?? "").utf8), .go)
+            outcome = (Data(DobbyvpnStopSession(command.sessionID ?? "", command.generation ?? 0).utf8), .go)
+        case .reset:
+            outcome = (Data(DobbyvpnResetSession(command.sessionID ?? "", command.expectedSequence ?? 0).utf8), .go)
         }
         return providerResponse(requestID: command.requestID, kind: outcome.kind, goResponse: outcome.payload)
     }
@@ -476,8 +452,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         let response = GomobileProviderSessionClient.configured(
             sessionID: command.sessionID ?? "",
-            rawConfiguration: rawConfiguration,
-            requestID: command.requestID
+            sequence: command.expectedSequence ?? 0,
+            rawConfiguration: rawConfiguration
         )
         // The containing app consumes the mailbox after it receives this Go
         // result, success or typed failure.
@@ -490,7 +466,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // has selected a generation and requested its packet-flow FD.
         let response = GomobileProviderSessionClient.started(
             sessionID: command.sessionID ?? "",
-            requestID: command.requestID,
+            sequence: command.expectedSequence ?? 0,
             mode: command.mode ?? "",
             index: command.index ?? 0
         )
@@ -506,16 +482,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func handleGoPublishedState(
         sessionID: String?,
         generation: Int64,
-        sequence: Int64,
         state: String?,
         failureCode: String?
     ) {
         _ = sessionID
-        _ = sequence
-        // IDLE and DESTROYED are positive Go cleanup completion signals. A
-        // FAILED event is clearable only when its failure is not cleanup
+        // IDLE is a positive Go cleanup completion signal. A FAILED event
+        // is clearable only when its failure is not cleanup
         // failure; CLEANUP_FAILED keeps the failure state intact.
-        let cleanupCompleted = state == "IDLE" || state == "DESTROYED" ||
+        let cleanupCompleted = state == "IDLE" ||
             (state == "FAILED" && failureCode != "CLEANUP_FAILED")
         guard cleanupCompleted else { return }
         commandQueue.async { [weak self] in
@@ -573,7 +547,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     /// Go closes its descriptor before this callback. Keep the callback
     /// synchronous so fixed routes are gone before Go emits cleanup-complete
-    /// IDLE/DESTROYED and before a subsequent generation can be acquired.
+    /// IDLE and before a subsequent generation can be acquired.
     private func releaseTunnel(sessionID: String?, generation: Int64) -> Bool {
         _ = sessionID
         return settingsQueue.sync {

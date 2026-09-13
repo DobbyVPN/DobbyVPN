@@ -102,6 +102,8 @@ class HostedRunPreflightTests(unittest.TestCase):
         self.assertTrue(
             {"--identity-url", "--latency-url", "--download-url", "--upload-url"}.isdisjoint(options)
         )
+        self.assertIn("--scenario", options)
+        self.assertNotIn("--scenario-id", options)
 
 
 if __name__ == "__main__":

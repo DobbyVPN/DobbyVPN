@@ -1,34 +1,33 @@
 package com.dobby.feature.main.ui
 
-import android.Manifest
 import android.content.Intent
 import android.net.VpnService
 import android.os.Bundle
 import android.view.WindowManager
-import androidx.fragment.app.FragmentActivity
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
-import androidx.core.app.ActivityCompat
 import androidx.lifecycle.lifecycleScope
 import com.dobby.common.ui.theme.DobbyTheme
+import com.dobby.AppDependenciesProvider
 import com.dobby.navigation.App
-import com.dobby.feature.main.domain.PermissionEventsChannel
 import kotlinx.coroutines.launch
-import org.koin.android.ext.android.inject
 
-class MainActivity : FragmentActivity() {
+class MainActivity : ComponentActivity() {
 
     private lateinit var requestVpnPermissionLauncher: ActivityResultLauncher<Intent>
 
-    private val permissionEventsChannel: PermissionEventsChannel by inject()
+    private val appDependencies get() = (application as AppDependenciesProvider).appDependencies
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val dependencies = appDependencies
 
         initVpnPermissionLauncher()
         lifecycleScope.launch {
-            permissionEventsChannel.checkPermissionsEvents.collect {
+            dependencies.permissionEventsChannel.checkPermissionsEvents.collect {
                 checkVpnPermissionAndStart()
             }
         }
@@ -38,7 +37,10 @@ class MainActivity : FragmentActivity() {
         )
         setContent {
             DobbyTheme {
-                App()
+                BackHandler(enabled = dependencies.navigation.canGoBack) {
+                    dependencies.navigation.goBack()
+                }
+                App(dependencies)
             }
         }
     }
@@ -59,6 +61,6 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun onPermissionGranted(isGranted: Boolean) {
-        lifecycleScope.launch { permissionEventsChannel.onPermissionGranted(isGranted) }
+        lifecycleScope.launch { appDependencies.permissionEventsChannel.onPermissionGranted(isGranted) }
     }
 }

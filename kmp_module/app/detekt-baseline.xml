@@ -3,7 +3,6 @@
   <ManuallySuppressedIssues></ManuallySuppressedIssues>
   <CurrentIssues>
     <ID>CyclomaticComplexMethod:ConnectionScreen.kt$@Preview @Composable fun ConnectionScreen( mainViewModel: MainViewModel, logsViewModel: LogsViewModel, modifier: Modifier = Modifier, )</ID>
-    <ID>LongMethod:App.kt$@Composable fun App(modifier: Modifier = Modifier)</ID>
     <ID>LongMethod:ConnectionScreen.kt$@Preview @Composable fun ConnectionScreen( mainViewModel: MainViewModel, logsViewModel: LogsViewModel, modifier: Modifier = Modifier, )</ID>
     <ID>LongMethod:LogMessageScreen.kt$@Composable fun LogMessageScreen(message: String)</ID>
     <ID>MagicNumber:LogsRepository.kt$LogsRepository$10</ID>
@@ -13,7 +12,6 @@
     <ID>MagicNumber:LogsRepository.kt$LogsRepository$7</ID>
     <ID>MagicNumber:LogsViewModel.kt$LogsViewModel$500L</ID>
     <ID>NewLineAtEndOfFile:IsPermissionCheckNeeded.kt$com.dobby.feature.main.presentation.IsPermissionCheckNeeded.kt</ID>
-    <ID>NewLineAtEndOfFile:Screens.kt$com.dobby.navigation.Screens.kt</ID>
     <ID>PackageNaming:ExpectResourceCollectors.kt$package kmp_module.app.generated.resources</ID>
     <ID>PackageNaming:Res.kt$package kmp_module.app.generated.resources</ID>
     <ID>TooGenericExceptionCaught:MainViewModel.kt$MainViewModel$e: Exception</ID>
@@ -22,13 +20,10 @@
     <ID>UnusedImports:ConnectionScreen.kt$import androidx.compose.ui.text.buildAnnotatedString</ID>
     <ID>UnusedImports:ConnectionScreen.kt$import androidx.compose.ui.text.font.FontFamily</ID>
     <ID>UnusedImports:ConnectionScreen.kt$import androidx.compose.ui.text.withStyle</ID>
-    <ID>UnusedImports:ConnectionScreen.kt$import com.dobby.util.koinViewModel</ID>
     <ID>UnusedImports:ConnectionScreen.kt$import kotlin.math.log</ID>
-    <ID>UnusedImports:LogsRepository.kt$import org.koin.compose.koinInject</ID>
     <ID>UnusedImports:SettingsScreen.kt$import kotlinx.coroutines.flow.MutableStateFlow</ID>
     <ID>UnusedImports:SettingsScreen.kt$import kotlinx.coroutines.flow.asStateFlow</ID>
     <ID>WildcardImport:ConnectionScreen.kt$import androidx.compose.runtime.*</ID>
     <ID>WildcardImport:MainViewModel.kt$import com.dobby.feature.main.domain.*</ID>
-    <ID>WildcardImport:MakeNativeModule.kt$import com.dobby.feature.main.domain.*</ID>
   </CurrentIssues>
 </SmellBaseline>

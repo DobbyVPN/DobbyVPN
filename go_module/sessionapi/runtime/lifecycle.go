@@ -1,4 +1,4 @@
-// Package runtime owns one transactional protocol/runtime lease for SessionV2.
+// Package runtime owns one transactional protocol/runtime lease for the session manager.
 // It is deliberately owned by Go: callers never interpret profile TOML or
 // normalized protocol payloads.
 package runtime
@@ -88,7 +88,7 @@ type Options struct {
 	HealthFailureThreshold  int
 }
 
-// New returns a SessionV2 Runtime. Its operation mutex deliberately serializes all
+// New returns a session Runtime. Its operation mutex deliberately serializes all
 // runs: platform routing and native tunnel resources are process-wide, so
 // parallel profile probes would not be isolated.
 func New(options Options) v2.Runtime {
@@ -420,11 +420,9 @@ func connectContext(ctx context.Context, client sessionCore) error {
 }
 
 type lease struct {
-	mu           sync.Mutex
-	stopped      bool
+	stopOnce     sync.Once
 	undo         []func(context.Context) error
 	onDone       func()
-	done         chan struct{}
 	cleanupErr   error
 	healthCancel context.CancelFunc
 	healthDone   chan struct{}
@@ -434,7 +432,7 @@ type lease struct {
 func (l *lease) push(fn func(context.Context) error) { l.undo = append(l.undo, fn) }
 func (l *lease) setOnDone(fn func())                 { l.onDone = fn }
 
-// HealthFailures implements SessionV2 HealthMonitoringLease. It is closed after the
+// HealthFailures implements HealthMonitoringLease. It is closed after the
 // lease has stopped, so the manager watcher cannot outlive its runtime lease.
 func (l *lease) HealthFailures() <-chan struct{} { return l.healthFailed }
 
@@ -482,46 +480,28 @@ func (l *lease) startHealthMonitor(parent context.Context, ref v2.SessionRef, ch
 }
 
 func (l *lease) Stop(ctx context.Context) error {
-	l.mu.Lock()
-	if l.stopped {
-		done := l.done
-		l.mu.Unlock()
-		<-done
-		l.mu.Lock()
-		err := l.cleanupErr
-		l.mu.Unlock()
-		return err
-	}
-	l.stopped = true
-	l.done = make(chan struct{})
-	undo := l.undo
-	onDone := l.onDone
-	l.undo = nil
-	l.onDone = nil
-	healthCancel, healthDone := l.healthCancel, l.healthDone
-	l.healthCancel = nil
-	l.mu.Unlock()
-	if healthCancel != nil {
-		healthCancel()
-	}
-	if healthDone != nil {
-		<-healthDone
-	}
-	var errs []error
-	for i := len(undo) - 1; i >= 0; i-- {
-		if err := undo[i](ctx); err != nil {
-			errs = append(errs, err)
+	// sync.Once also makes concurrent Stop calls wait for the one cleanup run.
+	// The lease is fully initialized before it is returned, so Stop is its only
+	// writer from that point on.
+	l.stopOnce.Do(func() {
+		if l.healthCancel != nil {
+			l.healthCancel()
 		}
-	}
-	if onDone != nil {
-		onDone()
-	}
-	err := errors.Join(errs...)
-	l.mu.Lock()
-	l.cleanupErr = err
-	close(l.done)
-	l.mu.Unlock()
-	return err
+		if l.healthDone != nil {
+			<-l.healthDone
+		}
+		var errs []error
+		for i := len(l.undo) - 1; i >= 0; i-- {
+			if err := l.undo[i](ctx); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if l.onDone != nil {
+			l.onDone()
+		}
+		l.cleanupErr = errors.Join(errs...)
+	})
+	return l.cleanupErr
 }
 
 type defaultInputs struct{}

@@ -1,5 +1,5 @@
 // Command dobby-cli is the native desktop operator client. It uses the
-// authenticated SessionV2 control channel and never starts a JVM or a second
+// authenticated session control channel and never starts a JVM or a second
 // VPN runtime.
 package main
 
@@ -220,27 +220,31 @@ func connect(ctx context.Context, client grpcproto.VpnClient, source string, pro
 		reportCLIError("profile index rejected", profileErr)
 		return exitArgs
 	}
-	created, createErr := client.CreateSession(ctx, &grpcproto.SessionCreateSessionRequest{})
-	if createErr != nil || created == nil || created.GetFailure() != nil {
-		return reportFailure(createErr, failureOf(created))
+	current, snapshotErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{})
+	if snapshotErr != nil || current == nil || current.GetFailure() != nil {
+		return reportFailure(snapshotErr, failureOf(current))
 	}
-	sessionID := created.GetSessionId()
+	owner := current.GetSnapshot()
+	if owner == nil {
+		return reportFailure(errors.New("service returned a snapshot response without a snapshot"), nil)
+	}
+	sessionID := owner.GetSessionId()
 	keepSession := false
 	var startedGeneration uint64
 	defer func() {
-		if !keepSession {
+		if !keepSession && startedGeneration != 0 {
 			if cleanupErr := cleanupSession(client, sessionID, startedGeneration); cleanupErr != nil {
 				reportCLIError("failed connection session cleanup failed", cleanupErr)
 			}
 		}
 	}()
 	configured, configureErr := client.Configure(ctx, &grpcproto.SessionConfigureRequest{
-		SessionId: sessionID, CommandId: commandID("configure"), RawConfig: raw,
+		SessionId: sessionID, ExpectedSequence: owner.GetSequence(), RawConfig: raw,
 	})
 	if configureErr != nil || configured == nil || configured.GetFailure() != nil {
 		return reportFailure(configureErr, failureOf(configured))
 	}
-	started, startErr := startSession(ctx, client, sessionID, profileValue)
+	started, startErr := startSession(ctx, client, sessionID, configured.GetSequence(), profileValue)
 	if startErr != nil || started == nil || started.GetFailure() != nil {
 		return reportFailure(startErr, failureOf(started))
 	}
@@ -278,9 +282,10 @@ func startSession(
 	ctx context.Context,
 	client grpcproto.VpnClient,
 	sessionID string,
+	expectedSequence uint64,
 	profileIndex *int32,
 ) (*grpcproto.SessionStartResponse, error) {
-	start := &grpcproto.SessionStartRequest{SessionId: sessionID, CommandId: commandID("start")}
+	start := &grpcproto.SessionStartRequest{SessionId: sessionID, ExpectedSequence: expectedSequence}
 	if profileIndex == nil {
 		start.Mode = grpcproto.SessionStartMode_SESSION_START_MODE_AUTO_SELECT
 	} else {
@@ -291,33 +296,32 @@ func startSession(
 }
 
 func waitForConnection(ctx context.Context, client grpcproto.VpnClient, sessionID string) (int, bool) {
-	stream, err := client.Watch(ctx, &grpcproto.SessionObserveRequest{SessionId: sessionID})
+	stream, err := client.Watch(ctx, &grpcproto.SessionSnapshotRequest{SessionId: sessionID})
 	if err != nil {
 		return reportFailure(err, nil), false
 	}
 	for {
-		event, recvErr := stream.Recv()
+		snapshot, recvErr := stream.Recv()
 		if errors.Is(recvErr, io.EOF) {
-			reportCLIError("session event stream ended", io.EOF)
+			reportCLIError("session snapshot stream ended", io.EOF)
 			return exitRuntime, false
 		}
 		if recvErr != nil {
 			return reportFailure(recvErr, nil), false
 		}
-		switch event.GetState() {
+		switch snapshot.GetState() {
 		case grpcproto.SessionState_SESSION_STATE_UNSPECIFIED,
 			grpcproto.SessionState_SESSION_STATE_IDLE,
 			grpcproto.SessionState_SESSION_STATE_CONFIGURED,
 			grpcproto.SessionState_SESSION_STATE_PROBING,
 			grpcproto.SessionState_SESSION_STATE_PREPARING,
-			grpcproto.SessionState_SESSION_STATE_STOPPING,
-			grpcproto.SessionState_SESSION_STATE_DESTROYED:
+			grpcproto.SessionState_SESSION_STATE_STOPPING:
 			continue
 		case grpcproto.SessionState_SESSION_STATE_CONNECTED:
 			fmt.Println("CONNECTED")
 			return exitOK, true
 		case grpcproto.SessionState_SESSION_STATE_FAILED:
-			return reportFailure(nil, event.GetFailure()), false
+			return reportFailure(nil, snapshot.GetLastFailure()), false
 		}
 	}
 }
@@ -328,29 +332,13 @@ func checkConfig(ctx context.Context, client grpcproto.VpnClient, source string)
 		reportCLIError("configuration source rejected", err)
 		return exitArgs
 	}
-	created, err := client.CreateSession(ctx, &grpcproto.SessionCreateSessionRequest{})
-	if err != nil || created == nil || created.GetFailure() != nil {
-		return reportFailure(err, failureOf(created))
-	}
-	id := created.GetSessionId()
-	// Configuration is a read-only session operation, but the temporary
-	// session still has to be destroyed when the command returns or its
-	// request deadline expires.  Never let that deferred cleanup inherit an
-	// unbounded context: an unresponsive service would otherwise keep
-	// ``dobby-cli check-config`` alive after the 30-second command deadline and
-	// consume the hosted lane's hard deadline.
-	result, err := client.Configure(ctx, &grpcproto.SessionConfigureRequest{SessionId: id, CommandId: commandID("check"), RawConfig: raw})
-	resultCode := exitOK
+	result, err := client.ValidateConfig(ctx, &grpcproto.SessionValidateConfigRequest{RawConfig: raw})
 	if err != nil || result == nil || result.GetFailure() != nil {
-		resultCode = reportFailure(err, failureOf(result))
+		return reportFailure(err, failureOf(result))
 	} else {
 		fmt.Printf("profiles=%d source=%s\n", len(result.GetProfiles()), result.GetSourceKind().String())
 	}
-	if cleanupErr := cleanupSession(client, id, 0); cleanupErr != nil {
-		reportCLIError("temporary session cleanup failed", cleanupErr)
-		return exitRuntime
-	}
-	return resultCode
+	return exitOK
 }
 
 func profileInventory(source string) int {
@@ -396,60 +384,36 @@ func profileInventoryJSON(profiles []sessionv2.ProfileSummary) ([]byte, error) {
 }
 
 func disconnect(ctx context.Context, client grpcproto.VpnClient) int {
-	recovered, err := client.RecoverActiveSession(ctx, &grpcproto.Empty{})
-	if err != nil {
-		return reportFailure(err, nil)
+	response, err := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{})
+	if err != nil || response == nil || response.GetFailure() != nil {
+		return reportFailure(err, failureOf(response))
 	}
-	if recovered == nil {
-		return reportFailure(nil, nil)
+	current := response.GetSnapshot()
+	if current == nil {
+		return reportFailure(errors.New("service returned a snapshot response without a snapshot"), nil)
 	}
-	if recovered.GetFailure() != nil {
-		return reportRecoveredFailure(recovered.GetFailure())
-	}
-	id := recovered.GetSessionId()
-	snapshot, err := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: id})
-	if err != nil || snapshot == nil || snapshot.GetFailure() != nil {
-		return reportFailure(err, failureOf(snapshot))
-	}
-	timedOut, stopFailure, stopErr := stopAndWaitForDisconnect(ctx, client, id, snapshot)
+	timedOut, stopFailure, stopErr := stopAndWaitForDisconnect(ctx, client, current)
 	if timedOut {
 		return reportFailure(stopErr, stopFailure)
 	}
 	if stopErr != nil || stopFailure != nil {
 		return reportFailure(stopErr, stopFailure)
 	}
-	destroyFailure, destroyErr := destroySession(ctx, client, id)
-	if destroyErr != nil || destroyFailure != nil {
-		return reportFailure(destroyErr, destroyFailure)
-	}
 	fmt.Println("DISCONNECTED")
 	return exitOK
-}
-
-func reportRecoveredFailure(failure *grpcproto.SessionFailure) int {
-	if failure.GetCode() == grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_NOT_FOUND {
-		fmt.Println("DISCONNECTED")
-		return exitOK
-	}
-	return reportFailure(nil, failure)
 }
 
 func stopAndWaitForDisconnect(
 	ctx context.Context,
 	client grpcproto.VpnClient,
-	sessionID string,
-	snapshot *grpcproto.SessionSnapshotResponse,
+	current *grpcproto.SessionSnapshot,
 ) (bool, *grpcproto.SessionFailure, error) {
-	current := snapshot.GetSnapshot()
-	if current == nil {
-		return false, nil, fmt.Errorf("service returned a snapshot response without a snapshot")
-	}
 	if current.GetGeneration() == 0 || current.GetCleanupComplete() {
-		return false, nil, nil
+		return false, cleanupFailure(current), nil
 	}
 	generation := current.GetGeneration()
 	stopped, stopErr := client.Stop(ctx, &grpcproto.SessionStopRequest{
-		SessionId: sessionID, CommandId: commandID("stop"), Generation: generation,
+		SessionId: current.GetSessionId(), Generation: generation,
 	})
 	if stopErr != nil {
 		return false, nil, stopErr
@@ -461,7 +425,7 @@ func stopAndWaitForDisconnect(
 		return false, failureOf(stopped), stopErr
 	}
 	for {
-		current, getErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: sessionID})
+		current, getErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: current.GetSessionId()})
 		if getErr != nil {
 			return false, nil, getErr
 		}
@@ -476,6 +440,9 @@ func stopAndWaitForDisconnect(
 			return false, nil, fmt.Errorf("service returned a snapshot response without a snapshot")
 		}
 		if currentSnapshot.GetCleanupComplete() {
+			if currentSnapshot.GetGeneration() == generation {
+				return false, cleanupFailure(currentSnapshot), nil
+			}
 			return false, nil, nil
 		}
 		select {
@@ -486,54 +453,19 @@ func stopAndWaitForDisconnect(
 	}
 }
 
-func destroySession(
-	ctx context.Context,
-	client grpcproto.VpnClient,
-	sessionID string,
-) (*grpcproto.SessionFailure, error) {
-	destroyed, err := client.DestroySession(
-		ctx,
-		&grpcproto.SessionDestroySessionRequest{SessionId: sessionID},
-	)
-	if err != nil {
-		return nil, err
-	}
-	if destroyed == nil {
-		return nil, fmt.Errorf("service returned an empty destroy response")
-	}
-	if destroyed.GetFailure() != nil {
-		return failureOf(destroyed), nil
-	}
-	if !destroyed.GetDestroyed() {
-		return nil, fmt.Errorf("service did not confirm session destruction")
-	}
-	return nil, nil
-}
-
 func status(ctx context.Context, client grpcproto.VpnClient, jsonOutput bool) int {
-	recovered, err := client.RecoverActiveSession(ctx, &grpcproto.Empty{})
+	response, err := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{})
 	if err != nil {
 		return reportFailure(err, nil)
 	}
-	state := grpcproto.SessionState_SESSION_STATE_IDLE
-	var generation uint64
-	if recovered == nil {
-		return reportFailure(nil, nil)
+	if response == nil || response.GetFailure() != nil {
+		return reportFailure(nil, failureOf(response))
 	}
-	if recovered.GetFailure() != nil {
-		if recovered.GetFailure().GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_NOT_FOUND {
-			return reportFailure(nil, failureOf(recovered))
-		}
-	} else if recovered.GetSessionId() != "" {
-		snapshot, snapshotErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: recovered.GetSessionId()})
-		if snapshotErr != nil || snapshot == nil || snapshot.GetFailure() != nil {
-			return reportFailure(snapshotErr, failureOf(snapshot))
-		}
-		if snapshot.GetSnapshot() == nil {
-			return reportFailure(errors.New("service returned a snapshot response without a snapshot"), nil)
-		}
-		state, generation = snapshot.GetSnapshot().GetState(), snapshot.GetSnapshot().GetGeneration()
+	snapshot := response.GetSnapshot()
+	if snapshot == nil {
+		return reportFailure(errors.New("service returned a snapshot response without a snapshot"), nil)
 	}
+	state, generation := snapshot.GetState(), snapshot.GetGeneration()
 	if jsonOutput {
 		code, label := publicStatus(state)
 		encoded, encodeErr := json.Marshal(struct {
@@ -566,8 +498,7 @@ func publicStatus(state grpcproto.SessionState) (code int, label string) {
 		code, label = 2, "Connected"
 	case grpcproto.SessionState_SESSION_STATE_UNSPECIFIED,
 		grpcproto.SessionState_SESSION_STATE_IDLE,
-		grpcproto.SessionState_SESSION_STATE_FAILED,
-		grpcproto.SessionState_SESSION_STATE_DESTROYED:
+		grpcproto.SessionState_SESSION_STATE_FAILED:
 	}
 	return code, label
 }
@@ -625,57 +556,38 @@ func isWindowsPath(source string) bool {
 		(source[2] == '\\' || source[2] == '/')
 }
 
-// cleanupSession is bounded. A CLI command which fails after
-// creating a session must not leave a hidden tunnel or an undisposable
-// session behind. Every cleanup error is returned to the caller.
+// cleanupSession stops only the generation started by this CLI invocation.
+// It leaves the process-owned session and accepted configuration available.
 func cleanupSession(client grpcproto.VpnClient, sessionID string, generation uint64) error {
+	if generation == 0 {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var cleanupErrors []error
 	snapshot, snapshotErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: sessionID})
 	switch {
 	case snapshotErr != nil:
-		cleanupErrors = append(cleanupErrors, fmt.Errorf("read cleanup session snapshot: %w", snapshotErr))
+		return fmt.Errorf("read cleanup session snapshot: %w", snapshotErr)
 	case snapshot == nil:
-		cleanupErrors = append(cleanupErrors, errors.New("cleanup session snapshot response is nil"))
+		return errors.New("cleanup session snapshot response is nil")
 	case snapshot.GetFailure() != nil:
-		cleanupErrors = append(cleanupErrors, sessionFailureError("read cleanup session snapshot", snapshot.GetFailure()))
-	default:
-		if activeErr := cleanupActiveSession(ctx, client, sessionID, snapshot, generation); activeErr != nil {
-			cleanupErrors = append(cleanupErrors, activeErr)
-		}
+		return sessionFailureError("read cleanup session snapshot", snapshot.GetFailure())
 	}
-	destroyed, destroyErr := client.DestroySession(ctx, &grpcproto.SessionDestroySessionRequest{SessionId: sessionID})
-	switch {
-	case destroyErr != nil:
-		cleanupErrors = append(cleanupErrors, fmt.Errorf("destroy cleanup session: %w", destroyErr))
-	case destroyed == nil:
-		cleanupErrors = append(cleanupErrors, errors.New("destroy cleanup session response is nil"))
-	case destroyed.GetFailure() != nil:
-		cleanupErrors = append(cleanupErrors, sessionFailureError("destroy cleanup session", destroyed.GetFailure()))
-	}
-	return errors.Join(cleanupErrors...)
-}
-
-func cleanupActiveSession(
-	ctx context.Context,
-	client grpcproto.VpnClient,
-	sessionID string,
-	snapshot *grpcproto.SessionSnapshotResponse,
-	generation uint64,
-) error {
 	current := snapshot.GetSnapshot()
 	if current == nil {
 		return errors.New("cleanup session snapshot payload is nil")
 	}
-	if generation == 0 {
-		generation = current.GetGeneration()
+	if current.GetGeneration() != generation {
+		return nil
 	}
-	if current.GetCleanupComplete() || generation == 0 {
+	if current.GetCleanupComplete() {
+		if failure := cleanupFailure(current); failure != nil {
+			return sessionFailureError("cleanup session", failure)
+		}
 		return nil
 	}
 	stopped, stopErr := client.Stop(ctx, &grpcproto.SessionStopRequest{
-		SessionId: sessionID, CommandId: commandID("cleanup-stop"), Generation: generation,
+		SessionId: sessionID, Generation: generation,
 	})
 	if stopErr != nil {
 		return fmt.Errorf("stop cleanup session: %w", stopErr)
@@ -705,10 +617,25 @@ func cleanupActiveSession(
 		if currentSnapshot.GetSnapshot() == nil {
 			return errors.New("poll cleanup session snapshot payload is nil")
 		}
-		if currentSnapshot.GetSnapshot().GetCleanupComplete() {
+		completed := currentSnapshot.GetSnapshot()
+		if completed.GetGeneration() != generation {
+			return nil
+		}
+		if completed.GetCleanupComplete() {
+			if failure := cleanupFailure(completed); failure != nil {
+				return sessionFailureError("wait for cleanup session", failure)
+			}
 			return nil
 		}
 	}
+}
+
+func cleanupFailure(snapshot *grpcproto.SessionSnapshot) *grpcproto.SessionFailure {
+	failure := snapshot.GetLastFailure()
+	if failure == nil || failure.GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CLEANUP_FAILED {
+		return nil
+	}
+	return failure
 }
 
 func externalIP() int {
@@ -749,10 +676,6 @@ func externalIP() int {
 	}
 	reportCLIError("external IP lookup failed", errors.Join(failures...))
 	return exitRuntime
-}
-
-func commandID(prefix string) string {
-	return prefix + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
 type failureResponse interface {

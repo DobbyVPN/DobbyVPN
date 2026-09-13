@@ -127,8 +127,6 @@ kotlin {
             implementation(libs.androidx.ui.graphics)
             implementation(libs.androidx.ui.tooling.preview)
             implementation(libs.androidx.material3)
-            implementation(libs.koin.android)
-            implementation(libs.koin.androidx.compose)
 
             implementation(backendGomobileAar)
 
@@ -144,16 +142,11 @@ kotlin {
             implementation(compose.components.uiToolingPreview)
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.lifecycle.viewmodel.compose)
-            implementation(libs.navigation.compose)
             implementation(libs.okio)
 
-            api(libs.koin.core)
-            implementation(libs.koin.compose)
             implementation(libs.lifecycle.viewmodel)
 
             implementation(libs.datetime)
-
-            implementation("com.russhwolf:multiplatform-settings-no-arg:1.3.0")
 
         }
 

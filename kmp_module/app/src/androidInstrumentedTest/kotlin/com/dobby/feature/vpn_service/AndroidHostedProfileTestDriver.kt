@@ -5,12 +5,13 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import androidx.test.platform.app.InstrumentationRegistry
+import com.dobby.AppDependenciesProvider
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.SessionControllerResult
-import com.dobby.feature.main.domain.SessionEvent
 import com.dobby.feature.main.domain.SessionProfile
 import com.dobby.feature.main.domain.SessionProtocol
+import com.dobby.feature.main.domain.SessionSnapshot
 import com.dobby.feature.main.domain.SessionStartTarget
 import com.dobby.feature.main.domain.SessionState
 import kotlinx.coroutines.CancellationException
@@ -24,7 +25,6 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
-import org.koin.core.context.GlobalContext
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -303,7 +303,9 @@ internal fun measurementServiceFailureCode(responseCode: Int): String? =
 /** Candidate-owned Android profile driver, compiled only into the instrumentation APK. */
 internal class AndroidHostedProfileTestDriver(
     private val context: Context,
-    private val controllerFactory: () -> SessionController = { GlobalContext.get().get<SessionController>() },
+    private val controllerFactory: () -> SessionController = {
+        (context.applicationContext as AppDependenciesProvider).appDependencies.sessionController
+    },
     private val platformFactory: (AndroidHostedEndpoints) -> AndroidHostedPlatform = { endpoints ->
         RealAndroidHostedPlatform(context, endpoints)
     },
@@ -449,22 +451,17 @@ internal class AndroidHostedProfileTestDriver(
                         } && cleanupSucceeded
                         generation = null
                     }
-                    // Stop is deliberately asynchronous: the Go API acknowledges the
-                    // transition to STOPPING before the platform callbacks finish and
-                    // publish IDLE.  Reading one snapshot immediately after stop can
-                    // therefore report a transient STOPPING state and make destroy
-                    // return CONFLICT even though the tunnel is already draining.
                     val cleanupSnapshot = cleanupAttempt("await_clean_snapshot", false) {
                         awaitCleanSnapshot(controller, stoppedGeneration)
                     }
-                    cleanupSucceeded = cleanupAttempt("destroy_session", false) {
-                        requireControllerSuccess(
-                            "CLEANUP_FAILED",
-                            "destroy",
-                            controller.destroy(),
-                        )
-                        true
-                    } && cleanupSucceeded
+                    if (cleanupSnapshot) {
+                        cleanupSucceeded = cleanupAttempt("reset_session", false) {
+                            requireControllerSuccess("CLEANUP_FAILED", "reset", controller.reset())
+                            true
+                        } && cleanupSucceeded
+                    } else {
+                        cleanupSucceeded = false
+                    }
                     cleanupAttempt("stop_vpn_service", false) {
                         context.stopService(DobbyVpnService.createStopIntent(context, 0, false))
                     }
@@ -668,24 +665,25 @@ internal class AndroidHostedProfileTestDriver(
             diagnosticLog(
                 "[DEBUG] Android hosted connect stage started stage=$stage profileIndex=$selected",
             )
-            val value = requireControllerSuccess(
+            val start = requireControllerSuccess(
                 "CONNECT_REJECTED",
                 "start",
                 controller.start(SessionStartTarget.ProfileIndex(selected)),
             )
-            setGeneration(value)
+            val generation = start.generation
+            setGeneration(generation)
             diagnosticLog("Android hosted connect stage completed stage=$stage profileIndex=$selected")
             stage = "await_connected"
             diagnosticLog(
                 "[DEBUG] Android hosted connect stage started stage=$stage profileIndex=$selected",
             )
-            val event = awaitState(controller, value, SessionState.CONNECTED)
-            if (event?.state != SessionState.CONNECTED) {
+            val snapshot = awaitState(controller, generation, SessionState.CONNECTED)
+            if (snapshot?.state != SessionState.CONNECTED) {
                 diagnosticLog(
                     "[ERROR] Android hosted connect stage failed " +
                         "stage=$stage profileIndex=$selected code=CONNECT_FAILED " +
-                        "lastState=${event?.state?.name ?: "UNAVAILABLE"} " +
-                        "lastFailureCode=${event?.failureCode?.name ?: "NONE"}",
+                        "lastState=${snapshot?.state?.name ?: "UNAVAILABLE"} " +
+                        "lastFailureCode=${snapshot?.lastFailure?.code?.name ?: "NONE"}",
                 )
                 throw AndroidHostedOperationFailure("CONNECT_FAILED")
             }
@@ -713,20 +711,20 @@ internal class AndroidHostedProfileTestDriver(
         controller: SessionController,
         generation: ULong,
         expected: SessionState,
-    ): SessionEvent? {
-        val event = withTimeoutOrNull(SESSION_STATE_TIMEOUT_MILLIS) {
-            controller.watch(0uL).firstOrNull { event ->
-                event.generation == generation &&
-                    (event.state == expected || event.state == SessionState.FAILED)
+    ): SessionSnapshot? {
+        val snapshot = withTimeoutOrNull(SESSION_STATE_TIMEOUT_MILLIS) {
+            controller.watch().firstOrNull { current ->
+                current.generation == generation &&
+                    (current.state == expected || current.state == SessionState.FAILED)
             }
         }
-        if (event == null) {
+        if (snapshot == null) {
             diagnosticLog(
                 "[ERROR] Android hosted session state wait expired " +
                     "expected=${expected.name} generation=$generation",
             )
         }
-        return event
+        return snapshot
     }
 
     private fun failureTypes(failure: Throwable): String =
@@ -786,9 +784,9 @@ internal class AndroidHostedProfileTestDriver(
             stoppedGeneration
         }
         if (requireIdle && withTimeoutOrNull(SESSION_STATE_TIMEOUT_MILLIS) {
-                controller.watch(0uL).firstOrNull { event ->
-                    event.state == SessionState.IDLE &&
-                        (expectedGeneration == null || event.generation == expectedGeneration)
+                controller.watch().firstOrNull { current ->
+                    current.state == SessionState.IDLE &&
+                        (expectedGeneration == null || current.generation == expectedGeneration)
                 }
             } == null
         ) {
@@ -1119,7 +1117,8 @@ class AndroidHostedProfileInstrumentationTest {
             .getString(AndroidHostedCommandContract.COMMAND_ARGUMENT)
         org.junit.Assume.assumeTrue(commandFile != null)
         requireNotNull(commandFile)
-        val logger = GlobalContext.get().get<Logger>()
+        val logger = (InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+            as AppDependenciesProvider).appDependencies.logger
         logger.log("Android hosted instrumentation started")
         val observation = try {
             AndroidHostedProfileTestDriver(

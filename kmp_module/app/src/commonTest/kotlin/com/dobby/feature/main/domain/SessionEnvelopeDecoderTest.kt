@@ -7,160 +7,83 @@ import kotlin.test.assertIs
 
 class SessionEnvelopeDecoderTest {
     @Test
-    fun validConfigurationPayloadPreservesFieldsAndKnownProtocol() {
+    fun configurationMetadataMapsUrlAndProfiles() {
         val result = SessionEnvelopeDecoder.decode(
-            """{"ok":true,"result":{"digest":"digest","profiles":[{"index":2,"protocol":"OUTLINE","description":"primary"}],"warnings":[{"code":"legacy","message":"accepted"}]}}""",
-        ) { it.toSessionConfiguration() }
+            """{"ok":true,"result":{"sequence":5,"digest":"digest","source_kind":"URL","profiles":[{"index":0,"protocol":"OUTLINE","description":"primary"}],"warnings":[]}}""",
+        ) { it.toSessionConfiguration("owner") }
 
         assertEquals(
             SessionConfiguration(
+                sessionId = "owner",
+                sequence = 5u,
                 digest = "digest",
-                profiles = listOf(SessionProfile(2, SessionProtocol.OUTLINE, "primary")),
-                warnings = listOf(SessionWarning("legacy", "accepted")),
+                sourceKind = SessionSourceKind.URL,
+                profiles = listOf(SessionProfile(0, SessionProtocol.OUTLINE, "primary")),
+                warnings = emptyList(),
             ),
             assertIs<SessionControllerResult.Success<SessionConfiguration>>(result).value,
         )
     }
 
     @Test
-    fun malformedPayloadPreservesTheDecoderFailure() {
-        assertFails { SessionEnvelopeDecoder.decode("not json") { it.sessionString("digest") } }
-    }
-
-    @Test
-    fun unknownProtocolStateAndIncompleteFailureAreRejected() {
-        assertFails {
-            SessionEnvelopeDecoder.decode("""{"ok":true,"result":{"protocol":"FUTURE"}}""") {
-                it.sessionString("protocol").toSessionProtocol()
+    fun configurationRequiresNonnegativeRevision() {
+        listOf(
+            """{"ok":true,"result":{"digest":"digest","source_kind":"INLINE","profiles":[],"warnings":[]}}""",
+            """{"ok":true,"result":{"sequence":-1,"digest":"digest","source_kind":"INLINE","profiles":[],"warnings":[]}}""",
+        ).forEach { payload ->
+            assertFails {
+                SessionEnvelopeDecoder.decode(payload) { it.toSessionConfiguration("owner") }
             }
         }
-        assertFails {
-            SessionEnvelopeDecoder.decode("""{"ok":true,"result":{"state":"FUTURE"}}""") {
-                it.sessionString("state").toSessionState()
-            }
-        }
-        assertFails {
-            SessionEnvelopeDecoder.decode("""{"ok":false,"error":{"code":"FUTURE"}}""") { Unit }
-        }
     }
 
     @Test
-    fun knownProtocolAndStateVocabularyMapsExactly() {
-        assertEquals(SessionProtocol.OUTLINE, "OUTLINE".toSessionProtocol())
-        assertEquals(SessionProtocol.XRAY, "XRAY".toSessionProtocol())
-        assertEquals(SessionProtocol.TRUST_TUNNEL, "TRUST_TUNNEL".toSessionProtocol())
-
-        assertEquals(SessionState.IDLE, "IDLE".toSessionState())
-        assertEquals(SessionState.CONFIGURED, "CONFIGURED".toSessionState())
-        assertEquals(SessionState.PROBING, "PROBING".toSessionState())
-        assertEquals(SessionState.PREPARING, "PREPARING".toSessionState())
-        assertEquals(SessionState.CONNECTED, "CONNECTED".toSessionState())
-        assertEquals(SessionState.STOPPING, "STOPPING".toSessionState())
-        assertEquals(SessionState.FAILED, "FAILED".toSessionState())
-        assertEquals(SessionState.DESTROYED, "DESTROYED".toSessionState())
-    }
-
-    @Test
-    fun typedFailurePayloadIsPreserved() {
+    fun snapshotCarriesCurrentRevisionAndFailure() {
         val result = SessionEnvelopeDecoder.decode(
-            """{"ok":false,"error":{"code":"STALE_GENERATION","message":"exact stale generation"}}""",
-        ) { Unit }
-
-        assertEquals(
-            SessionControllerResult.Failure("exact stale generation", SessionFailureCode.STALE_GENERATION),
-            result,
-        )
-    }
-
-    @Test
-    fun snapshotPayloadMapsTheCompletePublicSnapshot() {
-        val result = SessionEnvelopeDecoder.decode(
-            """{"ok":true,"result":{"session_id":"session-1","generation":7,"state":"CONNECTED","configured":true,"cleanup_complete":false,"last_failure":"RUNTIME_FAILED"}}""",
+            """{"ok":true,"result":{"session_id":"owner","sequence":8,"generation":2,"state":"CONNECTED","configured":true,"digest":"digest","source_kind":"INLINE","profiles":[],"warnings":[],"active_profile":{"index":0,"protocol":"XRAY","description":"fast"},"last_failure":{"code":"RUNTIME_FAILED","message":"protocol stopped"},"cleanup_complete":false}}""",
         ) { it.toSessionSnapshot() }
 
         assertEquals(
-            SessionSnapshot(7uL, SessionState.CONNECTED, configured = true, cleanupComplete = false, lastFailureCode = SessionFailureCode.RUNTIME_FAILED, sessionId = "session-1"),
+            SessionSnapshot(
+                sessionId = "owner",
+                sequence = 8u,
+                generation = 2u,
+                state = SessionState.CONNECTED,
+                configured = true,
+                digest = "digest",
+                sourceKind = SessionSourceKind.INLINE,
+                profiles = emptyList(),
+                warnings = emptyList(),
+                activeProfile = SessionProfile(0, SessionProtocol.XRAY, "fast"),
+                lastFailure = SessionFailure(SessionFailureCode.RUNTIME_FAILED, "protocol stopped"),
+                cleanupComplete = false,
+            ),
             assertIs<SessionControllerResult.Success<SessionSnapshot>>(result).value,
         )
     }
 
     @Test
-    fun snapshot_requires_a_nonnegative_go_generation() {
-        listOf(
-            """{"ok":true,"result":{"state":"IDLE","configured":false,"cleanup_complete":true}}""",
-            """{"ok":true,"result":{"generation":-1,"state":"IDLE","configured":false,"cleanup_complete":true}}""",
-        ).forEach { payload ->
+    fun typedFailureIsPreservedAndIncompleteOrUnknownPayloadsAreRejected() {
+        assertEquals(
+            SessionControllerResult.Failure("refresh snapshot", SessionFailureCode.CONFLICT),
+            SessionEnvelopeDecoder.decode(
+                """{"ok":false,"error":{"code":"CONFLICT","message":"refresh snapshot"}}""",
+            ) { Unit },
+        )
+        assertFails {
+            SessionEnvelopeDecoder.decode("""{"ok":false,"error":{"code":"FUTURE"}}""") { Unit }
+        }
+        assertFails { SessionEnvelopeDecoder.decode("not json") { it.sessionString("digest") } }
+    }
+
+    @Test
+    fun snapshotRequiresNonnegativeRevisionAndKnownState() {
+        val invalidSnapshots = listOf(
+            """{"ok":true,"result":{"session_id":"owner","sequence":-1,"generation":0,"state":"IDLE","configured":false,"digest":"","source_kind":"","profiles":[],"warnings":[],"cleanup_complete":true}}""",
+            """{"ok":true,"result":{"session_id":"owner","sequence":1,"generation":0,"state":"FUTURE","configured":false,"digest":"","source_kind":"","profiles":[],"warnings":[],"cleanup_complete":true}}""",
+        )
+        invalidSnapshots.forEach { payload ->
             assertFails { SessionEnvelopeDecoder.decode(payload) { it.toSessionSnapshot() } }
-        }
-    }
-
-    @Test
-    fun observationPayloadRejectsMalformedItems() {
-        assertFails {
-            SessionEnvelopeDecoder.decode(
-                """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":3,"sequence":8,"state":"PREPARING"},42,{"session_id":"session-1","generation":3,"sequence":9,"state":"FAILED","failure":"PLATFORM_FAILED"}],"next_sequence":9}}""",
-            ) { it.toSessionObservation() }
-        }
-    }
-
-    @Test
-    fun observationWithout_go_authoritative_sequence_is_not_given_a_zero_fallback() {
-        assertFails {
-            SessionEnvelopeDecoder.decode(
-                """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":3,"state":"CONNECTED"}],"next_sequence":1}}""",
-            ) { it.toSessionObservation() }
-        }
-    }
-
-    @Test
-    fun observation_with_zero_go_sequence_is_rejected() {
-        assertFails {
-            SessionEnvelopeDecoder.decode(
-                """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":3,"sequence":0,"state":"CONNECTED"}],"next_sequence":0}}""",
-            ) { it.toSessionObservation() }
-        }
-    }
-
-    @Test
-    fun observation_with_negative_next_sequence_is_rejected() {
-        assertFails {
-            SessionEnvelopeDecoder.decode(
-                """{"ok":true,"result":{"events":[],"next_sequence":-1}}""",
-            ) { it.toSessionObservation() }
-        }
-    }
-
-    @Test
-    fun observation_with_mixed_go_session_identities_is_rejected() {
-        assertFails {
-            SessionEnvelopeDecoder.decode(
-                """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":1,"sequence":1,"state":"CONNECTED"},{"session_id":"session-2","generation":1,"sequence":2,"state":"FAILED"}],"next_sequence":2}}""",
-            ) { it.toSessionObservation() }
-        }
-    }
-
-    @Test
-    fun active_event_requires_a_positive_go_generation_but_idle_allows_zero() {
-        assertFails {
-            SessionEnvelopeDecoder.decode(
-                """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":0,"sequence":1,"state":"CONNECTED"}],"next_sequence":1}}""",
-            ) { it.toSessionObservation() }
-        }
-
-        val idle = SessionEnvelopeDecoder.decode(
-            """{"ok":true,"result":{"events":[{"session_id":"session-1","generation":0,"sequence":1,"state":"IDLE"}],"next_sequence":1}}""",
-        ) { it.toSessionObservation() }
-        assertIs<SessionControllerResult.Success<SessionObservation>>(idle)
-    }
-
-    @Test
-    fun start_and_stop_results_require_positive_go_generation() {
-        listOf(
-            """{"ok":true,"result":{}}""",
-            """{"ok":true,"result":{"generation":0}}""",
-            """{"ok":true,"result":{"generation":-1}}""",
-        ).forEach { payload ->
-            assertFails { SessionEnvelopeDecoder.decode(payload) { it.requiredPositiveSessionLong("generation").toULong() } }
         }
     }
 }

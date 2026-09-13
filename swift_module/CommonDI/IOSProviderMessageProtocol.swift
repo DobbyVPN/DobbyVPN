@@ -4,14 +4,7 @@ private func isJSONBoolean(_ number: NSNumber) -> Bool {
     String(cString: number.objCType) == "c"
 }
 
-public extension Notification.Name {
-    /// Content-free wake signal; callers fetch ordered payloads with Go Observe.
-    static let iosSessionEventAvailable = Notification.Name("vpn.dobby.sessionapi.event-available")
-}
-
-/// Darwin notifications are the cross-process, content-free wake channel used
-/// between the NetworkExtension process and the containing app. The payload is
-/// never carried here; the app follows a wake with Go Observe.
+/// Darwin notifications are a content-free wake channel; state comes from Go snapshots.
 public enum IOSDarwinEventSink {
     public static let notificationName = "vpn.dobby.sessionapi.event-available"
 }
@@ -21,14 +14,11 @@ public enum IOSDarwinEventSink {
 /// configuration bytes are never part of a message and responses are returned
 /// from Go without being re-shaped by Swift.
 public enum IOSProviderOperation: String, Equatable {
-    case create
-    case recover
     case configure
     case start
     case snapshot
-    case observe
     case stop
-    case destroy
+    case reset
 }
 
 public enum IOSProviderMessageError: String, Error, Equatable {
@@ -50,10 +40,9 @@ public enum IOSProviderTiming {
 /// result (success or typed failure) consumes the one-shot configuration;
 /// transport timeout and malformed responses retain it.
 public enum IOSMailboxLifecycle {
-    /// A valid Go configure result, including a typed Go rejection, means the
-    /// provider has consumed the mailbox. Transport and malformed provider
-    /// responses are not Go results and retain it.
-    public static func mayConsumeConfigureResponse(_ response: Data) -> Bool {
+    /// A valid Go result, including a typed Go rejection, means the provider
+    /// has consumed the mailbox. Transport and malformed responses retain it.
+    public static func mayConsumeConfigurationResponse(_ response: Data) -> Bool {
         guard let root = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
               let ok = root["ok"] as? Bool else { return false }
         if ok { return root["result"] is [String: Any] }
@@ -62,12 +51,6 @@ public enum IOSMailboxLifecycle {
         return !code.isEmpty
     }
 
-    public static func isSuccessfulGoResponse(_ response: Data) -> Bool {
-        guard let root = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
-              root["ok"] as? Bool == true,
-              root["result"] is [String: Any] else { return false }
-        return true
-    }
 }
 
 /// Provider command envelope. Optional fields are operation-specific.
@@ -80,7 +63,7 @@ public struct IOSProviderCommand: Equatable {
     public let generation: Int64?
     public let mode: String?
     public let index: Int32?
-    public let afterSequence: Int64?
+    public let expectedSequence: Int64?
 
     public init(
         operation: IOSProviderOperation,
@@ -89,7 +72,7 @@ public struct IOSProviderCommand: Equatable {
         generation: Int64? = nil,
         mode: String? = nil,
         index: Int32? = nil,
-        afterSequence: Int64? = nil
+        expectedSequence: Int64? = nil
     ) throws {
         self.operation = operation
         self.requestID = requestID
@@ -97,7 +80,7 @@ public struct IOSProviderCommand: Equatable {
         self.generation = generation
         self.mode = mode
         self.index = index
-        self.afterSequence = afterSequence
+        self.expectedSequence = expectedSequence
         try validateFields()
     }
 
@@ -125,7 +108,7 @@ public struct IOSProviderCommand: Equatable {
             generation: int64(object["generation"]),
             mode: object["mode"] as? String,
             index: int32(object["index"]),
-            afterSequence: int64(object["after_sequence"])
+            expectedSequence: int64(object["expected_sequence"])
         )
     }
 
@@ -140,28 +123,25 @@ public struct IOSProviderCommand: Equatable {
         }
         if let generation, generation < 0 { throw IOSProviderMessageError.malformed }
         if let index, index < 0 { throw IOSProviderMessageError.malformed }
-        if let afterSequence, afterSequence < 0 { throw IOSProviderMessageError.malformed }
+        if let expectedSequence, expectedSequence < 0 { throw IOSProviderMessageError.malformed }
         let present: Set<String> = Set([
             sessionID == nil ? nil : "session_id",
             generation == nil ? nil : "generation",
             mode == nil ? nil : "mode",
             index == nil ? nil : "index",
-            afterSequence == nil ? nil : "after_sequence",
+            expectedSequence == nil ? nil : "expected_sequence",
         ].compactMap { $0 })
         let required: Set<String>
         let allowed: Set<String>
         switch operation {
-        case .create, .recover:
+        case .snapshot:
             required = []
-            allowed = []
-        case .configure, .snapshot, .destroy:
-            required = ["session_id"]
             allowed = ["session_id"]
-        case .start:
-            required = ["session_id", "mode", "index"]
+        case .configure, .reset:
+            required = ["session_id", "expected_sequence"]
             allowed = required
-        case .observe:
-            required = ["session_id", "after_sequence"]
+        case .start:
+            required = ["session_id", "expected_sequence", "mode", "index"]
             allowed = required
         case .stop:
             required = ["session_id", "generation"]
@@ -187,7 +167,7 @@ public struct IOSProviderCommand: Equatable {
         if let generation { value["generation"] = generation }
         if let mode { value["mode"] = mode }
         if let index { value["index"] = index }
-        if let afterSequence { value["after_sequence"] = afterSequence }
+        if let expectedSequence { value["expected_sequence"] = expectedSequence }
         return try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .withoutEscapingSlashes])
     }
 

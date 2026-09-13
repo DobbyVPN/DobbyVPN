@@ -13,16 +13,11 @@ private func dobbyDarwinEventCallback(
     Unmanaged<IOSSessionShell>.fromOpaque(observer).takeUnretainedValue().signalDarwinEvent()
 }
 
-/// Containing-app side of the iOS SessionV2 boundary.
-///
-/// This shell persists the opaque configuration in the shared Keychain
-/// mailbox and transports fixed commands to the packet
-/// tunnel. It never owns a session, generation, state, configured bit, or
-/// event sequence; every successful response is the exact JSON returned by Go.
+/// Containing-app side of the iOS session bridge. Go in the provider owns state.
 final class IOSSessionShell: NSObject, IosSessionBridge {
     private let secrets = SharedKeychainSecretStore.shared
     private let manager: VpnManagerImpl
-    private let logs = NativeModuleHolder.logsRepository
+    private let logs = IOSAppCompositionRoot.logsRepository
     private let eventCondition = NSCondition()
     private var eventGeneration: UInt64 = 0
     private var deliveredEventGeneration: UInt64 = 0
@@ -55,85 +50,65 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         }
     }
 
-    func recover(commandID: String) -> String {
-        executeResult(operation: .recover, requestID: commandID).response
-    }
-
-    func create(commandID: String) -> String {
-        executeResult(operation: .create, requestID: commandID).response
-    }
-
-    func configure(sessionID: String, commandID: String, rawConfig: KotlinByteArray) -> String {
-        let raw = data(from: rawConfig)
-        guard !raw.isEmpty else {
-            return failure("MALFORMED_CONFIG", message: "configuration is blank")
-        }
-        guard secrets.set(raw, for: SharedKeychainSecretStore.sessionConfigurationMailboxKey) else {
-            logs.writeLog(log: "iOS session configuration mailbox write returned failure")
-            return failure("PLATFORM_FAILED", message: "configuration mailbox write returned failure")
+    func configure(sessionID: String, expectedSequence: Int64, rawConfig: KotlinByteArray) -> String {
+        if let failure = storeConfiguration(rawConfig) {
+            return failure
         }
         let result = executeResult(
             operation: .configure,
-            requestID: commandID,
-            sessionID: sessionID
+            requestID: requestID(for: .configure),
+            sessionID: sessionID,
+            expectedSequence: expectedSequence
         )
-        // A mailbox is consumed after any syntactically valid
-        // Go configure result, including a typed Go rejection. Transport,
-        // and malformed responses retain it for recovery.
-        if result.isGoResult,
-           let response = result.response.data(using: .utf8),
-           IOSMailboxLifecycle.mayConsumeConfigureResponse(response) {
-            secrets.remove(SharedKeychainSecretStore.sessionConfigurationMailboxKey)
-        }
+        consumeConfiguration(after: result)
         return result.response
     }
 
-    func start(sessionID: String, commandID: String, mode: String, index: Int32) -> String {
+    func start(sessionID: String, expectedSequence: Int64, mode: String, index: Int32) -> String {
         executeResult(
             operation: .start,
-            requestID: commandID,
+            requestID: requestID(for: .start),
             sessionID: sessionID,
+            expectedSequence: expectedSequence,
             mode: mode,
             index: index
         ).response
     }
 
-    func stop(sessionID: String, commandID: String, generation: Int64) -> String {
+    func stop(sessionID: String, generation: Int64) -> String {
         executeResult(
             operation: .stop,
-            requestID: commandID,
+            requestID: requestID(for: .stop),
             sessionID: sessionID,
             generation: generation
         ).response
     }
 
     func snapshot(sessionID: String) -> String {
-        executeResult(operation: .snapshot, requestID: requestID(for: .snapshot), sessionID: sessionID).response
-    }
-
-    func observe(sessionID: String, afterSequence: Int64) -> String {
         executeResult(
-            operation: .observe,
-            requestID: requestID(for: .observe),
-            sessionID: sessionID,
-            afterSequence: afterSequence
+            operation: .snapshot,
+            requestID: requestID(for: .snapshot),
+            sessionID: sessionID.isEmpty ? nil : sessionID
         ).response
     }
 
-    func destroy(sessionID: String) -> String {
-        let result = executeResult(operation: .destroy, requestID: requestID(for: .destroy), sessionID: sessionID)
-        guard result.isGoResult,
-              let response = result.response.data(using: .utf8),
-              IOSMailboxLifecycle.isSuccessfulGoResponse(response) else { return result.response }
-        // Go must confirm destruction before the control provider or mailbox
-        // is removed. This ordering prevents a timeout from losing recovery.
-        manager.stopControlProvider()
-        secrets.remove(SharedKeychainSecretStore.sessionConfigurationMailboxKey)
+    func reset(sessionID: String, expectedSequence: Int64) -> String {
+        let result = executeResult(
+            operation: .reset,
+            requestID: requestID(for: .reset),
+            sessionID: sessionID,
+            expectedSequence: expectedSequence
+        )
+        if result.isGoResult,
+           let response = result.response.data(using: .utf8),
+           let root = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
+           root["ok"] as? Bool == true,
+           root["result"] is [String: Any] {
+            secrets.remove(SharedKeychainSecretStore.sessionConfigurationMailboxKey)
+        }
         return result.response
     }
 
-    /// Blocks on the cross-process Darwin wake channel. A timeout is only a
-    /// cancellation/recovery boundary; it never triggers steady-state polling.
     func awaitEvent(timeoutMillis: Int64) -> Bool {
         eventCondition.lock()
         let deadline = Date().addingTimeInterval(max(0, Double(timeoutMillis) / 1000.0))
@@ -155,14 +130,32 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         eventCondition.unlock()
     }
 
+    private func storeConfiguration(_ rawConfig: KotlinByteArray) -> String? {
+        let raw = data(from: rawConfig)
+        guard !raw.isEmpty else { return failure("MALFORMED_CONFIG", message: "configuration is blank") }
+        guard secrets.set(raw, for: SharedKeychainSecretStore.sessionConfigurationMailboxKey) else {
+            logs.writeLog(log: "iOS session configuration mailbox write returned failure")
+            return failure("PLATFORM_FAILED", message: "configuration mailbox write returned failure")
+        }
+        return nil
+    }
+
+    private func consumeConfiguration(after result: (response: String, isGoResult: Bool)) {
+        if result.isGoResult,
+           let response = result.response.data(using: .utf8),
+           IOSMailboxLifecycle.mayConsumeConfigurationResponse(response) {
+            secrets.remove(SharedKeychainSecretStore.sessionConfigurationMailboxKey)
+        }
+    }
+
     private func executeResult(
         operation: IOSProviderOperation,
         requestID: String,
         sessionID: String? = nil,
         generation: Int64? = nil,
+        expectedSequence: Int64? = nil,
         mode: String? = nil,
-        index: Int32? = nil,
-        afterSequence: Int64? = nil
+        index: Int32? = nil
     ) -> (response: String, isGoResult: Bool) {
         do {
             let command = try IOSProviderCommand(
@@ -172,7 +165,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
                 generation: generation,
                 mode: mode,
                 index: index,
-                afterSequence: afterSequence
+                expectedSequence: expectedSequence
             )
             let bytes = try command.encoded()
             let providerResponse = try IOSProviderResponse.decode(
@@ -184,10 +177,8 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
             }
             return (response, providerResponse.kind == .go)
         } catch {
-            logs.writeLog(
-                log: "iOS session bridge failed operation=\(operation.rawValue): \(String(reflecting: error))"
-            )
-            return (failure("INTERNAL", message: String(reflecting: error)), false)
+            logs.writeLog(log: "iOS session bridge failed operation=\(operation.rawValue)")
+            return (failure("INTERNAL", message: "iOS session provider request failed"), false)
         }
     }
 

@@ -5,7 +5,7 @@ import Foundation
 /// A NetworkExtension readiness and message-transport shell.
 ///
 /// This class deliberately has no VPN product state, generation, configured
-/// flag, or event sequence. Those values belong to Go SessionV2 in the
+/// flag, or event sequence. Those values belong to the Go session manager in the
 /// packet-tunnel process. The only state retained here is the private
 /// readiness state needed to deliver a provider message.
 public final class VpnManagerImpl: NSObject {
@@ -13,7 +13,7 @@ public final class VpnManagerImpl: NSObject {
     public static var dobbyName = "Dobby_VPN_4"
     private static let defaultServerAddress = "Dobby VPN"
 
-    private let logs = NativeModuleHolder.logsRepository
+    private let logs = IOSAppCompositionRoot.logsRepository
     private let condition = NSCondition()
     private var vpnManager: NETunnelProviderManager?
     private var providerStatus: NEVPNStatus = .invalid
@@ -67,23 +67,13 @@ public final class VpnManagerImpl: NSObject {
         do {
             return try sendOnce(messageData, timeout: timeout)
         } catch {
-            logs.writeLog(log: "[provider] sendProviderMessage failed: \(String(reflecting: error))")
+            logs.writeLog(log: "[provider] sendProviderMessage failed")
             return transportFailureResponse(
                 for: messageData,
                 code: "PLATFORM_FAILED",
-                message: String(reflecting: error)
+                message: "provider request failed"
             )
         }
-    }
-
-    /// Stops only the control-mode provider. Callers invoke this after a
-    /// successful Go Destroy response; a failed or timed-out destroy retains
-    /// the provider and its mailbox for recovery.
-    public func stopControlProvider() {
-        condition.lock()
-        let manager = vpnManager
-        condition.unlock()
-        manager?.connection.stopVPNTunnel()
     }
 
     public static func transportFailure(_ code: String, message: String) -> Data {
@@ -94,8 +84,8 @@ public final class VpnManagerImpl: NSObject {
         do {
             return try JSONSerialization.data(withJSONObject: value)
         } catch {
-            NativeModuleHolder.logsRepository.writeLog(
-                log: "[provider] transport failure encoding failed: \(String(reflecting: error))"
+            IOSAppCompositionRoot.logsRepository.writeLog(
+                log: "[provider] transport failure encoding failed"
             )
             // No valid response can be encoded. Return no decodable bytes so
             // the caller observes a transport failure rather than success.
@@ -113,8 +103,8 @@ public final class VpnManagerImpl: NSObject {
             )
             return try envelope.encoded()
         } catch {
-            logs.writeLog(log: "[provider] transport failure response encoding failed: \(String(reflecting: error))")
-            return Self.transportFailure("INTERNAL", message: String(reflecting: error))
+            logs.writeLog(log: "[provider] transport failure response encoding failed")
+            return Self.transportFailure("INTERNAL", message: "provider request failed")
         }
     }
 
@@ -169,7 +159,7 @@ public final class VpnManagerImpl: NSObject {
         }
         // Once the saved-and-reloaded manager is connected, use that exact
         // bound object for subsequent commands. Re-saving preferences for
-        // every Observe/Snapshot would add needless transition risk and
+        // every snapshot would add needless transition risk and
         // consume the aggregate command budget.
         condition.lock()
         if let current = vpnManager {

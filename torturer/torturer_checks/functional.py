@@ -18,7 +18,6 @@ import time
 
 from torturer_contract.functional.engine import FunctionalEngine
 from torturer_contract.functional.results import (
-    ConnectionIdentity,
     RunProvenance,
 )
 from torturer_contract.functional.scenarios import (
@@ -32,10 +31,8 @@ from .hosted.cli import (
 )
 from .hosted.factory import adapter_for_platform
 from .hosted.run import (
-    _discover_connections,
+    _execute_lane,
     _emit_progress_event,
-    _finalize_adapter,
-    _run_connection_matrix,
     _select_scenarios,
     _write_json,
 )
@@ -65,18 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=tuple(_ARCHITECTURES), required=True)
     parser.add_argument("--cli", type=Path, help="Installed candidate CLI for desktop platforms")
-    parser.add_argument(
-        "--dobby-source", type=Path,
-        help="Built/installed candidate root or CLI path (prepared-candidate compatibility)",
-    )
     parser.add_argument("--adb", type=Path, help="ADB executable for Android")
     parser.add_argument(
         "--profile", dest="profile", type=Path,
         required=True, help="Plaintext synthetic VPN test profile",
     )
-    parser.add_argument("--output", "--result", dest="output", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--raw-log-dir", "--logs", dest="raw_log_dir", type=Path, required=True,
+        "--raw-log-dir", type=Path, required=True,
         help="Directory for command output and diagnostics",
     )
     parser.add_argument("--platform-version", default="local")
@@ -84,15 +77,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--architecture",
         help="Observed local guest architecture (defaults to the host architecture for macOS)",
     )
-    parser.add_argument("--adapter", help="Optional adapter name to verify")
     parser.add_argument(
         "--source-sha", default=None,
         help="Optional candidate source SHA; dirty local trees do not require one",
     )
     parser.add_argument("--lane-timeout-seconds", type=_parse_timeout, default=1800.0)
-    parser.add_argument(
-        "--scenario-id", "--scenario", action="append", dest="scenario_ids",
-    )
+    parser.add_argument("--scenario", action="append", dest="scenario_ids")
     parser.add_argument("--service-pid", type=int)
     parser.add_argument("--service-binary", type=Path)
     parser.add_argument("--service-socket", type=Path)
@@ -103,29 +93,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--routing-firewall-helper", type=Path)
     parser.add_argument("--network-transition-helper", type=Path)
     return parser
-
-
-def _candidate_cli(source: Path | None, explicit: Path | None) -> Path | None:
-    """Resolve a built candidate root to its installed desktop CLI."""
-
-    if explicit is not None:
-        return explicit
-    if source is None:
-        return None
-    if source.is_file():
-        return source
-    for relative in (
-        "kmp_module/services/dobby-cli",
-        "kmp_module/services/dobby-cli.exe",
-        "build/bin/dobby-cli",
-        "build/bin/dobby-cli.exe",
-        "dobby-cli",
-        "dobby-cli.exe",
-    ):
-        candidate = source / relative
-        if candidate.is_file():
-            return candidate
-    return source
 
 
 def _supervised_request_root() -> Path | None:
@@ -177,7 +144,6 @@ def main(argv: list[str] | None = None) -> int:
         args.scenario_ids,
         platform=args.platform,
     )
-    connections: tuple[ConnectionIdentity, ...] = ()
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", local_architecture) is None:
         raise ValueError("architecture has an invalid format")
     raw_dir = args.raw_log_dir
@@ -192,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     _prepare_output_path(args.output)
     if args.source_sha is not None and _SHA40.fullmatch(args.source_sha) is None:
         raise ValueError("source SHA must be a full lowercase SHA")
-    cli = _candidate_cli(args.dobby_source, args.cli)
+    cli = args.cli
     runner = SubprocessRunner(
         supervised_root / "output" if supervised_root is not None else raw_dir,
         environment=(
@@ -226,31 +192,20 @@ def main(argv: list[str] | None = None) -> int:
     set_progress_sink = getattr(adapter, "set_progress_sink", None)
     if callable(set_progress_sink):
         set_progress_sink(_emit_progress_event)
-    if args.adapter is not None and args.adapter != adapter.adapter_id:
-        raise ValueError("adapter does not match the selected platform")
-    if args.scenario_ids:
-        adapter.reset()
-    _emit_progress_event("connection-discovery-start", {"platform": args.platform})
-    connections = _discover_connections(adapter, deadline=lane_deadline)
-    _emit_progress_event(
-        "connection-discovery-finish",
-        {"connection_count": len(connections), "platform": args.platform},
-    )
     provenance = RunProvenance(
         platform=args.platform,
         platform_version=args.platform_version,
         architecture=local_architecture,
     )
     engine = FunctionalEngine()
-    results = _run_connection_matrix(
+    connections, results = _execute_lane(
         engine,
         selected,
         adapter,
         provenance,
-        connections,
         deadline=lane_deadline,
+        reset_before_discovery=bool(args.scenario_ids),
     )
-    _finalize_adapter(adapter, lane_deadline)
     document = {
         "environment": {
             "platform": args.platform,

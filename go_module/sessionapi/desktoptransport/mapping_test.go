@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"testing"
-	"time"
 
 	"go_module/grpcproto"
 	v1 "go_module/sessionapi/v2"
@@ -13,65 +12,112 @@ import (
 
 func TestMappingsCoverPublicDomainValues(t *testing.T) {
 	for input, want := range map[v1.Protocol]grpcproto.SessionProtocol{
-		v1.ProtocolOutline: grpcproto.SessionProtocol_SESSION_PROTOCOL_OUTLINE, v1.ProtocolXray: grpcproto.SessionProtocol_SESSION_PROTOCOL_XRAY, v1.ProtocolTrustTunnel: grpcproto.SessionProtocol_SESSION_PROTOCOL_TRUST_TUNNEL,
+		v1.ProtocolOutline:     grpcproto.SessionProtocol_SESSION_PROTOCOL_OUTLINE,
+		v1.ProtocolXray:        grpcproto.SessionProtocol_SESSION_PROTOCOL_XRAY,
+		v1.ProtocolTrustTunnel: grpcproto.SessionProtocol_SESSION_PROTOCOL_TRUST_TUNNEL,
 	} {
 		if got := Protocol(input); got != want {
 			t.Fatalf("protocol %q = %v", input, got)
 		}
 	}
+	for input, want := range map[v1.State]grpcproto.SessionState{
+		v1.StateIdle:       grpcproto.SessionState_SESSION_STATE_IDLE,
+		v1.StateConfigured: grpcproto.SessionState_SESSION_STATE_CONFIGURED,
+		v1.StateProbing:    grpcproto.SessionState_SESSION_STATE_PROBING,
+		v1.StatePreparing:  grpcproto.SessionState_SESSION_STATE_PREPARING,
+		v1.StateConnected:  grpcproto.SessionState_SESSION_STATE_CONNECTED,
+		v1.StateStopping:   grpcproto.SessionState_SESSION_STATE_STOPPING,
+		v1.StateFailed:     grpcproto.SessionState_SESSION_STATE_FAILED,
+	} {
+		if got := State(input); got != want {
+			t.Fatalf("state %q = %v", input, got)
+		}
+	}
 	for input, want := range map[v1.FailureCode]grpcproto.SessionFailureCode{
-		v1.FailureInvalidArgument: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INVALID_ARGUMENT, v1.FailureNotFound: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_NOT_FOUND, v1.FailureConflict: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CONFLICT, v1.FailureNotConfigured: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_NOT_CONFIGURED, v1.FailureStaleGeneration: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_STALE_GENERATION, v1.FailureUnsupported: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_UNSUPPORTED, v1.FailureMalformedConfig: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_MALFORMED_CONFIG, v1.FailureProbe: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_PROBE_FAILED, v1.FailurePlatform: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_PLATFORM_FAILED, v1.FailureRuntime: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_RUNTIME_FAILED, v1.FailureCanceled: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CANCELED, v1.FailureInternal: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INTERNAL, v1.FailureCleanup: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CLEANUP_FAILED,
+		v1.FailureInvalidArgument: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INVALID_ARGUMENT,
+		v1.FailureNotFound:        grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_NOT_FOUND,
+		v1.FailureConflict:        grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CONFLICT,
+		v1.FailureNotConfigured:   grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_NOT_CONFIGURED,
+		v1.FailureStaleGeneration: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_STALE_GENERATION,
+		v1.FailureUnsupported:     grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_UNSUPPORTED,
+		v1.FailureMalformedConfig: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_MALFORMED_CONFIG,
+		v1.FailureProbe:           grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_PROBE_FAILED,
+		v1.FailurePlatform:        grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_PLATFORM_FAILED,
+		v1.FailureRuntime:         grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_RUNTIME_FAILED,
+		v1.FailureCanceled:        grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CANCELED,
+		v1.FailureInternal:        grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INTERNAL,
+		v1.FailureCleanup:         grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CLEANUP_FAILED,
 	} {
 		if got := FailureCode(input); got != want {
 			t.Fatalf("failure %q = %v", input, got)
 		}
 	}
-	if got := Failure(context.Canceled); got.GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INTERNAL || got.GetMessage() != context.Canceled.Error() {
-		t.Fatalf("error lost its exact message = %#v", got)
+	if got := Failure(context.Canceled); got.GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INTERNAL || got.GetMessage() != "internal session error" {
+		t.Fatalf("untyped error was not sanitized = %#v", got)
 	}
 }
 
-func TestManagerConfigureReceivesExactRawBytesAndKeepsOrderedEvents(t *testing.T) {
+func TestTypedFailureOmitsInternalCause(t *testing.T) {
+	err := &v1.Error{Code: v1.FailureInvalidArgument, Message: "configuration URL could not be fetched", Cause: context.DeadlineExceeded}
+	got := Failure(err)
+	if got.GetMessage() != "configuration URL could not be fetched" || got.GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INVALID_ARGUMENT {
+		t.Fatalf("typed failure exposed its cause or lost its public message = %#v", got)
+	}
+}
+
+func TestSnapshotMappingCarriesAuthoritativeConfiguration(t *testing.T) {
+	in := v1.SnapshotResult{
+		SessionID: "session", Sequence: 8, Generation: 3, State: v1.StateConnected,
+		Configured: true, Digest: "digest", SourceKind: v1.ConfigSourceURL,
+		Profiles:      []v1.ProfileSummary{{Index: 0, Protocol: v1.ProtocolOutline, Description: "primary"}},
+		Warnings:      []v1.Warning{{Code: "OPTIONAL", Message: "optional setting ignored"}},
+		ActiveProfile: &v1.ProfileSummary{Index: 0, Protocol: v1.ProtocolOutline, Description: "primary"},
+		LastFailure:   v1.FailureRuntime, LastFailureMessage: "runtime stopped",
+	}
+	out := Snapshot(in)
+	if out.GetSessionId() != in.SessionID || out.GetSequence() != in.Sequence || out.GetGeneration() != in.Generation || out.GetState() != grpcproto.SessionState_SESSION_STATE_CONNECTED {
+		t.Fatalf("identity and state fields were not preserved: %#v", out)
+	}
+	if !out.GetConfigured() || out.GetDigest() != in.Digest || out.GetSourceKind() != grpcproto.SessionSourceKind_SESSION_SOURCE_KIND_URL {
+		t.Fatalf("configuration identity was not preserved: %#v", out)
+	}
+	if len(out.GetProfiles()) != 1 || out.GetProfiles()[0].GetProtocol() != grpcproto.SessionProtocol_SESSION_PROTOCOL_OUTLINE || len(out.GetWarnings()) != 1 {
+		t.Fatalf("configuration metadata was not preserved: %#v", out)
+	}
+	if out.GetActiveProfile().GetDescription() != "primary" || out.GetLastFailure().GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_RUNTIME_FAILED || out.GetLastFailure().GetMessage() != "runtime stopped" {
+		t.Fatalf("runtime state was not preserved: %#v", out)
+	}
+}
+
+func TestManagerValidationAndConfigurationReceiveExactRawBytes(t *testing.T) {
 	m := v1.NewManager(v1.ManagerOptions{Runtime: mapperRuntime{}, Platform: mapperPlatform{}})
-	id, err := m.CreateSession(context.Background())
+	initial, err := m.Snapshot(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw := []byte("\n[[Outline]]\nServer = \"vpn.invalid\"\nPort = 443\nPassword = \"secret\"\n")
-	configured, err := m.Configure(context.Background(), id, "configure", raw)
+	validated, err := m.ValidateConfig(context.Background(), raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(raw)
-	if configured.Digest != hex.EncodeToString(digest[:]) {
-		t.Fatalf("raw bytes changed before Configure: %q", configured.Digest)
+	if validated.Digest != hex.EncodeToString(digest[:]) {
+		t.Fatalf("raw bytes changed before validation: %q", validated.Digest)
 	}
-	started, err := m.Start(context.Background(), id, "start", v1.StartTarget{Mode: v1.ProfileIndex, Index: 0})
+	afterValidation, err := m.Snapshot(context.Background(), initial.SessionID)
+	if err != nil || afterValidation.Sequence != initial.Sequence || afterValidation.Configured {
+		t.Fatalf("ValidateConfig mutated state: %#v, %v", afterValidation, err)
+	}
+	configured, err := m.Configure(context.Background(), initial.SessionID, initial.Sequence, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if duplicate, duplicateErr := m.Start(context.Background(), id, "start", v1.StartTarget{Mode: v1.ProfileIndex, Index: 0}); duplicateErr != nil || duplicate.Generation != started.Generation {
-		t.Fatalf("duplicate start = %#v, %v", duplicate, duplicateErr)
+	if configured.Digest != hex.EncodeToString(digest[:]) || configured.Sequence <= initial.Sequence {
+		t.Fatalf("Configure changed bytes or failed to advance revision: %#v", configured)
 	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		snapshot, _ := m.Snapshot(context.Background(), id)
-		if snapshot.State == v1.StateConnected {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if _, stopErr := m.Stop(context.Background(), id, "stale", started.Generation+1); v1.CodeOf(stopErr) != v1.FailureStaleGeneration {
-		t.Fatalf("stale generation = %v", stopErr)
-	}
-	observed, err := m.Observe(context.Background(), id, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for index, event := range observed.Events {
-		if event.Sequence != uint64(index+1) {
-			t.Fatalf("events not ordered at %d: %#v", index, event)
-		}
+	snapshot, err := m.Snapshot(context.Background(), initial.SessionID)
+	if err != nil || snapshot.Digest != configured.Digest || snapshot.SourceKind != v1.ConfigSourceInline || len(snapshot.Profiles) != len(configured.Profiles) {
+		t.Fatalf("snapshot did not carry accepted configuration: %#v, %v", snapshot, err)
 	}
 }
 
@@ -94,7 +140,7 @@ func (mapperPlatform) PrepareTunnel(context.Context, v1.SessionRef) (v1.Platform
 	return mapperPlatformLease{}, nil
 }
 func (mapperPlatform) ProtectSocket(context.Context, v1.SessionRef, int) error { return nil }
-func (mapperPlatform) PublishState(context.Context, v1.Event)                  {}
+func (mapperPlatform) PublishState(context.Context, v1.StateChange)            {}
 
 type mapperPlatformLease struct{}
 

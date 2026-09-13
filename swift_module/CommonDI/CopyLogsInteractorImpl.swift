@@ -4,7 +4,7 @@ import app
 import zlib
 
 class CopyLogsInteractorImpl: CopyLogsInteractor {
-    private var logs = NativeModuleHolder.logsRepository
+    private var logs = IOSAppCompositionRoot.logsRepository
 
     func doCopy(logs: [String]) {
         let logText = logs.joined(separator: "\n")

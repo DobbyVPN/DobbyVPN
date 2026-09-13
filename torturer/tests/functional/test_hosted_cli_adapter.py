@@ -1330,13 +1330,21 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.assertNotIn(Capability.NETWORK_TRANSITION, hosted.capabilities)
 
     def test_hosted_runner_can_select_a_bounded_canonical_subset(self) -> None:
-        parsed = build_parser().parse_args([
+        parser = build_parser()
+        options = {
+            option
+            for action in parser._actions
+            for option in action.option_strings
+        }
+        self.assertIn("--scenario", options)
+        self.assertNotIn("--scenario-id", options)
+        parsed = parser.parse_args([
             "--platform", "linux", "--cli", str(self.cli), "--profile", str(self.profile),
             "--source-sha", "a" * 40,
             "--platform-version", "24.04",
             "--lane-timeout-seconds", "1800",
-            "--output", str(self.directory.name + "/result.json"), "--scenario-id",
-            "functional.configure", "--scenario-id", "functional.start-stop-start",
+            "--output", str(self.directory.name + "/result.json"), "--scenario",
+            "functional.configure", "--scenario", "functional.start-stop-start",
         ])
         self.assertEqual(parsed.scenario_ids, ["functional.configure", "functional.start-stop-start"])
 
@@ -1886,7 +1894,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
             "--lane-timeout-seconds", "200",
             "--output", str(output),
             "--raw-log-dir", str(raw_directory),
-            "--scenario-id", "functional.configure",
+            "--scenario", "functional.configure",
         ]
         with (
             mock.patch.object(hosted_run, "adapter_for_platform", return_value=adapter),
@@ -1926,7 +1934,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
             "--source-sha", "a" * 40, "--platform-version", "24.04",
             "--lane-timeout-seconds", "200",
             "--output", str(output), "--raw-log-dir", str(raw_directory),
-            "--scenario-id", "functional.configure",
+            "--scenario", "functional.configure",
         ]
         with (
             mock.patch.object(hosted_run, "adapter_for_platform", return_value=MainAdapter()),
@@ -1983,7 +1991,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
             "--lane-timeout-seconds", "200",
             "--output", str(output),
             "--raw-log-dir", str(raw_directory),
-            "--scenario-id", "functional.configure",
+            "--scenario", "functional.configure",
         ]
         with (
             mock.patch.object(hosted_run.time, "monotonic", side_effect=monotonic),
@@ -2038,7 +2046,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
             "--lane-timeout-seconds", "200",
             "--output", str(output),
             "--raw-log-dir", str(raw_directory),
-            "--scenario-id", "functional.configure",
+            "--scenario", "functional.configure",
         ]
         with (
             mock.patch.object(hosted_run, "adapter_for_platform", return_value=adapter),

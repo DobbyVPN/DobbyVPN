@@ -41,8 +41,6 @@ func State(state v2.State) grpcproto.SessionState {
 		return grpcproto.SessionState_SESSION_STATE_STOPPING
 	case v2.StateFailed:
 		return grpcproto.SessionState_SESSION_STATE_FAILED
-	case v2.StateDestroyed:
-		return grpcproto.SessionState_SESSION_STATE_DESTROYED
 	default:
 		panic(fmt.Sprintf("unsupported session state %q", state))
 	}
@@ -87,7 +85,54 @@ func Failure(err error) *grpcproto.SessionFailure {
 	}
 	var domain *v2.Error
 	if errors.As(err, &domain) {
-		return &grpcproto.SessionFailure{Code: FailureCode(domain.Code), Message: err.Error()}
+		return &grpcproto.SessionFailure{Code: FailureCode(domain.Code), Message: domain.Message}
 	}
-	return &grpcproto.SessionFailure{Code: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INTERNAL, Message: err.Error()}
+	return &grpcproto.SessionFailure{Code: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INTERNAL, Message: "internal session error"}
+}
+
+func SourceKind(kind v2.ConfigSourceKind) grpcproto.SessionSourceKind {
+	switch kind {
+	case v2.ConfigSourceInline:
+		return grpcproto.SessionSourceKind_SESSION_SOURCE_KIND_INLINE
+	case v2.ConfigSourceURL:
+		return grpcproto.SessionSourceKind_SESSION_SOURCE_KIND_URL
+	default:
+		return grpcproto.SessionSourceKind_SESSION_SOURCE_KIND_UNSPECIFIED
+	}
+}
+
+func Profile(in v2.ProfileSummary) *grpcproto.SessionProfile {
+	return &grpcproto.SessionProfile{Index: in.Index, Protocol: Protocol(in.Protocol), Description: in.Description}
+}
+
+func Profiles(in []v2.ProfileSummary) []*grpcproto.SessionProfile {
+	out := make([]*grpcproto.SessionProfile, 0, len(in))
+	for _, profile := range in {
+		out = append(out, Profile(profile))
+	}
+	return out
+}
+
+func Warnings(in []v2.Warning) []*grpcproto.SessionWarning {
+	out := make([]*grpcproto.SessionWarning, 0, len(in))
+	for _, warning := range in {
+		out = append(out, &grpcproto.SessionWarning{Code: warning.Code, Message: warning.Message})
+	}
+	return out
+}
+
+func Snapshot(in v2.SnapshotResult) *grpcproto.SessionSnapshot {
+	out := &grpcproto.SessionSnapshot{
+		SessionId: in.SessionID, Sequence: in.Sequence, Generation: in.Generation,
+		State: State(in.State), Configured: in.Configured, Digest: in.Digest,
+		SourceKind: SourceKind(in.SourceKind), Profiles: Profiles(in.Profiles),
+		Warnings: Warnings(in.Warnings), CleanupComplete: in.CleanupComplete,
+	}
+	if in.ActiveProfile != nil {
+		out.ActiveProfile = Profile(*in.ActiveProfile)
+	}
+	if in.LastFailure != "" {
+		out.LastFailure = &grpcproto.SessionFailure{Code: FailureCode(in.LastFailure), Message: in.LastFailureMessage}
+	}
+	return out
 }

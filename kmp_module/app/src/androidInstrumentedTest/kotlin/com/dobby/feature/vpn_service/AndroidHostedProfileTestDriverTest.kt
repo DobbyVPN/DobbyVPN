@@ -6,13 +6,15 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.dobby.feature.main.domain.SessionConfiguration
 import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.SessionControllerResult
-import com.dobby.feature.main.domain.SessionEvent
+import com.dobby.feature.main.domain.SessionFailure
 import com.dobby.feature.main.domain.SessionFailureCode
-import com.dobby.feature.main.domain.SessionObservation
 import com.dobby.feature.main.domain.SessionProfile
 import com.dobby.feature.main.domain.SessionProtocol
 import com.dobby.feature.main.domain.SessionSnapshot
+import com.dobby.feature.main.domain.SessionSourceKind
+import com.dobby.feature.main.domain.SessionStart
 import com.dobby.feature.main.domain.SessionStartTarget
+import com.dobby.feature.main.domain.SessionStop
 import com.dobby.feature.main.domain.SessionState
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
@@ -185,7 +187,7 @@ class AndroidHostedProfileTestDriverTest {
         val commandFile = writeInput("command-order.json", commandJson(operations = operations))
         writeInput("profile-12.bin", "opaque-profile")
         val eventLog = mutableListOf<String>()
-        val controller = FakeSessionController(eventLog, staleIdleReplay = true)
+        val controller = FakeSessionController(eventLog)
         val platform = FakePlatform(events = eventLog)
         val result = AndroidHostedProfileTestDriver(
             context = context,
@@ -205,7 +207,7 @@ class AndroidHostedProfileTestDriverTest {
         assertEquals(2, controller.stopCalls)
         assertEquals(4, controller.emittedWatchEvents)
         assertTrue(controller.startTargets.all { it == SessionStartTarget.ProfileIndex(0) })
-        assertEquals(listOf("configure", "disconnected", "consent", "start", "watch", "tunnel", "identity", "stability", "throughput", "stop", "disconnected", "disconnected", "consent", "start", "watch", "tunnel", "identity", "stop", "disconnected", "snapshot", "watch", "snapshot", "disconnected", "snapshot", "destroy", "disconnected"), eventLog)
+        assertEquals(listOf("configure", "disconnected", "consent", "start", "watch", "tunnel", "identity", "stability", "throughput", "stop", "disconnected", "disconnected", "consent", "start", "watch", "tunnel", "identity", "stop", "disconnected", "snapshot", "watch", "snapshot", "disconnected", "snapshot", "reset", "disconnected"), eventLog)
     }
 
     @Test
@@ -283,7 +285,7 @@ class AndroidHostedProfileTestDriverTest {
     }
 
     @Test
-    fun operation_failure_still_attempts_stop_destroy_service_and_cleanup() = runBlocking {
+    fun operation_failure_still_attempts_stop_reset_service_and_cleanup() = runBlocking {
         val commandFile = writeInput("command-failure.json", commandJson(operations = listOf("configure", "connect", "observe_tunnel")))
         writeInput("profile-3.bin", "opaque-profile")
         val controller = FakeSessionController()
@@ -305,7 +307,7 @@ class AndroidHostedProfileTestDriverTest {
         assertEquals("synthetic platform failure", failure.message)
         assertEquals("DRIVER_ERROR", result.getString("error_code"))
         assertEquals(1, controller.stopCalls)
-        assertTrue(controller.events.contains("destroy"))
+        assertTrue(controller.events.contains("reset"))
         assertTrue(platform.events.contains("disconnected"))
         assertTrue(result.getBoolean("cleanup_verified"))
         assertTrue(
@@ -331,7 +333,7 @@ class AndroidHostedProfileTestDriverTest {
                 context = context,
                 controllerFactory = {
                     FakeSessionController(
-                        destroyFailure = IllegalArgumentException("synthetic cleanup failure"),
+                        resetFailure = IllegalArgumentException("synthetic cleanup failure"),
                     )
                 },
                 platformFactory = { _ -> FakePlatform(failTunnel = true) },
@@ -503,7 +505,7 @@ class AndroidHostedProfileTestDriverTest {
         assertFalse(result.cleanupVerified)
         assertEquals(1, controller.startCalls)
         assertEquals(0, controller.stopCalls)
-        assertFalse(controller.events.contains("destroy"))
+        assertFalse(controller.events.contains("reset"))
     }
 
     @Test
@@ -534,7 +536,7 @@ class AndroidHostedProfileTestDriverTest {
         assertTrue(result.getBoolean("cleanup_verified"))
         assertEquals(1, controller.startCalls)
         assertEquals(1, controller.stopCalls)
-        assertTrue(controller.events.contains("destroy"))
+        assertTrue(controller.events.contains("reset"))
     }
 
     @Test
@@ -564,7 +566,7 @@ class AndroidHostedProfileTestDriverTest {
         job.cancelAndJoin()
 
         assertEquals(1, controller.stopCalls)
-        assertTrue(controller.events.contains("destroy"))
+        assertTrue(controller.events.contains("reset"))
         assertFalse(profileFile.exists())
         assertTrue(outputFile.isFile)
     }
@@ -675,9 +677,8 @@ class AndroidHostedProfileTestDriverTest {
         ),
         private val stateAfterStart: SessionState = SessionState.CONNECTED,
         private val failureAfterStart: SessionFailureCode? = null,
-        private val destroyFailure: Throwable? = null,
+        private val resetFailure: Throwable? = null,
         private val stopFailure: SessionControllerResult.Failure? = null,
-        private val staleIdleReplay: Boolean = false,
     ) : SessionController {
 
         var stopCalls = 0
@@ -686,67 +687,82 @@ class AndroidHostedProfileTestDriverTest {
         val startTargets = mutableListOf<SessionStartTarget>()
         val startGenerations = mutableListOf<ULong>()
         private var state = SessionState.IDLE
+        private var configured = false
+        private var sequence = 0uL
+
         override suspend fun configure(rawConfig: ByteArray): SessionControllerResult<SessionConfiguration> {
             events += "configure"
-            return SessionControllerResult.Success(
-                SessionConfiguration(
-                    "digest",
-                    profiles,
-                    emptyList(),
-                ),
-            )
+            state = SessionState.CONFIGURED
+            configured = true
+            sequence += 1u
+            return SessionControllerResult.Success(configuration())
         }
-        override suspend fun start(target: SessionStartTarget): SessionControllerResult<ULong> {
+
+        private fun configuration() = SessionConfiguration(
+            sessionId = "test-session",
+            sequence = sequence,
+            digest = "digest",
+            sourceKind = SessionSourceKind.URL,
+            profiles = profiles,
+            warnings = emptyList(),
+        )
+
+        override suspend fun start(target: SessionStartTarget): SessionControllerResult<SessionStart> {
             events += "start"
             startTargets += target
             startCalls += 1
             state = stateAfterStart
+            sequence += 1u
             val generation = startCalls.toULong()
             startGenerations += generation
-            return SessionControllerResult.Success(generation)
+            return SessionControllerResult.Success(SessionStart("test-session", generation, sequence))
         }
-        override suspend fun stop(generation: ULong): SessionControllerResult<ULong> {
+
+        override suspend fun stop(generation: ULong): SessionControllerResult<SessionStop> {
             events += "stop"
             stopCalls += 1
             if (stopCalls == 1) stopFailure?.let { return it }
             state = SessionState.IDLE
-            return SessionControllerResult.Success(generation)
+            sequence += 1u
+            return SessionControllerResult.Success(SessionStop("test-session", generation, sequence))
         }
+
         override suspend fun snapshot(): SessionControllerResult<SessionSnapshot> {
             events += "snapshot"
-            return SessionControllerResult.Success(
-                SessionSnapshot(
-                    startCalls.toULong(),
-                    state,
-                    configured = true,
-                    cleanupComplete = state == SessionState.IDLE,
-                    lastFailureCode = failureAfterStart.takeIf { state == SessionState.FAILED },
+            return SessionControllerResult.Success(snapshotValue())
+        }
+
+        private fun snapshotValue() = SessionSnapshot(
                     sessionId = "test-session",
-                ),
-            )
-        }
-        override fun watch(afterSequence: ULong): Flow<SessionEvent> {
+                    sequence = sequence,
+                    generation = startCalls.toULong(),
+                    state = state,
+                    configured = configured,
+                    digest = "digest",
+                    sourceKind = SessionSourceKind.URL,
+                    profiles = profiles,
+                    warnings = emptyList(),
+                    activeProfile = profiles.firstOrNull().takeIf {
+                        state in setOf(SessionState.PROBING, SessionState.PREPARING, SessionState.CONNECTED)
+                    },
+                    lastFailure = failureAfterStart.takeIf { state == SessionState.FAILED }?.let {
+                        SessionFailure(it, "synthetic failure")
+                    },
+                    cleanupComplete = state == SessionState.IDLE,
+                )
+
+        override fun watch(): Flow<SessionSnapshot> {
             events += "watch"
-            val current = SessionEvent(
-                generation = startCalls.toULong(),
-                sequence = afterSequence + 1uL,
-                state = state,
-                failureCode = failureAfterStart.takeIf { state == SessionState.FAILED },
-                sessionId = "test-session",
-            )
-            val replay = if (staleIdleReplay && state == SessionState.IDLE && current.generation > 1uL) {
-                listOf(current.copy(generation = current.generation - 1uL), current)
-            } else {
-                listOf(current)
-            }
-            return flowOf(*replay.toTypedArray()).onEach { emittedWatchEvents += 1 }
+            return flowOf(snapshotValue()).onEach { emittedWatchEvents += 1 }
         }
-        override suspend fun observe(afterSequence: ULong): SessionControllerResult<SessionObservation> =
-            SessionControllerResult.Success(SessionObservation(emptyList(), afterSequence))
-        override suspend fun destroy(): SessionControllerResult<Unit> {
-            events += "destroy"
-            destroyFailure?.let { throw it }
-            return SessionControllerResult.Success(Unit)
+
+        override suspend fun reset(): SessionControllerResult<SessionSnapshot> {
+            events += "reset"
+            resetFailure?.let { throw it }
+            state = SessionState.IDLE
+            configured = false
+            sequence += 1u
+            return SessionControllerResult.Success(snapshotValue())
         }
     }
 }
