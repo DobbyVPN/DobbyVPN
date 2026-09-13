@@ -82,7 +82,11 @@ internal fun JsonObject.toSessionConfiguration(sessionId: String): SessionConfig
     digest = sessionString("digest"),
     sourceKind = sessionString("source_kind").toSessionSourceKind(),
     profiles = sessionArray("profiles").map { profile ->
-        SessionProfile(profile.sessionInt("index"), profile.sessionString("protocol").toSessionProtocol(), profile.sessionString("description"))
+        SessionProfile(
+            profile.sessionInt("index"),
+            profile.sessionString("protocol").toSessionProtocol(),
+            profile.sessionString("description"),
+        )
     },
     warnings = sessionArray("warnings").map { warning ->
         SessionWarning(warning.sessionString("code"), warning.sessionString("message"))

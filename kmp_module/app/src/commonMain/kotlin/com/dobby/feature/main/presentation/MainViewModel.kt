@@ -28,6 +28,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+private const val SNAPSHOT_RETRY_DELAY_MILLIS = 1_000L
+
 /** Go owns configuration, selection, failover, and lifecycle; this class maps snapshots to UI. */
 class MainViewModel(
     private val configsRepository: DobbyConfigsRepository,
@@ -112,7 +114,7 @@ class MainViewModel(
                         publishFailure(SessionFailureCode.INTERNAL)
                     }
                 }
-                if (isActive) delay(1_000)
+                if (isActive) delay(SNAPSHOT_RETRY_DELAY_MILLIS)
             }
         }
     }

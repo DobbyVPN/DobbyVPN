@@ -161,6 +161,7 @@ kotlin {
 
         jvmMain.dependencies {
             implementation(project(":grpcstub"))
+            implementation(libs.protobuf.java)
             runtimeOnly(libs.grpc.netty)
 
             implementation(compose.desktop.currentOs)

@@ -25,9 +25,9 @@ final class IOSLifecycleCoreTests: XCTestCase {
             operation: .start,
             requestID: "start",
             sessionID: "session",
-            expectedSequence: 1,
             mode: "UNKNOWN",
-            index: 0
+            index: 0,
+            expectedSequence: 1
         )) { error in
             XCTAssertEqual(error as? IOSProviderMessageError, .unsupportedOperation)
         }
@@ -40,8 +40,8 @@ final class IOSLifecycleCoreTests: XCTestCase {
             operation: .configure,
             requestID: "configure",
             sessionID: "session",
-            expectedSequence: 1,
-            generation: 1
+            generation: 1,
+            expectedSequence: 1
         ))
         XCTAssertThrowsError(try IOSProviderCommand(
             operation: .snapshot,
