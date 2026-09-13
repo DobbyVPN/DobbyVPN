@@ -1075,8 +1075,17 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.assertIn("trap 'on_signal 143' 15", script)
         self.assertIn("case \",$flags,\"", script)
         self.assertIn("while IFS= read -r line", script)
-        self.assertIn('ip link set dev "$interface" down', script)
-        self.assertIn('ip link set dev "$interface" up', script)
+        self.assertIn('wifi_status_output=$(cmd wifi status 2>&1)', script)
+        self.assertIn(
+            "wifi_state_output=$(printf '%s\\n' \"$wifi_status_output\" | sed -n '1p')",
+            script,
+        )
+        self.assertIn("[ \"$wifi_state_output\" = \"Wifi is $1\" ]", script)
+        self.assertIn('svc wifi disable', script)
+        self.assertIn('svc wifi enable', script)
+        self.assertIn('[ "$down_wifi_disabled" -eq 1 ] && ! route_is_usable "$down_routes"', script)
+        self.assertIn('[ "$restore_wifi_ready" -eq 1 ] && link_is_up "$restore_link" && route_is_usable "$restore_routes"', script)
+        self.assertNotIn('ip link set dev "$interface"', script)
         self.assertEqual(transition_calls[0][-1], "wlan0")
         self.assertEqual(len(transition_calls[0]), 9)
         self.assertGreaterEqual(int(transition_calls[0][-2]), 1)

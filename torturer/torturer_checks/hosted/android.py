@@ -1216,17 +1216,17 @@ class AndroidHostedAdapter:
         raise ScenarioExecutionError("ANDROID_PROCESS_LOSS_NOT_ABSENT")
 
     def _interrupt_uplink(self, interface: str, deadline: float) -> None:
-        """Drop and restore Android's real non-VPN default-route link.
+        """Disable and restore Android Wi-Fi on the proven uplink.
 
         ADB remains on an independent Android control transport. The guest-side
-        transaction uses the physical interface already validated by the
-        app-bound routing proof and restores it from an EXIT/signal trap.
+        transaction uses Android's Wi-Fi service so its network state and route
+        change together, then restores service state from an EXIT/signal trap.
         """
 
         remaining = _remaining(deadline, "ANDROID_UPLINK_TIMEOUT")
         if _ANDROID_INTERFACE.fullmatch(interface) is None:
             raise ScenarioExecutionError("ANDROID_UPLINK_IDENTITY_UNAVAILABLE")
-        restore_reserve = min(10.0, max(2.0, remaining / 3.0))
+        restore_reserve = min(20.0, max(2.0, remaining / 2.0))
         down_window = remaining - restore_reserve
         if down_window <= 0:
             raise ScenarioExecutionError("ANDROID_UPLINK_TIMEOUT")
@@ -1238,7 +1238,7 @@ script_start=$(date +%s)
 down_deadline=$((script_start + $1))
 overall_deadline=$((script_start + $2))
 interface=$3
-lowered=0
+wifi_disabled=0
 restore_status=0
 restore_detail=
 
@@ -1273,14 +1273,20 @@ EOF
     [ "$selected" -eq 1 ] && [ "$usable" -eq 1 ]
 }
 
+wifi_state_is() {
+    wifi_status_output=$(cmd wifi status 2>&1)
+    wifi_state_rc=$?
+    wifi_state_output=$(printf '%s\n' "$wifi_status_output" | sed -n '1p')
+    [ "$wifi_state_rc" -eq 0 ] && [ "$wifi_state_output" = "Wifi is $1" ]
+}
+
 restore_uplink() {
-    [ "$lowered" -eq 1 ] || return 0
-    restore_output=$(ip link set dev "$interface" up 2>&1)
+    [ "$wifi_disabled" -eq 1 ] || return 0
+    restore_output=$(svc wifi enable 2>&1)
     restore_rc=$?
-    lowered=0
     if [ "$restore_rc" -ne 0 ]; then
         restore_status=1
-        restore_detail="ip link set up rc=$restore_rc output=$restore_output"
+        restore_detail="svc wifi enable rc=$restore_rc output=$restore_output"
         return 0
     fi
     restore_ready=0
@@ -1289,12 +1295,14 @@ restore_uplink() {
         restore_link_rc=$?
         restore_routes=$(ip -4 route show table all default 2>&1)
         restore_routes_rc=$?
+        restore_wifi_ready=0
+        wifi_state_is enabled && restore_wifi_ready=1
         if [ "$restore_link_rc" -ne 0 ] || [ "$restore_routes_rc" -ne 0 ]; then
             restore_status=1
             restore_detail="restore link rc=$restore_link_rc output=$restore_link; restore routes rc=$restore_routes_rc output=$restore_routes"
             return 0
         fi
-        if link_is_up "$restore_link" && route_is_usable "$restore_routes"; then
+        if [ "$restore_wifi_ready" -eq 1 ] && link_is_up "$restore_link" && route_is_usable "$restore_routes"; then
             restore_ready=$((restore_ready + 1))
         else
             restore_ready=0
@@ -1306,9 +1314,10 @@ restore_uplink() {
     done
     if [ "$restore_ready" -lt 2 ]; then
         restore_status=1
-        restore_detail="restore link=$restore_link; restore routes=$restore_routes"
+        restore_detail="restore wifi=$wifi_state_output; link=$restore_link; routes=$restore_routes"
         return 0
     fi
+    wifi_disabled=0
     printf '%s\n' "DobbyVPN uplink interface=$interface state=restored"
 }
 
@@ -1357,15 +1366,18 @@ if ! link_is_up "$before_link" || ! route_is_usable "$route_output"; then
     printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_PRECONDITION detail=link=$before_link; routes=$route_output" >&2
     exit 14
 fi
+if ! wifi_state_is enabled; then
+    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_WIFI_PRECONDITION detail=wifi rc=$wifi_state_rc output=$wifi_state_output" >&2
+    exit 18
+fi
 printf '%s\n' "DobbyVPN uplink interface=$interface state=present"
 
-# Mark the link for restoration before attempting down, including a partial
-# or failed down command.
-lowered=1
-down_output=$(ip link set dev "$interface" down 2>&1)
+# Mark Wi-Fi for restoration before changing it, including a partial failure.
+wifi_disabled=1
+down_output=$(svc wifi disable 2>&1)
 down_rc=$?
 if [ "$down_rc" -ne 0 ]; then
-    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_DOWN_FAILED detail=ip link set down rc=$down_rc output=$down_output" >&2
+    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_DOWN_FAILED detail=svc wifi disable rc=$down_rc output=$down_output" >&2
     exit 15
 fi
 
@@ -1375,11 +1387,13 @@ while [ "$(date +%s)" -lt "$down_deadline" ]; do
     down_link_rc=$?
     down_routes=$(ip -4 route show table all default 2>&1)
     down_routes_rc=$?
+    down_wifi_disabled=0
+    wifi_state_is disabled && down_wifi_disabled=1
     if [ "$down_link_rc" -ne 0 ] || [ "$down_routes_rc" -ne 0 ]; then
         printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_PROBE_FAILED detail=link rc=$down_link_rc output=$down_link; routes rc=$down_routes_rc output=$down_routes" >&2
         exit 16
     fi
-    if ! link_is_up "$down_link" && ! route_is_usable "$down_routes"; then
+    if [ "$down_wifi_disabled" -eq 1 ] && ! route_is_usable "$down_routes"; then
         absence=$((absence + 1))
     else
         absence=0
@@ -1390,7 +1404,7 @@ while [ "$(date +%s)" -lt "$down_deadline" ]; do
     sleep 0.1
 done
 if [ "$absence" -lt 2 ]; then
-    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_LOSS_NOT_OBSERVED detail=link=$down_link; routes=$down_routes" >&2
+    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_LOSS_NOT_OBSERVED detail=wifi=$wifi_state_output; link=$down_link; routes=$down_routes" >&2
     exit 17
 fi
 printf '%s\n' "DobbyVPN uplink interface=$interface state=absent"
