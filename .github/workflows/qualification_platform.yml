@@ -139,8 +139,11 @@ jobs:
               ;;
             android)
               sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;36.0.0' 'emulator' 'system-images;android-35;google_apis;x86_64'
+              sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK root is unavailable}}"
+              emulator_bin="$sdk_root/emulator/emulator"
+              test -x "$emulator_bin"
               avdmanager create avd --force --name dobbyvpn-release --package 'system-images;android-35;google_apis;x86_64' --device pixel_2
-              emulator -avd dobbyvpn-release -no-window -no-audio -no-boot-anim -no-snapshot > "$SERVICE_DIR/emulator.stdout.log" 2> "$SERVICE_DIR/emulator.stderr.log" &
+              "$emulator_bin" -avd dobbyvpn-release -no-window -no-audio -no-boot-anim -no-snapshot > "$SERVICE_DIR/emulator.stdout.log" 2> "$SERVICE_DIR/emulator.stderr.log" &
               if ! timeout 120s adb wait-for-device; then
                 echo "Android emulator did not become visible to ADB" >&2
                 cat "$SERVICE_DIR/emulator.stderr.log" >&2 || true
@@ -154,7 +157,6 @@ jobs:
               signed="$(find release-packages -maxdepth 1 -name 'DobbyVPN-*-sign.apk' -type f)"
               companion="$(find release-packages -maxdepth 1 -name 'DobbyVPN-*-android-test-companion.apk' -type f)"
               test -f "$signed"; test -f "$companion"
-              sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK root is unavailable}}"
               apksigner_bin="$sdk_root/build-tools/36.0.0/apksigner"
               test -x "$apksigner_bin"
               "$apksigner_bin" verify --print-certs "$signed" > "$SERVICE_DIR/signed-certs.txt"
