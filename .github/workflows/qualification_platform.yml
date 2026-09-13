@@ -138,11 +138,19 @@ jobs:
               test -x "/Applications/Dobby VPN.app/Contents/Resources/macos_grpcvpnserver"
               ;;
             android)
-              sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;36.0.0' 'emulator' 'system-images;android-35;google_apis;x86_64'
               sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK root is unavailable}}"
+              sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;36.0.0' 'emulator' 'system-images;android-35;google_apis;x86_64'
               emulator_bin="$sdk_root/emulator/emulator"
               test -x "$emulator_bin"
+              android_sdk_home="$RUNNER_TEMP/dobbyvpn-android"
+              export ANDROID_SDK_HOME="$android_sdk_home"
+              export ANDROID_USER_HOME="$android_sdk_home/.android"
+              export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
+              mkdir -p "$ANDROID_AVD_HOME"
+              printf 'Android AVD home: %s\n' "$ANDROID_AVD_HOME"
               avdmanager create avd --force --name dobbyvpn-release --package 'system-images;android-35;google_apis;x86_64' --device pixel_2
+              test -s "$ANDROID_AVD_HOME/dobbyvpn-release.ini"
+              "$emulator_bin" -list-avds | grep -Fxq dobbyvpn-release
               "$emulator_bin" -avd dobbyvpn-release -no-window -no-audio -no-boot-anim -no-snapshot > "$SERVICE_DIR/emulator.stdout.log" 2> "$SERVICE_DIR/emulator.stderr.log" &
               if ! timeout 120s adb wait-for-device; then
                 echo "Android emulator did not become visible to ADB" >&2
@@ -213,8 +221,45 @@ jobs:
             SERVICE_ERR_WIN="$(cygpath -w "$EVIDENCE_DIR/service.log.stderr")"
             SERVICE_LOG_PATH_WIN="$(cygpath -w "$EVIDENCE_DIR/service.log")"
             SERVICE_LOG_ROOT_WIN="$(cygpath -w "$EVIDENCE_DIR")"
-            export SERVICE_WIN SERVICE_OUT_WIN SERVICE_ERR_WIN SERVICE_LOG_PATH_WIN SERVICE_LOG_ROOT_WIN
-            service_pid="$(powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$ErrorActionPreference="Stop"; [Console]::Error.WriteLine("Resolving MSI-managed service"); $installed=Get-Service -Name "DobbyVPN Server"; if ($installed.Status -ne "Stopped") { [Console]::Error.WriteLine("Stopping MSI-managed service"); Stop-Service -InputObject $installed -Force; $installed.WaitForStatus("Stopped",[TimeSpan]::FromSeconds(30)); [Console]::Error.WriteLine("MSI-managed service stopped") }; $env:DOBBY_LOG_PATH=$env:SERVICE_LOG_PATH_WIN; $env:DOBBY_LOG_ROOT=$env:SERVICE_LOG_ROOT_WIN; [Console]::Error.WriteLine("Starting qualification process"); $p=Start-Process -FilePath $env:SERVICE_WIN -ArgumentList @("-port","50051") -RedirectStandardOutput $env:SERVICE_OUT_WIN -RedirectStandardError $env:SERVICE_ERR_WIN -PassThru; [Console]::Error.WriteLine("Qualification process started"); $p.Id')"
+            SERVICE_PID_FILE="$SERVICE_DIR/windows-service.pid"
+            SERVICE_PID_FILE_WIN="$(cygpath -w "$SERVICE_PID_FILE")"
+            SERVICE_START_LOG="$SERVICE_DIR/windows-service-start.log"
+            export SERVICE_WIN SERVICE_OUT_WIN SERVICE_ERR_WIN SERVICE_LOG_PATH_WIN SERVICE_LOG_ROOT_WIN SERVICE_PID_FILE_WIN
+            powershell.exe -NoLogo -NoProfile -NonInteractive -Command '
+          $ErrorActionPreference = "Stop"
+          [Console]::Error.WriteLine("Resolving MSI-managed service")
+          $installed = Get-Service -Name "DobbyVPN Server"
+          if ($installed.Status -ne "Stopped") {
+            [Console]::Error.WriteLine("Stopping MSI-managed service")
+            Stop-Service -InputObject $installed -Force
+            $installed.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(30))
+            [Console]::Error.WriteLine("MSI-managed service stopped")
+          }
+          $env:DOBBY_LOG_PATH = $env:SERVICE_LOG_PATH_WIN
+          $env:DOBBY_LOG_ROOT = $env:SERVICE_LOG_ROOT_WIN
+          [Console]::Error.WriteLine("Starting qualification process")
+          $process = Start-Process -FilePath $env:SERVICE_WIN -ArgumentList @("-port", "50051") -RedirectStandardOutput $env:SERVICE_OUT_WIN -RedirectStandardError $env:SERVICE_ERR_WIN -PassThru
+          [Console]::Error.WriteLine("Qualification process started")
+          [System.IO.File]::WriteAllText($env:SERVICE_PID_FILE_WIN, [string]$process.Id)
+          [Console]::Error.WriteLine("Qualification PID saved")
+          ' > "$SERVICE_START_LOG" 2>&1 &
+            launcher_pid=$!
+            for _ in $(seq 1 30); do
+              [ -s "$SERVICE_PID_FILE" ] && break
+              if ! kill -0 "$launcher_pid" 2>/dev/null; then
+                wait "$launcher_pid" || true
+                break
+              fi
+              sleep 1
+            done
+            if [ ! -s "$SERVICE_PID_FILE" ]; then
+              cat "$SERVICE_START_LOG" >&2 || true
+              exit 1
+            fi
+            service_pid="$(tr -d '\r\n' < "$SERVICE_PID_FILE")"
+            [[ "$service_pid" =~ ^[1-9][0-9]*$ ]]
+            kill "$launcher_pid" 2>/dev/null || true
+            wait "$launcher_pid" 2>/dev/null || true
           elif [ "$PLATFORM" = macos ]; then
             launchd_stdout="$SERVICE_DIR/macos-launchd-print.stdout.log"
             launchd_stderr="$SERVICE_DIR/macos-launchd-print.stderr.log"
@@ -318,6 +363,8 @@ jobs:
             ${{ runner.temp }}/dobbyvpn-release-evidence/service.log
             ${{ runner.temp }}/dobbyvpn-release-evidence/service.log.stdout
             ${{ runner.temp }}/dobbyvpn-release-evidence/service.log.stderr
+            ${{ runner.temp }}/dobbyvpn-release-service/windows-service-start.log
+            ${{ runner.temp }}/dobbyvpn-release-service/windows-service.pid
             ${{ runner.temp }}/dobbyvpn-release-evidence/command-*.raw.log
             ${{ runner.temp }}/dobbyvpn-release-service/emulator.stdout.log
             ${{ runner.temp }}/dobbyvpn-release-service/emulator.stderr.log
