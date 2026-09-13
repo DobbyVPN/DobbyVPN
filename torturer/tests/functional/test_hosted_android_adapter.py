@@ -80,6 +80,7 @@ class FakeAndroidRunner:
         self.routing_counter_values = [(100, 200), (101, 201)]
         self.routing_rule_packets = 1
         self.routing_rule_protocol = "tcp"
+        self.routing_rule_interface = "eth0"
         self.routing_ready_override: dict[str, object] | None = None
         self.routing_blocked_override: dict[str, object] | None = None
         self.routing_unblocked_override: dict[str, object] | None = None
@@ -162,7 +163,8 @@ class FakeAndroidRunner:
                 0,
                 (
                     "num pkts bytes target prot opt in out source destination\n"
-                    f"1 {packets} 64 REJECT {self.routing_rule_protocol} -- * eth0 0.0.0.0/0 "
+                    f"1 {packets} 64 REJECT {self.routing_rule_protocol} -- * "
+                    f"{self.routing_rule_interface} 0.0.0.0/0 "
                     "203.0.113.10 tcp dpt:443\n"
                 ).encode(),
                 b"",
@@ -284,14 +286,17 @@ class ExternalControlRunner(FakeAndroidRunner):
                     failure.stderr,
                     failure.timed_out,
                 )
+            interface = argv[-1]
             self.uplink_up = False
             self.uplink_up = True
             return CommandResult(
                 argv,
                 0,
-                b"DobbyVPN uplink interface=eth0 state=present\n"
-                b"DobbyVPN uplink interface=eth0 state=absent\n"
-                b"DobbyVPN uplink interface=eth0 state=restored\n",
+                (
+                    f"DobbyVPN uplink interface={interface} state=present\n"
+                    f"DobbyVPN uplink interface={interface} state=absent\n"
+                    f"DobbyVPN uplink interface={interface} state=restored\n"
+                ).encode(),
                 b"",
             )
         if tail == ("shell", "pidof", "com.dobby.vpn"):
@@ -693,6 +698,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         )
         proof_events = [fields for event, fields in progress if event == "native-state"]
         self.assertTrue(any(fields.get("phase") == "blocked" for fields in proof_events))
+        self.assertEqual(self.adapter._validated_physical_interface, "eth0")
         self.assertNotIn(
             "203.0.113.10",
             json.dumps(proof_events, sort_keys=True),
@@ -758,6 +764,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                     ScenarioExecutionError, expected
                 ) as raised:
                     adapter._routing_proof(name, time.monotonic() + 5.0)
+                self.assertIsNone(adapter._validated_physical_interface)
                 notes = "\n".join(getattr(raised.exception, "__notes__", ()))
                 if suffix == "direct-success":
                     self.assertIn('"status": 200', notes)
@@ -1020,8 +1027,17 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.assertIn(Capability.NETWORK_TRANSITION, self.adapter.capabilities)
         self.assertEqual(self.adapter.capability_unavailable_reasons, {})
 
-    def test_android_external_controls_match_private_harness_operations(self) -> None:
+    def test_android_external_control_reuses_proven_uplink_interface(self) -> None:
         runner = ExternalControlRunner(self.runner.raw_directory.parent / "external-raw")
+        runner.routing_ready_override = {
+            "phase": "ready",
+            "physical_interface": "wlan0",
+            "vpn_interface": "tun0",
+            "ipv4": "203.0.113.10",
+            "port": 443,
+        }
+        runner.routing_rule_interface = "wlan0"
+        runner.routing_phases["routing.json.ready"] = "ready"
         adapter = AndroidHostedAdapter(
             runner=runner,
             profile=self.profile,
@@ -1034,6 +1050,13 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         )
         runner.uplink_up = True
         runner.app_alive = True
+        with self.assertRaisesRegex(
+            ScenarioExecutionError, "ANDROID_UPLINK_IDENTITY_UNAVAILABLE"
+        ):
+            adapter._perform_external_control(
+                "network_transition", time.monotonic() + 5.0
+            )
+        adapter._routing_proof("routing.json", time.monotonic() + 5.0)
         adapter._perform_external_control("network_transition", time.monotonic() + 5.0)
         self.assertTrue(runner.uplink_up)
         transition_calls = [
@@ -1045,6 +1068,8 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.assertEqual(len(transition_calls), 1)
         script = shlex.split(transition_calls[0][4])[0]
         self.assertIn("ip -4 route show table all default", script)
+        self.assertIn("interface=$3", script)
+        self.assertNotIn("interfaces=$(printf", script)
         self.assertIn("while [ \"$(date +%s)\" -lt \"$down_deadline\" ]", script)
         self.assertIn("while [ \"$(date +%s)\" -lt \"$overall_deadline\" ]", script)
         self.assertIn("trap 'on_signal 143' 15", script)
@@ -1052,9 +1077,10 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.assertIn("while IFS= read -r line", script)
         self.assertIn('ip link set dev "$interface" down', script)
         self.assertIn('ip link set dev "$interface" up', script)
-        self.assertEqual(len(transition_calls[0]), 8)
-        self.assertGreaterEqual(int(transition_calls[0][-1]), 1)
+        self.assertEqual(transition_calls[0][-1], "wlan0")
+        self.assertEqual(len(transition_calls[0]), 9)
         self.assertGreaterEqual(int(transition_calls[0][-2]), 1)
+        self.assertGreaterEqual(int(transition_calls[0][-3]), 1)
 
     def test_android_external_control_retains_primary_and_secondary_output(self) -> None:
         runner = ExternalControlRunner(self.runner.raw_directory.parent / "external-errors")
@@ -1074,6 +1100,8 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             download_url="https://download.example.test/blob",
             upload_url="https://upload.example.test/blob",
         )
+        runner.routing_phases["routing.json.ready"] = "ready"
+        adapter._routing_proof("routing.json", time.monotonic() + 5.0)
         with self.assertRaisesRegex(
             ScenarioExecutionError, "ANDROID_UPLINK_TRANSITION_FAILED"
         ) as raised:

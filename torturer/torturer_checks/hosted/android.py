@@ -231,6 +231,7 @@ class AndroidHostedAdapter:
         self._active_controls: tuple[tuple[str, str, float], ...] = ()
         self._connections: tuple[ConnectionIdentity, ...] = ()
         self._selected_connection: ConnectionIdentity | None = None
+        self._validated_physical_interface: str | None = None
         self._last_observation: AndroidProfileObservation | None = None
         self._observed_baseline_ip: str | None = None
         self._observed_tunneled_ips: set[str] = set()
@@ -303,6 +304,7 @@ class AndroidHostedAdapter:
         the command vector and retained diagnostics contain no profile bytes.
         """
         self._progress_scenario_id = scenario.id
+        self._validated_physical_interface = None
         started = time.monotonic()
         deadline, cleanup_deadline = _scenario_deadlines(
             started, float(scenario.max_duration_seconds)
@@ -895,6 +897,7 @@ class AndroidHostedAdapter:
             record(error)
         if primary is not None:
             raise primary
+        self._validated_physical_interface = physical
 
     def _routing_ready(
         self,
@@ -1162,7 +1165,12 @@ class AndroidHostedAdapter:
 
     def _perform_external_control(self, operation: str, deadline: float) -> None:
         if operation == "network_transition":
-            self._interrupt_uplink(deadline)
+            interface = self._validated_physical_interface
+            if interface is None:
+                raise ScenarioExecutionError(
+                    "ANDROID_UPLINK_IDENTITY_UNAVAILABLE"
+                )
+            self._interrupt_uplink(interface, deadline)
             return
         raise ScenarioExecutionError("ANDROID_OPERATION_UNSUPPORTED")
 
@@ -1207,16 +1215,17 @@ class AndroidHostedAdapter:
             time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
         raise ScenarioExecutionError("ANDROID_PROCESS_LOSS_NOT_ABSENT")
 
-    def _interrupt_uplink(self, deadline: float) -> None:
+    def _interrupt_uplink(self, interface: str, deadline: float) -> None:
         """Drop and restore Android's real non-VPN default-route link.
 
         ADB remains on an independent Android control transport. The guest-side
-        transaction discovers IPv4 defaults in all routing tables, excludes
-        VPN-style interfaces, and restores the selected physical link from an
-        EXIT/signal trap.
+        transaction uses the physical interface already validated by the
+        app-bound routing proof and restores it from an EXIT/signal trap.
         """
 
         remaining = _remaining(deadline, "ANDROID_UPLINK_TIMEOUT")
+        if _ANDROID_INTERFACE.fullmatch(interface) is None:
+            raise ScenarioExecutionError("ANDROID_UPLINK_IDENTITY_UNAVAILABLE")
         restore_reserve = min(10.0, max(2.0, remaining / 3.0))
         down_window = remaining - restore_reserve
         if down_window <= 0:
@@ -1228,6 +1237,7 @@ set +e
 script_start=$(date +%s)
 down_deadline=$((script_start + $1))
 overall_deadline=$((script_start + $2))
+interface=$3
 lowered=0
 restore_status=0
 restore_detail=
@@ -1337,26 +1347,6 @@ if [ "$route_rc" -ne 0 ]; then
     printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_ROUTE_PROBE_FAILED detail=ip route rc=$route_rc output=$route_output" >&2
     exit 11
 fi
-interfaces=$(printf '%s\n' "$route_output" | sed -n 's/.*[[:space:]]dev[[:space:]]\{1,\}\([A-Za-z0-9_.:-][A-Za-z0-9_.:-]*\).*/\1/p' | sort -u)
-interface=
-interface_count=0
-for candidate in $interfaces; do
-    case "$candidate" in
-        lo|tun*|tap*|wg*|ppp*) ;;
-        *)
-            if [ -z "$interface" ]; then
-                interface="$candidate"
-                interface_count=1
-            elif [ "$interface" != "$candidate" ]; then
-                interface_count=2
-            fi
-            ;;
-    esac
-done
-if [ "$interface_count" -ne 1 ]; then
-    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_IDENTITY_UNAVAILABLE detail=default interfaces=$interfaces" >&2
-    exit 12
-fi
 before_link=$(ip -o link show dev "$interface" 2>&1)
 before_link_rc=$?
 if [ "$before_link_rc" -ne 0 ]; then
@@ -1415,12 +1405,13 @@ exit 0
                 "dobbyvpn-uplink",
                 str(down_budget_seconds),
                 str(overall_budget_seconds),
+                interface,
             ),
             remaining,
             "ANDROID_UPLINK_TRANSITION_FAILED",
         )
         states: list[str] = []
-        interface: str | None = None
+        reported_interface: str | None = None
         state_pattern = re.compile(
             r"^DobbyVPN uplink interface=([A-Za-z0-9_.:-]+) state=(present|absent|restored)$"
         )
@@ -1429,21 +1420,28 @@ exit 0
             if match is None:
                 continue
             current_interface, state = match.groups()
-            if interface is None:
-                interface = current_interface
-            elif interface != current_interface:
+            if reported_interface is None:
+                reported_interface = current_interface
+            elif reported_interface != current_interface:
+                error = ScenarioExecutionError("ANDROID_UPLINK_OUTPUT_INVALID")
+                _append_command_result_notes(error, result)
+                raise error
+            if current_interface != interface:
                 error = ScenarioExecutionError("ANDROID_UPLINK_OUTPUT_INVALID")
                 _append_command_result_notes(error, result)
                 raise error
             states.append(state)
-        if interface is None or states != ["present", "absent", "restored"]:
+        if (
+            reported_interface is None
+            or states != ["present", "absent", "restored"]
+        ):
             error = ScenarioExecutionError("ANDROID_UPLINK_OUTPUT_INVALID")
             _append_command_result_notes(error, result)
             raise error
         for state in states:
             self._emit_progress(
                 "native-state",
-                interface=interface,
+                interface=reported_interface,
                 kind="uplink",
                 platform="android",
                 state=state,
