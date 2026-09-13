@@ -8,12 +8,10 @@ import com.dobby.grpcproto.SessionStartMode
 import com.dobby.grpcproto.SessionState as ProtoState
 import interop.session.SessionGrpcLibrary
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 
 /** Desktop adapter; protobuf is mapped directly into the small shared UI model. */
 internal class GrpcSessionController(
@@ -21,91 +19,81 @@ internal class GrpcSessionController(
 ) : SessionController {
     private val mutex = Mutex()
 
-    override suspend fun configure(rawConfig: ByteArray): SessionControllerResult<SessionConfiguration> = onWorker {
-        request {
-            mutex.withLock {
-                when (val current = snapshotNow()) {
-                    is SessionControllerResult.Failure -> current
-                    is SessionControllerResult.Success -> {
-                        val snapshot = current.value
-                        val response = session.configure(snapshot.sessionId, snapshot.sequence.toLong(), rawConfig)
-                        response.result(response.hasFailure(), response.failure) {
-                            SessionConfiguration(
-                                sessionId = snapshot.sessionId,
-                                sequence = response.sequence.toULongChecked(),
-                                digest = response.digest,
-                                sourceKind = response.sourceKind.toDomain(),
-                                profiles = response.profilesList.map { it.toDomain() },
-                                warnings = response.warningsList.map { it.toDomain() },
-                            )
-                        }
+    override suspend fun configure(rawConfig: ByteArray): SessionControllerResult<SessionConfiguration> = request {
+        mutex.withLock {
+            when (val current = snapshotNow()) {
+                is SessionControllerResult.Failure -> current
+                is SessionControllerResult.Success -> {
+                    val snapshot = current.value
+                    val response = session.configure(snapshot.sessionId, snapshot.sequence.toLong(), rawConfig)
+                    response.result(response.hasFailure(), response.failure) {
+                        SessionConfiguration(
+                            sessionId = snapshot.sessionId,
+                            sequence = response.sequence.toULongChecked(),
+                            digest = response.digest,
+                            sourceKind = response.sourceKind.toDomain(),
+                            profiles = response.profilesList.map { it.toDomain() },
+                            warnings = response.warningsList.map { it.toSessionWarning() },
+                        )
                     }
                 }
             }
         }
     }
 
-    override suspend fun start(target: SessionStartTarget): SessionControllerResult<SessionStart> = onWorker {
-        request {
-            mutex.withLock {
-                when (val current = snapshotNow()) {
-                    is SessionControllerResult.Failure -> current
-                    is SessionControllerResult.Success -> {
-                        val snapshot = current.value
-                        val mode = when (target) {
-                            SessionStartTarget.AutoSelect -> SessionStartMode.SESSION_START_MODE_AUTO_SELECT
-                            is SessionStartTarget.ProfileIndex -> SessionStartMode.SESSION_START_MODE_PROFILE_INDEX
-                        }
-                        val index = (target as? SessionStartTarget.ProfileIndex)?.index ?: 0
-                        val response = session.start(snapshot.sessionId, snapshot.sequence.toLong(), mode, index)
-                        response.result(response.hasFailure(), response.failure) {
-                            SessionStart(
-                                sessionId = snapshot.sessionId,
-                                generation = response.generation.toULongChecked(positive = true),
-                                sequence = response.sequence.toULongChecked(),
-                            )
-                        }
+    override suspend fun start(target: SessionStartTarget): SessionControllerResult<SessionStart> = request {
+        mutex.withLock {
+            when (val current = snapshotNow()) {
+                is SessionControllerResult.Failure -> current
+                is SessionControllerResult.Success -> {
+                    val snapshot = current.value
+                    val mode = when (target) {
+                        SessionStartTarget.AutoSelect -> SessionStartMode.SESSION_START_MODE_AUTO_SELECT
+                        is SessionStartTarget.ProfileIndex -> SessionStartMode.SESSION_START_MODE_PROFILE_INDEX
+                    }
+                    val index = (target as? SessionStartTarget.ProfileIndex)?.index ?: 0
+                    val response = session.start(snapshot.sessionId, snapshot.sequence.toLong(), mode, index)
+                    response.result(response.hasFailure(), response.failure) {
+                        SessionStart(
+                            sessionId = snapshot.sessionId,
+                            generation = response.generation.toULongChecked(positive = true),
+                            sequence = response.sequence.toULongChecked(),
+                        )
                     }
                 }
             }
         }
     }
 
-    override suspend fun stop(generation: ULong): SessionControllerResult<SessionStop> = onWorker {
-        request {
-            mutex.withLock {
-                when (val current = snapshotNow()) {
-                    is SessionControllerResult.Failure -> current
-                    is SessionControllerResult.Success -> {
-                        val response = session.stop(current.value.sessionId, generation.toLong())
-                        response.result(response.hasFailure(), response.failure) {
-                            SessionStop(
-                                sessionId = current.value.sessionId,
-                                generation = response.generation.toULongChecked(positive = true),
-                                sequence = response.sequence.toULongChecked(),
-                            )
-                        }
+    override suspend fun stop(generation: ULong): SessionControllerResult<SessionStop> = request {
+        mutex.withLock {
+            when (val current = snapshotNow()) {
+                is SessionControllerResult.Failure -> current
+                is SessionControllerResult.Success -> {
+                    val response = session.stop(current.value.sessionId, generation.toLong())
+                    response.result(response.hasFailure(), response.failure) {
+                        SessionStop(
+                            sessionId = current.value.sessionId,
+                            generation = response.generation.toULongChecked(positive = true),
+                            sequence = response.sequence.toULongChecked(),
+                        )
                     }
                 }
             }
         }
     }
 
-    override suspend fun snapshot(): SessionControllerResult<SessionSnapshot> = onWorker {
-        request { snapshotNow() }
-    }
+    override suspend fun snapshot(): SessionControllerResult<SessionSnapshot> = request { snapshotNow() }
 
     override fun watch(): Flow<SessionSnapshot> = session.watch().map(ProtoSnapshot::toDomain)
 
-    override suspend fun reset(): SessionControllerResult<SessionSnapshot> = onWorker {
-        request {
-            mutex.withLock {
-                when (val current = snapshotNow()) {
-                    is SessionControllerResult.Failure -> current
-                    is SessionControllerResult.Success -> {
-                        val response = session.reset(current.value.sessionId, current.value.sequence.toLong())
-                        response.result(response.hasFailure(), response.failure) { response.snapshot.toDomain() }
-                    }
+    override suspend fun reset(): SessionControllerResult<SessionSnapshot> = request {
+        mutex.withLock {
+            when (val current = snapshotNow()) {
+                is SessionControllerResult.Failure -> current
+                is SessionControllerResult.Success -> {
+                    val response = session.reset(current.value.sessionId, current.value.sequence.toLong())
+                    response.result(response.hasFailure(), response.failure) { response.snapshot.toDomain() }
                 }
             }
         }
@@ -115,8 +103,6 @@ internal class GrpcSessionController(
         val response = session.snapshot()
         return response.result(response.hasFailure(), response.failure) { response.snapshot.toDomain() }
     }
-
-    private suspend fun <T> onWorker(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
 
     private suspend fun <T> request(block: suspend () -> SessionControllerResult<T>): SessionControllerResult<T> =
         try {
@@ -147,7 +133,7 @@ private fun ProtoSnapshot.toDomain() = SessionSnapshot(
     digest = digest,
     sourceKind = sourceKind.toDomain(),
     profiles = profilesList.map { it.toDomain() },
-    warnings = warningsList.map { it.toDomain() },
+    warnings = warningsList.map { it.toSessionWarning() },
     activeProfile = if (hasActiveProfile()) activeProfile.toDomain() else null,
     lastFailure = if (hasLastFailure()) SessionFailure(lastFailure.code.toDomain(), lastFailure.message) else null,
     cleanupComplete = cleanupComplete,
@@ -156,7 +142,7 @@ private fun ProtoSnapshot.toDomain() = SessionSnapshot(
 private fun com.dobby.grpcproto.SessionProfile.toDomain() =
     SessionProfile(index, protocol.toDomain(), description)
 
-private fun com.dobby.grpcproto.SessionWarning.toDomain() = SessionWarning(code, message)
+private fun com.dobby.grpcproto.SessionWarning.toSessionWarning() = SessionWarning(code, message)
 
 private fun ProtoProtocol.toDomain() = when (this) {
     ProtoProtocol.SESSION_PROTOCOL_OUTLINE -> SessionProtocol.OUTLINE
