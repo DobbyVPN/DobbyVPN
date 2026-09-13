@@ -207,7 +207,7 @@ jobs:
             SERVICE_LOG_PATH_WIN="$(cygpath -w "$EVIDENCE_DIR/service.log")"
             SERVICE_LOG_ROOT_WIN="$(cygpath -w "$EVIDENCE_DIR")"
             export SERVICE_WIN SERVICE_OUT_WIN SERVICE_ERR_WIN SERVICE_LOG_PATH_WIN SERVICE_LOG_ROOT_WIN
-            service_pid="$(powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$ErrorActionPreference="Stop"; $env:DOBBY_LOG_PATH=$env:SERVICE_LOG_PATH_WIN; $env:DOBBY_LOG_ROOT=$env:SERVICE_LOG_ROOT_WIN; $p=Start-Process -FilePath $env:SERVICE_WIN -ArgumentList @("-port","50051") -RedirectStandardOutput $env:SERVICE_OUT_WIN -RedirectStandardError $env:SERVICE_ERR_WIN -PassThru; $p.Id')"
+            service_pid="$(powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$ErrorActionPreference="Stop"; $installed=Get-Service -Name "DobbyVPN Server"; if ($installed.Status -ne "Stopped") { Stop-Service -InputObject $installed -Force; $installed.WaitForStatus("Stopped",[TimeSpan]::FromSeconds(30)) }; $env:DOBBY_LOG_PATH=$env:SERVICE_LOG_PATH_WIN; $env:DOBBY_LOG_ROOT=$env:SERVICE_LOG_ROOT_WIN; $p=Start-Process -FilePath $env:SERVICE_WIN -ArgumentList @("-port","50051") -RedirectStandardOutput $env:SERVICE_OUT_WIN -RedirectStandardError $env:SERVICE_ERR_WIN -PassThru; $p.Id')"
           elif [ "$PLATFORM" = macos ]; then
             launchd_stdout="$SERVICE_DIR/macos-launchd-print.stdout.log"
             launchd_stderr="$SERVICE_DIR/macos-launchd-print.stderr.log"
@@ -272,6 +272,7 @@ jobs:
           else
             extra=(--app-log "$EVIDENCE_DIR/app.log")
             if [ "$PLATFORM" = linux ]; then
+              export DOBBYVPN_CONTROL_SOCKET="$SERVICE_SOCKET"
               extra+=(--service-library-path "$SERVICE_LIBRARY_PATH" --service-log "$EVIDENCE_DIR/service.log")
             fi
             if [ "$PLATFORM" = macos ]; then
