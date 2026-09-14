@@ -8,6 +8,7 @@ import shlex
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from torturer_checks.hosted.android import (
     AndroidHostedAdapter,
@@ -919,6 +920,53 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.assertFalse(
             any(call[1:3] == ("shell", "iptables") for call in runner.calls)
         )
+
+    def test_routing_proof_without_transport_cannot_trigger_transition(self) -> None:
+        self.runner.routing_phases["routing.json.ready"] = "ready"
+        self.runner.routing_ready_override = {
+            "phase": "ready",
+            "physical_interface": "eth0",
+            "vpn_interface": "tun0",
+            "ipv4": "203.0.113.10",
+            "port": 443,
+        }
+
+        self.adapter._routing_proof("routing.json", time.monotonic() + 5.0)
+
+        self.assertEqual(self.adapter._validated_physical_interface, "eth0")
+        self.assertIsNone(self.adapter._validated_physical_transport)
+        with self.assertRaisesRegex(
+            ScenarioExecutionError, "ANDROID_UPLINK_IDENTITY_UNAVAILABLE"
+        ):
+            self.adapter._perform_external_control(
+                "network_transition", time.monotonic() + 5.0
+            )
+        self.assertFalse(
+            any("DobbyVPN uplink" in call[-1] for call in self.runner.calls)
+        )
+
+    def test_post_transition_routing_wait_observes_worker_failure(self) -> None:
+        worker_failure = ScenarioExecutionError("ANDROID_INSTRUMENTATION_FAILED")
+
+        def abort() -> None:
+            raise worker_failure
+
+        with (
+            patch.object(self.adapter, "_perform_external_control"),
+            patch.object(self.adapter, "_stage_control_payload"),
+            self.assertRaisesRegex(
+                ScenarioExecutionError, "ANDROID_INSTRUMENTATION_FAILED"
+            ) as raised,
+        ):
+            self.adapter._complete_external_control(
+                "transition.json",
+                "network_transition",
+                time.monotonic() + 1.0,
+                ready={},
+                abort=abort,
+            )
+
+        self.assertIs(raised.exception, worker_failure)
 
     def test_process_loss_uses_two_sessions_with_proven_absence_between_them(self) -> None:
         runner = ExternalControlRunner(self.runner.raw_directory.parent / "loss-raw")

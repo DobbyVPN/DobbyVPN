@@ -886,6 +886,8 @@ internal class RealAndroidHostedPlatform(
                 ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
                 connectivity.getLinkProperties(network)?.routes?.any { it.isDefaultRoute } == true
         } ?: error("Routing probe has no non-VPN Internet network")
+        // Routing can still be proved when the current network cannot be toggled
+        // by this harness.
         val physicalTransport = connectivity.getNetworkCapabilities(physical)
             ?.let { capabilities ->
                 supportedPhysicalTransport(
@@ -893,7 +895,6 @@ internal class RealAndroidHostedPlatform(
                     ethernet = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
                 )
             }
-            ?: error("Routing probe has an unsupported physical network transport")
         val vpn = networks.firstOrNull(::isVpn)
             ?: error("Routing probe has no VPN network")
         val endpoint = URL(endpoints.identityUrl)
@@ -905,13 +906,14 @@ internal class RealAndroidHostedPlatform(
         // The app supplies network-bound HTTP facts. Torturer owns the root
         // firewall/counter operations and decides whether those facts pass.
         withControlFiles(control, ready) {
-            writeJson(ready, JSONObject()
+            val readyPayload = JSONObject()
                 .put("phase", "ready")
                 .put("physical_interface", requireNotNull(connectivity.getLinkProperties(physical)?.interfaceName))
-                .put("physical_transport", physicalTransport)
                 .put("vpn_interface", requireNotNull(connectivity.getLinkProperties(vpn)?.interfaceName))
                 .put("ipv4", address.hostAddress)
-                .put("port", if (endpoint.port == -1) 443 else endpoint.port))
+                .put("port", if (endpoint.port == -1) 443 else endpoint.port)
+            physicalTransport?.let { readyPayload.put("physical_transport", it) }
+            writeJson(ready, readyPayload)
             awaitRoutingCommand(control, "blocked")
             val direct = probeIdentity(physical, address)
             val throughVpn = probeIdentity(vpn, address)

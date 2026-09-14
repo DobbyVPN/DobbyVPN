@@ -727,7 +727,9 @@ class AndroidHostedAdapter:
         if operation == "network_transition":
             # The app's legacy transition acknowledgement is followed by a
             # separate ready file so it cannot be confused with routing proof.
-            self._routing_proof(f"{control_file}.routing", deadline)
+            self._routing_proof(
+                f"{control_file}.routing", deadline, abort=abort
+            )
 
     def _stage_control_payload(
         self, control_file: str, payload: bytes, deadline: float
@@ -946,7 +948,7 @@ class AndroidHostedAdapter:
     @staticmethod
     def _routing_ready_values(
         ready: Mapping[str, object],
-    ) -> tuple[str, str, str, str, int]:
+    ) -> tuple[str, str | None, str, str, int]:
         physical = ready.get("physical_interface")
         transport = ready.get("physical_transport")
         vpn = ready.get("vpn_interface")
@@ -955,8 +957,13 @@ class AndroidHostedAdapter:
         if (
             not isinstance(physical, str)
             or _ANDROID_INTERFACE.fullmatch(physical) is None
-            or not isinstance(transport, str)
-            or transport not in {"wifi", "ethernet"}
+            or (
+                transport is not None
+                and (
+                    not isinstance(transport, str)
+                    or transport not in {"wifi", "ethernet"}
+                )
+            )
             or not isinstance(vpn, str)
             or _ANDROID_INTERFACE.fullmatch(vpn) is None
             or physical == vpn
