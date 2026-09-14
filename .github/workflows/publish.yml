@@ -46,7 +46,10 @@ jobs:
           test "$(jq -r .event <<<"$run")" = workflow_dispatch
           test "$(jq -r .status <<<"$run")" = completed
           test "$(jq -r .conclusion <<<"$run")" = success
-          test "$(jq -r .run_attempt <<<"$run")" = 1
+          if [[ "$(jq -r .run_attempt <<<"$run")" != "1" ]]; then
+            echo "Release run $RELEASE_RUN_ID was retried; dispatch and qualify a fresh Release run before publishing." >&2
+            exit 1
+          fi
           source_sha="$(jq -r .head_sha <<<"$run")"
           release_run_number="$(jq -r .run_number <<<"$run")"
           [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]

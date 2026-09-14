@@ -5,15 +5,12 @@ import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.domain.provideAdditionalLogFilePaths
 import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.main.domain.SessionChangeEvents
 import com.dobby.feature.main.domain.GrpcSessionController
 import interop.GrpcVpnLibrary
 
 fun createDesktopAppDependencies(): AppDependencies {
-    val sessionChangeEvents = SessionChangeEvents()
     val logsRepository = LogsRepository(additionalLogFilePaths = provideAdditionalLogFilePaths())
     return AppDependencies(
-        sessionChangeEvents = sessionChangeEvents,
         permissionEventsChannel = PermissionEventsChannel(),
         sessionController = GrpcSessionController(GrpcVpnLibrary.sessionGrpcLibrary),
         logger = Logger(logsRepository),

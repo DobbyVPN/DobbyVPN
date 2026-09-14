@@ -14,15 +14,14 @@ import com.dobby.feature.main.domain.SessionChangeEvents
 /** The Android activity and VPN service share this process-owned dependency graph. */
 interface AppDependenciesProvider {
     val appDependencies: AppDependencies
+    val sessionChangeEvents: SessionChangeEvents
 }
 
-fun createAndroidAppDependencies(context: Context): AppDependencies {
+fun createAndroidAppDependencies(context: Context, sessionChangeEvents: SessionChangeEvents): AppDependencies {
     val appContext = context.applicationContext
-    val sessionChangeEvents = SessionChangeEvents()
     val logsRepository = LogsRepository(additionalLogFilePaths = provideAdditionalLogFilePaths())
     val logger = Logger(logsRepository)
     return AppDependencies(
-        sessionChangeEvents = sessionChangeEvents,
         permissionEventsChannel = PermissionEventsChannel(),
         sessionController = AndroidSessionController(appContext, sessionChangeEvents),
         logger = logger,

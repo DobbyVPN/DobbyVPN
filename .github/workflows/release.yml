@@ -15,6 +15,8 @@ concurrency:
 
 jobs:
   verification:
+    needs: prepare_version
+    if: github.run_attempt == 1
     uses: ./.github/workflows/test.yml
 
   # Marketing version (x.y.z) is manual via the repo VERSION file.
@@ -29,6 +31,14 @@ jobs:
       version_name: ${{ steps.version.outputs.version_name }}
       android_version_code: ${{ steps.version.outputs.android_version_code }}
     steps:
+      - name: Reject Release reruns
+        shell: bash
+        run: |
+          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
+            echo "Release reruns are unsupported; dispatch a fresh Release workflow." >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.sha }}
@@ -136,6 +146,14 @@ jobs:
       contents: read
       actions: read
     steps:
+      - name: Reject Release reruns before creating a Render service
+        shell: bash
+        run: |
+          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
+            echo "Release reruns are unsupported; dispatch a fresh Release workflow." >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
@@ -189,7 +207,7 @@ jobs:
 
   render_cleanup:
     name: Delete disposable Render VPN
-    if: always() && needs.render_start.result != 'skipped'
+    if: always()
     needs: [render_start, qualification]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -207,7 +225,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_provider.render_service stop \
-            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --run-id "$GITHUB_RUN_ID" --attempt 1 \
             --owner-id "$RENDER_OWNER_ID"
 
   qualification_result:
@@ -224,6 +242,10 @@ jobs:
           RENDER_CLEANUP_RESULT: ${{ needs.render_cleanup.result }}
         run: |
           set -euo pipefail
+          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
+            echo "Release attempt $GITHUB_RUN_ATTEMPT cannot qualify or publish; dispatch a fresh Release workflow." >&2
+            exit 1
+          fi
           test "$RENDER_START_RESULT" = success
           test "$PLATFORM_RESULT" = success
           test "$RENDER_CLEANUP_RESULT" = success

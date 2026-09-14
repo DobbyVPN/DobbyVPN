@@ -45,7 +45,8 @@ The functional-tooling suite includes Windows-only process tests, skipped on
 other operating systems. Running its Python unit tests is not a live VPN test.
 
 Shared Compose tests cover UI state. TODO: add desktop tests that drive the app
-through its GUI. CLI-driven testing is deferred to a separate task.
+through its GUI. New dedicated CLI coverage is deferred; existing functional
+suites continue to use the CLI entrypoints.
 
 ## iOS
 
@@ -91,6 +92,10 @@ distribute it, use **Actions → Publish → Run workflow** on `main` and select
 its run ID. Publish uses those retained artifacts. Apple submission and
 GitHub/F-Droid publication are independent jobs. Publishing credentials stay
 in those jobs.
+
+If a Release fails, fix the cause and dispatch a new Release workflow. Do not
+rerun the old Release: only attempt 1 can qualify for Publish. This restriction
+does not change reruns of the standalone Test workflow.
 
 To Publish, copy the digits after `/actions/runs/` in the successful Release
 run's URL into the required `release_run_id` field. Use a completed successful

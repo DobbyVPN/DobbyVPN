@@ -75,7 +75,6 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.compose.compiler)
-    alias(libs.plugins.jetbrains.kotlin.serialization)
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.hydraulic.conveyor)
 

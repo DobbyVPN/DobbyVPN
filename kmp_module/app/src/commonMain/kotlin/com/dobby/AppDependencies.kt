@@ -5,7 +5,6 @@ import com.dobby.feature.logging.domain.CopyLogsInteractor
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.main.domain.SessionChangeEvents
 import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.presentation.MainViewModel
 import com.dobby.feature.logging.presentation.LogsViewModel
@@ -13,7 +12,6 @@ import com.dobby.navigation.AppNavigationState
 
 /** Process-owned services shared by the UI and platform VPN shell. */
 class AppDependencies(
-    val sessionChangeEvents: SessionChangeEvents,
     val permissionEventsChannel: PermissionEventsChannel,
     val sessionController: SessionController,
     val logger: Logger,

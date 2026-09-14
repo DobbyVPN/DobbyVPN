@@ -10,10 +10,13 @@ import com.dobby.backend.GoBackendWrapper
 import com.dobby.createAndroidAppDependencies
 import com.dobby.feature.logging.domain.initLogFilePath
 import com.dobby.feature.logging.domain.initLogger
+import com.dobby.feature.main.domain.SessionChangeEvents
 import com.dobby.feature.vpn_service.DobbyVpnService
 
 class TestApplication : Application(), AppDependenciesProvider {
     override lateinit var appDependencies: AppDependencies
+        private set
+    override lateinit var sessionChangeEvents: SessionChangeEvents
         private set
 
     override fun onCreate() {
@@ -23,12 +26,13 @@ class TestApplication : Application(), AppDependenciesProvider {
         val targetContext = InstrumentationRegistry.getInstrumentation().targetContext
         initLogFilePath(targetContext)
         check(initLogger()) { "Go logger initialization returned false" }
+        sessionChangeEvents = SessionChangeEvents()
         DobbyVpnService.nativePlatformRegistrar = if (TestRuntimeOptions.realProfileEnabled) {
             GoBackendWrapper::registerSessionPlatform
         } else {
             {}
         }
-        appDependencies = createAndroidAppDependencies(targetContext)
+        appDependencies = createAndroidAppDependencies(targetContext, sessionChangeEvents)
     }
 
     override fun onTerminate() {

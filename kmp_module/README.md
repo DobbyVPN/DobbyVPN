@@ -26,9 +26,10 @@ The module is intentionally a shared UI and binding layer:
 kmp_module/
 ├── app/ --- shared Compose UI and thin platform shells
 ├── grpcprotos/ --- canonical session/Diagnostics schema
-├── grpcstub/ --- typed desktop gRPC calls
-└── iosApp/
+└── grpcstub/ --- typed desktop gRPC calls
 ```
+
+The iOS host app is in [`../swift_module/iosApp/`](../swift_module/iosApp/).
 
 Do not add a protocol-specific UI toggle, KMP repository, another session
 manager in Kotlin or Swift, or protocol-specific start/stop RPCs. New protocols

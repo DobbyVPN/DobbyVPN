@@ -9,19 +9,24 @@ import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.domain.SessionConfiguration
 import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.SessionControllerResult
+import com.dobby.feature.main.domain.SessionFailureCode
 import com.dobby.feature.main.domain.SessionSnapshot
 import com.dobby.feature.main.domain.SessionSourceKind
 import com.dobby.feature.main.domain.SessionStart
 import com.dobby.feature.main.domain.SessionStartTarget
 import com.dobby.feature.main.domain.SessionState
 import com.dobby.feature.main.domain.SessionStop
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -32,6 +37,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -93,6 +99,95 @@ class MainViewModelConnectionTest {
     }
 
     @Test
+    fun concurrentStartsIssueOnlyOneControllerCall() = runBlocking {
+        val response = CompletableDeferred<SessionControllerResult<SessionStart>>()
+        val fixture = Fixture(configured = true, startHandler = { response.await() })
+        try {
+            val first = async { fixture.viewModel.startVpnService() }
+            assertEquals(SessionStartTarget.AutoSelect, fixture.sessionController.startTargets.receiveSoon())
+
+            val second = async(start = CoroutineStart.UNDISPATCHED) { fixture.viewModel.startVpnService() }
+            assertTrue(fixture.sessionController.startTargets.tryReceive().isFailure)
+
+            response.complete(
+                SessionControllerResult.Success(
+                    SessionStart(sessionId = "test-session", generation = 37uL, sequence = 2uL),
+                ),
+            )
+            assertTrue(first.await())
+            assertFalse(second.await())
+            assertTrue(fixture.sessionController.startTargets.tryReceive().isFailure)
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
+    fun rejectedStartCanBeRetried() = runBlocking {
+        val responses = Channel<SessionControllerResult<SessionStart>>(Channel.UNLIMITED)
+        val fixture = Fixture(configured = true, startHandler = { responses.receive() })
+        try {
+            val first = async { fixture.viewModel.startVpnService() }
+            assertEquals(SessionStartTarget.AutoSelect, fixture.sessionController.startTargets.receiveSoon())
+            responses.send(
+                SessionControllerResult.Failure(
+                    message = "synthetic start failure",
+                    code = SessionFailureCode.RUNTIME_FAILED,
+                ),
+            )
+            assertFalse(first.await())
+
+            val retry = async { fixture.viewModel.startVpnService() }
+            assertEquals(SessionStartTarget.AutoSelect, fixture.sessionController.startTargets.receiveSoon())
+            responses.send(
+                SessionControllerResult.Success(
+                    SessionStart(sessionId = "test-session", generation = 41uL, sequence = 3uL),
+                ),
+            )
+            assertTrue(retry.await())
+            assertTrue(fixture.sessionController.startTargets.tryReceive().isFailure)
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
+    fun thrownStartDoesNotLeaveAStickyInFlightState() = runBlocking {
+        supervisorScope {
+            val firstStartEntered = CompletableDeferred<Unit>()
+            val fixture = Fixture(
+                configured = true,
+                startHandler = { call ->
+                    if (call == 1) {
+                        firstStartEntered.complete(Unit)
+                        throw IllegalStateException("synthetic controller failure")
+                    }
+                    SessionControllerResult.Success(
+                        SessionStart(sessionId = "test-session", generation = 43uL, sequence = 3uL),
+                    )
+                },
+            )
+            try {
+                val failed = async { fixture.viewModel.startVpnService() }
+                assertEquals(SessionStartTarget.AutoSelect, fixture.sessionController.startTargets.receiveSoon())
+                firstStartEntered.await()
+                try {
+                    failed.await()
+                    error("expected the synthetic controller failure")
+                } catch (expected: IllegalStateException) {
+                    assertEquals("synthetic controller failure", expected.message)
+                }
+
+                assertTrue(fixture.viewModel.startVpnService())
+                assertEquals(SessionStartTarget.AutoSelect, fixture.sessionController.startTargets.receiveSoon())
+                assertTrue(fixture.sessionController.startTargets.tryReceive().isFailure)
+            } finally {
+                fixture.close()
+            }
+        }
+    }
+
+    @Test
     fun stoppingButtonDoesNotIssueAnotherCommand() = runBlocking {
         val fixture = Fixture(initialState = SessionState.STOPPING, generation = 31uL, configured = true)
         try {
@@ -118,13 +213,18 @@ class MainViewModelConnectionTest {
         generation: ULong = 0uL,
         configured: Boolean = false,
         startGeneration: ULong = 11uL,
+        startHandler: suspend (Int) -> SessionControllerResult<SessionStart> = { call ->
+            SessionControllerResult.Success(
+                SessionStart("test-session", startGeneration, sequence = (call + 1).toULong()),
+            )
+        },
     ) {
         private val logPath: Path = FileSystem.SYSTEM_TEMPORARY_DIRECTORY /
             "dobby-view-model-${kotlin.random.Random.nextLong()}.jsonl"
         private val store = ViewModelStore()
         val sessionController = RecordingSessionController(
             initialSnapshot = testSnapshot(initialState, generation, configured),
-            startGeneration = startGeneration,
+            startHandler = startHandler,
         )
         val viewModel = MainViewModel(
             configsRepository = TestConfigsRepository(),
@@ -146,12 +246,13 @@ class MainViewModelConnectionTest {
 
     private class RecordingSessionController(
         initialSnapshot: SessionSnapshot,
-        private val startGeneration: ULong,
+        private val startHandler: suspend (Int) -> SessionControllerResult<SessionStart>,
     ) : SessionController {
         val configuredUrls = Channel<String>(Channel.UNLIMITED)
         val startTargets = Channel<SessionStartTarget>(Channel.UNLIMITED)
         val stoppedGenerations = Channel<ULong>(Channel.UNLIMITED)
         private val snapshots = MutableSharedFlow<SessionSnapshot>(replay = 1, extraBufferCapacity = 1)
+        private var startCallCount = 0
 
         init {
             check(snapshots.tryEmit(initialSnapshot))
@@ -173,9 +274,7 @@ class MainViewModelConnectionTest {
 
         override suspend fun start(target: SessionStartTarget): SessionControllerResult<SessionStart> {
             startTargets.send(target)
-            return SessionControllerResult.Success(
-                SessionStart(sessionId = "test-session", generation = startGeneration, sequence = 2uL),
-            )
+            return startHandler(++startCallCount)
         }
 
         override suspend fun stop(generation: ULong): SessionControllerResult<SessionStop> {

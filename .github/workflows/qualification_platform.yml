@@ -24,6 +24,14 @@ jobs:
       PLATFORM: ${{ inputs.platform }}
       DOBBYVPN_COMMIT_SHA: ${{ github.sha }}
     steps:
+      - name: Reject Release reruns before package qualification
+        shell: bash
+        run: |
+          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
+            echo "Release reruns are unsupported; dispatch a fresh Release workflow." >&2
+            exit 1
+          fi
+
       - name: Check out Release source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:

@@ -63,9 +63,10 @@ class DobbyVpnService : VpnService() {
         }
     }
 
-    private val appDependencies get() = (application as AppDependenciesProvider).appDependencies
+    private val dependencyProvider get() = application as AppDependenciesProvider
+    private val appDependencies get() = dependencyProvider.appDependencies
     private val logger: Logger get() = appDependencies.logger
-    private val sessionChangeEvents: SessionChangeEvents get() = appDependencies.sessionChangeEvents
+    private val sessionChangeEvents: SessionChangeEvents get() = dependencyProvider.sessionChangeEvents
     val serviceId: String = UUID.randomUUID().toString()
 
     /** The service retains this original descriptor while Go owns a duplicated FD. */

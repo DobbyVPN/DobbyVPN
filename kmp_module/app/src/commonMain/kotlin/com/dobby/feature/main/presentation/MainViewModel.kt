@@ -42,7 +42,6 @@ class MainViewModel(
     private var activeGeneration: ULong? = null
     // Configure acceptance can precede the snapshot that reports configured=true.
     private var configured = false
-    private var startInFlight = false
     private var pendingPermissionStart = false
 
     private val _uiState = MutableStateFlow(MainUiState())
@@ -121,23 +120,20 @@ class MainViewModel(
 
     /** Starts Go's automatic protocol selection after Android permission succeeds. */
     suspend fun startVpnService(): Boolean = lifecycleMutex.withLock {
-        if (!configured || startInFlight || activeGeneration != null) {
+        if (!configured || activeGeneration != null) {
             logger.log("Ignoring duplicate or unconfigured session start")
             return@withLock false
         }
-        startInFlight = true
         when (val result = withContext(Dispatchers.Default) {
             sessionController.start(SessionStartTarget.AutoSelect)
         }) {
             is SessionControllerResult.Success -> {
                 revisionGate.advance(result.value.sessionId, result.value.sequence)
                 activeGeneration = result.value.generation
-                startInFlight = false
                 publish(VpnConnectionState.CONNECTING)
                 true
             }
             is SessionControllerResult.Failure -> {
-                startInFlight = false
                 activeGeneration = null
                 logger.error("Session start rejected: failureCode=${result.code.name}")
                 publish(VpnConnectionState.DISCONNECTED, result.code)

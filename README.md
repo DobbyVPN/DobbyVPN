@@ -152,7 +152,8 @@ Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nic
 See [TESTING.md](TESTING.md) for contributor checks. Pushes and pull requests
 run checks. Release starts manually and qualifies its packages with the
 functional suite in `torturer/`. A separate manual Publish step uses the
-successful Release run's tested artifacts.
+successful Release run's tested artifacts. If Release fails, fix the cause and
+start a new Release run; rerunning the old run is unsupported.
 
 Remote telemetry has been removed. `[Telemetry]` configuration blocks are not
 supported.

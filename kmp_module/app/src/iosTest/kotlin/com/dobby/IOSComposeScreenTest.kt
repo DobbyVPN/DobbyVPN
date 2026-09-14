@@ -26,7 +26,6 @@ import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
-import com.dobby.feature.main.domain.SessionChangeEvents
 import com.dobby.feature.main.domain.SessionConfiguration
 import com.dobby.feature.main.domain.SessionController
 import com.dobby.feature.main.domain.SessionControllerResult
@@ -178,12 +177,10 @@ private class UiFixture(
     private val logsRepository = LogsRepository(logPath)
     val sessionController = FakeSessionController(configureResult)
     private val configsRepository = FakeConfigsRepository()
-    private val sessionChangeEvents = SessionChangeEvents()
     private val permissionEventsChannel = PermissionEventsChannel()
     private val appLogger = AppLogger(logsRepository)
     val appDependencies: AppDependencies by lazy {
         AppDependencies(
-            sessionChangeEvents = sessionChangeEvents,
             permissionEventsChannel = permissionEventsChannel,
             sessionController = sessionController,
             logger = appLogger,
