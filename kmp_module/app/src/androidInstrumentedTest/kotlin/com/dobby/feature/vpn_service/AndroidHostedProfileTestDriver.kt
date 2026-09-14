@@ -224,7 +224,10 @@ internal interface AndroidHostedPlatform {
         get() = 1.0
     suspend fun requestConsent()
     suspend fun observeTunnel(): Boolean
-    suspend fun observeRoutingProof(controlFile: String): Boolean
+    suspend fun observeRoutingProof(
+        controlFile: String,
+        retryVpnProbeAfterTransition: Boolean = false,
+    ): Boolean
     suspend fun measureStability(): Boolean
     suspend fun measureThroughput(): AndroidHostedMetrics
     suspend fun awaitDisconnected(): Boolean
@@ -596,7 +599,10 @@ internal class AndroidHostedProfileTestDriver(
             "network_transition" -> {
                 awaitExternalControl(operation)
                 val tunnel = platform.observeTunnel()
-                val identity = platform.observeRoutingProof("${requireNotNull(operation.controlFile)}.routing")
+                val identity = platform.observeRoutingProof(
+                    "${requireNotNull(operation.controlFile)}.routing",
+                    retryVpnProbeAfterTransition = true,
+                )
                 observation.networkTransitionVerified = tunnel && identity
                 if (!observation.networkTransitionVerified) {
                     throw AndroidHostedOperationFailure("NETWORK_TRANSITION_UNVERIFIED")
@@ -877,7 +883,10 @@ internal class RealAndroidHostedPlatform(
         )?.linkProperties?.interfaceName?.isNullOrBlank() == false
     }
 
-    override suspend fun observeRoutingProof(controlFile: String): Boolean = withContext(Dispatchers.IO) {
+    override suspend fun observeRoutingProof(
+        controlFile: String,
+        retryVpnProbeAfterTransition: Boolean,
+    ): Boolean = withContext(Dispatchers.IO) {
         val networks = connectivity.allNetworks.toList()
         fun isVpn(network: Network): Boolean = connectivity.getNetworkCapabilities(network)
             ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
@@ -916,7 +925,14 @@ internal class RealAndroidHostedPlatform(
             writeJson(ready, readyPayload)
             awaitRoutingCommand(control, "blocked")
             val direct = probeIdentity(physical, address)
-            val throughVpn = probeIdentity(vpn, address)
+            var throughVpn = probeIdentity(vpn, address)
+            if (retryVpnProbeAfterTransition && throughVpn.has("error_type")) {
+                // Android can publish the restored Wi-Fi route before VPN-bound
+                // sockets have resumed. Retry one fresh request; HTTP responses
+                // (including non-2xx statuses) remain subject to the routing proof.
+                delay(VPN_PROBE_RETRY_DELAY_MILLIS)
+                throughVpn = probeIdentity(vpn, address)
+            }
             writeJson(ready, JSONObject().put("phase", "blocked")
                 .put("direct", direct).put("vpn", throughVpn))
             awaitRoutingCommand(control, "unblocked")
@@ -955,8 +971,7 @@ internal class RealAndroidHostedPlatform(
                     override fun lookup(hostname: String): List<InetAddress> = listOf(address)
                 })
                 .socketFactory(network.socketFactory)
-                .connectTimeout(5, TimeUnit.SECONDS)
-                .readTimeout(5, TimeUnit.SECONDS)
+                .callTimeout(IDENTITY_PROBE_TIMEOUT_MILLIS.toLong(), TimeUnit.MILLISECONDS)
                 .followRedirects(false)
                 .build()
             val request = Request.Builder()
@@ -1110,6 +1125,8 @@ internal class RealAndroidHostedPlatform(
     private companion object {
         const val CONSENT_TIMEOUT_MILLIS = 10_000L
         const val NETWORK_TIMEOUT_MILLIS = 20_000
+        const val IDENTITY_PROBE_TIMEOUT_MILLIS = 5_000
+        const val VPN_PROBE_RETRY_DELAY_MILLIS = 250L
         const val THROUGHPUT_TIMEOUT_SECONDS = 30L
         const val POLL_INTERVAL_MILLIS = 100L
         const val STABILITY_SAMPLE_COUNT = 5

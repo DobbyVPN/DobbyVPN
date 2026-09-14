@@ -463,16 +463,18 @@ class AndroidHostedProfileTestDriverTest {
         responder.isDaemon = true
         responder.start()
         val controller = FakeSessionController()
+        val platform = FakePlatform()
         val result = AndroidHostedProfileTestDriver(
             context = context,
             controllerFactory = { controller },
-            platformFactory = { _ -> FakePlatform() },
+            platformFactory = { _ -> platform },
         ).run(commandFile.name)
         responder.join(2_000)
 
         assertFalse("external control responder did not finish", responder.isAlive)
         assertEquals(null, result.errorCode)
         assertTrue(result.networkTransitionVerified)
+        assertTrue(platform.events.contains("identity-retry"))
         assertTrue(result.cleanupVerified)
         externalOperations.forEach { operation ->
             val operationJson = command.getJSONArray("operations").let { items ->
@@ -662,7 +664,13 @@ class AndroidHostedProfileTestDriverTest {
             tunnelIndex += 1
             return result
         }
-        override suspend fun observeRoutingProof(controlFile: String): Boolean { events += "identity"; return true }
+        override suspend fun observeRoutingProof(
+            controlFile: String,
+            retryVpnProbeAfterTransition: Boolean,
+        ): Boolean {
+            events += if (retryVpnProbeAfterTransition) "identity-retry" else "identity"
+            return true
+        }
         override suspend fun measureStability(): Boolean {
             if (cancelStability) {
                 events += "stability-wait"
