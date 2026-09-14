@@ -26,7 +26,6 @@ var httpProbeURLs = []string{
 }
 
 type probeEndpointResult struct {
-	url          string
 	latencyMs    int64
 	status       int
 	failureStage string
@@ -40,74 +39,12 @@ const (
 	probeStageTLS      = "tls"
 	probeStageResponse = "response"
 	probeStageStatus   = "status"
+
 	probeErrorTimeout  = "timeout"
 	probeErrorCanceled = "canceled"
 	probeErrorDNS      = "dns"
 	probeErrorProtocol = "protocol"
 )
-
-// pingHostCheck performs one bounded HTTP readiness request through the
-// generation-owned route. It is kept beside the latency probe so the package
-// contains only pure probe operations; it does not own connection state or a
-// background health-check lifecycle.
-func pingHostCheck(host string) error {
-	const timeout = 3 * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, host, http.NoBody)
-	if err != nil {
-		return fmt.Errorf("probe request initialization failed: %w", err)
-	}
-	client := &http.Client{
-		Transport: &http.Transport{
-			DialContext:         cachedDialContext(timeout, "session-probe-http"),
-			DisableKeepAlives:   true,
-			ForceAttemptHTTP2:   false,
-			TLSHandshakeTimeout: timeout,
-		},
-		Timeout: timeout,
-	}
-	defer client.CloseIdleConnections()
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("probe request failed: %w", err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			log.Warnf("PROBE", "HTTP probe response body close failed errorType=%T error=%v", closeErr, closeErr)
-		}
-	}()
-	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return fmt.Errorf("probe returned status %d", resp.StatusCode)
-	}
-	return nil
-}
-
-func quorumHTTPPingCheck(hosts []string) error {
-	if len(hosts) == 0 {
-		return errors.New("probe has no HTTP candidates")
-	}
-	successes := 0
-	var failures []error
-	for _, host := range hosts {
-		if err := pingHostCheck(host); err != nil {
-			failures = append(failures, err)
-			continue
-		}
-		successes++
-	}
-	required := httpProbeMinSuccesses
-	if required > len(hosts) {
-		required = len(hosts)
-	}
-	if successes < required {
-		return fmt.Errorf("probe HTTP quorum failed passed=%d required=%d total=%d: %w", successes, required, len(hosts), errors.Join(failures...))
-	}
-	if successes != len(hosts) {
-		log.Warnf("PROBE", "probe HTTP quorum partial passed=%d total=%d", successes, len(hosts))
-	}
-	return nil
-}
 
 // MeasureTunnelProbeAverageLatencyMillis runs protocol-selection probes through
 // the currently installed system VPN route. Every request uses a fresh transport
@@ -213,7 +150,7 @@ func probeEndpoint(parent context.Context, endpointURL string, timeout time.Dura
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpointURL, http.NoBody)
 	if err != nil {
-		return failedProbeEndpoint(endpointURL, 0, probeStageRequest, err)
+		return failedProbeEndpoint(0, probeStageRequest, err)
 	}
 	trace := &httptrace.ClientTrace{
 		ConnectStart:         func(_, _ string) { setStage(1) },
@@ -229,7 +166,7 @@ func probeEndpoint(parent context.Context, endpointURL string, timeout time.Dura
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return failedProbeEndpoint(endpointURL, 0, probeFailureStage(stage.Load()), err)
+		return failedProbeEndpoint(0, probeFailureStage(stage.Load()), err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -238,21 +175,19 @@ func probeEndpoint(parent context.Context, endpointURL string, timeout time.Dura
 	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return failedProbeEndpoint(endpointURL, resp.StatusCode, probeStageStatus, fmt.Errorf("unexpected status %d", resp.StatusCode))
+		return failedProbeEndpoint(resp.StatusCode, probeStageStatus, fmt.Errorf("unexpected status %d", resp.StatusCode))
 	}
 
 	result := probeEndpointResult{
-		url:       endpointURL,
 		latencyMs: maxInt64(1, time.Since(startedAt).Milliseconds()),
 		status:    resp.StatusCode,
 	}
 	return result
 }
 
-func failedProbeEndpoint(endpointURL string, status int, stage string, err error) probeEndpointResult {
+func failedProbeEndpoint(status int, stage string, err error) probeEndpointResult {
 	return probeEndpointResult{
-		url: endpointURL, status: status, failureStage: stage,
-		errorClass: probeErrorClass(err), err: err,
+		status: status, failureStage: stage, errorClass: probeErrorClass(err), err: err,
 	}
 }
 

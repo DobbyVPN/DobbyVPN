@@ -18,14 +18,14 @@ pre-commit:
 
     kotlin-detekt-unix:
       glob: "kmp_module/**/*.kt"
-      run: cd kmp_module && ./gradlew detekt
+      run: cd kmp_module && ./gradlew :app:detektMetadataCommonMain :app:detektJvmMain :grpcstub:detekt
       only:
         - os: linux
         - os: darwin
 
     kotlin-detekt-windows:
       glob: "kmp_module/**/*.kt"
-      run: cd kmp_module && gradlew.bat detekt
+      run: cd kmp_module && gradlew.bat :app:detektMetadataCommonMain :app:detektJvmMain :grpcstub:detekt
       only:
         - os: windows
 

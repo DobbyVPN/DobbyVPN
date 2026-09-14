@@ -2,6 +2,7 @@ package mobilebinding
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -28,6 +29,30 @@ func TestJSONEnvelopeUsesStableKeys(t *testing.T) {
 	for _, field := range []string{`"sequence"`, `"source_kind":"INLINE"`, `"profiles"`, `"warnings"`} {
 		if !strings.Contains(configured, field) || strings.Contains(configured, `"Profiles"`) {
 			t.Fatalf("configure response did not use stable complete DTO keys: %s", configured)
+		}
+	}
+}
+
+func TestSnapshotDTOAlwaysRoundTripsRecoveringFlag(t *testing.T) {
+	for _, recovering := range []bool{false, true} {
+		encoded, err := json.Marshal(snapshotDTO(v1.SnapshotResult{Recovering: recovering}))
+		if err != nil {
+			t.Fatalf("marshal snapshot: %v", err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &fields); err != nil {
+			t.Fatalf("unmarshal snapshot: %v", err)
+		}
+		raw, ok := fields["recovering"]
+		if !ok {
+			t.Fatalf("snapshot omitted recovering=false/true field: %s", encoded)
+		}
+		var decoded bool
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatalf("decode recovering field: %v", err)
+		}
+		if decoded != recovering {
+			t.Fatalf("recovering round-trip = %t, want %t", decoded, recovering)
 		}
 	}
 }
@@ -63,7 +88,7 @@ func TestSnapshotCarriesAcceptedConfigurationAndResetClearsIt(t *testing.T) {
 		t.Fatalf("configuration bytes leaked in Configure result: %s", configured)
 	}
 	snapshot := binding.Snapshot(sessionID)
-	for _, field := range []string{`"sequence":`, `"digest":`, `"source_kind":"INLINE"`, `"profiles":[`, `"warnings":[`} {
+	for _, field := range []string{`"sequence":`, `"digest":`, `"source_kind":"INLINE"`, `"profiles":[`, `"warnings":[`, `"recovering":false`} {
 		if !strings.Contains(snapshot, field) {
 			t.Fatalf("snapshot missing %s: %s", field, snapshot)
 		}

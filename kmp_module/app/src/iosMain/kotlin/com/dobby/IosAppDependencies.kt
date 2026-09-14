@@ -1,7 +1,7 @@
 package com.dobby
 
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.logging.domain.CopyLogsInteractor
+import com.dobby.feature.logging.domain.ExportLogsInteractor
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.IosSessionBridge
@@ -12,7 +12,7 @@ import com.dobby.feature.main.domain.PermissionEventsChannel
 fun createIosAppDependencies(
     bridge: IosSessionBridge,
     logsRepository: LogsRepository,
-    copyLogsInteractor: CopyLogsInteractor,
+    exportLogsInteractor: ExportLogsInteractor,
     configsRepository: DobbyConfigsRepository,
 ): AppDependencies {
     return AppDependencies(
@@ -21,6 +21,6 @@ fun createIosAppDependencies(
         logger = Logger(logsRepository),
         configsRepository = configsRepository,
         logsRepository = logsRepository,
-        copyLogsInteractor = copyLogsInteractor,
+        exportLogsInteractor = exportLogsInteractor,
     )
 }

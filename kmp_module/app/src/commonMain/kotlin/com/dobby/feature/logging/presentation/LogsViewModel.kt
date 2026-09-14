@@ -2,7 +2,7 @@ package com.dobby.feature.logging.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.dobby.feature.logging.domain.CopyLogsInteractor
+import com.dobby.feature.logging.domain.ExportLogsInteractor
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.ui.LogsUiState
 import kotlinx.coroutines.delay
@@ -14,7 +14,7 @@ import kotlinx.coroutines.launch
 
 class LogsViewModel(
     private val logsRepository: LogsRepository,
-    private val copyLogsInteractor: CopyLogsInteractor
+    private val exportLogsInteractor: ExportLogsInteractor
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LogsUiState())
@@ -45,7 +45,7 @@ class LogsViewModel(
         )
     }
 
-    fun copyLogsToClipBoard() {
-        copyLogsInteractor.copy(logsRepository.readAllLogs())
+    fun exportLogs() {
+        exportLogsInteractor.export(logsRepository.readAllLogs())
     }
 }

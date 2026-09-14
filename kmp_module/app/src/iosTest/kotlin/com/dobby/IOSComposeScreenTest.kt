@@ -21,7 +21,7 @@ import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import com.dobby.feature.logging.Logger as AppLogger
-import com.dobby.feature.logging.domain.CopyLogsInteractor
+import com.dobby.feature.logging.domain.ExportLogsInteractor
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.main.domain.DobbyConfigsRepository
@@ -107,7 +107,8 @@ class IOSComposeScreenTest {
                 hasTestTag(AutomationSemantics.FAILURE_STATUS),
                 timeoutMillis = 5_000,
             )
-            onNodeWithText("Connection error: MALFORMED_CONFIG").assertExists()
+            onNodeWithText("synthetic config rejected").assertExists()
+            onNodeWithText("Code: MALFORMED_CONFIG").assertExists()
             waitUntilAtLeastOneExists(
                 hasText(
                     "Session configuration rejected: failureCode=MALFORMED_CONFIG",
@@ -186,7 +187,7 @@ private class UiFixture(
             logger = appLogger,
             configsRepository = configsRepository,
             logsRepository = logsRepository,
-            copyLogsInteractor = NoOpCopyLogsInteractor,
+            exportLogsInteractor = NoOpExportLogsInteractor,
         )
     }
     val mainViewModel: MainViewModel by lazy {
@@ -243,6 +244,7 @@ private class FakeSessionController(
                 activeProfile = null,
                 lastFailure = null,
                 cleanupComplete = true,
+                recovering = false,
             ),
         )
 
@@ -253,8 +255,8 @@ private class FakeSessionController(
     override suspend fun reset(): SessionControllerResult<SessionSnapshot> = snapshot()
 }
 
-private object NoOpCopyLogsInteractor : CopyLogsInteractor {
-    override fun copy(logs: List<String>) = Unit
+private object NoOpExportLogsInteractor : ExportLogsInteractor {
+    override fun export(logs: List<String>) = Unit
 }
 
 private class TestViewModelStoreOwner : ViewModelStoreOwner {

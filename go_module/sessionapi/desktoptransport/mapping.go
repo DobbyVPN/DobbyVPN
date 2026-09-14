@@ -127,6 +127,7 @@ func Snapshot(in v2.SnapshotResult) *grpcproto.SessionSnapshot {
 		State: State(in.State), Configured: in.Configured, Digest: in.Digest,
 		SourceKind: SourceKind(in.SourceKind), Profiles: Profiles(in.Profiles),
 		Warnings: Warnings(in.Warnings), CleanupComplete: in.CleanupComplete,
+		Recovering: in.Recovering,
 	}
 	if in.ActiveProfile != nil {
 		out.ActiveProfile = Profile(*in.ActiveProfile)

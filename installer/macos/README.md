@@ -4,23 +4,22 @@ The desktop GUI runs as its user; `com.dobby.vpnservice` is the root launchd
 daemon. `postinstall.sh` is the single service installation path. Prepared
 source builds may supply `DOBBYVPN_SERVICE_RESOURCES` and
 `DOBBYVPN_SERVICE_PLIST` to use their built service and this same template,
-plus `DOBBYVPN_CONTROL_PEER_UID` for the normal-user client. These inputs serve
-source-built service checks and can be removed if those checks become
-package-only. The normal package installation needs no overrides.
+plus `DOBBYVPN_CONTROL_PEER_UID` for the normal-user client. The local
+source-build service checks use these inputs to install the built service and
+template. The normal package installation needs no overrides.
 
 When `DOBBY_LOG_PATH` names a pre-created complete service log, the installer
 also retains daemon stdout and stderr separately at that path plus `.stdout`
 and `.stderr`. The run owner retains all three before removing its runtime.
-Command-capturing callers may instead supply `DOBBY_SERVICE_STDOUT_PATH` and
-`DOBBY_SERVICE_STDERR_PATH` to use their existing per-command output tree.
-Those optional paths serve complete command-stream retention; remove them if
-that consumer no longer requires caller-selected stream locations.
+The local service checks supply `DOBBY_SERVICE_STDOUT_PATH` and
+`DOBBY_SERVICE_STDERR_PATH` to retain daemon output in their per-command result
+tree. The normal package installation uses the service-log path defaults.
 Source builds and packages use the same system control socket and launchd
 lifecycle; neither requires running the GUI or test process as root.
 
 ## Dependencies
 
-Requires theese file put in the current folder:
+Requires the following files in the current folder:
 
 * `dobbyVPN-macos-aarch64.zip`
 * `dobbyVPN-macos-amd64.zip`
@@ -37,7 +36,7 @@ searches PATH for it.
 
 ## Build PKG
 
-### Properties, that should be pre defined as environment variable
+### Properties to define as environment variables
 
 * APP_MAJOR_VERSION
 * APP_MINOR_VERSION
@@ -54,8 +53,8 @@ Creates folders in this structure:
 ```
 .
 ├── bin/
-│   ├── aarch64
+│   ├── aarch64/
 │   │   └── dobbyVPN-macos-aarch64.pkg
-│   │   amd6464
-└── └── └── dobbyVPN-macos-amd6464.pkg
+│   └── amd64/
+│       └── dobbyVPN-macos-amd64.pkg
 ```

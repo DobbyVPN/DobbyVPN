@@ -247,6 +247,12 @@ class LocalVMTests(unittest.TestCase):
         self.assertEqual(windows_args.network_interface, "7")
         self.assertEqual(windows_command[3:].count("--network-interface"), 1)
 
+        windows_without_discovery = local_vm._functional_command(
+            root, descriptor | {"runtime": {}}, "windows", 30, None
+        )
+        windows_fallback_args = functional_parser().parse_args(windows_without_discovery[3:])
+        self.assertIsNone(windows_fallback_args.network_interface)
+
     def test_command_runner_streams_output_into_retained_logs(self) -> None:
         root, _ = self._run_directory()
         result = local_vm._run_logged(

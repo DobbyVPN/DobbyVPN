@@ -13,7 +13,7 @@ public enum IOSAppCompositionRoot {
     public static let appDependencies = IosAppDependenciesKt.createIosAppDependencies(
         bridge: sessionShell,
         logsRepository: logsRepository,
-        copyLogsInteractor: CopyLogsInteractorImpl(),
+        exportLogsInteractor: ExportLogsInteractorImpl(),
         configsRepository: configsRepository
     )
 }

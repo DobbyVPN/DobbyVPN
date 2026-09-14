@@ -45,8 +45,11 @@ internal fun JsonObject.requiredPositiveSessionLong(name: String): Long =
 internal fun JsonObject.sessionInt(name: String): Int =
     this[name]?.jsonPrimitive?.intOrNull ?: error("missing or invalid $name")
 
-internal fun JsonObject.sessionBool(name: String): Boolean =
-    this[name]?.jsonPrimitive?.booleanOrNull ?: error("missing or invalid $name")
+internal fun JsonObject.sessionBool(name: String): Boolean {
+	val value = this[name]?.jsonPrimitive ?: error("missing or invalid $name")
+	if (value.isString) error("missing or invalid $name")
+	return value.booleanOrNull ?: error("missing or invalid $name")
+}
 
 internal fun JsonObject.sessionArray(name: String): List<JsonObject> =
     (this[name] as? JsonArray)?.map { it.jsonObject } ?: error("missing or invalid $name")
@@ -115,6 +118,7 @@ internal fun JsonObject.toSessionSnapshot(): SessionSnapshot {
         activeProfile = activeProfile,
         lastFailure = failure,
         cleanupComplete = sessionBool("cleanup_complete"),
+        recovering = sessionBool("recovering"),
     )
 }
 

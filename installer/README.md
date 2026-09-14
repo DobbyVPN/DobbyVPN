@@ -1,16 +1,12 @@
-# Installer Build Scripts
+# Installer build scripts
 
-This directory contains all scripts and configuration files required to build application installers for supported platforms:
-
-* Windows
-* MacOS
-
-These scripts automate packaging and generating distributable installer files.
+This directory contains the scripts and configuration used to build Windows
+and macOS installers.
 
 ## Folder Structure
 
 ```
-installers/
+installer/
 ├── windows/
 │   ├── .gitignore 
 │   ├── AppComponents.wxs 
@@ -33,9 +29,9 @@ installers/
 
 | Platform | Output Format | Architecture | Status |
 | --- | --- | --- | --- |
-| Windows   | .msi | amd64      | ✅ Supported | 
-| MacOS     | .pkg | amd64      | ✅ Supported | 
-| MacOS     | .pkg | aarch64    | ✅ Supported | 
+| Windows | `.msi` | amd64 | Supported |
+| macOS | `.pkg` | amd64 | Supported |
+| macOS | `.pkg` | aarch64 | Supported |
 
 ## Windows Installer
 
@@ -43,7 +39,7 @@ installers/
 
 * Installer tool (WiX)
 
-### Build 
+### Build
 
 ```powershell
 cd windows/
@@ -60,7 +56,7 @@ cd windows/
 
 ### Output
 ```
-installers/
+installer/
 └── windows/
     └── bin/
         └── amd64/
@@ -75,7 +71,7 @@ installers/
 * APP_MINOR_VERSION
 * APP_MAINTENANCE_VERSION
 
-### Build 
+### Build
 
 ```bash
 cd macos/
@@ -89,17 +85,17 @@ architectures before packaging.
 ### Output
 
 ```
-installers/
+installer/
 ├── macos/
 │   ├── bin/
 │   │   ├── amd64/
 │   │   │   └── dobbyVPN-macos-amd64.pkg
-│   │   ├── aarch64/
-└── └── └── └── dobbyVPN-macos-aarch64.pkg
+│   │   └── aarch64/
+│   │       └── dobbyVPN-macos-aarch64.pkg
 ```
 
 ## Notes
 
-* All installers not only installs application, it runs gRPC vpn service.
-* Windows uninstaller also removed installed service.  
-* There is no MacOS uninstaller, so user should remove vpn service by himself.  
+Each installer installs the application and its gRPC VPN service. The Windows
+uninstaller removes the service. macOS has no uninstaller; remove the service
+manually when uninstalling the app.

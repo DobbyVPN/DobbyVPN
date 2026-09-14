@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stable local Torturer entry point used by VM runners."""
+"""Command-line entry point for the Torturer functional suite."""
 
 from torturer_checks.functional import main
 

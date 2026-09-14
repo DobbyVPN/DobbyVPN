@@ -1,6 +1,6 @@
 import com.dobby.AppDependencies
 import com.dobby.domain.DobbyConfigsRepositoryImpl
-import com.dobby.feature.logging.CopyLogsInteractorImpl
+import com.dobby.feature.logging.ExportLogsInteractorImpl
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.domain.provideAdditionalLogFilePaths
@@ -16,6 +16,6 @@ fun createDesktopAppDependencies(): AppDependencies {
         logger = Logger(logsRepository),
         configsRepository = DobbyConfigsRepositoryImpl(),
         logsRepository = logsRepository,
-        copyLogsInteractor = CopyLogsInteractorImpl(),
+        exportLogsInteractor = ExportLogsInteractorImpl(),
     )
 }

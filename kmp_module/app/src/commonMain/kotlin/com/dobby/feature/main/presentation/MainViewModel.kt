@@ -60,12 +60,13 @@ class MainViewModel(
     }
 
     fun onConnectionButtonClicked(connectionUrl: String) {
-        _uiState.value = _uiState.value.copy(lastFailureCode = null)
+        _uiState.value = _uiState.value.copy(lastFailureCode = null, lastFailureMessage = null)
         logger.log("Connection button clicked")
         viewModelScope.launch {
             when (_uiState.value.connectionState) {
                 VpnConnectionState.DISCONNECTED -> connect(connectionUrl)
-                VpnConnectionState.CONNECTING, VpnConnectionState.CONNECTED -> stopVpnService()
+                VpnConnectionState.CONNECTING, VpnConnectionState.RECONNECTING, VpnConnectionState.CONNECTED ->
+                    stopVpnService()
                 VpnConnectionState.STOPPING -> logger.log("Ignoring connection button while stop is pending")
             }
         }
@@ -82,6 +83,12 @@ class MainViewModel(
                     revisionGate.advance(result.value.sessionId, result.value.sequence)
                     configured = true
                 }
+                _uiState.value = _uiState.value.copy(
+                    lastFailureCode = null,
+                    lastFailureMessage = null,
+                    activeProfile = null,
+                    warnings = result.value.warnings,
+                )
                 if (result.value.sourceKind == SessionSourceKind.URL) {
                     configsRepository.setConnectionURL(connectionUrl)
                 }
@@ -90,7 +97,7 @@ class MainViewModel(
             }
             is SessionControllerResult.Failure -> {
                 logger.error("Session configuration rejected: failureCode=${result.code.name}")
-                publishFailure(result.code)
+                publishFailure(result.code, result.message)
                 false
             }
         }
@@ -110,7 +117,7 @@ class MainViewModel(
                 } catch (_: Exception) {
                     if (isActive) {
                         logger.error("Session snapshot stream failed")
-                        publishFailure(SessionFailureCode.INTERNAL)
+                        publishFailure(SessionFailureCode.INTERNAL, "Session snapshot stream failed")
                     }
                 }
                 if (isActive) delay(snapshotRetryDelayMillis)
@@ -136,7 +143,7 @@ class MainViewModel(
             is SessionControllerResult.Failure -> {
                 activeGeneration = null
                 logger.error("Session start rejected: failureCode=${result.code.name}")
-                publish(VpnConnectionState.DISCONNECTED, result.code)
+                publish(VpnConnectionState.DISCONNECTED, result.code, result.message)
                 false
             }
         }
@@ -159,7 +166,7 @@ class MainViewModel(
                 }
                 is SessionControllerResult.Failure -> {
                     logger.error("Session stop rejected: generation=$generation failureCode=${result.code.name}")
-                    publishFailure(result.code)
+                    publishFailure(result.code, result.message)
                 }
             }
         }
@@ -187,26 +194,59 @@ class MainViewModel(
             if (!revisionGate.accept(snapshot.sessionId, snapshot.sequence)) return@withLock
             configured = snapshot.configured
             activeGeneration = snapshot.generation.takeIf {
-                snapshot.state in setOf(
+                snapshot.recovering || snapshot.state in setOf(
                     SessionState.PROBING,
                     SessionState.PREPARING,
                     SessionState.CONNECTED,
                     SessionState.STOPPING,
                 )
             }
-            publish(snapshot.state.toConnectionState(), snapshot.lastFailure?.code)
+            val priorUiState = _uiState.value
+            val snapshotFailure = snapshot.lastFailure.takeIf { snapshot.state == SessionState.FAILED }
+            val successfulConnectionTransition =
+                snapshot.state == SessionState.CONNECTED && priorUiState.connectionState != VpnConnectionState.CONNECTED
+            val connectedAfterRejectedStop =
+                successfulConnectionTransition &&
+                    priorUiState.connectionState == VpnConnectionState.STOPPING &&
+                    (priorUiState.lastFailureCode != null || priorUiState.lastFailureMessage != null)
+            val clearPreviousFailure =
+                snapshot.state == SessionState.FAILED ||
+                    (successfulConnectionTransition && !connectedAfterRejectedStop)
+            _uiState.emit(
+                priorUiState.copy(
+                    connectionState = if (snapshot.recovering) {
+                        VpnConnectionState.RECONNECTING
+                    } else {
+                        snapshot.state.toConnectionState()
+                    },
+                    lastFailureCode = snapshotFailure?.code
+                        ?: priorUiState.lastFailureCode.takeUnless { clearPreviousFailure },
+                    lastFailureMessage = snapshotFailure?.message
+                        ?: priorUiState.lastFailureMessage.takeUnless { clearPreviousFailure },
+                    activeProfile = snapshot.activeProfile.takeIf { snapshot.state == SessionState.CONNECTED },
+                    warnings = snapshot.warnings,
+                ),
+            )
         }
     }
 
     private suspend fun publish(
         state: VpnConnectionState,
         failureCode: SessionFailureCode? = null,
+        failureMessage: String? = null,
     ) {
-        _uiState.emit(_uiState.value.copy(connectionState = state, lastFailureCode = failureCode))
+        _uiState.emit(
+            _uiState.value.copy(
+                connectionState = state,
+                lastFailureCode = failureCode,
+                lastFailureMessage = failureMessage,
+                activeProfile = if (state == VpnConnectionState.CONNECTED) _uiState.value.activeProfile else null,
+            ),
+        )
     }
 
-    private fun publishFailure(code: SessionFailureCode) {
-        _uiState.value = _uiState.value.copy(lastFailureCode = code)
+    private fun publishFailure(code: SessionFailureCode, message: String) {
+        _uiState.value = _uiState.value.copy(lastFailureCode = code, lastFailureMessage = message)
     }
 }
 

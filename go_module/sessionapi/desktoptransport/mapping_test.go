@@ -72,7 +72,7 @@ func TestSnapshotMappingCarriesAuthoritativeConfiguration(t *testing.T) {
 		Profiles:      []v1.ProfileSummary{{Index: 0, Protocol: v1.ProtocolOutline, Description: "primary"}},
 		Warnings:      []v1.Warning{{Code: "OPTIONAL", Message: "optional setting ignored"}},
 		ActiveProfile: &v1.ProfileSummary{Index: 0, Protocol: v1.ProtocolOutline, Description: "primary"},
-		LastFailure:   v1.FailureRuntime, LastFailureMessage: "runtime stopped",
+		LastFailure:   v1.FailureRuntime, LastFailureMessage: "runtime stopped", Recovering: true,
 	}
 	out := Snapshot(in)
 	if out.GetSessionId() != in.SessionID || out.GetSequence() != in.Sequence || out.GetGeneration() != in.Generation || out.GetState() != grpcproto.SessionState_SESSION_STATE_CONNECTED {
@@ -86,6 +86,9 @@ func TestSnapshotMappingCarriesAuthoritativeConfiguration(t *testing.T) {
 	}
 	if out.GetActiveProfile().GetDescription() != "primary" || out.GetLastFailure().GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_RUNTIME_FAILED || out.GetLastFailure().GetMessage() != "runtime stopped" {
 		t.Fatalf("runtime state was not preserved: %#v", out)
+	}
+	if !out.GetRecovering() {
+		t.Fatalf("recovery state was not preserved: %#v", out)
 	}
 }
 

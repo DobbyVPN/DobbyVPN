@@ -1,7 +1,9 @@
 # Trivy ignore file
 # https://aquasecurity.github.io/trivy/latest/docs/configuration/filtering/#by-finding-ids
 
-# golang.org/x/crypto/ssh vulnerabilities - not applicable
-# AWG uses crypto for WireGuard, not SSH
+# The remaining golang.org/x/crypto dependency is used by tun2socks for
+# Shadowsocks cipher primitives; the former AWG/WireGuard justification is stale.
+# Review these SSH-related ignores against the scanner's package-level findings
+# before removing them; the product does not import golang.org/x/crypto/ssh.
 CVE-2024-45337
 CVE-2025-22869

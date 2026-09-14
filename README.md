@@ -1,7 +1,6 @@
 # doBBYVPN - do Better By VPN
 
 Yet another VPN client. Currently wraps around OutlineSDK, TrustTunnel & XRay.
-More protocols planned.
 
 ## Architecture
 
@@ -11,8 +10,8 @@ VPN APIs require them. Go owns configuration acquisition, parsing, selection,
 and the process-local session; the Compose UI renders current snapshots across
 platforms.
 
-See the complete [architecture contract](docs/ARCHITECTURE.md), including the
-responsibility boundaries and future-protocol checklist.
+See the complete [architecture contract](docs/ARCHITECTURE.md) for the
+responsibility boundaries and supported configuration behavior.
 
 AppStore: https://apps.apple.com/us/app/dobbyvpn-do-better-by-vpn/id6741442515
 
@@ -24,7 +23,12 @@ DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 Desktop build commands, a local CLI configuration check, and CI build
 commands are documented in [.github/scripts/README.md](.github/scripts/README.md).
 
-Consume 'subscription' / 'dynamic keys' as TOML via HTTPS or inline:
+Use TOML configuration inline or fetch it from an HTTPS subscription URL. HTTP
+URLs are rejected, redirects must remain HTTPS, and downloaded or inline
+configuration is limited to 1 MiB. Supported profile arrays are `Outline`,
+`Xray`, and `TrustTunnel`, with optional `[ExcludeIPs]`; any other root section or
+key rejects the whole configuration. TrustTunnel certificate verification is
+required, so keep `skip_verification = false` (or omit it).
 
 **Connection variants** (automatic probe-based selection and failover)
 ```toml
@@ -45,7 +49,6 @@ outbounds = [
 [[TrustTunnel]] # Third variant
 loglevel = "info"
 vpn_mode = "general"
-killswitch_enabled = false
 post_quantum_group_enabled = true
 exclusions = []
 [TrustTunnel.endpoint]
@@ -55,7 +58,7 @@ custom_sni = "domain.com"
 username = "your_username"
 password = "your_password"
 client_random = ""
-skip_verification = true
+skip_verification = false
 upstream_protocol = "http3"
 anti_dpi = true
 dns_upstreams = []
@@ -69,14 +72,24 @@ IPs = [
 ]
 ```
 
-DobbyVPN probes protocol variants one by one when the VPN starts. Each variant
-must start and pass latency probes through the tunnel; DobbyVPN then activates
-the working variant with the lowest average latency, breaking ties by the
-variant's order in the configuration. If the runtime readiness monitor reports
-that the active variant is no longer connected, DobbyVPN repeats the full
-probe-and-rank procedure until the user stops the VPN. Use the same `[[Outline]]`,
-`[[Xray]]` or `[[TrustTunnel]]` section format even when the configuration
-contains only one variant.
+DobbyVPN probes configured variants one by one when the VPN starts and
+activates the working variant with the lowest average latency, breaking ties
+by configuration order. Automatic selection is the GUI behavior. The CLI's
+`connect-profile` command and the test harness can select a profile index
+through the same session runtime; this operator/test mode skips automatic
+selection and does not switch to another profile after a health failure.
+
+After an automatically selected connection becomes unhealthy, DobbyVPN allows
+up to three automatic recovery attempts. If another health failure occurs
+before five uninterrupted connected minutes, the session fails and the user
+must connect again manually. Five uninterrupted connected minutes reset the
+recovery allowance. The same `[[Outline]]`, `[[Xray]]`, or `[[TrustTunnel]]`
+section format works for one profile or several.
+
+`ExcludeIPs` intentionally bypasses the VPN for the listed destinations. The
+traffic still enters the tunnel on some platforms before the runtime routes it
+outside the proxy; platform routing details differ. DobbyVPN does not claim a
+system-wide kill switch or leak-free recovery during tunnel teardown.
 
 **Clean ShadowSocks** (best performance)
 ```toml
@@ -129,7 +142,6 @@ IPs = [
 [[TrustTunnel]]
 loglevel = "info"
 vpn_mode = "general"
-killswitch_enabled = false
 post_quantum_group_enabled = true
 exclusions = []
 [TrustTunnel.endpoint]
@@ -139,7 +151,7 @@ custom_sni = "domain.com"
 username = "your_username"
 password = "your_password"
 client_random = ""
-skip_verification = true
+skip_verification = false
 upstream_protocol = "http3"
 anti_dpi = true
 dns_upstreams = []

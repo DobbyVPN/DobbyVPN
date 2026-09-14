@@ -1,6 +1,6 @@
 package com.dobby.feature.logging
 
-import com.dobby.feature.logging.domain.CopyLogsInteractor
+import com.dobby.feature.logging.domain.ExportLogsInteractor
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
@@ -10,9 +10,9 @@ import java.util.Locale
 import java.util.zip.Deflater
 import java.util.zip.GZIPOutputStream
 
-class CopyLogsInteractorImpl : CopyLogsInteractor {
+class ExportLogsInteractorImpl : ExportLogsInteractor {
 
-    override fun copy(logs: List<String>) {
+    override fun export(logs: List<String>) {
         val joinedLogs = logs.joinToString("\n")
         val timestamp = SimpleDateFormat(
             "yyyy-MM-dd_HH-mm-ss",

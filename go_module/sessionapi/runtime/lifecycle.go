@@ -507,14 +507,14 @@ func (l *lease) Stop(ctx context.Context) error {
 type defaultInputs struct{}
 
 func (defaultInputs) Apply(_ context.Context, _ v2.SessionRef, cidrs []string) (InputLease, error) {
-	routes, err := tunnel.AcquireGeoRoutingConf(cidrs)
+	routes, err := tunnel.AcquireBypassPolicy(cidrs)
 	if err != nil {
 		return nil, fmt.Errorf("acquire exclusion policy: %w", err)
 	}
 	return routingInputs{routes: routes}, nil
 }
 
-type routingInputs struct{ routes *tunnel.GeoRoutingLease }
+type routingInputs struct{ routes *tunnel.BypassPolicyLease }
 
 func (l routingInputs) Release(context.Context) error { l.routes.Release(); return nil }
 

@@ -1,7 +1,7 @@
 package com.dobby
 
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.logging.domain.CopyLogsInteractor
+import com.dobby.feature.logging.domain.ExportLogsInteractor
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
@@ -17,7 +17,7 @@ class AppDependencies(
     val logger: Logger,
     private val configsRepository: DobbyConfigsRepository,
     private val logsRepository: LogsRepository,
-    private val copyLogsInteractor: CopyLogsInteractor,
+    private val exportLogsInteractor: ExportLogsInteractor,
 ) {
     val navigation = AppNavigationState()
 
@@ -31,6 +31,6 @@ class AppDependencies(
 
     fun createLogsViewModel() = LogsViewModel(
         logsRepository = logsRepository,
-        copyLogsInteractor = copyLogsInteractor,
+        exportLogsInteractor = exportLogsInteractor,
     )
 }

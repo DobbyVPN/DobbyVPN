@@ -115,6 +115,20 @@ func TestReadSourceAcceptsInlineURLAndFileWithoutReadingURL(t *testing.T) {
 	}
 }
 
+func TestParseSourceURLRequiresHTTPS(t *testing.T) {
+	for _, source := range []string{
+		"http://example.invalid/config",
+		"ftp://example.invalid/config",
+	} {
+		if _, isURL, err := parseSourceURL(source); !isURL || err == nil || !strings.Contains(err.Error(), "must use HTTPS") {
+			t.Fatalf("parseSourceURL(%q) = isURL=%v, err=%v; want HTTPS rejection", source, isURL, err)
+		}
+	}
+	if _, isURL, err := parseSourceURL("https://example.invalid/config"); !isURL || err != nil {
+		t.Fatalf("valid HTTPS URL = isURL=%v, err=%v", isURL, err)
+	}
+}
+
 func TestIsWindowsPathPreventsDriveLetterURLClassification(t *testing.T) {
 	for _, source := range []string{`C:\\Users\\dobbytest\\config.toml`, `z:/vpn/config.toml`} {
 		if !isWindowsPath(source) {

@@ -43,19 +43,19 @@ func IsBypass(metadata *M.Metadata) bool {
 	return false
 }
 
-// GeoRoutingLease owns a temporary replacement of the process-wide bypass
+// BypassPolicyLease owns a temporary replacement of the process-wide bypass
 // policy. Release is idempotent and restores the exact policy which existed
 // before acquisition. Session orchestration is serialized, so leases must be
 // released in acquisition order and must not overlap.
-type GeoRoutingLease struct {
+type BypassPolicyLease struct {
 	once     sync.Once
 	previous []*net.IPNet
 }
 
-// AcquireGeoRoutingConf validates and resolves the complete policy before
+// AcquireBypassPolicy validates and resolves the complete policy before
 // changing global state. A failed acquisition therefore leaves the baseline
 // policy untouched.
-func AcquireGeoRoutingConf(entries []string) (*GeoRoutingLease, error) {
+func AcquireBypassPolicy(entries []string) (*BypassPolicyLease, error) {
 	next, err := resolveRoutingEntries(entries)
 	if err != nil {
 		return nil, err
@@ -65,10 +65,10 @@ func AcquireGeoRoutingConf(entries []string) (*GeoRoutingLease, error) {
 	defaultBypassCIDRs = cloneIPNets(next)
 	routesMu.Unlock()
 	log.Debugf(Category, "[Routing] Acquired session bypass policy: %v", summarizeCIDRs(next))
-	return &GeoRoutingLease{previous: previous}, nil
+	return &BypassPolicyLease{previous: previous}, nil
 }
 
-func (l *GeoRoutingLease) Release() {
+func (l *BypassPolicyLease) Release() {
 	if l == nil {
 		return
 	}

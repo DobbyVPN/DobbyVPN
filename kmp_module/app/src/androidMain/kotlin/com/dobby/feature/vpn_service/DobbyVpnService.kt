@@ -10,7 +10,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.content.ContextCompat
 import com.dobby.AppDependenciesProvider
-import com.dobby.backend.GoBackendWrapper
+import com.dobby.backend.GoMobileBridge
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.main.domain.SessionChangeEvents
 import kotlinx.coroutines.CompletableDeferred
@@ -32,10 +32,10 @@ class DobbyVpnService : VpnService() {
     companion object {
         @Volatile
         internal var nativePlatformRegistrar: (DobbyVpnService) -> Unit =
-            GoBackendWrapper::registerSessionPlatform
+            GoMobileBridge::registerSessionPlatform
 
         internal fun resetNativePlatformRegistrar() {
-            nativePlatformRegistrar = GoBackendWrapper::registerSessionPlatform
+            nativePlatformRegistrar = GoMobileBridge::registerSessionPlatform
         }
         private const val ACTION_PREPARE = "com.dobby.vpn.action.PREPARE"
         private const val ACTION_STOP = "com.dobby.vpn.action.STOP"
@@ -218,7 +218,7 @@ class DobbyVpnService : VpnService() {
         val generation = activeGeneration
         if (session != null && generation > 0L) {
             val stopped = try {
-                sessionStopSucceeded(GoBackendWrapper.stopSession(session, generation))
+                sessionStopSucceeded(GoMobileBridge.stopSession(session, generation))
             } catch (failure: Throwable) {
                 reportFailure("session_stop_during_destroy generation=$generation", failure)
                 false
@@ -245,7 +245,7 @@ class DobbyVpnService : VpnService() {
         // authoritative runtime first; its release callback closes the matching PFD.
         if (session != null && active > 0L) {
             val stopped = try {
-                sessionStopSucceeded(GoBackendWrapper.stopSession(session, active))
+                sessionStopSucceeded(GoMobileBridge.stopSession(session, active))
             } catch (failure: Throwable) {
                 reportFailure("session_stop_from_intent generation=$active", failure)
                 false

@@ -137,6 +137,7 @@ private fun ProtoSnapshot.toDomain() = SessionSnapshot(
     activeProfile = if (hasActiveProfile()) activeProfile.toDomain() else null,
     lastFailure = if (hasLastFailure()) SessionFailure(lastFailure.code.toDomain(), lastFailure.message) else null,
     cleanupComplete = cleanupComplete,
+    recovering = recovering,
 )
 
 private fun com.dobby.grpcproto.SessionProfile.toDomain() =

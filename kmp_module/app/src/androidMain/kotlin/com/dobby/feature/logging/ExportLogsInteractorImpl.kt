@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
 import com.dobby.common.showToast
-import com.dobby.feature.logging.domain.CopyLogsInteractor
+import com.dobby.feature.logging.domain.ExportLogsInteractor
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -12,12 +12,12 @@ import java.util.Locale
 import java.util.zip.Deflater
 import java.util.zip.GZIPOutputStream
 
-class CopyLogsInteractorImpl(
+class ExportLogsInteractorImpl(
     private val context: Context,
     private val logger: Logger,
-) : CopyLogsInteractor {
+) : ExportLogsInteractor {
 
-    override fun copy(logs: List<String>) {
+    override fun export(logs: List<String>) {
         try {
             val joinedLogs = logs.joinToString("\n")
 
@@ -45,7 +45,7 @@ class CopyLogsInteractorImpl(
             }
 
             context.startActivity(
-                Intent.createChooser(shareIntent, "Send logs")
+                Intent.createChooser(shareIntent, "Export logs")
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
 

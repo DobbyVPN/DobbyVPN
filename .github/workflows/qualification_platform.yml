@@ -15,7 +15,7 @@ on:
 jobs:
   qualification:
     name: Public Release qualification / ${{ inputs.platform }}
-    runs-on: ${{ inputs.platform == 'windows' && 'windows-2022' || inputs.platform == 'macos' && 'macos-14' || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.platform == 'windows' && 'windows-2022' || inputs.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:
       contents: read

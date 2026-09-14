@@ -13,17 +13,40 @@ clients may skip intermediate revisions and always render the complete newest
 state. Android and iOS use native callbacks only as wake hints and read a fresh
 Go snapshot after each wake.
 
-Connect calls `Configure` with the entered HTTP(S) URL or transient inline
-configuration. Go fetches and validates the source before accepting it. The UI
-stores a URL only after Go accepts it, and does not log the entered source. A
-subsequent `Start` includes the current snapshot revision so a stale UI cannot
-start from an outdated state. Go selects profiles, probes protocols, performs
-automatic failover, and owns runtime cleanup.
+Connect calls `Configure` with the entered HTTPS URL or transient inline
+configuration. Go fetches and validates the source before accepting it. URL
+downloads must stay on HTTPS across redirects, and downloaded and inline
+configuration are limited to 1 MiB. Fetching occurs before the new tunnel is
+up. The UI stores a URL only after Go accepts it, and does not log the entered
+source. A subsequent `Start` includes the current snapshot revision so a stale
+UI cannot start from an outdated state. Go selects profiles, probes protocols,
+performs automatic failover, and owns runtime cleanup.
 
 Supported profiles remain Outline (including its WebSocket variant), Xray,
-and TrustTunnel. An unsupported legacy section such as Cloak rejects the full
-configuration with a typed, input-safe failure; Go does not partially start
-the supported sections from that input.
+and TrustTunnel. Only those profile sections and optional `ExcludeIPs` are
+accepted at the configuration root. Any other root section or key rejects the
+full configuration with a typed, input-safe failure; Go does not partially
+start supported sections from that input. TrustTunnel certificate verification
+must remain enabled; `skip_verification = true` is rejected.
+
+TrustTunnel's native bridge is available on physical Android arm64 and iOS
+devices. Android x86_64 and iOS Simulator builds report a TrustTunnel-specific
+runtime failure because the bridge is not packaged for those targets. The UI
+shows that failure message with its diagnostic code.
+
+The GUI always uses automatic selection. The CLI's `connect-profile` command
+and the functional test harness use the same runtime's operator/test mode to
+select a specific profile index. It skips automatic selection and does not
+switch profiles after a health failure.
+
+Automatic selection may attempt recovery up to three times after health
+failures. A fourth failure before five uninterrupted connected minutes ends
+the session in failure and requires the user to connect again. Five stable
+connected minutes reset that allowance. While a recovery is underway, snapshots
+carry `recovering = true`, including the temporary `IDLE` state during cleanup;
+the UI presents this as “Reconnecting” so teardown does not flash as a normal
+disconnect. The UI also presents the active protocol, supplied warnings, and
+the failure message with its code available as diagnostic detail.
 
 ## Disconnect and cleanup
 
@@ -53,4 +76,6 @@ no state; the app follows each wake with a current Go snapshot.
   event ledger or synthesize connection state. It does not run its own polling
   loop; the iOS bridge refreshes a snapshot on each Darwin wake or after its
   five-second wait timeout.
-- Diagnostics stay local. Remote telemetry is not part of the session flow.
+- Diagnostics stay local unless the user exports them. Android and iOS create a
+  compressed file and open the platform share sheet; desktop opens a save
+  dialog. DobbyVPN does not receive the exported logs automatically.

@@ -578,6 +578,7 @@ type SessionSnapshot struct {
 	SourceKind      SessionSourceKind      `protobuf:"varint,10,opt,name=source_kind,json=sourceKind,proto3,enum=grpcproto.SessionSourceKind" json:"source_kind,omitempty"`
 	Profiles        []*SessionProfile      `protobuf:"bytes,11,rep,name=profiles,proto3" json:"profiles,omitempty"`
 	Warnings        []*SessionWarning      `protobuf:"bytes,12,rep,name=warnings,proto3" json:"warnings,omitempty"`
+	Recovering      bool                   `protobuf:"varint,13,opt,name=recovering,proto3" json:"recovering,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -694,6 +695,13 @@ func (x *SessionSnapshot) GetWarnings() []*SessionWarning {
 		return x.Warnings
 	}
 	return nil
+}
+
+func (x *SessionSnapshot) GetRecovering() bool {
+	if x != nil {
+		return x.Recovering
+	}
+	return false
 }
 
 type SessionValidateConfigRequest struct {
@@ -1417,7 +1425,7 @@ const file_grpcproto_vpnserver_proto_rawDesc = "" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\">\n" +
 	"\x0eSessionWarning\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xab\x04\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xcb\x04\n" +
 	"\x0fSessionSnapshot\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1e\n" +
@@ -1437,7 +1445,10 @@ const file_grpcproto_vpnserver_proto_rawDesc = "" +
 	" \x01(\x0e2\x1c.grpcproto.SessionSourceKindR\n" +
 	"sourceKind\x125\n" +
 	"\bprofiles\x18\v \x03(\v2\x19.grpcproto.SessionProfileR\bprofiles\x125\n" +
-	"\bwarnings\x18\f \x03(\v2\x19.grpcproto.SessionWarningR\bwarnings\"=\n" +
+	"\bwarnings\x18\f \x03(\v2\x19.grpcproto.SessionWarningR\bwarnings\x12\x1e\n" +
+	"\n" +
+	"recovering\x18\r \x01(\bR\n" +
+	"recovering\"=\n" +
 	"\x1cSessionValidateConfigRequest\x12\x1d\n" +
 	"\n" +
 	"raw_config\x18\x01 \x01(\fR\trawConfig\"\x99\x02\n" +

@@ -9,39 +9,6 @@ import (
 	"time"
 )
 
-func TestQuorumHTTPPingCheckSucceedsWhenAllCandidatesWork(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer server.Close()
-
-	if err := quorumHTTPPingCheck([]string{server.URL, server.URL, server.URL}); err != nil {
-		t.Fatalf("quorumHTTPPingCheck returned error with all candidates working: %v", err)
-	}
-}
-
-func TestQuorumHTTPPingCheckSucceedsWhenOneCandidateFails(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer server.Close()
-
-	if err := quorumHTTPPingCheck([]string{server.URL, closedLocalHTTPURL(t), server.URL}); err != nil {
-		t.Fatalf("quorumHTTPPingCheck returned error with quorum available: %v", err)
-	}
-}
-
-func TestQuorumHTTPPingCheckFailsWithoutQuorum(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer server.Close()
-
-	if err := quorumHTTPPingCheck([]string{closedLocalHTTPURL(t), closedLocalHTTPURL(t), server.URL}); err == nil {
-		t.Fatal("quorumHTTPPingCheck returned nil without quorum")
-	}
-}
-
 func TestTunnelProbeContextCancelsEveryEndpointRequest(t *testing.T) {
 	started := make(chan struct{}, 3)
 	canceled := make(chan struct{}, 3)

@@ -3,10 +3,10 @@ import UniformTypeIdentifiers
 import app
 import zlib
 
-class CopyLogsInteractorImpl: CopyLogsInteractor {
+class ExportLogsInteractorImpl: ExportLogsInteractor {
     private var logs = IOSAppCompositionRoot.logsRepository
 
-    func doCopy(logs: [String]) {
+    func doExport(logs: [String]) {
         let logText = logs.joined(separator: "\n")
 
         let formatter = DateFormatter()
@@ -68,7 +68,7 @@ class CopyLogsInteractorImpl: CopyLogsInteractor {
             try "wb9".withCString { mode in
                 guard let gzipFile = gzopen(path, mode) else {
                     throw NSError(
-                        domain: "CopyLogsInteractorImpl",
+                        domain: "ExportLogsInteractorImpl",
                         code: 1,
                         userInfo: [NSLocalizedDescriptionKey: "Unable to open gzip file"]
                     )
@@ -88,7 +88,7 @@ class CopyLogsInteractorImpl: CopyLogsInteractor {
 
                 if written != Int32(data.count) {
                     throw NSError(
-                        domain: "CopyLogsInteractorImpl",
+                        domain: "ExportLogsInteractorImpl",
                         code: 2,
                         userInfo: [NSLocalizedDescriptionKey: "Incomplete gzip write"]
                     )

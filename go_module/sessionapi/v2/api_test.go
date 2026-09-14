@@ -309,6 +309,23 @@ func TestValidateConfigIsStatelessAndSnapshotCarriesAcceptedMetadata(t *testing.
 	}
 }
 
+func TestManagerPreservesSafeHTTPSRequirementForSubscriptionURLs(t *testing.T) {
+	const raw = "http://username:password@example.invalid/private-profile"
+	const want = "INVALID_ARGUMENT: configuration URL must use HTTPS"
+	m := NewManager(ManagerOptions{})
+
+	if _, err := m.ValidateConfig(context.Background(), []byte(raw)); err == nil || err.Error() != want {
+		t.Fatalf("ValidateConfig HTTP URL error = %v, want %q", err, want)
+	}
+	initial, err := m.Snapshot(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Configure(context.Background(), initial.SessionID, initial.Sequence, []byte(raw)); err == nil || err.Error() != want {
+		t.Fatalf("Configure HTTP URL error = %v, want %q", err, want)
+	}
+}
+
 func TestStaleRevisionCannotConfigureStartOrReset(t *testing.T) {
 	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int32]int64{0: 1}}, Platform: &fakePlatform{}})
 	initial, err := m.Snapshot(context.Background(), "")

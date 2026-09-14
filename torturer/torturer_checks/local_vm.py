@@ -395,10 +395,7 @@ def _functional_command(run_dir: Path, descriptor: dict[str, Any], platform: str
                 command.extend((flag, str(runtime[name])))
         if "network_interface" in runtime:
             command.extend(("--network-interface", str(runtime["network_interface"])))
-        if platform == "windows" and "network_interface" not in runtime:
-            # The adapter reads this when no Unix socket is supplied.
-            command.extend(("--network-interface", os.environ.get("DOBBYVPN_WINDOWS_INTERFACE", "1")))
-        elif platform == "linux":
+        if platform == "linux":
             command.extend(("--routing-firewall-helper", str(Path(__file__).resolve().parents[1] / "helpers/local/linux/routing-probe-firewall"),))
         elif platform == "macos":
             helper = Path(__file__).resolve().parents[1] / "helpers/local/macos/network-transition"

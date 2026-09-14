@@ -21,6 +21,11 @@ revision returned by a snapshot; `Stop` is fenced by generation. `Reset` clears
 accepted configuration after cleanup. No client needs to create, recover,
 destroy, or replay sessions.
 
+The GUI uses automatic profile selection. The CLI's `connect-profile` command
+and the functional test harness can select a profile index through the same
+session manager; this operator/test mode skips automatic selection and does
+not fail over to a different profile.
+
 The desktop CLI and desktop GUI use the same authenticated gRPC service. The
 CLI is implemented in Go and does not start a JVM. Mobile bindings expose the
 same manager through a small JSON boundary. Kotlin/Compose remains on the
@@ -46,16 +51,37 @@ session managers.
 
 ## Configuration and failures
 
-Go accepts an HTTP(S) source URL or transient inline configuration. UI code
-persists only a URL after configuration succeeds. Returned profiles omit
+Go accepts an HTTPS source URL or transient inline configuration. HTTP is
+rejected, redirects must remain HTTPS, and both downloaded and inline
+configuration are limited to 1 MiB. UI code persists only a URL after
+configuration succeeds. Returned profiles omit
 dedicated server-address fields and protocol payloads. The user-provided
 Description is returned unchanged and may itself contain sensitive text.
 Public failure messages use typed, input-safe text; raw URLs, credentials, and
 configuration are not echoed in failure responses or logs.
 
-An unsupported legacy section such as Cloak rejects the whole configuration
-with `UNSUPPORTED`. Supported sections in the same input are not partially
-started.
+Only `Outline`, `Xray`, `TrustTunnel`, and optional `ExcludeIPs` root entries
+are accepted. Any other root section or key—including `Cloak`, `WireGuard`, or
+legacy `Telemetry`—rejects the whole configuration with `UNSUPPORTED`, even if
+supported profiles are also present. Protocol-owned data nested within a
+supported profile remains open to the protocol parser. TrustTunnel profiles
+must keep endpoint certificate verification enabled; `skip_verification =
+true` or a non-boolean value is rejected as malformed configuration.
+
+Connection selection and health probes contact Google (`/generate_204`),
+Cloudflare (`/cdn-cgi/trace`), and `about.google` over the current tunnel route.
+Android's VPN service advertises Cloudflare DNS at `1.1.1.1` and
+`2606:4700:4700::1111`; iOS tunnel settings advertise `1.1.1.1` and `8.8.8.8`.
+The resolver advertised by a platform does not by itself establish the final
+DNS path for every protocol. `ExcludeIPs` is an intentional bypass: listed
+destinations are routed outside the VPN/proxy, with platform-specific routing
+details.
+
+The TrustTunnel native bridge is packaged for physical Android arm64 and iOS
+devices. Android x86_64 and iOS Simulator builds intentionally use unsupported
+stubs and return a TrustTunnel-specific runtime failure. Android's advertised
+Cloudflare DNS list is fixed by the VPN service and does not change with
+TrustTunnel's `dns_upstreams` setting.
 
 ## Adding a protocol
 

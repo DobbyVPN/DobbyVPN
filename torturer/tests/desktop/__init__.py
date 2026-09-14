@@ -1,1 +1,0 @@
-"""Desktop public-contract tests."""

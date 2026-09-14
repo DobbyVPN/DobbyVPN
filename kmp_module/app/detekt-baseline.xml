@@ -15,14 +15,6 @@
     <ID>PackageNaming:ExpectResourceCollectors.kt$package kmp_module.app.generated.resources</ID>
     <ID>PackageNaming:Res.kt$package kmp_module.app.generated.resources</ID>
     <ID>TooGenericExceptionCaught:MainViewModel.kt$MainViewModel$e: Exception</ID>
-    <ID>TooGenericExceptionThrown:MainViewModel.kt$MainViewModel$throw RuntimeException(errorMsg)</ID>
-    <ID>UnusedImports:ConnectionScreen.kt$import androidx.compose.ui.text.SpanStyle</ID>
-    <ID>UnusedImports:ConnectionScreen.kt$import androidx.compose.ui.text.buildAnnotatedString</ID>
-    <ID>UnusedImports:ConnectionScreen.kt$import androidx.compose.ui.text.font.FontFamily</ID>
-    <ID>UnusedImports:ConnectionScreen.kt$import androidx.compose.ui.text.withStyle</ID>
-    <ID>UnusedImports:ConnectionScreen.kt$import kotlin.math.log</ID>
-    <ID>UnusedImports:SettingsScreen.kt$import kotlinx.coroutines.flow.MutableStateFlow</ID>
-    <ID>UnusedImports:SettingsScreen.kt$import kotlinx.coroutines.flow.asStateFlow</ID>
     <ID>WildcardImport:ConnectionScreen.kt$import androidx.compose.runtime.*</ID>
     <ID>WildcardImport:MainViewModel.kt$import com.dobby.feature.main.domain.*</ID>
   </CurrentIssues>

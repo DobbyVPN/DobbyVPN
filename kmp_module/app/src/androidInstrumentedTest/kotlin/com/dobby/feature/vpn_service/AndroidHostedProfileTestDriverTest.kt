@@ -765,6 +765,7 @@ class AndroidHostedProfileTestDriverTest {
                         SessionFailure(it, "synthetic failure")
                     },
                     cleanupComplete = state == SessionState.IDLE,
+                    recovering = false,
                 )
 
         override fun watch(): Flow<SessionSnapshot> {

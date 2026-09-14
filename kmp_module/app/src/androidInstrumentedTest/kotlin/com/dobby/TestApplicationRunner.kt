@@ -6,7 +6,7 @@ import android.os.Bundle
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.AndroidJUnitRunner
 import com.dobby.AppDependenciesProvider
-import com.dobby.backend.GoBackendWrapper
+import com.dobby.backend.GoMobileBridge
 import com.dobby.createAndroidAppDependencies
 import com.dobby.feature.logging.domain.initLogFilePath
 import com.dobby.feature.logging.domain.initLogger
@@ -28,7 +28,7 @@ class TestApplication : Application(), AppDependenciesProvider {
         check(initLogger()) { "Go logger initialization returned false" }
         sessionChangeEvents = SessionChangeEvents()
         DobbyVpnService.nativePlatformRegistrar = if (TestRuntimeOptions.realProfileEnabled) {
-            GoBackendWrapper::registerSessionPlatform
+            GoMobileBridge::registerSessionPlatform
         } else {
             {}
         }

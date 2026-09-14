@@ -195,6 +195,7 @@ type snapshotResultDTO struct {
 	ActiveProfile   *profileDTO  `json:"active_profile,omitempty"`
 	LastFailure     *failureDTO  `json:"last_failure,omitempty"`
 	CleanupComplete bool         `json:"cleanup_complete"`
+	Recovering      bool         `json:"recovering"`
 }
 
 func profileResultDTO(in v2.ProfileSummary) profileDTO {
@@ -240,6 +241,7 @@ func snapshotDTO(in v2.SnapshotResult) snapshotResultDTO {
 		SourceKind: string(in.SourceKind), Profiles: profilesDTO(in.Profiles),
 		Warnings: warningsDTO(in.Warnings), ActiveProfile: profileResultPtr(in.ActiveProfile),
 		CleanupComplete: in.CleanupComplete,
+		Recovering:      in.Recovering,
 	}
 	if in.LastFailure != "" {
 		out.LastFailure = &failureDTO{Code: string(in.LastFailure), Message: in.LastFailureMessage}

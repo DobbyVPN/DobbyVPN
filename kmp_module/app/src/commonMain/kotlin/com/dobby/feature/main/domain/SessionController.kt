@@ -97,4 +97,5 @@ data class SessionSnapshot(
     val activeProfile: SessionProfile?,
     val lastFailure: SessionFailure?,
     val cleanupComplete: Boolean,
+    val recovering: Boolean,
 )

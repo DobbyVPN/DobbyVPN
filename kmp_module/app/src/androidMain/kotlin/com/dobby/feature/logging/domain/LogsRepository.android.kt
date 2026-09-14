@@ -7,7 +7,7 @@ import okio.Path
 import okio.Path.Companion.toPath
 import okio.buffer
 import okio.use
-import com.dobby.backend.GoBackendWrapper
+import com.dobby.backend.GoMobileBridge
 
 actual val fileSystem = okio.FileSystem.SYSTEM
 
@@ -47,4 +47,4 @@ actual fun platformLogInfo(): String {
         "abis=${Build.SUPPORTED_ABIS?.joinToString(",").orEmpty()}"
 }
 
-fun initLogger(): Boolean = GoBackendWrapper.initLogger(provideGoLogFilePath().toString())
+fun initLogger(): Boolean = GoMobileBridge.initLogger(provideGoLogFilePath().toString())

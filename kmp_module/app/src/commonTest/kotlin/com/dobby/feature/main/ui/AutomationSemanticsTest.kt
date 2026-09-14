@@ -18,10 +18,12 @@ class AutomationSemanticsTest {
     fun state_and_action_values_cover_every_ui_state() {
         assertEquals("disconnected", AutomationSemantics.connectionState(VpnConnectionState.DISCONNECTED))
         assertEquals("connecting", AutomationSemantics.connectionState(VpnConnectionState.CONNECTING))
+        assertEquals("reconnecting", AutomationSemantics.connectionState(VpnConnectionState.RECONNECTING))
         assertEquals("stopping", AutomationSemantics.connectionState(VpnConnectionState.STOPPING))
         assertEquals("connected", AutomationSemantics.connectionState(VpnConnectionState.CONNECTED))
         assertEquals("start", AutomationSemantics.connectionAction(VpnConnectionState.DISCONNECTED))
         assertEquals("stop", AutomationSemantics.connectionAction(VpnConnectionState.CONNECTING))
+        assertEquals("stop", AutomationSemantics.connectionAction(VpnConnectionState.RECONNECTING))
         assertEquals("stop", AutomationSemantics.connectionAction(VpnConnectionState.CONNECTED))
         assertEquals("stopping", AutomationSemantics.connectionAction(VpnConnectionState.STOPPING))
     }

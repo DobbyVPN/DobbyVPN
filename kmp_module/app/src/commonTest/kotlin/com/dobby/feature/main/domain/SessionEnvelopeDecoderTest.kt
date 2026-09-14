@@ -40,7 +40,7 @@ class SessionEnvelopeDecoderTest {
     @Test
     fun snapshotCarriesCurrentRevisionAndFailure() {
         val result = SessionEnvelopeDecoder.decode(
-            """{"ok":true,"result":{"session_id":"owner","sequence":8,"generation":2,"state":"CONNECTED","configured":true,"digest":"digest","source_kind":"INLINE","profiles":[],"warnings":[],"active_profile":{"index":0,"protocol":"XRAY","description":"fast"},"last_failure":{"code":"RUNTIME_FAILED","message":"protocol stopped"},"cleanup_complete":false}}""",
+            """{"ok":true,"result":{"session_id":"owner","sequence":8,"generation":2,"state":"CONNECTED","configured":true,"digest":"digest","source_kind":"INLINE","profiles":[],"warnings":[],"active_profile":{"index":0,"protocol":"XRAY","description":"fast"},"last_failure":{"code":"RUNTIME_FAILED","message":"protocol stopped"},"cleanup_complete":false,"recovering":true}}""",
         ) { it.toSessionSnapshot() }
 
         assertEquals(
@@ -57,6 +57,7 @@ class SessionEnvelopeDecoderTest {
                 activeProfile = SessionProfile(0, SessionProtocol.XRAY, "fast"),
                 lastFailure = SessionFailure(SessionFailureCode.RUNTIME_FAILED, "protocol stopped"),
                 cleanupComplete = false,
+                recovering = true,
             ),
             assertIs<SessionControllerResult.Success<SessionSnapshot>>(result).value,
         )
@@ -79,11 +80,15 @@ class SessionEnvelopeDecoderTest {
     @Test
     fun snapshotRequiresNonnegativeRevisionAndKnownState() {
         val invalidSnapshots = listOf(
-            """{"ok":true,"result":{"session_id":"owner","sequence":-1,"generation":0,"state":"IDLE","configured":false,"digest":"","source_kind":"","profiles":[],"warnings":[],"cleanup_complete":true}}""",
-            """{"ok":true,"result":{"session_id":"owner","sequence":1,"generation":0,"state":"FUTURE","configured":false,"digest":"","source_kind":"","profiles":[],"warnings":[],"cleanup_complete":true}}""",
+            """{"ok":true,"result":{"session_id":"owner","sequence":-1,"generation":0,"state":"IDLE","configured":false,"digest":"","source_kind":"","profiles":[],"warnings":[],"cleanup_complete":true,"recovering":false}}""",
+            """{"ok":true,"result":{"session_id":"owner","sequence":1,"generation":0,"state":"FUTURE","configured":false,"digest":"","source_kind":"","profiles":[],"warnings":[],"cleanup_complete":true,"recovering":false}}""",
+            """{"ok":true,"result":{"session_id":"owner","sequence":1,"generation":0,"state":"IDLE","configured":false,"digest":"","source_kind":"","profiles":[],"warnings":[],"cleanup_complete":true}}""",
+            """{"ok":true,"result":{"session_id":"owner","sequence":1,"generation":0,"state":"IDLE","configured":false,"digest":"","source_kind":"","profiles":[],"warnings":[],"cleanup_complete":true,"recovering":"false"}}""",
         )
-        invalidSnapshots.forEach { payload ->
-            assertFails { SessionEnvelopeDecoder.decode(payload) { it.toSessionSnapshot() } }
+        invalidSnapshots.forEachIndexed { index, payload ->
+            assertFails("invalid snapshot fixture $index") {
+                SessionEnvelopeDecoder.decode(payload) { it.toSessionSnapshot() }
+            }
         }
     }
 }

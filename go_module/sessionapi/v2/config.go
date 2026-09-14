@@ -18,7 +18,6 @@ import (
 // session API validates the container and ordering, while protocol runtimes
 // remain responsible for their existing protocol-specific validation.
 type configRoot struct {
-	Telemetry   map[string]interface{}   `toml:"Telemetry"`
 	ExcludeIPs  excludeIPsConfig         `toml:"ExcludeIPs"`
 	Outline     []map[string]interface{} `toml:"Outline"`
 	Xray        []map[string]interface{} `toml:"Xray"`
@@ -39,6 +38,8 @@ var (
 	protocolHeaderRE = regexp.MustCompile(`(?m)^\s*\[\[\s*(Outline|Xray|TrustTunnel)\s*]]`)
 )
 
+const maxConfigBytes = 1 << 20
+
 // InspectProfiles validates raw configuration with the product parser and
 // returns the connection inventory. It performs no network or session
 // operation.
@@ -51,19 +52,23 @@ func InspectProfiles(raw []byte) ([]ProfileSummary, error) {
 }
 
 func parseConfig(raw []byte) (parsedConfig, error) {
+	if len(raw) > maxConfigBytes {
+		return parsedConfig{}, failure(FailureMalformedConfig, "configuration exceeds the 1 MiB size limit")
+	}
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return parsedConfig{}, failure(FailureMalformedConfig, "configuration is blank")
 	}
 	text := string(raw)
-	if !protocolHeaderRE.MatchString(text) {
-		return parsedConfig{}, failure(FailureMalformedConfig, "expected one or more [[Outline]], [[Xray]], or [[TrustTunnel]] sections")
-	}
 	var root configRoot
-	if _, err := toml.Decode(text, &root); err != nil {
+	metadata, err := toml.Decode(text, &root)
+	if err != nil {
 		return parsedConfig{}, failure(FailureMalformedConfig, "TOML could not be parsed")
 	}
-	if root.Telemetry != nil {
-		return parsedConfig{}, failure(FailureUnsupported, "configuration contains removed Telemetry settings")
+	if err := validateRootKeys(metadata.Keys()); err != nil {
+		return parsedConfig{}, err
+	}
+	if !protocolHeaderRE.MatchString(text) {
+		return parsedConfig{}, failure(FailureMalformedConfig, "expected one or more [[Outline]], [[Xray]], or [[TrustTunnel]] sections")
 	}
 
 	headers := protocolHeaderRE.FindAllStringSubmatch(text, -1)
@@ -91,8 +96,19 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 			block, protocol = root.TrustTunnel[next[name]], ProtocolTrustTunnel
 		}
 		next[name]++
-		if boolValue(block, "Cloak") {
-			return parsedConfig{}, failure(FailureUnsupported, "configuration contains a removed Cloak profile")
+		if cloakValue, present := block["Cloak"]; present {
+			cloak, ok := cloakValue.(bool)
+			if !ok {
+				return parsedConfig{}, failure(FailureMalformedConfig, "Cloak must be a boolean")
+			}
+			if cloak {
+				return parsedConfig{}, failure(FailureUnsupported, "configuration contains a removed Cloak profile")
+			}
+		}
+		if protocol == ProtocolTrustTunnel {
+			if err := validateTrustTunnelVerification(block); err != nil {
+				return parsedConfig{}, err
+			}
 		}
 		payload, err := encodeProfile(block)
 		if err != nil {
@@ -116,6 +132,45 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 	}
 	digest := sha256.Sum256(raw)
 	return parsedConfig{digest: hex.EncodeToString(digest[:]), profiles: profiles}, nil
+}
+
+func validateRootKeys(keys []toml.Key) error {
+	for _, key := range keys {
+		// Keys exposes components directly, allowing nested protocol payloads
+		// to stay open while validating only the root namespace.
+		if len(key) == 0 {
+			continue
+		}
+		if key[0] == "ExcludeIPs" && len(key) > 1 && (key[1] != "IPs" || len(key) > 2) {
+			return failure(FailureUnsupported, "configuration contains an unsupported ExcludeIPs setting")
+		}
+		switch key[0] {
+		case "Outline", "Xray", "TrustTunnel", "ExcludeIPs":
+		default:
+			// Do not include user-controlled key text in public errors.
+			return failure(FailureUnsupported, "configuration contains an unsupported section")
+		}
+	}
+	return nil
+}
+
+func validateTrustTunnelVerification(block map[string]interface{}) error {
+	endpoint, ok := block["endpoint"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	value, present := endpoint["skip_verification"]
+	if !present {
+		return nil
+	}
+	skipVerification, ok := value.(bool)
+	if !ok {
+		return failure(FailureMalformedConfig, "TrustTunnel endpoint.skip_verification must be a boolean")
+	}
+	if skipVerification {
+		return failure(FailureMalformedConfig, "TrustTunnel certificate verification must remain enabled")
+	}
+	return nil
 }
 
 func encodeProfile(block map[string]interface{}) ([]byte, error) {

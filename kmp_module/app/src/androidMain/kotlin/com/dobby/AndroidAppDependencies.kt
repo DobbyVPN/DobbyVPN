@@ -3,7 +3,7 @@ package com.dobby
 import android.content.Context
 import android.content.Context.MODE_PRIVATE
 import com.dobby.domain.DobbyConfigsRepositoryImpl
-import com.dobby.feature.logging.CopyLogsInteractorImpl
+import com.dobby.feature.logging.ExportLogsInteractorImpl
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.domain.provideAdditionalLogFilePaths
@@ -29,6 +29,6 @@ fun createAndroidAppDependencies(context: Context, sessionChangeEvents: SessionC
             prefs = appContext.getSharedPreferences("DobbyPrefs", MODE_PRIVATE),
         ),
         logsRepository = logsRepository,
-        copyLogsInteractor = CopyLogsInteractorImpl(appContext, logger),
+        exportLogsInteractor = ExportLogsInteractorImpl(appContext, logger),
     )
 }

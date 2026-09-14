@@ -13,6 +13,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Protocol is intentionally a small stable vocabulary used by all bindings.
@@ -150,6 +151,7 @@ type SnapshotResult struct {
 	LastFailure        FailureCode
 	LastFailureMessage string
 	CleanupComplete    bool
+	Recovering         bool
 }
 
 // SessionRef is passed to every platform/runtime operation.  It prevents a
@@ -217,14 +219,22 @@ type ManagerOptions struct {
 	Runtime  Runtime
 	Platform PlatformAdapter
 	Loader   ConfigLoader
+	Now      func() time.Time
 }
 
 type Manager struct {
 	runtime  Runtime
 	platform PlatformAdapter
 	loader   ConfigLoader
+	now      func() time.Time
 	session  *session
 }
+
+const (
+	autoRecoveryLimit   = 3
+	autoRecoveryStable  = 5 * time.Minute
+	autoRecoveryMessage = "Automatic reconnect limit reached. Check your connection and connect again."
+)
 
 type session struct {
 	mu sync.Mutex
@@ -238,19 +248,25 @@ type session struct {
 	profiles   []RuntimeProfile
 	warnings   []Warning
 
-	active              *ProfileSummary
-	lastFailure         FailureCode
-	lastFailureMessage  string
-	cleanupDone         bool
-	cleanupFailed       bool
-	cancel              context.CancelFunc
-	ledger              *ledger
-	workerDone          chan struct{}
-	activeTarget        StartTarget
-	restartAfterCleanup bool
-	failureAfterCleanup FailureCode
-	sequence            uint64
-	watchers            map[*snapshotWatcher]struct{}
+	active                     *ProfileSummary
+	lastFailure                FailureCode
+	lastFailureMessage         string
+	cleanupDone                bool
+	cleanupFailed              bool
+	cancel                     context.CancelFunc
+	ledger                     *ledger
+	workerDone                 chan struct{}
+	activeTarget               StartTarget
+	restartAfterCleanup        bool
+	failureAfterCleanup        FailureCode
+	failureMessageAfterCleanup string
+	recovering                 bool
+	recoveryOriginGeneration   uint64
+	recoveryCount              int
+	lastConnectedAt            time.Time
+	hasConnectedAt             bool
+	sequence                   uint64
+	watchers                   map[*snapshotWatcher]struct{}
 }
 
 type snapshotWatcher struct {
@@ -274,9 +290,13 @@ func NewManager(options ManagerOptions) *Manager {
 	if loader == nil {
 		loader = DefaultConfigLoader{}
 	}
+	now := options.Now
+	if now == nil {
+		now = time.Now
+	}
 	id := randomID()
 	return &Manager{
-		runtime: r, platform: p, loader: loader,
+		runtime: r, platform: p, loader: loader, now: now,
 		session: &session{
 			id: id, state: StateIdle, cleanupDone: true, sequence: 1,
 			watchers: make(map[*snapshotWatcher]struct{}),
@@ -351,15 +371,15 @@ func safeConfigError(raw []byte, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return failure(FailureCanceled, "configuration loading timed out")
 	}
-	if sourceSchemeRE.MatchString(strings.TrimSpace(string(raw))) {
-		return failure(FailureInvalidArgument, "configuration URL could not be fetched")
-	}
 	var domain *Error
 	if errors.As(err, &domain) {
 		if domain.Cause != nil {
 			return failure(domain.Code, domain.Message)
 		}
 		return err
+	}
+	if sourceSchemeRE.MatchString(strings.TrimSpace(string(raw))) {
+		return failure(FailureInvalidArgument, "configuration URL could not be fetched")
 	}
 	return failure(FailureInvalidArgument, "configuration could not be loaded")
 }
@@ -374,7 +394,7 @@ func (m *Manager) Configure(ctx context.Context, sessionID string, expectedSeque
 		s.mu.Unlock()
 		return ConfigureResult{}, failure(FailureConflict, "session changed; refresh its snapshot before configuring")
 	}
-	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || !s.cleanupDone || s.cleanupFailed {
+	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || s.recovering || !s.cleanupDone || s.cleanupFailed {
 		s.mu.Unlock()
 		return ConfigureResult{}, failure(FailureConflict, "cannot configure until the previous generation cleaned up successfully")
 	}
@@ -397,11 +417,12 @@ func (m *Manager) Configure(ctx context.Context, sessionID string, expectedSeque
 	if err := ctx.Err(); err != nil {
 		return ConfigureResult{}, failureWithCause(FailureCanceled, "configuration was canceled before it was accepted", err)
 	}
-	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || !s.cleanupDone || s.cleanupFailed {
+	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || s.recovering || !s.cleanupDone || s.cleanupFailed {
 		return ConfigureResult{}, failure(FailureConflict, "cannot configure until the previous generation cleaned up successfully")
 	}
 	s.profiles, s.digest, s.sourceKind, s.warnings, s.configured = parsed.profiles, parsed.digest, loaded.Kind, parsed.warnings, true
 	s.active, s.lastFailure, s.lastFailureMessage, s.state, s.cleanupDone, s.cleanupFailed = nil, "", "", StateConfigured, true, false
+	s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
 	m.appendLocked(s)
 	result = ConfigureResult{Digest: s.digest, Sequence: s.sequence, Profiles: summaries(s.profiles), Warnings: cloneWarnings(s.warnings), SourceKind: s.sourceKind}
 	return cloneConfigure(result), nil
@@ -424,7 +445,7 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 		s.mu.Unlock()
 		return StartResult{}, failure(FailureNotConfigured, "configure a session before starting it")
 	}
-	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || !s.cleanupDone || s.cleanupFailed {
+	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || s.recovering || !s.cleanupDone || s.cleanupFailed {
 		s.mu.Unlock()
 		return StartResult{}, failure(FailureConflict, "previous generation has not completed cleanup")
 	}
@@ -441,6 +462,10 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
 	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure, s.lastFailureMessage = cancel, &ledger{}, make(chan struct{}), false, false, nil, "", ""
 	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = target, false, ""
+	s.failureMessageAfterCleanup = ""
+	s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
+	s.lastConnectedAt = time.Time{}
+	s.hasConnectedAt = false
 	s.state = StateProbing
 	m.appendLocked(s)
 	result = StartResult{Generation: generation, Sequence: s.sequence}
@@ -456,9 +481,20 @@ func (m *Manager) Stop(_ context.Context, sessionID string, generation uint64) (
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if generation != s.generation || generation == 0 {
+	if generation == 0 {
 		err := failure(FailureStaleGeneration, "generation is not active for this session")
 		return StopResult{}, err
+	}
+	if generation != s.generation {
+		// The UI can issue Stop from a recovery snapshot whose cleanup-complete
+		// IDLE was published just before the next generation was reserved.
+		// Accept that originating generation only while this recovery chain is
+		// still active, then stop the current generation under the same lock.
+		if !s.recovering || s.recoveryOriginGeneration != generation {
+			err := failure(FailureStaleGeneration, "generation is not active for this session")
+			return StopResult{}, err
+		}
+		generation = s.generation
 	}
 	if s.state == StateIdle || s.state == StateConfigured || s.state == StateFailed {
 		// A runtime-owned health failure can finish cleanup before the mobile
@@ -467,6 +503,10 @@ func (m *Manager) Stop(_ context.Context, sessionID string, generation uint64) (
 		// it must not turn a clean terminal state into a misleading stale-stop
 		// failure. Cleanup failures remain errors and still block restart.
 		if s.generation == generation && s.cleanupDone && !s.cleanupFailed && s.state != StateConfigured {
+			if s.recovering || s.recoveryOriginGeneration != 0 {
+				s.recovering, s.restartAfterCleanup, s.recoveryOriginGeneration = false, false, 0
+				m.appendLocked(s)
+			}
 			result = StopResult{Generation: generation, Sequence: s.sequence}
 			return result, nil
 		}
@@ -474,6 +514,12 @@ func (m *Manager) Stop(_ context.Context, sessionID string, generation uint64) (
 		return StopResult{}, err
 	}
 	result = StopResult{Generation: generation, Sequence: s.sequence}
+	if s.recovering || s.recoveryOriginGeneration != 0 {
+		// A Stop during health-triggered teardown cancels the queued retry even
+		// though the cleanup worker already owns the STOPPING transition.
+		s.recovering, s.restartAfterCleanup = false, false
+		s.recoveryOriginGeneration = 0
+	}
 	if s.state != StateStopping {
 		s.state = StateStopping
 		m.appendLocked(s)
@@ -525,9 +571,28 @@ func (m *Manager) reportHealthFailure(s *session, generation uint64) {
 		return
 	}
 	if s.activeTarget.Mode == AutoSelect {
-		s.restartAfterCleanup = true
+		now := m.now()
+		if s.hasConnectedAt && now.Sub(s.lastConnectedAt) >= autoRecoveryStable {
+			s.recoveryCount = 0
+			s.recoveryOriginGeneration = 0
+		}
+		if s.recoveryCount < autoRecoveryLimit {
+			s.recoveryCount++
+			s.restartAfterCleanup = true
+			s.recovering = true
+			if s.recoveryOriginGeneration == 0 {
+				s.recoveryOriginGeneration = generation
+			}
+		} else {
+			s.failureAfterCleanup = FailureRuntime
+			s.failureMessageAfterCleanup = autoRecoveryMessage
+			s.recovering = false
+			s.recoveryOriginGeneration = 0
+		}
 	} else {
 		s.failureAfterCleanup = FailureRuntime
+		s.recovering = false
+		s.recoveryOriginGeneration = 0
 	}
 	s.state = StateStopping
 	m.appendLocked(s)
@@ -562,12 +627,16 @@ func (m *Manager) Reset(_ context.Context, sessionID string, expectedSequence ui
 	if s.sequence != expectedSequence {
 		return SnapshotResult{}, failure(FailureConflict, "session changed; refresh its snapshot before resetting")
 	}
-	if !s.cleanupDone || s.cleanupFailed || s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping {
+	if !s.cleanupDone || s.cleanupFailed || s.recovering || s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping {
 		return SnapshotResult{}, failure(FailureConflict, "successful cleanup is required before resetting")
 	}
 	s.configured, s.digest, s.sourceKind = false, "", ""
 	s.profiles, s.warnings, s.active = nil, nil, nil
 	s.lastFailure, s.lastFailureMessage, s.state = "", "", StateIdle
+	s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
+	s.restartAfterCleanup, s.failureAfterCleanup, s.failureMessageAfterCleanup = false, "", ""
+	s.lastConnectedAt = time.Time{}
+	s.hasConnectedAt = false
 	s.cleanupDone, s.cleanupFailed = true, false
 	m.appendLocked(s)
 	return snapshotLocked(s), nil
@@ -754,6 +823,12 @@ func (m *Manager) advance(s *session, generation uint64, state State, profile *P
 		return false
 	}
 	s.state, s.active = state, cloneSummaryPtr(profile)
+	if state == StateConnected {
+		s.lastConnectedAt = m.now()
+		s.hasConnectedAt = true
+		s.recovering = false
+		s.recoveryOriginGeneration = 0
+	}
 	m.appendLocked(s)
 	s.mu.Unlock()
 	return true
@@ -796,6 +871,8 @@ func (m *Manager) finishWithPolicy(s *session, generation uint64, cause error, a
 	s.cleanupDone, s.cleanupFailed, s.cancel = true, cleanupErr != nil, nil
 	if cleanupErr != nil {
 		s.restartAfterCleanup, s.failureAfterCleanup = false, ""
+		s.failureMessageAfterCleanup = ""
+		s.recovering, s.recoveryOriginGeneration = false, 0
 		s.state, s.active, s.lastFailure = StateFailed, nil, FailureCleanup
 		diagnostic := errors.Join(cause, cleanupErr)
 		message := errorMessage(diagnostic)
@@ -808,25 +885,30 @@ func (m *Manager) finishWithPolicy(s *session, generation uint64, cause error, a
 		terminalFailure := s.failureAfterCleanup
 		s.restartAfterCleanup, s.failureAfterCleanup = false, ""
 		if terminalFailure != "" {
-			s.state, s.active, s.lastFailure, s.lastFailureMessage = StateFailed, nil, terminalFailure, ""
+			s.state, s.active, s.lastFailure, s.lastFailureMessage = StateFailed, nil, terminalFailure, s.failureMessageAfterCleanup
+			s.failureMessageAfterCleanup = ""
+			s.recovering, s.recoveryOriginGeneration = false, 0
 			m.appendLocked(s)
 			return
 		}
 		s.state, s.active, s.lastFailure, s.lastFailureMessage = StateIdle, nil, "", ""
 		m.appendLocked(s)
 		if restart {
-			go m.startFailover(s)
+			go m.startFailover(s, generation)
+		} else {
+			s.recovering, s.recoveryOriginGeneration = false, 0
 		}
 		return
 	}
 	message := errorMessage(cause)
 	s.state, s.active, s.lastFailure, s.lastFailureMessage = StateFailed, nil, CodeOf(cause), message
+	s.recovering, s.recoveryOriginGeneration = false, 0
 	m.appendLocked(s)
 }
 
-func (m *Manager) startFailover(s *session) {
+func (m *Manager) startFailover(s *session, expectedGeneration uint64) {
 	s.mu.Lock()
-	if !s.configured || !s.cleanupDone || s.state != StateIdle {
+	if !s.configured || !s.cleanupDone || s.state != StateIdle || !s.recovering || s.generation != expectedGeneration {
 		s.mu.Unlock()
 		return
 	}
@@ -835,6 +917,7 @@ func (m *Manager) startFailover(s *session) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure, s.lastFailureMessage = cancel, &ledger{}, make(chan struct{}), false, false, nil, "", ""
 	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = StartTarget{Mode: AutoSelect}, false, ""
+	s.failureMessageAfterCleanup = ""
 	s.state = StateProbing
 	m.appendLocked(s)
 	s.mu.Unlock()
@@ -875,6 +958,7 @@ func snapshotLocked(s *session) SnapshotResult {
 		Profiles: summaries(s.profiles), Warnings: cloneWarnings(s.warnings),
 		ActiveProfile: cloneSummaryPtr(s.active), LastFailure: s.lastFailure,
 		LastFailureMessage: s.lastFailureMessage, CleanupComplete: s.cleanupDone,
+		Recovering: s.recovering,
 	}
 }
 func summaries(in []RuntimeProfile) []ProfileSummary {

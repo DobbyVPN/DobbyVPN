@@ -515,8 +515,8 @@ func parseSourceURL(source string) (urlSource []byte, isURL bool, err error) {
 	if parsed.Scheme == "" {
 		return nil, false, nil
 	}
-	if (!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https")) || parsed.Host == "" {
-		return nil, true, fmt.Errorf("source URL must use HTTP or HTTPS")
+	if !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" {
+		return nil, true, fmt.Errorf("source URL must use HTTPS")
 	}
 	return []byte(source), true, nil
 }

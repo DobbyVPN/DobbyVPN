@@ -19,19 +19,15 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dobby.feature.diagnostic.domain.VpnConnectionState
-import com.dobby.feature.logging.presentation.LogsViewModel
 import com.dobby.feature.logging.domain.LogStorageStatus
+import com.dobby.feature.logging.presentation.LogsViewModel
+import com.dobby.feature.main.domain.SessionProtocol
 import com.dobby.feature.main.presentation.MainViewModel
 import org.jetbrains.compose.ui.tooling.preview.Preview
-import kotlin.math.log
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
@@ -84,12 +80,14 @@ fun ConnectionScreen(
                     tagText = when (uiMainState.connectionState) {
                         VpnConnectionState.DISCONNECTED -> "Status: disconnected"
                         VpnConnectionState.CONNECTING -> "Status: connecting..."
+                        VpnConnectionState.RECONNECTING -> "Status: reconnecting..."
                         VpnConnectionState.STOPPING -> "Status: stopping..."
                         VpnConnectionState.CONNECTED -> "Status: connected"
                     },
                     color = when (uiMainState.connectionState) {
                         VpnConnectionState.DISCONNECTED -> 0xFFFEE2E2
                         VpnConnectionState.CONNECTING -> 0xFFFEFEDC
+                        VpnConnectionState.RECONNECTING -> 0xFFFEFEDC
                         VpnConnectionState.STOPPING -> 0xFFFEFEDC
                         VpnConnectionState.CONNECTED -> 0xFFDCFCE7
                     },
@@ -142,24 +140,61 @@ fun ConnectionScreen(
                     when (uiMainState.connectionState) {
                         VpnConnectionState.DISCONNECTED -> "Start"
                         VpnConnectionState.CONNECTING -> "Stop"
+                        VpnConnectionState.RECONNECTING -> "Stop"
                         VpnConnectionState.STOPPING -> "Stopping..."
                         VpnConnectionState.CONNECTED -> "Stop"
                     }
                 )
             }
 
-            uiMainState.lastFailureCode?.let { failure ->
+            uiMainState.activeProfile?.let { profile ->
+                Spacer(modifier = Modifier.height(8.dp))
+                val protocolName = when (profile.protocol) {
+                    SessionProtocol.OUTLINE -> "Outline"
+                    SessionProtocol.XRAY -> "Xray"
+                    SessionProtocol.TRUST_TUNNEL -> "TrustTunnel"
+                }
+                Text(
+                    text = "Protocol: $protocolName",
+                    modifier = Modifier
+                        .testTag(AutomationSemantics.ACTIVE_PROTOCOL)
+                        .semantics { contentDescription = AutomationSemantics.ACTIVE_PROTOCOL },
+                )
+            }
+
+            uiMainState.warnings.forEach { warning ->
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Connection error: ${failure.name}",
+                    text = warning.message.ifBlank { warning.code },
+                    color = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier
+                        .testTag(AutomationSemantics.WARNING_STATUS)
+                        .semantics {
+                            contentDescription = AutomationSemantics.WARNING_STATUS
+                            stateDescription = warning.code
+                        },
+                )
+            }
+
+            uiMainState.lastFailureCode?.let { failure ->
+                val message = uiMainState.lastFailureMessage?.takeIf(String::isNotBlank)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = message ?: "Connection error (${failure.name})",
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier
                         .testTag(AutomationSemantics.FAILURE_STATUS)
                         .semantics {
                             contentDescription = AutomationSemantics.FAILURE_STATUS
-                            stateDescription = failure.name
+                            stateDescription = message?.let { "${failure.name}: $it" } ?: failure.name
                         },
                 )
+                if (message != null) {
+                    Text(
+                        text = "Code: ${failure.name}",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         }
 
@@ -225,10 +260,10 @@ fun ConnectionScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    logsViewModel.copyLogsToClipBoard()
+                    logsViewModel.exportLogs()
                     showLogsDialog = false
                 }) {
-                    Text("Send")
+                    Text("Export logs")
                 }
             },
             dismissButton = {

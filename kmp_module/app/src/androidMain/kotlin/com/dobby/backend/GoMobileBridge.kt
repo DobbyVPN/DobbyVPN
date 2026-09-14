@@ -5,7 +5,7 @@ import com.dobby.feature.vpn_service.PlatformServiceRegistry
 import com.dobby.gomobile.dobbyvpn.Dobbyvpn
 import com.dobby.gomobile.dobbyvpn.PlatformCallbacks
 
-object GoBackendWrapper {
+object GoMobileBridge {
     fun stopSession(sessionId: String, generation: Long): String =
         Dobbyvpn.stopSession(sessionId, generation)
 

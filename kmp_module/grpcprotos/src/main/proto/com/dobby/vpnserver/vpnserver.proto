@@ -110,6 +110,7 @@ message SessionSnapshot {
   SessionSourceKind source_kind = 10;
   repeated SessionProfile profiles = 11;
   repeated SessionWarning warnings = 12;
+  bool recovering = 13;
 }
 
 message SessionValidateConfigRequest {

@@ -11,6 +11,8 @@ object AutomationSemantics {
     const val SUBSCRIPTION_INPUT = "dobby.subscription.input"
     const val CONNECTION_ACTION = "dobby.connection.action"
     const val FAILURE_STATUS = "dobby.connection.failure"
+    const val ACTIVE_PROTOCOL = "dobby.connection.protocol"
+    const val WARNING_STATUS = "dobby.connection.warning"
     const val LOGS = "dobby.logs"
     const val LOG_STORAGE_STATUS = "dobby.logs.storage-status"
     const val SETTINGS_SCREEN = "dobby.settings.screen"
@@ -20,13 +22,14 @@ object AutomationSemantics {
     fun connectionState(state: VpnConnectionState): String = when (state) {
         VpnConnectionState.DISCONNECTED -> "disconnected"
         VpnConnectionState.CONNECTING -> "connecting"
+        VpnConnectionState.RECONNECTING -> "reconnecting"
         VpnConnectionState.STOPPING -> "stopping"
         VpnConnectionState.CONNECTED -> "connected"
     }
 
     fun connectionAction(state: VpnConnectionState): String = when (state) {
         VpnConnectionState.DISCONNECTED -> "start"
-        VpnConnectionState.CONNECTING, VpnConnectionState.CONNECTED -> "stop"
+        VpnConnectionState.CONNECTING, VpnConnectionState.RECONNECTING, VpnConnectionState.CONNECTED -> "stop"
         VpnConnectionState.STOPPING -> "stopping"
     }
 }
