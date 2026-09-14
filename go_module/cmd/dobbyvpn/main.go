@@ -137,7 +137,7 @@ func runServiceCommand(ctx context.Context, client grpcproto.VpnClient, args []s
 	}
 }
 
-func parseProfileIndex(value string) (int, error) {
+func parseProfileIndex(value string) (int32, error) {
 	index, err := strconv.Atoi(value)
 	if err != nil {
 		return 0, fmt.Errorf("parse profile index: %w", err)
@@ -145,7 +145,7 @@ func parseProfileIndex(value string) (int, error) {
 	if index < 0 || index > math.MaxInt32 {
 		return 0, fmt.Errorf("profile index must fit in int32")
 	}
-	return index, nil
+	return int32(index), nil
 }
 
 func initWindowsServiceLogger(
@@ -205,7 +205,7 @@ func initOptInServiceLogger(ctx context.Context, client grpcproto.VpnClient) err
 	return err
 }
 
-func connect(ctx context.Context, client grpcproto.VpnClient, source string, profileIndex *int) int {
+func connect(ctx context.Context, client grpcproto.VpnClient, source string, profileIndex *int32) int {
 	raw, err := readSource(source)
 	if err != nil {
 		reportCLIError("configuration source rejected", err)
@@ -214,11 +214,6 @@ func connect(ctx context.Context, client grpcproto.VpnClient, source string, pro
 	if loggerErr := initServiceLogger(ctx, client); loggerErr != nil {
 		reportCLIError("local service logging unavailable", loggerErr)
 		return exitRuntime
-	}
-	profileValue, profileErr := profileIndexAsInt32(profileIndex)
-	if profileErr != nil {
-		reportCLIError("profile index rejected", profileErr)
-		return exitArgs
 	}
 	current, snapshotErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{})
 	if snapshotErr != nil || current == nil || current.GetFailure() != nil {
@@ -244,7 +239,7 @@ func connect(ctx context.Context, client grpcproto.VpnClient, source string, pro
 	if configureErr != nil || configured == nil || configured.GetFailure() != nil {
 		return reportFailure(configureErr, failureOf(configured))
 	}
-	started, startErr := startSession(ctx, client, sessionID, configured.GetSequence(), profileValue)
+	started, startErr := startSession(ctx, client, sessionID, configured.GetSequence(), profileIndex)
 	if startErr != nil || started == nil || started.GetFailure() != nil {
 		return reportFailure(startErr, failureOf(started))
 	}
@@ -265,17 +260,6 @@ func initServiceLogger(ctx context.Context, client grpcproto.VpnClient) error {
 		return initWindowsServiceLogger(ctx, client, os.UserHomeDir)
 	}
 	return initOptInServiceLogger(ctx, client)
-}
-
-func profileIndexAsInt32(index *int) (*int32, error) {
-	if index == nil {
-		return nil, nil
-	}
-	if *index < 0 || *index > math.MaxInt32 {
-		return nil, fmt.Errorf("profile index must fit in int32")
-	}
-	value := int32(*index)
-	return &value, nil
 }
 
 func startSession(
