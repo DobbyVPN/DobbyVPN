@@ -47,6 +47,7 @@ kotlinx-coroutines-swing = { group = "org.jetbrains.kotlinx", name = "kotlinx-co
 datetime = { module = "com.soywiz.korlibs.klock:klock", version.ref = "datetime" }
 
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version = "1.10.2" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version = "1.10.2" }
 grpc-protobuf = { group = "io.grpc", name = "grpc-protobuf", version = "1.77.0" }
 grpc-netty = { group = "io.grpc", name = "grpc-netty", version = "1.77.0" }
 grpc-stub = { group = "io.grpc", name = "grpc-stub", version = "1.77.0" }

@@ -8,8 +8,8 @@ import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.LogsRepository
 import com.dobby.feature.logging.domain.provideAdditionalLogFilePaths
 import com.dobby.feature.main.domain.AndroidSessionController
-import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
+import com.dobby.feature.main.domain.SessionChangeEvents
 
 /** The Android activity and VPN service share this process-owned dependency graph. */
 interface AppDependenciesProvider {
@@ -18,13 +18,13 @@ interface AppDependenciesProvider {
 
 fun createAndroidAppDependencies(context: Context): AppDependencies {
     val appContext = context.applicationContext
-    val connectionStateRepository = ConnectionStateRepository()
+    val sessionChangeEvents = SessionChangeEvents()
     val logsRepository = LogsRepository(additionalLogFilePaths = provideAdditionalLogFilePaths())
     val logger = Logger(logsRepository)
     return AppDependencies(
-        connectionStateRepository = connectionStateRepository,
+        sessionChangeEvents = sessionChangeEvents,
         permissionEventsChannel = PermissionEventsChannel(),
-        sessionController = AndroidSessionController(appContext, connectionStateRepository),
+        sessionController = AndroidSessionController(appContext, sessionChangeEvents),
         logger = logger,
         configsRepository = DobbyConfigsRepositoryImpl(
             prefs = appContext.getSharedPreferences("DobbyPrefs", MODE_PRIVATE),

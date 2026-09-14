@@ -16,7 +16,7 @@ import kotlinx.serialization.json.JsonObject
 /** Android gomobile adapter for the process-owned Go session. */
 internal class AndroidSessionController(
     private val context: Context,
-    private val connectionState: ConnectionStateRepository = ConnectionStateRepository(),
+    private val sessionChangeEvents: SessionChangeEvents,
 ) : SessionController {
     private val mutex = Mutex()
 
@@ -81,7 +81,7 @@ internal class AndroidSessionController(
         mutex.withLock { snapshotNow() }
     }
 
-    override fun watch(): Flow<SessionSnapshot> = connectionState.sessionChanges
+    override fun watch(): Flow<SessionSnapshot> = sessionChangeEvents.sessionChanges
         .onStart { emit(Unit) }
         .map {
             when (val current = snapshot()) {

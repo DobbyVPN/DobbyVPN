@@ -12,7 +12,7 @@ import androidx.core.content.ContextCompat
 import com.dobby.AppDependenciesProvider
 import com.dobby.backend.GoBackendWrapper
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.main.domain.ConnectionStateRepository
+import com.dobby.feature.main.domain.SessionChangeEvents
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -65,7 +65,7 @@ class DobbyVpnService : VpnService() {
 
     private val appDependencies get() = (application as AppDependenciesProvider).appDependencies
     private val logger: Logger get() = appDependencies.logger
-    private val connectionState: ConnectionStateRepository get() = appDependencies.connectionStateRepository
+    private val sessionChangeEvents: SessionChangeEvents get() = appDependencies.sessionChangeEvents
     val serviceId: String = UUID.randomUUID().toString()
 
     /** The service retains this original descriptor while Go owns a duplicated FD. */
@@ -198,7 +198,7 @@ class DobbyVpnService : VpnService() {
             logger.log("[svc:$serviceId] ignore stale Go state=$state generation=$generation")
             return
         }
-        connectionState.publishSessionChanged()
+        sessionChangeEvents.publishSessionChanged()
         if (state == "IDLE" || state == "FAILED") {
             if (vpnInterface == null) stopForeground(STOP_FOREGROUND_REMOVE)
         }

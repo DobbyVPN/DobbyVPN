@@ -173,6 +173,10 @@ kotlin {
             implementation(libs.kotlinx.coroutines.swing)
         }
 
+        jvmTest.dependencies {
+            implementation(libs.kotlinx.coroutines.test)
+        }
+
         androidUnitTest.dependencies {
             implementation(kotlin("test-junit"))
             implementation(libs.junit)

@@ -48,9 +48,10 @@ session managers.
 
 Go accepts an HTTP(S) source URL or transient inline configuration. UI code
 persists only a URL after configuration succeeds. Returned profiles omit
-server addresses and protocol payloads. Public failure messages use typed,
-input-safe text; raw URLs, credentials, and configuration are not echoed in
-responses or logs.
+dedicated server-address fields and protocol payloads. The user-provided
+Description is returned unchanged and may itself contain sensitive text.
+Public failure messages use typed, input-safe text; raw URLs, credentials, and
+configuration are not echoed in failure responses or logs.
 
 An unsupported legacy section such as Cloak rejects the whole configuration
 with `UNSUPPORTED`. Supported sections in the same input are not partially

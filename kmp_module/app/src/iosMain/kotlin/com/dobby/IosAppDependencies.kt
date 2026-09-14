@@ -3,11 +3,11 @@ package com.dobby
 import com.dobby.feature.logging.Logger
 import com.dobby.feature.logging.domain.CopyLogsInteractor
 import com.dobby.feature.logging.domain.LogsRepository
-import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.IosSessionBridge
 import com.dobby.feature.main.domain.IosSessionController
 import com.dobby.feature.main.domain.PermissionEventsChannel
+import com.dobby.feature.main.domain.SessionChangeEvents
 
 /** Builds the app graph at the Swift entrypoint, where the provider bridge is available. */
 fun createIosAppDependencies(
@@ -16,9 +16,9 @@ fun createIosAppDependencies(
     copyLogsInteractor: CopyLogsInteractor,
     configsRepository: DobbyConfigsRepository,
 ): AppDependencies {
-    val connectionStateRepository = ConnectionStateRepository()
+    val sessionChangeEvents = SessionChangeEvents()
     return AppDependencies(
-        connectionStateRepository = connectionStateRepository,
+        sessionChangeEvents = sessionChangeEvents,
         permissionEventsChannel = PermissionEventsChannel(),
         sessionController = IosSessionController(bridge),
         logger = Logger(logsRepository),

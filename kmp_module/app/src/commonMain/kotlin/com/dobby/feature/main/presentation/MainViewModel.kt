@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dobby.feature.diagnostic.domain.VpnConnectionState
 import com.dobby.feature.logging.Logger
-import com.dobby.feature.main.domain.ConnectionStateRepository
 import com.dobby.feature.main.domain.DobbyConfigsRepository
 import com.dobby.feature.main.domain.PermissionEventsChannel
 import com.dobby.feature.main.domain.SessionController
@@ -33,14 +32,15 @@ private const val snapshotRetryDelayMillis = 1_000L
 /** Go owns configuration, selection, failover, and lifecycle; this class maps snapshots to UI. */
 class MainViewModel(
     private val configsRepository: DobbyConfigsRepository,
-    private val connectionStateRepository: ConnectionStateRepository,
     private val permissionEventsChannel: PermissionEventsChannel,
     private val sessionController: SessionController,
     private val logger: Logger,
 ) : ViewModel() {
     private val lifecycleMutex = Mutex()
     private val revisionGate = SessionRevisionGate()
+    // An accepted Start can precede its Watch snapshot; retain its generation for Stop.
     private var activeGeneration: ULong? = null
+    // Configure acceptance can precede the snapshot that reports configured=true.
     private var configured = false
     private var startInFlight = false
     private var pendingPermissionStart = false
@@ -64,7 +64,7 @@ class MainViewModel(
         _uiState.value = _uiState.value.copy(lastFailureCode = null)
         logger.log("Connection button clicked")
         viewModelScope.launch {
-            when (connectionStateRepository.statusFlow.value) {
+            when (_uiState.value.connectionState) {
                 VpnConnectionState.DISCONNECTED -> connect(connectionUrl)
                 VpnConnectionState.CONNECTING, VpnConnectionState.CONNECTED -> stopVpnService()
                 VpnConnectionState.STOPPING -> logger.log("Ignoring connection button while stop is pending")
@@ -207,7 +207,6 @@ class MainViewModel(
         failureCode: SessionFailureCode? = null,
     ) {
         _uiState.emit(_uiState.value.copy(connectionState = state, lastFailureCode = failureCode))
-        connectionStateRepository.updateStatus(state)
     }
 
     private fun publishFailure(code: SessionFailureCode) {
