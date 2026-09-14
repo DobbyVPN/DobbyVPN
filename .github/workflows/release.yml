@@ -62,15 +62,6 @@ jobs:
     with:
       source_sha: ${{ github.sha }}
 
-  ios_libs_build:
-    needs: [verification, prepare_version]
-    uses: ./.github/workflows/ios_libs_generate.yml
-    with:
-      source_sha: ${{ github.sha }}
-      app_major_version: ${{ needs.prepare_version.outputs.major }}
-      app_minor_version: ${{ needs.prepare_version.outputs.minor }}
-      app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
-
   android_build:
     needs: [verification, prepare_version]
     uses: ./.github/workflows/android_build.yml
@@ -98,7 +89,7 @@ jobs:
       version_code: ${{ needs.prepare_version.outputs.android_version_code }}
 
   ios_build:
-    needs: [prepare_version, ios_libs_build]
+    needs: [verification, prepare_version]
     uses: ./.github/workflows/ios_build.yml
     with:
       source_sha: ${{ github.sha }}

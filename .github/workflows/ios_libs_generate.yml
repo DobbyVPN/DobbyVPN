@@ -3,15 +3,6 @@ name: Build iOS VPN Libraries
 on:
   workflow_call:
     inputs:
-      app_major_version:
-        type: string
-        required: true
-      app_minor_version:
-        type: string
-        required: true
-      app_maintenance_version:
-        type: string
-        required: true
       source_sha:
         description: Lowercase full source commit SHA to build.
         type: string
@@ -118,9 +109,6 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 30
     env:
-      APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
-      APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
-      APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
       APPLE_BUILD_NUMBER: ${{ github.run_number }}
       APP_SOURCE_SHA: ${{ inputs.source_sha }}
       APP_SOURCE_REPOSITORY: ${{ github.repository }}
@@ -138,6 +126,10 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Read app version
+        id: version
+        run: python3 .github/scripts/version_metadata.py --version-file VERSION --github-output "$GITHUB_OUTPUT"
 
       - name: Select Xcode 26.3
         run: |
@@ -183,6 +175,10 @@ jobs:
 
       - name: Build KMP iOS framework
         working-directory: kmp_module
+        env:
+          APP_MAJOR_VERSION: ${{ steps.version.outputs.major }}
+          APP_MINOR_VERSION: ${{ steps.version.outputs.minor }}
+          APP_MAINTENANCE_VERSION: ${{ steps.version.outputs.maintenance }}
         run: |
           set -euo pipefail
           test "$APP_SOURCE_SHA" = "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
