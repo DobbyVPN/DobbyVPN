@@ -886,6 +886,14 @@ internal class RealAndroidHostedPlatform(
                 ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
                 connectivity.getLinkProperties(network)?.routes?.any { it.isDefaultRoute } == true
         } ?: error("Routing probe has no non-VPN Internet network")
+        val physicalTransport = connectivity.getNetworkCapabilities(physical)
+            ?.let { capabilities ->
+                supportedPhysicalTransport(
+                    wifi = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+                    ethernet = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
+                )
+            }
+            ?: error("Routing probe has an unsupported physical network transport")
         val vpn = networks.firstOrNull(::isVpn)
             ?: error("Routing probe has no VPN network")
         val endpoint = URL(endpoints.identityUrl)
@@ -900,6 +908,7 @@ internal class RealAndroidHostedPlatform(
             writeJson(ready, JSONObject()
                 .put("phase", "ready")
                 .put("physical_interface", requireNotNull(connectivity.getLinkProperties(physical)?.interfaceName))
+                .put("physical_transport", physicalTransport)
                 .put("vpn_interface", requireNotNull(connectivity.getLinkProperties(vpn)?.interfaceName))
                 .put("ipv4", address.hostAddress)
                 .put("port", if (endpoint.port == -1) 443 else endpoint.port))
@@ -1105,6 +1114,14 @@ internal class RealAndroidHostedPlatform(
         const val STABILITY_INTERVAL_MILLIS = 1_000L
         const val THROUGHPUT_BYTES = 1024 * 1024
         const val NANOS_PER_MILLISECOND = 1_000_000.0
+    }
+}
+
+internal fun supportedPhysicalTransport(wifi: Boolean, ethernet: Boolean): String? {
+    return when {
+        wifi && !ethernet -> "wifi"
+        ethernet && !wifi -> "ethernet"
+        else -> null
     }
 }
 

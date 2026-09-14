@@ -236,6 +236,7 @@ class FakeAndroidRunner:
                     value = {
                         "phase": "ready",
                         "physical_interface": "eth0",
+                        "physical_transport": "ethernet",
                         "vpn_interface": "tun0",
                         "ipv4": "203.0.113.10",
                         "port": 443,
@@ -699,6 +700,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         proof_events = [fields for event, fields in progress if event == "native-state"]
         self.assertTrue(any(fields.get("phase") == "blocked" for fields in proof_events))
         self.assertEqual(self.adapter._validated_physical_interface, "eth0")
+        self.assertEqual(self.adapter._validated_physical_transport, "ethernet")
         self.assertNotIn(
             "203.0.113.10",
             json.dumps(proof_events, sort_keys=True),
@@ -765,6 +767,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                 ) as raised:
                     adapter._routing_proof(name, time.monotonic() + 5.0)
                 self.assertIsNone(adapter._validated_physical_interface)
+                self.assertIsNone(adapter._validated_physical_transport)
                 notes = "\n".join(getattr(raised.exception, "__notes__", ()))
                 if suffix == "direct-success":
                     self.assertIn('"status": 200', notes)
@@ -844,6 +847,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         runner.routing_ready_override = {
             "phase": "ready",
             "physical_interface": "eth0",
+            "physical_transport": "ethernet",
             "vpn_interface": "eth0",
             "ipv4": "203.0.113.10",
             "port": 443,
@@ -882,6 +886,39 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             adapter._routing_proof("routing.json", time.monotonic() + 5.0)
         self.assertIn("before_rx=100", str(raised.exception))
         self.assertIn("after_tx=200", str(raised.exception))
+
+    def test_routing_proof_rejects_unsupported_physical_transport(self) -> None:
+        runner = FakeAndroidRunner(
+            self.runner.raw_directory.parent / "unsupported-transport"
+        )
+        runner.routing_phases["routing.json.ready"] = "ready"
+        runner.routing_ready_override = {
+            "phase": "ready",
+            "physical_interface": "eth0",
+            "physical_transport": "cellular",
+            "vpn_interface": "tun0",
+            "ipv4": "203.0.113.10",
+            "port": 443,
+        }
+        adapter = AndroidHostedAdapter(
+            runner=runner,
+            profile=self.profile,
+            adb=self.adb,
+            source_sha=_SOURCE_SHA,
+            identity_url="https://identity.example.test/ip",
+            latency_url="https://latency.example.test/blob",
+            download_url="https://download.example.test/blob",
+            upload_url="https://upload.example.test/blob",
+        )
+        with self.assertRaisesRegex(
+            ScenarioExecutionError, "ANDROID_ROUTING_READY_INVALID"
+        ):
+            adapter._routing_proof("routing.json", time.monotonic() + 5.0)
+        self.assertIsNone(adapter._validated_physical_interface)
+        self.assertIsNone(adapter._validated_physical_transport)
+        self.assertFalse(
+            any(call[1:3] == ("shell", "iptables") for call in runner.calls)
+        )
 
     def test_process_loss_uses_two_sessions_with_proven_absence_between_them(self) -> None:
         runner = ExternalControlRunner(self.runner.raw_directory.parent / "loss-raw")
@@ -1032,6 +1069,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         runner.routing_ready_override = {
             "phase": "ready",
             "physical_interface": "wlan0",
+            "physical_transport": "wifi",
             "vpn_interface": "tun0",
             "ipv4": "203.0.113.10",
             "port": 443,
@@ -1068,7 +1106,8 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.assertEqual(len(transition_calls), 1)
         script = shlex.split(transition_calls[0][4])[0]
         self.assertIn("ip -4 route show table all default", script)
-        self.assertIn("interface=$3", script)
+        self.assertIn("transition_kind=$3", script)
+        self.assertIn("interface=$4", script)
         self.assertNotIn("interfaces=$(printf", script)
         self.assertIn("while [ \"$(date +%s)\" -lt \"$down_deadline\" ]", script)
         self.assertIn("while [ \"$(date +%s)\" -lt \"$overall_deadline\" ]", script)
@@ -1083,13 +1122,47 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.assertIn("[ \"$wifi_state_output\" = \"Wifi is $1\" ]", script)
         self.assertIn('svc wifi disable', script)
         self.assertIn('svc wifi enable', script)
-        self.assertIn('[ "$down_wifi_disabled" -eq 1 ] && ! route_is_usable "$down_routes"', script)
-        self.assertIn('[ "$restore_wifi_ready" -eq 1 ] && link_is_up "$restore_link" && route_is_usable "$restore_routes"', script)
-        self.assertNotIn('ip link set dev "$interface"', script)
+        self.assertIn('if network_state_is absent "$down_link" && ! route_is_usable "$down_routes"; then', script)
+        self.assertIn('if network_state_is present "$restore_link" && route_is_usable "$restore_routes"; then', script)
+        self.assertIn('ip link set dev "$interface" down', script)
+        self.assertIn('ip link set dev "$interface" up', script)
         self.assertEqual(transition_calls[0][-1], "wlan0")
-        self.assertEqual(len(transition_calls[0]), 9)
-        self.assertGreaterEqual(int(transition_calls[0][-2]), 1)
+        self.assertEqual(transition_calls[0][-2], "wifi")
+        self.assertEqual(len(transition_calls[0]), 10)
+        self.assertGreaterEqual(int(transition_calls[0][-4]), 1)
         self.assertGreaterEqual(int(transition_calls[0][-3]), 1)
+
+        ethernet_runner = ExternalControlRunner(
+            self.runner.raw_directory.parent / "external-ethernet-raw"
+        )
+        ethernet_runner.routing_ready_override = {
+            "phase": "ready",
+            "physical_interface": "eth0",
+            "physical_transport": "ethernet",
+            "vpn_interface": "tun0",
+            "ipv4": "203.0.113.10",
+            "port": 443,
+        }
+        ethernet_runner.routing_rule_interface = "eth0"
+        ethernet_runner.routing_phases["routing.json.ready"] = "ready"
+        ethernet_adapter = AndroidHostedAdapter(
+            runner=ethernet_runner,
+            profile=self.profile,
+            adb=self.adb,
+            source_sha=_SOURCE_SHA,
+            identity_url="https://identity.example.test/ip",
+            latency_url="https://latency.example.test/blob",
+            download_url="https://download.example.test/blob",
+            upload_url="https://upload.example.test/blob",
+        )
+        ethernet_adapter._routing_proof("routing.json", time.monotonic() + 5.0)
+        ethernet_adapter._perform_external_control(
+            "network_transition", time.monotonic() + 5.0
+        )
+        ethernet_transition = next(
+            call for call in ethernet_runner.calls if "DobbyVPN uplink" in call[4]
+        )
+        self.assertEqual(ethernet_transition[-2:], ("ethernet", "eth0"))
 
     def test_android_external_control_retains_primary_and_secondary_output(self) -> None:
         runner = ExternalControlRunner(self.runner.raw_directory.parent / "external-errors")

@@ -41,6 +41,14 @@ class AndroidHostedProfileTestDriverTest {
         get() = InstrumentationRegistry.getInstrumentation().targetContext
     private val files = mutableListOf<File>()
 
+    @Test
+    fun physical_transport_supports_wifi_and_ethernet_only() {
+        assertEquals("wifi", supportedPhysicalTransport(wifi = true, ethernet = false))
+        assertEquals("ethernet", supportedPhysicalTransport(wifi = false, ethernet = true))
+        assertEquals(null, supportedPhysicalTransport(wifi = false, ethernet = false))
+        assertEquals(null, supportedPhysicalTransport(wifi = true, ethernet = true))
+    }
+
     @After
     fun cleanupFiles() {
         files.forEach(File::delete)

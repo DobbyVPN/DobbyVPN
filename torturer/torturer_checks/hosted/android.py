@@ -232,6 +232,7 @@ class AndroidHostedAdapter:
         self._connections: tuple[ConnectionIdentity, ...] = ()
         self._selected_connection: ConnectionIdentity | None = None
         self._validated_physical_interface: str | None = None
+        self._validated_physical_transport: str | None = None
         self._last_observation: AndroidProfileObservation | None = None
         self._observed_baseline_ip: str | None = None
         self._observed_tunneled_ips: set[str] = set()
@@ -305,6 +306,7 @@ class AndroidHostedAdapter:
         """
         self._progress_scenario_id = scenario.id
         self._validated_physical_interface = None
+        self._validated_physical_transport = None
         started = time.monotonic()
         deadline, cleanup_deadline = _scenario_deadlines(
             started, float(scenario.max_duration_seconds)
@@ -771,7 +773,7 @@ class AndroidHostedAdapter:
                     control_file, "ready", deadline, abort=abort
                 )
             )
-            physical, vpn, ipv4, port = self._routing_ready_values(ready_value)
+            physical, transport, vpn, ipv4, port = self._routing_ready_values(ready_value)
             self._emit_progress(
                 "native-state",
                 kind="routing-proof",
@@ -898,6 +900,7 @@ class AndroidHostedAdapter:
         if primary is not None:
             raise primary
         self._validated_physical_interface = physical
+        self._validated_physical_transport = transport
 
     def _routing_ready(
         self,
@@ -943,14 +946,17 @@ class AndroidHostedAdapter:
     @staticmethod
     def _routing_ready_values(
         ready: Mapping[str, object],
-    ) -> tuple[str, str, str, int]:
+    ) -> tuple[str, str, str, str, int]:
         physical = ready.get("physical_interface")
+        transport = ready.get("physical_transport")
         vpn = ready.get("vpn_interface")
         raw_ipv4 = ready.get("ipv4")
         raw_port = ready.get("port")
         if (
             not isinstance(physical, str)
             or _ANDROID_INTERFACE.fullmatch(physical) is None
+            or not isinstance(transport, str)
+            or transport not in {"wifi", "ethernet"}
             or not isinstance(vpn, str)
             or _ANDROID_INTERFACE.fullmatch(vpn) is None
             or physical == vpn
@@ -973,7 +979,7 @@ class AndroidHostedAdapter:
             raise AndroidHostedAdapter._routing_observation_failure(
                 "ANDROID_ROUTING_READY_INVALID", ready
             )
-        return physical, vpn, str(address), raw_port
+        return physical, transport, vpn, str(address), raw_port
 
     def _routing_counters(self, interface: str, deadline: float) -> tuple[int, int]:
         if _ANDROID_INTERFACE.fullmatch(interface) is None:
@@ -1166,11 +1172,12 @@ class AndroidHostedAdapter:
     def _perform_external_control(self, operation: str, deadline: float) -> None:
         if operation == "network_transition":
             interface = self._validated_physical_interface
-            if interface is None:
+            transport = self._validated_physical_transport
+            if interface is None or transport is None:
                 raise ScenarioExecutionError(
                     "ANDROID_UPLINK_IDENTITY_UNAVAILABLE"
                 )
-            self._interrupt_uplink(interface, deadline)
+            self._interrupt_uplink(interface, transport, deadline)
             return
         raise ScenarioExecutionError("ANDROID_OPERATION_UNSUPPORTED")
 
@@ -1215,17 +1222,20 @@ class AndroidHostedAdapter:
             time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
         raise ScenarioExecutionError("ANDROID_PROCESS_LOSS_NOT_ABSENT")
 
-    def _interrupt_uplink(self, interface: str, deadline: float) -> None:
-        """Disable and restore Android Wi-Fi on the proven uplink.
+    def _interrupt_uplink(self, interface: str, transport: str, deadline: float) -> None:
+        """Toggle the proven Android uplink using its matching control.
 
         ADB remains on an independent Android control transport. The guest-side
-        transaction uses Android's Wi-Fi service so its network state and route
-        change together, then restores service state from an EXIT/signal trap.
+        transaction uses Android's Wi-Fi service or link state according to the
+        proven Android network transport, then restores it from a trap.
         """
 
         remaining = _remaining(deadline, "ANDROID_UPLINK_TIMEOUT")
         if _ANDROID_INTERFACE.fullmatch(interface) is None:
             raise ScenarioExecutionError("ANDROID_UPLINK_IDENTITY_UNAVAILABLE")
+        if transport not in {"wifi", "ethernet"}:
+            raise ScenarioExecutionError("ANDROID_UPLINK_TRANSITION_UNSUPPORTED")
+        transition_kind = transport
         restore_reserve = min(20.0, max(2.0, remaining / 2.0))
         down_window = remaining - restore_reserve
         if down_window <= 0:
@@ -1237,8 +1247,9 @@ set +e
 script_start=$(date +%s)
 down_deadline=$((script_start + $1))
 overall_deadline=$((script_start + $2))
-interface=$3
-wifi_disabled=0
+transition_kind=$3
+interface=$4
+restore_needed=0
 restore_status=0
 restore_detail=
 
@@ -1280,13 +1291,32 @@ wifi_state_is() {
     [ "$wifi_state_rc" -eq 0 ] && [ "$wifi_state_output" = "Wifi is $1" ]
 }
 
+network_state_is() {
+    state=$1
+    link=$2
+    if [ "$state" = present ]; then
+        link_is_up "$link" || return 1
+        [ "$transition_kind" != wifi ] || wifi_state_is enabled
+    elif [ "$transition_kind" = wifi ]; then
+        wifi_state_is disabled
+    else
+        ! link_is_up "$link"
+    fi
+}
+
 restore_uplink() {
-    [ "$wifi_disabled" -eq 1 ] || return 0
-    restore_output=$(svc wifi enable 2>&1)
+    [ "$restore_needed" -eq 1 ] || return 0
+    if [ "$transition_kind" = wifi ]; then
+        restore_command="svc wifi enable"
+        restore_output=$(svc wifi enable 2>&1)
+    else
+        restore_command="ip link set up"
+        restore_output=$(ip link set dev "$interface" up 2>&1)
+    fi
     restore_rc=$?
     if [ "$restore_rc" -ne 0 ]; then
         restore_status=1
-        restore_detail="svc wifi enable rc=$restore_rc output=$restore_output"
+        restore_detail="$restore_command rc=$restore_rc output=$restore_output"
         return 0
     fi
     restore_ready=0
@@ -1295,14 +1325,12 @@ restore_uplink() {
         restore_link_rc=$?
         restore_routes=$(ip -4 route show table all default 2>&1)
         restore_routes_rc=$?
-        restore_wifi_ready=0
-        wifi_state_is enabled && restore_wifi_ready=1
         if [ "$restore_link_rc" -ne 0 ] || [ "$restore_routes_rc" -ne 0 ]; then
             restore_status=1
             restore_detail="restore link rc=$restore_link_rc output=$restore_link; restore routes rc=$restore_routes_rc output=$restore_routes"
             return 0
         fi
-        if [ "$restore_wifi_ready" -eq 1 ] && link_is_up "$restore_link" && route_is_usable "$restore_routes"; then
+        if network_state_is present "$restore_link" && route_is_usable "$restore_routes"; then
             restore_ready=$((restore_ready + 1))
         else
             restore_ready=0
@@ -1314,10 +1342,10 @@ restore_uplink() {
     done
     if [ "$restore_ready" -lt 2 ]; then
         restore_status=1
-        restore_detail="restore wifi=$wifi_state_output; link=$restore_link; routes=$restore_routes"
+        restore_detail="restore network=$transition_kind; wifi=$wifi_state_output; link=$restore_link; routes=$restore_routes"
         return 0
     fi
-    wifi_disabled=0
+    restore_needed=0
     printf '%s\n' "DobbyVPN uplink interface=$interface state=restored"
 }
 
@@ -1362,22 +1390,24 @@ if [ "$before_link_rc" -ne 0 ]; then
     printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_LINK_PROBE_FAILED detail=link rc=$before_link_rc output=$before_link" >&2
     exit 13
 fi
-if ! link_is_up "$before_link" || ! route_is_usable "$route_output"; then
+if ! network_state_is present "$before_link" || ! route_is_usable "$route_output"; then
     printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_PRECONDITION detail=link=$before_link; routes=$route_output" >&2
     exit 14
 fi
-if ! wifi_state_is enabled; then
-    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_WIFI_PRECONDITION detail=wifi rc=$wifi_state_rc output=$wifi_state_output" >&2
-    exit 18
-fi
 printf '%s\n' "DobbyVPN uplink interface=$interface state=present"
 
-# Mark Wi-Fi for restoration before changing it, including a partial failure.
-wifi_disabled=1
-down_output=$(svc wifi disable 2>&1)
+# Mark the proven uplink for restoration before changing it, including partial failure.
+restore_needed=1
+if [ "$transition_kind" = wifi ]; then
+    down_command="svc wifi disable"
+    down_output=$(svc wifi disable 2>&1)
+else
+    down_command="ip link set down"
+    down_output=$(ip link set dev "$interface" down 2>&1)
+fi
 down_rc=$?
 if [ "$down_rc" -ne 0 ]; then
-    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_DOWN_FAILED detail=svc wifi disable rc=$down_rc output=$down_output" >&2
+    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_DOWN_FAILED detail=$down_command rc=$down_rc output=$down_output" >&2
     exit 15
 fi
 
@@ -1387,13 +1417,11 @@ while [ "$(date +%s)" -lt "$down_deadline" ]; do
     down_link_rc=$?
     down_routes=$(ip -4 route show table all default 2>&1)
     down_routes_rc=$?
-    down_wifi_disabled=0
-    wifi_state_is disabled && down_wifi_disabled=1
     if [ "$down_link_rc" -ne 0 ] || [ "$down_routes_rc" -ne 0 ]; then
         printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_PROBE_FAILED detail=link rc=$down_link_rc output=$down_link; routes rc=$down_routes_rc output=$down_routes" >&2
         exit 16
     fi
-    if [ "$down_wifi_disabled" -eq 1 ] && ! route_is_usable "$down_routes"; then
+    if network_state_is absent "$down_link" && ! route_is_usable "$down_routes"; then
         absence=$((absence + 1))
     else
         absence=0
@@ -1419,6 +1447,7 @@ exit 0
                 "dobbyvpn-uplink",
                 str(down_budget_seconds),
                 str(overall_budget_seconds),
+                transition_kind,
                 interface,
             ),
             remaining,
