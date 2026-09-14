@@ -25,8 +25,9 @@ class ExportLogsInteractorImpl : ExportLogsInteractor {
             isVisible = true
         }
 
-        val selectedDirectory = dialog.directory ?: return
-        val selectedFile = dialog.file ?: return
+        val selectedDirectory: String? = dialog.directory
+        val selectedFile: String? = dialog.file
+        if (selectedDirectory == null || selectedFile == null) return
 
         bestCompressionGzip(File(selectedDirectory, selectedFile))
             .bufferedWriter(Charsets.UTF_8)
