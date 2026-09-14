@@ -6,7 +6,7 @@ import zlib
 class ExportLogsInteractorImpl: ExportLogsInteractor {
     private var logs = IOSAppCompositionRoot.logsRepository
 
-    func doExport(logs: [String]) {
+    func export(logs: [String]) {
         let logText = logs.joined(separator: "\n")
 
         let formatter = DateFormatter()
