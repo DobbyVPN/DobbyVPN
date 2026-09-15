@@ -10,7 +10,16 @@ import re
 import sys
 import zipfile
 
-from android_dependency_provenance import GO_SOURCE_COMMIT, GO_VERSION
+from android_dependency_provenance import (
+    ANDROID_BUILD_TOOLS,
+    ANDROID_NDK,
+    GO_SOURCE_COMMIT,
+    GO_VERSION,
+    GRADLE_VERSION,
+    JAVA_MAJOR,
+    MOBILE_MODULE,
+    MOBILE_VERSION,
+)
 
 
 SCHEMA = 1
@@ -23,13 +32,13 @@ NATIVE_PATHS = (
     "lib/x86_64/libgojni.so",
 )
 TOOLCHAIN = {
-    "android_build_tools": "36.0.0",
-    "android_ndk": "27.3.13750724",
+    "android_build_tools": ANDROID_BUILD_TOOLS,
+    "android_ndk": ANDROID_NDK,
     "go": f"go{GO_VERSION}",
     "go_source_commit": GO_SOURCE_COMMIT,
-    "gomobile": "golang.org/x/mobile@v0.0.0-20260520154334-0e4426e1883d",
-    "gradle": "8.13",
-    "java": "17",
+    "gomobile": f"{MOBILE_MODULE}@{MOBILE_VERSION}",
+    "gradle": GRADLE_VERSION,
+    "java": str(JAVA_MAJOR),
 }
 BUILD_ENVIRONMENT = {
     "go_flags": "-trimpath -buildvcs=false",

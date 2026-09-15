@@ -116,13 +116,11 @@ kotlin {
     sourceSets {
 
         androidMain.dependencies {
-            implementation(compose.preview)
             implementation(libs.androidx.activity.compose)
             implementation(libs.androidx.core.ktx)
             implementation(libs.androidx.lifecycle.runtime.ktx)
             implementation(libs.androidx.ui)
             implementation(libs.androidx.ui.graphics)
-            implementation(libs.androidx.ui.tooling.preview)
             implementation(libs.androidx.material3)
 
             implementation(backendGomobileAar)
@@ -157,7 +155,6 @@ kotlin {
         jvmMain.dependencies {
             implementation(project(":grpcstub"))
             implementation(libs.protobuf.java)
-            runtimeOnly(libs.grpc.netty)
 
             implementation(compose.desktop.currentOs)
             implementation(libs.skiko.win)

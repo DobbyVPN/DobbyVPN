@@ -4,6 +4,13 @@ Run checks relevant to the change. Tests are disposable: rerun them freely,
 keep useful diagnostics, and clean up resources on success or failure.
 A missing tool or unavailable platform is not a passing test.
 
+Optional Git hooks can be installed with:
+
+```bash
+go install github.com/evilmartians/lefthook/v2@v2.1.10
+lefthook install
+```
+
 ## Source checks
 
 On Linux, Go tests need the TrustTunnel bridge and C++ runtimes staged in

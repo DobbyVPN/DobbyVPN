@@ -26,7 +26,6 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.grpc.stub)
     implementation(libs.grpc.protobuf)
-    implementation(libs.protobuf.java.util)
     implementation(libs.protobuf.kotlin)
     implementation(libs.grpc.kotlin.stub)
     implementation(libs.grpc.netty)
