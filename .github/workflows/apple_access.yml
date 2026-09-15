@@ -1,0 +1,80 @@
+name: Check Apple access
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: release
+    steps:
+      - name: Install JWT signing dependency
+        run: python3 -m pip install cryptography
+      - name: Read App Store Connect publication state
+        env:
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import ec
+          from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+          def encode(value):
+              return base64.urlsafe_b64encode(value).rstrip(b'=')
+
+          key = serialization.load_pem_private_key(os.environ['APP_STORE_API_KEY'].encode(), password=None)
+          now = int(time.time())
+          header = {'alg': 'ES256', 'kid': os.environ['APP_STORE_KEY_ID'], 'typ': 'JWT'}
+          payload = {'iss': os.environ['APP_STORE_ISSUER_ID'], 'iat': now, 'exp': now + 300, 'aud': 'appstoreconnect-v1'}
+          message = encode(json.dumps(header).encode()) + b'.' + encode(json.dumps(payload).encode())
+          r, s = decode_dss_signature(key.sign(message, ec.ECDSA(hashes.SHA256())))
+          token = (message + b'.' + encode(r.to_bytes(32, 'big') + s.to_bytes(32, 'big'))).decode()
+
+          def get(path, **params):
+              url = 'https://api.appstoreconnect.apple.com/v1/' + path
+              if params:
+                  url += '?' + urllib.parse.urlencode(params)
+              request = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + token})
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as error:
+                  print('Apple API request failed:', path, 'HTTP', error.code)
+                  raise SystemExit(1)
+
+          apps = get('apps', **{'filter[bundleId]': 'vpn.dobby.app'})['data']
+          if len(apps) != 1:
+              raise SystemExit('Expected exactly one vpn.dobby.app record')
+          app_id = apps[0]['id']
+          print('Authentication and app access: OK')
+          versions = get(f'apps/{app_id}/appStoreVersions', **{'filter[platform]': 'IOS', 'include': 'build', 'limit': 200})
+          builds = {item['id']: item['attributes'].get('version') for item in versions.get('included', []) if item['type'] == 'builds'}
+          for item in versions['data']:
+              attrs = item['attributes']
+              build = item.get('relationships', {}).get('build', {}).get('data') or {}
+              print('App Store version:', attrs.get('versionString'), 'state:', attrs.get('appVersionState', attrs.get('appStoreState')), 'build:', builds.get(build.get('id')))
+              if attrs.get('versionString') == '1.5.0':
+                  localizations = get(f"appStoreVersions/{item['id']}/appStoreVersionLocalizations")
+                  for loc in localizations['data']:
+                      a = loc['attributes']
+                      print('1.5.0 locale:', a.get('locale'), 'Whats New present:', bool((a.get('whatsNew') or '').strip()))
+          submissions = get('reviewSubmissions', **{'filter[app]': app_id, 'filter[platform]': 'IOS', 'limit': 200})
+          for item in submissions['data']:
+              print('Review submission state:', item['attributes'].get('state'))
+          selected = get('builds', **{'filter[app]': app_id, 'filter[version]': '2180'})
+          print('Build 2180 records:', len(selected['data']))
+          print('Read-only Apple access check complete; no build uploaded or submitted.')
+          PY
