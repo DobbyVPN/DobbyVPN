@@ -156,6 +156,7 @@ jobs:
         run: bundle exec fastlane ios upload_testflight
       - name: Submit exact build to App Review
         env:
+          APP_STORE_RELEASE_NOTES: ${{ vars.APP_STORE_RELEASE_NOTES }}
           APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
           APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
           APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}

@@ -109,6 +109,12 @@ run's URL into the required `release_run_id` field. Use a completed successful
 Release from `main`; Publish rejects failed, in-progress, retried, or expired
 artifact runs.
 
+Before Publish, set the repository Actions variable `APP_STORE_RELEASE_NOTES`
+to the selected version's English “What's New” text under **Settings → Secrets
+and variables → Actions → Variables**. Publish passes it to App Review; update
+it for each release. Apple submission uses the existing `APP_STORE_API_KEY`,
+`APP_STORE_KEY_ID`, and `APP_STORE_ISSUER_ID` secrets.
+
 Hosted tests share one disposable Render VPN for the whole run. Public
 services provide IP and bounded upload/download checks; there is no custom
 HTTP measurement server. All platform traffic must originate inside the
