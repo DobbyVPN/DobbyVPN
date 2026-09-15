@@ -104,6 +104,11 @@ If a Release fails, fix the cause and dispatch a new Release workflow. Do not
 rerun the old Release: only attempt 1 can qualify for Publish. This restriction
 does not change reruns of the standalone Test workflow.
 
+After changing Apple API secrets, use **Actions → Check Apple access → Run
+workflow** on `main`. This reads the app, version metadata, reviews, and build
+2180 status using the same secrets as Publish. It does not upload or submit
+anything; successful reads do not prove every write permission or agreement.
+
 To Publish, copy the digits after `/actions/runs/` in the successful Release
 run's URL into the required `release_run_id` field. Use a completed successful
 Release from `main`; Publish rejects failed, in-progress, retried, or expired
