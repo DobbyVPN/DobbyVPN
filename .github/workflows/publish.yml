@@ -157,7 +157,50 @@ jobs:
           APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
           APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
           APP_STORE_IPA_PATH: ${{ github.workspace }}/selected-release/DobbyVPN.ipa
-        run: bundle exec fastlane ios upload_testflight
+        run: |
+          bundle exec ruby <<'RUBY'
+          require "spaceship"
+          Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
+            key_id: ENV.fetch("APP_STORE_KEY_ID"),
+            issuer_id: ENV.fetch("APP_STORE_ISSUER_ID"),
+            key: ENV.fetch("APP_STORE_API_KEY"),
+            duration: 1200
+          )
+          app = Spaceship::ConnectAPI::App.find("vpn.dobby.app")
+          abort "App Store Connect app was not found" unless app
+          version = ENV.fetch("APP_STORE_VERSION")
+          number = ENV.fetch("APP_STORE_BUILD_NUMBER")
+          find_build = lambda do
+            matches = Spaceship::ConnectAPI::Build.all(
+              app_id: app.id, version: version, build_number: number, platform: "IOS"
+            )
+            abort "Multiple builds match #{version} (#{number})" if matches.length > 1
+            matches.first
+          end
+          build = find_build.call
+          if build
+            puts "Reusing uploaded build #{version} (#{number})"
+          else
+            success = system("bundle", "exec", "fastlane", "ios", "upload_testflight")
+            abort "IPA upload failed" unless success
+          end
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 900
+          loop do
+            build = find_build.call
+            if build
+              abort "Selected Apple build is expired" if build.expired
+              state = build.processing_state
+              abort "Apple build processing failed: #{state}" if %w[FAILED INVALID].include?(state)
+              if state == "VALID"
+                puts "Build #{version} (#{number}) is ready for App Review"
+                break
+              end
+            end
+            abort "Timed out waiting for Apple build processing; retry Publish to resume" if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+            puts "Waiting for Apple to process #{version} (#{number})"
+            sleep 30
+          end
+          RUBY
       - name: Submit exact build to App Review
         env:
           APP_STORE_RELEASE_NOTES: ${{ inputs.release_notes }}
