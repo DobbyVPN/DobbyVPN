@@ -22,6 +22,8 @@ expect fun platformLogStorageInitializationAvailable(): Boolean
 expect fun clearLogFile(path: Path, storageFileSystem: FileSystem)
 expect fun <T> withLogWriteLock(block: () -> T): T
 
+private const val RetentionTimestampLength = 19
+
 class LogsRepository private constructor(
     private val logFilePath: Path = provideLogFilePath(),
     additionalLogFilePaths: List<Path> = emptyList(),
@@ -279,7 +281,7 @@ internal fun eventTimestamp(epochMilliseconds: Long): String {
 }
 
 private fun retentionTimestamp(epochMilliseconds: Long): String =
-    eventTimestamp(epochMilliseconds).take(19).replace('T', ' ')
+    eventTimestamp(epochMilliseconds).take(RetentionTimestampLength).replace('T', ' ')
 
 enum class LogStorageStatus {
     READY,
