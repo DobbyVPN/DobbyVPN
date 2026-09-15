@@ -89,7 +89,7 @@ func TestParseConfigTrustTunnelRequiresCertificateVerification(t *testing.T) {
 func TestParseConfigRejectsMisplacedTrustTunnelVerificationWithOtherProfiles(t *testing.T) {
 	trustTunnel := "[[TrustTunnel]]\nskip_verification = false\n"
 	for name, raw := range map[string]string{
-		"outline first":      outlineConfig + trustTunnel,
+		"outline first":     outlineConfig + trustTunnel,
 		"trusttunnel first": trustTunnel + outlineConfig,
 	} {
 		t.Run(name, func(t *testing.T) {
