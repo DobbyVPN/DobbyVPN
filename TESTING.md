@@ -114,6 +114,10 @@ run's URL into the required `release_run_id` field. Use a completed successful
 Release from `main`; Publish rejects failed, in-progress, retried, or expired
 artifact runs.
 
+Enter the selected version's English “What's New” text in the required
+`release_notes` Publish input. It is passed directly to Apple submission;
+no repository variable is needed.
+
 Hosted tests share one disposable Render VPN for the whole run. Public
 services provide IP and bounded upload/download checks; there is no custom
 HTTP measurement server. All platform traffic must originate inside the

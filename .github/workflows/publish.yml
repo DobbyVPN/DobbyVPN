@@ -7,6 +7,10 @@ on:
         description: Successful Release workflow run ID whose artifacts should be published.
         required: true
         type: string
+      release_notes:
+        description: English What's New text for the selected release.
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -156,6 +160,7 @@ jobs:
         run: bundle exec fastlane ios upload_testflight
       - name: Submit exact build to App Review
         env:
+          APP_STORE_RELEASE_NOTES: ${{ inputs.release_notes }}
           APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
           APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
           APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
