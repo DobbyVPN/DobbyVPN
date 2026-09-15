@@ -52,7 +52,13 @@ on every outcome.
 
 ## Simplicity
 
-Keep one implementation per responsibility. Prefer straightforward functions,
-scripts, and job dependencies to custom protocols. Internal test tooling has
-no backward-compatibility requirement. Add protections for concrete risks
-(such as exposing signing credentials), not hypothetical adversaries.
+Actively reduce complexity. Remove unnecessary code, abstractions,
+configuration, dependencies, tests, and documentation. Keep one owner per
+responsibility and one authoritative source per fact or instruction.
+
+Prefer straightforward code and established tools over custom machinery.
+Solve current problems; do not engineer for hypothetical needs.
+
+Existing architecture is replaceable. Simplify the whole system, not just
+individual files. Temporary breakage during an agreed rewrite is acceptable;
+the completed change must preserve required behavior and useful diagnostics.
