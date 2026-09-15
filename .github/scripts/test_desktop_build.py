@@ -76,12 +76,21 @@ class DesktopBuildTests(unittest.TestCase):
 
         self.assertIn('EXTRACTED_APP_BUNDLE="Dobby Vpn.app"', build_script)
         self.assertIn('APP_BUNDLE="Dobby VPN.app"', build_script)
-        self.assertEqual(build_script.count('mv "$EXTRACTED_APP_BUNDLE" "$APP_BUNDLE"'), 2)
+        self.assertEqual(build_script.count('mv "$EXTRACTED_APP_BUNDLE" "$APP_BUNDLE"'), 1)
+        self.assertIn(
+            "build_package aarch64 arm64 ../../services/arm64/macos_grpcvpnserver",
+            build_script,
+        )
+        self.assertIn(
+            "build_package amd64 x86_64 ../../services/amd64/macos_grpcvpnserver",
+            build_script,
+        )
         self.assertNotIn("pkgbuild --analyze", build_script)
         self.assertIn("write_fixed_payload_component_plist()", build_script)
-        self.assertEqual(build_script.count("write_fixed_payload_component_plist"), 3)
+        self.assertEqual(build_script.count("write_fixed_payload_component_plist"), 2)
         self.assertIn('<plist version="1.0"><array/></plist>', build_script)
-        self.assertEqual(build_script.count("--component-plist component.plist"), 2)
+        self.assertEqual(build_script.count("--component-plist component.plist"), 1)
+        self.assertIn('if [[ "$payload_arch" == "amd64" ]]', build_script)
         self.assertNotIn('/Applications/Dobby Vpn.app', postinstall)
         self.assertIn('/Applications/Dobby VPN.app', postinstall)
         self.assertEqual(service["Label"], "com.dobby.vpnservice")

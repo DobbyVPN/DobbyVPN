@@ -1,5 +1,3 @@
-//go:build android || ios
-
 package mobilebinding
 
 import (
@@ -70,9 +68,13 @@ func TestMissingPlatformCallbacksFailPredictably(t *testing.T) {
 func TestCallbackReplacementKeepsManagerAndLeaseOwner(t *testing.T) {
 	first := &trackingCallbacks{acquireFD: 41}
 	second := &trackingCallbacks{acquireFD: 42}
-	binding := New(first)
-	manager := binding.manager
-	adapter := binding.platform.(*platformAdapter)
+	adapter := &platformAdapter{
+		callbacks: first,
+		tunnels:   newTunnelFDs(),
+		active:    make(map[string]sessionapi.SessionRef),
+	}
+	manager := sessionapi.NewManager(sessionapi.ManagerOptions{Platform: adapter})
+	binding := &Binding{manager: manager, platform: adapter}
 	ref := sessionapi.SessionRef{SessionID: "session", Generation: 1}
 
 	fd, acquiredWith, err := adapter.acquire(ref)

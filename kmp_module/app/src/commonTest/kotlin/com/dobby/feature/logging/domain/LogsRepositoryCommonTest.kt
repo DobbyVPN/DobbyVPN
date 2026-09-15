@@ -1,12 +1,15 @@
+@file:OptIn(kotlin.time.ExperimentalTime::class)
+
 package com.dobby.feature.logging.domain
 
-import korlibs.time.DateTime
 import kotlin.random.Random
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Clock
+import kotlin.time.Instant
 import okio.FileSystem
 import okio.ForwardingFileSystem
 import okio.Path
@@ -28,7 +31,7 @@ class LogsRepositoryCommonTest {
     @Test
     fun legacy_lines_remain_visible_while_exports_keep_raw_records() {
         val path = temporaryLogPath("legacy")
-        val timestamp = DateTime.now().format("yyyy-MM-dd HH:mm:ss")
+        val timestamp = eventTimestamp(Clock.System.now().toEpochMilliseconds()).take(19).replace('T', ' ')
         val legacy = "[$timestamp] [INFO] retained diagnostic"
         write(path, legacy)
         val repository = LogsRepository(path)
@@ -41,7 +44,7 @@ class LogsRepositoryCommonTest {
     fun merges_producers_by_timestamp_and_clear_hides_older_external_records() {
         val primary = temporaryLogPath("primary")
         val goProducer = temporaryLogPath("go")
-        val baseMillis = DateTime.now().unixMillisLong
+        val baseMillis = Clock.System.now().toEpochMilliseconds()
         val goLine = encodeLogEvent(
             timestamp = timestampAt(baseMillis, -2_000),
             level = LogLevel.INFO,
@@ -80,7 +83,7 @@ class LogsRepositoryCommonTest {
     fun same_second_records_keep_subsecond_cross_producer_order() {
         val primary = temporaryLogPath("primary-order")
         val goProducer = temporaryLogPath("go-order")
-        val baseMillis = DateTime.now().unixMillisLong
+        val baseMillis = Clock.System.now().toEpochMilliseconds()
         val laterApp = encodeLogEvent(
             timestamp = timestampAt(baseMillis, -100),
             level = LogLevel.INFO,
@@ -127,6 +130,56 @@ class LogsRepositoryCommonTest {
         val repository = LogsRepository(primary, additionalLogFilePaths = listOf(goProducer))
         assertTrue(read(primary).contains("\"event\":\"logs.cleared\""))
         assertFalse(repository.readAllLogs().any { it.contains("old external diagnostic") })
+    }
+
+    @Test
+    fun retention_keeps_boundary_and_newer_records() {
+        val primary = temporaryLogPath("retention-boundary")
+        val now = Instant.parse("2026-01-03T00:00:00.500Z").toEpochMilliseconds()
+        val before = encodeLogEvent(
+            timestamp = "2025-12-31T23:59:59.999Z",
+            level = LogLevel.INFO,
+            source = "app",
+            event = "before",
+            message = "before cutoff",
+        )
+        val boundary = encodeLogEvent(
+            timestamp = "2026-01-01T00:00:00.000Z",
+            level = LogLevel.INFO,
+            source = "app",
+            event = "boundary",
+            message = "at cutoff",
+        )
+        val newer = encodeLogEvent(
+            timestamp = "2026-01-01T00:00:00.001Z",
+            level = LogLevel.INFO,
+            source = "app",
+            event = "newer",
+            message = "after cutoff",
+        )
+        write(primary, listOf(before, boundary, newer).joinToString("\n"))
+
+        val repository = LogsRepository.withFileSystemForTesting(
+            primary,
+            fileSystem,
+            nowEpochMilliseconds = { now },
+        )
+        val retained = repository.readAllLogs()
+        assertFalse(retained.any { it.contains("before cutoff") })
+        assertTrue(retained.any { it.contains("at cutoff") })
+        assertTrue(retained.any { it.contains("after cutoff") })
+    }
+
+    @Test
+    fun event_timestamp_uses_utc_with_fixed_milliseconds_across_year_rollover() {
+        assertEquals(
+            "2025-12-31T23:59:59.000Z",
+            eventTimestamp(Instant.parse("2025-12-31T23:59:59Z").toEpochMilliseconds()),
+        )
+        assertEquals(
+            "2026-01-01T00:00:00.007Z",
+            eventTimestamp(Instant.parse("2026-01-01T00:00:00.007Z").toEpochMilliseconds()),
+        )
     }
 
     @Test
@@ -187,8 +240,7 @@ class LogsRepositoryCommonTest {
             .also(temporaryPaths::add)
 
     private fun timestampAt(baseMillis: Long, offsetMillis: Long): String =
-        DateTime.fromUnixMillis(baseMillis + offsetMillis)
-            .format("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+        eventTimestamp(baseMillis + offsetMillis)
 
     private fun write(path: Path, line: String) {
         fileSystem.sink(path).buffer().use { sink ->

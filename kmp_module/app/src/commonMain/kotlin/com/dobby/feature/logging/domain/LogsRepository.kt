@@ -1,7 +1,6 @@
 package com.dobby.feature.logging.domain
 
 import com.dobby.vpn.BuildConfig
-import korlibs.time.DateTime
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -10,6 +9,9 @@ import okio.FileSystem
 import okio.Path
 import okio.buffer
 import okio.use
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 
 expect val fileSystem: FileSystem
 expect fun provideLogFilePath(): Path
@@ -24,11 +26,12 @@ class LogsRepository private constructor(
     private val logFilePath: Path = provideLogFilePath(),
     additionalLogFilePaths: List<Path> = emptyList(),
     private val storageFileSystem: FileSystem = fileSystem,
+    private val nowEpochMilliseconds: () -> Long = ::currentEpochMilliseconds,
 ) {
     constructor(
         logFilePath: Path = provideLogFilePath(),
         additionalLogFilePaths: List<Path> = emptyList(),
-    ) : this(logFilePath, additionalLogFilePaths, fileSystem)
+    ) : this(logFilePath, additionalLogFilePaths, fileSystem, ::currentEpochMilliseconds)
 
     companion object {
         const val UI_TAIL_LINES: Int = 50
@@ -39,7 +42,13 @@ class LogsRepository private constructor(
             logFilePath: Path,
             storageFileSystem: FileSystem,
             additionalLogFilePaths: List<Path> = emptyList(),
-        ): LogsRepository = LogsRepository(logFilePath, additionalLogFilePaths, storageFileSystem)
+            nowEpochMilliseconds: () -> Long = ::currentEpochMilliseconds,
+        ): LogsRepository = LogsRepository(
+            logFilePath,
+            additionalLogFilePaths,
+            storageFileSystem,
+            nowEpochMilliseconds,
+        )
     }
 
     private val producerLogPaths = (listOf(logFilePath) + additionalLogFilePaths).distinct()
@@ -92,7 +101,7 @@ class LogsRepository private constructor(
         fields: Map<String, String> = emptyMap(),
     ) {
         val logEntry = encodeLogEvent(
-            timestamp = DateTime.now().format("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"),
+            timestamp = eventTimestamp(nowEpochMilliseconds()),
             level = level,
             source = source,
             event = event,
@@ -136,9 +145,9 @@ class LogsRepository private constructor(
     private fun cleanupOldLogs(writeDiagnostic: Boolean) {
         runCatching {
             if (!storageFileSystem.exists(logFilePath)) return
-            val cutoff = DateTime
-                .fromUnixMillis(DateTime.now().unixMillisLong - LOG_RETENTION_HOURS.toLong() * 60L * 60L * 1000L)
-                .format("yyyy-MM-dd HH:mm:ss")
+            val cutoff = retentionTimestamp(
+                nowEpochMilliseconds() - LOG_RETENTION_HOURS.toLong() * 60L * 60L * 1000L,
+            )
             val records = readRecords(logFilePath, producerIndex = 0)
             val latestClearIndex = records.indexOfLast { it.lines.firstOrNull()?.let(::logEventName) == "logs.cleared" }
             val retainedRecords = records.filterIndexed { index, record ->
@@ -256,6 +265,21 @@ class LogsRepository private constructor(
         reportLogFailure(operation, failure)
     }
 }
+
+@OptIn(ExperimentalTime::class)
+private fun currentEpochMilliseconds(): Long = Clock.System.now().toEpochMilliseconds()
+
+@OptIn(ExperimentalTime::class)
+internal fun eventTimestamp(epochMilliseconds: Long): String {
+    val encoded = Instant.fromEpochMilliseconds(epochMilliseconds).toString().removeSuffix("Z")
+    val separator = encoded.indexOf('.')
+    val wholeSeconds = if (separator < 0) encoded else encoded.substring(0, separator)
+    val fraction = if (separator < 0) "000" else encoded.substring(separator + 1).padEnd(3, '0').take(3)
+    return "$wholeSeconds.$fraction" + "Z"
+}
+
+private fun retentionTimestamp(epochMilliseconds: Long): String =
+    eventTimestamp(epochMilliseconds).take(19).replace('T', ' ')
 
 enum class LogStorageStatus {
     READY,
