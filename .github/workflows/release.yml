@@ -1,6 +1,6 @@
 name: Release
 
-# Release is an explicit owner action. Pushes run Test without publishing.
+# Release builds and qualifies packages without publishing.
 on:
   workflow_dispatch:
 
@@ -126,8 +126,6 @@ jobs:
       CONVEYOR_SIGNING_KEY: ${{ secrets.CONVEYOR_SIGNING_KEY }}
 
   installers_build:
-    # Real-profile and performance qualification is a separate maintainer
-    # release gate; it never exposes private endpoints to public CI.
     needs: [prepare_version, desktop_build]
     uses: ./.github/workflows/installers_build.yml
     with:

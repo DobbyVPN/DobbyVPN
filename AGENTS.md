@@ -30,7 +30,7 @@ Run checks relevant to the change and report what could not run.
 
 ## Release
 
-Pushes and pull requests run checks. Release starts explicitly from `main`,
+Pushes and pull requests run checks. Release is dispatched from `main`,
 builds packages, and qualifies those exact packages with the in-repository
 functional suite. It does not publish. Publish is a separate manual workflow:
 it selects a successful Release run and promotes those tested artifacts.
