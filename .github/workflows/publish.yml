@@ -160,6 +160,7 @@ jobs:
         run: |
           bundle exec ruby <<'RUBY'
           require "spaceship"
+          require "net/http"
           Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
             key_id: ENV.fetch("APP_STORE_KEY_ID"),
             issuer_id: ENV.fetch("APP_STORE_ISSUER_ID"),
@@ -177,8 +178,26 @@ jobs:
             abort "Multiple builds match #{version} (#{number})" if matches.length > 1
             matches.first
           end
+          find_upload = lambda do
+            uri = URI("https://api.appstoreconnect.apple.com/v1/apps/#{app.id}/buildUploads")
+            uri.query = URI.encode_www_form(
+              "filter[cfBundleShortVersionString]" => version,
+              "filter[cfBundleVersion]" => number,
+              "filter[platform]" => "IOS"
+            )
+            request = Net::HTTP::Get.new(uri)
+            request["Authorization"] = "Bearer #{Spaceship::ConnectAPI.token.text}"
+            response = Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 30, read_timeout: 30) { |http| http.request(request) }
+            abort "Cannot read Apple upload status: HTTP #{response.code}" unless response.is_a?(Net::HTTPSuccess)
+            uploads = JSON.parse(response.body).fetch("data")
+            abort "Multiple uploads match #{version} (#{number})" if uploads.length > 1
+            state = uploads.first&.dig("attributes", "state")
+            abort "Apple upload processing failed; inspect App Store Connect delivery details" if state && state["state"] == "FAILED"
+            state
+          end
           build = find_build.call
-          if build
+          upload = find_upload.call
+          if build || upload
             puts "Reusing uploaded build #{version} (#{number})"
           else
             success = system("bundle", "exec", "fastlane", "ios", "upload_testflight")
@@ -187,6 +206,7 @@ jobs:
           deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 900
           loop do
             build = find_build.call
+            find_upload.call unless build
             if build
               abort "Selected Apple build is expired" if build.expired
               state = build.processing_state
