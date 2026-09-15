@@ -21,7 +21,7 @@ import (
 
 	"go_module/grpcproto"
 	applicationlog "go_module/log"
-	sessionv2 "go_module/sessionapi/v2"
+	"go_module/sessionapi"
 )
 
 const (
@@ -331,7 +331,7 @@ func profileInventory(source string) int {
 		reportCLIError("configuration source rejected", err)
 		return exitArgs
 	}
-	profiles, err := sessionv2.InspectProfiles(raw)
+	profiles, err := sessionapi.InspectProfiles(raw)
 	if err != nil {
 		return reportFailure(err, nil)
 	}
@@ -343,7 +343,7 @@ func profileInventory(source string) int {
 	return exitOK
 }
 
-func profileInventoryJSON(profiles []sessionv2.ProfileSummary) ([]byte, error) {
+func profileInventoryJSON(profiles []sessionapi.ProfileSummary) ([]byte, error) {
 	type profileIdentity struct {
 		Index    int32  `json:"index"`
 		Protocol string `json:"protocol"`
@@ -358,7 +358,7 @@ func profileInventoryJSON(profiles []sessionv2.ProfileSummary) ([]byte, error) {
 		}
 		protocol := string(profile.Protocol)
 		switch profile.Protocol {
-		case sessionv2.ProtocolOutline, sessionv2.ProtocolXray, sessionv2.ProtocolTrustTunnel:
+		case sessionapi.ProtocolOutline, sessionapi.ProtocolXray, sessionapi.ProtocolTrustTunnel:
 		default:
 			return nil, fmt.Errorf("invalid profile protocol")
 		}

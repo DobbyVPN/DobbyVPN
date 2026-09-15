@@ -1,10 +1,10 @@
-// Package v2 is the transport-neutral API for a DobbyVPN session.
+// Package sessionapi is the transport-neutral API for a DobbyVPN session.
 //
 // It deliberately does not bind a protocol implementation. Desktop gRPC and
 // mobile bindings can use the same manager while supplying their own Runtime
 // and PlatformAdapter. State changes wake platform clients; snapshots carry
 // authoritative control state and profile identity.
-package v2
+package sessionapi
 
 import (
 	"context"

@@ -11,7 +11,7 @@ import (
 
 	"go_module/grpcproto"
 	applicationlog "go_module/log"
-	sessionv2 "go_module/sessionapi/v2"
+	"go_module/sessionapi"
 
 	"google.golang.org/grpc"
 )
@@ -330,10 +330,10 @@ func TestParseProfileIndexRejectsValuesOutsideProtoRange(t *testing.T) {
 }
 
 func TestProfileInventoryJSONPreservesDynamicOrderAndProtocol(t *testing.T) {
-	profiles := []sessionv2.ProfileSummary{
-		{Index: 0, Protocol: sessionv2.ProtocolXray},
-		{Index: 1, Protocol: sessionv2.ProtocolOutline},
-		{Index: 2, Protocol: sessionv2.ProtocolTrustTunnel},
+	profiles := []sessionapi.ProfileSummary{
+		{Index: 0, Protocol: sessionapi.ProtocolXray},
+		{Index: 1, Protocol: sessionapi.ProtocolOutline},
+		{Index: 2, Protocol: sessionapi.ProtocolTrustTunnel},
 	}
 	got, err := profileInventoryJSON(profiles)
 	if err != nil {
@@ -346,9 +346,9 @@ func TestProfileInventoryJSONPreservesDynamicOrderAndProtocol(t *testing.T) {
 }
 
 func TestProfileInventoryJSONRejectsIncompleteIdentity(t *testing.T) {
-	for _, profiles := range [][]sessionv2.ProfileSummary{
-		{{Index: -1, Protocol: sessionv2.ProtocolOutline}},
-		{{Index: 0, Protocol: sessionv2.Protocol("")}},
+	for _, profiles := range [][]sessionapi.ProfileSummary{
+		{{Index: -1, Protocol: sessionapi.ProtocolOutline}},
+		{{Index: 0, Protocol: sessionapi.Protocol("")}},
 	} {
 		if _, err := profileInventoryJSON(profiles); err == nil {
 			t.Fatalf("invalid profiles unexpectedly accepted: %#v", profiles)

@@ -1,6 +1,6 @@
 # vpnserver.proto (Go stubs)
 
-**Canonical source:** `kmp_module/grpcprotos/src/main/proto/com/dobby/vpnserver/vpnserver.proto`
+**Canonical source:** `kmp_module/grpcstub/src/main/proto/com/dobby/vpnserver/vpnserver.proto`
 
 Edit that file only. Regenerate Go stubs with:
 

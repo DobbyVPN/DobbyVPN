@@ -14,7 +14,7 @@ import (
 	"go_module/log"
 	"go_module/probe"
 	"go_module/protocol"
-	v2 "go_module/sessionapi/v2"
+	"go_module/sessionapi"
 	"go_module/tunnel"
 )
 
@@ -33,8 +33,8 @@ const defaultProbeTimeout = 15 * time.Second
 // custom device factories so platform dial hooks can correlate protection with
 // the session which owns the socket.
 type TunnelProvider interface {
-	Acquire(context.Context, v2.SessionRef) (TunnelLease, error)
-	ProtectSocket(context.Context, v2.SessionRef, int) error
+	Acquire(context.Context, sessionapi.SessionRef) (TunnelLease, error)
+	ProtectSocket(context.Context, sessionapi.SessionRef, int) error
 }
 
 type TunnelLease interface {
@@ -48,13 +48,13 @@ type TunnelLease interface {
 // implementation owns tunnel's process-global exclusion policy; Runtime
 // serializes all leases so no other runtime lease can overwrite that policy.
 type InputProvider interface {
-	Apply(context.Context, v2.SessionRef, []string) (InputLease, error)
+	Apply(context.Context, sessionapi.SessionRef, []string) (InputLease, error)
 }
 
 type InputLease interface{ Release(context.Context) error }
 
 // DeviceFactory receives only the normalized config for every protocol.
-type DeviceFactory func(context.Context, v2.SessionRef, v2.RuntimeProfile, SocketProtector) (protocol.ProtocolDevice, error)
+type DeviceFactory func(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile, SocketProtector) (protocol.ProtocolDevice, error)
 
 type SocketProtector func(context.Context, int) error
 
@@ -70,7 +70,7 @@ type ProbeFunc func(context.Context) (int64, error)
 // ConnectedHealthFunc runs one connected-readiness check for a specific lease.
 // It must return promptly when ctx is canceled; the monitor uses that guarantee
 // to stop before runtime resources are released.
-type ConnectedHealthFunc func(context.Context, v2.SessionRef) error
+type ConnectedHealthFunc func(context.Context, sessionapi.SessionRef) error
 
 type Options struct {
 	Tunnel                  TunnelProvider
@@ -91,7 +91,7 @@ type Options struct {
 // New returns a session Runtime. Its operation mutex deliberately serializes all
 // runs: platform routing and native tunnel resources are process-wide, so
 // parallel profile probes would not be isolated.
-func New(options Options) v2.Runtime {
+func New(options Options) sessionapi.Runtime {
 	r := &runtime{options: options}
 	if r.options.Inputs == nil {
 		r.options.Inputs = defaultInputs{}
@@ -147,7 +147,7 @@ type runtime struct {
 	options Options
 }
 
-func (r *runtime) Start(ctx context.Context, ref v2.SessionRef, profile v2.RuntimeProfile) (v2.RuntimeLease, error) {
+func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (sessionapi.RuntimeLease, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -189,14 +189,14 @@ func (r *runtime) Start(ctx context.Context, ref v2.SessionRef, profile v2.Runti
 	return lease, nil
 }
 
-func (r *runtime) Probe(ctx context.Context, ref v2.SessionRef, profile v2.RuntimeProfile) (result v2.ProbeResult, err error) {
+func (r *runtime) Probe(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (result sessionapi.ProbeResult, err error) {
 	if contextErr := ctx.Err(); contextErr != nil {
-		return v2.ProbeResult{}, contextErr
+		return sessionapi.ProbeResult{}, contextErr
 	}
 	r.mu.Lock()
 	if r.active {
 		r.mu.Unlock()
-		return v2.ProbeResult{}, errors.New("another runtime lease is active")
+		return sessionapi.ProbeResult{}, errors.New("another runtime lease is active")
 	}
 	r.active = true
 
@@ -206,7 +206,7 @@ func (r *runtime) Probe(ctx context.Context, ref v2.SessionRef, profile v2.Runti
 	if err != nil {
 		r.active = false
 		r.mu.Unlock()
-		return v2.ProbeResult{}, err
+		return sessionapi.ProbeResult{}, err
 	}
 	lease.setOnDone(func() {
 		r.mu.Lock()
@@ -216,7 +216,7 @@ func (r *runtime) Probe(ctx context.Context, ref v2.SessionRef, profile v2.Runti
 	r.mu.Unlock()
 	defer func() {
 		if cleanupErr := lease.Stop(context.Background()); cleanupErr != nil {
-			result = v2.ProbeResult{}
+			result = sessionapi.ProbeResult{}
 			err = errors.Join(err, fmt.Errorf("cleanup runtime probe: %w", cleanupErr))
 		}
 	}()
@@ -231,9 +231,9 @@ func (r *runtime) Probe(ctx context.Context, ref v2.SessionRef, profile v2.Runti
 		r.options.ReadinessRetryInterval,
 	)
 	if probeErr != nil {
-		return v2.ProbeResult{}, probeErr
+		return sessionapi.ProbeResult{}, probeErr
 	}
-	return v2.ProbeResult{LatencyMillis: latency}, nil
+	return sessionapi.ProbeResult{LatencyMillis: latency}, nil
 }
 
 // probeUntilReady gives Android's newly established VPN route the same bounded
@@ -243,7 +243,7 @@ func (r *runtime) Probe(ctx context.Context, ref v2.SessionRef, profile v2.Runti
 // overall ProbeTimeout rather than being misclassified as a dead profile.
 func probeUntilReady(
 	ctx context.Context,
-	ref v2.SessionRef,
+	ref sessionapi.SessionRef,
 	probeFn ProbeFunc,
 	attempts int,
 	retryInterval time.Duration,
@@ -284,7 +284,7 @@ func probeUntilReady(
 	return 0, errors.New("runtime health probe did not reach quorum")
 }
 
-func (r *runtime) startLocked(ctx context.Context, ref v2.SessionRef, profile v2.RuntimeProfile) (*lease, error) {
+func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (*lease, error) {
 	if len(profile.NormalizedConfig) == 0 {
 		return nil, errors.New("runtime profile has no normalized config")
 	}
@@ -356,7 +356,7 @@ func (r *runtime) startLocked(ctx context.Context, ref v2.SessionRef, profile v2
 
 func waitForInitialReadiness(
 	ctx context.Context,
-	ref v2.SessionRef,
+	ref sessionapi.SessionRef,
 	check ConnectedHealthFunc,
 	attempts int,
 	attemptTimeout time.Duration,
@@ -436,7 +436,7 @@ func (l *lease) setOnDone(fn func())                 { l.onDone = fn }
 // lease has stopped, so the manager watcher cannot outlive its runtime lease.
 func (l *lease) HealthFailures() <-chan struct{} { return l.healthFailed }
 
-func (l *lease) startHealthMonitor(parent context.Context, ref v2.SessionRef, check ConnectedHealthFunc, interval time.Duration, threshold int) {
+func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.SessionRef, check ConnectedHealthFunc, interval time.Duration, threshold int) {
 	ctx, cancel := context.WithCancel(parent)
 	l.healthCancel = cancel
 	l.healthDone = make(chan struct{})
@@ -506,7 +506,7 @@ func (l *lease) Stop(ctx context.Context) error {
 
 type defaultInputs struct{}
 
-func (defaultInputs) Apply(_ context.Context, _ v2.SessionRef, cidrs []string) (InputLease, error) {
+func (defaultInputs) Apply(_ context.Context, _ sessionapi.SessionRef, cidrs []string) (InputLease, error) {
 	routes, err := tunnel.AcquireBypassPolicy(cidrs)
 	if err != nil {
 		return nil, fmt.Errorf("acquire exclusion policy: %w", err)
@@ -518,7 +518,7 @@ type routingInputs struct{ routes *tunnel.BypassPolicyLease }
 
 func (l routingInputs) Release(context.Context) error { l.routes.Release(); return nil }
 
-func unsupportedDevice(_ context.Context, _ v2.SessionRef, _ v2.RuntimeProfile, _ SocketProtector) (protocol.ProtocolDevice, error) {
+func unsupportedDevice(_ context.Context, _ sessionapi.SessionRef, _ sessionapi.RuntimeProfile, _ SocketProtector) (protocol.ProtocolDevice, error) {
 	return nil, errors.New("native protocol device factory is not installed")
 }
 
@@ -550,7 +550,7 @@ func probeTimeout(ctx context.Context) (time.Duration, error) {
 	return remaining, nil
 }
 
-func defaultConnectedHealth(ctx context.Context, _ v2.SessionRef) error {
+func defaultConnectedHealth(ctx context.Context, _ sessionapi.SessionRef) error {
 	latency, err := defaultProbe(ctx)
 	if err != nil {
 		return err

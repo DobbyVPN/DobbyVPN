@@ -25,8 +25,7 @@ The module is intentionally a shared UI and binding layer:
 ```
 kmp_module/
 ├── app/ --- shared Compose UI and thin platform shells
-├── grpcprotos/ --- canonical session/Diagnostics schema
-└── grpcstub/ --- typed desktop gRPC calls
+└── grpcstub/ --- canonical session/Diagnostics schema and typed desktop gRPC calls
 ```
 
 The iOS host app is in [`../swift_module/iosApp/`](../swift_module/iosApp/).

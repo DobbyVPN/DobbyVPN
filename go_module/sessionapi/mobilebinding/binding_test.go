@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	v1 "go_module/sessionapi/v2"
+	"go_module/sessionapi"
 )
 
 const syntheticConfig = `[[Outline]]
@@ -19,7 +19,7 @@ Password = "super-secret-token"
 `
 
 func TestJSONEnvelopeUsesStableKeys(t *testing.T) {
-	binding := NewForTest(v1.NewManager(v1.ManagerOptions{}))
+	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{}))
 	initial := binding.Snapshot("")
 	if strings.Contains(initial, "SessionID") || !strings.Contains(initial, `"session_id"`) {
 		t.Fatalf("snapshot did not use stable snake_case: %s", initial)
@@ -35,7 +35,7 @@ func TestJSONEnvelopeUsesStableKeys(t *testing.T) {
 
 func TestSnapshotDTOAlwaysRoundTripsRecoveringFlag(t *testing.T) {
 	for _, recovering := range []bool{false, true} {
-		encoded, err := json.Marshal(snapshotDTO(v1.SnapshotResult{Recovering: recovering}))
+		encoded, err := json.Marshal(snapshotDTO(sessionapi.SnapshotResult{Recovering: recovering}))
 		if err != nil {
 			t.Fatalf("marshal snapshot: %v", err)
 		}
@@ -66,7 +66,7 @@ func TestInternalFailureEnvelopeDoesNotExposeRawErrors(t *testing.T) {
 
 func TestURLFetchFailureDoesNotEchoSourceCredentials(t *testing.T) {
 	url := "https://alice:secret@example.invalid/profile?token=private"
-	binding := NewForTest(v1.NewManager(v1.ManagerOptions{Loader: failingURLLoader{}}))
+	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{Loader: failingURLLoader{}}))
 	initial := binding.Snapshot("")
 	result := binding.Configure(jsonField(t, initial, "session_id"), int64Field(t, initial, "sequence"), []byte(url))
 	for _, sensitive := range []string{"alice", "secret", "example.invalid", "private", url} {
@@ -80,7 +80,7 @@ func TestURLFetchFailureDoesNotEchoSourceCredentials(t *testing.T) {
 }
 
 func TestSnapshotCarriesAcceptedConfigurationAndResetClearsIt(t *testing.T) {
-	binding := NewForTest(v1.NewManager(v1.ManagerOptions{}))
+	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{}))
 	initial := binding.Snapshot("")
 	sessionID := jsonField(t, initial, "session_id")
 	configured := binding.Configure(sessionID, int64Field(t, initial, "sequence"), []byte(syntheticConfig))
@@ -104,14 +104,14 @@ func TestSnapshotCarriesAcceptedConfigurationAndResetClearsIt(t *testing.T) {
 
 func TestBindingPreservesStaleStopAndIdempotentStop(t *testing.T) {
 	runtime := &blockingRuntime{}
-	binding := NewForTest(v1.NewManager(v1.ManagerOptions{Runtime: runtime}))
+	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{Runtime: runtime}))
 	initial := binding.Snapshot("")
 	sessionID := jsonField(t, initial, "session_id")
 	configured := binding.Configure(sessionID, int64Field(t, initial, "sequence"), []byte(syntheticConfig))
 	if !strings.Contains(configured, `"ok":true`) {
 		t.Fatalf("configure failed: %s", configured)
 	}
-	started := binding.Start(sessionID, int64Field(t, configured, "sequence"), string(v1.ProfileIndex), 0)
+	started := binding.Start(sessionID, int64Field(t, configured, "sequence"), string(sessionapi.ProfileIndex), 0)
 	generation := int64Field(t, started, "generation")
 	stale := binding.Stop(sessionID, generation+1)
 	if !strings.Contains(stale, `"STALE_GENERATION"`) {
@@ -127,17 +127,17 @@ func TestBindingPreservesStaleStopAndIdempotentStop(t *testing.T) {
 func TestCallbacksCarryTheSessionAndGeneration(t *testing.T) {
 	platform := &recordingPlatform{}
 	runtime := &blockingRuntime{}
-	manager := v1.NewManager(v1.ManagerOptions{Runtime: runtime, Platform: platform})
+	manager := sessionapi.NewManager(sessionapi.ManagerOptions{Runtime: runtime, Platform: platform})
 	binding := NewForTest(manager)
 	initial := binding.Snapshot("")
 	sessionID := jsonField(t, initial, "session_id")
 	configured := binding.Configure(sessionID, int64Field(t, initial, "sequence"), []byte(syntheticConfig))
-	started := binding.Start(sessionID, int64Field(t, configured, "sequence"), string(v1.ProfileIndex), 0)
+	started := binding.Start(sessionID, int64Field(t, configured, "sequence"), string(sessionapi.ProfileIndex), 0)
 	generation := int64Field(t, started, "generation")
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		platform.mu.Lock()
-		seen := append([]v1.StateChange(nil), platform.events...)
+		seen := append([]sessionapi.StateChange(nil), platform.events...)
 		platform.mu.Unlock()
 		for _, event := range seen {
 			if event.Generation == uint64(generation) {
@@ -172,14 +172,14 @@ type blockingRuntime struct{}
 
 type failingURLLoader struct{}
 
-func (failingURLLoader) Load(_ context.Context, raw []byte) (v1.LoadedConfig, error) {
-	return v1.LoadedConfig{}, errors.New("request failed for " + string(raw))
+func (failingURLLoader) Load(_ context.Context, raw []byte) (sessionapi.LoadedConfig, error) {
+	return sessionapi.LoadedConfig{}, errors.New("request failed for " + string(raw))
 }
 
-func (r *blockingRuntime) Probe(context.Context, v1.SessionRef, v1.RuntimeProfile) (v1.ProbeResult, error) {
-	return v1.ProbeResult{}, nil
+func (r *blockingRuntime) Probe(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile) (sessionapi.ProbeResult, error) {
+	return sessionapi.ProbeResult{}, nil
 }
-func (r *blockingRuntime) Start(ctx context.Context, _ v1.SessionRef, _ v1.RuntimeProfile) (v1.RuntimeLease, error) {
+func (r *blockingRuntime) Start(ctx context.Context, _ sessionapi.SessionRef, _ sessionapi.RuntimeProfile) (sessionapi.RuntimeLease, error) {
 	return blockingLease{ctx: ctx}, nil
 }
 
@@ -189,14 +189,16 @@ func (l blockingLease) Stop(context.Context) error { return nil }
 
 type recordingPlatform struct {
 	mu     sync.Mutex
-	events []v1.StateChange
+	events []sessionapi.StateChange
 }
 
-func (*recordingPlatform) PrepareTunnel(context.Context, v1.SessionRef) (v1.PlatformLease, error) {
+func (*recordingPlatform) PrepareTunnel(context.Context, sessionapi.SessionRef) (sessionapi.PlatformLease, error) {
 	return noopLease{}, nil
 }
-func (*recordingPlatform) ProtectSocket(context.Context, v1.SessionRef, int) error { return nil }
-func (p *recordingPlatform) PublishState(_ context.Context, event v1.StateChange) {
+func (*recordingPlatform) ProtectSocket(context.Context, sessionapi.SessionRef, int) error {
+	return nil
+}
+func (p *recordingPlatform) PublishState(_ context.Context, event sessionapi.StateChange) {
 	p.mu.Lock()
 	p.events = append(p.events, event)
 	p.mu.Unlock()

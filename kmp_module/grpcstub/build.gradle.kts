@@ -23,8 +23,6 @@ protobuf {
 }
 
 dependencies {
-    protobuf(project(":grpcprotos"))
-
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.grpc.stub)
     implementation(libs.grpc.protobuf)

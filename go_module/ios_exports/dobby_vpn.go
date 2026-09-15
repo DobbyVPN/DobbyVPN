@@ -3,8 +3,6 @@
 package dobbyvpn
 
 import (
-	"sync"
-
 	"go_module/sessionapi/mobilebinding"
 
 	"golang.org/x/sys/unix"
@@ -13,10 +11,7 @@ import (
 const utunControlName = "com.apple.net.utun_control"
 const logCategory = "ios_exports"
 
-var (
-	iosCallbacks   iosPlatformCallbacks
-	mobileSessions = mobilebinding.New(&iosCallbacks)
-)
+var mobileSessions = mobilebinding.New(nil)
 
 // PlatformCallbacks is declared in the bound package so gobind emits the
 // Objective-C protocol instead of skipping an interface imported from another
@@ -36,7 +31,7 @@ type PlatformCallbacks interface {
 // RegisterSessionPlatform installs the NetworkExtension boundary used by the
 // shared runtime.
 func RegisterSessionPlatform(callbacks PlatformCallbacks) {
-	iosCallbacks.set(callbacks)
+	mobileSessions.SetPlatformCallbacks(callbacks)
 }
 
 func ConfigureSession(sessionID string, sequence int64, rawConfig []byte) string {
@@ -51,45 +46,6 @@ func StopSession(sessionID string, generation int64) string {
 func SnapshotSession(sessionID string) string { return mobileSessions.Snapshot(sessionID) }
 func ResetSession(sessionID string, sequence int64) string {
 	return mobileSessions.Reset(sessionID, sequence)
-}
-
-type iosPlatformCallbacks struct {
-	mu       sync.RWMutex
-	delegate mobilebinding.PlatformCallbacks
-}
-
-func (p *iosPlatformCallbacks) set(callbacks mobilebinding.PlatformCallbacks) {
-	p.mu.Lock()
-	p.delegate = callbacks
-	p.mu.Unlock()
-}
-func (p *iosPlatformCallbacks) callback() mobilebinding.PlatformCallbacks {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.delegate
-}
-func (p *iosPlatformCallbacks) AcquireTunnel(sessionID string, generation int64) int32 {
-	if callback := p.callback(); callback != nil {
-		return callback.AcquireTunnel(sessionID, generation)
-	}
-	return -1
-}
-func (p *iosPlatformCallbacks) ReleaseTunnel(sessionID string, generation int64, fd int32) bool {
-	if callback := p.callback(); callback != nil {
-		return callback.ReleaseTunnel(sessionID, generation, fd)
-	}
-	return false
-}
-func (p *iosPlatformCallbacks) ProtectSocket(sessionID string, generation int64, fd int32) bool {
-	if callback := p.callback(); callback != nil {
-		return callback.ProtectSocket(sessionID, generation, fd)
-	}
-	return false
-}
-func (p *iosPlatformCallbacks) PublishState(sessionID string, generation int64, state string, failureCode string) {
-	if callback := p.callback(); callback != nil {
-		callback.PublishState(sessionID, generation, state, failureCode)
-	}
 }
 
 func GetTunnelFileDescriptor() int {

@@ -7,8 +7,8 @@ import (
 	"net"
 
 	"go_module/auth"
-	"go_module/desktop_exports/common"
 	log "go_module/log"
+	"go_module/xray/common"
 	"go_module/xray/internal"
 
 	"github.com/xtls/xray-core/core"

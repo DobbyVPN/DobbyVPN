@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Copy the canonical vpnserver.proto from KMP grpcprotos, then regenerate Go stubs.
+# Copy the canonical vpnserver.proto from grpcstub, then regenerate Go stubs.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GO_MODULE="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$GO_MODULE/.." && pwd)"
-CANONICAL="$REPO_ROOT/kmp_module/grpcprotos/src/main/proto/com/dobby/vpnserver/vpnserver.proto"
+CANONICAL="$REPO_ROOT/kmp_module/grpcstub/src/main/proto/com/dobby/vpnserver/vpnserver.proto"
 PROTO_DEST="$GO_MODULE/grpcproto/vpnserver.proto"
 
 if [[ ! -f "$CANONICAL" ]]; then

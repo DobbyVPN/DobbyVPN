@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"go_module/log"
-	v2 "go_module/sessionapi/v2"
+	"go_module/sessionapi"
 )
 
 // This product-owned seam is compiled only into a build-local qualification
@@ -31,7 +31,7 @@ func configureTestSeams(options *Options) {
 	}
 
 	var successful atomic.Int64
-	options.ConnectedHealth = func(ctx context.Context, _ v2.SessionRef) error {
+	options.ConnectedHealth = func(ctx context.Context, _ sessionapi.SessionRef) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

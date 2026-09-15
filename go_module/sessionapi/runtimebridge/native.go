@@ -9,29 +9,29 @@ import (
 
 	"go_module/outline"
 	vpnprotocol "go_module/protocol"
+	"go_module/sessionapi"
 	"go_module/sessionapi/runtime"
-	v2 "go_module/sessionapi/v2"
 	"go_module/trusttunnel"
 	"go_module/xray"
 )
 
 // New installs all supported native protocols while retaining the runtime's
 // transactional lifecycle, probing, tun2socks, routing, and DNS behavior.
-func New(tunnel runtime.TunnelProvider) v2.Runtime {
+func New(tunnel runtime.TunnelProvider) sessionapi.Runtime {
 	return runtime.New(runtime.Options{
 		Tunnel:    tunnel,
 		NewDevice: newDevice,
 	})
 }
 
-func newDevice(_ context.Context, _ v2.SessionRef, profile v2.RuntimeProfile, _ runtime.SocketProtector) (vpnprotocol.ProtocolDevice, error) {
+func newDevice(_ context.Context, _ sessionapi.SessionRef, profile sessionapi.RuntimeProfile, _ runtime.SocketProtector) (vpnprotocol.ProtocolDevice, error) {
 	config := string(profile.NormalizedConfig)
 	switch profile.Summary.Protocol {
-	case v2.ProtocolOutline:
+	case sessionapi.ProtocolOutline:
 		return outline.NewOutlineDevice(config)
-	case v2.ProtocolXray:
+	case sessionapi.ProtocolXray:
 		return xray.NewXrayDevice(config)
-	case v2.ProtocolTrustTunnel:
+	case sessionapi.ProtocolTrustTunnel:
 		return trusttunnel.NewTrustTunnelDevice(config)
 	default:
 		return nil, fmt.Errorf("unsupported protocol")

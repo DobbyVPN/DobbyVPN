@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	v2 "go_module/sessionapi/v2"
+	"go_module/sessionapi"
 )
 
 // PlatformCallbacks is implemented by the Android service or iOS extension
@@ -27,11 +27,11 @@ type PlatformCallbacks interface {
 }
 
 type managerAPI interface {
-	Configure(context.Context, string, uint64, []byte) (v2.ConfigureResult, error)
-	Start(context.Context, string, uint64, v2.StartTarget) (v2.StartResult, error)
-	Stop(context.Context, string, uint64) (v2.StopResult, error)
-	Snapshot(context.Context, string) (v2.SnapshotResult, error)
-	Reset(context.Context, string, uint64) (v2.SnapshotResult, error)
+	Configure(context.Context, string, uint64, []byte) (sessionapi.ConfigureResult, error)
+	Start(context.Context, string, uint64, sessionapi.StartTarget) (sessionapi.StartResult, error)
+	Stop(context.Context, string, uint64) (sessionapi.StopResult, error)
+	Snapshot(context.Context, string) (sessionapi.SnapshotResult, error)
+	Reset(context.Context, string, uint64) (sessionapi.SnapshotResult, error)
 }
 
 // Binding is a thin synchronous JSON boundary over one process manager.
@@ -67,11 +67,11 @@ type envelopeError struct {
 func success(value interface{}) string { return encode(envelope{OK: true, Result: value}) }
 func failed(err error) string {
 	message := "internal session error"
-	var domain *v2.Error
+	var domain *sessionapi.Error
 	if errors.As(err, &domain) {
 		message = domain.Message
 	}
-	return encode(envelope{OK: false, Error: &envelopeError{Code: string(v2.CodeOf(err)), Message: message}})
+	return encode(envelope{OK: false, Error: &envelopeError{Code: string(sessionapi.CodeOf(err)), Message: message}})
 }
 func encode(value interface{}) string {
 	data, err := json.Marshal(value)
@@ -101,10 +101,10 @@ func (b *Binding) Start(sessionID string, expectedSequence int64, mode string, i
 	if err != nil {
 		return failed(err)
 	}
-	if index < 0 && mode != string(v2.AutoSelect) {
-		return failed(&v2.Error{Code: v2.FailureInvalidArgument, Message: "profile index must be non-negative"})
+	if index < 0 && mode != string(sessionapi.AutoSelect) {
+		return failed(&sessionapi.Error{Code: sessionapi.FailureInvalidArgument, Message: "profile index must be non-negative"})
 	}
-	result, err := b.manager.Start(context.Background(), sessionID, sequence, v2.StartTarget{Mode: v2.StartMode(mode), Index: int(index)})
+	result, err := b.manager.Start(context.Background(), sessionID, sequence, sessionapi.StartTarget{Mode: sessionapi.StartMode(mode), Index: int(index)})
 	if err != nil {
 		return failed(err)
 	}
@@ -115,7 +115,7 @@ func (b *Binding) Start(sessionID string, expectedSequence int64, mode string, i
 // harmless according to the manager contract.
 func (b *Binding) Stop(sessionID string, generation int64) string {
 	if generation <= 0 {
-		return failed(&v2.Error{Code: v2.FailureStaleGeneration, Message: "generation must be positive"})
+		return failed(&sessionapi.Error{Code: sessionapi.FailureStaleGeneration, Message: "generation must be positive"})
 	}
 	result, err := b.manager.Stop(context.Background(), sessionID, uint64(generation))
 	if err != nil {
@@ -149,7 +149,7 @@ func (b *Binding) Reset(sessionID string, expectedSequence int64) string {
 
 func nonNegative(value int64, name string) (uint64, error) {
 	if value < 0 {
-		return 0, &v2.Error{Code: v2.FailureInvalidArgument, Message: name + " must be non-negative"}
+		return 0, &sessionapi.Error{Code: sessionapi.FailureInvalidArgument, Message: name + " must be non-negative"}
 	}
 	return uint64(value), nil
 }
@@ -198,43 +198,43 @@ type snapshotResultDTO struct {
 	Recovering      bool         `json:"recovering"`
 }
 
-func profileResultDTO(in v2.ProfileSummary) profileDTO {
+func profileResultDTO(in sessionapi.ProfileSummary) profileDTO {
 	return profileDTO{Index: in.Index, Protocol: string(in.Protocol), Description: in.Description}
 }
-func profileResultPtr(in *v2.ProfileSummary) *profileDTO {
+func profileResultPtr(in *sessionapi.ProfileSummary) *profileDTO {
 	if in == nil {
 		return nil
 	}
 	out := profileResultDTO(*in)
 	return &out
 }
-func profilesDTO(in []v2.ProfileSummary) []profileDTO {
+func profilesDTO(in []sessionapi.ProfileSummary) []profileDTO {
 	out := make([]profileDTO, len(in))
 	for i := range in {
 		out[i] = profileResultDTO(in[i])
 	}
 	return out
 }
-func warningsDTO(in []v2.Warning) []warningDTO {
+func warningsDTO(in []sessionapi.Warning) []warningDTO {
 	out := make([]warningDTO, len(in))
 	for i := range in {
 		out[i] = warningDTO{Code: in[i].Code, Message: in[i].Message}
 	}
 	return out
 }
-func configureDTO(in v2.ConfigureResult) configureResultDTO {
+func configureDTO(in sessionapi.ConfigureResult) configureResultDTO {
 	return configureResultDTO{
 		Digest: in.Digest, Sequence: in.Sequence, SourceKind: string(in.SourceKind),
 		Profiles: profilesDTO(in.Profiles), Warnings: warningsDTO(in.Warnings),
 	}
 }
-func startDTO(in v2.StartResult) startResultDTO {
+func startDTO(in sessionapi.StartResult) startResultDTO {
 	return startResultDTO{Generation: in.Generation, Sequence: in.Sequence}
 }
-func stopDTO(in v2.StopResult) stopResultDTO {
+func stopDTO(in sessionapi.StopResult) stopResultDTO {
 	return stopResultDTO{Generation: in.Generation, Sequence: in.Sequence}
 }
-func snapshotDTO(in v2.SnapshotResult) snapshotResultDTO {
+func snapshotDTO(in sessionapi.SnapshotResult) snapshotResultDTO {
 	out := snapshotResultDTO{
 		SessionID: in.SessionID, Sequence: in.Sequence, Generation: in.Generation,
 		State: string(in.State), Configured: in.Configured, Digest: in.Digest,

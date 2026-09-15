@@ -4,8 +4,8 @@ package proto
 
 import (
 	"go_module/grpcproto"
+	"go_module/sessionapi"
 	"go_module/sessionapi/grpctransport"
-	v2 "go_module/sessionapi/v2"
 )
 
 type Server struct {
@@ -15,7 +15,7 @@ type Server struct {
 
 // NewServer permits desktop tests and embedders to inject the process session
 // manager. The zero-value Server remains supported for existing executors.
-func NewServer(manager *v2.Manager) *Server {
+func NewServer(manager *sessionapi.Manager) *Server {
 	if manager == nil {
 		return &Server{}
 	}

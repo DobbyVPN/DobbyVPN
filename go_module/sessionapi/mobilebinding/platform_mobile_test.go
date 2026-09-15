@@ -3,11 +3,13 @@
 package mobilebinding
 
 import (
+	"context"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
-	v2 "go_module/sessionapi/v2"
+	"go_module/sessionapi"
 )
 
 type releaseResultCallbacks struct {
@@ -29,9 +31,9 @@ func TestTunnelLeaseReleasePropagatesPlatformCleanupFailure(t *testing.T) {
 	adapter := &platformAdapter{
 		callbacks: callbacks,
 		tunnels:   newTunnelFDs(),
-		active:    make(map[string]v2.SessionRef),
+		active:    make(map[string]sessionapi.SessionRef),
 	}
-	ref := v2.SessionRef{SessionID: "session", Generation: 1}
+	ref := sessionapi.SessionRef{SessionID: "session", Generation: 1}
 	if !adapter.tunnels.reserve(fd, fdOwner{session: ref.SessionID, generation: ref.Generation}) {
 		t.Fatal("test descriptor was unexpectedly already reserved")
 	}
@@ -46,4 +48,66 @@ func TestTunnelLeaseReleasePropagatesPlatformCleanupFailure(t *testing.T) {
 	if err := lease.Release(nil); err == nil || !strings.Contains(err.Error(), "platform tunnel cleanup failed") {
 		t.Fatalf("Release error = %v, want platform cleanup failure", err)
 	}
+}
+
+func TestMissingPlatformCallbacksFailPredictably(t *testing.T) {
+	adapter := &platformAdapter{
+		tunnels: newTunnelFDs(),
+		active:  make(map[string]sessionapi.SessionRef),
+	}
+	ref := sessionapi.SessionRef{SessionID: "session", Generation: 1}
+	if _, _, err := adapter.acquire(ref); err == nil || err.Error() != "platform tunnel callback is not registered" {
+		t.Fatalf("acquire without callback = %v", err)
+	}
+	if err := adapter.ProtectSocket(context.Background(), ref, 7); err == nil || err.Error() != "platform socket protector is not registered" {
+		t.Fatalf("protect without callback = %v", err)
+	}
+	if adapter.protectActive(7) {
+		t.Fatal("active protection succeeded without a callback")
+	}
+}
+
+func TestCallbackReplacementKeepsManagerAndLeaseOwner(t *testing.T) {
+	first := &trackingCallbacks{acquireFD: 41}
+	second := &trackingCallbacks{acquireFD: 42}
+	binding := New(first)
+	manager := binding.manager
+	adapter := binding.platform.(*platformAdapter)
+	ref := sessionapi.SessionRef{SessionID: "session", Generation: 1}
+
+	fd, acquiredWith, err := adapter.acquire(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.SetPlatformCallbacks(second)
+	if binding.manager != manager {
+		t.Fatal("callback replacement replaced the session manager")
+	}
+	if err := adapter.release(ref, fd, acquiredWith); err != nil {
+		t.Fatal(err)
+	}
+	if first.releaseCount() != 1 || second.releaseCount() != 0 {
+		t.Fatalf("release callbacks: first=%d second=%d", first.releaseCount(), second.releaseCount())
+	}
+}
+
+type trackingCallbacks struct {
+	mu        sync.Mutex
+	acquireFD int32
+	releases  int
+}
+
+func (c *trackingCallbacks) AcquireTunnel(string, int64) int32 { return c.acquireFD }
+func (c *trackingCallbacks) ReleaseTunnel(string, int64, int32) bool {
+	c.mu.Lock()
+	c.releases++
+	c.mu.Unlock()
+	return true
+}
+func (*trackingCallbacks) ProtectSocket(string, int64, int32) bool    { return true }
+func (*trackingCallbacks) PublishState(string, int64, string, string) {}
+func (c *trackingCallbacks) releaseCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.releases
 }

@@ -9,9 +9,9 @@ import (
 	"os"
 	"sync"
 
+	"go_module/sessionapi"
 	"go_module/sessionapi/runtime"
 	"go_module/sessionapi/runtimebridge"
-	v2 "go_module/sessionapi/v2"
 )
 
 // New creates the single authoritative session manager for a mobile process.
@@ -19,11 +19,11 @@ import (
 // platform boundary for TUN, socket protection, and state publication.
 func New(callbacks PlatformCallbacks) *Binding {
 	platform := &platformAdapter{
-		callbacks: callbacks, tunnels: newTunnelFDs(), active: make(map[string]v2.SessionRef),
-		stateChanges: make(chan v2.StateChange, 1),
+		callbacks: callbacks, tunnels: newTunnelFDs(), active: make(map[string]sessionapi.SessionRef),
+		stateChanges: make(chan sessionapi.StateChange, 1),
 	}
 	go platform.publishStateChanges()
-	manager := v2.NewManager(v2.ManagerOptions{Runtime: runtimebridge.New(platform), Platform: platform})
+	manager := sessionapi.NewManager(sessionapi.ManagerOptions{Runtime: runtimebridge.New(platform), Platform: platform})
 	return &Binding{manager: manager, platform: platform}
 }
 
@@ -45,8 +45,8 @@ type platformAdapter struct {
 	mu           sync.Mutex
 	callbacks    PlatformCallbacks
 	tunnels      tunnelFDs
-	active       map[string]v2.SessionRef
-	stateChanges chan v2.StateChange
+	active       map[string]sessionapi.SessionRef
+	stateChanges chan sessionapi.StateChange
 }
 
 func (p *platformAdapter) setCallbacks(callbacks PlatformCallbacks) {
@@ -55,7 +55,7 @@ func (p *platformAdapter) setCallbacks(callbacks PlatformCallbacks) {
 	p.mu.Unlock()
 }
 
-func (p *platformAdapter) PrepareTunnel(_ context.Context, ref v2.SessionRef) (v2.PlatformLease, error) {
+func (p *platformAdapter) PrepareTunnel(_ context.Context, ref sessionapi.SessionRef) (sessionapi.PlatformLease, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if existing, ok := p.active[ref.SessionID]; ok && existing != ref {
@@ -65,7 +65,7 @@ func (p *platformAdapter) PrepareTunnel(_ context.Context, ref v2.SessionRef) (v
 	return platformLease{adapter: p, ref: ref}, nil
 }
 
-func (p *platformAdapter) Acquire(_ context.Context, ref v2.SessionRef) (runtime.TunnelLease, error) {
+func (p *platformAdapter) Acquire(_ context.Context, ref sessionapi.SessionRef) (runtime.TunnelLease, error) {
 	fd, callbacks, err := p.acquire(ref)
 	if err != nil {
 		return nil, err
@@ -78,7 +78,7 @@ func (p *platformAdapter) Acquire(_ context.Context, ref v2.SessionRef) (runtime
 	return &tunnelLease{file: file, fd: fd, ref: ref, adapter: p, callbacks: callbacks}, nil
 }
 
-func (p *platformAdapter) acquire(ref v2.SessionRef) (int32, PlatformCallbacks, error) {
+func (p *platformAdapter) acquire(ref sessionapi.SessionRef) (int32, PlatformCallbacks, error) {
 	p.mu.Lock()
 	callbacks := p.callbacks
 	p.mu.Unlock()
@@ -104,7 +104,7 @@ func (p *platformAdapter) acquire(ref v2.SessionRef) (int32, PlatformCallbacks, 
 	return fd, callbacks, nil
 }
 
-func (p *platformAdapter) release(ref v2.SessionRef, fd int32, callbacks PlatformCallbacks) error {
+func (p *platformAdapter) release(ref sessionapi.SessionRef, fd int32, callbacks PlatformCallbacks) error {
 	p.mu.Lock()
 	p.tunnels.release(fd, fdOwner{session: ref.SessionID, generation: ref.Generation})
 	p.mu.Unlock()
@@ -118,7 +118,7 @@ func (p *platformAdapter) release(ref v2.SessionRef, fd int32, callbacks Platfor
 	return nil
 }
 
-func (p *platformAdapter) ProtectSocket(_ context.Context, ref v2.SessionRef, fd int) error {
+func (p *platformAdapter) ProtectSocket(_ context.Context, ref sessionapi.SessionRef, fd int) error {
 	if fd < 0 {
 		return fmt.Errorf("invalid socket descriptor")
 	}
@@ -144,7 +144,7 @@ func (p *platformAdapter) protectActive(fd int32) bool {
 		p.mu.Unlock()
 		return false
 	}
-	var ref v2.SessionRef
+	var ref sessionapi.SessionRef
 	for _, candidate := range p.active {
 		ref = candidate
 	}
@@ -156,7 +156,7 @@ func (p *platformAdapter) protectActive(fd int32) bool {
 	return callbacks.ProtectSocket(ref.SessionID, int64(ref.Generation), fd)
 }
 
-func (p *platformAdapter) PublishState(_ context.Context, event v2.StateChange) {
+func (p *platformAdapter) PublishState(_ context.Context, event sessionapi.StateChange) {
 	select {
 	case p.stateChanges <- event:
 	default:
@@ -185,7 +185,7 @@ func (p *platformAdapter) publishStateChanges() {
 
 type platformLease struct {
 	adapter *platformAdapter
-	ref     v2.SessionRef
+	ref     sessionapi.SessionRef
 }
 
 func (l platformLease) Release(context.Context) error {
@@ -200,7 +200,7 @@ func (l platformLease) Release(context.Context) error {
 type tunnelLease struct {
 	file        *os.File
 	fd          int32
-	ref         v2.SessionRef
+	ref         sessionapi.SessionRef
 	adapter     *platformAdapter
 	callbacks   PlatformCallbacks
 	closeOnce   sync.Once

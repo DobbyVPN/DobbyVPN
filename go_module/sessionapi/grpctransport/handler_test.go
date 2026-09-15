@@ -7,13 +7,13 @@ import (
 	"time"
 
 	"go_module/grpcproto"
-	v1 "go_module/sessionapi/v2"
+	"go_module/sessionapi"
 )
 
 const testConfig = "[[Outline]]\nServer=\"vpn.invalid\"\nPort=443\nPassword=\"secret\"\n"
 
 func TestHandlerValidatesWithoutMutationAndUsesSnapshotRevisions(t *testing.T) {
-	h := New(v1.NewManager(v1.ManagerOptions{Runtime: testRuntime{}, Platform: testPlatform{}}))
+	h := New(sessionapi.NewManager(sessionapi.ManagerOptions{Runtime: testRuntime{}, Platform: testPlatform{}}))
 	ctx := context.Background()
 	initial, err := h.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{})
 	if err != nil || initial.GetFailure() != nil {
@@ -73,7 +73,7 @@ func TestHandlerValidatesWithoutMutationAndUsesSnapshotRevisions(t *testing.T) {
 }
 
 func TestHandlerMapsDomainFailures(t *testing.T) {
-	h := New(v1.NewManager(v1.ManagerOptions{}))
+	h := New(sessionapi.NewManager(sessionapi.ManagerOptions{}))
 	response, err := h.Start(context.Background(), &grpcproto.SessionStartRequest{Mode: grpcproto.SessionStartMode_SESSION_START_MODE_UNSPECIFIED})
 	if err != nil || response.GetFailure().GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INVALID_ARGUMENT {
 		t.Fatalf("failure mapping = %#v, %v", response, err)
@@ -82,7 +82,7 @@ func TestHandlerMapsDomainFailures(t *testing.T) {
 
 func TestHandlerPreservesAsyncFailureMessageInSnapshot(t *testing.T) {
 	const exact = "runtime start failed: dial tcp: i/o timeout"
-	h := New(v1.NewManager(v1.ManagerOptions{
+	h := New(sessionapi.NewManager(sessionapi.ManagerOptions{
 		Runtime:  &asyncFailureRuntime{err: errors.New(exact)},
 		Platform: testPlatform{},
 	}))
@@ -128,17 +128,17 @@ type testRuntime struct{}
 
 type asyncFailureRuntime struct{ err error }
 
-func (r *asyncFailureRuntime) Probe(context.Context, v1.SessionRef, v1.RuntimeProfile) (v1.ProbeResult, error) {
-	return v1.ProbeResult{LatencyMillis: 1}, nil
+func (r *asyncFailureRuntime) Probe(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile) (sessionapi.ProbeResult, error) {
+	return sessionapi.ProbeResult{LatencyMillis: 1}, nil
 }
-func (r *asyncFailureRuntime) Start(context.Context, v1.SessionRef, v1.RuntimeProfile) (v1.RuntimeLease, error) {
+func (r *asyncFailureRuntime) Start(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile) (sessionapi.RuntimeLease, error) {
 	return nil, r.err
 }
 
-func (testRuntime) Probe(context.Context, v1.SessionRef, v1.RuntimeProfile) (v1.ProbeResult, error) {
-	return v1.ProbeResult{LatencyMillis: 1}, nil
+func (testRuntime) Probe(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile) (sessionapi.ProbeResult, error) {
+	return sessionapi.ProbeResult{LatencyMillis: 1}, nil
 }
-func (testRuntime) Start(context.Context, v1.SessionRef, v1.RuntimeProfile) (v1.RuntimeLease, error) {
+func (testRuntime) Start(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile) (sessionapi.RuntimeLease, error) {
 	return testLease{}, nil
 }
 
@@ -148,11 +148,11 @@ func (testLease) Stop(context.Context) error { return nil }
 
 type testPlatform struct{}
 
-func (testPlatform) PrepareTunnel(context.Context, v1.SessionRef) (v1.PlatformLease, error) {
+func (testPlatform) PrepareTunnel(context.Context, sessionapi.SessionRef) (sessionapi.PlatformLease, error) {
 	return testPlatformLease{}, nil
 }
-func (testPlatform) ProtectSocket(context.Context, v1.SessionRef, int) error { return nil }
-func (testPlatform) PublishState(context.Context, v1.StateChange)            {}
+func (testPlatform) ProtectSocket(context.Context, sessionapi.SessionRef, int) error { return nil }
+func (testPlatform) PublishState(context.Context, sessionapi.StateChange)            {}
 
 type testPlatformLease struct{}
 

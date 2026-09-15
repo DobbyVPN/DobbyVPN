@@ -4,20 +4,49 @@ package proto
 
 import (
 	"context"
+	"sync"
 
 	"go_module/grpcproto"
-	"go_module/sessionapi/desktopbinding"
+	"go_module/sessionapi"
 	"go_module/sessionapi/grpctransport"
+	"go_module/sessionapi/runtimebridge"
 )
 
-// The zero-value Server uses this exact process-owned session API binding.
-var defaultSessionHandler = grpctransport.New(desktopbinding.Default())
+type desktopPlatform struct{}
+
+func (desktopPlatform) PrepareTunnel(context.Context, sessionapi.SessionRef) (sessionapi.PlatformLease, error) {
+	return desktopPlatformLease{}, nil
+}
+func (desktopPlatform) ProtectSocket(context.Context, sessionapi.SessionRef, int) error { return nil }
+func (desktopPlatform) PublishState(context.Context, sessionapi.StateChange)            {}
+
+type desktopPlatformLease struct{}
+
+func (desktopPlatformLease) Release(context.Context) error { return nil }
+
+var defaultSessionHandlerOnce sync.Once
+var defaultSessionHandler *grpctransport.Handler
+
+// processSessionHandler lazily constructs the one session manager owned by the
+// desktop service process. Tests can inject a native-free manager through
+// NewServer without touching this composition root.
+func processSessionHandler() *grpctransport.Handler {
+	defaultSessionHandlerOnce.Do(func() {
+		platform := desktopPlatform{}
+		manager := sessionapi.NewManager(sessionapi.ManagerOptions{
+			Runtime:  runtimebridge.New(nil),
+			Platform: platform,
+		})
+		defaultSessionHandler = grpctransport.New(manager)
+	})
+	return defaultSessionHandler
+}
 
 func (s *Server) sessionHandler() *grpctransport.Handler {
 	if s != nil && s.sessions != nil {
 		return s.sessions
 	}
-	return defaultSessionHandler
+	return processSessionHandler()
 }
 
 func (s *Server) ValidateConfig(ctx context.Context, in *grpcproto.SessionValidateConfigRequest) (*grpcproto.SessionValidateConfigResponse, error) {

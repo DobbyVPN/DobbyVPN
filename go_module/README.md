@@ -142,7 +142,7 @@ Compose GUI. It supports `connect`, `connect-profile`, `profile-inventory`,
 configuration and returns only the ordered connection indices and protocols;
 it and `logs clear` do not need the VPN service to be running.
 
-See the canonical [vpnserver.proto](../kmp_module/grpcprotos/src/main/proto/com/dobby/vpnserver/vpnserver.proto)
+See the canonical [vpnserver.proto](../kmp_module/grpcstub/src/main/proto/com/dobby/vpnserver/vpnserver.proto)
 for the authenticated session and local Diagnostics transport.
 
 After editing that proto, regenerate stubs:

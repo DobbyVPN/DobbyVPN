@@ -1,119 +1,118 @@
-// Package desktoptransport contains native-free session response conversion.
-// Desktop gRPC owns construction of the native runtime; this package is kept
-// free of protocol/device imports so its safety and ordering tests run on a
-// normal Go toolchain.
-package desktoptransport
+// Native-free response conversion stays beside the gRPC handler. The package
+// accepts injected managers, so its safety and ordering tests do not construct
+// a native runtime.
+package grpctransport
 
 import (
 	"errors"
 	"fmt"
 
 	"go_module/grpcproto"
-	v2 "go_module/sessionapi/v2"
+	"go_module/sessionapi"
 )
 
-func Protocol(protocol v2.Protocol) grpcproto.SessionProtocol {
+func protocol(protocol sessionapi.Protocol) grpcproto.SessionProtocol {
 	switch protocol {
-	case v2.ProtocolOutline:
+	case sessionapi.ProtocolOutline:
 		return grpcproto.SessionProtocol_SESSION_PROTOCOL_OUTLINE
-	case v2.ProtocolXray:
+	case sessionapi.ProtocolXray:
 		return grpcproto.SessionProtocol_SESSION_PROTOCOL_XRAY
-	case v2.ProtocolTrustTunnel:
+	case sessionapi.ProtocolTrustTunnel:
 		return grpcproto.SessionProtocol_SESSION_PROTOCOL_TRUST_TUNNEL
 	default:
 		panic(fmt.Sprintf("unsupported session protocol %q", protocol))
 	}
 }
 
-func State(state v2.State) grpcproto.SessionState {
+func state(state sessionapi.State) grpcproto.SessionState {
 	switch state {
-	case v2.StateIdle:
+	case sessionapi.StateIdle:
 		return grpcproto.SessionState_SESSION_STATE_IDLE
-	case v2.StateConfigured:
+	case sessionapi.StateConfigured:
 		return grpcproto.SessionState_SESSION_STATE_CONFIGURED
-	case v2.StateProbing:
+	case sessionapi.StateProbing:
 		return grpcproto.SessionState_SESSION_STATE_PROBING
-	case v2.StatePreparing:
+	case sessionapi.StatePreparing:
 		return grpcproto.SessionState_SESSION_STATE_PREPARING
-	case v2.StateConnected:
+	case sessionapi.StateConnected:
 		return grpcproto.SessionState_SESSION_STATE_CONNECTED
-	case v2.StateStopping:
+	case sessionapi.StateStopping:
 		return grpcproto.SessionState_SESSION_STATE_STOPPING
-	case v2.StateFailed:
+	case sessionapi.StateFailed:
 		return grpcproto.SessionState_SESSION_STATE_FAILED
 	default:
 		panic(fmt.Sprintf("unsupported session state %q", state))
 	}
 }
 
-func FailureCode(code v2.FailureCode) grpcproto.SessionFailureCode {
+func failureCode(code sessionapi.FailureCode) grpcproto.SessionFailureCode {
 	switch code {
-	case v2.FailureInvalidArgument:
+	case sessionapi.FailureInvalidArgument:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INVALID_ARGUMENT
-	case v2.FailureNotFound:
+	case sessionapi.FailureNotFound:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_NOT_FOUND
-	case v2.FailureConflict:
+	case sessionapi.FailureConflict:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CONFLICT
-	case v2.FailureNotConfigured:
+	case sessionapi.FailureNotConfigured:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_NOT_CONFIGURED
-	case v2.FailureStaleGeneration:
+	case sessionapi.FailureStaleGeneration:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_STALE_GENERATION
-	case v2.FailureUnsupported:
+	case sessionapi.FailureUnsupported:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_UNSUPPORTED
-	case v2.FailureMalformedConfig:
+	case sessionapi.FailureMalformedConfig:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_MALFORMED_CONFIG
-	case v2.FailureProbe:
+	case sessionapi.FailureProbe:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_PROBE_FAILED
-	case v2.FailurePlatform:
+	case sessionapi.FailurePlatform:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_PLATFORM_FAILED
-	case v2.FailureRuntime:
+	case sessionapi.FailureRuntime:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_RUNTIME_FAILED
-	case v2.FailureCanceled:
+	case sessionapi.FailureCanceled:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CANCELED
-	case v2.FailureInternal:
+	case sessionapi.FailureInternal:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INTERNAL
-	case v2.FailureCleanup:
+	case sessionapi.FailureCleanup:
 		return grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CLEANUP_FAILED
 	default:
 		panic(fmt.Sprintf("unsupported session failure code %q", code))
 	}
 }
 
-func Failure(err error) *grpcproto.SessionFailure {
+func failure(err error) *grpcproto.SessionFailure {
 	if err == nil {
 		return nil
 	}
-	var domain *v2.Error
+	var domain *sessionapi.Error
 	if errors.As(err, &domain) {
-		return &grpcproto.SessionFailure{Code: FailureCode(domain.Code), Message: domain.Message}
+		return &grpcproto.SessionFailure{Code: failureCode(domain.Code), Message: domain.Message}
 	}
 	return &grpcproto.SessionFailure{Code: grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_INTERNAL, Message: "internal session error"}
 }
 
-func SourceKind(kind v2.ConfigSourceKind) grpcproto.SessionSourceKind {
+func sourceKind(kind sessionapi.ConfigSourceKind) grpcproto.SessionSourceKind {
 	switch kind {
-	case v2.ConfigSourceInline:
+	case sessionapi.ConfigSourceInline:
 		return grpcproto.SessionSourceKind_SESSION_SOURCE_KIND_INLINE
-	case v2.ConfigSourceURL:
+	case sessionapi.ConfigSourceURL:
 		return grpcproto.SessionSourceKind_SESSION_SOURCE_KIND_URL
 	default:
 		return grpcproto.SessionSourceKind_SESSION_SOURCE_KIND_UNSPECIFIED
 	}
 }
 
-func Profile(in v2.ProfileSummary) *grpcproto.SessionProfile {
-	return &grpcproto.SessionProfile{Index: in.Index, Protocol: Protocol(in.Protocol), Description: in.Description}
+func profile(in sessionapi.ProfileSummary) *grpcproto.SessionProfile {
+	return &grpcproto.SessionProfile{Index: in.Index, Protocol: protocol(in.Protocol), Description: in.Description}
 }
 
-func Profiles(in []v2.ProfileSummary) []*grpcproto.SessionProfile {
+func profiles(in []sessionapi.ProfileSummary) []*grpcproto.SessionProfile {
 	out := make([]*grpcproto.SessionProfile, 0, len(in))
-	for _, profile := range in {
-		out = append(out, Profile(profile))
+	for _, item := range in {
+		out = append(out, profile(item))
 	}
 	return out
 }
 
-func Warnings(in []v2.Warning) []*grpcproto.SessionWarning {
+func warnings(in []sessionapi.Warning) []*grpcproto.SessionWarning {
 	out := make([]*grpcproto.SessionWarning, 0, len(in))
 	for _, warning := range in {
 		out = append(out, &grpcproto.SessionWarning{Code: warning.Code, Message: warning.Message})
@@ -121,19 +120,19 @@ func Warnings(in []v2.Warning) []*grpcproto.SessionWarning {
 	return out
 }
 
-func Snapshot(in v2.SnapshotResult) *grpcproto.SessionSnapshot {
+func snapshot(in sessionapi.SnapshotResult) *grpcproto.SessionSnapshot {
 	out := &grpcproto.SessionSnapshot{
 		SessionId: in.SessionID, Sequence: in.Sequence, Generation: in.Generation,
-		State: State(in.State), Configured: in.Configured, Digest: in.Digest,
-		SourceKind: SourceKind(in.SourceKind), Profiles: Profiles(in.Profiles),
-		Warnings: Warnings(in.Warnings), CleanupComplete: in.CleanupComplete,
+		State: state(in.State), Configured: in.Configured, Digest: in.Digest,
+		SourceKind: sourceKind(in.SourceKind), Profiles: profiles(in.Profiles),
+		Warnings: warnings(in.Warnings), CleanupComplete: in.CleanupComplete,
 		Recovering: in.Recovering,
 	}
 	if in.ActiveProfile != nil {
-		out.ActiveProfile = Profile(*in.ActiveProfile)
+		out.ActiveProfile = profile(*in.ActiveProfile)
 	}
 	if in.LastFailure != "" {
-		out.LastFailure = &grpcproto.SessionFailure{Code: FailureCode(in.LastFailure), Message: in.LastFailureMessage}
+		out.LastFailure = &grpcproto.SessionFailure{Code: failureCode(in.LastFailure), Message: in.LastFailureMessage}
 	}
 	return out
 }
