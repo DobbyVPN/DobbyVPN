@@ -118,6 +118,16 @@ Enter the selected version's English “What's New” text in the required
 `release_notes` Publish input. It is passed directly to Apple submission;
 no repository variable is needed.
 
+Publish waits up to 15 minutes for the exact Apple version/build to finish
+processing. A retry reuses an existing build instead of uploading it again;
+failed, invalid, or expired builds stop submission.
+
+If the qualified commit differs from the workflow revision, GitHub may reject
+tag creation by `GITHUB_TOKEN` because workflow files differ. Before dispatch,
+an authorized maintainer can create the annotated `vX.Y.Z` tag at the qualified
+Release SHA using an account with Contents and Workflows write access. Never
+move an existing release tag. Publish verifies its target before promotion.
+
 Hosted tests share one disposable Render VPN for the whole run. Public
 services provide IP and bounded upload/download checks; there is no custom
 HTTP measurement server. All platform traffic must originate inside the

@@ -151,7 +151,7 @@ jobs:
           path: selected-release
           run-id: ${{ inputs.release_run_id }}
           github-token: ${{ github.token }}
-      - name: Upload exact IPA to TestFlight
+      - name: Upload or reuse exact IPA and wait for processing
         env:
           APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
           APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
