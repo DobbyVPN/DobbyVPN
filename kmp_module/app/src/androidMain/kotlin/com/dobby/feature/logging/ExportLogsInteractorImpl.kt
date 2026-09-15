@@ -51,7 +51,7 @@ class ExportLogsInteractorImpl(
 
         } catch (e: Exception) {
             logger.error("Log export failed\n${e.stackTraceToString()}")
-            context.showToast("Can't send logs")
+            context.showToast("Can't export logs")
         }
     }
 

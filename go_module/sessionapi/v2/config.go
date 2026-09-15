@@ -155,6 +155,9 @@ func validateRootKeys(keys []toml.Key) error {
 }
 
 func validateTrustTunnelVerification(block map[string]interface{}) error {
+	if _, present := block["skip_verification"]; present {
+		return failure(FailureMalformedConfig, "TrustTunnel skip_verification is only supported under endpoint")
+	}
 	endpoint, ok := block["endpoint"].(map[string]interface{})
 	if !ok {
 		return nil

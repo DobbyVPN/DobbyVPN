@@ -28,7 +28,9 @@ URLs are rejected, redirects must remain HTTPS, and downloaded or inline
 configuration is limited to 1 MiB. Supported profile arrays are `Outline`,
 `Xray`, and `TrustTunnel`, with optional `[ExcludeIPs]`; any other root section or
 key rejects the whole configuration. TrustTunnel certificate verification is
-required, so keep `skip_verification = false` (or omit it).
+required, so keep `skip_verification = false` (or omit it). This setting is
+valid only inside `[TrustTunnel.endpoint]`; a root-level `skip_verification`
+key is rejected.
 
 **Connection variants** (automatic probe-based selection and failover)
 ```toml

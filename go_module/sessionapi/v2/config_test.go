@@ -64,6 +64,13 @@ func TestParseConfigTrustTunnelRequiresCertificateVerification(t *testing.T) {
 		{name: "false accepted", field: "[TrustTunnel.endpoint]\nskip_verification = false\n", wantCode: ""},
 		{name: "true rejected", field: "[TrustTunnel.endpoint]\nskip_verification = true\n", wantCode: FailureMalformedConfig},
 		{name: "wrong type rejected", field: "[TrustTunnel.endpoint]\nskip_verification = 'false'\n", wantCode: FailureMalformedConfig},
+		{name: "root true rejected", field: "skip_verification = true\n", wantCode: FailureMalformedConfig},
+		{name: "root false rejected", field: "skip_verification = false\n", wantCode: FailureMalformedConfig},
+		{name: "root string rejected", field: "skip_verification = 'false'\n", wantCode: FailureMalformedConfig},
+		{name: "root integer rejected", field: "skip_verification = 0\n", wantCode: FailureMalformedConfig},
+		{name: "root false with endpoint true rejected", field: "skip_verification = false\n[TrustTunnel.endpoint]\nskip_verification = true\n", wantCode: FailureMalformedConfig},
+		{name: "root true with endpoint false rejected", field: "skip_verification = true\n[TrustTunnel.endpoint]\nskip_verification = false\n", wantCode: FailureMalformedConfig},
+		{name: "inline endpoint true rejected", field: "endpoint = { skip_verification = true }\n", wantCode: FailureMalformedConfig},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -74,6 +81,24 @@ func TestParseConfigTrustTunnelRequiresCertificateVerification(t *testing.T) {
 				}
 			} else if CodeOf(err) != tt.wantCode {
 				t.Fatalf("parseConfig error = %v, want %s", err, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestParseConfigRejectsMisplacedTrustTunnelVerificationWithOtherProfiles(t *testing.T) {
+	trustTunnel := "[[TrustTunnel]]\nskip_verification = false\n"
+	for name, raw := range map[string]string{
+		"outline first":      outlineConfig + trustTunnel,
+		"trusttunnel first": trustTunnel + outlineConfig,
+	} {
+		t.Run(name, func(t *testing.T) {
+			parsed, err := parseConfig([]byte(raw))
+			if CodeOf(err) != FailureMalformedConfig {
+				t.Fatalf("parseConfig error = %v, want malformed config", err)
+			}
+			if parsed.profiles != nil {
+				t.Fatalf("parseConfig returned usable profiles after rejection: %#v", parsed.profiles)
 			}
 		})
 	}
