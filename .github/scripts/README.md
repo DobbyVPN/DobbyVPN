@@ -101,14 +101,23 @@ workflow instructions.
 Release-only Android checks build unsigned APKs twice and compare them.
 `verify_android_reproducibility.py` verifies identical payloads;
 `verify_android_apk_source.py` checks the embedded source identity.
-Signing verification checks the established certificate and that signing
-did not change application payloads. These checks protect F-Droid source
-matching and upgrade compatibility.
+Signing verification checks the established certificate and that signing did
+not change application payloads. The F-Droid Release lane then fetches the
+current upstream recipe and server, uses fdroidserver's own update logic for a
+new candidate, and builds the exact source in the official buildserver
+container. `fdroid_release_metadata.py` validates that inherited recipe fields
+are preserved; `fdroid_release_check.sh` runs `fetchsrclibs`, the on-server
+build, and the official APK scanner. F-Droid compares its unsigned output with
+the signed Release APK through the temporary local reference URL and verifies
+the declared signing key. These checks protect the recipe as well as the
+artifact.
 
 The marketing version determines Android's version code:
 `major * 1,000,000 + minor * 1,000 + maintenance`.
 Apple uses the release run number as its build number.
-F-Droid builds the promoted tag and `version.txt`.
+F-Droid builds the promoted source commit. Publish creates the `version.txt`
+release asset used by F-Droid's update check. The Release check is a
+pre-publication compatibility check; it does not publish metadata or packages.
 
 ## Signed iOS packages
 

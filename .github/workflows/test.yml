@@ -48,7 +48,7 @@ jobs:
       - name: Run Python tooling tests
         run: |
           python3 -m venv "$RUNNER_TEMP/python-test-venv"
-          "$RUNNER_TEMP/python-test-venv/bin/pip" install --disable-pip-version-check --no-input "pytest==9.0.2"
+          "$RUNNER_TEMP/python-test-venv/bin/pip" install --disable-pip-version-check --no-input "pytest==9.0.2" "PyYAML==6.0.3"
           "$RUNNER_TEMP/python-test-venv/bin/python" -m pytest -q .github/scripts
 
   go:

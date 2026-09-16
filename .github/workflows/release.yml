@@ -88,13 +88,10 @@ jobs:
       KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
 
   fdroid_check:
-    needs: verification
+    needs: [verification, prepare_version, android_build]
     uses: ./.github/workflows/fdroid_check.yml
-
-  fdroid_scan_apk:
-    needs: [prepare_version, android_build]
-    uses: ./.github/workflows/fdroid_scan_apk.yml
     with:
+      source_sha: ${{ github.sha }}
       version_name: ${{ needs.prepare_version.outputs.version_name }}
       version_code: ${{ needs.prepare_version.outputs.android_version_code }}
 
@@ -136,7 +133,7 @@ jobs:
 
   render_start:
     name: Start one disposable Render VPN
-    needs: [android_build, ios_build, installers_build, fdroid_check, fdroid_scan_apk]
+    needs: [android_build, ios_build, installers_build, fdroid_check]
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     environment: render-functional

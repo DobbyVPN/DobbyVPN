@@ -1,24 +1,103 @@
-name: F-Droid Compliance
+name: F-Droid Compatibility
 
 on:
   workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      version_name:
+        type: string
+        required: true
+      version_code:
+        type: string
+        required: true
 
 jobs:
-  check-binaries:
-    name: Check for committed binaries
-    runs-on: ubuntu-latest
+  build:
+    name: Build through the upstream F-Droid recipe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    env:
+      FDROID_IMAGE: registry.gitlab.com/fdroid/fdroidserver:buildserver-trixie
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      VERSION_NAME: ${{ inputs.version_name }}
+      VERSION_CODE: ${{ inputs.version_code }}
+
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
 
-      - name: Find executable binaries in repo
+      - name: Download signed Android artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobbyvpn-android-sign.apk
+          path: ${{ runner.temp }}/fdroid-reference
+
+      - name: Verify release inputs
         run: |
-          BINS=$(git ls-files | xargs file --mime-type \
-            | grep -E 'application/java-archive|application/x-executable|application/x-sharedlib|application/x-mach-binary|application/x-pie-executable' \
-            | grep -v 'gradle-wrapper.jar' \
-            | cut -d: -f1)
-          if [ -n "$BINS" ]; then
-            echo "::error::Binary files found in repository:"
-            echo "$BINS"
-            exit 1
-          fi
-          echo "No binaries found"
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$VERSION_NAME" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$VERSION_CODE" =~ ^[1-9][0-9]*$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -f "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-sign.apk"
+
+      - name: Fetch current F-Droid metadata and server
+        id: upstream
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://gitlab.com/fdroid/fdroiddata.git "$RUNNER_TEMP/fdroiddata"
+          git clone --depth 1 --branch master https://gitlab.com/fdroid/fdroidserver.git "$RUNNER_TEMP/fdroidserver"
+          fdroiddata_sha="$(git -C "$RUNNER_TEMP/fdroiddata" rev-parse HEAD)"
+          fdroidserver_sha="$(git -C "$RUNNER_TEMP/fdroidserver" rev-parse HEAD)"
+          echo "fdroiddata_sha=$fdroiddata_sha" >> "$GITHUB_OUTPUT"
+          echo "fdroidserver_sha=$fdroidserver_sha" >> "$GITHUB_OUTPUT"
+          echo "fdroiddata: $fdroiddata_sha"
+          echo "fdroidserver: $fdroidserver_sha"
+
+      - name: Pull the official F-Droid build environment
+        id: image
+        run: |
+          set -euo pipefail
+          docker pull "$FDROID_IMAGE"
+          digest="$(docker image inspect --format='{{index .RepoDigests 0}}' "$FDROID_IMAGE")"
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "F-Droid build image: $digest"
+
+      - name: Run the F-Droid metadata-driven build and scans
+        run: |
+          set -euo pipefail
+          docker run --rm --init \
+            --volume "$GITHUB_WORKSPACE:/workspace/product:ro" \
+            --volume "$RUNNER_TEMP/fdroiddata:/workspace/fdroiddata" \
+            --volume "$RUNNER_TEMP/fdroidserver:/workspace/fdroidserver:ro" \
+            --volume "$RUNNER_TEMP/fdroid-reference:/workspace/reference" \
+            --env SOURCE_SHA \
+            --env VERSION_NAME \
+            --env VERSION_CODE \
+            "$FDROID_IMAGE" \
+            /workspace/product/.github/scripts/fdroid_release_check.sh \
+              --fdroiddata /workspace/fdroiddata \
+              --fdroidserver /workspace/fdroidserver \
+              --reference-apk "/workspace/reference/DobbyVPN-v${VERSION_NAME}-sign.apk" \
+              --source-sha "$SOURCE_SHA" \
+              --version-name "$VERSION_NAME" \
+              --version-code "$VERSION_CODE"
+
+      - name: Record upstream inputs
+        if: always()
+        run: |
+          {
+            echo "F-Droid data: ${{ steps.upstream.outputs.fdroiddata_sha }}"
+            echo "F-Droid server: ${{ steps.upstream.outputs.fdroidserver_sha }}"
+            echo "Build image: ${{ steps.image.outputs.digest }}"
+            echo "Source: $SOURCE_SHA"
+            echo "Version: $VERSION_NAME ($VERSION_CODE)"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -149,7 +149,17 @@ a release from being treated as successful.
 
 Release-only checks retain Android reproducibility and signing-certificate
 verification, and iOS signature, entitlement, provisioning, and version
-checks. They protect deliverable correctness, not routine test bookkeeping.
+checks. The Android Release also fetches the current F-Droid metadata and
+fdroidserver source, then runs the app through the official F-Droid
+`buildserver-trixie` environment. For a version that is not in fdroiddata yet,
+the check uses fdroidserver's update logic to copy the latest build stanza and
+binds only the candidate source commit and local Release APK reference. The
+source scan, F-Droid APK scan, reproducible comparison, and
+`AllowedAPKSigningKeys` check must all pass. This catches recipe drift such as
+an inherited `submodules` flag after `.gitmodules` was removed. The live
+fdroiddata, fdroidserver, and container revisions are printed in the job
+summary; an unavailable external revision fails the F-Droid job instead of
+being treated as a pass.
 Publish never rebuilds or requalifies packages. It rejects incomplete or
 unsuccessful Release runs, checks that artifacts remain available, and uses
 the selected run's source commit and Apple build number. An Apple API failure
