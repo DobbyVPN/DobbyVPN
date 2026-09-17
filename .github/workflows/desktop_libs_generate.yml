@@ -73,7 +73,6 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.arch }}-desktop-vpn-lib-${{ hashFiles('.go-version', 'go_module/**', '.github/scripts/desktop_build.py', '.github/workflows/desktop_libs_generate.yml') }}
 
       - name: Set up Go
-        if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: .go-version
@@ -109,6 +108,28 @@ jobs:
             export CGO_LDFLAGS="-L${{ github.workspace }}/go_module"
           fi
           python .github/scripts/desktop_build.py libs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --go-mod-tidy --with-cli
+        shell: bash
+
+      - name: Install Linux Fyne build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxi-dev
+
+      - name: Build shared Go/Fyne UI
+        run: |
+          python .github/scripts/desktop_build.py ui \
+            --platform current \
+            --arch ${{ matrix.arch }} \
+            --go-mod-tidy
         shell: bash
 
       - name: Verify Windows service runtime closure
@@ -191,6 +212,14 @@ jobs:
           path: go_module/dobby-cli.exe
           if-no-files-found: error
 
+      - name: Upload Windows Go/Fyne UI
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobby-vpn-ui-windows
+          path: go_module/dobby-vpn-ui.exe
+          if-no-files-found: error
+
       - name: Upload Linux desktop CLI
         if: matrix.platform == 'linux'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -199,10 +228,26 @@ jobs:
           path: go_module/dobby-cli
           if-no-files-found: error
 
+      - name: Upload Linux Go/Fyne UI
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobby-vpn-ui-linux
+          path: go_module/dobby-vpn-ui
+          if-no-files-found: error
+
       - name: Upload macOS desktop CLI
         if: matrix.platform == 'macos'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobby-cli-macos-${{ matrix.arch }}
           path: go_module/dobby-cli
+          if-no-files-found: error
+
+      - name: Upload macOS Go/Fyne UI
+        if: matrix.platform == 'macos'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobby-vpn-ui-macos-${{ matrix.arch }}
+          path: go_module/dobby-vpn-ui
           if-no-files-found: error
