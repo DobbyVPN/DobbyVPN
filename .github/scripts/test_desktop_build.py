@@ -632,6 +632,8 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertIn("-tags=accessibility", command)
         self.assertEqual(command[command.index("-o") + 1], str(output))
         self.assertEqual(command[-1], "./cmd/dobbyui-test/")
+        ldflags = next(item for item in command if item.startswith("-ldflags="))
+        self.assertNotIn("-H=windowsgui", ldflags)
         self.assertEqual(run.call_args.kwargs["env"]["CGO_ENABLED"], "1")
         self.assertEqual(run.call_args.kwargs["env"]["GOOS"], "linux")
 

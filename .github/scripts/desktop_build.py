@@ -970,8 +970,6 @@ def build_go_ui_test(
         "GOARCH": target_arch,
     })
     ldflags = "-buildid="
-    if target_platform == "windows":
-        ldflags += " -H=windowsgui"
     if target_platform == "macos":
         ldflags += (
             f" -linkmode=external -extldflags=-mmacosx-version-min="
