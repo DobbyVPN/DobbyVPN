@@ -84,7 +84,7 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobby-cli-macos-arm64
-          path: kmp_module/services
+          path: kmp_module/services/macos-arm64
 
       - name: Download macOS amd64 gRPC vpn service
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
@@ -102,15 +102,17 @@ jobs:
         working-directory: kmp_module/services
         run: |
           set -euo pipefail
-          chmod +x macos_grpcvpnserver macos-amd64/macos_grpcvpnserver dobby-cli macos-amd64/dobby-cli
+          chmod +x macos_grpcvpnserver macos-amd64/macos_grpcvpnserver macos-arm64/dobby-cli macos-amd64/dobby-cli
           test -x macos_grpcvpnserver
           test -x macos-amd64/macos_grpcvpnserver
+          test -x macos-arm64/dobby-cli
 
       - name: Verify staged desktop CLI binaries
         working-directory: kmp_module/services
         run: |
           test -x dobby-cli
           test -f dobby-cli.exe
+          test -x macos-arm64/dobby-cli
           test -x macos-amd64/dobby-cli
 
       - name: Download Windows Go/Fyne UI
@@ -129,7 +131,7 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobby-vpn-ui-macos-arm64
-          path: kmp_module/services
+          path: kmp_module/services/macos-arm64
 
       - name: Download macOS amd64 Go/Fyne UI
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
@@ -141,9 +143,10 @@ jobs:
         working-directory: kmp_module/services
         run: |
           set -euo pipefail
-          chmod +x dobby-vpn-ui macos-amd64/dobby-vpn-ui
+          chmod +x dobby-vpn-ui macos-arm64/dobby-vpn-ui macos-amd64/dobby-vpn-ui
           test -f dobby-vpn-ui.exe
           test -x dobby-vpn-ui
+          test -x macos-arm64/dobby-vpn-ui
           test -x macos-amd64/dobby-vpn-ui
 
       - name: Build desktop via script
@@ -163,6 +166,7 @@ jobs:
           sudo apt-get install -y python3-pil
           python3 .github/scripts/package_desktop.py \
             --version "${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}" \
+            --staging-root kmp_module/services \
             --output output
 
       - name: Find files

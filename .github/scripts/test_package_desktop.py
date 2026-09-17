@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -90,6 +91,54 @@ class DesktopPackageTests(unittest.TestCase):
         self.assertTrue(package_desktop.VERSION_RE.fullmatch("1.5.1"))
         self.assertFalse(package_desktop.VERSION_RE.fullmatch("1.5"))
         self.assertFalse(package_desktop.VERSION_RE.fullmatch("v1.5.1"))
+
+    def test_staging_root_keeps_architecture_payloads_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            staging = root / "staging"
+            for name in ("windows-amd64", "macos-arm64", "macos-amd64", "linux-amd64"):
+                (staging / name).mkdir(parents=True)
+            output = root / "output"
+            calls: list[tuple[str, Path]] = []
+
+            def capture_windows(version: str, destination: Path, *, source_dir: Path) -> None:
+                calls.append(("windows", source_dir))
+
+            def capture_macos(version: str, destination: Path, *, arch: str, source_dir: Path, minimum_system_version: str) -> None:
+                calls.append((arch, source_dir))
+
+            def capture_linux(version: str, destination: Path, *, source_dir: Path) -> None:
+                calls.append(("linux", source_dir))
+
+            with (
+                mock.patch.object(package_desktop, "package_windows", side_effect=capture_windows),
+                mock.patch.object(package_desktop, "package_macos", side_effect=capture_macos),
+                mock.patch.object(package_desktop, "package_linux", side_effect=capture_linux),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "package_desktop.py",
+                        "--version",
+                        "1.5.1",
+                        "--staging-root",
+                        str(staging),
+                        "--output",
+                        str(output),
+                    ],
+                ),
+            ):
+                package_desktop.main()
+
+            self.assertEqual(
+                calls,
+                [
+                    ("windows", staging / "windows-amd64"),
+                    ("aarch64", staging / "macos-arm64"),
+                    ("amd64", staging / "macos-amd64"),
+                    ("linux", staging / "linux-amd64"),
+                ],
+            )
 
     def test_linux_package_keeps_runtime_path_aligned_with_payload(self) -> None:
         if package_desktop.shutil.which("dpkg-deb") is None:

@@ -17,7 +17,7 @@ responsibility boundaries and supported configuration behavior.
 AppStore: https://apps.apple.com/us/app/dobbyvpn-do-better-by-vpn/id6741442515
 
 F-Droid: https://f-droid.org/en/packages/com.dobby.vpn/ (official metadata may
-lag releases; v1.5.0 availability is not claimed until the index is updated.)
+lag releases; v1.5.1 availability is not claimed until the index is updated.)
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 

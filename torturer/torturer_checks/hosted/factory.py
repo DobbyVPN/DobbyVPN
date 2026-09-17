@@ -8,6 +8,7 @@ from .cli import CommandRunner
 from .linux import LinuxHostedAdapter
 from .macos import MacOSHostedAdapter
 from .windows import WindowsHostedAdapter
+from .ui import HeadlessUIAdapter
 
 PUBLIC_IDENTITY_URL = "https://api.ipify.org"
 PUBLIC_LATENCY_URL = "https://speed.cloudflare.com/__down?bytes=1"
@@ -19,6 +20,7 @@ def adapter_for_platform(
     platform: str,
     *,
     cli: Path | None = None,
+    ui_test: Path | None = None,
     profile: Path,
     runner: CommandRunner,
     adb: Path | None = None,
@@ -45,6 +47,7 @@ def adapter_for_platform(
             raise ValueError("android adapter does not use service_log")
         for name, value in (
             ("cli", cli),
+            ("ui_test", ui_test),
             ("service_pid", service_pid),
             ("service_binary", service_binary),
             ("service_socket", service_socket),
@@ -76,7 +79,7 @@ def adapter_for_platform(
     if platform == "linux":
         if network_transition_helper is not None:
             raise ValueError("linux adapter received unexpected network_transition_helper")
-        return LinuxHostedAdapter(
+        adapter = LinuxHostedAdapter(
             cli=cli,
             profile=profile,
             runner=runner,
@@ -94,6 +97,7 @@ def adapter_for_platform(
             network_interface=network_interface,
             routing_firewall_helper=routing_firewall_helper,
         )
+        return _wrap_ui(adapter, ui_test=ui_test, profile=profile, runner=runner)
     if platform == "windows":
         if routing_firewall_helper is not None:
             raise ValueError("windows adapter received unexpected routing_firewall_helper")
@@ -101,7 +105,7 @@ def adapter_for_platform(
             raise ValueError("windows adapter received unexpected service_log")
         if network_transition_helper is not None:
             raise ValueError("windows adapter received unexpected network_transition_helper")
-        return WindowsHostedAdapter(
+        adapter = WindowsHostedAdapter(
             cli=cli,
             profile=profile,
             runner=runner,
@@ -116,10 +120,11 @@ def adapter_for_platform(
             service_socket=service_socket,
             network_interface=network_interface,
         )
+        return _wrap_ui(adapter, ui_test=ui_test, profile=profile, runner=runner)
 
     if service_log is not None:
         raise ValueError("macos adapter received unexpected service_log")
-    return MacOSHostedAdapter(
+    adapter = MacOSHostedAdapter(
         cli=cli,
         profile=profile,
         runner=runner,
@@ -135,6 +140,18 @@ def adapter_for_platform(
         network_interface=network_interface,
         routing_firewall_helper=routing_firewall_helper,
         network_transition_helper=network_transition_helper,
+    )
+    return _wrap_ui(adapter, ui_test=ui_test, profile=profile, runner=runner)
+
+
+def _wrap_ui(adapter, *, ui_test: Path | None, profile: Path, runner: CommandRunner):
+    if ui_test is None:
+        return adapter
+    return HeadlessUIAdapter(
+        base=adapter,
+        ui_test=ui_test,
+        profile=profile,
+        runner=runner,
     )
 
 

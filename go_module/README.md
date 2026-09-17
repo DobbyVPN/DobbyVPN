@@ -34,6 +34,19 @@ The command writes an unbundled executable to `go_module/dobby-vpn-ui` (or
 `dobby-vpn-ui.exe` on Windows). It is suitable for a disposable Windows
 manual-injection test while installer integration is being migrated.
 
+Build the headless UI companion on the native target host for service-backed
+UI qualification:
+
+```bash
+python3 .github/scripts/desktop_build.py ui-test --platform current
+```
+
+It drives the production Fyne widgets with the Fyne test driver and speaks a
+small private JSON-lines protocol to the shared functional harness. The
+companion is not an operating-system input simulator; Windows/macOS release
+qualification additionally runs `.github/scripts/native_ui_smoke.py` against
+the packaged GUI to inject a real click and close gesture.
+
 Release desktop archives are assembled from those native binaries by the
 small, deterministic packager (no JVM or Gradle runtime is involved):
 

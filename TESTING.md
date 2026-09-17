@@ -51,15 +51,27 @@ PYTHONPATH=torturer python3 -m unittest discover -s torturer/tests -p 'test_*.py
 The functional-tooling suite includes Windows-only process tests, skipped on
 other operating systems. Running its Python unit tests is not a live VPN test.
 
-Go/Fyne component tests cover UI state without opening a window. Desktop
-release artifacts are native Go/Fyne binaries on Windows, macOS and Linux; the
-first two are the GUI-automation targets, while Linux remains CLI/service
-qualification only. Production Android Kotlin/Compose and iOS Swift/Compose
-activities retain their native VPN shells and exercise the shared Go session
-binding. The opt-in Fyne mobile entry point is built with `-tags=fyne_mobile`;
-it is a packaging experiment, not yet the production Android/iOS activity. GUI
-automation must drive visible controls and may not substitute CLI commands for
-GUI actions.
+Go/Fyne component tests cover UI state without opening a window. The native
+`dobby-vpn-ui-test` companion drives the production widgets with Fyne's test
+driver while using the real authenticated desktop service; Windows and macOS
+local/Release functional lanes use it for Connect, Disconnect, reconnect, and
+service-loss UI actions, while the existing semantic engine still owns VPN
+observations and cleanup. A separate native-window smoke injects one real
+mouse click and the platform close gesture against the packaged Windows/macOS
+binary. Linux remains CLI/service qualification only. GUI automation must
+drive visible controls and may not substitute CLI commands for GUI actions.
+
+The Go job emits one repository-wide coverage profile with
+`go test -coverpkg=./...` and uploads its `go tool cover -func` report as the
+`go-coverage` artifact. This is the shared Go coverage source; platform UI
+qualification is reported separately and does not invent per-platform
+coverage numbers.
+
+Production Android Kotlin/Compose and iOS Swift/Compose activities retain
+their native VPN shells and exercise the shared Go session binding. The opt-in
+Fyne mobile entry point is built with `-tags=fyne_mobile`; it remains a
+packaging/accessibility experiment until foreground/background and native
+accessibility checks pass on both platforms.
 
 ## iOS
 

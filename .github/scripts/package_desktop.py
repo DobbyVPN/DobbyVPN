@@ -73,16 +73,17 @@ def create_windows_icon(destination: Path) -> None:
         fail(f"could not convert {LOGO} to Windows icon: {error}")
 
 
-def package_windows(version: str, output: Path) -> None:
+def package_windows(version: str, output: Path, *, source_dir: Path | None = None) -> None:
+    source_dir = SERVICES if source_dir is None else source_dir
     with tempfile.TemporaryDirectory(prefix="dobbyvpn-desktop-windows-") as temporary:
         root = Path(temporary)
         copy_executable(
-            SERVICES / "dobby-vpn-ui.exe",
+            source_dir / "dobby-vpn-ui.exe",
             root / "bin" / "Dobby Vpn.exe",
             executable=False,
         )
         copy_executable(
-            SERVICES / "dobby-cli.exe",
+            source_dir / "dobby-cli.exe",
             root / "bin" / "dobby-cli.exe",
             executable=False,
         )
@@ -146,14 +147,15 @@ exit 0
     postinst.chmod(0o755)
 
 
-def package_linux(version: str, output: Path) -> None:
+def package_linux(version: str, output: Path, *, source_dir: Path | None = None) -> None:
+    source_dir = SERVICES if source_dir is None else source_dir
     with tempfile.TemporaryDirectory(prefix="dobbyvpn-desktop-linux-") as temporary:
         root = Path(temporary)
-        copy_executable(SERVICES / "dobby-vpn-ui", root / "opt" / "dobbyvpn" / "bin" / "dobby-vpn")
-        copy_executable(SERVICES / "dobby-cli", root / "opt" / "dobbyvpn" / "bin" / "dobby-cli")
-        copy_executable(SERVICES / "ubuntu_grpcvpnserver", root / "opt" / "dobbyvpn" / "lib" / "app" / "ubuntu_grpcvpnserver")
+        copy_executable(source_dir / "dobby-vpn-ui", root / "opt" / "dobbyvpn" / "bin" / "dobby-vpn")
+        copy_executable(source_dir / "dobby-cli", root / "opt" / "dobbyvpn" / "bin" / "dobby-cli")
+        copy_executable(source_dir / "ubuntu_grpcvpnserver", root / "opt" / "dobbyvpn" / "lib" / "app" / "ubuntu_grpcvpnserver")
         for name in ("libdobby_bridge.so", "libc++.so.1", "libc++abi.so.1"):
-            source = SERVICES / name
+            source = source_dir / name
             required(source)
             destination = root / "opt" / "dobbyvpn" / "lib" / "runtime" / name
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -215,6 +217,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Package the native DobbyVPN desktop binaries.")
     parser.add_argument("--version", required=True, help="Marketing version x.y.z")
     parser.add_argument("--output", type=Path, default=ROOT / "output")
+    parser.add_argument(
+        "--staging-root",
+        type=Path,
+        default=SERVICES,
+        help="Directory containing the native desktop payloads",
+    )
     return parser.parse_args()
 
 
@@ -223,22 +231,25 @@ def main() -> None:
     if not VERSION_RE.fullmatch(args.version):
         fail("--version must be a numeric x.y.z version")
     output = args.output.resolve()
-    package_windows(args.version, output)
+    staging = args.staging_root.resolve()
+    package_windows(args.version, output, source_dir=staging / "windows-amd64" if (staging / "windows-amd64").is_dir() else staging)
     package_macos(
         args.version,
         output,
         arch="aarch64",
-        source_dir=SERVICES,
+        source_dir=staging / "macos-arm64" if (staging / "macos-arm64").is_dir() else staging,
         minimum_system_version="15.0",
     )
     package_macos(
         args.version,
         output,
         arch="amd64",
-        source_dir=SERVICES / "macos-amd64",
+        source_dir=staging / "macos-amd64",
         minimum_system_version="11.0",
     )
-    package_linux(args.version, output)
+    # Keep the Linux payload at the historical staging root.  It is also the
+    # only payload whose names overlap with the arm64 macOS CLI/UI.
+    package_linux(args.version, output, source_dir=staging / "linux-amd64" if (staging / "linux-amd64").is_dir() else staging)
     print(f"[+] Wrote native desktop packages to {output}")
 
 

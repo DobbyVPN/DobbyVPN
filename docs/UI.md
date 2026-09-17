@@ -10,6 +10,21 @@ foreground/extension lifetime, secure storage and system sharing APIs while the
 opt-in Go/Fyne mobile packaging experiment (`-tags=fyne_mobile`) is validated
 separately.
 
+## UI qualification
+
+The desktop test companion (`desktop_build.py ui-test`) embeds the same
+production widgets and Fyne's headless driver. It sends Connect, Disconnect,
+and reconnect actions to the authenticated gRPC client; the shared functional
+adapter delegates tunnel, routing, traffic, process-loss, and cleanup
+assertions to the normal platform adapter. A Windows/macOS native-window smoke
+also starts the packaged binary, injects a real mouse click, and closes it with
+the platform gesture. Linux deliberately stays CLI/service-only.
+
+The Fyne driver is not an operating-system input simulator: it validates
+widget callbacks, layout state, accessibility labels, and the real service
+boundary. The native-window smoke covers actual window/input wiring. Neither
+duplicates the canonical functional scenario definitions.
+
 ## Connect and reattach
 
 At startup, the UI attaches with `Snapshot` and starts `Watch`. `Watch` sends

@@ -62,6 +62,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=tuple(_ARCHITECTURES), required=True)
     parser.add_argument("--cli", type=Path, help="Installed candidate CLI for desktop platforms")
+    parser.add_argument(
+        "--ui-test", type=Path,
+        help="Headless production Fyne UI companion for Windows/macOS UI lanes",
+    )
     parser.add_argument("--adb", type=Path, help="ADB executable for Android")
     parser.add_argument(
         "--profile", dest="profile", type=Path,
@@ -173,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     adapter = adapter_for_platform(
         args.platform,
         cli=cli,
+        ui_test=args.ui_test,
         adb=adb,
         profile=args.profile,
         runner=runner,

@@ -389,6 +389,8 @@ def _functional_command(run_dir: Path, descriptor: dict[str, Any], platform: str
         command.extend(("--adb", str(descriptor["runtime"]["adb"])))
     else:
         command.extend(("--cli", str(_candidate_path(descriptor, "cli")),))
+        if platform in {"windows", "macos"}:
+            command.extend(("--ui-test", str(_candidate_path(descriptor, "ui_test")),))
         runtime = descriptor.get("runtime", {})
         for name, flag in (("pid", "--service-pid"), ("binary", "--service-binary"), ("socket", "--service-socket"), ("library_path", "--service-library-path"), ("pid_file", "--service-pid-file"), ("identity_file", "--service-identity-file")):
             if name in runtime:

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,40 @@ type fakeClient struct {
 	started   bool
 	stopped   bool
 	startedCh chan struct{}
+}
+
+type reconnectClient struct {
+	mu      sync.Mutex
+	watches int
+	updates chan Snapshot
+}
+
+func (r *reconnectClient) Configure(context.Context, []byte, uint64) (ConfigureResult, error) {
+	return ConfigureResult{}, nil
+}
+func (r *reconnectClient) Start(context.Context, uint64) (StartResult, error) {
+	return StartResult{}, nil
+}
+func (r *reconnectClient) Stop(context.Context, uint64) (StopResult, error) {
+	return StopResult{}, nil
+}
+func (r *reconnectClient) Snapshot(context.Context) (Snapshot, error) {
+	return Snapshot{State: StateConnected, Generation: 1}, nil
+}
+func (r *reconnectClient) Watch(context.Context) (<-chan Snapshot, error) {
+	r.mu.Lock()
+	r.watches++
+	watch := r.watches
+	r.mu.Unlock()
+	if watch == 1 {
+		closed := make(chan Snapshot)
+		close(closed)
+		return closed, nil
+	}
+	return r.updates, nil
+}
+func (r *reconnectClient) Reset(context.Context, uint64) (Snapshot, error) {
+	return Snapshot{}, nil
 }
 
 func (f *fakeClient) Configure(context.Context, []byte, uint64) (ConfigureResult, error) {
@@ -114,6 +149,30 @@ func TestConnectionViewButtonDrivesSessionClient(t *testing.T) {
 	}
 }
 
+func TestConnectionViewReconnectsAfterWatchClosure(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	client := &reconnectClient{updates: make(chan Snapshot, 1)}
+	view := NewConnectionView(client)
+	view.Start()
+	t.Cleanup(view.Stop)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && view.Status.Text != "Reconnecting" {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if view.Status.Text != "Reconnecting" {
+		t.Fatalf("status after watch closure = %q", view.Status.Text)
+	}
+	client.updates <- Snapshot{State: StateConnected, Generation: 2}
+	for time.Now().Before(deadline) && view.Status.Text != "Connected" {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if view.Status.Text != "Connected" {
+		t.Fatalf("status after watch reconnect = %q", view.Status.Text)
+	}
+}
+
 func TestSettingsViewContainsBuildIdentity(t *testing.T) {
 	oldVersion, oldCommit := Version, Commit
 	Version, Commit = "1.5.1", "abc123"
@@ -125,5 +184,17 @@ func TestSettingsViewContainsBuildIdentity(t *testing.T) {
 	}
 	if view.Commit.Text != "Source commit: abc123" {
 		t.Fatalf("commit = %q", view.Commit.Text)
+	}
+}
+
+func TestApplicationCloseDetachesWithoutStoppingSession(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	client := &fakeClient{}
+	application := NewApplication(runtime, client)
+	application.Start()
+	application.Close()
+	if client.stopped {
+		t.Fatal("closing the UI must not stop the service-owned session")
 	}
 }

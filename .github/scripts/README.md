@@ -29,6 +29,13 @@ Build the native desktop inputs for the current host:
 python3 .github/scripts/desktop_build.py app
 ```
 
+Build the production-widget headless UI companion for Windows/macOS GUI
+qualification (on the matching native host):
+
+```bash
+python3 .github/scripts/desktop_build.py ui-test --platform current
+```
+
 Build release archives from staged native inputs:
 
 ```bash
@@ -89,9 +96,10 @@ Local mode accepts the supplied worktree, builds the app once with normal
 incremental caches, and builds its test companion. It does not prove release
 reproducibility or invent a Git identity for uncommitted source.
 For desktop targets, the resulting `candidate.json` is a flat map of the
-built native paths (`service`, `cli`, and `network`). Desktop local VM checks
-do not build or discover the JVM application. Android additionally records
-the signed `app` and `test_companion` APK paths.
+built native paths (`service`, `cli`, and `network`); Windows/macOS also carry
+the headless `ui_test` companion. Linux local checks remain CLI/service-only.
+Desktop local VM checks do not build or discover the JVM application. Android
+additionally records the signed `app` and `test_companion` APK paths.
 The runner already owns platform identities and logs, so the descriptor does
 not repeat those values or perform a cross-user permission handoff.
 

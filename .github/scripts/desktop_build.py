@@ -117,6 +117,11 @@ UI_NAMES = {
     "macos": "dobby-vpn-ui",
     "windows": "dobby-vpn-ui.exe",
 }
+UI_TEST_NAMES = {
+    "linux": "dobby-vpn-ui-test",
+    "macos": "dobby-vpn-ui-test",
+    "windows": "dobby-vpn-ui-test.exe",
+}
 MACOS_MINIMUM_SYSTEM_VERSION = "11.0"
 PROBE_TIMEOUT_SECONDS = 30
 GOOS_BY_PLATFORM = {
@@ -928,7 +933,7 @@ def build_go_ui(
             "-tags=accessibility",
             f"-ldflags={ldflags}",
             "-o",
-            output.name,
+            str(output),
             "./cmd/dobbyui/",
         ],
         cwd=GO_MODULE_DIR,
@@ -937,6 +942,58 @@ def build_go_ui(
     if target_platform != "windows":
         output.chmod(output.stat().st_mode | 0o111)
     log(f"Built Go/Fyne UI {output}")
+    return output
+
+
+def build_go_ui_test(
+    target_platform: str,
+    arch: str | None,
+    skip_deps: bool,
+    run_go_mod_tidy: bool,
+    output_path: Path | None = None,
+) -> Path:
+    """Build the native headless UI companion for local/functional tests."""
+    if target_platform != host_platform():
+        fail("The headless UI companion must be built on its native target host")
+    ensure_build_dependencies(target_platform, skip_deps)
+    if target_platform == "linux":
+        install_linux_gui_packages(skip_deps)
+    go_mod_download(run_go_mod_tidy)
+
+    target_arch = arch or default_service_arch(target_platform)
+    output = output_path.resolve() if output_path is not None else GO_MODULE_DIR / UI_TEST_NAMES[target_platform]
+    output.parent.mkdir(parents=True, exist_ok=True)
+    environment = os.environ.copy()
+    environment.update({
+        "CGO_ENABLED": "1",
+        "GOOS": GOOS_BY_PLATFORM[target_platform],
+        "GOARCH": target_arch,
+    })
+    ldflags = "-buildid="
+    if target_platform == "windows":
+        ldflags += " -H=windowsgui"
+    if target_platform == "macos":
+        ldflags += (
+            f" -linkmode=external -extldflags=-mmacosx-version-min="
+            f"{MACOS_MINIMUM_SYSTEM_VERSION} -headerpad 0xFF"
+        )
+    run(
+        [
+            "go",
+            "build",
+            "-trimpath",
+            "-tags=accessibility",
+            f"-ldflags={ldflags}",
+            "-o",
+            str(output),
+            "./cmd/dobbyui-test/",
+        ],
+        cwd=GO_MODULE_DIR,
+        env=environment,
+    )
+    if target_platform != "windows":
+        output.chmod(output.stat().st_mode | 0o111)
+    log(f"Built headless Go/Fyne UI companion {output}")
     return output
 
 
@@ -1141,8 +1198,11 @@ def ui_target_path(target_platform: str, arch: str | None = None) -> Path:
     # The release workflow stages the arm64 macOS artifact at the historical
     # platform root and the Intel artifact in a named subdirectory.  Keep that
     # layout explicit so the package config and local builds share one rule.
-    if target_platform == "macos" and arch == "amd64":
+    target_arch = arch or default_service_arch(target_platform)
+    if target_platform == "macos" and target_arch == "amd64":
         return SERVICES_DIR / "macos-amd64" / UI_NAMES[target_platform]
+    if target_platform == "macos":
+        return SERVICES_DIR / "macos-arm64" / UI_NAMES[target_platform]
     return SERVICES_DIR / UI_NAMES[target_platform]
 
 
@@ -1177,6 +1237,8 @@ def run_native_package() -> None:
             str(ROOT_DIR / ".github" / "scripts" / "package_desktop.py"),
             "--version",
             version,
+            "--staging-root",
+            str(SERVICES_DIR),
             "--output",
             str(ROOT_DIR / "output"),
         ],
@@ -1578,6 +1640,13 @@ def parse_args() -> argparse.Namespace:
     ui.add_argument("--output", type=Path, help="Output executable path (defaults to go_module/dobby-vpn-ui[.exe]).")
     ui.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the UI build.")
 
+    ui_test = subparsers.add_parser("ui-test", help="Build the headless Go/Fyne UI integration companion.")
+    add_common_options(ui_test)
+    ui_test.add_argument("--platform", default="current", help="Native current platform only.")
+    ui_test.add_argument("--arch", help="Override GOARCH for the companion build.")
+    ui_test.add_argument("--output", type=Path, help="Output companion path.")
+    ui_test.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the companion build.")
+
     cli = subparsers.add_parser("cli-test", help="Build current desktop target and run check-config.")
     add_common_options(cli)
     cli.add_argument("--config", help="Config URL, TOML file path, or inline TOML.")
@@ -1622,6 +1691,9 @@ def main() -> None:
     elif args.command == "ui":
         platform = host_platform() if args.platform == "current" else normalize_platform(args.platform)
         build_go_ui(platform, args.arch, args.skip_deps, args.go_mod_tidy, args.output)
+    elif args.command == "ui-test":
+        platform = host_platform() if args.platform == "current" else normalize_platform(args.platform)
+        build_go_ui_test(platform, args.arch, args.skip_deps, args.go_mod_tidy, args.output)
     elif args.command == "cli-test":
         cli_test(args)
     elif args.command == "test-seams-service":

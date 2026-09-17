@@ -32,6 +32,7 @@ class LocalCandidateTests(unittest.TestCase):
         go.mkdir(exist_ok=True)
         (go / candidate.SERVICE_NAMES[platform]).write_bytes(b"service")
         (go / candidate.CLI_NAMES[platform]).write_bytes(b"cli")
+        (go / candidate.UI_TEST_NAMES[platform]).write_bytes(b"ui-test")
 
     def test_prepare_describes_each_desktop_candidate_with_confined_paths(self) -> None:
         for platform in candidate.DESKTOP_PLATFORMS:
@@ -48,6 +49,8 @@ class LocalCandidateTests(unittest.TestCase):
                         output=output,
                     )
                 expected = {"cli", "service", "network"}
+                if platform in {"windows", "macos"}:
+                    expected.add("ui_test")
                 self.assertEqual(set(descriptor), expected)
                 self.assertEqual(json.loads(output.read_text()), descriptor)
                 for interface in expected:
@@ -323,7 +326,7 @@ class LocalCandidateTests(unittest.TestCase):
         self.assertIn('"label":"could not sign the local Android qualification APK"', metadata)
         self.assertIn('"argv":["/keytool"', metadata)
 
-    def test_desktop_adapter_builds_native_service_and_cli(self) -> None:
+    def test_desktop_adapter_builds_native_service_cli_and_ui_test(self) -> None:
         helper = self.source / ".github" / "scripts" / "desktop_build.py"
         helper.parent.mkdir(parents=True)
         helper.write_text("# fixture")
@@ -347,14 +350,16 @@ class LocalCandidateTests(unittest.TestCase):
                 "amd64",
                 True,
             )
-        self.assertEqual(len(commands), 1)
+        self.assertEqual(len(commands), 2)
         self.assertEqual(commands[0][1:4], [str(helper), "libs", "--platform"])
         self.assertIn("--with-cli", commands[0])
         self.assertIn("--skip-deps", commands[0])
-        self.assertEqual(len(environments), 1)
+        self.assertEqual(commands[1][1:4], [str(helper), "ui-test", "--platform"])
+        self.assertIn("--skip-deps", commands[1])
+        self.assertEqual(len(environments), 2)
         self.assertNotIn("GRADLE_USER_HOME", environments[0] or {})
 
-    def test_linux_adapter_builds_only_service_and_cli(self) -> None:
+    def test_linux_adapter_builds_service_and_cli_only(self) -> None:
         helper = self.source / ".github" / "scripts" / "desktop_build.py"
         helper.parent.mkdir(parents=True)
         helper.write_text("# fixture")

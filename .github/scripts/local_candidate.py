@@ -40,6 +40,11 @@ CLI_NAMES = {
     "windows": "dobby-cli.exe",
     "macos": "dobby-cli",
 }
+UI_TEST_NAMES = {
+    "linux": "dobby-vpn-ui-test",
+    "windows": "dobby-vpn-ui-test.exe",
+    "macos": "dobby-vpn-ui-test",
+}
 ANDROID_BUILD_TOOLS_VERSION = "36.0.0"
 ARCHITECTURE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 SIGNER_DIGEST = re.compile(r"certificate SHA-256 digest:\s*([0-9a-fA-F:]+)")
@@ -364,6 +369,21 @@ def _build_desktop(
     if skip_deps:
         libs.append("--skip-deps")
     _run(libs, source_root=source_root, environment=environment)
+    if platform in {"windows", "macos"}:
+        ui_test_output = source_root / "go_module" / UI_TEST_NAMES[platform]
+        ui_test = [
+            *common,
+            "ui-test",
+            "--platform",
+            "current",
+            "--arch",
+            architecture,
+            "--output",
+            str(ui_test_output),
+        ]
+        if skip_deps:
+            ui_test.append("--skip-deps")
+        _run(ui_test, source_root=source_root, environment=environment)
 
 
 def _build_android(
@@ -404,6 +424,7 @@ def _descriptor(
     app_path: Path | None,
     test_companion_path: Path | None,
     cli_path: Path | None,
+    ui_test_path: Path | None,
     service_path: Path | None,
     network_path: Path,
 ) -> dict[str, Any]:
@@ -429,6 +450,10 @@ def _descriptor(
         raise CandidateError("desktop candidate paths are incomplete")
     result["service"] = str(_regular_file(service_path, request_root, "service"))
     result["cli"] = str(_regular_file(cli_path, request_root, "CLI"))
+    if platform in {"windows", "macos"}:
+        if ui_test_path is None:
+            raise CandidateError("desktop UI candidate paths are incomplete")
+        result["ui_test"] = str(_regular_file(ui_test_path, request_root, "headless UI companion"))
     result["network"] = str(_confined(network_path, request_root, "network interface"))
     return result
 
@@ -487,12 +512,14 @@ def prepare_candidate(
         )
         service_path = source_root / "go_module" / SERVICE_NAMES[platform]
         cli_path = source_root / "go_module" / CLI_NAMES[platform]
+        ui_test_path = source_root / "go_module" / UI_TEST_NAMES[platform]
         app_path = None
     else:
         app_path = _build_android(source_root, candidate_root, architecture)
         test_companion_path = candidate_root / "dobbyvpn-test-companion.apk"
         service_path = None
         cli_path = None
+        ui_test_path = None
 
     # Linux Unix-domain socket paths are commonly limited to 107 usable bytes.
     # Linux's request/source path reached 113 bytes and bind returned EINVAL.
@@ -510,6 +537,7 @@ def prepare_candidate(
         app_path=app_path,
         test_companion_path=test_companion_path,
         cli_path=cli_path,
+        ui_test_path=ui_test_path,
         service_path=service_path,
         network_path=network_path,
     )

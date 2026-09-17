@@ -412,6 +412,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=("linux", "windows", "macos", "android"), required=True)
     parser.add_argument("--cli", type=Path)
+    parser.add_argument("--ui-test", type=Path)
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--source-sha", default=None, help="Optional checkout identity checked before hosted execution")
     parser.add_argument(
@@ -475,6 +476,7 @@ def main(argv: list[str] | None = None) -> int:
         adapter = adapter_for_platform(
             args.platform,
             cli=args.cli,
+            ui_test=args.ui_test,
             profile=args.profile,
             runner=runner,
             adb=args.adb,

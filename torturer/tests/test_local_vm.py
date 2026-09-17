@@ -112,10 +112,11 @@ class LocalVMTests(unittest.TestCase):
         root = Path(temporary.name)
         (root / "source" / "torturer").mkdir(parents=True)
         (root / "profile").write_text("synthetic", encoding="utf-8")
-        for name in ("dobby-cli", "ubuntu_grpcvpnserver"):
+        for name in ("dobby-cli", "dobby-vpn-ui-test", "ubuntu_grpcvpnserver"):
             (root / "source" / name).write_text("candidate", encoding="utf-8")
         descriptor = {
             "cli": str(root / "source" / "dobby-cli"),
+            "ui_test": str(root / "source" / "dobby-vpn-ui-test"),
             "service": str(root / "source" / "ubuntu_grpcvpnserver"),
             "network": str(root / "socket"),
         }

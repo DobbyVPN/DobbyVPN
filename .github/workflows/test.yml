@@ -87,12 +87,24 @@ jobs:
         run: |
           # Fyne's ci driver is software-backed, so the shared UI and its
           # transport client are tested without opening a host window.
-          go test -tags=ci ./...
+          mkdir -p "$RUNNER_TEMP/dobbyvpn-go-coverage"
+          go test -tags=ci -covermode=atomic -coverpkg=./... \
+            -coverprofile="$RUNNER_TEMP/dobbyvpn-go-coverage/coverage.out" ./...
+          go tool cover -func="$RUNNER_TEMP/dobbyvpn-go-coverage/coverage.out" \
+            | tee "$RUNNER_TEMP/dobbyvpn-go-coverage/coverage.txt"
 
       - name: Race-check lifecycle and routing
         working-directory: go_module
         run: |
           go test -race ./routing/... ./sessionapi/... ./tunnel/...
+
+      - name: Upload unified Go coverage
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: go-coverage
+          path: ${{ runner.temp }}/dobbyvpn-go-coverage
+          if-no-files-found: warn
 
   kotlin:
     name: Kotlin and Android service tests

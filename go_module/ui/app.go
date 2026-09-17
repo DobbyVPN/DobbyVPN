@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -26,14 +27,29 @@ func NewApplication(runtime fyne.App, client SessionClient) *Application {
 	window := runtime.NewWindow("Dobby VPN")
 	window.Resize(fyne.NewSize(460, 520))
 	window.SetContent(view.Content())
+	window.SetCloseIntercept(func() {
+		view.Stop()
+		window.Close()
+	})
 	view.Settings.OnTapped = func() { window.SetContent(settings.Content()) }
 	settings.Back.OnTapped = func() { window.SetContent(view.Content()) }
 	return &Application{App: runtime, Window: window, Connection: view, Settings: settings}
 }
 
 func (a *Application) Run() {
-	a.Connection.Start()
+	a.Start()
 	a.Window.ShowAndRun()
+}
+
+// Start attaches the UI to the service without opening a native window. It is
+// used by the headless integration companion as well as by the normal app.
+func (a *Application) Start() { a.Connection.Start() }
+
+// Close detaches the UI observers and closes its window. The service owns the
+// VPN session, so closing the UI never stops a healthy tunnel.
+func (a *Application) Close() {
+	a.Connection.Stop()
+	a.Window.Close()
 }
 
 // ConnectionView is deliberately small and exposes its controls for native
@@ -137,25 +153,81 @@ func (v *ConnectionView) Stop() {
 }
 
 func (v *ConnectionView) watch(ctx context.Context) {
-	if snapshot, err := v.client.Snapshot(ctx); err == nil {
-		v.render(snapshot)
-	}
-	updates, err := v.client.Watch(ctx)
-	if err != nil {
-		v.showError(err)
-		return
-	}
+	var last Snapshot
+	haveSnapshot := false
+	backoff := 100 * time.Millisecond
 	for {
-		select {
-		case snapshot, ok := <-updates:
-			if !ok {
+		if !haveSnapshot {
+			snapshot, err := v.client.Snapshot(ctx)
+			if err == nil {
+				last = snapshot
+				haveSnapshot = true
+				v.render(snapshot)
+				backoff = 100 * time.Millisecond
+			} else if !v.waitForReconnect(ctx, last, backoff) {
+				return
+			} else {
+				backoff = nextReconnectDelay(backoff)
+				continue
+			}
+		}
+
+		updates, err := v.client.Watch(ctx)
+		if err != nil {
+			v.renderRecovering(last)
+			if !v.waitForReconnect(ctx, last, backoff) {
 				return
 			}
-			v.render(snapshot)
-		case <-ctx.Done():
-			return
+			backoff = nextReconnectDelay(backoff)
+			haveSnapshot = false
+			continue
 		}
+		for {
+			select {
+			case snapshot, ok := <-updates:
+				if !ok {
+					v.renderRecovering(last)
+					if !v.waitForReconnect(ctx, last, backoff) {
+						return
+					}
+					backoff = nextReconnectDelay(backoff)
+					haveSnapshot = false
+					goto reconnect
+				}
+				last = snapshot
+				v.render(snapshot)
+				backoff = 100 * time.Millisecond
+			case <-ctx.Done():
+				return
+			}
+		}
+	reconnect:
+		continue
 	}
+}
+
+func (v *ConnectionView) waitForReconnect(ctx context.Context, last Snapshot, delay time.Duration) bool {
+	v.renderRecovering(last)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func nextReconnectDelay(current time.Duration) time.Duration {
+	if current >= 2*time.Second {
+		return 2 * time.Second
+	}
+	return current * 2
+}
+
+func (v *ConnectionView) renderRecovering(last Snapshot) {
+	last.Recovering = true
+	v.render(last)
 }
 
 func (v *ConnectionView) toggle() {
