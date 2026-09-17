@@ -13,10 +13,12 @@ separately.
 ## UI qualification
 
 The desktop test companion (`desktop_build.py ui-test`) embeds the same
-production widgets and Fyne's headless driver. It sends Connect, Disconnect,
-and reconnect actions to the authenticated gRPC client; the shared functional
-adapter delegates tunnel, routing, traffic, process-loss, and cleanup
-assertions to the normal platform adapter. A Windows/macOS native-window smoke
+production widgets and Fyne's headless driver. Its configure request stores
+the profile through the real UI client, then Connect, Disconnect, and
+reconnect actions exercise the production widget callbacks against the
+authenticated gRPC service. The shared functional adapter delegates tunnel,
+routing, traffic, process-loss, and cleanup assertions to the normal platform
+adapter. A Windows/macOS native-window smoke
 also starts the packaged binary, injects a real mouse click, and closes it with
 the platform gesture. Linux deliberately stays CLI/service-only.
 
