@@ -375,9 +375,23 @@ class HeadlessUIAdapter:
                             raise ScenarioExecutionError("UI_TEST_CLEANUP_FAILED")
                     else:
                         try:
-                            os.killpg(process.pid, 15)
+                            # close asks the companion to exit cleanly.  Give
+                            # that response a short chance to reach process
+                            # reaping before escalating; on macOS the process
+                            # can otherwise be between exit and wait, where a
+                            # group signal reports EPERM even though cleanup
+                            # is already completing.
+                            process.wait(timeout=min(1.0, max(0.1, close_deadline - time.monotonic())))
                         except ProcessLookupError:
                             pass
+                        except subprocess.TimeoutExpired:
+                            try:
+                                os.killpg(process.pid, 15)
+                            except ProcessLookupError:
+                                pass
+                            except PermissionError:
+                                if process.poll() is None:
+                                    process.terminate()
                     try:
                         process.wait(timeout=max(0.1, close_deadline - time.monotonic()))
                     except subprocess.TimeoutExpired:

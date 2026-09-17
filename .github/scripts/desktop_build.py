@@ -919,11 +919,10 @@ def build_go_ui(
         # remains a separate console-subsystem binary.
         ldflags += " -H=windowsgui"
     if target_platform == "macos":
-        # Keep the native macOS binary's declared deployment floor and reserve
-        # a little header space for standard post-link tooling.
+        # Keep the native macOS binary's declared deployment floor.
         ldflags += (
             f" -linkmode=external -extldflags=-mmacosx-version-min="
-            f"{MACOS_MINIMUM_SYSTEM_VERSION} -headerpad 0xFF"
+            f"{MACOS_MINIMUM_SYSTEM_VERSION}"
         )
     run(
         [
@@ -973,7 +972,7 @@ def build_go_ui_test(
     if target_platform == "macos":
         ldflags += (
             f" -linkmode=external -extldflags=-mmacosx-version-min="
-            f"{MACOS_MINIMUM_SYSTEM_VERSION} -headerpad 0xFF"
+            f"{MACOS_MINIMUM_SYSTEM_VERSION}"
         )
     run(
         [
