@@ -73,6 +73,7 @@ jobs:
             libgl1-mesa-dev \
             libwayland-dev \
             libxkbcommon-dev \
+            libxxf86vm-dev \
             libx11-dev \
             libxcursor-dev \
             libxinerama-dev \
