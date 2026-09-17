@@ -31,6 +31,8 @@ from ..windows_job import (
 
 
 _UI_START_TIMEOUT_SECONDS = 10.0
+_UI_CONFIGURE_TIMEOUT_SECONDS = 60.0
+_UI_CONNECT_TIMEOUT_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -151,11 +153,11 @@ class HeadlessUIAdapter:
     def _execute_step(self, step: ScenarioStep) -> dict[str, object]:
         timeout = float(step.timeout_seconds)
         if step.operation == "configure":
-            # The production desktop UI intentionally has one primary action:
-            # Connect configures and starts the selected session.  Exercise
-            # that action, then leave the scenario clean for the next step.
-            self._capture_ui_connection(timeout)
-            self._disconnect_ui(timeout)
+            # Keep semantic configure separate from the visible Connect
+            # action.  The next step clicks Connect and therefore exercises
+            # the complete UI start path without spending the configure
+            # step's CLI-oriented bound on a VPN startup.
+            self._configure_ui(max(timeout, _UI_CONFIGURE_TIMEOUT_SECONDS))
             return {"configured": True}
         if step.operation == "connect":
             self._capture_baseline(timeout)
@@ -194,23 +196,33 @@ class HeadlessUIAdapter:
             raise ScenarioExecutionError("ROUTING_BASELINE_UNAVAILABLE")
         capture(timeout)
 
-    def _capture_ui_connection(self, timeout: float) -> None:
-        self._connect_ui(timeout)
-
     def _connect_ui(self, timeout: float) -> None:
         if self._ui_connected:
             return
+        operation_timeout = max(timeout, _UI_CONNECT_TIMEOUT_SECONDS)
         result = self._request(
             {
                 "op": "connect",
+                "config": self._profile_text,
+                "timeout_ms": max(1, int(operation_timeout * 1000)),
+            },
+            operation_timeout,
+        )
+        if not result.ok or result.status != "Connected":
+            raise ScenarioExecutionError("UI_CONNECT_FAILED")
+        self._ui_connected = True
+
+    def _configure_ui(self, timeout: float) -> None:
+        result = self._request(
+            {
+                "op": "configure",
                 "config": self._profile_text,
                 "timeout_ms": max(1, int(timeout * 1000)),
             },
             timeout,
         )
-        if not result.ok or result.status != "Connected":
-            raise ScenarioExecutionError("UI_CONNECT_FAILED")
-        self._ui_connected = True
+        if not result.ok or result.status not in {"Ready", "Disconnected"}:
+            raise ScenarioExecutionError("UI_CONFIGURE_FAILED")
 
     def _disconnect_ui(self, timeout: float) -> None:
         if not self._ui_connected:

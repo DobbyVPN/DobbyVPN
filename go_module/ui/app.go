@@ -129,6 +129,42 @@ func (e *AccessibleEntry) AccessibilityRole() fyne.AccessibleRole {
 
 func (v *ConnectionView) Content() fyne.CanvasObject { return v.root }
 
+// Configure validates and stores a profile without starting a generation.
+// The desktop companion uses this operation to keep the semantic configure
+// step separate from the visible Connect action.  That preserves the shared
+// functional contract while still letting the following connect step exercise
+// the production button callback.
+func (v *ConnectionView) Configure(ctx context.Context, raw []byte) error {
+	v.mu.Lock()
+	sequence := v.sequence
+	v.mu.Unlock()
+	configured, err := v.client.Configure(ctx, raw, sequence)
+	if err != nil {
+		v.showError(err)
+		return err
+	}
+	v.mu.Lock()
+	v.sequence = configured.Sequence
+	v.mu.Unlock()
+	// Snapshot also refreshes the desktop client's opaque session ID after the
+	// first request and keeps the widget presentation authoritative.
+	snapshot, err := v.client.Snapshot(ctx)
+	if err != nil {
+		v.render(Snapshot{
+			State:      StateConfigured,
+			Configured: true,
+			Digest:     configured.Digest,
+			SourceKind: configured.SourceKind,
+			Profiles:   configured.Profiles,
+			Warnings:   configured.Warnings,
+			Sequence:   configured.Sequence,
+		})
+		return err
+	}
+	v.render(snapshot)
+	return nil
+}
+
 func (v *ConnectionView) Start() {
 	v.mu.Lock()
 	if v.started || v.client == nil {

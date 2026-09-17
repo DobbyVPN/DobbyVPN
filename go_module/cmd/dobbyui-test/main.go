@@ -8,6 +8,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -90,14 +91,15 @@ func handle(request request, application *ui.Application) response {
 	case "state":
 		return snapshot(application)
 	case "connect":
-		application.Connection.Input.SetText("")
-		// Real provider profiles can be hundreds of kilobytes. Fyne's test
-		// driver emits one rune event at a time, making that input path take
-		// minutes on Windows. Set the production entry's value atomically,
-		// then exercise the real Connect widget callback below.
-		application.Connection.Input.SetText(request.Config)
+		setInput(application, request.Config)
 		test.Tap(application.Connection.Connect)
 		if err := waitFor(application, "Connected", timeout(request.Timeout)); err != nil {
+			return response{Error: err.Error(), Status: application.Connection.Status.Text, Details: application.Connection.Details.Text, Button: application.Connection.Connect.Text}
+		}
+		return snapshot(application)
+	case "configure":
+		setInput(application, request.Config)
+		if err := application.Connection.Configure(context.Background(), []byte(application.Connection.Input.Text)); err != nil {
 			return response{Error: err.Error(), Status: application.Connection.Status.Text, Details: application.Connection.Details.Text, Button: application.Connection.Connect.Text}
 		}
 		return snapshot(application)
@@ -121,6 +123,17 @@ func handle(request request, application *ui.Application) response {
 	default:
 		return response{Error: fmt.Sprintf("unsupported operation %q", request.Op)}
 	}
+}
+
+func setInput(application *ui.Application, config string) {
+	if config == "" || application.Connection.Input.Text == config {
+		return
+	}
+	// Real provider profiles can be hundreds of kilobytes. Fyne's test
+	// driver's rune-by-rune typing is intentionally avoided; SetText updates
+	// the production entry atomically and the subsequent operation still uses
+	// the real widget callback where applicable.
+	application.Connection.Input.SetText(config)
 }
 
 func snapshot(application *ui.Application) response {
