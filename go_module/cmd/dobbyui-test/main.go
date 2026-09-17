@@ -91,7 +91,11 @@ func handle(request request, application *ui.Application) response {
 		return snapshot(application)
 	case "connect":
 		application.Connection.Input.SetText("")
-		test.Type(application.Connection.Input, request.Config)
+		// Real provider profiles can be hundreds of kilobytes. Fyne's test
+		// driver emits one rune event at a time, making that input path take
+		// minutes on Windows. Set the production entry's value atomically,
+		// then exercise the real Connect widget callback below.
+		application.Connection.Input.SetText(request.Config)
 		test.Tap(application.Connection.Connect)
 		if err := waitFor(application, "Connected", timeout(request.Timeout)); err != nil {
 			return response{Error: err.Error(), Status: application.Connection.Status.Text, Details: application.Connection.Details.Text, Button: application.Connection.Connect.Text}
