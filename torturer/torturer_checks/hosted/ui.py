@@ -30,7 +30,6 @@ from ..windows_job import (
 )
 
 
-_UI_PROTOCOL_TIMEOUT_SECONDS = 5.0
 _UI_START_TIMEOUT_SECONDS = 10.0
 
 
@@ -178,7 +177,14 @@ class HeadlessUIAdapter:
                 # Watch/reconnect is part of the UI contract.  The state may
                 # already be Connected when the service restart is too quick,
                 # so the service-side assertion remains authoritative.
-                self._request({"op": "wait", "state": "Connected"}, timeout)
+                self._request(
+                    {
+                        "op": "wait",
+                        "state": "Connected",
+                        "timeout_ms": max(1, int(timeout * 1000)),
+                    },
+                    timeout,
+                )
             return result
         return self.base.execute(step)
 
@@ -195,7 +201,11 @@ class HeadlessUIAdapter:
         if self._ui_connected:
             return
         result = self._request(
-            {"op": "connect", "config": self._profile_text},
+            {
+                "op": "connect",
+                "config": self._profile_text,
+                "timeout_ms": max(1, int(timeout * 1000)),
+            },
             timeout,
         )
         if not result.ok or result.status != "Connected":
@@ -205,7 +215,10 @@ class HeadlessUIAdapter:
     def _disconnect_ui(self, timeout: float) -> None:
         if not self._ui_connected:
             return
-        result = self._request({"op": "disconnect"}, timeout)
+        result = self._request(
+            {"op": "disconnect", "timeout_ms": max(1, int(timeout * 1000))},
+            timeout,
+        )
         if not result.ok or result.status not in {"Disconnected", "Failed"}:
             raise ScenarioExecutionError("UI_DISCONNECT_FAILED")
         self._ui_connected = False
@@ -309,8 +322,12 @@ class HeadlessUIAdapter:
                 process.stdin.flush()
             except (BrokenPipeError, OSError) as error:
                 raise ScenarioExecutionError("UI_TEST_PIPE_FAILED") from error
+            deadline = time.monotonic() + timeout
             try:
-                line = self._responses.get(timeout=min(timeout, _UI_PROTOCOL_TIMEOUT_SECONDS))
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise queue.Empty
+                line = self._responses.get(timeout=remaining)
             except queue.Empty as error:
                 raise ScenarioExecutionError("UI_RESPONSE_TIMEOUT") from error
             if line is None:
