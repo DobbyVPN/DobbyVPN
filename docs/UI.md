@@ -1,9 +1,11 @@
 # UI behavior
 
-The shared Compose UI renders the state owned by one Go session manager in each
+The shared Go/Fyne UI renders the state owned by one Go session manager in each
 service process. It forwards the entered source bytes, requests VPN permission,
 and displays current snapshots. It does not parse configuration, choose a
-protocol, or manage tunnel resources.
+protocol, or manage tunnel resources. Android and iOS retain thin native shells
+for VPN permissions, foreground/extension lifetime, secure storage and system
+sharing APIs.
 
 ## Connect and reattach
 

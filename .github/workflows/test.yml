@@ -68,6 +68,15 @@ jobs:
       - name: Stage pinned Linux native dependencies for Go tests
         run: |
           set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxi-dev
           python3 .github/scripts/desktop_build.py prepare-go-test-deps --go-mod-tidy
           test -f go_module/libdobby_bridge.so
           test -f go_module/libc++.so.1
@@ -76,7 +85,9 @@ jobs:
       - name: Run Go test suite
         working-directory: go_module
         run: |
-          go test ./...
+          # Fyne's ci driver is software-backed, so the shared UI and its
+          # transport client are tested without opening a host window.
+          go test -tags=ci ./...
 
       - name: Race-check lifecycle and routing
         working-directory: go_module

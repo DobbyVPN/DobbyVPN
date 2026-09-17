@@ -756,6 +756,30 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertEqual(calls, ["wintun:True", "bridge:True", "build"])
         self.assertEqual(run.call_args.kwargs["env"]["GODEBUG"], "gctrace=1")
 
+    def test_go_ui_build_is_native_and_enables_accessibility(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "dobby-vpn-ui"
+            with (
+                mock.patch.object(desktop_build, "host_platform", return_value="linux"),
+                mock.patch.object(desktop_build, "ensure_build_dependencies"),
+                mock.patch.object(desktop_build, "install_linux_gui_packages"),
+                mock.patch.object(desktop_build, "go_mod_download"),
+                mock.patch.object(desktop_build, "run", side_effect=lambda *args, **kwargs: output.touch()) as run,
+                mock.patch.object(desktop_build.Path, "chmod"),
+            ):
+                desktop_build.build_go_ui("linux", "amd64", True, False, output)
+
+        command = run.call_args.args[0]
+        self.assertIn("-tags=accessibility", command)
+        self.assertEqual(command[-1], "./cmd/dobbyui/")
+        self.assertEqual(run.call_args.kwargs["env"]["CGO_ENABLED"], "1")
+        self.assertEqual(run.call_args.kwargs["env"]["GOOS"], "linux")
+
+    def test_go_ui_rejects_cross_host_builds(self) -> None:
+        with mock.patch.object(desktop_build, "host_platform", return_value="linux"):
+            with self.assertRaises(SystemExit):
+                desktop_build.build_go_ui("windows", "amd64", True, False)
+
     def test_libs_with_cli_builds_both_native_interfaces(self) -> None:
         args = mock.Mock(
             command="libs",

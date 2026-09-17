@@ -3,7 +3,7 @@
 This module owns configuration acquisition and parsing, session policy and
 generation state, protocol-device construction, routing/TUN/tun2socks
 resources, probes, cleanup, local diagnostics, and the native desktop CLI.
-The shared Compose UI talks to this layer through the authenticated desktop
+The shared Go/Fyne UI talks to this layer through the authenticated desktop
 gRPC service or the one protocol-neutral mobile binding. Platform code
 only supplies the OS VPN callbacks and permission/lifecycle hooks it cannot
 provide in Go.
@@ -18,6 +18,21 @@ in session diagnostics and never reach protocol-device construction.
 go mod tidy
 go mod download
 ```
+
+### Go desktop UI feasibility build
+
+The UI is built on the native target host because Fyne uses the platform
+graphics toolchain. Accessibility support is enabled so Windows UI Automation,
+macOS XCTest and the mobile accessibility bridges can locate controls by
+labels rather than screen coordinates:
+
+```bash
+python3 .github/scripts/desktop_build.py ui --platform current
+```
+
+The command writes an unbundled executable to `go_module/dobby-vpn-ui` (or
+`dobby-vpn-ui.exe` on Windows). It is suitable for a disposable Windows
+manual-injection test while installer integration is being migrated.
 
 The reviewed tun2socks v2.6.0 dependency closure is likewise tracked under
 `go_module/modules/tun2socks`. It contains the upstream correction from

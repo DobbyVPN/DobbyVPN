@@ -119,6 +119,11 @@ CLI_NAMES = {
     "macos": "dobby-cli",
     "windows": "dobby-cli.exe",
 }
+UI_NAMES = {
+    "linux": "dobby-vpn-ui",
+    "macos": "dobby-vpn-ui",
+    "windows": "dobby-vpn-ui.exe",
+}
 MACOS_MINIMUM_SYSTEM_VERSION = "11.0"
 PROBE_TIMEOUT_SECONDS = 30
 GOOS_BY_PLATFORM = {
@@ -1055,6 +1060,74 @@ def build_cli(target_platform: str, arch: str | None = None) -> Path:
     return target
 
 
+def install_linux_gui_packages(skip_deps: bool) -> None:
+    """Install the native headers required by Fyne's desktop driver."""
+    if host_platform() != "linux":
+        return
+    required = {
+        "gl": "libgl1-mesa-dev",
+        "wayland-client": "libwayland-dev",
+    }
+    missing = [name for name in required if not shutil.which("pkg-config") or not run_capture(["pkg-config", "--exists", name])]
+    if not missing:
+        return
+    packages = sorted({required[name] for name in missing})
+    if skip_deps:
+        fail(f"Fyne desktop dependencies are missing: {', '.join(packages)}")
+    if not shutil.which("apt-get"):
+        fail(f"Install Fyne desktop dependencies manually: {', '.join(packages)}")
+    sudo = [] if os.geteuid() == 0 else ["sudo"]
+    run([*sudo, "apt-get", "update"])
+    run([*sudo, "apt-get", "install", "-y", *packages])
+
+
+def build_go_ui(
+    target_platform: str,
+    arch: str | None,
+    skip_deps: bool,
+    run_go_mod_tidy: bool,
+    output_path: Path | None = None,
+) -> Path:
+    """Build the shared Go/Fyne UI for the current native desktop host."""
+    if target_platform != host_platform():
+        fail("The Fyne UI must be built on its native target host; use a matching runner")
+    ensure_build_dependencies(target_platform, skip_deps, need_android=False)
+    if target_platform == "linux":
+        install_linux_gui_packages(skip_deps)
+    go_mod_download(run_go_mod_tidy)
+
+    target_arch = arch or default_service_arch(target_platform)
+    output = output_path.resolve() if output_path is not None else GO_MODULE_DIR / UI_NAMES[target_platform]
+    output.parent.mkdir(parents=True, exist_ok=True)
+    environment = os.environ.copy()
+    environment.update({
+        "CGO_ENABLED": "1",
+        "GOOS": GOOS_BY_PLATFORM[target_platform],
+        "GOARCH": target_arch,
+    })
+    ldflags = "-buildid="
+    if target_platform == "macos":
+        ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
+    run(
+        [
+            "go",
+            "build",
+            "-trimpath",
+            "-tags=accessibility",
+            f"-ldflags={ldflags}",
+            "-o",
+            output.name,
+            "./cmd/dobbyui/",
+        ],
+        cwd=GO_MODULE_DIR,
+        env=environment,
+    )
+    if target_platform != "windows":
+        output.chmod(output.stat().st_mode | 0o111)
+    log(f"Built Go/Fyne UI {output}")
+    return output
+
+
 def install_macos_amd64_trusttunnel_helper(skip_deps: bool) -> None:
     """Stage the pinned official helper beside the Intel macOS service.
 
@@ -1733,7 +1806,7 @@ def parse_args() -> argparse.Namespace:
     add_common_options(go_test_deps)
     go_test_deps.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before go mod download.")
 
-    app = subparsers.add_parser("app", help="Build the desktop JVM app and Conveyor config.")
+    app = subparsers.add_parser("app", help="Build the desktop app and optional Conveyor config.")
     add_common_options(app)
     add_gradle_option(app)
     app.add_argument(
@@ -1747,6 +1820,13 @@ def parse_args() -> argparse.Namespace:
     app.add_argument("--package", action="store_true", help="Run local Conveyor packaging after the Gradle build.")
     app.add_argument("--conveyor-passphrase", default=os.environ.get("CONVEYOR_PASSPHRASE"))
     app.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before service builds.")
+
+    ui = subparsers.add_parser("ui", help="Build the shared Go/Fyne desktop UI on the current host.")
+    add_common_options(ui)
+    ui.add_argument("--platform", default="current", help="Native current platform only.")
+    ui.add_argument("--arch", help="Override GOARCH for the native UI build.")
+    ui.add_argument("--output", type=Path, help="Output executable path (defaults to go_module/dobby-vpn-ui[.exe]).")
+    ui.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the UI build.")
 
     conveyor_config = subparsers.add_parser(
         "conveyor-config",
@@ -1796,6 +1876,9 @@ def main() -> None:
         prepare_go_test_dependencies(args.skip_deps, args.go_mod_tidy)
     elif args.command == "app":
         build_app(args)
+    elif args.command == "ui":
+        platform = host_platform() if args.platform == "current" else normalize_platform(args.platform)
+        build_go_ui(platform, args.arch, args.skip_deps, args.go_mod_tidy, args.output)
     elif args.command == "cli-test":
         cli_test(args)
     elif args.command == "test-seams-service":

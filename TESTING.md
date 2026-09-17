@@ -24,7 +24,7 @@ With those dependencies and environment variables available, from
 `go_module/`:
 
 ```bash
-go test ./...
+go test -tags=ci ./...
 go test -race ./routing/... ./sessionapi/... ./tunnel/...
 ```
 
@@ -51,9 +51,12 @@ PYTHONPATH=torturer python3 -m unittest discover -s torturer/tests -p 'test_*.py
 The functional-tooling suite includes Windows-only process tests, skipped on
 other operating systems. Running its Python unit tests is not a live VPN test.
 
-Shared Compose tests cover UI state. TODO: add desktop tests that drive the app
-through its GUI. New dedicated CLI coverage is deferred; existing functional
-suites continue to use the CLI entrypoints.
+Go/Fyne component tests cover UI state without opening a window. The native GUI
+automation lanes are being added separately for Windows, macOS, Android and
+iOS Simulator; they must drive the visible controls and may not substitute CLI
+commands for GUI actions. New dedicated CLI coverage is deferred; the existing
+functional suites continue to use the CLI entrypoints for Linux and service
+qualification.
 
 ## iOS
 
