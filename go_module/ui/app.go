@@ -17,14 +17,18 @@ type Application struct {
 	App        fyne.App
 	Window     fyne.Window
 	Connection *ConnectionView
+	Settings   *SettingsView
 }
 
 func NewApplication(runtime fyne.App, client SessionClient) *Application {
 	view := NewConnectionView(client)
+	settings := NewSettingsView()
 	window := runtime.NewWindow("Dobby VPN")
 	window.Resize(fyne.NewSize(460, 520))
 	window.SetContent(view.Content())
-	return &Application{App: runtime, Window: window, Connection: view}
+	view.Settings.OnTapped = func() { window.SetContent(settings.Content()) }
+	settings.Back.OnTapped = func() { window.SetContent(view.Content()) }
+	return &Application{App: runtime, Window: window, Connection: view, Settings: settings}
 }
 
 func (a *Application) Run() {

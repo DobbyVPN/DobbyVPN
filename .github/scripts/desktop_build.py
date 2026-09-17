@@ -1105,7 +1105,12 @@ def build_go_ui(
         "GOOS": GOOS_BY_PLATFORM[target_platform],
         "GOARCH": target_arch,
     })
-    ldflags = "-buildid="
+    version_name = ".".join(
+        os.environ.get(name, "0")
+        for name in ("APP_MAJOR_VERSION", "APP_MINOR_VERSION", "APP_MAINTENANCE_VERSION")
+    )
+    commit = os.environ.get("GITHUB_SHA", "unknown")
+    ldflags = f"-buildid= -X go_module/ui.Version={version_name} -X go_module/ui.Commit={commit}"
     if target_platform == "macos":
         ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
     run(

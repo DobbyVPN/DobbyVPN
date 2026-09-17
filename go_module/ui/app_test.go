@@ -84,3 +84,17 @@ func TestConnectionViewRejectsEmptyConfiguration(t *testing.T) {
 		t.Fatal("validation details are empty")
 	}
 }
+
+func TestSettingsViewContainsBuildIdentity(t *testing.T) {
+	oldVersion, oldCommit := Version, Commit
+	Version, Commit = "1.5.1", "abc123"
+	t.Cleanup(func() { Version, Commit = oldVersion, oldCommit })
+
+	view := NewSettingsView()
+	if view.Version.Text != "Version: 1.5.1" {
+		t.Fatalf("version = %q", view.Version.Text)
+	}
+	if view.Commit.Text != "Source commit: abc123" {
+		t.Fatalf("commit = %q", view.Commit.Text)
+	}
+}
