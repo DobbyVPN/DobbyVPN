@@ -51,12 +51,15 @@ PYTHONPATH=torturer python3 -m unittest discover -s torturer/tests -p 'test_*.py
 The functional-tooling suite includes Windows-only process tests, skipped on
 other operating systems. Running its Python unit tests is not a live VPN test.
 
-Go/Fyne component tests cover UI state without opening a window. The native GUI
-automation lanes are being added separately for Windows, macOS, Android and
-iOS Simulator; they must drive the visible controls and may not substitute CLI
-commands for GUI actions. New dedicated CLI coverage is deferred; the existing
-functional suites continue to use the CLI entrypoints for Linux and service
-qualification.
+Go/Fyne component tests cover UI state without opening a window. Desktop
+release artifacts are native Go/Fyne binaries on Windows, macOS and Linux; the
+first two are the GUI-automation targets, while Linux remains CLI/service
+qualification only. Production Android Kotlin/Compose and iOS Swift/Compose
+activities retain their native VPN shells and exercise the shared Go session
+binding. The opt-in Fyne mobile entry point is built with `-tags=fyne_mobile`;
+it is a packaging experiment, not yet the production Android/iOS activity. GUI
+automation must drive visible controls and may not substitute CLI commands for
+GUI actions.
 
 ## iOS
 

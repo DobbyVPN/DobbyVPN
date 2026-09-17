@@ -6,7 +6,6 @@ plugins {
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.composeMultiplatform) apply false
     alias(libs.plugins.kotlinMultiplatform) apply false
-    alias(libs.plugins.hydraulic.conveyor) apply false
     alias(libs.plugins.protobuf) apply false
     alias(libs.plugins.kotlin.jvm) apply false
     alias(libs.plugins.detekt)

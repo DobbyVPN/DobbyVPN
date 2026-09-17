@@ -1,4 +1,4 @@
-//go:build android || ios
+//go:build (android || ios) && fyne_mobile
 
 package main
 

@@ -1,8 +1,9 @@
 # DobbyVPN architecture
 
-DobbyVPN keeps product behavior in Go, shares the Compose UI across platforms,
-and uses small platform shells only where an operating system requires VPN
-APIs.
+DobbyVPN keeps product behavior and the shared desktop UI in Go, and uses
+small platform shells only where an operating system requires VPN APIs. The
+Android and iOS activities remain native while their Go/Fyne UI transition is
+validated independently.
 
 ## Ownership
 
@@ -26,11 +27,12 @@ and the functional test harness can select a profile index through the same
 session manager; this operator/test mode skips automatic selection and does
 not fail over to a different profile.
 
-The desktop CLI and desktop GUI use the same authenticated gRPC service. The
-CLI is implemented in Go and does not start a JVM. Mobile bindings expose the
-same manager through a small JSON boundary. Kotlin/Compose remains on the
-current JVM build for desktop; Kotlin/Native migration is not part of this
-cleanup.
+The desktop CLI and native Go/Fyne GUI use the same authenticated gRPC service.
+Neither starts a JVM. Mobile bindings expose the same manager through a small
+JSON boundary; production Android Kotlin/Compose and iOS Swift/Compose UI,
+VPN services, and extension boundaries remain in place until the opt-in
+`fyne_mobile` UI experiment has passed its foreground/background and
+accessibility checks.
 
 ## Platform shells
 

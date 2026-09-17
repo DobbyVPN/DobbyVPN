@@ -1,11 +1,14 @@
 # UI behavior
 
 The shared Go/Fyne UI renders the state owned by one Go session manager in each
-service process. It forwards the entered source bytes, requests VPN permission,
-and displays current snapshots. It does not parse configuration, choose a
-protocol, or manage tunnel resources. Android and iOS retain thin native shells
-for VPN permissions, foreground/extension lifetime, secure storage and system
-sharing APIs.
+service process. Desktop release packages now launch this native UI directly;
+the desktop package has no JVM or Compose launcher. It forwards the entered
+source bytes and displays current snapshots. It does not parse configuration,
+choose a protocol, or manage tunnel resources. Production Android Kotlin/Compose
+and iOS Swift/Compose retain their thin VPN shells for permissions,
+foreground/extension lifetime, secure storage and system sharing APIs while the
+opt-in Go/Fyne mobile packaging experiment (`-tags=fyne_mobile`) is validated
+separately.
 
 ## Connect and reattach
 
@@ -74,10 +77,10 @@ no state; the app follows each wake with a current Go snapshot.
   failover, protocol runtimes, and session state.
 - Platform shells own only VPN permission, foreground/extension lifetime,
   tunnel creation, socket protection, and wake delivery.
-- The shared UI maps snapshots to presentation state. It does not maintain an
+- The shared Go/Fyne UI maps snapshots to presentation state. It does not maintain an
   event ledger or synthesize connection state. It does not run its own polling
-  loop; the iOS bridge refreshes a snapshot on each Darwin wake or after its
-  five-second wait timeout.
+  loop on desktop; the mobile adapter uses a bounded foreground-only refresh
+  while the native service/extension remains the lifecycle owner.
 - Diagnostics stay local unless the user exports them. Android and iOS create a
   compressed file and open the platform share sheet; desktop opens a save
   dialog. DobbyVPN does not receive the exported logs automatically.

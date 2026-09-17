@@ -1,16 +1,14 @@
 # Desktop Build Script
 
-`desktop_build.py` is the shared entry point for desktop service builds, desktop
-JVM builds, and local CLI checks. It is intended to be used both locally and from
+`desktop_build.py` is the shared entry point for desktop service builds, native
+Go/Fyne UI builds, and local CLI checks. It is intended to be used both locally and from
 GitHub Actions.
 
 The script checks required dependencies and installs missing local toolchains
 where practical:
 
 - Go from `.go-version`
-- JDK 17
-- Android SDK command line tools with `platforms;android-35`,
-  `platforms;android-36`, and `build-tools;36.0.0`
+- Fyne's native desktop headers on Linux
 - Linux compiler packages through `apt-get`
 - Windows MinGW through Chocolatey when needed
 - `wintun.dll` for Windows CLI checks
@@ -25,16 +23,21 @@ Build the current platform gRPC VPN service:
 python3 .github/scripts/desktop_build.py libs
 ```
 
-Build the desktop JVM app and generated Conveyor config:
+Build the native desktop inputs for the current host:
 
 ```bash
 python3 .github/scripts/desktop_build.py app
 ```
 
-`kmp_module/conveyor.conf` generates its shared configuration through the
-paired `.github/scripts/conveyor-config` and `conveyor-config.bat` launchers.
-Keep the two launchers output-clean: stdout is reserved for HOCON, while
-diagnostics belong on stderr.
+Build release archives from staged native inputs:
+
+```bash
+python3 .github/scripts/package_desktop.py --version 1.5.1 --output output
+```
+
+This produces the Windows/macOS ZIPs and the Linux DEB consumed by the
+platform installers; it does not invoke Java, Gradle, or a third-party
+packager.
 
 Build and run the local CLI config check:
 

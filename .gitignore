@@ -67,7 +67,7 @@ go_module/grpcproto/vpnserver.proto
 # It is an ignored build artifact, never application source.
 /kmp_module/app/dobbyVPN-linux.deb
 
-# Public desktop_build.py and Conveyor generate these local staging trees.
+# Public desktop_build.py and the native packager generate these local staging trees.
 # They are reproducible build outputs, never application source.
 /kmp_module/services/
 /output/

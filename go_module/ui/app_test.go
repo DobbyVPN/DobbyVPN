@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"testing"
+	"time"
 
 	"fyne.io/fyne/v2/test"
 )
@@ -12,6 +13,7 @@ type fakeClient struct {
 	configure ConfigureResult
 	started   bool
 	stopped   bool
+	startedCh chan struct{}
 }
 
 func (f *fakeClient) Configure(context.Context, []byte, uint64) (ConfigureResult, error) {
@@ -19,6 +21,10 @@ func (f *fakeClient) Configure(context.Context, []byte, uint64) (ConfigureResult
 }
 func (f *fakeClient) Start(context.Context, uint64) (StartResult, error) {
 	f.started = true
+	if f.startedCh != nil {
+		close(f.startedCh)
+		f.startedCh = nil
+	}
 	return StartResult{Generation: 4, Sequence: f.configure.Sequence + 1}, nil
 }
 func (f *fakeClient) Stop(context.Context, uint64) (StopResult, error) {
@@ -82,6 +88,29 @@ func TestConnectionViewRejectsEmptyConfiguration(t *testing.T) {
 	}
 	if view.Details.Text == "" {
 		t.Fatal("validation details are empty")
+	}
+}
+
+func TestConnectionViewButtonDrivesSessionClient(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	started := make(chan struct{})
+	client := &fakeClient{
+		configure: ConfigureResult{Sequence: 2},
+		startedCh: started,
+	}
+	view := NewConnectionView(client)
+	view.ctx = context.Background()
+	test.Type(view.Input, "https://example.test/profile")
+	test.Tap(view.Connect)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("visible Connect control did not start the session")
+	}
+	if !client.started {
+		t.Fatal("session client was not started")
 	}
 }
 

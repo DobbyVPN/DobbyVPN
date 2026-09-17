@@ -217,7 +217,13 @@ func (v *ConnectionView) setBusy(busy bool) {
 	v.mu.Lock()
 	v.busy = busy
 	v.mu.Unlock()
-	onUI(func() { v.Connect.Enable() })
+	onUI(func() {
+		if busy {
+			v.Connect.Disable()
+		} else {
+			v.Connect.Enable()
+		}
+	})
 }
 
 func (v *ConnectionView) render(snapshot Snapshot) {

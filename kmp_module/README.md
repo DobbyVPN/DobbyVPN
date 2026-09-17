@@ -1,8 +1,8 @@
-# Shared Compose client
+# Mobile Compose client
 
-A Kotlin Multiplatform app that keeps one shared Compose UI across Android,
-iOS, Linux, Windows, and macOS. Go owns configuration parsing, protocol
-selection, session lifecycle, and runtime resources in
+A Kotlin Multiplatform app that keeps the production Compose UI on Android and
+iOS. Desktop release UI is the native Go/Fyne client in `go_module/`; Go owns
+configuration parsing, protocol selection, session lifecycle, and runtime resources in
 [`go_module/`](../go_module/); platform shells only provide the OS VPN
 permission, TUN, socket-protection, and extension/service callbacks.
 
@@ -20,13 +20,16 @@ permission, TUN, socket-protection, and extension/service callbacks.
 
 ## Architecture
 
-The module is intentionally a shared UI and binding layer:
+The module is intentionally the mobile UI and binding layer:
 
 ```
 kmp_module/
-├── app/ --- shared Compose UI and thin platform shells
+├── app/ --- shared Android/iOS Compose UI and thin platform shells
 └── grpcstub/ --- canonical session/Diagnostics schema and typed desktop gRPC calls
 ```
+
+The JVM target is test-only; it has no Compose Desktop entry point or release
+desktop artifact.
 
 The iOS host app is in [`../swift_module/iosApp/`](../swift_module/iosApp/).
 

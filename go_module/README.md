@@ -34,6 +34,20 @@ The command writes an unbundled executable to `go_module/dobby-vpn-ui` (or
 `dobby-vpn-ui.exe` on Windows). It is suitable for a disposable Windows
 manual-injection test while installer integration is being migrated.
 
+Release desktop archives are assembled from those native binaries by the
+small, deterministic packager (no JVM or Gradle runtime is involved):
+
+```bash
+python3 .github/scripts/package_desktop.py --version 1.5.1 --output output
+```
+
+The existing WiX and macOS `pkgbuild` steps consume the generated Windows and
+macOS archives; Linux receives the generated Debian package directly.
+
+The mobile Fyne entry point is intentionally opt-in while native VPN shells
+are retained: build it with `-tags=fyne_mobile` only for packaging/accessibility
+experiments.
+
 The reviewed tun2socks v2.6.0 dependency closure is likewise tracked under
 `go_module/modules/tun2socks`. It contains the upstream correction from
 `xjasonlyu/tun2socks#495`, backported without the unrelated post-v2.6.0
@@ -151,7 +165,7 @@ The manager owns one process-local session. Clients attach with `Snapshot`;
 credentials, and protocol payloads stay out of responses and diagnostics.
 
 The native `dobby-cli` shares this authenticated control channel with the
-Compose GUI. It supports `connect`, `connect-profile`, `profile-inventory`,
+Go/Fyne GUI. It supports `connect`, `connect-profile`, `profile-inventory`,
 `check-config`, `disconnect`, `status`, `logs clear`, `external-ip`, and
 `verify-session` without starting a JVM. `profile-inventory` validates a
 configuration and returns only the ordered connection indices and protocols;

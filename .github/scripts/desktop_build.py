@@ -42,13 +42,6 @@ TOOLS_DIR = (
     else ROOT_DIR / ".local-tools" / "desktop-build"
 )
 
-ANDROID_PACKAGES = (
-    "platforms;android-35",
-    "platforms;android-36",
-    "build-tools;36.0.0",
-    "platform-tools",
-)
-ANDROID_TOOLS_VERSION = "11076708"
 WINTUN_VERSION = "0.14.1"
 WINTUN_AMD64_DLL_SHA256 = "e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce"
 LLVM_LIBCXX_VERSION = "21.1.8"
@@ -357,15 +350,6 @@ def go_arch_from_machine() -> str:
     fail(f"Unsupported CPU architecture: {platform.machine()}")
 
 
-def adoptium_arch() -> str:
-    arch = go_arch_from_machine()
-    if arch == "amd64":
-        return "x64"
-    if arch == "arm64":
-        return "aarch64"
-    fail(f"Unsupported CPU architecture: {platform.machine()}")
-
-
 def go_version() -> str:
     return (ROOT_DIR / ".go-version").read_text(encoding="utf-8").strip()
 
@@ -377,9 +361,6 @@ def command_exists(name: str) -> bool:
 def bootstrap_local_tools() -> None:
     version = go_version()
     prepend_path(TOOLS_DIR / f"go-{version}" / "bin")
-    prepend_path(TOOLS_DIR / "jdk-17" / "bin")
-    prepend_path(TOOLS_DIR / "android-sdk" / "cmdline-tools" / "latest" / "bin")
-    prepend_path(TOOLS_DIR / "android-sdk" / "platform-tools")
 
 
 def local_go_root() -> Path:
@@ -484,188 +465,6 @@ def install_go(skip_deps: bool) -> None:
     configure_go_root(go_root / "bin" / ("go.exe" if current == "windows" else "go"))
     prepend_path(go_root / "bin")
     log(f"Installed Go {go_version()} into {go_root}")
-
-
-def java_executable_name() -> str:
-    return "java.exe" if host_platform() == "windows" else "java"
-
-
-def java_home_from_executable(java_path: Path) -> Path:
-    return java_path.resolve().parent.parent
-
-
-def is_java_17(java_path: Path) -> bool:
-    output = run_capture([str(java_path), "-version"])
-    return bool(output and 'version "17' in output)
-
-
-def find_java_17() -> Path | None:
-    java_name = java_executable_name()
-    java_home = os.environ.get("JAVA_HOME")
-    if java_home:
-        java = Path(java_home) / "bin" / java_name
-        if java.exists() and is_java_17(java):
-            return Path(java_home)
-
-    if host_platform() == "macos":
-        output = run_capture(["/usr/libexec/java_home", "-v", "17"])
-        if output:
-            candidate_home = Path(output)
-            candidate_java = candidate_home / "bin" / java_name
-            if candidate_java.exists() and is_java_17(candidate_java):
-                return candidate_home
-
-    java = shutil.which("java")
-    if java and is_java_17(Path(java)):
-        return java_home_from_executable(Path(java))
-
-    local_java = TOOLS_DIR / "jdk-17" / "bin" / java_name
-    if local_java.exists() and is_java_17(local_java):
-        return TOOLS_DIR / "jdk-17"
-
-    return None
-
-
-def install_jdk(skip_deps: bool) -> None:
-    found = find_java_17()
-    if found:
-        set_env("JAVA_HOME", str(found))
-        prepend_path(found / "bin")
-        log("JDK 17 already available")
-        return
-    if skip_deps:
-        fail("JDK 17 is required")
-
-    current = host_platform()
-    adoptium_os = {"linux": "linux", "macos": "mac", "windows": "windows"}[current]
-    suffix = "zip" if current == "windows" else "tar.gz"
-    archive = TOOLS_DIR / "downloads" / f"temurin-17-{adoptium_os}-{adoptium_arch()}.{suffix}"
-    jdk_root = TOOLS_DIR / "jdk-17"
-    url = (
-        "https://api.adoptium.net/v3/binary/latest/17/ga/"
-        f"{adoptium_os}/{adoptium_arch()}/jdk/hotspot/normal/eclipse"
-    )
-
-    download(url, archive)
-    with temporary_directory("dobby-jdk-") as extract_dir:
-        if suffix == "zip":
-            with zipfile.ZipFile(archive) as zip_file:
-                zip_file.extractall(extract_dir)
-        else:
-            with tarfile.open(archive) as tar_file:
-                tar_file.extractall(extract_dir)
-
-        java_name = java_executable_name()
-        java_files = list(extract_dir.rglob(f"bin/{java_name}"))
-        if not java_files:
-            fail("Downloaded JDK archive does not contain java")
-        if jdk_root.exists():
-            shutil.rmtree(jdk_root)
-        shutil.move(str(java_home_from_executable(java_files[0])), jdk_root)
-
-    set_env("JAVA_HOME", str(jdk_root))
-    prepend_path(jdk_root / "bin")
-    log(f"Installed JDK 17 into {jdk_root}")
-
-
-def sdkmanager_name() -> str:
-    return "sdkmanager.bat" if host_platform() == "windows" else "sdkmanager"
-
-
-def infer_android_home_from_sdkmanager(sdkmanager: Path) -> Path | None:
-    try:
-        return sdkmanager.resolve().parents[3]
-    except IndexError:
-        return None
-
-
-def find_sdkmanager() -> tuple[Path, Path] | None:
-    sdkmanager = shutil.which(sdkmanager_name())
-    if sdkmanager:
-        android_home = infer_android_home_from_sdkmanager(Path(sdkmanager))
-        if android_home:
-            return Path(sdkmanager), android_home
-
-    for env_name in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
-        sdk_root = os.environ.get(env_name)
-        if not sdk_root:
-            continue
-        manager = Path(sdk_root) / "cmdline-tools" / "latest" / "bin" / sdkmanager_name()
-        if manager.exists():
-            return manager, Path(sdk_root)
-
-    sdk_root = TOOLS_DIR / "android-sdk"
-    manager = sdk_root / "cmdline-tools" / "latest" / "bin" / sdkmanager_name()
-    if manager.exists():
-        return manager, sdk_root
-    return None
-
-
-def android_packages_installed(sdk_root: Path) -> bool:
-    return (
-        (sdk_root / "platforms" / "android-35").is_dir()
-        and (sdk_root / "platforms" / "android-36").is_dir()
-        and (sdk_root / "build-tools" / "36.0.0").is_dir()
-    )
-
-
-def configure_android_env(sdk_root: Path) -> None:
-    set_env("ANDROID_HOME", str(sdk_root))
-    set_env("ANDROID_SDK_ROOT", str(sdk_root))
-    prepend_path(sdk_root / "cmdline-tools" / "latest" / "bin")
-    prepend_path(sdk_root / "platform-tools")
-
-
-def install_android_sdk(skip_deps: bool) -> None:
-    found = find_sdkmanager()
-    if found:
-        sdkmanager, sdk_root = found
-        configure_android_env(sdk_root)
-        if android_packages_installed(sdk_root):
-            log("Android SDK already available")
-            return
-        if skip_deps:
-            fail("Android SDK packages are required")
-    elif skip_deps:
-        fail("Android SDK command line tools are required")
-    else:
-        sdk_root = Path(
-            os.environ.get("ANDROID_HOME")
-            or os.environ.get("ANDROID_SDK_ROOT")
-            or TOOLS_DIR / "android-sdk"
-        )
-        configure_android_env(sdk_root)
-        sdkmanager = sdk_root / "cmdline-tools" / "latest" / "bin" / sdkmanager_name()
-
-        current = host_platform()
-        tools_os = {"linux": "linux", "macos": "mac", "windows": "win"}[current]
-        tools_zip = TOOLS_DIR / "downloads" / f"android-commandlinetools-{tools_os}.zip"
-        tools_dir = sdk_root / "cmdline-tools"
-
-        download(
-            "https://dl.google.com/android/repository/"
-            f"commandlinetools-{tools_os}-{ANDROID_TOOLS_VERSION}_latest.zip",
-            tools_zip,
-        )
-        for existing in (tools_dir / "latest", tools_dir / "cmdline-tools"):
-            if existing.exists():
-                shutil.rmtree(existing)
-        tools_dir.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(tools_zip) as zip_file:
-            zip_file.extractall(tools_dir)
-        shutil.move(str(tools_dir / "cmdline-tools"), str(tools_dir / "latest"))
-        if current != "windows":
-            for tool in (tools_dir / "latest" / "bin").iterdir():
-                if tool.is_file():
-                    tool.chmod(tool.stat().st_mode | 0o111)
-
-    if not sdkmanager.exists():
-        fail(f"sdkmanager was not found at {sdkmanager}")
-
-    configure_android_env(sdk_root)
-    run([str(sdkmanager), "--licenses"], input_text="y\n" * 100)
-    run([str(sdkmanager), *ANDROID_PACKAGES])
-    log("Android SDK packages are installed")
 
 
 def install_linux_packages(skip_deps: bool) -> None:
@@ -974,14 +773,11 @@ def install_linux_libcxx_runtime(skip_deps: bool) -> Path:
     return runtime
 
 
-def ensure_build_dependencies(target_platform: str, skip_deps: bool, need_android: bool) -> None:
+def ensure_build_dependencies(target_platform: str, skip_deps: bool) -> None:
     install_linux_packages(skip_deps)
     install_go(skip_deps)
     configure_go_module_proxy()
     ensure_compiler(target_platform, skip_deps)
-    if need_android:
-        install_jdk(skip_deps)
-        install_android_sdk(skip_deps)
 
 
 def go_mod_download(run_tidy: bool) -> None:
@@ -1002,7 +798,7 @@ def prepare_go_test_dependencies(skip_deps: bool, run_go_mod_tidy: bool) -> None
     if host_platform() != "linux":
         fail("prepare-go-test-deps is supported only on Linux CI runners")
 
-    ensure_build_dependencies("linux", skip_deps, need_android=False)
+    ensure_build_dependencies("linux", skip_deps)
     install_linux_trusttunnel_bridge(skip_deps)
     runtime = install_linux_libcxx_runtime(skip_deps)
     go_mod_download(run_go_mod_tidy)
@@ -1091,7 +887,7 @@ def build_go_ui(
     """Build the shared Go/Fyne UI for the current native desktop host."""
     if target_platform != host_platform():
         fail("The Fyne UI must be built on its native target host; use a matching runner")
-    ensure_build_dependencies(target_platform, skip_deps, need_android=False)
+    ensure_build_dependencies(target_platform, skip_deps)
     if target_platform == "linux":
         install_linux_gui_packages(skip_deps)
     go_mod_download(run_go_mod_tidy)
@@ -1112,8 +908,18 @@ def build_go_ui(
         version_name = ".".join(os.environ[name] for name in version_parts)
     commit = os.environ.get("GITHUB_SHA") or run_capture(["git", "rev-parse", "HEAD"]) or "unknown"
     ldflags = f"-buildid= -X go_module/ui.Version={version_name} -X go_module/ui.Commit={commit}"
+    if target_platform == "windows":
+        # The Go UI is a desktop launcher. Avoid opening a console window when
+        # started from Explorer or the Windows start menu; the operator CLI
+        # remains a separate console-subsystem binary.
+        ldflags += " -H=windowsgui"
     if target_platform == "macos":
-        ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
+        # Keep the native macOS binary's declared deployment floor and reserve
+        # a little header space for standard post-link tooling.
+        ldflags += (
+            f" -linkmode=external -extldflags=-mmacosx-version-min="
+            f"{MACOS_MINIMUM_SYSTEM_VERSION} -headerpad 0xFF"
+        )
     run(
         [
             "go",
@@ -1201,7 +1007,7 @@ def build_service(
     runtime_dir: Path | None = None,
 ) -> Path:
     target_arch = arch or default_service_arch(target_platform)
-    ensure_build_dependencies(target_platform, skip_deps, need_android=False)
+    ensure_build_dependencies(target_platform, skip_deps)
     if target_platform == "windows":
         # The service imports the bridge and loads Wintun at process startup.
         # Stage exactly that runtime closure for the public artifact and local CLI.
@@ -1300,121 +1106,6 @@ def read_gradle_properties() -> dict[str, str]:
     return properties
 
 
-def github_repo_from_remote() -> str | None:
-    remote = run_capture(["git", "remote", "get-url", "origin"])
-    if not remote or "github.com" not in remote:
-        return None
-    remote = remote.removesuffix(".git")
-    if remote.startswith("git@github.com:"):
-        return remote.removeprefix("git@github.com:")
-    marker = "github.com/"
-    if marker in remote:
-        return remote.split(marker, 1)[1]
-    return None
-
-
-def desktop_version_properties() -> list[str]:
-    gradle_properties = read_gradle_properties()
-    major = os.environ.get("APP_MAJOR_VERSION")
-    minor = os.environ.get("APP_MINOR_VERSION")
-    maintenance = os.environ.get("APP_MAINTENANCE_VERSION")
-
-    if major is not None and minor is not None and maintenance is not None:
-        version_name = f"{major}.{minor}.{maintenance}"
-    else:
-        version_name = os.environ.get("VERSION_NAME") or gradle_properties.get("versionName", "0.0.1")
-
-    # Prefer CI run number (same as Android/iOS APPLE_BUILD_NUMBER) so desktop
-    # stays unique when marketing VERSION is held constant.
-    version_code = (
-        os.environ.get("APPLE_BUILD_NUMBER")
-        or os.environ.get("VERSION_CODE")
-        or os.environ.get("ANDROID_VERSION_CODE")
-    )
-    if version_code is None and major is not None and minor is not None and maintenance is not None:
-        version_code = str(int(major) * 1_000_000 + int(minor) * 1_000 + int(maintenance))
-    if version_code is None:
-        version_code = gradle_properties.get("versionCode", "1")
-
-    commit = os.environ.get("GITHUB_SHA") or run_capture(["git", "rev-parse", "HEAD"]) or "N/A"
-    repo = os.environ.get("GITHUB_REPOSITORY") or github_repo_from_remote() or "DobbyVPN/DobbyVPN"
-    commit_link = os.environ.get("PROJECT_REPOSITORY_COMMIT_LINK")
-    if not commit_link:
-        commit_link = "N/A" if commit == "N/A" else f"https://github.com/{repo}/tree/{commit}"
-
-    return [
-        f"-PprojectRepositoryCommit={commit}",
-        f"-PprojectRepositoryCommitLink={commit_link}",
-        f"-Pandroid.injected.version.code={version_code}",
-        f"-Pandroid.injected.version.name={version_name}",
-    ]
-
-
-def gradle_command(fixed_gradle_executable: str | os.PathLike[str] | None = None) -> str:
-    if fixed_gradle_executable is not None:
-        return os.fspath(fixed_gradle_executable)
-    if host_platform() == "windows":
-        return str(KMP_DIR / "gradlew.bat")
-    return "./gradlew"
-
-
-def run_desktop_gradle(
-    skip_deps: bool,
-    fixed_gradle_executable: str | os.PathLike[str] | None = None,
-) -> None:
-    gradle = gradle_command(fixed_gradle_executable)
-    install_jdk(skip_deps)
-    install_android_sdk(skip_deps)
-
-    props = desktop_version_properties()
-    run([gradle, "--no-daemon", "--build-cache", "--parallel", ":app:jvmJar", *props], cwd=KMP_DIR)
-    run([gradle, "--no-daemon", "dependencies", *props], cwd=KMP_DIR)
-    run([gradle, "--no-daemon", "printConveyorConfig", *props], cwd=KMP_DIR)
-
-
-def emit_conveyor_config(
-    fixed_gradle_executable: str | os.PathLike[str] | None = None,
-) -> None:
-    """Print only Conveyor's generated HOCON on every supported host."""
-    gradle = gradle_command(fixed_gradle_executable)
-    with contextlib.redirect_stdout(sys.stderr):
-        install_jdk(skip_deps=False)
-    command = [gradle, "--no-daemon", "printConveyorConfig", *desktop_version_properties()]
-    try:
-        result = subprocess.run(
-            command,
-            cwd=str(KMP_DIR),
-            env=os.environ.copy(),
-            stdout=subprocess.PIPE,
-            stderr=sys.stderr,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError as error:
-        fail(f"Command was not found: {error.filename}")
-    if result.returncode != 0:
-        emit_process_diagnostic(
-            f"[!] Conveyor config generation failed with exit code {result.returncode}",
-            result.stdout,
-        )
-        fail(f"Conveyor config generation failed with exit code {result.returncode}")
-    marker = "// Generated by the Conveyor Gradle plugin."
-    marker_index = result.stdout.find(marker)
-    if marker_index < 0:
-        fail("Conveyor config output is missing the generated configuration marker")
-    # Gradle writes its lifecycle banner, warnings, and task output to stdout
-    # alongside the task's generated HOCON.  Conveyor treats stdout as a
-    # configuration-only protocol, so preserve the complete child stream as
-    # diagnostics on stderr and pass only the marked configuration through.
-    sys.stderr.write(result.stdout)
-    config = result.stdout[marker_index:]
-    for terminator in ("\n[Incubating] Problems report", "\nDeprecated Gradle features were used"):
-        end_index = config.find(terminator)
-        if end_index >= 0:
-            config = config[:end_index]
-    sys.stdout.write(config.rstrip() + "\n")
-
-
 def required_service_platforms(require_all: bool, platform_value: str) -> list[str]:
     if require_all:
         return ["linux", "macos", "windows"]
@@ -1424,29 +1115,73 @@ def required_service_platforms(require_all: bool, platform_value: str) -> list[s
     return platforms
 
 
+def required_service_paths(require_all: bool, platform_value: str) -> list[Path]:
+    paths = []
+    for target_platform in required_service_platforms(require_all, platform_value):
+        paths.append(service_target_path(target_platform))
+        if require_all and target_platform == "macos":
+            paths.append(SERVICES_DIR / "macos-amd64" / SERVICE_NAMES[target_platform])
+    return paths
+
+
 def require_services(require_all: bool, platform_value: str) -> None:
     missing = []
-    for target_platform in required_service_platforms(require_all, platform_value):
-        target = service_target_path(target_platform)
+    for target in required_service_paths(require_all, platform_value):
         if not target.exists():
             missing.append(str(target))
             continue
-        if target_platform != "windows":
+        if target.suffix != ".exe":
             target.chmod(target.stat().st_mode | 0o111)
     if missing:
         fail("Missing service binaries:\n" + "\n".join(missing))
 
 
-def run_conveyor(passphrase: str | None) -> None:
-    conveyor = os.environ.get("CONVEYOR_CMD") or shutil.which("conveyor")
-    if not conveyor:
-        fail("Conveyor CLI was not found. Set CONVEYOR_CMD or run without --package.")
-    command = [conveyor, "-f", str(KMP_DIR / "conveyor.conf")]
-    if passphrase:
-        command.extend((f"--passphrase={passphrase}", "make", "site"))
+def ui_target_path(target_platform: str, arch: str | None = None) -> Path:
+    """Return the staged UI path used by the native desktop packager."""
+    # The release workflow stages the arm64 macOS artifact at the historical
+    # platform root and the Intel artifact in a named subdirectory.  Keep that
+    # layout explicit so the package config and local builds share one rule.
+    if target_platform == "macos" and arch == "amd64":
+        return SERVICES_DIR / "macos-amd64" / UI_NAMES[target_platform]
+    return SERVICES_DIR / UI_NAMES[target_platform]
+
+
+def required_ui_paths(require_all: bool, platform_value: str) -> list[Path]:
+    paths = [ui_target_path(target_platform) for target_platform in required_service_platforms(require_all, platform_value)]
+    if require_all:
+        paths.append(ui_target_path("macos", arch="amd64"))
+    return paths
+
+
+def require_ui(require_all: bool, platform_value: str) -> None:
+    missing = []
+    for target in required_ui_paths(require_all, platform_value):
+        if not target.exists():
+            missing.append(str(target))
+    if missing:
+        fail("Missing native Go/Fyne UI binaries:\n" + "\n".join(missing))
+
+
+def run_native_package() -> None:
+    """Assemble release archives without a JVM or third-party packager."""
+    major = os.environ.get("APP_MAJOR_VERSION")
+    minor = os.environ.get("APP_MINOR_VERSION")
+    maintenance = os.environ.get("APP_MAINTENANCE_VERSION")
+    if major is not None and minor is not None and maintenance is not None:
+        version = f"{major}.{minor}.{maintenance}"
     else:
-        command.extend(("make", "site"))
-    run(command)
+        version = os.environ.get("VERSION_NAME") or read_gradle_properties().get("versionName", "0.0.1")
+    run(
+        [
+            sys.executable,
+            str(ROOT_DIR / ".github" / "scripts" / "package_desktop.py"),
+            "--version",
+            version,
+            "--output",
+            str(ROOT_DIR / "output"),
+        ],
+        cwd=ROOT_DIR,
+    )
 
 
 def build_app(args: argparse.Namespace) -> None:
@@ -1464,17 +1199,39 @@ def build_app(args: argparse.Namespace) -> None:
     # The native operator CLI is a packaging input, not a JVM application
     # output.  A source/package build may deliberately reuse already-built
     # service binaries via --skip-libs, but it must still materialize the CLI
-    # for the selected target before Conveyor resolves conveyor.conf.
+    # for the selected target before the native packager assembles an archive.
     for target_platform in platforms:
         cli_target = service_target_path(target_platform).parent / CLI_NAMES[target_platform]
         if not cli_target.exists():
             build_cli(target_platform, args.arch)
 
+    # Desktop packaging is native now.  A local single-platform build can
+    # materialize its UI here; release builds stage all three native artifacts
+    # from the per-platform library workflow and fail if one is absent.
+    for target_platform in platforms:
+        target = ui_target_path(target_platform, args.arch)
+        if target.exists():
+            continue
+        if target_platform != host_platform():
+            fail(
+                f"Missing native UI for {target_platform}: {target}. "
+                "Build it on a matching host before packaging."
+            )
+        build_go_ui(
+            target_platform,
+            args.arch,
+            args.skip_deps,
+            args.go_mod_tidy,
+            output_path=target,
+        )
+
     if args.require_all_services:
         require_services(True, args.platform)
-    run_desktop_gradle(args.skip_deps, args.gradle_executable)
+        require_ui(True, args.platform)
+    else:
+        require_ui(False, args.platform)
     if args.package:
-        run_conveyor(args.conveyor_passphrase)
+        run_native_package()
 
 
 def build_test_seams_service(args: argparse.Namespace) -> None:
@@ -1730,7 +1487,7 @@ def cli_test(args: argparse.Namespace) -> None:
         fail("Run this command from an elevated shell so the VPN service can configure Wintun")
 
     target_platform = host_platform()
-    ensure_build_dependencies(target_platform, args.skip_deps, need_android=True)
+    ensure_build_dependencies(target_platform, args.skip_deps)
     if target_platform == "windows":
         install_wintun(args.skip_deps)
 
@@ -1743,7 +1500,6 @@ def cli_test(args: argparse.Namespace) -> None:
             run_go_mod_tidy=args.go_mod_tidy,
         )
         build_cli(target_platform, go_arch_from_machine())
-        run_desktop_gradle(args.skip_deps, args.gradle_executable)
     else:
         require_services(False, "current")
         if not (SERVICES_DIR / CLI_NAMES[target_platform]).exists():
@@ -1778,19 +1534,9 @@ def add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skip-build", action="store_true", help="Reuse existing build outputs when possible.")
 
 
-def add_gradle_option(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--gradle-bin",
-        "--gradle-executable",
-        dest="gradle_executable",
-        metavar="PATH",
-        help="Use this Gradle executable.",
-    )
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build DobbyVPN desktop services/app in the same shape used by CI."
+        description="Build DobbyVPN desktop services and native Go/Fyne app inputs."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -1812,9 +1558,8 @@ def parse_args() -> argparse.Namespace:
     add_common_options(go_test_deps)
     go_test_deps.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before go mod download.")
 
-    app = subparsers.add_parser("app", help="Build the desktop app and optional Conveyor config.")
+    app = subparsers.add_parser("app", help="Build native desktop inputs and optional package archives.")
     add_common_options(app)
-    add_gradle_option(app)
     app.add_argument(
         "--platform",
         default="current",
@@ -1823,8 +1568,7 @@ def parse_args() -> argparse.Namespace:
     app.add_argument("--arch", help="Override GOARCH for service builds.")
     app.add_argument("--skip-libs", action="store_true", help="Use existing kmp_module/services binaries.")
     app.add_argument("--require-all-services", action="store_true", help="Require Linux, macOS, and Windows services.")
-    app.add_argument("--package", action="store_true", help="Run local Conveyor packaging after the Gradle build.")
-    app.add_argument("--conveyor-passphrase", default=os.environ.get("CONVEYOR_PASSPHRASE"))
+    app.add_argument("--package", action="store_true", help="Assemble native desktop archives after staging inputs.")
     app.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before service builds.")
 
     ui = subparsers.add_parser("ui", help="Build the shared Go/Fyne desktop UI on the current host.")
@@ -1834,15 +1578,8 @@ def parse_args() -> argparse.Namespace:
     ui.add_argument("--output", type=Path, help="Output executable path (defaults to go_module/dobby-vpn-ui[.exe]).")
     ui.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the UI build.")
 
-    conveyor_config = subparsers.add_parser(
-        "conveyor-config",
-        help="Emit generated Conveyor HOCON without platform-specific wrapper assumptions.",
-    )
-    add_gradle_option(conveyor_config)
-
     cli = subparsers.add_parser("cli-test", help="Build current desktop target and run check-config.")
     add_common_options(cli)
-    add_gradle_option(cli)
     cli.add_argument("--config", help="Config URL, TOML file path, or inline TOML.")
     cli.add_argument("--port", type=int, default=int(os.environ.get("PORT", "50151")))
     cli.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the service build.")
@@ -1889,9 +1626,6 @@ def main() -> None:
         cli_test(args)
     elif args.command == "test-seams-service":
         build_test_seams_service(args)
-    elif args.command == "conveyor-config":
-        emit_conveyor_config(args.gradle_executable)
-        return
     else:
         fail(f"Unknown command: {args.command}")
 

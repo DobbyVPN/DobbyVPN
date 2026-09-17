@@ -310,31 +310,8 @@ class DesktopBuildTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "remained unusable.*exit_code=2"):
                 desktop_build.ensure_compiler("windows", False)
 
-    def test_desktop_package_version_is_required_from_release_inputs(self) -> None:
-        conveyor = (SCRIPT_PATH.parents[2] / "kmp_module" / "conveyor.conf").read_text(
-            encoding="utf-8",
-        )
-        self.assertIn(
-            "app.version = ${env.APP_MAJOR_VERSION}.${env.APP_MINOR_VERSION}.${env.APP_MAINTENANCE_VERSION}",
-            conveyor,
-        )
-        self.assertNotIn("app.version = 1.1", conveyor)
-        self.assertIn('include "#!../.github/scripts/conveyor-config"', conveyor)
-
-        unix_launcher = SCRIPT_PATH.with_name("conveyor-config")
-        windows_launcher = SCRIPT_PATH.with_name("conveyor-config.bat")
-        self.assertEqual(
-            unix_launcher.read_text(encoding="utf-8"),
-            '#!/bin/sh\nexec python3 "$(dirname "$0")/desktop_build.py" conveyor-config\n',
-        )
-        self.assertTrue(unix_launcher.stat().st_mode & stat.S_IXUSR)
-        self.assertEqual(
-            windows_launcher.read_text(encoding="utf-8"),
-            "@echo off\n"
-            'python.exe "%~dp0desktop_build.py" conveyor-config\n'
-            "exit /b %ERRORLEVEL%\n",
-        )
-
+    def test_desktop_packaging_uses_native_inputs_and_no_conveyor(self) -> None:
+        script = SCRIPT_PATH.read_text(encoding="utf-8")
         workflow = (SCRIPT_PATH.parents[1] / "workflows" / "desktop_build.yml").read_text(
             encoding="utf-8",
         )
@@ -346,6 +323,19 @@ class DesktopBuildTests(unittest.TestCase):
             self.assertIn(f"{name}: ${{{{ inputs.{name.lower()} }}}}", workflow)
         self.assertIn('test "$(dpkg-deb -f "$deb_file" Version)" = "$EXPECTED_VERSION"', workflow)
         self.assertNotIn("find ./output -name '*.deb'", workflow)
+        self.assertIn("package_desktop.py", workflow)
+        self.assertNotIn("hydraulic-software/conveyor", workflow)
+        self.assertIn("path: kmp_module/services", workflow)
+        self.assertIn("path: kmp_module/services/macos-amd64", workflow)
+        self.assertIn("test -x macos-amd64/dobby-vpn-ui", workflow)
+        self.assertIn("Environment=LD_LIBRARY_PATH=/opt/dobbyvpn/lib/runtime", workflow)
+        self.assertNotIn("path: kmp_module/services/macos-arm64", workflow)
+        self.assertNotIn("run_conveyor", script)
+        self.assertNotIn("printConveyorConfig", script)
+        self.assertFalse((SCRIPT_PATH.parents[2] / "kmp_module" / "conveyor.conf").exists())
+        self.assertFalse((SCRIPT_PATH.parents[2] / "kmp_module" / "conveyor-ci.conf").exists())
+        self.assertFalse(SCRIPT_PATH.with_name("conveyor-config").exists())
+        self.assertFalse(SCRIPT_PATH.with_name("conveyor-config.bat").exists())
 
         installers = (SCRIPT_PATH.parents[1] / "workflows" / "installers_build.yml").read_text(
             encoding="utf-8",
@@ -356,138 +346,6 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertIn("Verify macOS installer versions", installers)
         self.assertIn('pkgutil --expand-full "$package" "$expanded"', installers)
         self.assertIn('if actual != expected:', installers)
-
-    def test_gradle_command_keeps_standalone_wrapper_default(self) -> None:
-        with mock.patch.object(desktop_build, "host_platform", return_value="macos"):
-            self.assertEqual(desktop_build.gradle_command(), "./gradlew")
-
-    def test_desktop_sdk_check_does_not_require_android_ndk(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            sdk = Path(temporary)
-            for relative in (
-                "platforms/android-35",
-                "platforms/android-36",
-                "build-tools/36.0.0",
-            ):
-                (sdk / relative).mkdir(parents=True)
-
-            self.assertTrue(desktop_build.android_packages_installed(sdk))
-
-    def test_desktop_gradle_accepts_a_fixed_absolute_executable_as_one_argv_item(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            fixed = Path(temporary) / "Gradle 8.13" / "bin" / "gradle"
-            fixed.parent.mkdir(parents=True)
-            fixed.write_text("#!/bin/sh\n", encoding="utf-8")
-            fixed.chmod(0o755)
-            with (
-                mock.patch.object(desktop_build, "install_jdk"),
-                mock.patch.object(desktop_build, "install_android_sdk"),
-                mock.patch.object(
-                    desktop_build,
-                    "desktop_version_properties",
-                    return_value=["-PversionName=1.4.7"],
-                ),
-                mock.patch.object(desktop_build, "run") as run,
-            ):
-                desktop_build.run_desktop_gradle(True, fixed)
-
-        self.assertEqual(len(run.call_args_list), 3)
-        for call in run.call_args_list:
-            self.assertEqual(call.args[0][0], str(fixed))
-            self.assertIs(call.kwargs["cwd"], desktop_build.KMP_DIR)
-
-    def test_fixed_gradle_executable_uses_the_supplied_path(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            fixed = root / "gradle"
-            fixed.write_text("#!/bin/sh\n", encoding="utf-8")
-            fixed.chmod(0o755)
-            link = root / "gradle-link"
-            link.symlink_to(fixed)
-
-            self.assertEqual(desktop_build.gradle_command("gradle"), "gradle")
-            self.assertEqual(desktop_build.gradle_command(link), str(link))
-
-    def test_conveyor_config_uses_host_gradle_wrapper_and_emits_only_hocon(self) -> None:
-        completed = mock.Mock(returncode=0, stdout="// Generated by the Conveyor Gradle plugin.\napp.display-name = DobbyVPN\n")
-        output = io.StringIO()
-        diagnostics = io.StringIO()
-        with (
-            mock.patch.object(
-                desktop_build,
-                "install_jdk",
-                side_effect=lambda **_kwargs: print("jdk-ready"),
-            ) as install_jdk,
-            mock.patch.object(desktop_build, "gradle_command", return_value="gradlew.bat"),
-            mock.patch.object(desktop_build, "desktop_version_properties", return_value=["-PversionName=1.4.7"]),
-            mock.patch.object(desktop_build.subprocess, "run", return_value=completed) as run,
-            mock.patch.object(desktop_build.sys, "stdout", output),
-            mock.patch.object(desktop_build.sys, "stderr", diagnostics),
-        ):
-            desktop_build.emit_conveyor_config()
-
-        install_jdk.assert_called_once_with(skip_deps=False)
-        self.assertIn("app.display-name = DobbyVPN", output.getvalue())
-        self.assertIn("jdk-ready\n", diagnostics.getvalue())
-        self.assertIn("// Generated by the Conveyor Gradle plugin.", diagnostics.getvalue())
-        self.assertEqual(
-            run.call_args.args[0],
-            ["gradlew.bat", "--no-daemon", "printConveyorConfig", "-PversionName=1.4.7"],
-        )
-        self.assertEqual(run.call_args.kwargs["cwd"], str(desktop_build.KMP_DIR))
-        self.assertIs(run.call_args.kwargs["stderr"], diagnostics)
-
-    def test_desktop_gradle_invocations_are_all_non_daemon(self) -> None:
-        props = ["-PversionName=1.5.0"]
-        with (
-            mock.patch.object(desktop_build, "install_jdk"),
-            mock.patch.object(desktop_build, "install_android_sdk"),
-            mock.patch.object(desktop_build, "desktop_version_properties", return_value=props),
-            mock.patch.object(desktop_build, "gradle_command", return_value="gradlew"),
-            mock.patch.object(desktop_build, "run") as run,
-        ):
-            desktop_build.run_desktop_gradle(skip_deps=True)
-
-        self.assertEqual(
-            run.call_args_list,
-            [
-                mock.call(
-                    ["gradlew", "--no-daemon", "--build-cache", "--parallel", ":app:jvmJar", *props],
-                    cwd=desktop_build.KMP_DIR,
-                ),
-                mock.call(
-                    ["gradlew", "--no-daemon", "dependencies", *props],
-                    cwd=desktop_build.KMP_DIR,
-                ),
-                mock.call(
-                    ["gradlew", "--no-daemon", "printConveyorConfig", *props],
-                    cwd=desktop_build.KMP_DIR,
-                ),
-            ],
-        )
-        for invocation in run.call_args_list:
-            self.assertIn("--no-daemon", invocation.args[0])
-
-    def test_conveyor_config_failure_never_emits_partial_hocon(self) -> None:
-        output = io.StringIO()
-        diagnostics = io.StringIO()
-        with (
-            mock.patch.object(desktop_build, "install_jdk"),
-            mock.patch.object(desktop_build, "gradle_command", return_value="gradlew.bat"),
-            mock.patch.object(desktop_build, "desktop_version_properties", return_value=[]),
-            mock.patch.object(
-                desktop_build.subprocess,
-                "run",
-                return_value=mock.Mock(returncode=7, stdout="partial-private-config\n"),
-            ),
-            mock.patch.object(desktop_build.sys, "stdout", output),
-            mock.patch.object(desktop_build.sys, "stderr", diagnostics),
-        ):
-            with self.assertRaisesRegex(SystemExit, "failed with exit code 7"):
-                desktop_build.emit_conveyor_config()
-        self.assertEqual(output.getvalue(), "")
-        self.assertIn("partial-private-config\n", diagnostics.getvalue())
-
     def test_native_bridge_release_contract_is_single_source_and_exact(self) -> None:
         self.assertEqual(
             desktop_build.BRIDGE_RELEASES,
@@ -616,14 +474,10 @@ class DesktopBuildTests(unittest.TestCase):
             desktop_build.stop_service(process)
         terminate.assert_called_once_with(process)
 
-    def test_cli_check_passes_control_socket_to_gradle_process(self) -> None:
+    def test_cli_check_passes_control_socket_to_cli_process(self) -> None:
         socket_path = Path("/tmp/dobbyvpn-test/control.sock")
 
-        with (
-            mock.patch.object(desktop_build, "desktop_version_properties", return_value=[]),
-            mock.patch.object(desktop_build, "gradle_command", return_value="gradle"),
-            mock.patch.object(desktop_build, "run") as run,
-        ):
+        with mock.patch.object(desktop_build, "run") as run:
             desktop_build.run_cli_check("/tmp/config.toml", 50151, socket_path)
 
         self.assertEqual(
@@ -705,28 +559,13 @@ class DesktopBuildTests(unittest.TestCase):
             ):
                 desktop_build.prepare_go_test_dependencies(True, True)
 
-        self.assertEqual(calls[0], ("deps", ("linux", True), {"need_android": False}))
+        self.assertEqual(calls[0], ("deps", ("linux", True), {}))
         self.assertEqual(calls[1:], [("bridge", True), ("libcxx", True), ("modules", True)])
         self.assertEqual(environment_updates["CGO_ENABLED"], "1")
         self.assertIn(f"-L{desktop_build.GO_MODULE_DIR}", environment_updates["CGO_LDFLAGS"])
         self.assertIn(f"-L{runtime}", environment_updates["CGO_LDFLAGS"])
         self.assertIn(str(desktop_build.GO_MODULE_DIR), environment_updates["LD_LIBRARY_PATH"])
         self.assertIn(str(runtime), environment_updates["LD_LIBRARY_PATH"])
-
-    def test_local_conveyor_options_precede_make_task(self) -> None:
-        with (
-            mock.patch.dict(desktop_build.os.environ, {"CONVEYOR_CMD": "/tool/conveyor"}),
-            mock.patch.object(desktop_build, "run") as run,
-        ):
-            desktop_build.run_conveyor("fixture-passphrase")
-
-        self.assertEqual(
-            run.call_args.args[0],
-            [
-                "/tool/conveyor", "-f", str(desktop_build.KMP_DIR / "conveyor.conf"),
-                "--passphrase=fixture-passphrase", "make", "site",
-            ],
-        )
 
     def test_windows_service_stages_import_derived_runtime_before_build(self) -> None:
         calls: list[str] = []
@@ -779,6 +618,18 @@ class DesktopBuildTests(unittest.TestCase):
         with mock.patch.object(desktop_build, "host_platform", return_value="linux"):
             with self.assertRaises(SystemExit):
                 desktop_build.build_go_ui("windows", "amd64", True, False)
+
+    def test_release_require_all_includes_both_macos_architectures(self) -> None:
+        service_paths = desktop_build.required_service_paths(True, "current")
+        ui_paths = desktop_build.required_ui_paths(True, "current")
+        self.assertIn(
+            desktop_build.SERVICES_DIR / "macos-amd64" / "macos_grpcvpnserver",
+            service_paths,
+        )
+        self.assertIn(
+            desktop_build.SERVICES_DIR / "macos-amd64" / "dobby-vpn-ui",
+            ui_paths,
+        )
 
     def test_libs_with_cli_builds_both_native_interfaces(self) -> None:
         args = mock.Mock(

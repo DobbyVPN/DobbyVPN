@@ -74,7 +74,6 @@ plugins {
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.kotlinMultiplatform)
-    alias(libs.plugins.hydraulic.conveyor)
 
     id("com.github.gmazzo.buildconfig") version "5.6.5"
 }
@@ -95,6 +94,9 @@ kotlin {
         }
     }
 
+    // JVM remains test-only for platform-neutral Kotlin checks. The shipped
+    // desktop application is the native Go/Fyne binary and has no JVM entry
+    // point or Compose Desktop dependencies.
     jvm {
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_17)
@@ -147,26 +149,17 @@ kotlin {
             implementation(kotlin("test"))
         }
 
-        @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
-        iosTest.dependencies {
-            implementation(compose.uiTest)
-        }
-
         jvmMain.dependencies {
             implementation(project(":grpcstub"))
-            implementation(libs.protobuf.java)
-
-            implementation(compose.desktop.currentOs)
-            implementation(libs.skiko.win)
-            implementation(libs.skiko.mac.amd64)
-            implementation(libs.skiko.mac.arm64)
-            implementation(libs.skiko.linux)
-
-            implementation(libs.kotlinx.coroutines.swing)
         }
 
         jvmTest.dependencies {
             implementation(libs.kotlinx.coroutines.test)
+        }
+
+        @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+        iosTest.dependencies {
+            implementation(compose.uiTest)
         }
 
         androidUnitTest.dependencies {
@@ -185,12 +178,6 @@ kotlin {
         iosMain.dependencies {
 
         }
-    }
-}
-
-compose.desktop {
-    application {
-        mainClass = "MainKt"
     }
 }
 

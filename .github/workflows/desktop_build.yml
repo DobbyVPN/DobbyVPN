@@ -2,11 +2,6 @@ name: Desktop Build
 
 on:
   workflow_call:
-    secrets:
-      CONVEYOR_PASSPHRASE:
-        required: true
-      CONVEYOR_SIGNING_KEY:
-        required: true
     inputs:
       source_sha:
         description: Full lowercase 40-character source commit SHA to build.
@@ -89,7 +84,7 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobby-cli-macos-arm64
-          path: kmp_module/services/macos-arm64
+          path: kmp_module/services
 
       - name: Download macOS amd64 gRPC vpn service
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
@@ -106,34 +101,50 @@ jobs:
       - name: Verify staged macOS gRPC vpn services
         working-directory: kmp_module/services
         run: |
-          chmod +x macos_grpcvpnserver macos-amd64/macos_grpcvpnserver macos-arm64/dobby-cli macos-amd64/dobby-cli
+          set -euo pipefail
+          chmod +x macos_grpcvpnserver macos-amd64/macos_grpcvpnserver dobby-cli macos-amd64/dobby-cli
+          test -x macos_grpcvpnserver
+          test -x macos-amd64/macos_grpcvpnserver
 
       - name: Verify staged desktop CLI binaries
         working-directory: kmp_module/services
         run: |
           test -x dobby-cli
           test -f dobby-cli.exe
-          test -x macos-arm64/dobby-cli
           test -x macos-amd64/dobby-cli
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      - name: Download Windows Go/Fyne UI
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          distribution: 'temurin'
-          java-version: '17'
-          cache: gradle
-          cache-dependency-path: |
-            kmp_module/**/*.gradle.kts
-            kmp_module/gradle/libs.versions.toml
-            kmp_module/gradle/wrapper/gradle-wrapper.properties
+          name: dobby-vpn-ui-windows
+          path: kmp_module/services
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+      - name: Download Linux Go/Fyne UI
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          packages: >
-            platforms;android-35
-            platforms;android-36
-            build-tools;36.0.0
+          name: dobby-vpn-ui-linux
+          path: kmp_module/services
+
+      - name: Download macOS arm64 Go/Fyne UI
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobby-vpn-ui-macos-arm64
+          path: kmp_module/services
+
+      - name: Download macOS amd64 Go/Fyne UI
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobby-vpn-ui-macos-amd64
+          path: kmp_module/services/macos-amd64
+
+      - name: Verify staged native Go/Fyne UI binaries
+        working-directory: kmp_module/services
+        run: |
+          set -euo pipefail
+          chmod +x dobby-vpn-ui macos-amd64/dobby-vpn-ui
+          test -f dobby-vpn-ui.exe
+          test -x dobby-vpn-ui
+          test -x macos-amd64/dobby-vpn-ui
 
       - name: Build desktop via script
         run: |
@@ -146,24 +157,13 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
 
-      - name: Cache Conveyor downloads
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: .conveyor/cache
-          key: conveyor-${{ runner.os }}-${{ hashFiles('kmp_module/conveyor.conf', 'kmp_module/**/*.gradle.kts', 'kmp_module/gradle/libs.versions.toml') }}
-
-      - name: Conveyor build site
-        uses: hydraulic-software/conveyor/actions/build@3fd1c206e213cbc01d0b0343ddb120fdde074165 # v16.0
-        env:
-          OAUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
-          APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
-          APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
-        with:
-          command: make site
-          extra_flags: "--passphrase=\"${{ secrets.CONVEYOR_PASSPHRASE }}\" -f kmp_module/conveyor.conf"
-          signing_key: ${{ secrets.CONVEYOR_SIGNING_KEY }}
-          agree_to_license: 1
+      - name: Package native desktop archives
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pil
+          python3 .github/scripts/package_desktop.py \
+            --version "${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}" \
+            --output output
 
       - name: Find files
         id: find_deb
@@ -197,8 +197,8 @@ jobs:
           unit="$package_root/usr/local/lib/systemd/system/dobbyvpn.service"
           test -x "$service"
           test -f "$unit"
-          grep -Fx 'Environment=LD_LIBRARY_PATH=/opt/dobbyvpn/lib/runtime/lib' "$unit"
-          LD_LIBRARY_PATH="$package_root/opt/dobbyvpn/lib/runtime/lib" ldd "$service" > "$package_root/ldd.txt"
+          grep -Fx 'Environment=LD_LIBRARY_PATH=/opt/dobbyvpn/lib/runtime' "$unit"
+          LD_LIBRARY_PATH="$package_root/opt/dobbyvpn/lib/runtime" ldd "$service" > "$package_root/ldd.txt"
           if grep -F 'not found' "$package_root/ldd.txt"; then
             echo 'Debian service has an unresolved runtime library' >&2
             exit 1

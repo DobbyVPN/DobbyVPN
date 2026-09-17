@@ -118,9 +118,6 @@ jobs:
       app_major_version: ${{ needs.prepare_version.outputs.major }}
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
-    secrets:
-      CONVEYOR_PASSPHRASE: ${{ secrets.CONVEYOR_PASSPHRASE }}
-      CONVEYOR_SIGNING_KEY: ${{ secrets.CONVEYOR_SIGNING_KEY }}
 
   installers_build:
     needs: [prepare_version, desktop_build]
