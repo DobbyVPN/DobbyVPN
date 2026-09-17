@@ -1105,11 +1105,12 @@ def build_go_ui(
         "GOOS": GOOS_BY_PLATFORM[target_platform],
         "GOARCH": target_arch,
     })
-    version_name = ".".join(
-        os.environ.get(name, "0")
-        for name in ("APP_MAJOR_VERSION", "APP_MINOR_VERSION", "APP_MAINTENANCE_VERSION")
-    )
-    commit = os.environ.get("GITHUB_SHA", "unknown")
+    metadata = read_gradle_properties()
+    version_name = os.environ.get("VERSION_NAME") or metadata.get("versionName", "0.0.1")
+    version_parts = ("APP_MAJOR_VERSION", "APP_MINOR_VERSION", "APP_MAINTENANCE_VERSION")
+    if all(os.environ.get(name) is not None for name in version_parts):
+        version_name = ".".join(os.environ[name] for name in version_parts)
+    commit = os.environ.get("GITHUB_SHA") or run_capture(["git", "rev-parse", "HEAD"]) or "unknown"
     ldflags = f"-buildid= -X go_module/ui.Version={version_name} -X go_module/ui.Commit={commit}"
     if target_platform == "macos":
         ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
