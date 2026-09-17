@@ -868,6 +868,7 @@ def install_linux_gui_packages(skip_deps: bool) -> None:
     required = {
         "gl": "libgl1-mesa-dev",
         "wayland-client": "libwayland-dev",
+        "xkbcommon": "libxkbcommon-dev",
     }
     missing = [name for name in required if not shutil.which("pkg-config") or not run_capture(["pkg-config", "--exists", name])]
     if not missing:
