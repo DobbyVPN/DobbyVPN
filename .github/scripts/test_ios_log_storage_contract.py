@@ -42,6 +42,7 @@ class IosNativeShellContractTests(unittest.TestCase):
         self.assertIn('if [[ "$device" == 1 ]]; then', script)
         self.assertIn('cp -R "$tunnel_product" "$app/PlugIns/tunnel.appex"', script)
         self.assertIn('rm -rf "$app/Frameworks/CommonDI.framework" "$app/PlugIns/tunnel.appex"', script)
+        self.assertIn("install_name_tool -add_rpath '@executable_path/Frameworks'", script)
 
 
 if __name__ == "__main__":

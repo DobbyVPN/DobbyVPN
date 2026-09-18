@@ -34,6 +34,8 @@ source_commit=${SOURCE_COMMIT:-$(git -C "$script_root" rev-parse HEAD)}
 [[ -d "$runtime" ]] || { echo "DobbyVPNRuntime.xcframework is unavailable: $runtime" >&2; exit 2; }
 command -v xcodebuild >/dev/null || { echo "xcodebuild is required" >&2; exit 2; }
 command -v codesign >/dev/null || { echo "codesign is required" >&2; exit 2; }
+command -v install_name_tool >/dev/null || { echo "install_name_tool is required" >&2; exit 2; }
+command -v otool >/dev/null || { echo "otool is required" >&2; exit 2; }
 
 if [[ "$device" == 1 ]]; then
   identity=${IOS_SIGNING_IDENTITY:-Apple\ Distribution}
@@ -218,6 +220,16 @@ app="$fyne_output"
 mkdir -p "$app/Frameworks"
 rm -rf "$app/Frameworks/CommonDI.framework" "$app/PlugIns/tunnel.appex"
 cp -R "$common_framework" "$app/Frameworks/CommonDI.framework"
+
+# Fyne's generated Xcode project treats the Go executable as a resource, so
+# Xcode does not apply its LD_RUNPATH_SEARCH_PATHS to that executable. Add the
+# same runpath explicitly or dyld will search only the Simulator runtime for
+# CommonDI.framework and the app will exit before Go can write its startup log.
+main_executable="$app/main"
+[[ -x "$main_executable" ]] || { echo "Fyne app executable is unavailable: $main_executable" >&2; exit 1; }
+if ! otool -l "$main_executable" | grep -F -q '@executable_path/Frameworks'; then
+  install_name_tool -add_rpath '@executable_path/Frameworks' "$main_executable"
+fi
 
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier vpn.dobby.app" "$app/Info.plist" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :DobbySourceCommit string $source_commit" "$app/Info.plist" 2>/dev/null || \
