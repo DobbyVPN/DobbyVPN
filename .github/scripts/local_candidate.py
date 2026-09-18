@@ -45,6 +45,10 @@ UI_TEST_NAMES = {
     "windows": "dobby-vpn-ui-test.exe",
     "macos": "dobby-vpn-ui-test",
 }
+UI_NAMES = {
+    "windows": "Dobby Vpn.exe",
+    "macos": "Dobby Vpn",
+}
 ANDROID_BUILD_TOOLS_VERSION = "36.0.0"
 ARCHITECTURE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 SIGNER_DIGEST = re.compile(r"certificate SHA-256 digest:\s*([0-9a-fA-F:]+)")
@@ -384,6 +388,19 @@ def _build_desktop(
         if skip_deps:
             ui_test.append("--skip-deps")
         _run(ui_test, source_root=source_root, environment=environment)
+        ui = [
+            *common,
+            "ui",
+            "--platform",
+            "current",
+            "--arch",
+            architecture,
+            "--output",
+            str(source_root / "go_module" / UI_NAMES[platform]),
+        ]
+        if skip_deps:
+            ui.append("--skip-deps")
+        _run(ui, source_root=source_root, environment=environment)
 
 
 def _build_android(
@@ -425,6 +442,7 @@ def _descriptor(
     test_companion_path: Path | None,
     cli_path: Path | None,
     ui_test_path: Path | None,
+    ui_path: Path | None,
     service_path: Path | None,
     network_path: Path,
 ) -> dict[str, Any]:
@@ -454,6 +472,9 @@ def _descriptor(
         if ui_test_path is None:
             raise CandidateError("desktop UI candidate paths are incomplete")
         result["ui_test"] = str(_regular_file(ui_test_path, request_root, "headless UI companion"))
+        if ui_path is None:
+            raise CandidateError("desktop native UI path is missing")
+        result["ui"] = str(_regular_file(ui_path, request_root, "desktop UI"))
     result["network"] = str(_confined(network_path, request_root, "network interface"))
     return result
 
@@ -503,6 +524,7 @@ def prepare_candidate(
     candidate_root = _new_directory(candidate_root, request_root, "candidate root")
     output = _confined(Path(output), request_root, "descriptor")
     test_companion_path: Path | None = None
+    ui_path: Path | None = None
     if platform in DESKTOP_PLATFORMS:
         _build_desktop(
             source_root,
@@ -513,6 +535,7 @@ def prepare_candidate(
         service_path = source_root / "go_module" / SERVICE_NAMES[platform]
         cli_path = source_root / "go_module" / CLI_NAMES[platform]
         ui_test_path = source_root / "go_module" / UI_TEST_NAMES[platform]
+        ui_path = source_root / "go_module" / UI_NAMES[platform] if platform in {"windows", "macos"} else None
         app_path = None
     else:
         app_path = _build_android(source_root, candidate_root, architecture)
@@ -538,6 +561,7 @@ def prepare_candidate(
         test_companion_path=test_companion_path,
         cli_path=cli_path,
         ui_test_path=ui_test_path,
+        ui_path=ui_path,
         service_path=service_path,
         network_path=network_path,
     )

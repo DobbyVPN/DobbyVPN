@@ -407,6 +407,27 @@ def _functional_command(run_dir: Path, descriptor: dict[str, Any], platform: str
     return command
 
 
+def _native_ui_command(run_dir: Path, descriptor: dict[str, Any], platform: str, timeout: float) -> list[str]:
+    """Build the required real-window journey command for desktop guests."""
+    if platform not in {"windows", "macos"}:
+        raise LocalVMError(f"native GUI qualification is unsupported on {platform}")
+    smoke = run_dir / "source" / ".github" / "scripts" / "native_ui_smoke.py"
+    if not smoke.is_file():
+        raise LocalVMError("native desktop UI qualification script is missing")
+    return [
+        sys.executable,
+        str(smoke),
+        "--platform",
+        platform,
+        "--ui",
+        str(_candidate_path(descriptor, "ui")),
+        "--profile",
+        str(run_dir / "profile"),
+        "--timeout",
+        str(min(timeout, 300.0)),
+    ]
+
+
 def run(args: argparse.Namespace) -> int:
     run_dir = _run_dir(args.run_dir)
     source = _required_input(run_dir, "source", directory=True)
@@ -480,6 +501,31 @@ def run(args: argparse.Namespace) -> int:
         state["runtime"] = runtime
         state["status"] = "running"
         _write_json(run_dir / "platform.json", state)
+        if args.platform in {"windows", "macos"}:
+            native_environment = {**os.environ}
+            runtime_environment = runtime.get("environment")
+            if isinstance(runtime_environment, dict):
+                native_environment.update({
+                    str(key): str(value)
+                    for key, value in runtime_environment.items()
+                    if isinstance(key, str) and isinstance(value, str)
+                })
+            native_result = _run_logged(
+                _native_ui_command(run_dir, descriptor, args.platform, args.timeout),
+                cwd=run_dir / "source",
+                logs=logs,
+                label="native-ui",
+                timeout=min(args.timeout, 300.0),
+                environment=native_environment,
+                check=False,
+            )
+            state["native_ui_exit_code"] = native_result.returncode
+            if native_result.returncode != 0:
+                state["status"] = "native-ui-failed"
+                _write_json(run_dir / "platform.json", state)
+                return native_result.returncode
+            state["native_ui_status"] = "passed"
+            _write_json(run_dir / "platform.json", state)
         command = _functional_command(run_dir, {**descriptor, "runtime": runtime}, args.platform, args.timeout, args.scenarios)
         functional_environment = {
             **os.environ,

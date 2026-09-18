@@ -4,11 +4,11 @@ The shared Go/Fyne UI renders the state owned by one Go session manager in each
 service process. Desktop release packages now launch this native UI directly;
 the desktop package has no JVM or Compose launcher. It forwards the entered
 source bytes and displays current snapshots. It does not parse configuration,
-choose a protocol, or manage tunnel resources. Production Android Kotlin/Compose
-and iOS Swift/Compose retain their thin VPN shells for permissions,
-foreground/extension lifetime, secure storage and system sharing APIs while the
-opt-in Go/Fyne mobile packaging experiment (`-tags=fyne_mobile`) is validated
-separately.
+choose a protocol, or manage tunnel resources. Production Android and iOS
+retain thin native VPN shells for permissions, foreground/extension lifetime,
+secure storage, and system sharing APIs while the Go/Fyne mobile application
+is brought to parity. Those shells must not duplicate session or protocol
+policy.
 
 ## UI qualification
 
@@ -18,17 +18,18 @@ the profile through the real UI client, then Connect, Disconnect, and
 reconnect actions exercise the production widget callbacks against the
 authenticated gRPC service. The shared functional adapter delegates tunnel,
 routing, traffic, process-loss, and cleanup assertions to the normal platform
-adapter. A Windows/macOS native-window smoke
-also starts the packaged binary, injects a real mouse click, and closes it with
-the platform gesture. Hosted runners without an interactive desktop/window
-server report that smoke as unavailable; the authenticated headless companion
-remains the gating check there, while an interactive Windows/macOS VM should
-require the native smoke. Linux deliberately stays CLI/service-only.
+adapter. A Windows/macOS native-window qualification also starts the packaged
+binary, discovers controls through the platform accessibility tree, enters a
+fresh profile through native clipboard/keyboard input, clicks Connect and
+Disconnect, observes visible status, opens Settings, and verifies close/reopen
+reattaches to the service-owned session. A missing interactive desktop or
+denied automation permission is an incomplete/failed GUI lane, not a pass.
+Linux deliberately stays CLI/service-only.
 
 The Fyne driver is not an operating-system input simulator: it validates
 widget callbacks, layout state, accessibility labels, and the real service
-boundary. The native-window smoke covers actual window/input wiring. Neither
-duplicates the canonical functional scenario definitions.
+boundary. The native-window qualification covers actual rendering and input
+wiring. Neither duplicates the canonical functional scenario definitions.
 
 ## Connect and reattach
 

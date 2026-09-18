@@ -1,5 +1,3 @@
-//go:build android || ios
-
 package ui
 
 import (
@@ -10,9 +8,20 @@ import (
 	"time"
 )
 
-// mobileAPI is supplied by the platform-specific Go export package.  Keeping
-// this small adapter in the UI package means Android and iOS use the same
-// screens and JSON contract while retaining their native VPN shells.
+// MobileTransport is the narrow native boundary for the mobile UI. The
+// implementation may be a gomobile call in a platform process or a native
+// app/extension bridge; the UI never owns a second session manager.
+type MobileTransport interface {
+	Configure(string, int64, []byte) string
+	Start(string, int64, string, int32) string
+	Stop(string, int64) string
+	Snapshot(string) string
+	Reset(string, int64) string
+}
+
+// mobileAPI adapts exported Go functions without exposing function values to
+// callers. It is kept private so platform code cannot bypass MobileClient's
+// session and JSON handling.
 type mobileAPI struct {
 	configure func(string, int64, []byte) string
 	start     func(string, int64, string, int32) string
@@ -21,14 +30,35 @@ type mobileAPI struct {
 	reset     func(string, int64) string
 }
 
+func (a mobileAPI) Configure(session string, sequence int64, raw []byte) string {
+	return a.configure(session, sequence, raw)
+}
+func (a mobileAPI) Start(session string, sequence int64, mode string, index int32) string {
+	return a.start(session, sequence, mode, index)
+}
+func (a mobileAPI) Stop(session string, generation int64) string {
+	return a.stop(session, generation)
+}
+func (a mobileAPI) Snapshot(session string) string { return a.snapshot(session) }
+func (a mobileAPI) Reset(session string, sequence int64) string {
+	return a.reset(session, sequence)
+}
+
 type MobileClient struct {
-	api mobileAPI
+	api MobileTransport
 
 	mu        sync.RWMutex
 	sessionID string
 }
 
-func NewMobileClient() *MobileClient { return &MobileClient{api: newMobileAPI()} }
+// NewMobileClientWithTransport is used by platform entry points and by tests.
+// It keeps the shared UI independent from Android/iOS imports.
+func NewMobileClientWithTransport(transport MobileTransport) *MobileClient {
+	if transport == nil {
+		panic("nil mobile transport")
+	}
+	return &MobileClient{api: transport}
+}
 
 func (c *MobileClient) session() string {
 	c.mu.RLock()
@@ -45,8 +75,11 @@ func (c *MobileClient) remember(id string) {
 	c.mu.Unlock()
 }
 
-func (c *MobileClient) Configure(_ context.Context, raw []byte, sequence uint64) (ConfigureResult, error) {
-	value, err := decodeEnvelope(c.api.configure(c.session(), int64(sequence), append([]byte(nil), raw...)))
+func (c *MobileClient) Configure(ctx context.Context, raw []byte, sequence uint64) (ConfigureResult, error) {
+	if err := contextError(ctx); err != nil {
+		return ConfigureResult{}, err
+	}
+	value, err := decodeEnvelope(c.api.Configure(c.session(), int64(sequence), append([]byte(nil), raw...)))
 	if err != nil {
 		return ConfigureResult{}, err
 	}
@@ -57,8 +90,11 @@ func (c *MobileClient) Configure(_ context.Context, raw []byte, sequence uint64)
 	return ConfigureResult{Digest: result.Digest, Sequence: result.Sequence, SourceKind: result.SourceKind, Profiles: result.Profiles.ui(), Warnings: result.Warnings.ui()}, nil
 }
 
-func (c *MobileClient) Start(_ context.Context, sequence uint64) (StartResult, error) {
-	value, err := decodeEnvelope(c.api.start(c.session(), int64(sequence), "AUTO_SELECT", -1))
+func (c *MobileClient) Start(ctx context.Context, sequence uint64) (StartResult, error) {
+	if err := contextError(ctx); err != nil {
+		return StartResult{}, err
+	}
+	value, err := decodeEnvelope(c.api.Start(c.session(), int64(sequence), "AUTO_SELECT", -1))
 	if err != nil {
 		return StartResult{}, err
 	}
@@ -69,8 +105,11 @@ func (c *MobileClient) Start(_ context.Context, sequence uint64) (StartResult, e
 	return StartResult{Generation: result.Generation, Sequence: result.Sequence}, nil
 }
 
-func (c *MobileClient) Stop(_ context.Context, generation uint64) (StopResult, error) {
-	value, err := decodeEnvelope(c.api.stop(c.session(), int64(generation)))
+func (c *MobileClient) Stop(ctx context.Context, generation uint64) (StopResult, error) {
+	if err := contextError(ctx); err != nil {
+		return StopResult{}, err
+	}
+	value, err := decodeEnvelope(c.api.Stop(c.session(), int64(generation)))
 	if err != nil {
 		return StopResult{}, err
 	}
@@ -81,8 +120,11 @@ func (c *MobileClient) Stop(_ context.Context, generation uint64) (StopResult, e
 	return StopResult{Generation: result.Generation, Sequence: result.Sequence}, nil
 }
 
-func (c *MobileClient) Snapshot(_ context.Context) (Snapshot, error) {
-	value, err := decodeEnvelope(c.api.snapshot(c.session()))
+func (c *MobileClient) Snapshot(ctx context.Context) (Snapshot, error) {
+	if err := contextError(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	value, err := decodeEnvelope(c.api.Snapshot(c.session()))
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -130,8 +172,11 @@ func (c *MobileClient) Watch(ctx context.Context) (<-chan Snapshot, error) {
 	return updates, nil
 }
 
-func (c *MobileClient) Reset(_ context.Context, sequence uint64) (Snapshot, error) {
-	value, err := decodeEnvelope(c.api.reset(c.session(), int64(sequence)))
+func (c *MobileClient) Reset(ctx context.Context, sequence uint64) (Snapshot, error) {
+	if err := contextError(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	value, err := decodeEnvelope(c.api.Reset(c.session(), int64(sequence)))
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -141,6 +186,13 @@ func (c *MobileClient) Reset(_ context.Context, sequence uint64) (Snapshot, erro
 	}
 	c.remember(result.SessionID)
 	return result.ui(), nil
+}
+
+func contextError(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
 }
 
 type mobileEnvelope struct {
@@ -176,6 +228,8 @@ type warningDTO struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+type profilesDTO []profileDTO
+type warningsDTO []warningDTO
 type failureDTO struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -184,8 +238,8 @@ type configureDTO struct {
 	Digest     string       `json:"digest"`
 	Sequence   uint64       `json:"sequence"`
 	SourceKind string       `json:"source_kind"`
-	Profiles   []profileDTO `json:"profiles"`
-	Warnings   []warningDTO `json:"warnings"`
+	Profiles   profilesDTO `json:"profiles"`
+	Warnings   warningsDTO `json:"warnings"`
 }
 type startDTO struct {
 	Generation uint64 `json:"generation"`
@@ -200,15 +254,15 @@ type snapshotDTO struct {
 	Configured      bool         `json:"configured"`
 	Digest          string       `json:"digest"`
 	SourceKind      string       `json:"source_kind"`
-	Profiles        []profileDTO `json:"profiles"`
-	Warnings        []warningDTO `json:"warnings"`
+	Profiles        profilesDTO `json:"profiles"`
+	Warnings        warningsDTO `json:"warnings"`
 	ActiveProfile   *profileDTO  `json:"active_profile"`
 	LastFailure     *failureDTO  `json:"last_failure"`
 	CleanupComplete bool         `json:"cleanup_complete"`
 	Recovering      bool         `json:"recovering"`
 }
 
-func (values []profileDTO) ui() []Profile {
+func (values profilesDTO) ui() []Profile {
 	result := make([]Profile, len(values))
 	for i, value := range values {
 		result[i] = Profile{Index: value.Index, Protocol: Protocol(value.Protocol), Description: value.Description}
@@ -216,7 +270,7 @@ func (values []profileDTO) ui() []Profile {
 	return result
 }
 
-func (values []warningDTO) ui() []Warning {
+func (values warningsDTO) ui() []Warning {
 	result := make([]Warning, len(values))
 	for i, value := range values {
 		result[i] = Warning{Code: value.Code, Message: value.Message}

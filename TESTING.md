@@ -28,7 +28,8 @@ go test -tags=ci ./...
 go test -race ./routing/... ./sessionapi/... ./tunnel/...
 ```
 
-From `kmp_module/`, with JDK 17 and the Android SDK:
+The Android platform shell is currently built from `kmp_module/`, with JDK 17
+and the Android SDK:
 
 ```bash
 ./gradlew :grpcstub:test :app:jvmTest :app:testDebugUnitTest :app:verifyDebugNativeAbiPayloads :app:assembleReleaseAndroidTest
@@ -56,13 +57,15 @@ Go/Fyne component tests cover UI state without opening a window. The native
 driver while using the real authenticated desktop service; Windows and macOS
 local/Release functional lanes use it for Connect, Disconnect, reconnect, and
 service-loss UI actions, while the existing semantic engine still owns VPN
-observations and cleanup. A separate native-window smoke injects one real
-mouse click and the platform close gesture against the packaged Windows/macOS
-binary. On hosted workers without an interactive desktop/window server this
-attempt is reported as unavailable while the real-service companion remains
-gating; a matching interactive Windows/macOS VM should treat the smoke as
-required. Linux remains CLI/service qualification only. GUI automation must
-drive visible controls and may not substitute CLI commands for GUI actions.
+observations and cleanup. The required native-window qualification launches
+the packaged binary in an interactive desktop session, discovers Fyne controls
+through the platform accessibility tree, enters a synthetic profile with
+native keyboard input, clicks Connect and Disconnect, observes rendered
+status, opens Settings, and closes/reopens the UI while the service-owned
+session remains available. If an interactive desktop or accessibility
+permission is unavailable, the GUI lane is incomplete or failed; it is not
+converted to a pass. Linux remains CLI/service qualification only. GUI
+automation must drive visible controls and may not substitute CLI commands.
 
 The Go job emits one repository-wide coverage profile with
 `go test -coverpkg=./...` and uploads its `go tool cover -func` report as the
@@ -70,11 +73,12 @@ The Go job emits one repository-wide coverage profile with
 qualification is reported separately and does not invent per-platform
 coverage numbers.
 
-Production Android Kotlin/Compose and iOS Swift/Compose activities retain
-their native VPN shells and exercise the shared Go session binding. The opt-in
-Fyne mobile entry point is built with `-tags=fyne_mobile`; it remains a
-packaging/accessibility experiment until foreground/background and native
-accessibility checks pass on both platforms.
+Mobile Go/Fyne qualification must use real Android/iOS rendering, keyboard,
+tap, lifecycle, and permission interaction. Headless Fyne tests prove widget
+state and callbacks only; they do not prove that a platform renderer
+presented a frame or that a user tap reached it. Simulator GUI tests also do
+not prove a physical iOS NetworkExtension tunnel. The current mobile shell is
+the migration boundary until those checks pass.
 
 ## iOS
 
