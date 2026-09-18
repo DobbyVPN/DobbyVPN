@@ -594,7 +594,7 @@ def run_ios_simulator_app_contract(
             raise IOSSimulatorAppContractError("could not reset the Simulator app log") from error
         _require_success(
             runner,
-            simctl_launch_command(simulator.udid, contract.bundle_identifier, console=True),
+            simctl_launch_command(simulator.udid, contract.bundle_identifier),
             "launch Simulator app",
             budget=budget,
         )
