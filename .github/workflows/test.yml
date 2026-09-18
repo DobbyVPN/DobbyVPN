@@ -295,3 +295,11 @@ jobs:
           python3 torturer/tests/ios_simulator/run_app_contract.py \
             --candidate-root "$GITHUB_WORKSPACE" \
             --work-dir "$RUNNER_TEMP/ios-simulator-metal-contract"
+
+      - name: Upload Simulator launch diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-simulator-go-ui-diagnostics
+          path: ${{ runner.temp }}/ios-simulator-metal-contract/diagnostics
+          if-no-files-found: ignore

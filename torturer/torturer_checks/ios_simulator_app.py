@@ -40,6 +40,8 @@ _SUPPORTED_ARCHITECTURES = frozenset(("arm64", "amd64"))
 _XCODE_ARCHITECTURES = {"arm64": "arm64", "amd64": "x86_64"}
 _STARTUP_WAIT_SECONDS = 60
 _DIAGNOSTIC_TAIL_BYTES = 1024 * 1024
+_SIMULATOR_LOG_TAIL_BYTES = 256 * 1024
+_SIMULATOR_DIAGNOSTIC_TIMEOUT_SECONDS = 30
 MAX_RUN_SECONDS = 30 * 60
 CLEANUP_RESERVE_SECONDS = 120
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
@@ -434,6 +436,55 @@ def _retain_diagnostics(container: Path | None, diagnostic_dir: Path | None) -> 
             pass
 
 
+def _collect_simulator_diagnostics(
+    runner: CommandRunner,
+    simulator: AvailableSimulator,
+    *,
+    budget: RunBudget,
+    diagnostic_dir: Path | None,
+) -> str | None:
+    """Capture bounded CoreSimulator logs when launch or startup fails.
+
+    A successful ``simctl launch`` only proves that SpringBoard accepted the
+    bundle.  The process can still exit during native initialization (for
+    example because of a dyld or renderer failure), and the app-owned log is
+    then legitimately empty.  CoreSimulator's unified log is the useful
+    diagnostic in that case.  Collection is best effort and never replaces
+    the original failure.
+    """
+    command = [
+        "xcrun", "simctl", "spawn", simulator.udid, "log", "show",
+        "--last", "90s", "--style", "compact",
+        "--predicate",
+        "process == \"Dobby-Vpn\" OR process == \"main\" OR "
+        "process == \"vpn.dobby.app\" OR process == \"SpringBoard\" OR "
+        "process == \"ReportCrash\" OR process == \"runningboardd\"",
+    ]
+    try:
+        result = runner.run(
+            command,
+            timeout_seconds=min(
+                _SIMULATOR_DIAGNOSTIC_TIMEOUT_SECONDS,
+                budget.cleanup_timeout(),
+            ),
+        )
+    except BaseException as error:
+        return f"CoreSimulator diagnostics collection failed: {error}"
+    payload = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+    if not payload:
+        return "CoreSimulator diagnostics were empty"
+    encoded = payload.encode("utf-8", errors="replace")
+    bounded = encoded[-_SIMULATOR_LOG_TAIL_BYTES:]
+    text = bounded.decode("utf-8", errors="replace")
+    if diagnostic_dir is not None:
+        try:
+            diagnostic_dir.mkdir(parents=True, exist_ok=True)
+            (diagnostic_dir / "simulator.log.txt").write_bytes(bounded)
+        except OSError:
+            pass
+    return text
+
+
 def _add_note(failure: BaseException | None, label: str, error: BaseException) -> BaseException:
     if failure is None:
         return error
@@ -572,6 +623,15 @@ def run_ios_simulator_app_contract(
                         runner, simulator.udid, budget=budget, best_effort=True,
                     )
                 _retain_diagnostics(container, Path(diagnostic_dir))
+            if failure is not None and boot_started:
+                diagnostics = _collect_simulator_diagnostics(
+                    runner,
+                    simulator,
+                    budget=budget,
+                    diagnostic_dir=Path(diagnostic_dir) if diagnostic_dir is not None else None,
+                )
+                if diagnostics:
+                    failure.add_note("CoreSimulator diagnostics:\n" + diagnostics)
             if boot_started:
                 try:
                     _shutdown_simulator(runner, simulator, budget=budget)

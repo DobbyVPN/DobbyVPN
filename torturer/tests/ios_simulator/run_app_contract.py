@@ -49,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
             mode="metal",
             contract=contract,
             budget=budget,
+            diagnostic_dir=args.work_dir / "diagnostics",
         )
     except IOSSimulatorAppContractError as error:
         print(f"error: {error}", file=sys.stderr)
