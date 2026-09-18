@@ -16,6 +16,10 @@ val sourceCommit = providers.gradleProperty("projectRepositoryCommit").getOrElse
 android {
     namespace = "com.dobby.vpn"
     compileSdk = 35
+    // Keep the release APK and its instrumented companion as one tested
+    // variant.  Without this explicit selection AGP does not register the
+    // assembleReleaseAndroidTest task for the plain application module.
+    testBuildType = "release"
 
     defaultConfig {
         applicationId = providers.gradleProperty("packageName").get()

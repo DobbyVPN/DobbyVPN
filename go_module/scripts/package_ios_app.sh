@@ -82,7 +82,12 @@ xcode_args=(
   -project "$swift_root/iosApp.xcodeproj"
   -configuration Release
   -sdk "$sdk"
-  -derivedDataPath "$derived"
+  # xcodebuild's -derivedDataPath mode requires a scheme.  These are direct
+  # target builds so use the equivalent build-directory settings instead;
+  # this keeps CommonDI/tunnel isolated without forcing the diagnostic
+  # iosApp target into the generated Fyne bundle.
+  "SYMROOT=$derived/products"
+  "OBJROOT=$derived/intermediates"
   CODE_SIGNING_ALLOWED=NO
   CODE_SIGNING_REQUIRED=NO
   DOBBY_SOURCE_COMMIT="$source_commit"
@@ -110,8 +115,8 @@ if [[ "$device" == 1 ]]; then
 fi
 xcodebuild "${tunnel_xcode_args[@]}" -target tunnel build
 
-common_framework="$derived/Build/Products/Release-$sdk/CommonDI.framework"
-tunnel_product="$derived/Build/Products/Release-$sdk/tunnel.appex"
+common_framework="$derived/products/Release-$sdk/CommonDI.framework"
+tunnel_product="$derived/products/Release-$sdk/tunnel.appex"
 [[ -d "$common_framework" ]] || { echo "CommonDI.framework was not built" >&2; exit 1; }
 [[ -d "$tunnel_product" ]] || { echo "tunnel.appex was not built" >&2; exit 1; }
 
