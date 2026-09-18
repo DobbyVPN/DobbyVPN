@@ -7,6 +7,7 @@ plugins {
 
 val repoRoot = rootProject.projectDir.parentFile
 val goModule = repoRoot.resolve("go_module")
+val goBinary = providers.environmentVariable("GO_BIN").orElse("go")
 val versionName = providers.gradleProperty("android.injected.version.name")
     .orElse(providers.gradleProperty("versionName")).get()
 val versionCode = providers.gradleProperty("android.injected.version.code")
@@ -65,12 +66,18 @@ android {
     buildFeatures { buildConfig = true }
 }
 
+val downloadGoModules by tasks.registering(Exec::class) {
+    commandLine(goBinary.get(), "mod", "download")
+    workingDir(goModule)
+}
+
 val copyFyneJava by tasks.registering(Copy::class) {
     val goCache = providers.environmentVariable("GOMODCACHE").orElse(
         providers.provider { File(System.getProperty("user.home"), "go/pkg/mod").absolutePath }
     )
     val fyneRoot = File(goCache.get()).resolve("fyne.io/fyne/v2@v2.8.1/internal/driver/mobile/app")
     val generatedFyneJava = layout.buildDirectory.dir("generated/fyne-java/org/golang/app")
+    dependsOn(downloadGoModules)
     from(fyneRoot) { include("GoNativeActivity.java", "FyneNotificationReceiver.java") }
     into(generatedFyneJava)
     rename { it }
@@ -84,7 +91,6 @@ val copyFyneJava by tasks.registering(Copy::class) {
 }
 
 val buildGoUI by tasks.registering {
-    val goBinary = providers.environmentVariable("GO_BIN").orElse("go")
     val ndkHome = providers.environmentVariable("ANDROID_NDK_HOME")
         .orElse(providers.environmentVariable("ANDROID_NDK_ROOT"))
         .orElse("")
