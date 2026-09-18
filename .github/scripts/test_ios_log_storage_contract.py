@@ -35,8 +35,10 @@ class IosNativeShellContractTests(unittest.TestCase):
         self.assertIn("no Apple Development certificate", script)
         self.assertIn("iossimulator", script)
         self.assertIn("codesign --force --sign -", script)
-        self.assertIn("com.apple.security.application-groups", script)
-        self.assertIn("group.vpn.dobby.app", script)
+        self.assertIn("provisioning-free Simulator app cannot receive", script)
+        self.assertIn('codesign --force --sign - "$app"', script)
+        self.assertNotIn("simulator_entitlements", script)
+        self.assertNotIn('Add :DobbyKeychainAccessGroup string vpn.dobby.app', script)
 
 
 if __name__ == "__main__":

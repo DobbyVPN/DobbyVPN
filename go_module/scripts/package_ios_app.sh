@@ -248,32 +248,17 @@ if [[ "$device" == 1 ]]; then
   mkdir -p "$(dirname "$output")"
   (cd "$payload" && /usr/bin/zip -qry "$output" Payload)
 else
+  # A provisioning-free Simulator app cannot receive the physical target's
+  # App Group or keychain-access entitlements.  Keeping those entitlements in
+  # an ad-hoc bundle makes SpringBoard reject it at launch (and would make
+  # Keychain queries fail with a missing-entitlement status).  The Swift
+  # composition root selects its app-owned temporary directory on Simulator;
+  # the physical target above remains the only path that uses the provisioned
+  # App Group and shared keychain.
   codesign --force --sign - "$app/PlugIns/tunnel.appex"
   codesign --force --sign - "$app/Frameworks/CommonDI.framework"
-  simulator_entitlements="$derived/simulator.entitlements"
-  cat > "$simulator_entitlements" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>com.apple.security.application-groups</key>
-  <array>
-    <string>group.vpn.dobby.app</string>
-  </array>
-  <key>keychain-access-groups</key>
-  <array>
-    <string>vpn.dobby.app</string>
-  </array>
-</dict>
-</plist>
-PLIST
-  # Keep the product's storage/keychain metadata in the Simulator bundle for
-  # parity with the physical target. The Simulator Swift shell deliberately
-  # writes logs to its app-owned temporary directory because this ad-hoc
-  # bundle cannot receive a provisioned App Group container.
-  /usr/libexec/PlistBuddy -c "Add :DobbyKeychainAccessGroup string vpn.dobby.app" "$app/Info.plist" 2>/dev/null || \
-    /usr/libexec/PlistBuddy -c "Set :DobbyKeychainAccessGroup vpn.dobby.app" "$app/Info.plist"
-  codesign --force --sign - --entitlements "$simulator_entitlements" "$app"
+  /usr/libexec/PlistBuddy -c "Delete :DobbyKeychainAccessGroup" "$app/Info.plist" 2>/dev/null || true
+  codesign --force --sign - "$app"
   rm -rf "$output"
   mkdir -p "$(dirname "$output")"
   cp -R "$app" "$output"
