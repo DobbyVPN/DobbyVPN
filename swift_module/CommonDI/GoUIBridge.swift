@@ -16,7 +16,8 @@ private func stringFromCString(_ value: UnsafePointer<CChar>?) -> String {
 @_cdecl("dobby_ui_startup")
 public func dobbyUIStartup(_ mode: UnsafePointer<CChar>?) {
     let value = stringFromCString(mode)
-    IOSAppCompositionRoot.logsRepository.writeLog(log: "startup.initialized mode=\(value.isEmpty ? \"normal\" : value)")
+    let startupMode = value.isEmpty ? "normal" : value
+    IOSAppCompositionRoot.logsRepository.writeLog(log: "startup.initialized mode=\(startupMode)")
 }
 
 @_cdecl("dobby_ui_attached")

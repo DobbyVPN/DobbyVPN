@@ -197,7 +197,7 @@ func installJNIPlatform(binding *mobilebinding.Binding) {
 
 //export Java_com_dobby_nativebridge_NativeGoSession_attach
 func Java_com_dobby_nativebridge_NativeGoSession_attach(env *C.JNIEnv, _ C.jclass, context C.jobject) {
-	if env == nil || context == nil {
+	if env == nil || unsafe.Pointer(context) == nil {
 		return
 	}
 	setAndroidContext(uintptr(C.dobby_vm_for_env(env)), uintptr(unsafe.Pointer(env)), uintptr(unsafe.Pointer(context)))
