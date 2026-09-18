@@ -51,6 +51,18 @@ and accessibility labels compile for Android, but it does not contain the
 native `VpnService`; it must not be used as a release APK until the shell/IPC
 integration is complete.
 
+On an emulator whose ABI matches the package, drive the rendered screen with
+the real Android accessibility/input path:
+
+```bash
+python3 .github/scripts/mobile_android_ui_smoke.py \
+  --apk "$RUNNER_TEMP/dobby-vpn-fyne-ui.apk"
+```
+
+The smoke launches the Fyne `GoNativeActivity`, checks visible labels, taps
+Settings and Back, and uninstalls the temporary APK. It is a UI-renderer check,
+not VPN-service or permission qualification.
+
 With a disposable Android emulator/device connected, run the app's own
 instrumentation tests directly: `./gradlew :app:connectedReleaseAndroidTest`.
 These service-shell tests do not replace VPN traffic tests.

@@ -75,6 +75,13 @@ app projects before a mobile package is used for release. The headless Go UI
 tests therefore stay useful on every host, while device/emulator UI checks
 remain required for the native shell handoff.
 
+For a real Android emulator, use the matching ABI and then drive the package
+through the accessibility tree:
+
+```bash
+python3 .github/scripts/mobile_android_ui_smoke.py --apk /tmp/dobby-vpn.apk
+```
+
 The reviewed tun2socks v2.6.0 dependency closure is likewise tracked under
 `go_module/modules/tun2socks`. It contains the upstream correction from
 `xjasonlyu/tun2socks#495`, backported without the unrelated post-v2.6.0
