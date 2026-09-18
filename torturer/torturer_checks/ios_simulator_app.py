@@ -31,7 +31,6 @@ _PROJECT_PATH = Path("swift_module/iosApp.xcodeproj")
 _CONFIGURATION = "Release"
 _APP_PRODUCT = "Dobby-Vpn.app"
 _BUNDLE_IDENTIFIER = "vpn.dobby.app"
-_APP_LOG_CONTAINER_IDENTIFIER = "group.vpn.dobby.app"
 _APP_LOG_NAME = "app_logs.txt"
 _GO_APP_LOG_NAME = "go_app_logs.jsonl"
 _MINI_STARTUP_MARKER = b"startup.ui_attached mode=normal"
@@ -321,7 +320,11 @@ def simctl_get_app_container_command(device_udid: str) -> list[str]:
         udid = simctl_boot_command(device_udid)[-1]
     except IOSSimulatorContractError as error:
         raise IOSSimulatorAppContractError(str(error)) from error
-    return ["xcrun", "simctl", "get_app_container", udid, _BUNDLE_IDENTIFIER, _APP_LOG_CONTAINER_IDENTIFIER]
+    # Xcode's simctl grammar accepts the container kind (app, data, or
+    # groups) here, not the app-group identifier itself.  The packaged app
+    # has one declared group, so the single path returned by `groups` is the
+    # app-owned log container used by the startup contract.
+    return ["xcrun", "simctl", "get_app_container", udid, _BUNDLE_IDENTIFIER, "groups"]
 
 
 def _require_success(
@@ -360,7 +363,7 @@ def _app_container(
         )
         paths = [line.strip() for line in result.stdout.splitlines() if line.strip()]
         if len(paths) != 1 or not Path(paths[0]).is_absolute():
-            raise IOSSimulatorAppContractError("simctl returned no absolute app-group container path")
+            raise IOSSimulatorAppContractError("simctl returned no single absolute app-group container path")
         return Path(paths[0])
     except (IOSSimulatorAppContractError, OSError):
         if best_effort:

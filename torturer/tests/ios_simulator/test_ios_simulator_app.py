@@ -246,6 +246,15 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
             )
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
+    def test_app_group_lookup_uses_simctl_groups_container_kind(self) -> None:
+        runner = FakeRunner(self.root)
+        run_ios_simulator_app_contract(
+            candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
+            mode="mini", contract=self.contract,
+        )
+        lookup = next(command for command in runner.commands if command[:3] == ["xcrun", "simctl", "get_app_container"])
+        self.assertEqual(lookup[-1], "groups")
+
     def test_prepare_builds_the_go_runtime_and_packages_the_fyne_app(self) -> None:
         runner = FakeRunner(self.root)
         work = self.root / "work"
