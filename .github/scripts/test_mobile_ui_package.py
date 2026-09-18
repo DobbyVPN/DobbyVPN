@@ -13,7 +13,8 @@ class MobileUIPackageScriptTests(unittest.TestCase):
         source = SCRIPT.read_text(encoding="utf-8")
         for target in ("android/arm64", "android/amd64", "ios", "iossimulator"):
             self.assertIn(target, source)
-        self.assertIn("./cmd/dobbyui", source)
+        self.assertIn('pushd "$module_root/cmd/dobbyui"', source)
+        self.assertNotIn("--src", source)
         self.assertIn("--tags accessibility", source)
         self.assertIn("--app-id com.dobby.vpn", source)
         self.assertIn("--icon \"$script_root/assets/logo.png\"", source)

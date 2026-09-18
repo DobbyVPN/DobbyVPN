@@ -35,10 +35,9 @@ go_bin=${GO_BIN:-go}
 command -v "$go_bin" >/dev/null || { echo "Go is unavailable: $go_bin" >&2; exit 2; }
 mkdir -p -- "$(dirname -- "$output")"
 
-pushd "$module_root" >/dev/null
+pushd "$module_root/cmd/dobbyui" >/dev/null
 "$go_bin" tool fyne package \
   --os "$target" \
-  --src ./cmd/dobbyui \
   --name "Dobby Vpn" \
   --app-id com.dobby.vpn \
   --icon "$script_root/assets/logo.png" \
@@ -48,8 +47,8 @@ pushd "$module_root" >/dev/null
 popd >/dev/null
 
 case "$target" in
-  android*) artifact="$module_root/Dobby_Vpn.apk" ;;
-  *) artifact="$module_root/Dobby-Vpn.app" ;;
+  android*) artifact="$module_root/cmd/dobbyui/Dobby_Vpn.apk" ;;
+  *) artifact="$module_root/cmd/dobbyui/Dobby-Vpn.app" ;
 esac
 [[ -e "$artifact" ]] || {
   echo "Fyne did not produce the expected mobile artifact: $artifact" >&2
