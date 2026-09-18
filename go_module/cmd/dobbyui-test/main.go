@@ -52,6 +52,12 @@ func main() {
 	serviceClient := ui.NewGRPCClient(grpcproto.NewVpnClient(connection))
 	application := ui.NewApplication(runtime, serviceClient)
 	application.Start()
+	primeContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := application.Connection.Prime(primeContext); err != nil {
+		cancel()
+		fatal(fmt.Errorf("prime service session: %w", err))
+	}
+	cancel()
 
 	if err := serve(os.Stdin, os.Stdout, application); err != nil {
 		fmt.Fprintf(os.Stderr, "dobbyui-test: %v\n", err)

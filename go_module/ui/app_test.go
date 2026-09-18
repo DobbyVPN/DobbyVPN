@@ -97,6 +97,19 @@ func TestConnectionViewRendersAuthoritativeSnapshot(t *testing.T) {
 	}
 }
 
+func TestConnectionViewPrimeRefreshesSessionRevision(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	client := &fakeClient{snapshot: Snapshot{State: StateIdle, Sequence: 7}}
+	view := NewConnectionView(client)
+	if err := view.Prime(context.Background()); err != nil {
+		t.Fatalf("prime failed: %v", err)
+	}
+	if view.sequence != 7 {
+		t.Fatalf("sequence = %d, want 7", view.sequence)
+	}
+}
+
 func TestConnectionViewShowsRecoveryAndFailureDetails(t *testing.T) {
 	runtime := test.NewApp()
 	defer runtime.Quit()

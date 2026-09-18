@@ -77,6 +77,14 @@ jobs:
           name: dobby-vpn-ui-test-macos-arm64
           path: release-ui
 
+      - name: Restore macOS UI companion executable mode
+        if: inputs.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x "$GITHUB_WORKSPACE/release-ui/dobby-vpn-ui-test"
+          test -x "$GITHUB_WORKSPACE/release-ui/dobby-vpn-ui-test"
+
       - name: Download shared Render VPN profile
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:

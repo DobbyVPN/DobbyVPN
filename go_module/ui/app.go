@@ -179,6 +179,20 @@ func (v *ConnectionView) Start() {
 	go v.watch(ctx)
 }
 
+// Prime synchronously obtains the initial service snapshot.  The normal app
+// has time for its watcher to populate this state before a user can click;
+// the headless companion accepts commands immediately, so it uses Prime to
+// establish the session ID and revision before its first mutation.
+func (v *ConnectionView) Prime(ctx context.Context) error {
+	snapshot, err := v.client.Snapshot(ctx)
+	if err != nil {
+		v.showError(err)
+		return err
+	}
+	v.render(snapshot)
+	return nil
+}
+
 func (v *ConnectionView) Stop() {
 	v.mu.Lock()
 	if v.cancel != nil {
