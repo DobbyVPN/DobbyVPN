@@ -178,8 +178,12 @@ if [[ "$device" == 1 ]]; then
 else
   fyne_args=(--certificate "Dobby Simulator" --profile "")
   # The generated Fyne Xcode project is unsigned first, then its final app is
-  # ad-hoc signed by Fyne. This keeps Simulator packaging independent of Apple
-  # provisioning while retaining the certificate metadata Fyne 2.8 requires.
+  # ad-hoc signed below. Fyne 2.8 still invokes xcodebuild with
+  # -allowProvisioningUpdates and a synthetic DEVELOPMENT_TEAM even when the
+  # profile is empty. That makes Xcode look for an Apple account/profile on a
+  # Simulator-only lane. The shim below gives only Fyne's generated app build
+  # explicit no-signing settings; the native CommonDI/tunnel builds above keep
+  # their normal command line and the final bundle is signed ad hoc here.
   fyne_env+=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO)
 fi
 
@@ -187,7 +191,22 @@ fyne_command=(go tool fyne package --os "$fyne_target" --name "Dobby Vpn" \
   --app-id vpn.dobby.app --icon "$script_root/assets/logo.png" \
   --app-version "$version" --app-build "$build" --tags "$fyne_tags" "${fyne_args[@]}")
 if [[ -n "$fyne_security_path" ]]; then
-  (cd "$go_root/cmd/dobbyui" && PATH="$fyne_security_path:$PATH" \
+  xcrun_shim_dir="$derived/fyne-tools"
+  mkdir -p "$xcrun_shim_dir"
+  cat > "$xcrun_shim_dir/xcrun" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "xcodebuild" ]]; then
+  shift
+  exec /usr/bin/xcrun xcodebuild "$@" \
+    CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGN_IDENTITY= PROVISIONING_PROFILE_SPECIFIER= \
+    DEVELOPMENT_TEAM= CODE_SIGN_STYLE=Manual
+fi
+exec /usr/bin/xcrun "$@"
+SH
+  chmod 700 "$xcrun_shim_dir/xcrun"
+  (cd "$go_root/cmd/dobbyui" && PATH="$xcrun_shim_dir:$fyne_security_path:$PATH" \
     DOBBY_SIMULATOR_CERT="$derived/simulator-cert/cert.pem" env "${fyne_env[@]}" \
     "${fyne_command[@]}")
 else
