@@ -44,6 +44,15 @@ android {
         }
     }
 
+    // Fyne 2.8.1 supplies a generic notification receiver as generated Java.
+    // DobbyVPN does not schedule Fyne notifications; its only notification is
+    // the native VPN foreground notification owned by DobbyVpnService. The
+    // generated receiver has no Android 13 runtime-permission branch, so its
+    // NotificationPermission warning is not actionable in this app.
+    lint {
+        disable += "NotificationPermission"
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
