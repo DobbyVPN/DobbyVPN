@@ -39,6 +39,9 @@ class IosNativeShellContractTests(unittest.TestCase):
         self.assertIn('codesign --force --sign - "$app"', script)
         self.assertNotIn("simulator_entitlements", script)
         self.assertNotIn('Add :DobbyKeychainAccessGroup string vpn.dobby.app', script)
+        self.assertIn('if [[ "$device" == 1 ]]; then', script)
+        self.assertIn('cp -R "$tunnel_product" "$app/PlugIns/tunnel.appex"', script)
+        self.assertIn('rm -rf "$app/Frameworks/CommonDI.framework" "$app/PlugIns/tunnel.appex"', script)
 
 
 if __name__ == "__main__":

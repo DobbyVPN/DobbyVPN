@@ -215,16 +215,17 @@ fi
 [[ -d "$fyne_output" ]] || { echo "Fyne did not produce $fyne_output" >&2; exit 1; }
 
 app="$fyne_output"
-mkdir -p "$app/Frameworks" "$app/PlugIns"
+mkdir -p "$app/Frameworks"
 rm -rf "$app/Frameworks/CommonDI.framework" "$app/PlugIns/tunnel.appex"
 cp -R "$common_framework" "$app/Frameworks/CommonDI.framework"
-cp -R "$tunnel_product" "$app/PlugIns/tunnel.appex"
 
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier vpn.dobby.app" "$app/Info.plist" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :DobbySourceCommit string $source_commit" "$app/Info.plist" 2>/dev/null || \
   /usr/libexec/PlistBuddy -c "Set :DobbySourceCommit $source_commit" "$app/Info.plist"
 
 if [[ "$device" == 1 ]]; then
+  mkdir -p "$app/PlugIns"
+  cp -R "$tunnel_product" "$app/PlugIns/tunnel.appex"
   app_entitlements="$swift_root/iosApp/iosApp.entitlements"
   tunnel_entitlements="$swift_root/tunnel/tunnel.entitlements"
   expanded_app_entitlements="$derived/app.entitlements"
@@ -254,8 +255,10 @@ else
   # Keychain queries fail with a missing-entitlement status).  The Swift
   # composition root selects its app-owned temporary directory on Simulator;
   # the physical target above remains the only path that uses the provisioned
-  # App Group and shared keychain.
-  codesign --force --sign - "$app/PlugIns/tunnel.appex"
+  # App Group and shared keychain. The packet-tunnel extension is compiled
+  # above for native lifecycle coverage, but is not embedded here: iOS
+  # Simulator cannot host a NetworkExtension packet-tunnel provider and
+  # SpringBoard rejects a GUI bundle carrying that unsupported plug-in.
   codesign --force --sign - "$app/Frameworks/CommonDI.framework"
   /usr/libexec/PlistBuddy -c "Delete :DobbyKeychainAccessGroup" "$app/Info.plist" 2>/dev/null || true
   codesign --force --sign - "$app"
