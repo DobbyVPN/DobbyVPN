@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+from ctypes import wintypes
 from pathlib import Path
 import signal
 import subprocess
@@ -48,12 +49,41 @@ def _windows_smoke(binary: Path, timeout: float) -> None:
     try:
         hwnd = 0
 
+        def window_for_process() -> int:
+            """Return the first visible top-level window owned by the UI process."""
+            found = 0
+            process_id = wintypes.DWORD()
+            callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+            @callback_type
+            def callback(candidate: int, _lparam: int) -> bool:
+                nonlocal found
+                user32.GetWindowThreadProcessId(candidate, ctypes.byref(process_id))
+                if process_id.value == process.pid and user32.IsWindowVisible(candidate):
+                    found = int(candidate)
+                    return False
+                return True
+
+            user32.EnumWindows(callback, 0)
+            return found
+
         def find_window() -> bool:
             nonlocal hwnd
-            hwnd = int(user32.FindWindowW(None, "Dobby VPN"))
+            hwnd = window_for_process()
+            if not hwnd:
+                # Keep the title fallback for launchers that hand the window
+                # to a short-lived child process.
+                hwnd = int(user32.FindWindowW(None, "Dobby VPN"))
             return hwnd != 0 and bool(user32.IsWindowVisible(hwnd))
 
-        _wait_until(find_window, timeout, "Dobby VPN window did not become visible")
+        def wait_for_window() -> bool:
+            if process.poll() is not None:
+                raise NativeUISmokeError(
+                    f"Dobby VPN exited with code {process.returncode} before creating a window"
+                )
+            return find_window()
+
+        _wait_until(wait_for_window, timeout, "Dobby VPN window did not become visible")
         left, top, right, bottom = _windows_rect(hwnd)
         width = right - left
         height = bottom - top
@@ -84,7 +114,14 @@ def _windows_smoke(binary: Path, timeout: float) -> None:
 
 
 def _macos_smoke(binary: Path, timeout: float) -> None:
-    process = subprocess.Popen([str(binary)])
+    # LaunchServices supplies the Aqua session and pixel-format context that
+    # a raw Contents/MacOS launch can miss on hosted runners.  -W keeps a
+    # process handle that represents the app until its window is closed.
+    bundle = binary
+    if binary.parent.name == "MacOS" and binary.parent.parent.name == "Contents":
+        bundle = binary.parent.parent.parent
+    launch = ["open", "-W", "-n", str(bundle)] if bundle.suffix == ".app" else [str(binary)]
+    process = subprocess.Popen(launch)
     script = f'''tell application "System Events"
     tell process "Dobby Vpn"
         repeat until exists window 1
@@ -108,6 +145,11 @@ def _macos_smoke(binary: Path, timeout: float) -> None:
         _wait_until(lambda: process.poll() is not None, timeout, "Dobby Vpn window did not close")
     finally:
         if process.poll() is None:
+            subprocess.run(
+                ["osascript", "-e", 'tell application "Dobby Vpn" to quit'],
+                check=False,
+                timeout=5,
+            )
             process.send_signal(signal.SIGTERM)
             try:
                 process.wait(timeout=2)
