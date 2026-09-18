@@ -130,6 +130,9 @@ val buildGoUI by tasks.registering {
                 environment("GOARCH", goArch)
                 environment("CGO_ENABLED", "1")
                 environment("CC", compiler.absolutePath)
+                // Keep cgo/linker metadata stable across the two clean release
+                // builds used by the reproducibility gate.
+                environment("SOURCE_DATE_EPOCH", "0")
             }
         }
     }
