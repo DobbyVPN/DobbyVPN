@@ -70,10 +70,17 @@ val copyFyneJava by tasks.registering(Copy::class) {
         providers.provider { File(System.getProperty("user.home"), "go/pkg/mod").absolutePath }
     )
     val fyneRoot = File(goCache.get()).resolve("fyne.io/fyne/v2@v2.8.1/internal/driver/mobile/app")
+    val generatedFyneJava = layout.buildDirectory.dir("generated/fyne-java/org/golang/app")
     from(fyneRoot) { include("GoNativeActivity.java", "FyneNotificationReceiver.java") }
-    into(layout.buildDirectory.dir("generated/fyne-java/org/golang/app"))
+    into(generatedFyneJava)
     rename { it }
-    doFirst { check(fyneRoot.isDirectory) { "pinned Fyne Java sources are unavailable: $fyneRoot" } }
+    doFirst {
+        check(fyneRoot.isDirectory) { "pinned Fyne Java sources are unavailable: $fyneRoot" }
+        // Go module cache files are read-only by design. Gradle preserves that
+        // mode while copying, so clear the generated output before the release
+        // APK and test-companion builds invoke this task again.
+        generatedFyneJava.get().asFile.deleteRecursively()
+    }
 }
 
 val buildGoUI by tasks.registering {
