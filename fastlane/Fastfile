@@ -92,7 +92,6 @@ platform :ios do
       "SOURCE_COMMIT=#{COMMIT.shellescape} " \
       "IOS_CERTIFICATE_NAME=#{'Apple Distribution'.shellescape} " \
       "IOS_PROFILE_NAME=#{'DobbyVPNAppStore'.shellescape} " \
-      "IOS_TUNNEL_PROFILE_NAME=#{'DobbyVPNTunnelAppStore'.shellescape} " \
       "IOS_TEAM_ID=#{TEAM_ID.to_s.shellescape} " \
       "IOS_SIGNING_IDENTITY=#{'Apple Distribution'.shellescape} " \
       "#{package_script.shellescape} ios #{output.shellescape} #{runtime.shellescape}"

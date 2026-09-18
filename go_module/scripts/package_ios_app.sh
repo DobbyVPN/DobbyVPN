@@ -41,7 +41,6 @@ if [[ "$device" == 1 ]]; then
   identity=${IOS_SIGNING_IDENTITY:-Apple\ Distribution}
   certificate=${IOS_CERTIFICATE_NAME:-Apple\ Distribution}
   profile=${IOS_PROFILE_NAME:-DobbyVPNAppStore}
-  tunnel_profile=${IOS_TUNNEL_PROFILE_NAME:-DobbyVPNTunnelAppStore}
   team_id=${IOS_TEAM_ID:-${APPLE_TEAM_ID:-}}
   [[ -n "$team_id" ]] || { echo "IOS_TEAM_ID or APPLE_TEAM_ID is required for a device IPA" >&2; exit 2; }
   [[ "$team_id" =~ ^[A-Za-z0-9]+$ ]] || { echo "IOS_TEAM_ID must contain only letters and digits" >&2; exit 2; }
@@ -105,14 +104,14 @@ tunnel_xcode_args=("${xcode_args[@]}")
 if [[ "$device" == 1 ]]; then
   # The tunnel target must carry its installed NetworkExtension profile. The
   # containing Fyne app is signed by Fyne below; CommonDI is signed when it is
-  # embedded. Keeping the profile selection explicit avoids Xcode silently
-  # choosing a development identity.
+  # embedded. Its device-specific profile is kept in the tunnel target's
+  # iphoneos Release build settings; do not pass a global profile override,
+  # because Xcode applies command-line settings to CommonDI's dependency too.
   tunnel_xcode_args+=(
     CODE_SIGNING_ALLOWED=YES
     CODE_SIGNING_REQUIRED=YES
     "CODE_SIGN_IDENTITY=$identity"
     "DEVELOPMENT_TEAM=$team_id"
-    "PROVISIONING_PROFILE_SPECIFIER=$tunnel_profile"
   )
 fi
 xcodebuild "${tunnel_xcode_args[@]}" -target tunnel build
