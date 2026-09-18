@@ -215,8 +215,9 @@ def finalize(
     _validate_request(version_name, version_code, source_sha)
     if mode not in {"candidate", "existing"}:
         raise MetadataError("mode must be candidate or existing")
-    if not binary_url.startswith("http://127.0.0.1:") or "%v" not in binary_url:
-        raise MetadataError("Binaries test URL must use loopback HTTP and %v")
+    if not binary_url.startswith(("http://127.0.0.1:", "https://127.0.0.1:")) \
+        or "%v" not in binary_url:
+        raise MetadataError("Binaries test URL must use loopback HTTP(S) and %v")
 
     baseline = _read(baseline_path)
     document = _read(metadata_path)

@@ -100,7 +100,7 @@ class FdroidReleaseMetadataTests(unittest.TestCase):
             "1.5.0",
             1005000,
             SOURCE_SHA,
-            "http://127.0.0.1:8765/DobbyVPN-v%v-sign.apk",
+            "https://127.0.0.1:8765/DobbyVPN-v%v-sign.apk",
         )
 
         result = yaml.safe_load(self.metadata.read_text(encoding="utf-8"))
@@ -109,7 +109,7 @@ class FdroidReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(target["gradle"], ["yes"])
         self.assertEqual(target["build"], ["echo fixture"])
         self.assertEqual(target["commit"], SOURCE_SHA)
-        self.assertEqual(result["Binaries"], "http://127.0.0.1:8765/DobbyVPN-v%v-sign.apk")
+        self.assertEqual(result["Binaries"], "https://127.0.0.1:8765/DobbyVPN-v%v-sign.apk")
         self.assertEqual(result["UpdateCheckData"], UPDATE_DATA)
 
     def test_existing_recipe_can_be_bound_to_exact_release_source(self) -> None:
@@ -130,7 +130,7 @@ class FdroidReleaseMetadataTests(unittest.TestCase):
             "1.5.0",
             1005000,
             SOURCE_SHA,
-            "http://127.0.0.1:8765/DobbyVPN-v%v-sign.apk",
+            "https://127.0.0.1:8765/DobbyVPN-v%v-sign.apk",
         )
         result = yaml.safe_load(self.metadata.read_text(encoding="utf-8"))
         self.assertEqual(result["Builds"][0]["commit"], SOURCE_SHA)
@@ -167,7 +167,7 @@ class FdroidReleaseMetadataTests(unittest.TestCase):
                 "1.5.0",
                 1005000,
                 SOURCE_SHA,
-                "http://127.0.0.1:8765/DobbyVPN-v%v-sign.apk",
+                "https://127.0.0.1:8765/DobbyVPN-v%v-sign.apk",
             )
 
     def test_rejects_invalid_request_and_missing_signing_key(self) -> None:

@@ -119,7 +119,7 @@ new candidate, and builds the exact source in the official buildserver
 container. `fdroid_release_metadata.py` validates that inherited recipe fields
 are preserved; `fdroid_release_check.sh` runs `fetchsrclibs`, the on-server
 build, and the official APK scanner. F-Droid compares its unsigned output with
-the signed Release APK through the temporary local reference URL and verifies
+the signed Release APK through the temporary local HTTPS reference URL and verifies
 the declared signing key. These checks protect the recipe as well as the
 artifact.
 

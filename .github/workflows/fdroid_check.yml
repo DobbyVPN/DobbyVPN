@@ -74,12 +74,10 @@ jobs:
       - name: Run the F-Droid metadata-driven build and scans
         run: |
           set -euo pipefail
-          # fdroid_release_check.sh serves the signed Release APK on the
-          # runner's loopback interface for fdroidserver's reference-binary
-          # comparison. Host networking makes that temporary URL visible
-          # inside the disposable build container without publishing it.
+          # fdroid_release_check.sh serves the signed Release APK over a
+          # temporary, container-local HTTPS endpoint for fdroidserver's
+          # reference-binary comparison.
           docker run --rm --init \
-            --network host \
             --volume "$GITHUB_WORKSPACE:/workspace/product:ro" \
             --volume "$RUNNER_TEMP/fdroiddata:/workspace/fdroiddata" \
             --volume "$RUNNER_TEMP/fdroidserver:/workspace/fdroidserver:ro" \

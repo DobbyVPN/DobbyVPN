@@ -56,7 +56,11 @@ reference_apk="$(readlink -f "$reference_apk")"
 reference_dir="$(dirname "$reference_apk")"
 baseline_path="$(mktemp)"
 fdroid_home="/home/vagrant"
-http_log="$reference_dir/fdroid-http.log"
+reference_cert="$reference_dir/fdroid-reference.crt"
+reference_key="$reference_dir/fdroid-reference.key"
+reference_ca_bundle="$reference_dir/fdroid-reference-ca-bundle.crt"
+https_log="$reference_dir/fdroid-https.log"
+reference_url="https://127.0.0.1:8765/$(basename "$reference_apk")"
 server_pid=""
 
 test -d "$fdroiddata_dir"
@@ -70,21 +74,54 @@ cleanup() {
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
   fi
-  rm -f "$baseline_path" "$http_log"
+  rm -f "$baseline_path" "$reference_cert" "$reference_key" \
+    "$reference_ca_bundle" "$https_log"
 }
 trap cleanup EXIT
 
-python3 -m http.server 8765 \
-  --bind 127.0.0.1 \
-  --directory "$reference_dir" \
-  > "$http_log" 2>&1 &
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout "$reference_key" \
+  -out "$reference_cert" \
+  -days 1 \
+  -subj "/CN=127.0.0.1" \
+  -addext "subjectAltName=IP:127.0.0.1" \
+  >/dev/null 2>&1
+if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
+  cat /etc/ssl/certs/ca-certificates.crt "$reference_cert" > "$reference_ca_bundle"
+else
+  cp "$reference_cert" "$reference_ca_bundle"
+fi
+
+python3 - "$reference_dir" "$reference_cert" "$reference_key" \
+  > "$https_log" 2>&1 <<'PY' &
+import functools
+import http.server
+import ssl
+import sys
+
+directory, certificate, private_key = sys.argv[1:]
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=directory)
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 8765), handler)
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain(certificate, private_key)
+server.socket = context.wrap_socket(server.socket, server_side=True)
+server.serve_forever()
+PY
 server_pid=$!
 export NO_PROXY="127.0.0.1,localhost"
 export no_proxy="$NO_PROXY"
 
 for _ in {1..20}; do
-  if python3 -c 'import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=2).read(1)' \
-    "http://127.0.0.1:8765/$(basename "$reference_apk")" >/dev/null; then
+  if python3 - "$reference_cert" "$reference_url" <<'PY'
+import ssl
+import sys
+import urllib.request
+
+context = ssl.create_default_context(cafile=sys.argv[1])
+with urllib.request.urlopen(sys.argv[2], context=context, timeout=2) as response:
+    response.read(1)
+PY
+  then
     break
   fi
   sleep 1
@@ -116,6 +153,7 @@ fdroid_environment=(
   "HOME=$fdroid_home"
   "NO_PROXY=$NO_PROXY"
   "no_proxy=$no_proxy"
+  "REQUESTS_CA_BUNDLE=$reference_ca_bundle"
 )
 run_fdroid_vagrant() {
   sudo --preserve-env --user vagrant "${fdroid_environment[@]}" fdroid "$@"
@@ -146,7 +184,7 @@ python3 "$metadata_helper" finalize \
   --version-name "$version_name" \
   --version-code "$version_code" \
   --source-sha "$source_sha" \
-  --binary-url "http://127.0.0.1:8765/DobbyVPN-v%v-sign.apk"
+  --binary-url "https://127.0.0.1:8765/DobbyVPN-v%v-sign.apk"
 
 rm -rf "$fdroid_home/build" "$fdroid_home/metadata" "$fdroid_home/tmp" "$fdroid_home/logs"
 mkdir -p "$fdroid_home/build" "$fdroid_home/metadata" "$fdroid_home/tmp" "$fdroid_home/logs"
