@@ -36,7 +36,29 @@ def _read(path: Path) -> dict[str, Any]:
         raise MetadataError(f"cannot read metadata {path}: {error}") from error
     if not isinstance(value, dict):
         raise MetadataError("metadata must be a YAML mapping")
+    _normalize_gradle_flags(value)
     return value
+
+
+def _normalize_gradle_flags(document: dict[str, Any]) -> None:
+    """Keep F-Droid's default Gradle flavor as the string ``yes``.
+
+    PyYAML follows YAML 1.1 and reads the upstream recipe's ``gradle: yes``
+    as a boolean.  F-Droid treats the literal flavor ``yes`` specially (it
+    means the default release task); writing the boolean back would make the
+    current server generate ``assembleTrueRelease`` instead.
+    """
+    builds = document.get("Builds")
+    if not isinstance(builds, list):
+        return
+    for build in builds:
+        if not isinstance(build, dict) or "gradle" not in build:
+            continue
+        value = build["gradle"]
+        if isinstance(value, bool):
+            build["gradle"] = ["yes"] if value else []
+        elif isinstance(value, list):
+            build["gradle"] = ["yes" if item is True else item for item in value]
 
 
 def _write(path: Path, value: dict[str, Any]) -> None:
@@ -114,7 +136,9 @@ def _canonical(value: Any, field: str | None = None) -> Any:
     if field == "gradle" and isinstance(value, list):
         return [_canonical(item, field) for item in value]
     if field == "gradle" and isinstance(value, bool):
-        return str(value).lower()
+        return "yes" if value else ""
+    if field == "gradle" and isinstance(value, str):
+        return value.lower()
     if isinstance(value, dict):
         return {key: _canonical(item, key) for key, item in value.items()}
     if isinstance(value, list):

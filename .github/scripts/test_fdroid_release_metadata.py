@@ -39,7 +39,7 @@ def metadata_document() -> dict[str, object]:
                 "commit": "a" * 40,
                 "subdir": "kmp_module/app",
                 "submodules": True,
-                "gradle": [True],
+                "gradle": True,
                 "build": ["echo fixture"],
             }
         ],
@@ -84,7 +84,7 @@ class FdroidReleaseMetadataTests(unittest.TestCase):
             versionName="1.5.0",
             versionCode=1005000,
             commit="v1.5.0",
-            gradle=["true"],
+            gradle=["yes"],
         )
         document["Builds"].append(inherited)
         document["CurrentVersion"] = "1.5.0"
@@ -106,7 +106,7 @@ class FdroidReleaseMetadataTests(unittest.TestCase):
         result = yaml.safe_load(self.metadata.read_text(encoding="utf-8"))
         target = result["Builds"][-1]
         self.assertTrue(target["submodules"])
-        self.assertEqual(target["gradle"], ["true"])
+        self.assertEqual(target["gradle"], ["yes"])
         self.assertEqual(target["build"], ["echo fixture"])
         self.assertEqual(target["commit"], SOURCE_SHA)
         self.assertEqual(result["Binaries"], "http://127.0.0.1:8765/DobbyVPN-v%v-sign.apk")
