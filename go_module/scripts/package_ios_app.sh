@@ -274,6 +274,7 @@ PLIST
     /usr/libexec/PlistBuddy -c "Set :DobbyKeychainAccessGroup vpn.dobby.app" "$app/Info.plist"
   codesign --force --sign - --entitlements "$simulator_entitlements" "$app"
   rm -rf "$output"
+  mkdir -p "$(dirname "$output")"
   cp -R "$app" "$output"
 fi
 
