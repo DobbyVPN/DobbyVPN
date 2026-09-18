@@ -267,9 +267,10 @@ else
 </dict>
 </plist>
 PLIST
-  # The Simulator contract reads the app-group log container. Fyne's
-  # generated project has no product-specific entitlements, so add the
-  # simulator-safe group explicitly before the final ad-hoc signature.
+  # Keep the product's storage/keychain metadata in the Simulator bundle for
+  # parity with the physical target. The Simulator Swift shell deliberately
+  # writes logs to its app-owned temporary directory because this ad-hoc
+  # bundle cannot receive a provisioned App Group container.
   /usr/libexec/PlistBuddy -c "Add :DobbyKeychainAccessGroup string vpn.dobby.app" "$app/Info.plist" 2>/dev/null || \
     /usr/libexec/PlistBuddy -c "Set :DobbyKeychainAccessGroup vpn.dobby.app" "$app/Info.plist"
   codesign --force --sign - --entitlements "$simulator_entitlements" "$app"

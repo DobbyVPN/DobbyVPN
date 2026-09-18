@@ -3,7 +3,7 @@
 The public GitHub Test workflow builds the Go packet-tunnel runtime
 XCFramework, packages the Go/Fyne application with the native Swift
 NetworkExtension shell, and launches that same app on an iPhone Simulator.
-`run_app_contract.py` checks the app-group startup and UI-attached markers,
+`run_app_contract.py` checks the app-owned startup and UI-attached markers,
 not VPN traffic or screenshots.
 
 The private Harness accepts `--platform ios-simulator --simulator-mode mini`
@@ -15,10 +15,13 @@ only the caller's host/timeout policy. A missing Simulator, build, launch,
 accessibility permission, or startup marker is a failed or unavailable check,
 never a pass.
 
-The app-group log is required for the fresh startup marker. Copying bounded log
-tails into diagnostics is best-effort and does not decide pass/fail. The check
-clears the disposable Simulator's app log before launch so an earlier marker
-cannot satisfy the current run.
+The Simulator build writes its native log to the app-owned temporary directory
+because a provisioning-free bundle cannot receive an App Group container. The
+contract resolves that directory through `simctl get_app_container ... data`.
+Copying bounded log tails into diagnostics is best-effort and does not decide
+pass/fail. The check clears the disposable Simulator's app log before launch
+so an earlier marker cannot satisfy the current run. Physical iOS builds keep
+using the real App Group boundary.
 
 The Simulator does not run a packet tunnel or the physical-device-only
 TrustTunnel bridge. A signed physical-device build still requires the normal

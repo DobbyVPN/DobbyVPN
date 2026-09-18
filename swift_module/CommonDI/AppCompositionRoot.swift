@@ -54,9 +54,17 @@ public final class DobbyLogStore {
 
 public enum IOSAppCompositionRoot {
     private static func sharedDirectory() -> URL {
+#if targetEnvironment(simulator)
+        // Provisioning-free Simulator bundles do not receive an App Group
+        // container. Keep startup/lifecycle logs inside the app-owned
+        // temporary directory; the physical iOS target uses the real shared
+        // App Group below.
+        return FileManager.default.temporaryDirectory
+#else
         FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: appGroupIdentifier
         ) ?? FileManager.default.temporaryDirectory
+#endif
     }
 
     public static func sharedLogPath(_ name: String) -> URL {

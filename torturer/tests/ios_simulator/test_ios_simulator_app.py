@@ -57,16 +57,17 @@ class FakeRunner:
         startup_mode: str = "mini",
         write_startup_marker: bool = True,
         app_logs: bytes = b'{"message":"old run"}\n',
-        app_group_output: str | None = None,
+        app_data_output: str | None = None,
     ) -> None:
         self.root = root
         self.fail = fail or {}
         self.startup_mode = startup_mode
         self.write_startup_marker = write_startup_marker
-        self.app_group_output = app_group_output
+        self.app_data_output = app_data_output
         self.commands: list[list[str]] = []
         self.calls: list[tuple[list[str], Path | None, float | None]] = []
-        self.container = root / "simulator-app-group"
+        self.data_container = root / "simulator-data"
+        self.container = self.data_container / "tmp"
         self.log_at_launch: bytes | None = None
         self.container.mkdir(parents=True, exist_ok=True)
         (self.container / "app_logs.txt").write_bytes(app_logs)
@@ -88,9 +89,9 @@ class FakeRunner:
         if command[:3] == ["xcrun", "simctl", "get_app_container"]:
             return CommandResult(
                 0,
-                self.app_group_output
-                if self.app_group_output is not None
-                else f"group.vpn.dobby.app\t{self.container}\n",
+                self.app_data_output
+                if self.app_data_output is not None
+                else f"{self.data_container}\n",
             )
         if command[:3] == ["xcrun", "simctl", "launch"]:
             self.log_at_launch = (self.container / "app_logs.txt").read_bytes()
@@ -254,28 +255,23 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
             )
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
-    def test_app_group_lookup_uses_simctl_groups_container_kind(self) -> None:
+    def test_app_log_lookup_uses_simctl_data_container_kind(self) -> None:
         runner = FakeRunner(self.root)
         run_ios_simulator_app_contract(
             candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
             mode="mini", contract=self.contract,
         )
         lookup = next(command for command in runner.commands if command[:3] == ["xcrun", "simctl", "get_app_container"])
-        self.assertEqual(lookup[-1], "groups")
+        self.assertEqual(lookup[-1], "data")
 
-    def test_app_group_lookup_selects_the_product_group_from_simctl_listing(self) -> None:
-        unrelated = self.root / "unrelated-group"
-        unrelated.mkdir()
+    def test_app_log_lookup_uses_the_data_container_temporary_directory(self) -> None:
         runner = FakeRunner(
             self.root,
-            app_group_output=(
-                f"group.other.app\t{unrelated}\n"
-                f"group.vpn.dobby.app\t{self.root / 'simulator-app-group'}\n"
-            ),
+            app_data_output=f"{self.root / 'simulator-data'}\n",
         )
         self.assertEqual(
             _app_container(runner, UDID, budget=RunBudget()),
-            self.root / "simulator-app-group",
+            self.root / "simulator-data" / "tmp",
         )
 
     def test_prepare_builds_the_go_runtime_and_packages_the_fyne_app(self) -> None:

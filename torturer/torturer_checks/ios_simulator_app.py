@@ -31,7 +31,6 @@ _PROJECT_PATH = Path("swift_module/iosApp.xcodeproj")
 _CONFIGURATION = "Release"
 _APP_PRODUCT = "Dobby-Vpn.app"
 _BUNDLE_IDENTIFIER = "vpn.dobby.app"
-_APP_GROUP_IDENTIFIER = "group.vpn.dobby.app"
 _APP_LOG_NAME = "app_logs.txt"
 _GO_APP_LOG_NAME = "go_app_logs.jsonl"
 _MINI_STARTUP_MARKER = b"startup.ui_attached mode=normal"
@@ -321,11 +320,11 @@ def simctl_get_app_container_command(device_udid: str) -> list[str]:
         udid = simctl_boot_command(device_udid)[-1]
     except IOSSimulatorContractError as error:
         raise IOSSimulatorAppContractError(str(error)) from error
-    # Xcode's simctl grammar accepts the container kind (app, data, or
-    # groups) here, not the app-group identifier itself.  The packaged app
-    # has one declared group, so the single path returned by `groups` is the
-    # app-owned log container used by the startup contract.
-    return ["xcrun", "simctl", "get_app_container", udid, _BUNDLE_IDENTIFIER, "groups"]
+    # A provisioning-free Simulator app cannot receive a real App Group
+    # container. The native shell deliberately uses FileManager's temporary
+    # directory for Simulator builds, which lives below the app data
+    # container. Physical iOS builds continue to use the App Group boundary.
+    return ["xcrun", "simctl", "get_app_container", udid, _BUNDLE_IDENTIFIER, "data"]
 
 
 def _require_success(
@@ -362,34 +361,25 @@ def _app_container(
             "locate iOS app logs",
             budget=budget,
         )
-        # `simctl get_app_container ... groups` prints one tab-separated
-        # `<group identifier> <absolute path>` row per declared group.  It
-        # does not return a bare path, and Xcode 26 no longer accepts the
-        # group identifier as the command's third argument.  Select the
-        # product's declared group explicitly; accepting a lone absolute
-        # path keeps the contract compatible with older simctl versions and
-        # the small local command fake.
+        # `simctl get_app_container ... data` returns one absolute data
+        # container path. The native Simulator logger writes to its
+        # app-owned temporary directory below that path. Accepting a lone
+        # absolute path keeps the parsing independent of simctl's wording.
         paths: list[Path] = []
         for raw_line in result.stdout.splitlines():
             line = raw_line.strip()
             if not line:
                 continue
-            fields = line.split(None, 1)
-            if len(fields) == 2 and fields[0] == _APP_GROUP_IDENTIFIER:
-                candidate = fields[1]
-            elif Path(line).is_absolute():
-                candidate = line
-            else:
-                continue
+            candidate = line
             path = Path(candidate)
             if path.is_absolute():
                 paths.append(path)
         if len(paths) != 1:
             raise IOSSimulatorAppContractError(
-                "simctl groups output did not contain exactly one absolute "
-                f"{_APP_GROUP_IDENTIFIER} container path"
+                "simctl data output did not contain exactly one absolute "
+                "app data container path"
             )
-        return paths[0]
+        return paths[0] / "tmp"
     except (IOSSimulatorAppContractError, OSError):
         if best_effort:
             return None
@@ -547,6 +537,7 @@ def run_ios_simulator_app_contract(
         try:
             # Simulators are disposable; clear old runs so log rotation cannot
             # make a retained startup marker look like evidence from this run.
+            log_path.parent.mkdir(parents=True, exist_ok=True)
             log_path.write_bytes(b"")
         except OSError as error:
             raise IOSSimulatorAppContractError("could not reset the Simulator app log") from error
