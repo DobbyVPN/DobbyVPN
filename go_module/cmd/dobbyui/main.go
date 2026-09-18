@@ -22,5 +22,10 @@ func main() {
 	defer connection.Close()
 
 	client := ui.NewGRPCClient(grpcproto.NewVpnClient(connection))
-	ui.NewApplication(app.NewWithID("com.dobby.vpn"), client).Run()
+	store, err := ui.NewFileSourceStore()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "could not initialize connection source storage:", err)
+		os.Exit(1)
+	}
+	ui.NewApplication(app.NewWithID("com.dobby.vpn"), client, store).Run()
 }

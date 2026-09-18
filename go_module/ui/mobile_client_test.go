@@ -10,6 +10,7 @@ import (
 type fakeMobileTransport struct {
 	mu        sync.Mutex
 	lastID    string
+	lastIndex int32
 	snapshots []string
 	configure string
 	start     string
@@ -23,9 +24,10 @@ func (f *fakeMobileTransport) Configure(id string, _ int64, _ []byte) string {
 	f.mu.Unlock()
 	return f.configure
 }
-func (f *fakeMobileTransport) Start(id string, _ int64, _ string, _ int32) string {
+func (f *fakeMobileTransport) Start(id string, _ int64, _ string, index int32) string {
 	f.mu.Lock()
 	f.lastID = id
+	f.lastIndex = index
 	f.mu.Unlock()
 	return f.start
 }
@@ -80,6 +82,9 @@ func TestMobileClientUsesOneOpaqueSessionAcrossOperations(t *testing.T) {
 	defer transport.mu.Unlock()
 	if transport.lastID != "session-1" {
 		t.Fatalf("last session id = %q, want session-1", transport.lastID)
+	}
+	if transport.lastIndex != 0 {
+		t.Fatalf("automatic profile index = %d, want 0", transport.lastIndex)
 	}
 }
 

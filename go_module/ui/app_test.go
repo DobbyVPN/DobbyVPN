@@ -162,6 +162,53 @@ func TestConnectionViewButtonDrivesSessionClient(t *testing.T) {
 	}
 }
 
+func TestConnectionViewPersistsOnlyAcceptedSourceAndCanRestartConfiguredSession(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	store := &MemorySourceStore{}
+	client := &fakeClient{
+		snapshot:  Snapshot{State: StateIdle, Configured: true, Sequence: 2},
+		configure: ConfigureResult{Sequence: 3},
+	}
+	view := NewConnectionView(client, store)
+	view.ctx = context.Background()
+	view.render(client.snapshot)
+	test.Type(view.Input, "https://example.test/accepted")
+	view.toggle()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && !client.started {
+		time.Sleep(5 * time.Millisecond)
+	}
+	got, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "https://example.test/accepted" {
+		t.Fatalf("stored source = %q", got)
+	}
+
+	client.started = false
+	view.Input.SetText("")
+	view.snapshot.Configured = true
+	view.toggle()
+	for time.Now().Before(deadline) && !client.started {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !client.started {
+		t.Fatal("configured session was not started without re-entering source")
+	}
+}
+
+func TestConnectionViewRendersWarningsInLogs(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	view := NewConnectionView(nil)
+	view.render(Snapshot{State: StateConfigured, Warnings: []Warning{{Code: "PROFILE_WARNING", Message: "profile ignored"}}})
+	if view.Logs.Text != "PROFILE_WARNING: profile ignored" {
+		t.Fatalf("logs = %q", view.Logs.Text)
+	}
+}
+
 func TestConnectionViewReconnectsAfterWatchClosure(t *testing.T) {
 	runtime := test.NewApp()
 	defer runtime.Quit()

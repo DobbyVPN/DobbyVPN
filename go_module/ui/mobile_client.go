@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -75,12 +76,46 @@ func (c *MobileClient) remember(id string) {
 	c.mu.Unlock()
 }
 
+func (c *MobileClient) clear() {
+	c.mu.Lock()
+	c.sessionID = ""
+	c.mu.Unlock()
+}
+
+// invoke gives native transports a cancellation boundary. The underlying
+// gomobile/JNI call cannot always be interrupted, but the UI never waits past
+// its caller's context and a subsequent Snapshot can reattach after a native
+// process restart.
+func invoke(ctx context.Context, call func() string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := contextError(ctx); err != nil {
+		return "", err
+	}
+	result := make(chan string, 1)
+	go func() { result <- call() }()
+	select {
+	case raw := <-result:
+		return raw, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
 func (c *MobileClient) Configure(ctx context.Context, raw []byte, sequence uint64) (ConfigureResult, error) {
 	if err := contextError(ctx); err != nil {
 		return ConfigureResult{}, err
 	}
-	value, err := decodeEnvelope(c.api.Configure(c.session(), int64(sequence), append([]byte(nil), raw...)))
+	rawResult, err := invoke(ctx, func() string {
+		return c.api.Configure(c.session(), int64(sequence), append([]byte(nil), raw...))
+	})
 	if err != nil {
+		return ConfigureResult{}, err
+	}
+	value, err := decodeEnvelope(rawResult)
+	if err != nil {
+		c.clearOnTransportFailure(err)
 		return ConfigureResult{}, err
 	}
 	var result configureDTO
@@ -94,8 +129,18 @@ func (c *MobileClient) Start(ctx context.Context, sequence uint64) (StartResult,
 	if err := contextError(ctx); err != nil {
 		return StartResult{}, err
 	}
-	value, err := decodeEnvelope(c.api.Start(c.session(), int64(sequence), "AUTO_SELECT", -1))
+	rawResult, err := invoke(ctx, func() string {
+		// AUTO_SELECT is represented by index zero by the native providers. A
+		// negative sentinel was accepted by the Go manager but rejected by the
+		// Swift bridge, creating a platform-only failure.
+		return c.api.Start(c.session(), int64(sequence), "AUTO_SELECT", 0)
+	})
 	if err != nil {
+		return StartResult{}, err
+	}
+	value, err := decodeEnvelope(rawResult)
+	if err != nil {
+		c.clearOnTransportFailure(err)
 		return StartResult{}, err
 	}
 	var result startDTO
@@ -109,8 +154,13 @@ func (c *MobileClient) Stop(ctx context.Context, generation uint64) (StopResult,
 	if err := contextError(ctx); err != nil {
 		return StopResult{}, err
 	}
-	value, err := decodeEnvelope(c.api.Stop(c.session(), int64(generation)))
+	rawResult, err := invoke(ctx, func() string { return c.api.Stop(c.session(), int64(generation)) })
 	if err != nil {
+		return StopResult{}, err
+	}
+	value, err := decodeEnvelope(rawResult)
+	if err != nil {
+		c.clearOnTransportFailure(err)
 		return StopResult{}, err
 	}
 	var result stopDTO
@@ -124,8 +174,13 @@ func (c *MobileClient) Snapshot(ctx context.Context) (Snapshot, error) {
 	if err := contextError(ctx); err != nil {
 		return Snapshot{}, err
 	}
-	value, err := decodeEnvelope(c.api.Snapshot(c.session()))
+	rawResult, err := invoke(ctx, func() string { return c.api.Snapshot(c.session()) })
 	if err != nil {
+		return Snapshot{}, err
+	}
+	value, err := decodeEnvelope(rawResult)
+	if err != nil {
+		c.clearOnTransportFailure(err)
 		return Snapshot{}, err
 	}
 	var result snapshotDTO
@@ -140,6 +195,9 @@ func (c *MobileClient) Snapshot(ctx context.Context) (Snapshot, error) {
 // service/extension remains the lifecycle owner; this refresh is only the
 // foreground view's wake mechanism and stops immediately with its context.
 func (c *MobileClient) Watch(ctx context.Context) (<-chan Snapshot, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	updates := make(chan Snapshot, 1)
 	go func() {
 		defer close(updates)
@@ -161,6 +219,12 @@ func (c *MobileClient) Watch(ctx context.Context) (<-chan Snapshot, error) {
 						return
 					}
 				}
+			} else if ctx.Err() != nil {
+				return
+			} else {
+				// Closing the stream tells ConnectionView to enter its bounded
+				// reconnect path instead of silently presenting stale state.
+				return
 			}
 			select {
 			case <-ticker.C:
@@ -176,8 +240,13 @@ func (c *MobileClient) Reset(ctx context.Context, sequence uint64) (Snapshot, er
 	if err := contextError(ctx); err != nil {
 		return Snapshot{}, err
 	}
-	value, err := decodeEnvelope(c.api.Reset(c.session(), int64(sequence)))
+	rawResult, err := invoke(ctx, func() string { return c.api.Reset(c.session(), int64(sequence)) })
 	if err != nil {
+		return Snapshot{}, err
+	}
+	value, err := decodeEnvelope(rawResult)
+	if err != nil {
+		c.clearOnTransportFailure(err)
 		return Snapshot{}, err
 	}
 	var result snapshotDTO
@@ -205,6 +274,31 @@ type mobileError struct {
 	Message string `json:"message"`
 }
 
+type mobileResponseError struct {
+	code    string
+	message string
+}
+
+func (e *mobileResponseError) Error() string {
+	if e.message == "" {
+		return e.code
+	}
+	return e.code + ": " + e.message
+}
+
+func (c *MobileClient) clearOnTransportFailure(err error) {
+	var responseErr *mobileResponseError
+	if errors.As(err, &responseErr) {
+		// A stale owner is recoverable by a fresh empty-session Snapshot. Other
+		// domain errors retain the owner so the UI can show the authoritative
+		// failure and retry without losing accepted configuration.
+		switch responseErr.code {
+		case "INTERNAL", "SESSION_NOT_FOUND", "STALE_SESSION", "PLATFORM_FAILED":
+			c.clear()
+		}
+	}
+}
+
 func decodeEnvelope(raw string) (json.RawMessage, error) {
 	var envelope mobileEnvelope
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
@@ -212,9 +306,9 @@ func decodeEnvelope(raw string) (json.RawMessage, error) {
 	}
 	if !envelope.OK {
 		if envelope.Error == nil {
-			return nil, fmt.Errorf("mobile session request failed")
+			return nil, &mobileResponseError{code: "INTERNAL", message: "mobile session request failed"}
 		}
-		return nil, fmt.Errorf("%s: %s", envelope.Error.Code, envelope.Error.Message)
+		return nil, &mobileResponseError{code: envelope.Error.Code, message: envelope.Error.Message}
 	}
 	return envelope.Result, nil
 }
@@ -235,9 +329,9 @@ type failureDTO struct {
 	Message string `json:"message"`
 }
 type configureDTO struct {
-	Digest     string       `json:"digest"`
-	Sequence   uint64       `json:"sequence"`
-	SourceKind string       `json:"source_kind"`
+	Digest     string      `json:"digest"`
+	Sequence   uint64      `json:"sequence"`
+	SourceKind string      `json:"source_kind"`
 	Profiles   profilesDTO `json:"profiles"`
 	Warnings   warningsDTO `json:"warnings"`
 }
@@ -247,19 +341,19 @@ type startDTO struct {
 }
 type stopDTO startDTO
 type snapshotDTO struct {
-	SessionID       string       `json:"session_id"`
-	Sequence        uint64       `json:"sequence"`
-	Generation      uint64       `json:"generation"`
-	State           string       `json:"state"`
-	Configured      bool         `json:"configured"`
-	Digest          string       `json:"digest"`
-	SourceKind      string       `json:"source_kind"`
+	SessionID       string      `json:"session_id"`
+	Sequence        uint64      `json:"sequence"`
+	Generation      uint64      `json:"generation"`
+	State           string      `json:"state"`
+	Configured      bool        `json:"configured"`
+	Digest          string      `json:"digest"`
+	SourceKind      string      `json:"source_kind"`
 	Profiles        profilesDTO `json:"profiles"`
 	Warnings        warningsDTO `json:"warnings"`
-	ActiveProfile   *profileDTO  `json:"active_profile"`
-	LastFailure     *failureDTO  `json:"last_failure"`
-	CleanupComplete bool         `json:"cleanup_complete"`
-	Recovering      bool         `json:"recovering"`
+	ActiveProfile   *profileDTO `json:"active_profile"`
+	LastFailure     *failureDTO `json:"last_failure"`
+	CleanupComplete bool        `json:"cleanup_complete"`
+	Recovering      bool        `json:"recovering"`
 }
 
 func (values profilesDTO) ui() []Profile {

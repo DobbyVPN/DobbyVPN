@@ -21,8 +21,12 @@ type Application struct {
 	Settings   *SettingsView
 }
 
-func NewApplication(runtime fyne.App, client SessionClient) *Application {
-	view := NewConnectionView(client)
+func NewApplication(runtime fyne.App, client SessionClient, stores ...SourceStore) *Application {
+	var store SourceStore
+	if len(stores) > 0 {
+		store = stores[0]
+	}
+	view := NewConnectionView(client, store)
 	settings := NewSettingsView()
 	window := runtime.NewWindow("Dobby VPN")
 	window.Resize(fyne.NewSize(460, 520))
@@ -57,6 +61,7 @@ func (a *Application) Close() {
 // not by screen coordinates.
 type ConnectionView struct {
 	client SessionClient
+	store  SourceStore
 
 	Input    *AccessibleEntry
 	Connect  *widget.Button
@@ -66,15 +71,16 @@ type ConnectionView struct {
 	Settings *widget.Button
 	root     fyne.CanvasObject
 
-	mu         sync.Mutex
-	ctx        context.Context
-	cancel     context.CancelFunc
-	done       chan struct{}
-	snapshot   Snapshot
-	started    bool
-	busy       bool
-	sequence   uint64
-	generation uint64
+	mu           sync.Mutex
+	ctx          context.Context
+	cancel       context.CancelFunc
+	done         chan struct{}
+	snapshot     Snapshot
+	started      bool
+	busy         bool
+	sequence     uint64
+	generation   uint64
+	sourceLoaded bool
 	// rendered* mirrors the last authoritative presentation under mu. Native
 	// widgets are updated through fyne.Do and must not be read from a worker
 	// goroutine; the mirrors keep lifecycle tests race-free without making the
@@ -84,8 +90,12 @@ type ConnectionView struct {
 	renderedDetails string
 }
 
-func NewConnectionView(client SessionClient) *ConnectionView {
-	view := &ConnectionView{client: client}
+func NewConnectionView(client SessionClient, stores ...SourceStore) *ConnectionView {
+	var store SourceStore
+	if len(stores) > 0 {
+		store = stores[0]
+	}
+	view := &ConnectionView{client: client, store: store}
 	view.Input = NewAccessibleEntry(true, "Connection configuration")
 	view.Input.SetPlaceHolder("HTTPS connection URL or inline configuration")
 	view.Input.SetMinRowsVisible(4)
@@ -216,7 +226,12 @@ func (v *ConnectionView) Stop() {
 	v.started = false
 	v.mu.Unlock()
 	if done != nil {
-		<-done
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			// A native transport is allowed to finish after the window has
+			// closed. Never block the UI shutdown indefinitely on it.
+		}
 	}
 }
 
@@ -228,6 +243,7 @@ func (v *ConnectionView) watch(ctx context.Context) {
 		if !haveSnapshot {
 			snapshot, err := v.client.Snapshot(ctx)
 			if err == nil {
+				v.loadSource(ctx)
 				last = snapshot
 				haveSnapshot = true
 				v.render(snapshot)
@@ -319,9 +335,13 @@ func (v *ConnectionView) toggle() {
 	ctx := v.ctx
 	v.mu.Unlock()
 
-	if text == "" {
+	if text == "" && !snapshot.Configured {
 		v.showError(fmt.Errorf("connection configuration is required"))
 		v.setBusy(false)
+		return
+	}
+	if text == "" {
+		go v.startConfigured(ctx, sequence)
 		return
 	}
 	go v.connect(ctx, []byte(text), sequence)
@@ -333,12 +353,47 @@ func (v *ConnectionView) connect(ctx context.Context, raw []byte, sequence uint6
 		v.mu.Lock()
 		v.sequence = configured.Sequence
 		v.mu.Unlock()
+		if v.store != nil {
+			if saveErr := v.store.Save(ctx, raw); saveErr != nil {
+				err = fmt.Errorf("save accepted connection source: %w", saveErr)
+			}
+		}
+	}
+	if err == nil {
 		_, err = v.client.Start(ctx, configured.Sequence)
 	}
 	if err != nil {
 		v.showError(err)
 	}
 	v.setBusy(false)
+}
+
+func (v *ConnectionView) startConfigured(ctx context.Context, sequence uint64) {
+	_, err := v.client.Start(ctx, sequence)
+	if err != nil {
+		v.showError(err)
+	}
+	v.setBusy(false)
+}
+
+func (v *ConnectionView) loadSource(ctx context.Context) {
+	v.mu.Lock()
+	if v.sourceLoaded || v.store == nil {
+		v.mu.Unlock()
+		return
+	}
+	v.sourceLoaded = true
+	store := v.store
+	v.mu.Unlock()
+	raw, err := store.Load(ctx)
+	if err != nil || len(raw) == 0 {
+		if err != nil {
+			v.showError(err)
+		}
+		return
+	}
+	text := string(raw)
+	onUI(func() { v.Input.SetText(text) })
 }
 
 func (v *ConnectionView) disconnect(ctx context.Context, generation uint64) {
@@ -383,6 +438,7 @@ func (v *ConnectionView) render(snapshot Snapshot) {
 		v.Status.SetText(status)
 		v.Connect.SetText(button)
 		v.Details.SetText(details)
+		v.Logs.SetText(snapshotLogText(snapshot))
 	})
 }
 
@@ -442,6 +498,25 @@ func detailsText(snapshot Snapshot) string {
 		return fmt.Sprintf("%d profile(s) available", len(snapshot.Profiles))
 	}
 	return ""
+}
+
+func snapshotLogText(snapshot Snapshot) string {
+	lines := make([]string, 0, len(snapshot.Warnings)+1)
+	for _, warning := range snapshot.Warnings {
+		line := warning.Code
+		if warning.Message != "" {
+			line += ": " + warning.Message
+		}
+		lines = append(lines, line)
+	}
+	if snapshot.LastFailure != nil {
+		line := snapshot.LastFailure.Code
+		if snapshot.LastFailure.Message != "" {
+			line += ": " + snapshot.LastFailure.Message
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func onUI(fn func()) {
