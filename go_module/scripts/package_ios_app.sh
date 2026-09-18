@@ -124,8 +124,8 @@ tunnel_product="$derived/products/Release-$sdk/tunnel.appex"
 # caller-provided CGO_LDFLAGS. The Go UI package therefore links through this
 # source-relative staging directory, which is removed by the trap above.
 rm -rf "$native_framework_dir"
-mkdir -p "$go_root"
-cp -R "$common_framework" "$native_framework_dir"
+mkdir -p "$native_framework_dir"
+cp -R "$common_framework" "$native_framework_dir/CommonDI.framework"
 staged_native_framework=1
 
 # Fyne 2.8 reuses the mobile toolchain's cache directory as a readiness

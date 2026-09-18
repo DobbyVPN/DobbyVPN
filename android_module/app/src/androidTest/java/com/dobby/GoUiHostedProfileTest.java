@@ -346,15 +346,15 @@ public final class GoUiHostedProfileTest {
                 Thread.sleep(POLL_MILLIS);
                 continue;
             }
-            Network vpn = findNetwork(NetworkCapabilities.TRANSPORT_VPN);
-            Network physical = findPhysicalNetwork();
-            if (vpn == null || physical == null) {
+            Network phaseVpn = findNetwork(NetworkCapabilities.TRANSPORT_VPN);
+            Network phasePhysical = findPhysicalNetwork();
+            if (phaseVpn == null || phasePhysical == null) {
                 throw new IllegalStateException("ANDROID_NETWORK_IDENTITY_UNAVAILABLE");
             }
             boolean directRequired = "unblocked".equals(phase);
             JSONObject response = new JSONObject().put("phase", phase)
-                    .put("direct", networkRequest(physical, identityUrl, directRequired))
-                    .put("vpn", networkRequest(vpn, identityUrl, true));
+                    .put("direct", networkRequest(phasePhysical, identityUrl, directRequired))
+                    .put("vpn", networkRequest(phaseVpn, identityUrl, true));
             writeJson(new File(control.getPath() + ".ready"), response);
         }
     }
