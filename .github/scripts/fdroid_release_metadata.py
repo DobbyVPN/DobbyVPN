@@ -23,6 +23,37 @@ ALLOWED_FINAL_FIELDS = {
     "CurrentVersionCode",
     "UpdateCheckData",
 }
+GO_FYNE_SOURCES = [
+    "go@go1.25.1",
+    "reproducible-apk-tools@v0.3.2",
+]
+GO_FYNE_BUILD = [
+    "pushd $$go$$/src",
+    "./make.bash",
+    "popd",
+    "export GOROOT=$$go$$",
+    'export GOPATH="$HOME/go"',
+    'export GO111MODULE=on',
+    'export GOFLAGS="-trimpath -buildvcs=false"',
+    'export SOURCE_DATE_EPOCH=0',
+    'export PATH="$GOROOT/bin:$GOPATH/bin:$PATH"',
+    'go env GOROOT GOVERSION GOFLAGS',
+    'cd ..',
+    'export REPO_ROOT=$(pwd)',
+    'pushd go_module',
+    'go mod download',
+    'popd',
+    'sdkmanager "platforms;android-35" "platforms;android-36" "build-tools;36.0.0" "ndk;27.3.13750724"',
+    'export ANDROID_SDK_ROOT="$$SDK$$"',
+    'export ANDROID_HOME="$$SDK$$"',
+    'export ANDROID_NDK_HOME="$$SDK$$/ndk/27.3.13750724"',
+    'export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64',
+    'export PATH="$JAVA_HOME/bin:$GOROOT/bin:$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$GOPATH/bin:$PATH"',
+    'cd android_module',
+    'sed -i -e "s/^versionCode=.*/versionCode=$$VERCODE$$/" -e "s/^versionName=.*/versionName=$$VERSION$$/" gradle.properties',
+    'export COMMIT=$(git rev-parse HEAD)',
+    'printf "\\nprojectRepositoryCommit=$COMMIT\\nprojectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$COMMIT\\n" >> gradle.properties',
+]
 
 
 class MetadataError(ValueError):
@@ -250,11 +281,15 @@ def finalize(
     if not isinstance(target.get("commit"), str) or not target["commit"]:
         raise MetadataError("requested build has no source commit")
     target["commit"] = source_sha
-    # The release shell is a plain Android project now. Keep the inherited
-    # upstream recipe fields for historical builds, but point the candidate at
-    # the one Gradle root that owns the Go/Fyne APK.
+    # The release shell is a plain Android project now. Point the candidate at
+    # the one Gradle root that owns the Go/Fyne APK and replace the inherited
+    # KMP/gomobile recipe with the pinned Go/Fyne build inputs.
     target["subdir"] = "android_module"
     target["gradle"] = ["yes"]
+    target["srclibs"] = list(GO_FYNE_SOURCES)
+    target["rm"] = ["swift_module"]
+    target["build"] = list(GO_FYNE_BUILD)
+    target.pop("preassemble", None)
     document["Binaries"] = binary_url
     document["UpdateCheckData"] = baseline["UpdateCheckData"]
     document["CurrentVersion"] = version_name

@@ -41,6 +41,7 @@ def metadata_document() -> dict[str, object]:
                 "submodules": True,
                 "gradle": True,
                 "build": ["echo fixture"],
+                "preassemble": [":app:gomobileBindAndroid"],
             }
         ],
         "AllowedAPKSigningKeys": SIGNING_KEY,
@@ -108,7 +109,12 @@ class FdroidReleaseMetadataTests(unittest.TestCase):
         self.assertTrue(target["submodules"])
         self.assertEqual(target["gradle"], ["yes"])
         self.assertEqual(target["subdir"], "android_module")
-        self.assertEqual(target["build"], ["echo fixture"])
+        self.assertEqual(target["srclibs"], ["go@go1.25.1", "reproducible-apk-tools@v0.3.2"])
+        self.assertEqual(target["rm"], ["swift_module"])
+        self.assertIn("pushd $$go$$/src", target["build"])
+        self.assertIn("go mod download", target["build"])
+        self.assertIn("ndk/27.3.13750724", " ".join(target["build"]))
+        self.assertNotIn("preassemble", target)
         self.assertEqual(target["commit"], SOURCE_SHA)
         self.assertEqual(result["Binaries"], "https://127.0.0.1:8765/DobbyVPN-v%v-sign.apk")
         self.assertEqual(result["UpdateCheckData"], UPDATE_DATA)

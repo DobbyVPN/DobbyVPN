@@ -116,8 +116,9 @@ Signing verification checks the established certificate and that signing did
 not change application payloads. The F-Droid Release lane then fetches the
 current upstream recipe and server, uses fdroidserver's own update logic for a
 new candidate, and builds the exact source in the official buildserver
-container. `fdroid_release_metadata.py` validates that inherited recipe fields
-are preserved; `fdroid_release_check.sh` runs `fetchsrclibs`, the on-server
+container. `fdroid_release_metadata.py` validates that historical recipe
+entries are preserved while the new candidate is switched to the pinned
+Go/Fyne Android recipe; `fdroid_release_check.sh` runs `fetchsrclibs`, the on-server
 build, and the official APK scanner. F-Droid compares its unsigned output with
 the signed Release APK through the temporary local HTTPS reference URL and verifies
 the declared signing key. These checks protect the recipe as well as the
