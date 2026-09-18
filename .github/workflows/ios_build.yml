@@ -38,6 +38,10 @@ jobs:
       APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
       APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
       APP_SOURCE_SHA: ${{ inputs.source_sha }}
+      # Fastlane reads the build number while loading the Fastfile, so make it
+      # available to every lane (including build_ios), not only the bump and
+      # entitlement-verification steps.
+      APPLE_BUILD_NUMBER: ${{ github.run_number }}
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
 
     steps:
