@@ -38,6 +38,12 @@ func (c *GRPCClient) remember(snapshot *grpcproto.SessionSnapshot) {
 	c.mu.Unlock()
 }
 
+func (c *GRPCClient) clearSession() {
+	c.mu.Lock()
+	c.sessionID = ""
+	c.mu.Unlock()
+}
+
 func (c *GRPCClient) Configure(ctx context.Context, raw []byte, sequence uint64) (ConfigureResult, error) {
 	response, err := c.client.Configure(ctx, &grpcproto.SessionConfigureRequest{
 		SessionId:        c.session(),
@@ -111,7 +117,13 @@ func (c *GRPCClient) Watch(ctx context.Context) (<-chan Snapshot, error) {
 	}
 	updates := make(chan Snapshot, 1)
 	go func() {
-		defer close(updates)
+		defer func() {
+			// A service restart invalidates the old opaque session owner.  The
+			// next Snapshot with an empty ID bootstraps the replacement session;
+			// retaining the predecessor ID would leave the UI stuck reconnecting.
+			c.clearSession()
+			close(updates)
+		}()
 		for {
 			value, recvErr := stream.Recv()
 			if recvErr != nil {

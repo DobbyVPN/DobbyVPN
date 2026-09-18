@@ -52,3 +52,12 @@ func TestEnumConversionDoesNotExposeGeneratedPrefixes(t *testing.T) {
 		t.Fatalf("failure = %q", got)
 	}
 }
+
+func TestGRPCClientClearsSessionOwnerForServiceRestart(t *testing.T) {
+	client := &GRPCClient{}
+	client.remember(&grpcproto.SessionSnapshot{SessionId: "old-owner"})
+	client.clearSession()
+	if got := client.session(); got != "" {
+		t.Fatalf("session after service restart = %q, want empty", got)
+	}
+}
